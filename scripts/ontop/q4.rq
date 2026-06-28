@@ -1,0 +1,3 @@
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?route ?long WHERE {
+  ?route gtfs:shortName ?short ; gtfs:longName ?long . FILTER(?short = "R0") }

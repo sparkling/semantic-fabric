@@ -1,0 +1,88 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix gtfs: <http://vocab.gtfs.org/terms#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix geo: <http://www.w3.org/2003/01/geo/wgs84_pos#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# R2RML mapping for the GTFS-Madrid OBDA subset, functionally identical to
+# crates/sf-bench/src/workload.rs MAPPING_TTL — table/column names lowercased to
+# match the PostgreSQL schema produced by scripts/gen_gtfs.sql. Same GTFS vocab
+# (http://vocab.gtfs.org/terms#) and subject IRIs
+# (http://transport.linkeddata.es/madrid/metro/) as semantic-fabric uses.
+
+<#agency_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "agency" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/agency/{agency_id}" ;
+        rr:class gtfs:Agency
+    ] ;
+    rr:predicateObjectMap [ rr:predicate foaf:name ; rr:objectMap [ rr:column "agency_name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:timezone ; rr:objectMap [ rr:column "agency_timezone" ] ] ;
+    rr:predicateObjectMap [ rr:predicate foaf:page ;
+        rr:objectMap [ rr:column "agency_url" ; rr:termType rr:IRI ] ] .
+
+<#calendar_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "calendar" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/services/{service_id}" ;
+        rr:class gtfs:Service
+    ] ;
+    rr:predicateObjectMap [ rr:predicate dct:date ; rr:objectMap [ rr:column "start_date" ] ] .
+
+<#routes_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "routes" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/routes/{route_id}" ;
+        rr:class gtfs:Route
+    ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:shortName ; rr:objectMap [ rr:column "route_short_name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:longName ; rr:objectMap [ rr:column "route_long_name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:routeType ;
+        rr:objectMap [ rr:template "http://transport.linkeddata.es/resource/RouteType/{route_type}" ; rr:termType rr:IRI ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:agency ;
+        rr:objectMap [ rr:parentTriplesMap <#agency_0> ;
+            rr:joinCondition [ rr:child "agency_id" ; rr:parent "agency_id" ] ] ] .
+
+<#trips_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "trips" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/trips/{trip_id}" ;
+        rr:class gtfs:Trip
+    ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:headsign ; rr:objectMap [ rr:column "trip_headsign" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:direction ;
+        rr:objectMap [ rr:column "direction_id" ; rr:datatype xsd:integer ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:route ;
+        rr:objectMap [ rr:parentTriplesMap <#routes_0> ;
+            rr:joinCondition [ rr:child "route_id" ; rr:parent "route_id" ] ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:service ;
+        rr:objectMap [ rr:parentTriplesMap <#calendar_0> ;
+            rr:joinCondition [ rr:child "service_id" ; rr:parent "service_id" ] ] ] .
+
+<#stops_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "stops" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/stops/{stop_id}" ;
+        rr:class gtfs:Stop
+    ] ;
+    rr:predicateObjectMap [ rr:predicate foaf:name ; rr:objectMap [ rr:column "stop_name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate geo:lat ; rr:objectMap [ rr:column "stop_lat" ] ] ;
+    rr:predicateObjectMap [ rr:predicate geo:long ; rr:objectMap [ rr:column "stop_lon" ] ] .
+
+<#stoptimes_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "stop_times" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/stoptimes/{trip_id}-{stop_id}-{arrival_time}" ;
+        rr:class gtfs:StopTime
+    ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:arrivalTime ; rr:objectMap [ rr:column "arrival_time" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:departureTime ; rr:objectMap [ rr:column "departure_time" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:stopSequence ;
+        rr:objectMap [ rr:column "stop_sequence" ; rr:datatype xsd:integer ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:trip ;
+        rr:objectMap [ rr:parentTriplesMap <#trips_0> ;
+            rr:joinCondition [ rr:child "trip_id" ; rr:parent "trip_id" ] ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:stop ;
+        rr:objectMap [ rr:parentTriplesMap <#stops_0> ;
+            rr:joinCondition [ rr:child "stop_id" ; rr:parent "stop_id" ] ] ] .

@@ -70,19 +70,19 @@ the load-bearing result; absolute latency feeds the Path-B objective (ADR-0013).
 
 | Query | Median |
 |---|---|
-| Q1 routes BGP | 45.6 µs |
-| Q2 route→agency join | 43.4 µs |
-| Q3 stop_time→trip→route join | 930 µs |
-| Q4 route FILTER | 34.3 µs |
-| Q5 trip OPTIONAL headsign | 93.5 µs |
+| Q1 routes BGP | 29.4 µs |
+| Q2 route→agency join | 37.8 µs |
+| Q3 stop_time→trip→route join | 738 µs |
+| Q4 route FILTER | 26.7 µs |
+| Q5 trip OPTIONAL headsign | 96.3 µs |
 
 ### CONSTRUCT dump — full streamed latency
 
 | Scale | Triples | Full dump | Throughput |
 |---|---|---|---|
-| 1x | 5 200 | 3.13 ms | ~1.66 M triples/s |
-| 10x | 51 880 | 28.2 ms | ~1.84 M triples/s |
-| 100x | 518 680 | 291 ms | ~1.78 M triples/s |
+| 1x | 5 200 | 3.12 ms | ~1.67 M triples/s |
+| 10x | 51 880 | 27.7 ms | ~1.87 M triples/s |
+| 100x | 518 680 | 290 ms | ~1.79 M triples/s |
 
 Latency grows **linearly with result size** (constant throughput) — the source
 does the set-work, the engine streams.
@@ -91,11 +91,11 @@ does the set-work, the engine streams.
 
 | Scale | Triples | Peak engine heap | Bytes / triple | First-result latency |
 |---|---|---|---|---|
-| 1x | 5 200 | **122 318 B** | 23.5 | 48.7 µs |
-| 10x | 51 880 | **122 318 B** | 2.36 | 31.1 µs |
-| 100x | 518 680 | **122 318 B** | 0.236 | 62.5 µs |
+| 1x | 5 200 | **129 358 B** | 24.9 | 67.0 µs |
+| 10x | 51 880 | **129 358 B** | 2.49 | 64.2 µs |
+| 100x | 518 680 | **129 358 B** | 0.249 | 64.4 µs |
 
-The engine peak heap during streaming is **byte-identical (122 318 B) across a
+The engine peak heap during streaming is **byte-identical (129 358 B) across a
 100× growth in source data and result size**, while bytes/triple collapses toward
 zero and first-result latency stays bounded (~30–60 µs). This is the
 `O(|T| + |M| + batch)` invariant, demonstrated. The `cargo test` version asserts

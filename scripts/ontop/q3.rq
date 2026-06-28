@@ -1,0 +1,3 @@
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?st ?short WHERE {
+  ?st gtfs:trip ?t . ?t gtfs:route ?r . ?r gtfs:shortName ?short }

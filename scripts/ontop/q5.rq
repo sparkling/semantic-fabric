@@ -1,0 +1,3 @@
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?t ?hs WHERE {
+  ?t a gtfs:Trip . OPTIONAL { ?t gtfs:headsign ?hs } }
