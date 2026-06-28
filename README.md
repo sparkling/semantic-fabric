@@ -25,9 +25,18 @@ SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }
 ```
 
 ```bash
-# Today: the in-process OBDA driver rewrites these to SQL and streams results
-# from a live SQLite source (the `serve` HTTP endpoint is on the roadmap — §9).
-cargo run -p sf-cli -- bench
+# Serve it: a real SPARQL 1.2 Protocol HTTP endpoint over a live SQLite or
+# PostgreSQL source — rewrites each query to SQL and streams the results back.
+# (reproducible GTFS source: scripts/load_gtfs_postgres.sh 1)
+cargo run -p sf-cli -- serve \
+  --source pg:dbname=gtfs_bench \
+  --mapping scripts/ontop/gtfs.r2rml.ttl
+
+# ...then query it like any SPARQL endpoint:
+curl -s 'http://127.0.0.1:7878/sparql' \
+  -H 'Accept: application/sparql-results+json' \
+  --data-urlencode 'query=PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+    SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }'
 ```
 
 ---
@@ -92,8 +101,14 @@ copy in between.**
   batch budget`, independent of dataset size. **Proven byte-for-byte** (see
   [§7](#7-benchmarks--comparison)) — [ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md),
   [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
+- **A real SPARQL 1.2 Protocol endpoint** — `serve` exposes a streamed,
+  content-negotiated, governed HTTP query endpoint over a live SQLite **or**
+  PostgreSQL source ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8,
+  [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md)).
 - **No JVM anywhere on the runtime path** — a single native Rust binary, in place
-  of a Jena/Fuseki-class stack ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md),
+  of a Jena/Fuseki-class stack: a 12.8 MiB static binary, ~0.15 s cold start, ~12
+  MiB serving footprint ([§7](#7-benchmarks--comparison)) —
+  ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md),
   [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md)).
 - **No copy / no ETL** — point it at a DB + an R2RML file and query live
   ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md),
@@ -102,9 +117,10 @@ copy in between.**
   80/81 PostgreSQL; one documented deviation) over an ISWC-2018-based,
   provably-correct rewrite ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
   [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
-- **Two real backends today** — SQLite + PostgreSQL via a dialect-correct SQL
-  layer ([ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)). _(SQLite
-  is the wired executor today; see [§9](#9-status--limitations).)_
+- **Two real backends, both executing today** — SQLite **and** PostgreSQL both
+  run the OBDA path end to end via a dialect-correct SQL layer; PostgreSQL is no
+  longer emit-only ([ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md),
+  [ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
 - **Built-in query-time provenance/lineage and a security edge** — named-graph
   lineage plus source RLS / rewriter ABAC / data-sensitivity authZ
   ([ADR-0017](docs/adr/ADR-0017-provenance-lineage.md),
@@ -144,10 +160,11 @@ RDF terms streamed out  (A-Box never materialised)
   does the heavy lifting ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md),
   [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)).
 - **5e. Reasoning folded into the rewrite** — tier-1 hierarchy (subclass,
-  subproperty, inverse, symmetric) is unfolded into the query; transitive
-  properties are served live via single-predicate `P+` / `P*` recursive CTEs —
-  entailment with **no separate reasoner and no JVM**
-  ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)).
+  subproperty, inverse, symmetric) is unfolded into the query; property-path
+  expressions (`^p`, `p/q`, `p|q`, `p?`, `!p`, and composite `+`/`*`) compile to
+  source-dialect recursive CTEs and are served live — entailment with **no
+  separate reasoner and no JVM** ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)).
+  (A few rarer path shapes return a documented `501` — see [§9](#9-status--limitations).)
 - **5f. W3C conformance + dialect/datatype canonicalisation (R2RML §10)** — why
   results are byte-correct across SQLite & PostgreSQL despite their different type
   systems ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
@@ -176,12 +193,23 @@ data ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
 
 ## 7. Benchmarks & comparison
 
+> **The honest head-to-head lives in [COMPARISON.md](COMPARISON.md)** — a fair,
+> same-backend race: semantic-fabric and Ontop both as warm HTTP SPARQL endpoints
+> over the **same** PostgreSQL, timed by the same client. In short: **sf is faster
+> on 9 of 10 (query × scale) cells** including the heavy 3-way join, at full answer
+> parity, **but Ontop wins the OPTIONAL query (Q5) at 10×** where sf's left-join
+> plan scales poorly; sf is far leaner (12.8 MiB binary vs a JVM stack, ~0.15 s vs
+> ~1.7 s cold start, ~12 vs ~300 MiB serving RSS) with a **byte-constant engine
+> heap (129 358 B)** as data grows. No blanket speed-win claim — read it for the
+> caveats.
+
 > **Honesty contract.** semantic-fabric's load-bearing result is the **constant
 > engine memory under growing source data** invariant — a property of the
-> streaming architecture, demonstrated byte-for-byte below. The sf-vs-Ontop
-> latency tables are **not** a clean apples-to-apples race (different process
-> model and backend). Full methodology, caveats, and reproduction live in
-> **[BENCHMARKS.md](BENCHMARKS.md)**.
+> streaming architecture, demonstrated byte-for-byte below. The in-process
+> micro-benchmark numbers in §7b are an in-process Rust library over embedded
+> SQLite (no HTTP); the cross-engine race uses HTTP on both sides — see
+> [COMPARISON.md](COMPARISON.md). Full methodology, caveats, and reproduction live
+> in **[BENCHMARKS.md](BENCHMARKS.md)** and **[COMPARISON.md](COMPARISON.md)**.
 
 Workload: a deterministic, cross-reference-consistent subset of the
 **[GTFS-Madrid-Bench](https://github.com/oeg-upm/gtfs-bench)**, vendored verbatim
@@ -240,30 +268,26 @@ grows linearly with the result (the non-materialising path):
 | 10x | 51 880 | 64.2 µs | 28.431 ms |
 | 100x | 518 680 | 64.4 µs | 283.017 ms |
 
-### 7c. Ontop comparison (real local run)
+### 7c. Fair head-to-head vs Ontop — same backend, same process model
 
-Real **Ontop 5.5.0** numbers, captured on the same machine over the **same logical
-GTFS dataset** loaded into PostgreSQL 17.7 (Java 23, PG JDBC 42.7.4), warm HTTP
-endpoint, median of 15 round-trips (`scripts/run_ontop_bench.sh`). **Answer
-cardinalities matched semantic-fabric exactly at every scale** (parity confirmed):
+Now that `serve` and the PostgreSQL executor both ship, the comparison is
+like-for-like: semantic-fabric and **Ontop 5.5.0** both run as **warm HTTP SPARQL
+endpoints over the same PostgreSQL 17.7**, timed by the same `curl` client over the
+same five queries, at full answer parity. Selected medians (ms):
 
-| Query | Ontop @1x | Ontop @10x |
-|---|---|---|
-| Q1 routes BGP | 1.96 ms | 3.07 ms |
-| Q2 route → agency join | 2.02 ms | 2.42 ms |
-| Q3 stop_time → trip → route join | 13.44 ms | 56.74 ms |
-| Q4 route FILTER | 1.46 ms | 1.40 ms |
-| Q5 trip OPTIONAL headsign | 1.75 ms | 3.20 ms |
-| CONSTRUCT dump (Turtle) | 110.7 ms | 1.272 s |
+| Query | sf @1x | Ontop @1x | sf @10x | Ontop @10x |
+|---|---|---|---|---|
+| Q1 routes BGP | **0.60** | 2.41 | **0.71** | 2.90 |
+| Q3 stop_time → trip → route (3-way join) | **1.76** | 12.57 | **9.01** | 56.08 |
+| Q5 trip OPTIONAL | **0.81** | 1.84 | 8.72 | **2.93** |
 
-> **Read before comparing.** This is **not** a clean head-to-head. sf is an
-> in-process Rust library over embedded SQLite (no HTTP, no serialization); Ontop
-> is a warm JVM HTTP endpoint over PostgreSQL (includes HTTP + result
-> serialization, ~1 ms floor). The backends differ (sf has no PostgreSQL executor
-> yet). **Both are virtualisers** — neither materialises — so "no materialisation"
-> is *common ground*, not an sf advantage over Ontop. The defensible, load-bearing
-> result is the **constant-memory invariant**. See
-> [BENCHMARKS.md › Measurement asymmetry](BENCHMARKS.md#measurement-asymmetry-read-this-before-comparing).
+semantic-fabric is faster on **9 of 10 (query × scale) cells** including the heavy
+3-way join Q3 — **but Ontop wins Q5 (OPTIONAL) at 10×** (sf's left-join plan grows
+~10× from 1x→10x while Ontop's barely moves; reported, not hidden). On footprint sf
+is a **12.8 MiB single binary** (vs a JVM + 171 jars), **0.15 s cold start** (vs
+~1.7 s), **~12 MiB serving RSS** (vs ~300 MiB). This is a small, simple-query,
+localhost dataset — **not a blanket speed-win claim**. Full tables, the materialiser
+(Morph-KGC) axis, methodology, and caveats are in **[COMPARISON.md](COMPARISON.md)**.
 
 ### 7d. OSS OBDA / RDB-to-RDF landscape
 
@@ -273,7 +297,7 @@ tables, not timings, and explicitly declines to rank engines):
 
 | Engine | Runtime | Virtual? | Mapping→SQL approach | Backends | Maturity |
 |---|---|---|---|---|---|
-| **semantic-fabric** | **Rust (no JVM, single binary)** | **Yes (virtualisation-only, never materialises)** | SPARQL 1.2 → SQL over R2RML | SQLite, PostgreSQL | early/public; serve not built; paths `P+`/`P*` single-predicate; W3C 81/82 SQLite, 80/81 PG (1 deviation) |
+| **semantic-fabric** | **Rust (no JVM, single binary)** | **Yes (virtualisation-only, never materialises)** | SPARQL 1.2 → SQL over R2RML | SQLite, PostgreSQL (both execute) | early/public; `serve` HTTP endpoint live; full property-path expressions (with documented 501 residuals); W3C 81/82 SQLite, 80/81 PG (1 deviation) |
 | [Ontop](https://github.com/ontop/ontop) | Java/JVM | Yes (core) | SPARQL→datalog→optimised SQL, R2RML/.obda | Many RDBMS | Mature, maintained, reference |
 | [Morph-RDB](https://github.com/oeg-upm/morph-rdb) | JVM (Scala/Java) | Yes (+materialise) | SPARQL→SQL, R2RML | JDBC RDBMS | Unmaintained since 2019 (v3.12.5) |
 | [Squerall](https://github.com/EIS-Bonn/Squerall) | JVM (Scala/Spark+Presto) | Yes | Data-lake OBDA, distributed | CSV/Parquet/Mongo/Cassandra/JDBC | Research (SANSA) |
@@ -294,8 +318,9 @@ virtualisation-only, and constant engine memory**, not a claimed speed win.
 ## 8. Quick start / how to use
 
 **Prerequisites:** the pinned Rust toolchain (`rust-toolchain.toml`, channel
-1.96.0); PostgreSQL is optional (only needed for the Ontop comparison harness — sf
-itself runs over embedded SQLite).
+1.96.0); PostgreSQL is optional — `serve`/`bench`/`conformance` all run over
+embedded SQLite with no external dependency, and PostgreSQL is needed only to serve
+or compare against a live PG source.
 
 ```bash
 # Build the workspace and see the CLI
@@ -307,37 +332,67 @@ The single binary exposes three subcommands:
 
 | Subcommand | What it does | Status |
 |---|---|---|
+| `serve` | **SPARQL 1.2 Protocol HTTP endpoint** over a live SQLite/PostgreSQL source — streamed, content-negotiated, governed ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8, [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[0011](docs/adr/ADR-0011-observability-and-configuration.md)) | Working |
 | `conformance` | Runs the **real W3C RDB2RDF suite** (SQLite) with EARL reporting ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md)) | Working |
 | `bench` | Runs the **GTFS-Madrid OBDA driver** — live SPARQL→SQL over SQLite ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md)/[0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)) | Working |
-| `serve` | SPARQL 1.2 Protocol HTTP endpoint | **Roadmap — not built; prints not-implemented & exits non-zero** ([ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)/[0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)) |
 
 ```bash
+cargo run -p sf-cli -- serve --source <src> --mapping <ttl>   # live SPARQL 1.2 endpoint (below)
 cargo run -p sf-cli -- conformance     # W3C RDB2RDF over SQLite (prints pass/deviation summary)
 cargo run -p sf-cli -- bench           # GTFS-Madrid OBDA: rewrites SPARQL → SQL, streams from SQLite
-cargo run -p sf-cli -- serve           # NOT YET BUILT — reports not-implemented
+```
+
+**`serve` flags.** `--source sqlite:<path>` (path may be `:memory:`) or
+`pg:<conninfo>`; `--mapping <ttl>` (R2RML, required); `--ontology <ttl>` (optional
+tier-1 T-Box); `--bind host:port` (default `127.0.0.1:7878`); plus `--timeout-secs`
+and `--max-query-len` governance caps ([ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)).
+The endpoint is `GET`/`POST /sparql` (SPARQL 1.2 Protocol), read-only (query only),
+content-negotiated via `Accept` (SPARQL Results JSON/XML/CSV/TSV for SELECT/ASK;
+Turtle/N-Triples/JSON-LD for CONSTRUCT).
+
+```bash
+# Reproducible GTFS source: load the shared dataset into PostgreSQL, then serve it.
+scripts/load_gtfs_postgres.sh 1                         # creates the gtfs_bench DB
+
+cargo run -p sf-cli -- serve \
+  --source pg:dbname=gtfs_bench \
+  --mapping scripts/ontop/gtfs.r2rml.ttl \
+  --bind 127.0.0.1:7878
+
+# (SQLite instead — same flags, the other source form:)
+#   --source sqlite:/path/to/your.db        (or sqlite::memory:)
+
+# In another shell — query it like any SPARQL endpoint:
+curl -s 'http://127.0.0.1:7878/sparql' \
+  -H 'Accept: application/sparql-results+json' \
+  --data-urlencode 'query=PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+    SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }'
 ```
 
 **Minimal walkthrough.** Give the engine (a) an R2RML mapping `M` describing how a
-SQLite table maps to RDF and (b) a SPARQL query. The vendored GTFS example
+SQLite/PostgreSQL table maps to RDF and (b) a SPARQL query — over `serve` (above),
+or in-process via the vendored GTFS example exercised by `bench`
 (`crates/sf-bench/vendor/gtfs-madrid-bench/gtfs-rdb.r2rml.ttl` + the queries in
-`crates/sf-bench/src/workload.rs`) is the end-to-end reference exercised by `bench`
-today; the rewriter unfolds the SPARQL against `M`, emits dialect SQL, runs it
-against the live SQLite source, and streams RDF terms back out — no copy, no
-materialisation.
+`crates/sf-bench/src/workload.rs`). The rewriter unfolds the SPARQL against `M`,
+emits dialect SQL, runs it against the live source, and streams RDF terms back out —
+no copy, no materialisation.
 
 ## 9. Status & limitations
 
-**Works today.** SPARQL 1.2 → SQL over R2RML + Direct Mapping; SQLite +
-PostgreSQL dialects; conformance and bench end-to-end; named-graph output; R2RML
-§10 datatype canonicalisation; constant-memory streaming.
+**Works today.** A real `serve` SPARQL 1.2 Protocol HTTP endpoint (streamed,
+content-negotiated, governed) over **both** SQLite and PostgreSQL — both backends
+execute the OBDA path; SPARQL 1.2 → SQL over R2RML + Direct Mapping; full
+property-path expressions (`^p`, `p/q`, `p|q`, `p?`, `!p`, composite `+`/`*`);
+conformance and bench end-to-end; named-graph output; R2RML §10 datatype
+canonicalisation; constant-memory streaming.
 
 **Limitations — stated plainly so the numbers are not over-read:**
 
 | Area | Honest status |
 |---|---|
-| `serve` HTTP endpoint | **Not built.** Scaffold returns not-implemented; all numbers come from the in-process bench/test harness ([ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)/[0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)) |
-| Backend executor | **SQLite-only** today. PostgreSQL SQL is *emitted* (`Dialect::Postgres`) but not yet *executed* ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)) |
-| Property paths | **Single-predicate `P+` / `P*` only** — no arbitrary path expressions ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)) |
+| `serve` HTTP endpoint | **Built and working** — a SPARQL 1.2 Protocol query endpoint (`GET`/`POST /sparql`), read-only, streamed, content-negotiated, with ADR-0010 governance (timeout, query-length cap, cancel-on-drop) ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8, [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[0011](docs/adr/ADR-0011-observability-and-configuration.md)) |
+| Backend executor | **SQLite *and* PostgreSQL both execute** the OBDA path end to end (PostgreSQL is no longer emit-only) ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)) |
+| Property paths | **Full expressions** — inverse `^p`, sequence `p/q`, alternative `p|q`, `p?`, negated property set `!p`, and composite `+`/`*`. Honest 501 residuals (never silently wrong): a **bound endpoint** (v1 = `?s PATH ?o`), a **nested closure inside a composite**, **shape-mismatched composites** (`P+`/`P*` whose subject/object node shapes differ across heterogeneous term domains), and **`p?`/`P*` reflexive** over a multi-predicate or composite graph ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md), [ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)) |
 | W3C RDB2RDF conformance | **81/82 (SQLite), 80/81 (PostgreSQL)** — **not 100%** — with one documented standards deviation, `R2RMLTC0002f` ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md), [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)) |
 | Out of scope | Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, FNML ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md), [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)) |
 
@@ -346,7 +401,7 @@ wrong, but they are not done.
 
 ## 10. Architecture / workspace
 
-Seven crates ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)
+Eight crates ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)
 crate layout, [ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)
 shared-core/frontend split, [ADR-0004](docs/adr/ADR-0004-oxigraph-rdf-sparql-substrate.md)
 substrate):
@@ -359,6 +414,7 @@ substrate):
 | `sf-sparql` | The virtualiser: SPARQL 1.2 → SQL rewriter (instance data never materialised) |
 | `sf-conformance` | W3C RDB2RDF harness + EARL + `M ⋈ T` SHACL gate |
 | `sf-bench` | GTFS-Madrid OBDA benchmark driver |
+| `sf-serve` | The SPARQL 1.2 Protocol HTTP endpoint (streamed, negotiated, governed) over SQLite/PostgreSQL |
 | `sf-cli` | The single binary: `serve · conformance · bench` |
 
 ## 11. Decision records
@@ -422,7 +478,7 @@ canonical index.
 | ADR | Decision |
 |---|---|
 | [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md) | Production-hardening backlog (acknowledged-deferred) |
-| [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) | RDF 1.2 / SPARQL 1.2 / SHACL readiness — Rust stack in place of a JVM |
+| [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) | RDF 1.2 / SPARQL 1.2 / SHACL readiness — Rust stack in place of a JVM (G8: own the 1.2 Protocol endpoint — realised in `sf-serve`) |
 | [ADR-0020](docs/adr/ADR-0020-outstanding-sota-optimisations.md) | Outstanding SOTA optimisations — research register & dispositions |
 
 ## 12. Research grounding / prior art
