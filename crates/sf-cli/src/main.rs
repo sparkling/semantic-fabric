@@ -1,16 +1,17 @@
 //! `semantic-fabric` — the single-binary CLI (ADR-0006). Subcommands:
 //! `serve` · `conformance` · `bench`. `conformance` runs the real W3C RDB2RDF
 //! harness (ADR-0005) and `bench` runs the GTFS-Madrid OBDA driver
-//! (ADR-0005/0006); `serve` is a later-wave scaffold (the SPARQL 1.2 Protocol
-//! endpoint, ADR-0019 G8) that reports its not-yet-implemented status.
+//! (ADR-0005/0006); `serve` runs the live SPARQL 1.2 Protocol endpoint over the
+//! OBDA virtualiser (ADR-0019 G8, ADR-0010/0011; `sf-serve`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
+use sf_serve::{serve_blocking, ServeOptions};
 
 #[derive(Parser)]
 #[command(
@@ -25,25 +26,63 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Serve a live SPARQL endpoint over an RDBMS (OBDA virtualiser; ADR-0003).
-    Serve,
+    /// Serve the live SPARQL 1.2 Protocol endpoint over an RDBMS (ADR-0019 G8).
+    Serve(ServeArgs),
     /// Run the W3C RDB2RDF conformance suite (ADR-0005).
     Conformance,
     /// Run GTFS-Madrid OBDA benchmarks (ADR-0005).
     Bench,
 }
 
+/// `serve` flags (ADR-0019 G8, ADR-0010/0011). Read-only query endpoint.
+#[derive(clap::Args)]
+struct ServeArgs {
+    /// Source: `sqlite:<path>` (path may be `:memory:`) or `pg:<conninfo>`.
+    #[arg(long)]
+    source: String,
+    /// R2RML mapping document (Turtle).
+    #[arg(long)]
+    mapping: String,
+    /// Optional ontology (Turtle) → tier-1 T-Box (ADR-0008).
+    #[arg(long)]
+    ontology: Option<String>,
+    /// Address to bind.
+    #[arg(long, default_value = "127.0.0.1:7878")]
+    bind: String,
+    /// Request timeout in seconds (ADR-0010).
+    #[arg(long, default_value_t = 30)]
+    timeout_secs: u64,
+    /// Max query length in bytes (ADR-0010).
+    #[arg(long, default_value_t = 1 << 20)]
+    max_query_len: usize,
+}
+
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Conformance => conformance(),
-        Command::Serve => not_implemented("serve / OBDA virtualiser", "ADR-0003/0007"),
+        Command::Serve(args) => serve(args),
         Command::Bench => bench(),
     }
 }
 
-fn not_implemented(what: &str, adr: &str) -> ExitCode {
-    eprintln!("semantic-fabric: {what} is not yet implemented (scaffold; {adr}).");
-    ExitCode::from(2)
+/// Run the SPARQL 1.2 Protocol endpoint (`sf-serve`). Returns a clear error
+/// (non-zero exit, no panic) if a required input is missing or invalid.
+fn serve(args: ServeArgs) -> ExitCode {
+    let opts = ServeOptions {
+        source: args.source,
+        mapping_path: args.mapping,
+        ontology_path: args.ontology,
+        bind: args.bind,
+        timeout: Duration::from_secs(args.timeout_secs),
+        max_query_len: args.max_query_len,
+    };
+    match serve_blocking(opts) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("semantic-fabric: serve failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Run the GTFS-Madrid OBDA benchmark driver (ADR-0005/0006): generate the

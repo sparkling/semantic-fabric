@@ -446,6 +446,32 @@ pub struct Solutions {
     pub rows: Vec<Vec<Option<Term>>>,
 }
 
+/// Stream a SELECT's solutions, invoking `sink` per projected row (in projection
+/// order, `None` = unbound) — one row in flight (bounded memory), the streaming
+/// core behind [`select`]. The HTTP layer drives this to serialise + flush each
+/// row into the response body without ever collecting the result set (ADR-0010
+/// §C). The `&[Option<Term>]` slice is reused across rows (a fixed budget).
+pub fn select_each(
+    plan: &Plan,
+    conn: &Connection,
+    mut sink: impl FnMut(&[Option<Term>]) -> Result<()>,
+) -> Result<()> {
+    let vars = match &plan.form {
+        PlanForm::Select { vars } => vars.clone(),
+        _ => {
+            return Err(Error::Unsupported(
+                "select() requires a SELECT plan".to_owned(),
+            ))
+        }
+    };
+    let mut row: Vec<Option<Term>> = Vec::with_capacity(vars.len());
+    for_each_solution(plan, conn, |_branch, bindings| {
+        row.clear();
+        row.extend(vars.iter().map(|v| bindings.get(v).cloned()));
+        sink(&row)
+    })
+}
+
 /// Execute a SELECT, collecting solutions (bounded-memory streaming is the
 /// `for_each_solution` core; this collects for callers/tests).
 pub fn select(plan: &Plan, conn: &Connection) -> Result<Solutions> {

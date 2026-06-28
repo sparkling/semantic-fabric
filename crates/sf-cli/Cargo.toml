@@ -15,5 +15,6 @@ sf-core.workspace = true
 sf-sparql.workspace = true
 sf-conformance.workspace = true
 sf-bench.workspace = true
+sf-serve.workspace = true
 clap.workspace = true
 anyhow.workspace = true

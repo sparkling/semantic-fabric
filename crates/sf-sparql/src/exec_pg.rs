@@ -19,6 +19,7 @@
 //! integration suite (ADR-0012), never the in-crate unit tests.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 
 use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::LogicalSource;
@@ -138,11 +139,17 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
 /// connection, one row in flight (bounded memory). Mirrors the SQLite
 /// [`crate::exec`] core: offset/limit applied in Rust only for the multi-branch
 /// (bag-union) case (the single-branch case already pushed them into SQL).
-async fn for_each_solution_pg(
-    plan: &Plan,
-    client: &Client,
-    mut sink: impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
-) -> Result<()> {
+///
+/// The `sink` is **async** (awaited per solution): collecting callers return a
+/// ready future, while the HTTP streaming layer returns a future that serialises
+/// the row and flushes it into the response body — `send().await` there applies
+/// backpressure straight back to this `query_raw` cursor, so the whole pipeline
+/// stays bounded-memory end to end (ADR-0006 / ADR-0010 §C).
+async fn for_each_solution_pg<F, Fut>(plan: &Plan, client: &Client, mut sink: F) -> Result<()>
+where
+    F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     let branches = plan.prepared_branches();
     let catalog = build_catalog_pg(&branches, client, plan.dialect).await;
     let multi = branches.len() > 1;
@@ -186,7 +193,7 @@ async fn for_each_solution_pg(
             };
             let bindings = reconstruct(branch, &raw)?;
             emitted += 1;
-            sink(branch, &bindings)?;
+            sink(branch, &bindings).await?;
         }
     }
     Ok(())
@@ -226,10 +233,38 @@ pub async fn construct_triples_pg(plan: &Plan, client: &Client) -> Result<Vec<Tr
                 out.push(triple);
             }
         }
-        Ok(())
+        std::future::ready(Ok(()))
     })
     .await?;
     Ok(out)
+}
+
+/// Stream a CONSTRUCT over a live PostgreSQL connection: `sink` is awaited once
+/// per solution with that solution's instantiated triples (bounded by the
+/// template size — never the whole graph). The async mirror of the streaming
+/// SQLite [`crate::exec::construct`] sink; the HTTP layer serialises + flushes
+/// each batch into the RDF response body without collecting (ADR-0010 §C).
+pub async fn construct_each_pg<F, Fut>(plan: &Plan, client: &Client, mut sink: F) -> Result<()>
+where
+    F: FnMut(Vec<Triple>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let template = match &plan.form {
+        PlanForm::Construct { template } => template.clone(),
+        _ => {
+            return Err(Error::Unsupported(
+                "construct() requires a CONSTRUCT plan".to_owned(),
+            ))
+        }
+    };
+    for_each_solution_pg(plan, client, |_branch, bindings| {
+        let triples: Vec<Triple> = template
+            .iter()
+            .filter_map(|tp| instantiate(tp, bindings))
+            .collect();
+        sink(triples)
+    })
+    .await
 }
 
 /// Execute a SELECT over a live PostgreSQL connection, collecting solutions —
@@ -252,10 +287,36 @@ pub async fn select_pg(plan: &Plan, client: &Client) -> Result<Solutions> {
     let mut rows = Vec::new();
     for_each_solution_pg(plan, client, |_branch, bindings| {
         rows.push(vars.iter().map(|v| bindings.get(v).cloned()).collect());
-        Ok(())
+        std::future::ready(Ok(()))
     })
     .await?;
     Ok(Solutions { vars, rows })
+}
+
+/// Stream a SELECT's solution rows over a live PostgreSQL connection into an
+/// async `sink`, awaited once per projected row (in `plan` projection order,
+/// `None` = unbound). The async mirror of the SQLite [`crate::exec::select_each`]:
+/// the HTTP layer serialises + flushes each row into the response body without
+/// ever collecting the result set (ADR-0006 / ADR-0010 §C). The caller reads the
+/// projected variables from `plan.form` for the result header.
+pub async fn select_each_pg<F, Fut>(plan: &Plan, client: &Client, mut sink: F) -> Result<()>
+where
+    F: FnMut(Vec<Option<Term>>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let vars = match &plan.form {
+        PlanForm::Select { vars } => vars.clone(),
+        _ => {
+            return Err(Error::Unsupported(
+                "select() requires a SELECT plan".to_owned(),
+            ))
+        }
+    };
+    for_each_solution_pg(plan, client, |_branch, bindings| {
+        let row: Vec<Option<Term>> = vars.iter().map(|v| bindings.get(v).cloned()).collect();
+        sink(row)
+    })
+    .await
 }
 
 /// Execute an ASK over a live PostgreSQL connection — true iff at least one
@@ -265,7 +326,7 @@ pub async fn ask_pg(plan: &Plan, client: &Client) -> Result<bool> {
     let mut any = false;
     for_each_solution_pg(plan, client, |_b, _s| {
         any = true;
-        Ok(())
+        std::future::ready(Ok(()))
     })
     .await?;
     Ok(any)
@@ -291,25 +352,28 @@ pub async fn dump_quads_pg(
     };
     let mut out = Vec::new();
     for_each_solution_pg(&plan, client, |branch, bindings| {
-        let (Some(s), Some(p), Some(o)) = (
+        // A NULL s/p/o column ⇒ no term ⇒ no triple (§11); a named-graph branch
+        // whose graph map yields no value drops that quad (no default fallback).
+        if let (Some(s), Some(p), Some(o)) = (
             bindings.get(VAR_S),
             bindings.get(VAR_P),
             bindings.get(VAR_O),
-        ) else {
-            return Ok(()); // a NULL s/p/o column ⇒ no term ⇒ no triple (§11)
-        };
-        let graph = if branch.bindings.contains_key(VAR_G) {
-            match bindings.get(VAR_G) {
-                Some(Term::NamedNode(n)) => GraphName::NamedNode(n.clone()),
-                _ => return Ok(()), // graph map yielded no value ⇒ drop this quad
+        ) {
+            let graph = if branch.bindings.contains_key(VAR_G) {
+                match bindings.get(VAR_G) {
+                    Some(Term::NamedNode(n)) => Some(GraphName::NamedNode(n.clone())),
+                    _ => None,
+                }
+            } else {
+                Some(GraphName::DefaultGraph)
+            };
+            if let Some(graph) = graph {
+                if let Ok(triple) = Triple::from_terms(s.clone(), p.clone(), o.clone()) {
+                    out.push(triple.in_graph(graph));
+                }
             }
-        } else {
-            GraphName::DefaultGraph
-        };
-        if let Ok(triple) = Triple::from_terms(s.clone(), p.clone(), o.clone()) {
-            out.push(triple.in_graph(graph));
         }
-        Ok(())
+        std::future::ready(Ok(()))
     })
     .await?;
     Ok(out)

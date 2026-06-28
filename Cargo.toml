@@ -9,6 +9,7 @@ members = [
     "crates/sf-sparql",
     "crates/sf-conformance",
     "crates/sf-bench",
+    "crates/sf-serve",
     "crates/sf-cli",
 ]
 
@@ -38,6 +39,15 @@ sf-mapping = { path = "crates/sf-mapping" }
 sf-sparql = { path = "crates/sf-sparql" }
 sf-conformance = { path = "crates/sf-conformance" }
 sf-bench = { path = "crates/sf-bench" }
+sf-serve = { path = "crates/sf-serve" }
+# --- SPARQL 1.2 Protocol HTTP endpoint (sf-serve; ADR-0019 G8, ADR-0010/0011) ---
+# Own server-binary (Oxigraph ships a 1.1 server only) — axum on tokio, bounded
+# streaming via Body::from_stream; bound-param + cancel-on-drop governance (ADR-0010).
+axum = "0.8"
+tower = "0.5"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+form_urlencoded = "1"
 #
 # Execution stack — wired per-crate when engine logic lands (ADR-0006 / ADR-0015);
 # versions validated latest on crates.io 2026-06-27:
