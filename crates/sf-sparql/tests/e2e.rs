@@ -760,6 +760,177 @@ fn distinct_over_union_dedups_across_branches() {
 }
 
 #[test]
+fn order_by_single_branch_sorts_in_exec_not_sql() {
+    // ORDER BY ?n over a single-branch SELECT is applied in exec via the type-aware
+    // order_cmp, NOT pushed into SQL (a SQL ORDER BY would inherit the column's
+    // collation/affinity — see order_by_respects_codepoint_order_over_sql_collation).
+    // =order gate: the produced rows are the exact ordered vector (not a set).
+    let maps = mapping();
+    let conn = source();
+
+    let q_asc = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n }} ORDER BY ?n");
+    let plan = parse_and_translate(&q_asc, &maps, Dialect::Sqlite).unwrap();
+    assert!(
+        !plan.emitted().unwrap()[0]
+            .sql
+            .to_uppercase()
+            .contains("ORDER BY"),
+        "ORDER BY is applied in exec (collation-independent), never pushed into SQL"
+    );
+    let asc: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(asc, vec!["Ada", "Grace"], "ASC order is exact");
+
+    let q_desc = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n }} ORDER BY DESC(?n)");
+    let plan = parse_and_translate(&q_desc, &maps, Dialect::Sqlite).unwrap();
+    let desc: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(desc, vec!["Grace", "Ada"], "DESC order is exact");
+}
+
+#[test]
+fn order_by_respects_codepoint_order_over_sql_collation() {
+    // Regression (WS-B wave-2 adversarial find): a SQL `ORDER BY` on a NOCASE text
+    // column sorts case-insensitively, disagreeing with SPARQL's xsd:string order
+    // (Unicode codepoint: 'Z' U+005A < 'a' U+0061). Because ORDER BY is applied in
+    // exec via order_cmp (codepoint), the result is correct regardless of the
+    // column's declared collation. (The old single-branch SQL push returned the
+    // wrong order ["apple","Zoo"] here.)
+    let t = TriplesMap {
+        id: "T".to_owned(),
+        source: LogicalSource::Table("t".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/t/{id}"),
+            classes: vec![],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![pom(EMP_NAME, column_literal("name"))],
+    };
+    let maps = std::slice::from_ref(&t);
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT COLLATE NOCASE);
+         INSERT INTO t VALUES (1,'Zoo'),(2,'apple');",
+    )
+    .unwrap();
+    let q = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n }} ORDER BY ?n");
+    let plan = parse_and_translate(&q, maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(
+        got,
+        vec!["Zoo", "apple"],
+        "codepoint order (uppercase < lowercase), not the NOCASE column collation"
+    );
+}
+
+#[test]
+fn order_by_asc_sorts_unbound_optional_first() {
+    // ASC pins UNBOUND (the OPTIONAL no-match) FIRST (SPARQL §15.1 + NULLS FIRST).
+    // Lone has no department ⇒ ?dn unbound ⇒ sorts before the bound R&D.
+    let maps = mapping();
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE emp(id INTEGER PRIMARY KEY, name TEXT, dept_id INTEGER);
+         CREATE TABLE dept(id INTEGER PRIMARY KEY, dname TEXT);
+         INSERT INTO emp VALUES (1,'Ada',10),(3,'Lone',99);
+         INSERT INTO dept VALUES (10,'R&D');",
+    )
+    .unwrap();
+    let q = format!(
+        "SELECT ?n ?dn WHERE {{ ?e <{EMP_NAME}> ?n . ?e <{EMP_DEPT}> ?d \
+         OPTIONAL {{ ?d <{DEPT_NAME}> ?dn }} }} ORDER BY ?dn"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let rows: Vec<(String, Option<String>)> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| (lit(&r[0]), r[1].as_ref().map(|_| lit(&r[1]))))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("Lone".to_owned(), None), // unbound ?dn sorts FIRST (ASC)
+            ("Ada".to_owned(), Some("R&D".to_owned())),
+        ],
+        "ASC puts the unbound OPTIONAL key first"
+    );
+}
+
+#[test]
+fn order_by_over_union_sorts_globally_across_branches() {
+    // ORDER BY over a UNION is a multi-branch bag-union: per-branch SQL cannot give
+    // a global order, so exec buffers + stable-sorts ACROSS branches. The two arms
+    // bind ?n from emp/dept names; the merged result must be globally ordered.
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n WHERE {{ {{ ?e <{EMP_NAME}> ?n }} UNION {{ ?d <{DEPT_NAME}> ?n }} }} \
+         ORDER BY ?n"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    assert!(plan.branches.len() > 1, "UNION is a multi-branch plan");
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    // Global codepoint order across BOTH arms: Ada, Grace, Ops, R&D.
+    assert_eq!(
+        got,
+        vec!["Ada", "Grace", "Ops", "R&D"],
+        "the bag-union is sorted globally, not per-branch"
+    );
+}
+
+#[test]
+fn order_by_then_limit_is_global_top_n() {
+    // ORDER BY ?n DESC LIMIT 2 over the UNION: the slice applies AFTER the global
+    // sort (SPARQL §15: order, then LIMIT), so it is the true top-2, not a per-branch
+    // head. Descending global order: R&D, Ops, Grace, Ada → top-2 = [R&D, Ops].
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n WHERE {{ {{ ?e <{EMP_NAME}> ?n }} UNION {{ ?d <{DEPT_NAME}> ?n }} }} \
+         ORDER BY DESC(?n) LIMIT 2"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(got, vec!["R&D", "Ops"], "top-2 after the global DESC sort");
+}
+
+#[test]
+fn order_by_complex_expression_is_501() {
+    // ORDER BY over a non-variable expression (here an arithmetic key) is outside the
+    // v1 subset → honest 501, never a wrong order.
+    let maps = mapping();
+    let q = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n }} ORDER BY (STRLEN(?n) + 1)");
+    assert!(
+        parse_and_translate(&q, &maps, Dialect::Sqlite).is_err(),
+        "a complex ORDER BY expression is deferred to 501"
+    );
+}
+
+#[test]
 fn bind_concat_preserves_lang_and_typechecks() {
     // CONCAT (§17.4.5.4): operands sharing one language tag keep it; a non-string
     // typed operand is a type error → the BIND variable is unbound (never wrong).

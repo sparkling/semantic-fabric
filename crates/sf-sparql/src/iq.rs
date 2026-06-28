@@ -170,6 +170,18 @@ pub enum StrMatchOp {
     RegexMatchI,
 }
 
+/// One ORDER BY key (SPARQL §15.1): a bound variable plus its direction. The
+/// ordering is over the SPARQL value space — emission/execution pin it so an
+/// unbound (NULL) key sorts FIRST for ASC and LAST for DESC (never the dialect
+/// default), and bound terms order blank-node < IRI < literal. v1 supports a key
+/// that is a bound variable only; a complex ORDER BY expression is deferred → 501
+/// ([`crate::unfold`]).
+#[derive(Debug, Clone)]
+pub struct OrderKey {
+    pub var: String,
+    pub descending: bool,
+}
+
 /// Comparison operators supported by pushed-down FILTERs (ADR-0007 v1 subset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
@@ -333,6 +345,10 @@ pub struct Branch {
     pub distinct: bool,
     pub limit: Option<usize>,
     pub offset: usize,
+    /// ORDER BY keys, pushed into this branch's SQL (the single-branch case;
+    /// [`crate::Plan::prepared_branches`]). A multi-branch bag-union cannot order
+    /// in per-branch SQL — that global sort happens in [`crate::exec`].
+    pub order: Vec<OrderKey>,
     /// When set, this branch is a recursive property-path closure: its `FROM` is
     /// the CTE (empty `core`), not a base scan (ADR-0007 recursive paths).
     pub path: Option<PathClosure>,
@@ -349,6 +365,7 @@ impl Branch {
             distinct: false,
             limit: None,
             offset: 0,
+            order: Vec::new(),
             path: None,
         }
     }

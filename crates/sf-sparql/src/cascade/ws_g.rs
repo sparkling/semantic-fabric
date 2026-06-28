@@ -73,6 +73,7 @@ fn ontop_inner_self_join_elimination_on_pk() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     b.bindings

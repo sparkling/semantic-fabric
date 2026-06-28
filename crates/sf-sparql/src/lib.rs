@@ -24,7 +24,10 @@
 //! Supported: the `?s ?p ?o` CONSTRUCT **dump** (the M2 / W3C-conformance target,
 //! ADR-0005), BGP, JOIN, FILTER (comparison/`&&`/`||`/`!`/`BOUND` subset),
 //! OPTIONAL (NULL-safe LEFT JOIN, single-scan right side), UNION, projection,
-//! DISTINCT/REDUCED, LIMIT/OFFSET, `rr:class` / refObjectMap unfolding, and the
+//! DISTINCT/REDUCED, LIMIT/OFFSET, ORDER BY (by a bound variable, ASC/DESC, several
+//! keys — value-space order with UNBOUND first/last per direction; a single branch
+//! pushes `ORDER BY … NULLS FIRST/LAST` into SQL, a bag-union sorts globally in
+//! `exec`), `rr:class` / refObjectMap unfolding, and the
 //! property paths with variable endpoints (`WITH RECURSIVE` / non-recursive CTE,
 //! ADR-0007; `owl:TransitiveProperty` served live, ADR-0008; depth-bounded,
 //! ADR-0010): `P+`/`P*` over a single predicate, the `?` (ZeroOrOne), `!` (NPS),
@@ -34,8 +37,10 @@
 //! single-predicate graph). Deferred → `501` (documented, never silent): a path
 //! with a bound endpoint, a nested closure inside a composite, a predicate from a
 //! multi-mapping / refObjectMap / multi-column or non-constant term map, a
-//! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; plus
-//! aggregates, LATERAL, MINUS, GRAPH, BIND/VALUES, ORDER BY, DESCRIBE, SERVICE,
+//! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; an ORDER BY
+//! on a complex expression (only a bound variable is supported) or, for a single
+//! branch pushed to SQL, on a non-`rr:column` term (a template IRI / COALESCE);
+//! plus aggregates, LATERAL, MINUS, GRAPH, DESCRIBE, SERVICE,
 //! OWL 2 QL tier-2 (ADR-0008), and PostgreSQL execution (SQLite is this wave's
 //! execution target; the path CTE's Postgres `CYCLE` variant is the later MB-4
 //! wave; emission is otherwise dialect-generic).
@@ -109,21 +114,30 @@ pub struct Plan {
     pub distinct: bool,
     pub limit: Option<usize>,
     pub offset: usize,
+    /// ORDER BY keys (SPARQL §15.1), empty when unordered. Applied to SQL for a
+    /// single branch ([`Plan::prepared_branches`]) or as a global stable sort over
+    /// the bag-union in [`exec`] for multiple branches.
+    pub order: Vec<iq::OrderKey>,
     pub dialect: Dialect,
 }
 
 impl Plan {
-    /// Branches ready for emission: when there is exactly one branch, DISTINCT /
-    /// LIMIT / OFFSET are pushed into its SQL; with multiple (bag-union) branches
-    /// they are applied during streaming ([`exec`]), and DISTINCT-over-union is
-    /// deferred (ADR-0007).
+    /// Branches ready for emission: when there is exactly one unordered branch,
+    /// DISTINCT / LIMIT / OFFSET are pushed into its SQL; with multiple (bag-union)
+    /// branches they are applied during streaming ([`exec`]). **ORDER BY is never
+    /// pushed into SQL** — it is applied in `exec` via the type-aware, collation-
+    /// independent [`exec::order_cmp`] (a SQL `ORDER BY` would inherit the column's
+    /// collation/affinity, which can disagree with SPARQL value order). So an ordered
+    /// plan must also keep LIMIT/OFFSET out of SQL — they apply *after* the sort.
     pub fn prepared_branches(&self) -> Vec<Branch> {
         let mut branches = self.branches.clone();
         if branches.len() == 1 {
             let b = &mut branches[0];
             b.distinct = self.distinct;
-            b.limit = self.limit;
-            b.offset = self.offset;
+            if self.order.is_empty() {
+                b.limit = self.limit;
+                b.offset = self.offset;
+            }
         }
         branches
     }
@@ -245,6 +259,7 @@ fn translate_inner(
         distinct,
         limit: trans.limit,
         offset: trans.offset,
+        order: trans.order,
         dialect,
     })
 }

@@ -11,6 +11,7 @@
 //! dedicated rayon pool ([`crate::pool`]); the sync SQLite path here generates
 //! inline (no async runtime to protect — ADR-0006).
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use rusqlite::types::ValueRef;
@@ -23,7 +24,7 @@ use sf_core::ir::LogicalSource;
 use sf_sql::Dialect;
 
 use crate::emit::{ColumnCatalog, EmittedBranch};
-use crate::iq::{Branch, ColRef, TermDef};
+use crate::iq::{Branch, ColRef, OrderKey, TermDef};
 use crate::{Error, Plan, PlanForm, Result};
 
 /// Introspect the actual result-column names of every source the plan reads, so
@@ -306,7 +307,16 @@ fn for_each_solution(
         std::collections::HashSet::new();
     let mut seen = 0usize; // solutions observed (for offset)
     let mut emitted = 0usize; // solutions passed downstream (for limit)
-    for branch in &branches {
+                              // ORDER BY is applied HERE for every plan (single- and multi-branch alike), never
+                              // in SQL: a SQL `ORDER BY` inherits the column's collation/affinity, which can
+                              // disagree with SPARQL value order (NOCASE text, non-C locale, temporal types).
+                              // So buffer every (DISTINCT-deduped) solution, stable-sort by the keys via the
+                              // type-aware `order_cmp`, then OFFSET/LIMIT (SPARQL §15: order, then slice).
+                              // Bounded-memory caveat: ORDER BY inherently buffers — the one exception to the
+                              // streaming contract (ADR-0006), memory grows with the result size.
+    let ordered = !plan.order.is_empty();
+    let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
+    for (bi, branch) in branches.iter().enumerate() {
         let e = crate::emit::emit_branch_with(branch, plan.dialect, &catalog)?;
         let declared = declared_codes(&e, conn);
         let char_pads = declared_char_pads(&e, conn);
@@ -361,8 +371,8 @@ fn for_each_solution(
                     return Ok(());
                 }
             };
-            // Rust-side DISTINCT + offset/limit only when SQL didn't apply them
-            // (multi-branch bag-union).
+            // DISTINCT dedup only for a multi-branch bag-union (a single branch dedups
+            // in SQL). Applied before ORDER BY.
             if multi {
                 if let Some(vars) = &distinct_vars {
                     let key: Vec<Option<Term>> =
@@ -371,6 +381,17 @@ fn for_each_solution(
                         return Ok(()); // duplicate projected solution ⇒ not a new one
                     }
                 }
+            }
+            // ORDER BY (any branch count): defer slicing — buffer for the global
+            // type-aware sort after every row is read, so single- and multi-branch
+            // order identically (OFFSET/LIMIT applied after the sort, below).
+            if ordered {
+                buffer.push((bi, bindings));
+                return Ok(());
+            }
+            // Streaming OFFSET/LIMIT only when SQL didn't apply them (a multi-branch
+            // bag-union; a single unordered branch sliced in SQL).
+            if multi {
                 if seen < plan.offset {
                     seen += 1;
                     return Ok(());
@@ -392,7 +413,125 @@ fn for_each_solution(
             return Err(x);
         }
     }
+    // The buffered bag-union ORDER BY: stable-sort by the keys (a stable sort keeps
+    // the input bag order for equal keys), then OFFSET/LIMIT, then sink.
+    if ordered {
+        buffer.sort_by(|(_, a), (_, b)| order_cmp(&plan.order, a, b));
+        let take = plan.limit.unwrap_or(usize::MAX);
+        for (bi, bindings) in buffer.iter().skip(plan.offset).take(take) {
+            sink(&branches[*bi], bindings)?;
+        }
+    }
     Ok(())
+}
+
+/// Compare two solutions by the ORDER BY keys (SPARQL §15.1), honoring each key's
+/// direction with explicit UNBOUND placement: an unbound key sorts FIRST for ASC
+/// and LAST for DESC — matching the SQL `NULLS FIRST/LAST` the single-branch path
+/// emits, so single- and multi-branch orderings agree. Bound terms order
+/// blank-node < IRI < literal; numeric-typed literals compare by value (so
+/// xsd:integer 2 < 10, not lexical "10" < "2"). `pub(crate)` so the PostgreSQL
+/// executor sorts its bag-union identically.
+pub(crate) fn order_cmp(
+    order: &[OrderKey],
+    a: &BTreeMap<String, Term>,
+    b: &BTreeMap<String, Term>,
+) -> Ordering {
+    for key in order {
+        let ord = match (a.get(&key.var), b.get(&key.var)) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => {
+                if key.descending {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            (Some(_), None) => {
+                if key.descending {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
+            (Some(x), Some(y)) => {
+                let c = cmp_term(x, y);
+                if key.descending {
+                    c.reverse()
+                } else {
+                    c
+                }
+            }
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
+}
+
+/// SPARQL term order extended to a total order for sorting: blank node < IRI <
+/// literal; within a kind by value.
+fn cmp_term(a: &Term, b: &Term) -> Ordering {
+    fn rank(t: &Term) -> u8 {
+        match t {
+            Term::BlankNode(_) => 0,
+            Term::NamedNode(_) => 1,
+            Term::Literal(_) => 2,
+            _ => 3, // quoted triple (RDF-star) — sorts last, by lexical form
+        }
+    }
+    match (a, b) {
+        (Term::BlankNode(x), Term::BlankNode(y)) => x.as_str().cmp(y.as_str()),
+        (Term::NamedNode(x), Term::NamedNode(y)) => x.as_str().cmp(y.as_str()),
+        (Term::Literal(x), Term::Literal(y)) => cmp_literal(x, y),
+        _ => rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.to_string().cmp(&b.to_string())),
+    }
+}
+
+/// Compare two literals: numerically when both carry a numeric XSD datatype, else
+/// by lexical value, then datatype IRI, then language tag.
+fn cmp_literal(x: &Literal, y: &Literal) -> Ordering {
+    if let (Some(nx), Some(ny)) = (numeric_value(x), numeric_value(y)) {
+        return nx.partial_cmp(&ny).unwrap_or(Ordering::Equal);
+    }
+    x.value()
+        .cmp(y.value())
+        .then_with(|| x.datatype().as_str().cmp(y.datatype().as_str()))
+        .then_with(|| x.language().unwrap_or("").cmp(y.language().unwrap_or("")))
+}
+
+/// The `f64` value of a numeric-XSD-typed literal, else `None` (a non-numeric
+/// datatype is ordered lexically, never coerced).
+fn numeric_value(l: &Literal) -> Option<f64> {
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    let local = l.datatype().as_str().strip_prefix(XSD)?;
+    let numeric = matches!(
+        local,
+        "integer"
+            | "decimal"
+            | "double"
+            | "float"
+            | "long"
+            | "int"
+            | "short"
+            | "byte"
+            | "nonNegativeInteger"
+            | "nonPositiveInteger"
+            | "negativeInteger"
+            | "positiveInteger"
+            | "unsignedLong"
+            | "unsignedInt"
+            | "unsignedShort"
+            | "unsignedByte"
+    );
+    if numeric {
+        l.value().parse::<f64>().ok()
+    } else {
+        None
+    }
 }
 
 fn map_sql_err(e: sf_sql::Error) -> Error {
@@ -455,6 +594,7 @@ pub fn dump_quads_stream(
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         dialect,
     };
     for_each_solution(&plan, conn, |branch, bindings| {

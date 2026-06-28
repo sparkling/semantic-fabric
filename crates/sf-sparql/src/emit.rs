@@ -27,10 +27,12 @@
 
 use std::collections::HashMap;
 
-use sf_core::ir::LogicalSource;
+use sf_core::ir::{LogicalSource, TermMap};
 use sf_sql::Dialect;
 
-use crate::iq::{Branch, ColRef, HopExpr, PathClosure, PathKind, SqlCond, StrMatchOp};
+use crate::iq::{
+    Branch, ColRef, HopExpr, OrderKey, PathClosure, PathKind, SqlCond, StrMatchOp, TermDef,
+};
 use crate::{Error, Result};
 
 /// The introspected (actual) column names of each logical source, so a mapping's
@@ -155,6 +157,10 @@ pub fn emit_branch_with(
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
+    // ORDER BY precedes LIMIT/OFFSET (SPARQL §15: order, then slice).
+    if let Some(order) = render_order(&b.order, b, dialect, &actuals)? {
+        skeleton.push_str(&order);
+    }
     if let Some(limit) = b.limit {
         skeleton.push_str(&format!(" LIMIT {limit}"));
     }
@@ -170,6 +176,62 @@ pub fn emit_branch_with(
         projection,
         params,
     })
+}
+
+/// Render an `ORDER BY` clause that pins the SPARQL value-space order, or `None`
+/// when there are no keys. Each key is a bound variable; its `rr:column` term map
+/// lowers to a raw column whose SQL order equals the RDF lexical/value order (a
+/// homogeneous literal column, or an IRI whose value *is* the column). NULL
+/// placement is **always explicit** — `NULLS FIRST` for ASC, `NULLS LAST` for DESC
+/// — never the dialect default (PostgreSQL: NULLS LAST; SQLite: NULLS FIRST), so an
+/// unbound key sorts first (ASC) / last (DESC) on every engine. A key bound to a
+/// non-`rr:column` term (a constructed template IRI, COALESCE, …) cannot be ordered
+/// soundly in SQL (the constructed string ≠ the column order) → honest 501.
+fn render_order(
+    order: &[OrderKey],
+    b: &Branch,
+    dialect: Dialect,
+    actuals: &HashMap<usize, Vec<String>>,
+) -> Result<Option<String>> {
+    if order.is_empty() {
+        return Ok(None);
+    }
+    let mut terms = Vec::with_capacity(order.len());
+    for key in order {
+        let def = b.bindings.get(&key.var).ok_or_else(|| {
+            Error::Unsupported(format!(
+                "ORDER BY ?{} is not a bound variable → 501",
+                key.var
+            ))
+        })?;
+        let col = order_column(def).ok_or_else(|| {
+            Error::Unsupported(format!(
+                "ORDER BY ?{} is not an rr:column term — a constructed/derived sort \
+                 key cannot be ordered soundly in SQL → 501",
+                key.var
+            ))
+        })?;
+        let dir = if key.descending {
+            "DESC NULLS LAST"
+        } else {
+            "ASC NULLS FIRST"
+        };
+        terms.push(format!("{} {dir}", colref(&col, dialect, actuals)));
+    }
+    Ok(Some(format!(" ORDER BY {}", terms.join(", "))))
+}
+
+/// The single raw column an ORDER BY key lowers to, iff the key is a bound
+/// `rr:column` term map (the SQL-order-sound case). A template / COALESCE / CONCAT /
+/// constant has no such column → `None` (the caller defers to 501).
+fn order_column(def: &TermDef) -> Option<ColRef> {
+    match def {
+        TermDef::Derived {
+            term_map: TermMap::Column(c, _),
+            alias,
+        } => Some(ColRef::new(*alias, c.clone())),
+        _ => None,
+    }
 }
 
 /// Render a property-path closure branch to a (possibly `WITH RECURSIVE`) CTE
@@ -206,6 +268,15 @@ fn emit_path_branch(
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<EmittedBranch> {
+    // A path closure binds its endpoints to constructed template IRIs over the
+    // canonical `sf_s`/`sf_o` keys — never a plain `rr:column` — so SQL-ordering by
+    // a raw key would not match the IRI order. ORDER BY over a property-path result
+    // is therefore deferred → 501 (never a silently wrong order), not dropped.
+    if !b.order.is_empty() {
+        return Err(Error::Unsupported(
+            "ORDER BY over a property-path result is deferred → 501".to_owned(),
+        ));
+    }
     let projection = b.projection();
     let mut params = Vec::new();
     let mut pidx = 0usize;

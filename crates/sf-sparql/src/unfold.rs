@@ -7,10 +7,10 @@
 
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
-use spargebra::algebra::GraphPattern;
+use spargebra::algebra::{Expression, GraphPattern, OrderExpression};
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern};
 
-use crate::iq::{Branch, Scan, SqlCond, TermDef};
+use crate::iq::{Branch, OrderKey, Scan, SqlCond, TermDef};
 use crate::leftjoin::left_join_branches;
 use crate::saturate::Tbox;
 use crate::unify::{filter_cond, unify, Unify};
@@ -26,6 +26,7 @@ pub struct TransPattern {
     pub distinct: bool,
     pub limit: Option<usize>,
     pub offset: usize,
+    pub order: Vec<OrderKey>,
 }
 
 impl TransPattern {
@@ -36,6 +37,7 @@ impl TransPattern {
             distinct: false,
             limit: None,
             offset: 0,
+            order: Vec::new(),
         }
     }
 }
@@ -178,7 +180,37 @@ impl<'a> Unfolder<'a> {
                 }
                 Ok(TransPattern::plain(branches))
             }
-            // Deferred → 501 (documented, never silent): MINUS, GRAPH, ORDER BY,
+            // ORDER BY (SPARQL §15.1) — order over the value space. v1 supported
+            // subset: each key is a *bound variable*, Asc or Desc, possibly several.
+            // The keys are peeled onto `TransPattern` here; the actual sort is pinned
+            // later (single-branch → SQL `ORDER BY … NULLS FIRST/LAST` in
+            // [`crate::emit`]; multi-branch bag-union → the global stable sort in
+            // [`crate::exec`], which per-branch SQL cannot give). A non-variable key
+            // (a complex expression we cannot lower) defers the whole query → 501,
+            // never a wrong order.
+            GraphPattern::OrderBy { inner, expression } => {
+                let mut t = self.translate_pattern(inner)?;
+                let mut keys = Vec::with_capacity(expression.len());
+                for oe in expression {
+                    let (expr, descending) = match oe {
+                        OrderExpression::Asc(e) => (e, false),
+                        OrderExpression::Desc(e) => (e, true),
+                    };
+                    let var = match expr {
+                        Expression::Variable(v) => v.as_str().to_owned(),
+                        other => {
+                            return Err(Error::Unsupported(format!(
+                                "ORDER BY expression not supported in v1 → 501 \
+                                 (only a bound variable key): {other:?}"
+                            )))
+                        }
+                    };
+                    keys.push(OrderKey { var, descending });
+                }
+                t.order = keys;
+                Ok(t)
+            }
+            // Deferred → 501 (documented, never silent): MINUS, GRAPH,
             // aggregates, LATERAL, SERVICE (ADR-0007 §v1 SPARQL coverage; ADR-0008
             // tier-2).
             other => Err(Error::Unsupported(format!(

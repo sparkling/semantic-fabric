@@ -30,7 +30,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Client, Row as PgRow};
 
 use crate::emit::ColumnCatalog;
-use crate::exec::{instantiate, reconstruct, RawRow, Solutions};
+use crate::exec::{instantiate, order_cmp, reconstruct, RawRow, Solutions};
 use crate::iq::Branch;
 use crate::{Error, Plan, PlanForm, Result};
 
@@ -155,7 +155,14 @@ where
     let multi = branches.len() > 1;
     let mut seen = 0usize;
     let mut emitted = 0usize;
-    for branch in &branches {
+    // ORDER BY is applied here for every plan (single- and multi-branch), never in
+    // SQL: a SQL `ORDER BY` inherits the column's collation/affinity, which can
+    // disagree with SPARQL value order. Buffer + stable-sort via the type-aware
+    // `order_cmp`, then OFFSET/LIMIT. ORDER BY inherently buffers (the streaming
+    // exception), mirroring the SQLite executor.
+    let ordered = !plan.order.is_empty();
+    let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
+    for (bi, branch) in branches.iter().enumerate() {
         let e = crate::emit::emit_branch_with(branch, plan.dialect, &catalog)?;
         let params: Vec<&(dyn ToSql + Sync)> =
             e.params.iter().map(|s| s as &(dyn ToSql + Sync)).collect();
@@ -173,7 +180,19 @@ where
                 codes.push(pg_xsd_code(ty));
                 values.push(pg_value(&row, i, ty)?);
             }
-            // Rust-side offset/limit only when SQL didn't apply them (multi-branch).
+            let raw = RawRow {
+                schema: &e.projection,
+                values: &values,
+                codes: &codes,
+            };
+            let bindings = reconstruct(branch, &raw)?;
+            // ORDER BY (any branch count): buffer for the global type-aware sort after
+            // every row, so single- and multi-branch order identically (slice below).
+            if ordered {
+                buffer.push((bi, bindings));
+                continue;
+            }
+            // Streaming OFFSET/LIMIT only when SQL didn't apply them (multi-branch).
             if multi {
                 if seen < plan.offset {
                     seen += 1;
@@ -185,15 +204,16 @@ where
                     }
                 }
             }
-            seen += 1;
-            let raw = RawRow {
-                schema: &e.projection,
-                values: &values,
-                codes: &codes,
-            };
-            let bindings = reconstruct(branch, &raw)?;
             emitted += 1;
             sink(branch, &bindings).await?;
+        }
+    }
+    // The buffered bag-union ORDER BY: stable-sort by the keys, then OFFSET/LIMIT.
+    if ordered {
+        buffer.sort_by(|(_, a), (_, b)| order_cmp(&plan.order, a, b));
+        let take = plan.limit.unwrap_or(usize::MAX);
+        for (bi, bindings) in buffer.iter().skip(plan.offset).take(take) {
+            sink(&branches[*bi], bindings).await?;
         }
     }
     Ok(())
@@ -348,6 +368,7 @@ pub async fn dump_quads_pg(
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         dialect,
     };
     let mut out = Vec::new();

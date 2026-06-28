@@ -46,6 +46,7 @@ fn self_join_eliminated_on_unique_key() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     b.bindings.insert("n".to_owned(), col_binding(1, "name"));
@@ -81,6 +82,7 @@ fn self_join_not_eliminated_on_nullable_unique_key() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     let mut ts = TableSchema::new("emp");
@@ -111,6 +113,7 @@ fn self_join_eliminated_keeps_unrelated_self_comparison_guard() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     b.bindings.insert("n".to_owned(), col_binding(1, "name"));
@@ -139,6 +142,7 @@ fn self_join_not_eliminated_without_key_proof() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     let out = run(vec![b], &[], &CascadeCtx::default());
@@ -170,6 +174,7 @@ fn fd_inference_seeds_keys_and_closes_transitively() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     let schema = vec![pk_table("a", "x"), pk_table("b", "y"), pk_table("c", "z")];
@@ -198,6 +203,7 @@ fn fd_inference_empty_without_schema() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     let fds = infer_functional_dependencies(&b, &[]);
@@ -248,6 +254,7 @@ fn fk_branch() -> Branch {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     // ?route bound to the parent (routes) subject IRI, built from route_id.
@@ -459,6 +466,7 @@ fn distinct_kept_on_join() {
         distinct: false,
         limit: None,
         offset: 0,
+        order: Vec::new(),
         path: None,
     };
     b.bindings
