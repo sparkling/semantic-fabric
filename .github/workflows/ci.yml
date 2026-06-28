@@ -1,0 +1,56 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: fmt · clippy · build · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build --workspace --all-targets
+      - name: test
+        run: cargo test --workspace
+      # W3C RDB2RDF conformance gate (ADR-0005) — the non-degradation half of the
+      # Darwin fitness function. Red until engine logic lands; enable then:
+      # - name: conformance (W3C RDB2RDF)
+      #   run: cargo run -p sf-cli -- conformance
+
+  readiness:
+    name: meta-harness readiness telemetry (ADR-0013)
+    runs-on: ubuntu-latest
+    # Drift tracking only — non-blocking while the engine is pre-build (ADR-0013 §1).
+    # 2026-06-27 baseline: harnessFit 67 · compileConfidence 100 · scaffoldReady true.
+    # Tighten to a hard gate (drop continue-on-error; fail on the harnessFit floor)
+    # once engine logic lands. The security suite (oia-audit/mcp-scan/threat-model) and
+    # the --alert-on-* exit gates are ruflo-plugin-only (not in the public metaharness
+    # package) — run those via the ruflo plugin, not here (ADR-0013 §3).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: harness score + genome (informational snapshot)
+        run: |
+          { echo '### Meta-harness readiness (ADR-0013)'; echo '```json'; } >> "$GITHUB_STEP_SUMMARY"
+          npx -y metaharness@latest score . --json | tee score.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          npx -y metaharness@latest genome . || true
+          fit=$(jq -r '.harnessFit' score.json)
+          echo "harnessFit=$fit (ADR-0013 baseline: 67)"
+          if [ "$fit" -lt 60 ]; then
+            echo "::warning::harnessFit $fit is below the 60 floor — readiness regression vs ADR-0013 baseline"
+          fi

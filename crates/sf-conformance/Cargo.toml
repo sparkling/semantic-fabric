@@ -1,0 +1,35 @@
+[package]
+name = "sf-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric W3C RDB2RDF conformance harness + EARL + M⋈T SHACL gate (ADR-0005)"
+
+[dependencies]
+sf-core.workspace = true
+sf-sql.workspace = true
+sf-mapping.workspace = true
+sf-sparql.workspace = true
+# Graph-isomorphism comparison + N-Quads/Turtle parsing of expected output (ADR-0005).
+oxrdf.workspace = true
+oxttl.workspace = true
+# In-memory SQLite fixture per W3C case (matches the sf-sparql execution wave).
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror.workspace = true
+# Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway schema per
+# case loaded over a real server, executed via the PgRowStream cursor. Skips
+# gracefully when no server is reachable (probe / SF_PG_URL), so CI stays green.
+tokio = { version = "1", features = ["rt", "macros"] }
+tokio-postgres = "0.7"
+# M⋈T SHACL gate — rudof `shacl` in Native mode (ADR-0005 / ADR-0019 G4). The
+# `oxrdf` it pulls is 0.3.3, identical to the workspace pin (no second RDF stack).
+shacl = "0.3"
+rudof_rdf = "0.3"
+sparql_service = "0.3"
+# In-memory differential oracle (ADR-0005 / ADR-0004): spareval evaluates the same
+# SPARQL over the expected RDF graph as the independent second evaluator. ADR-0004
+# sanctions spareval for the in-memory oracle ONLY (never the OBDA hot path); pins
+# match the workspace exactly (oxrdf =0.3.3, spargebra =0.4.6, sparesults =0.3.3).
+spareval = { version = "0.2.6", features = ["sparql-12"] }
+spargebra.workspace = true

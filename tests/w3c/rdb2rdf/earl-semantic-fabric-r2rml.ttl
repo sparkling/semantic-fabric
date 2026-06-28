@@ -1,0 +1,399 @@
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+<https://example.org/tools/semantic-fabric> a earl:TestSubject, doap:Project ;
+  doap:name "semantic-fabric" ;
+  doap:programming-language "Rust" .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0000> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0001a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0001b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — exec: sql error: sqlite error: no such column: t0.IDs in SELECT t0.\"IDs\" AS c0, t0.\"ID\" AS c1, t0.\"Name\" AS c2 FROM \"Student\" t0 at offset 7" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002d> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002e> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — exec: sql error: sqlite error: no such table: Students" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002f> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:failed ;
+    dct:description "error case: engine produced output instead of signalling an error" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002g> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — exec: sql error: sql emission error: sql parser error: Expected: joined table, found: NOT at Line: 2, Column: 32" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002h> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — rr:sqlQuery produces duplicate column name \"ID\" (R2RML §5.1)" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002i> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002j> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0003a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — mapping parse: mapping error: unsupported rr:sqlVersion <http://www.w3.org/ns/r2rml#SQL1979> (only rr:SQL2008 is recognised)" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0003b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0003c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0004a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0004b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — mapping parse: mapping error: subject map _:d03064a88c6a54c97459e65c288ca4d9 has rr:termType rr:Literal (must be IRI or blank node)" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0005a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0005b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0006a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007d> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007e> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007f> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007g> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007h> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — mapping parse: mapping error: predicate/graph term map _:d93c7bfe40aa6228a45d0fa6eafc0cf6 must have rr:termType rr:IRI" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0008a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0008b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0008c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0009a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0009b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0009c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0009d> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0010a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0010b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0010c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0011a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0011b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0012a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0012b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0012c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — mapping parse: mapping error: triples map http://example.com/base/TriplesMap1 has no rr:subjectMap / rr:subject" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0012d> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — mapping parse: mapping error: triples map http://example.com/base/TriplesMap1 has more than one subject map" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0012e> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0013a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0014a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0014b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0014c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0014d> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0015a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0015b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — mapping parse: mapping error: rr:language \"english\" of _:c07ec288811b48029a023268de6166dc is not a valid BCP47 language tag" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0016a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0016b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0016c> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0016d> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0016e> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0018a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0019a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0019b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — exec: core error: term generation error: rr:column IRI value \"Juan Daniel\" is not a valid IRI and does not resolve against the base" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0020a> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0020b> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
+    dct:description "error correctly surfaced — exec: core error: term generation error: rr:column IRI value \"Emily Smith\" is not a valid IRI and does not resolve against the base" ] .

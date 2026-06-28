@@ -1,0 +1,30 @@
+[package]
+name = "sf-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric GTFS-Madrid OBDA benchmark driver (ADR-0005)"
+
+[dependencies]
+sf-core.workspace = true
+sf-sql.workspace = true
+sf-mapping.workspace = true
+sf-sparql.workspace = true
+# File-backed SQLite source (ADR-0006): the source DB does the set-work on disk,
+# so engine memory is separable from source data. Same pin as sf-sparql/exec.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+# criterion latency benches (ADR-0005). tempfile holds the file-backed source DB
+# off the in-process heap so the constant-memory measurement is not confounded.
+criterion = "0.5"
+tempfile = "3"
+
+[[bench]]
+name = "obda_latency"
+harness = false
+
+[[bench]]
+name = "constant_memory"
+harness = false

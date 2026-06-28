@@ -1,0 +1,34 @@
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:	<http://www.w3.org/2000/01/rdf-schema#> .
+@prefix mf:     <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<>  rdf:type mf:Manifest ;
+    rdfs:label "R2RML Test Cases" ;
+    mf:include (
+        <D000-1table1column0rows/manifest.ttl>
+        <D001-1table1column1row/manifest.ttl>
+        <D002-1table2columns1row/manifest.ttl>
+        <D003-1table3columns1row/manifest.ttl>
+        <D004-1table2columns1row/manifest.ttl>
+        <D005-1table3columns3rows2duplicates/manifest.ttl>
+        <D006-1table1primarykey1column1row/manifest.ttl>
+        <D007-1table1primarykey2columns1row/manifest.ttl>
+        <D008-1table1compositeprimarykey3columns1row/manifest.ttl>
+        <D009-2tables1primarykey1foreignkey/manifest.ttl>
+        <D010-1table1primarykey3colums3rows/manifest.ttl>
+        <D011-M2MRelations/manifest.ttl>
+        <D012-2tables2duplicates0nulls/manifest.ttl>
+        <D013-1table1primarykey3columns2rows1nullvalue/manifest.ttl>
+        <D014-3tables1primarykey1foreignkey/manifest.ttl>
+        <D015-1table3columns1composityeprimarykey3rows2languages/manifest.ttl>
+        <D016-1table1primarykey10columns3rowsSQLdatatypes/manifest.ttl>
+        <D017-I18NnoSpecialChars/manifest.ttl>
+        <D018-1table1primarykey2columns3rows/manifest.ttl>
+        <D019-1table1primarykey3columns3rows/manifest.ttl>
+        <D020-1table1column5rows/manifest.ttl>
+        <D021-2tables2primarykeys1foreignkeyReferencesAllNulls/manifest.ttl>
+        <D022-2tables1primarykey1foreignkeyReferencesNoPrimaryKey/manifest.ttl>
+        <D023-2tables2primarykeys2foreignkeysReferencesToNon-primarykeys/manifest.ttl>
+        <D024-2tables2primarykeys1foreignkeyToARowWithSomeNulls/manifest.ttl>
+        <D025-3tables3primarykeys3foreignkeys/manifest.ttl>
+    ).

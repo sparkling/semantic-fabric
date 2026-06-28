@@ -1,0 +1,49 @@
+# semantic-fabric — Rust data-fabric workspace (ADR-0001).
+# Shared core + the virtualiser frontend (ADR-0003), realised as 7 crates (ADR-0006).
+[workspace]
+resolver = "2"
+members = [
+    "crates/sf-core",
+    "crates/sf-sql",
+    "crates/sf-mapping",
+    "crates/sf-sparql",
+    "crates/sf-conformance",
+    "crates/sf-bench",
+    "crates/sf-cli",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.96"
+
+[workspace.dependencies]
+# --- Oxigraph RDF/SPARQL substrate (ADR-0004): reuse plumbing, own the rewriter ---
+oxrdf = { version = "0.3.3", features = ["rdf-12", "rdfc-10"] }
+oxiri = "0.2.11"
+oxttl = { version = "0.2.3", features = ["rdf-12"] }
+oxjsonld = { version = "0.2.5", features = ["rdf-12"] }
+spargebra = { version = "0.4.6", features = ["sparql-12", "sep-0002", "sep-0006", "standard-unicode-escaping"] }
+sparesults = { version = "0.3.3", features = ["sparql-12"] }
+oxsdatatypes = "0.2.2"
+# --- errors / CLI ---
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# --- internal crates ---
+sf-core = { path = "crates/sf-core" }
+sf-sql = { path = "crates/sf-sql" }
+sf-mapping = { path = "crates/sf-mapping" }
+sf-sparql = { path = "crates/sf-sparql" }
+sf-conformance = { path = "crates/sf-conformance" }
+sf-bench = { path = "crates/sf-bench" }
+#
+# Execution stack — wired per-crate when engine logic lands (ADR-0006 / ADR-0015);
+# versions validated latest on crates.io 2026-06-27:
+#   tokio 1.52, tokio-postgres 0.7.18, deadpool-postgres 0.14, duckdb 1.10504
+#   (cross-source + embedded out-of-core executor), sqlparser 0.62, rayon 1.12,
+#   lasso 0.7, rustc-hash 2.1, smallvec 1.15, oxttl 0.2, criterion 0.8;
+#   virtualizer streaming (ADR-0010): async-stream 0.3, tokio-util 0.7, axum 0.8.
+#   SHACL gate (sf-conformance, ADR-0005): shacl 0.3.
+#   (DataFusion / Arrow / connector_arrow / polars dropped — source push-down + DuckDB, ADR-0015.)

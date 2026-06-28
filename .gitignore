@@ -1,0 +1,22 @@
+# Rust
+/target/
+**/*.rs.bk
+# Cargo.lock untracked by choice (re-resolved per build; avoids lockfile churn)
+/Cargo.lock
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+
+# Environment / secrets (source-DB connection strings, credentials)
+.env
+.env.local
+.env.*.local
+
+# Local source / test databases (generated — SQLite dev + conformance CI)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3

@@ -1,0 +1,79 @@
+# =============================================================================
+# Mapping-output validation shapes — the M ⋈ T gate (ADR-0005)
+#
+# PROVENANCE: vendored from the mapping-authoring layer's mapping-output
+# validation shapes (the four shapes named in ADR-0005 §"Cross-repo M⋈T gate").
+# Copied here so sf-conformance's gate test is hermetic; the mapping-authoring
+# layer remains the source of truth. Re-sync if those shapes change.
+#
+# Validated in rudof `shacl` Native mode (ADR-0019). Note (ADR-0019):
+# mf:MappingDatatypeConformanceShape uses an sh:sparql constraint and
+# mf:EntitySubjectGroundingShape uses inverse/alternative property paths — the
+# two existence shapes below are pure SHACL-Core and are what the hermetic gate
+# test exercises; the datatype/grounding shapes are vendored for completeness and
+# the cross-repo full run.
+# =============================================================================
+
+@prefix mf:  <http://example.org/mapping-fabric#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+
+mf:MappingClassConformanceShape a sh:NodeShape ;
+    rdfs:label "Mapping Class-Target Conformance Gate"@en ;
+    sh:severity sh:Violation ;
+    sh:targetObjectsOf rr:class ;
+    sh:targetObjectsOf rml:class ;
+    sh:class owl:Class ;
+    sh:message "Source-mapping target class (rr:class / rml:class) does not resolve to a class declared in T over the M ⋈ T closure." .
+
+mf:MappingPredicateConformanceShape a sh:NodeShape ;
+    rdfs:label "Mapping Predicate-Target Conformance Gate"@en ;
+    sh:severity sh:Violation ;
+    sh:targetObjectsOf rr:predicate ;
+    sh:targetObjectsOf rml:predicate ;
+    sh:or (
+        [ sh:class owl:ObjectProperty ]
+        [ sh:class owl:DatatypeProperty ]
+        [ sh:class owl:AnnotationProperty ]
+        [ sh:class rdf:Property ]
+    ) ;
+    sh:message "Source-mapping target predicate (rr:predicate / rml:predicate) does not resolve to a property declared in T over the M ⋈ T closure." .
+
+mf:MappingDatatypeConformanceShape a sh:NodeShape ;
+    rdfs:label "Mapping Value-Datatype Conformance Gate"@en ;
+    sh:severity sh:Violation ;
+    sh:targetSubjectsOf rr:predicate ;
+    sh:targetSubjectsOf rml:predicate ;
+    sh:sparql [
+        sh:message "Source-mapping object-map datatype conflicts with T's sh:datatype for this predicate." ;
+        sh:severity sh:Violation ;
+        sh:select """
+            PREFIX rr:  <http://www.w3.org/ns/r2rml#>
+            PREFIX rml: <http://semweb.mmlab.be/ns/rml#>
+            PREFIX sh:  <http://www.w3.org/ns/shacl#>
+            SELECT $this WHERE {
+                $this (rr:predicate|rml:predicate) ?p .
+                $this (rr:objectMap|rml:objectMap) ?om .
+                ?om (rr:datatype|rml:datatype) ?md .
+                ?ns sh:property ?ps .
+                ?ps sh:path ?p .
+                ?ps sh:datatype ?td .
+                FILTER(?md != ?td)
+            }
+        """ ;
+    ] .
+
+mf:EntitySubjectGroundingShape a sh:NodeShape ;
+    rdfs:label "Entity Subject-Grounding Shape"@en ;
+    sh:severity sh:Warning ;
+    sh:targetSubjectsOf mf:stereotype ;
+    sh:property [
+        sh:path [ sh:alternativePath ( [ sh:inversePath rr:class ] [ sh:inversePath rml:class ] ) ] ;
+        sh:minCount 1 ;
+        sh:severity sh:Warning ;
+        sh:message "Entity has no Subject: no source-mapping subject map names it via rr:class / rml:class." ;
+    ] .

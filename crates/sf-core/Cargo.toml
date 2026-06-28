@@ -1,0 +1,13 @@
+[package]
+name = "sf-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric shared core: mapping IR, term generation, datatype mapping (ADR-0003)"
+
+[dependencies]
+oxrdf.workspace = true
+oxiri.workspace = true
+oxsdatatypes.workspace = true
+thiserror.workspace = true

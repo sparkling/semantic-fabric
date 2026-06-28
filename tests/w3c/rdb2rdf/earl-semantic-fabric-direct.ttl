@@ -1,0 +1,157 @@
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+<https://example.org/tools/semantic-fabric> a earl:TestSubject, doap:Project ;
+  doap:name "semantic-fabric" ;
+  doap:programming-language "Rust" .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0000> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0001> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0002> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0003> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0004> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0005> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0006> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0007> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0008> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0009> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0010> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0011> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0012> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0013> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0014> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0015> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0016> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0017> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0018> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:passed ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0021> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:untested ;
+    dct:description "fixture: create.sql load failed: near \"\"key1attr1\"\": syntax error in CREATE TABLE \"Target\" (\n\t\"PK\" INT,\n\tPRIMARY KEY(\"PK\"),\n\t\"key1attr1\" CHAR(5),\n\t\"key1attr2\" CHAR(5),\n\tUNIQUE (\"key1attr1\", \"key1attr2\"),\n\t\"key2attr1\" CHAR(5),\n\t\"key2attr2\" CHAR(5),\n\tUNIQUE (\"key2attr2\", \"key2attr1\")\n);\n\nCREATE TABLE \"Source\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"attrA\" CHAR(5),\n\t\"attrB\" CHAR(5),\n\tFOREIGN KEY (\"attrA\", \"attrB\") REFERENCES \"Target\"(\"key2attr2\", \"key2attr1\")\n);\n\nINSERT INTO \"Target\" (\"PK\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1010, 'K1A11'    , 'K1A21'    , 'K2A11'    , 'K2A21'    );\nINSERT INTO \"Target\" (\"PK\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1011, 'K1A12'    , 'K1A22'    , NULL       , 'K2A22'    );\nINSERT INTO \"Target\" (\"PK\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1012, 'K1A13'    , 'K1A23'    , NULL       , NULL       );\n\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1100, 'K2A21', 'K2A11');\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1101, 'K2A22', NULL   );\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1102, NULL   , NULL   );\n\n at offset 56" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0022> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:untested ;
+    dct:description "fixture: create.sql load failed: near \"\"key2attr1\"\": syntax error in CREATE TABLE \"Target\" (\n\t\"litattr1\" INT,\n\t-- PRIMARY KEY(\"PK\"),\n\t\"key1attr1\" CHAR(4),\n\t\"key1attr2\" CHAR(4),\n\tUNIQUE (\"key1attr1\", \"key1attr2\"),\n\t\"key2attr1\" CHAR(4),\n\t\"key2attr2\" CHAR(4),\n\tUNIQUE (\"key2attr2\", \"key2attr1\")\n);\n\nCREATE TABLE \"Source\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"attrA\" CHAR(4),\n\t\"attrB\" CHAR(4),\n\tFOREIGN KEY (\"attrA\", \"attrB\") REFERENCES \"Target\"(\"key2attr2\", \"key2attr1\")\n);\n\nINSERT INTO \"Target\" (\"litattr1\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1010      , 'K1A1'     , 'K1A2'     , 'K2A1'     , 'K2A2');\n\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1100, 'K2A2' , 'K2A1' );\n at offset 145" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0023> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:untested ;
+    dct:description "fixture: create.sql load failed: near \"\"key1attr1\"\": syntax error in CREATE TABLE \"Target\" (\n\t\"PK\" INT,\n\tPRIMARY KEY(\"PK\"),\n\t\"key1attr1\" CHAR(4),\n\t\"key1attr2\" CHAR(4),\n\tUNIQUE (\"key1attr1\", \"key1attr2\"),\n\t\"key2attr1\" CHAR(4),\n\t\"key2attr2\" CHAR(4),\n\tUNIQUE (\"key2attr2\", \"key2attr1\")\n);\n\nCREATE TABLE \"Source\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"attrA\" CHAR(4),\n\t\"attrB\" CHAR(4),\n\tFOREIGN KEY (\"attrA\", \"attrB\") REFERENCES \"Target\"(\"key2attr2\", \"key2attr1\")\n);\n\nINSERT INTO \"Target\" (\"PK\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1010, 'K1A1'     , 'K1A2'     , 'K2A1'     , 'K2A2'     );\n\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1100, 'K2A2' , 'K2A1' );\n at offset 56" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0024> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:untested ;
+    dct:description "fixture: create.sql load failed: near \"\"key1attr1\"\": syntax error in CREATE TABLE \"Target\" (\n\t\"PK\" INT,\n\tPRIMARY KEY(\"PK\"),\n\t\"key1attr1\" CHAR(5),\n\t\"key1attr2\" CHAR(5),\n\tUNIQUE (\"key1attr1\", \"key1attr2\"),\n\t\"key2attr1\" CHAR(5),\n\t\"key2attr2\" CHAR(5),\n\tUNIQUE (\"key2attr2\", \"key2attr1\")\n);\n\nCREATE TABLE \"Source\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"attrA\" CHAR(5),\n\t\"attrB\" CHAR(5),\n\tFOREIGN KEY (\"attrA\", \"attrB\") REFERENCES \"Target\"(\"key2attr2\", \"key2attr1\")\n);\n\nINSERT INTO \"Target\" (\"PK\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1010, 'K1A11'    , 'K1A21'    , 'K2A11'    , 'K2A21'    );\nINSERT INTO \"Target\" (\"PK\", \"key1attr1\", \"key1attr2\", \"key2attr1\", \"key2attr2\")\n              VALUES (1011, 'K1A12'    , 'K1A22'    , NULL       , 'K2A22'    );\n\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1100, 'K2A21', 'K2A11');\nINSERT INTO \"Source\" (\"ID\", \"attrA\", \"attrB\")\n              VALUES (1101, 'K2A22', NULL   );\n\n at offset 56" ] .
+
+[] a earl:Assertion ;
+  earl:assertedBy <https://example.org/tools/semantic-fabric> ;
+  earl:subject <https://example.org/tools/semantic-fabric> ;
+  earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#DirectGraphTC0025> ;
+  earl:result [ a earl:TestResult ; earl:outcome earl:untested ;
+    dct:description "fixture: create.sql load failed: near \"\"city\"\": syntax error in CREATE TABLE \"Addresses\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"city\" VARCHAR(10),\n\t\"state\" CHAR(2)\n);\n\nCREATE TABLE \"Department\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"name\" VARCHAR(50),\n\t\"city\" VARCHAR(50),\n\tUNIQUE (\"name\", \"city\"),\n\t\"manager\" INT\n);\n\nCREATE TABLE \"People\" (\n\t\"ID\" INT,\n\tPRIMARY KEY(\"ID\"),\n\t\"fname\" VARCHAR(10),\n\t\"addr\" INT,\n\tFOREIGN KEY (\"addr\") REFERENCES \"Addresses\"(\"ID\"),\n\t\"deptName\" VARCHAR(50),\n\t\"deptCity\" VARCHAR(50)\n);\n\nALTER TABLE \"Department\" ADD FOREIGN KEY(\"manager\") REFERENCES \"People\"(\"ID\");\nALTER TABLE \"People\" ADD FOREIGN KEY(\"deptName\", \"deptCity\") REFERENCES \"Department\"(\"name\", \"city\");\n\nINSERT INTO \"Addresses\" (\"ID\", \"city\",      \"state\")\n                 VALUES (18,   'Cambridge', 'MA');\n\nINSERT INTO \"People\" (\"ID\", \"fname\", \"addr\", \"deptName\", \"deptCity\" )\n              VALUES (8,    'Sue',   NULL,   NULL,       NULL);\n\nINSERT INTO \"Department\" (\"ID\", \"name\",       \"city\",      \"manager\")\n                  VALUES (23,   'accounting', 'Cambridge', 8);\n\nINSERT INTO \"People\" (\"ID\", \"fname\", \"addr\", \"deptName\",   \"deptCity\" )\n              VALUES (7,    'Bob',   18,     'accounting', 'Cambridge');\n              \nCREATE TABLE \"Projects\" (\n\t\"lead\" INT,\n\t\"name\" VARCHAR(50), \n\tUNIQUE (\"lead\", \"name\"), \n\t\"deptName\" VARCHAR(50), \n\t\"deptCity\" VARCHAR(50),\n\tUNIQUE (\"name\", \"deptName\", \"deptCity\"),\n\tFOREIGN KEY (\"deptName\", \"deptCity\") REFERENCES \"Department\"(\"name\", \"city\")\n);\nCREATE TABLE \"TaskAssignments\" (\n\t\"worker\" INT,\n\t\"project\" VARCHAR(50), \n\tPRIMARY KEY (\"worker\", \"project\"), \n\t\"deptName\" VARCHAR(50), \n\t\"deptCity\" VARCHAR(50),\n\tFOREIGN KEY (\"project\", \"deptName\", \"deptCity\") REFERENCES \"Projects\"(\"name\", \"deptName\", \"deptCity\"),\n\tFOREIGN KEY (\"deptName\", \"deptCity\") REFERENCES \"Department\"(\"name\", \"city\")\n);\n\nALTER TABLE \"Projects\" ADD FOREIGN KEY(\"lead\") REFERENCES \"People\"(\"ID\");\nALTER TABLE \"TaskAssignments\" ADD FOREIGN KEY(\"worker\") REFERENCES \"People\"(\"ID\");\n\nINSERT INTO  \"Projects\" (\"lead\", \"name\",          \"deptName\",   \"deptCity\" )\n                 VALUES (8,      'pencil survey', 'accounting', 'Cambridge');\nINSERT INTO  \"Projects\" (\"lead\", \"name\",          \"deptName\",   \"deptCity\" )\n                 VALUES (8,      'eraser survey', 'accounting', 'Cambridge');\nINSERT INTO \"TaskAssignments\" (\"worker\", \"project\",       \"deptName\",   \"deptCity\" )\n                       VALUES (7,        'pencil survey', 'accounting', 'Cambridge');               at offset 59" ] .

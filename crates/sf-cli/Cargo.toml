@@ -1,0 +1,19 @@
+[package]
+name = "sf-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric command-line interface — the single binary (ADR-0006)"
+
+[[bin]]
+name = "semantic-fabric"
+path = "src/main.rs"
+
+[dependencies]
+sf-core.workspace = true
+sf-sparql.workspace = true
+sf-conformance.workspace = true
+sf-bench.workspace = true
+clap.workspace = true
+anyhow.workspace = true

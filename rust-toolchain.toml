@@ -1,0 +1,4 @@
+# Pinned for reproducible local + CI builds (ADR-0006).
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

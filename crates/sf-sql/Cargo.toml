@@ -1,0 +1,18 @@
+[package]
+name = "sf-sql"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric source/SQL layer: dialect emission, introspection, streaming, semi-join cost (ADR-0006)"
+
+[dependencies]
+sf-core.workspace = true
+thiserror.workspace = true
+# Source/SQL stack (ADR-0006 crate table / ADR-0015). Native drivers + a SQL
+# AST library only — no columnar/OLAP engine on the relational path (ADR-0006
+# Confirmation: no datafusion / connector_arrow / duckdb / librocksdb-sys here).
+sqlparser = "0.62"                                      # dialect SQL emission + rr:sqlQuery parsing (ADR-0015)
+rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] } # SQLite source: introspection + cursor streaming + per-statement column decl types (R2RML §10 over rr:sqlQuery views, ADR-0015)
+tokio-postgres = "0.7"                                  # PostgreSQL source: query_raw server-side cursor (ADR-0010 §C)
+futures-util = "0.3"                                    # poll the tokio-postgres RowStream

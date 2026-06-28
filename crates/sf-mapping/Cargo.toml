@@ -1,0 +1,13 @@
+[package]
+name = "sf-mapping"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric R2RML/Direct-Mapping parser (Turtle -> sf-core IR) (ADR-0003, ADR-0006)"
+
+[dependencies]
+sf-core.workspace = true
+sf-sql.workspace = true   # Direct Mapping consumes introspected TableSchema (ADR-0003 DM-as-auto-R2RML; ADR-0006)
+oxttl.workspace = true
+thiserror.workspace = true

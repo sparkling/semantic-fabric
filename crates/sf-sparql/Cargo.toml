@@ -1,0 +1,26 @@
+[package]
+name = "sf-sparql"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "semantic-fabric virtualizer: SPARQL→SQL OBDA rewriting (ADR-0007)"
+
+[dependencies]
+sf-core.workspace = true
+sf-sql.workspace = true
+sf-mapping.workspace = true
+spargebra.workspace = true
+# sparopt (ADR-0007 pipeline step 2, opt-in/bypassable) is intentionally NOT
+# wired in v1: sparopt 0.3.6 fails to compile against spargebra's `sparql-12` /
+# `sep-0006` feature set (non-exhaustive matches over the new triple-term /
+# LATERAL algebra variants). The optimize step is bypassed by default anyway
+# (ADR-0007); re-add once an upstream sparopt release covers 1.2.
+oxjsonld.workspace = true      # JSON-LD 1.2 output for CONSTRUCT/DESCRIBE (ADR-0006/0019); wired now so the 1.2 surface resolves
+thiserror.workspace = true
+rayon = "1.12"                 # SEPARATE CPU pool for term-gen (ADR-0006 rayon/tokio separation)
+rusqlite = { version = "0.32", features = ["bundled"] } # SQLite execution of emitted SQL (this-wave target)
+tokio-postgres = "0.7"         # PostgreSQL execution of emitted SQL via PgRowStream/query_raw (ADR-0010 §C)
+
+[dev-dependencies]
+oxrdf.workspace = true
