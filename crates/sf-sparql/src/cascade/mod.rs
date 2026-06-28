@@ -38,6 +38,9 @@ use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, SqlCond, TermDef};
 mod joinelim;
 #[cfg(test)]
 mod tests;
+/// WS-G — Ontop-parity oracle (ADR-0022): GREEN parity ports + `#[ignore]` WS-A specs.
+#[cfg(test)]
+mod ws_g;
 
 /// Context the constraint-driven passes need beyond the per-branch shape:
 /// whether a `DISTINCT` is requested and which variables the query projects
@@ -68,16 +71,19 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             if !prune_iri_template_mismatch(&b) {
                 return None; // 1 — unsatisfiable branch
             }
-            self_join_elimination(&mut b, schema); // 2
+            self_join_elimination(&mut b, schema); // 2 (inner-join variant)
+            self_left_join_elimination(&mut b, schema); // 2 (left-join variant — Q5)
             let fds = infer_functional_dependencies(&b, schema); // 3
             joinelim::fk_pk_join_elimination(&mut b, schema, &fds); // 4
             selection_pushdown(&mut b); // 5
             Some(b)
         })
         .collect();
-    // 6 — distinct removal. DISTINCT-over-union is deferred (ADR-0007 / the plan
-    // applies DISTINCT during streaming for a bag union), so the proof only
-    // applies to the single-branch case where DISTINCT is pushed into the SQL.
+    // 6 — distinct removal. For a multi-branch bag union, DISTINCT cannot be proved
+    // redundant per-branch, so it is *enforced* by deduplicating projected solutions
+    // in `exec::for_each_solution` (the streaming core); this pass only *removes* a
+    // DISTINCT a single branch's projected key already makes redundant (pushed into
+    // the SQL). So the proof here applies only to the single-branch case.
     if ctx.distinct && out.len() == 1 && out[0].path.is_none() {
         out[0].distinct = true;
         distinct_removal(&mut out[0], schema, ctx.project);
@@ -162,6 +168,79 @@ fn find_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, u
     None
 }
 
+/// Collapse a self-**LEFT**-join — an `OPTIONAL` right side that is a provable 1:1
+/// match of a kept core scan — by rebinding it onto that scan and dropping the
+/// `LEFT JOIN` (the Q5 `?t a :Trip . OPTIONAL { ?t :headsign ?hs }` fix). Unlike
+/// pass (2)'s inner-join variant the redundant side lives in [`Branch::opts`], not
+/// `where_conds`, so this scans `opts`. Loops to a fixpoint to handle several
+/// eliminable OPTIONALs; a no-op when no precondition holds.
+///
+/// `=_bag`-safe: the OPTIONAL reads the SAME base table as a kept core scan, joined
+/// on a SINGLE shared NON-NULL unique key. Equal NON-NULL key value ⇒ the optional
+/// row *is* the core row (exactly one, by uniqueness; the null-safe `ON`'s `IS NULL`
+/// disjuncts are dead for a NOT-NULL key). The LEFT JOIN therefore always matches
+/// 1:1 and only contributes columns of the already-read row — eliminating it
+/// preserves multiplicities and every binding value. A nullable unique determinant
+/// is *not* a true key (the null-safe `ON` would admit NULL rows the bare scan
+/// re-reads differently → `=_bag` break), so the pass refuses (ADR-0007).
+fn self_left_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
+    while let Some((keep, opt_alias, opt_idx)) = find_self_left_join(b, schema) {
+        // The ON lived on the OptJoin, never in `where_conds`; remove the whole
+        // OptJoin, then rebind every reference to the optional scan onto the kept
+        // scan (rewrite_alias recurses through Coalesce bindings).
+        b.opts.remove(opt_idx);
+        rewrite_alias(b, opt_alias, keep);
+    }
+}
+
+/// Returns `(keep_alias, opt_alias, opt_index)` of an eliminable self-left-join, or
+/// `None`. Fires only when ALL hold (else a sound no-op): the OptJoin right side is
+/// a single base-table scan whose table a core scan also reads; `on` is EXACTLY one
+/// shared-key compatibility condition (`NullSafeEq`/`ColEq`, same column on both
+/// sides, one side the kept scan and the other the optional scan); that column is a
+/// NON-NULL single-column unique key; and `extra` is empty (a FILTER inside the
+/// OPTIONAL makes the match conditional → not always-matching → not eliminable).
+fn find_self_left_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, usize)> {
+    for (idx, opt) in b.opts.iter().enumerate() {
+        // A FILTER inside the OPTIONAL can make the match conditional → keep it.
+        if !opt.extra.is_empty() {
+            continue;
+        }
+        // The right side must be a single base-table scan.
+        let LogicalSource::Table(opt_table) = &opt.scan.source else {
+            continue;
+        };
+        let opt_alias = opt.scan.alias;
+        // Exactly one shared-key compatibility condition, same column on both sides.
+        let [cond] = opt.on.as_slice() else { continue };
+        let (SqlCond::NullSafeEq(a, c) | SqlCond::ColEq(a, c)) = cond else {
+            continue;
+        };
+        if a.column != c.column {
+            continue;
+        }
+        // One side on the optional scan, the other on a kept core scan.
+        let keep = if a.alias == opt_alias && c.alias != opt_alias {
+            c
+        } else if c.alias == opt_alias && a.alias != opt_alias {
+            a
+        } else {
+            continue;
+        };
+        // The kept side must be a core scan reading the SAME table.
+        if scan_table(b, keep.alias).as_deref() != Some(opt_table.as_str()) {
+            continue;
+        }
+        // The shared column must be a NON-NULL single-column unique key.
+        if let Some(t) = schema.iter().find(|t| &t.name == opt_table) {
+            if t.is_unique_key(&keep.column) && key_is_non_null(t, &keep.column) {
+                return Some((keep.alias, opt_alias, idx));
+            }
+        }
+    }
+    None
+}
+
 /// A key column is non-NULL iff it is a primary-key column (PK ⇒ NOT NULL by SQL
 /// semantics) or the catalog declares the column `NOT NULL`. A nullable UNIQUE
 /// column is therefore *not* treated as a safe self-join determinant (ADR-0007).
@@ -213,6 +292,11 @@ fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
         TermDef::Coalesce(l, r) => {
             rewrite_def_alias(l, from, to);
             rewrite_def_alias(r, from, to);
+        }
+        TermDef::Concat(parts) => {
+            for p in parts {
+                rewrite_def_alias(p, from, to);
+            }
         }
     }
 }

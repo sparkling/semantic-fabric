@@ -193,6 +193,11 @@ fn rewrite_parent_def(def: &mut TermDef, e: &FkElim) {
             rewrite_parent_def(l, e);
             rewrite_parent_def(r, e);
         }
+        TermDef::Concat(parts) => {
+            for p in parts {
+                rewrite_parent_def(p, e);
+            }
+        }
     }
 }
 

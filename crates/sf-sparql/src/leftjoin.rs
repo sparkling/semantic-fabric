@@ -123,5 +123,6 @@ fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
         TermDef::Coalesce(l, r) => {
             def_is_nullable(l, opt_aliases) || def_is_nullable(r, opt_aliases)
         }
+        TermDef::Concat(parts) => parts.iter().any(|p| def_is_nullable(p, opt_aliases)),
     }
 }

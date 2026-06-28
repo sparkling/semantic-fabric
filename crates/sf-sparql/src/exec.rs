@@ -162,6 +162,37 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
             Some(t) => Ok(Some(t)),
             None => build_term(r, raw),
         },
+        // BIND(CONCAT(…)) — SPARQL §17.4.5.4. Every operand must be a string literal
+        // (xsd:string, simple, or lang-tagged); an unbound / IRI / blank-node operand
+        // or a non-string *typed* literal is an expression error, so the BIND variable
+        // is left unbound (Ok(None)) — never a wrong value. The result carries the
+        // common language tag iff every operand shares it, else a simple literal.
+        TermDef::Concat(parts) => {
+            let mut s = String::new();
+            let mut common_lang: Option<Option<String>> = None; // unset | mixed | lang
+            for p in parts {
+                let Some(Term::Literal(l)) = build_term(p, raw)? else {
+                    return Ok(None);
+                };
+                let lang = l.language();
+                if lang.is_none() && l.datatype() != sf_core::vocab::xsd::STRING {
+                    return Ok(None); // a non-string typed literal ⇒ type error
+                }
+                s.push_str(l.value());
+                let this = lang.map(str::to_owned);
+                common_lang = Some(match common_lang {
+                    None => this,                       // first operand sets it
+                    Some(prev) if prev == this => prev, // still consistent
+                    Some(_) => None,                    // diverged ⇒ no common tag
+                });
+            }
+            let term = match common_lang.flatten() {
+                Some(lang) => Literal::new_language_tagged_literal(s, lang)
+                    .map_err(|e| Error::Core(e.to_string()))?,
+                None => Literal::new_simple_literal(s),
+            };
+            Ok(Some(Term::Literal(term)))
+        }
     }
 }
 
@@ -261,6 +292,18 @@ fn for_each_solution(
     let branches = plan.prepared_branches();
     let catalog = build_catalog(&branches, conn, plan.dialect);
     let multi = branches.len() > 1;
+    // DISTINCT over a multi-branch bag-union: SQL dedups only *within* each branch's
+    // SELECT, never *across* the separate per-branch SELECTs (UNION arms / VALUES
+    // rows), so we dedup the projected solutions here — before OFFSET/LIMIT, since
+    // SPARQL evaluates DISTINCT before slicing. The single-branch case pushes DISTINCT
+    // into SQL (cascade pass 6 / the branch `distinct` flag); CONSTRUCT/dump never set
+    // it. Bounded-memory caveat: DISTINCT inherently buffers the seen key set.
+    let distinct_vars: Option<Vec<String>> = match (plan.distinct && multi, &plan.form) {
+        (true, PlanForm::Select { vars }) => Some(vars.clone()),
+        _ => None,
+    };
+    let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
+        std::collections::HashSet::new();
     let mut seen = 0usize; // solutions observed (for offset)
     let mut emitted = 0usize; // solutions passed downstream (for limit)
     for branch in &branches {
@@ -303,8 +346,31 @@ fn for_each_solution(
                     }
                 }
             }
-            // Rust-side offset/limit only when SQL didn't apply them (multi-branch).
+            let raw = RawRow {
+                schema: &e.projection,
+                values: &values,
+                codes: &codes,
+            };
+            // Reconstruct first: DISTINCT needs the projected terms to dedup, and the
+            // dedup must precede OFFSET/LIMIT (SPARQL order). Single-branch plans had
+            // DISTINCT/OFFSET/LIMIT pushed into SQL, so they reconstruct + sink only.
+            let bindings = match reconstruct(branch, &raw) {
+                Ok(b) => b,
+                Err(x) => {
+                    err = Some(x);
+                    return Ok(());
+                }
+            };
+            // Rust-side DISTINCT + offset/limit only when SQL didn't apply them
+            // (multi-branch bag-union).
             if multi {
+                if let Some(vars) = &distinct_vars {
+                    let key: Vec<Option<Term>> =
+                        vars.iter().map(|v| bindings.get(v).cloned()).collect();
+                    if !seen_tuples.insert(key) {
+                        return Ok(()); // duplicate projected solution ⇒ not a new one
+                    }
+                }
                 if seen < plan.offset {
                     seen += 1;
                     return Ok(());
@@ -315,20 +381,9 @@ fn for_each_solution(
                     }
                 }
             }
-            seen += 1;
-            let raw = RawRow {
-                schema: &e.projection,
-                values: &values,
-                codes: &codes,
-            };
-            match reconstruct(branch, &raw) {
-                Ok(bindings) => {
-                    emitted += 1;
-                    if let Err(x) = sink(branch, &bindings) {
-                        err = Some(x);
-                    }
-                }
-                Err(x) => err = Some(x),
+            emitted += 1;
+            if let Err(x) = sink(branch, &bindings) {
+                err = Some(x);
             }
             Ok(())
         })

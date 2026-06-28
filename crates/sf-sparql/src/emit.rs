@@ -125,8 +125,14 @@ pub fn emit_branch_with(
     let mut pidx = 0usize;
 
     // FROM (+ LEFT JOIN ON params) MUST render before WHERE so positional
-    // placeholders bind in text order.
-    let from = render_from(b, dialect, &actuals, &mut params, &mut pidx)?;
+    // placeholders bind in text order. A core-less branch (an inline `VALUES`
+    // constant row — all `Const` bindings, no scan) renders as a one-row
+    // `SELECT <const exprs>` with no FROM.
+    let from = if b.core.is_empty() {
+        None
+    } else {
+        Some(render_from(b, dialect, &actuals, &mut params, &mut pidx)?)
+    };
     let where_sql = render_where(&b.where_conds, dialect, &actuals, &mut params, &mut pidx);
 
     let select_list = if projection.is_empty() {
@@ -141,7 +147,10 @@ pub fn emit_branch_with(
     };
 
     let distinct = if b.distinct { "DISTINCT " } else { "" };
-    let mut skeleton = format!("SELECT {distinct}{select_list} FROM {from}");
+    let mut skeleton = match from {
+        Some(f) => format!("SELECT {distinct}{select_list} FROM {f}"),
+        None => format!("SELECT {distinct}{select_list}"),
+    };
     if let Some(w) = where_sql {
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);

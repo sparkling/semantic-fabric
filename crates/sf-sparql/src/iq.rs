@@ -53,6 +53,12 @@ pub enum TermDef {
     /// Reconstruction tries the preserved (`left`) side first and falls back to
     /// `right` when `left`'s source columns are NULL (the optional did not match).
     Coalesce(Box<TermDef>, Box<TermDef>),
+    /// A `BIND(CONCAT(…) AS ?v)` computed value: the operand defs are reconstructed
+    /// and their lexical values concatenated into a plain literal at the outer
+    /// projection (term-construction lifting — built in Rust at reconstruction,
+    /// never in SQL). An unbound / non-literal operand makes the CONCAT an error, so
+    /// the BIND variable is left unbound (SPARQL §17.4.x / §10 ASSIGN).
+    Concat(Vec<TermDef>),
 }
 
 impl TermDef {
@@ -69,6 +75,13 @@ impl TermDef {
                 let mut cols = l.columns();
                 for c in r.columns() {
                     cols.push(c);
+                }
+                cols
+            }
+            TermDef::Concat(parts) => {
+                let mut cols = Vec::new();
+                for p in parts {
+                    cols.extend(p.columns());
                 }
                 cols
             }

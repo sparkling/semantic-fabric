@@ -49,11 +49,13 @@ pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
                 alias: a2,
             },
         ) => unify_derived(t1, *a1, t2, *a2),
-        // A COALESCE'd binding arises only from a chain of 3+ OPTIONALs sharing one
-        // variable; unifying it further (raw-column reduction over a two-sided
-        // term) is deferred (ADR-0007 v1 — never silently wrong).
-        (TermDef::Coalesce(..), _) | (_, TermDef::Coalesce(..)) => Unify::Unsupported(
-            "unification of a COALESCE'd (multi-OPTIONAL) shared variable".to_owned(),
+        // A COALESCE'd (multi-OPTIONAL shared var) or CONCAT'd (BIND-computed)
+        // binding is a multi-source constructed term; reducing it to raw-column
+        // equalities is deferred (ADR-0007 v1 — never silently wrong). So sharing a
+        // BIND variable with a later pattern (a join/filter on it) defers to 501.
+        (TermDef::Coalesce(..) | TermDef::Concat(..), _)
+        | (_, TermDef::Coalesce(..) | TermDef::Concat(..)) => Unify::Unsupported(
+            "unification of a COALESCE'd / CONCAT'd (multi-source) constructed binding".to_owned(),
         ),
     }
 }
@@ -267,6 +269,41 @@ pub fn filter_cond(
         Expression::LessOrEqual(a, b) => cmp(a, b, CmpOp::Le, bindings),
         Expression::FunctionCall(f, args) => str_match(f, args, bindings, dialect),
         other => Err(format!("FILTER expression not supported in v1: {other:?}")),
+    }
+}
+
+/// Lower a `BIND(expr AS ?v)` expression to the [`TermDef`] for `?v`, reusing the
+/// outer-projection term-construction lifting (ADR-0007): the value is built in
+/// Rust at reconstruction, never inside a join/filter. Supported in this wave:
+///
+/// * a constant — an IRI (`Const` IRI) or a literal (`Const` literal);
+/// * a bare variable `?y` — a column/term copy (clone `?y`'s binding);
+/// * `CONCAT(a, b, …)` — each operand lowered recursively, reconstructed and
+///   concatenated into a plain literal ([`TermDef::Concat`]).
+///
+/// Anything else (arithmetic, other built-ins, `IF`/`COALESCE`/`EXISTS`, …) is
+/// reported unsupported → the whole query is `501` (never a silent wrong answer).
+pub fn bind_term_def(
+    expr: &Expression,
+    bindings: &BTreeMap<String, TermDef>,
+) -> Result<TermDef, String> {
+    match expr {
+        Expression::NamedNode(n) => Ok(TermDef::Const(Term::NamedNode(n.clone()))),
+        Expression::Literal(l) => Ok(TermDef::Const(Term::Literal(l.clone()))),
+        Expression::Variable(v) => bindings
+            .get(v.as_str())
+            .cloned()
+            .ok_or_else(|| format!("BIND references unbound ?{}", v.as_str())),
+        Expression::FunctionCall(Function::Concat, args) => {
+            let mut parts = Vec::with_capacity(args.len());
+            for a in args {
+                parts.push(bind_term_def(a, bindings)?);
+            }
+            Ok(TermDef::Concat(parts))
+        }
+        other => Err(format!(
+            "BIND expression not supported in v1 → 501: {other:?}"
+        )),
     }
 }
 

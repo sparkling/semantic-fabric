@@ -8,7 +8,7 @@
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 use spargebra::algebra::GraphPattern;
-use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
+use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern};
 
 use crate::iq::{Branch, Scan, SqlCond, TermDef};
 use crate::leftjoin::left_join_branches;
@@ -136,9 +136,51 @@ impl<'a> Unfolder<'a> {
             } => Ok(TransPattern::plain(vec![
                 self.path_branch(subject, path, object)?
             ])),
-            // Deferred → 501 (documented, never silent): property paths, MINUS,
-            // GRAPH, BIND, VALUES, ORDER BY, aggregates, LATERAL, SERVICE
-            // (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
+            // BIND(expr AS ?v) — translate the inner pattern, then add ?v computed
+            // from `expr` to every branch's output bindings. BIND adds an output
+            // column only; it never changes row multiplicity (=_bag preserved). An
+            // expression outside the supported subset defers the whole query → 501
+            // ([`crate::unify::bind_term_def`]; ADR-0007 term-construction lifting).
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression,
+            } => {
+                let mut t = self.translate_pattern(inner)?;
+                for b in &mut t.branches {
+                    let def = crate::unify::bind_term_def(expression, &b.bindings)
+                        .map_err(Error::Unsupported)?;
+                    bind(b, variable.as_str(), def)?;
+                }
+                Ok(t)
+            }
+            // VALUES — an inline constant solution sequence: a bag union of
+            // core-less branches, one per binding row. A bound cell becomes a
+            // `Const` binding; an UNDEF cell leaves that variable unbound (absent).
+            // It composes with the surrounding pattern through the existing
+            // shared-variable `join_branches` unification (a Join wrapping VALUES).
+            // Each row contributes exactly one solution (=_bag preserved).
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } => {
+                let mut branches = Vec::with_capacity(bindings.len());
+                for row in bindings {
+                    let mut b = Branch::empty();
+                    for (var, cell) in variables.iter().zip(row.iter()) {
+                        if let Some(gt) = cell {
+                            let def = TermDef::Const(ground_term_to_term(gt)?);
+                            bind(&mut b, var.as_str(), def)?;
+                        }
+                        // None (UNDEF) ⇒ leave the variable unbound (absent).
+                    }
+                    branches.push(b);
+                }
+                Ok(TransPattern::plain(branches))
+            }
+            // Deferred → 501 (documented, never silent): MINUS, GRAPH, ORDER BY,
+            // aggregates, LATERAL, SERVICE (ADR-0007 §v1 SPARQL coverage; ADR-0008
+            // tier-2).
             other => Err(Error::Unsupported(format!(
                 "graph pattern not supported in v1 → 501: {other:?}"
             ))),
@@ -400,6 +442,18 @@ impl<'a> Unfolder<'a> {
 enum PredMatch {
     Yes(TermDef),
     No,
+}
+
+/// A VALUES inline ground term → an RDF [`Term`]. A quoted triple term
+/// (SPARQL 1.2 `sparql-12`) is deferred → 501 (never silent).
+fn ground_term_to_term(gt: &GroundTerm) -> Result<Term> {
+    match gt {
+        GroundTerm::NamedNode(n) => Ok(Term::NamedNode(n.clone())),
+        GroundTerm::Literal(l) => Ok(Term::Literal(l.clone())),
+        other => Err(Error::Unsupported(format!(
+            "VALUES ground term not supported in v1 → 501: {other:?}"
+        ))),
+    }
 }
 
 /// A mapping term map → a [`TermDef`] at `alias` (constants need no alias).

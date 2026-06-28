@@ -16,8 +16,10 @@ use sf_core::ir::{
     TriplesMap,
 };
 use sf_core::NamedNode;
-use sf_sparql::{exec, parse_and_translate, translate, Tbox};
-use sf_sql::Dialect;
+use sf_sparql::{
+    exec, parse_and_translate, translate, translate_unoptimized, translate_with, Tbox,
+};
+use sf_sql::{Column, Dialect, TableSchema};
 
 const EMP_NAME: &str = "http://ex/empName";
 const EMP_DEPT: &str = "http://ex/empDept";
@@ -205,6 +207,110 @@ fn optional_is_null_safe_left_join() {
 }
 
 #[test]
+fn optional_self_left_join_elimination_q5_bag_oracle() {
+    // Q5 (ADR-0022 / Ontop LeftJoinOptimizationTest.testLeftJoinElimination1):
+    // `?t a :Trip . OPTIONAL { ?t :headsign ?hs }` maps both patterns to the SAME
+    // `trips` table on the NOT-NULL PK `trip_id`, so the OPTIONAL reads the same row
+    // — a redundant self-LEFT-join. The decisive =_bag gate: the optimized engine
+    // output (cascade self_left_join_elimination ON) must be IDENTICAL to the
+    // unoptimized base translation, every trip present and ?hs bound or unbound
+    // exactly as the data dictates (some trips have a NULL trip_headsign).
+    const TRIP: &str = "http://ex/Trip";
+    const HEADSIGN: &str = "http://ex/headsign";
+    let trips = TriplesMap {
+        id: "TRIPS".to_owned(),
+        source: LogicalSource::Table("trips".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/trip/{trip_id}"),
+            classes: vec![iri(TRIP)],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![pom(HEADSIGN, column_literal("trip_headsign"))],
+    };
+    let maps = std::slice::from_ref(&trips);
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE trips(trip_id TEXT PRIMARY KEY, trip_headsign TEXT);
+         INSERT INTO trips VALUES
+           ('T1','Downtown'),('T2',NULL),('T3','Airport'),('T4',NULL);",
+    )
+    .unwrap();
+
+    // The introspected catalog: trip_id is a NOT-NULL PK (what licenses the
+    // collapse), trip_headsign nullable. Passing it is what makes the cascade fire.
+    let mut ts = TableSchema::new("trips");
+    ts.primary_key = vec!["trip_id".to_owned()];
+    ts.columns = vec![
+        Column::new("trip_id", "text", true),
+        Column::new("trip_headsign", "text", false),
+    ];
+    let schema = std::slice::from_ref(&ts);
+
+    let query = parse(&format!(
+        "SELECT ?t ?hs WHERE {{ ?t a <{TRIP}> OPTIONAL {{ ?t <{HEADSIGN}> ?hs }} }}"
+    ));
+
+    // Optimized: the self-LEFT-join must collapse (no surviving LEFT JOIN).
+    let opt = translate_with(&query, maps, Dialect::Sqlite, &Tbox::default(), schema).unwrap();
+    let opt_sql = &opt.emitted().unwrap()[0].sql;
+    assert!(
+        !opt_sql.to_uppercase().contains("LEFT JOIN"),
+        "self-LEFT-join on the trips PK must be eliminated: {opt_sql}"
+    );
+
+    // Unoptimized oracle: the raw base translation keeps the LEFT JOIN.
+    let base =
+        translate_unoptimized(&query, maps, Dialect::Sqlite, &Tbox::default(), schema).unwrap();
+    assert!(
+        base.emitted().unwrap()[0]
+            .sql
+            .to_uppercase()
+            .contains("LEFT JOIN"),
+        "the unoptimized arm retains the self-LEFT-join (the oracle)"
+    );
+
+    let bag = |plan: &sf_sparql::Plan| -> Vec<(Option<String>, Option<String>)> {
+        let sol = exec::select(plan, &conn).unwrap();
+        assert_eq!(sol.vars, vec!["t".to_owned(), "hs".to_owned()]);
+        let mut rows: Vec<(Option<String>, Option<String>)> = sol
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r[0].as_ref().map(|_| lit(&r[0])),
+                    r[1].as_ref().map(|_| lit(&r[1])),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+
+    let got = bag(&opt);
+    // Decisive =_bag gate: optimized output is identical to the unoptimized base.
+    assert_eq!(
+        got,
+        bag(&base),
+        "self-LEFT-join elimination must preserve =_bag vs the base translation"
+    );
+    // ...and equals the hand-computed oracle (every trip; ?hs bound iff non-NULL).
+    let mut expect: Vec<(Option<String>, Option<String>)> = vec![
+        (
+            Some("<http://ex/trip/T1>".to_owned()),
+            Some("Downtown".to_owned()),
+        ),
+        (Some("<http://ex/trip/T2>".to_owned()), None),
+        (
+            Some("<http://ex/trip/T3>".to_owned()),
+            Some("Airport".to_owned()),
+        ),
+        (Some("<http://ex/trip/T4>".to_owned()), None),
+    ];
+    expect.sort();
+    assert_eq!(got, expect);
+}
+
+#[test]
 fn nested_optional_shared_var_coalesces_to_the_matching_side() {
     // R2 (ADR-0007): `?s :p ?v . OPTIONAL { ?s :a ?x } OPTIONAL { ?s :b ?x }`
     // parses left-deep to LeftJoin(LeftJoin(BGP, A), B). ?x is shared in the OUTER
@@ -373,6 +479,84 @@ fn select_with_contains_like_pushdown() {
     );
 }
 
+#[test]
+fn select_with_bind_concat_computes_and_projects() {
+    // BIND(CONCAT(?n, "!") AS ?greeting): an Extend adds one output column computed
+    // over a row's existing binding, WITHOUT changing row multiplicity. =_bag gate:
+    // exactly the two empName rows, each with its computed greeting (hand oracle).
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n ?greeting WHERE {{ ?e <{EMP_NAME}> ?n . \
+         BIND(CONCAT(?n, \"!\") AS ?greeting) }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(sol.vars, vec!["n".to_owned(), "greeting".to_owned()]);
+    let got: BTreeSet<(String, String)> =
+        sol.rows.iter().map(|r| (lit(&r[0]), lit(&r[1]))).collect();
+    let expect: BTreeSet<(String, String)> = [
+        ("Ada".to_owned(), "Ada!".to_owned()),
+        ("Grace".to_owned(), "Grace!".to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        got, expect,
+        "BIND adds a computed column, multiplicity unchanged"
+    );
+}
+
+#[test]
+fn select_with_values_inline_table_joined_to_bgp() {
+    // VALUES (?n ?tag) { ("Ada" "lead") ("Grace" UNDEF) } joined to ?e :empName ?n.
+    // Each VALUES row is one core-less branch (a bag union); the shared ?n unifies
+    // through join_branches. =_bag gate: the UNDEF cell leaves ?tag UNBOUND for the
+    // Grace row, while Ada carries its tag — a normal bag-join, one row per pairing.
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n ?tag WHERE {{ ?e <{EMP_NAME}> ?n . \
+         VALUES (?n ?tag) {{ (\"Ada\" \"lead\") (\"Grace\" UNDEF) }} }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(sol.vars, vec!["n".to_owned(), "tag".to_owned()]);
+    let got: BTreeSet<(String, Option<String>)> = sol
+        .rows
+        .iter()
+        .map(|r| (lit(&r[0]), r[1].as_ref().map(|_| lit(&r[1]))))
+        .collect();
+    let expect: BTreeSet<(String, Option<String>)> = [
+        ("Ada".to_owned(), Some("lead".to_owned())),
+        ("Grace".to_owned(), None), // UNDEF cell ⇒ ?tag unbound
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(got, expect, "VALUES row joins the BGP; UNDEF stays unbound");
+}
+
+#[test]
+fn standalone_values_emits_core_less_constant_rows() {
+    // A standalone VALUES is a bag union of core-less constant branches, each
+    // emitting a one-row `SELECT <const>` with NO FROM. =_bag gate: exactly the two
+    // inline rows.
+    let maps = mapping();
+    let conn = source();
+    let q = "SELECT ?x WHERE { VALUES (?x) { (1) (2) } }";
+    let plan = parse_and_translate(q, &maps, Dialect::Sqlite).unwrap();
+    for e in plan.emitted().unwrap() {
+        assert!(
+            !e.sql.to_uppercase().contains(" FROM "),
+            "core-less constant branch renders without FROM: {}",
+            e.sql
+        );
+    }
+    let sol = exec::select(&plan, &conn).unwrap();
+    let got: BTreeSet<String> = sol.rows.iter().map(|r| lit(&r[0])).collect();
+    assert_eq!(got, BTreeSet::from(["1".to_owned(), "2".to_owned()]));
+}
+
 const REACHES: &str = "http://ex/reaches";
 
 /// `edge(parent, child)` mapped so `?p :reaches ?c` is the one-hop relation, with
@@ -490,5 +674,120 @@ fn lit(t: &Option<sf_core::Term>) -> String {
         Some(sf_core::Term::Literal(l)) => l.value().to_owned(),
         Some(other) => other.to_string(),
         None => "<unbound>".to_owned(),
+    }
+}
+
+#[test]
+fn values_undef_acts_as_join_wildcard() {
+    // VALUES (?n) { ("Ada") (UNDEF) } joined to ?e :empName ?n. The UNDEF row is a
+    // wildcard (compatible with any ?n) so it contributes every BGP solution; the
+    // "Ada" row contributes only Ada. Bag = [Ada (explicit + wildcard), Grace].
+    let maps = mapping();
+    let conn = source();
+    let q =
+        format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n . VALUES (?n) {{ (\"Ada\") (UNDEF) }} }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ada", "Ada", "Grace"],
+        "UNDEF row acts as a wildcard"
+    );
+}
+
+#[test]
+fn values_filter_on_const_var_is_501() {
+    // FILTER over a variable bound only to a VALUES constant (no source column to
+    // push the predicate onto) is an honest 501 — never a silently-wrong answer.
+    let maps = mapping();
+    let q = "SELECT ?x WHERE { VALUES (?x) { (1) (2) } FILTER(?x = 1) }";
+    assert!(
+        parse_and_translate(q, &maps, Dialect::Sqlite).is_err(),
+        "FILTER on a VALUES-const var is deferred to 501, not silently wrong"
+    );
+}
+
+#[test]
+fn distinct_over_values_dedups_across_branches() {
+    // Regression: SELECT DISTINCT over a multi-branch bag union (each VALUES row is a
+    // separate core-less branch) must dedup ACROSS branches — per-branch SQL can't.
+    // Before the exec::for_each_solution dedup this returned [1, 1].
+    let maps = mapping();
+    let conn = source();
+    let q = "SELECT DISTINCT ?x WHERE { VALUES (?x) { (1) (1) } }";
+    let plan = parse_and_translate(q, &maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(
+        got,
+        vec!["1"],
+        "DISTINCT collapses the duplicate VALUES rows"
+    );
+}
+
+#[test]
+fn distinct_over_union_dedups_across_branches() {
+    // The same multi-branch DISTINCT path on UNION (the pre-existing bug VALUES
+    // exposed): `{A} UNION {A}` yields each name twice; DISTINCT must collapse them.
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT DISTINCT ?n WHERE {{ {{ ?e <{EMP_NAME}> ?n }} UNION {{ ?e <{EMP_NAME}> ?n }} }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ada", "Grace"],
+        "DISTINCT collapses cross-branch duplicates"
+    );
+}
+
+#[test]
+fn bind_concat_preserves_lang_and_typechecks() {
+    // CONCAT (§17.4.5.4): operands sharing one language tag keep it; a non-string
+    // typed operand is a type error → the BIND variable is unbound (never wrong).
+    let maps = mapping();
+    let conn = source();
+    let q_lang = format!(
+        "SELECT ?v WHERE {{ ?e <{EMP_NAME}> ?n . BIND(CONCAT(\"x\"@en, \"y\"@en) AS ?v) }}"
+    );
+    let plan = parse_and_translate(&q_lang, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert!(!sol.rows.is_empty());
+    for r in &sol.rows {
+        match &r[0] {
+            Some(sf_core::Term::Literal(l)) => {
+                assert_eq!(l.value(), "xy");
+                assert_eq!(l.language(), Some("en"), "common language tag preserved");
+            }
+            other => panic!("expected a lang-tagged literal, got {other:?}"),
+        }
+    }
+    let q_type = format!("SELECT ?v WHERE {{ ?e <{EMP_NAME}> ?n . BIND(CONCAT(\"a\", 1) AS ?v) }}");
+    let plan = parse_and_translate(&q_type, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert!(!sol.rows.is_empty());
+    for r in &sol.rows {
+        assert!(
+            r[0].is_none(),
+            "CONCAT with a non-string (xsd:integer) operand ⇒ ?v unbound"
+        );
     }
 }
