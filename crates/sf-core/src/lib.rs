@@ -187,8 +187,12 @@ mod tests {
         // Warm up: let every buffer grow to its steady-state capacity first.
         for _ in 0..16 {
             for row in rows {
-                let s = term::generate_into(&subject, row, &mut bs).unwrap().unwrap();
-                let p = term::generate_into(&predicate, row, &mut bp).unwrap().unwrap();
+                let s = term::generate_into(&subject, row, &mut bs)
+                    .unwrap()
+                    .unwrap();
+                let p = term::generate_into(&predicate, row, &mut bp)
+                    .unwrap()
+                    .unwrap();
                 let o = term::generate_into(&object, row, &mut bo).unwrap().unwrap();
                 std::hint::black_box((s, p, o));
                 bs.clear();
@@ -200,8 +204,12 @@ mod tests {
         alloc_probe::arm();
         for _ in 0..1000 {
             for row in rows {
-                let s = term::generate_into(&subject, row, &mut bs).unwrap().unwrap();
-                let p = term::generate_into(&predicate, row, &mut bp).unwrap().unwrap();
+                let s = term::generate_into(&subject, row, &mut bs)
+                    .unwrap()
+                    .unwrap();
+                let p = term::generate_into(&predicate, row, &mut bp)
+                    .unwrap()
+                    .unwrap();
                 let o = term::generate_into(&object, row, &mut bo).unwrap().unwrap();
                 std::hint::black_box((s, p, o));
                 bs.clear();

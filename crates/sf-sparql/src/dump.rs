@@ -77,13 +77,16 @@ fn class_atoms(tm: &TriplesMap, out: &mut Vec<Branch>) {
                 alias: CHILD,
                 source: tm.source.clone(),
             });
-            b.bindings.insert(VAR_S.to_owned(), def_of(&tm.subject.term, CHILD));
+            b.bindings
+                .insert(VAR_S.to_owned(), def_of(&tm.subject.term, CHILD));
             b.bindings.insert(
                 VAR_P.to_owned(),
                 TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RDF_TYPE))),
             );
-            b.bindings
-                .insert(VAR_O.to_owned(), TermDef::Const(Term::NamedNode(class.clone())));
+            b.bindings.insert(
+                VAR_O.to_owned(),
+                TermDef::Const(Term::NamedNode(class.clone())),
+            );
             bind_graph(&mut b, gt);
             out.push(b);
         }
@@ -103,7 +106,8 @@ fn pom_branch(
         alias: CHILD,
         source: tm.source.clone(),
     });
-    b.bindings.insert(VAR_S.to_owned(), def_of(&tm.subject.term, CHILD));
+    b.bindings
+        .insert(VAR_S.to_owned(), def_of(&tm.subject.term, CHILD));
     b.bindings.insert(VAR_P.to_owned(), def_of(pm, CHILD));
     let obj_def = match om {
         ObjectMap::Term(otm) => def_of(otm, CHILD),
@@ -204,7 +208,10 @@ mod tests {
         };
         let branches = build_branches(&[tm]);
         assert_eq!(branches.len(), 1);
-        assert!(branches[0].bindings.contains_key(VAR_G), "named-graph target binds g");
+        assert!(
+            branches[0].bindings.contains_key(VAR_G),
+            "named-graph target binds g"
+        );
     }
 
     /// No graph maps anywhere ⇒ the default graph: the atom branch omits `g`.
@@ -229,7 +236,10 @@ mod tests {
         };
         let branches = build_branches(&[tm]);
         assert_eq!(branches.len(), 1);
-        assert!(!branches[0].bindings.contains_key(VAR_G), "default-graph target omits g");
+        assert!(
+            !branches[0].bindings.contains_key(VAR_G),
+            "default-graph target omits g"
+        );
     }
 
     /// Subject graph ∪ POM graph (distinct) ⇒ two branches for the one atom, so the
@@ -251,7 +261,11 @@ mod tests {
             }],
         };
         let branches = build_branches(&[tm]);
-        assert_eq!(branches.len(), 2, "one atom into two distinct graphs ⇒ two branches");
+        assert_eq!(
+            branches.len(),
+            2,
+            "one atom into two distinct graphs ⇒ two branches"
+        );
         assert!(branches.iter().all(|b| b.bindings.contains_key(VAR_G)));
     }
 
@@ -272,6 +286,8 @@ mod tests {
         assert_eq!(branches.len(), 1);
         let b = &branches[0];
         assert!(b.bindings.contains_key(VAR_G));
-        assert!(matches!(b.bindings.get(VAR_P), Some(TermDef::Const(Term::NamedNode(n))) if n.as_str() == RDF_TYPE));
+        assert!(
+            matches!(b.bindings.get(VAR_P), Some(TermDef::Const(Term::NamedNode(n))) if n.as_str() == RDF_TYPE)
+        );
     }
 }

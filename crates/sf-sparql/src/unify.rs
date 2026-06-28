@@ -13,7 +13,7 @@ use sf_core::Term;
 
 use sf_sql::Dialect;
 
-use crate::iq::{ColRef, CmpOp, SqlCond, StrMatchOp, TermDef};
+use crate::iq::{CmpOp, ColRef, SqlCond, StrMatchOp, TermDef};
 
 /// The result of unifying two term definitions for the same variable.
 pub enum Unify {
@@ -52,9 +52,9 @@ pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
         // A COALESCE'd binding arises only from a chain of 3+ OPTIONALs sharing one
         // variable; unifying it further (raw-column reduction over a two-sided
         // term) is deferred (ADR-0007 v1 — never silently wrong).
-        (TermDef::Coalesce(..), _) | (_, TermDef::Coalesce(..)) => {
-            Unify::Unsupported("unification of a COALESCE'd (multi-OPTIONAL) shared variable".to_owned())
-        }
+        (TermDef::Coalesce(..), _) | (_, TermDef::Coalesce(..)) => Unify::Unsupported(
+            "unification of a COALESCE'd (multi-OPTIONAL) shared variable".to_owned(),
+        ),
     }
 }
 
@@ -67,9 +67,11 @@ fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
     };
     match tm {
         TermMap::Constant(_) => unreachable!("Derived never wraps a constant term map"),
-        TermMap::Column(col, _) => {
-            Unify::Sat(vec![SqlCond::Cmp(ColRef::new(alias, col.clone()), CmpOp::Eq, want)])
-        }
+        TermMap::Column(col, _) => Unify::Sat(vec![SqlCond::Cmp(
+            ColRef::new(alias, col.clone()),
+            CmpOp::Eq,
+            want,
+        )]),
         TermMap::Template(t, _) => match split_template(t) {
             TemplateShape::AllLiteral(text) => {
                 if text == want {
@@ -78,7 +80,11 @@ fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
                     Unify::Empty
                 }
             }
-            TemplateShape::SingleSlot { prefix, column, suffix } => {
+            TemplateShape::SingleSlot {
+                prefix,
+                column,
+                suffix,
+            } => {
                 if want.len() < prefix.len() + suffix.len()
                     || !want.starts_with(&prefix)
                     || !want.ends_with(&suffix)
@@ -124,7 +130,12 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
 /// columns become pairwise raw-column equalities; a fixed-text mismatch proves
 /// disjointness; a kind/length mismatch is conservatively unsupported (never an
 /// unsound prune).
-fn align_templates(x: &sf_core::ir::Template, a1: usize, y: &sf_core::ir::Template, a2: usize) -> Unify {
+fn align_templates(
+    x: &sf_core::ir::Template,
+    a1: usize,
+    y: &sf_core::ir::Template,
+    a2: usize,
+) -> Unify {
     let (sx, sy) = (x.segments(), y.segments());
     if sx.len() != sy.len() {
         return Unify::Unsupported("template length mismatch".to_owned());
@@ -138,7 +149,10 @@ fn align_templates(x: &sf_core::ir::Template, a1: usize, y: &sf_core::ir::Templa
                 }
             }
             (Segment::Column(c1), Segment::Column(c2)) => {
-                eqs.push(SqlCond::ColEq(ColRef::new(a1, c1.clone()), ColRef::new(a2, c2.clone())));
+                eqs.push(SqlCond::ColEq(
+                    ColRef::new(a1, c1.clone()),
+                    ColRef::new(a2, c2.clone()),
+                ));
             }
             _ => return Unify::Unsupported("template shape mismatch".to_owned()),
         }
@@ -148,7 +162,11 @@ fn align_templates(x: &sf_core::ir::Template, a1: usize, y: &sf_core::ir::Templa
 
 enum TemplateShape {
     AllLiteral(String),
-    SingleSlot { prefix: String, column: Box<str>, suffix: String },
+    SingleSlot {
+        prefix: String,
+        column: Box<str>,
+        suffix: String,
+    },
     MultiSlot,
 }
 
@@ -187,7 +205,11 @@ fn split_template(t: &sf_core::ir::Template) -> TemplateShape {
                 Segment::Column(c) => c.clone(),
                 Segment::Literal(_) => unreachable!(),
             };
-            TemplateShape::SingleSlot { prefix, column, suffix }
+            TemplateShape::SingleSlot {
+                prefix,
+                column,
+                suffix,
+            }
         }
         _ => TemplateShape::MultiSlot,
     }
@@ -462,21 +484,39 @@ mod tests {
     fn string_filters_lower_to_bound_like_with_wildcards_and_escaping() {
         let b = col_binding("x", "name");
         // CONTAINS with a literal `%` ⇒ escaped middle, wildcard-wrapped.
-        let c = filter_cond(&func(Function::Contains, vec![var("x"), lit("a%b")]), &b, Dialect::Postgres)
-            .unwrap();
+        let c = filter_cond(
+            &func(Function::Contains, vec![var("x"), lit("a%b")]),
+            &b,
+            Dialect::Postgres,
+        )
+        .unwrap();
         assert!(
             matches!(&c, SqlCond::StrMatch { op: StrMatchOp::Like, param, col }
                 if param == "%a\\%b%" && &*col.column == "name"),
             "{c:?}"
         );
         // STRSTARTS ⇒ anchored prefix.
-        let s = filter_cond(&func(Function::StrStarts, vec![var("x"), lit("foo")]), &b, Dialect::Postgres)
-            .unwrap();
-        assert!(matches!(&s, SqlCond::StrMatch { op: StrMatchOp::Like, param, .. } if param == "foo%"), "{s:?}");
+        let s = filter_cond(
+            &func(Function::StrStarts, vec![var("x"), lit("foo")]),
+            &b,
+            Dialect::Postgres,
+        )
+        .unwrap();
+        assert!(
+            matches!(&s, SqlCond::StrMatch { op: StrMatchOp::Like, param, .. } if param == "foo%"),
+            "{s:?}"
+        );
         // STRENDS ⇒ anchored suffix; underscore metachar escaped.
-        let e = filter_cond(&func(Function::StrEnds, vec![var("x"), lit("b_r")]), &b, Dialect::Postgres)
-            .unwrap();
-        assert!(matches!(&e, SqlCond::StrMatch { op: StrMatchOp::Like, param, .. } if param == "%b\\_r"), "{e:?}");
+        let e = filter_cond(
+            &func(Function::StrEnds, vec![var("x"), lit("b_r")]),
+            &b,
+            Dialect::Postgres,
+        )
+        .unwrap();
+        assert!(
+            matches!(&e, SqlCond::StrMatch { op: StrMatchOp::Like, param, .. } if param == "%b\\_r"),
+            "{e:?}"
+        );
     }
 
     /// SPARQL CONTAINS/STRSTARTS/STRENDS are case-SENSITIVE, but SQLite `LIKE` is
@@ -490,7 +530,10 @@ mod tests {
         for f in [Function::Contains, Function::StrStarts, Function::StrEnds] {
             for d in [Dialect::Sqlite, Dialect::MySql] {
                 let r = filter_cond(&func(f.clone(), vec![var("x"), lit("foo")]), &b, d);
-                assert!(r.is_err(), "{f:?} on {d:?} must not lower to a case-folding LIKE: {r:?}");
+                assert!(
+                    r.is_err(),
+                    "{f:?} on {d:?} must not lower to a case-folding LIKE: {r:?}"
+                );
             }
         }
     }
@@ -510,17 +553,31 @@ mod tests {
                 alias: 0,
             },
         );
-        let r = filter_cond(&func(Function::Contains, vec![var("x"), lit("z")]), &b, Dialect::Sqlite);
-        assert!(r.is_err(), "constructed-term CONTAINS must not lower to LIKE: {r:?}");
+        let r = filter_cond(
+            &func(Function::Contains, vec![var("x"), lit("z")]),
+            &b,
+            Dialect::Sqlite,
+        );
+        assert!(
+            r.is_err(),
+            "constructed-term CONTAINS must not lower to LIKE: {r:?}"
+        );
     }
 
     /// REGEX is dialect-split: PostgreSQL `~`/`~*`; SQLite has no regex operator.
     #[test]
     fn regex_is_dialect_split() {
         let b = col_binding("x", "name");
-        let pg = filter_cond(&func(Function::Regex, vec![var("x"), lit("^a.*")]), &b, Dialect::Postgres)
-            .unwrap();
-        assert!(matches!(&pg, SqlCond::StrMatch { op: StrMatchOp::RegexMatch, param, .. } if param == "^a.*"), "{pg:?}");
+        let pg = filter_cond(
+            &func(Function::Regex, vec![var("x"), lit("^a.*")]),
+            &b,
+            Dialect::Postgres,
+        )
+        .unwrap();
+        assert!(
+            matches!(&pg, SqlCond::StrMatch { op: StrMatchOp::RegexMatch, param, .. } if param == "^a.*"),
+            "{pg:?}"
+        );
         // The `i` flag ⇒ case-insensitive `~*`.
         let pgi = filter_cond(
             &func(Function::Regex, vec![var("x"), lit("^a.*"), lit("i")]),
@@ -528,8 +585,22 @@ mod tests {
             Dialect::Postgres,
         )
         .unwrap();
-        assert!(matches!(&pgi, SqlCond::StrMatch { op: StrMatchOp::RegexMatchI, .. }), "{pgi:?}");
+        assert!(
+            matches!(
+                &pgi,
+                SqlCond::StrMatch {
+                    op: StrMatchOp::RegexMatchI,
+                    ..
+                }
+            ),
+            "{pgi:?}"
+        );
         // SQLite: unsupported (not silently dropped).
-        assert!(filter_cond(&func(Function::Regex, vec![var("x"), lit("^a.*")]), &b, Dialect::Sqlite).is_err());
+        assert!(filter_cond(
+            &func(Function::Regex, vec![var("x"), lit("^a.*")]),
+            &b,
+            Dialect::Sqlite
+        )
+        .is_err());
     }
 }

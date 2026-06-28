@@ -57,10 +57,7 @@ pub fn run_obda_scenario(scenario: &Scenario) -> Result<()> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!(
-        "sf-bench-{}-{nanos}.db",
-        scenario.scale_factor
-    ));
+    let path = std::env::temp_dir().join(format!("sf-bench-{}-{nanos}.db", scenario.scale_factor));
 
     let result = (|| -> driver::DResult<()> {
         let (conn, _counts) = workload::open_source_db(&path, scenario.scale_factor)?;

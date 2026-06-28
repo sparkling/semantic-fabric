@@ -34,7 +34,12 @@ pub fn parse_turtle(text: &str, base: &str) -> Result<Dataset, String> {
             predicate,
             object,
         } = t.map_err(|e| format!("Turtle parse error: {e}"))?;
-        quads.push(Quad::new(subject, predicate, object, GraphName::DefaultGraph));
+        quads.push(Quad::new(
+            subject,
+            predicate,
+            object,
+            GraphName::DefaultGraph,
+        ));
     }
     Ok(Dataset::from_iter(quads))
 }
@@ -61,7 +66,8 @@ pub fn quads_to_dataset(quads: &[Quad]) -> Dataset {
 /// CONSTRUCT dump emits only the default graph, so a case whose expected output
 /// uses `rr:graphMap` (named quads) is outside the dump's reach (ADR-0005).
 pub fn has_named_graph(ds: &Dataset) -> bool {
-    ds.iter().any(|q| q.graph_name != GraphNameRef::DefaultGraph)
+    ds.iter()
+        .any(|q| q.graph_name != GraphNameRef::DefaultGraph)
 }
 
 /// True iff `a` and `b` are isomorphic (blank-node-aware), via RDFC-1.0
@@ -108,8 +114,7 @@ mod tests {
     fn detects_named_graph_quads() {
         let dg = parse_nquads("<http://e/s> <http://e/p> <http://e/o> .").unwrap();
         assert!(!has_named_graph(&dg));
-        let ng =
-            parse_nquads("<http://e/s> <http://e/p> <http://e/o> <http://e/g> .").unwrap();
+        let ng = parse_nquads("<http://e/s> <http://e/p> <http://e/o> <http://e/g> .").unwrap();
         assert!(has_named_graph(&ng));
     }
 }

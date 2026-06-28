@@ -120,6 +120,8 @@ fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
     match def {
         TermDef::Const(_) => false,
         TermDef::Derived { alias, .. } => opt_aliases.contains(alias),
-        TermDef::Coalesce(l, r) => def_is_nullable(l, opt_aliases) || def_is_nullable(r, opt_aliases),
+        TermDef::Coalesce(l, r) => {
+            def_is_nullable(l, opt_aliases) || def_is_nullable(r, opt_aliases)
+        }
     }
 }

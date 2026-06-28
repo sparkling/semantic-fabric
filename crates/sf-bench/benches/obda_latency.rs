@@ -65,7 +65,8 @@ fn report_first_result_table() {
     for scale in [1u32, 10, 100] {
         let fx = fixture(scale);
         let (n, first, total) =
-            driver::stream_construct_timed(&fx.maps, &fx.conn, &fx.schemas, workload::DUMP_QUERY).unwrap();
+            driver::stream_construct_timed(&fx.maps, &fx.conn, &fx.schemas, workload::DUMP_QUERY)
+                .unwrap();
         eprintln!(
             "{scale:>6} {n:>14} {:>18.1} {:>14.3}",
             first.as_secs_f64() * 1e6,
@@ -84,7 +85,13 @@ fn bench_construct_dump(c: &mut Criterion) {
         // Full streamed dump (all triples), bounded memory.
         group.bench_function(format!("full_dump_{scale}x"), |b| {
             b.iter(|| {
-                driver::stream_construct_count(&fx.maps, &fx.conn, &fx.schemas, workload::DUMP_QUERY).unwrap()
+                driver::stream_construct_count(
+                    &fx.maps,
+                    &fx.conn,
+                    &fx.schemas,
+                    workload::DUMP_QUERY,
+                )
+                .unwrap()
             });
         });
         let _ = fx.counts.total();

@@ -24,7 +24,11 @@ pub(super) fn sql_identifier(raw: &str) -> String {
 /// statement terminator breaking the enclosing SQL.
 pub(super) fn strip_trailing_semicolon(query: &str) -> String {
     let trimmed = query.trim_end();
-    trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end().to_owned()
+    trimmed
+        .strip_suffix(';')
+        .unwrap_or(trimmed)
+        .trim_end()
+        .to_owned()
 }
 
 /// Normalise delimited-identifier column names inside a template's placeholders
@@ -75,7 +79,8 @@ pub(super) fn is_well_formed_language_tag(tag: &str) -> bool {
     let Some(primary) = subtags.next() else {
         return false;
     };
-    let primary_ok = (2..=3).contains(&primary.len()) && primary.bytes().all(|b| b.is_ascii_alphabetic());
+    let primary_ok =
+        (2..=3).contains(&primary.len()) && primary.bytes().all(|b| b.is_ascii_alphabetic());
     if !primary_ok {
         return false;
     }

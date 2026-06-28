@@ -53,9 +53,9 @@ fn pom_with_predicate<'a>(map: &'a TriplesMap, predicate: &str) -> &'a Predicate
     map.predicate_object_maps
         .iter()
         .find(|pom| {
-            pom.predicates.iter().any(|p| {
-                matches!(p, TermMap::Constant(Term::NamedNode(n)) if n.as_str() == predicate)
-            })
+            pom.predicates.iter().any(
+                |p| matches!(p, TermMap::Constant(Term::NamedNode(n)) if n.as_str() == predicate),
+            )
         })
         .unwrap_or_else(|| panic!("no predicate-object map for {predicate}"))
 }
@@ -70,7 +70,9 @@ fn parses_r2rml_fixture_into_ir() {
 
     // Logical sources: rr:tableName vs rr:sqlQuery.
     assert!(matches!(&emp.source, LogicalSource::Table(t) if t == "EMP"));
-    assert!(matches!(&dept.source, LogicalSource::Query(q) if q == "SELECT deptno, dname FROM DEPT"));
+    assert!(
+        matches!(&dept.source, LogicalSource::Query(q) if q == "SELECT deptno, dname FROM DEPT")
+    );
 
     // Template subject defaults to an IRI term type; rr:class captured.
     match &emp.subject.term {

@@ -36,7 +36,10 @@ ex:worksFor a owl:ObjectProperty .
 #[test]
 fn m_join_t_gate_passes_a_conforming_closure() {
     let out = mapping_conforms_to_t(CONFORMING, &shapes()).expect("Native validation runs");
-    assert!(out.conforms, "conforming M⋈T closure must pass the gate: {out:?}");
+    assert!(
+        out.conforms,
+        "conforming M⋈T closure must pass the gate: {out:?}"
+    );
     assert_eq!(out.violations, 0);
 }
 

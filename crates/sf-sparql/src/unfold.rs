@@ -5,7 +5,7 @@
 //! JOIN obeying R1–R5. This is the **unoptimized** tree the [`crate::cascade`]
 //! then rewrites.
 
-use sf_core::ir::{ObjectMap, Segment, TermMap, Template, TriplesMap};
+use sf_core::ir::{ObjectMap, Segment, Template, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 use spargebra::algebra::{GraphPattern, PropertyPathExpression};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
@@ -141,7 +141,9 @@ impl<'a> Unfolder<'a> {
                 subject,
                 path,
                 object,
-            } => Ok(TransPattern::plain(vec![self.path_branch(subject, path, object)?])),
+            } => Ok(TransPattern::plain(vec![
+                self.path_branch(subject, path, object)?
+            ])),
             // Deferred → 501 (documented, never silent): property paths, MINUS,
             // GRAPH, BIND, VALUES, ORDER BY, aggregates, LATERAL, SERVICE
             // (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
@@ -223,7 +225,9 @@ impl<'a> Unfolder<'a> {
             ObjectMap::Ref(r) => {
                 let parent = self
                     .map_by_id(&r.parent_triples_map)
-                    .ok_or_else(|| Error::Mapping(format!("unknown parent map {}", r.parent_triples_map)))?
+                    .ok_or_else(|| {
+                        Error::Mapping(format!("unknown parent map {}", r.parent_triples_map))
+                    })?
                     .clone();
                 let palias = self.alias();
                 branch.core.push(Scan {
@@ -239,7 +243,11 @@ impl<'a> Unfolder<'a> {
                 def_of(&parent.subject.term, palias)
             }
         };
-        let (q_subj, q_obj) = if swap { (obj_def, subj_def) } else { (subj_def, obj_def) };
+        let (q_subj, q_obj) = if swap {
+            (obj_def, subj_def)
+        } else {
+            (subj_def, obj_def)
+        };
 
         // Bind/constrain the three query positions.
         if let NamedNodePattern::Variable(pv) = &tp.predicate {
@@ -280,7 +288,11 @@ impl<'a> Unfolder<'a> {
             let subj_def = def_of(&tm.subject.term, alias);
             // predicate is rdf:type (matched); bind object var to the class IRI.
             if let TermPattern::Variable(ov) = &tp.object {
-                bind(&mut branch, ov.as_str(), TermDef::Const(Term::NamedNode(class.clone())))?;
+                bind(
+                    &mut branch,
+                    ov.as_str(),
+                    TermDef::Const(Term::NamedNode(class.clone())),
+                )?;
             }
             if let NamedNodePattern::Variable(pv) = &tp.predicate {
                 bind(
@@ -314,9 +326,15 @@ impl<'a> Unfolder<'a> {
                 match pm {
                     TermMap::Constant(Term::NamedNode(q)) => {
                         if direct.iter().any(|i| i == q.as_str()) {
-                            Ok((PredMatch::Yes(TermDef::Const(Term::NamedNode(q.clone()))), false))
+                            Ok((
+                                PredMatch::Yes(TermDef::Const(Term::NamedNode(q.clone()))),
+                                false,
+                            ))
                         } else if inverse.iter().any(|i| i == q.as_str()) {
-                            Ok((PredMatch::Yes(TermDef::Const(Term::NamedNode(q.clone()))), true))
+                            Ok((
+                                PredMatch::Yes(TermDef::Const(Term::NamedNode(q.clone()))),
+                                true,
+                            ))
                         } else {
                             Ok((PredMatch::No, false))
                         }
@@ -492,18 +510,18 @@ impl<'a> Unfolder<'a> {
                     continue;
                 }
                 for om in &pom.objects {
-                    let obj_map = match om {
-                        ObjectMap::Term(t) => t.clone(),
-                        ObjectMap::Ref(_) => {
-                            return Err(Error::Unsupported(
+                    let obj_map =
+                        match om {
+                            ObjectMap::Term(t) => t.clone(),
+                            ObjectMap::Ref(_) => return Err(Error::Unsupported(
                                 "property path over a refObjectMap-joined predicate deferred → 501"
                                     .to_owned(),
-                            ))
-                        }
-                    };
+                            )),
+                        };
                     if found.is_some() {
                         return Err(Error::Unsupported(
-                            "property path over a predicate from >1 mapping deferred → 501".to_owned(),
+                            "property path over a predicate from >1 mapping deferred → 501"
+                                .to_owned(),
                         ));
                     }
                     found = Some(ResolvedHop {
@@ -518,7 +536,9 @@ impl<'a> Unfolder<'a> {
             }
         }
         found.ok_or_else(|| {
-            Error::Unsupported(format!("property path predicate {pred_iri} is not mapped → 501"))
+            Error::Unsupported(format!(
+                "property path predicate {pred_iri} is not mapped → 501"
+            ))
         })
     }
 }

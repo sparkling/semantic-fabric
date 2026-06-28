@@ -129,7 +129,10 @@ mod tests {
             ]
         );
         // A class with no sub-classes still matches itself.
-        assert_eq!(t.saturate_class("http://ex/Manager"), vec!["http://ex/Manager"]);
+        assert_eq!(
+            t.saturate_class("http://ex/Manager"),
+            vec!["http://ex/Manager"]
+        );
     }
 
     #[test]
@@ -146,9 +149,18 @@ mod tests {
         let mut t = Tbox::new();
         t.add_inverse("http://ex/parentOf", "http://ex/childOf");
         t.add_symmetric("http://ex/marriedTo");
-        assert_eq!(t.inverse_predicates("http://ex/parentOf"), vec!["http://ex/childOf"]);
-        assert_eq!(t.inverse_predicates("http://ex/childOf"), vec!["http://ex/parentOf"]);
-        assert_eq!(t.inverse_predicates("http://ex/marriedTo"), vec!["http://ex/marriedTo"]);
+        assert_eq!(
+            t.inverse_predicates("http://ex/parentOf"),
+            vec!["http://ex/childOf"]
+        );
+        assert_eq!(
+            t.inverse_predicates("http://ex/childOf"),
+            vec!["http://ex/parentOf"]
+        );
+        assert_eq!(
+            t.inverse_predicates("http://ex/marriedTo"),
+            vec!["http://ex/marriedTo"]
+        );
         assert!(t.inverse_predicates("http://ex/unrelated").is_empty());
     }
 }

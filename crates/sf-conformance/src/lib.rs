@@ -116,7 +116,11 @@ impl Report {
 
     /// `"<passed>/<adjudicated>"` for a kind (the EARL split form).
     pub fn split(&self, kind: Kind) -> String {
-        format!("{}/{}", self.passed(Some(kind)), self.adjudicated(Some(kind)))
+        format!(
+            "{}/{}",
+            self.passed(Some(kind)),
+            self.adjudicated(Some(kind))
+        )
     }
 
     /// Failed-case identifiers + reasons (for honest reporting).

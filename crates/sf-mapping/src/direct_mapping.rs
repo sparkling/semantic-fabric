@@ -19,8 +19,8 @@
 //! so the column object maps here carry no explicit `rr:datatype`.
 
 use sf_core::ir::{
-    Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, Segment, SubjectMap, Template,
-    TermMap, TermSpec, TriplesMap,
+    Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, Segment, SubjectMap,
+    Template, TermMap, TermSpec, TriplesMap,
 };
 use sf_core::{NamedNode, Result, Term};
 use sf_sql::TableSchema;
@@ -43,7 +43,11 @@ fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
     // is `<base/Table#Column>`; the object is the natural-typed value, with §10
     // applied downstream in term-gen).
     for col in &table.columns {
-        let predicate = constant_iri(&format!("{base}{}#{}", encode(&table.name), encode(&col.name)));
+        let predicate = constant_iri(&format!(
+            "{base}{}#{}",
+            encode(&table.name),
+            encode(&col.name)
+        ));
         poms.push(PredicateObjectMap {
             predicates: vec![predicate],
             objects: vec![ObjectMap::Term(TermMap::Column(
@@ -59,9 +63,13 @@ fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
     for fk in &table.foreign_keys {
         // Encode each FK column name, then join with a literal `;` separator (the
         // separator is structural and is not itself percent-encoded — W3C DM §2).
-        let ref_name = fk.columns.iter().map(|c| encode(c)).collect::<Vec<_>>().join(";");
-        let predicate =
-            constant_iri(&format!("{base}{}#ref-{}", encode(&table.name), ref_name));
+        let ref_name = fk
+            .columns
+            .iter()
+            .map(|c| encode(c))
+            .collect::<Vec<_>>()
+            .join(";");
+        let predicate = constant_iri(&format!("{base}{}#ref-{}", encode(&table.name), ref_name));
         let joins = fk
             .columns
             .iter()
@@ -125,7 +133,10 @@ fn pk_template(table: &TableSchema, base: &str) -> Result<TermMap> {
         segs.push(Segment::Literal(prefix.into()));
         segs.push(Segment::Column(pk.as_str().into()));
     }
-    Ok(TermMap::Template(Template::from_segments(segs)?, TermSpec::iri()))
+    Ok(TermMap::Template(
+        Template::from_segments(segs)?,
+        TermSpec::iri(),
+    ))
 }
 
 /// A per-row blank-node template (W3C DM §2: "a fresh blank node unique to the

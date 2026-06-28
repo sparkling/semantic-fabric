@@ -34,7 +34,8 @@ fn report_peak_table() {
         let schemas = driver::introspect(&conn).unwrap();
 
         let base = mem::reset_peak();
-        let triples = driver::stream_construct_count(&maps, &conn, &schemas, workload::DUMP_QUERY).unwrap();
+        let triples =
+            driver::stream_construct_count(&maps, &conn, &schemas, workload::DUMP_QUERY).unwrap();
         let peak = mem::window_peak(base);
 
         let per = if triples > 0 {
@@ -59,7 +60,8 @@ fn bench_streamed_dump(c: &mut Criterion) {
         let schemas = driver::introspect(&conn).unwrap();
         group.bench_function(format!("stream_{scale}x"), |b| {
             b.iter(|| {
-                driver::stream_construct_count(&maps, &conn, &schemas, workload::DUMP_QUERY).unwrap()
+                driver::stream_construct_count(&maps, &conn, &schemas, workload::DUMP_QUERY)
+                    .unwrap()
             });
         });
     }

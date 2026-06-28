@@ -16,9 +16,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use sf_sparql::{exec_pg, parse_and_translate_with, Error as SparqlError, Tbox};
 use sf_sql::introspect::introspect_postgres;
 use sf_sql::{Dialect, TableSchema};
-use sf_sparql::{exec_pg, parse_and_translate_with, Error as SparqlError, Tbox};
 use tokio_postgres::{Client, NoTls};
 
 use crate::graph::{has_named_graph, parse_nquads, parse_turtle};
@@ -167,7 +167,10 @@ async fn introspect_all(client: &Client) -> Result<Vec<TableSchema>, String> {
 
 /// R2RML §5.1: an `rr:sqlQuery` view must not yield two identically-named result
 /// columns — validate each against the live server via prepare-time metadata.
-async fn validate_query_sources(client: &Client, maps: &[sf_core::ir::TriplesMap]) -> Result<(), String> {
+async fn validate_query_sources(
+    client: &Client,
+    maps: &[sf_core::ir::TriplesMap],
+) -> Result<(), String> {
     use sf_core::ir::LogicalSource;
     for map in maps {
         if let LogicalSource::Query(q) = &map.source {
@@ -193,7 +196,12 @@ async fn run_r2rml_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Stri
     }
     let doc = match &case.mapping_document {
         Some(d) => d,
-        None => return (Status::Skipped, "R2RML case without a mapping document".to_owned()),
+        None => {
+            return (
+                Status::Skipped,
+                "R2RML case without a mapping document".to_owned(),
+            )
+        }
     };
     let ttl = match read(dir, doc) {
         Ok(t) => t,
@@ -210,9 +218,17 @@ async fn run_r2rml_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Stri
         Ok(s) => s,
         Err(e) => return (Status::Skipped, format!("introspect: {e}")),
     };
-    let plan = match parse_and_translate_with(DUMP, &maps, Dialect::Postgres, &Tbox::default(), &schemas) {
+    let plan = match parse_and_translate_with(
+        DUMP,
+        &maps,
+        Dialect::Postgres,
+        &Tbox::default(),
+        &schemas,
+    ) {
         Ok(p) => p,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 translate: {m}")),
+        Err(SparqlError::Unsupported(m)) => {
+            return (Status::Skipped, format!("501 translate: {m}"))
+        }
         Err(e) => return parse_error_outcome(case, &format!("translate: {e}")),
     };
     let triples = match exec_pg::construct_triples_pg(&plan, client).await {
@@ -228,7 +244,12 @@ async fn run_r2rml_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Stri
     }
     let out = match &case.output {
         Some(o) => o,
-        None => return (Status::Skipped, "positive case without an output file".to_owned()),
+        None => {
+            return (
+                Status::Skipped,
+                "positive case without an output file".to_owned(),
+            )
+        }
     };
     let expected = match read_forked(dir, out, TAG).and_then(|t| parse_nquads(&t)) {
         Ok(d) => d,
@@ -237,7 +258,9 @@ async fn run_r2rml_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Stri
     if has_named_graph(&expected) {
         let quads = match exec_pg::dump_quads_pg(&maps, client, Dialect::Postgres).await {
             Ok(q) => q,
-            Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 quad dump: {m}")),
+            Err(SparqlError::Unsupported(m)) => {
+                return (Status::Skipped, format!("501 quad dump: {m}"))
+            }
             Err(e) => return parse_error_outcome(case, &format!("quad dump: {e}")),
         };
         return compare_quads(&quads, &expected);
@@ -257,9 +280,17 @@ async fn run_direct_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Str
         Ok(m) => m,
         Err(e) => return (Status::Failed, format!("direct mapping: {e}")),
     };
-    let plan = match parse_and_translate_with(DUMP, &maps, Dialect::Postgres, &Tbox::default(), &schemas) {
+    let plan = match parse_and_translate_with(
+        DUMP,
+        &maps,
+        Dialect::Postgres,
+        &Tbox::default(),
+        &schemas,
+    ) {
         Ok(p) => p,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 translate: {m}")),
+        Err(SparqlError::Unsupported(m)) => {
+            return (Status::Skipped, format!("501 translate: {m}"))
+        }
         Err(e) => return (Status::Failed, format!("translate: {e}")),
     };
     let triples = match exec_pg::construct_triples_pg(&plan, client).await {

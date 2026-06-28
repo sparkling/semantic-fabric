@@ -146,10 +146,17 @@ mod tests {
         // Pin both to the same pre-hash bucket (a forced collision).
         ka.structural_hash = 42;
         kb.structural_hash = 42;
-        assert_ne!(ka, kb, "distinct canonical algebra ⇒ distinct keys despite equal hash");
+        assert_ne!(
+            ka, kb,
+            "distinct canonical algebra ⇒ distinct keys despite equal hash"
+        );
         cache.put(ka.clone(), 1);
         assert_eq!(cache.get(&ka), Some(1));
-        assert_eq!(cache.get(&kb), None, "a collision must not serve the wrong plan");
+        assert_eq!(
+            cache.get(&kb),
+            None,
+            "a collision must not serve the wrong plan"
+        );
     }
 
     #[test]
@@ -165,8 +172,14 @@ mod tests {
         cache.put(k1.clone(), 10);
         assert_eq!(cache.get(&k1), Some(10));
         // Overflow clears wholesale (⟨T,M⟩-bounded eviction).
-        cache.put(plan_key(&parse("SELECT * WHERE { ?d ?e ?f }"), Epoch(0)), 20);
-        cache.put(plan_key(&parse("SELECT * WHERE { ?g ?h ?i }"), Epoch(0)), 30);
+        cache.put(
+            plan_key(&parse("SELECT * WHERE { ?d ?e ?f }"), Epoch(0)),
+            20,
+        );
+        cache.put(
+            plan_key(&parse("SELECT * WHERE { ?g ?h ?i }"), Epoch(0)),
+            30,
+        );
         assert!(cache.len() <= 2);
     }
 }

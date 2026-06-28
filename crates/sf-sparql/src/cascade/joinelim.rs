@@ -223,4 +223,3 @@ fn rename_col_in_term_map(tm: &TermMap, from: &str, to: &str) -> TermMap {
         }
     }
 }
-

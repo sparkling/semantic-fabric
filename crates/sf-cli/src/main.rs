@@ -61,7 +61,10 @@ fn bench() -> ExitCode {
             eprintln!("semantic-fabric: bench scenario {scale}x failed: {e}");
             return ExitCode::FAILURE;
         }
-        println!("  {scale:>3}x  all queries + streaming CONSTRUCT   {:?}", t.elapsed());
+        println!(
+            "  {scale:>3}x  all queries + streaming CONSTRUCT   {:?}",
+            t.elapsed()
+        );
     }
     println!(
         "\nFull numbers:\n  \

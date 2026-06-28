@@ -86,7 +86,9 @@ fn column_iri<'a>(value: &'a str, base: Option<&str>, buf: &'a mut String) -> Re
         if let Ok(base_iri) = oxiri::Iri::parse(base) {
             buf.clear();
             if base_iri.resolve_into(value, buf).is_ok() {
-                return Ok(GenTerm::NamedNode(NamedNodeRef::new_unchecked(buf.as_str())));
+                return Ok(GenTerm::NamedNode(NamedNodeRef::new_unchecked(
+                    buf.as_str(),
+                )));
             }
         }
     }
@@ -159,7 +161,10 @@ mod tests {
         assert_eq!(g, GenTerm::NamedNode(node.as_ref()));
         let owned = g.into_owned();
         // Consuming `g` releases the buffer; the constant path never wrote it.
-        assert!(buf.is_empty(), "constant path must not touch the scratch buffer");
+        assert!(
+            buf.is_empty(),
+            "constant path must not touch the scratch buffer"
+        );
         assert_eq!(owned, Term::NamedNode(node));
     }
 
@@ -184,22 +189,32 @@ mod tests {
     #[test]
     fn column_iri_relative_value_resolves_against_base() {
         // R2RML §7.3: a relative `rr:column` IRI value resolves against the base.
-        let tm = TermMap::Column("u".into(), TermSpec::iri().with_base("http://example.com/base/"));
+        let tm = TermMap::Column(
+            "u".into(),
+            TermSpec::iri().with_base("http://example.com/base/"),
+        );
         let row: &[(&str, Option<&str>)] = &[("u", Some("Carlos"))];
         assert_eq!(
             owned(&tm, row),
-            Some(Term::NamedNode(NamedNode::new_unchecked("http://example.com/base/Carlos")))
+            Some(Term::NamedNode(NamedNode::new_unchecked(
+                "http://example.com/base/Carlos"
+            )))
         );
     }
 
     #[test]
     fn column_iri_absolute_value_passes_through_base() {
         // An absolute IRI is used verbatim, base or no base.
-        let tm = TermMap::Column("u".into(), TermSpec::iri().with_base("http://example.com/base/"));
+        let tm = TermMap::Column(
+            "u".into(),
+            TermSpec::iri().with_base("http://example.com/base/"),
+        );
         let row: &[(&str, Option<&str>)] = &[("u", Some("http://ex.org/ns#Jhon"))];
         assert_eq!(
             owned(&tm, row),
-            Some(Term::NamedNode(NamedNode::new_unchecked("http://ex.org/ns#Jhon")))
+            Some(Term::NamedNode(NamedNode::new_unchecked(
+                "http://ex.org/ns#Jhon"
+            )))
         );
     }
 
@@ -207,7 +222,10 @@ mod tests {
     fn column_iri_invalid_value_is_a_data_error() {
         // A value that is neither a valid absolute IRI nor a resolvable relative
         // reference (a space is illegal in an IRI) is a data error (R2RML §7.3).
-        let tm = TermMap::Column("u".into(), TermSpec::iri().with_base("http://example.com/base/"));
+        let tm = TermMap::Column(
+            "u".into(),
+            TermSpec::iri().with_base("http://example.com/base/"),
+        );
         let row: &[(&str, Option<&str>)] = &[("u", Some("Juan Daniel"))];
         assert!(generate(&tm, row).is_err());
     }
@@ -216,14 +234,20 @@ mod tests {
     fn column_blank_node() {
         let tm = TermMap::Column("b".into(), TermSpec::blank_node());
         let row: &[(&str, Option<&str>)] = &[("b", Some("n1"))];
-        assert_eq!(owned(&tm, row), Some(Term::BlankNode(BlankNode::new_unchecked("n1"))));
+        assert_eq!(
+            owned(&tm, row),
+            Some(Term::BlankNode(BlankNode::new_unchecked("n1")))
+        );
     }
 
     #[test]
     fn column_plain_literal() {
         let tm = TermMap::Column("name".into(), TermSpec::plain_literal());
         let row: &[(&str, Option<&str>)] = &[("name", Some("Ada"))];
-        assert_eq!(owned(&tm, row), Some(Term::Literal(Literal::new_simple_literal("Ada"))));
+        assert_eq!(
+            owned(&tm, row),
+            Some(Term::Literal(Literal::new_simple_literal("Ada")))
+        );
     }
 
     #[test]
@@ -236,7 +260,10 @@ mod tests {
         let row: &[(&str, Option<&str>)] = &[("age", Some("007"))];
         assert_eq!(
             owned(&tm, row),
-            Some(Term::Literal(Literal::new_typed_literal("007", xsd::INTEGER)))
+            Some(Term::Literal(Literal::new_typed_literal(
+                "007",
+                xsd::INTEGER
+            )))
         );
     }
 
@@ -257,13 +284,18 @@ mod tests {
         let row: &[(&str, Option<&str>)] = &[("id", Some("a b"))];
         assert_eq!(
             owned(&tm, row),
-            Some(Term::NamedNode(NamedNode::new_unchecked("http://ex.org/emp/a%20b")))
+            Some(Term::NamedNode(NamedNode::new_unchecked(
+                "http://ex.org/emp/a%20b"
+            )))
         );
     }
 
     #[test]
     fn template_literal_is_not_percent_encoded() {
-        let tm = TermMap::Template(Template::parse("{a}/{b}").unwrap(), TermSpec::plain_literal());
+        let tm = TermMap::Template(
+            Template::parse("{a}/{b}").unwrap(),
+            TermSpec::plain_literal(),
+        );
         let row: &[(&str, Option<&str>)] = &[("a", Some("x y")), ("b", Some("z"))];
         assert_eq!(
             owned(&tm, row),

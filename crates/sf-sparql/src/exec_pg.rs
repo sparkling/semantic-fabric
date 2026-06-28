@@ -90,20 +90,41 @@ fn pg_xsd_code(ty: &Type) -> Option<XsdTypeCode> {
 fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
     let sql_err = |e: tokio_postgres::Error| Error::Sql(e.to_string());
     let s = match *ty {
-        Type::BOOL => row.try_get::<_, Option<bool>>(idx).map_err(sql_err)?.map(|b| b.to_string()),
-        Type::INT2 => row.try_get::<_, Option<i16>>(idx).map_err(sql_err)?.map(|v| v.to_string()),
-        Type::INT4 => row.try_get::<_, Option<i32>>(idx).map_err(sql_err)?.map(|v| v.to_string()),
-        Type::INT8 => row.try_get::<_, Option<i64>>(idx).map_err(sql_err)?.map(|v| v.to_string()),
-        Type::FLOAT4 => row.try_get::<_, Option<f32>>(idx).map_err(sql_err)?.map(|v| v.to_string()),
-        Type::FLOAT8 => row.try_get::<_, Option<f64>>(idx).map_err(sql_err)?.map(|v| v.to_string()),
-        Type::BYTEA => row.try_get::<_, Option<Vec<u8>>>(idx).map_err(sql_err)?.map(|b| {
-            let mut out = std::string::String::new();
-            datatype::hex_binary_upper(&b, &mut out);
-            out
-        }),
-        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::CHAR | Type::UNKNOWN => {
-            row.try_get::<_, Option<std::string::String>>(idx).map_err(sql_err)?
-        }
+        Type::BOOL => row
+            .try_get::<_, Option<bool>>(idx)
+            .map_err(sql_err)?
+            .map(|b| b.to_string()),
+        Type::INT2 => row
+            .try_get::<_, Option<i16>>(idx)
+            .map_err(sql_err)?
+            .map(|v| v.to_string()),
+        Type::INT4 => row
+            .try_get::<_, Option<i32>>(idx)
+            .map_err(sql_err)?
+            .map(|v| v.to_string()),
+        Type::INT8 => row
+            .try_get::<_, Option<i64>>(idx)
+            .map_err(sql_err)?
+            .map(|v| v.to_string()),
+        Type::FLOAT4 => row
+            .try_get::<_, Option<f32>>(idx)
+            .map_err(sql_err)?
+            .map(|v| v.to_string()),
+        Type::FLOAT8 => row
+            .try_get::<_, Option<f64>>(idx)
+            .map_err(sql_err)?
+            .map(|v| v.to_string()),
+        Type::BYTEA => row
+            .try_get::<_, Option<Vec<u8>>>(idx)
+            .map_err(sql_err)?
+            .map(|b| {
+                let mut out = std::string::String::new();
+                datatype::hex_binary_upper(&b, &mut out);
+                out
+            }),
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::CHAR | Type::UNKNOWN => row
+            .try_get::<_, Option<std::string::String>>(idx)
+            .map_err(sql_err)?,
         _ => {
             return Err(Error::Unsupported(format!(
                 "PostgreSQL result type {ty} reconstruction"
@@ -192,7 +213,11 @@ fn map_sql_err(e: sf_sql::Error) -> Error {
 pub async fn construct_triples_pg(plan: &Plan, client: &Client) -> Result<Vec<Triple>> {
     let template = match &plan.form {
         PlanForm::Construct { template } => template.clone(),
-        _ => return Err(Error::Unsupported("construct() requires a CONSTRUCT plan".to_owned())),
+        _ => {
+            return Err(Error::Unsupported(
+                "construct() requires a CONSTRUCT plan".to_owned(),
+            ))
+        }
     };
     let mut out = Vec::new();
     for_each_solution_pg(plan, client, |_branch, bindings| {
@@ -227,9 +252,11 @@ pub async fn dump_quads_pg(
     };
     let mut out = Vec::new();
     for_each_solution_pg(&plan, client, |branch, bindings| {
-        let (Some(s), Some(p), Some(o)) =
-            (bindings.get(VAR_S), bindings.get(VAR_P), bindings.get(VAR_O))
-        else {
+        let (Some(s), Some(p), Some(o)) = (
+            bindings.get(VAR_S),
+            bindings.get(VAR_P),
+            bindings.get(VAR_O),
+        ) else {
             return Ok(()); // a NULL s/p/o column ⇒ no term ⇒ no triple (§11)
         };
         let graph = if branch.bindings.contains_key(VAR_G) {

@@ -74,7 +74,10 @@ fn declared_codes(e: &EmittedBranch, conn: &Connection) -> Vec<Option<XsdTypeCod
 /// literal consistent across source dialects (ADR-0015 §10 consistency clause).
 fn declared_char_pads(e: &EmittedBranch, conn: &Connection) -> Vec<Option<usize>> {
     match sf_sql::sqlite_column_decltypes(conn, &e.sql) {
-        Ok(decltypes) => decltypes.iter().map(|d| d.as_deref().and_then(char_pad_len)).collect(),
+        Ok(decltypes) => decltypes
+            .iter()
+            .map(|d| d.as_deref().and_then(char_pad_len))
+            .collect(),
         Err(_) => vec![None; e.projection.len()],
     }
 }
@@ -85,7 +88,11 @@ fn declared_char_pads(e: &EmittedBranch, conn: &Connection) -> Vec<Option<usize>
 fn char_pad_len(decl: &str) -> Option<usize> {
     let open = decl.find('(')?;
     let close = decl[open..].find(')')? + open;
-    let name: String = decl[..open].split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase();
+    let name: String = decl[..open]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase();
     if !matches!(name.as_str(), "CHAR" | "CHARACTER" | "NCHAR") {
         return None;
     }
@@ -188,7 +195,8 @@ fn natural_literal(value: &str, code: XsdTypeCode) -> Result<Term> {
         XsdTypeCode::HexBinary => Literal::new_typed_literal(value, code.iri()),
         _ => {
             let mut buf = String::new();
-            datatype::canonical_lexical(value, code, &mut buf).map_err(|e| Error::Core(e.to_string()))?;
+            datatype::canonical_lexical(value, code, &mut buf)
+                .map_err(|e| Error::Core(e.to_string()))?;
             Literal::new_typed_literal(buf, code.iri())
         }
     };
@@ -220,7 +228,9 @@ fn lexical(v: ValueRef<'_>) -> Result<Option<String>> {
                 .map_err(|e| Error::Core(format!("non-UTF8 text column: {e}")))?
                 .to_owned(),
         ),
-        ValueRef::Blob(_) => return Err(Error::Unsupported("BLOB column reconstruction".to_owned())),
+        ValueRef::Blob(_) => {
+            return Err(Error::Unsupported("BLOB column reconstruction".to_owned()))
+        }
     })
 }
 
@@ -340,7 +350,11 @@ fn map_sql_err(e: sf_sql::Error) -> Error {
 pub fn construct(plan: &Plan, conn: &Connection, mut sink: impl FnMut(Triple)) -> Result<u64> {
     let template = match &plan.form {
         PlanForm::Construct { template } => template.clone(),
-        _ => return Err(Error::Unsupported("construct() requires a CONSTRUCT plan".to_owned())),
+        _ => {
+            return Err(Error::Unsupported(
+                "construct() requires a CONSTRUCT plan".to_owned(),
+            ))
+        }
     };
     let mut count = 0u64;
     for_each_solution(plan, conn, |_branch, bindings| {
@@ -389,9 +403,11 @@ pub fn dump_quads_stream(
         dialect,
     };
     for_each_solution(&plan, conn, |branch, bindings| {
-        let (Some(s), Some(p), Some(o)) =
-            (bindings.get(VAR_S), bindings.get(VAR_P), bindings.get(VAR_O))
-        else {
+        let (Some(s), Some(p), Some(o)) = (
+            bindings.get(VAR_S),
+            bindings.get(VAR_P),
+            bindings.get(VAR_O),
+        ) else {
             return Ok(()); // a NULL s/p/o column ⇒ no term ⇒ no triple (§11)
         };
         // A named-graph branch declares `g` in its bindings *definition*; the
@@ -435,7 +451,11 @@ pub struct Solutions {
 pub fn select(plan: &Plan, conn: &Connection) -> Result<Solutions> {
     let vars = match &plan.form {
         PlanForm::Select { vars } => vars.clone(),
-        _ => return Err(Error::Unsupported("select() requires a SELECT plan".to_owned())),
+        _ => {
+            return Err(Error::Unsupported(
+                "select() requires a SELECT plan".to_owned(),
+            ))
+        }
     };
     let mut rows = Vec::new();
     for_each_solution(plan, conn, |_branch, bindings| {
@@ -458,7 +478,10 @@ pub fn ask(plan: &Plan, conn: &Connection) -> Result<bool> {
 /// Instantiate a CONSTRUCT-template triple against a solution; `None` if any
 /// variable is unbound or the triple would be ill-formed. `pub(crate)` so the
 /// PostgreSQL executor instantiates CONSTRUCT templates identically.
-pub(crate) fn instantiate(tp: &spargebra::term::TriplePattern, bindings: &BTreeMap<String, Term>) -> Option<Triple> {
+pub(crate) fn instantiate(
+    tp: &spargebra::term::TriplePattern,
+    bindings: &BTreeMap<String, Term>,
+) -> Option<Triple> {
     use spargebra::term::{NamedNodePattern, TermPattern};
     let term = |p: &TermPattern| -> Option<Term> {
         match p {

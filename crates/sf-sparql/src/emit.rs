@@ -348,7 +348,11 @@ fn render_cond(
 ) -> String {
     match cond {
         SqlCond::ColEq(a, b) => {
-            format!("{} = {}", colref(a, dialect, actuals), colref(b, dialect, actuals))
+            format!(
+                "{} = {}",
+                colref(a, dialect, actuals),
+                colref(b, dialect, actuals)
+            )
         }
         SqlCond::NullSafeEq(a, b) => {
             let (la, lb) = (colref(a, dialect, actuals), colref(b, dialect, actuals));
@@ -383,7 +387,10 @@ fn render_cond(
         SqlCond::Not(c) => format!("(NOT {})", render_cond(c, dialect, actuals, params, pidx)),
         SqlCond::And(cs) => {
             let refs: Vec<&SqlCond> = cs.iter().collect();
-            format!("({})", render_conjunction(&refs, dialect, actuals, params, pidx))
+            format!(
+                "({})",
+                render_conjunction(&refs, dialect, actuals, params, pidx)
+            )
         }
         SqlCond::Or(cs) => {
             if cs.is_empty() {
@@ -440,7 +447,11 @@ mod tests {
         let up = e.sql.to_uppercase();
         assert!(up.contains("LIKE") && up.contains("ESCAPE"), "{}", e.sql);
         assert!(e.sql.contains('?'), "bound placeholder: {}", e.sql);
-        assert!(!e.sql.contains("a%b"), "value must not be inlined: {}", e.sql);
+        assert!(
+            !e.sql.contains("a%b"),
+            "value must not be inlined: {}",
+            e.sql
+        );
         assert_eq!(e.params, vec!["%a\\%b%".to_owned()]);
     }
 
@@ -497,8 +508,16 @@ mod tests {
         )
         .unwrap();
         assert!(e.sql.contains("~*"), "{}", e.sql);
-        assert!(e.sql.contains("$1"), "numbered bound placeholder: {}", e.sql);
-        assert!(!e.sql.contains("^a"), "pattern must not be inlined: {}", e.sql);
+        assert!(
+            e.sql.contains("$1"),
+            "numbered bound placeholder: {}",
+            e.sql
+        );
+        assert!(
+            !e.sql.contains("^a"),
+            "pattern must not be inlined: {}",
+            e.sql
+        );
         assert_eq!(e.params, vec!["^a.*".to_owned()]);
     }
 }

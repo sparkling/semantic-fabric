@@ -49,7 +49,12 @@ fn run_r2rml(dir: &Path, case: &Case) -> (Status, String) {
     };
     let doc = match &case.mapping_document {
         Some(d) => d,
-        None => return (Status::Skipped, "R2RML case without a mapping document".to_owned()),
+        None => {
+            return (
+                Status::Skipped,
+                "R2RML case without a mapping document".to_owned(),
+            )
+        }
     };
     let ttl = match read(dir, doc) {
         Ok(t) => t,
@@ -73,11 +78,14 @@ fn run_r2rml(dir: &Path, case: &Case) -> (Status, String) {
         Ok(s) => s,
         Err(e) => return (Status::Skipped, format!("introspect: {e}")),
     };
-    let plan = match parse_and_translate_with(DUMP, &maps, Dialect::Sqlite, &Tbox::default(), &schemas) {
-        Ok(p) => p,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 translate: {m}")),
-        Err(e) => return parse_error_outcome(case, &format!("translate: {e}")),
-    };
+    let plan =
+        match parse_and_translate_with(DUMP, &maps, Dialect::Sqlite, &Tbox::default(), &schemas) {
+            Ok(p) => p,
+            Err(SparqlError::Unsupported(m)) => {
+                return (Status::Skipped, format!("501 translate: {m}"))
+            }
+            Err(e) => return parse_error_outcome(case, &format!("translate: {e}")),
+        };
     let triples = match exec::construct_triples(&plan, &conn) {
         Ok(t) => t,
         Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 exec: {m}")),
@@ -93,9 +101,17 @@ fn run_r2rml(dir: &Path, case: &Case) -> (Status, String) {
 
     let out = match &case.output {
         Some(o) => o,
-        None => return (Status::Skipped, "positive case without an output file".to_owned()),
+        None => {
+            return (
+                Status::Skipped,
+                "positive case without an output file".to_owned(),
+            )
+        }
     };
-    let expected = match read(dir, out).map_err(|e| e.to_string()).and_then(|t| parse_nquads(&t)) {
+    let expected = match read(dir, out)
+        .map_err(|e| e.to_string())
+        .and_then(|t| parse_nquads(&t))
+    {
         Ok(d) => d,
         Err(e) => return (Status::Skipped, format!("expected output: {e}")),
     };
@@ -107,7 +123,9 @@ fn run_r2rml(dir: &Path, case: &Case) -> (Status, String) {
         // graphs included) by blank-node isomorphism against the gold N-Quads.
         let quads = match exec::dump_quads(&maps, &conn, Dialect::Sqlite) {
             Ok(q) => q,
-            Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 quad dump: {m}")),
+            Err(SparqlError::Unsupported(m)) => {
+                return (Status::Skipped, format!("501 quad dump: {m}"))
+            }
             Err(e) => return parse_error_outcome(case, &format!("quad dump: {e}")),
         };
         return compare_quads(&quads, &expected);
@@ -148,11 +166,14 @@ fn run_direct(dir: &Path, case: &Case) -> (Status, String) {
         Ok(m) => m,
         Err(e) => return (Status::Failed, format!("direct mapping: {e}")),
     };
-    let plan = match parse_and_translate_with(DUMP, &maps, Dialect::Sqlite, &Tbox::default(), &schemas) {
-        Ok(p) => p,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 translate: {m}")),
-        Err(e) => return (Status::Failed, format!("translate: {e}")),
-    };
+    let plan =
+        match parse_and_translate_with(DUMP, &maps, Dialect::Sqlite, &Tbox::default(), &schemas) {
+            Ok(p) => p,
+            Err(SparqlError::Unsupported(m)) => {
+                return (Status::Skipped, format!("501 translate: {m}"))
+            }
+            Err(e) => return (Status::Failed, format!("translate: {e}")),
+        };
     let triples = match exec::construct_triples(&plan, &conn) {
         Ok(t) => t,
         Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 exec: {m}")),
@@ -166,7 +187,10 @@ fn run_direct(dir: &Path, case: &Case) -> (Status, String) {
         );
     }
     let out = case.output.as_deref().unwrap_or("directGraph.ttl");
-    let expected = match read(dir, out).map_err(|e| e.to_string()).and_then(|t| parse_turtle(&t, BASE)) {
+    let expected = match read(dir, out)
+        .map_err(|e| e.to_string())
+        .and_then(|t| parse_turtle(&t, BASE))
+    {
         Ok(d) => d,
         Err(e) => return (Status::Skipped, format!("expected output: {e}")),
     };
@@ -199,7 +223,10 @@ pub(crate) fn parse_error_outcome(case: &Case, detail: &str) -> (Status, String)
     if case.has_expected_output {
         (Status::Failed, detail.to_owned())
     } else {
-        (Status::Passed, format!("error correctly surfaced — {detail}"))
+        (
+            Status::Passed,
+            format!("error correctly surfaced — {detail}"),
+        )
     }
 }
 

@@ -12,13 +12,15 @@ use std::collections::HashMap;
 use oxttl::TurtleParser;
 
 use sf_core::ir::{
-    Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, SubjectMap, Template, TermMap,
-    TermSpec, TermType, TriplesMap,
+    Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, SubjectMap, Template,
+    TermMap, TermSpec, TermType, TriplesMap,
 };
 use sf_core::{Error, NamedNode, NamedOrBlankNode, Result, Term, Triple};
 
 mod sql;
-use sql::{normalize_template_idents, resolve_iri_template, sql_identifier, strip_trailing_semicolon};
+use sql::{
+    normalize_template_idents, resolve_iri_template, sql_identifier, strip_trailing_semicolon,
+};
 
 // --- R2RML vocabulary (namespace `http://www.w3.org/ns/r2rml#`, R2RML §11) ----
 
@@ -115,7 +117,10 @@ fn parse_triples_map(g: &Graph, tm: &NamedOrBlankNode) -> Result<TriplesMap> {
 /// view). R2RML-only: no reference formulation (ADR-0002).
 fn parse_logical_source(g: &Graph, tm: &NamedOrBlankNode) -> Result<LogicalSource> {
     let lt = g.object(tm, RR_LOGICAL_TABLE).ok_or_else(|| {
-        Error::Mapping(format!("triples map {} has no rr:logicalTable", node_id(tm)))
+        Error::Mapping(format!(
+            "triples map {} has no rr:logicalTable",
+            node_id(tm)
+        ))
     })?;
     let node = as_resource(lt)?;
     // R2RML §5.1: the only SQL version identifier this processor recognises is
@@ -131,7 +136,9 @@ fn parse_logical_source(g: &Graph, tm: &NamedOrBlankNode) -> Result<LogicalSourc
     if let Some(table) = g.object(&node, RR_TABLE_NAME) {
         Ok(LogicalSource::Table(sql_identifier(lexical(table)?)))
     } else if let Some(query) = g.object(&node, RR_SQL_QUERY) {
-        Ok(LogicalSource::Query(strip_trailing_semicolon(lexical(query)?)))
+        Ok(LogicalSource::Query(strip_trailing_semicolon(lexical(
+            query,
+        )?)))
     } else {
         Err(Error::Mapping(format!(
             "logical table {} has neither rr:tableName nor rr:sqlQuery",

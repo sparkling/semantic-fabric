@@ -206,7 +206,9 @@ fn translate_inner(
             (t, PlanForm::Ask)
         }
         Query::Describe { .. } => {
-            return Err(Error::Unsupported("DESCRIBE is deferred → 501 (ADR-0007)".to_owned()))
+            return Err(Error::Unsupported(
+                "DESCRIBE is deferred → 501 (ADR-0007)".to_owned(),
+            ))
         }
     };
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
@@ -223,7 +225,11 @@ fn translate_inner(
         };
         let out = cascade::run(trans.branches, schema, &ctx);
         // The single-branch DISTINCT decision is recorded on the branch by pass (6).
-        let distinct = if out.len() == 1 { out[0].distinct } else { trans.distinct };
+        let distinct = if out.len() == 1 {
+            out[0].distinct
+        } else {
+            trans.distinct
+        };
         (out, distinct)
     } else {
         (trans.branches, trans.distinct)
@@ -308,7 +314,10 @@ mod tests {
         let q = spargebra::SparqlParser::new()
             .parse_query("DESCRIBE <http://ex/x>")
             .unwrap();
-        assert!(matches!(translate(&q, &[], Dialect::Sqlite), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            translate(&q, &[], Dialect::Sqlite),
+            Err(Error::Unsupported(_))
+        ));
     }
 
     #[test]
@@ -321,13 +330,16 @@ mod tests {
         let cache: PlanCache<Plan> = PlanCache::new(8);
         let e = Epoch(1);
         assert!(cache.is_empty());
-        let _ = translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e).unwrap();
+        let _ =
+            translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e).unwrap();
         assert_eq!(cache.len(), 1, "first compile populates the cache");
-        let _ = translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e).unwrap();
+        let _ =
+            translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e).unwrap();
         assert_eq!(cache.len(), 1, "second call is a hit, no new entry");
         let mut e2 = e;
         e2.bump();
-        let _ = translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e2).unwrap();
+        let _ =
+            translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e2).unwrap();
         assert_eq!(cache.len(), 2, "a new epoch recompiles under a fresh key");
     }
 
@@ -341,7 +353,10 @@ mod tests {
             "SELECT * WHERE { ?s (<http://ex/p>/<http://ex/q>)+ ?o }",
         ] {
             let q = spargebra::SparqlParser::new().parse_query(q).unwrap();
-            assert!(matches!(translate(&q, &[], Dialect::Sqlite), Err(Error::Unsupported(_))));
+            assert!(matches!(
+                translate(&q, &[], Dialect::Sqlite),
+                Err(Error::Unsupported(_))
+            ));
         }
     }
 }

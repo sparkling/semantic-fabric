@@ -88,7 +88,12 @@ pub fn evaluate(graph: &Dataset, sparql: &str) -> Result<OracleAnswer, String> {
             let mut quads = Vec::new();
             for t in iter {
                 let t = t.map_err(|e| format!("oracle triple: {e}"))?;
-                quads.push(Quad::new(t.subject, t.predicate, t.object, GraphName::DefaultGraph));
+                quads.push(Quad::new(
+                    t.subject,
+                    t.predicate,
+                    t.object,
+                    GraphName::DefaultGraph,
+                ));
             }
             Ok(OracleAnswer::Graph(Box::new(Dataset::from_iter(quads))))
         }
@@ -179,6 +184,9 @@ mod tests {
         assert!(solutions_bag_eq(&one, &one.clone()));
         let mut dup = one.clone();
         dup.extend(one.clone());
-        assert!(!solutions_bag_eq(&one, &dup), "differing multiplicity ⇒ unequal bags");
+        assert!(
+            !solutions_bag_eq(&one, &dup),
+            "differing multiplicity ⇒ unequal bags"
+        );
     }
 }

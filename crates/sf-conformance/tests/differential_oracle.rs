@@ -78,7 +78,11 @@ const EXPECTED_TTL: &str = r#"
 <http://ex/dept/10> ex:label "Sales" .
 "#;
 
-fn fixture() -> (Connection, Vec<sf_core::ir::TriplesMap>, Vec<sf_sql::TableSchema>) {
+fn fixture() -> (
+    Connection,
+    Vec<sf_core::ir::TriplesMap>,
+    Vec<sf_sql::TableSchema>,
+) {
     let conn = sqlite::load(CREATE_SQL).expect("fixture loads");
     let maps = sf_mapping::parse_r2rml(R2RML).expect("R2RML parses");
     let schema = sqlite::introspect_all(&conn).expect("introspection");
@@ -91,7 +95,9 @@ fn engine_plan(
     sparql: &str,
     optimize: bool,
 ) -> sf_sparql::Plan {
-    let query = SparqlParser::new().parse_query(sparql).expect("query parses");
+    let query = SparqlParser::new()
+        .parse_query(sparql)
+        .expect("query parses");
     if optimize {
         translate_with(&query, maps, Dialect::Sqlite, &Tbox::default(), schema)
     } else {
@@ -159,8 +165,10 @@ fn oracle_matches_engine_on_bgp_join_optional_filter() {
     // Ann (with Sales + ann@x) and Bob (Sales, email unbound); Zed filtered out.
     assert_eq!(engine.len(), 2, "two rows survive the FILTER");
     assert!(
-        engine.iter().any(|r| r.get("name").map(|t| t.to_string()) == Some("\"Bob\"".into())
-            && !r.contains_key("email")),
+        engine.iter().any(
+            |r| r.get("name").map(|t| t.to_string()) == Some("\"Bob\"".into())
+                && !r.contains_key("email")
+        ),
         "Bob's NULL email is correctly unbound through the OPTIONAL"
     );
 }
@@ -184,7 +192,10 @@ fn oracle_evaluates_property_path_engine_defers_501() {
     };
     let mut reached: Vec<String> = rows.iter().map(|r| r["x"].to_string()).collect();
     reached.sort();
-    assert_eq!(reached, vec!["<http://ex/b>".to_owned(), "<http://ex/c>".to_owned()]);
+    assert_eq!(
+        reached,
+        vec!["<http://ex/b>".to_owned(), "<http://ex/c>".to_owned()]
+    );
 
     // The engine defers property paths to 501 (documented gap, never a wrong answer).
     let query = SparqlParser::new().parse_query(path_q).unwrap();
@@ -237,14 +248,16 @@ INSERT INTO edge VALUES (1, 5);
     let graph = parse_turtle(EDGES_TTL, BASE).expect("edges parse");
 
     for path in ["+", "*"] {
-        let q =
-            format!("PREFIX ex: <http://ex/> SELECT ?s ?o WHERE {{ ?s ex:reaches{path} ?o }}");
+        let q = format!("PREFIX ex: <http://ex/> SELECT ?s ?o WHERE {{ ?s ex:reaches{path} ?o }}");
 
         // Engine: the path compiles to a depth-bounded recursive CTE (ADR-0010).
         let plan = engine_plan(&maps, &schema, &q, true);
         let sql = &plan.emitted().expect("emit")[0].sql;
         let up = sql.to_uppercase();
-        assert!(up.contains("WITH RECURSIVE"), "recursive CTE for reaches{path}: {sql}");
+        assert!(
+            up.contains("WITH RECURSIVE"),
+            "recursive CTE for reaches{path}: {sql}"
+        );
         assert!(
             sql.contains("256"),
             "ADR-0010 recursion-depth bound present in the CTE for reaches{path}: {sql}"
@@ -314,8 +327,7 @@ INSERT INTO edge VALUES (1, 3);
     let graph = parse_turtle(EDGES_TTL, BASE).expect("edges parse");
 
     for path in ["+", "*"] {
-        let q =
-            format!("PREFIX ex: <http://ex/> SELECT ?s ?o WHERE {{ ?s ex:reaches{path} ?o }}");
+        let q = format!("PREFIX ex: <http://ex/> SELECT ?s ?o WHERE {{ ?s ex:reaches{path} ?o }}");
         let plan = engine_plan(&maps, &schema, &q, true);
 
         // Engine answer over the live SQLite source via the recursive CTE — must

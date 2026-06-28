@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use sf_core::ir::TriplesMap;
-use sf_sql::{Dialect, TableSchema};
 use sf_sparql::{exec, parse_and_translate_with, Tbox};
+use sf_sql::{Dialect, TableSchema};
 
 use crate::workload::MAPPING_TTL;
 

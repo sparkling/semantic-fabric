@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use oxttl::TurtleParser;
 use oxrdf::{NamedOrBlankNode, Term};
+use oxttl::TurtleParser;
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const NS: &str = "http://purl.org/NET/rdb2rdf-test#";
@@ -41,10 +41,7 @@ pub struct Case {
 /// Parse a manifest's test cases, in identifier order (deterministic).
 pub fn parse(turtle: &str) -> Result<Vec<Case>, String> {
     let g = Graph::load(turtle)?;
-    let mut cases: Vec<Case> = g
-        .subjects()
-        .filter_map(|s| case_of(&g, s))
-        .collect();
+    let mut cases: Vec<Case> = g.subjects().filter_map(|s| case_of(&g, s)).collect();
     cases.sort_by(|a, b| a.identifier.cmp(&b.identifier));
     Ok(cases)
 }
@@ -142,17 +139,26 @@ mod tests {
     fn parses_r2rml_directmapping_and_error_cases() {
         let cases = parse(M).unwrap();
         assert_eq!(cases.len(), 3);
-        let tc = cases.iter().find(|c| c.identifier == "R2RMLTC0001a").unwrap();
+        let tc = cases
+            .iter()
+            .find(|c| c.identifier == "R2RMLTC0001a")
+            .unwrap();
         assert_eq!(tc.kind, Kind::R2rml);
         assert_eq!(tc.mapping_document.as_deref(), Some("r2rmla.ttl"));
         assert_eq!(tc.output.as_deref(), Some("mappeda.nq"));
         assert!(tc.has_expected_output);
 
-        let err = cases.iter().find(|c| c.identifier == "R2RMLTC0001z").unwrap();
+        let err = cases
+            .iter()
+            .find(|c| c.identifier == "R2RMLTC0001z")
+            .unwrap();
         assert!(!err.has_expected_output);
         assert!(err.output.is_none());
 
-        let dg = cases.iter().find(|c| c.kind == Kind::DirectMapping).unwrap();
+        let dg = cases
+            .iter()
+            .find(|c| c.kind == Kind::DirectMapping)
+            .unwrap();
         assert_eq!(dg.output.as_deref(), Some("directGraph.ttl"));
     }
 }

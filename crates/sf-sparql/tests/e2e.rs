@@ -16,8 +16,8 @@ use sf_core::ir::{
     TriplesMap,
 };
 use sf_core::NamedNode;
-use sf_sql::Dialect;
 use sf_sparql::{exec, parse_and_translate, translate, Tbox};
+use sf_sql::Dialect;
 
 const EMP_NAME: &str = "http://ex/empName";
 const EMP_DEPT: &str = "http://ex/empDept";
@@ -115,7 +115,10 @@ fn construct_dump_unfolds_all_triples_maps() {
     .into_iter()
     .collect();
 
-    assert_eq!(got, expect, "dump must be the exact UNION of all per-map triples");
+    assert_eq!(
+        got, expect,
+        "dump must be the exact UNION of all per-map triples"
+    );
     // N-Triples serialisation round-trips line count (ADR-0019 G1).
     assert_eq!(exec::write_ntriples(&triples).lines().count(), 10);
 }
@@ -133,11 +136,8 @@ fn select_bgp_with_cross_table_join() {
     let sol = exec::select(&plan, &conn).unwrap();
 
     assert_eq!(sol.vars, vec!["n".to_owned(), "dn".to_owned()]);
-    let got: BTreeSet<(String, String)> = sol
-        .rows
-        .iter()
-        .map(|r| (lit(&r[0]), lit(&r[1])))
-        .collect();
+    let got: BTreeSet<(String, String)> =
+        sol.rows.iter().map(|r| (lit(&r[0]), lit(&r[1]))).collect();
     let expect: BTreeSet<(String, String)> = [
         ("Ada".to_owned(), "R&D".to_owned()),
         ("Grace".to_owned(), "Ops".to_owned()),
@@ -155,7 +155,10 @@ fn select_with_pushed_down_filter() {
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
     // The constant becomes a bound parameter (ADR-0010 R1), never inlined.
     let sql = &plan.emitted().unwrap()[0].sql;
-    assert!(sql.contains('?'), "filter constant must be a bound placeholder: {sql}");
+    assert!(
+        sql.contains('?'),
+        "filter constant must be a bound placeholder: {sql}"
+    );
     assert!(!sql.contains("Ada"), "value must not be inlined: {sql}");
 
     let sol = exec::select(&plan, &conn).unwrap();
@@ -262,10 +265,16 @@ fn tier1_subclass_saturation_matches_subclasses() {
     let mut tbox = Tbox::new();
     tbox.add_subclass("http://ex/Manager", EMPLOYEE);
 
-    let q = parse(&format!("SELECT ?e WHERE {{ ?e <{RDF_TYPE}> <{EMPLOYEE}> }}"));
+    let q = parse(&format!(
+        "SELECT ?e WHERE {{ ?e <{RDF_TYPE}> <{EMPLOYEE}> }}"
+    ));
     let plan = sf_sparql::translate_with(&q, &maps, Dialect::Sqlite, &tbox, &[]).unwrap();
     let sol = exec::select(&plan, &conn).unwrap();
-    assert_eq!(sol.rows.len(), 2, "both managers match the superclass query");
+    assert_eq!(
+        sol.rows.len(),
+        2,
+        "both managers match the superclass query"
+    );
 
     // Without the T-Box, the superclass query returns nothing.
     let plan0 = translate(&q, &maps, Dialect::Sqlite).unwrap();
@@ -313,9 +322,22 @@ fn construct_applies_r2rml_section10_natural_datatypes() {
         .collect();
 
     let xsd = "http://www.w3.org/2001/XMLSchema#";
-    assert!(got.contains(&format!("<http://ex/m/1> <http://ex/age> \"42\"^^<{xsd}integer>")), "{got:?}");
-    assert!(got.contains(&format!("<http://ex/m/1> <http://ex/score> \"8.025E1\"^^<{xsd}double>")), "{got:?}");
-    assert!(got.contains("<http://ex/m/1> <http://ex/name> \"Ada\""), "plain literal: {got:?}");
+    assert!(
+        got.contains(&format!(
+            "<http://ex/m/1> <http://ex/age> \"42\"^^<{xsd}integer>"
+        )),
+        "{got:?}"
+    );
+    assert!(
+        got.contains(&format!(
+            "<http://ex/m/1> <http://ex/score> \"8.025E1\"^^<{xsd}double>"
+        )),
+        "{got:?}"
+    );
+    assert!(
+        got.contains("<http://ex/m/1> <http://ex/name> \"Ada\""),
+        "plain literal: {got:?}"
+    );
 }
 
 #[test]
@@ -330,8 +352,14 @@ fn select_with_contains_like_pushdown() {
 
     let emitted = plan.emitted().unwrap();
     let sql = &emitted[0].sql;
-    assert!(sql.to_uppercase().contains("LIKE"), "substring pushdown: {sql}");
-    assert!(sql.contains("$1"), "pattern must be a bound placeholder: {sql}");
+    assert!(
+        sql.to_uppercase().contains("LIKE"),
+        "substring pushdown: {sql}"
+    );
+    assert!(
+        sql.contains("$1"),
+        "pattern must be a bound placeholder: {sql}"
+    );
     assert!(!sql.contains("%ra%"), "pattern must not be inlined: {sql}");
     assert_eq!(emitted[0].params, vec!["%ra%".to_owned()]);
 
@@ -390,15 +418,22 @@ fn property_path_oneormore_is_transitive_closure() {
     let sql = &plan.emitted().unwrap()[0].sql;
     let up = sql.to_uppercase();
     assert!(up.contains("WITH RECURSIVE"), "recursive CTE: {sql}");
-    assert!(up.contains("UNION") && !up.contains("UNION ALL"), "set-union closure: {sql}");
+    assert!(
+        up.contains("UNION") && !up.contains("UNION ALL"),
+        "set-union closure: {sql}"
+    );
     assert!(sql.contains("256"), "ADR-0010 depth bound present: {sql}");
 
     let sol = exec::select(&plan, &conn).unwrap();
     let got: BTreeSet<(String, String)> =
         sol.rows.iter().map(|r| (lit(&r[0]), lit(&r[1]))).collect();
     let expect: BTreeSet<(String, String)> = [
-        (n(1), n(2)), (n(1), n(3)), (n(1), n(4)), (n(1), n(5)),
-        (n(2), n(3)), (n(2), n(4)),
+        (n(1), n(2)),
+        (n(1), n(3)),
+        (n(1), n(4)),
+        (n(1), n(5)),
+        (n(2), n(3)),
+        (n(2), n(4)),
         (n(3), n(4)),
     ]
     .into_iter()
@@ -415,7 +450,10 @@ fn property_path_zeroormore_adds_reflexive_pairs() {
     let q = format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>* ?o }}");
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
     assert!(
-        plan.emitted().unwrap()[0].sql.to_uppercase().contains("WITH RECURSIVE"),
+        plan.emitted().unwrap()[0]
+            .sql
+            .to_uppercase()
+            .contains("WITH RECURSIVE"),
         "P* is also a recursive CTE"
     );
 
@@ -423,8 +461,12 @@ fn property_path_zeroormore_adds_reflexive_pairs() {
     let got: BTreeSet<(String, String)> =
         sol.rows.iter().map(|r| (lit(&r[0]), lit(&r[1]))).collect();
     let mut expect: BTreeSet<(String, String)> = [
-        (n(1), n(2)), (n(1), n(3)), (n(1), n(4)), (n(1), n(5)),
-        (n(2), n(3)), (n(2), n(4)),
+        (n(1), n(2)),
+        (n(1), n(3)),
+        (n(1), n(4)),
+        (n(1), n(5)),
+        (n(2), n(3)),
+        (n(2), n(4)),
         (n(3), n(4)),
     ]
     .into_iter()
@@ -432,7 +474,10 @@ fn property_path_zeroormore_adds_reflexive_pairs() {
     for i in 1..=5 {
         expect.insert((n(i), n(i))); // reflexive: P* but not P+
     }
-    assert_eq!(got, expect, "P* = transitive closure ∪ reflexive node pairs");
+    assert_eq!(
+        got, expect,
+        "P* = transitive closure ∪ reflexive node pairs"
+    );
 }
 
 fn parse(q: &str) -> spargebra::Query {

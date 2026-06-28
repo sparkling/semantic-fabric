@@ -109,7 +109,10 @@ ex:name a owl:DatatypeProperty .
 ex:map1 rr:class ex:Ghost .
 "#;
         let out = validate(data, CORE_SHAPES).unwrap();
-        assert!(!out.conforms, "dangling rr:class must be a Violation: {out:?}");
+        assert!(
+            !out.conforms,
+            "dangling rr:class must be a Violation: {out:?}"
+        );
         assert!(out.violations >= 1);
     }
 }

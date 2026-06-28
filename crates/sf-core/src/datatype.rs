@@ -67,7 +67,9 @@ pub fn natural_xsd(sql_type: &str) -> Option<XsdTypeCode> {
     match normalize_sql_type(sql_type).as_str() {
         "CHARACTER" | "CHARACTER VARYING" | "CHAR" | "VARCHAR" | "CLOB" | "NCHAR"
         | "NCHAR VARYING" | "NVARCHAR" | "NCLOB" | "TEXT" => Some(String),
-        "BINARY" | "BINARY VARYING" | "VARBINARY" | "BINARY LARGE OBJECT" | "BLOB" => Some(HexBinary),
+        "BINARY" | "BINARY VARYING" | "VARBINARY" | "BINARY LARGE OBJECT" | "BLOB" => {
+            Some(HexBinary)
+        }
         "NUMERIC" | "DECIMAL" | "DEC" => Some(Decimal),
         "SMALLINT" | "INTEGER" | "INT" | "BIGINT" => Some(Integer),
         "FLOAT" | "REAL" | "DOUBLE PRECISION" | "DOUBLE" => Some(Double),
@@ -242,7 +244,10 @@ mod tests {
 
     #[test]
     fn canonical_string_is_verbatim() {
-        assert_eq!(canon("any \"raw\" text", XsdTypeCode::String), "any \"raw\" text");
+        assert_eq!(
+            canon("any \"raw\" text", XsdTypeCode::String),
+            "any \"raw\" text"
+        );
     }
 
     #[test]

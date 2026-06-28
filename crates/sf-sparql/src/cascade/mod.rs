@@ -33,7 +33,7 @@
 use sf_core::ir::LogicalSource;
 use sf_sql::TableSchema;
 
-use crate::iq::{collect_cond_cols, Branch, ColRef, CmpOp, SqlCond, TermDef};
+use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, SqlCond, TermDef};
 
 mod joinelim;
 #[cfg(test)]
@@ -455,4 +455,3 @@ pub fn condition_columns(b: &Branch) -> Vec<ColRef> {
     }
     cols
 }
-

@@ -284,9 +284,7 @@ pub fn generate(conn: &Connection, scale: u32) -> rusqlite::Result<RowCounts> {
     }
     let mut stop_times = 0u64;
     {
-        let mut stmt = tx.prepare(
-            "INSERT INTO STOP_TIMES VALUES (?1,?2,?3,?4,?5,?6)",
-        )?;
+        let mut stmt = tx.prepare("INSERT INTO STOP_TIMES VALUES (?1,?2,?3,?4,?5,?6)")?;
         for i in 0..n_trips {
             let trip = format!("t{i}");
             for k in 0..STOPS_PER_TRIP {
