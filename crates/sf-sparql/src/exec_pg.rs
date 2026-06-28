@@ -29,7 +29,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Client, Row as PgRow};
 
 use crate::emit::ColumnCatalog;
-use crate::exec::{instantiate, reconstruct, RawRow};
+use crate::exec::{instantiate, reconstruct, RawRow, Solutions};
 use crate::iq::Branch;
 use crate::{Error, Plan, PlanForm, Result};
 
@@ -230,6 +230,45 @@ pub async fn construct_triples_pg(plan: &Plan, client: &Client) -> Result<Vec<Tr
     })
     .await?;
     Ok(out)
+}
+
+/// Execute a SELECT over a live PostgreSQL connection, collecting solutions —
+/// the async mirror of the sync SQLite [`crate::exec::select`] (ADR-0003 R3: the
+/// SAME reconstruction). Bounded-memory streaming is the [`for_each_solution_pg`]
+/// core (server-side `query_raw` cursor, one row in flight); this collects the
+/// projected rows for callers/tests. The identifier case-folding resolution
+/// (`build_catalog_pg` / `emit::resolve_col`) is applied inside the core, so the
+/// PG path resolves regular-identifier column references through PostgreSQL's
+/// lowercase folding exactly as the conformance PG path does.
+pub async fn select_pg(plan: &Plan, client: &Client) -> Result<Solutions> {
+    let vars = match &plan.form {
+        PlanForm::Select { vars } => vars.clone(),
+        _ => {
+            return Err(Error::Unsupported(
+                "select() requires a SELECT plan".to_owned(),
+            ))
+        }
+    };
+    let mut rows = Vec::new();
+    for_each_solution_pg(plan, client, |_branch, bindings| {
+        rows.push(vars.iter().map(|v| bindings.get(v).cloned()).collect());
+        Ok(())
+    })
+    .await?;
+    Ok(Solutions { vars, rows })
+}
+
+/// Execute an ASK over a live PostgreSQL connection — true iff at least one
+/// solution exists. The async mirror of the sync [`crate::exec::ask`] (same
+/// streaming core, same reconstruction).
+pub async fn ask_pg(plan: &Plan, client: &Client) -> Result<bool> {
+    let mut any = false;
+    for_each_solution_pg(plan, client, |_b, _s| {
+        any = true;
+        Ok(())
+    })
+    .await?;
+    Ok(any)
 }
 
 /// Collect the mapping-IR **quad** dump over a live PostgreSQL connection

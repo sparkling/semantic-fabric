@@ -9,13 +9,34 @@
 //!   bounded-memory streaming path (`exec::construct` drives a per-triple sink and
 //!   never builds the triple set), used for first-result latency and the
 //!   constant-memory demonstration.
+//!
+//! ## Backend dispatch (sync SQLite vs async PostgreSQL)
+//!
+//! The same OBDA query runs over either of two relational backends, and the
+//! dispatch is **at the call site by signature**, not behind one runtime-erased
+//! entry point — because the two halves have fundamentally different execution
+//! models (ADR-0006):
+//!
+//! * **SQLite** — [`run_select`] is **synchronous** (`rusqlite`'s blocking
+//!   cursor). No `tokio` runtime is involved or required.
+//! * **PostgreSQL** — [`run_select_pg`] is **async** (`tokio-postgres` + the
+//!   `exec_pg::select_pg` server-side `query_raw` cursor) and so takes a live
+//!   `&tokio_postgres::Client` and must be `.await`ed on a `tokio` runtime.
+//!
+//! Both reuse the *same* translation ([`parse_and_translate_with`], differing
+//! only in [`Dialect`]) and the *same* single sf-core term-gen reconstruction
+//! (ADR-0003 R3) — only the source executor differs. Keeping them as two
+//! functions means the SQLite path never pays for, nor links against, an async
+//! runtime: the caller (a `criterion` bench, a server handler) picks the arm that
+//! matches its source and its sync/async context.
 
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use sf_core::ir::TriplesMap;
-use sf_sparql::{exec, parse_and_translate_with, Tbox};
+use sf_sparql::{exec, exec_pg, parse_and_translate_with, Tbox};
 use sf_sql::{Dialect, TableSchema};
+use tokio_postgres::Client;
 
 use crate::workload::MAPPING_TTL;
 
@@ -57,6 +78,24 @@ pub fn run_select(
 ) -> DResult<usize> {
     let plan = parse_and_translate_with(sparql, maps, Dialect::Sqlite, &Tbox::default(), schema)?;
     let sol = exec::select(&plan, conn)?;
+    Ok(sol.rows.len())
+}
+
+/// Execute a SELECT over a **live PostgreSQL** source and return its solution-row
+/// count — the async sibling of [`run_select`]. Translation is identical bar the
+/// [`Dialect::Postgres`] target; execution goes through the bounded-memory
+/// server-side cursor ([`exec_pg::select_pg`], `query_raw`), reusing the same
+/// sf-core term-gen reconstruction (ADR-0003 R3). This is the path the fair
+/// Ontop-vs-sf latency benchmark and serve-over-PG build on. Full-result
+/// wall-clock is the caller's `Instant` around the `.await`.
+pub async fn run_select_pg(
+    maps: &[TriplesMap],
+    client: &Client,
+    schema: &[TableSchema],
+    sparql: &str,
+) -> DResult<usize> {
+    let plan = parse_and_translate_with(sparql, maps, Dialect::Postgres, &Tbox::default(), schema)?;
+    let sol = exec_pg::select_pg(&plan, client).await?;
     Ok(sol.rows.len())
 }
 
