@@ -17,6 +17,11 @@ implements:
 
 The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translated into SQL and executed against a live source database. Three concerns are intrinsic to the rewriter/executor and cannot be retrofitted at a gateway (which never sees the generated SQL): **injection**, **denial of service**, and **result streaming** (a SPARQL `SELECT` may return millions of rows). This ADR fixes the controls the **engine** owns. Authorization (authN/Z, row-level security, multi-tenancy, sensitivity) is **ADR-0018**; deployment-edge operations (TLS, secrets store, rate-limiting, audit transport) are **ADR-0014**.
 
+## Considered Options
+
+* **Engine-owned controls (chosen)** — build injection-safety, DoS governance, and result streaming into the rewriter/executor itself, since these concerns are intrinsic to the SPARQL→SQL path.
+* **Retrofit at a deployment gateway/edge** — rejected: a gateway never sees the generated SQL, so injection, denial of service, and result streaming (intrinsic to the rewriter/executor) cannot be addressed there.
+
 ## Decision Outcome
 
 ### A. Injection-safety by construction
@@ -34,14 +39,14 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 ### D. Delegated
 * **Authorization / RLS / tenancy / sensitivity → ADR-0018.** **TLS, secrets store, rate-limiting, audit transport, deployment packaging → ADR-0014.** The engine consumes DB credentials via secret injection only (never logged; ADR-0011) and emits governance + access-decision events to observability (ADR-0011).
 
-## Rules
-* **R1** — user values are bound parameters, never concatenated.
-* **R2** — SQL identifiers derive only from the mapping IR (the reachability floor; authorization is ADR-0018).
-* **R3** — every recursive CTE carries a depth limit + cycle detection.
-* **R4** — every generated query is governed (statement timeout, result cap, cost pre-check, admission control).
-* **R5** — results stream with bounded memory **and** DB-bounded lifetime (`transaction_timeout`, stream-lane pool, cancel-on-drop).
+### Consequences
+* Good, because neither table/column injection nor access to un-mapped data is expressible (user values are bound parameters; identifiers derive only from the trusted mapping IR).
+* Good, because the source DB is never taken down (statement timeout, result-size cap, pre-execution cost check, admission control on every generated query).
+* Good, because bounded recursion makes `P+`/`P*` terminate within a depth bound with cycle detection rather than OOM/hang.
+* Good, because client memory is bounded and TCP backpressure propagates to the backend (`RowStream`), and slow/abandoned clients cannot pin a connection indefinitely (DB-bounded stream lifetime, stream-lane pool, cancel-on-drop).
+* Neutral, because authorization / RLS / tenancy / sensitivity is delegated to ADR-0018 and TLS / secrets store / rate-limiting / audit transport / deployment packaging to ADR-0014.
 
-## Confirmation
+### Confirmation
 * Fuzzing the rewriter (ADR-0012) surfaces no injection (always parameterised; identifiers always from the mapping).
 * A `P+` query over a cyclic fixture terminates within the depth bound; a pathological query hits cost-reject or timeout — not OOM/hang.
 * A million-row `SELECT` streams with bounded memory; a slow/abandoned client is bounded by `transaction_timeout` and does not exhaust the stream-lane pool.
@@ -49,3 +54,10 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
+
+## Rules
+* **R1** — user values are bound parameters, never concatenated.
+* **R2** — SQL identifiers derive only from the mapping IR (the reachability floor; authorization is ADR-0018).
+* **R3** — every recursive CTE carries a depth limit + cycle detection.
+* **R4** — every generated query is governed (statement timeout, result cap, cost pre-check, admission control).
+* **R5** — results stream with bounded memory **and** DB-bounded lifetime (`transaction_timeout`, stream-lane pool, cancel-on-drop).

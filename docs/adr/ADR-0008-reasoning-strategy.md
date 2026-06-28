@@ -19,6 +19,14 @@ A fabric that lets you query the *ontology* (T), not raw tables, needs some enta
 
 **Runtime invariant:** all reasoning is native Rust, in-process, at query time — no JVM, no external reasoner, no materialised closure.
 
+## Considered Options
+
+* **Entailment folded into the SPARQL→SQL rewrite (native Rust, in-process, query time)** — tier-1 hierarchy by T-mapping saturation (UNION-folding) + inverse/symmetric folding + transitive served as recursive-CTE property paths; nothing materialised. (Chosen.)
+* **Host platform's Jena Fuseki `GenericRuleReasoner` + a safe OWL-RL rule subset (JVM)** — the upstream approach this native query-time lane replaces; keeps a runtime JVM and external reasoner in the path.
+* **Hand-rolled full tree-witness / OWL 2 QL rewriter** — rejected as serving dependency; re-treads 15 years of Ontop. Ontop (JVM) is retained only as the offline differential oracle (ADR-0005), never a serving dependency.
+* **Tier-2 (full OWL 2 QL: RHS-existential / tree-witness answering over anonymous individuals)** — deferred, evidence-gated on ontology depth; closed at depth-0 (provably complete via tier-1), grown to depth-1 only if a real query is shown to miss certain answers.
+* **Materialised A-Box closure** — rejected; introduces closure-staleness and conflicts with the virtualisation invariant (ADR-0003). No A-Box closure is computed or stored.
+
 ## Decision Outcome
 
 ### Tier-1 (hierarchy) — folded into the rewrite, live
@@ -33,12 +41,12 @@ Tier-2 adds only **answering over anonymous individuals** (`C ⊑ ∃R.D` querie
 * **If a real query is shown to miss certain answers** (via the Ontop offline oracle, ADR-0005): grow the virtual rewriter to **depth-1** (polynomial-size nonrecursive-Datalog rewriting; stays virtual) first.
 * **Do not hand-roll a full tree-witness rewriter** (re-treads 15 years of Ontop). `horned-owl` parses OWL 2 QL; Ontop (JVM) is the offline differential oracle only — never a serving dependency.
 
-## Consequences
-* Good — superclass queries are complete (tier-1) without tree-witness cost; the JVM is gone from the reasoning path; nothing is materialised, so there is no closure-staleness concern.
-* Good — tier-2 is a measured, evidence-gated decision, not speculative capability.
-* Neutral — the fabric never invokes a TBox classifier; it loads a pre-classified T (boundary check).
+### Consequences
+* Good, because superclass queries are complete (tier-1) without tree-witness cost; the JVM is gone from the reasoning path; nothing is materialised, so there is no closure-staleness concern.
+* Good, because tier-2 is a measured, evidence-gated decision, not speculative capability.
+* Neutral, because the fabric never invokes a TBox classifier; it loads a pre-classified T (boundary check).
 
-## Confirmation
+### Confirmation
 * T-mapping saturation appears as a documented stage in the rewriter (`sf-sparql`).
 * The fabric loads a pre-classified T and never classifies it.
 * Tier-2 stays absent until the depth check / oracle proves it necessary.
@@ -47,4 +55,3 @@ Tier-2 adds only **answering over anonymous individuals** (`C ⊑ ∃R.D` querie
 * **Architecture:** ADR-0003. **Rewriting (UNION-folding, recursive CTE):** ADR-0007. **Scope:** ADR-0002. **Substrate (T held in memory):** ADR-0004. **Conformance / oracle:** ADR-0005.
 * **Cross-project (authoritative):** the upstream reasoning policy + a safe OWL-RL rule subset and the OWL-as-documentation policy (authored in the upstream modelling project), which this native query-time lane replaces.
 * **Research:** `docs/research/` — `owlql-tier2`, `rust-reasoning-validation`.
-</content>

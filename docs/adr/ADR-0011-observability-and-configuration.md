@@ -51,20 +51,20 @@ Layered precedence: **defaults < config file (TOML) < env vars < secret injectio
 Credentials never logged at any level; result-data/PII never logged; **generated SQL only at `DEBUG`** (it carries bound-param values).
 
 ### Consequences
-* Good — observable + OTel-ready from day one; governance is visible (trace + metric); per-stage latency attributable.
-* Bad — instrumentation has a small runtime cost (keep hot-path spans cheap) and metric **cardinality must be bounded** (no per-query labels like raw text).
-* Neutral — the config surface grows with features (governance, store, modes).
+* Good, because observable + OTel-ready from day one; governance is visible (trace + metric); per-stage latency attributable.
+* Bad, because instrumentation has a small runtime cost (keep hot-path spans cheap) and metric **cardinality must be bounded** (no per-query labels like raw text).
+* Neutral, because the config surface grows with features (governance, store, modes).
 
 ### Confirmation
 * A query produces a span tree + the metric set; governance actions appear as **both** a trace event and a counter.
 * An invalid config **fails fast** at startup.
 * **No secret appears in any log at any level** (redaction test + lint); generated SQL appears only at `DEBUG`.
 
+## More Information
+* **Governance events / secret handling:** ADR-0010. **Exec model the hooks instrument:** ADR-0006. **Intensional graphs:** ADR-0004. **Architecture:** ADR-0003.
+
 ## Rules
 * **R1** — one `tracing` span tree per request; every pipeline stage is a span.
 * **R2** — metrics via the `metrics` facade only; **bounded cardinality** (no unbounded labels).
 * **R3** — secrets via injection only, never inline, never logged; generated SQL at `DEBUG` only.
 * **R4** — every ADR-0010 governance action emits both a trace event and a metric.
-
-## More Information
-* **Governance events / secret handling:** ADR-0010. **Exec model the hooks instrument:** ADR-0006. **Intensional graphs:** ADR-0004. **Architecture:** ADR-0003.

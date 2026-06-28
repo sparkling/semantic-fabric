@@ -18,7 +18,12 @@ ADR-0001 / ADR-0002 fix semantic-fabric as a **virtualisation-only OBDA engine**
 
 The engine holds two small **intensional** graphs in memory — the **ontology / T-Box (T)** and the **mapping graph (M, R2RML as RDF)** — and answers queries by **unfolding** the SPARQL algebra against the mappings into SQL. Instance data (the A-Box) is never instantiated; it is produced on demand as bindings/triples, streamed, and discarded.
 
-## Decision
+## Considered Options
+
+* **Single virtualiser pipeline over a shared core** — one model, one binary; SPARQL is unfolded against the mappings into SQL, with parse, term-generation, datatypes, and the source layer existing exactly once.
+* **A separate materialisation mode / `materialize` verb** — rejected: ADR-0001 / ADR-0002 fix semantic-fabric as virtualisation-only, and a one-off RDF dump is just `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` streamed through the same pipeline — a query, not a second mode.
+
+## Decision Outcome
 
 A single **virtualiser** pipeline over a shared core:
 
@@ -48,14 +53,19 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 
 ### Consequences
 
-* Good — one model, one binary, one operational + conformance surface; parse, term-gen, datatypes, and the source layer exist exactly once.
-* Good — datatype / term semantics cannot drift (a single term-generation path).
-* Bad — the mapping IR must be walkable as a rewrite target; the hardest correctness surface is NULL / datatype semantics across SPARQL `OPTIONAL` → SQL `LEFT JOIN` (ADR-0007; Chebotko et al. as the proof target).
+* Good, because one model, one binary, one operational + conformance surface; parse, term-gen, datatypes, and the source layer exist exactly once.
+* Good, because datatype / term semantics cannot drift (a single term-generation path).
+* Bad, because the mapping IR must be walkable as a rewrite target; the hardest correctness surface is NULL / datatype semantics across SPARQL `OPTIONAL` → SQL `LEFT JOIN` (ADR-0007; Chebotko et al. as the proof target).
 
 ### Confirmation
 
 * `cargo tree` shows the core crates (`sf-core` / `sf-sql` / `sf-mapping`) with no dependency on the virtualiser frontend; one mapping-IR type, one parser.
 * `sf-cli` exposes `serve` (+ `conformance` / `bench`) and **no `materialize` verb**.
+
+## More Information
+
+* **Charter / scope:** ADR-0001, ADR-0002. **Substrate:** ADR-0004. **Crate layout + execution:** ADR-0006. **Rewriting + cascade correctness:** ADR-0007. **Reasoning (T-saturation):** ADR-0008. **Datatype/dialect:** ADR-0015.
+* **Foundation:** the OBDA unfolding model — Ontop; Xiao & Kontchakov (ISWC-2018) — `docs/research/ontop.md`, `docs/research/foundations-benchmarks.md`.
 
 ## Rules
 
@@ -67,9 +77,3 @@ RDF terms are `oxrdf` types (RDF 1.2; ADR-0004 / ADR-0019) throughout. No bespok
 
 ### R3 — Datatype mapping is shared, not duplicated
 The R2RML §10 SQL→XSD datatype mapping lives once in `sf-core` term generation (ADR-0015).
-
-## More Information
-
-* **Charter / scope:** ADR-0001, ADR-0002. **Substrate:** ADR-0004. **Crate layout + execution:** ADR-0006. **Rewriting + cascade correctness:** ADR-0007. **Reasoning (T-saturation):** ADR-0008. **Datatype/dialect:** ADR-0015.
-* **Foundation:** the OBDA unfolding model — Ontop; Xiao & Kontchakov (ISWC-2018) — `docs/research/ontop.md`, `docs/research/foundations-benchmarks.md`.
-</content>

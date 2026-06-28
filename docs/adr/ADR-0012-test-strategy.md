@@ -17,6 +17,11 @@ implements:
 
 ADR-0005 specifies the **outer** test layers — W3C RDB2RDF conformance (via CONSTRUCT), the GTFS-Madrid OBDA benchmark, the native in-memory Oxigraph differential oracle, EARL. The **inner** layers (unit / integration / property / fuzz) were unspecified. For a query *translator* that turns untrusted SPARQL into executed SQL, those inner layers are load-bearing for both **correctness** (the optimizer cascade is order-sensitive — the hardest surface, ADR-0007) and **security** (the injection/DoS surface, ADR-0010). This ADR fixes them.
 
+## Considered Options
+
+* **Full inner test pyramid** (unit + integration + property-based + differential/metamorphic + fuzzing + snapshot) — the chosen path; gives a correctness + security net below the ADR-0005 conformance layers, covering the order-sensitive optimizer cascade (ADR-0007) and the injection/DoS surface (ADR-0010).
+* **Rely only on the ADR-0005 outer layers** (W3C RDB2RDF conformance, GTFS-Madrid OBDA benchmark, native in-memory Oxigraph differential oracle, EARL) — insufficient: the inner layers were unspecified yet are load-bearing for both correctness (the order-sensitive optimizer cascade) and security (the injection/DoS surface), so outer layers alone leave the hardest surfaces untested.
+
 ## Decision Outcome — the test pyramid
 
 1. **Unit.** `sf-core` IR + term generation + the R2RML §10 datatype table (table-tests); `sf-mapping` R2RML parser; **each `sf-sparql` cascade pass in isolation** on hand-built IQ inputs (IRI-template pruning, self-join elimination, FD inference — the order-sensitive ones); `sf-sql` dialect emission per dialect.
@@ -40,19 +45,18 @@ Atop these sit the ADR-0005 outer layers: conformance (W3C via CONSTRUCT + EARL)
 `fmt` + `clippy -D warnings` + unit/integration/property + a **bounded fuzz smoke** per push (**long fuzz nightly** from a persisted corpus) + the W3C conformance run + `criterion` regression thresholds + a **constant-memory check** on the OBDA benchmark (the streaming invariant, ADR-0006).
 
 ### Consequences
-* Good — correctness + security net; the rewriter-correctness property is *guaranteed* by generation; fuzz catches the translator's real failure modes; SQL changes are reviewable.
-* Bad — `proptest` generators for *valid* R2RML + SPARQL are non-trivial to author; fuzzing needs a corpus + time (nightly, not per-push).
-* Neutral — meaningful test-code volume (expected for a translator).
+* Good, because correctness + security net; the rewriter-correctness property is *guaranteed* by generation; fuzz catches the translator's real failure modes; SQL changes are reviewable.
+* Bad, because `proptest` generators for *valid* R2RML + SPARQL are non-trivial to author; fuzzing needs a corpus + time (nightly, not per-push).
+* Neutral, because meaningful test-code volume (expected for a translator).
 
 ### Confirmation
 * The pyramid runs in CI; the rewriter-vs-oracle property holds over generated cases; fuzzing finds no panic/injection over the corpus; snapshots gate SQL changes.
+
+## More Information
+* **Outer layers this extends:** ADR-0005. **Fuzz target + the security controls it verifies:** ADR-0007, ADR-0010. **CI baseline:** ADR-0006. **Datatype fixtures:** ADR-0015.
 
 ## Rules
 * **R1** — every optimizer-cascade pass has isolated unit tests (the order-sensitive surface, ADR-0007).
 * **R2** — rewriter-vs-in-memory-oracle is a **property** test, not just fixed cases.
 * **R3** — the SPARQL→SQL rewriter is **continuously fuzzed**; a fuzz finding (panic / injection / unbounded recursion) is a **release blocker**.
 * **R4** — generated SQL is snapshot-pinned per dialect.
-
-## More Information
-* **Outer layers this extends:** ADR-0005. **Fuzz target + the security controls it verifies:** ADR-0007, ADR-0010. **CI baseline:** ADR-0006. **Datatype fixtures:** ADR-0015.
-</content>

@@ -17,7 +17,15 @@ The virtualiser (ADR-0003) needs an RDF 1.2 term system, Turtle/JSON-LD I/O, a S
 
 `spargebra` (parser → algebra) and `sparopt` (optimizer) carry zero dependency on any evaluator or store, so we consume their AST and feed our own SQL-rewriting engine (ADR-0007). Instance data is never stored (ADR-0002), so we take no persistent triplestore.
 
-## Decision
+## Considered Options
+
+* **Reuse the Oxigraph sub-crates as substrate; own the SQL-rewriting evaluator; hold `⟨T, M⟩` in memory** — consume `oxrdf`/`oxttl`/`oxjsonld`/`spargebra`/`sparopt`/`sparesults`/`oxsdatatypes` and feed the algebra into our own SQL rewriter.
+* **Reimplement the RDF 1.2 terms, Turtle/JSON-LD I/O, and SPARQL 1.2 parser + algebra from scratch** — wasted effort against the mature, dual-licensed (MIT OR Apache-2.0) Oxigraph crate family.
+* **Use the `oxigraph` store crate** — bundles RocksDB / `librocksdb-sys`, for which the virtualiser has no use (instance data is never stored, ADR-0002).
+* **Use `spareval` on the OBDA path** — its triple-at-a-time pull model is the wrong execution model for SQL-rewriting OBDA (the whole query is pushed into the DB as one SQL statement, ADR-0007); permitted only for the in-memory `⟨T, M⟩` queries.
+* **Keep a persistent triplestore (Jena Fuseki/TDB2) to serve the ontology** — there is no materialised instance graph to serve; the intensional graphs live in process.
+
+## Decision Outcome
 
 **Reuse the Oxigraph sub-crates as substrate; own the SQL-rewriting evaluator; hold `⟨T, M⟩` as small in-memory graphs.**
 
@@ -52,9 +60,9 @@ Enable `standard-unicode-escaping` (strict 1.2 `\u`) where wanted. **`sep-0006` 
 
 ### Consequences
 
-* Good — first-class RDF 1.2 / SPARQL 1.2 plumbing for free; we build only the novel part (the SQL rewriter); permissive licensing; no JVM, no RocksDB, no `librocksdb-sys` on the engine path.
-* Good — `⟨T, M⟩` in memory keeps the engine store-free while still allowing SPARQL over the intensional graphs via an in-memory evaluator.
-* Bad — 0.x semver: breaking changes between minors, mitigated by exact pins + lockstep releases.
+* Good, because first-class RDF 1.2 / SPARQL 1.2 plumbing for free; we build only the novel part (the SQL rewriter); permissive licensing; no JVM, no RocksDB, no `librocksdb-sys` on the engine path.
+* Good, because `⟨T, M⟩` in memory keeps the engine store-free while still allowing SPARQL over the intensional graphs via an in-memory evaluator.
+* Bad, because 0.x semver: breaking changes between minors, mitigated by exact pins + lockstep releases.
 
 ### Confirmation
 
@@ -65,4 +73,3 @@ Enable `standard-unicode-escaping` (strict 1.2 `\u`) where wanted. **`sep-0006` 
 
 * **Architecture:** ADR-0003 (R2 — `oxrdf` terms end-to-end). **Rewriter:** ADR-0007. **Crate layout:** ADR-0006. **1.2 feature flags / Jena replacement:** ADR-0019. **Datatypes:** ADR-0015.
 * **Survey:** `docs/research/oxigraph.md`, `docs/research/rust-substrate.md`.
-</content>

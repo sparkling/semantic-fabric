@@ -15,6 +15,12 @@ implements:
 
 Operators need to know which mapping / source / row produced each result triple (source-mapping lineage; provenance). The engine virtualises — it stores nothing (ADR-0002) — so provenance is intrinsically **query-time**: recomputed from the rewrite, never persisted.
 
+## Considered Options
+
+* **Query-time recomputed provenance (nothing stored)** — recompute lineage from the rewrite (`⟨T, M⟩` + the query), materialised on demand only for returned rows.
+* **Persisted/materialised provenance store** — rejected: storing provenance conflicts with virtualisation-only (the engine stores nothing, ADR-0002).
+* **Whole-graph provenance materialisation** — rejected: per-triple bloat; provenance is needed only for the rows a query returns, never for the whole graph.
+
 ## Decision Outcome
 
 ### Query-time where/how-provenance
@@ -26,11 +32,15 @@ Provenance is materialised-on-demand only for the rows a query returns — never
 * a per-solution **PROV-O** bundle (`prov:Activity` *used* the source + mapping document, `prov:wasDerivedFrom` the row) for provenance, FAIR-aligned.
 Triple-level metadata rides RDF 1.2 reification; keep it out of any SHACL-validated graph (the RDF-star/SHACL interaction, ADR-0019).
 
-## Consequences
-* Good — source-mapping lineage + provenance with zero stored state and no per-triple bloat; consistent with virtualisation-only; reuses RDF 1.2 reification natively.
-* Bad — provenance is recomputed per query (a cost on the response path); compute it only when requested.
+### Consequences
+
+* Good, because source-mapping lineage + provenance with zero stored state and no per-triple bloat; consistent with virtualisation-only; reuses RDF 1.2 reification natively.
+* Bad, because provenance is recomputed per query (a cost on the response path); compute it only when requested.
+
+### Confirmation
+
+Verified via the ADR-0012 test strategy and ADR-0005 conformance/bench gates: provenance is recomputed from `⟨T, M⟩` + the query with nothing stored, and is materialised only for returned rows (graph results as RDF 1.2 reifying triples, per-solution PROV-O bundles).
 
 ## More Information
 * **Architecture / rewriter:** ADR-0003, ADR-0007. **Reasoning (provenance must survive saturation):** ADR-0008. **Security (sensitivity composes with provenance tags):** ADR-0018. **RDF 1.2 reification:** ADR-0019.
 * **Cross-project:** the platform's provenance / source-mapping concerns. **Research:** `docs/research/provenance-security`.
-</content>

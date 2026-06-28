@@ -19,6 +19,12 @@ ADR-0003 fixed the virtualiser architecture; this ADR realises it as a Cargo wor
 
 The load-bearing execution decision: semantic-fabric serves an **OLTP-shaped runtime path** — the live virtualizer (ADR-0007) — over **live relational source databases**. Relational data is never routed through a columnar/OLAP intermediary. **The source database does the set-work (scan, join, DISTINCT, sort, spill); the engine generates SQL, generates RDF terms, and streams.** Engine memory is bounded by `⟨T, M⟩` + a fixed streaming budget, **independent of source size**.
 
+## Considered Options
+
+* **Push down to the source DB + bounded semi-join reduction (chosen)** — the rewriter emits SQL run via native drivers; the source does scan/join/DISTINCT/aggregation/sort/spill/parallelism, the engine streams rows and generates terms, with cross-source joins handled by bounded semi-join reduction + streaming k-way merge. Memory bounded by `⟨T, M⟩` independent of source size.
+* **Columnar/OLAP intermediary (DataFusion / `connector_arrow` / DuckDB)** — rejected: an in-process columnar engine buffers instance data and breaks the bounded-memory invariant; only the source DB does blocking set-work (it spills natively).
+* **Pulled-in in-process join engine for cross-source tables** — rejected in favor of bounded semi-join reduction (fixed-size Bloom filter / bounded `IN`-list / temp-table batch) plus streaming k-way merge, kept inside the fixed memory budget.
+
 ## Decision Outcome
 
 ### Workspace crates
@@ -72,10 +78,10 @@ Term generation runs once per result row, and its dominant cost is **small-objec
 
 ### Consequences
 
-* Good — memory-bounded by construction (the source spills); minimal data movement; a light dependency set with no columnar engine and no triplestore on the data plane; coherent with the OLTP runtime path and the single-binary ethos.
-* Good — crate boundaries enforce the architecture; perf decisions grounded in measured prior art.
-* Bad — cross-source joins need an in-engine bounded semi-join / k-way-merge planner; cross-source cardinality estimation remains the hardest input (catalogs can be stale or thin), now mitigated by the cost model above — sketch-based distinct counts, a cached leaf `EXPLAIN` probe, and the skip-if-unselective gate — rather than left open.
-* Bad — the rayon/tokio pool separation is a standing latency/correctness discipline.
+* Good, because memory-bounded by construction (the source spills); minimal data movement; a light dependency set with no columnar engine and no triplestore on the data plane; coherent with the OLTP runtime path and the single-binary ethos.
+* Good, because crate boundaries enforce the architecture; perf decisions grounded in measured prior art.
+* Bad, because cross-source joins need an in-engine bounded semi-join / k-way-merge planner; cross-source cardinality estimation remains the hardest input (catalogs can be stale or thin), now mitigated by the cost model above — sketch-based distinct counts, a cached leaf `EXPLAIN` probe, and the skip-if-unselective gate — rather than left open.
+* Bad, because the rayon/tokio pool separation is a standing latency/correctness discipline.
 
 ### Confirmation
 
@@ -89,4 +95,3 @@ Term generation runs once per result row, and its dominant cost is **small-objec
 * **Architecture:** ADR-0003. **Substrate:** ADR-0004. **Rewriting + cascade:** ADR-0007. **Datatype/dialect:** ADR-0015. **Reasoning:** ADR-0008. **Conformance/bench/oracle:** ADR-0005. **Governance + streaming:** ADR-0010. **Test strategy:** ADR-0012.
 * **Research:** `docs/research/` — `external-memory-join`, `federation`, `rust-substrate`.
 * **Cost-driven design (baked in here):** the term-gen allocation discipline and the cross-source semi-join cost model; the rewriter-side term-construction lifting + plan cache are in ADR-0007. Both promoted from the ADR-0020 research register.
-</content>

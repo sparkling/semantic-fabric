@@ -17,6 +17,13 @@ implements:
 
 R2RML §10 defines the natural mapping from a SQL value to an RDF literal and mandates **consistency**: the same (target datatype, value) MUST yield the same lexical form — across modes and across source dialects. That consistency clause *is* the engine's parity contract. The hazard: a driver's default string rendering of a non-string value is frequently non-canonical or wrong for RDF (PostgreSQL booleans `t`/`f`, `bytea` `\x`+lowercase, hour-only tz offsets, space-separator timestamps; `xsd:double` requires `E`-notation everywhere; decimals return scale-padded), and **SQLite has no reliable per-column type at all**.
 
+## Considered Options
+
+* **Trust the driver's default string rendering of non-string values** — rejected: frequently non-canonical or wrong for RDF (PostgreSQL booleans `t`/`f`, `bytea` `\x`+lowercase, hour-only tz offsets, space-separator timestamps; `xsd:double` needs `E`-notation everywhere; decimals return scale-padded), and SQLite has no reliable per-column type at all.
+* **Push canonicalization into SQL** — rejected: scientific notation, decimal trimming, and hex casing are fragile across dialects, and the cross-source read goes through other renderers anyway. SQL does set-work; Rust does lexical form.
+* **Catalog-driven type determination + one Rust canonicalization chokepoint (chosen)** — determine the target XSD datatype from catalog metadata (per-dialect `DbTypeMap`), then produce the XSD canonical lexical form in Rust via `oxsdatatypes`, with a per-value SQLite storage-class branch for dynamic typing.
+* **Strict SQL:2008 delimited-vs-regular identifier rejection** — rejected for identifier resolution: provenance is unrecoverable by a virtualiser and strict rejection is a net conformance loss against the predominantly-lenient W3C suite. Chosen instead: resolve every mapping column identifier against the live introspected schema (exact match, then unique ASCII-case-insensitive match).
+
 ## Decision Outcome
 
 **Never trust the driver's rendering for a non-string value. Determine the target XSD datatype from catalog metadata, then produce the XSD canonical lexical form in Rust.** Two layers:
@@ -41,13 +48,14 @@ R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) ide
 
 **Consequence — one documented deviation:** `R2RMLTC0002f` (a negative test expecting rejection) is not rejected by the engine. It is recorded in `sf_conformance::EXPECTED_DEVIATIONS`, reported truthfully as `earl:failed`, and **excluded from the regression gate** (`Report::unexpected_failures`) — so it cannot mask a real future regression while also not being a perpetual red bar. Revisit if a future need requires strict identifier validation (it would be a distinct, opt-in mapping-validation pass, not the resolution path).
 
-## Confirmation
+### Consequences
+
+* Good, because byte-identical RDF output across dialects by construction; reuses `oxsdatatypes` (already in-stack); the parity contract is directly testable.
+* Bad, because a per-dialect type map plus the SQLite per-value branch are real surface to maintain.
+
+### Confirmation
 
 A `(SQL source type × dialect) → expected RDF literal` matrix, realised as **per-DBMS forked golden N-Triples fixtures** (the RML-community layout; ADR-0012) run against real PostgreSQL/SQLite, plus: **cross-dialect** byte-identity (the §10 consistency clause), Rust canonicalization unit tests over the raw dialect renderings, and SQLite affinity-violation + STRICT tests. The W3C RDB2RDF suite (ADR-0005) is the floor.
-
-## Consequences
-* Good — byte-identical RDF output across dialects by construction; reuses `oxsdatatypes` (already in-stack); the parity contract is directly testable.
-* Bad — a per-dialect type map plus the SQLite per-value branch are real surface to maintain.
 
 ## More Information
 * **Term-generation home:** `sf-core` (ADR-0003 R3). **Execution:** ADR-0006. **Conformance:** ADR-0005. **Test strategy:** ADR-0012.

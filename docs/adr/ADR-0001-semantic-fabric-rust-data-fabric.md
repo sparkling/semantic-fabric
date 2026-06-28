@@ -15,7 +15,13 @@ The ontology is populated from relational source systems via **source mapping** 
 
 The host platform serves this today on **Apache Jena (Fuseki + jena-shacl)** plus off-the-shelf OBDA tooling (Ontop) — a **JVM** stack, owned by several upstreams with independent roadmaps, sitting on the runtime-critical answer-serving path. The question: keep assembling off-the-shelf JVM tools, or build **one Rust engine we own** — native to RDF 1.2 / SPARQL 1.2, with no JVM on the runtime path.
 
-## Decision
+## Considered Options
+
+* **Build one Rust OBDA engine we own (semantic-fabric)** — a single static Rust binary, native to RDF 1.2 / SPARQL 1.2, with no JVM on the runtime-critical path; owns the answer-serving path end-to-end.
+* **Keep assembling off-the-shelf JVM tools** — continue on Apache Jena (Fuseki + jena-shacl) plus Ontop, a JVM stack owned by several upstreams with independent roadmaps on the runtime-critical path, anchored to SPARQL 1.1.
+* **Materialise source data into RDF** — excluded by design: semantic-fabric is a virtualiser; source data is never materialised into RDF (ADR-0002).
+
+## Decision Outcome
 
 Build **semantic-fabric**: a custom **Rust Ontology-Based Data Access (OBDA) engine** that answers **SPARQL 1.2 over the ontology by rewriting to SQL** against live **relational** sources, executing **R2RML** mappings. It is a **virtualiser** — source data is never materialised into RDF (ADR-0002). The ontology and the mappings (`⟨T, M⟩`) are loaded as the engine's intensional inputs; instance data stays in the source and is produced on demand, streamed, and discarded.
 
@@ -35,10 +41,10 @@ This **supersedes the *executor* choice** in the upstream mapping-conformance re
 
 ### Consequences
 
-* Good — one owned, single-binary Rust engine on the runtime-critical path; no JVM; RDF 1.2 / SPARQL 1.2 native; the `M ⋈ T` gate runs natively.
-* Good — fits the greenfield capability-altitude posture from the upstream design corpus: architect the target, don't patch a pipeline.
-* Bad — large build effort: a full SPARQL 1.2 → SQL OBDA rewriter is a major undertaking, and we take on the conformance, SQL-dialect, and perf-regression maintenance the upstreams carry today.
-* Neutral — design-phase: a charter + decision, not running code.
+* Good, because one owned, single-binary Rust engine on the runtime-critical path; no JVM; RDF 1.2 / SPARQL 1.2 native; the `M ⋈ T` gate runs natively.
+* Good, because it fits the greenfield capability-altitude posture from the upstream design corpus: architect the target, don't patch a pipeline.
+* Bad, because large build effort: a full SPARQL 1.2 → SQL OBDA rewriter is a major undertaking, and we take on the conformance, SQL-dialect, and perf-regression maintenance the upstreams carry today.
+* Neutral, because design-phase: a charter + decision, not running code.
 
 ### Confirmation
 
@@ -49,4 +55,3 @@ This **supersedes the *executor* choice** in the upstream mapping-conformance re
 
 * **Scope:** ADR-0002. **Architecture:** ADR-0003. **Substrate (Oxigraph crates):** ADR-0004. **Conformance/bench:** ADR-0005. **Execution/crates:** ADR-0006. **Rewriting:** ADR-0007. **Reasoning:** ADR-0008. **1.2 readiness / Jena replacement:** ADR-0019.
 * **Cross-project (executor only):** the upstream mapping-conformance requirements / source-mapping decision (the source-mapping toolchain). Greenfield posture: the upstream design corpus.
-</content>

@@ -15,11 +15,19 @@ implements:
 
 > **Forward-looking.** The *readiness-telemetry* half is usable now; the *Darwin* half activates only once the engine builds and the test/bench harness (ADR-0005/0012) produces fitness numbers. The meta-harness is a **dev / optimisation** tool — **never** on the fabric's runtime/serving path. Grounded in `docs/research/ruflo-metaharness.md` + `ruflo-metaharness-darwin.md` (2026-06-27).
 
-## Context
+## Context and Problem Statement
 
 The ruflo meta-harness is a development/optimisation tool, not part of the fabric runtime. Its Darwin Mode is the **Darwin Gödel Machine** pattern (Zhang/Hu/Lu/Lange/Clune, [arXiv 2505.22954](https://arxiv.org/abs/2505.22954), ICLR 2026) productised by `ruvnet/agent-harness-generator`: *freeze the model, evolve the harness.* It plays two roles for semantic-fabric, and precision matters.
 
-## Decision
+## Considered Options
+
+* **Use `metaharness-darwin evolve` to tune the engine's runtime knobs** — rejected: `evolve` mutates the seven agent-harness *policy surfaces* (how agents build the repo), not the engine's rewriter/cascade/pool/plan-cache knobs.
+* **Separate engine-perf Path-B loop over `sf-bench`** — chosen for engine tuning; borrows Darwin's archive + measured-promotion + safety philosophy under the W3C conformance non-degradation gate (ADR-0005), without using `metaharness-darwin evolve`.
+* **Readiness telemetry via `harness genome` + `harness score` in CI** — chosen, usable now as a readiness gate (not a quality discriminator) while the engine matures.
+* **Target the plugin-pinned `@metaharness/darwin@~0.3.1`** — chosen supported path: ruflo-tested, graceful-degradation-honouring, reachable via the `metaharness_*` MCP tools.
+* **Target latest `@metaharness/darwin@0.7.1` directly via `npx`** — available and verified working but off the ruflo-tested path (MCP `metaharness_evolve` cannot reach it) until the 0.3→0.7 delta is smoke-checked.
+
+## Decision Outcome
 
 ### 1. Readiness telemetry — usable now
 Snapshot `harness genome` + `harness score` in CI to track agent-readiness drift as the engine matures. Baseline captured 2026-06-26: `unknown` / compileConfidence 12 / scaffoldReady false → `rust_ci` / 100 / true. **Snapshot 2026-06-27** (full 5-dim via the `metaharness_*` MCP tools): harnessFit **67** · compileConfidence **100** · taskCoverage **79** · toolSafety **100** · memoryUsefulness **40**; scaffoldReady true, hardConstraints 6/6, archetype `rust-crate-harness`, est $0.048/run. Genome: `rust_ci`, topology [maintainer, tester, security, release], risk_score **0.21**, mcp_surface `local_default_deny`, test_confidence 0.8, publish_readiness 0.75. `oia-audit` composite worst = **clean** (no MCP surface; threat-model `info`), persisted for drift tracking to `metaharness-audit/audit-2026-06-27T22-05-23-872Z`. Lowest dim = memoryUsefulness 40 (no agent-memory wired — expected: not a ruflo project, engine needs none). *Caveat:* the score is a readiness **gate**, not a quality discriminator (~0.985 ceiling) — engine quality is the test harness (ADR-0005/0012), never the meta-harness score.
@@ -39,6 +47,19 @@ Published: `metaharness` 0.2.7 (read layer), **`@metaharness/darwin` latest 0.7.
 
 ### Constraints (upstream ADR-153)
 removable · optional (`optionalDependencies` only) · graceful degradation · CI-gate. **Never auto-evolve in CI.** Promoting a winner = copy it back through PR review. Darwin mutates the *target repo's* surfaces, not ruflo's own. Upstream safety stack (reference, all ruflo ADRs): static safety inspector (`exit 99` = disqualified), Darwin Shield (ADR-155, security genome), Darwin Rails (ADR-164, immutable anti-reward-hacking), SGM risk-budget (ADR-079; ADR-090 only wires it), genome-similarity (ADR-152). Authoritative write surface = the **12 `metaharness_*` MCP tools shipped inside `@claude-flow/cli@3.13.2`**, not the stale standalone plugin-cache 0.1.0.
+
+### Consequences
+
+* Good, because the readiness-telemetry half is usable now — `harness genome` + `harness score` snapshot agent-readiness drift in CI as the engine matures.
+* Good, because keeping the meta-harness strictly a dev/optimisation tool keeps it off the fabric's runtime/serving path.
+* Good, because the engine-perf Path-B loop inherits Darwin's archive + measured-promotion + safety discipline (n≥4–5 repeated runs against noise; immutable anti-reward-hacking rails) while staying bound to the W3C conformance non-degradation gate, so it can never trade correctness for speed.
+* Neutral, because the Darwin `evolve` half activates only once the engine builds and the ADR-0005/0012 harness produces fitness numbers.
+* Neutral, because the readiness score is a gate (~0.985 ceiling), not a quality discriminator — engine quality stays the job of the test harness (ADR-0005/0012), never the meta-harness score.
+* Bad, because the supported path is pinned to `@metaharness/darwin@~0.3.1`, four minors behind upstream 0.7.1; the MCP `metaharness_evolve` tool cannot reach 0.7.1, and a `/plugin` marketplace reload does not auto-bump the pin, so versions must be re-checked after each update.
+
+### Confirmation
+
+Verified via the CI readiness snapshots (baseline 2026-06-26; full 5-dim 2026-06-27 via the `metaharness_*` MCP tools: harnessFit 67 / compileConfidence 100 / taskCoverage 79 / toolSafety 100 / memoryUsefulness 40, scaffoldReady true, hardConstraints 6/6), the `oia-audit` composite worst = clean (persisted for drift tracking to `metaharness-audit/audit-2026-06-27T22-05-23-872Z`), and the static safety inspector (`exit 99` = safety-disqualified) gating every variant. Engine fitness is confirmed against the ADR-0005 conformance/bench gates and the ADR-0012 test strategy (n≥4–5 repeated runs). The 0.7.1 bypass path (`npx -y -p @metaharness/darwin@0.7.1 metaharness-darwin <verb>`) is verified working.
 
 ## More Information
 * **Research (grounding):** `docs/research/ruflo-metaharness.md` (read layer), `docs/research/ruflo-metaharness-darwin.md` (write layer / Darwin).
