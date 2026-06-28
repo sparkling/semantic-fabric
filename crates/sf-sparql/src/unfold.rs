@@ -5,26 +5,18 @@
 //! JOIN obeying R1–R5. This is the **unoptimized** tree the [`crate::cascade`]
 //! then rewrites.
 
-use sf_core::ir::{ObjectMap, Segment, Template, TermMap, TriplesMap};
+use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
-use spargebra::algebra::{GraphPattern, PropertyPathExpression};
+use spargebra::algebra::GraphPattern;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
-use crate::iq::{Branch, HopRelation, PathClosure, Scan, SqlCond, TermDef};
+use crate::iq::{Branch, Scan, SqlCond, TermDef};
 use crate::leftjoin::left_join_branches;
 use crate::saturate::Tbox;
 use crate::unify::{filter_cond, unify, Unify};
 use crate::{Error, Result};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-
-/// ADR-0010 recursion-depth backstop for property-path closures. SPARQL path
-/// reachability is set-based (the CTE body uses `UNION`), so the closure already
-/// terminates on a finite hop relation — this bound is the safety net against a
-/// pathological mapping, capping the longest chased chain. A simple path longer
-/// than this is truncated (a documented limit, not a correctness claim — deeper
-/// chains stay future work, like the rest of the path surface deferred to 501).
-const PATH_MAX_DEPTH: usize = 256;
+pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
 /// The translation of one graph pattern: a bag union of [`Branch`]es plus the
 /// solution modifiers peeled from the algebra.
@@ -50,7 +42,7 @@ impl TransPattern {
 
 /// Walks the mappings + T-Box, allocating fresh scan aliases.
 pub struct Unfolder<'a> {
-    maps: &'a [TriplesMap],
+    pub(crate) maps: &'a [TriplesMap],
     tbox: &'a Tbox,
     dialect: sf_sql::Dialect,
     next_alias: usize,
@@ -66,7 +58,7 @@ impl<'a> Unfolder<'a> {
         }
     }
 
-    fn alias(&mut self) -> usize {
+    pub(crate) fn alias(&mut self) -> usize {
         let a = self.next_alias;
         self.next_alias += 1;
         a
@@ -381,105 +373,13 @@ impl<'a> Unfolder<'a> {
         }
     }
 
-    /// Translate a property-path pattern `?s P+ ?o` / `?s P* ?o` into a recursive
-    /// closure branch (ADR-0007). v1 covers `OneOrMore` / `ZeroOrMore` over a
-    /// **single predicate IRI** with both endpoints variables; everything else
-    /// (the `?` operator, `!`/NPS, sequence / alternative / inverse combinations,
-    /// a bound endpoint, a predicate served by a `refObjectMap` join or by more
-    /// than one triples-map, a multi-column key) stays deferred → 501.
-    fn path_branch(
-        &mut self,
-        subject: &TermPattern,
-        path: &PropertyPathExpression,
-        object: &TermPattern,
-    ) -> Result<Branch> {
-        let (pred, reflexive) = match path {
-            PropertyPathExpression::OneOrMore(p) => (p.as_ref(), false),
-            PropertyPathExpression::ZeroOrMore(p) => (p.as_ref(), true),
-            other => {
-                return Err(Error::Unsupported(format!(
-                    "property path operator deferred → 501 (v1 = P+/P* only): {other:?}"
-                )))
-            }
-        };
-        let pred_iri = match pred {
-            PropertyPathExpression::NamedNode(p) => p.as_str(),
-            other => {
-                return Err(Error::Unsupported(format!(
-                    "property path over a non-predicate sub-path deferred → 501: {other:?}"
-                )))
-            }
-        };
-        let (subj_var, obj_var) = match (subject, object) {
-            (TermPattern::Variable(s), TermPattern::Variable(o)) => (s.as_str(), o.as_str()),
-            _ => {
-                return Err(Error::Unsupported(
-                    "property path with a bound endpoint deferred → 501 (v1 = ?s P+ ?o)".to_owned(),
-                ))
-            }
-        };
-
-        // `P*` (ZeroOrMore) must bind the reflexive `(x, x)` ZeroLengthPath for
-        // EVERY node of the active graph (SPARQL 1.1 §9.3), not just nodes of the
-        // path predicate. The raw-key single-hop model can only seed reflexive
-        // pairs over the hop's own node set, which equals the graph's node set
-        // ONLY when `pred_iri` is the sole predicate the mapping produces. For a
-        // multi-predicate virtual graph it would silently miss nodes appearing
-        // only under another predicate, so defer rather than ship a wrong answer.
-        if reflexive && !self.graph_is_single_predicate(pred_iri) {
-            return Err(Error::Unsupported(
-                "P* (ZeroOrMore) over a multi-predicate virtual graph deferred → 501: \
-                 the reflexive ZeroLengthPath must bind (x,x) for every node of the \
-                 active graph, which the single-predicate raw-key hop model cannot \
-                 enumerate provably across heterogeneous term maps"
-                    .to_owned(),
-            ));
-        }
-
-        // The one-hop relation: the (subject, object) raw-key pairs the mapping
-        // produces for `pred_iri`. v1 requires exactly one producing triples-map
-        // with a direct constant predicate and a single-column term object.
-        let hop = self.hop_relation(pred_iri)?;
-
-        // Rebuild the subject / object term maps to read the CTE's canonical key
-        // columns (`sf_s` / `sf_o`); terms are materialised at projection only.
-        let subj_def = TermDef::Derived {
-            term_map: rewrite_single_col(&hop.subj_map, "sf_s")?,
-            alias: hop.alias,
-        };
-        let obj_def = TermDef::Derived {
-            term_map: rewrite_single_col(&hop.obj_map, "sf_o")?,
-            alias: hop.alias,
-        };
-
-        let mut branch = Branch::empty();
-        branch.path = Some(PathClosure {
-            alias: hop.alias,
-            reflexive,
-            hop: HopRelation {
-                source: hop.source,
-                subj_col: hop.subj_col,
-                obj_col: hop.obj_col,
-            },
-            max_depth: PATH_MAX_DEPTH,
-        });
-        // Bind via the shared helper so `?s P+ ?s` self-unifies (ColEq sf_s,sf_o).
-        bind(&mut branch, subj_var, subj_def)?;
-        match bind(&mut branch, obj_var, obj_def)? {
-            true => Ok(branch),
-            false => Err(Error::Unsupported(
-                "property-path endpoints unify to empty → 501".to_owned(),
-            )),
-        }
-    }
-
     /// `true` iff `pred_iri` is the ONLY predicate the whole mapping produces —
     /// no other `rr:predicate` and no `rr:class` (which would add `rdf:type`
     /// triples and class-IRI object nodes). In that case the hop relation's node
     /// set (subjects ∪ objects of `pred_iri`) equals the active graph's node set,
-    /// making `P*`'s reflexive ZeroLengthPath provably complete (under the v1
+    /// making `P*`/`p?`'s reflexive ZeroLengthPath provably complete (under the
     /// same-domain raw-key assumption that already underpins `P+`).
-    fn graph_is_single_predicate(&self, pred_iri: &str) -> bool {
+    pub(crate) fn graph_is_single_predicate(&self, pred_iri: &str) -> bool {
         for tm in self.maps {
             if !tm.subject.classes.is_empty() {
                 return false;
@@ -494,108 +394,6 @@ impl<'a> Unfolder<'a> {
             }
         }
         true
-    }
-
-    /// Resolve the single one-hop relation for `pred_iri` (v1: exactly one
-    /// producing triples-map, direct constant predicate, single-column subject and
-    /// `Term` object term maps; else 501).
-    fn hop_relation(&mut self, pred_iri: &str) -> Result<ResolvedHop> {
-        let mut found: Option<ResolvedHop> = None;
-        for tm in self.maps {
-            for pom in &tm.predicate_object_maps {
-                let produces = pom.predicates.iter().any(|pm| {
-                    matches!(pm, TermMap::Constant(Term::NamedNode(q)) if q.as_str() == pred_iri)
-                });
-                if !produces {
-                    continue;
-                }
-                for om in &pom.objects {
-                    let obj_map =
-                        match om {
-                            ObjectMap::Term(t) => t.clone(),
-                            ObjectMap::Ref(_) => return Err(Error::Unsupported(
-                                "property path over a refObjectMap-joined predicate deferred → 501"
-                                    .to_owned(),
-                            )),
-                        };
-                    if found.is_some() {
-                        return Err(Error::Unsupported(
-                            "property path over a predicate from >1 mapping deferred → 501"
-                                .to_owned(),
-                        ));
-                    }
-                    found = Some(ResolvedHop {
-                        alias: self.alias(),
-                        source: tm.source.clone(),
-                        subj_col: single_col(&tm.subject.term)?,
-                        obj_col: single_col(&obj_map)?,
-                        subj_map: tm.subject.term.clone(),
-                        obj_map,
-                    });
-                }
-            }
-        }
-        found.ok_or_else(|| {
-            Error::Unsupported(format!(
-                "property path predicate {pred_iri} is not mapped → 501"
-            ))
-        })
-    }
-}
-
-/// A resolved one-hop relation plus the term maps that rebuild its endpoints.
-struct ResolvedHop {
-    alias: usize,
-    source: sf_core::ir::LogicalSource,
-    subj_col: Box<str>,
-    obj_col: Box<str>,
-    subj_map: TermMap,
-    obj_map: TermMap,
-}
-
-/// The single source column a term map reads, or 501 if it is not single-column
-/// (a constant, or a multi-column template — deferred for v1 paths).
-fn single_col(tm: &TermMap) -> Result<Box<str>> {
-    let cols = crate::iq::term_map_columns(tm);
-    match cols.len() {
-        1 => Ok(cols.into_iter().next().unwrap()),
-        _ => Err(Error::Unsupported(
-            "property path endpoint term map is not single-column → 501".to_owned(),
-        )),
-    }
-}
-
-/// Clone a single-column term map, redirecting its one column reference to
-/// `new_col` (the CTE's canonical key column). Constants / multi-column maps 501.
-fn rewrite_single_col(tm: &TermMap, new_col: &str) -> Result<TermMap> {
-    match tm {
-        TermMap::Column(_, spec) => Ok(TermMap::Column(new_col.into(), spec.clone())),
-        TermMap::Template(t, spec) => {
-            let mut seen = 0;
-            let segments = t
-                .segments()
-                .iter()
-                .map(|s| match s {
-                    Segment::Literal(l) => Segment::Literal(l.clone()),
-                    Segment::Column(_) => {
-                        seen += 1;
-                        Segment::Column(new_col.into())
-                    }
-                })
-                .collect::<Vec<_>>();
-            if seen != 1 {
-                return Err(Error::Unsupported(
-                    "property path endpoint template is not single-column → 501".to_owned(),
-                ));
-            }
-            Ok(TermMap::Template(
-                Template::from_segments(segments).map_err(|e| Error::Mapping(e.to_string()))?,
-                spec.clone(),
-            ))
-        }
-        TermMap::Constant(_) => Err(Error::Unsupported(
-            "property path endpoint is a constant term map → 501".to_owned(),
-        )),
     }
 }
 
@@ -617,7 +415,7 @@ fn def_of(tm: &TermMap, alias: usize) -> TermDef {
 
 /// Bind `var` in `branch`, unifying with any existing binding. `Ok(false)` ⇒ the
 /// branch is pruned (disjoint self-unification).
-fn bind(branch: &mut Branch, var: &str, def: TermDef) -> Result<bool> {
+pub(crate) fn bind(branch: &mut Branch, var: &str, def: TermDef) -> Result<bool> {
     if let Some(existing) = branch.bindings.get(var) {
         match unify(existing, &def) {
             Unify::Sat(conds) => {

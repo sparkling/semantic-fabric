@@ -25,16 +25,20 @@
 //! ADR-0005), BGP, JOIN, FILTER (comparison/`&&`/`||`/`!`/`BOUND` subset),
 //! OPTIONAL (NULL-safe LEFT JOIN, single-scan right side), UNION, projection,
 //! DISTINCT/REDUCED, LIMIT/OFFSET, `rr:class` / refObjectMap unfolding, and the
-//! recursive property paths `P+`/`P*` over a single predicate with variable
-//! endpoints (`WITH RECURSIVE` CTE, ADR-0007; `owl:TransitiveProperty` served
-//! live, ADR-0008; depth-bounded, ADR-0010). Deferred → `501` (documented, never
-//! silent): aggregates, the `?` (ZeroOrOne) / `!` (NPS) path operators and
-//! sequence/alternative/inverse path combinations, a path with a bound endpoint
-//! or a multi-mapping / refObjectMap / multi-column predicate, LATERAL, MINUS,
-//! GRAPH, BIND/VALUES, ORDER BY, DESCRIBE, SERVICE, OWL 2 QL tier-2 (ADR-0008),
-//! and PostgreSQL execution (SQLite is this wave's execution target; the path
-//! CTE's Postgres `CYCLE` variant is the later MB-4 wave; emission is otherwise
-//! dialect-generic).
+//! property paths with variable endpoints (`WITH RECURSIVE` / non-recursive CTE,
+//! ADR-0007; `owl:TransitiveProperty` served live, ADR-0008; depth-bounded,
+//! ADR-0010): `P+`/`P*` over a single predicate, the `?` (ZeroOrOne), `!` (NPS),
+//! and `^`/`/`/`|` (inverse / sequence / alternative) operators, and `P+`/`P*`
+//! over such composites (see [`path`] for the per-shape soundness gates — raw-key
+//! equality requires matching node shapes; `P*`/`p?` reflexive requires a
+//! single-predicate graph). Deferred → `501` (documented, never silent): a path
+//! with a bound endpoint, a nested closure inside a composite, a predicate from a
+//! multi-mapping / refObjectMap / multi-column or non-constant term map, a
+//! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; plus
+//! aggregates, LATERAL, MINUS, GRAPH, BIND/VALUES, ORDER BY, DESCRIBE, SERVICE,
+//! OWL 2 QL tier-2 (ADR-0008), and PostgreSQL execution (SQLite is this wave's
+//! execution target; the path CTE's Postgres `CYCLE` variant is the later MB-4
+//! wave; emission is otherwise dialect-generic).
 
 use std::collections::BTreeSet;
 
@@ -51,6 +55,7 @@ pub mod exec;
 pub mod exec_pg;
 pub mod iq;
 pub mod leftjoin;
+pub mod path;
 pub mod pool;
 pub mod saturate;
 pub mod unfold;
@@ -344,13 +349,18 @@ mod tests {
     }
 
     #[test]
-    fn deferred_property_path_operators_are_unsupported() {
-        // The `?` (ZeroOrOne) operator stays deferred → 501 (v1 = P+/P* only); the
-        // P+/P* engine path is exercised end-to-end in tests/e2e.rs.
+    fn unmapped_property_path_operators_are_unsupported() {
+        // With NO mappings every path predicate is unmapped → 501 regardless of the
+        // operator (`?`/`!`/composite `+` are all now compiled — see
+        // `crate::path` — but resolve to "predicate not mapped" here). The
+        // supported-shape differentials live in
+        // sf-conformance/tests/differential_paths.rs; the single-predicate P+/P*
+        // engine path is exercised end-to-end in tests/e2e.rs.
         for q in [
             "SELECT * WHERE { ?s <http://ex/p>? ?o }",
             "SELECT * WHERE { ?s !<http://ex/p> ?o }",
             "SELECT * WHERE { ?s (<http://ex/p>/<http://ex/q>)+ ?o }",
+            "SELECT * WHERE { ?s (^<http://ex/p>)+ ?o }",
         ] {
             let q = spargebra::SparqlParser::new().parse_query(q).unwrap();
             assert!(matches!(

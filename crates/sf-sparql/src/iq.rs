@@ -204,31 +204,87 @@ pub struct OptJoin {
     pub extra: Vec<SqlCond>,
 }
 
-/// A recursive property-path closure (`P+` / `P*` over a single predicate;
-/// ADR-0007 *recursive paths compile to source-dialect recursive CTEs*, ADR-0008
-/// `owl:TransitiveProperty` served live, ADR-0010 *recursion bounds*).
+/// How a [`PathClosure`]'s [`HopExpr`] is iterated (SPARQL 1.1 §9 path semantics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathKind {
+    /// Exactly the hop relation, distinct node pairs — one step, no closure:
+    /// `^p`, `p/q`, `p|q`, `!p`, or any sequence/alternative/inverse composite.
+    One,
+    /// `p?` — the hop ∪ the reflexive `(x, x)` pairs over the active graph's
+    /// nodes (the ZeroLengthPath of §9.3). Only emitted over a single-predicate
+    /// bare-leaf hop (so the hop's node set equals the graph's); else 501.
+    ZeroOrOne,
+    /// `P+` — the transitive closure (1+ hops), no reflexive pairs.
+    OneOrMore,
+    /// `P*` — the transitive closure ∪ the reflexive `(x, x)` pairs (same
+    /// single-predicate-graph restriction as `ZeroOrOne`).
+    ZeroOrMore,
+}
+
+/// The one-hop relation a [`PathClosure`] iterates, built from the mapping over
+/// **raw key columns** (term-construction lifting, ADR-0007). Each node carries a
+/// known [`HopRelation`] leaf; the composite operators (`Inverse`/`Seq`/`Alt`/
+/// `Nps`) compile to nested subqueries each yielding the canonical `(sf_s, sf_o)`
+/// pair. Raw-key equality stands in for RDF-term equality at every junction;
+/// `unfold`'s `path::compile` only builds a node when the meeting endpoints share a
+/// *node shape* (so equal raw key ⟺ equal RDF term), else it defers to 501.
+#[derive(Debug, Clone)]
+pub enum HopExpr {
+    /// A single mapped predicate's `(subject-key, object-key)` base relation.
+    Pred(HopRelation),
+    /// `^p` — swap the inner hop's subject and object.
+    Inverse(Box<HopExpr>),
+    /// `p/q` — join the two inner hops on the shared middle node (`a.sf_o = b.sf_s`).
+    Seq(Box<HopExpr>, Box<HopExpr>),
+    /// `p|q|…` — the **set** union of the inner hops' pairs (the `spareval` oracle
+    /// evaluates an alternative with set semantics; emission dedups via `UNION`).
+    Alt(Vec<HopExpr>),
+    /// `!(p1|…)` — a negated property set: the union of the *complement* predicate
+    /// hops. Unlike `Alt`, the oracle gives this **bag** semantics (one solution per
+    /// matching triple — §18.2.2 length-one path), so emission is a `UNION ALL` over
+    /// the per-predicate distinct pairs and the `PathKind::One` wrapper omits its
+    /// outer `DISTINCT`. A pair connected by two complement predicates therefore
+    /// yields two solutions, matching the oracle (never silently undercounted).
+    Nps(Vec<HopExpr>),
+}
+
+impl HopExpr {
+    /// The single base relation iff this hop is a bare predicate leaf — the only
+    /// shape over which `P*`/`p?` reflexive `(x, x)` enumeration is emitted.
+    pub fn as_pred(&self) -> Option<&HopRelation> {
+        match self {
+            HopExpr::Pred(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+/// A property-path closure (ADR-0007 *recursive paths compile to source-dialect
+/// recursive CTEs*, ADR-0008 `owl:TransitiveProperty` served live, ADR-0010
+/// *recursion bounds*).
 ///
 /// A branch carrying a `PathClosure` has an **empty `core`**: its `FROM` is the
-/// recursive CTE, not a base scan. The CTE runs over the **raw key columns** of
-/// the one-hop relation (term-construction lifting, ADR-0007): it projects two
-/// canonical key columns (`sf_s`, `sf_o`) and a depth counter; the branch's
-/// `bindings` build the RDF subject/object terms from those keys at the outer
-/// projection only. Connectivity is **set-based** over node pairs (SPARQL `P+`/`P*`
-/// semantics): emission wraps the depth-tracked recursion in a `SELECT DISTINCT
-/// sf_s, sf_o` so a pair reached at several depths or around a cycle yields one
-/// solution. The recursion itself terminates **only** via `sf_d < max_depth` (the
-/// depth key keeps cyclic revisits distinct in the recursive member; the SQLite
-/// `CYCLE` clause is the later MB-4 wave). `max_depth` is the ADR-0010 bound.
+/// (possibly recursive) CTE, not a base scan. The CTE runs over the **raw key
+/// columns** of the one-hop relation (term-construction lifting, ADR-0007): it
+/// projects two canonical key columns (`sf_s`, `sf_o`) and (for the recursive
+/// kinds) a depth counter; the branch's `bindings` build the RDF subject/object
+/// terms from those keys at the outer projection only. Connectivity is
+/// **set-based** over node pairs (SPARQL `P+`/`P*` semantics): emission wraps the
+/// relation in a `SELECT DISTINCT sf_s, sf_o` so a pair reached at several depths
+/// or around a cycle yields one solution. The recursion (for `OneOrMore`/
+/// `ZeroOrMore`) terminates **only** via `sf_d < max_depth` (the depth key keeps
+/// cyclic revisits distinct in the recursive member; the SQLite `CYCLE` clause is
+/// the later MB-4 wave). `max_depth` is the ADR-0010 bound.
 #[derive(Debug, Clone)]
 pub struct PathClosure {
     /// The scan alias the CTE is bound to; the outer projection reads
     /// `t{alias}.sf_s` / `t{alias}.sf_o`.
     pub alias: usize,
-    /// `P*` (include the reflexive `(x, x)` pairs over the hop's node set) vs
-    /// `P+` (one or more hops only).
-    pub reflexive: bool,
-    /// The one-hop relation the closure iterates.
-    pub hop: HopRelation,
+    /// Which path operator this closure realises.
+    pub kind: PathKind,
+    /// The one-hop relation the closure iterates (a predicate leaf or a
+    /// sequence/alternative/inverse composite).
+    pub hop: HopExpr,
     /// ADR-0010 recursion-depth backstop (the `WHERE sf_d < max_depth` guard).
     pub max_depth: usize,
 }
@@ -302,9 +358,10 @@ impl Branch {
         for o in &self.opts {
             out.push((o.scan.alias, &o.scan.source));
         }
-        if let Some(pc) = &self.path {
-            out.push((pc.alias, &pc.hop.source));
-        }
+        // A property-path closure's leaf sources are resolved directly against the
+        // column catalog at emission (its CTE alias projects the canonical `sf_s` /
+        // `sf_o` keys, not raw base columns), so it contributes no alias→source
+        // entry here.
         out
     }
 

@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use sf_core::ir::LogicalSource;
 use sf_sql::Dialect;
 
-use crate::iq::{Branch, ColRef, PathClosure, SqlCond, StrMatchOp};
+use crate::iq::{Branch, ColRef, HopExpr, PathClosure, PathKind, SqlCond, StrMatchOp};
 use crate::{Error, Result};
 
 /// The introspected (actual) column names of each logical source, so a mapping's
@@ -118,7 +118,7 @@ pub fn emit_branch_with(
 ) -> Result<EmittedBranch> {
     let actuals = branch_actuals(b, catalog);
     if let Some(pc) = &b.path {
-        return emit_path_branch(b, pc, dialect, &actuals);
+        return emit_path_branch(b, pc, dialect, catalog);
     }
     let projection = b.projection();
     let mut params = Vec::new();
@@ -163,89 +163,118 @@ pub fn emit_branch_with(
     })
 }
 
-/// Render a recursive property-path closure branch to a `WITH RECURSIVE` CTE
+/// Render a property-path closure branch to a (possibly `WITH RECURSIVE`) CTE
 /// (ADR-0007 *recursive paths compile to source-dialect recursive CTEs*).
 ///
-/// The CTE iterates the one-hop relation over **raw key columns** (term-gen
-/// lifting): the recursive member `t{alias}r` projects `sf_s` / `sf_o` (the two
-/// keys) plus an `sf_d` depth counter. Its body is a **`UNION`** (it dedups on the
-/// `(sf_s, sf_o, sf_d)` triple), but because `sf_d` is part of that key a pair
-/// reached at several depths — or revisited around a cycle — is NOT collapsed
-/// there: `sf_d < max_depth` is the *sole* recursion terminator (ADR-0010 depth
-/// backstop; SQLite has no `CYCLE` clause — that is the later MB-4 wave). SPARQL
-/// `P+`/`P*` are set-semantics over node **pairs**, so a second non-recursive CTE
-/// `t{alias}` = `SELECT DISTINCT sf_s, sf_o` collapses the depth dimension to the
-/// distinct reachable pairs the outer projection then reads. Deduping the *pair*
-/// (not the projected columns) is what keeps `SELECT ?s WHERE {?s p+ ?o}` a
-/// correct bag of `?s` even when `?o` is dropped. `P+` anchors on the one-hop
-/// pairs (depth 1); `P*` additionally seeds the reflexive `(x, x)` pairs over the
-/// hop's node set (subjects ∪ objects) at depth 0 — sound only for a
-/// single-predicate active graph, which `unfold` enforces (else `P*` → 501). The
-/// depth ints and the bound are engine constants (not query data), so — like
+/// The hop relation ([`HopExpr`]) compiles to a subquery yielding the canonical
+/// **raw key columns** `sf_s` / `sf_o` (term-gen lifting; see [`hop_sql`]): a bare
+/// predicate is a base scan, and `^p`/`p/q`/`p|q`/`!p` are nested subqueries over
+/// the same keys. A second relation reduces it to the distinct reachable node
+/// pairs the outer projection reads as `t{alias}` — SPARQL paths are set-semantics
+/// over node **pairs**, so this `SELECT DISTINCT sf_s, sf_o` is what keeps
+/// `SELECT ?s WHERE {?s P ?o}` a correct bag of `?s` even when `?o` is dropped.
+///
+/// Per [`PathKind`]:
+/// * `One` (`^p`, `p/q`, `p|q`) — just the distinct hop pairs, no recursion; `!p`
+///   (NPS) is the bag exception — its `UNION ALL` hop is kept un-`DISTINCT`ed.
+/// * `ZeroOrOne` (`p?`) — the hop ∪ the reflexive `(x, x)` pairs over the active
+///   graph's nodes (only over a single-predicate bare leaf, `unfold`-enforced).
+/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` closure: the recursive member keeps an
+///   `sf_d` depth counter, its body a `UNION` deduped on `(sf_s, sf_o, sf_d)` so a
+///   pair revisited around a cycle is NOT collapsed there — `sf_d < max_depth` is
+///   the *sole* recursion terminator (ADR-0010; SQLite has no `CYCLE` clause — the
+///   later MB-4 wave). The outer `SELECT DISTINCT` collapses the depth dimension.
+/// * `ZeroOrMore` (`P*`) — `OneOrMore` plus the reflexive `(x, x)` pairs at depth 0.
+///
+/// The depth ints and the bound are engine constants (not query data), so — like
 /// `LIMIT` and the `ESCAPE '\'` char — they are part of the trusted skeleton, not
 /// bound params. RDF terms are still built only at the outer projection
-/// ([`crate::exec`]).
-///
-/// This wave targets the SQLite dialect; the PostgreSQL `CYCLE`/PG14 variant is
-/// the later MB-4 wave.
+/// ([`crate::exec`]). This wave targets the SQLite dialect; the PostgreSQL
+/// `CYCLE`/PG14 variant is the later MB-4 wave.
 fn emit_path_branch(
     b: &Branch,
     pc: &PathClosure,
     dialect: Dialect,
-    actuals: &HashMap<usize, Vec<String>>,
+    catalog: &ColumnCatalog,
 ) -> Result<EmittedBranch> {
     let projection = b.projection();
     let mut params = Vec::new();
     let mut pidx = 0usize;
 
     // `cte` is the distinct-pairs relation the outer projection reads (colref binds
-    // `t{alias}`); `cte_raw` is the depth-tracked recursive closure behind it.
+    // `t{alias}`). Its columns are the canonical `sf_s` / `sf_o` keys, never base
+    // columns, so the outer projection / WHERE resolve against an empty catalog.
     let cte = format!("t{}", pc.alias);
-    let cte_raw = format!("t{}r", pc.alias);
-    let src = source_sql(&pc.hop.source, dialect);
-    let s_col = dialect.quote_ident(&pc.hop.subj_col);
-    let o_col = dialect.quote_ident(&pc.hop.obj_col);
+    let outer_actuals: HashMap<usize, Vec<String>> = HashMap::new();
+    let hop = hop_sql(&pc.hop, dialect, catalog);
     let (sf_s, sf_o, sf_d) = (
         dialect.quote_ident("sf_s"),
         dialect.quote_ident("sf_o"),
         dialect.quote_ident("sf_d"),
     );
 
-    // Anchor: P+ = the one-hop pairs (depth 1); P* additionally = the reflexive
-    // (x, x) pairs over every node appearing as a hop subject or object (depth 0).
-    let anchor = if pc.reflexive {
-        format!(
-            "SELECT h.{s_col} AS {sf_s}, h.{s_col} AS {sf_o}, 0 AS {sf_d} FROM {src} h \
-             UNION SELECT h.{o_col} AS {sf_s}, h.{o_col} AS {sf_o}, 0 AS {sf_d} FROM {src} h"
-        )
-    } else {
-        format!("SELECT h.{s_col} AS {sf_s}, h.{o_col} AS {sf_o}, 1 AS {sf_d} FROM {src} h")
+    // The `WITH …` prelude that defines `t{alias}(sf_s, sf_o)` as the distinct
+    // reachable node pairs, per path kind.
+    let with = match pc.kind {
+        PathKind::One => {
+            // A negated property set is bag-valued (the hop already emits its own
+            // per-predicate `DISTINCT` over a `UNION ALL`); every other length-one
+            // composite (`^p`/`p/q`/`p|q`) is set-valued. Omitting / keeping the
+            // outer `DISTINCT` accordingly is what matches the oracle's bag vs set.
+            let one_distinct = if matches!(pc.hop, HopExpr::Nps(_)) {
+                ""
+            } else {
+                "DISTINCT "
+            };
+            format!(
+                "WITH {cte}({sf_s}, {sf_o}) AS \
+                 (SELECT {one_distinct}{sf_s}, {sf_o} FROM ({hop}) hx)"
+            )
+        }
+        PathKind::ZeroOrOne => {
+            let refl = reflexive_sql(&pc.hop, dialect, catalog, None)?;
+            format!(
+                "WITH {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM \
+                 (SELECT {sf_s}, {sf_o} FROM ({hop}) hx UNION {refl}) z)"
+            )
+        }
+        PathKind::OneOrMore | PathKind::ZeroOrMore => {
+            let cte_raw = format!("t{}r", pc.alias);
+            let one_hop = format!("SELECT {sf_s}, {sf_o}, 1 AS {sf_d} FROM ({hop}) hx");
+            let anchor = if matches!(pc.kind, PathKind::ZeroOrMore) {
+                let refl = reflexive_sql(&pc.hop, dialect, catalog, Some(0))?;
+                format!("{one_hop} UNION {refl}")
+            } else {
+                one_hop
+            };
+            let recursive = format!(
+                "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
+                 FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} WHERE c.{sf_d} < {max}",
+                max = pc.max_depth
+            );
+            format!(
+                "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
+                 {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
+            )
+        }
     };
-    // Recursive step: extend a reached pair by one hop (raw-key equality), bounded.
-    let recursive = format!(
-        "SELECT c.{sf_s} AS {sf_s}, h.{o_col} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
-         FROM {cte_raw} c JOIN {src} h ON c.{sf_o} = h.{s_col} WHERE c.{sf_d} < {max}",
-        max = pc.max_depth
-    );
 
     let select_list = projection
         .iter()
         .enumerate()
-        .map(|(i, c)| format!("{} AS c{i}", colref(c, dialect, actuals)))
+        .map(|(i, c)| format!("{} AS c{i}", colref(c, dialect, &outer_actuals)))
         .collect::<Vec<_>>()
         .join(", ");
 
     let distinct = if b.distinct { "DISTINCT " } else { "" };
-    // The recursive closure keeps `sf_d` (so cycles/multi-depth pairs are NOT
-    // collapsed there); a second non-recursive CTE reduces it to the DISTINCT
-    // reachable node pairs — SPARQL `P+`/`P*` set-semantics — which the outer
-    // projection reads as `t{alias}`.
-    let mut skeleton = format!(
-        "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
-         {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw}) \
-         SELECT {distinct}{select_list} FROM {cte}"
-    );
-    if let Some(w) = render_where(&b.where_conds, dialect, actuals, &mut params, &mut pidx) {
+    let mut skeleton = format!("{with} SELECT {distinct}{select_list} FROM {cte}");
+    if let Some(w) = render_where(
+        &b.where_conds,
+        dialect,
+        &outer_actuals,
+        &mut params,
+        &mut pidx,
+    ) {
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
@@ -264,6 +293,92 @@ fn emit_path_branch(
         projection,
         params,
     })
+}
+
+/// Render a [`HopExpr`] to a relation expression yielding the canonical raw key
+/// columns `sf_s` / `sf_o` (term-construction lifting, ADR-0007): a bare predicate
+/// is a base scan; `^p` swaps the keys; `p/q` joins on the middle node; `p|q` /
+/// `!p` set-union the pairs. The result is a `SELECT …` body to be wrapped in
+/// `(…) alias` by the caller. Leaf base-column references are resolved against the
+/// live catalog (SQL:2008 identifier folding; see the module docs).
+fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
+    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
+    match hop {
+        HopExpr::Pred(rel) => {
+            let src = source_sql(&rel.source, dialect);
+            let cols = catalog.columns(&rel.source);
+            let s = dialect.quote_ident(resolve_col(rel.subj_col.as_ref(), cols));
+            let o = dialect.quote_ident(resolve_col(rel.obj_col.as_ref(), cols));
+            format!("SELECT h0.{s} AS {sf_s}, h0.{o} AS {sf_o} FROM {src} h0")
+        }
+        HopExpr::Inverse(inner) => {
+            let inner_sql = hop_sql(inner, dialect, catalog);
+            format!("SELECT x.{sf_o} AS {sf_s}, x.{sf_s} AS {sf_o} FROM ({inner_sql}) x")
+        }
+        HopExpr::Seq(a, b) => {
+            let a_sql = hop_sql(a, dialect, catalog);
+            let b_sql = hop_sql(b, dialect, catalog);
+            format!(
+                "SELECT a.{sf_s} AS {sf_s}, b.{sf_o} AS {sf_o} \
+                 FROM ({a_sql}) a JOIN ({b_sql}) b ON a.{sf_o} = b.{sf_s}"
+            )
+        }
+        HopExpr::Alt(parts) => parts
+            .iter()
+            .map(|p| {
+                let psql = hop_sql(p, dialect, catalog);
+                format!("SELECT {sf_s}, {sf_o} FROM ({psql}) u")
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION "),
+        // NPS carries BAG semantics (one solution per matching triple): `UNION ALL`
+        // over the per-predicate DISTINCT pairs so a pair connected by two
+        // complement predicates yields two rows (matching the oracle), while a
+        // duplicate row WITHIN one predicate (the same virtual triple) stays
+        // collapsed by that predicate's `DISTINCT`. The `PathKind::One` wrapper
+        // omits its outer `DISTINCT` to preserve this bag (see `emit_path_branch`).
+        HopExpr::Nps(parts) => parts
+            .iter()
+            .map(|p| {
+                let psql = hop_sql(p, dialect, catalog);
+                format!("SELECT DISTINCT {sf_s}, {sf_o} FROM ({psql}) u")
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL "),
+    }
+}
+
+/// The reflexive `(x, x)` pairs over a bare-predicate hop's node set (its subjects
+/// ∪ objects) — the ZeroLengthPath component of `P*` / `p?`. `depth` adds a
+/// constant `sf_d` column for the recursive (`P*`) anchor. `unfold` only emits
+/// reflexive kinds over a single-predicate bare leaf, so a composite hop here is a
+/// programming error surfaced as 501.
+fn reflexive_sql(
+    hop: &HopExpr,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+    depth: Option<u32>,
+) -> Result<String> {
+    let rel = hop.as_pred().ok_or_else(|| {
+        Error::Unsupported("reflexive (P*/p?) path over a composite hop → 501".to_owned())
+    })?;
+    let src = source_sql(&rel.source, dialect);
+    let cols = catalog.columns(&rel.source);
+    let s = dialect.quote_ident(resolve_col(rel.subj_col.as_ref(), cols));
+    let o = dialect.quote_ident(resolve_col(rel.obj_col.as_ref(), cols));
+    let (sf_s, sf_o, sf_d) = (
+        dialect.quote_ident("sf_s"),
+        dialect.quote_ident("sf_o"),
+        dialect.quote_ident("sf_d"),
+    );
+    let dcol = match depth {
+        Some(d) => format!(", {d} AS {sf_d}"),
+        None => String::new(),
+    };
+    Ok(format!(
+        "SELECT h0.{s} AS {sf_s}, h0.{s} AS {sf_o}{dcol} FROM {src} h0 \
+         UNION SELECT h0.{o} AS {sf_s}, h0.{o} AS {sf_o}{dcol} FROM {src} h0"
+    ))
 }
 
 /// A base source rendered **without** a binding alias (the CTE bodies attach their
