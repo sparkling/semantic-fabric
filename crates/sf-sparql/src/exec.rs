@@ -24,7 +24,7 @@ use sf_core::ir::LogicalSource;
 use sf_sql::Dialect;
 
 use crate::emit::{ColumnCatalog, EmittedBranch};
-use crate::iq::{AggKind, Branch, ColRef, OrderKey, TermDef};
+use crate::iq::{AggKind, Branch, ColRef, OrderKey, RustAgg, RustGroup, TermDef};
 use crate::{Error, Plan, PlanForm, Result};
 
 /// Introspect the actual result-column names of every source the plan reads, so
@@ -344,6 +344,11 @@ fn for_each_solution(
     conn: &Connection,
     mut sink: impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
 ) -> Result<()> {
+    // Multi-branch GROUP BY: buffer all inner solutions, group and aggregate in
+    // Rust, then stream the grouped result rows.
+    if let Some(rg) = &plan.rust_group {
+        return rust_group_execute(plan, conn, rg, &mut sink);
+    }
     let branches = plan.prepared_branches();
     let catalog = build_catalog(&branches, conn, plan.dialect);
     let multi = branches.len() > 1;
@@ -649,6 +654,7 @@ pub fn dump_quads_stream(
         limit: None,
         offset: 0,
         order: Vec::new(),
+        rust_group: None,
         dialect,
     };
     for_each_solution(&plan, conn, |branch, bindings| {
@@ -785,4 +791,249 @@ pub fn write_ntriples(triples: &[Triple]) -> String {
         out.push_str(" .\n");
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Rust-level GROUP BY (multi-branch inner, SPARQL §11)
+// ---------------------------------------------------------------------------
+
+/// Buffer all solutions from every inner branch, apply GROUP BY and aggregation
+/// in Rust, and stream the resulting group rows.  Called by [`for_each_solution`]
+/// when `plan.rust_group` is set (a UNION/VALUES inner that cannot be grouped in
+/// SQL — see ADR-0007 and [`crate::unfold::Unfolder::group`]).
+fn rust_group_execute(
+    plan: &Plan,
+    conn: &Connection,
+    rg: &RustGroup,
+    sink: &mut impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
+) -> Result<()> {
+    // Build a no-modifier plan for the inner execution (GROUP BY applies AFTER
+    // collecting all inner solutions, so DISTINCT/OFFSET/LIMIT must not be
+    // applied to the inner rows; ORDER BY is handled after grouping below).
+    let inner_plan = Plan {
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: Vec::new(),
+        rust_group: None, // prevent recursion
+        ..plan.clone()
+    };
+
+    // Collect all inner solutions.
+    let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
+    for_each_solution(&inner_plan, conn, |_, bindings| {
+        inner_rows.push(bindings.clone());
+        Ok(())
+    })?;
+
+    // Group by the key variable values, preserving insertion order for stable output.
+    // Use a Vec for ordering + a HashMap for O(1) group lookup.
+    let mut groups: Vec<(Vec<Option<Term>>, Vec<BTreeMap<String, Term>>)> = Vec::new();
+    let mut key_index: std::collections::HashMap<Vec<Option<Term>>, usize> =
+        std::collections::HashMap::new();
+
+    for row in inner_rows {
+        let key: Vec<Option<Term>> = rg.keys.iter().map(|k| row.get(k).cloned()).collect();
+        if let Some(&idx) = key_index.get(&key) {
+            groups[idx].1.push(row);
+        } else {
+            let idx = groups.len();
+            key_index.insert(key.clone(), idx);
+            groups.push((key, vec![row]));
+        }
+    }
+
+    // Implicit grouping (no key variables): always produce exactly one group,
+    // even over an empty inner (COUNT(*) ⇒ 0, AVG/MIN/MAX ⇒ UNBOUND — §11).
+    if rg.keys.is_empty() && groups.is_empty() {
+        groups.push((vec![], vec![]));
+    }
+
+    // Choose a dummy branch for the sink call (SELECT uses `_branch` only for
+    // CONSTRUCT template lookup; GROUP BY results do not come from a single branch).
+    let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
+
+    // Apply ORDER BY (if requested) over the grouped result rows.
+    if !plan.order.is_empty() {
+        // Build the result rows first, then sort.
+        let mut result_rows: Vec<BTreeMap<String, Term>> = Vec::new();
+        for (key_vals, group_rows) in &groups {
+            let mut result = BTreeMap::new();
+            for (k, val) in rg.keys.iter().zip(key_vals.iter()) {
+                if let Some(t) = val {
+                    result.insert(k.clone(), t.clone());
+                }
+            }
+            for agg_spec in &rg.aggs {
+                if let Some(t) = rust_agg(agg_spec, group_rows)? {
+                    result.insert(agg_spec.out_var.clone(), t);
+                }
+            }
+            result_rows.push(result);
+        }
+        result_rows.sort_by(|a, b| order_cmp(&plan.order, a, b));
+        let take = plan.limit.unwrap_or(usize::MAX);
+        for result in result_rows.into_iter().skip(plan.offset).take(take) {
+            sink(&dummy, &result)?;
+        }
+        return Ok(());
+    }
+
+    // Streaming path (no ORDER BY): OFFSET/LIMIT applied row by row.
+    let mut seen = 0usize;
+    let mut emitted = 0usize;
+    for (key_vals, group_rows) in &groups {
+        if seen < plan.offset {
+            seen += 1;
+            continue;
+        }
+        if let Some(limit) = plan.limit {
+            if emitted >= limit {
+                break;
+            }
+        }
+        let mut result = BTreeMap::new();
+        for (k, val) in rg.keys.iter().zip(key_vals.iter()) {
+            if let Some(t) = val {
+                result.insert(k.clone(), t.clone());
+            }
+        }
+        for agg_spec in &rg.aggs {
+            if let Some(t) = rust_agg(agg_spec, group_rows)? {
+                result.insert(agg_spec.out_var.clone(), t);
+            }
+        }
+        emitted += 1;
+        sink(&dummy, &result)?;
+    }
+    Ok(())
+}
+
+/// Compute one aggregate over a group of solutions. Returns `None` for
+/// UNBOUND (AVG/MIN/MAX over an empty multiset — SPARQL §11).
+fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Term>> {
+    // Collect bound numeric values of the argument variable.
+    let bound_vals: Vec<&Term> = match &agg.arg_var {
+        None => rows.iter().flat_map(|r| r.values()).collect(), // COUNT(*) — not used for numerics
+        Some(var) => rows.iter().filter_map(|r| r.get(var)).collect(),
+    };
+
+    match agg.kind {
+        AggKind::Count => {
+            let count = match &agg.arg_var {
+                None => rows.len(), // COUNT(*)
+                Some(var) => {
+                    if agg.distinct {
+                        let mut seen: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        rows.iter()
+                            .filter_map(|r| r.get(var))
+                            .filter(|t| seen.insert(t.to_string()))
+                            .count()
+                    } else {
+                        rows.iter().filter(|r| r.contains_key(var.as_str())).count()
+                    }
+                }
+            };
+            Ok(Some(Term::Literal(Literal::new_typed_literal(
+                count.to_string(),
+                sf_core::NamedNode::new_unchecked(
+                    "http://www.w3.org/2001/XMLSchema#integer",
+                ),
+            ))))
+        }
+        AggKind::Sum => {
+            let Some(var) = &agg.arg_var else {
+                return Ok(None);
+            };
+            let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
+            if vals.is_empty() {
+                // SUM over empty multiset ⇒ "0"^^xsd:integer (SPARQL §11).
+                return Ok(Some(Term::Literal(Literal::new_typed_literal(
+                    "0",
+                    sf_core::NamedNode::new_unchecked(
+                        "http://www.w3.org/2001/XMLSchema#integer",
+                    ),
+                ))));
+            }
+            let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
+            if nums.len() < vals.len() {
+                return Ok(None); // non-numeric operand ⇒ UNBOUND (type error)
+            }
+            let sum: f64 = nums.iter().sum();
+            if vals.iter().all(|t| is_xsd_integer(t)) {
+                Ok(Some(integer_term(sum as i64)))
+            } else {
+                Ok(Some(decimal_term(sum)))
+            }
+        }
+        AggKind::Avg => {
+            let Some(var) = &agg.arg_var else {
+                return Ok(None);
+            };
+            let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
+            let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
+            if nums.is_empty() {
+                return Ok(None); // UNBOUND for empty / non-numeric (§11)
+            }
+            let avg = nums.iter().sum::<f64>() / nums.len() as f64;
+            Ok(Some(decimal_term(avg)))
+        }
+        AggKind::Min | AggKind::Max => {
+            let Some(var) = &agg.arg_var else {
+                return Ok(None);
+            };
+            let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
+            if vals.is_empty() {
+                return Ok(None); // UNBOUND for empty multiset (§11)
+            }
+            let result = if agg.kind == AggKind::Min {
+                vals.iter().min_by(|a, b| cmp_term(a, b))
+            } else {
+                vals.iter().max_by(|a, b| cmp_term(a, b))
+            };
+            Ok(result.map(|t| (*t).clone()))
+        }
+    }
+}
+
+/// Extract the `f64` numeric value of an RDF term (returns `None` for
+/// non-numeric-typed literals and non-literals).
+fn numeric_term(t: &Term) -> Option<f64> {
+    match t {
+        Term::Literal(l) => numeric_value(l),
+        _ => None,
+    }
+}
+
+/// Whether an RDF term is an `xsd:integer`-typed literal.
+fn is_xsd_integer(t: &Term) -> bool {
+    match t {
+        Term::Literal(l) => {
+            l.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#integer"
+        }
+        _ => false,
+    }
+}
+
+/// Build an `xsd:integer` literal from an `i64`.
+fn integer_term(n: i64) -> Term {
+    Term::Literal(Literal::new_typed_literal(
+        n.to_string(),
+        sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+    ))
+}
+
+/// Build an `xsd:decimal` literal from an `f64`.
+fn decimal_term(n: f64) -> Term {
+    // Use a compact decimal representation (avoid scientific notation).
+    let s = if n.fract() == 0.0 {
+        format!("{n:.1}")
+    } else {
+        format!("{n}")
+    };
+    Term::Literal(Literal::new_typed_literal(
+        s,
+        sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+    ))
 }

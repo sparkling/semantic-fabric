@@ -3,41 +3,187 @@
 //! `COALESCE(left, right)` projection of a shared variable (R2), and the
 //! inner-FILTER-into-`ON` placement (R5). Split from [`crate::unfold`] so the
 //! conjunctive core and the left-join semantics stay independently legible.
+//!
+//! For `P OPT (R1 ∪ R2 ∪ …)` (multi-branch right side), the ISWC-2018
+//! decomposition is used: one inner-join branch per Ri (P ⋈ Ri) plus a
+//! no-match branch (P filtered by `NOT EXISTS Ri` for each Ri).
 
 use std::collections::HashSet;
 
-use crate::iq::{Branch, CmpOp, OptJoin, SqlCond, TermDef};
+use crate::iq::{Branch, CmpOp, OptJoin, Scan, SqlCond, TermDef};
 use crate::unify::{filter_cond, unify, Unify};
 use crate::{Error, Result};
 
-/// OPTIONAL → NULL-safe LEFT JOIN (ADR-0007 R1–R5). v1: a single-scan,
-/// opt-free right side (the common case); richer right sides are deferred.
+/// OPTIONAL → NULL-safe branches (ADR-0007 R1–R5).
+///
+/// - Empty `right`: identity (`left` unchanged — `OPTIONAL {}` = noop).
+/// - Single-branch `right`, single-scan, opt-free: the existing SQL LEFT JOIN
+///   path via [`build_left_join`].
+/// - Multi-branch `right` (each branch single-scan, opt-free):
+///   `P OPT (R1 ∪ R2 ∪ …)` = `(P ⋈ R1) ∪ (P ⋈ R2) ∪ … ∪ P_no_match`
+///   where P_no_match carries `NOT EXISTS` for every Ri.
 pub fn left_join_branches(
     left: Vec<Branch>,
     right: Vec<Branch>,
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Vec<Branch>> {
-    if right.len() != 1 {
-        return Err(Error::Unsupported(
-            "OPTIONAL with a UNION/empty right side is deferred → 501 (ADR-0007)".to_owned(),
-        ));
+    // OPTIONAL {} = identity.
+    if right.is_empty() {
+        return Ok(left);
     }
-    let r = &right[0];
-    if r.core.len() != 1 || !r.opts.is_empty() {
-        return Err(Error::Unsupported(
-            "multi-scan OPTIONAL right side is deferred → 501 (ADR-0007)".to_owned(),
-        ));
-    }
-    let mut out = Vec::new();
-    for mut l in left {
-        if let Some(b) = build_left_join(&mut l, r, expr, dialect)? {
-            out.push(b);
-        } else {
-            out.push(l); // optional never matches → left unchanged (right vars unbound)
+
+    // All right branches must be single-scan and opt-free.
+    for r in &right {
+        if r.core.len() != 1 || !r.opts.is_empty() {
+            return Err(Error::Unsupported(
+                "multi-scan OPTIONAL right side is deferred → 501 (ADR-0007)".to_owned(),
+            ));
         }
     }
+
+    // Single-branch right side: SQL LEFT JOIN (the common case).
+    if right.len() == 1 {
+        let r = &right[0];
+        let mut out = Vec::new();
+        for mut l in left {
+            if let Some(b) = build_left_join(&mut l, r, expr, dialect)? {
+                out.push(b);
+            } else {
+                out.push(l); // optional never matches → left unchanged (right vars unbound)
+            }
+        }
+        return Ok(out);
+    }
+
+    // Multi-branch right: P OPT (R1 ∪ R2 ∪ …)
+    // = (P ⋈_NL R1) ∪ (P ⋈_NL R2) ∪ … ∪ P_no_match
+    let mut out = Vec::new();
+    for l in &left {
+        // One inner-join branch per right branch.
+        for r in &right {
+            if let Some(b) = inner_join_one(l, r, expr, dialect)? {
+                out.push(b);
+            }
+        }
+        // No-match branch: L with NOT EXISTS for each Ri that can possibly match.
+        let mut no_match = l.clone();
+        for r in &right {
+            if let Some(cond) = not_exists_cond_for(l, r)? {
+                no_match.where_conds.push(cond);
+            }
+        }
+        out.push(no_match);
+    }
     Ok(out)
+}
+
+/// Inner join of one left branch with one single-scan, opt-free right branch.
+/// Returns `None` when unification proves the join empty (L ∩ R = ∅).
+///
+/// Uses NULL-safe WHERE conditions (`null_safe`) so a left variable that is
+/// unbound (NULL from a prior OPTIONAL) matches any right value — the same
+/// compatibility rule as the LEFT JOIN path.  R2 COALESCE bindings are applied
+/// for nullable left shared variables so their value comes from the right side
+/// when the left was unbound.
+fn inner_join_one(
+    left: &Branch,
+    right: &Branch,
+    expr: Option<&spargebra::algebra::Expression>,
+    dialect: sf_sql::Dialect,
+) -> Result<Option<Branch>> {
+    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
+    let mut where_conds = left.where_conds.clone();
+    let mut bindings = left.bindings.clone();
+
+    // Shared-variable compatibility → NULL-safe WHERE conditions (R1 analogue).
+    for (var, rdef) in &right.bindings {
+        if let Some(ldef) = left.bindings.get(var) {
+            match unify(ldef, rdef) {
+                Unify::Sat(conds) => {
+                    for c in conds {
+                        where_conds.push(null_safe(c));
+                    }
+                }
+                Unify::Empty => return Ok(None),
+                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+            }
+        }
+    }
+
+    // Right-side own conditions.
+    where_conds.extend(right.where_conds.iter().cloned());
+
+    // FILTER inside the OPTIONAL goes in the inner-join WHERE (R5 analogue).
+    if let Some(e) = expr {
+        let mut combined = left.bindings.clone();
+        for (v, d) in &right.bindings {
+            combined.entry(v.clone()).or_insert_with(|| d.clone());
+        }
+        where_conds.push(filter_cond(e, &combined, dialect).map_err(Error::Unsupported)?);
+    }
+
+    // R2 binding merge: COALESCE for nullable left shared vars; plain right def
+    // for right-only vars.
+    for (var, rdef) in &right.bindings {
+        match left.bindings.get(var) {
+            Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
+                bindings.insert(
+                    var.clone(),
+                    TermDef::Coalesce(Box::new(ldef.clone()), Box::new(rdef.clone())),
+                );
+            }
+            Some(_) => {} // non-nullable left — value equals right by join condition
+            None => {
+                bindings.insert(var.clone(), rdef.clone());
+            }
+        }
+    }
+
+    // Merge scans: left core + the right's single scan.
+    let mut core = left.core.clone();
+    core.push(right.core[0].clone());
+
+    Ok(Some(Branch {
+        core,
+        opts: left.opts.clone(),
+        bindings,
+        where_conds,
+        distinct: left.distinct,
+        limit: left.limit,
+        offset: left.offset,
+        order: left.order.clone(),
+        path: left.path.clone(),
+        agg: left.agg.clone(),
+    }))
+}
+
+/// Build the `NOT EXISTS` condition for one right branch in the no-match branch
+/// of a multi-branch OPTIONAL.  Returns `None` when unification proves the join
+/// always empty (NOT EXISTS is trivially true — omit the condition).
+fn not_exists_cond_for(left: &Branch, right: &Branch) -> Result<Option<SqlCond>> {
+    let mut conds: Vec<SqlCond> = right.where_conds.clone();
+
+    for (var, rdef) in &right.bindings {
+        if let Some(ldef) = left.bindings.get(var) {
+            match unify(ldef, rdef) {
+                Unify::Sat(cond_list) => {
+                    for c in cond_list {
+                        conds.push(null_safe(c));
+                    }
+                }
+                // Unification is impossible → this Ri can never match left →
+                // NOT EXISTS is trivially true; skip.
+                Unify::Empty => return Ok(None),
+                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+            }
+        }
+    }
+
+    Ok(Some(SqlCond::NotExists {
+        scans: right.core.clone(),
+        conds,
+    }))
 }
 
 /// Returns `Some(branch-with-OptJoin)`, or `None` when the shared variables prove

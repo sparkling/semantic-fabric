@@ -150,6 +150,13 @@ where
     F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
+    if plan.rust_group.is_some() {
+        return Err(Error::Unsupported(
+            "GROUP BY over a multi-branch inner on PostgreSQL is not yet implemented \
+             (Rust-level GROUP BY is SQLite-only in v1)"
+                .to_owned(),
+        ));
+    }
     let branches = plan.prepared_branches();
     let catalog = build_catalog_pg(&branches, client, plan.dialect).await;
     let multi = branches.len() > 1;
@@ -390,6 +397,7 @@ pub async fn dump_quads_pg(
         limit: None,
         offset: 0,
         order: Vec::new(),
+        rust_group: None,
         dialect,
     };
     let mut out = Vec::new();

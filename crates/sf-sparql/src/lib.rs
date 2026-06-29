@@ -121,6 +121,10 @@ pub struct Plan {
     /// single branch ([`Plan::prepared_branches`]) or as a global stable sort over
     /// the bag-union in [`exec`] for multiple branches.
     pub order: Vec<iq::OrderKey>,
+    /// Rust-level GROUP BY descriptor for a multi-branch inner (SPARQL §11).
+    /// When set, the executor buffers all branch solutions, groups by `keys`,
+    /// and computes `aggs` in Rust before streaming the grouped results.
+    pub rust_group: Option<iq::RustGroup>,
     pub dialect: Dialect,
 }
 
@@ -263,6 +267,7 @@ fn translate_inner(
         limit: trans.limit,
         offset: trans.offset,
         order: trans.order,
+        rust_group: trans.rust_group,
         dialect,
     })
 }

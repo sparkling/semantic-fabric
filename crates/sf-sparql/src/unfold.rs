@@ -14,7 +14,8 @@ use spargebra::algebra::{
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
 use crate::iq::{
-    AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, Scan, SqlCond, TermDef,
+    AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan,
+    SqlCond, TermDef,
 };
 use crate::leftjoin::left_join_branches;
 use crate::saturate::Tbox;
@@ -32,6 +33,9 @@ pub struct TransPattern {
     pub limit: Option<usize>,
     pub offset: usize,
     pub order: Vec<OrderKey>,
+    /// Rust-level GROUP BY descriptor for a multi-branch inner (set by [`Unfolder::group`]
+    /// when the inner pattern produced more than one branch).
+    pub rust_group: Option<RustGroup>,
 }
 
 impl TransPattern {
@@ -43,6 +47,7 @@ impl TransPattern {
             limit: None,
             offset: 0,
             order: Vec::new(),
+            rust_group: None,
         }
     }
 }
@@ -283,14 +288,12 @@ impl<'a> Unfolder<'a> {
         aggregates: &[(Variable, AggregateExpression)],
     ) -> Result<TransPattern> {
         let t = self.translate_pattern(inner)?;
-        // v1: a single-branch inner only — a bag-union (UNION/VALUES) cannot be
-        // grouped per arm in SQL (the groups would span arms).
+        // v1: a single-branch inner is grouped in SQL (one GROUP BY per SELECT).
+        // A multi-branch (UNION/VALUES) inner cannot be grouped per SQL arm because
+        // groups would span arms; instead, buffer all solutions in Rust and aggregate
+        // there via `Plan::rust_group` (Rust-level GROUP BY path).
         if t.branches.len() != 1 {
-            return Err(Error::Unsupported(
-                "GROUP BY over a multi-branch (UNION/VALUES) inner is deferred → 501 \
-                 (v1 groups a single SQL SELECT)"
-                    .to_owned(),
-            ));
+            return rust_group_plan(t, variables, aggregates);
         }
         let mut branch = t.branches.into_iter().next().unwrap();
         if branch.path.is_some() {
@@ -810,6 +813,88 @@ fn ground_term_to_term(gt: &GroundTerm) -> Result<Term> {
         other => Err(Error::Unsupported(format!(
             "VALUES ground term not supported in v1 → 501: {other:?}"
         ))),
+    }
+}
+
+/// Build a [`TransPattern`] with a [`RustGroup`] descriptor for a multi-branch
+/// GROUP BY inner (called when the inner produced more than one branch).
+fn rust_group_plan(
+    t: TransPattern,
+    variables: &[Variable],
+    aggregates: &[(Variable, AggregateExpression)],
+) -> Result<TransPattern> {
+    let keys: Vec<String> = variables.iter().map(|v| v.as_str().to_owned()).collect();
+    let mut aggs = Vec::with_capacity(aggregates.len());
+    for (out_var, expr) in aggregates {
+        let (kind, arg_var, distinct, fixed_type) = parse_rust_agg(expr)?;
+        aggs.push(RustAgg {
+            out_var: out_var.as_str().to_owned(),
+            kind,
+            arg_var,
+            distinct,
+            fixed_type,
+        });
+    }
+    Ok(TransPattern {
+        rust_group: Some(RustGroup { keys, aggs }),
+        ..t
+    })
+}
+
+/// Parse one [`AggregateExpression`] into `(kind, arg_var, distinct, fixed_type)`.
+/// Does not require branch bindings — the arg is returned as a variable name
+/// rather than a [`ColRef`], for use in the Rust-level GROUP BY path.
+fn parse_rust_agg(
+    expr: &AggregateExpression,
+) -> Result<(AggKind, Option<String>, bool, Option<XsdTypeCode>)> {
+    match expr {
+        AggregateExpression::CountSolutions { distinct } => {
+            if *distinct {
+                return Err(Error::Unsupported(
+                    "COUNT(DISTINCT *) is deferred → 501 (v1 supports COUNT(*))".to_owned(),
+                ));
+            }
+            Ok((AggKind::Count, None, false, Some(XsdTypeCode::Integer)))
+        }
+        AggregateExpression::FunctionCall {
+            name,
+            expr: inner,
+            distinct,
+        } => {
+            let var = match inner.as_ref() {
+                Expression::Variable(v) => Some(v.as_str().to_owned()),
+                _ => {
+                    return Err(Error::Unsupported(
+                        "aggregate over a non-variable expression is deferred → 501 \
+                         (v1 aggregates a single column-backed variable)"
+                            .to_owned(),
+                    ))
+                }
+            };
+            let (kind, fixed) = match name {
+                AggregateFunction::Count => (AggKind::Count, Some(XsdTypeCode::Integer)),
+                AggregateFunction::Sum => (AggKind::Sum, None),
+                AggregateFunction::Avg => (AggKind::Avg, None),
+                AggregateFunction::Min => (AggKind::Min, None),
+                AggregateFunction::Max => (AggKind::Max, None),
+                AggregateFunction::GroupConcat { .. } => {
+                    return Err(Error::Unsupported(
+                        "GROUP_CONCAT is deferred → 501 (string-join semantics)".to_owned(),
+                    ))
+                }
+                AggregateFunction::Sample => {
+                    return Err(Error::Unsupported(
+                        "SAMPLE is deferred → 501 (non-deterministic pick)".to_owned(),
+                    ))
+                }
+                AggregateFunction::Custom(_) => {
+                    return Err(Error::Unsupported(
+                        "custom aggregate function is deferred → 501".to_owned(),
+                    ))
+                }
+            };
+            Ok((kind, var, *distinct, fixed))
+        }
     }
 }
 

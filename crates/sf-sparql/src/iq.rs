@@ -111,6 +111,30 @@ impl TermDef {
     }
 }
 
+/// Rust-level GROUP BY descriptor for a multi-branch (UNION/VALUES) inner
+/// pattern (SPARQL §11). When [`Plan::rust_group`][crate::Plan::rust_group] is
+/// set, the executor buffers every solution from the inner branches, groups them
+/// by `keys`, computes `aggs` in Rust, and streams one result row per group.
+#[derive(Debug, Clone)]
+pub struct RustGroup {
+    /// Grouping variable names (empty ⇒ implicit grouping: one group over all rows).
+    pub keys: Vec<String>,
+    /// Aggregate output descriptors, in projection order.
+    pub aggs: Vec<RustAgg>,
+}
+
+/// One aggregate column in a [`RustGroup`].
+#[derive(Debug, Clone)]
+pub struct RustAgg {
+    /// Output variable name.
+    pub out_var: String,
+    pub kind: AggKind,
+    /// Input variable (`None` for `COUNT(*)`).
+    pub arg_var: Option<String>,
+    pub distinct: bool,
+    pub fixed_type: Option<XsdTypeCode>,
+}
+
 /// A GROUP BY + aggregates carrier on a [`Branch`] (SPARQL §11). The branch's
 /// `core`/`opts`/`where_conds` are the inner pattern's single-branch FROM/WHERE;
 /// this records the grouping keys (lowered to their **raw key columns** — term
