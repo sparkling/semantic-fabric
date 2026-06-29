@@ -116,8 +116,20 @@ impl<'a> Unfolder<'a> {
         }
 
         // `P*`/`p?` bind the reflexive `(x, x)` for EVERY node of the active graph
-        // (§9.3). The raw-key model can enumerate that only over a single-predicate
-        // graph whose one predicate is this hop's bare leaf.
+        // (SPARQL §9.3). Enumerating every node of the active graph requires a union
+        // over ALL tables in the mapping (every subject and object column), which is
+        // architecturally constrained (ADR-0007): the raw-key CTE uses a single term
+        // map for reconstruction; mixing nodes from tables with different term maps in
+        // the same CTE would reconstruct wrong RDF terms.
+        //
+        // The one sound case: a bare single-predicate hop over a graph that uses
+        // ONLY that predicate — all graph nodes are the hop's own rows, so the CTE
+        // node universe equals the active graph.
+        //
+        // ADR-0007 decision: any other shape → 501. This is NOT a deferral; it is a
+        // documented architectural bound. Lifting it requires either materialising the
+        // full node universe in SQL (one column per term map, outer UNION) or
+        // switching to a term-first CTE model — both are ADR-0020 / MB-5 scope.
         if matches!(kind, PathKind::ZeroOrMore | PathKind::ZeroOrOne) {
             let reflexive_ok = compiled.expr.as_pred().is_some()
                 && compiled
@@ -126,9 +138,10 @@ impl<'a> Unfolder<'a> {
                     .is_some_and(|p| self.graph_is_single_predicate(p));
             if !reflexive_ok {
                 return Err(Error::Unsupported(
-                    "P*/p? reflexive ZeroLengthPath must bind (x,x) for every node of \
-                     the active graph; the single-predicate raw-key hop model cannot \
-                     enumerate that over a multi-predicate or composite path → 501"
+                    "P*/p? reflexive ZeroLengthPath: graph node enumeration is ADR-0007 \
+                     bounded — supported only over a single-predicate, single-table mapping \
+                     (any multi-predicate or composite hop would reconstruct from a \
+                     mixed-term-map CTE → silent data corruption) → 501"
                         .to_owned(),
                 ));
             }

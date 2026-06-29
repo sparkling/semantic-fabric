@@ -272,15 +272,8 @@ fn emit_path_branch(
     dialect: Dialect,
     catalog: &ColumnCatalog,
 ) -> Result<EmittedBranch> {
-    // A path closure binds its endpoints to constructed template IRIs over the
-    // canonical `sf_s`/`sf_o` keys — never a plain `rr:column` — so SQL-ordering by
-    // a raw key would not match the IRI order. ORDER BY over a property-path result
-    // is therefore deferred → 501 (never a silently wrong order), not dropped.
-    if !b.order.is_empty() {
-        return Err(Error::Unsupported(
-            "ORDER BY over a property-path result is deferred → 501".to_owned(),
-        ));
-    }
+    // ORDER BY over a path result is handled at the exec layer (plan.order →
+    // Rust-level order_cmp) — Branch.order is always empty here, so no guard needed.
     let projection = b.projection();
     let mut params = Vec::new();
     let mut pidx = 0usize;
