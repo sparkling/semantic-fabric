@@ -1401,3 +1401,50 @@ fn graph_clause_unknown_graph_returns_empty() {
         "unknown named graph must produce no results: {got:?}"
     );
 }
+
+#[test]
+fn named_graph_triples_invisible_without_graph_clause() {
+    // Regression for graph_maps_match(None, non_empty) bug: a query WITHOUT a
+    // GRAPH clause over a mapping where DEPT_NAME triples sit in a named graph
+    // must return EMPTY — those triples are not in the default graph.
+    // Before the fix, graph_maps_match returned true unconditionally for
+    // active=None, causing named-graph triples to leak.
+    let maps = named_graph_mapping(); // DEPT triples in http://ex/namedGraph
+    let conn = source();
+    let q = format!("SELECT ?dn WHERE {{ ?d <{DEPT_NAME}> ?dn }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert!(
+        got.is_empty(),
+        "named-graph triples must NOT appear in default-graph query: {got:?}"
+    );
+}
+
+#[test]
+fn filter_exists_with_optional_derived_var_returns_501() {
+    // Regression for outer_opt_aliases dead-code bug: FILTER EXISTS where a
+    // shared variable (?dept) comes from the outer OPTIONAL arm must NOT emit
+    // wrong SQL `col = col` correlation (NULL = value → false → wrong). Instead
+    // the engine must surface a 501 Unsupported error so the caller can handle
+    // or fall back gracefully.
+    let maps = mapping();
+    let q = format!(
+        "SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n . OPTIONAL {{ ?e <{EMP_DEPT}> ?dept }} \
+         FILTER EXISTS {{ ?dept <{DEPT_NAME}> ?dn }} }}"
+    );
+    let result = parse_and_translate(&q, &maps, Dialect::Sqlite);
+    assert!(
+        result.is_err(),
+        "EXISTS with OPTIONAL-derived outer variable must return 501, not Ok: {result:?}"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("UNBOUND") || msg.contains("501") || msg.contains("OPTIONAL"),
+        "error should mention OPTIONAL/UNBOUND/501, got: {msg}"
+    );
+}

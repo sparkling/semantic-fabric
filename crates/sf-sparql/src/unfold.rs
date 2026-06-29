@@ -129,7 +129,10 @@ impl<'a> Unfolder<'a> {
             GraphPattern::Filter { expr, inner } => {
                 let mut t = self.translate_pattern(inner)?;
                 for b in &mut t.branches {
-                    let cond = self.lower_filter_expr(expr, &b.bindings)?;
+                    // Pass the full branch so lower_filter_expr can detect
+                    // OPTIONAL-derived outer variables in EXISTS/NOT EXISTS
+                    // correlation (opt_aliases fix — see lower_exists).
+                    let cond = self.lower_filter_expr(expr, b)?;
                     b.where_conds.push(cond);
                 }
                 Ok(t)
@@ -615,31 +618,27 @@ impl<'a> Unfolder<'a> {
     /// `FILTER NOT EXISTS { P }` and `FILTER EXISTS { P }` are the only SPARQL
     /// constructs that embed a pattern inside a FILTER; everything else is a
     /// pure expression over bindings.
-    fn lower_filter_expr(
-        &mut self,
-        expr: &Expression,
-        bindings: &std::collections::BTreeMap<String, TermDef>,
-    ) -> Result<SqlCond> {
+    fn lower_filter_expr(&mut self, expr: &Expression, outer: &Branch) -> Result<SqlCond> {
         match expr {
-            Expression::Exists(p) => self.lower_exists(p, bindings, /*negated=*/ false),
+            Expression::Exists(p) => self.lower_exists(p, outer, /*negated=*/ false),
             Expression::Not(inner) => {
                 if let Expression::Exists(p) = inner.as_ref() {
-                    self.lower_exists(p, bindings, /*negated=*/ true)
+                    self.lower_exists(p, outer, /*negated=*/ true)
                 } else {
                     Ok(SqlCond::Not(Box::new(
-                        self.lower_filter_expr(inner, bindings)?,
+                        self.lower_filter_expr(inner, outer)?,
                     )))
                 }
             }
             Expression::And(a, b) => Ok(SqlCond::And(vec![
-                self.lower_filter_expr(a, bindings)?,
-                self.lower_filter_expr(b, bindings)?,
+                self.lower_filter_expr(a, outer)?,
+                self.lower_filter_expr(b, outer)?,
             ])),
             Expression::Or(a, b) => Ok(SqlCond::Or(vec![
-                self.lower_filter_expr(a, bindings)?,
-                self.lower_filter_expr(b, bindings)?,
+                self.lower_filter_expr(a, outer)?,
+                self.lower_filter_expr(b, outer)?,
             ])),
-            other => filter_cond(other, bindings, self.dialect).map_err(Error::Unsupported),
+            other => filter_cond(other, &outer.bindings, self.dialect).map_err(Error::Unsupported),
         }
     }
 
@@ -656,13 +655,8 @@ impl<'a> Unfolder<'a> {
     /// are correlated via raw-key equality (ADR-0007 term-construction lifting).
     /// v1 restriction: if a shared variable may be UNBOUND on the outer side
     /// (reads an OPTIONAL scan alias) we defer → 501 rather than emit a wrong
-    /// equality.
-    fn lower_exists(
-        &mut self,
-        p: &GraphPattern,
-        outer: &std::collections::BTreeMap<String, TermDef>,
-        negated: bool,
-    ) -> Result<SqlCond> {
+    /// NULL = value equality.
+    fn lower_exists(&mut self, p: &GraphPattern, outer: &Branch, negated: bool) -> Result<SqlCond> {
         let inner = self.translate_pattern(p)?;
         if inner.branches.is_empty() {
             // P produces no branches at all (unmapped): EXISTS → always false, NOT EXISTS → always true.
@@ -672,8 +666,11 @@ impl<'a> Unfolder<'a> {
                 Ok(SqlCond::Or(vec![])) // vacuously false — rendered as 1=0
             };
         }
-        // outer OPTIONAL scan aliases — used to detect potentially-unbound outer vars.
-        let outer_opt_aliases: Vec<usize> = vec![]; // FILTER EXISTS outer has no OPTIONAL context tracked here
+        // Outer OPTIONAL scan aliases: a shared variable whose TermDef reads one of
+        // these aliases may be UNBOUND (the OPTIONAL arm did not fire), so SQL
+        // `outer_col = inner_col` would be NULL ≠ value — wrong. Defer → 501 to
+        // avoid silent data corruption (mirrors minus_branches, line ~980).
+        let outer_opt_aliases: Vec<usize> = outer.opts.iter().map(|o| o.scan.alias).collect();
         let mut sub_conds = Vec::with_capacity(inner.branches.len());
         for r in &inner.branches {
             if r.path.is_some() {
@@ -685,13 +682,13 @@ impl<'a> Unfolder<'a> {
             // correlation equalities for every shared variable.
             let mut corr = r.where_conds.clone();
             let mut never_compatible = false;
-            for (v, ldef) in outer {
+            for (v, ldef) in &outer.bindings {
                 let Some(rdef) = r.bindings.get(v) else {
                     continue; // not shared
                 };
                 if def_reads_opt_alias(ldef, &outer_opt_aliases) {
                     return Err(Error::Unsupported(format!(
-                        "EXISTS shared variable ?{v} may be UNBOUND on the outer side → 501 \
+                        "EXISTS shared variable ?{v} may be UNBOUND on the outer side (OPTIONAL) → 501 \
                          (v1 supports non-OPTIONAL shared variables)"
                     )));
                 }
@@ -706,13 +703,8 @@ impl<'a> Unfolder<'a> {
             }
             if never_compatible {
                 // This branch can never match the outer row.
-                if negated {
-                    // NOT EXISTS: this branch is vacuously satisfied (never removes the left row).
-                    continue;
-                } else {
-                    // EXISTS: this branch contributes no OR arm.
-                    continue;
-                }
+                // NOT EXISTS: vacuously satisfied (never removes left row). EXISTS: no OR arm.
+                continue;
             }
             if negated {
                 sub_conds.push(SqlCond::NotExists {
@@ -727,11 +719,9 @@ impl<'a> Unfolder<'a> {
             }
         }
         Ok(if negated {
-            // AND of NOT EXISTS: all branches must fail to match.
-            SqlCond::And(sub_conds)
+            SqlCond::And(sub_conds) // AND of NOT EXISTS: all branches must fail to match
         } else {
-            // OR of EXISTS: at least one branch must match.
-            SqlCond::Or(sub_conds)
+            SqlCond::Or(sub_conds) // OR of EXISTS: at least one branch must match
         })
     }
 
@@ -762,22 +752,44 @@ impl<'a> Unfolder<'a> {
 /// Whether the effective graph maps of a triple are compatible with the active
 /// `GRAPH <g>` clause (or the absence of one).
 ///
-/// * `active = None` (no GRAPH clause, default-graph context) → accept everything.
-///   This preserves backward-compatibility: mappings that don't use `rr:graphName`
-///   appear in the default graph, and the current virtualiser doesn't filter them
-///   out when no GRAPH clause is present.
-/// * `active = Some(g)` → accept only triples where the effective graph maps
-///   contain a `TermMap::Constant(NamedNode(g))` match. Template/column graph
-///   maps are not yet evaluable at translation time → treated as non-matching
-///   (the conservative safe choice — never admits wrong rows).
+/// Whether a TriplesMap/POM with the given effective `graphs` matches the active
+/// GRAPH context:
+///
+/// * `active = None` (no GRAPH clause, default-graph context):
+///   accept only triples that belong to the **default graph** — i.e. whose
+///   `graphs` is empty (no `rr:graphName` declared). A non-empty `graphs` with
+///   a constant named-node entry means those triples live in a named graph, not
+///   the default graph, and must **not** appear in default-graph queries
+///   (R2RML §7.4 / SPARQL §13.1). Column/template graph maps are unknowable at
+///   translation time and are conservatively included (never wrong on the "missing
+///   rows" side; the alternative would silently drop valid triples).
+/// * `active = Some(g)` — GRAPH <g> clause:
+///   accept only triples where a constant graph map equals `g`. Column/template
+///   graph maps are treated as non-matching (conservative — never admits wrong rows).
 fn graph_maps_match(active: Option<&NamedNode>, graphs: &[sf_core::ir::TermMap]) -> bool {
-    let Some(g) = active else {
-        return true; // no GRAPH clause — no filtering
-    };
-    // At least one constant graph map must equal g.
-    graphs.iter().any(
-        |gm| matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n)) if n == g),
-    )
+    // R2RML §6.1: `rr:defaultGraph` is a legal constant graph map that explicitly
+    // places triples in the default graph.  It is stored in the IR as a NamedNode
+    // with this IRI; treat it the same as an absent graph map (i.e. default-graph).
+    const RR_DEFAULT_GRAPH: &str = "http://www.w3.org/ns/r2rml#defaultGraph";
+
+    match active {
+        None => {
+            // Default-graph query: triples with a declared non-default named-graph IRI
+            // must stay out (=_bag fix — those triples are not in the default graph).
+            // `rr:defaultGraph` and empty-graphs both mean "default graph" → accept.
+            !graphs.iter().any(|gm| {
+                matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n))
+                    if n.as_str() != RR_DEFAULT_GRAPH)
+            })
+        }
+        Some(g) => {
+            // GRAPH <g>: at least one constant graph map must equal g.
+            // rr:defaultGraph is never equal to any user-specified named-graph IRI.
+            graphs.iter().any(|gm| {
+                matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n)) if n == g)
+            })
+        }
+    }
 }
 
 enum PredMatch {
