@@ -231,6 +231,15 @@ pub enum SqlCond {
         scans: Vec<Scan>,
         conds: Vec<SqlCond>,
     },
+    /// `EXISTS (SELECT 1 FROM <scans> WHERE <conds>)` — the correlated semi-join
+    /// backing SPARQL `FILTER EXISTS { P }` (§8.4). Semantics mirror `NotExists`
+    /// but the sense is reversed: a left row survives iff at least one right row
+    /// satisfies `conds`. The correlation equalities follow the same raw-key
+    /// equality convention as `NotExists`.
+    Exists {
+        scans: Vec<Scan>,
+        conds: Vec<SqlCond>,
+    },
 }
 
 /// How a [`SqlCond::StrMatch`] matches (the near-free FTS baseline, ADR-0020 §2).
@@ -533,19 +542,20 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
                 collect_cond_cols(c, f);
             }
         }
-        // A `NotExists` (MINUS anti-join) is opaque to outer column collection: its
-        // inner conditions reference the subquery's own scans, and the outer
-        // (correlation) columns it reads are shared variables already projected via
-        // the left bindings — so it adds nothing to the outer projection.
-        SqlCond::NotExists { .. } => {}
+        // `NotExists` and `Exists` (MINUS / FILTER EXISTS) are opaque to outer
+        // column collection: their inner conditions reference the subquery's own
+        // scans, and the outer correlation columns are already projected via the
+        // outer bindings — nothing is added here.
+        SqlCond::NotExists { .. } | SqlCond::Exists { .. } => {}
     }
 }
 
-/// Walk every scan a `NotExists` (MINUS anti-join) carries in `cond` (recursing
-/// through boolean combinators), pairing each with its source for catalog lookup.
+/// Walk every scan a `NotExists` or `Exists` subquery carries in `cond`
+/// (recursing through boolean combinators), pairing each with its source for
+/// catalog lookup.
 fn collect_not_exists_scans<'a>(cond: &'a SqlCond, out: &mut Vec<(usize, &'a LogicalSource)>) {
     match cond {
-        SqlCond::NotExists { scans, conds } => {
+        SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
             for s in scans {
                 out.push((s.alias, &s.source));
             }

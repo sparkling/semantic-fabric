@@ -724,7 +724,8 @@ fn render_cond(
         // outer left aliases), so the whole left row is dropped when a compatible
         // right row exists. A core-less right side (an inline VALUES) renders without
         // FROM. Inner placeholders bind in text order at this position.
-        SqlCond::NotExists { scans, conds } => {
+        SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
+            let neg = matches!(cond, SqlCond::NotExists { .. });
             let from = scans
                 .iter()
                 .enumerate()
@@ -737,10 +738,11 @@ fn render_cond(
                 });
             let refs: Vec<&SqlCond> = conds.iter().collect();
             let where_sql = render_conjunction(&refs, dialect, actuals, params, pidx);
+            let kw = if neg { "NOT EXISTS" } else { "EXISTS" };
             if from.is_empty() {
-                format!("NOT EXISTS (SELECT 1 WHERE {where_sql})")
+                format!("{kw} (SELECT 1 WHERE {where_sql})")
             } else {
-                format!("NOT EXISTS (SELECT 1 FROM {from} WHERE {where_sql})")
+                format!("{kw} (SELECT 1 FROM {from} WHERE {where_sql})")
             }
         }
     }

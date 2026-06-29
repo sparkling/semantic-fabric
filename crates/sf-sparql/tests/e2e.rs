@@ -1241,3 +1241,90 @@ fn avg_over_integer_column_is_xsd_decimal() {
     );
     assert_eq!(lit(&sol.rows[0][0]), "200", "AVG(100, 300) = 200");
 }
+
+// --- FILTER EXISTS / NOT EXISTS (SPARQL §8.4) ---------------------------------
+
+#[test]
+fn filter_not_exists_is_correlated_anti_join() {
+    // FILTER NOT EXISTS { ?e :empName "Ada" } over ?e :empName ?n — keeps only
+    // the employee whose name is NOT "Ada" (i.e. Grace).  Semantically the same
+    // result as MINUS here but uses the FILTER NOT EXISTS spelling.
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n . FILTER NOT EXISTS {{ ?e <{EMP_NAME}> \"Ada\" }} }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    // The emitted SQL must contain NOT EXISTS for the anti-join.
+    let sql = &plan.emitted().unwrap()[0].sql;
+    assert!(
+        sql.to_uppercase().contains("NOT EXISTS"),
+        "NOT EXISTS must appear in SQL: {sql}"
+    );
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Grace"],
+        "FILTER NOT EXISTS should keep only Grace"
+    );
+}
+
+#[test]
+fn filter_exists_is_correlated_semi_join() {
+    // FILTER EXISTS { ?e :empDept ?d . ?d :deptName "R&D" } over ?e :empName ?n —
+    // keeps only employees whose department name is "R&D" (i.e. Ada in dept 10).
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n . \
+         FILTER EXISTS {{ ?e <{EMP_DEPT}> ?d . ?d <{DEPT_NAME}> \"R&D\" }} }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sql = &plan.emitted().unwrap()[0].sql;
+    // The emitted SQL must contain EXISTS (without NOT) for the semi-join.
+    let up = sql.to_uppercase();
+    assert!(
+        up.contains("EXISTS") && !up.contains("NOT EXISTS"),
+        "EXISTS (not NOT EXISTS) must appear in SQL: {sql}"
+    );
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(
+        got,
+        vec!["Ada"],
+        "FILTER EXISTS should keep only Ada (dept R&D)"
+    );
+}
+
+#[test]
+fn filter_not_exists_with_and_is_supported() {
+    // FILTER(NOT EXISTS{P} && NOT EXISTS{Q}) — EXISTS nested inside AND.  Both
+    // subpatterns constrain the result; the combined filter keeps only Grace
+    // (Ada is eliminated by the first NOT EXISTS).
+    let maps = mapping();
+    let conn = source();
+    let q = format!(
+        "SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n . \
+         FILTER(NOT EXISTS {{ ?e <{EMP_NAME}> \"Ada\" }} && NOT EXISTS {{ ?e <{EMP_NAME}> \"NoOne\" }}) }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    // "NoOne" doesn't exist so the second NOT EXISTS is vacuously true; first NOT EXISTS removes Ada.
+    assert_eq!(got, vec!["Grace"]);
+}

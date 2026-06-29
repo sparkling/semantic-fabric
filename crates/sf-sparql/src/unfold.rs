@@ -124,8 +124,7 @@ impl<'a> Unfolder<'a> {
             GraphPattern::Filter { expr, inner } => {
                 let mut t = self.translate_pattern(inner)?;
                 for b in &mut t.branches {
-                    let cond =
-                        filter_cond(expr, &b.bindings, self.dialect).map_err(Error::Unsupported)?;
+                    let cond = self.lower_filter_expr(expr, &b.bindings)?;
                     b.where_conds.push(cond);
                 }
                 Ok(t)
@@ -559,6 +558,134 @@ impl<'a> Unfolder<'a> {
             Unify::Empty => Ok(false),
             Unify::Unsupported(why) => Err(Error::Unsupported(why)),
         }
+    }
+
+    /// Lower a SPARQL FILTER expression to a [`SqlCond`], handling `EXISTS` and
+    /// `NOT EXISTS` subqueries by translating the inner [`GraphPattern`] through
+    /// the full unfolding pipeline (which requires `&mut self` for alias counters).
+    /// Non-EXISTS expressions are delegated to [`filter_cond`] from `unify`.
+    ///
+    /// `FILTER NOT EXISTS { P }` and `FILTER EXISTS { P }` are the only SPARQL
+    /// constructs that embed a pattern inside a FILTER; everything else is a
+    /// pure expression over bindings.
+    fn lower_filter_expr(
+        &mut self,
+        expr: &Expression,
+        bindings: &std::collections::BTreeMap<String, TermDef>,
+    ) -> Result<SqlCond> {
+        match expr {
+            Expression::Exists(p) => self.lower_exists(p, bindings, /*negated=*/ false),
+            Expression::Not(inner) => {
+                if let Expression::Exists(p) = inner.as_ref() {
+                    self.lower_exists(p, bindings, /*negated=*/ true)
+                } else {
+                    Ok(SqlCond::Not(Box::new(
+                        self.lower_filter_expr(inner, bindings)?,
+                    )))
+                }
+            }
+            Expression::And(a, b) => Ok(SqlCond::And(vec![
+                self.lower_filter_expr(a, bindings)?,
+                self.lower_filter_expr(b, bindings)?,
+            ])),
+            Expression::Or(a, b) => Ok(SqlCond::Or(vec![
+                self.lower_filter_expr(a, bindings)?,
+                self.lower_filter_expr(b, bindings)?,
+            ])),
+            other => filter_cond(other, bindings, self.dialect).map_err(Error::Unsupported),
+        }
+    }
+
+    /// Translate `EXISTS { P }` or `NOT EXISTS { P }` to a [`SqlCond`].
+    ///
+    /// P is unfolded through the full mapping pipeline, producing one branch per
+    /// matching (TriplesMap, POM) pair (a bag-union). For `NOT EXISTS` every
+    /// branch that can match must be absent, so each becomes a `SqlCond::NotExists`
+    /// and they are AND'd. For `EXISTS` at least one branch must match, so each
+    /// becomes a `SqlCond::Exists` and they are OR'd (`=_bag`: the multiplicity of
+    /// matching right rows is irrelevant — only existence is tested).
+    ///
+    /// Correlation: shared variables between the outer binding and an inner branch
+    /// are correlated via raw-key equality (ADR-0007 term-construction lifting).
+    /// v1 restriction: if a shared variable may be UNBOUND on the outer side
+    /// (reads an OPTIONAL scan alias) we defer → 501 rather than emit a wrong
+    /// equality.
+    fn lower_exists(
+        &mut self,
+        p: &GraphPattern,
+        outer: &std::collections::BTreeMap<String, TermDef>,
+        negated: bool,
+    ) -> Result<SqlCond> {
+        let inner = self.translate_pattern(p)?;
+        if inner.branches.is_empty() {
+            // P produces no branches at all (unmapped): EXISTS → always false, NOT EXISTS → always true.
+            return if negated {
+                Ok(SqlCond::And(vec![])) // vacuously true
+            } else {
+                Ok(SqlCond::Or(vec![])) // vacuously false — rendered as 1=0
+            };
+        }
+        // outer OPTIONAL scan aliases — used to detect potentially-unbound outer vars.
+        let outer_opt_aliases: Vec<usize> = vec![]; // FILTER EXISTS outer has no OPTIONAL context tracked here
+        let mut sub_conds = Vec::with_capacity(inner.branches.len());
+        for r in &inner.branches {
+            if r.path.is_some() {
+                return Err(Error::Unsupported(
+                    "EXISTS with a property-path inner is deferred → 501 (v1)".to_owned(),
+                ));
+            }
+            // Build the inner subquery's conditions: right branch's own conds +
+            // correlation equalities for every shared variable.
+            let mut corr = r.where_conds.clone();
+            let mut never_compatible = false;
+            for (v, ldef) in outer {
+                let Some(rdef) = r.bindings.get(v) else {
+                    continue; // not shared
+                };
+                if def_reads_opt_alias(ldef, &outer_opt_aliases) {
+                    return Err(Error::Unsupported(format!(
+                        "EXISTS shared variable ?{v} may be UNBOUND on the outer side → 501 \
+                         (v1 supports non-OPTIONAL shared variables)"
+                    )));
+                }
+                match unify(ldef, rdef) {
+                    Unify::Sat(conds) => corr.extend(conds),
+                    Unify::Empty => {
+                        never_compatible = true;
+                        break;
+                    }
+                    Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+                }
+            }
+            if never_compatible {
+                // This branch can never match the outer row.
+                if negated {
+                    // NOT EXISTS: this branch is vacuously satisfied (never removes the left row).
+                    continue;
+                } else {
+                    // EXISTS: this branch contributes no OR arm.
+                    continue;
+                }
+            }
+            if negated {
+                sub_conds.push(SqlCond::NotExists {
+                    scans: r.core.clone(),
+                    conds: corr,
+                });
+            } else {
+                sub_conds.push(SqlCond::Exists {
+                    scans: r.core.clone(),
+                    conds: corr,
+                });
+            }
+        }
+        Ok(if negated {
+            // AND of NOT EXISTS: all branches must fail to match.
+            SqlCond::And(sub_conds)
+        } else {
+            // OR of EXISTS: at least one branch must match.
+            SqlCond::Or(sub_conds)
+        })
     }
 
     /// `true` iff `pred_iri` is the ONLY predicate the whole mapping produces —

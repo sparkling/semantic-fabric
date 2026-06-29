@@ -99,12 +99,13 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
     out
 }
 
-/// Whether a branch carries a MINUS anti-join (`NotExists`) anywhere in its
-/// `where_conds` — such branches bypass the constraint-driven cascade passes.
+/// Whether a branch carries a MINUS anti-join (`NotExists`) or FILTER EXISTS
+/// semi-join (`Exists`) anywhere in its `where_conds` — such branches bypass
+/// the constraint-driven cascade passes.
 fn branch_has_not_exists(b: &Branch) -> bool {
     fn has(c: &SqlCond) -> bool {
         match c {
-            SqlCond::NotExists { .. } => true,
+            SqlCond::NotExists { .. } | SqlCond::Exists { .. } => true,
             SqlCond::Not(c) => has(c),
             SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(has),
             _ => false,
@@ -342,10 +343,10 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
                 rewrite_cond_alias(c, fix);
             }
         }
-        // A `NotExists` correlates on outer (left) aliases, which a self-join merge
-        // may rename; recurse so those references track the kept alias. (Inner scan
-        // aliases are globally unique and never a merge target.)
-        SqlCond::NotExists { conds, .. } => {
+        // `NotExists` and `Exists` correlate on outer (left) aliases, which a
+        // self-join merge may rename; recurse so those references track the kept
+        // alias. (Inner scan aliases are globally unique and never a merge target.)
+        SqlCond::NotExists { conds, .. } | SqlCond::Exists { conds, .. } => {
             for c in conds {
                 rewrite_cond_alias(c, fix);
             }
