@@ -153,6 +153,16 @@ where
     let branches = plan.prepared_branches();
     let catalog = build_catalog_pg(&branches, client, plan.dialect).await;
     let multi = branches.len() > 1;
+    // DISTINCT over a multi-branch bag-union: SQL dedups only *within* each branch's
+    // SELECT, never *across* the separate per-branch SELECTs, so we dedup the projected
+    // solutions here — before OFFSET/LIMIT. The single-branch case pushes DISTINCT into
+    // SQL. Mirroring the SQLite executor ([`crate::exec::for_each_solution`]).
+    let distinct_vars: Option<Vec<String>> = match (plan.distinct && multi, &plan.form) {
+        (true, PlanForm::Select { vars }) => Some(vars.clone()),
+        _ => None,
+    };
+    let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
+        std::collections::HashSet::new();
     let mut seen = 0usize;
     let mut emitted = 0usize;
     // ORDER BY is applied here for every plan (single- and multi-branch), never in
@@ -186,6 +196,17 @@ where
                 codes: &codes,
             };
             let bindings = reconstruct(branch, &raw)?;
+            // DISTINCT dedup for multi-branch bag-union (single-branch dedups in SQL).
+            // Applied before ORDER BY buffering so the sorted bag is already deduped.
+            if multi {
+                if let Some(vars) = &distinct_vars {
+                    let key: Vec<Option<Term>> =
+                        vars.iter().map(|v| bindings.get(v).cloned()).collect();
+                    if !seen_tuples.insert(key) {
+                        continue; // duplicate projected solution
+                    }
+                }
+            }
             // ORDER BY (any branch count): buffer for the global type-aware sort after
             // every row, so single- and multi-branch order identically (slice below).
             if ordered {
