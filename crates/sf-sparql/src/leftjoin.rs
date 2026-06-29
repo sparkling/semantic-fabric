@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use crate::iq::{Branch, CmpOp, OptJoin, Scan, SqlCond, TermDef};
+use crate::iq::{Branch, CmpOp, OptJoin, SqlCond, TermDef};
 use crate::unify::{filter_cond, unify, Unify};
 use crate::{Error, Result};
 

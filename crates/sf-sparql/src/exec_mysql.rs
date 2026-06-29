@@ -298,6 +298,7 @@ pub async fn dump_quads_mysql(
         limit: None,
         offset: 0,
         order: Vec::new(),
+        rust_group: None,
         dialect,
     };
     let mut out = Vec::new();

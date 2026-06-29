@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use sf_core::datatype::XsdTypeCode;
 use sf_core::ir::{LogicalSource, TermMap, TermType};
 use sf_core::Term;
+use spargebra::algebra::Expression;
 
 /// A reference to a raw source column of a specific scan alias. Aliases are
 /// small integers; emission renders them `t{alias}` (ADR-0007 lifting: joins and
@@ -289,16 +290,22 @@ pub enum StrMatchOp {
     RegexMatchI,
 }
 
-/// One ORDER BY key (SPARQL §15.1): a bound variable plus its direction. The
-/// ordering is over the SPARQL value space — emission/execution pin it so an
-/// unbound (NULL) key sorts FIRST for ASC and LAST for DESC (never the dialect
-/// default), and bound terms order blank-node < IRI < literal. v1 supports a key
-/// that is a bound variable only; a complex ORDER BY expression is deferred → 501
-/// ([`crate::unfold`]).
+/// One ORDER BY key (SPARQL §15.1): a sort direction plus either a plain bound
+/// variable (`expr = None`) or a complex SPARQL expression (`expr = Some`). The
+/// ordering is over the SPARQL value space — execution pins it so an unbound
+/// (NULL) key sorts FIRST for ASC and LAST for DESC (never the dialect default),
+/// and bound terms order blank-node < IRI < literal.
+///
+/// For expression keys the exec layer evaluates the expression against each
+/// solution's binding map and stores the result under `var` (a synthetic name
+/// `__sf_ord_{n}`) before sorting, so `order_cmp` can look up the key by name.
 #[derive(Debug, Clone)]
 pub struct OrderKey {
     pub var: String,
     pub descending: bool,
+    /// Set for non-variable ORDER BY expressions (e.g. `STRLEN(?x)`). The exec
+    /// layer evaluates this and injects the result into the solution before sorting.
+    pub expr: Option<Box<Expression>>,
 }
 
 /// Comparison operators supported by pushed-down FILTERs (ADR-0007 v1 subset).

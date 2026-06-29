@@ -23,6 +23,8 @@ use sf_core::{Literal, Row, Term, Triple};
 use sf_core::ir::LogicalSource;
 use sf_sql::Dialect;
 
+use spargebra::algebra::{Expression, Function};
+
 use crate::emit::{ColumnCatalog, EmittedBranch};
 use crate::iq::{AggKind, Branch, ColRef, OrderKey, RustAgg, RustGroup, TermDef};
 use crate::{Error, Plan, PlanForm, Result};
@@ -349,6 +351,17 @@ fn for_each_solution(
     if let Some(rg) = &plan.rust_group {
         return rust_group_execute(plan, conn, rg, &mut sink);
     }
+    for_each_branch_solution(plan, conn, &mut sink)
+}
+
+/// Core branches loop — does NOT check `rust_group`. Called from both
+/// `for_each_solution` (when no rust_group is set) and `rust_group_execute`
+/// (to collect the inner solutions without triggering re-grouping).
+fn for_each_branch_solution(
+    plan: &Plan,
+    conn: &Connection,
+    sink: &mut impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
+) -> Result<()> {
     let branches = plan.prepared_branches();
     let catalog = build_catalog(&branches, conn, plan.dialect);
     let multi = branches.len() > 1;
@@ -444,7 +457,22 @@ fn for_each_solution(
             // ORDER BY (any branch count): defer slicing — buffer for the global
             // type-aware sort after every row is read, so single- and multi-branch
             // order identically (OFFSET/LIMIT applied after the sort, below).
+            // For expression keys (e.g. STRLEN(?n)), evaluate the expression now
+            // and inject the result as a synthetic binding so order_cmp finds it.
             if ordered {
+                let bindings = if plan.order.iter().any(|k| k.expr.is_some()) {
+                    let mut b = bindings;
+                    for key in &plan.order {
+                        if let Some(expr) = &key.expr {
+                            if let Some(val) = eval_expr(expr, &b) {
+                                b.insert(key.var.clone(), val);
+                            }
+                        }
+                    }
+                    b
+                } else {
+                    bindings
+                };
                 buffer.push((bi, bindings));
                 return Ok(());
             }
@@ -595,6 +623,226 @@ fn numeric_value(l: &Literal) -> Option<f64> {
 
 fn map_sql_err(e: sf_sql::Error) -> Error {
     Error::Sql(e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// SPARQL expression evaluator for ORDER BY expression keys
+// ---------------------------------------------------------------------------
+// Evaluates a SPARQL expression against a solution binding map, returning the
+// result as an RDF term, or `None` on type error / unbound input. Covers the
+// subset needed for ORDER BY expression keys: arithmetic, string built-ins,
+// IF, BOUND, comparisons, COALESCE, boolean connectives. On unsupported
+// sub-expressions returns None (unbound), which ORDER BY treats as sorting
+// first/last per direction — sound but never silently wrong.
+
+/// Evaluate a SPARQL expression to an RDF term, or `None` if indeterminate.
+pub(crate) fn eval_expr(expr: &Expression, b: &BTreeMap<String, Term>) -> Option<Term> {
+    match expr {
+        Expression::Variable(v) => b.get(v.as_str()).cloned(),
+        Expression::NamedNode(n) => Some(Term::NamedNode(n.clone())),
+        Expression::Literal(l) => Some(Term::Literal(l.clone())),
+        Expression::Bound(v) => {
+            let bound = b.contains_key(v.as_str());
+            Some(Term::Literal(Literal::new_typed_literal(
+                if bound { "true" } else { "false" },
+                sf_core::NamedNode::new("http://www.w3.org/2001/XMLSchema#boolean").ok()?,
+            )))
+        }
+        Expression::If(cond, then, els) => {
+            if eval_bool(cond, b)? {
+                eval_expr(then, b)
+            } else {
+                eval_expr(els, b)
+            }
+        }
+        Expression::Coalesce(args) => args.iter().find_map(|a| eval_expr(a, b)),
+        Expression::Not(a) => {
+            let v = eval_bool(a, b)?;
+            bool_literal(!v)
+        }
+        Expression::And(a, c) => {
+            let av = eval_bool(a, b)?;
+            let bv = eval_bool(c, b)?;
+            bool_literal(av && bv)
+        }
+        Expression::Or(a, c) => {
+            let av = eval_bool(a, b)?;
+            let bv = eval_bool(c, b)?;
+            bool_literal(av || bv)
+        }
+        Expression::Equal(a, c) => {
+            let cmp = cmp_option(eval_expr(a, b).as_ref(), eval_expr(c, b).as_ref());
+            bool_literal(matches!(cmp, Some(Ordering::Equal)))
+        }
+        Expression::Less(a, c) => bool_literal(matches!(
+            cmp_option(eval_expr(a, b).as_ref(), eval_expr(c, b).as_ref()),
+            Some(Ordering::Less)
+        )),
+        Expression::Greater(a, c) => bool_literal(matches!(
+            cmp_option(eval_expr(a, b).as_ref(), eval_expr(c, b).as_ref()),
+            Some(Ordering::Greater)
+        )),
+        Expression::LessOrEqual(a, c) => bool_literal(matches!(
+            cmp_option(eval_expr(a, b).as_ref(), eval_expr(c, b).as_ref()),
+            Some(Ordering::Less | Ordering::Equal)
+        )),
+        Expression::GreaterOrEqual(a, c) => bool_literal(matches!(
+            cmp_option(eval_expr(a, b).as_ref(), eval_expr(c, b).as_ref()),
+            Some(Ordering::Greater | Ordering::Equal)
+        )),
+        Expression::Add(a, c) => num_binop(eval_expr(a, b)?, eval_expr(c, b)?, |x, y| x + y),
+        Expression::Subtract(a, c) => num_binop(eval_expr(a, b)?, eval_expr(c, b)?, |x, y| x - y),
+        Expression::Multiply(a, c) => num_binop(eval_expr(a, b)?, eval_expr(c, b)?, |x, y| x * y),
+        Expression::Divide(a, c) => {
+            let bv = term_to_f64(&eval_expr(c, b)?)?;
+            if bv == 0.0 {
+                return None;
+            }
+            num_binop(
+                eval_expr(a, b)?,
+                Term::Literal(Literal::new_simple_literal("0")),
+                |x, _| x / bv,
+            )
+        }
+        Expression::UnaryMinus(a) => {
+            let v = term_to_f64(&eval_expr(a, b)?)?;
+            f64_to_term(-v)
+        }
+        Expression::FunctionCall(func, args) => eval_function(func, args, b),
+        _ => None,
+    }
+}
+
+fn eval_bool(expr: &Expression, b: &BTreeMap<String, Term>) -> Option<bool> {
+    match eval_expr(expr, b)? {
+        Term::Literal(l) => {
+            const XSD_BOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+            if l.datatype().as_str() == XSD_BOOL {
+                Some(l.value() == "true")
+            } else {
+                // Effective boolean value per SPARQL §17.2.2
+                let v = l.value();
+                Some(!v.is_empty() && v != "0" && v != "0.0" && v != "false")
+            }
+        }
+        _ => None,
+    }
+}
+
+fn bool_literal(v: bool) -> Option<Term> {
+    Some(Term::Literal(Literal::new_typed_literal(
+        if v { "true" } else { "false" },
+        sf_core::NamedNode::new("http://www.w3.org/2001/XMLSchema#boolean").ok()?,
+    )))
+}
+
+fn term_to_f64(t: &Term) -> Option<f64> {
+    match t {
+        Term::Literal(l) => l.value().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn f64_to_term(v: f64) -> Option<Term> {
+    let code = if v.fract() == 0.0 && v.abs() < 1e15 {
+        XsdTypeCode::Integer
+    } else {
+        XsdTypeCode::Double
+    };
+    natural_literal(&v.to_string(), code).ok()
+}
+
+fn num_binop(a: Term, b: Term, op: impl Fn(f64, f64) -> f64) -> Option<Term> {
+    let av = term_to_f64(&a)?;
+    let bv = term_to_f64(&b)?;
+    f64_to_term(op(av, bv))
+}
+
+fn cmp_option(a: Option<&Term>, b: Option<&Term>) -> Option<Ordering> {
+    Some(cmp_term(a?, b?))
+}
+
+fn eval_function(func: &Function, args: &[Expression], b: &BTreeMap<String, Term>) -> Option<Term> {
+    fn str_val(t: &Term) -> Option<String> {
+        match t {
+            Term::Literal(l) => Some(l.value().to_owned()),
+            _ => None,
+        }
+    }
+    match func {
+        Function::StrLen => {
+            let t = eval_expr(args.first()?, b)?;
+            let s = str_val(&t)?;
+            natural_literal(&s.chars().count().to_string(), XsdTypeCode::Integer).ok()
+        }
+        Function::UCase => {
+            let t = eval_expr(args.first()?, b)?;
+            Some(Term::Literal(Literal::new_simple_literal(
+                str_val(&t)?.to_uppercase(),
+            )))
+        }
+        Function::LCase => {
+            let t = eval_expr(args.first()?, b)?;
+            Some(Term::Literal(Literal::new_simple_literal(
+                str_val(&t)?.to_lowercase(),
+            )))
+        }
+        Function::Str => {
+            let t = eval_expr(args.first()?, b)?;
+            let s = match &t {
+                Term::Literal(l) => l.value().to_owned(),
+                Term::NamedNode(n) => n.as_str().to_owned(),
+                _ => return None,
+            };
+            Some(Term::Literal(Literal::new_simple_literal(s)))
+        }
+        Function::Concat => {
+            let mut result = String::new();
+            for arg in args {
+                let t = eval_expr(arg, b)?;
+                result.push_str(&str_val(&t)?);
+            }
+            Some(Term::Literal(Literal::new_simple_literal(result)))
+        }
+        Function::Lang => {
+            let t = eval_expr(args.first()?, b)?;
+            let lang = match &t {
+                Term::Literal(l) => l.language().unwrap_or("").to_owned(),
+                _ => String::new(),
+            };
+            Some(Term::Literal(Literal::new_simple_literal(lang)))
+        }
+        Function::Datatype => {
+            let t = eval_expr(args.first()?, b)?;
+            match &t {
+                Term::Literal(l) => Some(Term::NamedNode(
+                    sf_core::NamedNode::new(l.datatype().as_str()).ok()?,
+                )),
+                _ => None,
+            }
+        }
+        Function::Abs => {
+            let t = eval_expr(args.first()?, b)?;
+            let v = term_to_f64(&t)?;
+            f64_to_term(v.abs())
+        }
+        Function::Floor => {
+            let t = eval_expr(args.first()?, b)?;
+            let v = term_to_f64(&t)?;
+            f64_to_term(v.floor())
+        }
+        Function::Ceil => {
+            let t = eval_expr(args.first()?, b)?;
+            let v = term_to_f64(&t)?;
+            f64_to_term(v.ceil())
+        }
+        Function::Round => {
+            let t = eval_expr(args.first()?, b)?;
+            let v = term_to_f64(&t)?;
+            f64_to_term(v.round())
+        }
+        _ => None,
+    }
 }
 
 /// Stream the triples of a `CONSTRUCT` (or the `?s ?p ?o` dump), invoking `sink`
@@ -819,16 +1067,22 @@ fn rust_group_execute(
         ..plan.clone()
     };
 
-    // Collect all inner solutions.
+    // Collect all inner solutions (use for_each_branch_solution to avoid the
+    // rust_group check — the inner_plan has rust_group: None, but calling
+    // for_each_solution would create a recursive monomorphization that the
+    // compiler cannot handle; for_each_branch_solution is the non-recursive core).
     let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
-    for_each_solution(&inner_plan, conn, |_, bindings| {
+    for_each_branch_solution(&inner_plan, conn, &mut |_, bindings| {
         inner_rows.push(bindings.clone());
         Ok(())
     })?;
 
     // Group by the key variable values, preserving insertion order for stable output.
     // Use a Vec for ordering + a HashMap for O(1) group lookup.
-    let mut groups: Vec<(Vec<Option<Term>>, Vec<BTreeMap<String, Term>>)> = Vec::new();
+    type GroupKey = Vec<Option<Term>>;
+    type GroupRows = Vec<BTreeMap<String, Term>>;
+    #[allow(clippy::type_complexity)]
+    let mut groups: Vec<(GroupKey, GroupRows)> = Vec::new();
     let mut key_index: std::collections::HashMap<Vec<Option<Term>>, usize> =
         std::collections::HashMap::new();
 
@@ -913,7 +1167,7 @@ fn rust_group_execute(
 /// UNBOUND (AVG/MIN/MAX over an empty multiset — SPARQL §11).
 fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Term>> {
     // Collect bound numeric values of the argument variable.
-    let bound_vals: Vec<&Term> = match &agg.arg_var {
+    let _bound_vals: Vec<&Term> = match &agg.arg_var {
         None => rows.iter().flat_map(|r| r.values()).collect(), // COUNT(*) — not used for numerics
         Some(var) => rows.iter().filter_map(|r| r.get(var)).collect(),
     };
@@ -937,9 +1191,7 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             };
             Ok(Some(Term::Literal(Literal::new_typed_literal(
                 count.to_string(),
-                sf_core::NamedNode::new_unchecked(
-                    "http://www.w3.org/2001/XMLSchema#integer",
-                ),
+                sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
             ))))
         }
         AggKind::Sum => {
@@ -951,9 +1203,7 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 // SUM over empty multiset ⇒ "0"^^xsd:integer (SPARQL §11).
                 return Ok(Some(Term::Literal(Literal::new_typed_literal(
                     "0",
-                    sf_core::NamedNode::new_unchecked(
-                        "http://www.w3.org/2001/XMLSchema#integer",
-                    ),
+                    sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
                 ))));
             }
             let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
@@ -1009,9 +1259,7 @@ fn numeric_term(t: &Term) -> Option<f64> {
 /// Whether an RDF term is an `xsd:integer`-typed literal.
 fn is_xsd_integer(t: &Term) -> bool {
     match t {
-        Term::Literal(l) => {
-            l.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#integer"
-        }
+        Term::Literal(l) => l.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#integer",
         _ => false,
     }
 }

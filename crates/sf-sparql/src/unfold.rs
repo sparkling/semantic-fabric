@@ -202,9 +202,10 @@ impl<'a> Unfolder<'a> {
             // The keys are peeled onto `TransPattern` here; the actual sort is pinned
             // later (single-branch → SQL `ORDER BY … NULLS FIRST/LAST` in
             // [`crate::emit`]; multi-branch bag-union → the global stable sort in
-            // [`crate::exec`], which per-branch SQL cannot give). A non-variable key
-            // (a complex expression we cannot lower) defers the whole query → 501,
-            // never a wrong order.
+            // [`crate::exec`], which per-branch SQL cannot give). Variable keys are
+            // lowered to `OrderKey { expr: None }`; expression keys (`STRLEN(?n)` etc.)
+            // store the SPARQL expression and a synthetic var name so the exec layer
+            // evaluates and injects the sort value per solution before sorting.
             GraphPattern::OrderBy { inner, expression } => {
                 let mut t = self.translate_pattern(inner)?;
                 let mut keys = Vec::with_capacity(expression.len());
@@ -213,16 +214,24 @@ impl<'a> Unfolder<'a> {
                         OrderExpression::Asc(e) => (e, false),
                         OrderExpression::Desc(e) => (e, true),
                     };
-                    let var = match expr {
-                        Expression::Variable(v) => v.as_str().to_owned(),
-                        other => {
-                            return Err(Error::Unsupported(format!(
-                                "ORDER BY expression not supported in v1 → 501 \
-                                 (only a bound variable key): {other:?}"
-                            )))
+                    match expr {
+                        Expression::Variable(v) => {
+                            keys.push(OrderKey {
+                                var: v.as_str().to_owned(),
+                                descending,
+                                expr: None,
+                            });
                         }
-                    };
-                    keys.push(OrderKey { var, descending });
+                        other => {
+                            // Non-variable: store the expression; exec evaluates it.
+                            let syn = format!("__sf_ord_{}", keys.len());
+                            keys.push(OrderKey {
+                                var: syn,
+                                descending,
+                                expr: Some(Box::new(other.clone())),
+                            });
+                        }
+                    }
                 }
                 t.order = keys;
                 Ok(t)
@@ -861,7 +870,7 @@ fn parse_rust_agg(
             expr: inner,
             distinct,
         } => {
-            let var = match inner.as_ref() {
+            let var = match inner {
                 Expression::Variable(v) => Some(v.as_str().to_owned()),
                 _ => {
                     return Err(Error::Unsupported(

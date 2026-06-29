@@ -39,19 +39,29 @@
 //! single-predicate graph). Deferred → `501` (documented, never silent): a path
 //! with a bound endpoint, a nested closure inside a composite, a predicate from a
 //! multi-mapping / refObjectMap / multi-column or non-constant term map, a
-//! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; an ORDER BY
-//! on a complex expression (only a bound variable is supported) or, for a single
-//! branch pushed to SQL, on a non-`rr:column` term (a template IRI / COALESCE);
-//! plus aggregates, LATERAL, GRAPH, DESCRIBE, SERVICE,
-//! OWL 2 QL tier-2 (ADR-0008), and PostgreSQL execution (SQLite is this wave's
-//! execution target; the path CTE's Postgres `CYCLE` variant is the later MB-4
-//! wave; emission is otherwise dialect-generic).
+//! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; for a single
+//! branch pushed to SQL an ORDER BY on a non-`rr:column` term (a template IRI /
+//! COALESCE); OPTIONAL with a multi-scan right side (JOIN inside OPTIONAL); plus
+//! LATERAL, SERVICE, OWL 2 QL tier-2 (ADR-0008), and PostgreSQL execution (SQLite
+//! is this wave's execution target; the path CTE's Postgres `CYCLE` variant is
+//! the later MB-4 wave; emission is otherwise dialect-generic).
+//!
+//! ## Wave-E / M4 additions (2026-06-29)
+//!
+//! - **DESCRIBE** → Concise Bounded Description CONSTRUCT (CBD, SPARQL §10.4).
+//! - **ORDER BY with arbitrary expressions** — evaluated at exec time via
+//!   `exec::eval_expr` (STRLEN, arithmetic, IF, BOUND, comparisons, COALESCE, …).
+//! - **OPTIONAL with UNION/multi-branch right** — sound ISWC-2018 decomposition:
+//!   inner-join branches per right-branch + NOT EXISTS anti-join for unmatched lefts.
+//! - **GROUP BY over UNION/multi-branch inner** — Rust-level grouping + aggregation.
 
 use std::collections::BTreeSet;
 
 use sf_core::ir::TriplesMap;
 use sf_sql::{Dialect, TableSchema};
-use spargebra::term::TriplePattern;
+use spargebra::algebra::GraphPattern;
+use spargebra::term::Variable;
+use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 use spargebra::Query;
 
 pub mod cache;
@@ -231,10 +241,52 @@ fn translate_inner(
             let t = uf.translate_pattern(pattern)?;
             (t, PlanForm::Ask)
         }
-        Query::Describe { .. } => {
-            return Err(Error::Unsupported(
-                "DESCRIBE is deferred → 501 (ADR-0007)".to_owned(),
-            ))
+        Query::Describe { pattern, .. } => {
+            // Concise Bounded Description (CBD): for each described resource r,
+            // CONSTRUCT { r ?__sf_p ?__sf_o } WHERE { <original WHERE> . r ?__sf_p ?__sf_o }.
+            // The `pattern` field encodes the DESCRIBE targets as a Project over the
+            // WHERE clause (the parser wraps literal resources in BIND expressions).
+            let (describe_vars, inner_pat) = match pattern {
+                GraphPattern::Project { variables, inner } => {
+                    (variables.clone(), inner.as_ref().clone())
+                }
+                other => (Vec::new(), other.clone()),
+            };
+            if describe_vars.is_empty() {
+                return Err(Error::Unsupported(
+                    "DESCRIBE * (wildcard) is not supported → 501".to_owned(),
+                ));
+            }
+            // Fresh synthetic variables for the CBD predicate and object
+            // (double-underscore prefix avoids collision with user variables).
+            let var_p = Variable::new_unchecked("__sf_describe_p");
+            let var_o = Variable::new_unchecked("__sf_describe_o");
+            // Build the CBD WHERE: join the original WHERE with `?v ?__sf_p ?__sf_o`
+            // for each described variable. Multiple DESCRIBE targets each add their own
+            // CBD triple, returning triples for all described resources in one plan.
+            let mut cbd_pattern = inner_pat;
+            for v in &describe_vars {
+                cbd_pattern = GraphPattern::Join {
+                    left: Box::new(cbd_pattern),
+                    right: Box::new(GraphPattern::Bgp {
+                        patterns: vec![TriplePattern {
+                            subject: TermPattern::Variable(v.clone()),
+                            predicate: NamedNodePattern::Variable(var_p.clone()),
+                            object: TermPattern::Variable(var_o.clone()),
+                        }],
+                    }),
+                };
+            }
+            let template = describe_vars
+                .iter()
+                .map(|v| TriplePattern {
+                    subject: TermPattern::Variable(v.clone()),
+                    predicate: NamedNodePattern::Variable(var_p.clone()),
+                    object: TermPattern::Variable(var_o.clone()),
+                })
+                .collect();
+            let t = uf.translate_pattern(&cbd_pattern)?;
+            (t, PlanForm::Construct { template })
         }
     };
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
@@ -358,14 +410,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn describe_is_unsupported() {
+    fn describe_iri_produces_construct_plan() {
+        // DESCRIBE <r> translates to a CBD CONSTRUCT — should succeed, not 501.
         let q = spargebra::SparqlParser::new()
             .parse_query("DESCRIBE <http://ex/x>")
             .unwrap();
-        assert!(matches!(
-            translate(&q, &[], Dialect::Sqlite),
-            Err(Error::Unsupported(_))
-        ));
+        let result = translate(&q, &[], Dialect::Sqlite);
+        assert!(
+            result.is_ok(),
+            "DESCRIBE <iri> should translate to a CONSTRUCT plan, got: {:?}",
+            result
+        );
+        assert!(
+            matches!(result.unwrap().form, PlanForm::Construct { .. }),
+            "DESCRIBE should produce a Construct form"
+        );
+    }
+
+    #[test]
+    fn describe_wildcard_produces_construct_plan() {
+        // DESCRIBE * WHERE { P } expands `*` to all in-scope variables, each of which
+        // becomes a CBD target — should succeed and produce a CONSTRUCT plan.
+        let q = spargebra::SparqlParser::new()
+            .parse_query("DESCRIBE * WHERE { ?s ?p ?o }")
+            .unwrap();
+        let result = translate(&q, &[], Dialect::Sqlite);
+        assert!(
+            result.is_ok(),
+            "DESCRIBE * should translate successfully, got: {:?}",
+            result
+        );
+        assert!(
+            matches!(result.unwrap().form, PlanForm::Construct { .. }),
+            "DESCRIBE * should produce a Construct form"
+        );
     }
 
     #[test]

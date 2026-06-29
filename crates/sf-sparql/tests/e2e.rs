@@ -1009,14 +1009,30 @@ fn order_by_then_limit_is_global_top_n() {
 }
 
 #[test]
-fn order_by_complex_expression_is_501() {
-    // ORDER BY over a non-variable expression (here an arithmetic key) is outside the
-    // v1 subset → honest 501, never a wrong order.
+fn order_by_expression_strlen_sorts_correctly() {
+    // ORDER BY over a non-variable expression (STRLEN(?n) + 1) — now supported via
+    // the exec-layer expression evaluator. "Ada" (len=3) < "Grace" (len=5) ascending.
     let maps = mapping();
+    let conn = source();
     let q = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n }} ORDER BY (STRLEN(?n) + 1)");
-    assert!(
-        parse_and_translate(&q, &maps, Dialect::Sqlite).is_err(),
-        "a complex ORDER BY expression is deferred to 501"
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite)
+        .expect("ORDER BY expression should translate successfully");
+    let sol = exec::select(&plan, &conn).unwrap();
+    let names: Vec<_> = sol
+        .rows
+        .iter()
+        .map(|r| r[0].as_ref().map(|t| t.to_string()).unwrap_or_default())
+        .collect();
+    // "Ada" (STRLEN = 3) comes before "Grace" (STRLEN = 5) ascending
+    assert_eq!(
+        names[0], "\"Ada\"",
+        "shortest name should sort first: {:?}",
+        names
+    );
+    assert_eq!(
+        names[1], "\"Grace\"",
+        "longer name should sort second: {:?}",
+        names
     );
 }
 
