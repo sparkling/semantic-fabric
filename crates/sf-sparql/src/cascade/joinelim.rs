@@ -31,8 +31,227 @@ struct FkElim {
 /// (a nullable FK would re-admit NULL rows on removal; a non-unique target would
 /// multiply rows — either breaks the bag). Otherwise a sound no-op.
 pub(super) fn fk_pk_join_elimination(b: &mut Branch, schema: &[TableSchema], fds: &Fds) {
+    // Single-column FK/PK elimination (uses FD uniqueness proof from pass 3).
     while let Some(e) = find_fk_pk_join(b, schema, fds) {
         apply_fk_pk_elim(b, &e);
+    }
+    // Multi-column composite FK/PK elimination (uniqueness proven from catalog alone).
+    while let Some(e) = find_multi_fk_pk_join(b, schema) {
+        apply_multi_fk_pk_elim(b, &e);
+    }
+}
+
+// --- 4b. Multi-column composite FK/PK join elimination ----------------------
+
+/// One eliminable multi-column FK/PK join: all FK column equalities are
+/// removed together and every reference to the parent's composite-key columns
+/// is rewritten onto the corresponding child FK columns.
+struct MultiFkElim {
+    /// Indices into `b.where_conds` of the ColEq conditions that form the FK.
+    cond_indices: Vec<usize>,
+    parent_alias: usize,
+    child_alias: usize,
+    /// `(parent_col, child_col)` column rewrites (positionally aligned with FK).
+    rewrites: Vec<(Box<str>, Box<str>)>,
+}
+
+/// Find an eliminable composite FK/PK join. Collects ALL `ColEq` conditions
+/// between a pair of scans and checks whether they together match a declared
+/// composite FK whose parent columns are a composite key and all child FK
+/// columns are NOT NULL. Sound (=_bag) iff BOTH hold, same argument as the
+/// single-column variant (ADR-0007).
+fn find_multi_fk_pk_join(b: &Branch, schema: &[TableSchema]) -> Option<MultiFkElim> {
+    // Collect all cross-scan ColEqs grouped by (child_alias, parent_alias).
+    for i in 0..b.core.len() {
+        let child_alias = b.core[i].alias;
+        let Some(child_table) = scan_table(b, child_alias) else {
+            continue;
+        };
+        let cs = schema.iter().find(|t| t.name == child_table)?;
+
+        for j in 0..b.core.len() {
+            if i == j {
+                continue;
+            }
+            let parent_alias = b.core[j].alias;
+            let Some(parent_table) = scan_table(b, parent_alias) else {
+                continue;
+            };
+            let ps = schema.iter().find(|t| t.name == parent_table)?;
+
+            // Collect all ColEq conditions between this (child, parent) pair.
+            let mut pairs: Vec<(usize, Box<str>, Box<str>)> = Vec::new(); // (cond_idx, child_col, parent_col)
+            for (idx, cond) in b.where_conds.iter().enumerate() {
+                let SqlCond::ColEq(a, c) = cond else { continue };
+                if a.alias == child_alias && c.alias == parent_alias {
+                    pairs.push((idx, a.column.clone(), c.column.clone()));
+                } else if a.alias == parent_alias && c.alias == child_alias {
+                    pairs.push((idx, c.column.clone(), a.column.clone()));
+                }
+            }
+            if pairs.len() < 2 {
+                continue; // single-column case handled by pass 4a
+            }
+
+            let child_cols: Vec<&str> = pairs.iter().map(|(_, c, _)| c.as_ref()).collect();
+            let parent_cols: Vec<&str> = pairs.iter().map(|(_, _, p)| p.as_ref()).collect();
+
+            // Uniqueness: parent join columns form a composite key.
+            if !ps.is_composite_key(&parent_cols) {
+                continue;
+            }
+            // Match-guarantee: declared composite FK on child and all child cols NOT NULL.
+            // Sound only when each (child_col, parent_col) pair is *positionally aligned*
+            // with an FK entry: both set-coverage AND per-pair FK lookup are required.
+            // (Set-membership alone is unsound — T4.col2=T3.col2 plus T4.col3=T3.col1
+            // looks like a composite FK but the FK actually says T4.col2→T3.col1.)
+            let fk_declared = cs.foreign_keys.iter().any(|fk| {
+                fk.parent_table == parent_table
+                    && fk.columns.len() == child_cols.len()
+                    // Every observed (child_col, parent_col) pair must match a positional FK entry.
+                    && child_cols.iter().zip(parent_cols.iter()).all(|(cc, pc)| {
+                        fk.columns.iter().zip(fk.parent_columns.iter())
+                            .any(|(fc, fp)| fc.as_str() == *cc && fp.as_str() == *pc)
+                    })
+                    // Every FK entry must be covered by an observed pair (completeness).
+                    && fk.columns.iter().zip(fk.parent_columns.iter()).all(|(fc, fp)| {
+                        child_cols.iter().zip(parent_cols.iter())
+                            .any(|(cc, pc)| cc == &fc.as_str() && pc == &fp.as_str())
+                    })
+            });
+            if !fk_declared {
+                continue;
+            }
+            let all_nn = child_cols.iter().all(|cc| column_not_null(cs, cc));
+            if !all_nn {
+                continue;
+            }
+            // Parent reached only for its composite key columns.
+            if !parent_referenced_only_via_set(b, parent_alias, &parent_cols) {
+                continue;
+            }
+
+            let cond_indices = pairs.iter().map(|(i, _, _)| *i).collect();
+            let rewrites = pairs.into_iter().map(|(_, cc, pc)| (pc, cc)).collect();
+            return Some(MultiFkElim {
+                cond_indices,
+                parent_alias,
+                child_alias,
+                rewrites,
+            });
+        }
+    }
+    None
+}
+
+/// Does every reference to `alias` use only the columns in `cols`?
+fn parent_referenced_only_via_set(b: &Branch, alias: usize, cols: &[&str]) -> bool {
+    let mut ok = true;
+    let mut check = |c: &ColRef| {
+        if c.alias == alias && !cols.contains(&&*c.column) {
+            ok = false;
+        }
+    };
+    for def in b.bindings.values() {
+        for c in def.columns() {
+            check(&c);
+        }
+    }
+    for cond in &b.where_conds {
+        collect_cond_cols(cond, &mut check);
+    }
+    for opt in &b.opts {
+        for cond in opt.on.iter().chain(opt.extra.iter()) {
+            collect_cond_cols(cond, &mut check);
+        }
+    }
+    ok
+}
+
+fn apply_multi_fk_pk_elim(b: &mut Branch, e: &MultiFkElim) {
+    // Remove FK ColEq conditions (highest indices first).
+    let mut sorted_idxs = e.cond_indices.clone();
+    sorted_idxs.sort_unstable_by(|a, b| b.cmp(a));
+    for idx in sorted_idxs {
+        b.where_conds.remove(idx);
+    }
+    // Rewrite parent column references → child column references.
+    for def in b.bindings.values_mut() {
+        rewrite_parent_def_multi(def, e);
+    }
+    for cond in &mut b.where_conds {
+        rewrite_parent_cond_multi(cond, e);
+    }
+    for opt in &mut b.opts {
+        for cond in opt.on.iter_mut().chain(opt.extra.iter_mut()) {
+            rewrite_parent_cond_multi(cond, e);
+        }
+    }
+    b.core.retain(|s| s.alias != e.parent_alias);
+}
+
+fn rewrite_parent_colref_multi(c: &mut ColRef, e: &MultiFkElim) {
+    if c.alias != e.parent_alias {
+        return;
+    }
+    if let Some((_, child_col)) = e
+        .rewrites
+        .iter()
+        .find(|(parent_col, _)| *parent_col == c.column)
+    {
+        c.alias = e.child_alias;
+        c.column = child_col.clone();
+    }
+}
+
+fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
+    match cond {
+        SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
+            rewrite_parent_colref_multi(a, e);
+            rewrite_parent_colref_multi(b, e);
+        }
+        SqlCond::Cmp(a, _, _) | SqlCond::IsNotNull(a) | SqlCond::IsNull(a) => {
+            rewrite_parent_colref_multi(a, e)
+        }
+        SqlCond::StrMatch { col, .. } => rewrite_parent_colref_multi(col, e),
+        SqlCond::Not(c) => rewrite_parent_cond_multi(c, e),
+        SqlCond::And(cs) | SqlCond::Or(cs) => {
+            for c in cs {
+                rewrite_parent_cond_multi(c, e);
+            }
+        }
+        SqlCond::NotExists { conds, .. } | SqlCond::Exists { conds, .. } => {
+            for c in conds {
+                rewrite_parent_cond_multi(c, e);
+            }
+        }
+    }
+}
+
+fn rewrite_parent_def_multi(def: &mut TermDef, e: &MultiFkElim) {
+    match def {
+        TermDef::Const(_) => {}
+        TermDef::Derived { term_map, alias } => {
+            if *alias == e.parent_alias {
+                // Apply each parent→child column rename in the term map.
+                let mut tm = term_map.clone();
+                for (parent_col, child_col) in &e.rewrites {
+                    tm = rename_col_in_term_map(&tm, parent_col, child_col);
+                }
+                *term_map = tm;
+                *alias = e.child_alias;
+            }
+        }
+        TermDef::Coalesce(l, r) => {
+            rewrite_parent_def_multi(l, e);
+            rewrite_parent_def_multi(r, e);
+        }
+        TermDef::Concat(parts) => {
+            for p in parts {
+                rewrite_parent_def_multi(p, e);
+            }
+        }
+        TermDef::Agg { .. } => {}
     }
 }
 

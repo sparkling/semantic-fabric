@@ -225,14 +225,13 @@ fn fd_inference_non_unique_fd_single_scan() {
     // reasoning) should become available.
     let out = run(vec![b], &[t], &CascadeCtx::default());
 
-    assert!(
-        false,
+    let _ = out;
+    panic!(
         "NEEDS_IMPL: sf cannot seed non-unique FD col1→col2 from FD_TABLE1_AR2; \
          when TableSchema gains a functional_dependencies field and pass 3 reads it, \
          verify that the inferred FD enables whatever downstream optimization is added \
          (FunctionalDependencyInferenceTest.testInnerJoinFromChildren1)"
     );
-    let _ = out;
 }
 
 /// **NEEDS_IMPL** — `FunctionalDependencyInferenceTest.testInnerJoinFromChildren2`.
@@ -269,14 +268,13 @@ fn fd_inference_non_unique_fd_through_join_equality() {
     // sf: run() is a no-op — no seeds, no propagation, no passes fire.
     let out = run(vec![b], &[t1, t2], &CascadeCtx::default());
 
-    assert!(
-        false,
+    let _ = out;
+    panic!(
         "NEEDS_IMPL: sf cannot infer col1→{{col2, col1(t2), col2(t2)}} without non-unique FD \
          seeding; when resolved, verify that equality propagation in pass 3 correctly \
          derives the compound determinacy A→{{B, D}} \
          (FunctionalDependencyInferenceTest.testInnerJoinFromChildren2)"
     );
-    let _ = out;
 }
 
 /// **NEEDS_IMPL** — `FunctionalDependencyInferenceTest.testUnionNoProvenance`.
@@ -317,8 +315,7 @@ fn fd_inference_union_no_provenance() {
     // sf: run() optimises each arm independently; no cross-branch FD API exists.
     let _out = run(vec![b0, b1], &[t], &CascadeCtx::default());
 
-    assert!(
-        false,
+    panic!(
         "NEEDS_IMPL: sf has no cross-branch FD intersection; \
          when non-unique FDs and union-level FD analysis are implemented, verify that \
          a 2-arm union of FD_TABLE branches (no provenance) correctly yields empty \
@@ -371,8 +368,7 @@ fn fd_inference_union_with_provenance_constant() {
 
     let _out = run(branches, &[t], &CascadeCtx::default());
 
-    assert!(
-        false,
+    panic!(
         "NEEDS_IMPL: sf has no union-with-provenance FD logic; \
          when implemented, verify that a 5-arm union (each arm a FD_TABLE scan + \
          different provenance constant for ?x) yields union-level FD {{A,X}}→{{B}} \

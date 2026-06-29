@@ -24,7 +24,8 @@
 //!     NonElimination2bis's initial state), then finds no elimination. In sf the
 //!     two scans start without cross-scan ColEqs so `st_non_elimination2bis`
 //!     already covers this case. No new test needed.
-//!   ⇒ Zero NEEDS_IMPL gaps; no additional SelfJoin tests in this file.
+//!
+//!   Zero NEEDS_IMPL gaps; no additional SelfJoin tests in this file.
 //!
 //! TrueNodesRemovalOptimizerTest (11) — BOUNDARY
 //!   sf has no TrueNode artifact; see port file for detailed rationale.
@@ -38,12 +39,10 @@
 //!                Single-placeholder ⇒ trivially injective ⇒ X unique ⇒ DISTINCT
 //!                removed. sf correctly handles this. ✓
 //!
-//!   [RED P0]     uc_non_injective_reversed_cols_distinct_kept
-//!                P0 injectivity-bug companion. Template "ds2/{col2}{col1}" on
-//!                pk_ar2 — reversed column order, adjacent placeholders, still
-//!                non-injective: ("2","13") and ("21","3") produce identical IRIs.
-//!                sf sees col1 (the PK) in def.columns() and incorrectly removes
-//!                DISTINCT. Ontop: {} (keeps DISTINCT).
+//!   [GREEN]      uc_non_injective_reversed_cols_distinct_kept
+//!                P0 companion — FIXED by Template::is_injective() + pass-6 gate.
+//!                Template "ds2/{col2}{col1}": reversed-column adjacent placeholders
+//!                ⇒ non-injective ⇒ DISTINCT kept. sf now correctly matches Ontop.
 //!
 //!   [RED NEEDS_IMPL] uc_composite_pk_injective_distinct_removed_needs_impl
 //!                Analog of Ontop testConstructionInjectiveTemplate3. Table with
@@ -169,25 +168,17 @@ fn uc_single_col_template_pk_distinct_removed() {
     );
 }
 
-/// **RED — P0 injectivity bug (companion to port file
-/// `uc_construction_non_injective_template1_red`).** Template
+/// **GREEN — P0 soundness fix shipped.** Template
 /// `http://example.org/ds2/{col2}{col1}` reverses the column order vs the port
 /// test but is equally non-injective: for col2="2", col1="13" vs col2="21",
-/// col1="3" both yield the IRI ending in "213". DISTINCT is semantically required
-/// because two distinct source rows may produce the same IRI.
+/// col1="3" both yield the IRI ending in "213". DISTINCT must be preserved.
 ///
-/// sf: `def.columns()` = `[col2, col1]` (order follows template segments);
-/// `single_col_keys(pk_ar2)` = `["col1"]`; `contains(col1_ref)` = true (col1
-/// appears anywhere in the column list) ⇒ `redundant = true` ⇒ DISTINCT removed.
-/// This diverges from Ontop (returns `{}` — not unique).
+/// Fixed by `Template::is_injective()` + `binding_is_injective()` in pass 6:
+/// adjacent `Column` slots ⇒ `is_injective() = false` ⇒ DISTINCT kept.
 ///
 /// Expected (Ontop): DISTINCT kept (`out.distinct == true`).
-/// Got (sf):         DISTINCT removed (`out.distinct == false`).
+/// sf (after fix):   DISTINCT kept (`out.distinct == true`). ✓
 #[test]
-#[ignore = "RED: sf pass-6 distinct-removal fires for any template that mentions \
-            the PK column, regardless of injectivity or column order; \
-            reversed-placeholder non-injective template {col2}{col1} has the \
-            same =_bag gap as the port's {col1}{col2} test — P0 companion"]
 fn uc_non_injective_reversed_cols_distinct_kept() {
     // col2 first, then col1, no separator ⇒ non-injective.
     // ("2","13") and ("21","3") both produce IRI suffix "213".

@@ -87,6 +87,16 @@ impl TableSchema {
         pk_sole || uniq_sole
     }
 
+    /// Are `cols` a composite unique key (the exact PK or an exact UNIQUE
+    /// constraint)? Order-insensitive — the set of column names must match
+    /// exactly. Used for multi-column FK/PK join elimination (ADR-0007).
+    pub fn is_composite_key(&self, cols: &[&str]) -> bool {
+        let matches = |key: &[String]| {
+            key.len() == cols.len() && cols.iter().all(|c| key.iter().any(|k| k == c))
+        };
+        matches(&self.primary_key) || self.unique.iter().any(|u| matches(u))
+    }
+
     /// Best available **distinct-key cardinality** for `column` — the selectivity
     /// driver for cross-source side selection (ADR-0006).
     ///

@@ -512,25 +512,17 @@ fn uc_duplicate_column4_two_aliases_of_pk_distinct_removed() {
     );
 }
 
-/// **RED — real parity bug (kept `#[ignore]` to hold the suite green; run with
-/// `--ignored`).** Ontop `testConstructionNonInjectiveTemplate1` ⇒ `{}`: the
-/// template `ds2/{col1}{col2}` has two *adjacent* placeholders (no separator) and
-/// is therefore NON-injective — distinct rows can map to the same IRI, so X is
-/// NOT a unique constraint and the DISTINCT must be preserved.
+/// **GREEN — P0 soundness fix shipped.** Ontop `testConstructionNonInjectiveTemplate1`
+/// ⇒ `{}`: the template `ds2/{col1}{col2}` has two *adjacent* placeholders (no
+/// separator) and is therefore NON-injective — distinct rows can map to the same
+/// IRI, so X is NOT a unique constraint and the DISTINCT must be preserved.
 ///
-/// sf-core's term maps carry NO injectivity flag (verified: no `injective` field
-/// on `TermMap`/`TermSpec`), and pass 6 (`distinct_removal`) only checks that a
-/// projected term *reads* a key column — it does not check template injectivity.
-/// So sf REMOVES the DISTINCT here, diverging from Ontop and from `=_bag` vs the
-/// DISTINCT semantics (two rows whose `(col1,col2)` concatenate equally would be
-/// emitted twice instead of collapsed).
+/// Fixed by `Template::is_injective()` + `binding_is_injective()` in pass 6:
+/// adjacent `Column` slots ⇒ `is_injective() = false` ⇒ DISTINCT kept.
 ///
 /// Expected (Ontop): DISTINCT kept (`out.distinct == true`).
-/// Got (sf):         DISTINCT removed (`out.distinct == false`).
+/// sf (after fix):   DISTINCT kept (`out.distinct == true`). ✓
 #[test]
-#[ignore = "RED: sf pass-6 distinct-removal ignores IRI-template injectivity \
-            (no injectivity flag in sf-core); removes a DISTINCT Ontop preserves \
-            for a non-injective (separator-less) template — latent =_bag gap"]
 fn uc_construction_non_injective_template1_red() {
     let mut b = branch(vec![scan(0, "pk_ar2")], Vec::new(), true);
     // Non-injective: "ds2/" + col1 + col2 with NO separator between placeholders.

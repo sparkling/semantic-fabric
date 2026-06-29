@@ -10,9 +10,9 @@
 //!
 //!   * `iq/executor/EmptyNodeRemovalTest.java`     (21 scenarios — ALL BOUNDARY)
 //!   * `iq/executor/FunctionalDependencyTest.java` (35 scenarios — 2 GREEN in port,
-//!                                                   3 RED-SPEC here, remainder NEEDS_IMPL)
+//!     3 RED-SPEC here, remainder NEEDS_IMPL)
 //!   * `iq/executor/LeftJoinOptimizationTest.java` (180 scenarios — 4 GREEN in port,
-//!                                                   3 RED-SPEC here, many BOUNDARY)
+//!     3 RED-SPEC here, many BOUNDARY)
 //!   * `iq/executor/LJJoinLiftTest.java`           ( 2 scenarios — ALL BOUNDARY)
 //!   * `iq/executor/QueryMergingTest.java`         (21 scenarios — ALL BOUNDARY)
 //!

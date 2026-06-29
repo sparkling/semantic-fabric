@@ -30,17 +30,30 @@
 //! unique key. This is the Path-B engine-perf work (ADR-0013) under the hard
 //! invariant that cost may choose only among `=_bag`-equivalent plans.
 
-use sf_core::ir::LogicalSource;
+use sf_core::ir::{LogicalSource, Segment, TermMap, TermType};
 use sf_sql::TableSchema;
 
 use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, SqlCond, TermDef};
 
+mod fd;
 mod joinelim;
+mod sameterm;
 #[cfg(test)]
 mod tests;
+/// WS-FK — RedundantJoinFKTest oracle scenarios (ADR-0022, WAVE 1).
+#[cfg(test)]
+mod ws_fk;
 /// WS-G — Ontop-parity oracle (ADR-0022): GREEN parity ports + `#[ignore]` WS-A specs.
 #[cfg(test)]
 mod ws_g;
+/// WS-ST — SelfJoinSameTermsTest oracle scenarios (ADR-0022, WAVE 1).
+#[cfg(test)]
+mod ws_st;
+
+/// Re-export `Fds` so `joinelim` and tests can use `super::Fds`.
+pub use fd::Fds;
+/// Re-export for tests that use `use super::*`.
+pub use fd::{infer_functional_dependencies, single_col_keys};
 
 /// Context the constraint-driven passes need beyond the per-branch shape:
 /// whether a `DISTINCT` is requested and which variables the query projects
@@ -79,9 +92,10 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             if !prune_iri_template_mismatch(&b) {
                 return None; // 1 — unsatisfiable branch
             }
-            self_join_elimination(&mut b, schema); // 2 (inner-join variant)
-            self_left_join_elimination(&mut b, schema); // 2 (left-join variant — Q5)
-            let fds = infer_functional_dependencies(&b, schema); // 3
+            self_join_elimination(&mut b, schema); // 2a (inner-join variant — unique key)
+            self_left_join_elimination(&mut b, schema); // 2b (left-join variant — Q5)
+            sameterm::same_terms_elimination(&mut b, ctx); // 2c (same terms under DISTINCT — ADR-0022)
+            let fds = fd::infer_functional_dependencies(&b, schema); // 3
             joinelim::fk_pk_join_elimination(&mut b, schema, &fds); // 4
             selection_pushdown(&mut b); // 5
             Some(b)
@@ -304,7 +318,7 @@ fn rewrite_alias(b: &mut Branch, from: usize, to: usize) {
 }
 
 /// Rewrite the scan alias inside a term def (recursing through a `Coalesce`).
-fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
+pub(super) fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
     match def {
         TermDef::Const(_) => {}
         TermDef::Derived { alias, .. } => {
@@ -354,123 +368,11 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
     }
 }
 
-// --- 3. functional-dependency inference -----------------------------------
+// --- 2c. same terms elimination — see `sameterm.rs` ----------------------
 
-/// The functional dependencies that hold over a branch's row stream. An entry
-/// `(det, alias)` means **`det` determines every column of scan `alias`** (a
-/// superkey of that scan's projection). Built for pass (4): a join may be
-/// eliminated only once uniqueness is proven, and uniqueness is exactly "the
-/// join column is a key" — an FD whose determinant is that column.
-#[derive(Debug, Default)]
-pub struct Fds {
-    /// `(det, alias)`: `det` functionally determines all columns of `alias`.
-    deps: Vec<(ColRef, usize)>,
-}
+// --- 3. functional-dependency inference — see `fd.rs` ---------------------
 
-impl Fds {
-    fn has(&self, det: &ColRef, alias: usize) -> bool {
-        self.deps.iter().any(|(d, a)| d == det && *a == alias)
-    }
-
-    fn add(&mut self, det: ColRef, alias: usize) -> bool {
-        if self.has(&det, alias) {
-            false
-        } else {
-            self.deps.push((det, alias));
-            true
-        }
-    }
-
-    /// Is `c` a key — does it determine its own scan's whole row? This is the
-    /// uniqueness precondition pass (4) consults.
-    pub fn is_key(&self, c: &ColRef) -> bool {
-        self.has(c, c.alias)
-    }
-}
-
-/// Derive the FD set with its **transitive closure** (ADR-0007 step iii — "FD
-/// inference, transitive closure, through unions, *must precede* FK/PK join
-/// elimination"). Seeds each single-column unique key as a key→row FD, then
-/// closes to a fixpoint under two sound rules:
-///
-/// * **equality** — for a core key equality `ColEq(a, b)` (`a` and `b` hold the
-///   same value on every surviving row), anything `a` determines `b` also
-///   determines, and vice-versa.
-/// * **transitivity** — if `x` determines all of scan `m` and a column `y` of
-///   `m` determines scan `n`, then `x` determines `n`.
-///
-/// "Through unions" is honoured at the branch granularity: each UNION arm is a
-/// separate [`Branch`], so its FDs are inferred independently and a join is
-/// eliminated per-arm only on that arm's proven keys.
-fn infer_functional_dependencies(b: &Branch, schema: &[TableSchema]) -> Fds {
-    let mut fds = Fds::default();
-    // Seed: every single-column unique key (PK or UNIQUE) determines its row.
-    for scan in &b.core {
-        if let LogicalSource::Table(t) = &scan.source {
-            if let Some(ts) = schema.iter().find(|s| &s.name == t) {
-                for col in single_col_keys(ts) {
-                    fds.add(ColRef::new(scan.alias, col), scan.alias);
-                }
-            }
-        }
-    }
-    // Closure to a fixpoint.
-    loop {
-        let mut changed = false;
-        for cond in &b.where_conds {
-            if let SqlCond::ColEq(a, c) = cond {
-                changed |= propagate_eq(&mut fds, a, c);
-                changed |= propagate_eq(&mut fds, c, a);
-            }
-        }
-        // transitivity — snapshot the current edges to avoid borrow conflicts.
-        let snapshot: Vec<(ColRef, usize)> = fds.deps.clone();
-        for (x, m) in &snapshot {
-            for (y, n) in &snapshot {
-                if y.alias == *m && fds.add(x.clone(), *n) {
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    fds
-}
-
-/// Equality rule: given `ColEq(from, to)` (equal values), copy every FD whose
-/// determinant is `from` onto `to`. Returns whether anything was added.
-fn propagate_eq(fds: &mut Fds, from: &ColRef, to: &ColRef) -> bool {
-    let targets: Vec<usize> = fds
-        .deps
-        .iter()
-        .filter(|(d, _)| d == from)
-        .map(|(_, a)| *a)
-        .collect();
-    let mut changed = false;
-    for a in targets {
-        changed |= fds.add(to.clone(), a);
-    }
-    changed
-}
-
-/// The single-column unique keys of a table (the determinants that fix a row):
-/// a single-column primary key, plus any single-column `UNIQUE` constraint.
-fn single_col_keys(ts: &TableSchema) -> Vec<String> {
-    let mut keys = Vec::new();
-    if ts.primary_key.len() == 1 {
-        keys.push(ts.primary_key[0].clone());
-    }
-    for u in &ts.unique {
-        if u.len() == 1 && !keys.contains(&u[0]) {
-            keys.push(u[0].clone());
-        }
-    }
-    keys
-}
-
-// --- 5/6 + helpers live below; pass 4 is in `joinelim`. -------------------
+// --- 5/6 + helpers live below; pass 4 is in `joinelim`. ------------------
 
 // --- 5. selection pushdown -------------------------------------------------
 
@@ -521,6 +423,36 @@ fn is_single_scan_selection(cond: &SqlCond) -> bool {
 
 // --- 6. distinct removal ---------------------------------------------------
 
+/// Returns `true` when `def`'s term construction is injective — distinct
+/// source-column tuples always produce distinct output terms — so that a key
+/// column in the binding implies no two solution rows share the same term.
+///
+/// `TermMap::Column` is trivially injective (column value → term, bijection).
+/// `TermMap::Template` with adjacent column slots is **not** injective (see
+/// [`Template::is_injective`]); for non-IRI templates only a single column
+/// slot is safe because the lack of percent-encoding means a separator
+/// character can appear in a column value, breaking uniqueness.
+fn binding_is_injective(def: &TermDef) -> bool {
+    let TermDef::Derived {
+        term_map: TermMap::Template(t, spec),
+        ..
+    } = def
+    else {
+        return true; // Column / Constant / Coalesce / Concat / Agg — not gated
+    };
+    if spec.term_type == TermType::Iri {
+        t.is_injective()
+    } else {
+        // Literal/BlankNode: no percent-encoding, so only a single-column
+        // template is unambiguously injective.
+        t.segments()
+            .iter()
+            .filter(|s| matches!(s, Segment::Column(_)))
+            .count()
+            <= 1
+    }
+}
+
 /// Drop a `DISTINCT` already implied by a **projected unique key** (DISTINCT over
 /// a key is a no-op — R4: never *add* DISTINCT, only remove a provably redundant
 /// one). Sound proof: the branch is a single base-table scan with no OPTIONAL, so
@@ -554,6 +486,7 @@ fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[St
     let projected = |var: &str| project.is_none_or(|p| p.iter().any(|v| v == var));
     let redundant = b.bindings.iter().any(|(var, def)| {
         projected(var)
+            && binding_is_injective(def)
             && keys
                 .iter()
                 .any(|k| def.columns().contains(&ColRef::new(scan.alias, k.clone())))

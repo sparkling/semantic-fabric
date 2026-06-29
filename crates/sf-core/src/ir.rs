@@ -256,6 +256,40 @@ impl Template {
         &self.segments
     }
 
+    /// Returns `true` when the template is syntactically injective: no two
+    /// distinct tuples of column values can produce the same expanded string.
+    ///
+    /// A template is injective when every pair of adjacent [`Segment::Column`]
+    /// slots is separated by at least one non-empty [`Segment::Literal`].
+    /// Adjacent column slots with no separator (or only empty literals between
+    /// them) are **not** injective: `("a","bc")` and `("ab","c")` both expand
+    /// to `"abc"`.
+    ///
+    /// **Soundness note for IRI templates**: R2RML percent-encoding ensures a
+    /// literal separator character cannot appear verbatim in a column value, so
+    /// a non-empty separator between columns is sufficient to guarantee
+    /// injectivity.  For literal/blank-node templates (no encoding) the caller
+    /// must additionally require at most one column slot (see
+    /// `cascade::distinct_removal`).
+    pub fn is_injective(&self) -> bool {
+        let mut prev_col = false;
+        for seg in &self.segments {
+            match seg {
+                Segment::Column(_) => {
+                    if prev_col {
+                        return false; // adjacent column slots — not injective
+                    }
+                    prev_col = true;
+                }
+                Segment::Literal(text) if !text.is_empty() => {
+                    prev_col = false; // non-empty separator resets adjacency
+                }
+                Segment::Literal(_) => {} // empty literal — adjacency unchanged
+            }
+        }
+        true
+    }
+
     /// Expand the template for `row` into `out` (which is **cleared** first),
     /// percent-encoding column values when `encode_iri` is set (R2RML §7.3 only
     /// percent-encodes for IRI term types).
