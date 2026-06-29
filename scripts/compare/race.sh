@@ -28,6 +28,7 @@ ONTOP_HOME="${ONTOP_HOME:?set ONTOP_HOME to the unpacked ontop-cli directory}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 M="$REPO/scripts/ontop"                       # shared mapping + queries
+ONTOP_PROPS="${ONTOP_PROPS:-$M/gtfs.properties}"   # allow Docker/CI override
 SF_BIN="$REPO/target/release/semantic-fabric"
 SF_EP="http://127.0.0.1:${SF_PORT}/sparql"
 ONTOP_EP="http://127.0.0.1:${ONTOP_PORT}/sparql"
@@ -65,7 +66,7 @@ echo ">> starting sf-serve (PostgreSQL OBDA) on :$SF_PORT"
   >"/tmp/sf-serve-${SCALE}x.log" 2>&1 &
 SF_PID=$!
 echo ">> starting Ontop endpoint (PostgreSQL OBDA) on :$ONTOP_PORT"
-"$ONTOP_HOME/ontop" endpoint -m "$M/gtfs.r2rml.ttl" -p "$M/gtfs.properties" --port "$ONTOP_PORT" \
+"$ONTOP_HOME/ontop" endpoint -m "$M/gtfs.r2rml.ttl" -p "$ONTOP_PROPS" --port "$ONTOP_PORT" \
   >"/tmp/ontop-endpoint-${SCALE}x.log" 2>&1 &
 ONTOP_PID=$!
 trap 'kill $SF_PID $ONTOP_PID 2>/dev/null || true' EXIT

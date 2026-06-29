@@ -70,13 +70,19 @@ ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 10 31
 
 ### @1x (median of 25 warm round-trips, ms)
 
+Measured 2026-06-29: both endpoints wired to `postgres:16` in Docker
+(`127.0.0.1:15432`); Ontop CLI 5.5.0 + JDBC 42.7.3; ontop-cli downloaded
+and installed in-session via `scripts/compare/race.sh` with `ONTOP_PROPS`
+override. Docker PG adds ~0.5 ms symmetric overhead vs native — ratios remain
+meaningful; absolute numbers slightly higher than a native-PG run.
+
 | Query | semantic-fabric | Ontop 5.5.0 | rows (both) | parity | winner |
 |---|---|---|---|---|---|
-| Q1 routes BGP | **0.60** | 2.41 | 8 | OK | sf (4.0×) |
-| Q2 route → agency join | **0.71** | 1.84 | 8 | OK | sf (2.6×) |
-| Q3 stop_time → trip → route | **1.76** | 12.57 | 800 | OK | sf (7.1×) |
-| Q4 route FILTER | **0.58** | 1.64 | 1 | OK | sf (2.8×) |
-| Q5 trip OPTIONAL | **0.81** | 1.84 | 40 | OK | sf (2.3×) |
+| Q1 routes BGP | **1.26** | 2.76 | 8 | OK | sf (2.2×) |
+| Q2 route → agency join | **1.11** | 2.23 | 8 | OK | sf (2.0×) |
+| Q3 stop_time → trip → route | **2.28** | 11.90 | 800 | OK | sf (5.2×) |
+| Q4 route FILTER | **1.15** | 2.20 | 1 | OK | sf (1.9×) |
+| Q5 trip OPTIONAL | **1.21** | 2.41 | 40 | OK | sf (2.0×) |
 
 ### @10x (median of 31 warm round-trips, ms)
 

@@ -1242,6 +1242,27 @@ fn avg_over_integer_column_is_xsd_decimal() {
     assert_eq!(lit(&sol.rows[0][0]), "200", "AVG(100, 300) = 200");
 }
 
+#[test]
+fn sum_over_nonempty_integer_group_is_xsd_integer() {
+    // Regression guard for SUM type inference via storage_class_code:
+    // SUM(integer_col) over non-empty group must be typed xsd:integer, not plain
+    // string. SQLite SUM over INTEGER values returns INTEGER storage class so the
+    // per-row storage_class_code path (not decltype) must correctly produce
+    // Some(XsdTypeCode::Integer). Ada=100, Grace=300 → SUM=400^^xsd:integer.
+    let maps = agg_typed_mapping();
+    let conn = agg_typed_source();
+    let q = format!("SELECT (SUM(?sal) AS ?s) WHERE {{ ?e <{EMP_SALARY}> ?sal }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(sol.rows.len(), 1, "implicit grouping yields one row");
+    assert_eq!(lit(&sol.rows[0][0]), "400", "SUM(100, 300) = 400");
+    assert_eq!(
+        dt(&sol.rows[0][0]),
+        XSD_INTEGER,
+        "SUM over integer column must be xsd:integer"
+    );
+}
+
 // --- FILTER EXISTS / NOT EXISTS (SPARQL §8.4) ---------------------------------
 
 #[test]
