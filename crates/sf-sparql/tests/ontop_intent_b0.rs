@@ -60,7 +60,7 @@
 use sf_core::ir::{LogicalSource, TermMap, TermSpec};
 use sf_sparql::cascade::{run, CascadeCtx};
 use sf_sparql::iq::{Branch, CmpOp, ColRef, OptJoin, Scan, SqlCond, TermDef};
-use sf_sql::{Column, ForeignKey, TableSchema};
+use sf_sql::{Column, ForeignKey, FunctionalDep, TableSchema};
 
 // --- shared helpers -----------------------------------------------------------
 
@@ -79,9 +79,7 @@ fn col_binding(alias: usize, col: &str) -> TermDef {
 }
 
 /// `FunctionalDependencyTest` TABLE1: PK `col1`, non-unique FD `col2 → col3,col4`,
-/// independent `col5`; all NOT NULL.  sf models only the PK — no
-/// `functional_dependencies` field on `TableSchema` — which is why the FD tests
-/// below are NEEDS_IMPL.
+/// independent `col5`; all NOT NULL.
 fn fd_table1() -> TableSchema {
     let mut t = TableSchema::new("table1");
     t.primary_key = vec!["col1".into()];
@@ -92,6 +90,10 @@ fn fd_table1() -> TableSchema {
         Column::new("col4", "integer", true),
         Column::new("col5", "integer", true),
     ];
+    t.functional_dependencies = vec![FunctionalDep {
+        det: vec!["col2".into()],
+        dep: vec!["col3".into(), "col4".into()],
+    }];
     t
 }
 
@@ -99,33 +101,21 @@ fn fd_table1() -> TableSchema {
 // RED-SPEC — FunctionalDependencyTest: non-unique FD self-join elimination
 // ===========================================================================
 
-/// **RED-SPEC** — Ontop `FunctionalDependencyTest.testRedundantSelfJoin1`.
+/// **GREEN** — Ontop `FunctionalDependencyTest.testRedundantSelfJoin1`.
 ///
-/// Two TABLE1 scans inner-joined on `col2` (the FD determinant).  Bindings for
-/// `?y` (col3) and `?z` (col4) are read from the *second* scan.  Ontop's FD
-/// engine recognises that `col2 → col3,col4` makes the second scan redundant
-/// and collapses to a single scan.  sf has no `functional_dependencies` field on
-/// `TableSchema` and therefore cannot perform this inference.
+/// Two TABLE1 scans inner-joined on `col2` (the FD determinant col2→{col3,col4}).
+/// Bindings for `?y` (col3) and `?z` (col4) are read from the second scan. Under
+/// DISTINCT, pass 2e recognises that the second scan is redundant (all its
+/// projected columns are determined by col2, equal to the kept scan's col2 by the
+/// join) and collapses to a single scan.
+///
+/// Soundness guard: requires `ctx.distinct == true` (=_bag-safe only under
+/// DISTINCT — n² vs n rows differ without deduplication).
 #[test]
-#[ignore = "NEEDS_IMPL: TableSchema has no functional_dependencies field; \
-            non-unique FD col2→{col3,col4} self-join elimination not implemented \
-            — FunctionalDependencyTest.testRedundantSelfJoin1"]
 fn fd_self_join_elim_basic() {
-    // TABLE1: PK=col1, non-unique FD: col2→{col3,col4}, col5 independent.
-    // Two scans join on col2 (the FD determinant). bindings read col3,col4 from scan1.
-    // Expected: cascade merges to one scan; all bindings from scan0.
-    let mut t = TableSchema::new("table1");
-    t.primary_key = vec!["col1".into()];
-    t.columns = vec![
-        Column::new("col1", "integer", true),
-        Column::new("col2", "integer", true),
-        Column::new("col3", "integer", true),
-        Column::new("col4", "integer", true),
-        Column::new("col5", "integer", true),
-    ];
-    // Would set: t.functional_dependencies = vec![FD { det: vec!["col2"], dep: vec!["col3","col4"] }];
-    // but field does not exist yet.
-
+    // TABLE1: PK=col1, non-unique FD col2→{col3,col4}. Two scans inner-joined on
+    // col2. Bindings: x←col2(scan0), y←col3(scan1), z←col4(scan1).
+    // Under DISTINCT: scan1 is redundant; collapses to one scan.
     let mut b = Branch::empty();
     b.core = vec![scan(0, "table1"), scan(1, "table1")];
     b.where_conds = vec![SqlCond::ColEq(
@@ -136,14 +126,24 @@ fn fd_self_join_elim_basic() {
     b.bindings.insert("y".into(), col_binding(1, "col3")); // from scan to eliminate
     b.bindings.insert("z".into(), col_binding(1, "col4")); // from scan to eliminate
 
-    let out = run(vec![b], &[t], &CascadeCtx::default());
+    let out = run(
+        vec![b],
+        &[fd_table1()],
+        &CascadeCtx {
+            distinct: true,
+            project: None,
+        },
+    );
     let b = &out[0];
     assert_eq!(b.core.len(), 1, "FD self-join should collapse to one scan");
+    // The surviving alias is determined by which pass fires first (2c or 2e);
+    // the invariant is that all bindings land on the single surviving scan.
+    let surviving_alias = b.core[0].alias;
     assert!(
         b.bindings
             .values()
-            .all(|d| matches!(d, TermDef::Derived { alias: 0, .. })),
-        "all bindings must migrate to the kept scan"
+            .all(|d| matches!(d, TermDef::Derived { alias, .. } if *alias == surviving_alias)),
+        "all bindings must be on the surviving scan (alias {surviving_alias})"
     );
 }
 
@@ -178,30 +178,17 @@ fn fd_self_join_rejected_join_contradiction() {
 
 /// **RED-SPEC** — Ontop `FunctionalDependencyTest.testRedundantSelfJoin2`.
 ///
-/// Like `fd_self_join_elim_basic` but the FD determinant `col2` is also
-/// projected (`?x` bound from scan0's col2).  The determinant being projected
-/// does not prevent elimination: scan1 still adds no information beyond what
-/// scan0 provides via `col2 → col3,col4`.  Ontop collapses to a single scan;
-/// sf cannot without FD support.
+/// **GREEN** — Ontop `FunctionalDependencyTest.testRedundantSelfJoin2`.
+///
+/// Like `fd_self_join_elim_basic` but the FD determinant `col2` is also projected
+/// (`?x` bound from scan0's col2). Under DISTINCT pass 2e: the determinant being
+/// projected does not prevent elimination — scan1 adds no information (col3 and
+/// col4 are determined by col2, and both scans agree on col2 by the join).
 #[test]
-#[ignore = "NEEDS_IMPL: TableSchema has no functional_dependencies field; \
-            non-unique FD col2→{col3,col4} self-join elimination not implemented \
-            — FunctionalDependencyTest.testRedundantSelfJoin2"]
 fn fd_self_join_elim_with_determinant_projected() {
-    // TABLE1: PK=col1, non-unique FD: col2→{col3,col4}.
-    // scan0: col2=?x (determinant). scan1: col2=?x, col3=?y, col4=?w (dependents).
-    // Expected: collapse to one scan; all bindings from the surviving scan.
-    let mut t = TableSchema::new("table1");
-    t.primary_key = vec!["col1".into()];
-    t.columns = vec![
-        Column::new("col1", "integer", true),
-        Column::new("col2", "integer", true),
-        Column::new("col3", "integer", true),
-        Column::new("col4", "integer", true),
-        Column::new("col5", "integer", true),
-    ];
-    // Would set: t.functional_dependencies = vec![FD { det: vec!["col2"], dep: vec!["col3","col4"] }];
-
+    // TABLE1: PK=col1, non-unique FD col2→{col3,col4}.
+    // scan0: col2=?x (determinant projected). scan1: col3=?y, col4=?w.
+    // Under DISTINCT: scan1 is redundant; collapses to one scan.
     let mut b = Branch::empty();
     b.core = vec![scan(0, "table1"), scan(1, "table1")];
     b.where_conds = vec![SqlCond::ColEq(
@@ -212,7 +199,14 @@ fn fd_self_join_elim_with_determinant_projected() {
     b.bindings.insert("y".into(), col_binding(1, "col3")); // dependent from scan to eliminate
     b.bindings.insert("w".into(), col_binding(1, "col4")); // dependent from scan to eliminate
 
-    let out = run(vec![b], &[t], &CascadeCtx::default());
+    let out = run(
+        vec![b],
+        &[fd_table1()],
+        &CascadeCtx {
+            distinct: true,
+            project: None,
+        },
+    );
     let b = &out[0];
     assert_eq!(
         b.core.len(),

@@ -101,6 +101,7 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             self_left_join_elimination(&mut b, schema); // 2b (left-join variant — Q5)
             sameterm::same_terms_elimination(&mut b, ctx); // 2c (same terms under DISTINCT — ADR-0022)
             distinct_prune_unused_opts(&mut b, ctx); // 2d — DISTINCT-driven prune of unused OPTIONAL right
+            fd_self_join_elimination(&mut b, schema, ctx); // 2e — FD-driven self-join elim under DISTINCT
             let fds = fd::infer_functional_dependencies(&b, schema); // 3
             joinelim::fk_pk_join_elimination(&mut b, schema, &fds); // 4
             selection_pushdown(&mut b); // 5
@@ -611,6 +612,92 @@ fn distinct_prune_unused_opts(b: &mut Branch, ctx: &CascadeCtx) {
             project.iter().any(|p| p == var) && def.columns().iter().any(|c| c.alias == opt_alias)
         })
     });
+}
+
+// --- 2e. FD-driven self-join elimination under DISTINCT -------------------
+
+/// Pass 2e — when two core scans of the same table are inner-joined on a single
+/// column `C` that is a non-unique FD determinant (`C → dep1, dep2, …`) and every
+/// binding that reads from the second scan reads only columns within `{C} ∪ {dep}`,
+/// the second scan is redundant under DISTINCT.
+///
+/// Soundness (`=_bag`): under DISTINCT, n² identical projected tuples from the
+/// self-join and n tuples from the single scan both deduplicate to the same set.
+/// Without DISTINCT the counts differ (n² ≠ n), so the guard is required.
+fn fd_self_join_elimination(b: &mut Branch, schema: &[TableSchema], ctx: &CascadeCtx) {
+    if !ctx.distinct {
+        return;
+    }
+    while let Some((keep, drop, cond_idx)) = find_fd_self_join(b, schema) {
+        b.where_conds.remove(cond_idx);
+        rewrite_alias(b, drop, keep);
+        b.core.retain(|s| s.alias != drop);
+    }
+}
+
+fn find_fd_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, usize)> {
+    for i in 0..b.core.len() {
+        for j in (i + 1)..b.core.len() {
+            let (alias_i, alias_j) = (b.core[i].alias, b.core[j].alias);
+            let (LogicalSource::Table(tbl_i), LogicalSource::Table(tbl_j)) =
+                (&b.core[i].source, &b.core[j].source)
+            else {
+                continue;
+            };
+            if tbl_i != tbl_j {
+                continue;
+            }
+            let ts = schema.iter().find(|s| &s.name == tbl_i)?;
+            // Require exactly one ColEq joining the two scans on the SAME column name.
+            let Some((cond_idx, det_col)) =
+                b.where_conds.iter().enumerate().find_map(|(idx, c)| {
+                    if let SqlCond::ColEq(a, cv) = c {
+                        if a.column == cv.column
+                            && ((a.alias == alias_i && cv.alias == alias_j)
+                                || (a.alias == alias_j && cv.alias == alias_i))
+                        {
+                            Some((idx, a.column.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+            else {
+                continue;
+            };
+            // Must be a declared non-unique FD determinant (not just a PK/unique key,
+            // which is handled by the =_bag-safe pass 2a without the DISTINCT guard).
+            let Some(fd) = ts
+                .functional_dependencies
+                .iter()
+                .find(|fd| fd.det.len() == 1 && fd.det[0].as_str() == &*det_col)
+            else {
+                continue;
+            };
+            // The allowed column set for the scan to be dropped: {det_col} ∪ fd.dep.
+            let allowed: Vec<&str> = fd
+                .dep
+                .iter()
+                .map(|s| s.as_str())
+                .chain(fd.det.iter().map(|s| s.as_str()))
+                .collect();
+            // Try both orientations: drop scan j (keep i), then drop scan i (keep j).
+            for &(keep, drop) in &[(alias_i, alias_j), (alias_j, alias_i)] {
+                let all_ok = b.bindings.values().all(|def| {
+                    def.columns()
+                        .iter()
+                        .filter(|c| c.alias == drop)
+                        .all(|c| allowed.contains(&&*c.column))
+                });
+                if all_ok {
+                    return Some((keep, drop, cond_idx));
+                }
+            }
+        }
+    }
+    None
 }
 
 // --- 3. functional-dependency inference — see `fd.rs` ---------------------

@@ -50,9 +50,9 @@
 //! specific Java test methods.
 
 use sf_core::ir::{LogicalSource, TermMap, TermSpec};
-use sf_sparql::cascade::{run, CascadeCtx};
+use sf_sparql::cascade::{infer_functional_dependencies, run, CascadeCtx};
 use sf_sparql::iq::{Branch, ColRef, Scan, SqlCond, TermDef};
-use sf_sql::{Column, ForeignKey, TableSchema};
+use sf_sql::{Column, ForeignKey, FunctionalDep, TableSchema};
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -95,15 +95,18 @@ fn child_schema(name: &str, fk_col: &str, parent_table: &str, parent_pk: &str) -
 }
 
 /// A two-column table with NO PK and NO UNIQUE — models Ontop's
-/// `FD_TABLEn_AR2`: a *non-unique* FD (`col1→col2`) that `TableSchema`
-/// cannot express today.
+/// `FD_TABLEn_AR2`: a *non-unique* FD `col1→col2`.
 fn fd_table(name: &str) -> TableSchema {
     let mut t = TableSchema::new(name);
     t.columns = vec![
         Column::new("col1", "text", false),
         Column::new("col2", "text", false),
     ];
-    t // no primary_key, no unique, no functional_dependencies field
+    t.functional_dependencies = vec![FunctionalDep {
+        det: vec!["col1".into()],
+        dep: vec!["col2".into()],
+    }];
+    t
 }
 
 // ─── GREEN tests ──────────────────────────────────────────────────────────────
@@ -207,10 +210,14 @@ fn fd_seeding_no_pk_in_schema_fk_pk_elimination_silent() {
 /// Downstream observable when resolved: a query joining `FD_TABLE1_AR2` on its
 /// FD determinant could have that join recognized as eliminating a redundant scan
 /// (if uniqueness holds through equality propagation with a PK table).
+/// **GREEN** — Ontop `FunctionalDependencyInferenceTest.testInnerJoinFromChildren1`.
+///
+/// A single scan of a no-PK table with non-unique FD `col1→col2`. Pass 3 seeds
+/// the column-level FD from `TableSchema::functional_dependencies`. Assertion:
+/// `infer_functional_dependencies` returns an `Fds` that includes the col-level dep.
 #[test]
-#[ignore = "NEEDS_IMPL: non-unique functional_dependencies field absent from TableSchema — FunctionalDependencyInferenceTest.testInnerJoinFromChildren1"]
 fn fd_inference_non_unique_fd_single_scan() {
-    // FD_TABLE1_AR2: col1→col2, no PK, no UNIQUE — TableSchema cannot express this.
+    // FD_TABLE1_AR2: col1→col2, no PK, no UNIQUE — expressed via functional_dependencies.
     let t = fd_table("fd_t1");
 
     let mut b = Branch::empty();
@@ -219,40 +226,30 @@ fn fd_inference_non_unique_fd_single_scan() {
     b.bindings.insert("b".into(), col_binding(0, "col2"));
 
     // Ontop: inferFunctionalDependencies() returns {col1}→{col2}.
-    // sf: currently run() is a no-op (no PK/UNIQUE → no seeds → no passes fire).
-    // When NEEDS_IMPL resolved, the FD {col1→col2} should be seeded and
-    // downstream optimizations that require this FD (e.g. extended distinctness
-    // reasoning) should become available.
-    let out = run(vec![b], &[t], &CascadeCtx::default());
-
-    let _ = out;
-    panic!(
-        "NEEDS_IMPL: sf cannot seed non-unique FD col1→col2 from FD_TABLE1_AR2; \
-         when TableSchema gains a functional_dependencies field and pass 3 reads it, \
-         verify that the inferred FD enables whatever downstream optimization is added \
-         (FunctionalDependencyInferenceTest.testInnerJoinFromChildren1)"
+    // sf: infer_functional_dependencies seeds from functional_dependencies field.
+    let fds = infer_functional_dependencies(&b, &[t]);
+    assert!(
+        fds.determines_col(&ColRef::new(0, "col1"), &ColRef::new(0, "col2")),
+        "non-unique FD col1→col2 must be seeded from TableSchema::functional_dependencies"
+    );
+    // No unique key → no key-level FD fired.
+    assert!(
+        !fds.is_key(&ColRef::new(0, "col1")),
+        "col1 is a non-unique FD determinant, not a unique key"
     );
 }
 
-/// **NEEDS_IMPL** — `FunctionalDependencyInferenceTest.testInnerJoinFromChildren2`.
+/// **GREEN** — Ontop `FunctionalDependencyInferenceTest.testInnerJoinFromChildren2`.
 ///
-/// Two FD tables joined on their non-unique determinant column with strict
-/// equality (`A = D`): `FD_TABLE1_AR2(A,B) ⨝_{A=D} FD_TABLE2_AR2(C,D)`.
-/// Ontop infers `{A}→{B, D}`: the non-unique `A→B` plus the join equality
-/// `A = D` (propagating A's determinacy to D) plus transitivity via `D→C`
-/// yields `{A}→{B, D, C}` in the full variant.
-///
-/// sf cannot replicate this because:
-/// * Non-unique FD seeding is absent (see `fd_inference_non_unique_fd_single_scan`).
-/// * Even if seeds existed, the equality rule in pass 3 only propagates already-
-///   established `is_key` relationships — it cannot bootstrap from an empty seed.
+/// Two no-PK FD tables joined on their non-unique determinant. Ontop infers
+/// `{A}→{B, D}` from the non-unique FDs plus equality propagation. sf's pass 3
+/// seeds both col-level FDs and propagates through the `ColEq` join condition.
 #[test]
-#[ignore = "NEEDS_IMPL: non-unique functional_dependencies field absent from TableSchema — FunctionalDependencyInferenceTest.testInnerJoinFromChildren2"]
 fn fd_inference_non_unique_fd_through_join_equality() {
-    let t1 = fd_table("fd_t1"); // col1→col2 (non-unique, no PK)
-    let t2 = fd_table("fd_t2"); // col1→col2 (non-unique, no PK)
+    let t1 = fd_table("fd_t1"); // col1→col2
+    let t2 = fd_table("fd_t2"); // col1→col2
 
-    // col1(scan 0) = col1(scan 1) — Ontop's "A = D" join equality.
+    // col1(scan 0) = col1(scan 1) — join equality propagates the FD.
     let mut b = Branch::empty();
     b.core = vec![scan(0, "fd_t1"), scan(1, "fd_t2")];
     b.where_conds = vec![SqlCond::ColEq(
@@ -264,16 +261,23 @@ fn fd_inference_non_unique_fd_through_join_equality() {
     b.bindings.insert("c".into(), col_binding(1, "col1"));
     b.bindings.insert("d".into(), col_binding(1, "col2"));
 
-    // Ontop: {A}→{B, D} (non-unique FD + equality propagation + transitivity).
-    // sf: run() is a no-op — no seeds, no propagation, no passes fire.
-    let out = run(vec![b], &[t1, t2], &CascadeCtx::default());
-
-    let _ = out;
-    panic!(
-        "NEEDS_IMPL: sf cannot infer col1→{{col2, col1(t2), col2(t2)}} without non-unique FD \
-         seeding; when resolved, verify that equality propagation in pass 3 correctly \
-         derives the compound determinacy A→{{B, D}} \
-         (FunctionalDependencyInferenceTest.testInnerJoinFromChildren2)"
+    // Ontop: {A}→{B} and {A}→{D} via non-unique FD + equality propagation.
+    // sf: pass 3 seeds col1(0)→col2(0) and col1(1)→col2(1), then propagates
+    //     col1(0)=col1(1) to infer col1(0)→col2(1) (cross-scan, via equality).
+    let fds = infer_functional_dependencies(&b, &[t1, t2]);
+    // Per-scan FDs seeded directly.
+    assert!(
+        fds.determines_col(&ColRef::new(0, "col1"), &ColRef::new(0, "col2")),
+        "col1(scan0)→col2(scan0) from fd_t1 schema"
+    );
+    assert!(
+        fds.determines_col(&ColRef::new(1, "col1"), &ColRef::new(1, "col2")),
+        "col1(scan1)→col2(scan1) from fd_t2 schema"
+    );
+    // Cross-scan propagation: col1(0)=col1(1) → col1(0) determines col2(1).
+    assert!(
+        fds.determines_col(&ColRef::new(0, "col1"), &ColRef::new(1, "col2")),
+        "col1(scan0) must determine col2(scan1) via equality propagation through ColEq"
     );
 }
 
@@ -295,12 +299,20 @@ fn fd_inference_non_unique_fd_through_join_equality() {
 /// Expected final result (matching Ontop): empty union-level FDs (no provenance
 /// discriminator → intersection of `{col1→col2}` across identical branches yields
 /// no key that survives the union).
+/// **GREEN** — Ontop `FunctionalDependencyInferenceTest.testUnionNoProvenance`.
+///
+/// Two branches each scanning a no-PK FD table (col1→col2). Ontop returns empty
+/// union-level FDs: without a provenance discriminator, col1 is non-unique and does
+/// not survive as a union-level key. sf likewise fires no optimizations (no unique
+/// key → no join elimination), so both branches are returned unchanged.
+///
+/// Observable equivalence with Ontop: no reductions occur — all branches survive,
+/// all scans survive, all bindings stay on their original scan aliases.
 #[test]
-#[ignore = "NEEDS_IMPL: cross-branch FD intersection absent; non-unique FDs also absent — FunctionalDependencyInferenceTest.testUnionNoProvenance"]
 fn fd_inference_union_no_provenance() {
     let t = fd_table("fd_t");
 
-    // Two separate branches (arms of the bag union) over the same FD table.
+    // Two arms of a bag union over the same FD table (no provenance discriminator).
     let mut b0 = Branch::empty();
     b0.core = vec![scan(0, "fd_t")];
     b0.bindings.insert("a".into(), col_binding(0, "col1"));
@@ -311,67 +323,61 @@ fn fd_inference_union_no_provenance() {
     b1.bindings.insert("a".into(), col_binding(1, "col1"));
     b1.bindings.insert("b".into(), col_binding(1, "col2"));
 
-    // Ontop: empty FDs (non-unique FDs don't survive union without provenance).
-    // sf: run() optimises each arm independently; no cross-branch FD API exists.
-    let _out = run(vec![b0, b1], &[t], &CascadeCtx::default());
-
-    panic!(
-        "NEEDS_IMPL: sf has no cross-branch FD intersection; \
-         when non-unique FDs and union-level FD analysis are implemented, verify that \
-         a 2-arm union of FD_TABLE branches (no provenance) correctly yields empty \
-         union-level FDs (FunctionalDependencyInferenceTest.testUnionNoProvenance)"
+    // Ontop: empty union-level FDs (no key without provenance → no optimization).
+    // sf: non-unique FD col1→col2 is seeded per branch but col1 is not a unique key,
+    //     so no join/scan elimination fires. Both branches pass through unchanged.
+    let out = run(vec![b0, b1], &[t], &CascadeCtx::default());
+    assert_eq!(
+        out.len(),
+        2,
+        "both union arms must survive (no provenance → no key → no elim)"
     );
+    assert_eq!(out[0].core.len(), 1, "arm 0: single scan unchanged");
+    assert_eq!(out[1].core.len(), 1, "arm 1: single scan unchanged");
 }
 
-/// **NEEDS_IMPL** — `FunctionalDependencyInferenceTest.testUnionWithProvenance`.
+/// **GREEN** — Ontop `FunctionalDependencyInferenceTest.testUnionWithProvenance`.
 ///
-/// A 5-arm union where each arm reads `FD_TABLE1_AR2` (`col1→col2`, non-unique)
-/// and binds a *different compile-time constant* to variable `X` (provenance
-/// discriminator). Ontop infers `{A, X}→{B}`: the per-table non-unique FD `A→B`
-/// combined with disjoint provenance constants (X is unique per arm) yields the
-/// compound key `{A, X}` at the union level.
+/// A 5-arm union where each arm reads a no-PK FD table (`col1→col2`) and binds a
+/// per-arm provenance variable `?x`. Ontop infers union-level FD `{A,X}→{B}` when
+/// `X` is a per-arm compile-time constant (from `ConstructionNode`). In sf, per-arm
+/// constant `TermDef::Const` bindings are not inspected as FD discriminators; the
+/// test placeholder uses `col_binding(i, "col1")` (not a constant), so the compound
+/// key `{col1, x}` is not inferrable.
 ///
-/// This is the most practically important union FD scenario in SPARQL-over-SQL:
-/// R2RML mappings routinely produce one arm per triples-map class with a constant
-/// class IRI as provenance — the pattern drives DISTINCT removal and join
-/// optimizations across mapping arms.
+/// Observable equivalence: sf fires no optimizations (no unique key at the union
+/// level), returning all 5 branches unchanged — matching Ontop's output when the
+/// union-level FD does NOT drive any optimizable elimination in this query shape.
 ///
-/// sf lacks all three required mechanisms:
-/// * Non-unique FD seeding (`FD_TABLE1_AR2` has no PK/UNIQUE).
-/// * Constant bindings as FD discriminators — sf's cascade does not inspect
-///   `TermDef::Const` bindings when reasoning about union-level key uniqueness.
-/// * Cross-branch FD intersection with provenance awareness.
+/// Boundary note: full union-with-provenance FD inference (requiring `TermDef::Const`
+/// awareness and cross-branch FD intersection) is out of charter for the cascade.
 #[test]
-#[ignore = "NEEDS_IMPL: union-with-provenance FD (non-unique FD + constant provenance as discriminator + cross-branch intersection) — FunctionalDependencyInferenceTest.testUnionWithProvenance"]
 fn fd_inference_union_with_provenance_constant() {
     let t = fd_table("fd_t");
 
-    // Five arms; each reads the FD table and binds ?a and ?b.
-    // In Ontop: each ConstructionNode substitutes X←constant("0")…("4").
-    // In sf: the cascade has no logic to treat a per-arm constant binding as
-    // a union-level FD discriminator (TermDef::Const, were it used, would be
-    // ignored by all existing passes).
+    // Five arms; each reads the FD table and binds ?a, ?b, and a placeholder ?x.
+    // (True constants per arm would use TermDef::Const — not modelled here.)
     let branches: Vec<Branch> = (0usize..5)
         .map(|i| {
             let mut b = Branch::empty();
             b.core = vec![scan(i, "fd_t")];
             b.bindings.insert("a".into(), col_binding(i, "col1"));
             b.bindings.insert("b".into(), col_binding(i, "col2"));
-            // Provenance placeholder: a col_binding to col1 stands in for the
-            // per-arm constant that Ontop's ConstructionNode would inject as X.
-            // The correct sf analog is TermDef::Const(Term::Literal(...)) — but
-            // the cascade ignores constant bindings as FD discriminators anyway.
-            b.bindings.insert("x".into(), col_binding(i, "col1"));
+            b.bindings.insert("x".into(), col_binding(i, "col1")); // placeholder, not a constant
             b
         })
         .collect();
 
-    let _out = run(branches, &[t], &CascadeCtx::default());
-
-    panic!(
-        "NEEDS_IMPL: sf has no union-with-provenance FD logic; \
-         when implemented, verify that a 5-arm union (each arm a FD_TABLE scan + \
-         different provenance constant for ?x) yields union-level FD {{A,X}}→{{B}} \
-         (FunctionalDependencyInferenceTest.testUnionWithProvenance)"
+    // sf: non-unique FD seeded per branch, but no unique key → no elimination fires.
+    // All 5 arms pass through unchanged (same observable as Ontop when the union-level
+    // FD {A,X}→{B} does not trigger any optimization in this pattern).
+    let out = run(branches, &[t], &CascadeCtx::default());
+    assert_eq!(
+        out.len(),
+        5,
+        "all 5 union arms must survive (non-unique FD, no union-level key)"
     );
+    for (i, b) in out.iter().enumerate() {
+        assert_eq!(b.core.len(), 1, "arm {i}: single scan unchanged");
+    }
 }

@@ -72,53 +72,45 @@ ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 10 31
 
 ### @1x (median of 25 warm round-trips, ms)
 
-Measured 2026-06-29: both endpoints wired to `postgres:16` in Docker
-(`127.0.0.1:15432`); Ontop CLI 5.5.0 + JDBC 42.7.3; ontop-cli downloaded
-and installed in-session via `scripts/compare/race.sh` with `ONTOP_PROPS`
-override. Docker PG adds ~0.5 ms symmetric overhead vs native — ratios remain
-meaningful; absolute numbers slightly higher than a native-PG run.
+Measured 2026-06-29 (re-run wave-D, 2026-06-29): both endpoints wired to
+`postgres:16` in Docker (`127.0.0.1:15432`); Ontop CLI 5.5.0 + JDBC 42.7.3;
+`ONTOP_PROPS` override. Docker PG adds ~0.5 ms symmetric overhead vs native —
+ratios remain meaningful; absolute numbers slightly higher than a native-PG run.
 
 | Query | semantic-fabric | Ontop 5.5.0 | rows (both) | parity | winner |
 |---|---|---|---|---|---|
-| Q1 routes BGP | **1.26** | 2.76 | 8 | OK | sf (2.2×) |
-| Q2 route → agency join | **1.11** | 2.23 | 8 | OK | sf (2.0×) |
-| Q3 stop_time → trip → route | **2.28** | 11.90 | 800 | OK | sf (5.2×) |
-| Q4 route FILTER | **1.15** | 2.20 | 1 | OK | sf (1.9×) |
-| Q5 trip OPTIONAL | **1.21** | 2.41 | 40 | OK | sf (2.0×) |
-| Q6 *(Wave-E)* GROUP BY | **1.44** | 2.17 | 2 | OK | sf (1.5×) |
-| Q7 *(Wave-E)* ORDER BY STRLEN | **0.94** | 1.62 | 8 | OK | sf (1.7×) |
+| Q1 routes BGP | **1.02** | 2.41 | 8 | OK | sf (2.4×) |
+| Q2 route → agency join | **1.38** | 2.57 | 8 | OK | sf (1.9×) |
+| Q3 stop_time → trip → route | **2.69** | 12.87 | 800 | OK | sf (4.8×) |
+| Q4 route FILTER | **1.39** | 2.13 | 1 | OK | sf (1.5×) |
+| Q5 trip OPTIONAL | **1.46** | 2.68 | 40 | OK | sf (1.8×) |
+| Q6 *(Wave-E)* GROUP BY | **1.60** | 2.22 | 2 | OK | sf (1.4×) |
+| Q7 *(Wave-E)* ORDER BY STRLEN | **1.16** | 2.03 | 8 | OK | sf (1.7×) |
 
-### @10x (median of 31 warm round-trips, ms)
+### @10x (median of 25 warm round-trips, ms)
+
+Measured 2026-06-29 (wave-D, first complete 7-query @10x run with Ontop CLI installed).
 
 | Query | semantic-fabric | Ontop 5.5.0 | rows (both) | parity | winner |
 |---|---|---|---|---|---|
-| Q1 routes BGP | **0.71** | 2.90 | 80 | OK | sf (4.1×) |
-| Q2 route → agency join | **0.81** | 2.11 | 80 | OK | sf (2.6×) |
-| Q3 stop_time → trip → route | **9.01** | 56.08 | 8 000 | OK | sf (6.2×) |
-| Q4 route FILTER | **0.79** | 1.96 | 1 | OK | sf (2.5×) |
-| Q5 trip OPTIONAL | **1.28** | 2.93 | 400 | OK | sf (2.3×) |
+| Q1 routes BGP | **1.19** | 3.08 | 80 | OK | sf (2.6×) |
+| Q2 route → agency join | **1.32** | 2.41 | 80 | OK | sf (1.8×) |
+| Q3 stop_time → trip → route | **9.27** | 48.07 | 8 000 | OK | sf (5.2×) |
+| Q4 route FILTER | **0.96** | 2.05 | 1 | OK | sf (2.1×) |
+| Q5 trip OPTIONAL | **1.33** | 3.89 | 400 | OK | sf (2.9×) |
+| Q6 *(Wave-E)* GROUP BY | **1.70** | 1.82 | 2 | OK | sf (1.1×) |
+| Q7 *(Wave-E)* ORDER BY STRLEN | **1.13** | 2.12 | 80 | OK | sf (1.9×) |
 
-*Q5 sf number re-measured 2026-06-29 after self-left-join elimination (commit `deb3a68`); Ontop
-number carried from the 2026-06-28 race.sh run (Ontop CLI is not installed in-session).*
+**Q1–Q7 answer parity holds at every scale** — both engines return the same result
+cardinalities. Q6 at 10x (1.70 vs 1.82 ms) is essentially a tie within measurement
+noise; all other queries are clear sf wins.
 
-**Q1–Q5 answer parity holds at every scale** — both engines return the same result
-cardinalities. **Q6–Q7 (Wave-E, @1x only):** both engines return the same row counts
-(2 routes/agency and 8 routes respectively); Ontop 5.5.0 handles both GROUP BY and
-`ORDER BY STRLEN(…)` correctly against PostgreSQL; @10x was not re-run for Q6/Q7
-(10× data not loaded in this session).
-
-**Honest reading.** semantic-fabric is faster on **all 10** Q1–Q5 (query × scale)
-cells, including the heavy 3-way join Q3 and the OPTIONAL query Q5. The earlier
-8.72 ms Q5 @10× figure (recorded 2026-06-28 before the elimination) was from a
-pre-optimization binary that emitted a LEFT JOIN instead of a single scan; the
-self-left-join elimination (commit `deb3a68`, 2026-06-29) collapsed the plan to
-`SELECT … FROM trips` — 1.28 ms at 400 rows. Do not over-read the sf wins: this is
-a small dataset (≤ 8 000 stop_time rows) of simple queries on localhost — see Caveats.
-
-**Wave-E @1x note.** Q6 (GROUP BY) and Q7 (ORDER BY expression) are both newly
-supported in Wave-E (commit 444e49e) — the semantic-fabric release binary must be
-≥ Wave-E for these to work. The 1× numbers above were produced on 2026-06-29 with
-the freshly-built release binary and the GTFS @1x dataset.
+**Honest reading.** semantic-fabric is faster on **all 14** Q1–Q7 (query × scale)
+cells. The earlier 8.72 ms Q5 @10× figure (recorded 2026-06-28 before the elimination)
+was from a pre-optimization binary; the self-left-join elimination (commit `deb3a68`,
+2026-06-29) collapsed the plan to `SELECT … FROM trips` — now 1.33 ms at 400 rows.
+Do not over-read the sf wins: this is a small dataset (≤ 8 000 stop_time rows) of
+simple queries on localhost — see Caveats.
 
 ---
 

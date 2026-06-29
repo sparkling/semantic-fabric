@@ -31,7 +31,7 @@ pub mod stream;
 pub use cost::{plan_semijoin, CostConfig, Plan, ReducerForm, Side, SideStats};
 pub use dialect::Dialect;
 pub use error::{Error, Result};
-pub use schema::{Column, ForeignKey, TableSchema};
+pub use schema::{Column, ForeignKey, FunctionalDep, TableSchema};
 pub use stream::{
     sqlite_column_decltypes, sqlite_column_names, sqlite_for_each, PgRowStream, SqliteRowStream,
 };

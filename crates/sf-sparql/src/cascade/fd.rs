@@ -12,10 +12,16 @@ use crate::iq::{Branch, ColRef, SqlCond};
 /// superkey of that scan's projection). Built for pass (4): a join may be
 /// eliminated only once uniqueness is proven, and uniqueness is exactly "the
 /// join column is a key" — an FD whose determinant is that column.
+///
+/// `col_deps` tracks column-level non-unique FDs (`det_col → dep_col`), seeded
+/// from [`TableSchema::functional_dependencies`] and used by pass (2e).
 #[derive(Debug, Default)]
 pub struct Fds {
     /// `(det, alias)`: `det` functionally determines all columns of `alias`.
     pub(super) deps: Vec<(ColRef, usize)>,
+    /// `(det_col, dep_col)`: non-unique column-level FD — `det_col` determines
+    /// `dep_col` (multiple rows may share the same `det_col` value).
+    pub(super) col_deps: Vec<(ColRef, ColRef)>,
 }
 
 impl Fds {
@@ -36,6 +42,20 @@ impl Fds {
     /// uniqueness precondition pass (4) consults.
     pub fn is_key(&self, c: &ColRef) -> bool {
         self.has(c, c.alias)
+    }
+
+    /// Does `det` determine `dep` at the column level (non-unique FD)?
+    pub fn determines_col(&self, det: &ColRef, dep: &ColRef) -> bool {
+        self.col_deps.iter().any(|(d, p)| d == det && p == dep)
+    }
+
+    pub(super) fn add_col_dep(&mut self, det: ColRef, dep: ColRef) -> bool {
+        if self.determines_col(&det, &dep) {
+            false
+        } else {
+            self.col_deps.push((det, dep));
+            true
+        }
     }
 }
 
@@ -62,6 +82,15 @@ pub fn infer_functional_dependencies(b: &Branch, schema: &[TableSchema]) -> Fds 
                 for col in single_col_keys(ts) {
                     fds.add(ColRef::new(scan.alias, col), scan.alias);
                 }
+                // Seed non-unique column-level FDs from TableSchema.
+                for fd in &ts.functional_dependencies {
+                    if fd.det.len() == 1 {
+                        let det = ColRef::new(scan.alias, fd.det[0].as_str());
+                        for dep_col in &fd.dep {
+                            fds.add_col_dep(det.clone(), ColRef::new(scan.alias, dep_col.as_str()));
+                        }
+                    }
+                }
             }
         }
     }
@@ -72,6 +101,17 @@ pub fn infer_functional_dependencies(b: &Branch, schema: &[TableSchema]) -> Fds 
             if let SqlCond::ColEq(a, c) = cond {
                 changed |= propagate_eq(&mut fds, a, c);
                 changed |= propagate_eq(&mut fds, c, a);
+                // Propagate column-level FDs through equality: if det→dep and ColEq(det, x),
+                // then x→dep; and if dep→x and ColEq(det, dep), then det→x.
+                let col_snapshot: Vec<(ColRef, ColRef)> = fds.col_deps.clone();
+                for (det, dep) in &col_snapshot {
+                    if det == a {
+                        changed |= fds.add_col_dep(c.clone(), dep.clone());
+                    }
+                    if det == c {
+                        changed |= fds.add_col_dep(a.clone(), dep.clone());
+                    }
+                }
             }
         }
         // transitivity — snapshot the current edges to avoid borrow conflicts.

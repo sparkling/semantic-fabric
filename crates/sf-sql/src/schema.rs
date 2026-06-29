@@ -44,6 +44,20 @@ pub struct ForeignKey {
     pub parent_columns: Vec<String>,
 }
 
+/// A non-unique functional dependency: `det` column(s) together determine each
+/// column in `dep`. Unlike a key, multiple rows may share the same determinant
+/// value. Drives FD-driven self-join elimination under DISTINCT (ADR-0007).
+///
+/// This field is annotation-only — the catalog introspector does not populate it
+/// yet; tests and SPARQL-mapping pipelines that know the FD can inject it directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionalDep {
+    /// Determinant column(s).
+    pub det: Vec<String>,
+    /// Dependent column(s) — each is functionally determined by `det`.
+    pub dep: Vec<String>,
+}
+
 /// A table's introspected schema.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TableSchema {
@@ -55,6 +69,9 @@ pub struct TableSchema {
     /// Unique constraints/indexes, each a column set (in index order).
     pub unique: Vec<Vec<String>>,
     pub foreign_keys: Vec<ForeignKey>,
+    /// Non-unique functional dependencies declared on this table. Drives
+    /// FD-driven self-join elimination under DISTINCT (ADR-0007).
+    pub functional_dependencies: Vec<FunctionalDep>,
     /// Estimated total rows (`pg_class.reltuples`, `sqlite_stat1` row count).
     /// `None` ⇒ no statistics (e.g. `ANALYZE` never run).
     pub row_estimate: Option<u64>,
