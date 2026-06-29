@@ -1583,7 +1583,13 @@ fn optional_multi_scan_right_side() {
     let got: BTreeSet<(String, Option<String>, Option<String>)> = sol
         .rows
         .iter()
-        .map(|r| (lit(&r[0]), r[1].as_ref().map(|_| lit(&r[1])), r[2].as_ref().map(|_| lit(&r[2]))))
+        .map(|r| {
+            (
+                lit(&r[0]),
+                r[1].as_ref().map(|_| lit(&r[1])),
+                r[2].as_ref().map(|_| lit(&r[2])),
+            )
+        })
         .collect();
     let expect: BTreeSet<(String, Option<String>, Option<String>)> = [
         (
