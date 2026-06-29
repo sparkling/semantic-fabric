@@ -59,6 +59,7 @@ pub mod cascade;
 pub mod dump;
 pub mod emit;
 pub mod exec;
+pub mod exec_mysql;
 pub mod exec_pg;
 pub mod iq;
 pub mod leftjoin;

@@ -18,6 +18,9 @@ pub enum Error {
     /// A PostgreSQL source driver error (`tokio-postgres`).
     #[error("postgres error: {0}")]
     Postgres(#[from] tokio_postgres::Error),
+    /// A MySQL source driver error (`mysql_async`).
+    #[error("mysql error: {0}")]
+    Mysql(#[from] mysql_async::Error),
 }
 
 /// The crate result alias.

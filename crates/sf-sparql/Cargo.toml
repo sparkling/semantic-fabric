@@ -21,6 +21,8 @@ thiserror.workspace = true
 rayon = "1.12"                 # SEPARATE CPU pool for term-gen (ADR-0006 rayon/tokio separation)
 rusqlite = { version = "0.32", features = ["bundled"] } # SQLite execution of emitted SQL (this-wave target)
 tokio-postgres = "0.7"         # PostgreSQL execution of emitted SQL via PgRowStream/query_raw (ADR-0010 §C)
+mysql_async = { version = "0.35", default-features = false, features = ["default-rustls"] } # MySQL execution (WS-D)
 
 [dev-dependencies]
 oxrdf.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # async MySQL integration test

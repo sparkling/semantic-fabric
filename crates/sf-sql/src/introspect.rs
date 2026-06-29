@@ -335,6 +335,118 @@ pub async fn introspect_postgres(
     Ok(schema)
 }
 
+// --- MySQL (integration-tested, ADR-0012) -------------------------------------
+
+/// Columns, NOT NULL, and data type — from `information_schema.COLUMNS`, bound
+/// by table name with a `?` positional placeholder (Dialect::MySql, ADR-0010 R1).
+const MYSQL_COLUMNS_SQL: &str = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
+     FROM information_schema.COLUMNS \
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
+     ORDER BY ORDINAL_POSITION";
+
+/// PRIMARY KEY and UNIQUE constraints — from `information_schema.STATISTICS` which
+/// is per-index-column and available without additional joins (ADR-0014 §mysql-pk).
+const MYSQL_KEYS_SQL: &str = "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX \
+     FROM information_schema.STATISTICS \
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
+     ORDER BY INDEX_NAME, SEQ_IN_INDEX";
+
+/// Foreign keys — from `information_schema.KEY_COLUMN_USAGE` cross-joined to
+/// `REFERENTIAL_CONSTRAINTS` so we get both child and parent column names in
+/// ordinal order (positional `?` bind for table name, ADR-0010 R1).
+const MYSQL_FK_SQL: &str =
+    "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
+            kcu.REFERENCED_COLUMN_NAME \
+     FROM information_schema.KEY_COLUMN_USAGE kcu \
+     JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
+       ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
+      AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA \
+     WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = ? \
+       AND kcu.REFERENCED_TABLE_NAME IS NOT NULL \
+     ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
+
+/// Introspect `table` from a live MySQL connection via `information_schema`.
+/// All catalog SQL uses `?` positional placeholders (ADR-0010 R1). Statistics
+/// (row estimate, distinct counts) are not available without `ANALYZE` having
+/// been run; they are omitted and treated as unknown by the planner.
+///
+/// Requires a live server; exercised by the integration suite (ADR-0012).
+pub async fn introspect_mysql(conn: &mut mysql_async::Conn, table: &str) -> Result<TableSchema> {
+    use mysql_async::prelude::Queryable;
+    use mysql_async::Value;
+
+    let mut schema = TableSchema::new(table);
+
+    // Columns.
+    let col_rows: Vec<mysql_async::Row> =
+        conn.exec(MYSQL_COLUMNS_SQL, (Value::from(table),)).await?;
+    for row in &col_rows {
+        let name: String = row.get(0).ok_or_else(|| {
+            Error::Introspection(format!("MySQL COLUMNS missing COLUMN_NAME for {table}"))
+        })?;
+        let data_type: String = row.get(1).ok_or_else(|| {
+            Error::Introspection(format!("MySQL COLUMNS missing DATA_TYPE for {name}"))
+        })?;
+        let is_nullable: String = row.get(2).ok_or_else(|| {
+            Error::Introspection(format!("MySQL COLUMNS missing IS_NULLABLE for {name}"))
+        })?;
+        schema.columns.push(Column::new(
+            name,
+            data_type,
+            is_nullable.eq_ignore_ascii_case("NO"),
+        ));
+    }
+    if schema.columns.is_empty() {
+        return Err(Error::Introspection(format!(
+            "MySQL table {table:?} not found in information_schema"
+        )));
+    }
+
+    // Primary key + unique indexes.
+    let key_rows: Vec<mysql_async::Row> = conn.exec(MYSQL_KEYS_SQL, (Value::from(table),)).await?;
+    let mut indexes: BTreeMap<String, (bool, Vec<String>)> = BTreeMap::new(); // name → (unique, cols)
+    for row in &key_rows {
+        let index_name: String = row.get(0).unwrap_or_default();
+        let non_unique: u8 = row.get::<u8, _>(1).unwrap_or(1);
+        let col_name: String = row.get(2).unwrap_or_default();
+        let e = indexes
+            .entry(index_name)
+            .or_insert((non_unique == 0, Vec::new()));
+        e.1.push(col_name);
+    }
+    for (name, (unique, cols)) in &indexes {
+        if name == "PRIMARY" {
+            schema.primary_key = cols.clone();
+        } else if *unique {
+            schema.unique.push(cols.clone());
+        }
+    }
+
+    // Foreign keys.
+    let fk_rows: Vec<mysql_async::Row> = conn.exec(MYSQL_FK_SQL, (Value::from(table),)).await?;
+    let mut fk_map: BTreeMap<String, (Vec<String>, String, Vec<String>)> = BTreeMap::new();
+    for row in &fk_rows {
+        let cname: String = row.get(0).unwrap_or_default();
+        let col: String = row.get(1).unwrap_or_default();
+        let ptable: String = row.get(2).unwrap_or_default();
+        let pcol: String = row.get(3).unwrap_or_default();
+        let e = fk_map
+            .entry(cname)
+            .or_insert((Vec::new(), ptable, Vec::new()));
+        e.0.push(col);
+        e.2.push(pcol);
+    }
+    for (_, (cols, parent_table, parent_cols)) in fk_map {
+        schema.foreign_keys.push(ForeignKey {
+            columns: cols,
+            parent_table,
+            parent_columns: parent_cols,
+        });
+    }
+
+    Ok(schema)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +562,17 @@ mod tests {
             assert!(
                 sql.contains("$1"),
                 "catalog SQL must bind table name: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn mysql_catalog_sql_binds_table_as_parameter() {
+        // MySQL catalog SQL must use ? placeholders (Dialect::MySql) — never inline.
+        for sql in [MYSQL_COLUMNS_SQL, MYSQL_KEYS_SQL, MYSQL_FK_SQL] {
+            assert!(
+                sql.contains('?'),
+                "MySQL catalog SQL must bind table name: {sql}"
             );
         }
     }
