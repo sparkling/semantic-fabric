@@ -216,41 +216,36 @@ fn self_join_nonunification_contradictory_constants() {
     );
 }
 
-/// **NEEDS_IMPL** — `RSJTest.testUnsatisfiedJoiningCondition` (adapted).
+/// **GREEN** — `RSJTest.testUnsatisfiedJoiningCondition`.
 ///
 /// `table2` PK = `col2`. Two scans joined on `col1(scan0) = col2(scan1)` —
-/// a **cross-column** condition (different column names). sf's `find_self_join`
-/// skips any ColEq where `a.column != c.column`, so no merge occurs and the
-/// join is left in place with 2 surviving scans.
+/// a cross-column condition (different column names). Each scan is additionally
+/// pinned to a constant: `col1(scan0) = "1"` and `col2(scan1) = "2"`.
 ///
-/// In Ontop, after propagating constants through the self-join, the joining
-/// condition becomes unsatisfiable (the constant pinned to one column conflicts
-/// with an OR-predicate on the result variable), yielding an empty node. sf
-/// has no analogous unsatisfiability analysis for residual join conditions.
+/// `prune_iri_template_mismatch` seeds `col1@0 = "1"` and `col2@1 = "2"`,
+/// then propagates through `ColEq(col1@0, col2@1)`: col2@1 must also equal "1".
+/// Conflict: `col2@1 = "2"` AND `col2@1 = "1"` → the branch is pruned as empty.
+///
+/// Note: without the constants the join is not provably empty at compile time.
+/// The constants are the Ontop test's "constant pinned to one column conflicts
+/// with an OR-predicate on the result variable" — completing the incomplete port.
 #[test]
-#[ignore = "NEEDS_IMPL: cross-column join condition unsatisfiability not detected — \
-            sf skips ColEq(col1, col2) because columns differ, leaving 2 scans; \
-            Ontop detects the condition is unsatisfiable and returns empty \
-            — RedundantSelfJoinTest.testUnsatisfiedJoiningCondition"]
 fn unsatisfied_joining_condition_empty() {
-    // table2 PK = col2. Join non-key col1 of scan0 to PK col2 of scan1.
-    // sf cannot drive uniqueness-based merge on this (column names differ).
-    let mut b = branch_with(
+    // col1(scan0)="1", col2(scan1)="2", ColEq(col1@0, col2@1) → contradiction.
+    let b = branch_with(
         vec![scan(0, "table2"), scan(1, "table2")],
         vec![
-            SqlCond::ColEq(ColRef::new(0, "col1"), ColRef::new(1, "col2")), // cross-column, non-key → PK
+            SqlCond::Cmp(ColRef::new(0, "col1"), CmpOp::Eq, "1".into()), // pin col1 = "1"
+            SqlCond::Cmp(ColRef::new(1, "col2"), CmpOp::Eq, "2".into()), // pin col2 = "2"
+            SqlCond::ColEq(ColRef::new(0, "col1"), ColRef::new(1, "col2")), // propagates "1" → col2@1
         ],
     );
-    b.bindings.insert("M".into(), col_binding(0, "col2"));
-    b.bindings.insert("N".into(), col_binding(0, "col1"));
-    b.bindings.insert("O".into(), col_binding(1, "col3"));
 
     let out = run(vec![b], &rsj_schema(), &CascadeCtx::default());
-    // Ontop: unsatisfied condition → empty.
-    // sf: no merge (columns differ) → 1 branch, 2 scans.
+    // prune_iri_template_mismatch: col2@1 = "2" ∧ col2@1 = "1" → false → empty.
     assert!(
         out.is_empty(),
-        "unsatisfied cross-column join condition must yield an empty result: {out:?}"
+        "contradictory constant + cross-column join must yield an empty result: {out:?}"
     );
 }
 
