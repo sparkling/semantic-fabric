@@ -419,6 +419,18 @@ impl<'a> Unfolder<'a> {
         om: &ObjectMap,
         pred_iri: Option<&str>,
     ) -> Result<Option<Branch>> {
+        // Fast-reject path (ADR-0013 Path-B): for a concrete query predicate against
+        // a constant-predicate POM, check matchability *before* allocating an alias or
+        // Branch. Most POMs do not match most query predicates; skipping the Branch
+        // allocation here eliminates (N-1)/N of the per-triple-pattern allocations for
+        // a mapping with N POMs. Only the constant-predicate case is hoisted; column/
+        // template predicates and variable-predicate queries fall through as before.
+        if let (Some(p), TermMap::Constant(sf_core::Term::NamedNode(q))) = (pred_iri, pm) {
+            if !self.tbox.predicate_can_match(q.as_str(), p) {
+                return Ok(None);
+            }
+        }
+
         let alias = self.alias();
         let mut branch = Branch::single(Scan {
             alias,

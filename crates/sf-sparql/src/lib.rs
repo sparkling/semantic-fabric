@@ -289,6 +289,26 @@ pub fn translate_cached(
     Ok(plan)
 }
 
+/// Parse `sparql` and translate it with caching (ADR-0007 *Plan cache*). The
+/// serve-endpoint entry point: parse first so a syntactically invalid query
+/// returns a 400 without touching the cache, then hit the cache before the
+/// full rewrite. Callers that already have a parsed `Query` call
+/// [`translate_cached`] directly.
+pub fn parse_and_translate_cached(
+    sparql: &str,
+    maps: &[TriplesMap],
+    dialect: Dialect,
+    tbox: &Tbox,
+    schema: &[TableSchema],
+    cache: &PlanCache<Plan>,
+    epoch: Epoch,
+) -> Result<Plan> {
+    let query = spargebra::SparqlParser::new()
+        .parse_query(sparql)
+        .map_err(|e| Error::Parse(e.to_string()))?;
+    translate_cached(&query, maps, dialect, tbox, schema, cache, epoch)
+}
+
 /// Parse `sparql` and translate it (convenience over [`translate`]).
 pub fn parse_and_translate(sparql: &str, maps: &[TriplesMap], dialect: Dialect) -> Result<Plan> {
     let query = spargebra::SparqlParser::new()

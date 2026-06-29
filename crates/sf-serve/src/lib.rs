@@ -32,10 +32,15 @@ use axum::routing::get;
 use axum::Router;
 
 use sf_core::ir::TriplesMap;
-use sf_sparql::{exec, exec_pg, Error as SparqlError, Plan, PlanForm, Tbox};
+use sf_sparql::{exec, exec_pg, Epoch, Error as SparqlError, Plan, PlanCache, PlanForm, Tbox};
 use sf_sql::introspect::{introspect_postgres, introspect_sqlite};
 use sf_sql::{Dialect, TableSchema};
 use sparesults::QueryResultsFormat;
+
+/// Plan-cache capacity (ADR-0007 *Plan cache, hot path*). 64 entries covers a
+/// diverse serve-mode workload without over-committing memory; the cache is sized
+/// by `⟨T, M⟩` (never by data), so it cannot go stale vs a live source.
+const PLAN_CACHE_CAP: usize = 64;
 
 pub use ontology::tbox_from_turtle;
 pub use stream::RdfFormat;
@@ -71,7 +76,7 @@ impl Backend {
 
 /// The immutable server configuration shared (in an `Arc`) across all requests:
 /// the parsed mapping `M`, the tier-1 T-Box `T`, the introspected source schema,
-/// the backend, and the ADR-0010 governance knobs.
+/// the backend, the ADR-0010 governance knobs, and the plan-compile cache.
 pub struct ServeConfig {
     pub mapping: Vec<TriplesMap>,
     pub tbox: Tbox,
@@ -79,6 +84,11 @@ pub struct ServeConfig {
     pub backend: Backend,
     pub timeout: Duration,
     pub max_query_len: usize,
+    /// Compiled-plan cache (ADR-0007): repeated queries at the same `⟨T, M⟩` +
+    /// schema epoch reuse their plan without recompilation.
+    plan_cache: PlanCache<Plan>,
+    /// Monotonic epoch invalidated by ontology/mapping/schema reloads.
+    epoch: Epoch,
 }
 
 impl ServeConfig {
@@ -96,6 +106,8 @@ impl ServeConfig {
             backend,
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
+            plan_cache: PlanCache::new(PLAN_CACHE_CAP),
+            epoch: Epoch::default(),
         }
     }
 }
@@ -181,10 +193,20 @@ async fn process(cfg: Arc<ServeConfig>, query: String, accept: Option<String>) -
 }
 
 /// Compile (parse + rewrite) off the async runtime (ADR-0006); map errors to status.
+/// Uses the per-config plan cache (ADR-0007): repeated queries at the same epoch
+/// skip the full rewrite and return a cached plan clone.
 async fn compile(cfg: Arc<ServeConfig>, query: String) -> Result<Plan, Response> {
     let dialect = cfg.backend.dialect();
     let joined = tokio::task::spawn_blocking(move || {
-        sf_sparql::parse_and_translate_with(&query, &cfg.mapping, dialect, &cfg.tbox, &cfg.schema)
+        sf_sparql::parse_and_translate_cached(
+            &query,
+            &cfg.mapping,
+            dialect,
+            &cfg.tbox,
+            &cfg.schema,
+            &cfg.plan_cache,
+            cfg.epoch,
+        )
     })
     .await;
     match joined {

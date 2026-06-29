@@ -83,6 +83,40 @@ impl Tbox {
         out
     }
 
+    /// Allocation-free fast check: can a mapping POM with constant predicate
+    /// `mapping_pred` ever match a query triple pattern on `query_pred`?
+    ///
+    /// Semantically equivalent to `saturate_predicate(query_pred).contains(mapping_pred)
+    /// || inverse_predicates(query_pred).contains(mapping_pred)` but avoids the
+    /// `Vec` allocations those functions produce. Used by `unfold::atom` to fast-
+    /// reject non-matching POMs before any `Branch` is allocated (ADR-0013 Path-B).
+    pub fn predicate_can_match(&self, mapping_pred: &str, query_pred: &str) -> bool {
+        // Direct: the mapping predicate is the query predicate itself, or one of its
+        // sub-properties (saturate_predicate expansion).
+        if mapping_pred == query_pred {
+            return true;
+        }
+        if self
+            .sub_properties
+            .get(query_pred)
+            .is_some_and(|subs| subs.iter().any(|s| s == mapping_pred))
+        {
+            return true;
+        }
+        // Inverse: the mapping predicate is the owl:inverseOf of the query predicate,
+        // or the query predicate is symmetric and the mapping predicate equals it
+        // (already caught by the direct check above, so only the inverseOf case
+        // remains here).
+        if self
+            .inverses
+            .get(query_pred)
+            .is_some_and(|inv| inv == mapping_pred)
+        {
+            return true;
+        }
+        false
+    }
+
     /// Every predicate IRI to match directly for a query on `predicate` — the
     /// predicate itself plus all its sub-properties (UNION-folding). The inverse
     /// directions are reported separately by [`Tbox::inverse_predicates`].
