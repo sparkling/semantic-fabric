@@ -125,7 +125,6 @@ fn nuc_table(name: &str) -> TableSchema {
 /// misses this optimisation. When implemented: `core.len() == 1` and
 /// `IS NOT NULL(col1)` in `where_conds`.
 #[test]
-#[ignore = "NEEDS_IMPL: nullable-unique inner self-join should collapse to one scan + IS NOT NULL filter — NullableUniqueConstraintTest.testSimpleJoin1"]
 fn nuc_inner_self_join_nullable_unique_collapses_with_not_null() {
     let t = nuc_table("table1");
 
@@ -173,7 +172,6 @@ fn nuc_inner_self_join_nullable_unique_collapses_with_not_null() {
 /// (Ontop's `testSimpleJoin2` covers the iterative-elimination case where both
 /// duplicate scans are eliminated and IS NOT NULL constraints accumulate.)
 #[test]
-#[ignore = "NEEDS_IMPL: iterative nullable-unique inner self-join collapse — NullableUniqueConstraintTest.testSimpleJoin2"]
 fn nuc_inner_self_join_nullable_unique_three_scans_collapse() {
     let t = nuc_table("table1");
 
@@ -223,7 +221,6 @@ fn nuc_inner_self_join_nullable_unique_three_scans_collapse() {
 /// consults it for binding shrinking. Optimisation sf lacks: explicit IQ-level
 /// projection shrinking.
 #[test]
-#[ignore = "NEEDS_IMPL: cascade does not shrink Branch::bindings to the project list — ProjectionShrinkingOptimizerTest"]
 fn projection_shrinking_removes_unused_binding_single_branch() {
     let mut t = TableSchema::new("t");
     t.columns = vec![
@@ -273,7 +270,6 @@ fn projection_shrinking_removes_unused_binding_single_branch() {
 ///
 /// sf's cascade does not consult `project` for per-branch binding shrinking.
 #[test]
-#[ignore = "NEEDS_IMPL: cascade does not shrink Branch::bindings across a UNION — ProjectionShrinkingOptimizerTest.testUnion"]
 fn projection_shrinking_union_removes_unused_from_all_branches() {
     let mut t1 = TableSchema::new("table1");
     t1.columns = vec![
@@ -330,7 +326,6 @@ fn projection_shrinking_union_removes_unused_from_all_branches() {
 /// shrinking implementation removes all bindings that are (a) not projected and
 /// (b) not needed to reconstruct any projected variable.
 #[test]
-#[ignore = "NEEDS_IMPL: projection shrinking should remove all unprojected bindings — ProjectionShrinkingOptimizerTest.testUnionAndImplicitJoinCondition2"]
 fn projection_shrinking_join_removes_all_unprojected_bindings() {
     let mut tj = TableSchema::new("tj");
     tj.columns = vec![

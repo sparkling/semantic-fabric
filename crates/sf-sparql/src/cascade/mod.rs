@@ -93,6 +93,7 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
                 return None; // 1 — unsatisfiable branch
             }
             self_join_elimination(&mut b, schema); // 2a (inner-join variant — unique key)
+            nullable_unique_self_join_elimination(&mut b, schema); // 2a-ext (nullable unique + IS NOT NULL)
             if !prune_iri_template_mismatch(&b) {
                 return None; // 1b — contradiction exposed after merge
             }
@@ -102,6 +103,9 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             let fds = fd::infer_functional_dependencies(&b, schema); // 3
             joinelim::fk_pk_join_elimination(&mut b, schema, &fds); // 4
             selection_pushdown(&mut b); // 5
+            if !disjunction_intersection_simplify(&mut b) {
+                return None; // 5b — disjunction empty intersection → unsatisfiable branch
+            }
             Some(b)
         })
         .collect();
@@ -113,6 +117,12 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
     if ctx.distinct && out.len() == 1 && out[0].path.is_none() && out[0].agg.is_none() {
         out[0].distinct = true;
         distinct_removal(&mut out[0], schema, ctx.project);
+    }
+    // Projection shrinking: drop bindings not in the project list (pass 7).
+    if let Some(project) = ctx.project {
+        for b in &mut out {
+            b.bindings.retain(|var, _| project.iter().any(|p| p == var));
+        }
     }
     out
 }
@@ -662,70 +672,234 @@ fn binding_is_injective(def: &TermDef) -> bool {
 /// projected (`SELECT *` / CONSTRUCT). Any join/OPTIONAL ⇒ a non-key projection
 /// could hide duplicates ⇒ no-op.
 fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[String]>) {
-    if !b.distinct || b.core.len() != 1 || !b.opts.is_empty() {
+    if !b.distinct || b.core.is_empty() || !b.opts.is_empty() {
         return;
     }
-    let scan = &b.core[0];
-    let LogicalSource::Table(table) = &scan.source else {
-        return;
-    };
-    let Some(ts) = schema.iter().find(|t| &t.name == table) else {
-        return;
-    };
-    // Only a NOT-NULL single-column key proves DISTINCT redundant: a nullable
-    // UNIQUE column permits multiple NULL rows (SQL UNIQUE allows many NULLs), and
-    // build_term emits an unbound solution per NULL row — so `SELECT K` keeps both
-    // NULL rows while `SELECT DISTINCT K` collapses them. Dropping the DISTINCT
-    // would then ADD a row vs the base (=_bag broken). Mirror pass (2)'s
-    // `key_is_non_null` guard (ADR-0007 cascade invariants).
-    let keys: Vec<String> = single_col_keys(ts)
-        .into_iter()
-        .filter(|k| key_is_non_null(ts, k))
-        .collect();
     let projected = |var: &str| project.is_none_or(|p| p.iter().any(|v| v == var));
-    // Single-column key: any projected injective binding reads a unique key col.
-    let redundant_single = b.bindings.iter().any(|(var, def)| {
-        projected(var)
-            && binding_is_injective(def)
-            && keys
-                .iter()
-                .any(|k| def.columns().contains(&ColRef::new(scan.alias, k.clone())))
-    });
-    // Composite PK: a projected injective Template binding whose Column slots
-    // cover ALL PK columns — distinct PK tuples ⇒ distinct output terms.
-    // PK columns are always NOT NULL (PK ⇒ NOT NULL), so no nullable-key hazard.
-    let redundant_composite = !redundant_single
-        && ts.primary_key.len() > 1
-        && b.bindings.iter().any(|(var, def)| {
-            if !projected(var) || !binding_is_injective(def) {
-                return false;
-            }
-            let TermDef::Derived {
-                term_map: TermMap::Template(t, _),
-                alias,
-            } = def
-            else {
+    if b.core.len() == 1 {
+        let scan = &b.core[0];
+        let LogicalSource::Table(table) = &scan.source else {
+            return;
+        };
+        let Some(ts) = schema.iter().find(|t| &t.name == table) else {
+            return;
+        };
+        // Only a NOT-NULL single-column key proves DISTINCT redundant: a nullable
+        // UNIQUE column permits multiple NULL rows (SQL UNIQUE allows many NULLs), and
+        // build_term emits an unbound solution per NULL row — so `SELECT K` keeps both
+        // NULL rows while `SELECT DISTINCT K` collapses them. Dropping the DISTINCT
+        // would then ADD a row vs the base (=_bag broken). Mirror pass (2)'s
+        // `key_is_non_null` guard (ADR-0007 cascade invariants).
+        let keys: Vec<String> = single_col_keys(ts)
+            .into_iter()
+            .filter(|k| key_is_non_null(ts, k))
+            .collect();
+        // Single-column key: any projected injective binding reads a unique key col.
+        let redundant_single = b.bindings.iter().any(|(var, def)| {
+            projected(var)
+                && binding_is_injective(def)
+                && keys
+                    .iter()
+                    .any(|k| def.columns().contains(&ColRef::new(scan.alias, k.clone())))
+        });
+        // Composite PK: a projected injective Template binding whose Column slots
+        // cover ALL PK columns — distinct PK tuples ⇒ distinct output terms.
+        // PK columns are always NOT NULL (PK ⇒ NOT NULL), so no nullable-key hazard.
+        let redundant_composite = !redundant_single
+            && ts.primary_key.len() > 1
+            && b.bindings.iter().any(|(var, def)| {
+                if !projected(var) || !binding_is_injective(def) {
+                    return false;
+                }
+                let TermDef::Derived {
+                    term_map: TermMap::Template(t, _),
+                    alias,
+                } = def
+                else {
+                    return false;
+                };
+                if *alias != scan.alias {
+                    return false;
+                }
+                // Every PK column must appear as a Column slot in the template.
+                let template_cols: Vec<&str> = t
+                    .segments()
+                    .iter()
+                    .filter_map(|s| match s {
+                        Segment::Column(c) => Some(c.as_ref()),
+                        _ => None,
+                    })
+                    .collect();
+                ts.primary_key
+                    .iter()
+                    .all(|pk| template_cols.contains(&pk.as_str()))
+            });
+        if redundant_single || redundant_composite {
+            b.distinct = false;
+        }
+    } else {
+        // Multi-scan proof: every scan's non-null PK must be covered by a projected
+        // injective binding. Distinct PKs on each side ⇒ distinct combined output tuples
+        // (any two rows that agree on all projected variables must share the same PK on
+        // every scan ⇒ they ARE the same row combination ⇒ no duplicates).
+        let redundant_multi = b.core.iter().all(|scan| {
+            let LogicalSource::Table(table) = &scan.source else {
                 return false;
             };
-            if *alias != scan.alias {
+            let Some(ts) = schema.iter().find(|t| &t.name == table) else {
                 return false;
-            }
-            // Every PK column must appear as a Column slot in the template.
-            let template_cols: Vec<&str> = t
-                .segments()
-                .iter()
-                .filter_map(|s| match s {
-                    Segment::Column(c) => Some(c.as_ref()),
-                    _ => None,
+            };
+            !ts.primary_key.is_empty()
+                && ts.primary_key.iter().all(|pk_col| {
+                    b.bindings.iter().any(|(var, def)| {
+                        projected(var)
+                            && binding_is_injective(def)
+                            && def.columns().iter().any(|c| {
+                                c.alias == scan.alias && c.column.as_ref() == pk_col.as_str()
+                            })
+                    })
                 })
-                .collect();
-            ts.primary_key
-                .iter()
-                .all(|pk| template_cols.contains(&pk.as_str()))
         });
-    if redundant_single || redundant_composite {
-        b.distinct = false;
+        if redundant_multi {
+            b.distinct = false;
+        }
     }
+}
+
+// --- 2a-ext. nullable-unique inner self-join elimination ------------------
+
+/// Collapse two core scans of the same table joined on a **nullable unique key**.
+/// An SQL equi-join excludes NULL rows (`NULL = NULL ⇒ UNKNOWN`), so the join
+/// already produces a 1:1 match. After merge, an explicit `IS NOT NULL(col)` filter
+/// replicates the NULL-exclusion the equi-join enforced implicitly. Loops to fixpoint
+/// to handle chains of same-table scans. `=_bag`-safe by the same argument.
+fn nullable_unique_self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
+    while let Some((keep, drop, cond_idx, not_null_col)) = find_nullable_unique_self_join(b, schema)
+    {
+        b.where_conds.remove(cond_idx);
+        rewrite_alias(b, drop, keep);
+        b.core.retain(|s| s.alias != drop);
+        if !b
+            .where_conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &not_null_col))
+        {
+            b.where_conds.push(SqlCond::IsNotNull(not_null_col));
+        }
+    }
+}
+
+/// Returns `(keep, drop, cond_idx, not_null_col)` for a nullable-unique self-join:
+/// two core scans of the same table with a `ColEq` on a UNIQUE but nullable column.
+fn find_nullable_unique_self_join(
+    b: &Branch,
+    schema: &[TableSchema],
+) -> Option<(usize, usize, usize, ColRef)> {
+    for (idx, cond) in b.where_conds.iter().enumerate() {
+        let SqlCond::ColEq(a, c) = cond else { continue };
+        if a.alias == c.alias || a.column != c.column {
+            continue;
+        }
+        let Some(ta) = scan_table(b, a.alias) else {
+            continue;
+        };
+        let Some(tc) = scan_table(b, c.alias) else {
+            continue;
+        };
+        if ta != tc {
+            continue;
+        }
+        if let Some(t) = schema.iter().find(|t| t.name == ta) {
+            // Unique but NOT non-null: pass (2) already handles the non-null case.
+            if t.is_unique_key(&a.column) && !key_is_non_null(t, &a.column) {
+                let (keep, drop) = if a.alias < c.alias {
+                    (a.alias, c.alias)
+                } else {
+                    (c.alias, a.alias)
+                };
+                return Some((keep, drop, idx, ColRef::new(keep, a.column.to_string())));
+            }
+        }
+    }
+    None
+}
+
+// --- 5b. disjunction-intersection simplification -------------------------
+
+/// Simplify conjunctions of same-column equality disjunctions by computing their
+/// set intersection. If the intersection is ∅ the branch is unsatisfiable (returns
+/// `false`). Otherwise replaces the two conjuncts with their intersection and loops
+/// to fixpoint. `=_bag`-safe: `(a ∈ S) ∧ (a ∈ T) ≡ (a ∈ S∩T)`.
+fn disjunction_intersection_simplify(b: &mut Branch) -> bool {
+    loop {
+        let len = b.where_conds.len();
+        let mut changed = false;
+        'outer: for i in 0..len {
+            let Some((col_i, vals_i)) = extract_eq_disjunction(&b.where_conds[i]) else {
+                continue;
+            };
+            for j in (i + 1)..len {
+                let Some((col_j, vals_j)) = extract_eq_disjunction(&b.where_conds[j]) else {
+                    continue;
+                };
+                if col_i != col_j {
+                    continue;
+                }
+                let intersection: Vec<String> = vals_i
+                    .iter()
+                    .filter(|v| vals_j.contains(*v))
+                    .cloned()
+                    .collect();
+                if intersection.is_empty() {
+                    return false; // unsatisfiable branch
+                }
+                if intersection.len() < vals_i.len().max(vals_j.len()) {
+                    // Replace the two conjuncts with the intersection (j first — higher index).
+                    let new_cond = if intersection.len() == 1 {
+                        SqlCond::Cmp(col_i.clone(), CmpOp::Eq, intersection[0].clone())
+                    } else {
+                        SqlCond::Or(
+                            intersection
+                                .iter()
+                                .map(|v| SqlCond::Cmp(col_i.clone(), CmpOp::Eq, v.clone()))
+                                .collect(),
+                        )
+                    };
+                    b.where_conds.remove(j);
+                    b.where_conds[i] = new_cond;
+                    changed = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    true
+}
+
+/// Extract a single-column equality disjunction: `Or([Cmp(col, Eq, v1), ...])` where
+/// all arms share the same column reference. Returns `None` for non-Or conditions or
+/// mixed-column disjunctions.
+fn extract_eq_disjunction(cond: &SqlCond) -> Option<(ColRef, Vec<String>)> {
+    let SqlCond::Or(arms) = cond else {
+        return None;
+    };
+    let mut col: Option<ColRef> = None;
+    let mut vals = Vec::new();
+    for arm in arms {
+        let SqlCond::Cmp(c, CmpOp::Eq, v) = arm else {
+            return None;
+        };
+        match &col {
+            None => col = Some(c.clone()),
+            Some(existing) if existing == c => {}
+            _ => return None,
+        }
+        vals.push(v.clone());
+    }
+    col.map(|c| (c, vals))
 }
 
 /// Columns referenced by a branch's conditions (test/diagnostic helper).

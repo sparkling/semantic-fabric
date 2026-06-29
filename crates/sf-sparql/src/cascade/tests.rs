@@ -67,11 +67,11 @@ fn self_join_eliminated_on_unique_key() {
 }
 
 #[test]
-fn self_join_not_eliminated_on_nullable_unique_key() {
-    // A single-column UNIQUE but NULLABLE column (e.g. `email TEXT UNIQUE`) is
-    // not a true key: the base translation's `t0.email = t1.email` already drops
-    // NULL-email rows (NULL = NULL ⇒ UNKNOWN); collapsing to a bare scan would
-    // re-admit them → extra rows → =_bag break (ADR-0007). Must NOT fire.
+fn self_join_collapsed_with_is_not_null_on_nullable_unique_key() {
+    // A single-column UNIQUE but NULLABLE column (e.g. `email TEXT UNIQUE`):
+    // the SQL equi-join `t0.email = t1.email` already excludes NULL rows
+    // (NULL = NULL ⇒ UNKNOWN). Collapsing to one scan + IS NOT NULL reproduces
+    // exactly that NULL-exclusion → same bag (=_bag preserved, ADR-0007).
     let b = Branch {
         core: vec![scan(0, "emp"), scan(1, "emp")],
         opts: Vec::new(),
@@ -93,10 +93,17 @@ fn self_join_not_eliminated_on_nullable_unique_key() {
     let out = run(vec![b], std::slice::from_ref(&ts), &CascadeCtx::default());
     assert_eq!(
         out[0].core.len(),
-        2,
-        "nullable unique key ⇒ self-join preserved"
+        1,
+        "nullable-unique self-join collapses with IS NOT NULL"
     );
-    assert_eq!(out[0].where_conds.len(), 1, "the key equality is retained");
+    assert!(
+        out[0]
+            .where_conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::IsNotNull(r) if r.column.as_ref() == "email")),
+        "IS NOT NULL(email) compensates for NULL-exclusion: {:?}",
+        out[0].where_conds
+    );
 }
 
 #[test]

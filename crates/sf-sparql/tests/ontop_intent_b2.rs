@@ -125,8 +125,6 @@ fn one_table_ab() -> Vec<TableSchema> {
 /// (RED) until multi-scan FD-closure DISTINCT removal lands.
 /// Run with `cargo test -- --ignored`.
 #[test]
-#[ignore = "NEEDS_IMPL: pass 6 distinct_removal is single-scan only; multi-scan \
-            DISTINCT-over-join removal not implemented — DistinctTest.testDistinctJoin2"]
 fn ontop_distinct_over_join_all_keys_two_tables() {
     let mut b = Branch::single(scan(0, "pk_t0"));
     b.core.push(scan(1, "pk_t1"));
@@ -207,8 +205,6 @@ fn ontop_distinct_over_join_partial_key_kept() {
 /// remain in `where_conds` unchanged (len == 3, not 2).
 /// The assertion `where_conds.len() == 2` fires the RED spec.
 #[test]
-#[ignore = "NEEDS_IMPL: boolean filter simplification (disjunction intersection) \
-            not implemented — CoDM.mergingTest1"]
 fn conjunction_disjunction_intersection_simplification() {
     let mut b = Branch::single(scan(0, "t"));
 
@@ -264,8 +260,6 @@ fn conjunction_disjunction_intersection_simplification() {
 /// detect disjunction-level emptiness, so the branch survives unchanged
 /// (`out.len() == 1`, not 0).  The assertion `out.is_empty()` fires the RED spec.
 #[test]
-#[ignore = "NEEDS_IMPL: disjunction intersection emptiness detection not implemented \
-            — CoDM.mergingTest2"]
 fn conjunction_disjunction_empty_intersection() {
     let mut b = Branch::single(scan(0, "t"));
 

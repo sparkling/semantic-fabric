@@ -247,9 +247,6 @@ fn three_pk_tables() -> Vec<TableSchema> {
 /// post-impl state (`distinct == false`) and is `#[ignore]`d (RED) until multi-scan
 /// FD-closure DISTINCT removal lands. Run with `cargo test -- --ignored`.
 #[test]
-#[ignore = "NEEDS_IMPL: pass 6 distinct_removal is single-scan only; multi-scan \
-            DISTINCT-over-join removal (every joined relation contributes a projected \
-            key) is not yet implemented — DistinctTest.testDistinctJoin1"]
 fn ontop_distinct_over_join_removed_when_all_relations_contribute_a_key_spec() {
     let mut b = Branch::single(scan(0, "pk_t0"));
     b.core.push(scan(1, "pk_t1"));
