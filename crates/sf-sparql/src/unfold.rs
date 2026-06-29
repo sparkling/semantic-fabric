@@ -774,13 +774,17 @@ fn graph_maps_match(active: Option<&NamedNode>, graphs: &[sf_core::ir::TermMap])
 
     match active {
         None => {
-            // Default-graph query: triples with a declared non-default named-graph IRI
-            // must stay out (=_bag fix — those triples are not in the default graph).
-            // `rr:defaultGraph` and empty-graphs both mean "default graph" → accept.
-            !graphs.iter().any(|gm| {
-                matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n))
-                    if n.as_str() != RR_DEFAULT_GRAPH)
-            })
+            // Default-graph query: include triples that have no rr:graph declaration
+            // (empty) OR whose rr:graph map includes rr:defaultGraph.  R2RML §7.4
+            // allows simultaneous rr:defaultGraph + named-graph declarations on the
+            // same predicate-object map; that triple appears in BOTH graphs, so it
+            // must be visible in the default-graph view too.
+            // Triples declared exclusively in named graphs are excluded (=_bag fix).
+            graphs.is_empty()
+                || graphs.iter().any(|gm| {
+                    matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n))
+                        if n.as_str() == RR_DEFAULT_GRAPH)
+                })
         }
         Some(g) => {
             // GRAPH <g>: at least one constant graph map must equal g.

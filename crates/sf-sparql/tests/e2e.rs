@@ -1448,3 +1448,70 @@ fn filter_exists_with_optional_derived_var_returns_501() {
         "error should mention OPTIONAL/UNBOUND/501, got: {msg}"
     );
 }
+
+/// A mapping where DEPT triples are declared in BOTH the default graph (via
+/// `rr:defaultGraph`) AND a named graph simultaneously.  R2RML §7.4 allows
+/// multiple graph maps on the same subject/predicate-object map; the triple
+/// must appear in both graphs.
+fn dual_graph_mapping() -> Vec<TriplesMap> {
+    let default_g = sf_core::Term::NamedNode(iri("http://www.w3.org/ns/r2rml#defaultGraph"));
+    let named_g = sf_core::Term::NamedNode(iri("http://ex/namedGraph"));
+    let dept = TriplesMap {
+        id: "DEPT".to_owned(),
+        source: LogicalSource::Table("dept".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/dept/{id}"),
+            classes: vec![],
+            // Both rr:defaultGraph and a named graph — R2RML §7.4 multi-graph.
+            graphs: vec![TermMap::Constant(default_g), TermMap::Constant(named_g)],
+        },
+        predicate_object_maps: vec![pom(DEPT_NAME, column_literal("dname"))],
+    };
+    vec![dept]
+}
+
+#[test]
+fn multi_graph_default_and_named_visible_in_default_query() {
+    // Regression for graph_maps_match None-branch defect: when graphs contains
+    // BOTH rr:defaultGraph AND a named-graph IRI, the previous !any(n != rr:defaultGraph)
+    // predicate would fire on the named-graph entry and exclude the triple from
+    // default-graph queries. The fix uses (is_empty || any(n == rr:defaultGraph)).
+    let maps = dual_graph_mapping();
+    let conn = source();
+    let q = format!("SELECT ?dn WHERE {{ ?d <{DEPT_NAME}> ?dn }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ops", "R&D"],
+        "rr:defaultGraph + named-graph dual declaration: triple must appear in default-graph query"
+    );
+}
+
+#[test]
+fn multi_graph_default_and_named_visible_in_graph_clause() {
+    // Complement: the same triple must also be visible via GRAPH <http://ex/namedGraph>.
+    let maps = dual_graph_mapping();
+    let conn = source();
+    let q =
+        format!("SELECT ?dn WHERE {{ GRAPH <http://ex/namedGraph> {{ ?d <{DEPT_NAME}> ?dn }} }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ops", "R&D"],
+        "rr:defaultGraph + named-graph dual declaration: triple must appear in named-graph clause"
+    );
+}

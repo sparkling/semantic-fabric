@@ -74,11 +74,26 @@ async fn build_catalog_mysql(
 /// Convert a single MySQL [`Value`] cell to a raw lexical [`String`] (NULL → `None`).
 /// All wire types are converted via their natural Rust representation and then
 /// formatted as strings — the same principle as the PostgreSQL text-protocol path.
+///
+/// **Bytes:** only valid UTF-8 sequences are accepted; non-UTF-8 bytes (BLOB /
+/// VARBINARY) yield `None` (unbound) rather than a silently-corrupted literal.
+/// Callers that need binary BLOB values should add an `rr:datatype` declaration
+/// and a custom term-gen hook (ADR-0014 follow-up).
+///
+/// **Date midnight:** `Value::Date` with all-zero time fields is produced by both
+/// MySQL `DATE` columns and `DATETIME`/`TIMESTAMP` columns whose value is exactly
+/// midnight. Without per-column wire-type metadata (available from `stmt.columns()`
+/// but not yet threaded through the v1 executor) the two are indistinguishable.
+/// The emitted lexical form `"YYYY-MM-DD"` is correct for `DATE` columns mapped with
+/// `rr:datatype xsd:date`; for `DATETIME` midnight mapped with `rr:datatype xsd:dateTime`
+/// this produces an invalid xsd:dateTime lexical form — a known v1 limitation tracked
+/// under ADR-0014.
 fn mysql_value_to_string(v: Value) -> Option<String> {
     use mysql_async::Value::*;
     match v {
         NULL => None,
-        Bytes(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+        // Reject non-UTF-8 bytes rather than silently corrupting BLOB data.
+        Bytes(b) => String::from_utf8(b).ok(),
         Int(i) => Some(i.to_string()),
         UInt(u) => Some(u.to_string()),
         Float(f) => Some(f.to_string()),
