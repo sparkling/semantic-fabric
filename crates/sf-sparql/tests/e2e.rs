@@ -1552,3 +1552,52 @@ fn multi_graph_default_and_named_visible_in_graph_clause() {
         "rr:defaultGraph + named-graph dual declaration: triple must appear in named-graph clause"
     );
 }
+
+#[test]
+fn optional_multi_scan_right_side() {
+    // OPTIONAL { ?e :empName ?n . ?e :empDept ?d } has a multi-scan right side
+    // (two triple patterns → two scan branches within the right side).
+    // The ISWC-2018 decomposition must produce the correct left-join semantics:
+    // employees with neither name nor dept appear with both vars unbound;
+    // employees with both appear fully bound.
+    let maps = mapping();
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE emp(id INTEGER PRIMARY KEY, name TEXT, dept_id INTEGER);
+         CREATE TABLE dept(id INTEGER PRIMARY KEY, dname TEXT);
+         INSERT INTO emp VALUES (1,'Ada',10),(2,'Ghost',NULL);
+         INSERT INTO dept VALUES (10,'R&D');",
+    )
+    .unwrap();
+
+    // ?e a :Employee . OPTIONAL { ?e :empName ?n . ?e :empDept ?d }
+    // The OPTIONAL right side resolves to TWO scans (?e :empName ?n uses EMP,
+    // ?e :empDept ?d also uses EMP — after self-join elimination both fold to the
+    // same scan, so we test with a cross-table multi-scan by also fetching dept).
+    let q = format!(
+        "SELECT ?e ?n ?dn WHERE {{ ?e a <{EMPLOYEE}> . OPTIONAL {{ ?e <{EMP_NAME}> ?n . \
+         ?e <{EMP_DEPT}> ?d . ?d <{DEPT_NAME}> ?dn }} }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    let got: BTreeSet<(String, Option<String>, Option<String>)> = sol
+        .rows
+        .iter()
+        .map(|r| (lit(&r[0]), r[1].as_ref().map(|_| lit(&r[1])), r[2].as_ref().map(|_| lit(&r[2]))))
+        .collect();
+    let expect: BTreeSet<(String, Option<String>, Option<String>)> = [
+        (
+            "<http://ex/emp/1>".to_owned(),
+            Some("Ada".to_owned()),
+            Some("R&D".to_owned()),
+        ),
+        // emp/2 has NULL dept_id → the JOIN inside OPTIONAL fails → both ?n and ?dn unbound
+        ("<http://ex/emp/2>".to_owned(), None, None),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        got, expect,
+        "multi-scan OPTIONAL right must null-preserve non-matching rows"
+    );
+}

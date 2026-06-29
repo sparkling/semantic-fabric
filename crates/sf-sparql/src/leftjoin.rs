@@ -4,9 +4,9 @@
 //! inner-FILTER-into-`ON` placement (R5). Split from [`crate::unfold`] so the
 //! conjunctive core and the left-join semantics stay independently legible.
 //!
-//! For `P OPT (R1 ∪ R2 ∪ …)` (multi-branch right side), the ISWC-2018
-//! decomposition is used: one inner-join branch per Ri (P ⋈ Ri) plus a
-//! no-match branch (P filtered by `NOT EXISTS Ri` for each Ri).
+//! For `P OPT R` with a multi-branch or multi-scan right the ISWC-2018
+//! decomposition is used: one inner-join branch per Ri (all Ri scans merged
+//! into the FROM clause) plus a no-match branch (`NOT EXISTS Ri` for each Ri).
 
 use std::collections::HashSet;
 
@@ -17,11 +17,13 @@ use crate::{Error, Result};
 /// OPTIONAL → NULL-safe branches (ADR-0007 R1–R5).
 ///
 /// - Empty `right`: identity (`left` unchanged — `OPTIONAL {}` = noop).
-/// - Single-branch `right`, single-scan, opt-free: the existing SQL LEFT JOIN
-///   path via [`build_left_join`].
-/// - Multi-branch `right` (each branch single-scan, opt-free):
-///   `P OPT (R1 ∪ R2 ∪ …)` = `(P ⋈ R1) ∪ (P ⋈ R2) ∪ … ∪ P_no_match`
-///   where P_no_match carries `NOT EXISTS` for every Ri.
+/// - Single-branch, single-scan `right`, opt-free: SQL LEFT JOIN via
+///   [`build_left_join`].
+/// - Any other `right` (multi-branch or multi-scan per branch, opt-free):
+///   ISWC-2018 decomposition `P OPT R = (P ⋈ R) ∪ (P - R)`.
+///   One inner-join branch per Ri (all scans merged into a FROM clause)
+///   plus a no-match branch with `NOT EXISTS Ri` for every Ri.
+///   Nested OPTIONAL inside the right (opts non-empty) remains → 501.
 pub fn left_join_branches(
     left: Vec<Branch>,
     right: Vec<Branch>,
@@ -33,17 +35,20 @@ pub fn left_join_branches(
         return Ok(left);
     }
 
-    // All right branches must be single-scan and opt-free.
+    // All right branches must be opt-free (nested OPTIONAL inside OPTIONAL
+    // right is not yet supported).  Multi-scan right (core.len() > 1) is sound
+    // via the decomposition below: (P ⋈ R) ∪ (P - R).
     for r in &right {
-        if r.core.len() != 1 || !r.opts.is_empty() {
+        if !r.opts.is_empty() {
             return Err(Error::Unsupported(
-                "multi-scan OPTIONAL right side is deferred → 501 (ADR-0007)".to_owned(),
+                "nested OPTIONAL inside an OPTIONAL right side is deferred → 501 (ADR-0007)"
+                    .to_owned(),
             ));
         }
     }
 
-    // Single-branch right side: SQL LEFT JOIN (the common case).
-    if right.len() == 1 {
+    // Single-branch, single-scan right: SQL LEFT JOIN (the common case).
+    if right.len() == 1 && right[0].core.len() == 1 {
         let r = &right[0];
         let mut out = Vec::new();
         for mut l in left {
@@ -56,7 +61,10 @@ pub fn left_join_branches(
         return Ok(out);
     }
 
-    // Multi-branch right: P OPT (R1 ∪ R2 ∪ …)
+    // Multi-branch or multi-scan right: P OPT R = (P ⋈ R) ∪ (P - R)
+    // Handles both: OPTIONAL with multiple triples-map branches (UNION) and
+    // OPTIONAL with multiple table scans (JOIN) within one branch.  Each Ri is
+    // inner-joined with P; P rows with no Ri match go in the no-match branch.
     // = (P ⋈_NL R1) ∪ (P ⋈_NL R2) ∪ … ∪ P_no_match
     let mut out = Vec::new();
     for l in &left {
@@ -140,9 +148,9 @@ fn inner_join_one(
         }
     }
 
-    // Merge scans: left core + the right's single scan.
+    // Merge scans: left core + all right scans.
     let mut core = left.core.clone();
-    core.push(right.core[0].clone());
+    core.extend(right.core.iter().cloned());
 
     Ok(Some(Branch {
         core,
