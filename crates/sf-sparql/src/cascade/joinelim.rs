@@ -174,6 +174,14 @@ fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
                 rewrite_parent_cond(c, e);
             }
         }
+        // A MINUS anti-join's correlation may reference the eliminated parent alias;
+        // recurse so it tracks the child. (Branches with a `NotExists` bypass the
+        // cascade, so this is defensive — kept exhaustive and correct regardless.)
+        SqlCond::NotExists { conds, .. } => {
+            for c in conds {
+                rewrite_parent_cond(c, e);
+            }
+        }
     }
 }
 

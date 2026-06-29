@@ -23,7 +23,9 @@
 //!
 //! Supported: the `?s ?p ?o` CONSTRUCT **dump** (the M2 / W3C-conformance target,
 //! ADR-0005), BGP, JOIN, FILTER (comparison/`&&`/`||`/`!`/`BOUND` subset),
-//! OPTIONAL (NULL-safe LEFT JOIN, single-scan right side), UNION, projection,
+//! OPTIONAL (NULL-safe LEFT JOIN, single-scan right side), UNION, MINUS (§8.3
+//! correlated anti-join over non-OPTIONAL shared variables, with the
+//! disjoint-domain no-op), projection,
 //! DISTINCT/REDUCED, LIMIT/OFFSET, ORDER BY (by a bound variable, ASC/DESC, several
 //! keys — value-space order with UNBOUND first/last per direction; a single branch
 //! pushes `ORDER BY … NULLS FIRST/LAST` into SQL, a bag-union sorts globally in
@@ -40,7 +42,7 @@
 //! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; an ORDER BY
 //! on a complex expression (only a bound variable is supported) or, for a single
 //! branch pushed to SQL, on a non-`rr:column` term (a template IRI / COALESCE);
-//! plus aggregates, LATERAL, MINUS, GRAPH, DESCRIBE, SERVICE,
+//! plus aggregates, LATERAL, GRAPH, DESCRIBE, SERVICE,
 //! OWL 2 QL tier-2 (ADR-0008), and PostgreSQL execution (SQLite is this wave's
 //! execution target; the path CTE's Postgres `CYCLE` variant is the later MB-4
 //! wave; emission is otherwise dialect-generic).

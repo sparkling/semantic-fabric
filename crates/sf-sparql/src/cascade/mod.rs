@@ -64,7 +64,11 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
         .filter_map(|mut b| {
             // A recursive property-path closure has no base scans to rewrite — the
             // constraint-driven passes are inapplicable; pass it through untouched.
-            if b.path.is_some() {
+            // A MINUS anti-join branch likewise carries a correlated `NotExists`
+            // whose subquery scans the constraint passes do not model; pass it
+            // through so a self-join/FK rewrite never silently corrupts the
+            // correlation (the anti-join is already a sound base translation).
+            if b.path.is_some() || branch_has_not_exists(&b) {
                 return Some(b);
             }
             tier0_eliminate(&mut b, schema); // 0
@@ -89,6 +93,20 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
         distinct_removal(&mut out[0], schema, ctx.project);
     }
     out
+}
+
+/// Whether a branch carries a MINUS anti-join (`NotExists`) anywhere in its
+/// `where_conds` — such branches bypass the constraint-driven cascade passes.
+fn branch_has_not_exists(b: &Branch) -> bool {
+    fn has(c: &SqlCond) -> bool {
+        match c {
+            SqlCond::NotExists { .. } => true,
+            SqlCond::Not(c) => has(c),
+            SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(has),
+            _ => false,
+        }
+    }
+    b.where_conds.iter().any(has)
 }
 
 // --- 0. tier-0 elimination -------------------------------------------------
@@ -312,6 +330,14 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
         SqlCond::Not(c) => rewrite_cond_alias(c, fix),
         SqlCond::And(cs) | SqlCond::Or(cs) => {
             for c in cs {
+                rewrite_cond_alias(c, fix);
+            }
+        }
+        // A `NotExists` correlates on outer (left) aliases, which a self-join merge
+        // may rename; recurse so those references track the kept alias. (Inner scan
+        // aliases are globally unique and never a merge target.)
+        SqlCond::NotExists { conds, .. } => {
+            for c in conds {
                 rewrite_cond_alias(c, fix);
             }
         }

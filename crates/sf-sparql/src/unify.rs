@@ -117,6 +117,16 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
             return Unify::Empty; // an IRI can never equal a literal, etc.
         }
     }
+    // `sameTerm` for literals also requires matching datatype + language (SPARQL
+    // §17.4.1.7): two literal term maps whose static *effective* datatype/language
+    // differ can never be sameTerm (`"1990"^^xsd:integer` vs `"1990"^^xsd:string`,
+    // `"Ada"@en` vs `"Ada"@fr`), so they are disjoint — never equate them by a raw
+    // lexical column. Closes a false-match in MINUS anti-joins and BGP joins alike.
+    if let (Some(l1), Some(l2)) = (literal_key(t1), literal_key(t2)) {
+        if l1 != l2 {
+            return Unify::Empty;
+        }
+    }
     match (t1, t2) {
         (TermMap::Column(c1, _), TermMap::Column(c2, _)) => Unify::Sat(vec![SqlCond::ColEq(
             ColRef::new(a1, c1.clone()),
@@ -219,6 +229,30 @@ fn split_template(t: &sf_core::ir::Template) -> TemplateShape {
 
 fn term_map_type(tm: &TermMap) -> Option<TermType> {
     crate::iq::term_map_type(tm)
+}
+
+/// The effective `(datatype-IRI, language)` of a *literal* term map — a plain
+/// literal normalises to `xsd:string`, a lang-tagged literal to `rdf:langString` —
+/// i.e. the key under which two literals are `sameTerm` (SPARQL §17.4.1.7). `None`
+/// for a non-literal term map (IRI / blank node) or a wrapped constant.
+fn literal_key(tm: &TermMap) -> Option<(&str, Option<&str>)> {
+    let spec = match tm {
+        TermMap::Column(_, s) | TermMap::Template(_, s) => s,
+        TermMap::Constant(_) => return None,
+    };
+    if spec.term_type != TermType::Literal {
+        return None;
+    }
+    if let Some(lang) = spec.language.as_deref() {
+        Some((
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+            Some(lang),
+        ))
+    } else if let Some(dt) = &spec.datatype {
+        Some((dt.as_str(), None))
+    } else {
+        Some(("http://www.w3.org/2001/XMLSchema#string", None))
+    }
 }
 
 /// The lexical form a constant must take to match a term map of the given type.

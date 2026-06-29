@@ -597,6 +597,31 @@ fn render_cond(
                 .collect();
             format!("({})", parts.join(" OR "))
         }
+        // MINUS anti-join (SPARQL §8.3): a correlated `NOT EXISTS` over the right
+        // pattern's scans. The inner WHERE renders the right pattern's own
+        // conditions plus the shared-variable correlation equalities (which name the
+        // outer left aliases), so the whole left row is dropped when a compatible
+        // right row exists. A core-less right side (an inline VALUES) renders without
+        // FROM. Inner placeholders bind in text order at this position.
+        SqlCond::NotExists { scans, conds } => {
+            let from = scans
+                .iter()
+                .enumerate()
+                .fold(String::new(), |mut acc, (i, s)| {
+                    if i > 0 {
+                        acc.push_str(" CROSS JOIN ");
+                    }
+                    acc.push_str(&scan_ref(&s.source, s.alias, dialect));
+                    acc
+                });
+            let refs: Vec<&SqlCond> = conds.iter().collect();
+            let where_sql = render_conjunction(&refs, dialect, actuals, params, pidx);
+            if from.is_empty() {
+                format!("NOT EXISTS (SELECT 1 WHERE {where_sql})")
+            } else {
+                format!("NOT EXISTS (SELECT 1 FROM {from} WHERE {where_sql})")
+            }
+        }
     }
 }
 

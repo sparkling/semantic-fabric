@@ -210,9 +210,19 @@ impl<'a> Unfolder<'a> {
                 t.order = keys;
                 Ok(t)
             }
-            // Deferred → 501 (documented, never silent): MINUS, GRAPH,
-            // aggregates, LATERAL, SERVICE (ADR-0007 §v1 SPARQL coverage; ADR-0008
-            // tier-2).
+            // MINUS (SPARQL §8.3) — translate `left` and `right`, then exclude each
+            // left solution that is compatible with a right solution it shares a
+            // bound variable with (a correlated anti-join). When a left/right pair
+            // shares no bound variable the pair never removes the left row, so a
+            // variable-disjoint MINUS is a NO-OP returning `left` unchanged (NOT
+            // empty) — the canonical §8.3 gotcha. See [`minus_branches`].
+            GraphPattern::Minus { left, right } => {
+                let l = self.translate_pattern(left)?;
+                let r = self.translate_pattern(right)?;
+                Ok(TransPattern::plain(minus_branches(l.branches, r.branches)?))
+            }
+            // Deferred → 501 (documented, never silent): GRAPH, aggregates,
+            // LATERAL, SERVICE (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
             other => Err(Error::Unsupported(format!(
                 "graph pattern not supported in v1 → 501: {other:?}"
             ))),
@@ -515,6 +525,98 @@ pub(crate) fn bind(branch: &mut Branch, var: &str, def: TermDef) -> Result<bool>
         branch.bindings.insert(var.to_owned(), def);
         Ok(true)
     }
+}
+
+/// SPARQL MINUS (§8.3) as a correlated anti-join. The result is the LEFT
+/// solutions minus every left solution that is COMPATIBLE with some right solution
+/// **with which it shares at least one bound variable**.
+///
+/// * **Disjoint-domain rule.** When a left/right branch pair shares no bound
+///   variable, that pair can never remove the left row (the domains don't
+///   intersect), so a globally variable-disjoint MINUS is a NO-OP returning `left`
+///   unchanged — NOT empty (the §8.3 difference from `NOT EXISTS`). This falls out
+///   per-pair: an empty shared set contributes no `NotExists`.
+/// * **Compatibility** is raw-key equality on every shared variable (term lifting,
+///   ADR-0007) — an unbound variable does not constrain. Each kept pair becomes a
+///   `NOT EXISTS` over the right branch correlated on those equalities.
+/// * **Bag semantics.** The `NotExists` is a pure WHERE filter, so a surviving left
+///   solution keeps its LEFT multiplicity and the right multiplicities neither
+///   multiply nor dedup the left rows.
+///
+/// v1 supports shared variables statically bound (non-OPTIONAL) on both sides. An
+/// OPTIONAL / property-path right side, a property-path left side, or a shared
+/// variable that may be UNBOUND (a COALESCE'd / CONCAT'd binding, or one reading an
+/// OPTIONAL scan alias) is deferred → 501 (never a silently wrong answer).
+fn minus_branches(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>> {
+    for r in &right {
+        if !r.opts.is_empty() || r.path.is_some() {
+            return Err(Error::Unsupported(
+                "MINUS with an OPTIONAL / property-path right side is deferred → 501".to_owned(),
+            ));
+        }
+    }
+    let mut out = Vec::with_capacity(left.len());
+    for mut l in left {
+        if l.path.is_some() {
+            return Err(Error::Unsupported(
+                "MINUS over a property-path left side is deferred → 501".to_owned(),
+            ));
+        }
+        let l_opt_aliases: Vec<usize> = l.opts.iter().map(|o| o.scan.alias).collect();
+        let mut anti: Vec<SqlCond> = Vec::new();
+        for r in &right {
+            // The variables bound in BOTH this left branch and this right branch.
+            let shared: Vec<&str> = r
+                .bindings
+                .keys()
+                .filter(|v| l.bindings.contains_key(*v))
+                .map(String::as_str)
+                .collect();
+            if shared.is_empty() {
+                continue; // disjoint domains for this pair → never removes the left row
+            }
+            let mut corr = r.where_conds.clone();
+            let mut never_compatible = false;
+            for v in &shared {
+                let ldef = &l.bindings[*v];
+                let rdef = &r.bindings[*v];
+                // v1: a shared variable that may be UNBOUND on the left (it reads an
+                // OPTIONAL scan) would need unbound-does-not-constrain handling → 501.
+                if def_reads_opt_alias(ldef, &l_opt_aliases) {
+                    return Err(Error::Unsupported(format!(
+                        "MINUS shared variable ?{v} may be UNBOUND on the left (OPTIONAL) → 501 \
+                         (v1 supports non-OPTIONAL shared variables)"
+                    )));
+                }
+                match unify(ldef, rdef) {
+                    Unify::Sat(conds) => corr.extend(conds),
+                    // Provably never equal on a shared variable ⇒ never compatible ⇒
+                    // this right branch can never remove the left row.
+                    Unify::Empty => {
+                        never_compatible = true;
+                        break;
+                    }
+                    Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+                }
+            }
+            if never_compatible {
+                continue;
+            }
+            anti.push(SqlCond::NotExists {
+                scans: r.core.clone(),
+                conds: corr,
+            });
+        }
+        l.where_conds.extend(anti);
+        out.push(l);
+    }
+    Ok(out)
+}
+
+/// Whether a term def reads any of the given OPTIONAL scan aliases — i.e. its
+/// value may be UNBOUND (the trigger to defer a MINUS shared variable → 501).
+fn def_reads_opt_alias(def: &TermDef, opt_aliases: &[usize]) -> bool {
+    def.columns().iter().any(|c| opt_aliases.contains(&c.alias))
 }
 
 /// Join two bag-unions (the product), unifying shared variables in each pair.

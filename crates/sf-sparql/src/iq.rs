@@ -145,6 +145,18 @@ pub enum SqlCond {
     Not(Box<SqlCond>),
     And(Vec<SqlCond>),
     Or(Vec<SqlCond>),
+    /// `NOT EXISTS (SELECT 1 FROM <scans> WHERE <conds>)` — the correlated
+    /// anti-join backing SPARQL MINUS (§8.3). `scans` is the right (minuend)
+    /// pattern's `FROM`; `conds` are that pattern's own conditions plus the
+    /// shared-variable correlation equalities, which reference the OUTER (left)
+    /// scan aliases (term-construction lifting: raw-key equality stands in for RDF
+    /// compatibility, ADR-0007). A left row survives iff no right row satisfies
+    /// `conds`, so it is a pure filter — the left bag multiplicity is preserved and
+    /// the right multiplicities never fan it out.
+    NotExists {
+        scans: Vec<Scan>,
+        conds: Vec<SqlCond>,
+    },
 }
 
 /// How a [`SqlCond::StrMatch`] matches (the near-free FTS baseline, ADR-0020 §2).
@@ -388,6 +400,12 @@ impl Branch {
         for o in &self.opts {
             out.push((o.scan.alias, &o.scan.source));
         }
+        // A MINUS anti-join carries the right (minuend) pattern's scans inside a
+        // `NotExists` WHERE condition; surface them so the executor probes their
+        // column catalog (SQL:2008 identifier folding) like any other scan.
+        for cond in &self.where_conds {
+            collect_not_exists_scans(cond, &mut out);
+        }
         // A property-path closure's leaf sources are resolved directly against the
         // column catalog at emission (its CTE alias projects the canonical `sf_s` /
         // `sf_o` keys, not raw base columns), so it contributes no alias→source
@@ -436,5 +454,32 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
                 collect_cond_cols(c, f);
             }
         }
+        // A `NotExists` (MINUS anti-join) is opaque to outer column collection: its
+        // inner conditions reference the subquery's own scans, and the outer
+        // (correlation) columns it reads are shared variables already projected via
+        // the left bindings — so it adds nothing to the outer projection.
+        SqlCond::NotExists { .. } => {}
+    }
+}
+
+/// Walk every scan a `NotExists` (MINUS anti-join) carries in `cond` (recursing
+/// through boolean combinators), pairing each with its source for catalog lookup.
+fn collect_not_exists_scans<'a>(cond: &'a SqlCond, out: &mut Vec<(usize, &'a LogicalSource)>) {
+    match cond {
+        SqlCond::NotExists { scans, conds } => {
+            for s in scans {
+                out.push((s.alias, &s.source));
+            }
+            for c in conds {
+                collect_not_exists_scans(c, out);
+            }
+        }
+        SqlCond::Not(c) => collect_not_exists_scans(c, out),
+        SqlCond::And(cs) | SqlCond::Or(cs) => {
+            for c in cs {
+                collect_not_exists_scans(c, out);
+            }
+        }
+        _ => {}
     }
 }

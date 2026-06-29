@@ -664,6 +664,96 @@ fn property_path_zeroormore_adds_reflexive_pairs() {
     );
 }
 
+#[test]
+fn minus_removes_left_solutions_matching_on_a_shared_var() {
+    // ?e :empName ?n MINUS { ?e :empName "Ada" } — the right binds ?e to the Ada
+    // employee; MINUS removes the left solution sharing that ?e, keeping Grace.
+    let maps = mapping();
+    let conn = source();
+    let q = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n MINUS {{ ?e <{EMP_NAME}> \"Ada\" }} }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(
+        got,
+        vec!["Grace"],
+        "MINUS removes the left solution sharing ?e=Ada"
+    );
+}
+
+#[test]
+fn minus_disjoint_domains_is_a_noop() {
+    // {?e :empName ?n} MINUS {?d :deptName ?dn} — NO shared variable, so MINUS is a
+    // NO-OP (SPARQL §8.3): every left solution survives (it is NOT emptied). This is
+    // the canonical MINUS-vs-NOT-EXISTS distinction.
+    let maps = mapping();
+    let conn = source();
+    let q = format!("SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n MINUS {{ ?d <{DEPT_NAME}> ?dn }} }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ada", "Grace"],
+        "disjoint-domain MINUS returns the left unchanged"
+    );
+}
+
+#[test]
+fn minus_respects_literal_language_not_just_lexical() {
+    // Regression (WS-B wave-3 adversarial find): MINUS compatibility is `sameTerm`,
+    // not raw lexical equality — "Ada"@en is NOT compatible with "Ada"@fr, so the
+    // left solution must be KEPT. (Before the unify datatype/language fix this
+    // wrongly equated the columns and returned [].)
+    let t = TriplesMap {
+        id: "T".to_owned(),
+        source: LogicalSource::Table("t".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/t/{id}"),
+            classes: vec![],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![
+            pom(
+                "http://ex/enLabel",
+                TermMap::Column("v".into(), TermSpec::lang_literal("en")),
+            ),
+            pom(
+                "http://ex/frLabel",
+                TermMap::Column("v".into(), TermSpec::lang_literal("fr")),
+            ),
+        ],
+    };
+    let maps = std::slice::from_ref(&t);
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES (1,'Ada');",
+    )
+    .unwrap();
+    let q = "SELECT ?x WHERE { ?a <http://ex/enLabel> ?x MINUS { ?b <http://ex/frLabel> ?x } }";
+    let plan = parse_and_translate(q, maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert_eq!(
+        got,
+        vec!["Ada"],
+        "\"Ada\"@en is not sameTerm \"Ada\"@fr ⇒ the left solution is kept"
+    );
+}
+
 fn parse(q: &str) -> spargebra::Query {
     spargebra::SparqlParser::new().parse_query(q).unwrap()
 }
