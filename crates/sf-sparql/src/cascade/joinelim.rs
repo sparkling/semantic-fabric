@@ -2,11 +2,92 @@
 //! Split out of `cascade` to keep each file within the size budget; it consumes
 //! the FD/uniqueness proof built by pass (3) in the parent module.
 
-use sf_core::ir::{Segment, Template, TermMap};
+use sf_core::ir::{LogicalSource, Segment, Template, TermMap};
 use sf_sql::TableSchema;
 
 use super::{scan_table, Fds};
 use crate::iq::{collect_cond_cols, Branch, ColRef, SqlCond, TermDef};
+
+// --- 2b-pre. LJ→IJ FK-guaranteed downgrade --------------------------------
+
+/// Downgrade an OptJoin to an inner join when a `NOT NULL` FK on a core scan
+/// guarantees that every core row has exactly one matching optional row. Sound:
+/// `NOT NULL FK` + declared referential integrity ⇒ LEFT JOIN always matches 1:1
+/// ⇒ LEFT JOIN semantics = INNER JOIN semantics ⇒ `=_bag` preserved.
+///
+/// Promotes the opt scan to `b.core` and moves the ON + extra conditions to
+/// `b.where_conds` (converting `NullSafeEq` → `ColEq` since both sides are
+/// NOT NULL after the FK match-guarantee is confirmed). The demoted `OptJoin`
+/// is removed from `b.opts`; subsequent cascade passes (3)/(4) see the promoted
+/// scan as a normal core scan and may eliminate it further.
+pub(super) fn lj_to_ij_fk_downgrade(b: &mut Branch, schema: &[TableSchema]) {
+    let mut i = 0;
+    while i < b.opts.len() {
+        if opt_is_fk_guaranteed(b, i, schema) {
+            let opt = b.opts.remove(i);
+            // Move ON + extra to where_conds; null-safe equalities become plain
+            // column equalities (both sides NOT NULL by FK guarantee).
+            for cond in opt.on.into_iter().chain(opt.extra) {
+                let inner = match cond {
+                    SqlCond::NullSafeEq(a, c) => SqlCond::ColEq(a, c),
+                    other => other,
+                };
+                b.where_conds.push(inner);
+            }
+            b.core.push(opt.scan);
+            // Re-check the same index — a later opt might now also qualify.
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Returns `true` when the OptJoin at `opt_idx` is guaranteed to match every
+/// core row: the ON clause is a single (Null)SafeEq between a core FK column and
+/// the opt scan's PK column, the FK is declared NOT NULL in the child table, and
+/// referential integrity is declared in the schema.
+fn opt_is_fk_guaranteed(b: &Branch, opt_idx: usize, schema: &[TableSchema]) -> bool {
+    let opt = &b.opts[opt_idx];
+    let LogicalSource::Table(opt_table) = &opt.scan.source else {
+        return false;
+    };
+    let opt_alias = opt.scan.alias;
+    // ON must be exactly one NullSafeEq or ColEq.
+    let (core_col, opt_col) = match opt.on.as_slice() {
+        [SqlCond::NullSafeEq(a, c)] | [SqlCond::ColEq(a, c)] => {
+            if a.alias != opt_alias && c.alias == opt_alias {
+                (a, c) // a is core, c is opt
+            } else if c.alias != opt_alias && a.alias == opt_alias {
+                (c, a) // c is core, a is opt
+            } else {
+                return false;
+            }
+        }
+        _ => return false,
+    };
+    // The opt-side column must be a unique key on the opt table (typically the PK).
+    let Some(opt_schema) = schema.iter().find(|t| t.name == *opt_table) else {
+        return false;
+    };
+    if !opt_schema.is_unique_key(&opt_col.column) {
+        return false;
+    }
+    // The core-side must be a declared NOT-NULL FK pointing at opt.
+    let Some(core_table) = scan_table(b, core_col.alias) else {
+        return false;
+    };
+    let Some(core_schema) = schema.iter().find(|t| t.name == core_table) else {
+        return false;
+    };
+    let fk_ok = core_schema.foreign_keys.iter().any(|fk| {
+        fk.parent_table == *opt_table
+            && fk.columns.len() == 1
+            && fk.columns[0] == *core_col.column
+            && fk.parent_columns.len() == 1
+            && fk.parent_columns[0] == *opt_col.column
+    });
+    fk_ok && column_not_null(core_schema, &core_col.column)
+}
 
 // --- 4. FK/PK join elimination --------------------------------------------
 

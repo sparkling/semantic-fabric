@@ -156,8 +156,6 @@ fn fd_self_join_elim_basic() {
 /// empty result.  sf neither models non-unique FDs nor detects constant
 /// contradictions across equi-join legs.
 #[test]
-#[ignore = "NEEDS_IMPL: FD-closure contradiction detection not implemented \
-            — FunctionalDependencyTest.testRejectedJoin1"]
 fn fd_self_join_rejected_join_contradiction() {
     // scan0 requires col2=1, scan1 requires col2=2, inner-joined on col2.
     // col2=1 AND col2=2 is unsatisfiable → empty result.
@@ -243,8 +241,6 @@ fn fd_self_join_elim_with_determinant_projected() {
 /// only *drops* a redundant parent scan; it never *downgrades* a LEFT JOIN on a
 /// FK match-guarantee basis.
 #[test]
-#[ignore = "NEEDS_IMPL: LJ→IJ FK-guaranteed downgrade not implemented \
-            — LeftJoinOptimizationTest.testLeftJoinElimination1"]
 fn lj_to_ij_fk_basic() {
     // TABLE1: PK col1. TABLE2: FK col2 NOT NULL → TABLE1.col1.
     // OPTIONAL {TABLE1 t1} ON t2.col2 = t1.col1.
@@ -307,9 +303,6 @@ fn lj_to_ij_fk_basic() {
 /// `opts[i].extra` is non-empty — it cannot synthesise the conditional term —
 /// so the OPTIONAL is kept as-is.
 #[test]
-#[ignore = "NEEDS_IMPL: self-LJ-with-filter elimination via IfElseNull conditional \
-            term not implemented \
-            — LeftJoinOptimizationTest.testSelfJoinElimination2"]
 fn self_lj_ifelsenull_with_filter() {
     // TABLE1: PK col1 (NOT NULL), col2 NOT NULL, col3 nullable.
     // Left scan: col1=M, col2=N. Right scan: col1=M, col3=O.
@@ -362,9 +355,6 @@ fn self_lj_ifelsenull_with_filter() {
 /// NULL-pads `?N` and drops the right scan.  sf has no cross-alias
 /// column-identity reasoning and does not detect the contradiction.
 #[test]
-#[ignore = "NEEDS_IMPL: self-LJ with contradictory constants on right — NULL-pad \
-            detection not implemented \
-            — LeftJoinOptimizationTest.testSelfLeftJoinNonUnification1"]
 fn self_lj_non_unification_constants() {
     // TABLE1: PK col1. Left scan: WHERE col3=1. Right scan: WHERE col3=2.
     // Same col1=M (PK) → same physical row → col3 cannot be both 1 and 2.

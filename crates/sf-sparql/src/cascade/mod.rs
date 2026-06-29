@@ -93,6 +93,10 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
                 return None; // 1 — unsatisfiable branch
             }
             self_join_elimination(&mut b, schema); // 2a (inner-join variant — unique key)
+            if !prune_iri_template_mismatch(&b) {
+                return None; // 1b — contradiction exposed after merge
+            }
+            joinelim::lj_to_ij_fk_downgrade(&mut b, schema); // 2b-pre — LJ→IJ FK guarantee
             self_left_join_elimination(&mut b, schema); // 2b (left-join variant — Q5)
             sameterm::same_terms_elimination(&mut b, ctx); // 2c (same terms under DISTINCT — ADR-0022)
             let fds = fd::infer_functional_dependencies(&b, schema); // 3
@@ -140,18 +144,51 @@ fn tier0_eliminate(_b: &mut Branch, _schema: &[TableSchema]) {}
 
 /// Returns `false` if the branch is provably empty: a column is constrained by
 /// two `=` constants with different values (the algebra-level disjointness the
-/// ADR calls IRI-template-mismatch). Sound: such a branch yields no rows.
+/// ADR calls IRI-template-mismatch). Also propagates constants through
+/// `ColEq` join equalities to fixpoint, detecting cross-alias contradictions
+/// (e.g. `col2=1 AND col2=2 AND ColEq(t0.col2, t1.col2)` → unsatisfiable).
+/// Sound: such a branch yields no rows.
 fn prune_iri_template_mismatch(b: &Branch) -> bool {
-    let mut eqs: Vec<(&ColRef, &str)> = Vec::new();
+    // Map column reference → constant it equals (first-seen wins).
+    let mut known: Vec<(ColRef, String)> = Vec::new();
+
+    // Seed from direct Cmp(col, Eq, val) conditions.
     for cond in &b.where_conds {
         if let SqlCond::Cmp(col, CmpOp::Eq, val) = cond {
-            if let Some((_, prev)) = eqs.iter().find(|(c, _)| *c == col) {
-                if *prev != val.as_str() {
+            if let Some((_, prev)) = known.iter().find(|(c, _)| c == col) {
+                if prev != val {
                     return false;
                 }
             } else {
-                eqs.push((col, val));
+                known.push((col.clone(), val.clone()));
             }
+        }
+    }
+
+    // Propagate through ColEq to fixpoint: if a=X and ColEq(a, b) then b=X.
+    loop {
+        let mut changed = false;
+        for cond in &b.where_conds {
+            let (lhs, rhs) = match cond {
+                SqlCond::ColEq(a, c) => (a, c),
+                _ => continue,
+            };
+            for (src, tgt) in [(lhs, rhs), (rhs, lhs)] {
+                if let Some((_, val)) = known.iter().find(|(c, _)| c == src) {
+                    let val = val.clone();
+                    if let Some((_, prev)) = known.iter().find(|(c, _)| c == tgt) {
+                        if *prev != val {
+                            return false; // contradiction via join equality
+                        }
+                    } else {
+                        known.push((tgt.clone(), val));
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
     true
@@ -166,12 +203,23 @@ fn prune_iri_template_mismatch(b: &Branch) -> bool {
 /// `NULL = NULL ⇒ UNKNOWN` join already excludes its NULL rows, so collapsing to a
 /// bare scan would re-admit them and break `=_bag`). Otherwise a no-op.
 fn self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
+    // Single-column unique-key self-join elimination.
     while let Some((keep, drop, cond_idx)) = find_self_join(b, schema) {
         // Remove exactly the key equality that licenses *this* merge (by index,
         // before the rewrite). Removing every trivial `x = x` would also drop a
         // genuine `?x :p ?x` self-comparison, which is an effective `IS NOT NULL`
         // guard and must survive (ADR-0007 R3/=_bag).
         b.where_conds.remove(cond_idx);
+        rewrite_alias(b, drop, keep);
+        b.core.retain(|s| s.alias != drop);
+    }
+    // Composite-key self-join elimination (all PK cols covered by cross-scan ColEqs).
+    while let Some((keep, drop, mut idxs)) = find_composite_pk_self_join(b, schema) {
+        // Remove all licensing ColEq conditions, highest index first.
+        idxs.sort_unstable_by(|a, c| c.cmp(a));
+        for idx in idxs {
+            b.where_conds.remove(idx);
+        }
         rewrite_alias(b, drop, keep);
         b.core.retain(|s| s.alias != drop);
     }
@@ -205,6 +253,64 @@ fn find_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, u
     None
 }
 
+/// Find `(keep, drop, cond_indices)` for a composite-PK self-join: two core scans
+/// of the same table where the set of cross-scan `ColEq` conditions (same column
+/// name on both sides) covers every column of the composite primary key. Such a
+/// join identifies the same row on both sides, so the merge is `=_bag`-safe. All
+/// PK columns are `NOT NULL` by SQL semantics — no nullable-key hazard.
+fn find_composite_pk_self_join(
+    b: &Branch,
+    schema: &[TableSchema],
+) -> Option<(usize, usize, Vec<usize>)> {
+    for i in 0..b.core.len() {
+        let LogicalSource::Table(ti) = &b.core[i].source else {
+            continue;
+        };
+        let ai = b.core[i].alias;
+        let Some(ts) = schema.iter().find(|t| &t.name == ti) else {
+            continue;
+        };
+        if ts.primary_key.len() < 2 {
+            continue; // single-column handled by find_self_join
+        }
+        for j in (i + 1)..b.core.len() {
+            let LogicalSource::Table(tj) = &b.core[j].source else {
+                continue;
+            };
+            if ti != tj {
+                continue;
+            }
+            let aj = b.core[j].alias;
+            let (keep, drop) = if ai < aj { (ai, aj) } else { (aj, ai) };
+
+            // Collect cross-scan ColEq conditions whose column is part of the composite PK.
+            let mut pk_cols_covered: Vec<String> = Vec::new();
+            let mut cond_idxs: Vec<usize> = Vec::new();
+            for (idx, cond) in b.where_conds.iter().enumerate() {
+                let SqlCond::ColEq(a, c) = cond else { continue };
+                if a.column != c.column {
+                    continue; // different column names — not a direct PK equality
+                }
+                let spans_pair =
+                    (a.alias == ai && c.alias == aj) || (a.alias == aj && c.alias == ai);
+                if !spans_pair {
+                    continue;
+                }
+                let col = a.column.to_string();
+                if ts.primary_key.contains(&col) && !pk_cols_covered.contains(&col) {
+                    pk_cols_covered.push(col);
+                    cond_idxs.push(idx);
+                }
+            }
+            // All PK columns must be covered.
+            if ts.primary_key.iter().all(|pk| pk_cols_covered.contains(pk)) {
+                return Some((keep, drop, cond_idxs));
+            }
+        }
+    }
+    None
+}
+
 /// Collapse a self-**LEFT**-join — an `OPTIONAL` right side that is a provable 1:1
 /// match of a kept core scan — by rebinding it onto that scan and dropping the
 /// `LEFT JOIN` (the Q5 `?t a :Trip . OPTIONAL { ?t :headsign ?hs }` fix). Unlike
@@ -228,6 +334,91 @@ fn self_left_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
         b.opts.remove(opt_idx);
         rewrite_alias(b, opt_alias, keep);
     }
+    // Detect self-LJ where the right-side extra conditions contradict the core
+    // WHERE conditions: since PK equality ⇒ same row, any column constant on the
+    // right that conflicts with one on the left means the OPTIONAL never matches.
+    lj_contradiction_elim(b, schema);
+}
+
+/// Drop OptJoins whose `extra` conditions contradict the core `where_conds` on
+/// same-table, PK-joined (self-LJ) branches. On a self-LEFT-JOIN the ON key
+/// equality guarantees that left and right sides read the SAME physical row; a
+/// constant on the right (col = X) that disagrees with one on the left
+/// (col = Y, X ≠ Y) is therefore impossible — the OPTIONAL never matches and
+/// all right-side variables are always NULL. Sound to drop the OptJoin and
+/// remove bindings that exclusively reference the vanished alias.
+fn lj_contradiction_elim(b: &mut Branch, schema: &[TableSchema]) {
+    let mut i = 0;
+    while i < b.opts.len() {
+        if opt_has_pk_contradiction(b, i, schema) {
+            let drop_alias = b.opts[i].scan.alias;
+            b.opts.remove(i);
+            // NULL-pad: drop bindings that reference only the vanished alias.
+            b.bindings.retain(|_, def| {
+                let cols = def.columns();
+                !cols.iter().all(|c| c.alias == drop_alias)
+            });
+            // Do not advance i — recheck at the same slot.
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Returns `true` when the OptJoin at `opt_idx` is a PK-keyed self-LEFT-JOIN
+/// whose extra conditions contain a constant that contradicts a core WHERE
+/// constant on the same column (same physical cell, impossible value).
+fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &[TableSchema]) -> bool {
+    let opt = &b.opts[opt_idx];
+    let LogicalSource::Table(opt_table) = &opt.scan.source else {
+        return false;
+    };
+    let opt_alias = opt.scan.alias;
+    // ON must be a single NullSafeEq/ColEq on the same column.
+    let [cond] = opt.on.as_slice() else {
+        return false;
+    };
+    let (SqlCond::NullSafeEq(a, c) | SqlCond::ColEq(a, c)) = cond else {
+        return false;
+    };
+    if a.column != c.column {
+        return false;
+    }
+    let keep = if a.alias == opt_alias && c.alias != opt_alias {
+        c
+    } else if c.alias == opt_alias && a.alias != opt_alias {
+        a
+    } else {
+        return false;
+    };
+    // Kept side must be a core scan of the same table.
+    if scan_table(b, keep.alias).as_deref() != Some(opt_table.as_str()) {
+        return false;
+    }
+    // The shared key must be a NON-NULL unique key (ensures same-row identity).
+    let Some(ts) = schema.iter().find(|t| &t.name == opt_table) else {
+        return false;
+    };
+    if !ts.is_unique_key(&keep.column) || !key_is_non_null(ts, &keep.column) {
+        return false;
+    }
+    // Contradiction: same column name, different constants on kept vs opt sides.
+    for extra in &opt.extra {
+        let SqlCond::Cmp(ec, CmpOp::Eq, eval) = extra else {
+            continue;
+        };
+        if ec.alias != opt_alias {
+            continue;
+        }
+        let contradicts = b.where_conds.iter().any(|wc| {
+            matches!(wc, SqlCond::Cmp(wc_col, CmpOp::Eq, wc_val)
+                if wc_col.alias == keep.alias && wc_col.column == ec.column && wc_val != eval)
+        });
+        if contradicts {
+            return true;
+        }
+    }
+    false
 }
 
 /// Returns `(keep_alias, opt_alias, opt_index)` of an eliminable self-left-join, or
@@ -239,15 +430,23 @@ fn self_left_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
 /// OPTIONAL makes the match conditional → not always-matching → not eliminable).
 fn find_self_left_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, usize)> {
     for (idx, opt) in b.opts.iter().enumerate() {
+        let opt_alias = opt.scan.alias;
         // A FILTER inside the OPTIONAL can make the match conditional → keep it.
-        if !opt.extra.is_empty() {
+        // Exception: a lone `IS NOT NULL(col)` on the opt scan is not conditional in
+        // the PK self-join case — because the same-row identity means the column has
+        // the same value on the kept scan, and NULL propagates naturally after merge.
+        let extra_ok = opt.extra.is_empty()
+            || matches!(
+                opt.extra.as_slice(),
+                [SqlCond::IsNotNull(c)] if c.alias == opt_alias
+            );
+        if !extra_ok {
             continue;
         }
         // The right side must be a single base-table scan.
         let LogicalSource::Table(opt_table) = &opt.scan.source else {
             continue;
         };
-        let opt_alias = opt.scan.alias;
         // Exactly one shared-key compatibility condition, same column on both sides.
         let [cond] = opt.on.as_slice() else { continue };
         let (SqlCond::NullSafeEq(a, c) | SqlCond::ColEq(a, c)) = cond else {
@@ -484,14 +683,47 @@ fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[St
         .filter(|k| key_is_non_null(ts, k))
         .collect();
     let projected = |var: &str| project.is_none_or(|p| p.iter().any(|v| v == var));
-    let redundant = b.bindings.iter().any(|(var, def)| {
+    // Single-column key: any projected injective binding reads a unique key col.
+    let redundant_single = b.bindings.iter().any(|(var, def)| {
         projected(var)
             && binding_is_injective(def)
             && keys
                 .iter()
                 .any(|k| def.columns().contains(&ColRef::new(scan.alias, k.clone())))
     });
-    if redundant {
+    // Composite PK: a projected injective Template binding whose Column slots
+    // cover ALL PK columns — distinct PK tuples ⇒ distinct output terms.
+    // PK columns are always NOT NULL (PK ⇒ NOT NULL), so no nullable-key hazard.
+    let redundant_composite = !redundant_single
+        && ts.primary_key.len() > 1
+        && b.bindings.iter().any(|(var, def)| {
+            if !projected(var) || !binding_is_injective(def) {
+                return false;
+            }
+            let TermDef::Derived {
+                term_map: TermMap::Template(t, _),
+                alias,
+            } = def
+            else {
+                return false;
+            };
+            if *alias != scan.alias {
+                return false;
+            }
+            // Every PK column must appear as a Column slot in the template.
+            let template_cols: Vec<&str> = t
+                .segments()
+                .iter()
+                .filter_map(|s| match s {
+                    Segment::Column(c) => Some(c.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            ts.primary_key
+                .iter()
+                .all(|pk| template_cols.contains(&pk.as_str()))
+        });
+    if redundant_single || redundant_composite {
         b.distinct = false;
     }
 }

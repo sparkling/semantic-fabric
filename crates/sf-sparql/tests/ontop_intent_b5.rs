@@ -215,10 +215,6 @@ fn uc_non_injective_reversed_cols_distinct_kept() {
 ///                   injective template covers all PK columns before removing
 ///                   DISTINCT.
 #[test]
-#[ignore = "NEEDS_IMPL: sf pass-6 distinct-removal does not handle composite PKs; \
-            single_col_keys returns [] for a 2-column PK, so DISTINCT is \
-            conservatively kept even when an injective template covers the full \
-            composite key (Ontop testConstructionInjectiveTemplate3 ⇒ {{X}})"]
 fn uc_composite_pk_injective_distinct_removed_needs_impl() {
     // Injective template: "/" separator between col1 and col2.
     // (col1, col2) is the composite PK ⇒ X is unique ⇒ DISTINCT redundant.

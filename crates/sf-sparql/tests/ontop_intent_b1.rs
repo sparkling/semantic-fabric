@@ -151,9 +151,6 @@ fn rsj_schema() -> Vec<TableSchema> {
 /// self-join elimination requires collecting all join equalities and checking
 /// them together against a composite key.
 #[test]
-#[ignore = "NEEDS_IMPL: composite-key self-join elimination not implemented \
-            — sf pass 2 only handles single-column PKs \
-            — RedundantSelfJoinTest.testSelfJoinElimination3"]
 fn composite_pk_self_join_elim() {
     let mut b = branch_with(
         vec![scan(0, "table3"), scan(1, "table3")],
@@ -196,10 +193,6 @@ fn composite_pk_self_join_elim() {
 /// Ontop's optimizer detects the constant clash on the PK during unification
 /// and emits an empty node immediately.
 #[test]
-#[ignore = "NEEDS_IMPL: plain-constant contradiction on PK not detected — \
-            sf merges on col1 (PK) and retains contradictory Cmp conditions \
-            rather than producing an empty result \
-            — RedundantSelfJoinTest.testNonUnification1"]
 fn self_join_nonunification_contradictory_constants() {
     let mut b = branch_with(
         vec![scan(0, "table1"), scan(1, "table1")],
