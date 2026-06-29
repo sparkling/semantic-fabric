@@ -100,6 +100,7 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             joinelim::lj_to_ij_fk_downgrade(&mut b, schema); // 2b-pre — LJ→IJ FK guarantee
             self_left_join_elimination(&mut b, schema); // 2b (left-join variant — Q5)
             sameterm::same_terms_elimination(&mut b, ctx); // 2c (same terms under DISTINCT — ADR-0022)
+            distinct_prune_unused_opts(&mut b, ctx); // 2d — DISTINCT-driven prune of unused OPTIONAL right
             let fds = fd::infer_functional_dependencies(&b, schema); // 3
             joinelim::fk_pk_join_elimination(&mut b, schema, &fds); // 4
             selection_pushdown(&mut b); // 5
@@ -578,6 +579,39 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
 }
 
 // --- 2c. same terms elimination — see `sameterm.rs` ----------------------
+
+// --- 2d. DISTINCT-driven pruning of unused OPTIONAL right sides -----------
+
+/// Pass 2d — under DISTINCT, drop any OPTIONAL (LEFT JOIN) right side whose
+/// scan alias is not read by any *projected* binding.
+///
+/// Soundness (=_bag): under DISTINCT, if no projected binding reads the opt
+/// scan, then for every core row:
+///   * matches k opt rows  → k identical projected tuples → DISTINCT ⇒ 1
+///   * matches 0 opt rows  → 1 NULL-extended projected tuple → same 1 row
+///
+/// So DISTINCT ∘ (core ⊕ opt) ≡ DISTINCT ∘ core on the projected columns.
+///
+/// The `extra` conditions are part of the LEFT JOIN ON clause — they cannot
+/// filter core rows (the core always appears in a LEFT JOIN regardless of
+/// whether the optional side matches), so dropping the OptJoin is safe even
+/// when `extra` references core aliases.
+fn distinct_prune_unused_opts(b: &mut Branch, ctx: &CascadeCtx) {
+    if !ctx.distinct {
+        return;
+    }
+    let Some(project) = ctx.project else {
+        return;
+    };
+    b.opts.retain(|oj| {
+        let opt_alias = oj.scan.alias;
+        // Retain if any projected binding reads a column from the optional scan.
+        // TermDef::columns() recurses through Coalesce / Concat for correctness.
+        b.bindings.iter().any(|(var, def)| {
+            project.iter().any(|p| p == var) && def.columns().iter().any(|c| c.alias == opt_alias)
+        })
+    });
+}
 
 // --- 3. functional-dependency inference — see `fd.rs` ---------------------
 

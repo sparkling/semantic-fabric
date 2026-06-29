@@ -398,3 +398,254 @@ fn self_lj_non_unification_constants() {
          OPTIONAL must be dropped and right-bound vars NULL-padded"
     );
 }
+
+// ===========================================================================
+// GREEN — pass 2d: DISTINCT-driven pruning of unused OPTIONAL right sides
+// Covers Ontop LeftJoinOptimizationTest.testDistinctPruneUnusedRight1-7
+// and the testDistinctNoPrune* guards.
+// ===========================================================================
+
+fn prune_schema() -> Vec<TableSchema> {
+    let mut t1 = TableSchema::new("TABLE1");
+    t1.primary_key = vec!["col1".into()];
+    t1.columns = vec![
+        Column::new("col1", "integer", true),
+        Column::new("col2", "integer", true),
+    ];
+    let mut t2 = TableSchema::new("TABLE2");
+    t2.primary_key = vec!["col1".into()];
+    t2.columns = vec![
+        Column::new("col1", "integer", true),
+        Column::new("col2", "integer", true),
+    ];
+    vec![t1, t2]
+}
+
+fn ctx_d<'a>(project: &'a [String]) -> CascadeCtx<'a> {
+    CascadeCtx {
+        distinct: true,
+        project: Some(project),
+    }
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight1`: basic case — one OPTIONAL
+/// whose only binding is not projected; under DISTINCT it is dropped.
+#[test]
+fn distinct_prune_unused_right_basic() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // NOT projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into()]));
+    assert!(
+        out[0].opts.is_empty(),
+        "unused OPTIONAL pruned under DISTINCT"
+    );
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight2`: OPTIONAL with an `extra`
+/// condition on the opt scan itself — still pruned (ON-clause, no core filter).
+#[test]
+fn distinct_prune_unused_right_extra_on_opt_side() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![SqlCond::NullSafeEq(
+            ColRef::new(0, "col1"),
+            ColRef::new(1, "col1"),
+        )],
+        extra: vec![SqlCond::IsNotNull(ColRef::new(1, "col2"))],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // NOT projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into()]));
+    assert!(
+        out[0].opts.is_empty(),
+        "extra on opt side only → still pruned"
+    );
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight3`: two OPTIONALs, both unused
+/// under DISTINCT → both dropped.
+#[test]
+fn distinct_prune_unused_right_two_both_unused() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.opts.push(OptJoin {
+        scan: scan(2, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // NOT projected
+    b.bindings.insert("P".into(), col_binding(2, "col2")); // NOT projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into()]));
+    assert!(out[0].opts.is_empty(), "both unused OPTIONALs pruned");
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight4`: two OPTIONALs — alias 1
+/// unused (pruned), alias 2 used (kept).
+#[test]
+fn distinct_prune_unused_right_two_opts_one_used() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.opts.push(OptJoin {
+        scan: scan(2, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // NOT projected
+    b.bindings.insert("P".into(), col_binding(2, "col2")); // IS projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into(), "P".into()]));
+    assert_eq!(out[0].opts.len(), 1, "only unused OPTIONAL pruned");
+    assert_eq!(out[0].opts[0].scan.alias, 2, "alias 2 (used) kept");
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight5`: `extra` condition references
+/// the CORE alias — still safe to prune (LEFT JOIN ON cannot filter core rows).
+#[test]
+fn distinct_prune_unused_right_extra_touches_core() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![SqlCond::NullSafeEq(
+            ColRef::new(0, "col1"),
+            ColRef::new(1, "col1"),
+        )],
+        // Condition references core alias 0 — but it's a LEFT JOIN ON condition,
+        // not a WHERE filter: core rows are never filtered by the ON clause.
+        extra: vec![SqlCond::ColEq(
+            ColRef::new(0, "col2"),
+            ColRef::new(1, "col2"),
+        )],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // NOT projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into()]));
+    assert!(
+        out[0].opts.is_empty(),
+        "extra references core alias but is ON-clause only → still pruned"
+    );
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight6`: binding in `b.bindings` whose
+/// variable is absent from the project list — treated as unused → pruned.
+#[test]
+fn distinct_prune_unused_right_binding_not_in_project() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2"));
+    b.bindings.insert("O".into(), col_binding(1, "col1")); // also from alias 1, not projected
+                                                           // project contains only "M" — none of the alias-1 bindings are projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into()]));
+    assert!(
+        out[0].opts.is_empty(),
+        "no projected var reads alias 1 → pruned"
+    );
+}
+
+/// **GREEN** — `testDistinctPruneUnusedRight7`: a `Coalesce` binding that
+/// reads alias 1 on the left → the OPTIONAL is retained (the binding IS used).
+#[test]
+fn distinct_prune_no_prune_coalesce_reads_opt() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    // "N" is a Coalesce that reads alias 1 (opt) first, alias 0 (core) as fallback.
+    b.bindings.insert(
+        "N".into(),
+        TermDef::Coalesce(
+            Box::new(col_binding(1, "col2")),
+            Box::new(col_binding(0, "col2")),
+        ),
+    );
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into(), "N".into()]));
+    assert_eq!(
+        out[0].opts.len(),
+        1,
+        "Coalesce reads opt alias → OPTIONAL kept"
+    );
+}
+
+/// **GREEN** — `testDistinctNoPrune1`: projected variable IS sourced from the
+/// OPTIONAL scan → opt must be retained.
+#[test]
+fn distinct_no_prune_used_var_projected() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // IS projected
+    let out = run(vec![b], &prune_schema(), &ctx_d(&["M".into(), "N".into()]));
+    assert_eq!(
+        out[0].opts.len(),
+        1,
+        "projected var from opt → OPTIONAL kept"
+    );
+}
+
+/// **GREEN** — `testDistinctNoPrune2`: same branch but WITHOUT DISTINCT context
+/// → pass 2d does not fire; OPTIONAL retained.
+#[test]
+fn distinct_no_prune_without_distinct() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2")); // NOT projected but no DISTINCT
+                                                           // Use a project list but no DISTINCT — pass 2d must not fire.
+    let ctx = CascadeCtx {
+        distinct: false,
+        project: Some(&["M".into()]),
+    };
+    let out = run(vec![b], &prune_schema(), &ctx);
+    assert_eq!(out[0].opts.len(), 1, "no DISTINCT → pass 2d must not fire");
+}
+
+/// **GREEN** — `testDistinctNoPrune3`: SELECT * (no project list) — pass 2d
+/// requires a known project list and must not fire when `project = None`.
+#[test]
+fn distinct_no_prune_no_project_list() {
+    let mut b = Branch::single(scan(0, "TABLE1"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "TABLE2"),
+        on: vec![],
+        extra: vec![],
+    });
+    b.bindings.insert("M".into(), col_binding(0, "col1"));
+    b.bindings.insert("N".into(), col_binding(1, "col2"));
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: None,
+    }; // SELECT DISTINCT * analog
+    let out = run(vec![b], &prune_schema(), &ctx);
+    assert_eq!(out[0].opts.len(), 1, "project=None → pass 2d must not fire");
+}
