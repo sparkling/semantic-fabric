@@ -624,14 +624,148 @@ fn distinct_prune_unused_opts(b: &mut Branch, ctx: &CascadeCtx) {
 /// Soundness (`=_bag`): under DISTINCT, n² identical projected tuples from the
 /// self-join and n tuples from the single scan both deduplicate to the same set.
 /// Without DISTINCT the counts differ (n² ≠ n), so the guard is required.
+///
+/// **1b — FD-based self-LEFT-JOIN (OPTIONAL) elimination.** When an OPTIONAL right
+/// side is a scan of the SAME table as a core scan, joined on a NOT-NULL FD determinant
+/// column `C`, and all opt-scan bindings use only `{C} ∪ {dep}`, the OPTIONAL is
+/// redundant under DISTINCT. The NOT-NULL guard ensures the FD applies to every row
+/// (FDs are vacuously true for NULL determinants in SQL, so a NULL `C` would not
+/// constrain the dep columns → the opt could produce different dep values from
+/// different rows → elimination would be unsound). The same-table guarantee means
+/// every opt row IS a row of the core table; under DISTINCT the FD forces all
+/// opt-produced projected values to equal the core-produced values.
+///
+/// **1c — nullable-determinant IS-NOT-NULL synthesis.** For the inner-join case: an
+/// equi-join on a nullable `C` excludes NULL rows (`NULL = NULL ⇒ UNKNOWN`). After
+/// merging to a single scan, NULL rows would be re-admitted, breaking `=_bag`. A
+/// synthetic `IS NOT NULL(C)` guard on the kept alias restores the exclusion.
 fn fd_self_join_elimination(b: &mut Branch, schema: &[TableSchema], ctx: &CascadeCtx) {
     if !ctx.distinct {
         return;
     }
+    // 2e inner-join case (with 1c nullable-det IS-NOT-NULL synthesis).
     while let Some((keep, drop, cond_idx)) = find_fd_self_join(b, schema) {
+        // Extract det_col name before removing the condition.
+        let det_col: Box<str> = {
+            let SqlCond::ColEq(a, _) = &b.where_conds[cond_idx] else {
+                unreachable!("find_fd_self_join returns a ColEq index");
+            };
+            a.column.clone()
+        };
+        // 1c: if the determinant is nullable, the equi-join excluded NULL rows.
+        // Synthesise IS NOT NULL to preserve that exclusion after the merge.
+        let is_nullable = scan_table(b, keep)
+            .and_then(|tbl| schema.iter().find(|t| t.name == tbl))
+            .is_some_and(|ts| !key_is_non_null(ts, &det_col));
+
         b.where_conds.remove(cond_idx);
         rewrite_alias(b, drop, keep);
         b.core.retain(|s| s.alias != drop);
+
+        if is_nullable {
+            let col = ColRef::new(keep, det_col);
+            if !b
+                .where_conds
+                .iter()
+                .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &col))
+            {
+                b.where_conds.push(SqlCond::IsNotNull(col));
+            }
+        }
+    }
+    // 1b: FD-based self-LEFT-JOIN (OPTIONAL) elimination under DISTINCT.
+    let mut i = 0;
+    while i < b.opts.len() {
+        if let Some(keep) = find_fd_self_left_join(b, schema, i) {
+            let opt_alias = b.opts[i].scan.alias;
+            b.opts.remove(i);
+            rewrite_alias(b, opt_alias, keep);
+            // Restart from the beginning — removing shifts all subsequent indices.
+            i = 0;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Returns the core alias to keep when the OPTIONAL at `opt_idx` qualifies for
+/// FD-based self-left-join elimination under DISTINCT (wave 1b).
+///
+/// All five preconditions must hold:
+/// 1. `opt.extra` is empty (a non-empty extra makes the match conditional).
+/// 2. `opt.on` is a single `(Null)SafeEq` or `ColEq` with the SAME column name on
+///    both sides (the FD determinant `det_col`).
+/// 3. One side of the ON condition is the opt scan; the other is a core scan of the
+///    SAME table (self-join identity).
+/// 4. `det_col` is NOT NULL on that table — necessary because FDs are defined on
+///    non-NULL values; a NULL `det_col` would not constrain the dep columns, so
+///    different rows could have the same `NULL` det but different dep values.
+/// 5. The schema declares `det_col` as a non-unique FD determinant (`det_col → dep`),
+///    and ALL bindings that reference the opt scan use only columns in `{det_col} ∪ dep`.
+fn find_fd_self_left_join(b: &Branch, schema: &[TableSchema], opt_idx: usize) -> Option<usize> {
+    let opt = &b.opts[opt_idx];
+    let opt_alias = opt.scan.alias;
+
+    // Precondition 1: no extra conditions (a non-empty extra makes the match conditional).
+    if !opt.extra.is_empty() {
+        return None;
+    }
+
+    // Precondition 2: exactly one ON condition, (Null)SafeEq or ColEq, same column.
+    let [cond] = opt.on.as_slice() else {
+        return None;
+    };
+    let (a, c) = match cond {
+        SqlCond::NullSafeEq(a, c) | SqlCond::ColEq(a, c) => (a, c),
+        _ => return None,
+    };
+    if a.column != c.column {
+        return None;
+    }
+
+    // Precondition 3: one side on the opt scan, the other on a core scan of the same table.
+    let (det_col, core_alias) = if a.alias == opt_alias && c.alias != opt_alias {
+        (&a.column, c.alias)
+    } else if c.alias == opt_alias && a.alias != opt_alias {
+        (&c.column, a.alias)
+    } else {
+        return None;
+    };
+    let LogicalSource::Table(opt_table) = &opt.scan.source else {
+        return None;
+    };
+    if scan_table(b, core_alias).as_deref() != Some(opt_table.as_str()) {
+        return None;
+    }
+
+    // Precondition 4: det_col must be NOT NULL (FDs only constrain non-NULL rows).
+    let ts = schema.iter().find(|t| &t.name == opt_table)?;
+    if !key_is_non_null(ts, det_col) {
+        return None;
+    }
+
+    // Precondition 5: det_col is a declared FD determinant, and all opt bindings
+    // are confined to {det_col} ∪ fd.dep.
+    let fd = ts
+        .functional_dependencies
+        .iter()
+        .find(|fd| fd.det.len() == 1 && fd.det[0].as_str() == &**det_col)?;
+    let allowed: Vec<&str> = fd
+        .dep
+        .iter()
+        .map(|s| s.as_str())
+        .chain(fd.det.iter().map(|s| s.as_str()))
+        .collect();
+    let all_ok = b.bindings.values().all(|def| {
+        def.columns()
+            .iter()
+            .filter(|c| c.alias == opt_alias)
+            .all(|c| allowed.contains(&&*c.column))
+    });
+    if all_ok {
+        Some(core_alias)
+    } else {
+        None
     }
 }
 

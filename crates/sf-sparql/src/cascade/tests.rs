@@ -3,8 +3,9 @@
 #![cfg(test)]
 
 use super::*;
+use crate::iq::OptJoin;
 use sf_core::ir::{LogicalSource, Segment, Template, TermMap, TermSpec};
-use sf_sql::{Column, ForeignKey};
+use sf_sql::{Column, ForeignKey, FunctionalDep};
 use std::collections::BTreeMap;
 
 fn scan(alias: usize, table: &str) -> crate::iq::Scan {
@@ -494,5 +495,228 @@ fn distinct_kept_on_join() {
     assert!(
         out[0].distinct,
         "join ⇒ DISTINCT preserved (no uniqueness proof)"
+    );
+}
+
+// --- pass 2e ext (wave 1b): FD-based OPTIONAL elimination under DISTINCT -----
+
+/// A table with a non-unique FD determinant: `det_col → col3, col4`.
+/// `det_notnull` controls whether `det_col` is NOT NULL or nullable.
+fn fd_table(name: &str, det_notnull: bool) -> TableSchema {
+    let mut t = TableSchema::new(name);
+    t.columns = vec![
+        Column::new("id", "integer", true),
+        Column::new("det_col", "integer", det_notnull),
+        Column::new("col3", "text", false),
+        Column::new("col4", "text", false),
+    ];
+    t.primary_key = vec!["id".to_owned()];
+    t.functional_dependencies = vec![FunctionalDep {
+        det: vec!["det_col".to_owned()],
+        dep: vec!["col3".to_owned(), "col4".to_owned()],
+    }];
+    t
+}
+
+#[test]
+fn fd_optional_eliminated_on_notnull_fd_determinant() {
+    // OPTIONAL(same table, ON NullSafeEq(det_col@0, det_col@1), no extra) where
+    // det_col is NOT NULL and a declared FD determinant, and all opt bindings
+    // read only from {det_col, col3, col4} — the OPTIONAL is redundant under DISTINCT.
+    // Wave 1b positive case.
+    let mut b = Branch {
+        core: vec![scan(0, "emp")],
+        opts: vec![OptJoin {
+            scan: scan(1, "emp"),
+            on: vec![SqlCond::NullSafeEq(
+                ColRef::new(0, "det_col"),
+                ColRef::new(1, "det_col"),
+            )],
+            extra: vec![],
+        }],
+        bindings: BTreeMap::new(),
+        where_conds: vec![],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+    };
+    b.bindings.insert("x".into(), col_binding(1, "col3"));
+    let ts = fd_table("emp", true); // det_col NOT NULL
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: None,
+    };
+    let out = run(vec![b], std::slice::from_ref(&ts), &ctx);
+    let b = &out[0];
+    assert!(b.opts.is_empty(), "FD-based OPTIONAL must be eliminated");
+    // Binding must be rewritten to the core alias.
+    match b.bindings.get("x").unwrap() {
+        TermDef::Derived { alias, .. } => {
+            assert_eq!(*alias, 0, "binding rewritten to core alias 0")
+        }
+        _ => panic!("expected a derived binding"),
+    }
+}
+
+#[test]
+fn fd_optional_not_eliminated_when_fd_det_nullable() {
+    // With det_col NULLABLE the FD does not constrain rows with det_col IS NULL —
+    // different rows could share det_col=NULL but differ on col3/col4.
+    // Eliminating the OPTIONAL would merge those distinct tuples → =_bag break.
+    let mut b = Branch {
+        core: vec![scan(0, "emp")],
+        opts: vec![OptJoin {
+            scan: scan(1, "emp"),
+            on: vec![SqlCond::NullSafeEq(
+                ColRef::new(0, "det_col"),
+                ColRef::new(1, "det_col"),
+            )],
+            extra: vec![],
+        }],
+        bindings: BTreeMap::new(),
+        where_conds: vec![],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+    };
+    b.bindings.insert("x".into(), col_binding(1, "col3"));
+    let ts = fd_table("emp", false); // det_col NULLABLE
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: None,
+    };
+    let out = run(vec![b], std::slice::from_ref(&ts), &ctx);
+    assert_eq!(
+        out[0].opts.len(),
+        1,
+        "nullable FD det ⇒ OPTIONAL preserved (=_bag guard)"
+    );
+}
+
+#[test]
+fn fd_optional_not_eliminated_without_distinct() {
+    // Without DISTINCT the pass must not fire — eliminating the OPTIONAL would
+    // remove rows where the opt side is absent (NULL), changing the bag.
+    let mut b = Branch {
+        core: vec![scan(0, "emp")],
+        opts: vec![OptJoin {
+            scan: scan(1, "emp"),
+            on: vec![SqlCond::NullSafeEq(
+                ColRef::new(0, "det_col"),
+                ColRef::new(1, "det_col"),
+            )],
+            extra: vec![],
+        }],
+        bindings: BTreeMap::new(),
+        where_conds: vec![],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+    };
+    b.bindings.insert("x".into(), col_binding(1, "col3"));
+    let ts = fd_table("emp", true); // det_col NOT NULL — but no DISTINCT
+    let ctx = CascadeCtx {
+        distinct: false,
+        project: None,
+    };
+    let out = run(vec![b], std::slice::from_ref(&ts), &ctx);
+    assert_eq!(out[0].opts.len(), 1, "no DISTINCT ⇒ OPTIONAL preserved");
+}
+
+// --- pass 2e ext (wave 1c): nullable-det IS-NOT-NULL synthesis (inner join) --
+
+#[test]
+fn fd_inner_join_nullable_det_adds_is_not_null() {
+    // Two scans of "emp" inner-joined on nullable det_col (a declared FD determinant)
+    // under DISTINCT. After collapsing to one scan, IS NOT NULL(det_col@0) must be
+    // synthesised — without it, rows that had det_col=NULL would re-appear (the
+    // equi-join excluded them), breaking =_bag.
+    // Wave 1c positive case.
+    //
+    // Binding design: "x" on alias 1 (drop), "y" on alias 0 (keep). This blocks
+    // pass 2c (same_terms_elimination) from firing, because in BOTH orientations
+    // the binding on the "drop" side uses col3 which is not covered by the
+    // ColEq(det_col) — only col3 IS in the FD dep set, so pass 2e handles it.
+    let mut b = Branch {
+        core: vec![scan(0, "emp"), scan(1, "emp")],
+        opts: vec![],
+        bindings: BTreeMap::new(),
+        where_conds: vec![SqlCond::ColEq(
+            ColRef::new(0, "det_col"),
+            ColRef::new(1, "det_col"),
+        )],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+    };
+    b.bindings.insert("x".into(), col_binding(1, "col3")); // on drop alias
+    b.bindings.insert("y".into(), col_binding(0, "col3")); // on keep alias — blocks pass 2c
+    let ts = fd_table("emp", false); // det_col NULLABLE
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: None,
+    };
+    let out = run(vec![b], std::slice::from_ref(&ts), &ctx);
+    let b = &out[0];
+    assert_eq!(b.core.len(), 1, "FD self-join collapses to single scan");
+    let guard = ColRef::new(0, "det_col");
+    assert!(
+        b.where_conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &guard)),
+        "IS NOT NULL synthesised to preserve the equi-join's NULL exclusion: {:?}",
+        b.where_conds
+    );
+}
+
+#[test]
+fn fd_inner_join_notnull_det_no_is_not_null_added() {
+    // When det_col is NOT NULL the equi-join never excluded any rows — no IS NOT
+    // NULL guard is needed. Adding one anyway would be a no-op semantically, but
+    // the pass should not emit unnecessary conditions.
+    // Same binding design as the nullable variant to isolate pass 2e from pass 2c.
+    let mut b = Branch {
+        core: vec![scan(0, "emp"), scan(1, "emp")],
+        opts: vec![],
+        bindings: BTreeMap::new(),
+        where_conds: vec![SqlCond::ColEq(
+            ColRef::new(0, "det_col"),
+            ColRef::new(1, "det_col"),
+        )],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+    };
+    b.bindings.insert("x".into(), col_binding(1, "col3")); // on drop alias
+    b.bindings.insert("y".into(), col_binding(0, "col3")); // on keep alias — blocks pass 2c
+    let ts = fd_table("emp", true); // det_col NOT NULL
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: None,
+    };
+    let out = run(vec![b], std::slice::from_ref(&ts), &ctx);
+    let b = &out[0];
+    assert_eq!(b.core.len(), 1, "FD self-join collapses to single scan");
+    assert!(
+        !b.where_conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::IsNotNull(..))),
+        "NOT-NULL det ⇒ no IS NOT NULL synthesised: {:?}",
+        b.where_conds
     );
 }
