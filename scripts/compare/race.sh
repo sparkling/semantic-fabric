@@ -102,7 +102,8 @@ for q in q6 q7; do
     on_r="$(rows_of "$ONTOP_EP" "$qf")"
     par="OK"; [ "$sf_r" = "$on_r" ] || par="MISMATCH"
   fi
-  printf "%-36s %12s %12s %8s %8s %7s\n" "$q" "$(ms "$sf_s")" "$on_s" "$sf_r" "$on_r" "$par"
+  on_s_ms="N/A"; [ "$on_s" != "N/A" ] && on_s_ms="$(ms "$on_s")"
+  printf "%-36s %12s %12s %8s %8s %7s\n" "$q" "$(ms "$sf_s")" "$on_s_ms" "$sf_r" "$on_r" "$par"
 done
 
 echo ""

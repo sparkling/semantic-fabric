@@ -40,7 +40,7 @@ over the *same* PostgreSQL, timed by the *same* client with the *same* queries.*
 into PostgreSQL via `scripts/load_gtfs_postgres.sh {1,10}`. Per-scale rows: agency
 2, calendar 3, routes 8·s, stops 40·s, trips 40·s, stop_times 800·s. The full graph
 is ≈ 5 200·s triples. All engines read the **same R2RML** (`scripts/ontop/gtfs.r2rml.ttl`)
-and the **same five queries** (`scripts/ontop/q{1..5}.rq`).
+and the **same queries** (`scripts/ontop/q{1..7}.rq`).
 
 | Query | Shape | Rows @1x / @10x |
 |---|---|---|
@@ -49,6 +49,8 @@ and the **same five queries** (`scripts/ontop/q{1..5}.rq`).
 | Q3 | 3-way join (stop_time → trip → route) | 800 / 8 000 |
 | Q4 | pushed-down FILTER (`?short = "R0"`) | 1 / 1 |
 | Q5 | OPTIONAL (NULL-safe left join, trips) | 40 / 400 |
+| Q6 *(Wave-E)* | GROUP BY aggregate (routes → agency, COUNT) | 2 |
+| Q7 *(Wave-E)* | ORDER BY expression (`STRLEN(?short)`) | 8 |
 
 ---
 
@@ -83,6 +85,8 @@ meaningful; absolute numbers slightly higher than a native-PG run.
 | Q3 stop_time → trip → route | **2.28** | 11.90 | 800 | OK | sf (5.2×) |
 | Q4 route FILTER | **1.15** | 2.20 | 1 | OK | sf (1.9×) |
 | Q5 trip OPTIONAL | **1.21** | 2.41 | 40 | OK | sf (2.0×) |
+| Q6 *(Wave-E)* GROUP BY | **1.44** | 2.17 | 2 | OK | sf (1.5×) |
+| Q7 *(Wave-E)* ORDER BY STRLEN | **0.94** | 1.62 | 8 | OK | sf (1.7×) |
 
 ### @10x (median of 31 warm round-trips, ms)
 
@@ -94,18 +98,26 @@ meaningful; absolute numbers slightly higher than a native-PG run.
 | Q4 route FILTER | **0.79** | 1.96 | 1 | OK | sf (2.5×) |
 | Q5 trip OPTIONAL | 8.72 | **2.93** | 400 | OK | **Ontop (3.0×)** |
 
-**Answer parity holds on every query at every scale** — both engines return the
-same result cardinalities.
+**Q1–Q5 answer parity holds at every scale** — both engines return the same result
+cardinalities. **Q6–Q7 (Wave-E, @1x only):** both engines return the same row counts
+(2 routes/agency and 8 routes respectively); Ontop 5.5.0 handles both GROUP BY and
+`ORDER BY STRLEN(…)` correctly against PostgreSQL; @10x was not re-run for Q6/Q7
+(10× data not loaded in this session).
 
-**Honest reading.** semantic-fabric is faster on 9 of 10 (query × scale) cells,
-including the heavy 3-way join Q3. **But Ontop wins Q5 (OPTIONAL) at 10×** — and
-decisively: sf's OPTIONAL latency grows ~10× from 1x→10x (0.81 → 8.72 ms) while
+**Honest reading.** semantic-fabric is faster on 9 of 10 Q1–Q5 (query × scale)
+cells, including the heavy 3-way join Q3. **But Ontop wins Q5 (OPTIONAL) at 10×** —
+and decisively: sf's OPTIONAL latency grows ~10× from 1x→10x (0.81 → 8.72 ms) while
 Ontop's barely moves (1.84 → 2.93 ms). This is reproducible (two independent runs:
 sf 7.99/8.72 ms, Ontop 2.78/2.93 ms). Ontop's mature optimizer handles the NULL-safe
 left join far better at scale; semantic-fabric's OPTIONAL plan does not yet. **This
 is exactly the kind of result a mature optimizer is expected to win, and we report
 it rather than hide it.** Do not over-read the sf wins either: this is a small
 dataset (≤ 8 000 stop_time rows) of simple queries on localhost — see Caveats.
+
+**Wave-E @1x note.** Q6 (GROUP BY) and Q7 (ORDER BY expression) are both newly
+supported in Wave-E (commit 444e49e) — the semantic-fabric release binary must be
+≥ Wave-E for these to work. The 1× numbers above were produced on 2026-06-29 with
+the freshly-built release binary and the GTFS @1x dataset.
 
 ---
 
@@ -324,4 +336,4 @@ MORPH_PY=$PWD/morphvenv/bin/python scripts/compare/materialise.sh 10
 | `scripts/compare/footprint.sh` | §2 artifact size, cold start, serving RSS |
 | `scripts/compare/materialise.sh` | §5 Morph-KGC materialise: dump wall-clock + size |
 | `scripts/load_gtfs_postgres.sh`, `scripts/gen_gtfs.sql` | shared dataset loader |
-| `scripts/ontop/gtfs.r2rml.ttl`, `gtfs.properties`, `q{1..5}.rq`, `dump.rq` | shared mapping, conn, queries |
+| `scripts/ontop/gtfs.r2rml.ttl`, `gtfs.properties`, `q{1..7}.rq`, `dump.rq` | shared mapping, conn, queries |
