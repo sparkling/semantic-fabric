@@ -1328,3 +1328,76 @@ fn filter_not_exists_with_and_is_supported() {
     // "NoOne" doesn't exist so the second NOT EXISTS is vacuously true; first NOT EXISTS removes Ada.
     assert_eq!(got, vec!["Grace"]);
 }
+
+// --- GRAPH <g> { P } (SPARQL §13 / R2RML rr:graphName) -----------------------
+
+/// Build a mapping where EMP triples are in the default graph and DEPT triples
+/// are in the named graph `http://ex/namedGraph`.
+fn named_graph_mapping() -> Vec<TriplesMap> {
+    let graph_iri = sf_core::Term::NamedNode(iri("http://ex/namedGraph"));
+    let emp = TriplesMap {
+        id: "EMP".to_owned(),
+        source: LogicalSource::Table("emp".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/emp/{id}"),
+            classes: vec![],
+            graphs: vec![], // default graph
+        },
+        predicate_object_maps: vec![pom(EMP_NAME, column_literal("name"))],
+    };
+    let dept = TriplesMap {
+        id: "DEPT".to_owned(),
+        source: LogicalSource::Table("dept".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/dept/{id}"),
+            classes: vec![],
+            graphs: vec![TermMap::Constant(graph_iri)], // named graph
+        },
+        predicate_object_maps: vec![pom(DEPT_NAME, column_literal("dname"))],
+    };
+    vec![emp, dept]
+}
+
+#[test]
+fn graph_clause_filters_to_named_graph() {
+    // GRAPH <http://ex/namedGraph> { ?d :deptName ?dn } — the DEPT triples are in
+    // the named graph; only those rows should appear.  EMP triples (default graph)
+    // must NOT leak through.
+    let maps = named_graph_mapping();
+    let conn = source(); // re-uses the standard emp+dept tables
+    let q =
+        format!("SELECT ?dn WHERE {{ GRAPH <http://ex/namedGraph> {{ ?d <{DEPT_NAME}> ?dn }} }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ops", "R&D"],
+        "GRAPH clause should see only dept rows in the named graph"
+    );
+}
+
+#[test]
+fn graph_clause_unknown_graph_returns_empty() {
+    // GRAPH <http://ex/unknown> { ?d :deptName ?dn } — no triples are mapped to
+    // this IRI, so the result must be empty (not a 501 error).
+    let maps = named_graph_mapping();
+    let conn = source();
+    let q = format!("SELECT ?dn WHERE {{ GRAPH <http://ex/unknown> {{ ?d <{DEPT_NAME}> ?dn }} }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    assert!(
+        got.is_empty(),
+        "unknown named graph must produce no results: {got:?}"
+    );
+}

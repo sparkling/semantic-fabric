@@ -53,6 +53,10 @@ pub struct Unfolder<'a> {
     tbox: &'a Tbox,
     dialect: sf_sql::Dialect,
     next_alias: usize,
+    /// The named graph currently active inside a `GRAPH <g> { ... }` clause, or
+    /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
+    /// by the `GraphPattern::Graph` arm; all other arms inherit the current value.
+    current_graph: Option<NamedNode>,
 }
 
 impl<'a> Unfolder<'a> {
@@ -62,6 +66,7 @@ impl<'a> Unfolder<'a> {
             tbox,
             dialect,
             next_alias: 0,
+            current_graph: None,
         }
     }
 
@@ -238,8 +243,25 @@ impl<'a> Unfolder<'a> {
                 variables,
                 aggregates,
             } => self.group(inner, variables, aggregates),
-            // Deferred → 501 (documented, never silent): GRAPH,
-            // LATERAL, SERVICE (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
+            // GRAPH <g> { P } — translate P restricted to triples in named graph g.
+            // v1: constant graph IRI only (`NamedNodePattern::NamedNode`); a variable
+            // graph name requires runtime IRI lookup → 501 (never silently wrong).
+            // The `current_graph` context is saved, set to g, translated, restored so
+            // nested GRAPH clauses work correctly.
+            GraphPattern::Graph { name, inner } => match name {
+                NamedNodePattern::NamedNode(g) => {
+                    let saved = self.current_graph.take();
+                    self.current_graph = Some(g.clone());
+                    let result = self.translate_pattern(inner);
+                    self.current_graph = saved;
+                    result
+                }
+                NamedNodePattern::Variable(_) => Err(Error::Unsupported(
+                    "GRAPH ?var (variable graph name) is deferred → 501 (v1)".to_owned(),
+                )),
+            },
+            // Deferred → 501 (documented, never silent): LATERAL, SERVICE
+            // (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
             other => Err(Error::Unsupported(format!(
                 "graph pattern not supported in v1 → 501: {other:?}"
             ))),
@@ -359,10 +381,23 @@ impl<'a> Unfolder<'a> {
 
         for tm in self.maps {
             // rr:class → rdf:type atoms (when predicate is rdf:type or a variable).
+            // rr:class triples inherit the subject map's graph.
             if want_type || pred_iri.is_none() {
-                self.class_atoms(tp, tm, &mut out)?;
+                // Skip if the subject map's graph doesn't match the active GRAPH clause.
+                if graph_maps_match(self.current_graph.as_ref(), &tm.subject.graphs) {
+                    self.class_atoms(tp, tm, &mut out)?;
+                }
             }
             for pom in &tm.predicate_object_maps {
+                // Effective graph: POM overrides subject map (R2RML §4.6).
+                let eff_graphs = if pom.graphs.is_empty() {
+                    &tm.subject.graphs
+                } else {
+                    &pom.graphs
+                };
+                if !graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                    continue;
+                }
                 for pm in &pom.predicates {
                     for om in &pom.objects {
                         if let Some(b) = self.atom(tp, tm, pm, om, pred_iri.as_deref())? {
@@ -710,6 +745,27 @@ impl<'a> Unfolder<'a> {
         }
         true
     }
+}
+
+/// Whether the effective graph maps of a triple are compatible with the active
+/// `GRAPH <g>` clause (or the absence of one).
+///
+/// * `active = None` (no GRAPH clause, default-graph context) → accept everything.
+///   This preserves backward-compatibility: mappings that don't use `rr:graphName`
+///   appear in the default graph, and the current virtualiser doesn't filter them
+///   out when no GRAPH clause is present.
+/// * `active = Some(g)` → accept only triples where the effective graph maps
+///   contain a `TermMap::Constant(NamedNode(g))` match. Template/column graph
+///   maps are not yet evaluable at translation time → treated as non-matching
+///   (the conservative safe choice — never admits wrong rows).
+fn graph_maps_match(active: Option<&NamedNode>, graphs: &[sf_core::ir::TermMap]) -> bool {
+    let Some(g) = active else {
+        return true; // no GRAPH clause — no filtering
+    };
+    // At least one constant graph map must equal g.
+    graphs.iter().any(
+        |gm| matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n)) if n == g),
+    )
 }
 
 enum PredMatch {
