@@ -96,7 +96,10 @@ meaningful; absolute numbers slightly higher than a native-PG run.
 | Q2 route → agency join | **0.81** | 2.11 | 80 | OK | sf (2.6×) |
 | Q3 stop_time → trip → route | **9.01** | 56.08 | 8 000 | OK | sf (6.2×) |
 | Q4 route FILTER | **0.79** | 1.96 | 1 | OK | sf (2.5×) |
-| Q5 trip OPTIONAL | 8.72 | **2.93** | 400 | OK | **Ontop (3.0×)** |
+| Q5 trip OPTIONAL | **1.28** | 2.93 | 400 | OK | sf (2.3×) |
+
+*Q5 sf number re-measured 2026-06-29 after self-left-join elimination (commit `deb3a68`); Ontop
+number carried from the 2026-06-28 race.sh run (Ontop CLI is not installed in-session).*
 
 **Q1–Q5 answer parity holds at every scale** — both engines return the same result
 cardinalities. **Q6–Q7 (Wave-E, @1x only):** both engines return the same row counts
@@ -104,15 +107,13 @@ cardinalities. **Q6–Q7 (Wave-E, @1x only):** both engines return the same row 
 `ORDER BY STRLEN(…)` correctly against PostgreSQL; @10x was not re-run for Q6/Q7
 (10× data not loaded in this session).
 
-**Honest reading.** semantic-fabric is faster on 9 of 10 Q1–Q5 (query × scale)
-cells, including the heavy 3-way join Q3. **But Ontop wins Q5 (OPTIONAL) at 10×** —
-and decisively: sf's OPTIONAL latency grows ~10× from 1x→10x (0.81 → 8.72 ms) while
-Ontop's barely moves (1.84 → 2.93 ms). This is reproducible (two independent runs:
-sf 7.99/8.72 ms, Ontop 2.78/2.93 ms). Ontop's mature optimizer handles the NULL-safe
-left join far better at scale; semantic-fabric's OPTIONAL plan does not yet. **This
-is exactly the kind of result a mature optimizer is expected to win, and we report
-it rather than hide it.** Do not over-read the sf wins either: this is a small
-dataset (≤ 8 000 stop_time rows) of simple queries on localhost — see Caveats.
+**Honest reading.** semantic-fabric is faster on **all 10** Q1–Q5 (query × scale)
+cells, including the heavy 3-way join Q3 and the OPTIONAL query Q5. The earlier
+8.72 ms Q5 @10× figure (recorded 2026-06-28 before the elimination) was from a
+pre-optimization binary that emitted a LEFT JOIN instead of a single scan; the
+self-left-join elimination (commit `deb3a68`, 2026-06-29) collapsed the plan to
+`SELECT … FROM trips` — 1.28 ms at 400 rows. Do not over-read the sf wins: this is
+a small dataset (≤ 8 000 stop_time rows) of simple queries on localhost — see Caveats.
 
 **Wave-E @1x note.** Q6 (GROUP BY) and Q7 (ORDER BY expression) are both newly
 supported in Wave-E (commit 444e49e) — the semantic-fabric release binary must be
@@ -278,7 +279,7 @@ live database without copying it.
   figures as order-of-magnitude, not exact.
 - **One Ontop config.** Default `ontop endpoint` settings; no JVM/heap tuning, no
   Ontop-specific mapping optimisation. A tuned Ontop could differ.
-- **semantic-fabric Q5 (OPTIONAL) is a real, reproducible loss at 10×** — see §1.
+- **semantic-fabric Q5 (OPTIONAL) was a real loss at 10× before commit `deb3a68`** (8.72 ms); after the self-left-join elimination it is 1.28 ms — see §1.
 - Ontop and Morph-KGC numbers are from the exact versions in the Environment table.
 
 ---
@@ -290,10 +291,12 @@ single **12.8 MiB native binary with no JVM**, a **0.15 s cold start** (vs ~1.7 
 a **~12 MiB serving footprint that stays flat as data grows 10×**, and a
 **byte-constant engine heap (129 358 B) under 16× data growth** — the streaming,
 non-materialising design doing what it claims. On **latency**, the now-fair
-same-backend / same-process race shows semantic-fabric **faster on 9 of 10 query×scale
-cells** (including the heavy 3-way join), at full answer parity — **but Ontop wins
-the OPTIONAL query (Q5) at 10×**, where semantic-fabric's left-join plan scales
-poorly and Ontop's mature optimizer shines; that is a genuine gap, not noise. On
+same-backend / same-process race shows semantic-fabric **faster on all 10 query×scale
+cells** (including the heavy 3-way join Q3 and the OPTIONAL query Q5 at both scales),
+at full answer parity. The Q5 result deserves a note: the original 2026-06-28 run
+recorded 8.72 ms at 10× (Ontop won); a self-left-join elimination (commit `deb3a68`)
+collapsed the Q5 plan from a NULL-safe LEFT JOIN to a single `trips` scan, cutting
+that to 1.28 ms — a genuine optimizer improvement. On
 **breadth and maturity Ontop leads** decisively (many backends, far fuller SPARQL
 coverage, a real optimizer), and the materialiser (Morph-KGC) plays a different game
 entirely — it copies the graph to a file rather than answering queries. The honest

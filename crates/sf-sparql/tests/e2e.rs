@@ -16,6 +16,7 @@ use sf_core::ir::{
     TriplesMap,
 };
 use sf_core::NamedNode;
+use sf_mapping::parse_r2rml;
 use sf_sparql::{
     exec, parse_and_translate, translate, translate_unoptimized, translate_with, Tbox,
 };
@@ -1605,5 +1606,63 @@ fn optional_multi_scan_right_side() {
     assert_eq!(
         got, expect,
         "multi-scan OPTIONAL right must null-preserve non-matching rows"
+    );
+}
+
+/// Verify that the self-left-join elimination fires for the actual GTFS R2RML
+/// mapping structure (trips_0 has multiple predicateObjectMaps).  The Q5 pattern
+/// `?t a gtfs:Trip . OPTIONAL { ?t gtfs:headsign ?hs }` should collapse to a
+/// single `trips` scan after cascade — no LEFT JOIN in the emitted SQL.
+///
+/// This is the full-pipeline equivalent of the ws_g oracle test.  The schema
+/// matches exactly what `introspect_postgres` returns for the live `gtfs_bench`
+/// trips table (trip_id PK NOT NULL, trip_headsign nullable).
+#[test]
+fn q5_gtfs_mapping_elimination_fires_pg() {
+    // GTFS R2RML mapping (trips_0 subset relevant to Q5).
+    const GTFS_TTL: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix gtfs: <http://vocab.gtfs.org/terms#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<#trips_0> a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "trips" ] ;
+    rr:subjectMap [
+        rr:template "http://transport.linkeddata.es/madrid/metro/trips/{trip_id}" ;
+        rr:class gtfs:Trip
+    ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:headsign ; rr:objectMap [ rr:column "trip_headsign" ] ] ;
+    rr:predicateObjectMap [ rr:predicate gtfs:direction ;
+        rr:objectMap [ rr:column "direction_id" ; rr:datatype xsd:integer ] ] .
+"#;
+
+    let maps = parse_r2rml(GTFS_TTL).expect("GTFS TTL parses");
+
+    // Exact schema that introspect_postgres returns for the live gtfs_bench trips table.
+    let mut ts = TableSchema::new("trips");
+    ts.primary_key = vec!["trip_id".to_owned()];
+    ts.columns = vec![
+        Column::new("trip_id", "text", true), // PK → NOT NULL
+        Column::new("route_id", "text", false),
+        Column::new("service_id", "text", false),
+        Column::new("trip_headsign", "text", false), // nullable
+        Column::new("direction_id", "integer", false),
+    ];
+    let schema = std::slice::from_ref(&ts);
+
+    let q = "PREFIX gtfs: <http://vocab.gtfs.org/terms#> \
+              SELECT ?t ?hs WHERE { ?t a gtfs:Trip . OPTIONAL { ?t gtfs:headsign ?hs } }";
+
+    let plan =
+        sf_sparql::parse_and_translate_with(q, &maps, Dialect::Postgres, &Tbox::default(), schema)
+            .expect("Q5 compiles");
+
+    let emitted = plan.emitted().unwrap();
+    let sql = &emitted[0].sql;
+    eprintln!("Q5 GTFS SQL ({} branches): {sql}", emitted.len());
+    assert!(
+        !sql.to_uppercase().contains("LEFT JOIN"),
+        "self-LEFT-join on trip_id PK must be eliminated — got: {sql}"
     );
 }
