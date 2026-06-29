@@ -31,7 +31,8 @@ use sf_core::ir::{LogicalSource, TermMap};
 use sf_sql::Dialect;
 
 use crate::iq::{
-    Branch, ColRef, HopExpr, OrderKey, PathClosure, PathKind, SqlCond, StrMatchOp, TermDef,
+    AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey, PathClosure, PathKind,
+    SqlCond, StrMatchOp, TermDef,
 };
 use crate::{Error, Result};
 
@@ -121,6 +122,9 @@ pub fn emit_branch_with(
     let actuals = branch_actuals(b, catalog);
     if let Some(pc) = &b.path {
         return emit_path_branch(b, pc, dialect, catalog);
+    }
+    if let Some(agg) = &b.agg {
+        return emit_agg_branch(b, agg, dialect, &actuals);
     }
     let projection = b.projection();
     let mut params = Vec::new();
@@ -373,6 +377,123 @@ fn emit_path_branch(
         projection,
         params,
     })
+}
+
+/// Render a GROUP BY + aggregates branch (SPARQL §11) to one parameterised SQL
+/// `SELECT … GROUP BY …`. The grouping keys are their **raw key columns** (term
+/// construction is rebuilt at reconstruction, ADR-0007), grouped and projected;
+/// each aggregate is `COUNT`/`SUM`/`AVG`/`MIN`/`MAX(…)` over its single raw column
+/// (or `COUNT(*)`). Implicit grouping (no keys) emits no `GROUP BY`, yielding one
+/// row over all inner rows — and one row even when the inner is empty (`COUNT(*)`
+/// = 0). The projection is built in lockstep with the SELECT list so reconstruction
+/// reads each key/aggregate by position. The aggregate result columns are synthetic
+/// (computed in SQL), so their `§10` type is set explicitly at reconstruction (see
+/// [`TermDef::Agg`]), never read from a base column.
+fn emit_agg_branch(
+    b: &Branch,
+    agg: &Aggregation,
+    dialect: Dialect,
+    actuals: &HashMap<usize, Vec<String>>,
+) -> Result<EmittedBranch> {
+    let mut params = Vec::new();
+    let mut pidx = 0usize;
+
+    // FROM (+ LEFT JOIN ON params) renders before WHERE so positional placeholders
+    // bind in text order. A core-less inner (an empty BGP) renders without FROM.
+    let from = if b.core.is_empty() {
+        None
+    } else {
+        Some(render_from(b, dialect, actuals, &mut params, &mut pidx)?)
+    };
+    let where_sql = render_where(&b.where_conds, dialect, actuals, &mut params, &mut pidx);
+
+    // The projection + SELECT list, in lockstep: grouping-key raw columns first
+    // (also the GROUP BY columns), then each aggregate expression.
+    let mut projection: Vec<ColRef> = Vec::new();
+    let mut select_items: Vec<String> = Vec::new();
+    let mut group_cols: Vec<String> = Vec::new();
+    for key in &agg.keys {
+        for col in &key.cols {
+            let i = projection.len();
+            let rendered = colref(col, dialect, actuals);
+            select_items.push(format!("{rendered} AS c{i}"));
+            group_cols.push(rendered);
+            projection.push(col.clone());
+        }
+    }
+    for a in &agg.aggs {
+        let i = projection.len();
+        let expr = agg_expr_sql(a, dialect, actuals);
+        select_items.push(format!("{expr} AS c{i}"));
+        projection.push(a.out.clone());
+        // AVG result datatype (§11.4) follows the OPERAND numeric type. SQLite's
+        // `AVG` always returns a `REAL` (storage class double), erasing an integer/
+        // decimal operand's type — so project the operand bare alongside, letting
+        // reconstruction read its preserved §10 decltype (SQLite keeps a grouped
+        // column's decltype). PostgreSQL's `avg()` already returns the promoted
+        // type natively and rejects a bare non-grouped column, so this is
+        // SQLite-only (the value is read for its type, never its row).
+        if dialect == Dialect::Sqlite && a.kind == AggKind::Avg {
+            if let Some(operand) = &a.arg {
+                let j = projection.len();
+                let rendered = colref(operand, dialect, actuals);
+                select_items.push(format!("{rendered} AS c{j}"));
+                projection.push(operand.clone());
+            }
+        }
+    }
+    let select_list = select_items.join(", ");
+
+    let distinct = if b.distinct { "DISTINCT " } else { "" };
+    let mut skeleton = match from {
+        Some(f) => format!("SELECT {distinct}{select_list} FROM {f}"),
+        None => format!("SELECT {distinct}{select_list}"),
+    };
+    if let Some(w) = where_sql {
+        skeleton.push_str(" WHERE ");
+        skeleton.push_str(&w);
+    }
+    if !group_cols.is_empty() {
+        skeleton.push_str(" GROUP BY ");
+        skeleton.push_str(&group_cols.join(", "));
+    }
+    // ORDER BY over an aggregate result is applied in `exec` (never pushed to SQL —
+    // it sorts the reconstructed terms type-aware). LIMIT/OFFSET on a single agg
+    // branch were pushed by `Plan::prepared_branches` only when unordered.
+    if let Some(limit) = b.limit {
+        skeleton.push_str(&format!(" LIMIT {limit}"));
+    }
+    if b.offset > 0 {
+        skeleton.push_str(&format!(" OFFSET {}", b.offset));
+    }
+
+    let sql = dialect
+        .emit_via_ast(&skeleton)
+        .map_err(|e| Error::Sql(e.to_string()))?;
+    Ok(EmittedBranch {
+        sql,
+        projection,
+        params,
+    })
+}
+
+/// The SQL for one aggregate output column (`COUNT(*)` / `COUNT`/`SUM`/`AVG`/`MIN`/
+/// `MAX(<col>)`, with optional `DISTINCT`). `MIN`/`MAX` ignore DISTINCT (it never
+/// changes the extremum), but it is rendered when requested for faithfulness.
+fn agg_expr_sql(a: &AggCol, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {
+    let d = if a.distinct { "DISTINCT " } else { "" };
+    let func = match a.kind {
+        AggKind::Count => "COUNT",
+        AggKind::Sum => "SUM",
+        AggKind::Avg => "AVG",
+        AggKind::Min => "MIN",
+        AggKind::Max => "MAX",
+    };
+    match &a.arg {
+        // COUNT(*) — the only argument-less form (DISTINCT is rejected upstream).
+        None => format!("{func}(*)"),
+        Some(col) => format!("{func}({d}{})", colref(col, dialect, actuals)),
+    }
 }
 
 /// Render a [`HopExpr`] to a relation expression yielding the canonical raw key

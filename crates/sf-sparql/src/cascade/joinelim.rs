@@ -206,6 +206,9 @@ fn rewrite_parent_def(def: &mut TermDef, e: &FkElim) {
                 rewrite_parent_def(p, e);
             }
         }
+        // An aggregate result reads its synthetic group alias, never a base-scan
+        // parent alias — nothing to rewrite (agg branches bypass this cascade).
+        TermDef::Agg { .. } => {}
     }
 }
 

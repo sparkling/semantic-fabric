@@ -1052,3 +1052,192 @@ fn bind_concat_preserves_lang_and_typechecks() {
         );
     }
 }
+
+// ---- SCRATCH ADVERSARIAL TESTS (count-variants lens) ----
+fn agg_mapping_nullable() -> Vec<TriplesMap> {
+    vec![TriplesMap {
+        id: "EMP".to_owned(),
+        source: LogicalSource::Table("emp".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/emp/{id}"),
+            classes: vec![iri(EMPLOYEE)],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![
+            pom(EMP_NAME, column_literal("name")),
+            pom(EMP_DEPT, template_iri("http://ex/dept/{dept_id}")),
+            pom("http://ex/empSalary", column_literal("salary")),
+        ],
+    }]
+}
+
+fn agg_source_nullable() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    // Linus (id 3) has NULL salary -> :empSalary triple does NOT exist for him.
+    conn.execute_batch(
+        "CREATE TABLE emp(id INTEGER PRIMARY KEY, name TEXT, dept_id INTEGER, salary INTEGER);
+         INSERT INTO emp VALUES (1,'Ada',10,100),(2,'Grace',10,300),(3,'Linus',20,NULL);",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn scratch_count_var_over_optional_unbound() {
+    let maps = agg_mapping_nullable();
+    let conn = agg_source_nullable();
+    // 3 employees; only 2 have a salary. SPARQL §11:
+    //   COUNT(*)    = 3 (counts solutions)
+    //   COUNT(?sal) = 2 (counts only BOUND ?sal)
+    let q = format!(
+        "SELECT (COUNT(*) AS ?all) (COUNT(?sal) AS ?bound) (COUNT(DISTINCT ?sal) AS ?dist) \
+         WHERE {{ ?e <{EMP_NAME}> ?n OPTIONAL {{ ?e <http://ex/empSalary> ?sal }} }}"
+    );
+    let r = parse_and_translate(&q, &maps, Dialect::Sqlite);
+    match r {
+        Ok(plan) => {
+            eprintln!("SQL = {}", plan.emitted().unwrap()[0].sql);
+            let sol = exec::select(&plan, &conn).unwrap();
+            eprintln!("vars = {:?}", sol.vars);
+            for row in &sol.rows {
+                eprintln!(
+                    "all={} bound={} dist={}",
+                    lit(&row[0]),
+                    lit(&row[1]),
+                    lit(&row[2])
+                );
+            }
+        }
+        Err(e) => eprintln!("DEFERRED/ERR: {e:?}"),
+    }
+}
+
+// ---- SPARQL §11 aggregate correctness: empty-group SUM = 0; AVG datatype ----
+
+const EMP_SALARY: &str = "http://ex/empSalary";
+const EMP_FSALARY: &str = "http://ex/empFloatSalary";
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+
+/// The XSD datatype IRI of a reconstructed typed-literal binding.
+fn dt(t: &Option<sf_core::Term>) -> String {
+    match t {
+        Some(sf_core::Term::Literal(l)) => l.datatype().as_str().to_owned(),
+        other => panic!("expected a typed literal, got {other:?}"),
+    }
+}
+
+/// `salary` is INTEGER, `fsal` is REAL (xsd:double natural type). Linus (id 3) has
+/// NULL for both, so neither :empSalary nor :empFloatSalary triple exists for him.
+fn agg_typed_mapping() -> Vec<TriplesMap> {
+    vec![TriplesMap {
+        id: "EMP".to_owned(),
+        source: LogicalSource::Table("emp".to_owned()),
+        subject: SubjectMap {
+            term: template_iri("http://ex/emp/{id}"),
+            classes: vec![iri(EMPLOYEE)],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![
+            pom(EMP_NAME, column_literal("name")),
+            pom(EMP_SALARY, column_literal("salary")),
+            pom(EMP_FSALARY, column_literal("fsal")),
+        ],
+    }]
+}
+
+fn agg_typed_source() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE emp(id INTEGER PRIMARY KEY, name TEXT, salary INTEGER, fsal REAL);
+         INSERT INTO emp VALUES (1,'Ada',100,1.5),(2,'Grace',300,2.5),(3,'Linus',NULL,NULL);",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn sum_over_empty_group_is_zero_integer() {
+    // SPARQL §11: SUM over an empty multiset is "0"^^xsd:integer (NOT unbound). A
+    // FILTER matching nobody empties the inner; implicit grouping still yields one
+    // row, and SUM(∅) = 0. (SQL SUM over zero rows is NULL → must map to 0 here.)
+    let maps = agg_typed_mapping();
+    let conn = agg_typed_source();
+    let q = format!(
+        "SELECT (SUM(?sal) AS ?s) WHERE {{ ?e <{EMP_NAME}> ?n . ?e <{EMP_SALARY}> ?sal \
+         FILTER(?n = \"Nobody\") }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(
+        sol.rows.len(),
+        1,
+        "implicit grouping yields exactly one row"
+    );
+    assert_eq!(lit(&sol.rows[0][0]), "0", "SUM over an empty multiset is 0");
+    assert_eq!(dt(&sol.rows[0][0]), XSD_INTEGER, "empty SUM is xsd:integer");
+}
+
+#[test]
+fn sum_over_all_null_optional_is_zero_integer() {
+    // SPARQL §11: an OPTIONAL column unbound in every solution leaves SUM an empty
+    // multiset of bound values ⇒ "0"^^xsd:integer (NOT unbound). Linus is matched
+    // but has no salary, so ?sal is unbound in his (only) solution.
+    let maps = agg_typed_mapping();
+    let conn = agg_typed_source();
+    let q = format!(
+        "SELECT (SUM(?sal) AS ?s) WHERE {{ ?e <{EMP_NAME}> ?n \
+         OPTIONAL {{ ?e <{EMP_SALARY}> ?sal }} FILTER(?n = \"Linus\") }}"
+    );
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(sol.rows.len(), 1);
+    assert_eq!(
+        lit(&sol.rows[0][0]),
+        "0",
+        "SUM over an all-NULL optional is 0"
+    );
+    assert_eq!(dt(&sol.rows[0][0]), XSD_INTEGER);
+}
+
+#[test]
+fn avg_over_double_column_is_xsd_double() {
+    // SPARQL §11.4: AVG result datatype follows the operand numeric type. A REAL /
+    // xsd:double operand ⇒ xsd:double (NOT xsd:decimal). fsal = {1.5, 2.5} ⇒ 2.0.
+    let maps = agg_typed_mapping();
+    let conn = agg_typed_source();
+    let q = format!("SELECT (AVG(?fs) AS ?a) WHERE {{ ?e <{EMP_FSALARY}> ?fs }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(sol.rows.len(), 1);
+    assert_eq!(
+        dt(&sol.rows[0][0]),
+        XSD_DOUBLE,
+        "AVG over double is xsd:double"
+    );
+    assert_eq!(
+        lit(&sol.rows[0][0]),
+        "2.0E0",
+        "AVG(1.5, 2.5) = 2.0 (canonical xsd:double)"
+    );
+}
+
+#[test]
+fn avg_over_integer_column_is_xsd_decimal() {
+    // SPARQL §11.4: an xsd:integer operand promotes to xsd:decimal under SUM/COUNT
+    // division — NOT xsd:double, even though SQLite's AVG yields a REAL value.
+    // salary = {100, 300} ⇒ 200.
+    let maps = agg_typed_mapping();
+    let conn = agg_typed_source();
+    let q = format!("SELECT (AVG(?sal) AS ?a) WHERE {{ ?e <{EMP_SALARY}> ?sal }}");
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(sol.rows.len(), 1);
+    assert_eq!(
+        dt(&sol.rows[0][0]),
+        XSD_DECIMAL,
+        "AVG over integer is xsd:decimal"
+    );
+    assert_eq!(lit(&sol.rows[0][0]), "200", "AVG(100, 300) = 200");
+}

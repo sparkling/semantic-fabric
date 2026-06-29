@@ -68,7 +68,11 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             // whose subquery scans the constraint passes do not model; pass it
             // through so a self-join/FK rewrite never silently corrupts the
             // correlation (the anti-join is already a sound base translation).
-            if b.path.is_some() || branch_has_not_exists(&b) {
+            // A GROUP BY + aggregates branch (SPARQL §11) carries an `Aggregation`
+            // over its inner FROM/WHERE; the constraint-driven passes model neither
+            // grouping nor aggregate columns, so pass it through untouched (a sound
+            // base translation already — never risk corrupting the grouping).
+            if b.path.is_some() || b.agg.is_some() || branch_has_not_exists(&b) {
                 return Some(b);
             }
             tier0_eliminate(&mut b, schema); // 0
@@ -88,7 +92,7 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
     // in `exec::for_each_solution` (the streaming core); this pass only *removes* a
     // DISTINCT a single branch's projected key already makes redundant (pushed into
     // the SQL). So the proof here applies only to the single-branch case.
-    if ctx.distinct && out.len() == 1 && out[0].path.is_none() {
+    if ctx.distinct && out.len() == 1 && out[0].path.is_none() && out[0].agg.is_none() {
         out[0].distinct = true;
         distinct_removal(&mut out[0], schema, ctx.project);
     }
@@ -314,6 +318,11 @@ fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
         TermDef::Concat(parts) => {
             for p in parts {
                 rewrite_def_alias(p, from, to);
+            }
+        }
+        TermDef::Agg { col, .. } => {
+            if col.alias == from {
+                col.alias = to;
             }
         }
     }

@@ -124,5 +124,7 @@ fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
             def_is_nullable(l, opt_aliases) || def_is_nullable(r, opt_aliases)
         }
         TermDef::Concat(parts) => parts.iter().any(|p| def_is_nullable(p, opt_aliases)),
+        // An aggregate result is produced post-grouping, never under an OPTIONAL.
+        TermDef::Agg { .. } => false,
     }
 }

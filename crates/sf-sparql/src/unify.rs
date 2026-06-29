@@ -53,10 +53,16 @@ pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
         // binding is a multi-source constructed term; reducing it to raw-column
         // equalities is deferred (ADR-0007 v1 — never silently wrong). So sharing a
         // BIND variable with a later pattern (a join/filter on it) defers to 501.
-        (TermDef::Coalesce(..) | TermDef::Concat(..), _)
-        | (_, TermDef::Coalesce(..) | TermDef::Concat(..)) => Unify::Unsupported(
-            "unification of a COALESCE'd / CONCAT'd (multi-source) constructed binding".to_owned(),
-        ),
+        // An aggregate result is produced post-grouping and is never re-unified into
+        // a join/filter (the group is the outermost pattern in v1).
+        (TermDef::Coalesce(..) | TermDef::Concat(..) | TermDef::Agg { .. }, _)
+        | (_, TermDef::Coalesce(..) | TermDef::Concat(..) | TermDef::Agg { .. }) => {
+            Unify::Unsupported(
+                "unification of a COALESCE'd / CONCAT'd / aggregate (multi-source / computed) \
+                 binding"
+                    .to_owned(),
+            )
+        }
     }
 }
 

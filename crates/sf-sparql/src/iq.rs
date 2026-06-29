@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 
+use sf_core::datatype::XsdTypeCode;
 use sf_core::ir::{LogicalSource, TermMap, TermType};
 use sf_core::Term;
 
@@ -59,6 +60,26 @@ pub enum TermDef {
     /// never in SQL). An unbound / non-literal operand makes the CONCAT an error, so
     /// the BIND variable is left unbound (SPARQL §17.4.x / §10 ASSIGN).
     Concat(Vec<TermDef>),
+    /// **An aggregate result (SPARQL §11).** The value is computed in SQL
+    /// (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`) and projected at `col` — a synthetic
+    /// column on the [`Aggregation`]'s reserved alias, not a base scan column. The
+    /// `kind` drives both the empty-group value (SPARQL §11: SUM/COUNT over an
+    /// empty multiset ⇒ `"0"^^xsd:integer`; AVG/MIN/MAX ⇒ UNBOUND) and the result
+    /// datatype. `fixed_type` pins the type when the function fixes it (COUNT ⇒
+    /// `xsd:integer`); otherwise the type is the column's resolved §10 type
+    /// (decltype/storage-class — MIN/MAX/SUM keep the source value's numeric type).
+    /// AVG (§11.4) follows the **operand** numeric type under XPath promotion
+    /// (`xsd:integer`/`xsd:decimal` ⇒ `xsd:decimal`; `xsd:double` kept) — resolved
+    /// from `operand`'s §10 type, not the SQL aggregate column's (SQLite's `AVG`
+    /// always yields a `REAL`).
+    Agg {
+        col: ColRef,
+        kind: AggKind,
+        /// The single aggregated argument column (`None` for `COUNT(*)`), used to
+        /// resolve AVG's §10 operand type at reconstruction.
+        operand: Option<ColRef>,
+        fixed_type: Option<XsdTypeCode>,
+    },
 }
 
 impl TermDef {
@@ -85,8 +106,61 @@ impl TermDef {
                 }
                 cols
             }
+            TermDef::Agg { col, .. } => vec![col.clone()],
         }
     }
+}
+
+/// A GROUP BY + aggregates carrier on a [`Branch`] (SPARQL §11). The branch's
+/// `core`/`opts`/`where_conds` are the inner pattern's single-branch FROM/WHERE;
+/// this records the grouping keys (lowered to their **raw key columns** — term
+/// construction is rebuilt at projection, ADR-0007) and each aggregate output
+/// column. v1 carries a single inner branch only (a multi-branch UNION/VALUES
+/// inner cannot GROUP BY per arm in SQL → deferred 501 in [`crate::unfold`]).
+#[derive(Debug, Clone)]
+pub struct Aggregation {
+    /// The grouping keys (empty ⇒ *implicit* grouping: one group over all rows,
+    /// yielding one row even when the inner is empty).
+    pub keys: Vec<GroupKey>,
+    /// The aggregate output columns.
+    pub aggs: Vec<AggCol>,
+}
+
+/// One GROUP BY key: an output variable lowered to the raw key columns it groups
+/// by (the term map's columns). Grouping by the raw key ≡ grouping by the
+/// constructed term (the term-construction-lifting injectivity assumption that
+/// already underpins joins, ADR-0007); the term is rebuilt at projection.
+#[derive(Debug, Clone)]
+pub struct GroupKey {
+    pub var: String,
+    pub cols: Vec<ColRef>,
+}
+
+/// One aggregate output column: its result variable, the set function, the single
+/// raw argument column (`None` for `COUNT(*)`), DISTINCT, and the synthetic output
+/// column the SQL result is projected as (read back at reconstruction).
+#[derive(Debug, Clone)]
+pub struct AggCol {
+    pub var: String,
+    pub kind: AggKind,
+    pub arg: Option<ColRef>,
+    pub distinct: bool,
+    pub out: ColRef,
+    /// The fixed §10 result type, when the function pins it (COUNT ⇒ integer,
+    /// AVG ⇒ decimal); `None` ⇒ take the value's resolved decltype/storage type
+    /// (SUM/MIN/MAX keep the source numeric type).
+    pub fixed_type: Option<XsdTypeCode>,
+}
+
+/// The set functions wired in v1 (SPARQL §11.4). GROUP_CONCAT / SAMPLE / custom
+/// are deferred → 501 in [`crate::unfold`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggKind {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
 }
 
 /// The columns referenced by a (non-constant) term map, in order.
@@ -364,6 +438,10 @@ pub struct Branch {
     /// When set, this branch is a recursive property-path closure: its `FROM` is
     /// the CTE (empty `core`), not a base scan (ADR-0007 recursive paths).
     pub path: Option<PathClosure>,
+    /// When set, this branch is a GROUP BY + aggregates over its inner FROM/WHERE
+    /// (SPARQL §11): emission renders `GROUP BY <key cols>` + the aggregate SQL,
+    /// and reconstruction reads the grouping keys + aggregate result columns.
+    pub agg: Option<Aggregation>,
 }
 
 impl Branch {
@@ -379,6 +457,7 @@ impl Branch {
             offset: 0,
             order: Vec::new(),
             path: None,
+            agg: None,
         }
     }
 

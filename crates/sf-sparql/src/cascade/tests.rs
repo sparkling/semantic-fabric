@@ -48,6 +48,7 @@ fn self_join_eliminated_on_unique_key() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     b.bindings.insert("n".to_owned(), col_binding(1, "name"));
 
@@ -84,6 +85,7 @@ fn self_join_not_eliminated_on_nullable_unique_key() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     let mut ts = TableSchema::new("emp");
     ts.unique = vec![vec!["email".to_owned()]];
@@ -115,6 +117,7 @@ fn self_join_eliminated_keeps_unrelated_self_comparison_guard() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     b.bindings.insert("n".to_owned(), col_binding(1, "name"));
     let mut ts = TableSchema::new("emp");
@@ -144,6 +147,7 @@ fn self_join_not_eliminated_without_key_proof() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     let out = run(vec![b], &[], &CascadeCtx::default());
     assert_eq!(out[0].core.len(), 2, "no key proof ⇒ join is preserved");
@@ -176,6 +180,7 @@ fn fd_inference_seeds_keys_and_closes_transitively() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     let schema = vec![pk_table("a", "x"), pk_table("b", "y"), pk_table("c", "z")];
     let fds = infer_functional_dependencies(&b, &schema);
@@ -205,6 +210,7 @@ fn fd_inference_empty_without_schema() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     let fds = infer_functional_dependencies(&b, &[]);
     assert!(!fds.is_key(&ColRef::new(0, "x")));
@@ -256,6 +262,7 @@ fn fk_branch() -> Branch {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     // ?route bound to the parent (routes) subject IRI, built from route_id.
     b.bindings.insert(
@@ -468,6 +475,7 @@ fn distinct_kept_on_join() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     b.bindings
         .insert("s".into(), iri_template_binding(0, "http://ex/emp/", "id"));

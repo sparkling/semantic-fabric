@@ -75,6 +75,7 @@ fn ontop_inner_self_join_elimination_on_pk() {
         offset: 0,
         order: Vec::new(),
         path: None,
+        agg: None,
     };
     b.bindings
         .insert("hs".into(), col_binding(1, "trip_headsign"));

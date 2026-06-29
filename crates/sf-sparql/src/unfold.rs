@@ -5,12 +5,17 @@
 //! JOIN obeying R1–R5. This is the **unoptimized** tree the [`crate::cascade`]
 //! then rewrites.
 
+use sf_core::datatype::XsdTypeCode;
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
-use spargebra::algebra::{Expression, GraphPattern, OrderExpression};
-use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern};
+use spargebra::algebra::{
+    AggregateExpression, AggregateFunction, Expression, GraphPattern, OrderExpression,
+};
+use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
-use crate::iq::{Branch, OrderKey, Scan, SqlCond, TermDef};
+use crate::iq::{
+    AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, Scan, SqlCond, TermDef,
+};
 use crate::leftjoin::left_join_branches;
 use crate::saturate::Tbox;
 use crate::unify::{filter_cond, unify, Unify};
@@ -221,12 +226,111 @@ impl<'a> Unfolder<'a> {
                 let r = self.translate_pattern(right)?;
                 Ok(TransPattern::plain(minus_branches(l.branches, r.branches)?))
             }
-            // Deferred → 501 (documented, never silent): GRAPH, aggregates,
+            // GROUP BY + aggregates (SPARQL §11). v1 groups a SINGLE-branch inner:
+            // emit `GROUP BY <raw key cols>` + COUNT/SUM/AVG/MIN/MAX, the keys
+            // lowered to their raw key columns (term-construction lifting — the term
+            // is rebuilt at projection). Implicit grouping (empty `variables`) is one
+            // group over all inner rows, yielding one row even when the inner is
+            // empty (COUNT(*)=0). A multi-branch inner (UNION/VALUES), GROUP_CONCAT /
+            // SAMPLE, or a key/aggregate over a constructed/non-column expression is
+            // deferred → 501 (never silently wrong). See [`Self::group`].
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => self.group(inner, variables, aggregates),
+            // Deferred → 501 (documented, never silent): GRAPH,
             // LATERAL, SERVICE (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
             other => Err(Error::Unsupported(format!(
                 "graph pattern not supported in v1 → 501: {other:?}"
             ))),
         }
+    }
+
+    /// GROUP BY + aggregates (SPARQL §11) over a single-branch inner. Builds one
+    /// [`Branch`] carrying the inner FROM/WHERE plus an [`Aggregation`]: the
+    /// grouping keys lowered to raw key columns, and each aggregate output column.
+    /// The output bindings are the grouping variables (their original term defs,
+    /// rebuilt from the grouped raw columns) plus the aggregate result variables.
+    fn group(
+        &mut self,
+        inner: &GraphPattern,
+        variables: &[Variable],
+        aggregates: &[(Variable, AggregateExpression)],
+    ) -> Result<TransPattern> {
+        let t = self.translate_pattern(inner)?;
+        // v1: a single-branch inner only — a bag-union (UNION/VALUES) cannot be
+        // grouped per arm in SQL (the groups would span arms).
+        if t.branches.len() != 1 {
+            return Err(Error::Unsupported(
+                "GROUP BY over a multi-branch (UNION/VALUES) inner is deferred → 501 \
+                 (v1 groups a single SQL SELECT)"
+                    .to_owned(),
+            ));
+        }
+        let mut branch = t.branches.into_iter().next().unwrap();
+        if branch.path.is_some() {
+            return Err(Error::Unsupported(
+                "GROUP BY over a property-path closure is deferred → 501".to_owned(),
+            ));
+        }
+        if branch.agg.is_some() {
+            return Err(Error::Unsupported(
+                "nested GROUP BY (aggregate over an aggregate) is deferred → 501".to_owned(),
+            ));
+        }
+
+        // The grouping keys, lowered to their raw key columns.
+        let mut keys = Vec::with_capacity(variables.len());
+        let mut out_bindings = std::collections::BTreeMap::new();
+        for v in variables {
+            let def = branch.bindings.get(v.as_str()).ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "GROUP BY ?{} is not a bound variable in the group's inner → 501",
+                    v.as_str()
+                ))
+            })?;
+            let cols = group_key_columns(def, v.as_str())?;
+            // The grouping variable stays in scope after grouping, rebuilt from its
+            // (now grouped) raw columns by its original term def.
+            out_bindings.insert(v.as_str().to_owned(), def.clone());
+            keys.push(GroupKey {
+                var: v.as_str().to_owned(),
+                cols,
+            });
+        }
+
+        // The aggregate result columns share one reserved synthetic alias (they are
+        // computed in SQL, never read from a base scan).
+        let agg_alias = self.alias();
+        let mut aggs = Vec::with_capacity(aggregates.len());
+        for (out_var, expr) in aggregates {
+            let (kind, arg, distinct, fixed_type) = lower_aggregate(expr, &branch.bindings)?;
+            let out = ColRef::new(agg_alias, out_var.as_str());
+            out_bindings.insert(
+                out_var.as_str().to_owned(),
+                TermDef::Agg {
+                    col: out.clone(),
+                    kind,
+                    operand: arg.clone(),
+                    fixed_type,
+                },
+            );
+            aggs.push(AggCol {
+                var: out_var.as_str().to_owned(),
+                kind,
+                arg,
+                distinct,
+                out,
+                fixed_type,
+            });
+        }
+
+        // After grouping, ONLY the grouping vars + aggregate results are in scope
+        // (the inner pattern's other variables are not projected by the group).
+        branch.bindings = out_bindings;
+        branch.agg = Some(Aggregation { keys, aggs });
+        Ok(TransPattern::plain(vec![branch]))
     }
 
     /// Translate a BGP: each pattern → its alternative branches, then the
@@ -496,6 +600,122 @@ fn ground_term_to_term(gt: &GroundTerm) -> Result<Term> {
             "VALUES ground term not supported in v1 → 501: {other:?}"
         ))),
     }
+}
+
+/// The raw key columns a GROUP BY key lowers to: a column/template term map's
+/// columns (grouping by the raw key ≡ grouping by the constructed term, the
+/// term-lifting injectivity assumption, ADR-0007). A constant / COALESCE / CONCAT
+/// key has no single raw key to group by (a constant doesn't partition; a
+/// constructed multi-source term can't be reduced to a GROUP BY column soundly) →
+/// deferred 501 (never silently wrong).
+fn group_key_columns(def: &TermDef, var: &str) -> Result<Vec<ColRef>> {
+    match def {
+        TermDef::Derived { .. } => {
+            let cols = def.columns();
+            if cols.is_empty() {
+                Err(Error::Unsupported(format!(
+                    "GROUP BY ?{var} reduces to no raw column → 501"
+                )))
+            } else {
+                Ok(cols)
+            }
+        }
+        _ => Err(Error::Unsupported(format!(
+            "GROUP BY ?{var} is a constructed/constant key (not reducible to a raw \
+             GROUP BY column) → 501"
+        ))),
+    }
+}
+
+/// Lower one [`AggregateExpression`] to `(kind, arg col, distinct, fixed result
+/// type)`. `COUNT(*)` has no argument column; every other function aggregates a
+/// single bound variable reducible to ONE raw column. An aggregate over a complex
+/// expression / multi-column term, GROUP_CONCAT, SAMPLE, custom, or `COUNT(DISTINCT
+/// *)` is deferred → 501 (never silently wrong).
+fn lower_aggregate(
+    expr: &AggregateExpression,
+    bindings: &std::collections::BTreeMap<String, TermDef>,
+) -> Result<(AggKind, Option<ColRef>, bool, Option<XsdTypeCode>)> {
+    match expr {
+        // COUNT(*) — counts solutions in the group; result xsd:integer.
+        AggregateExpression::CountSolutions { distinct } => {
+            if *distinct {
+                return Err(Error::Unsupported(
+                    "COUNT(DISTINCT *) is deferred → 501 (v1 supports COUNT(*))".to_owned(),
+                ));
+            }
+            Ok((AggKind::Count, None, false, Some(XsdTypeCode::Integer)))
+        }
+        AggregateExpression::FunctionCall {
+            name,
+            expr,
+            distinct,
+        } => {
+            // v1: the aggregated expression must be a single bound variable that
+            // lowers to ONE raw column (term-construction lifting — never a
+            // constructed/computed expression).
+            let Expression::Variable(v) = expr else {
+                return Err(Error::Unsupported(
+                    "aggregate over a non-variable expression is deferred → 501 \
+                     (v1 aggregates a single column-backed variable)"
+                        .to_owned(),
+                ));
+            };
+            let def = bindings.get(v.as_str()).ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "aggregate variable ?{} is not bound in the group's inner → 501",
+                    v.as_str()
+                ))
+            })?;
+            let col = single_column_of(def, v.as_str())?;
+            let (kind, fixed) = match name {
+                // COUNT(?v) — counts solutions where ?v is BOUND (non-NULL col);
+                // COUNT(DISTINCT ?v) — distinct bound values. Result xsd:integer.
+                AggregateFunction::Count => (AggKind::Count, Some(XsdTypeCode::Integer)),
+                // SUM/MIN/MAX keep the source numeric type (decltype/storage at
+                // reconstruction). AVG (§11.4: SUM/COUNT under XPath numeric
+                // promotion) follows the OPERAND numeric type, resolved from the
+                // operand's §10 type at reconstruction — never pinned (SQLite's AVG
+                // always yields REAL, so a fixed decimal is wrong for a double
+                // operand).
+                AggregateFunction::Sum => (AggKind::Sum, None),
+                AggregateFunction::Avg => (AggKind::Avg, None),
+                AggregateFunction::Min => (AggKind::Min, None),
+                AggregateFunction::Max => (AggKind::Max, None),
+                AggregateFunction::GroupConcat { .. } => {
+                    return Err(Error::Unsupported(
+                        "GROUP_CONCAT is deferred → 501 (string-join semantics)".to_owned(),
+                    ))
+                }
+                AggregateFunction::Sample => {
+                    return Err(Error::Unsupported(
+                        "SAMPLE is deferred → 501 (non-deterministic pick)".to_owned(),
+                    ))
+                }
+                AggregateFunction::Custom(_) => {
+                    return Err(Error::Unsupported(
+                        "custom aggregate function is deferred → 501".to_owned(),
+                    ))
+                }
+            };
+            Ok((kind, Some(col), *distinct, fixed))
+        }
+    }
+}
+
+/// The single raw column a column-backed variable reads (for SUM/AVG/MIN/MAX/COUNT
+/// over a column). A constant / multi-column template / COALESCE / CONCAT binding
+/// has no single aggregation column → deferred 501.
+fn single_column_of(def: &TermDef, var: &str) -> Result<ColRef> {
+    if let TermDef::Derived { .. } = def {
+        if let [col] = def.columns().as_slice() {
+            return Ok(col.clone());
+        }
+    }
+    Err(Error::Unsupported(format!(
+        "aggregate over ?{var} requires a single column-backed value (not a \
+         constructed/multi-column term) → 501"
+    )))
 }
 
 /// A mapping term map → a [`TermDef`] at `alias` (constants need no alias).

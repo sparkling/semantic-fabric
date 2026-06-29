@@ -24,7 +24,7 @@ use sf_core::ir::LogicalSource;
 use sf_sql::Dialect;
 
 use crate::emit::{ColumnCatalog, EmittedBranch};
-use crate::iq::{Branch, ColRef, OrderKey, TermDef};
+use crate::iq::{AggKind, Branch, ColRef, OrderKey, TermDef};
 use crate::{Error, Plan, PlanForm, Result};
 
 /// Introspect the actual result-column names of every source the plan reads, so
@@ -194,6 +194,49 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
             };
             Ok(Some(Term::Literal(term)))
         }
+        // An aggregate result (SPARQL §11): the value is the SQL aggregate computed
+        // at `col`. A NULL value is an empty multiset: SUM (and COUNT, defensively —
+        // SQL `COUNT` never NULLs) over an empty multiset is `"0"^^xsd:integer`,
+        // while AVG/MIN/MAX (and SAMPLE) are UNBOUND (§11). The §10 type is
+        // `fixed_type` when the function pins it (COUNT ⇒ integer), else the
+        // column's resolved decltype/storage class (SUM/MIN/MAX keep the source
+        // numeric type). AVG (§11.4) follows the OPERAND numeric type under XPath
+        // promotion — resolved from `operand`'s §10 type, since SQLite's `AVG`
+        // always yields a REAL (the operand is projected bare on SQLite; on PG it is
+        // absent and `avg()`'s own promoted result type is used).
+        TermDef::Agg {
+            col,
+            kind,
+            operand,
+            fixed_type,
+        } => {
+            let row = AliasRow {
+                raw,
+                alias: col.alias,
+            };
+            let Some(value) = row.value(&col.column) else {
+                return match kind {
+                    AggKind::Sum | AggKind::Count => {
+                        Ok(Some(natural_literal("0", XsdTypeCode::Integer)?))
+                    }
+                    AggKind::Avg | AggKind::Min | AggKind::Max => Ok(None),
+                };
+            };
+            let code = match kind {
+                AggKind::Avg => {
+                    let operand_code = operand
+                        .as_ref()
+                        .and_then(|o| raw.code_for(o.alias, &o.column))
+                        .or_else(|| raw.code_for(col.alias, &col.column))
+                        .unwrap_or(XsdTypeCode::Decimal);
+                    avg_result_code(operand_code)
+                }
+                _ => fixed_type
+                    .or_else(|| raw.code_for(col.alias, &col.column))
+                    .unwrap_or(XsdTypeCode::String),
+            };
+            Ok(Some(natural_literal(value, code)?))
+        }
     }
 }
 
@@ -233,6 +276,17 @@ fn natural_literal(value: &str, code: XsdTypeCode) -> Result<Term> {
         }
     };
     Ok(Term::Literal(literal))
+}
+
+/// The §10 result datatype of `AVG(operand)` (SPARQL §11.4: AVG = SUM/COUNT under
+/// XPath numeric type promotion). The result follows the operand numeric type:
+/// `xsd:double` is preserved (so is `xsd:float`, which this codebase folds into
+/// `xsd:double`); `xsd:integer` and `xsd:decimal` promote to `xsd:decimal`.
+fn avg_result_code(operand: XsdTypeCode) -> XsdTypeCode {
+    match operand {
+        XsdTypeCode::Double => XsdTypeCode::Double,
+        _ => XsdTypeCode::Decimal,
+    }
 }
 
 /// Reconstruct all bound variables of `branch` for one raw row. `pub(crate)` so
