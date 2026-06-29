@@ -1,0 +1,4 @@
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?route ?short ?long WHERE {
+  ?route a gtfs:Route ; gtfs:shortName ?short ; gtfs:longName ?long
+} ORDER BY STRLEN(?short) ?long

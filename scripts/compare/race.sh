@@ -86,6 +86,25 @@ for q in q1 q2 q3 q4 q5; do
   printf "%-36s %12s %12s %8s %8s %7s\n" "$q" "$(ms "$sf_s")" "$(ms "$on_s")" "$sf_r" "$on_r" "$par"
 done
 
+# Wave-E additions: queries newly answerable after closing ORDER BY expression
+# and GROUP BY multi-branch 501s. Ontop may return 501 on q7 (expression ORDER BY);
+# if so the Ontop column shows "ERR" and parity shows "N/A".
+for q in q6 q7; do
+  qf="$M/$q.rq"
+  [ -f "$qf" ] || continue
+  sf_s="$(time_query "$SF_EP" "$qf")"
+  sf_r="$(rows_of "$SF_EP" "$qf")"
+  # Ontop: attempt but tolerate failure (expression ORDER BY may be unsupported)
+  on_s="N/A"; on_r="N/A"; par="N/A"
+  if http_code="$(curl -s -o /dev/null -w '%{http_code}' --data-urlencode "query=$(cat "$qf")" -H 'Accept: text/csv' "$ONTOP_EP")"; \
+     [ "$http_code" = "200" ]; then
+    on_s="$(time_query "$ONTOP_EP" "$qf")"
+    on_r="$(rows_of "$ONTOP_EP" "$qf")"
+    par="OK"; [ "$sf_r" = "$on_r" ] || par="MISMATCH"
+  fi
+  printf "%-36s %12s %12s %8s %8s %7s\n" "$q" "$(ms "$sf_s")" "$on_s" "$sf_r" "$on_r" "$par"
+done
+
 echo ""
 echo ">> sf-serve log tail:";    tail -n 2 "/tmp/sf-serve-${SCALE}x.log"    | sed 's/^/   /'
 echo ">> ontop endpoint log tail:"; tail -n 2 "/tmp/ontop-endpoint-${SCALE}x.log" | sed 's/^/   /'
