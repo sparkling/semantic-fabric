@@ -31,6 +31,11 @@ pub mod node;
 /// proven flat [`crate::unfold`] atom oracle verbatim. The flat path is untouched.
 pub mod resolve;
 
+/// NORMALIZE-min (ADR-0023 M3b): substitution-lift + join-over-union distribution +
+/// Empty/True pruning to drive a RESOLVED tree to the lowerable leaf-CQ spine. The
+/// flat path is untouched (not wired into the live engine).
+pub mod normalize;
+
 /// A reference to a raw source column of a specific scan alias. Aliases are
 /// small integers; emission renders them `t{alias}` (ADR-0007 lifting: joins and
 /// filters are over these, never over constructed term strings).
