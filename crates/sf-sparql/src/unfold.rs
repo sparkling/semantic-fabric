@@ -383,9 +383,30 @@ impl<'a> Unfolder<'a> {
         Ok(acc)
     }
 
+    /// Resolve one triple pattern **at a given active graph** to its flat atom
+    /// alternatives (ADR-0023 M3a). This is the entry point the tree-path
+    /// [`crate::iq::resolve`] drives per [`crate::iq::node::IqNode::Intensional`]:
+    /// it pins the `current_graph` to the leaf's resolved constant graph (so
+    /// [`graph_maps_match`] filters exactly as the flat `GRAPH <g>` path does),
+    /// delegates to the **unchanged** [`Self::pattern_branches`] oracle, then
+    /// restores the previous graph context. Behaviour (arm set, conds, fresh
+    /// aliases, `predicate_can_match` pruning) is byte-identical to the flat
+    /// translation — that is the `=_bag` argument (M3 design §3, §6).
+    pub(crate) fn resolve_pattern(
+        &mut self,
+        tp: &TriplePattern,
+        graph: Option<&NamedNode>,
+    ) -> Result<Vec<Branch>> {
+        let saved = self.current_graph.take();
+        self.current_graph = graph.cloned();
+        let out = self.pattern_branches(tp);
+        self.current_graph = saved;
+        out
+    }
+
     /// All atom alternatives for one triple pattern (a bag union over the
     /// matching triples-maps / predicate-object maps / `rr:class` entries).
-    fn pattern_branches(&mut self, tp: &TriplePattern) -> Result<Vec<Branch>> {
+    pub(crate) fn pattern_branches(&mut self, tp: &TriplePattern) -> Result<Vec<Branch>> {
         let mut out = Vec::new();
         // Predicate match set (direct + sub-properties + inverse/symmetric).
         let pred_iri = match &tp.predicate {

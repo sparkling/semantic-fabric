@@ -26,6 +26,11 @@ use spargebra::algebra::Expression;
 /// optimizer model; the [`Branch`] below is its SQL-lowering target.
 pub mod node;
 
+/// RESOLVE (ADR-0023 M3a): replace every [`node::IqNode::Intensional`] leaf with its
+/// resolved `Extensional`/`Construction`(/`Union`/`InnerJoin`) subtree, reusing the
+/// proven flat [`crate::unfold`] atom oracle verbatim. The flat path is untouched.
+pub mod resolve;
+
 /// A reference to a raw source column of a specific scan alias. Aliases are
 /// small integers; emission renders them `t{alias}` (ADR-0007 lifting: joins and
 /// filters are over these, never over constructed term strings).

@@ -317,7 +317,7 @@ fn push_unique_all(out: &mut Vec<Var>, vs: Vec<Var>) {
 
 /// The variables a triple pattern binds, in subject→predicate→object order
 /// (de-duplicated, so a repeated variable such as `?x ?x ?x` is listed once).
-fn triple_pattern_vars(tp: &TriplePattern) -> Vec<Var> {
+pub(crate) fn triple_pattern_vars(tp: &TriplePattern) -> Vec<Var> {
     let mut out = Vec::new();
     if let TermPattern::Variable(v) = &tp.subject {
         push_unique(&mut out, v.as_str().into());
