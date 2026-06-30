@@ -673,9 +673,15 @@ impl<'a> Unfolder<'a> {
             TermPattern::Literal(l) => {
                 self.constrain(branch, TermDef::Const(Term::Literal(l.clone())), def)
             }
-            TermPattern::BlankNode(b) => {
-                self.constrain(branch, TermDef::Const(Term::BlankNode(b.clone())), def)
-            }
+            // A blank node in a graph pattern is a NON-DISTINGUISHED join variable
+            // (SPARQL 1.1 §4.1.4 / §18.2.1), not a constant. spargebra desugars bare
+            // sequence/inverse paths (`p/q`, `^(...)`) into a BGP joined by a fresh
+            // middle blank node, so binding it as a constant would prune the join and
+            // collapse the plan to Empty. Bind it as a synthetic join variable keyed by
+            // its stable spargebra id, namespaced (`__bnode_`) so it can never collide
+            // with a real SPARQL variable name; the outer Construction projection is
+            // driven by SELECT scope, so it is projected away.
+            TermPattern::BlankNode(b) => bind(branch, &format!("__bnode_{}", b.as_str()), def),
             other => Err(Error::Unsupported(format!(
                 "term pattern not supported in v1 → 501: {other:?}"
             ))),
