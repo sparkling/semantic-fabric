@@ -72,6 +72,7 @@ fn ontop_st_elimination1_two_scans_sharing_two_cols() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("B".into(), col_binding(0, "col2"));
     b.bindings.insert("C".into(), col_binding(0, "col3"));
@@ -122,6 +123,7 @@ fn ontop_st_elimination3_three_scans_all_sharing_two_cols() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("B".into(), col_binding(0, "col2"));
     b.bindings.insert("C".into(), col_binding(0, "col3"));
@@ -161,6 +163,7 @@ fn ontop_st_elimination4_constant_shared_col_no_guard() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("C".into(), col_binding(0, "col3"));
 
@@ -215,6 +218,7 @@ fn ontop_st_elimination5_mixed_constant_and_variable_col2() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("C".into(), col_binding(0, "col3"));
     // B on scan2.col2 is NOT projected.
@@ -250,6 +254,7 @@ fn ontop_st_elimination6_col1_also_projected_from_keep() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     // A is from scan0.col1 (projected). B, C from scan0.col2/col3.
     b.bindings.insert("A".into(), col_binding(0, "col1"));
@@ -299,6 +304,7 @@ fn ontop_st_elimination8_self_join_all_cols_projected() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
     b.bindings.insert("B".into(), col_binding(0, "col2"));
@@ -336,6 +342,7 @@ fn ontop_st_non_elimination1_no_distinct() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("B".into(), col_binding(0, "col2"));
     b.bindings.insert("C".into(), col_binding(0, "col3"));
@@ -369,6 +376,7 @@ fn ontop_st_non_elimination2_no_shared_projected_cols() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("B".into(), col_binding(0, "col2"));
     b.bindings.insert("C".into(), col_binding(1, "col3"));
@@ -402,6 +410,7 @@ fn ontop_st_non_elimination2bis_minimal_scans_no_shared_cols() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("B".into(), col_binding(0, "col2"));
     b.bindings.insert("C".into(), col_binding(1, "col3"));
@@ -439,6 +448,7 @@ fn ontop_st_non_elimination3_projected_col_not_covered_by_coleq() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     // B from scan0.col2 (projected) — NOT covered by the col1 ColEq.
     b.bindings.insert("B".into(), col_binding(0, "col2"));
@@ -478,6 +488,7 @@ fn ontop_st_non_elimination4_different_constants_on_col1() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("B".into(), col_binding(0, "col2"));
     b.bindings.insert("C".into(), col_binding(0, "col3"));

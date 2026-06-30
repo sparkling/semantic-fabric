@@ -981,3 +981,73 @@ fn w3c_rdb2rdf_dump_flat_eq_tree() {
         "the W3C dump differential must compare at least one case"
     );
 }
+
+// ============================================================================
+// SUBPLAN (ADR-0023 M5 Wave 2) — a modifier-bearing subquery appearing as a JOIN
+// operand (not the spine) is lowered via a SubPlan derived table in the TREE path.
+// The FLAT path handles some of these shapes by translating the subquery algebra
+// inline (transparent to the JOIN), but produces results that differ from the tree
+// on queries where shared variables cross the subquery boundary (flat is imprecise
+// here). The rigorous gate is: the TREE result =_bag the independent spareval oracle.
+// ============================================================================
+
+/// A SubPlan-as-join tree-only spec (ADR-0023 M5 Wave 2): assert the TREE produces
+/// a subplan_join branch AND the tree result =_bag the independent spareval oracle.
+/// Does NOT compare with the flat oracle (flat may produce incomplete results for
+/// the subquery-join algebra shape).
+fn subplan_tree_eq_spareval(sql: &str, r2rml: &str, ttl: &str, query: &str) {
+    let conn = sqlite::load(sql).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let q = parse(query);
+    let tp = tree(&maps, &q, &schema).expect("tree must succeed for subquery-as-join");
+    assert!(
+        tp.branches.iter().any(|b| !b.subplan_joins.is_empty()),
+        "tree must produce a subplan_join branch (SubPlan derived-table, §5.4): {tp:?}"
+    );
+    assert_vs_spareval(ttl, query, &tp, &conn);
+}
+
+#[test]
+fn subplan_aggregate_as_join_operand() {
+    // Test 1 (ADR-0023 M5 Wave 2, §5.4): a SPARQL aggregate subquery appearing as a
+    // JOIN operand — `{ SELECT ?s (COUNT(?n) AS ?c) WHERE { ?s ex:name ?n } GROUP BY ?s }
+    // ?s ex:name ?m`. The tree lowers the inner SELECT via a SubPlan derived table
+    // (`(SELECT …) AS t{alias}`) joined with the outer `?s ex:name ?m` pattern.
+    //
+    // Expected over STRESS fixture (emp has 1 name per id):
+    //   (emp/1, c=1, m="A"), (emp/2, c=1, m="A"), (emp/3, c=1, m="B") — 3 rows.
+    //
+    // flat = Ok (the flat path handles the subquery inline but the tree uses a
+    // derived-table SubPlan; the independent spareval oracle gates correctness).
+    subplan_tree_eq_spareval(
+        STRESS_SQL,
+        STRESS_R2RML,
+        STRESS_TTL,
+        &format!(
+            "{PFX} SELECT ?s ?c ?m WHERE {{ \
+             {{ SELECT ?s (COUNT(?n) AS ?c) WHERE {{ ?s ex:name ?n }} GROUP BY ?s }} \
+             ?s ex:name ?m }}"
+        ),
+    );
+}
+
+#[test]
+fn subplan_distinct_as_join_operand() {
+    // Test 2 (ADR-0023 M5 Wave 2, §5.4): a DISTINCT subquery appearing as a JOIN
+    // operand — `{ SELECT DISTINCT ?n WHERE { ?s ex:name ?n } } ?s ex:name ?n`.
+    // The tree lowers the inner SELECT DISTINCT as a SubPlan derived table.
+    //
+    // Expected over STRESS fixture:
+    //   DISTINCT names: {"A", "B"};
+    //   joined with ?s ex:name ?n:
+    //   (n="A", s=emp/1), (n="A", s=emp/2), (n="B", s=emp/3) — 3 rows.
+    //
+    // flat = Ok for this shape (distinct subquery with non-overlapping outer var).
+    // tree-vs-spareval is the independent oracle gate.
+    diff_stress(&format!(
+        "{PFX} SELECT ?s ?n WHERE {{ \
+         {{ SELECT DISTINCT ?n WHERE {{ ?s ex:name ?n }} }} \
+         ?s ex:name ?n }}"
+    ));
+}

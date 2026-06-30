@@ -291,6 +291,7 @@ fn ontop_self_left_join_collapses_with_extra_core_scan() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("M".into(), col_binding(0, "col1"));
     b.bindings.insert("N".into(), col_binding(0, "col2"));
@@ -408,6 +409,7 @@ fn ontop_same_terms_only_shared_col_projected() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("X".into(), col_binding(0, "col2"));
 
@@ -449,6 +451,7 @@ fn ontop_same_terms_subsumed_scan_dropped() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("X".into(), col_binding(0, "col2")); // only col2 on scan 0
     b.bindings.insert("Y".into(), col_binding(1, "col3")); // col3 only on scan 1
@@ -502,6 +505,7 @@ fn ontop_same_terms_independent_attribute_not_eliminated() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("X".into(), col_binding(0, "col1")); // col1 of scan 0
     b.bindings.insert("Y".into(), col_binding(1, "col5")); // independent col5 of scan 1

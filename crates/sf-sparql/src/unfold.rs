@@ -1228,5 +1228,10 @@ fn merge(mut left: Branch, right: &Branch) -> Result<Option<Branch>> {
     left.core.extend(right.core.iter().cloned());
     left.opts.extend(right.opts.iter().cloned());
     left.where_conds.extend(right.where_conds.iter().cloned());
+    // SubPlan joins from the right branch are appended to the merged result so
+    // that a SubPlan-as-join-operand (ADR-0023 M5 Wave 2) survives the merge.
+    // The flat path never sets `subplan_joins`, so this is a no-op on the flat path.
+    left.subplan_joins
+        .extend(right.subplan_joins.iter().cloned());
     Ok(Some(left))
 }

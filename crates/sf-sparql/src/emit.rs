@@ -85,11 +85,24 @@ fn resolve_col<'a>(raw: &'a str, actual: Option<&'a [String]>) -> &'a str {
 }
 
 /// The actual columns of every scan alias in `b`, keyed by alias, for resolution.
+/// For SubPlan-join aliases, the "actual columns" are the projected variable names
+/// from the nested Plan's `PlanForm::Select { vars }` (the names the derived table
+/// exposes). SubPlan aliases are NOT in `alias_sources()` (they have no catalog
+/// entry), so they are wired up here directly.
 fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> HashMap<usize, Vec<String>> {
     let mut out = HashMap::new();
     for (alias, source) in b.alias_sources() {
         if let Some(cols) = catalog.columns(source) {
             out.insert(alias, cols.to_vec());
+        }
+    }
+    // SubPlan derived-table aliases: their columns are the positional names the
+    // inner `emit_branch` assigns (`c0`, `c1`, …), NOT the SPARQL variable names.
+    // The outer branch's bindings use `ColRef(sp_alias, "c{i}")` after remapping.
+    for sp in &b.subplan_joins {
+        if let crate::PlanForm::Select { vars } = &sp.plan.form {
+            let positional: Vec<String> = (0..vars.len()).map(|i| format!("c{i}")).collect();
+            out.insert(sp.alias, positional);
         }
     }
     out
@@ -131,10 +144,12 @@ pub fn emit_branch_with(
     let mut pidx = 0usize;
 
     // FROM (+ LEFT JOIN ON params) MUST render before WHERE so positional
-    // placeholders bind in text order. A core-less branch (an inline `VALUES`
-    // constant row — all `Const` bindings, no scan) renders as a one-row
-    // `SELECT <const exprs>` with no FROM.
-    let from = if b.core.is_empty() {
+    // placeholders bind in text order. A core-less branch with no SubPlan joins
+    // (an inline `VALUES` constant row — all `Const` bindings) renders as a
+    // one-row `SELECT <const exprs>` with no FROM. A core-less branch WITH
+    // SubPlan joins (ADR-0023 M5 Wave 2: SubPlan anchor) uses the first SubPlan
+    // as the FROM anchor.
+    let from = if b.core.is_empty() && b.subplan_joins.is_empty() {
         None
     } else {
         Some(render_from(b, dialect, &actuals, &mut params, &mut pidx)?)
@@ -591,23 +606,154 @@ fn render_from(
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
-    let mut scans = b.core.iter();
-    let first = scans
-        .next()
-        .ok_or_else(|| Error::Unsupported("branch with no FROM relation".to_owned()))?;
-    let mut from = scan_ref(&first.source, first.alias, dialect);
-    for s in scans {
-        from.push_str(" CROSS JOIN ");
-        from.push_str(&scan_ref(&s.source, s.alias, dialect));
-    }
-    for opt in &b.opts {
-        from.push_str(" LEFT JOIN ");
-        from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
-        from.push_str(" ON ");
-        let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
-        from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
-    }
+    // SubPlan derived-table joins (ADR-0023 M5 Wave 2): nested Plans inlined as
+    // `(SELECT …) AS t{alias}`. Nested params are spliced at this text-order position
+    // (load-bearing for prepared-statement binding — positional order matters).
+    //
+    // When `core` is non-empty the first core scan is the FROM anchor; SubPlan joins
+    // follow as INNER/LEFT JOIN. When `core` is empty AND there are SubPlan joins the
+    // first SubPlan becomes the FROM anchor (no CROSS JOIN keyword before it).
+    let emit_sp = |sp: &crate::iq::SubPlanJoin,
+                   params: &mut Vec<String>,
+                   pidx: &mut usize,
+                   join_kw: &str|
+     -> Result<String> {
+        let (nested_sql, nested_params) = emit_subplan_sql(&sp.plan, dialect)?;
+        let nested_count = nested_params.len();
+        // Rebase Postgres $N placeholders in the nested SQL from $1.. to $(pidx+1)..
+        let rebased = rebase_placeholders(&nested_sql, dialect, *pidx)?;
+        // Splice nested params into the parent's param vector at this text position.
+        params.extend(nested_params);
+        // Advance pidx past the nested params so subsequent ON conditions number correctly.
+        *pidx += nested_count;
+        Ok(format!("{join_kw}({rebased}) t{}", sp.alias))
+    };
+
+    let from = if b.core.is_empty() {
+        // No base scans: first SubPlan is the FROM anchor (no keyword); remaining join with ON.
+        let mut sp_iter = b.subplan_joins.iter();
+        let first_sp = sp_iter
+            .next()
+            .ok_or_else(|| Error::Unsupported("branch with no FROM relation".to_owned()))?;
+        let anchor = emit_sp(first_sp, params, pidx, "")?;
+        let on_clause = if !first_sp.on.is_empty() {
+            // The anchor is a naked derived table — no ON clause in the FROM position;
+            // ON-conditions go into WHERE instead. For now emit them into WHERE by
+            // pushing to where_conds is not possible here — the only sound path is to
+            // require sp.on to be empty for the anchor (lower_as_subplan guarantees this).
+            String::new()
+        } else {
+            String::new()
+        };
+        let mut from = format!("{}{anchor}", on_clause);
+        for sp in sp_iter {
+            let join_kw = if sp.left {
+                " LEFT JOIN "
+            } else {
+                " INNER JOIN "
+            };
+            from.push_str(&emit_sp(sp, params, pidx, join_kw)?);
+            if !sp.on.is_empty() {
+                from.push_str(" ON ");
+                let conds: Vec<&SqlCond> = sp.on.iter().collect();
+                from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+            } else {
+                from.push_str(" ON 1 = 1");
+            }
+        }
+        from
+    } else {
+        let mut scans = b.core.iter();
+        let first = scans.next().expect("core non-empty — checked above");
+        let mut from = scan_ref(&first.source, first.alias, dialect);
+        for s in scans {
+            from.push_str(" CROSS JOIN ");
+            from.push_str(&scan_ref(&s.source, s.alias, dialect));
+        }
+        for opt in &b.opts {
+            from.push_str(" LEFT JOIN ");
+            from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
+            from.push_str(" ON ");
+            let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
+            from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+        }
+        for sp in &b.subplan_joins {
+            let join_kw = if sp.left {
+                " LEFT JOIN "
+            } else {
+                " INNER JOIN "
+            };
+            from.push_str(&emit_sp(sp, params, pidx, join_kw)?);
+            if !sp.on.is_empty() {
+                from.push_str(" ON ");
+                let conds: Vec<&SqlCond> = sp.on.iter().collect();
+                from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+            } else {
+                from.push_str(" ON 1 = 1");
+            }
+        }
+        from
+    };
     Ok(from)
+}
+
+/// Render all prepared branches of a nested [`Plan`] to a single SQL SELECT string
+/// (for embedding as a derived table). Multi-branch plans become a `UNION ALL`.
+/// Returns `(sql_text, params)` — params in text order, placeholders starting from 1.
+fn emit_subplan_sql(plan: &crate::Plan, _dialect: Dialect) -> Result<(String, Vec<String>)> {
+    let emitted = plan.emitted()?;
+    if emitted.is_empty() {
+        // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
+        // Use a dummy column so it is syntactically valid as a derived table.
+        return Ok(("SELECT 1 AS __sf_empty WHERE 1 = 0".to_owned(), Vec::new()));
+    }
+    if emitted.len() == 1 {
+        let e = &emitted[0];
+        return Ok((e.sql.clone(), e.params.clone()));
+    }
+    // Multiple branches: UNION ALL (bag semantics). Each branch's params in text order.
+    let mut all_sql = Vec::new();
+    let mut all_params = Vec::new();
+    for e in &emitted {
+        all_sql.push(format!("({})", e.sql));
+        all_params.extend(e.params.clone());
+    }
+    let sql = all_sql.join(" UNION ALL ");
+    Ok((sql, all_params))
+}
+
+/// Rebase positional `$N` placeholders in `sql` from base 1 to start at `base+1`,
+/// for PostgreSQL numbered placeholders. SQLite uses `?` (positional by text order,
+/// no numbering), so for SQLite (or when `base == 0`) returns `sql` unchanged.
+fn rebase_placeholders(sql: &str, dialect: Dialect, base: usize) -> Result<String> {
+    if dialect != Dialect::Postgres || base == 0 {
+        return Ok(sql.to_owned());
+    }
+    // Replace each `$N` → `$(N + base)` by scanning the string bytes.
+    let mut out = String::with_capacity(sql.len() + 16);
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+            i += 1; // skip '$'
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            let n: usize = sql[start..i].parse().map_err(|_| {
+                Error::Sql(format!(
+                    "rebase_placeholders: non-numeric after $: {}",
+                    &sql[start..i]
+                ))
+            })?;
+            out.push('$');
+            out.push_str(&(n + base).to_string());
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    Ok(out)
 }
 
 fn scan_ref(source: &LogicalSource, alias: usize, dialect: Dialect) -> String {

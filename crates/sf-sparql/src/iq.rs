@@ -474,6 +474,24 @@ pub struct HopRelation {
     pub obj_col: Box<str>,
 }
 
+/// A derived-table (SubPlan) join: a sub-`Plan` lowered to `(SELECT …) AS t{alias}`.
+///
+/// The parent branch joins the derived table on `on` conditions (column equalities
+/// over the shared SPARQL variables). `left = true` emits a `LEFT JOIN` (the
+/// LeftJoinJoinLimit case, ADR-0023 M5 Wave 2); `left = false` emits an
+/// `INNER JOIN … ON` (a modifier-bearing subquery as a join/filter input).
+///
+/// **Flat branches NEVER set this field** — it is always an empty `Vec` for
+/// branches produced by the flat [`crate::unfold`] path. That invariant keeps the
+/// flat SQL output byte-identical after the M5 Wave 2 changes (ADR-0023 §5.4).
+#[derive(Debug, Clone)]
+pub struct SubPlanJoin {
+    pub alias: usize,
+    pub plan: Box<crate::Plan>,
+    pub on: Vec<SqlCond>,
+    pub left: bool,
+}
+
 /// One compiled SQL `SELECT`. The conjunctive core (inner joins) is a set of
 /// scans plus key equalities applied in `WHERE` (CROSS JOIN + WHERE-eq ≡ inner
 /// join — emission renders it that way); OPTIONALs are `LEFT JOIN`s layered on
@@ -502,6 +520,10 @@ pub struct Branch {
     /// (SPARQL §11): emission renders `GROUP BY <key cols>` + the aggregate SQL,
     /// and reconstruction reads the grouping keys + aggregate result columns.
     pub agg: Option<Aggregation>,
+    /// Derived-table (SubPlan) joins — nested Plans emitted as `(SELECT …) AS t{alias}`.
+    /// Always `Vec::new()` for flat-path branches; only populated by the tree path's
+    /// `lower_as_subplan` (ADR-0023 M5 Wave 2: closes §5.4 nested-modifier 501 sites).
+    pub subplan_joins: Vec<SubPlanJoin>,
 }
 
 impl Branch {
@@ -518,6 +540,7 @@ impl Branch {
             order: Vec::new(),
             path: None,
             agg: None,
+            subplan_joins: Vec::new(),
         }
     }
 
@@ -571,6 +594,11 @@ impl Branch {
         }
         for opt in &self.opts {
             for cond in opt.on.iter().chain(opt.extra.iter()) {
+                collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
+            }
+        }
+        for sp in &self.subplan_joins {
+            for cond in &sp.on {
                 collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
             }
         }

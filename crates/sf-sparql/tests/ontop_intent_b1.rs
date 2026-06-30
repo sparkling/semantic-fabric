@@ -85,6 +85,7 @@ fn branch_with(core: Vec<Scan>, where_conds: Vec<SqlCond>) -> Branch {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     }
 }
 

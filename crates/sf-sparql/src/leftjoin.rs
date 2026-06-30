@@ -163,6 +163,7 @@ pub(crate) fn inner_join_one(
         order: left.order.clone(),
         path: left.path.clone(),
         agg: left.agg.clone(),
+        subplan_joins: Vec::new(),
     }))
 }
 

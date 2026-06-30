@@ -50,6 +50,7 @@ fn self_join_eliminated_on_unique_key() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("n".to_owned(), col_binding(1, "name"));
 
@@ -87,6 +88,7 @@ fn self_join_collapsed_with_is_not_null_on_nullable_unique_key() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     let mut ts = TableSchema::new("emp");
     ts.unique = vec![vec!["email".to_owned()]];
@@ -126,6 +128,7 @@ fn self_join_eliminated_keeps_unrelated_self_comparison_guard() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("n".to_owned(), col_binding(1, "name"));
     let mut ts = TableSchema::new("emp");
@@ -156,6 +159,7 @@ fn self_join_not_eliminated_without_key_proof() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     let out = run(vec![b], &[], &CascadeCtx::default());
     assert_eq!(out[0].core.len(), 2, "no key proof ⇒ join is preserved");
@@ -189,6 +193,7 @@ fn fd_inference_seeds_keys_and_closes_transitively() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     let schema = vec![pk_table("a", "x"), pk_table("b", "y"), pk_table("c", "z")];
     let fds = infer_functional_dependencies(&b, &schema);
@@ -219,6 +224,7 @@ fn fd_inference_empty_without_schema() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     let fds = infer_functional_dependencies(&b, &[]);
     assert!(!fds.is_key(&ColRef::new(0, "x")));
@@ -271,6 +277,7 @@ fn fk_branch() -> Branch {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     // ?route bound to the parent (routes) subject IRI, built from route_id.
     b.bindings.insert(
@@ -484,6 +491,7 @@ fn distinct_kept_on_join() {
         order: Vec::new(),
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings
         .insert("s".into(), iri_template_binding(0, "http://ex/emp/", "id"));
@@ -542,6 +550,7 @@ fn fd_optional_eliminated_on_notnull_fd_determinant() {
         order: vec![],
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("x".into(), col_binding(1, "col3"));
     let ts = fd_table("emp", true); // det_col NOT NULL
@@ -584,6 +593,7 @@ fn fd_optional_not_eliminated_when_fd_det_nullable() {
         order: vec![],
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("x".into(), col_binding(1, "col3"));
     let ts = fd_table("emp", false); // det_col NULLABLE
@@ -621,6 +631,7 @@ fn fd_optional_not_eliminated_without_distinct() {
         order: vec![],
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("x".into(), col_binding(1, "col3"));
     let ts = fd_table("emp", true); // det_col NOT NULL — but no DISTINCT
@@ -660,6 +671,7 @@ fn fd_inner_join_nullable_det_adds_is_not_null() {
         order: vec![],
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("x".into(), col_binding(1, "col3")); // on drop alias
     b.bindings.insert("y".into(), col_binding(0, "col3")); // on keep alias — blocks pass 2c
@@ -701,6 +713,7 @@ fn fd_inner_join_notnull_det_no_is_not_null_added() {
         order: vec![],
         path: None,
         agg: None,
+        subplan_joins: Vec::new(),
     };
     b.bindings.insert("x".into(), col_binding(1, "col3")); // on drop alias
     b.bindings.insert("y".into(), col_binding(0, "col3")); // on keep alias — blocks pass 2c
