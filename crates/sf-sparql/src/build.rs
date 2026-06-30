@@ -30,8 +30,11 @@
 //!    "non-lowerable → 501" clause of design §2's `Extend`/`Group` arms).
 //! 3. **A property-path closure** (`P+`, `P*`, `p?`, `^p`, `p/q`, `p|q`, `!p`). The
 //!    [`IqNode::Path`] leaf needs mapping resolution to build its
-//!    [`PathClosure`](crate::iq::PathClosure) (design §5.2 item 3); only a length-1
-//!    fixed-predicate path (≡ one triple) is built, as an `Intensional` leaf.
+//!    [`PathClosure`](crate::iq::PathClosure) (design §5.2 item 3), so BUILD carries the
+//!    path **verbatim** as an [`IqNode::UnresolvedPath`] leaf (a transient leaf like
+//!    `Intensional`) that RESOLVE compiles via the flat `path_branch` (M5 Wave 1); only a
+//!    length-1 fixed-predicate path (≡ one triple) is built directly, as an `Intensional`
+//!    leaf. This is NOT a 501 — the closure is resolved, not deferred.
 //!
 //! ## Arm mapping (design-lock §2)
 //!
@@ -81,10 +84,13 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Resul
             }),
         },
 
-        // A length-1 fixed-predicate path is one triple → an Intensional leaf. Any
-        // closure operator (sequence/alternative/inverse/nps/`?`/`+`/`*`) needs the
-        // mapping resolution that builds a PathClosure → tracked sound-501 (design
-        // §5.2 item 3): PathClosure resolution is deferred to M5.
+        // A length-1 fixed-predicate path is one triple → an Intensional leaf (the
+        // fast-path). Any closure operator (sequence `/`, alternative `|`, inverse `^`,
+        // negated property set `!`, `?`/`+`/`*`) needs the mapping resolution that builds
+        // a PathClosure (the hop relation reads the triples-maps), so it is carried
+        // **verbatim** as an UNRESOLVED-PATH leaf that RESOLVE compiles via the flat
+        // `path_branch` (design §5.2 item 3; M5 Wave 1). Like `Intensional`, the
+        // `UnresolvedPath` leaf MUST NOT survive RESOLVE.
         GraphPattern::Path {
             subject,
             path,
@@ -98,9 +104,12 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Resul
                 };
                 Ok(intensional(&tp, current_graph))
             }
-            _ => Err(Error::Unsupported(
-                "path closure: deferred to resolution (M5)".to_owned(),
-            )),
+            _ => Ok(IqNode::UnresolvedPath {
+                subject: subject.clone(),
+                path: path.clone(),
+                object: object.clone(),
+                graph: current_graph.cloned(),
+            }),
         },
 
         // ---- joins ---------------------------------------------------------------
@@ -661,18 +670,27 @@ mod tests {
     }
 
     #[test]
-    fn path_closure_is_tracked_501() {
-        // Only genuine closures stay as a `Path` in spargebra: `^p` (single-pred
-        // inverse) and `p/q` (sequence) are simplified to a swapped triple / a join,
-        // which build fine — so they are NOT in this 501 list.
+    fn path_closure_builds_unresolved_path_leaf() {
+        // A genuine closure (`+`/`*`/`?`/`!`) is no longer a build-time 501: it builds
+        // an `UnresolvedPath` leaf carrying the verbatim path components, which RESOLVE
+        // compiles via the flat `path_branch` (M5 Wave 1). The subject/object vars are
+        // published as the leaf's scope.
         for q in [
             "SELECT * WHERE { ?s <http://p>+ ?o }",
             "SELECT * WHERE { ?s <http://p>* ?o }",
             "SELECT * WHERE { ?s <http://p>? ?o }",
             "SELECT * WHERE { ?s !<http://p> ?o }",
         ] {
-            let r = build_tree(&pattern(q), None);
-            assert!(matches!(r, Err(Error::Unsupported(_))), "{q}: {r:?}");
+            // strip the SELECT * Project Construction the parser wraps the WHERE in.
+            let t = match build_tree(&pattern(q), None).unwrap() {
+                IqNode::Construction { child, .. } => *child,
+                other => other,
+            };
+            assert!(
+                matches!(t, IqNode::UnresolvedPath { graph: None, .. }),
+                "{q}: {t:?}"
+            );
+            assert_eq!(t.output_vars(), vec_var(&["s", "o"]));
         }
     }
 

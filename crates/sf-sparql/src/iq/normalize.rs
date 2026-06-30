@@ -166,15 +166,16 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
         }),
 
         // ---- leaves / identities pass through ------------------------------------
-        // `Intensional` MUST already be gone (RESOLVE invariant); it is carried
-        // through verbatim rather than special-cased, so a contract violation is
-        // visible downstream instead of silently rewritten.
+        // `Intensional`/`UnresolvedPath` MUST already be gone (RESOLVE invariant); they
+        // are carried through verbatim rather than special-cased, so a contract violation
+        // is visible downstream (a LOWER 501) instead of being silently rewritten.
         leaf @ (IqNode::Extensional { .. }
         | IqNode::Values { .. }
         | IqNode::Path { .. }
         | IqNode::Empty { .. }
         | IqNode::True
-        | IqNode::Intensional { .. }) => Ok(leaf),
+        | IqNode::Intensional { .. }
+        | IqNode::UnresolvedPath { .. }) => Ok(leaf),
     }
 }
 

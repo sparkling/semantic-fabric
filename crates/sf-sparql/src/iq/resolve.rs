@@ -119,6 +119,27 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             })
         }
 
+        // ---- the property-path resolving case (M5 Wave 1) -----------------------
+        // Reuse the flat `path_branch` VERBATIM via `resolve_path` (pinning the
+        // constant active graph exactly as the flat `GRAPH <g> { ?s PATH ?o }` path
+        // does), then bridge the single resulting `Branch` (which carries a
+        // `path = Some(PathClosure)`) to an `IqNode::Path` UNDER its `Construction`
+        // bindings via the SAME `bridge_branch` the triple case uses. A path pattern
+        // is one bag alternative (the flat `GraphPattern::Path` arm yields exactly
+        // `vec![path_branch(...)]`), so there is never a `Union` wrapper here. ZERO
+        // `UnresolvedPath` survives — `bridge_branch` produces no `UnresolvedPath`.
+        IqNode::UnresolvedPath {
+            subject,
+            path,
+            object,
+            graph,
+        } => {
+            let branch = cx
+                .unfolder
+                .resolve_path(&subject, &path, &object, graph.as_ref())?;
+            Ok(bridge_branch(branch))
+        }
+
         // ---- recurse into children, structure unchanged -------------------------
         IqNode::Construction {
             child,
@@ -209,39 +230,66 @@ fn resolve_cond(cond: IqCond, cx: &mut ResolveCx) -> Result<IqCond> {
     }
 }
 
-/// Bridge one resolved flat [`Branch`] (a single triple pattern's atom alternative) to
-/// an [`IqNode`] arm (module docs; M3 design §3.1, §3.3 fallback). For a triple
-/// pattern, the branch only ever populates `core` + `where_conds` + `bindings`
-/// (`opts`/`path`/`agg` are never set by `atom`/`class_atoms`), so the bridge reads
-/// exactly those three: the scans become [`IqNode::Extensional`] leaves, the WHERE
-/// conds become [`IqCond::Sql`] join/constant conditions, and the bindings become the
-/// [`IqNode::Construction`] substitution (the var → [`TermDef`] scope, design §3.2).
+/// Bridge one resolved flat [`Branch`] to an [`IqNode`] arm (module docs; M3 design
+/// §3.1, §3.3 fallback; M5 Wave 1 path extension). A **triple-pattern** branch only ever
+/// populates `core` + `where_conds` + `bindings` (`atom`/`class_atoms` never set
+/// `opts`/`path`/`agg`): the scans become [`IqNode::Extensional`] leaves, the WHERE conds
+/// become [`IqCond::Sql`] join/constant conditions, and the bindings become the
+/// [`IqNode::Construction`] substitution (the var → [`TermDef`] scope, design §3.2). A
+/// **property-path** branch (M5 Wave 1) instead carries `path = Some(PathClosure)` with an
+/// empty `core`: the bridge must NOT drop it (the old `..` rest pattern silently did), so
+/// the relational body becomes the [`IqNode::Path`] closure leaf, with any `where_cond`
+/// (the `?s PATH ?s` self-unify [`SqlCond::ColEq`] from `bind`) wrapping it in a `Filter`.
+/// Either way the body sits under the same `Construction(bindings)`, so an outer
+/// `InnerJoin`/`LeftJoin`/`Filter` composes over the path arm exactly as over a triple arm.
 fn bridge_branch(branch: Branch) -> IqNode {
     let Branch {
         core,
         bindings,
         where_conds,
+        path,
         ..
     } = branch;
 
-    // The arm's relational body: the flat `core` + `where_conds`, as a CROSS JOIN +
-    // WHERE-eq InnerJoin (`Extensional.bind` left empty — all join logic is carried by
-    // the explicit `IqCond::Sql` conds, exactly mirroring the flat lowering).
-    let scans: Vec<IqNode> = core
-        .into_iter()
-        .map(|scan| IqNode::Extensional {
-            scan,
-            bind: BTreeMap::new(),
-        })
-        .collect();
     let conds: Vec<IqCond> = where_conds.into_iter().map(IqCond::Sql).collect();
 
-    let child = if scans.len() == 1 && conds.is_empty() {
-        scans.into_iter().next().expect("len checked == 1")
-    } else {
-        IqNode::InnerJoin {
-            children: scans,
-            cond: conds,
+    let child = match path {
+        // ---- property-path closure arm (M5 Wave 1) ------------------------------
+        // The relational body is the recursive `PathClosure` leaf (empty `core` by
+        // construction). A self-path `where_cond` (`?s PATH ?s` ⇒ `ColEq sf_s,sf_o`)
+        // wraps the leaf in a `Filter` so LOWER pushes it via `apply_conds` after the
+        // `Branch::path` leaf lowers (it never rides an `InnerJoin`, which has no scans).
+        Some(closure) => {
+            let leaf = IqNode::Path { closure };
+            if conds.is_empty() {
+                leaf
+            } else {
+                IqNode::Filter {
+                    child: Box::new(leaf),
+                    cond: conds,
+                }
+            }
+        }
+        // ---- triple-pattern arm (M3a) -------------------------------------------
+        // The flat `core` + `where_conds`, as a CROSS JOIN + WHERE-eq InnerJoin
+        // (`Extensional.bind` left empty — all join logic is carried by the explicit
+        // `IqCond::Sql` conds, exactly mirroring the flat lowering).
+        None => {
+            let scans: Vec<IqNode> = core
+                .into_iter()
+                .map(|scan| IqNode::Extensional {
+                    scan,
+                    bind: BTreeMap::new(),
+                })
+                .collect();
+            if scans.len() == 1 && conds.is_empty() {
+                scans.into_iter().next().expect("len checked == 1")
+            } else {
+                IqNode::InnerJoin {
+                    children: scans,
+                    cond: conds,
+                }
+            }
         }
     };
 
@@ -364,6 +412,10 @@ mod tests {
                     || cond.iter().any(cond_has_intensional)
             }
             IqNode::Union { children, .. } => children.iter().any(has_intensional),
+            // `UnresolvedPath` is the M5 path companion of `Intensional` — also a
+            // transient leaf that must not survive RESOLVE; treated as a violation here so
+            // the `resolve_leaves_zero_intensional` invariant covers paths too.
+            IqNode::UnresolvedPath { .. } => true,
             IqNode::Values { .. }
             | IqNode::Extensional { .. }
             | IqNode::Empty { .. }

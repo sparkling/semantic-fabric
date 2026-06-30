@@ -345,6 +345,11 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect, decompose: bool) -> Result
              was violated → 501"
                 .to_owned(),
         )),
+        IqNode::UnresolvedPath { .. } => Err(Error::Unsupported(
+            "UnresolvedPath survived to LOWER — RESOLVE must compile it to an IqNode::Path \
+             (the ZERO UnresolvedPath invariant was violated) → 501"
+                .to_owned(),
+        )),
     }
 }
 

@@ -597,6 +597,257 @@ fn r5_ii_overlapping_maps_same_predicate() {
 }
 
 // ============================================================================
+// PROPERTY PATHS (ADR-0023 M5 Wave 1) — the tree path now compiles a SPARQL
+// property-path closure (`P+`/`P*`/`p?`, sequence `p/q`, alternative `p|q`, inverse
+// `^p`, negated property set `!p`) by REUSING the flat `path_branch` VERBATIM at
+// RESOLVE (`UnresolvedPath` → `IqNode::Path`), so the closure semantics are identical
+// to the flat path by construction. Each case asserts flat-vs-tree row-bag parity (the
+// `=_bag` gate) AND — set-faithful node-pair graphs — tree-vs-spareval (the independent
+// oracle). These fixtures are the proven `differential_paths.rs` path fixtures.
+//
+// Before M5 Wave 1 every non-NamedNode path 501'd in the TREE while the FLAT path
+// resolved it — the `diff` (b) identical-501-set assertion would FAIL on the alternative
+// `p|q` case (M3d Finding 2: tree 501 vs flat Ok). With the path now resolved in the
+// tree, `diff` passes (b), proving the alt-path 501-divergence is GONE.
+// ============================================================================
+
+// --- Fixture A: two predicates ex:p / ex:q, all nodes in the ex:n/ domain (one node
+// shape), so sequence/alternative/inverse/NPS are all soundly composable. ---
+
+const PA_SQL: &str = r#"
+CREATE TABLE pe (ps INTEGER NOT NULL, pm INTEGER NOT NULL);
+CREATE TABLE qe (qm INTEGER NOT NULL, qo INTEGER NOT NULL);
+INSERT INTO pe VALUES (1, 2);
+INSERT INTO pe VALUES (2, 3);
+INSERT INTO qe VALUES (2, 20);
+INSERT INTO qe VALUES (3, 30);
+"#;
+
+const PA_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#P>
+    rr:logicalTable [ rr:tableName "pe" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{ps}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:template "http://ex/n/{pm}" ] ] .
+<#Q>
+    rr:logicalTable [ rr:tableName "qe" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{qm}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:q ; rr:objectMap [ rr:template "http://ex/n/{qo}" ] ] .
+"#;
+
+const PA_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:p <http://ex/n/2> .
+<http://ex/n/2> ex:p <http://ex/n/3> .
+<http://ex/n/2> ex:q <http://ex/n/20> .
+<http://ex/n/3> ex:q <http://ex/n/30> .
+"#;
+
+// --- Single-predicate edge fixture: the reflexive (P*/p?) shapes are sound here
+// because the hop's node set equals the active graph's node set. ---
+
+const PE_SQL: &str = r#"
+CREATE TABLE edge (parent INTEGER NOT NULL, child INTEGER NOT NULL);
+INSERT INTO edge VALUES (1, 2);
+INSERT INTO edge VALUES (2, 3);
+INSERT INTO edge VALUES (3, 4);
+INSERT INTO edge VALUES (1, 5);
+"#;
+
+const PE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Edge>
+    rr:logicalTable [ rr:tableName "edge" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{parent}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:reaches ; rr:objectMap [ rr:template "http://ex/n/{child}" ] ] .
+"#;
+
+const PE_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:reaches <http://ex/n/2> .
+<http://ex/n/2> ex:reaches <http://ex/n/3> .
+<http://ex/n/3> ex:reaches <http://ex/n/4> .
+<http://ex/n/1> ex:reaches <http://ex/n/5> .
+"#;
+
+// --- Cyclic edge fixture (1→2→3→1 + chord 1→3): a composite closure must terminate
+// (depth bound) and return each reachable pair exactly once. ---
+
+const PC_SQL: &str = r#"
+CREATE TABLE edge (parent INTEGER NOT NULL, child INTEGER NOT NULL);
+INSERT INTO edge VALUES (1, 2);
+INSERT INTO edge VALUES (2, 3);
+INSERT INTO edge VALUES (3, 1);
+INSERT INTO edge VALUES (1, 3);
+"#;
+
+const PC_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:reaches <http://ex/n/2> .
+<http://ex/n/2> ex:reaches <http://ex/n/3> .
+<http://ex/n/3> ex:reaches <http://ex/n/1> .
+<http://ex/n/1> ex:reaches <http://ex/n/3> .
+"#;
+
+#[test]
+fn path_recursive_plus_star_tree_eq_flat_and_spareval() {
+    // P+ (transitive closure) over the single-predicate edge fixture — recursive CTE.
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        Some(PE_TTL),
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches+ ?o }}"),
+    );
+    // P* — P+ ∪ the reflexive (x,x) over every graph node (§9.3), sound here because the
+    // graph is single-predicate/single-table (the hop node set equals the graph's).
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        Some(PE_TTL),
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches* ?o }}"),
+    );
+    // P+ over a CYCLIC graph must terminate (depth bound) and return each pair once.
+    diff(
+        PC_SQL,
+        PE_R2RML,
+        Some(PC_TTL),
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches+ ?o }}"),
+    );
+}
+
+#[test]
+fn path_zero_or_one_tree_eq_flat_and_spareval() {
+    // p? — the hop ∪ the reflexive (x,x) over the graph's nodes (single-predicate).
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        Some(PE_TTL),
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches? ?o }}"),
+    );
+}
+
+#[test]
+fn path_alternative_tree_eq_flat_and_spareval() {
+    // p|q ALTERNATIVE — the M3d Finding 2 case: before M5 Wave 1 the TREE 501'd while
+    // the FLAT path resolved it (the alt-path 501-divergence). `diff` asserts (b) the
+    // identical-501-set — so its PASS proves that divergence is GONE — AND (a) flat-vs-tree
+    // row-bag parity AND (d) tree-vs-spareval (set union of the two hop relations).
+    diff(
+        PA_SQL,
+        PA_R2RML,
+        Some(PA_TTL),
+        &format!("{PFX} SELECT ?x ?y WHERE {{ ?x ex:p|ex:q ?y }}"),
+    );
+}
+
+#[test]
+fn path_negated_property_set_tree_eq_flat_and_spareval() {
+    // !p NEGATED PROPERTY SET — the complement of ex:p is {ex:q} (bag semantics per
+    // matching triple, §18.2.2; faithful here as no pair is reached twice).
+    diff(
+        PA_SQL,
+        PA_R2RML,
+        Some(PA_TTL),
+        &format!("{PFX} SELECT ?x ?y WHERE {{ ?x !ex:p ?y }}"),
+    );
+}
+
+#[test]
+fn path_composite_inverse_and_sequence_plus_tree_eq_flat_and_spareval() {
+    // (^p)+ — a composite closure over an INVERSE one-hop relation (HopExpr::Inverse),
+    // closed transitively over the cyclic graph (must terminate, each pair once).
+    diff(
+        PC_SQL,
+        PE_R2RML,
+        Some(PC_TTL),
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s (^ex:reaches)+ ?o }}"),
+    );
+    // (p/q)+ — a composite closure over a SEQUENCE one-hop relation (HopExpr::Seq): the
+    // middle node of p/q is the junction the raw-key join meets on (matching node shape).
+    const SEQ_SQL: &str = r#"
+CREATE TABLE pe (ps INTEGER NOT NULL, pm INTEGER NOT NULL);
+CREATE TABLE qe (qm INTEGER NOT NULL, qo INTEGER NOT NULL);
+INSERT INTO pe VALUES (1, 1);
+INSERT INTO pe VALUES (2, 2);
+INSERT INTO qe VALUES (1, 2);
+INSERT INTO qe VALUES (2, 1);
+"#;
+    const SEQ_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:p <http://ex/n/1> .
+<http://ex/n/2> ex:p <http://ex/n/2> .
+<http://ex/n/1> ex:q <http://ex/n/2> .
+<http://ex/n/2> ex:q <http://ex/n/1> .
+"#;
+    diff(
+        SEQ_SQL,
+        PA_R2RML,
+        Some(SEQ_TTL),
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s (ex:p/ex:q)+ ?o }}"),
+    );
+}
+
+#[test]
+fn path_blank_node_sequence_tree_eq_flat_bag() {
+    // M3d Finding 1 — the BLANK-NODE-connected sequence path. spargebra lowers a bare
+    // top-level sequence `p/q` to a BGP of two triples joined on a fresh ANONYMOUS BLANK
+    // NODE (`?x ex:p _:b . _:b ex:q ?z`), NOT a property-path closure — so it resolves
+    // through ordinary triple resolution. The FROZEN flat oracle binds a query blank node
+    // as a CONSTANT term (no blank nodes in the source ⇒ empty), which a set-graph oracle
+    // like spareval (blank node = non-distinguished variable) does not — so this is a
+    // flat-vs-tree BAG-ONLY case (the established flat blank-node behavior, out of scope;
+    // flat==tree, the `=_bag` gate this milestone proves, still holds and is asserted).
+    diff(
+        PA_SQL,
+        PA_R2RML,
+        None,
+        &format!("{PFX} SELECT ?x ?z WHERE {{ ?x ex:p/ex:q ?z }}"),
+    );
+}
+
+#[test]
+fn path_bare_inverse_tree_eq_flat_and_spareval() {
+    // A bare top-level inverse `^p` is lowered to the reversed triple `?y p ?x` (the
+    // single-predicate fast-path, a real join variable) — tree == flat == spareval.
+    diff(
+        PA_SQL,
+        PA_R2RML,
+        Some(PA_TTL),
+        &format!("{PFX} SELECT ?x ?y WHERE {{ ?x ^ex:p ?y }}"),
+    );
+}
+
+#[test]
+fn path_deferred_shapes_tree_eq_flat_501() {
+    // Shapes the FLAT path itself 501s must ALSO 501 in the tree (identical-501-set): the
+    // tree reuses `path_branch` verbatim, so a `path_branch` 501 propagates unchanged.
+    // `diff` asserts both paths agree on Unsupported.
+    // p? reflexive over a MULTI-predicate graph (ZeroLengthPath node set ≠ hop node set).
+    diff(
+        PA_SQL,
+        PA_R2RML,
+        None,
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:p? ?o }}"),
+    );
+    // A nested closure operator inside a composite hop relation.
+    diff(
+        PA_SQL,
+        PA_R2RML,
+        None,
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s (ex:p+)/ex:q ?o }}"),
+    );
+    // A bound endpoint — outside `?s PATH ?o` (v1 path surface).
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        None,
+        &format!("{PFX} SELECT ?o WHERE {{ <http://ex/n/1> ex:reaches+ ?o }}"),
+    );
+}
+
+// ============================================================================
 // W3C RDB2RDF corpus — the ?s ?p ?o dump CONSTRUCT through BOTH paths over every
 // loadable vendored case (R2RML + Direct Mapping), asserting flat-vs-tree row-bag
 // parity and identical 501 outcomes (the breadth half of the differential).

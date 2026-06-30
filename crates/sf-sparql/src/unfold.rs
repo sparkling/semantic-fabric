@@ -10,6 +10,7 @@ use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 use spargebra::algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, OrderExpression,
+    PropertyPathExpression,
 };
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
@@ -400,6 +401,31 @@ impl<'a> Unfolder<'a> {
         let saved = self.current_graph.take();
         self.current_graph = graph.cloned();
         let out = self.pattern_branches(tp);
+        self.current_graph = saved;
+        out
+    }
+
+    /// Resolve one property-path pattern `?s PATH ?o` **at a given active graph** to its
+    /// flat [`PathClosure`](crate::iq::PathClosure) branch (ADR-0023 M5 Wave 1). This is
+    /// the entry point the tree-path [`crate::iq::resolve`] drives per
+    /// [`crate::iq::node::IqNode::UnresolvedPath`]: it pins the `current_graph` exactly as
+    /// the flat `GRAPH <g> { ?s PATH ?o }` path does (saved/restored around the call) and
+    /// delegates to the **unchanged** [`Self::path_branch`] oracle — so the compiled hop
+    /// relation, recursion bound, node-shape soundness checks, and reflexive-enumeration
+    /// 501s are byte-identical to the flat translation (the `=_bag` argument). The
+    /// resulting [`Branch`] carries `path = Some(closure)` + the subject/object bindings
+    /// (+ a `?s PATH ?s` self-unify `ColEq` in `where_conds`), bridged to an
+    /// [`IqNode::Path`] by [`crate::iq::resolve::bridge_branch`].
+    pub(crate) fn resolve_path(
+        &mut self,
+        subject: &TermPattern,
+        path: &PropertyPathExpression,
+        object: &TermPattern,
+        graph: Option<&NamedNode>,
+    ) -> Result<Branch> {
+        let saved = self.current_graph.take();
+        self.current_graph = graph.cloned();
+        let out = self.path_branch(subject, path, object);
         self.current_graph = saved;
         out
     }

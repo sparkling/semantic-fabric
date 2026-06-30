@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use sf_core::datatype::XsdTypeCode;
 use sf_core::{NamedNode, Term};
-use spargebra::algebra::Expression;
+use spargebra::algebra::{Expression, PropertyPathExpression};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
 use super::{AggKind, OrderKey, PathClosure, Scan, SqlCond, TermDef};
@@ -143,6 +143,22 @@ pub enum IqNode {
         pattern: TriplePattern,
         graph: Option<NamedNode>,
     },
+    /// `UnresolvedPathNode`: a SPARQL property-path pattern `?s PATH ?o` (any closure
+    /// `P+`/`P*`/`p?`, sequence `p/q`, alternative `p|q`, inverse `^p`, or negated
+    /// property set `!p`) carried **verbatim** from BUILD until RESOLVE compiles it.
+    /// Like [`IqNode::Intensional`] it is a **transient leaf that MUST NOT survive
+    /// RESOLVE** (M5 Wave 1): the closure relation is built from the T-mappings (the
+    /// hop relation reads the triples-maps), so it cannot be compiled context-free at
+    /// BUILD — RESOLVE reuses the flat [`Unfolder::path_branch`](crate::unfold) VERBATIM
+    /// to turn it into an [`IqNode::Path`] closure (design §5.2 item 3). `graph` is the
+    /// resolved *constant* active graph (a variable graph is already a build-time 501);
+    /// the length-1 fixed-predicate path (≡ one triple) stays an `Intensional`, not this.
+    UnresolvedPath {
+        subject: TermPattern,
+        path: PropertyPathExpression,
+        object: TermPattern,
+        graph: Option<NamedNode>,
+    },
     /// `EmptyNode`: ∅ over a declared variable set. Union identity, InnerJoin absorbing
     /// (design §4.13). Carries `vars` so a parent projection stays well-formed when the
     /// node is absorbed.
@@ -261,6 +277,8 @@ impl IqNode {
     /// * `Values`/`Empty` — the declared `vars`; `True` — none (the empty tuple).
     /// * `Intensional` — the variables in the triple pattern's subject/predicate/
     ///   object positions (the `graph` here is a resolved *constant*, never a var).
+    /// * `UnresolvedPath` — the variables in the path pattern's subject/object
+    ///   positions (a property path has no predicate variable; `graph` is a constant).
     /// * `Extensional` — its `bind` keys (the variables the resolved relation reads).
     /// * `Path` — empty: a [`PathClosure`](super::PathClosure) is keyed by the
     ///   canonical `sf_s`/`sf_o` raw columns and carries **no** SPARQL variable
@@ -296,6 +314,18 @@ impl IqNode {
             IqNode::Values { vars, .. } | IqNode::Empty { vars } => vars.clone(),
             IqNode::Extensional { bind, .. } => bind.keys().cloned().collect(),
             IqNode::Intensional { pattern, .. } => triple_pattern_vars(pattern),
+            IqNode::UnresolvedPath {
+                subject, object, ..
+            } => {
+                let mut out = Vec::new();
+                if let TermPattern::Variable(v) = subject {
+                    push_unique(&mut out, v.as_str().into());
+                }
+                if let TermPattern::Variable(v) = object {
+                    push_unique(&mut out, v.as_str().into());
+                }
+                out
+            }
             IqNode::True | IqNode::Path { .. } => Vec::new(),
         }
     }
