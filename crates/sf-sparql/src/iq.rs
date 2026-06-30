@@ -22,6 +22,10 @@ use sf_core::ir::{LogicalSource, TermMap, TermType};
 use sf_core::Term;
 use spargebra::algebra::Expression;
 
+/// The operator-tree IR node set (ADR-0023 M2, design-lock §1). The tree is the
+/// optimizer model; the [`Branch`] below is its SQL-lowering target.
+pub mod node;
+
 /// A reference to a raw source column of a specific scan alias. Aliases are
 /// small integers; emission renders them `t{alias}` (ADR-0007 lifting: joins and
 /// filters are over these, never over constructed term strings).

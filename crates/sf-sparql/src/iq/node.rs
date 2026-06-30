@@ -1,0 +1,188 @@
+//! The operator-tree intermediate query (IQ) node set — ADR-0023's native-Rust
+//! query IR (design-lock `docs/design/ADR-0023-design-lock.md` §1).
+//!
+//! **The tree is the optimizer model; [`Branch`](super::Branch) is its SQL-lowering
+//! target.** A query is built into an [`IqNode`] tree (replacing the eager
+//! `Vec<Branch>` flattening), normalized by substitution-lifting to a fixpoint
+//! (ADR-0023 §Normalization), then a normalized *leaf CQ* lowers to today's
+//! `Branch`/`emit` path — preserving ADR-0006 streaming, ADR-0007 term-construction
+//! lifting, and ADR-0010 bound-parameter discipline. Nothing here re-implements term
+//! or condition machinery: payloads **reuse** the existing [`TermDef`], [`SqlCond`],
+//! [`AggKind`], [`OrderKey`], [`Scan`], and [`PathClosure`] types.
+//!
+//! Modelled as one Rust `enum` with exhaustive `match` — **no** trait objects, JVM
+//! class hierarchy, or DI (ADR-0004). Unary children are `Box<IqNode>`; n-ary
+//! children are `Vec<IqNode>`. **Out of charter, not modelled:** `FlattenNode` / JSON
+//! unnest, cost-driven translation selection, and any generic `NativeNode` — raw SQL
+//! exists only as the `Branch`/`emit` lowering target, never as an IR node.
+
+use std::collections::BTreeMap;
+
+use sf_core::datatype::XsdTypeCode;
+use sf_core::{NamedNode, Term};
+use spargebra::term::TriplePattern;
+
+use super::{AggKind, OrderKey, PathClosure, Scan, SqlCond, TermDef};
+
+/// A SPARQL variable name. `Box<str>` (not `String`) keeps nodes compact; it converts
+/// freely to the `String` key domain of [`Branch::bindings`](super::Branch::bindings)
+/// at lowering.
+pub type Var = Box<str>;
+
+/// One node of the operator-tree IR (ADR-0023 design-lock §1). Fifteen variants: the
+/// in-charter IQ node set plus the specialized recursive [`IqNode::Path`] leaf.
+///
+/// Every node has a bottom-up *scope* (its projected variables + per-variable
+/// nullability), computed on demand during normalization — the single property that
+/// dissolves the flat model's eager-flattening deferrals (a subtree composes under
+/// `Join`/`LeftJoin`/`Union` uniformly because its scope is known without flattening).
+#[derive(Debug, Clone)]
+pub enum IqNode {
+    // ---- unary substitution carrier (the heavy lifter) ---------------------------
+    /// Ontop `ConstructionNode`. `subst` **reuses** [`TermDef`] as its var→term payload
+    /// (ADR-0007 term-construction lifting); `project` is the declared projected
+    /// variable set. Construction∘Construction folds to one during normalization
+    /// (compose substitutions, intersect projections — ADR-0023 §Normalization).
+    Construction {
+        child: Box<IqNode>,
+        subst: BTreeMap<Var, TermDef>,
+        project: Vec<Var>,
+    },
+
+    // ---- unary boolean selection -------------------------------------------------
+    /// `FilterNode`. Reuses [`SqlCond`] (3-valued SPARQL FILTER: a solution is kept
+    /// only when the condition is TRUE). The `Vec` is an implicit conjunction (AND).
+    Filter {
+        child: Box<IqNode>,
+        cond: Vec<SqlCond>,
+    },
+
+    // ---- n-ary / binary joins ----------------------------------------------------
+    /// `InnerJoinNode`: an n-ary natural join over shared variables plus an optional
+    /// joining condition. Identity is [`IqNode::True`] (**condition-free only**, design
+    /// §4.13); absorbing element is [`IqNode::Empty`].
+    InnerJoin {
+        children: Vec<IqNode>,
+        cond: Vec<SqlCond>,
+    },
+    /// `LeftJoinNode`: binary and **non-commutative**; `cond` is the OPTIONAL
+    /// ON-expression. Variables provided only by `right` become nullable in the output
+    /// scope. This is the designated 3-valued-logic regression hotspot (design §7).
+    LeftJoin {
+        left: Box<IqNode>,
+        right: Box<IqNode>,
+        cond: Vec<SqlCond>,
+    },
+
+    // ---- n-ary bag union ---------------------------------------------------------
+    /// `UnionNode` (bag semantics — no dedup). **Invariant:** every child projects
+    /// exactly `project`; arms with a narrower scope are NULL-padded via a
+    /// [`IqNode::Construction`] to the common signature before they become children.
+    Union {
+        children: Vec<IqNode>,
+        project: Vec<Var>,
+    },
+
+    // ---- aggregation -------------------------------------------------------------
+    /// `AggregationNode` (SPARQL §11). ONE construct for both the SQL-`GROUP BY` and
+    /// the Rust-group lowering paths (the strategy is chosen at lowering, not modelled
+    /// here). The output scope (`grouping` ∪ each [`AggDef::var`]) is **owned by this
+    /// node** — which is what lets an outer `Extend`/`Project` resolve aggregate
+    /// variables and closes the agg-over-UNION binding-scope bug (design §4.14).
+    Aggregation {
+        child: Box<IqNode>,
+        grouping: Vec<Var>,
+        aggs: Vec<AggDef>,
+    },
+
+    // ---- query-modifier spine ----------------------------------------------------
+    /// `DistinctNode`: multiset → set on the child's projected tuples.
+    Distinct { child: Box<IqNode> },
+    /// `SliceNode`: SPARQL OFFSET/LIMIT (`limit == None` ⇒ no upper bound).
+    Slice {
+        child: Box<IqNode>,
+        offset: usize,
+        limit: Option<usize>,
+    },
+    /// `OrderByNode`: SPARQL §15.1 ordering. [`OrderKey`] reused verbatim.
+    OrderBy {
+        child: Box<IqNode>,
+        keys: Vec<OrderKey>,
+    },
+
+    // ---- leaves ------------------------------------------------------------------
+    /// `ValuesNode`: an inline literal table (bag). A `None` cell is SPARQL `UNDEF`
+    /// (the variable is unbound in that row).
+    Values {
+        vars: Vec<Var>,
+        rows: Vec<Vec<Option<TermDef>>>,
+    },
+    /// `ExtensionalDataNode`: a concrete mapped relation. **Reuses** [`Scan`]; `bind`
+    /// is the sparse column→variable/constant binding the pattern reads. The relation's
+    /// PK/UC/FK/FD constraints are looked up from the catalog by the constraint-driven
+    /// rules (design §4.7), not stored here.
+    Extensional {
+        scan: Scan,
+        bind: BTreeMap<Box<str>, ColOrConst>,
+    },
+    /// `IntensionalDataNode`: an unresolved triple/quad pattern. **MUST NOT survive
+    /// unfolding** — it is replaced against the T-mappings (into
+    /// `Extensional`/`Construction`/`Union` subtrees) before normalization and
+    /// lowering. `graph` is the resolved *constant* active graph (a variable graph is a
+    /// 501 at build time — design §2 `Graph` arm / §5.2 item 6).
+    Intensional {
+        pattern: TriplePattern,
+        graph: Option<NamedNode>,
+    },
+    /// `EmptyNode`: ∅ over a declared variable set. Union identity, InnerJoin absorbing
+    /// (design §4.13). Carries `vars` so a parent projection stays well-formed when the
+    /// node is absorbed.
+    Empty { vars: Vec<Var> },
+    /// `TrueNode`: the single empty tuple. InnerJoin identity — **for a condition-free
+    /// join only** (design §4.13).
+    True,
+
+    // ---- specialized recursive leaf (not a generic node) -------------------------
+    /// A property-path closure ([`PathClosure`] reused verbatim). It publishes an
+    /// ordinary output scope, so `InnerJoin`/`Filter`/`LeftJoin`/`Minus` compose over
+    /// it — which is what retires the flat model's path-join 501s.
+    Path { closure: PathClosure },
+}
+
+/// One aggregate output: `var := kind(arg) [DISTINCT]` with its §10 fixed result type.
+///
+/// `arg` is an **expression** payload (not a bare [`Var`]) so `SUM(?a + ?b)`,
+/// `GROUP_CONCAT(… ; SEPARATOR=…)`, and `SAMPLE` are expressible (design §8 gap-3); an
+/// expression argument may be pre-bound by an inner [`IqNode::Construction`] (an
+/// `Extend`) that lowers it to a plain variable. `COUNT(DISTINCT *)` rides
+/// [`AggDef::distinct`] with `arg == None`.
+#[derive(Debug, Clone)]
+pub struct AggDef {
+    pub var: Var,
+    pub kind: AggKind,
+    /// The aggregated argument (`None` for `COUNT(*)`).
+    pub arg: Option<AggArg>,
+    pub distinct: bool,
+    /// The fixed §10 result type when the set function pins it (COUNT ⇒ integer,
+    /// AVG ⇒ decimal); `None` ⇒ take the value's resolved decltype (SUM/MIN/MAX keep
+    /// the source numeric type).
+    pub fixed_type: Option<XsdTypeCode>,
+}
+
+/// An aggregate's argument: a bound variable, or a SPARQL expression (lowered via a
+/// [`TermDef`]). A pre-Extend may rewrite [`AggArg::Expr`] into [`AggArg::Var`] before
+/// lowering so the SQL/Rust group path sees a single column.
+#[derive(Debug, Clone)]
+pub enum AggArg {
+    Var(Var),
+    Expr(TermDef),
+}
+
+/// What an [`IqNode::Extensional`] column position binds to: a raw source column (read
+/// into a variable / used in a join key) or a fixed RDF term (a constant-position
+/// pattern term, e.g. the predicate of a triple pattern).
+#[derive(Debug, Clone)]
+pub enum ColOrConst {
+    Col(Box<str>),
+    Const(Term),
+}
