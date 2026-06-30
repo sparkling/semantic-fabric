@@ -513,6 +513,22 @@ pub fn parse_and_translate(sparql: &str, maps: &[TriplesMap], dialect: Dialect) 
     translate(&query, maps, dialect)
 }
 
+/// Parse `sparql` and translate it through the **operator-tree path** (ADR-0023)
+/// with a T-Box and source `schema` (convenience over [`translate_tree`]). Drop-in
+/// alternative to [`parse_and_translate_with`] for the M7 benchmark comparison.
+pub fn parse_and_translate_tree_with(
+    sparql: &str,
+    maps: &[TriplesMap],
+    dialect: Dialect,
+    tbox: &Tbox,
+    schema: &[TableSchema],
+) -> Result<Plan> {
+    let query = spargebra::SparqlParser::new()
+        .parse_query(sparql)
+        .map_err(|e| Error::Parse(e.to_string()))?;
+    translate_tree(&query, maps, tbox, dialect, schema)
+}
+
 /// Parse `sparql` and translate it against a T-Box and source `schema`
 /// (convenience over [`translate_with`]). This is the live entry point: passing a
 /// real introspected `schema` is what makes the constraint-driven cascade passes

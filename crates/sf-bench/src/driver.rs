@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use sf_core::ir::TriplesMap;
-use sf_sparql::{exec, exec_pg, parse_and_translate_with, Tbox};
+use sf_sparql::{exec, exec_pg, parse_and_translate_tree_with, parse_and_translate_with, Tbox};
 use sf_sql::{Dialect, TableSchema};
 use tokio_postgres::Client;
 
@@ -77,6 +77,23 @@ pub fn run_select(
     sparql: &str,
 ) -> DResult<usize> {
     let plan = parse_and_translate_with(sparql, maps, Dialect::Sqlite, &Tbox::default(), schema)?;
+    let sol = exec::select(&plan, conn)?;
+    Ok(sol.rows.len())
+}
+
+/// Execute a SELECT through the **operator-tree (IQ) path** (ADR-0023 M7) and
+/// return its solution-row count — the tree-path sibling of [`run_select`].
+/// Translation uses [`parse_and_translate_tree_with`]; execution is the same
+/// `exec::select` the flat path uses, so timing isolates translation + plan
+/// structure rather than the executor. The benchmark target: tree ≥ flat speed.
+pub fn run_select_tree(
+    maps: &[TriplesMap],
+    conn: &Connection,
+    schema: &[TableSchema],
+    sparql: &str,
+) -> DResult<usize> {
+    let plan =
+        parse_and_translate_tree_with(sparql, maps, Dialect::Sqlite, &Tbox::default(), schema)?;
     let sol = exec::select(&plan, conn)?;
     Ok(sol.rows.len())
 }

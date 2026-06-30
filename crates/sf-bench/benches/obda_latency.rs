@@ -52,6 +52,19 @@ fn bench_select_queries(c: &mut Criterion) {
     group.finish();
 }
 
+/// M7 tree-path benchmark: same five queries through the operator-tree (IQ) path.
+/// Paired with `obda_select_1x` to compare flat vs tree translation + plan shape.
+fn bench_select_queries_tree(c: &mut Criterion) {
+    let fx = fixture(1);
+    let mut group = c.benchmark_group("obda_select_tree_1x");
+    for (name, sparql) in workload::queries() {
+        group.bench_function(name, |b| {
+            b.iter(|| driver::run_select_tree(&fx.maps, &fx.conn, &fx.schemas, sparql).unwrap());
+        });
+    }
+    group.finish();
+}
+
 /// First-result latency must be measured from the value `stream_construct_timed`
 /// captures at the first produced triple — criterion times the whole closure, so
 /// it cannot time a partial stream. Reported once as a table (the
@@ -99,5 +112,10 @@ fn bench_construct_dump(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_select_queries, bench_construct_dump);
+criterion_group!(
+    benches,
+    bench_select_queries,
+    bench_select_queries_tree,
+    bench_construct_dump
+);
 criterion_main!(benches);
