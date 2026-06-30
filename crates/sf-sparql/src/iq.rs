@@ -589,17 +589,28 @@ impl Branch {
                 push(c, &mut cols);
             }
         }
-        for cond in &self.where_conds {
-            collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
-        }
-        for opt in &self.opts {
-            for cond in opt.on.iter().chain(opt.extra.iter()) {
+        // When this branch carries a single-branch DISTINCT pushed into the SQL
+        // (`SELECT DISTINCT …`), the SELECT list MUST be exactly the output-determining
+        // set the executor reconstructs — i.e. the binding columns only. The condition
+        // columns below are enforced in WHERE / JOIN-ON and are never read back by
+        // `exec::reconstruct` (it iterates `bindings`), so including them in a DISTINCT
+        // projection over-widens the dedup key and collapses nothing (e.g. q15: a join
+        // key that varies per joined row would defeat `DISTINCT ?route`). Skipping them
+        // under DISTINCT makes the dedup run over the projected key alone; for every
+        // non-DISTINCT branch the loops still run, keeping its SELECT list byte-identical.
+        if !self.distinct {
+            for cond in &self.where_conds {
                 collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
             }
-        }
-        for sp in &self.subplan_joins {
-            for cond in &sp.on {
-                collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
+            for opt in &self.opts {
+                for cond in opt.on.iter().chain(opt.extra.iter()) {
+                    collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
+                }
+            }
+            for sp in &self.subplan_joins {
+                for cond in &sp.on {
+                    collect_cond_cols(cond, &mut |c| push(c.clone(), &mut cols));
+                }
             }
         }
         cols
