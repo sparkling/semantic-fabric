@@ -696,5 +696,26 @@ unchanged**; **13 required restatement** with a corrected precondition (all bake
 
 ---
 
-*Locked. M2–M8 build against §1–§6; §4 preconditions and §5.1/§5.2 boundary are
-non-negotiable; every commit holds the gate in the front-matter.*
+---
+
+## 9. Implementation amendments
+
+Refinements discovered during implementation, recorded so the locked contract stays
+accurate. Each preserves the §1–§6 intent; none relaxes a `=_bag` precondition.
+
+* **M2 — `IqCond` (condition representation).** §1/§2 specified `Filter.cond:
+  Vec<SqlCond>` and "`EXISTS`/`NOT EXISTS` → `SqlCond::Exists` carrying the built inner
+  subtree." The flat `SqlCond::Exists { scans, conds }` cannot carry an unlowered
+  `IqNode` subtree, so the three condition-bearing nodes (`Filter`, `InnerJoin`,
+  `LeftJoin`) carry `Vec<IqCond>`, where `IqCond = Sql(SqlCond) | And | Or | Not |
+  Exists(Box<IqNode>) | NotExists(Box<IqNode>)`. This **keeps** the "reuse `SqlCond`"
+  intent (the pushable vocabulary is `IqCond::Sql`) and realizes the design's "the
+  normalizer recurses into the EXISTS payload as a first-class `IqNode`" (§3) and "MINUS
+  → `Filter[NotExists(build R)]`" (§2). At lowering a normalized `Exists`/`NotExists`
+  subtree collapses to the flat `SqlCond::Exists`/`NotExists` (§5), so no new SQL path is
+  added. `=_bag`: unchanged — `IqCond` is a representational carrier, not a rewrite.
+
+---
+
+*Locked. M2–M8 build against §1–§6 (as amended by §9); §4 preconditions and §5.1/§5.2
+boundary are non-negotiable; every commit holds the gate in the front-matter.*

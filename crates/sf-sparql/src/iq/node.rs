@@ -50,28 +50,32 @@ pub enum IqNode {
     },
 
     // ---- unary boolean selection -------------------------------------------------
-    /// `FilterNode`. Reuses [`SqlCond`] (3-valued SPARQL FILTER: a solution is kept
-    /// only when the condition is TRUE). The `Vec` is an implicit conjunction (AND).
+    /// `FilterNode`. `cond` is an implicit conjunction of [`IqCond`]s (3-valued SPARQL
+    /// FILTER: a solution is kept only when the condition is TRUE). [`IqCond`] reuses
+    /// the pushable [`SqlCond`] vocabulary and adds `EXISTS`/`NOT EXISTS` over a built
+    /// `IqNode` subtree — which the flat `SqlCond::Exists` cannot carry before lowering.
     Filter {
         child: Box<IqNode>,
-        cond: Vec<SqlCond>,
+        cond: Vec<IqCond>,
     },
 
     // ---- n-ary / binary joins ----------------------------------------------------
     /// `InnerJoinNode`: an n-ary natural join over shared variables plus an optional
-    /// joining condition. Identity is [`IqNode::True`] (**condition-free only**, design
-    /// §4.13); absorbing element is [`IqNode::Empty`].
+    /// joining condition (a conjunction of [`IqCond`]s, populated by filter push-down
+    /// during normalization). Identity is [`IqNode::True`] (**condition-free only**,
+    /// design §4.13); absorbing element is [`IqNode::Empty`].
     InnerJoin {
         children: Vec<IqNode>,
-        cond: Vec<SqlCond>,
+        cond: Vec<IqCond>,
     },
     /// `LeftJoinNode`: binary and **non-commutative**; `cond` is the OPTIONAL
-    /// ON-expression. Variables provided only by `right` become nullable in the output
-    /// scope. This is the designated 3-valued-logic regression hotspot (design §7).
+    /// ON-expression (a conjunction of [`IqCond`]s). Variables provided only by `right`
+    /// become nullable in the output scope. This is the designated 3-valued-logic
+    /// regression hotspot (design §7).
     LeftJoin {
         left: Box<IqNode>,
         right: Box<IqNode>,
-        cond: Vec<SqlCond>,
+        cond: Vec<IqCond>,
     },
 
     // ---- n-ary bag union ---------------------------------------------------------
@@ -185,4 +189,30 @@ pub enum AggArg {
 pub enum ColOrConst {
     Col(Box<str>),
     Const(Term),
+}
+
+/// A tree-level boolean condition for [`IqNode::Filter`] / `InnerJoin` / `LeftJoin`.
+///
+/// It **reuses** the pushable [`SqlCond`] vocabulary (comparisons, `IS [NOT] NULL`,
+/// column equality, string match) and adds the two cases the flat `SqlCond` cannot hold
+/// before lowering: `EXISTS` / `NOT EXISTS` over a **built `IqNode` subtree** (design §2
+/// `Filter`/`Minus` arms). The normalizer descends into those subtrees as first-class
+/// `IqNode`s (design §3 recursion clause); at **lowering**, a normalized subtree
+/// collapses to the flat [`SqlCond::Exists`](super::SqlCond::Exists) /
+/// [`SqlCond::NotExists`](super::SqlCond::NotExists) (scans + correlation conds), so no
+/// new SQL-emission path is introduced.
+#[derive(Debug, Clone)]
+pub enum IqCond {
+    /// A pushable leaf/boolean condition over raw columns + bound constants — the flat
+    /// vocabulary, reused verbatim (its own `And`/`Or`/`Not` cover boolean nesting that
+    /// contains no `EXISTS`).
+    Sql(SqlCond),
+    And(Vec<IqCond>),
+    Or(Vec<IqCond>),
+    Not(Box<IqCond>),
+    /// `FILTER EXISTS { P }` — a correlated semi-join over the built subtree (correlated
+    /// on the variables shared with the enclosing scope, resolved at lowering).
+    Exists(Box<IqNode>),
+    /// `FILTER NOT EXISTS { P }` and `MINUS` — a correlated anti-join over the subtree.
+    NotExists(Box<IqNode>),
 }
