@@ -1222,9 +1222,14 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 return Ok(None);
             };
             let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
+            if vals.is_empty() {
+                // AVG over an empty multiset ⇒ "0"^^xsd:integer (SPARQL §11, like SUM —
+                // NOT UNBOUND; the spareval oracle confirms 0).
+                return Ok(Some(integer_term(0)));
+            }
             let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
             if nums.is_empty() {
-                return Ok(None); // UNBOUND for empty / non-numeric (§11)
+                return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
             }
             let avg = nums.iter().sum::<f64>() / nums.len() as f64;
             Ok(Some(decimal_term(avg)))

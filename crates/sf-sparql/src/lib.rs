@@ -330,10 +330,13 @@ fn translate_inner(
 /// drives the four-stage tree pipeline — [`build::build_tree`] → [`iq::resolve::resolve`]
 /// → [`iq::normalize::normalize`] → [`iq::lower::lower`] — for the same per-`Query`-form
 /// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK / DESCRIBE
-/// CBD), producing a [`Plan`] the SAME `exec` runs. The cascade optimizer is **not**
-/// applied (the tree pipeline reaches the lowerable spine directly), so this is the
-/// tree analogue of the unoptimized base translation; it must be `=_bag` to the flat
-/// path (M3 design §7 — proved by the `differential_tree` shadow test).
+/// CBD), producing a [`Plan`] the SAME `exec` runs. After lowering, the **proven flat
+/// cascade** ([`cascade::run`]) is reused on the lowered branches (ADR-0023 M4 wave 1),
+/// giving the tree the within-leaf-CQ rewrites (self-join / FK elimination, filter
+/// pushdown, distinct removal, …) for free — the cross-union/capability rewrites the
+/// flat cascade cannot do are LATER M4 waves. The cascade is `=_bag`-preserving, so the
+/// optimized tree result stays multiset-equal to the flat oracle (M3 design §7 — proved
+/// by the `differential_tree` shadow test).
 ///
 /// **This is the shadow path, NOT the default.** [`translate`]/[`translate_with`] stay
 /// the production engine and the proven oracle (M3 design §7: never switch before a
@@ -346,6 +349,7 @@ pub fn translate_tree(
     maps: &[TriplesMap],
     tbox: &Tbox,
     dialect: Dialect,
+    schema: &[TableSchema],
 ) -> Result<Plan> {
     let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
@@ -358,10 +362,10 @@ pub fn translate_tree(
         iq::lower::lower(normalized, dialect)
     };
 
-    match query {
+    let mut plan = match query {
         // SELECT — `lower` already produced the projected-variable `PlanForm::Select`
         // from the tree's outermost `Construction.project` (the SELECT scope).
-        Query::Select { pattern, .. } => compile(pattern),
+        Query::Select { pattern, .. } => compile(pattern)?,
         // CONSTRUCT — compile the WHERE pattern, then carry the construction template
         // (exactly the flat core's `PlanForm::Construct` wrapping).
         Query::Construct {
@@ -371,13 +375,13 @@ pub fn translate_tree(
             plan.form = PlanForm::Construct {
                 template: template.clone(),
             };
-            Ok(plan)
+            plan
         }
         // ASK — compile the WHERE pattern, carry the `Ask` form.
         Query::Ask { pattern, .. } => {
             let mut plan = compile(pattern)?;
             plan.form = PlanForm::Ask;
-            Ok(plan)
+            plan
         }
         // DESCRIBE — Concise Bounded Description, replicated from the flat core: wrap
         // the WHERE in a CBD `?v ?__sf_p ?__sf_o` join per described resource and emit
@@ -420,9 +424,33 @@ pub fn translate_tree(
                 .collect();
             let mut plan = compile(&cbd_pattern)?;
             plan.form = PlanForm::Construct { template };
-            Ok(plan)
+            plan
+        }
+    };
+
+    // Reuse the PROVEN flat cascade (ADR-0007) on the tree's lowered branches — the same
+    // call `translate_inner` makes (ADR-0023 M4 wave 1). `project` is the SELECT scope
+    // (CONSTRUCT/ASK project every binding ⇒ `None`); `distinct` is the requested DISTINCT.
+    // A multi-branch aggregation (`rust_group`) is skipped: its pre-group union arms carry
+    // the aggregate-argument columns that `rust_group_execute` reads BY NAME, so the
+    // projection-shrinking pass (which narrows to the SELECT vars, excluding those args)
+    // must not touch them — cross-union aggregate optimization is a LATER M4 wave.
+    if plan.rust_group.is_none() {
+        let project_vars: Option<Vec<String>> = match &plan.form {
+            PlanForm::Select { vars } => Some(vars.clone()),
+            _ => None,
+        };
+        let ctx = cascade::CascadeCtx {
+            distinct: plan.distinct,
+            project: project_vars.as_deref(),
+        };
+        plan.branches = cascade::run(plan.branches, schema, &ctx);
+        // The single-branch DISTINCT decision is recorded on the branch by pass (6).
+        if plan.branches.len() == 1 {
+            plan.distinct = plan.branches[0].distinct;
         }
     }
+    Ok(plan)
 }
 
 /// Translate through the compiled-plan cache (ADR-0007 *Plan cache, hot path*):

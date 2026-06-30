@@ -31,8 +31,8 @@ use rusqlite::Connection;
 use sf_conformance::graph::{isomorphic, parse_turtle, triples_to_dataset};
 use sf_conformance::oracle::{self, OracleAnswer};
 use sf_conformance::sqlite;
-use sf_sparql::{exec, translate, translate_tree, Error, Plan, PlanForm, Tbox};
-use sf_sql::Dialect;
+use sf_sparql::{exec, translate_tree, translate_with, Error, Plan, PlanForm, Tbox};
+use sf_sql::{Dialect, TableSchema};
 use spargebra::{Query, SparqlParser};
 
 /// Base IRI for the hand-authored expected graphs (matches the mapping templates).
@@ -42,12 +42,20 @@ fn parse(q: &str) -> Query {
     SparqlParser::new().parse_query(q).expect("query parses")
 }
 
-fn flat(maps: &[sf_core::ir::TriplesMap], q: &Query) -> sf_sparql::Result<Plan> {
-    translate(q, maps, Dialect::Sqlite)
+fn flat(
+    maps: &[sf_core::ir::TriplesMap],
+    q: &Query,
+    schema: &[TableSchema],
+) -> sf_sparql::Result<Plan> {
+    translate_with(q, maps, Dialect::Sqlite, &Tbox::default(), schema)
 }
 
-fn tree(maps: &[sf_core::ir::TriplesMap], q: &Query) -> sf_sparql::Result<Plan> {
-    translate_tree(q, maps, &Tbox::default(), Dialect::Sqlite)
+fn tree(
+    maps: &[sf_core::ir::TriplesMap],
+    q: &Query,
+    schema: &[TableSchema],
+) -> sf_sparql::Result<Plan> {
+    translate_tree(q, maps, &Tbox::default(), Dialect::Sqlite, schema)
 }
 
 /// A plan's executed answer, in a form directly comparable as a MULTISET-with-counts.
@@ -96,10 +104,14 @@ fn answers_eq(a: &Answer, b: &Answer) -> bool {
 /// vs the independent `spareval` oracle over the hand-authored expected graph.
 fn diff(create: &str, r2rml: &str, ttl: Option<&str>, query: &str) {
     let conn = sqlite::load(create).expect("fixture loads");
+    // Introspect the live fixture so BOTH paths optimize with the SAME schema (ADR-0023
+    // M4 wave 1): the cascade is `=_bag`-preserving, so the optimized tree result still
+    // equals the optimized flat result — the property this differential proves.
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
     let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
     let q = parse(query);
-    let f = flat(&maps, &q);
-    let t = tree(&maps, &q);
+    let f = flat(&maps, &q, &schema);
+    let t = tree(&maps, &q, &schema);
 
     match (&f, &t) {
         // (b) identical 501 set — both defer.
@@ -403,17 +415,142 @@ fn r5_iv_optional_null_pad_over_duplicates() {
 
 #[test]
 fn r5_v_aggregate_over_union_and_unbound() {
-    // (v) aggregate over a UNION (multi-branch ⇒ Rust-group), multiplicity > 1.
-    diff_stress(&format!(
-        "{PFX} SELECT (COUNT(?o) AS ?c) WHERE {{ {{ ?p ex:name ?o }} UNION {{ ?p ex:name ?o }} }}"
-    ));
-    diff_stress(&format!(
-        "{PFX} SELECT ?o (COUNT(?p) AS ?c) WHERE {{ {{ ?p ex:name ?o }} UNION {{ ?p ex:tag ?o }} }} GROUP BY ?o"
-    ));
+    // (v) aggregate over a UNION (multi-branch ⇒ Rust-group) is the agg-over-UNION case the
+    // FLAT oracle defers (ADR-0023 design §4.14): the tree now CLOSES it, so a flat-vs-tree
+    // diff would fail the 501-set assertion. Those specs moved to `agg_over_union_tree_*`
+    // below, gated vs the independent spareval oracle (the tree EXCEEDS flat by design).
+    //
     // Unbound variable carried through a multiplicity-> 1 projection (engine_bag drops
     // the unbound ?missing; tree must match flat AND spareval).
     diff_stress(&format!(
         "{PFX} SELECT ?o ?missing WHERE {{ ?p ex:name ?o }}"
+    ));
+}
+
+// ============================================================================
+// AGG-OVER-UNION — the HEADLINE bug the operator-tree closes (ADR-0023 §4.14): an
+// aggregate over a MULTI-branch inner (UNION/VALUES) is lowered to a `Plan::rust_group`
+// with the `Aggregation` node owning its scope, so the outer `(agg AS ?v)` Extend renames
+// the Rust-group output instead of folding into the pre-group branches (which lack the
+// aggregate column → the FLAT path's "BIND references unbound" 501). The FLAT oracle
+// DEFERS this shape, so the differential's flat-vs-tree 501-set assertion does NOT apply;
+// the rigorous gate is the TREE result `=_bag` the INDEPENDENT spareval oracle over a
+// hand-authored set-faithful graph (the tree EXCEEDS flat by design).
+// ============================================================================
+
+// All union-arm columns are NOT NULL so the virtual graph is SET-FAITHFUL even for
+// COUNT(*) (a nullable column object would be emitted as an UNBOUND solution row that
+// COUNT(*) counts but a set-graph oracle does not — the established NULL-as-unbound gap,
+// out of scope here; see `diff_p` vs `diff_p_bag`).
+const AGG_SQL: &str = r#"
+CREATE TABLE m (
+    id INTEGER PRIMARY KEY,
+    grp TEXT NOT NULL, s1 TEXT NOT NULL, s2 TEXT NOT NULL,
+    n1 INTEGER NOT NULL, n2 INTEGER NOT NULL
+);
+INSERT INTO m VALUES (1, 'g1', 'a', 'b', 10, 1);
+INSERT INTO m VALUES (2, 'g1', 'c', 'f', 20, 2);
+INSERT INTO m VALUES (3, 'g2', 'd', 'e', 30, 3);
+"#;
+
+const AGG_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#M>
+    rr:logicalTable [ rr:tableName "m" ] ;
+    rr:subjectMap [ rr:template "http://ex/m/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:grp ; rr:objectMap [ rr:column "grp" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p1  ; rr:objectMap [ rr:column "s1" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p2  ; rr:objectMap [ rr:column "s2" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:q1  ; rr:objectMap [ rr:column "n1" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:q2  ; rr:objectMap [ rr:column "n2" ] ] .
+"#;
+
+// Set-faithful expected graph (distinct triples per row): an INTEGER column maps to an
+// xsd:integer literal (R2RML natural mapping), matching the bare integer literals here.
+const AGG_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/m/1> ex:grp "g1" ; ex:p1 "a" ; ex:p2 "b" ; ex:q1 10 ; ex:q2 1 .
+<http://ex/m/2> ex:grp "g1" ; ex:p1 "c" ; ex:p2 "f" ; ex:q1 20 ; ex:q2 2 .
+<http://ex/m/3> ex:grp "g2" ; ex:p1 "d" ; ex:p2 "e" ; ex:q1 30 ; ex:q2 3 .
+"#;
+
+/// An agg-over-UNION spec (ADR-0023 M4 wave 1): assert the FLAT oracle DEFERS (documents
+/// the headline gap the tree closes) AND the TREE result `=_bag` the independent spareval
+/// oracle over `ttl` (the rigorous gate — not a hand-computed expected alone).
+fn agg_union(query: &str) {
+    let conn = sqlite::load(AGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).expect("R2RML parses");
+    let q = parse(query);
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "flat oracle must DEFER agg-over-UNION (else not a tree-exceeds-flat spec): `{query}`"
+    );
+    let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
+    assert!(
+        tp.rust_group.is_some(),
+        "agg-over-UNION must lower to a rust_group: `{query}`"
+    );
+    assert_vs_spareval(AGG_TTL, query, &tp, &conn);
+}
+
+#[test]
+fn agg_over_union_count() {
+    // 1. COUNT(?v) over a UNION, no GROUP BY: {a,b,c,f,d,e} ⇒ 6.
+    agg_union(&format!(
+        "{PFX} SELECT (COUNT(?v) AS ?c) WHERE {{ {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }}"
+    ));
+    // 2. COUNT(*) over a UNION, no GROUP BY ⇒ 6 (3 p1 + 3 p2 solutions).
+    agg_union(&format!(
+        "{PFX} SELECT (COUNT(*) AS ?c) WHERE {{ {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }}"
+    ));
+    // 3. The HEADLINE: COUNT(?v) GROUP BY a key bound OUTSIDE the union — g1:{a,b,c,f}=4, g2:{d,e}=2.
+    agg_union(&format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+    // 4. COUNT(*) GROUP BY the outside key — g1=4, g2=2.
+    agg_union(&format!(
+        "{PFX} SELECT ?g (COUNT(*) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+}
+
+#[test]
+fn agg_over_union_min_max() {
+    // 5. MIN over the string UNION GROUP BY grp — g1: min{a,b,c,f}=a, g2: min{d,e}=d.
+    agg_union(&format!(
+        "{PFX} SELECT ?g (MIN(?v) AS ?m) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+    // 6. MAX over the string UNION GROUP BY grp (the `agg_union_max_group_by` spec) —
+    //    g1: max{a,b,c,f}=f, g2: max{d,e}=e. Gated vs spareval (no hand-expected).
+    agg_union(&format!(
+        "{PFX} SELECT ?g (MAX(?v) AS ?m) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+    // 7. MAX over the union with NO group (implicit single group).
+    agg_union(&format!(
+        "{PFX} SELECT (MAX(?v) AS ?m) WHERE {{ {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }}"
+    ));
+}
+
+#[test]
+fn agg_over_union_sum_avg() {
+    // 8. SUM over a NUMERIC UNION (xsd:integer), no group: {10,1,20,2,30,3} ⇒ 66.
+    agg_union(&format!(
+        "{PFX} SELECT (SUM(?v) AS ?t) WHERE {{ {{ ?x ex:q1 ?v }} UNION {{ ?x ex:q2 ?v }} }}"
+    ));
+    // 9. SUM over the numeric union GROUP BY grp — g1: 10+1+20+2=33, g2: 30+3=33.
+    agg_union(&format!(
+        "{PFX} SELECT ?g (SUM(?v) AS ?t) WHERE {{ ?x ex:grp ?g . \
+         {{ ?x ex:q1 ?v }} UNION {{ ?x ex:q2 ?v }} }} GROUP BY ?g"
+    ));
+    // 10. Two aggregates at once over the union GROUP BY grp.
+    agg_union(&format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) (MAX(?v) AS ?m) WHERE {{ ?x ex:grp ?g . \
+         {{ ?x ex:q1 ?v }} UNION {{ ?x ex:q2 ?v }} }} GROUP BY ?g"
     ));
 }
 
@@ -475,10 +612,15 @@ fn w3c_cases_dir() -> PathBuf {
 /// Run the DUMP through both paths over `maps`/`conn`; assert flat-vs-tree parity and
 /// identical 501 outcome. Returns `Some(true)` when compared, `Some(false)` when both
 /// deferred, `None` when a runtime (exec) 501/skip made the case non-comparable.
-fn w3c_compare(maps: &[sf_core::ir::TriplesMap], conn: &Connection, id: &str) -> Option<bool> {
+fn w3c_compare(
+    maps: &[sf_core::ir::TriplesMap],
+    conn: &Connection,
+    schema: &[TableSchema],
+    id: &str,
+) -> Option<bool> {
     let q = parse(DUMP);
-    let f = translate(&q, maps, Dialect::Sqlite);
-    let t = translate_tree(&q, maps, &Tbox::default(), Dialect::Sqlite);
+    let f = translate_with(&q, maps, Dialect::Sqlite, &Tbox::default(), schema);
+    let t = translate_tree(&q, maps, &Tbox::default(), Dialect::Sqlite, schema);
     match (&f, &t) {
         // Both paths error identically (a deferred/negative case) — parity holds; we
         // require the Unsupported SET to match, and tolerate identical non-501 errors
@@ -572,7 +714,7 @@ fn w3c_rdb2rdf_dump_flat_eq_tree() {
                     }
                 }
             };
-            match w3c_compare(&maps, &conn, &case.identifier) {
+            match w3c_compare(&maps, &conn, &schemas, &case.identifier) {
                 Some(true) => compared += 1,
                 Some(false) => deferred += 1,
                 None => noncomparable += 1,

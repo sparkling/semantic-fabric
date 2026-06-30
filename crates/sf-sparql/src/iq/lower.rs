@@ -152,6 +152,18 @@ fn lower_spine(node: IqNode, dialect: sf_sql::Dialect, spine: &mut Spine) -> Res
         {
             spine.project.get_or_insert_with(|| project.clone());
             let mut branches = lower_spine(*child, dialect, spine)?;
+            // A MULTI-branch aggregation lowers to a `rust_group`: the aggregate outputs
+            // are computed in Rust AFTER grouping, so they are NOT columns of the pre-group
+            // union branches. The outer `Construction`'s `(agg AS ?v)` Extend must rewrite
+            // the `RustGroup` output names — NOT fold into the branches (which would fail
+            // "BIND references unbound" on the internal aggregate var, the agg-over-UNION
+            // bug, design §4.14). The branches feed `rust_group_execute` by variable name,
+            // so they keep their full bindings (the grouped result is rebuilt from the keys
+            // + renamed agg outputs).
+            if let Some(rg) = spine.rust_group.as_mut() {
+                rename_rust_group_outputs(&subst, rg)?;
+                return Ok(branches);
+            }
             for b in &mut branches {
                 fold_subst(&subst, b)?;
                 b.bindings
@@ -749,6 +761,41 @@ fn lower_rust_agg(def: &AggDef) -> Result<RustAgg> {
     })
 }
 
+/// Rewrite a multi-branch [`RustGroup`]'s output variable names per the outer
+/// `Construction`'s substitution — the post-GROUP-BY `(agg AS ?v)` Extend (design §4.14).
+/// In SPARQL algebra `SELECT (COUNT(?x) AS ?c)` is a `Group` producing an INTERNAL
+/// aggregate variable, then an `Extend` `?c := ?internal`. For the SQL `GROUP BY`
+/// (single-branch) path that Extend folds into the branch bindings; for the Rust-group
+/// (UNION/VALUES) path the aggregate has no branch column, so the Extend instead RENAMES
+/// the `RustAgg::out_var` from the internal var to the SELECT var. Each subst entry must
+/// be such a bare-variable rename of an aggregate output; anything else (arithmetic over
+/// an aggregate, a group-key rename) is a tracked sound-501 (never silently dropped).
+fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup) -> Result<()> {
+    for (out_var, def) in subst {
+        let BindDef::Expr(e) = def else {
+            return Err(Error::Unsupported(
+                "post-GROUP-BY substitution over a UNION aggregate must be a bare-variable \
+                 rename → 501"
+                    .to_owned(),
+            ));
+        };
+        let Expression::Variable(inner) = e.as_ref() else {
+            return Err(Error::Unsupported(format!(
+                "post-GROUP-BY expression over a UNION aggregate is deferred → 501: {e:?}"
+            )));
+        };
+        if let Some(agg) = rg.aggs.iter_mut().find(|a| a.out_var == inner.as_str()) {
+            agg.out_var = out_var.to_string();
+        } else {
+            return Err(Error::Unsupported(format!(
+                "post-GROUP-BY substitution references ?{inner}, not a UNION aggregate output \
+                 → 501"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// A fresh scan alias for the aggregate result columns: one past the max alias used
 /// anywhere in `b` (the flat `group` draws this from the `Unfolder` counter; here we
 /// derive it from the branch so the synthetic alias never collides with a base scan).
@@ -1045,8 +1092,8 @@ mod tests {
     /// (design §5 Aggregation). Tested on a hand-built `Aggregation` over a two-arm
     /// `Union` so the agg output var is the user var directly: a query-level *aliased*
     /// aggregate over a multi-branch inner injects a spargebra-internal var + `Extend`
-    /// the FLAT oracle itself 501s — see
-    /// [`aliased_aggregate_over_multi_branch_is_501_like_flat`].
+    /// the tree now closes by renaming the `RustGroup` output — see
+    /// [`aliased_aggregate_over_multi_branch_closes_via_rust_group`].
     #[test]
     fn group_by_multi_branch_uses_rust_group() {
         use crate::iq::node::{AggArg, AggDef, BindDef};
@@ -1106,13 +1153,31 @@ mod tests {
         );
     }
 
-    /// §6 parity: an *aliased* aggregate over a multi-branch inner 501s in the tree path
-    /// EXACTLY as in the flat oracle (the post-Group `Extend(?c := <internal agg var>)`
-    /// reads a var only the Rust group binds at exec) — never a silent pass.
+    /// ADR-0023 M4 wave 1 — the agg-over-UNION HEADLINE (design §4.14): an *aliased*
+    /// aggregate over a multi-branch inner, where SPARQL injects an internal agg var + a
+    /// post-Group `Extend(?c := <internal var>)`, now CLOSES in the tree path (the FLAT
+    /// oracle still 501s — "BIND references unbound"). The Construction renames the
+    /// `RustGroup` output `<internal var>` → `?c` instead of folding into the pre-group
+    /// branches, so the plan is a correct multi-branch `rust_group`. (Multiset correctness
+    /// vs the independent spareval oracle is gated by `differential_tree::agg_over_union_*`.)
     #[test]
-    fn aliased_aggregate_over_multi_branch_is_501_like_flat() {
-        let r = try_plan("SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s");
-        assert!(matches!(r, Err(Error::Unsupported(_))), "{r:?}");
+    fn aliased_aggregate_over_multi_branch_closes_via_rust_group() {
+        let p = plan("SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s");
+        let rg = p
+            .rust_group
+            .expect("multi-branch aggregate ⇒ Plan.rust_group");
+        assert_eq!(rg.keys, vec!["s".to_owned()]);
+        assert_eq!(rg.aggs.len(), 1);
+        assert_eq!(rg.aggs[0].out_var, "c", "internal agg var renamed to ?c");
+        assert_eq!(rg.aggs[0].arg_var.as_deref(), Some("o"));
+        assert!(
+            p.branches.iter().all(|b| b.agg.is_none()),
+            "no per-branch SQL GROUP BY for a multi-branch inner"
+        );
+        let PlanForm::Select { vars } = &p.form else {
+            panic!("SELECT form");
+        };
+        assert_eq!(vars, &vec!["s".to_owned(), "c".to_owned()]);
     }
 
     /// VALUES → core-less `Const` branches, one per row (UNDEF ⇒ absent var).
