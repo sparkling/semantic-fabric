@@ -36,6 +36,12 @@ pub mod resolve;
 /// flat path is untouched (not wired into the live engine).
 pub mod normalize;
 
+/// LOWER (ADR-0023 M3c): fold a NORMALIZED leaf-CQ spine into a [`crate::Plan`]
+/// (bag-union of [`Branch`]es), reusing the proven flat `emit`/`leftjoin`/`unify`
+/// machinery. FILTER/BIND resolve HERE, per leaf-CQ. The flat path is untouched
+/// (not wired into the live engine).
+pub mod lower;
+
 /// A reference to a raw source column of a specific scan alias. Aliases are
 /// small integers; emission renders them `t{alias}` (ADR-0007 lifting: joins and
 /// filters are over these, never over constructed term strings).

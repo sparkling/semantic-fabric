@@ -934,7 +934,7 @@ fn parse_rust_agg(
 /// key has no single raw key to group by (a constant doesn't partition; a
 /// constructed multi-source term can't be reduced to a GROUP BY column soundly) →
 /// deferred 501 (never silently wrong).
-fn group_key_columns(def: &TermDef, var: &str) -> Result<Vec<ColRef>> {
+pub(crate) fn group_key_columns(def: &TermDef, var: &str) -> Result<Vec<ColRef>> {
     match def {
         TermDef::Derived { .. } => {
             let cols = def.columns();
@@ -1032,7 +1032,7 @@ fn lower_aggregate(
 /// The single raw column a column-backed variable reads (for SUM/AVG/MIN/MAX/COUNT
 /// over a column). A constant / multi-column template / COALESCE / CONCAT binding
 /// has no single aggregation column → deferred 501.
-fn single_column_of(def: &TermDef, var: &str) -> Result<ColRef> {
+pub(crate) fn single_column_of(def: &TermDef, var: &str) -> Result<ColRef> {
     if let TermDef::Derived { .. } = def {
         if let [col] = def.columns().as_slice() {
             return Ok(col.clone());
