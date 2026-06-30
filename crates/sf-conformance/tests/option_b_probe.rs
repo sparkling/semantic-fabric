@@ -3,9 +3,9 @@
 //! join-elim, projection-and-true) this constructs a minimal SPARQL + R2RML +
 //! SQLite fixture and runs THREE evaluators:
 //!
-//!   * `translate`      — the proven FLAT path (the `=_bag` set-faithful oracle),
-//!   * `translate_tree` — the operator-tree (IQ) path under test,
-//!   * `spareval`       — the INDEPENDENT in-memory SPARQL oracle (ADR-0004/0005).
+//!   * `translate_with_flat` — the proven FLAT path (the `=_bag` set-faithful oracle),
+//!   * `translate_tree`      — the operator-tree (IQ) path, now the default since M8,
+//!   * `spareval`            — the INDEPENDENT in-memory SPARQL oracle (ADR-0004/0005).
 //!
 //! The load-bearing question is NOT "does the tree reproduce Ontop's node-shape"
 //! (the analyses already say most rewrites are cosmetic for the bag) but the
@@ -31,7 +31,7 @@ use oxrdf::Term;
 use rusqlite::Connection;
 use sf_conformance::oracle::{self, OracleAnswer};
 use sf_conformance::sqlite;
-use sf_sparql::{exec, translate_tree, translate_with, Plan, PlanForm, Tbox};
+use sf_sparql::{exec, translate_tree, translate_with_flat, Plan, PlanForm, Tbox};
 use sf_sql::Dialect;
 use spargebra::{Query, SparqlParser};
 
@@ -136,7 +136,7 @@ fn probe(s: &Scenario) -> (Outcome, Outcome, String, Verdict) {
     let q = parse(&s.query);
 
     let flat = run_path(
-        translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema),
+        translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema),
         &conn,
     );
     let tree = run_path(

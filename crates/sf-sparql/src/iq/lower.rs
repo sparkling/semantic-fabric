@@ -553,10 +553,12 @@ fn lower_iq_exists(
         }
         let mut corr = r.where_conds.clone();
         let mut never_compatible = false;
+        let mut shared_var_found = false;
         for (v, ldef) in &outer.bindings {
             let Some(rdef) = r.bindings.get(v) else {
                 continue; // not shared
             };
+            shared_var_found = true;
             if def_reads_opt_alias(ldef, &outer_opt_aliases) {
                 return Err(Error::Unsupported(format!(
                     "EXISTS shared variable ?{v} may be UNBOUND on the outer side (OPTIONAL) → 501 \
@@ -574,6 +576,12 @@ fn lower_iq_exists(
         }
         if never_compatible {
             continue; // this branch can never match the outer row
+        }
+        // SPARQL §8.3: if outer and inner have disjoint variable domains, MINUS is a
+        // NO-OP for this (outer, inner) pair — the inner branch can never remove the
+        // left row. Skip it (mirrors flat `minus_branches` line: `if shared.is_empty() { continue }`).
+        if negated && !shared_var_found {
+            continue;
         }
         if negated {
             sub_conds.push(SqlCond::NotExists {

@@ -1,8 +1,8 @@
-//! ADR-0023 M3d **shadow differential** — empirically prove the operator-tree (IQ)
-//! translation path ([`sf_sparql::translate_tree`]) is `=_bag` (multiset-equivalent,
-//! counts significant) to the proven flat [`sf_sparql::translate`] oracle, WITHOUT
-//! switching the default (M3 design `docs/design/ADR-0023-M3-resolution-pipeline.md`
-//! §7). The flat `unfold.rs` path stays the default and the ORACLE.
+//! ADR-0023 M8 **flat-oracle differential** — after the M8 default flip, the flat
+//! [`sf_sparql::translate_with_flat`] path is the `=_bag` oracle and the tree
+//! ([`sf_sparql::translate_tree`]) is now the production default. This harness
+//! still verifies tree `=_bag` flat over the full corpus (W3C, multiplicity-stress,
+//! spareval cross-check) so any regression is caught immediately.
 //!
 //! For every query in the corpus this runs BOTH translators and asserts:
 //!
@@ -31,7 +31,7 @@ use rusqlite::Connection;
 use sf_conformance::graph::{isomorphic, parse_turtle, triples_to_dataset};
 use sf_conformance::oracle::{self, OracleAnswer};
 use sf_conformance::sqlite;
-use sf_sparql::{exec, translate_tree, translate_with, Error, Plan, PlanForm, Tbox};
+use sf_sparql::{exec, translate_tree, translate_with_flat, Error, Plan, PlanForm, Tbox};
 use sf_sql::{Dialect, TableSchema};
 use spargebra::{Query, SparqlParser};
 
@@ -47,7 +47,7 @@ fn flat(
     q: &Query,
     schema: &[TableSchema],
 ) -> sf_sparql::Result<Plan> {
-    translate_with(q, maps, Dialect::Sqlite, &Tbox::default(), schema)
+    translate_with_flat(q, maps, Dialect::Sqlite, &Tbox::default(), schema)
 }
 
 fn tree(
@@ -870,7 +870,7 @@ fn w3c_compare(
     id: &str,
 ) -> Option<bool> {
     let q = parse(DUMP);
-    let f = translate_with(&q, maps, Dialect::Sqlite, &Tbox::default(), schema);
+    let f = translate_with_flat(&q, maps, Dialect::Sqlite, &Tbox::default(), schema);
     let t = translate_tree(&q, maps, &Tbox::default(), Dialect::Sqlite, schema);
     match (&f, &t) {
         // Both paths error identically (a deferred/negative case) — parity holds; we

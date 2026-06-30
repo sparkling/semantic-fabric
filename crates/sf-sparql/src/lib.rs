@@ -170,13 +170,15 @@ impl Plan {
 }
 
 /// Translate a parsed SPARQL query against `maps` into a [`Plan`] (no T-Box, no
-/// schema — the plain R2RML conformance path). See [`translate_with`].
+/// schema — the plain R2RML conformance path). Routes through the operator-tree
+/// (IQ) pipeline — the default since ADR-0023 M8. See [`translate_with`].
 pub fn translate(query: &Query, maps: &[TriplesMap], dialect: Dialect) -> Result<Plan> {
     translate_with(query, maps, dialect, &Tbox::default(), &[])
 }
 
 /// Translate with a pre-classified T-Box (tier-1 saturation, ADR-0008) and source
-/// schema (the constraint-driven cascade passes, ADR-0007). `sparopt` algebra
+/// schema (the constraint-driven cascade passes, ADR-0007). Routes through the
+/// operator-tree (IQ) pipeline — the default since ADR-0023 M8. `sparopt` algebra
 /// optimisation (pipeline step 2) is opt-in and bypassed by default (ADR-0007).
 pub fn translate_with(
     query: &Query,
@@ -185,7 +187,30 @@ pub fn translate_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    translate_inner(query, maps, dialect, tbox, schema, true)
+    translate_tree(query, maps, tbox, dialect, schema)
+}
+
+/// Translate through the **flat unfold path** (the proven `=_bag` oracle,
+/// ADR-0023 M8 fallback). This was the production path before M8; it is now kept
+/// as the oracle / regression anchor. Prefer [`translate`] / [`translate_with`]
+/// (tree path) for production; call this when the flat SQL shape matters (e.g.
+/// `differential_tree` oracle arm). See [`translate_with_flat`].
+pub fn translate_flat(query: &Query, maps: &[TriplesMap], dialect: Dialect) -> Result<Plan> {
+    translate_with_flat(query, maps, dialect, &Tbox::default(), &[])
+}
+
+/// Translate through the **flat unfold path** with a T-Box and schema. This was
+/// the production path before ADR-0023 M8; it is now the `=_bag` oracle /
+/// fallback. Prefer [`translate_with`] (tree path) for production; call this when
+/// the flat SQL shape matters or as a regression guard.
+pub fn translate_with_flat(
+    query: &Query,
+    maps: &[TriplesMap],
+    dialect: Dialect,
+    tbox: &Tbox,
+    schema: &[TableSchema],
+) -> Result<Plan> {
+    translate_inner_flat(query, maps, dialect, tbox, schema, true)
 }
 
 /// Translate **without** the optimizer cascade — the raw ISWC-2018 base
@@ -203,13 +228,13 @@ pub fn translate_unoptimized(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    translate_inner(query, maps, dialect, tbox, schema, false)
+    translate_inner_flat(query, maps, dialect, tbox, schema, false)
 }
 
-/// Shared translation core. `optimize` gates the ADR-0007 cascade: `true` is the
-/// production path ([`translate_with`]); `false` is the NoREC unoptimized arm
-/// ([`translate_unoptimized`]).
-fn translate_inner(
+/// Shared flat-path translation core. `optimize` gates the ADR-0007 cascade:
+/// `true` is the flat oracle path ([`translate_with_flat`]); `false` is the NoREC
+/// unoptimized arm ([`translate_unoptimized`]).
+fn translate_inner_flat(
     query: &Query,
     maps: &[TriplesMap],
     dialect: Dialect,
@@ -334,22 +359,19 @@ fn translate_inner(
     })
 }
 
-/// Translate a parsed SPARQL query through the **operator-tree (IQ) path** (ADR-0023
-/// M3d shadow), the alternative to the flat [`unfold`]-based [`translate_with`]. It
-/// drives the four-stage tree pipeline — [`build::build_tree`] → [`iq::resolve::resolve`]
+/// Translate a parsed SPARQL query through the **operator-tree (IQ) path**
+/// (ADR-0023 M8). This is the production default since M8: [`translate`] and
+/// [`translate_with`] both route here. It drives the four-stage tree pipeline —
+/// [`build::build_tree`] → [`iq::resolve::resolve`]
 /// → [`iq::normalize::normalize`] → [`iq::lower::lower`] — for the same per-`Query`-form
 /// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK / DESCRIBE
 /// CBD), producing a [`Plan`] the SAME `exec` runs. After lowering, the **proven flat
 /// cascade** ([`cascade::run`]) is reused on the lowered branches (ADR-0023 M4 wave 1),
 /// giving the tree the within-leaf-CQ rewrites (self-join / FK elimination, filter
-/// pushdown, distinct removal, …) for free — the cross-union/capability rewrites the
-/// flat cascade cannot do are LATER M4 waves. The cascade is `=_bag`-preserving, so the
+/// pushdown, distinct removal, …) for free. The cascade is `=_bag`-preserving, so the
 /// optimized tree result stays multiset-equal to the flat oracle (M3 design §7 — proved
-/// by the `differential_tree` shadow test).
-///
-/// **This is the shadow path, NOT the default.** [`translate`]/[`translate_with`] stay
-/// the production engine and the proven oracle (M3 design §7: never switch before a
-/// full green differential window).
+/// by the `differential_tree` shadow test). The flat path is kept as the `=_bag` oracle
+/// / fallback via [`translate_flat`] / [`translate_with_flat`].
 ///
 /// The single [`iq::resolve::ResolveCx`] threads ONE alias counter across the whole
 /// query, so sibling patterns receive disjoint scan aliases (M3 design §3.2).
@@ -438,7 +460,7 @@ pub fn translate_tree(
     };
 
     // Reuse the PROVEN flat cascade (ADR-0007) on the tree's lowered branches — the same
-    // call `translate_inner` makes (ADR-0023 M4 wave 1). `project` is the SELECT scope
+    // call `translate_inner_flat` makes (ADR-0023 M4 wave 1). `project` is the SELECT scope
     // (CONSTRUCT/ASK project every binding ⇒ `None`); `distinct` is the requested DISTINCT.
     // A multi-branch aggregation (`rust_group`) is skipped: its pre-group union arms carry
     // the aggregate-argument columns that `rust_group_execute` reads BY NAME, so the
