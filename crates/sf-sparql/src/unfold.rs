@@ -531,6 +531,16 @@ impl<'a> Unfolder<'a> {
                 def_of(&parent.subject.term, palias)
             }
         };
+        // R2RML §11: a column/template object term map produces NO RDF term (hence no
+        // triple) when any referenced column is NULL. Capture those columns now, before
+        // `obj_def` is moved, so we can guard them below. The join already excludes NULL
+        // child columns for a `Ref` (parentTriplesMap) object, so only a plain column/
+        // template object map needs the explicit guard.
+        let obj_null_guard: Vec<crate::iq::ColRef> = match om {
+            ObjectMap::Term(_) => obj_def.columns(),
+            ObjectMap::Ref(_) => Vec::new(),
+        };
+
         let (q_subj, q_obj) = if swap {
             (obj_def, subj_def)
         } else {
@@ -542,10 +552,24 @@ impl<'a> Unfolder<'a> {
             bind(&mut branch, pv.as_str(), pred_def)?;
         }
         self.bind_position(&mut branch, &tp.subject, q_subj)?;
-        match self.bind_position(&mut branch, &tp.object, q_obj)? {
-            true => Ok(Some(branch)),
-            false => Ok(None),
+        if !self.bind_position(&mut branch, &tp.object, q_obj)? {
+            return Ok(None);
         }
+        // Enforce the R2RML §11 NULL rule inside SQL (not only at reconstruct time): a
+        // NULL data column drops the row. Without this, a NULL object would still emit a
+        // solution (object UNBOUND), so an anti-join (SPARQL MINUS / NOT EXISTS), whose
+        // correlation is the clone of these `where_conds`, would correlate on the subject
+        // alone and wrongly remove every left row.
+        for col in obj_null_guard {
+            if !branch
+                .where_conds
+                .iter()
+                .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &col))
+            {
+                branch.where_conds.push(SqlCond::IsNotNull(col));
+            }
+        }
+        Ok(Some(branch))
     }
 
     /// `rr:class` → `rdf:type` atoms (subject a `:C`), with class-query

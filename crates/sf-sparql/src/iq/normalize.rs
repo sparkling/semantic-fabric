@@ -743,15 +743,29 @@ mod tests {
     }
 
     /// A single-pattern query normalizes to ONE leaf-CQ (no Union wrapper): a
-    /// Construction over the bare Extensional scan, carrying both bound variables.
+    /// Construction over the Extensional scan, carrying both bound variables. The
+    /// column-valued object `?n` rides an R2RML §11 NULL guard (`IsNotNull`) on the
+    /// scan's condition (a NULL column ⇒ no triple).
     #[test]
     fn single_pattern_is_one_leaf_cq() {
+        use crate::iq::SqlCond;
         let body = strip_spine(&norm("SELECT * WHERE { ?s <http://ex/name> ?n }")).clone();
         assert_leaf_cq(&body);
         let IqNode::Construction { child, subst, .. } = &body else {
             unreachable!()
         };
-        assert!(matches!(**child, IqNode::Extensional { .. }), "{child:?}");
+        let IqNode::InnerJoin { children, cond } = &**child else {
+            panic!("the scan plus its §11 NULL guard is an InnerJoin over one leaf, got {child:?}");
+        };
+        assert!(
+            matches!(children.as_slice(), [IqNode::Extensional { .. }]),
+            "{children:?}"
+        );
+        assert!(
+            cond.iter()
+                .any(|c| matches!(c, IqCond::Sql(SqlCond::IsNotNull(_)))),
+            "the §11 NULL guard for the column object rides the cond: {cond:?}"
+        );
         assert!(
             subst.contains_key("s") && subst.contains_key("n"),
             "the single bindings map carries ?s and ?n: {subst:?}"
