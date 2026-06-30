@@ -11,6 +11,16 @@ here is estimated or extrapolated. Where two systems are not measured under
 identical conditions, that is stated explicitly — see
 [Measurement asymmetry](#measurement-asymmetry-read-this-before-comparing).
 
+> **Update (2026-06-30):** the asymmetry that the original tables carried (sf
+> in-process over SQLite vs Ontop HTTP over PostgreSQL) is now **removed** for the
+> head-to-head. semantic-fabric ships a real `serve` SPARQL endpoint with a wired
+> PostgreSQL OBDA executor, so `scripts/compare/race.sh` runs **both** engines as
+> warm HTTP SPARQL endpoints over the **same** PostgreSQL `gtfs_bench` database with
+> the **same** `curl %{time_total}` median-of-N timer. See
+> [Ontop vs semantic-fabric — head-to-head](#ontop-vs-semantic-fabric--head-to-head-adr-0023)
+> below. The older single-engine tables and the SQLite-only limitation notes are
+> retained for provenance but are superseded by that run for cross-engine claims.
+
 > **Honesty contract.** semantic-fabric's load-bearing result is the
 > **constant engine memory under growing source data** invariant — a property of
 > the streaming architecture, demonstrated byte-for-byte below. Absolute query
@@ -77,6 +87,73 @@ the SPARQL in `workload.rs::queries`):
 
 Result cardinalities were verified **equal** between semantic-fabric and Ontop at
 every scale (parity check) — the two systems return the same answers.
+
+---
+
+## Ontop vs semantic-fabric — head-to-head (ADR-0023)
+
+**Run date: 2026-06-30.** The real, symmetric race the program targeted. Both
+engines run as **warm HTTP SPARQL endpoints over the same PostgreSQL `gtfs_bench`
+database** (scale 1), timed with the **identical** client methodology:
+`curl %{time_total}`, `Accept: text/csv`, 3 warm-up calls then **median of 25**
+timed round-trips per query. This removes both asymmetries the original tables
+carried (process model and backend are now the same for both engines).
+
+```bash
+scripts/load_gtfs_postgres.sh 1
+cargo build --release -p sf-cli
+ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 1 25
+```
+
+- **semantic-fabric**: `target/release/semantic-fabric serve --source pg:… --mapping
+  scripts/ontop/gtfs.r2rml.ttl` — native Rust HTTP SPARQL endpoint, PostgreSQL OBDA
+  executor (`exec_pg`).
+- **Ontop 5.5.0**: `ontop endpoint -m … -p gtfs.properties` — JVM (Tomcat) HTTP
+  SPARQL endpoint, PostgreSQL via JDBC 42.7.4. Boot log confirms a genuine run:
+  `Starting OntopEndpointApplication v5.5.0 using Java 23.0.2` →
+  `Ontop has completed the setup and it is ready for query answering!` →
+  `Ontop virtual repository initialized successfully!`
+- Same R2RML mapping (`scripts/ontop/gtfs.r2rml.ttl`), same queries
+  (`scripts/ontop/q{1..7}.rq`), same PostgreSQL data.
+
+### Result (median of 25 warm HTTP round-trips, scale 1)
+
+| Query | Shape | sf median ms | Ontop median ms | sf speedup | sf rows | ont rows | rows-match? |
+|---|---|---|---|---|---|---|---|
+| Q1 | routes BGP | 0.52 | 1.87 | **3.60×** | 8 | 8 | ✅ |
+| Q2 | route → agency join | 0.68 | 1.65 | **2.43×** | 8 | 8 | ✅ |
+| Q3 | stop_time → trip → route (3-way) | 1.41 | 12.36 | **8.77×** | 800 | 800 | ✅ |
+| Q4 | pushed-down FILTER (`?short = "R0"`) | 0.52 | 1.47 | **2.83×** | 1 | 1 | ✅ |
+| Q5 | OPTIONAL (left join, headsign) | 0.53 | 1.57 | **2.96×** | 40 | 40 | ✅ |
+| Q6 | GROUP BY + COUNT + ORDER BY DESC | 0.83 | 1.30 | **1.57×** | 2 | 2 | ✅ |
+| Q7 | ORDER BY expression (`STRLEN`) | 0.53 | 1.18 | **2.23×** | 8 | 8 | ✅ |
+
+**Row-count parity: PASS on all 7 queries** — every query returns the identical
+answer cardinality from both engines over the same data. The latency comparison is
+therefore meaningful (both engines compute the same result).
+
+### Honest reading
+
+- **semantic-fabric is faster on every query in this run**, geomean **3.64×** over
+  the canonical Q1–Q5 set and **3.01×** over all seven. There is no query where
+  Ontop wins.
+- The largest gap is **Q3** (the 800-row 3-way join), where Ontop's median is
+  12.36 ms vs sf's 1.41 ms (**8.77×**). On the small single-table / filter / join
+  queries (Q1, Q2, Q4, Q5, Q7) Ontop clusters around a ~1.2–1.9 ms floor while sf
+  sits near ~0.5–0.7 ms; the gap there is dominated by per-request engine + HTTP
+  overhead, not result size. The narrowest gap is **Q6** (GROUP BY/COUNT, 2 rows)
+  at 1.57×.
+- **Remaining asymmetry — be honest:** the backend (PostgreSQL) and the
+  client-side timer are now identical, but the two HTTP servers are not the same
+  stack: Ontop serves via an embedded **JVM/Tomcat** server (Spring), semantic-
+  fabric via its **native Rust** server. Some of Ontop's flat ~1 ms floor is JVM/
+  Tomcat request overhead rather than query work, and a JVM endpoint carries a
+  multi-hundred-MB heap vs sf's native footprint. This is an architectural
+  difference, not something the harness subtracts out — but it is *much* smaller
+  and fairer than the original SQLite-vs-PostgreSQL gap, and it does **not**
+  account for the Q3 join gap (that is genuine engine throughput on the same SQL
+  backend). Ontop remains the more feature-complete system; this race covers the
+  subset both engines answer identically.
 
 ---
 
