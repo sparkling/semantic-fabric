@@ -1,0 +1,5 @@
+# q15 — DISTINCT over a join that produces duplicates (many stop_times per route).
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT DISTINCT ?route WHERE {
+  ?st gtfs:trip ?t . ?t gtfs:route ?route
+}

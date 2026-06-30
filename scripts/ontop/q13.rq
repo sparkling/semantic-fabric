@@ -1,0 +1,9 @@
+# q13 — SUBQUERY + nested aggregation: a sub-SELECT (COUNT per agency) joined to the agency.
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+SELECT ?agencyName ?routeCount WHERE {
+  ?a a gtfs:Agency ; foaf:name ?agencyName .
+  { SELECT ?agencyName (COUNT(?route) AS ?routeCount) WHERE {
+      ?route a gtfs:Route ; gtfs:agency ?ag . ?ag foaf:name ?agencyName
+    } GROUP BY ?agencyName }
+}

@@ -155,6 +155,174 @@ therefore meaningful (both engines compute the same result).
   backend). Ontop remains the more feature-complete system; this race covers the
   subset both engines answer identically.
 
+### Feature-class × scale matrix (q8–q15 + q1–q7, scales 1·100·1000·10000)
+
+**Run date: 2026-07-01.** The scale-1 / q1–q7 race above only exercises simple
+BGP/join/filter/optional/groupby/orderby. This section expands the head-to-head
+two ways: (1) **eight new feature-class queries** `q8`–`q15`, one per SPARQL class
+ADR-0023 targets, and (2) **four data scales** (1, 100, 1000, 10000) so EXECUTION —
+not the ~1 ms transport floor — dominates. Ontop is treated as the **correctness
+oracle** (the reference VKG/OBDA engine); each cell records both engines' median
+HTTP latency, the row counts, and a parity/error status. Loaded PostgreSQL row
+counts prove the data actually grew:
+
+| scale | agency | calendar | routes | stops | trips | stop_times |
+|---|---|---|---|---|---|---|
+| 1 | 2 | 3 | 8 | 40 | 40 | 800 |
+| 100 | 2 | 3 | 800 | 4 000 | 4 000 | 80 000 |
+| 1000 | 2 | 3 | 8 000 | 40 000 | 40 000 | 800 000 |
+| 10000 | 2 | 3 | 80 000 | 400 000 | 400 000 | 8 000 000 |
+
+```bash
+scripts/load_gtfs_postgres.sh 1000              # 893k rows total
+ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 1000 10
+```
+
+The new queries and their feature class (each verified to return a **non-empty**
+result against the Ontop oracle over the mapped GTFS data):
+
+| query | feature class | sf vs oracle (correctness) |
+|---|---|---|
+| q8 | **UNION** (two-arm short/long name) | ✅ correct |
+| q9 | **AGG-over-UNION** (COUNT over UNION + GROUP BY) — *the ADR-0023 headline* | ❌ **sf aborts** (HTTP 200 then mid-stream error) |
+| q10 | **PROPERTY PATH** (sequence `gtfs:trip/gtfs:route`) | ❌ **sf returns 0 rows** (silently wrong) |
+| q11 | **MINUS** (trips with no headsign) | ❌ **sf returns 0 rows** (removes everything) |
+| q12 | **FILTER EXISTS** (routes with a direction-1 trip) | ❌ **sf aborts** (HTTP 200 then mid-stream error) |
+| q13 | **SUBQUERY + nested agg** (sub-SELECT COUNT joined to agency) | ✅ correct |
+| q14 | **NESTED OPTIONAL** (Trip ⟕ route ⟕ shortName) | ✅ correct (but catastrophically slow — see below) |
+| q15 | **DISTINCT-over-join** (distinct routes via stop_times) | ❌ **sf returns duplicates** (DISTINCT not applied) |
+
+#### Scale 1 (median of 25 warm runs)
+
+| query | class | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
+|---|---|---|---|---|---|---|---|
+| q1 | BGP | 0.72 | 1.85 | 2.57× | 8 | 8 | OK |
+| q2 | join | 0.69 | 1.62 | 2.35× | 8 | 8 | OK |
+| q3 | 3-way join | 1.50 | 12.03 | **8.02×** | 800 | 800 | OK |
+| q4 | filter | 0.52 | 1.37 | 2.63× | 1 | 1 | OK |
+| q5 | optional | 0.54 | 1.40 | 2.59× | 40 | 40 | OK |
+| q6 | groupby | 0.87 | 1.40 | 1.61× | 2 | 2 | OK |
+| q7 | orderby expr | 0.56 | 1.24 | 2.21× | 8 | 8 | OK |
+| q8 | union | 0.69 | 1.81 | 2.62× | 2 | 2 | OK |
+| q9 | **agg-over-union** | ERR | 2.11 | — | — | 2 | **SF-501** |
+| q10 | **property path** | 0.28 | 12.20 | — | 0 | 800 | **SF-EMPTY** |
+| q11 | **minus** | 0.84 | 1.63 | — | 0 | 14 | **SF-EMPTY** |
+| q12 | **filter exists** | ERR | 1.84 | — | — | 4 | **SF-501** |
+| q13 | subquery | 1.26 | 1.48 | 1.17× | 2 | 2 | OK |
+| q14 | nested optional | 1.80 | 1.61 | 0.89× | 40 | 40 | OK |
+| q15 | **distinct** | 1.25 | 1.43 | — | 40 | 8 | **MISMATCH** |
+
+#### Scale 100 (median of 25 warm runs; 80 000 stop_times)
+
+| query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
+|---|---|---|---|---|---|---|
+| q1 | 1.02 | 5.37 | 5.27× | 800 | 800 | OK |
+| q2 | 1.12 | 3.66 | 3.27× | 800 | 800 | OK |
+| q3 | 57.39 | 594.99 | **10.37×** | 80 000 | 80 000 | OK |
+| q5 | 2.55 | 13.59 | 5.33× | 4 000 | 4 000 | OK |
+| q7 | 1.13 | 4.26 | 3.77× | 800 | 800 | OK |
+| q8 | 1.02 | 2.17 | 2.13× | 222 | 222 | OK |
+| q9 | ERR | 2.20 | — | — | 2 | **SF-501** |
+| q10 | 0.21 | 645.19 | — | 0 | 80 000 | **SF-EMPTY** |
+| q11 | 1.57 | 3.28 | — | 0 | 1 334 | **SF-EMPTY** |
+| q12 | ERR | 4.03 | — | — | 400 | **SF-501** |
+| q14 | 698.11 | 30.49 | **0.04× (Ontop 22.9×)** | 4 000 | 4 000 | OK |
+| q15 | 15.90 | 14.26 | — | 4 000 | 800 | **MISMATCH** |
+
+(q4 0.57/1.43, q6 1.48/1.58, q13 1.41/1.30 — all OK, omitted for brevity.)
+
+#### Scale 1000 (median of 5 warm runs; 800 000 stop_times — primary big-data headline)
+
+| query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
+|---|---|---|---|---|---|---|
+| q1 | 6.01 | 27.83 | 4.63× | 8 000 | 8 000 | OK |
+| q2 | 5.48 | 23.48 | 4.28× | 8 000 | 8 000 | OK |
+| q3 | 554.71 | 5 979.30 | **10.78×** | 800 000 | 800 000 | OK |
+| q4 | 1.07 | 2.02 | 1.89× | 1 | 1 | OK |
+| q5 | 20.46 | 122.51 | 5.99× | 40 000 | 40 000 | OK |
+| q6 | 5.43 | 3.58 | 0.66× (Ontop 1.5×) | 2 | 2 | OK |
+| q7 | 6.61 | 33.45 | 5.06× | 8 000 | 8 000 | OK |
+| q8 | 2.28 | 9.35 | 4.10× | 2 222 | 2 222 | OK |
+| q9 | ERR | 8.36 | — | — | 2 | **SF-501** |
+| q10 | 0.24 | 6 419.39 | — | 0 | 800 000 | **SF-EMPTY** |
+| q11 | 9.37 | 26.50 | — | 0 | 13 334 | **SF-EMPTY** |
+| q12 | ERR | 21.12 | — | — | 4 000 | **SF-501** |
+| q13 | 4.45 | 3.36 | 0.76× (Ontop 1.3×) | 2 | 2 | OK |
+| q14 | 50 766.39 | 287.75 | **0.006× (Ontop 176×)** | 40 000 | 40 000 | OK |
+| q15 | 183.93 | 141.20 | — | 40 000 | 8 000 | **MISMATCH** |
+
+#### Scale 10000 (single warm call, RUNS=1 — partial; 8 000 000 stop_times)
+
+At this scale each warm call is slow enough that a median-of-N is impractical for
+the heavy cells (Ontop q10 ≈ 99 s, Ontop q3 ≈ 93 s, **sf q14 ≈ 91 s**), so these
+are **single-call** wall times — directionally representative because execution, not
+transport, dominates entirely here. Everything below completed; nothing was skipped.
+
+| query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
+|---|---|---|---|---|---|---|
+| q1 | 54.74 | 399.17 | 7.29× | 80 000 | 80 000 | OK |
+| q2 | 48.93 | 244.72 | 5.00× | 80 000 | 80 000 | OK |
+| q3 | 5 628.84 | 92 997.67 | **16.52×** | 8 000 000 | 8 000 000 | OK |
+| q4 | 12.90 | 27.27 | 2.11× | 1 | 1 | OK |
+| q5 | 197.22 | 1 255.59 | 6.37× | 400 000 | 400 000 | OK |
+| q6 | 44.03 | 29.98 | 0.68× (Ontop 1.5×) | 2 | 2 | OK |
+| q7 | 75.10 | 354.48 | 4.72× | 80 000 | 80 000 | OK |
+| q8 | 19.19 | 101.31 | 5.28× | 22 222 | 22 222 | OK |
+| q9 | ERR | 52.61 | — | — | 2 | **SF-501** |
+| q10 | 0.43 | 99 248.56 | — | 0 | 8 000 000 | **SF-EMPTY** |
+| q11 | 53.94 | 273.12 | — | 0 | 133 334 | **SF-EMPTY** |
+| q12 | ERR | 196.10 | — | — | 40 000 | **SF-501** |
+| q13 | 40.48 | 18.00 | 0.44× (Ontop 2.3×) | 2 | 2 | OK |
+| q14 | 91 103.85 | 2 850.51 | **0.03× (Ontop 32×)** | 400 000 | 400 000 | OK |
+| q15 | 2 155.77 | 2 879.32 | — | 400 000 | 80 000 | **MISMATCH** |
+
+### Honest reading — feature classes × scale
+
+- **Where sf computes the same answer, it wins on execution throughput, and the win
+  grows with data.** The marquee cell is **Q3** (the 3-way `stop_time→trip→route`
+  join): **8.0×** at scale 1 → **10.8×** at 800 k rows → **16.5×** at **8 M rows**
+  (5.6 s vs 93.0 s). Q1/Q2/Q5/Q7/Q8 hold a steady **4–7×** at scale. This is genuine
+  same-backend engine throughput (both hit the identical PostgreSQL), not the JVM
+  floor. On the canonical correct-answer set sf is the faster engine at every scale.
+
+- **🔴 AGG-over-UNION (Q9) — the ADR-0023 headline feature — FAILS on the live
+  endpoint.** Ontop answers it correctly (2 rows) at every scale; **sf-serve returns
+  HTTP 200 then aborts the response body mid-stream** (an uncaught executor error,
+  not even logged). This is the exact bug class ADR-0023's operator tree was built to
+  close — and it is still open *on the path that actually serves queries.* **Root
+  cause (code-traced, honest):** `sf-serve` compiles via
+  `sf_sparql::translate_cached → translate_with` — the **flat unfold path** — *not*
+  `translate_tree`, the ADR-0023 operator-tree path. The tree IR that closed
+  agg-over-union is proven in differential unit tests (`crates/sf-conformance`) but is
+  **not wired into the `serve` endpoint**, so the live head-to-head exercises the flat
+  path and inherits its gaps. Wiring `translate_tree` into `serve` is the fix.
+
+- **🔴 Four more feature classes are silently wrong on sf-serve** (Ontop is the only
+  correct engine): **Q10 sequence property path** → sf returns **0 rows** (Ontop
+  returns all 800/80 k/800 k/8 M); **Q11 MINUS** → sf returns **0 rows** (removes
+  everything; Ontop returns the correct 14/1 334/13 334/133 334); **Q12 FILTER EXISTS**
+  with a join+filter → sf **aborts mid-stream** (Ontop answers 4/400/4 000/40 000);
+  **Q15 DISTINCT-over-join** → sf returns **duplicates** (40 000 rows where Ontop
+  returns 8 000 distinct). Simple variants work (bare `DISTINCT`, single-predicate
+  path, bare `EXISTS`, agg-without-union all return correct rows on sf), so these are
+  flat-path *combination* gaps, not total absences.
+
+- **🟠 Ontop WINS where sf's flat plan degrades.** **Q14 nested multi-scan OPTIONAL**
+  is correct on both engines but sf's flat plan is **catastrophic at scale**: par at
+  scale 1 (1.8 ms vs 1.6 ms) → **176× slower** at 800 k rows (50.8 s vs 0.29 s) →
+  32× slower at 8 M rows (91.1 s vs 2.85 s). Ontop also edges sf on the tiny-result
+  aggregates **Q6/Q13** at scale ≥ 1000 (≈1.3–2.3×) where the result is 2 rows and
+  plan quality, not scan throughput, decides.
+
+- **No ONTOP-501 — the capability gap runs the *other* way.** The premise that Ontop
+  would 501 on paths/subqueries did **not** materialize: **Ontop 5.5.0 answered every
+  one of q1–q15 correctly at every scale.** There is no sf capability advantage in
+  this set; on the contrary, sf-serve is the engine that fails (q9/q12) or silently
+  mis-answers (q10/q11/q15) five of the eight feature classes. The honest bottom line:
+  **sf is materially faster on the OBDA join/scan workload it executes correctly, but
+  Ontop is more correct and more robust across SPARQL feature classes on the live
+  endpoint today.**
+
 ---
 
 ## semantic-fabric results

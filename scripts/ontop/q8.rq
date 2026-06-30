@@ -1,0 +1,7 @@
+# q8 — UNION (two-arm): routes whose shortName OR longName matches a pattern.
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?route ?name WHERE {
+  { ?route a gtfs:Route ; gtfs:shortName ?name . FILTER(STRSTARTS(?name, "R1")) }
+  UNION
+  { ?route a gtfs:Route ; gtfs:longName ?name . FILTER(STRSTARTS(?name, "Route 2")) }
+}

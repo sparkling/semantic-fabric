@@ -10,6 +10,20 @@
 # embedded SQLite, so BENCHMARKS.md compared sf-in-process-SQLite vs Ontop-HTTP-PG,
 # an explicit asymmetry. race.sh removes both asymmetries.)
 #
+# Queries q1..q7 are the simple BGP/join/filter/optional/groupby/orderby set.
+# Queries q8..q15 are the ADR-0023 feature classes (UNION, agg-over-UNION, property
+# path, MINUS, FILTER EXISTS, SUBQUERY, nested OPTIONAL, DISTINCT). For EACH query the
+# race records BOTH engines' HTTP status + row count and classifies the row-parity:
+#   OK         — both 200, sf_rows == ontop_rows (sound, latency is comparable)
+#   MISMATCH   — both 200 but sf_rows != ontop_rows (a correctness gap vs the oracle)
+#   SF-EMPTY   — both 200 but sf returns 0 rows while Ontop returns >0 (sf silent miss)
+#   SF-501     — sf returns a non-200 where Ontop answers (an sf engine error/bug)
+#   ONTOP-501  — Ontop returns a non-200 where sf answers (an sf capability advantage)
+#   BOTH-ERR   — neither engine answers
+# Ontop is treated as the correctness oracle (the reference VKG/OBDA engine). When
+# the parity is not OK, the latency numbers are NOT a like-for-like comparison (one
+# engine is not computing the same result) and must be read with that caveat.
+#
 # Prereqs:
 #   * PostgreSQL at :5432 with the dataset loaded:  scripts/load_gtfs_postgres.sh SCALE
 #   * sf-cli release binary built:                  cargo build --release -p sf-cli
@@ -24,6 +38,8 @@ PGCONN="${3:-host=localhost port=5432 user=henrik dbname=gtfs_bench}"
 SF_PORT="${SF_PORT:-7901}"
 ONTOP_PORT="${ONTOP_PORT:-18080}"
 ONTOP_HOME="${ONTOP_HOME:?set ONTOP_HOME to the unpacked ontop-cli directory}"
+MAXT="${MAXT:-180}"                          # per-curl wall-clock cap (s) — big-scale guard
+QUERIES="${QUERIES:-q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12 q13 q14 q15}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -45,16 +61,22 @@ wait_ready() {  # $1=endpoint ; probe with a real query (sf-serve 501s on empty 
   echo "!! endpoint $1 never became ready" >&2; return 1
 }
 
+http_code() {  # $1=endpoint $2=query-file -> HTTP status (single call)
+  curl -s -o /dev/null -w '%{http_code}' --max-time "$MAXT" \
+    --data-urlencode "query=$(cat "$2")" -H "Accept: text/csv" "$1" 2>/dev/null || echo "000"
+}
+
 rows_of() {  # $1=endpoint $2=query-file ; count CSV result rows (minus header)
-  curl -s --data-urlencode "query=$(cat "$2")" -H "Accept: text/csv" "$1" | tail -n +2 | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' '
+  curl -s --max-time "$MAXT" --data-urlencode "query=$(cat "$2")" -H "Accept: text/csv" "$1" \
+    | tail -n +2 | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' '
 }
 
 time_query() {  # $1=endpoint $2=query-file -> prints median seconds
   local q; q="$(cat "$2")"
-  for _ in 1 2 3; do curl -s -o /dev/null --data-urlencode "query=$q" -H "Accept: text/csv" "$1"; done
+  for _ in 1 2 3; do curl -s -o /dev/null --max-time "$MAXT" --data-urlencode "query=$q" -H "Accept: text/csv" "$1"; done
   local tmp; tmp="$(mktemp)"
   for _ in $(seq 1 "$RUNS"); do
-    curl -s -o /dev/null -w '%{time_total}\n' --data-urlencode "query=$q" -H "Accept: text/csv" "$1"
+    curl -s -o /dev/null --max-time "$MAXT" -w '%{time_total}\n' --data-urlencode "query=$q" -H "Accept: text/csv" "$1"
   done >"$tmp"
   median <"$tmp"; rm -f "$tmp"
 }
@@ -74,36 +96,25 @@ trap 'kill $SF_PID $ONTOP_PID 2>/dev/null || true' EXIT
 wait_ready "$SF_EP"
 wait_ready "$ONTOP_EP"
 echo ">> both endpoints warm; timing $RUNS warm runs/query (median %{time_total})"
-printf "\n%-36s %12s %12s %8s %8s %7s\n" "query" "sf_ms" "ontop_ms" "sf_rows" "ont_rows" "parity"
+printf "\n%-5s %12s %12s %8s %9s %10s\n" "query" "sf_ms" "ontop_ms" "sf_rows" "ont_rows" "status"
 
-for q in q1 q2 q3 q4 q5; do
-  qf="$M/$q.rq"
-  sf_s="$(time_query "$SF_EP" "$qf")"
-  on_s="$(time_query "$ONTOP_EP" "$qf")"
-  sf_r="$(rows_of "$SF_EP" "$qf")"
-  on_r="$(rows_of "$ONTOP_EP" "$qf")"
-  par="OK"; [ "$sf_r" = "$on_r" ] || par="MISMATCH"
-  printf "%-36s %12s %12s %8s %8s %7s\n" "$q" "$(ms "$sf_s")" "$(ms "$on_s")" "$sf_r" "$on_r" "$par"
-done
-
-# Wave-E additions: queries newly answerable after closing ORDER BY expression
-# and GROUP BY multi-branch 501s. Ontop may return 501 on q7 (expression ORDER BY);
-# if so the Ontop column shows "ERR" and parity shows "N/A".
-for q in q6 q7; do
+for q in $QUERIES; do
   qf="$M/$q.rq"
   [ -f "$qf" ] || continue
-  sf_s="$(time_query "$SF_EP" "$qf")"
-  sf_r="$(rows_of "$SF_EP" "$qf")"
-  # Ontop: attempt but tolerate failure (expression ORDER BY may be unsupported)
-  on_s="N/A"; on_r="N/A"; par="N/A"
-  if http_code="$(curl -s -o /dev/null -w '%{http_code}' --data-urlencode "query=$(cat "$qf")" -H 'Accept: text/csv' "$ONTOP_EP")"; \
-     [ "$http_code" = "200" ]; then
-    on_s="$(time_query "$ONTOP_EP" "$qf")"
-    on_r="$(rows_of "$ONTOP_EP" "$qf")"
-    par="OK"; [ "$sf_r" = "$on_r" ] || par="MISMATCH"
-  fi
-  on_s_ms="N/A"; [ "$on_s" != "N/A" ] && on_s_ms="$(ms "$on_s")"
-  printf "%-36s %12s %12s %8s %8s %7s\n" "$q" "$(ms "$sf_s")" "$on_s_ms" "$sf_r" "$on_r" "$par"
+  sf_code="$(http_code "$SF_EP" "$qf")"
+  on_code="$(http_code "$ONTOP_EP" "$qf")"
+
+  if [ "$sf_code" = "200" ]; then sf_ms="$(ms "$(time_query "$SF_EP" "$qf")")"; sf_r="$(rows_of "$SF_EP" "$qf")"; else sf_ms="ERR"; sf_r="ERR"; fi
+  if [ "$on_code" = "200" ]; then on_ms="$(ms "$(time_query "$ONTOP_EP" "$qf")")"; on_r="$(rows_of "$ONTOP_EP" "$qf")"; else on_ms="ERR"; on_r="ERR"; fi
+
+  if   [ "$sf_code" != "200" ] && [ "$on_code" = "200" ]; then status="SF-501"
+  elif [ "$on_code" != "200" ] && [ "$sf_code" = "200" ]; then status="ONTOP-501"
+  elif [ "$sf_code" != "200" ] && [ "$on_code" != "200" ]; then status="BOTH-ERR"
+  elif [ "$sf_r" = "$on_r" ]; then status="OK"
+  elif [ "$sf_r" = "0" ] && [ "$on_r" != "0" ]; then status="SF-EMPTY"
+  else status="MISMATCH"; fi
+
+  printf "%-5s %12s %12s %8s %9s %10s\n" "$q" "$sf_ms" "$on_ms" "$sf_r" "$on_r" "$status"
 done
 
 echo ""

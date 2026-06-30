@@ -1,0 +1,6 @@
+# q12 — FILTER EXISTS: routes that have at least one trip running in direction 1.
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?route ?short WHERE {
+  ?route a gtfs:Route ; gtfs:shortName ?short .
+  FILTER EXISTS { ?t gtfs:route ?route ; gtfs:direction ?d . FILTER(?d = 1) }
+}

@@ -1,0 +1,6 @@
+# q11 — MINUS: trips that have NO headsign (every 3rd trip has a NULL headsign).
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?t WHERE {
+  ?t a gtfs:Trip .
+  MINUS { ?t gtfs:headsign ?hs }
+}

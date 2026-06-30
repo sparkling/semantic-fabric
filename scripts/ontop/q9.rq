@@ -1,0 +1,7 @@
+# q9 — AGG-over-UNION: COUNT over a UNION with GROUP BY (the headline ADR-0023 feature).
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+SELECT ?agencyName (COUNT(?label) AS ?labelCount) WHERE {
+  ?route a gtfs:Route ; gtfs:agency ?a . ?a foaf:name ?agencyName .
+  { ?route gtfs:shortName ?label } UNION { ?route gtfs:longName ?label }
+} GROUP BY ?agencyName

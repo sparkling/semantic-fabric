@@ -1,0 +1,6 @@
+# q14 — NESTED / MULTI-SCAN OPTIONAL: Trip, OPTIONAL route, OPTIONAL route shortName.
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?t ?r ?s WHERE {
+  ?t a gtfs:Trip .
+  OPTIONAL { ?t gtfs:route ?r . OPTIONAL { ?r gtfs:shortName ?s } }
+}

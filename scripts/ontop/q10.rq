@@ -1,0 +1,5 @@
+# q10 — PROPERTY PATH (sequence): stop_time -> trip -> route via gtfs:trip/gtfs:route.
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+SELECT ?st ?r WHERE {
+  ?st gtfs:trip/gtfs:route ?r
+}
