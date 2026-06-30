@@ -334,11 +334,14 @@ What **is** a clean, defensible comparison:
 
 Stated plainly so the numbers are not over-read:
 
-- **No `serve` HTTP endpoint yet.** The SPARQL 1.2 Protocol endpoint is a scaffold
-  and returns not-implemented; all semantic-fabric numbers here come from the
-  in-process bench/test harness, not an HTTP server.
-- **SQLite-only execution.** The engine emits PostgreSQL/MySQL SQL but only
-  *executes* over embedded SQLite today; there is no wired PostgreSQL executor.
+- ~~**No `serve` HTTP endpoint yet.**~~ **(Superseded 2026-06-30.)** `serve` is now
+  a live SPARQL 1.2 Protocol endpoint (`sf-serve`); the head-to-head above runs it
+  as a warm HTTP server. The *single-engine* `semantic-fabric results` tables below
+  remain in-process bench/test figures (criterion), not HTTP.
+- ~~**SQLite-only execution.**~~ **(Superseded 2026-06-30.)** A PostgreSQL OBDA
+  executor (`exec_pg`) is now wired; `serve --source pg:…` executes over PostgreSQL
+  (used by the head-to-head). The in-process `obda_latency` / `constant_memory`
+  benches below still run over embedded SQLite.
 - **Property paths** are single-predicate `P+` / `P*` only (no arbitrary path
   expressions).
 - **W3C RDB2RDF conformance is not 100%:** 81/82 (SQLite) and 80/81 (PostgreSQL),
