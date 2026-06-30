@@ -217,7 +217,16 @@ fn translate_inner(
     schema: &[TableSchema],
     optimize: bool,
 ) -> Result<Plan> {
-    let mut uf = unfold::Unfolder::new(maps, tbox, dialect);
+    // M6 offline T-mapping: fold Tbox hierarchy into the maps once at startup so
+    // the per-query unfold can use an empty Tbox (no runtime hash-map lookups).
+    let empty_tbox = Tbox::default();
+    let (saturated_maps, uf_tbox) = if tbox.is_empty() {
+        (std::borrow::Cow::Borrowed(maps), tbox)
+    } else {
+        let expanded = saturate::saturate_maps(maps, tbox);
+        (expanded, &empty_tbox)
+    };
+    let mut uf = unfold::Unfolder::new(&saturated_maps, uf_tbox, dialect);
     let (trans, form) = match query {
         Query::Select { pattern, .. } => {
             let t = uf.translate_pattern(pattern)?;
