@@ -105,38 +105,57 @@ the Ontop integration bench planned under ADR-0005. Note also that the absolute
 latency is dominated by the loopback network round-trip to PG plus PG's own query
 execution; the translation contribution is small relative to network/exec.
 
-### Results — OBDA SELECT latency @1x on PostgreSQL (Apple Silicon, macOS, criterion 100 samples)
+### Results — OBDA SELECT latency @1x on PostgreSQL (Apple Silicon, macOS, criterion, single collision-free run, 50 samples / 5 s)
 
 PostgreSQL 17.7 (Homebrew), `localhost:5432`, trust auth, fixture = 893 rows
 (`AGENCY` 2 · `CALENDAR` 3 · `ROUTES` 8 · `STOPS` 40 · `TRIPS` 40 · `STOP_TIMES` 800).
+Each bench process builds the fixture in its own private database `sf_bench_<pid>`
+(see *Fixture isolation* below), so this run could not collide with any other.
 
 | Query | Flat-PG median | Tree-PG median | Tree delta | Profile note |
 |---|---|---|---|---|
-| Q1 routes BGP | 153.1 µs | 146.5 µs | -4.3% | exec-dominated (loopback); within noise |
-| Q2 route→agency join | 216.4 µs | 205.3 µs | -5.1% | exec-dominated; within noise |
-| Q3 stop_time→trip→route (3-way) | 828.6 µs | 1053.6 µs | **+27.2%** | exec-dominated; tree emits a slower 3-way join plan |
-| Q4 route FILTER | 150.2 µs | 144.3 µs | -3.9% | exec-dominated; within noise |
-| Q5 trip OPTIONAL headsign | 163.5 µs | 155.4 µs | -5.0% | exec-dominated; within noise |
-| **geomean** | | | **+1.1%** | tree ≈1% slower overall, driven entirely by Q3 |
+| Q1 routes BGP | 150.2 µs | 162.1 µs | +7.9% | loopback-bound; CIs overlap |
+| Q2 route→agency join | 212.8 µs | 226.8 µs | +6.6% | loopback-bound; CIs overlap |
+| Q3 stop_time→trip→route (3-way) | 812.6 µs | 831.0 µs | +2.3% | exec-dominated; within noise |
+| Q4 route FILTER | 151.0 µs | 155.5 µs | +2.9% | loopback-bound; within noise |
+| Q5 trip OPTIONAL headsign | 176.2 µs | 163.0 µs | -7.5% | loopback-bound; tree edges ahead |
+| **geomean** | | | **+2.3%** | tree ≈ flat — parity within noise |
 
-**Reading the result:** On a live PG source the loopback round-trip + PG query
-execution set a ~150 µs floor, so the tree's translation overhead (the +8–13% seen
-on the in-process SQLite shootout) is swamped and disappears into noise on the four
-cheap queries (Q1/Q2/Q4/Q5), where tree even edges ahead by 4–5% — within run-to-run
-variation at this scale. The one real signal is **Q3, the 3-way
-`stop_time→trip→route` join**: the tree path is **+27.2% slower** there (1.05 ms vs
-0.83 ms). That is not noise — it is reproducible and exec-side, meaning the IQ
-pipeline currently lowers this 3-way join into SQL that PostgreSQL's planner executes
-less efficiently than the flat unfold's SQL for the same query. The geomean across all
-five is **+1.1%** (tree marginally slower), but that single aggregate hides the real
-finding: parity on the cheap queries, a genuine **tree regression on the 3-way join**
-on a PG-class backend. This is the honest, load-bearing datum — a concrete follow-up
-for the ADR-0023 tree-SQL lowering (the 3-way-join plan shape), not a "tree is faster
-on PG" claim.
+**Reading the result — on PG the tree path is at parity with flat.** The geomean is
+**+2.3%** and every query lands within ±8% with wide, overlapping criterion confidence
+intervals (e.g. Q1 tree `[155.5, 174.5] µs` overlaps flat `[149.6, 150.7] µs`; on Q5
+the tree even edges ahead). The loopback round-trip + PG execution set a ~150 µs floor
+that fully **absorbs** the +8–13% translation overhead the tree path costs on the
+sub-50 µs in-process SQLite shootout: once a real DB round-trip + execution dominate,
+the four-stage build→resolve→normalize→lower pipeline is no longer on the critical
+path. There is **no Q3 regression** — the 3-way join (the exec-dominated,
+production-profile query) is +2.3%, squarely within run-to-run noise.
 
-Measured on this box (Apple Silicon, macOS), `--release` via criterion (criterion
-defaults: 3 s warm-up, 100 samples). Numbers are indicative — the
-*invariant* (constant memory, bounded first result), not the absolute latency, is
+**Retraction.** Earlier revisions of this section reported PG numbers measured against
+a **broken shared-database fixture** and drew two now-retracted conclusions: (a) any
+"tree ~8% faster on PG" reading, and (b) a "+27.2% tree regression on the 3-way join".
+Both were **measurement artifacts** of a fixture-collision bug, not real signal. The
+old fixture created the six GTFS tables under global names in the *shared* scratch DB
+(`dbname=$USER`) and tore them down with a global `DROP TABLE`; when two bench
+processes ran concurrently (or a leftover lingered), one process's teardown yanked
+tables out from under another mid-run — crashing iterations
+(`relation "TRIPS" does not exist`) and distorting the surviving timings (an inflated
+flat baseline makes tree look faster; cross-run interference can swing a single query
+like Q3 wildly). The honest, collision-free result is **tree-at-parity-with-flat on PG**.
+
+**Fixture isolation (re-runnable, collision-free).** `PgFixture::new`
+(`benches/obda_latency.rs`) creates a private database `sf_bench_<pid>`, builds the
+whole fixture inside it, and `Drop` runs `DROP DATABASE IF EXISTS "sf_bench_<pid>" WITH
+(FORCE)` — so two concurrent `cargo bench` invocations get distinct databases and can
+never touch each other's tables (verified: two parallel runs, exit 0, zero crashes,
+distinct `db=sf_bench_<pid>`). A per-process *schema* would **not** have sufficed:
+`introspect_postgres` (sf-sql) scopes its `information_schema` lookups by table name
+only, so a sibling process's same-named tables in another schema would double-count
+columns; a per-process **database** isolates the catalog cleanly without touching sf-sql.
+
+Measured on this box (Apple Silicon, macOS), `--release` via criterion (3 s warm-up,
+50 samples, 5 s measurement), one clean single-process run. Numbers are indicative —
+the *invariant* (constant memory, bounded first result), not the absolute latency, is
 the load-bearing result; absolute latency feeds the Path-B objective (ADR-0013).
 
 ### Dataset scale (rows per scale factor `s`)

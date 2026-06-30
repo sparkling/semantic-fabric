@@ -57,41 +57,86 @@ fn pg_conn_str() -> String {
 }
 
 /// PostgreSQL bench fixture. Holds a live client + the parsed mapping + introspected
-/// schemas. The six GTFS tables are created in the scratch DB for this run and
-/// torn down in `Drop` (best-effort).
+/// schemas.
+///
+/// **Process isolation (fixture-collision fix).** Each bench process creates its
+/// own private database `sf_bench_<pid>` and runs the whole fixture there. Two
+/// concurrent `cargo bench` invocations therefore get distinct databases and can
+/// never touch each other's tables — the previous design created the six GTFS
+/// tables in the *shared* scratch DB (`dbname=$USER`) under global names and tore
+/// them down with a global `DROP TABLE`, so a second run's setup/teardown would
+/// yank tables out from under a live run (→ `relation "TRIPS" does not exist`
+/// crashes and distorted timings). A per-process schema would not have sufficed:
+/// `introspect_postgres` (sf-sql) scopes its `information_schema` lookups by table
+/// name only, so a sibling process's same-named tables in another schema would
+/// double-count columns. A per-process **database** isolates the catalog cleanly
+/// without touching sf-sql. `Drop` only ever targets THIS process's own DB.
 struct PgFixture {
     rt: tokio::runtime::Runtime,
     client: tokio_postgres::Client,
+    /// `host=… port=… user=…` (no `dbname`) — used to reach the default scratch DB
+    /// for the admin `CREATE DATABASE` / `DROP DATABASE` of our private DB.
+    admin_conn_str: String,
+    /// This process's private database name (`sf_bench_<pid>`).
+    db_name: String,
     maps: Vec<TriplesMap>,
     schemas: Vec<TableSchema>,
     counts: workload::RowCounts,
 }
 
+/// Connect to PG, spawning the connection driver task on the current runtime.
+async fn pg_connect(conn_str: &str) -> Result<tokio_postgres::Client, tokio_postgres::Error> {
+    let (client, conn) = tokio_postgres::connect(conn_str, NoTls).await?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    Ok(client)
+}
+
 impl PgFixture {
-    /// Connect, create + populate the GTFS tables at `scale`, introspect.
-    /// Returns `None` if PG is unreachable (bench groups are skipped).
+    /// Connect, create this process's private DB, populate the GTFS tables at
+    /// `scale`, introspect. Returns `None` if PG is unreachable (groups skipped).
     fn new(scale: u32) -> Option<Self> {
-        let conn_str = pg_conn_str();
+        let admin_conn_str = pg_conn_str();
+        let db_name = format!("sf_bench_{}", std::process::id());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("tokio rt");
-        let client = match rt.block_on(async {
-            let (client, conn) = tokio_postgres::connect(&conn_str, NoTls).await?;
-            tokio::spawn(async move {
-                let _ = conn.await;
-            });
-            Ok::<_, tokio_postgres::Error>(client)
-        }) {
+
+        // 1. Admin-connect to the default scratch DB and (re)create our private DB.
+        //    `WITH (FORCE)` clears any stale same-pid DB left by a crashed prior run.
+        let setup = rt.block_on(async {
+            let admin = pg_connect(&admin_conn_str).await?;
+            let _ = admin
+                .batch_execute(&format!(
+                    r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+                ))
+                .await;
+            admin
+                .batch_execute(&format!(r#"CREATE DATABASE "{db_name}""#))
+                .await?;
+            Ok::<_, tokio_postgres::Error>(())
+        });
+        if let Err(e) = setup {
+            eprintln!("\n[bench] PostgreSQL unavailable ({e}) — skipping PG shootout groups");
+            return None;
+        }
+
+        // 2. Connect to the private DB and build the fixture inside it. The trailing
+        //    `dbname=` keyword overrides any earlier value (libpq last-wins).
+        let fixture_conn_str = format!("{admin_conn_str} dbname={db_name}");
+        let client = match rt.block_on(pg_connect(&fixture_conn_str)) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("\n[bench] PostgreSQL unavailable ({e}) — skipping PG shootout groups");
+                eprintln!(
+                    "\n[bench] could not open private DB {db_name} ({e}) — skipping PG groups"
+                );
                 return None;
             }
         };
         let counts = rt
             .block_on(async {
-                // Idempotent schema setup: drop-if-exists + recreate.
                 client.batch_execute(workload::PG_SCHEMA_SQL).await?;
                 workload::generate_pg(&client, scale).await
             })
@@ -101,7 +146,7 @@ impl PgFixture {
             .expect("introspect PG");
         let maps = driver::mapping().expect("parse mapping");
         eprintln!(
-            "\n[bench] live PG fixture @{scale}x loaded ({conn_str}): \
+            "\n[bench] live PG fixture @{scale}x loaded (db={db_name}): \
              AGENCY {} CALENDAR {} ROUTES {} STOPS {} TRIPS {} STOP_TIMES {} = {} rows",
             counts.agency,
             counts.calendar,
@@ -114,6 +159,8 @@ impl PgFixture {
         Some(PgFixture {
             rt,
             client,
+            admin_conn_str,
+            db_name,
             maps,
             schemas,
             counts,
@@ -124,9 +171,20 @@ impl PgFixture {
 impl Drop for PgFixture {
     fn drop(&mut self) {
         let _ = self.counts.total();
-        let _ = self
-            .rt
-            .block_on(async { self.client.batch_execute(workload::PG_DROP_SQL).await });
+        let admin_conn_str = self.admin_conn_str.clone();
+        let db_name = self.db_name.clone();
+        // Drop ONLY this process's private DB. `WITH (FORCE)` terminates our own
+        // still-open fixture connection so the drop succeeds; a concurrent run owns
+        // a different `sf_bench_<pid>` and is never touched.
+        let _ = self.rt.block_on(async move {
+            let admin = pg_connect(&admin_conn_str).await?;
+            admin
+                .batch_execute(&format!(
+                    r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+                ))
+                .await?;
+            Ok::<_, tokio_postgres::Error>(())
+        });
     }
 }
 
