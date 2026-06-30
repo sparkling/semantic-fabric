@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 
 use sf_core::datatype::XsdTypeCode;
 use sf_core::{NamedNode, Term};
+use spargebra::algebra::Expression;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
 use super::{AggKind, OrderKey, PathClosure, Scan, SqlCond, TermDef};
@@ -39,13 +40,15 @@ pub type Var = Box<str>;
 #[derive(Debug, Clone)]
 pub enum IqNode {
     // ---- unary substitution carrier (the heavy lifter) ---------------------------
-    /// Ontop `ConstructionNode`. `subst` **reuses** [`TermDef`] as its var→term payload
-    /// (ADR-0007 term-construction lifting); `project` is the declared projected
-    /// variable set. Construction∘Construction folds to one during normalization
+    /// Ontop `ConstructionNode`. `subst` maps each variable to a [`BindDef`] — a resolved
+    /// [`TermDef`] (ADR-0007 term-construction lifting) or a **symbolic** `spargebra`
+    /// expression carried until per-leaf-CQ lowering (a `BIND(?v := expr)` over a variable
+    /// has no column until its triple resolves; M3 design §2.2). `project` is the declared
+    /// projected variable set. Construction∘Construction folds to one during normalization
     /// (compose substitutions, intersect projections — ADR-0023 §Normalization).
     Construction {
         child: Box<IqNode>,
-        subst: BTreeMap<Var, TermDef>,
+        subst: BTreeMap<Var, BindDef>,
         project: Vec<Var>,
     },
 
@@ -79,9 +82,11 @@ pub enum IqNode {
     },
 
     // ---- n-ary bag union ---------------------------------------------------------
-    /// `UnionNode` (bag semantics — no dedup). **Invariant:** every child projects
-    /// exactly `project`; arms with a narrower scope are NULL-padded via a
-    /// [`IqNode::Construction`] to the common signature before they become children.
+    /// `UnionNode` (bag semantics — no dedup). `project` is the union of the arms' scopes,
+    /// kept as **scope bookkeeping for parent resolution only** (M3 design §5.2, R3). Arms
+    /// are NOT padded to a common signature: each arm keeps its own bindings, and a
+    /// variable an arm does not bind stays genuinely **unbound/absent** at lowering
+    /// (matching the flat `Vec<Branch>` bag union — never a concrete NULL-valued term).
     Union {
         children: Vec<IqNode>,
         project: Vec<Var>,
@@ -203,9 +208,14 @@ pub enum ColOrConst {
 /// new SQL-emission path is introduced.
 #[derive(Debug, Clone)]
 pub enum IqCond {
-    /// A pushable leaf/boolean condition over raw columns + bound constants — the flat
-    /// vocabulary, reused verbatim (its own `And`/`Or`/`Not` cover boolean nesting that
-    /// contains no `EXISTS`).
+    /// A variable-referencing FILTER / ON leaf carried as a raw `spargebra` expression.
+    /// Kept symbolic through resolve + normalize (a FILTER above a `Union` has no single
+    /// column for a variable — each arm binds it to a different alias/column, or to a
+    /// constructed term with no column), then lowered to `Sql` **per leaf-CQ** at LOWER
+    /// via the flat `lower_filter_expr` (M3 design §2.1).
+    Expr(Box<Expression>),
+    /// A resolved/pushed leaf over raw columns + bound constants — the flat vocabulary,
+    /// filled at LOWER and by the §4 (M4) rewrite rules.
     Sql(SqlCond),
     And(Vec<IqCond>),
     Or(Vec<IqCond>),
@@ -215,6 +225,19 @@ pub enum IqCond {
     Exists(Box<IqNode>),
     /// `FILTER NOT EXISTS { P }` and `MINUS` — a correlated anti-join over the subtree.
     NotExists(Box<IqNode>),
+}
+
+/// A [`IqNode::Construction`] substitution entry: either a resolved [`TermDef`] (the
+/// existing term-construction-lifting carrier — `Const`/`Derived`/`Coalesce`/`Concat`/
+/// `Agg`), or a **symbolic** `spargebra` expression carried until per-leaf-CQ lowering
+/// (a `BIND(?v := expr)` over a variable has no column until its triple resolves; M3
+/// design §2.2). LOWER folds `Resolved(td)` straight into the branch bindings and
+/// resolves `Expr(e)` via the flat `bind_term_def` against the now-known per-branch
+/// bindings (mirroring the `AggArg::Var|Expr` and `OrderKey.expr` precedents).
+#[derive(Debug, Clone)]
+pub enum BindDef {
+    Resolved(TermDef),
+    Expr(Box<Expression>),
 }
 
 impl IqNode {

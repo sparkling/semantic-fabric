@@ -738,6 +738,38 @@ accurate. Each preserves the §1–§6 intent; none relaxes a `=_bag` preconditi
   giving `build_tree` the resolution context (mappings/schema/dialect). `=_bag`: inline
   resolution *is* the flat model's proven resolution, unchanged.
 
+* **M3 — FILTER/BIND resolve at per-leaf-CQ LOWER, not at build (corrects the Option-B
+  timing).** The Option-B note above governs **triple** resolution; the prior reading
+  "lower FILTER/BIND inline at build" is **wrong** — a FILTER above a `Union` references a
+  variable that binds a *different column in each arm* (`var_col` reads branch-local
+  bindings), so it has no single `SqlCond` until the union is split into leaf-CQs. The
+  tree therefore carries FILTER/ON conditions and BIND definitions **symbolically**
+  (`IqCond::Expr(Box<Expression>)`; `Construction.subst: BTreeMap<Var, BindDef>` with
+  `BindDef = Resolved(TermDef) | Expr(Box<Expression>)`) through resolve + normalize, and
+  resolves them to `SqlCond`/`TermDef` **at LOWER, per resulting branch**, by reusing the
+  IDENTICAL flat `lower_filter_expr` / `bind_term_def` (the same functions the flat path
+  calls — just at the point where each branch has one bindings map). This retires the M2
+  context-free 501s. (Full contract: `docs/design/ADR-0023-M3-resolution-pipeline.md`
+  §1–§2.) `=_bag`: the resolver is the proven flat function, applied per-branch exactly as
+  `unfold.rs:136-142` does.
+
+* **M3 — `Union` invariant relaxed (no bound NULL-padding).** The §1 `Union` doc-invariant
+  "every child projects exactly `project`, NULL-padding narrower arms via a Construction"
+  **contradicts** the flat oracle (`unfold.rs` `l.branches.extend(r.branches)` — a
+  variable absent from an arm is genuinely UNBOUND) and has no `TermDef` representation.
+  Corrected: each arm keeps its own bindings; an unbound projected variable stays
+  **ABSENT** at lowering (never a concrete `TermDef`); `Union.project` is scope
+  bookkeeping for parent resolution only. (M3 design §5.2, ledger R3.)
+
+* **M3 — §5.1 `SubPlan` layering + scope correction.** `LogicalSource::SubPlan(Box<Plan>)`
+  as written in §5.1 is a **cyclic crate dependency** (`Plan ∈ sf-sparql`, `LogicalSource ∈
+  sf-core`, `sf-sparql → sf-core` only). The derived-table source belongs at the
+  **sf-sparql `Scan` level** (a `Scan`-local source enum), rendered by `emit` as
+  `( <nested SELECT> ) AS t{alias}` (mirroring the existing `Query` arm). Also:
+  **multi-scan / Union OPTIONAL right is REMOVED from the §5.2 SubPlan-501 list** — the
+  flat oracle already lowers it via `leftjoin::left_join_branches` (the ISWC-2018
+  `(P⋈R) ∪ (P−R)` decomposition), so the tree reuses that (M3 design §5.3), not a 501.
+
 ---
 
 *Locked. M2–M8 build against §1–§6 (as amended by §9); §4 preconditions and §5.1/§5.2

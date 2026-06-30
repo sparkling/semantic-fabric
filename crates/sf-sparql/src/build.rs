@@ -50,7 +50,7 @@ use spargebra::algebra::{
 };
 use spargebra::term::{NamedNodePattern, TriplePattern, Variable};
 
-use crate::iq::node::{AggArg, AggDef, IqCond, IqNode, Var};
+use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{AggKind, OrderKey, TermDef};
 use crate::unfold::ground_term_to_term;
 use crate::{Error, Result};
@@ -194,7 +194,10 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Resul
                 project.push(v.clone());
             }
             let mut subst = BTreeMap::new();
-            subst.insert(v, lower_expr_to_termdef(expression)?);
+            // BIND(?v := expr) is carried SYMBOLIC (BindDef::Expr) and resolved per
+            // leaf-CQ at LOWER via the flat bind_term_def (M3 design §2.2): a variable /
+            // CONCAT / arithmetic expression has no column until its triple resolves.
+            subst.insert(v, BindDef::Expr(Box::new(expression.clone())));
             Ok(IqNode::Construction {
                 child: Box::new(child),
                 subst,
@@ -341,20 +344,17 @@ fn lower_iqcond(expr: &Expression, current_graph: Option<&NamedNode>) -> Result<
             lower_iqcond(a, current_graph)?,
             lower_iqcond(b, current_graph)?,
         ])),
-        // A pushable leaf the flat lower_filter_expr resolves to a SqlCond over raw
-        // columns — unavailable context-free (the Intensional leaves are unresolved,
-        // and there is no dialect). Deferred to resolution → tracked sound-501 (M3);
-        // never a silent wrong answer (module docs class 1).
-        other => Err(Error::Unsupported(format!(
-            "FILTER condition leaf needs bound-column resolution (M3) → 501: {other:?}"
-        ))),
+        // A pushable leaf is carried SYMBOLIC (IqCond::Expr) and resolved to a SqlCond
+        // per leaf-CQ at LOWER via the flat lower_filter_expr (M3 design §2.1): a FILTER
+        // above a Union has no single column for a variable until the union is split.
+        other => Ok(IqCond::Expr(Box::new(other.clone()))),
     }
 }
 
-/// Lower a `BIND` / aggregate-argument expression to a [`TermDef`], reusing the
-/// shape of [`crate::unify::bind_term_def`] (design §2 Extend arm). Context-free,
-/// only a constant IRI/literal is lowerable; a variable / `CONCAT` / arithmetic term
-/// needs the inner bindings → "non-lowerable → 501" (module docs class 2).
+/// Lower an aggregate-argument expression to a [`TermDef`] (design §2 Group arm; `BIND`
+/// is now carried symbolically as [`BindDef::Expr`], not via this fn). Context-free, only
+/// a constant IRI/literal is lowerable; a variable / `CONCAT` / arithmetic aggregate
+/// argument stays a tracked sound-501 (M3 design §2.3).
 fn lower_expr_to_termdef(expr: &Expression) -> Result<TermDef> {
     match expr {
         Expression::NamedNode(n) => Ok(TermDef::Const(Term::NamedNode(n.clone()))),
@@ -625,10 +625,17 @@ mod tests {
     }
 
     #[test]
-    fn filter_pushable_leaf_is_tracked_501() {
-        // A comparison needs bound-column resolution (M3) → 501, never silently wrong.
-        let r = build_tree(&pattern("SELECT * WHERE { ?s ?p ?o FILTER(?o > 5) }"), None);
-        assert!(matches!(r, Err(Error::Unsupported(_))), "{r:?}");
+    fn filter_pushable_leaf_is_symbolic_expr() {
+        // A comparison is carried SYMBOLIC (IqCond::Expr), resolved per leaf-CQ at LOWER
+        // (M3 design §2.1) — no longer a build-time 501.
+        let t = build_tree(&pattern("SELECT * WHERE { ?s ?p ?o FILTER(?o > 5) }"), None).unwrap();
+        let IqNode::Construction { child, .. } = &t else {
+            panic!("expected Project, got {t:?}");
+        };
+        let IqNode::Filter { cond, .. } = child.as_ref() else {
+            panic!("expected Filter, got {child:?}");
+        };
+        assert!(matches!(cond.as_slice(), [IqCond::Expr(_)]), "{cond:?}");
     }
 
     #[test]
@@ -694,19 +701,25 @@ mod tests {
         let IqNode::Construction { subst, project, .. } = &t else {
             panic!("expected Construction, got {t:?}");
         };
-        assert!(matches!(subst.get("c"), Some(TermDef::Const(_))));
+        // BIND is carried symbolic (BindDef::Expr) and resolved at LOWER (M3 §2.2).
+        assert!(matches!(subst.get("c"), Some(BindDef::Expr(_))));
         assert_eq!(*project, vec_var(&["s", "p", "o", "c"]));
     }
 
     #[test]
-    fn extend_variable_expression_is_501() {
-        // BIND(?o AS ?c): a variable term needs the inner bindings (M3) → 501.
+    fn extend_variable_expression_is_symbolic_bind() {
+        // BIND(?o AS ?c): a variable term is carried SYMBOLIC (BindDef::Expr), resolved
+        // per leaf-CQ at LOWER (M3 design §2.2) — no longer a build-time 501.
         let e = GraphPattern::Extend {
             inner: Box::new(bgp(vec![triple("s", "p", "o")])),
             variable: var("c"),
             expression: Expression::Variable(var("o")),
         };
-        assert!(matches!(build_tree(&e, None), Err(Error::Unsupported(_))));
+        let t = build_tree(&e, None).unwrap();
+        let IqNode::Construction { subst, .. } = &t else {
+            panic!("expected Construction, got {t:?}");
+        };
+        assert!(matches!(subst.get("c"), Some(BindDef::Expr(_))));
     }
 
     #[test]
