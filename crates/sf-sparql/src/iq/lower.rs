@@ -267,16 +267,23 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
             // pattern, THEN FILTER — `unfold.rs:135-142`), so peel the leading FILTER(s)
             // and apply their conds per branch once the bindings are in place (R4).
             let (body, filters) = peel_filters(*child);
-            let mut branches = lower_node(body, dialect)?;
-            for b in &mut branches {
-                fold_subst(&subst, b)?;
+            let branches = lower_node(body, dialect)?;
+            let mut out = Vec::with_capacity(branches.len());
+            for mut b in branches {
+                // A `fold_subst` shared-var unify may prove the branch unsatisfiable
+                // (provably disjoint constants) — drop it, mirroring the flat `merge`
+                // `None` prune (§5 / R4), never a silent wrong row.
+                if !fold_subst(&subst, &mut b)? {
+                    continue;
+                }
                 for cond in &filters {
-                    apply_conds(cond, b, dialect)?;
+                    apply_conds(cond, &mut b, dialect)?;
                 }
                 b.bindings
                     .retain(|k, _| project.iter().any(|p| p.as_ref() == k.as_str()));
+                out.push(b);
             }
-            Ok(branches)
+            Ok(out)
         }
 
         // ---- §5.4 tracked sound-501s (need the §5.1 SubPlan derived table, M5/M7) --
@@ -315,12 +322,26 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
 /// `BIND` can reference a triple-resolved variable; symbolic entries then resolve in
 /// dependency order (a multi-pass fixpoint so `BIND(?y:=?x) . BIND(?z:=?y)` resolves
 /// regardless of the `BTreeMap` order — a still-unresolvable entry stays a sound 501).
-fn fold_subst(subst: &BTreeMap<Var, BindDef>, b: &mut Branch) -> Result<()> {
+/// Fold a `Construction`'s `subst` into one branch's bindings (design §5 Construction).
+/// Returns `Ok(false)` when the fold proved the branch **unsatisfiable** (a shared-var
+/// unify yielded `Empty`) so the caller drops it — mirroring the flat `merge` `None`
+/// prune (`unfold.rs:1194`).
+///
+/// A variable the branch ALREADY binds (e.g. it joined a `Values` leaf that bound it
+/// per-row, or two leaf-CQs share a constructed var) is NOT overwritten: the incoming
+/// definition is **unified** against the existing one via the proven [`unify`] oracle —
+/// `Sat` conds append to `where_conds` (the natural-join equality), `Empty` drops the
+/// branch, `Unsupported` is a tracked sound-501. This is the same variable-by-variable
+/// rule the flat [`merge`](crate::unfold) applies (`unfold.rs:1190-1201`); without it a
+/// `Join(BGP, VALUES)` (or any pre-bound shared var) degenerates to a cartesian product.
+fn fold_subst(subst: &BTreeMap<Var, BindDef>, b: &mut Branch) -> Result<bool> {
     let mut pending: Vec<(&Var, &Expression)> = Vec::new();
     for (v, def) in subst {
         match def {
             BindDef::Resolved(td) => {
-                b.bindings.insert(v.to_string(), td.clone());
+                if insert_or_unify(b, v, td.clone())? {
+                    return Ok(false); // provably disjoint ⇒ drop the branch
+                }
             }
             BindDef::Expr(e) => pending.push((v, e)),
         }
@@ -332,7 +353,9 @@ fn fold_subst(subst: &BTreeMap<Var, BindDef>, b: &mut Branch) -> Result<()> {
         for (v, e) in pending {
             match bind_term_def(e, &b.bindings) {
                 Ok(td) => {
-                    b.bindings.insert(v.to_string(), td);
+                    if insert_or_unify(b, v, td)? {
+                        return Ok(false);
+                    }
                 }
                 Err(why) => {
                     last_err = Some(why);
@@ -349,7 +372,28 @@ fn fold_subst(subst: &BTreeMap<Var, BindDef>, b: &mut Branch) -> Result<()> {
         }
         pending = next;
     }
-    Ok(())
+    Ok(true)
+}
+
+/// Insert `td` as the branch's binding for `v`, or — when `v` is already bound —
+/// **unify** the existing and incoming definitions (the flat `merge` rule, keeping the
+/// existing binding and appending the equality conds). Returns `Ok(true)` iff the two
+/// are provably disjoint (`Unify::Empty`), signalling the branch is unsatisfiable.
+fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
+    match b.bindings.get(v.as_ref()) {
+        None => {
+            b.bindings.insert(v.to_string(), td);
+            Ok(false)
+        }
+        Some(existing) => match unify(existing, &td) {
+            Unify::Sat(conds) => {
+                b.where_conds.extend(conds);
+                Ok(false)
+            }
+            Unify::Empty => Ok(true),
+            Unify::Unsupported(why) => Err(Error::Unsupported(why)),
+        },
+    }
 }
 
 /// Peel the leading `Filter` node(s) directly under a `Construction`, returning the

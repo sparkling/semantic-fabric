@@ -325,6 +325,106 @@ fn translate_inner(
     })
 }
 
+/// Translate a parsed SPARQL query through the **operator-tree (IQ) path** (ADR-0023
+/// M3d shadow), the alternative to the flat [`unfold`]-based [`translate_with`]. It
+/// drives the four-stage tree pipeline — [`build::build_tree`] → [`iq::resolve::resolve`]
+/// → [`iq::normalize::normalize`] → [`iq::lower::lower`] — for the same per-`Query`-form
+/// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK / DESCRIBE
+/// CBD), producing a [`Plan`] the SAME `exec` runs. The cascade optimizer is **not**
+/// applied (the tree pipeline reaches the lowerable spine directly), so this is the
+/// tree analogue of the unoptimized base translation; it must be `=_bag` to the flat
+/// path (M3 design §7 — proved by the `differential_tree` shadow test).
+///
+/// **This is the shadow path, NOT the default.** [`translate`]/[`translate_with`] stay
+/// the production engine and the proven oracle (M3 design §7: never switch before a
+/// full green differential window).
+///
+/// The single [`iq::resolve::ResolveCx`] threads ONE alias counter across the whole
+/// query, so sibling patterns receive disjoint scan aliases (M3 design §3.2).
+pub fn translate_tree(
+    query: &Query,
+    maps: &[TriplesMap],
+    tbox: &Tbox,
+    dialect: Dialect,
+) -> Result<Plan> {
+    let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect);
+    // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
+    // (one alias counter) is threaded by `&mut`, so a query with several patterns
+    // (e.g. DESCRIBE's CBD join) keeps disjoint aliases across them.
+    let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
+        let built = build::build_tree(pattern, None)?;
+        let resolved = iq::resolve::resolve(built, &mut cx)?;
+        let normalized = iq::normalize::normalize(resolved)?;
+        iq::lower::lower(normalized, dialect)
+    };
+
+    match query {
+        // SELECT — `lower` already produced the projected-variable `PlanForm::Select`
+        // from the tree's outermost `Construction.project` (the SELECT scope).
+        Query::Select { pattern, .. } => compile(pattern),
+        // CONSTRUCT — compile the WHERE pattern, then carry the construction template
+        // (exactly the flat core's `PlanForm::Construct` wrapping).
+        Query::Construct {
+            template, pattern, ..
+        } => {
+            let mut plan = compile(pattern)?;
+            plan.form = PlanForm::Construct {
+                template: template.clone(),
+            };
+            Ok(plan)
+        }
+        // ASK — compile the WHERE pattern, carry the `Ask` form.
+        Query::Ask { pattern, .. } => {
+            let mut plan = compile(pattern)?;
+            plan.form = PlanForm::Ask;
+            Ok(plan)
+        }
+        // DESCRIBE — Concise Bounded Description, replicated from the flat core: wrap
+        // the WHERE in a CBD `?v ?__sf_p ?__sf_o` join per described resource and emit
+        // a CONSTRUCT over the synthetic predicate/object (M3 design §7 "same template/
+        // cbd/current_graph wrapping the flat core uses").
+        Query::Describe { pattern, .. } => {
+            let (describe_vars, inner_pat) = match pattern {
+                GraphPattern::Project { variables, inner } => {
+                    (variables.clone(), inner.as_ref().clone())
+                }
+                other => (Vec::new(), other.clone()),
+            };
+            if describe_vars.is_empty() {
+                return Err(Error::Unsupported(
+                    "DESCRIBE * (wildcard) is not supported → 501".to_owned(),
+                ));
+            }
+            let var_p = Variable::new_unchecked("__sf_describe_p");
+            let var_o = Variable::new_unchecked("__sf_describe_o");
+            let mut cbd_pattern = inner_pat;
+            for v in &describe_vars {
+                cbd_pattern = GraphPattern::Join {
+                    left: Box::new(cbd_pattern),
+                    right: Box::new(GraphPattern::Bgp {
+                        patterns: vec![TriplePattern {
+                            subject: TermPattern::Variable(v.clone()),
+                            predicate: NamedNodePattern::Variable(var_p.clone()),
+                            object: TermPattern::Variable(var_o.clone()),
+                        }],
+                    }),
+                };
+            }
+            let template = describe_vars
+                .iter()
+                .map(|v| TriplePattern {
+                    subject: TermPattern::Variable(v.clone()),
+                    predicate: NamedNodePattern::Variable(var_p.clone()),
+                    object: TermPattern::Variable(var_o.clone()),
+                })
+                .collect();
+            let mut plan = compile(&cbd_pattern)?;
+            plan.form = PlanForm::Construct { template };
+            Ok(plan)
+        }
+    }
+}
+
 /// Translate through the compiled-plan cache (ADR-0007 *Plan cache, hot path*):
 /// a repeated query at the same `⟨T, M⟩` + schema `epoch` reuses its plan instead
 /// of recompiling. Keying is collision-safe — the canonical algebra disambiguates
