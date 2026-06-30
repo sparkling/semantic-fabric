@@ -64,6 +64,7 @@ use spargebra::term::Variable;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 use spargebra::Query;
 
+pub mod build;
 pub mod cache;
 pub mod cascade;
 pub mod dump;

@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use sf_core::datatype::XsdTypeCode;
 use sf_core::{NamedNode, Term};
-use spargebra::term::TriplePattern;
+use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
 use super::{AggKind, OrderKey, PathClosure, Scan, SqlCond, TermDef};
 
@@ -215,4 +215,95 @@ pub enum IqCond {
     Exists(Box<IqNode>),
     /// `FILTER NOT EXISTS { P }` and `MINUS` — a correlated anti-join over the subtree.
     NotExists(Box<IqNode>),
+}
+
+impl IqNode {
+    /// The bottom-up *variable scope* this node publishes (design-lock §1: "every
+    /// node computes a bottom-up `scope` on demand" — the single invariant that
+    /// dissolves the flat model's eager-flattening deferrals). The list is
+    /// deterministic, de-duplicated, and in a stable bottom-up order, so a parent
+    /// `InnerJoin`/`LeftJoin`/`Union` composes over a child's scope **without
+    /// flattening it** — the property the M2 builder relies on to populate
+    /// `Union.project` and an `Extend`'s `Construction.project` (design-lock §2).
+    ///
+    /// Per-variant scope (design-lock §1 / §2):
+    /// * `Construction`/`Union` — the declared `project` (the node owns its scope).
+    /// * `Filter`/`Distinct`/`Slice`/`OrderBy` — the child's scope (a query modifier
+    ///   never adds or drops a variable).
+    /// * `InnerJoin` — the de-duplicated union of every child's scope.
+    /// * `LeftJoin` — left scope ++ right scope (right-only vars are nullable in the
+    ///   output, but still in scope).
+    /// * `Aggregation` — the grouping keys ++ each aggregate's output variable (the
+    ///   node owns its scope, closing the agg-over-UNION binding bug, design §4.14).
+    /// * `Values`/`Empty` — the declared `vars`; `True` — none (the empty tuple).
+    /// * `Intensional` — the variables in the triple pattern's subject/predicate/
+    ///   object positions (the `graph` here is a resolved *constant*, never a var).
+    /// * `Extensional` — its `bind` keys (the variables the resolved relation reads).
+    /// * `Path` — empty: a [`PathClosure`](super::PathClosure) is keyed by the
+    ///   canonical `sf_s`/`sf_o` raw columns and carries **no** SPARQL variable
+    ///   names, so none are recoverable here. (The M2 builder never emits `Path` — it
+    ///   defers a property-path closure to resolution, design §5.2 item 3.)
+    pub fn output_vars(&self) -> Vec<Var> {
+        match self {
+            IqNode::Construction { project, .. } | IqNode::Union { project, .. } => project.clone(),
+            IqNode::Filter { child, .. }
+            | IqNode::Distinct { child }
+            | IqNode::Slice { child, .. }
+            | IqNode::OrderBy { child, .. } => child.output_vars(),
+            IqNode::InnerJoin { children, .. } => {
+                let mut out = Vec::new();
+                for c in children {
+                    push_unique_all(&mut out, c.output_vars());
+                }
+                out
+            }
+            IqNode::LeftJoin { left, right, .. } => {
+                let mut out = left.output_vars();
+                push_unique_all(&mut out, right.output_vars());
+                out
+            }
+            IqNode::Aggregation { grouping, aggs, .. } => {
+                let mut out = Vec::new();
+                push_unique_all(&mut out, grouping.clone());
+                for a in aggs {
+                    push_unique(&mut out, a.var.clone());
+                }
+                out
+            }
+            IqNode::Values { vars, .. } | IqNode::Empty { vars } => vars.clone(),
+            IqNode::Extensional { bind, .. } => bind.keys().cloned().collect(),
+            IqNode::Intensional { pattern, .. } => triple_pattern_vars(pattern),
+            IqNode::True | IqNode::Path { .. } => Vec::new(),
+        }
+    }
+}
+
+/// Push `v` onto `out` iff absent — a small stable-order de-duplicator for scopes.
+fn push_unique(out: &mut Vec<Var>, v: Var) {
+    if !out.contains(&v) {
+        out.push(v);
+    }
+}
+
+/// Push every element of `vs` onto `out`, de-duplicating in stable order.
+fn push_unique_all(out: &mut Vec<Var>, vs: Vec<Var>) {
+    for v in vs {
+        push_unique(out, v);
+    }
+}
+
+/// The variables a triple pattern binds, in subject→predicate→object order
+/// (de-duplicated, so a repeated variable such as `?x ?x ?x` is listed once).
+fn triple_pattern_vars(tp: &TriplePattern) -> Vec<Var> {
+    let mut out = Vec::new();
+    if let TermPattern::Variable(v) = &tp.subject {
+        push_unique(&mut out, v.as_str().into());
+    }
+    if let NamedNodePattern::Variable(v) = &tp.predicate {
+        push_unique(&mut out, v.as_str().into());
+    }
+    if let TermPattern::Variable(v) = &tp.object {
+        push_unique(&mut out, v.as_str().into());
+    }
+    out
 }

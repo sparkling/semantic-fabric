@@ -715,6 +715,29 @@ accurate. Each preserves the §1–§6 intent; none relaxes a `=_bag` preconditi
   subtree collapses to the flat `SqlCond::Exists`/`NotExists` (§5), so no new SQL path is
   added. `=_bag`: unchanged — `IqCond` is a representational carrier, not a rewrite.
 
+* **M2/M3 — resolution architecture: inline resolution during build (Option B), not a
+  deferred Intensional pass.** §2 was internally inconsistent on resolution *timing*:
+  `Bgp → Intensional` ("resolved later") yet `Extend`/`Filter` "lower expr at build" —
+  impossible together, because a FILTER/BIND over a triple's variable needs that
+  triple's resolved columns. **Decision:** `build_tree` resolves triple patterns
+  **inline** against the (offline-consolidated) T-mappings — reusing the proven flat
+  `bgp()` machinery — producing `Extensional`+`Construction` (and a `Union` for a
+  predicate with several triples-maps), establishing the variable→column scope, then
+  lowering FILTER/BIND leaves inline via the existing `lower_filter_expr` /
+  `bind_term_def` (columns now known). The **operator structure**
+  (`InnerJoin`/`LeftJoin`/`Union`/`Aggregation`/`Distinct`/…) is preserved as tree nodes
+  — **no eager flattening**, the ADR-0023 goal — and normalization (§3/§4) + lowering
+  (§5) run on the resolved tree. This delivers every ADR-0023 guarantee (operator tree
+  for logical rewrites, no eager flattening, offline T-mappings, `=_bag`) while
+  **maximising reuse** of the proven flat machinery (harness "reuse over new") and
+  avoiding a parallel unresolved-expression type system + a re-implemented resolve pass.
+  `IqNode::Intensional` stays in the enum as the conceptual unresolved-pattern leaf (and
+  for any future lazy-resolution / SERVICE path). The **M2** structural builder
+  (`build.rs`, context-free) emits `Intensional` + tracked sound-501s for the
+  column-dependent leaves (FILTER leaf / non-constant BIND); **M3** retires those by
+  giving `build_tree` the resolution context (mappings/schema/dialect). `=_bag`: inline
+  resolution *is* the flat model's proven resolution, unchanged.
+
 ---
 
 *Locked. M2–M8 build against §1–§6 (as amended by §9); §4 preconditions and §5.1/§5.2

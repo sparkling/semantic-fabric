@@ -815,7 +815,7 @@ enum PredMatch {
 
 /// A VALUES inline ground term → an RDF [`Term`]. A quoted triple term
 /// (SPARQL 1.2 `sparql-12`) is deferred → 501 (never silent).
-fn ground_term_to_term(gt: &GroundTerm) -> Result<Term> {
+pub(crate) fn ground_term_to_term(gt: &GroundTerm) -> Result<Term> {
     match gt {
         GroundTerm::NamedNode(n) => Ok(Term::NamedNode(n.clone())),
         GroundTerm::Literal(l) => Ok(Term::Literal(l.clone())),
