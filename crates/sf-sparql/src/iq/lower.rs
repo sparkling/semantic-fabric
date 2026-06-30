@@ -63,7 +63,7 @@ use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{
     AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, SqlCond, TermDef,
 };
-use crate::leftjoin::left_join_branches;
+use crate::leftjoin::{inner_join_one, left_join_branches, not_exists_cond_for};
 use crate::unfold::{group_key_columns, join_branches, single_column_of};
 use crate::unify::{bind_term_def, filter_cond, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
@@ -175,14 +175,21 @@ fn lower_spine(node: IqNode, dialect: sf_sql::Dialect, spine: &mut Spine) -> Res
         // leaf): the projected scope is its output scope; fold it to branches.
         other => {
             spine.project.get_or_insert_with(|| other.output_vars());
-            lower_node(other, dialect)
+            lower_node(other, dialect, false)
         }
     }
 }
 
 /// Fold a relational subtree to a bag of [`Branch`]es (design §5), bottom-up. A node may
 /// yield several branches: a `Union` arm-per-branch, a multi-branch OPTIONAL decomposition.
-fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
+///
+/// `decompose` forces every `LeftJoin` in this subtree to lower to its OPTS-FREE
+/// `(P⋈R)∪(P−R)` form (never the efficient single-scan `OptJoin`). It is set ONLY while
+/// lowering the RIGHT operand of an enclosing `LeftJoin` (§5.3 nested-right closure): the
+/// right of a `LeftJoin` must be opts-free to be re-feedable into [`left_join_branches`].
+/// At top level (and on a `LeftJoin`'s LEFT operand) it stays `false`, so the simple
+/// non-nested OPTIONAL keeps the efficient `OptJoin` path (no perf regression).
+fn lower_node(node: IqNode, dialect: sf_sql::Dialect, decompose: bool) -> Result<Vec<Branch>> {
     match node {
         // ---- leaves --------------------------------------------------------------
         IqNode::Extensional { scan, bind } => {
@@ -226,7 +233,7 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
             // merge is a pure CROSS JOIN; the shared-var equalities ride `cond`.
             let mut acc = vec![Branch::empty()];
             for child in children {
-                let cbr = lower_node(child, dialect)?;
+                let cbr = lower_node(child, dialect, decompose)?;
                 acc = join_branches(acc, cbr)?;
                 if acc.is_empty() {
                     break;
@@ -240,18 +247,32 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
 
         // ---- left join: §5.3 dispatcher, reuse left_join_branches verbatim --------
         IqNode::LeftJoin { left, right, cond } => {
-            let l = lower_node(*left, dialect)?;
-            let r = lower_node(*right, dialect)?;
+            // The LEFT operand inherits the enclosing `decompose` context (a left-nested
+            // OPTIONAL is already opts-free-compatible: `left_join_branches` only requires
+            // the RIGHT to be opts-free, so the left keeps the efficient path at top level).
+            let l = lower_node(*left, dialect, decompose)?;
+            // The RIGHT operand MUST lower to OPTS-FREE branches to be re-feedable into
+            // `left_join_branches` (§5.3 nested-right closure): force any OPTIONAL inside
+            // the right to its `(P⋈R)∪(P−R)` decomposition rather than the OptJoin form.
+            let r = lower_node(*right, dialect, true)?;
             // The OPTIONAL ON-expression (R5 inner FILTER) is reconstructed to a single
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
             let expr = iqconds_to_expr(&cond)?;
-            left_join_branches(l, r, expr.as_ref(), dialect)
+            if decompose {
+                // This `LeftJoin` is ITSELF a right operand: its own output must be
+                // opts-free, so force the decomposition (never the single-scan OptJoin).
+                left_join_decomposed(l, r, expr.as_ref(), dialect)
+            } else {
+                // Top-level / left-nested OPTIONAL: the efficient context-dependent
+                // choice (single-scan right ⇒ OptJoin; multi-branch/multi-scan ⇒ decomp).
+                left_join_branches(l, r, expr.as_ref(), dialect)
+            }
         }
 
         // ---- selection: resolve each cond per resulting branch (R4) ---------------
         IqNode::Filter { child, cond } => {
-            let mut branches = lower_node(*child, dialect)?;
+            let mut branches = lower_node(*child, dialect, decompose)?;
             for b in &mut branches {
                 apply_conds(&cond, b, dialect)?;
             }
@@ -262,7 +283,7 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
         IqNode::Union { children, .. } => {
             let mut out = Vec::new();
             for c in children {
-                out.extend(lower_node(c, dialect)?);
+                out.extend(lower_node(c, dialect, decompose)?);
             }
             Ok(out)
         }
@@ -279,7 +300,7 @@ fn lower_node(node: IqNode, dialect: sf_sql::Dialect) -> Result<Vec<Branch>> {
             // pattern, THEN FILTER — `unfold.rs:135-142`), so peel the leading FILTER(s)
             // and apply their conds per branch once the bindings are in place (R4).
             let (body, filters) = peel_filters(*child);
-            let branches = lower_node(body, dialect)?;
+            let branches = lower_node(body, dialect, decompose)?;
             let mut out = Vec::with_capacity(branches.len());
             for mut b in branches {
                 // A `fold_subst` shared-var unify may prove the branch unsatisfiable
@@ -478,7 +499,7 @@ fn lower_iq_exists(
     negated: bool,
     dialect: sf_sql::Dialect,
 ) -> Result<SqlCond> {
-    let inner = lower_node(node.clone(), dialect)?;
+    let inner = lower_node(node.clone(), dialect, false)?;
     if inner.is_empty() {
         // P produces no branches (unmapped): EXISTS → always false, NOT EXISTS → true.
         return Ok(if negated {
@@ -544,6 +565,53 @@ fn def_reads_opt_alias(def: &TermDef, opt_aliases: &[usize]) -> bool {
     def.columns().iter().any(|c| opt_aliases.contains(&c.alias))
 }
 
+/// The OPTS-FREE form of `left OPT right` — the ISWC-2018 `(P⋈R)∪(P−R)` decomposition,
+/// used when this `LeftJoin` is itself the RIGHT operand of an enclosing `LeftJoin` and so
+/// must yield re-feedable opts-free branches (§5.3 nested-right closure). It mirrors the
+/// multi-branch arm of [`left_join_branches`] but NEVER takes the single-scan `OptJoin`
+/// shortcut (which would leave `opts` set), reusing the proven [`inner_join_one`] /
+/// [`not_exists_cond_for`] helpers verbatim. `right` is opts-free (it was lowered with the
+/// `decompose` flag); a `right` branch still carrying `opts` is a genuine SubPlan shape
+/// (e.g. an OPTIONAL the decomposition could not flatten) and stays a tracked 501 (M5).
+fn left_join_decomposed(
+    left: Vec<Branch>,
+    right: Vec<Branch>,
+    expr: Option<&Expression>,
+    dialect: sf_sql::Dialect,
+) -> Result<Vec<Branch>> {
+    if right.is_empty() {
+        return Ok(left); // OPTIONAL {} = identity
+    }
+    for r in &right {
+        if !r.opts.is_empty() {
+            return Err(Error::Unsupported(
+                "nested OPTIONAL right could not be reduced to opts-free branches → 501 \
+                 (needs the §5.1 SubPlan derived table, M5)"
+                    .to_owned(),
+            ));
+        }
+    }
+    // (P ⋈ Ri) for each right branch, plus one no-match branch (P − R): NOT EXISTS Ri
+    // for every Ri that can possibly match. Identical to `left_join_branches`' multi
+    // arm, so the opts-free output is `=_bag` to it.
+    let mut out = Vec::new();
+    for l in &left {
+        for r in &right {
+            if let Some(b) = inner_join_one(l, r, expr, dialect)? {
+                out.push(b);
+            }
+        }
+        let mut no_match = l.clone();
+        for r in &right {
+            if let Some(cond) = not_exists_cond_for(l, r)? {
+                no_match.where_conds.push(cond);
+            }
+        }
+        out.push(no_match);
+    }
+    Ok(out)
+}
+
 /// Reconstruct the single OPTIONAL ON-`Expression` from a `LeftJoin.cond`
 /// (`Vec<IqCond>`) for [`left_join_branches`] (design §5.3). BUILD split the original
 /// `&&` into conjuncts ([`crate::build`]); re-AND them (AND is associative, so `=_bag` is
@@ -605,7 +673,7 @@ fn lower_aggregation(
     dialect: sf_sql::Dialect,
     spine: &mut Spine,
 ) -> Result<Vec<Branch>> {
-    let inner = lower_node(child, dialect)?;
+    let inner = lower_node(child, dialect, false)?;
     spine.project.get_or_insert_with(|| {
         let mut out = grouping.clone();
         for a in &aggs {
@@ -1014,6 +1082,37 @@ mod tests {
             .filter(|b| has_not_exists(&b.where_conds))
             .count();
         assert_eq!(no_match, 1, "exactly one no-match (NOT EXISTS) branch");
+    }
+
+    /// ADR-0023 M4 wave 3 (§5.3 nested-right closure) — a RIGHT-nested OPTIONAL
+    /// `P OPT (Q OPT R)` lowers WITHOUT a 501: the inner OPTIONAL (the outer's right
+    /// operand) is forced to its OPTS-FREE `(P⋈R)∪(P−R)` decomposition so it is
+    /// re-feedable into the outer `left_join_branches`. Every resulting branch is
+    /// opts-free (no `OptJoin` survives in the right) and the bag carries a no-match
+    /// (`NOT EXISTS`) branch — the multi-branch decomposition shape.
+    #[test]
+    fn right_nested_optional_lowers_opt_free() {
+        let r = try_plan(
+            "SELECT * WHERE { ?s <http://ex/name> ?n \
+             OPTIONAL { ?s <http://ex/dept> ?d . ?d <http://ex/dname> ?dn \
+             OPTIONAL { ?s <http://ex/name> ?m } } }",
+        );
+        let p = r.expect("right-nested OPTIONAL must lower (no 501)");
+        assert!(
+            p.branches.len() >= 2,
+            "(P⋈R)∪(P−R) ⇒ ≥2 branches: {:?}",
+            p.branches
+        );
+        assert!(
+            p.branches.iter().all(|b| b.opts.is_empty()),
+            "every branch is OPTS-FREE (the right was decomposed, not OptJoin): {:?}",
+            p.branches
+        );
+        assert!(
+            p.branches.iter().any(|b| has_not_exists(&b.where_conds)),
+            "a no-match (NOT EXISTS) branch is present: {:?}",
+            p.branches
+        );
     }
 
     /// UNION → a `Vec<Branch>` bag union; each arm carries ONLY its own bindings, and a

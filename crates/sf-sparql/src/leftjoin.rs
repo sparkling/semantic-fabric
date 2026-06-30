@@ -94,7 +94,7 @@ pub fn left_join_branches(
 /// compatibility rule as the LEFT JOIN path.  R2 COALESCE bindings are applied
 /// for nullable left shared variables so their value comes from the right side
 /// when the left was unbound.
-fn inner_join_one(
+pub(crate) fn inner_join_one(
     left: &Branch,
     right: &Branch,
     expr: Option<&spargebra::algebra::Expression>,
@@ -169,7 +169,7 @@ fn inner_join_one(
 /// Build the `NOT EXISTS` condition for one right branch in the no-match branch
 /// of a multi-branch OPTIONAL.  Returns `None` when unification proves the join
 /// always empty (NOT EXISTS is trivially true — omit the condition).
-fn not_exists_cond_for(left: &Branch, right: &Branch) -> Result<Option<SqlCond>> {
+pub(crate) fn not_exists_cond_for(left: &Branch, right: &Branch) -> Result<Option<SqlCond>> {
     let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
     for (var, rdef) in &right.bindings {

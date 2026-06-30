@@ -317,16 +317,35 @@ fn scenarios() -> Vec<Scenario> {
         Scenario {
             name: "join-elim/LJReductionWithLJOnTheRight (right-nested OPTIONAL)",
             family: "join-elim",
-            disp: Disp::NeedsRewrite,
+            // ADR-0023 M4 wave 3 — CLOSED: the top OPTIONAL's right is itself an OPTIONAL
+            // (right-nested LeftJoin). The tree lowers the right operand OPTS-FREE via the
+            // `(P⋈R)∪(P−R)` decomposition (§5.3), then re-feeds it into the outer
+            // `left_join_branches`. The FLAT path still 501s (frozen); the tree EXCEEDS it.
+            disp: Disp::FreePass,
             create: P_SQL,
             r2rml: P_R2RML,
             ttl: P_TTL,
-            // The top OPTIONAL's right is itself an OPTIONAL — right-nested LeftJoin,
-            // unrepresentable as a single OptJoin in v1 (needs tree-level re-assoc).
             query: format!(
                 "{PFX} SELECT ?name ?label ?email WHERE {{ ?p ex:name ?name \
                  OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label \
                  OPTIONAL {{ ?p ex:email ?email }} }} }}"
+            ),
+        },
+        Scenario {
+            name: "join-elim/OPTIONAL over a UNION right (multi-branch opts-free right)",
+            family: "join-elim",
+            // ADR-0023 M4 wave 3 — the OPTIONAL right is a UNION. The right lowers to
+            // multi-branch opts-free branches and re-feeds `left_join_branches` (multi-
+            // branch decomposition). Over the all-NOT-NULL U fixture (set-faithful vs
+            // spareval): each ?s has both ?y and ?z, so the OPTIONAL union matches twice
+            // per row ⇒ {(x1,y1),(x1,z1),(x2,y2),(x2,z2)} = 4 rows.
+            disp: Disp::FreePass,
+            create: U_SQL,
+            r2rml: U_R2RML,
+            ttl: U_TTL,
+            query: format!(
+                "{PFX} SELECT ?v ?w WHERE {{ ?s ex:x ?v \
+                 OPTIONAL {{ {{ ?s ex:y ?w }} UNION {{ ?s ex:z ?w }} }} }}"
             ),
         },
         // --- projection-and-true ------------------------------------------
