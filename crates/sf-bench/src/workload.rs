@@ -23,6 +23,16 @@
 //! constant-memory measurement. `STOP_TIMES` — the dominant table — grows
 //! linearly with the scale factor, so result-row counts grow ~linearly while the
 //! engine's streaming working set stays bounded.
+//!
+//! ## PostgreSQL fixture (ADR-0023 shootout)
+//!
+//! [`generate_pg`] populates the same six tables (identical column names and data)
+//! in a live PostgreSQL database. Table names are **double-quoted uppercase**
+//! (`"AGENCY"`, `"ROUTES"`, …) so they match the R2RML mapping's
+//! `rr:tableName "AGENCY"` / `rr:tableName "ROUTES"` exactly — PostgreSQL folds
+//! unquoted identifiers to lowercase, so the bench uses quoted DDL + quoted
+//! `DROP TABLE IF EXISTS "AGENCY" CASCADE` cleanup. The caller owns the scratch
+//! database and must clean up after the bench run.
 
 use std::path::Path;
 
@@ -323,4 +333,159 @@ pub fn open_source_db(path: &Path, scale: u32) -> rusqlite::Result<(Connection, 
     let conn = Connection::open(path)?;
     let counts = generate(&conn, scale)?;
     Ok((conn, counts))
+}
+
+/// PostgreSQL DDL for the six GTFS bench tables. Table names are double-quoted
+/// uppercase so they match the `rr:tableName "AGENCY"` / `"ROUTES"` etc. in the
+/// R2RML mapping verbatim. Column names likewise preserved as-is (TEXT / REAL /
+/// INTEGER mirror the SQLite schema so the same mapping applies to both).
+pub const PG_SCHEMA_SQL: &str = r#"
+DROP TABLE IF EXISTS "STOP_TIMES" CASCADE;
+DROP TABLE IF EXISTS "TRIPS"      CASCADE;
+DROP TABLE IF EXISTS "STOPS"      CASCADE;
+DROP TABLE IF EXISTS "ROUTES"     CASCADE;
+DROP TABLE IF EXISTS "CALENDAR"   CASCADE;
+DROP TABLE IF EXISTS "AGENCY"     CASCADE;
+
+CREATE TABLE "AGENCY" (
+  agency_id TEXT PRIMARY KEY, agency_name TEXT, agency_url TEXT, agency_timezone TEXT);
+CREATE TABLE "CALENDAR" (
+  service_id TEXT PRIMARY KEY, monday INTEGER, start_date TEXT);
+CREATE TABLE "ROUTES" (
+  route_id TEXT PRIMARY KEY, agency_id TEXT, route_short_name TEXT,
+  route_long_name TEXT, route_type INTEGER);
+CREATE TABLE "STOPS" (
+  stop_id TEXT PRIMARY KEY, stop_name TEXT, stop_lat DOUBLE PRECISION, stop_lon DOUBLE PRECISION, location_type INTEGER);
+CREATE TABLE "TRIPS" (
+  trip_id TEXT PRIMARY KEY, route_id TEXT, service_id TEXT, trip_headsign TEXT, direction_id INTEGER);
+CREATE TABLE "STOP_TIMES" (
+  trip_id TEXT, stop_id TEXT, arrival_time TEXT, departure_time TEXT,
+  stop_sequence INTEGER, stop_headsign TEXT,
+  PRIMARY KEY (trip_id, stop_id, arrival_time));
+"#;
+
+/// DDL to tear down the bench tables (idempotent; call after the bench run).
+pub const PG_DROP_SQL: &str = r#"
+DROP TABLE IF EXISTS "STOP_TIMES" CASCADE;
+DROP TABLE IF EXISTS "TRIPS"      CASCADE;
+DROP TABLE IF EXISTS "STOPS"      CASCADE;
+DROP TABLE IF EXISTS "ROUTES"     CASCADE;
+DROP TABLE IF EXISTS "CALENDAR"   CASCADE;
+DROP TABLE IF EXISTS "AGENCY"     CASCADE;
+"#;
+
+/// Populate the six GTFS tables in a live **PostgreSQL** database at `scale`.
+/// The caller must have already run `PG_SCHEMA_SQL` on the client. Returns row
+/// counts identical to [`generate`] so the two fixtures are directly comparable.
+///
+/// Table names are double-quoted uppercase to match the R2RML mapping's
+/// `rr:tableName` values. Inserts are batched in a single transaction for speed.
+pub async fn generate_pg(
+    client: &tokio_postgres::Client,
+    scale: u32,
+) -> Result<RowCounts, tokio_postgres::Error> {
+    let sf = scale.max(1) as u64;
+    let n_agency = 2u64;
+    let n_calendar = 3u64;
+    let n_routes = 8 * sf;
+    let n_stops = 40 * sf;
+    let n_trips = 40 * sf;
+
+    client.batch_execute("BEGIN").await?;
+
+    for i in 0..n_agency {
+        client
+            .execute(
+                r#"INSERT INTO "AGENCY" VALUES ($1,$2,$3,$4)"#,
+                &[
+                    &format!("A{i}"),
+                    &format!("Agency {i}"),
+                    &format!("http://transport.linkeddata.es/madrid/agency/{i}"),
+                    &"Europe/Madrid",
+                ],
+            )
+            .await?;
+    }
+    for i in 0..n_calendar {
+        client
+            .execute(
+                r#"INSERT INTO "CALENDAR" VALUES ($1,$2,$3)"#,
+                &[&format!("S{i}"), &(1i32), &"20260101"],
+            )
+            .await?;
+    }
+    for i in 0..n_routes {
+        client
+            .execute(
+                r#"INSERT INTO "ROUTES" VALUES ($1,$2,$3,$4,$5)"#,
+                &[
+                    &format!("r{i}"),
+                    &format!("A{}", i % n_agency),
+                    &format!("R{i}"),
+                    &format!("Route {i}"),
+                    &((i % 4) as i32),
+                ],
+            )
+            .await?;
+    }
+    for i in 0..n_stops {
+        client
+            .execute(
+                r#"INSERT INTO "STOPS" VALUES ($1,$2,$3,$4,$5)"#,
+                &[
+                    &format!("s{i}"),
+                    &format!("Stop {i}"),
+                    &(40.0f64 + (i as f64) * 0.0001),
+                    &(-3.7f64 + (i as f64) * 0.0001),
+                    &(0i32),
+                ],
+            )
+            .await?;
+    }
+    for i in 0..n_trips {
+        let headsign: Option<String> = if i % 3 == 0 {
+            None
+        } else {
+            Some(format!("Trip headsign {i}"))
+        };
+        client
+            .execute(
+                r#"INSERT INTO "TRIPS" VALUES ($1,$2,$3,$4,$5)"#,
+                &[
+                    &format!("t{i}"),
+                    &format!("r{}", i % n_routes),
+                    &format!("S{}", i % n_calendar),
+                    &headsign,
+                    &((i % 2) as i32),
+                ],
+            )
+            .await?;
+    }
+    let mut stop_times = 0u64;
+    for i in 0..n_trips {
+        let trip = format!("t{i}");
+        for k in 0..STOPS_PER_TRIP {
+            let stop = format!("s{}", (i + k) % n_stops);
+            let arr = format!("{:02}:{:02}:00", (k * 3) / 60 + 5, (k * 3) % 60);
+            let dep = format!("{:02}:{:02}:30", (k * 3) / 60 + 5, (k * 3) % 60);
+            let headsign = format!("To stop {}", (i + k + 1) % n_stops);
+            client
+                .execute(
+                    r#"INSERT INTO "STOP_TIMES" VALUES ($1,$2,$3,$4,$5,$6)"#,
+                    &[&trip, &stop, &arr, &dep, &(k as i32), &headsign],
+                )
+                .await?;
+            stop_times += 1;
+        }
+    }
+    client.batch_execute("COMMIT").await?;
+
+    Ok(RowCounts {
+        agency: n_agency,
+        calendar: n_calendar,
+        routes: n_routes,
+        stops: n_stops,
+        trips: n_trips,
+        stop_times,
+    })
 }

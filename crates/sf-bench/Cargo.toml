@@ -25,6 +25,9 @@ tokio-postgres = "0.7"
 # off the in-process heap so the constant-memory measurement is not confounded.
 criterion = "0.5"
 tempfile = "3"
+# PG bench group (obda_select_pg_1x): tokio runtime wraps the async criterion
+# iteration and the PG fixture setup (ADR-0023 shootout).
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [[bench]]
 name = "obda_latency"

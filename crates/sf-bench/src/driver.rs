@@ -38,7 +38,7 @@ use sf_sparql::{
     exec, exec_pg, parse_and_translate_flat_with, parse_and_translate_tree_with,
     parse_and_translate_with, Tbox,
 };
-use sf_sql::{Dialect, TableSchema};
+use sf_sql::{introspect::introspect_postgres, Dialect, TableSchema};
 use tokio_postgres::Client;
 
 use crate::workload::MAPPING_TTL;
@@ -124,6 +124,10 @@ pub fn run_select_tree(
 /// sf-core term-gen reconstruction (ADR-0003 R3). This is the path the fair
 /// Ontop-vs-sf latency benchmark and serve-over-PG build on. Full-result
 /// wall-clock is the caller's `Instant` around the `.await`.
+///
+/// Since ADR-0023 M8 the public `parse_and_translate_with` routes through the
+/// operator-tree (IQ) path; this function follows that default. For the flat
+/// oracle use [`run_select_pg_flat`].
 pub async fn run_select_pg(
     maps: &[TriplesMap],
     client: &Client,
@@ -133,6 +137,42 @@ pub async fn run_select_pg(
     let plan = parse_and_translate_with(sparql, maps, Dialect::Postgres, &Tbox::default(), schema)?;
     let sol = exec_pg::select_pg(&plan, client).await?;
     Ok(sol.rows.len())
+}
+
+/// Execute a SELECT through the **flat unfold path** over a live PostgreSQL
+/// source (ADR-0023 oracle on PG). Symmetric counterpart to [`run_select_pg`]
+/// for the shootout bench group `obda_select_pg_flat_1x`; guarantees the
+/// comparison is flat-vs-tree-on-PG rather than tree-vs-tree after the M8 flip.
+pub async fn run_select_pg_flat(
+    maps: &[TriplesMap],
+    client: &Client,
+    schema: &[TableSchema],
+    sparql: &str,
+) -> DResult<usize> {
+    let plan =
+        parse_and_translate_flat_with(sparql, maps, Dialect::Postgres, &Tbox::default(), schema)?;
+    let sol = exec_pg::select_pg(&plan, client).await?;
+    Ok(sol.rows.len())
+}
+
+/// Introspect all tables currently visible in `public` on the PG client, in
+/// alphabetical name order. Used by the PG bench fixture setup to wire the
+/// cascade passes (self-join / FD / FK-PK join elimination) exactly as the live
+/// serve-over-PG path does ([`sf_sql::introspect::introspect_postgres`]).
+pub async fn introspect_pg_all(client: &Client) -> DResult<Vec<TableSchema>> {
+    let rows = client
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name",
+            &[],
+        )
+        .await?;
+    let names: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
+    let mut schemas = Vec::with_capacity(names.len());
+    for name in &names {
+        schemas.push(introspect_postgres(client, name).await?);
+    }
+    Ok(schemas)
 }
 
 /// Stream a CONSTRUCT through a discarding sink and return the produced-triple

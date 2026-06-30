@@ -89,10 +89,53 @@ Q2 +7.6%, Q3 +1.0%, Q4 +8.3%, Q5 +4.5% — today's numbers are consistent within
 expected run-to-run variation on a shared CPU (Apple Silicon thermal effects can
 move sub-50 µs benchmarks by several percent between runs).
 
+## Tree-vs-flat shootout — PostgreSQL (ADR-0023, 2026-06-30)
 
+Same five queries over a **live local PostgreSQL 17** source (`localhost:5432`,
+trust auth, 1x scale). Bench groups: `obda_select_pg_flat_1x` (flat oracle via
+`parse_and_translate_flat_with`) and `obda_select_pg_tree_1x` (tree path, the M8
+production default). Both use the async `exec_pg::select_pg` cursor on a current-thread
+tokio runtime. Each criterion iteration includes the tokio `block_on` overhead, which
+is identical for both paths and thus cancels in the delta.
 
-Measured on this box (Apple Silicon, macOS), `--release` via criterion
-(`--measurement-time 2 --warm-up-time 1`). Numbers are indicative — the
+**Important:** this is sf-tree vs sf-flat on a live PG source — both are
+semantic-fabric engines. This shootout does **not** establish "faster than Ontop".
+The Ontop JVM cross-check is still deferred per ADR-0005; that comparison requires
+the Ontop integration bench planned under ADR-0005. Note also that the absolute
+latency is dominated by the loopback network round-trip to PG plus PG's own query
+execution; the translation contribution is small relative to network/exec.
+
+### Results — OBDA SELECT latency @1x on PostgreSQL (Apple Silicon, macOS, criterion 100 samples)
+
+PostgreSQL 17.7 (Homebrew), `localhost:5432`, trust auth, fixture = 893 rows
+(`AGENCY` 2 · `CALENDAR` 3 · `ROUTES` 8 · `STOPS` 40 · `TRIPS` 40 · `STOP_TIMES` 800).
+
+| Query | Flat-PG median | Tree-PG median | Tree delta | Profile note |
+|---|---|---|---|---|
+| Q1 routes BGP | 153.1 µs | 146.5 µs | -4.3% | exec-dominated (loopback); within noise |
+| Q2 route→agency join | 216.4 µs | 205.3 µs | -5.1% | exec-dominated; within noise |
+| Q3 stop_time→trip→route (3-way) | 828.6 µs | 1053.6 µs | **+27.2%** | exec-dominated; tree emits a slower 3-way join plan |
+| Q4 route FILTER | 150.2 µs | 144.3 µs | -3.9% | exec-dominated; within noise |
+| Q5 trip OPTIONAL headsign | 163.5 µs | 155.4 µs | -5.0% | exec-dominated; within noise |
+| **geomean** | | | **+1.1%** | tree ≈1% slower overall, driven entirely by Q3 |
+
+**Reading the result:** On a live PG source the loopback round-trip + PG query
+execution set a ~150 µs floor, so the tree's translation overhead (the +8–13% seen
+on the in-process SQLite shootout) is swamped and disappears into noise on the four
+cheap queries (Q1/Q2/Q4/Q5), where tree even edges ahead by 4–5% — within run-to-run
+variation at this scale. The one real signal is **Q3, the 3-way
+`stop_time→trip→route` join**: the tree path is **+27.2% slower** there (1.05 ms vs
+0.83 ms). That is not noise — it is reproducible and exec-side, meaning the IQ
+pipeline currently lowers this 3-way join into SQL that PostgreSQL's planner executes
+less efficiently than the flat unfold's SQL for the same query. The geomean across all
+five is **+1.1%** (tree marginally slower), but that single aggregate hides the real
+finding: parity on the cheap queries, a genuine **tree regression on the 3-way join**
+on a PG-class backend. This is the honest, load-bearing datum — a concrete follow-up
+for the ADR-0023 tree-SQL lowering (the 3-way-join plan shape), not a "tree is faster
+on PG" claim.
+
+Measured on this box (Apple Silicon, macOS), `--release` via criterion (criterion
+defaults: 3 s warm-up, 100 samples). Numbers are indicative — the
 *invariant* (constant memory, bounded first result), not the absolute latency, is
 the load-bearing result; absolute latency feeds the Path-B objective (ADR-0013).
 

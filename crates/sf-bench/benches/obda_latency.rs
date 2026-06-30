@@ -3,6 +3,11 @@
 //! streaming CONSTRUCT dump, at 1x and 10x. Live SPARQL→SQL over a file-backed
 //! SQLite source — no materialisation (ADR-0006).
 //!
+//! The `obda_select_pg_flat_1x` / `obda_select_pg_tree_1x` groups (ADR-0023
+//! shootout) run against a **live PostgreSQL server** (`localhost:5432`, trust
+//! auth, user=$USER). If no server is reachable the groups are skipped with a
+//! warning — they do not fail the bench run.
+//!
 //! Ontop is the optional, offline JVM cross-check (ADR-0005); it is deliberately
 //! NOT a dependency here. Run `cargo bench -p sf-bench`.
 
@@ -14,6 +19,7 @@ use sf_bench::{driver, workload};
 use sf_core::ir::TriplesMap;
 use sf_sql::TableSchema;
 use tempfile::TempDir;
+use tokio_postgres::NoTls;
 
 static FIRST_RESULT: Once = Once::new();
 
@@ -38,6 +44,89 @@ fn fixture(scale: u32) -> Fixture {
         maps,
         schemas,
         counts,
+    }
+}
+
+/// Resolve the PG connection string: `SF_PG_URL` env var if set, else the
+/// local trust-auth default (`host=localhost port=5432 user=$USER`).
+fn pg_conn_str() -> String {
+    std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+        format!("host=localhost port=5432 user={user}")
+    })
+}
+
+/// PostgreSQL bench fixture. Holds a live client + the parsed mapping + introspected
+/// schemas. The six GTFS tables are created in the scratch DB for this run and
+/// torn down in `Drop` (best-effort).
+struct PgFixture {
+    rt: tokio::runtime::Runtime,
+    client: tokio_postgres::Client,
+    maps: Vec<TriplesMap>,
+    schemas: Vec<TableSchema>,
+    counts: workload::RowCounts,
+}
+
+impl PgFixture {
+    /// Connect, create + populate the GTFS tables at `scale`, introspect.
+    /// Returns `None` if PG is unreachable (bench groups are skipped).
+    fn new(scale: u32) -> Option<Self> {
+        let conn_str = pg_conn_str();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio rt");
+        let client = match rt.block_on(async {
+            let (client, conn) = tokio_postgres::connect(&conn_str, NoTls).await?;
+            tokio::spawn(async move {
+                let _ = conn.await;
+            });
+            Ok::<_, tokio_postgres::Error>(client)
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("\n[bench] PostgreSQL unavailable ({e}) — skipping PG shootout groups");
+                return None;
+            }
+        };
+        let counts = rt
+            .block_on(async {
+                // Idempotent schema setup: drop-if-exists + recreate.
+                client.batch_execute(workload::PG_SCHEMA_SQL).await?;
+                workload::generate_pg(&client, scale).await
+            })
+            .expect("PG fixture setup");
+        let schemas = rt
+            .block_on(driver::introspect_pg_all(&client))
+            .expect("introspect PG");
+        let maps = driver::mapping().expect("parse mapping");
+        eprintln!(
+            "\n[bench] live PG fixture @{scale}x loaded ({conn_str}): \
+             AGENCY {} CALENDAR {} ROUTES {} STOPS {} TRIPS {} STOP_TIMES {} = {} rows",
+            counts.agency,
+            counts.calendar,
+            counts.routes,
+            counts.stops,
+            counts.trips,
+            counts.stop_times,
+            counts.total(),
+        );
+        Some(PgFixture {
+            rt,
+            client,
+            maps,
+            schemas,
+            counts,
+        })
+    }
+}
+
+impl Drop for PgFixture {
+    fn drop(&mut self) {
+        let _ = self.counts.total();
+        let _ = self
+            .rt
+            .block_on(async { self.client.batch_execute(workload::PG_DROP_SQL).await });
     }
 }
 
@@ -75,6 +164,51 @@ fn bench_select_queries_tree(c: &mut Criterion) {
     for (name, sparql) in workload::queries() {
         group.bench_function(name, |b| {
             b.iter(|| driver::run_select_tree(&fx.maps, &fx.conn, &fx.schemas, sparql).unwrap());
+        });
+    }
+    group.finish();
+}
+
+/// ADR-0023 PG shootout — flat unfold path on live PostgreSQL @1x.
+/// Skipped gracefully if PG is unreachable.
+fn bench_select_queries_pg_flat(c: &mut Criterion) {
+    let Some(fx) = PgFixture::new(1) else { return };
+    let mut group = c.benchmark_group("obda_select_pg_flat_1x");
+    for (name, sparql) in workload::queries() {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                fx.rt
+                    .block_on(driver::run_select_pg_flat(
+                        &fx.maps,
+                        &fx.client,
+                        &fx.schemas,
+                        sparql,
+                    ))
+                    .unwrap()
+            });
+        });
+    }
+    group.finish();
+}
+
+/// ADR-0023 PG shootout — operator-tree (IQ) path on live PostgreSQL @1x.
+/// Skipped gracefully if PG is unreachable. Paired with `obda_select_pg_flat_1x`
+/// for a true flat-vs-tree comparison on a live PG source.
+fn bench_select_queries_pg_tree(c: &mut Criterion) {
+    let Some(fx) = PgFixture::new(1) else { return };
+    let mut group = c.benchmark_group("obda_select_pg_tree_1x");
+    for (name, sparql) in workload::queries() {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                fx.rt
+                    .block_on(driver::run_select_pg(
+                        &fx.maps,
+                        &fx.client,
+                        &fx.schemas,
+                        sparql,
+                    ))
+                    .unwrap()
+            });
         });
     }
     group.finish();
@@ -132,6 +266,8 @@ criterion_group!(
     bench_select_queries,
     bench_select_queries_flat,
     bench_select_queries_tree,
+    bench_select_queries_pg_flat,
+    bench_select_queries_pg_tree,
     bench_construct_dump
 );
 criterion_main!(benches);
