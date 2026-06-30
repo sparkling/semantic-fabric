@@ -569,6 +569,23 @@ pub fn parse_and_translate_with(
     translate_with(&query, maps, dialect, tbox, schema)
 }
 
+/// Parse `sparql` and translate it through the **flat unfold path** (the ADR-0023
+/// oracle / permanent fallback), with a T-Box and source `schema`. Symmetric
+/// counterpart to [`parse_and_translate_tree_with`]; intended for benchmark
+/// comparison (bench group `obda_select_flat_1x`) and test oracle arms.
+pub fn parse_and_translate_flat_with(
+    sparql: &str,
+    maps: &[TriplesMap],
+    dialect: Dialect,
+    tbox: &Tbox,
+    schema: &[TableSchema],
+) -> Result<Plan> {
+    let query = spargebra::SparqlParser::new()
+        .parse_query(sparql)
+        .map_err(|e| Error::Parse(e.to_string()))?;
+    translate_with_flat(&query, maps, dialect, tbox, schema)
+}
+
 /// All variables bound anywhere in the branches (the `SELECT *` projection), in a
 /// deterministic order.
 fn visible_vars(branches: &[Branch]) -> Vec<String> {

@@ -52,6 +52,21 @@ fn bench_select_queries(c: &mut Criterion) {
     group.finish();
 }
 
+/// ADR-0023 shootout: flat unfold path baseline, explicit oracle arm.
+/// After the M8 default flip, `run_select` routes through the tree path.
+/// This group pins the flat path via `run_select_flat` so the shootout comparison
+/// reflects two genuinely different translation pipelines.
+fn bench_select_queries_flat(c: &mut Criterion) {
+    let fx = fixture(1);
+    let mut group = c.benchmark_group("obda_select_flat_1x");
+    for (name, sparql) in workload::queries() {
+        group.bench_function(name, |b| {
+            b.iter(|| driver::run_select_flat(&fx.maps, &fx.conn, &fx.schemas, sparql).unwrap());
+        });
+    }
+    group.finish();
+}
+
 /// M7 tree-path benchmark: same five queries through the operator-tree (IQ) path.
 /// Paired with `obda_select_1x` to compare flat vs tree translation + plan shape.
 fn bench_select_queries_tree(c: &mut Criterion) {
@@ -115,6 +130,7 @@ fn bench_construct_dump(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_select_queries,
+    bench_select_queries_flat,
     bench_select_queries_tree,
     bench_construct_dump
 );

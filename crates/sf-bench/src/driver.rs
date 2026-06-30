@@ -34,7 +34,10 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use sf_core::ir::TriplesMap;
-use sf_sparql::{exec, exec_pg, parse_and_translate_tree_with, parse_and_translate_with, Tbox};
+use sf_sparql::{
+    exec, exec_pg, parse_and_translate_flat_with, parse_and_translate_tree_with,
+    parse_and_translate_with, Tbox,
+};
 use sf_sql::{Dialect, TableSchema};
 use tokio_postgres::Client;
 
@@ -77,6 +80,22 @@ pub fn run_select(
     sparql: &str,
 ) -> DResult<usize> {
     let plan = parse_and_translate_with(sparql, maps, Dialect::Sqlite, &Tbox::default(), schema)?;
+    let sol = exec::select(&plan, conn)?;
+    Ok(sol.rows.len())
+}
+
+/// Execute a SELECT through the **flat unfold path** (the ADR-0023 oracle,
+/// permanent fallback) and return its solution-row count. Used by the shootout
+/// bench group `obda_select_flat_1x` to give flat a baseline independent of the
+/// M8 default switch (which routes the public API through the tree path).
+pub fn run_select_flat(
+    maps: &[TriplesMap],
+    conn: &Connection,
+    schema: &[TableSchema],
+    sparql: &str,
+) -> DResult<usize> {
+    let plan =
+        parse_and_translate_flat_with(sparql, maps, Dialect::Sqlite, &Tbox::default(), schema)?;
     let sol = exec::select(&plan, conn)?;
     Ok(sol.rows.len())
 }
