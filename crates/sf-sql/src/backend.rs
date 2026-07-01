@@ -14,6 +14,8 @@
 use crate::error::Result;
 use sf_core::datatype::XsdTypeCode;
 
+pub mod sqlite;
+
 /// One projected result row, marshalled into the driver-agnostic lexical form the
 /// term-gen core consumes (ADR-0003 R3 / ADR-0007). The adapter has ALREADY
 /// extracted each cell to its lexical string (NULL ⇒ `None`) via the driver's
@@ -30,6 +32,11 @@ pub struct RawTuple {
 /// A bounded pull cursor over ONE emitted branch `SELECT`. One row in flight; the
 /// signature CANNOT return a `Vec<Row>`, so no impl can buffer the full result set
 /// (ADR-0006 / ADR-0010 §C "bounded by shape").
+///
+/// `async fn` in trait is deliberate: the seam is used ONLY via static dispatch
+/// (`run::<B>()`), never `dyn`, so the auto-trait (`Send`) bound is applied at the
+/// concrete monomorphized spawn site, not on the trait method (design §1).
+#[allow(async_fn_in_trait)]
 pub trait BranchStream {
     /// Next row, or `None` at end. A mid-stream marshalling failure is a HARD `Err`
     /// (never a silent short read): the SQLite bridge forwards `Result<RawTuple>`
@@ -38,6 +45,7 @@ pub trait BranchStream {
 }
 
 /// One driver's prepare / typed-bind / server-side-cursor surface (ADR-0024).
+#[allow(async_fn_in_trait)]
 pub trait SqlBackend {
     /// GAT so the stream may borrow the handle for its lifetime. PG's `PgRowStream`
     /// and the SQLite channel-bridged `Receiver` are both `'static` (satisfy any

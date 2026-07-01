@@ -21,6 +21,11 @@ pub enum Error {
     /// A MySQL source driver error (`mysql_async`).
     #[error("mysql error: {0}")]
     Mysql(#[from] mysql_async::Error),
+    /// A per-cell result-marshalling failure in a backend adapter (ADR-0024): a
+    /// non-UTF-8 text column, or a BLOB in a non-`hexBinary` position. Surfaced as a
+    /// HARD error via `BranchStream::next_row` (design A2), never a silent short read.
+    #[error("value marshalling error: {0}")]
+    Marshal(String),
 }
 
 /// The crate result alias.
