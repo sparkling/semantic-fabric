@@ -42,7 +42,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002c> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — exec: sql error: sqlite error: no such column: t0.IDs in SELECT t0.\"IDs\" AS c0, t0.\"ID\" AS c1, t0.\"Name\" AS c2 FROM \"Student\" t0 at offset 7" ] .
+    dct:description "error correctly surfaced — exec: sql error: sqlite error: no such column: t0.IDs in SELECT t0.\"IDs\" AS c0, t0.\"ID\" AS c1, t0.\"Name\" AS c2 FROM \"Student\" t0 WHERE t0.\"IDs\" IS NOT NULL at offset 7: no such column: t0.IDs in SELECT t0.\"IDs\" AS c0, t0.\"ID\" AS c1, t0.\"Name\" AS c2 FROM \"Student\" t0 WHERE t0.\"IDs\" IS NOT NULL at offset 7: Error code 1: SQL error or missing database" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
@@ -55,7 +55,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0002e> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — exec: sql error: sqlite error: no such table: Students" ] .
+    dct:description "error correctly surfaced — exec: sql error: sqlite error: no such table: Students: no such table: Students: Error code 1: SQL error or missing database" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
@@ -120,7 +120,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0004b> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — mapping parse: mapping error: subject map _:c942d2b5407dac3b71eea8e9b5121551 has rr:termType rr:Literal (must be IRI or blank node)" ] .
+    dct:description "error correctly surfaced — mapping parse: mapping error: subject map _:cbc9ce42123664865dc676d2f0630bc5 has rr:termType rr:Literal (must be IRI or blank node)" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
@@ -187,7 +187,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007h> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — mapping parse: mapping error: predicate/graph term map _:fb52997c6379e170c3524aa186989ab8 must have rr:termType rr:IRI" ] .
+    dct:description "error correctly surfaced — mapping parse: mapping error: predicate/graph term map _:e6dbe4377231c1de0707dbfb468e5725 must have rr:termType rr:IRI" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
@@ -334,7 +334,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0015b> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — mapping parse: mapping error: rr:language \"english\" of _:cc1f51044ddb42130c442812038bc450 is not a valid BCP47 language tag" ] .
+    dct:description "error correctly surfaced — mapping parse: mapping error: rr:language \"english\" of _:ff8bf565e7fc600607f0253fe80ec443 is not a valid BCP47 language tag" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;

@@ -14,106 +14,15 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::{TermMap, TermType};
 use sf_core::{Literal, Row, Term, Triple};
 
-use sf_core::ir::LogicalSource;
-use sf_sql::Dialect;
-
 use spargebra::algebra::{Expression, Function};
 
-use crate::emit::{ColumnCatalog, EmittedBranch};
 use crate::iq::{AggKind, Branch, ColRef, OrderKey, RustAgg, RustGroup, TermDef};
-use crate::{Error, Plan, PlanForm, Result};
-
-/// Introspect the actual result-column names of every source the plan reads, so
-/// emission can resolve a mapping's regular-identifier column references to the
-/// columns SQLite truly exposes (see [`crate::emit`]). A source whose metadata
-/// cannot be read is simply omitted (resolution falls back to the raw identifier).
-fn build_catalog(branches: &[Branch], conn: &Connection, dialect: Dialect) -> ColumnCatalog {
-    let mut catalog = ColumnCatalog::default();
-    let mut seen = std::collections::HashSet::new();
-    for branch in branches {
-        for (_, source) in branch.alias_sources() {
-            let probe = match source {
-                LogicalSource::Table(t) => format!("SELECT * FROM {}", dialect.quote_ident(t)),
-                LogicalSource::Query(q) => q.clone(),
-            };
-            if !seen.insert(probe.clone()) {
-                continue;
-            }
-            if let Ok(names) = sf_sql::sqlite_column_names(conn, &probe) {
-                catalog.insert(source, names);
-            }
-        }
-    }
-    catalog
-}
-
-/// Each projected column's R2RML §10 natural XSD type from the emitted SQL's
-/// **declared** result-column types (ADR-0015), in projection order. SQLite traces
-/// decl types back through `rr:sqlQuery` views and derived tables, so this covers
-/// base tables and views alike; a computed/expression column (`COUNT(…)`,
-/// `a || b`) has no decl type — `None` — and falls back to its per-value storage
-/// class at extraction ([`storage_class_code`]).
-fn declared_codes(e: &EmittedBranch, conn: &Connection) -> Vec<Option<XsdTypeCode>> {
-    match sf_sql::sqlite_column_decltypes(conn, &e.sql) {
-        Ok(decltypes) => decltypes
-            .iter()
-            .map(|d| d.as_deref().and_then(datatype::natural_xsd))
-            .collect(),
-        Err(_) => vec![None; e.projection.len()],
-    }
-}
-
-/// Each projected column's fixed `CHARACTER(n)` blank-pad length, in projection
-/// order (`None` unless the column is a fixed-length char type with an explicit
-/// length). A `CHARACTER(n)` value carries SQL fixed-length semantics — it is
-/// space-padded to `n` (PostgreSQL does this; SQLite stores it unpadded). Capture
-/// `n` so the extractor can right-pad SQLite's value, keeping the natural RDF
-/// literal consistent across source dialects (ADR-0015 §10 consistency clause).
-fn declared_char_pads(e: &EmittedBranch, conn: &Connection) -> Vec<Option<usize>> {
-    match sf_sql::sqlite_column_decltypes(conn, &e.sql) {
-        Ok(decltypes) => decltypes
-            .iter()
-            .map(|d| d.as_deref().and_then(char_pad_len))
-            .collect(),
-        Err(_) => vec![None; e.projection.len()],
-    }
-}
-
-/// The fixed `CHARACTER(n)` pad length, if `decl` is a fixed-length char type
-/// (`CHAR` / `CHARACTER` / `NCHAR`) with an explicit `(n)` — never a *varying*
-/// type (`VARCHAR`, `CHARACTER VARYING`) and never an unsized one.
-fn char_pad_len(decl: &str) -> Option<usize> {
-    let open = decl.find('(')?;
-    let close = decl[open..].find(')')? + open;
-    let name: String = decl[..open]
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_uppercase();
-    if !matches!(name.as_str(), "CHAR" | "CHARACTER" | "NCHAR") {
-        return None;
-    }
-    decl[open + 1..close].trim().parse::<usize>().ok()
-}
-
-/// The §10 type implied by a value's SQLite storage class — the affinity fallback
-/// for a column with no declared type (ADR-0015 *SQLite — the special hazard*):
-/// `INTEGER → xsd:integer`, `REAL → xsd:double`, `BLOB → xsd:hexBinary`; text /
-/// NULL carry no implied type (plain literal).
-fn storage_class_code(v: &ValueRef<'_>) -> Option<XsdTypeCode> {
-    match v {
-        ValueRef::Integer(_) => Some(XsdTypeCode::Integer),
-        ValueRef::Real(_) => Some(XsdTypeCode::Double),
-        ValueRef::Blob(_) => Some(XsdTypeCode::HexBinary),
-        ValueRef::Text(_) | ValueRef::Null => None,
-    }
-}
+use crate::{Error, Plan, Result};
 
 /// One projected result row's raw column values plus each value's resolved §10
 /// type (declared type, else storage-class fallback), addressed by [`ColRef`].
@@ -303,215 +212,6 @@ pub(crate) fn reconstruct(branch: &Branch, raw: &RawRow<'_>) -> Result<BTreeMap<
     Ok(out)
 }
 
-/// Read a SQLite value as its lexical string (NULL ⇒ `None`). Datatype
-/// canonicalisation (R2RML §10) is `sf-core`'s concern and explicit `rr:datatype`
-/// values pass through verbatim (ADR-0015); this is the raw lexical extraction.
-fn lexical(v: ValueRef<'_>) -> Result<Option<String>> {
-    Ok(match v {
-        ValueRef::Null => None,
-        ValueRef::Integer(i) => Some(i.to_string()),
-        ValueRef::Real(f) => Some(f.to_string()),
-        ValueRef::Text(t) => Some(
-            std::str::from_utf8(t)
-                .map_err(|e| Error::Core(format!("non-UTF8 text column: {e}")))?
-                .to_owned(),
-        ),
-        ValueRef::Blob(_) => {
-            return Err(Error::Unsupported("BLOB column reconstruction".to_owned()))
-        }
-    })
-}
-
-/// Extract a column value with its target §10 type in view: a `BLOB` feeding an
-/// `xsd:hexBinary` column is uppercase-hex-encoded here (where the raw bytes are
-/// available — ADR-0015), so the literal builder sees its canonical lexical form;
-/// every other storage class is read by [`lexical`]. A blob in a non-hexBinary
-/// position is still unsupported (501).
-fn lexical_typed(v: ValueRef<'_>, code: Option<XsdTypeCode>) -> Result<Option<String>> {
-    if let ValueRef::Blob(bytes) = v {
-        if code == Some(XsdTypeCode::HexBinary) {
-            let mut out = String::new();
-            datatype::hex_binary_upper(bytes, &mut out);
-            return Ok(Some(out));
-        }
-    }
-    lexical(v)
-}
-
-/// Iterate every WHERE solution across all branches, applying offset/limit in
-/// Rust for the multi-branch (bag-union) case (the single-branch case pushes them
-/// into SQL — see [`Plan::prepared_branches`]).
-fn for_each_solution(
-    plan: &Plan,
-    conn: &Connection,
-    mut sink: impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
-) -> Result<()> {
-    // Multi-branch GROUP BY: buffer all inner solutions, group and aggregate in
-    // Rust, then stream the grouped result rows.
-    if let Some(rg) = &plan.rust_group {
-        return rust_group_execute(plan, conn, rg, &mut sink);
-    }
-    for_each_branch_solution(plan, conn, &mut sink)
-}
-
-/// Core branches loop — does NOT check `rust_group`. Called from both
-/// `for_each_solution` (when no rust_group is set) and `rust_group_execute`
-/// (to collect the inner solutions without triggering re-grouping).
-fn for_each_branch_solution(
-    plan: &Plan,
-    conn: &Connection,
-    sink: &mut impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
-) -> Result<()> {
-    let branches = plan.prepared_branches();
-    let catalog = build_catalog(&branches, conn, plan.dialect);
-    let multi = branches.len() > 1;
-    // DISTINCT over a multi-branch bag-union: SQL dedups only *within* each branch's
-    // SELECT, never *across* the separate per-branch SELECTs (UNION arms / VALUES
-    // rows), so we dedup the projected solutions here — before OFFSET/LIMIT, since
-    // SPARQL evaluates DISTINCT before slicing. The single-branch case pushes DISTINCT
-    // into SQL (cascade pass 6 / the branch `distinct` flag); CONSTRUCT/dump never set
-    // it. Bounded-memory caveat: DISTINCT inherently buffers the seen key set.
-    let distinct_vars: Option<Vec<String>> = match (plan.distinct && multi, &plan.form) {
-        (true, PlanForm::Select { vars }) => Some(vars.clone()),
-        _ => None,
-    };
-    let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
-        std::collections::HashSet::new();
-    let mut seen = 0usize; // solutions observed (for offset)
-    let mut emitted = 0usize; // solutions passed downstream (for limit)
-                              // ORDER BY is applied HERE for every plan (single- and multi-branch alike), never
-                              // in SQL: a SQL `ORDER BY` inherits the column's collation/affinity, which can
-                              // disagree with SPARQL value order (NOCASE text, non-C locale, temporal types).
-                              // So buffer every (DISTINCT-deduped) solution, stable-sort by the keys via the
-                              // type-aware `order_cmp`, then OFFSET/LIMIT (SPARQL §15: order, then slice).
-                              // Bounded-memory caveat: ORDER BY inherently buffers — the one exception to the
-                              // streaming contract (ADR-0006), memory grows with the result size.
-    let ordered = !plan.order.is_empty();
-    let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
-    for (bi, branch) in branches.iter().enumerate() {
-        let e = crate::emit::emit_branch_with(branch, plan.dialect, &catalog)?;
-        let declared = declared_codes(&e, conn);
-        let char_pads = declared_char_pads(&e, conn);
-        let params = rusqlite::params_from_iter(e.params.iter());
-        let mut err: Option<Error> = None;
-        sf_sql::sqlite_for_each(conn, &e.sql, params, |row| {
-            if err.is_some() {
-                return Ok(());
-            }
-            let mut values = Vec::with_capacity(e.projection.len());
-            let mut codes = Vec::with_capacity(e.projection.len());
-            for (i, &decl_code) in declared.iter().enumerate() {
-                let v = match row.get_ref(i).map_err(|e| Error::Sql(e.to_string())) {
-                    Ok(v) => v,
-                    Err(x) => {
-                        err = Some(x);
-                        return Ok(());
-                    }
-                };
-                // §10 type: the declared decl type, else the value's storage class.
-                let code = decl_code.or_else(|| storage_class_code(&v));
-                match lexical_typed(v, code) {
-                    Ok(mut text) => {
-                        // R2RML §10 / ADR-0015: blank-pad a fixed-length CHAR(n)
-                        // value to `n` so SQLite matches the SQL-standard value.
-                        if let (Some(n), Some(s)) = (char_pads[i], text.as_mut()) {
-                            for _ in s.chars().count()..n {
-                                s.push(' ');
-                            }
-                        }
-                        values.push(text);
-                        codes.push(code);
-                    }
-                    Err(x) => {
-                        err = Some(x);
-                        return Ok(());
-                    }
-                }
-            }
-            let raw = RawRow {
-                schema: &e.projection,
-                values: &values,
-                codes: &codes,
-            };
-            // Reconstruct first: DISTINCT needs the projected terms to dedup, and the
-            // dedup must precede OFFSET/LIMIT (SPARQL order). Single-branch plans had
-            // DISTINCT/OFFSET/LIMIT pushed into SQL, so they reconstruct + sink only.
-            let bindings = match reconstruct(branch, &raw) {
-                Ok(b) => b,
-                Err(x) => {
-                    err = Some(x);
-                    return Ok(());
-                }
-            };
-            // DISTINCT dedup only for a multi-branch bag-union (a single branch dedups
-            // in SQL). Applied before ORDER BY.
-            if multi {
-                if let Some(vars) = &distinct_vars {
-                    let key: Vec<Option<Term>> =
-                        vars.iter().map(|v| bindings.get(v).cloned()).collect();
-                    if !seen_tuples.insert(key) {
-                        return Ok(()); // duplicate projected solution ⇒ not a new one
-                    }
-                }
-            }
-            // ORDER BY (any branch count): defer slicing — buffer for the global
-            // type-aware sort after every row is read, so single- and multi-branch
-            // order identically (OFFSET/LIMIT applied after the sort, below).
-            // For expression keys (e.g. STRLEN(?n)), evaluate the expression now
-            // and inject the result as a synthetic binding so order_cmp finds it.
-            if ordered {
-                let bindings = if plan.order.iter().any(|k| k.expr.is_some()) {
-                    let mut b = bindings;
-                    for key in &plan.order {
-                        if let Some(expr) = &key.expr {
-                            if let Some(val) = eval_expr(expr, &b) {
-                                b.insert(key.var.clone(), val);
-                            }
-                        }
-                    }
-                    b
-                } else {
-                    bindings
-                };
-                buffer.push((bi, bindings));
-                return Ok(());
-            }
-            // Streaming OFFSET/LIMIT only when SQL didn't apply them (a multi-branch
-            // bag-union; a single unordered branch sliced in SQL).
-            if multi {
-                if seen < plan.offset {
-                    seen += 1;
-                    return Ok(());
-                }
-                if let Some(limit) = plan.limit {
-                    if emitted >= limit {
-                        return Ok(());
-                    }
-                }
-            }
-            emitted += 1;
-            if let Err(x) = sink(branch, &bindings) {
-                err = Some(x);
-            }
-            Ok(())
-        })
-        .map_err(map_sql_err)?;
-        if let Some(x) = err {
-            return Err(x);
-        }
-    }
-    // The buffered bag-union ORDER BY: stable-sort by the keys (a stable sort keeps
-    // the input bag order for equal keys), then OFFSET/LIMIT, then sink.
-    if ordered {
-        buffer.sort_by(|(_, a), (_, b)| order_cmp(&plan.order, a, b));
-        let take = plan.limit.unwrap_or(usize::MAX);
-        for (bi, bindings) in buffer.iter().skip(plan.offset).take(take) {
-            sink(&branches[*bi], bindings)?;
-        }
-    }
-    Ok(())
-}
-
 /// Compare two solutions by the ORDER BY keys (SPARQL §15.1), honoring each key's
 /// direction with explicit UNBOUND placement: an unbound key sorts FIRST for ASC
 /// and LAST for DESC — matching the SQL `NULLS FIRST/LAST` the single-branch path
@@ -619,10 +319,6 @@ fn numeric_value(l: &Literal) -> Option<f64> {
     } else {
         None
     }
-}
-
-fn map_sql_err(e: sf_sql::Error) -> Error {
-    Error::Sql(e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -847,87 +543,41 @@ fn eval_function(func: &Function, args: &[Expression], b: &BTreeMap<String, Term
 
 /// Stream the triples of a `CONSTRUCT` (or the `?s ?p ?o` dump), invoking `sink`
 /// per well-formed triple. Ill-formed instantiations (e.g. a literal subject) are
-/// skipped, per SPARQL CONSTRUCT semantics.
-pub fn construct(plan: &Plan, conn: &Connection, mut sink: impl FnMut(Triple)) -> Result<u64> {
-    let template = match &plan.form {
-        PlanForm::Construct { template } => template.clone(),
-        _ => {
-            return Err(Error::Unsupported(
-                "construct() requires a CONSTRUCT plan".to_owned(),
-            ))
-        }
-    };
-    let mut count = 0u64;
-    for_each_solution(plan, conn, |_branch, bindings| {
-        for tp in &template {
-            if let Some(triple) = instantiate(tp, bindings) {
-                count += 1;
-                sink(triple);
-            }
-        }
-        Ok(())
-    })?;
-    Ok(count)
+/// skipped, per SPARQL CONSTRUCT semantics. Runs the driver-agnostic
+/// [`crate::exec_core`] core over a live SQLite connection (ADR-0024).
+pub fn construct(plan: &Plan, conn: &Connection, sink: impl FnMut(Triple)) -> Result<u64> {
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::construct(plan, &mut backend, sink))
 }
 
 /// Collect a CONSTRUCT's triples (test/diagnostic convenience; the streaming
 /// [`construct`] is the bounded-memory API).
 pub fn construct_triples(plan: &Plan, conn: &Connection) -> Result<Vec<Triple>> {
-    let mut out = Vec::new();
-    construct(plan, conn, |t| out.push(t))?;
-    Ok(out)
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::construct_triples(plan, &mut backend))
 }
 
 /// Stream the whole mapping as **quads** (ADR-0005 named-graph conformance),
 /// invoking `sink` per well-formed quad. Distinct from the `?s ?p ?o` CONSTRUCT
 /// dump: it walks the mapping IR ([`crate::dump`]) so each triple carries the
 /// graph term from the applicable `rr:graphMap`(s), built through the *same*
-/// `sf-core` term-gen path (datatype §10 included — no drift). Bounded-memory:
-/// one row in flight via [`for_each_solution`]. A triple whose subject/predicate/
-/// object column is NULL is dropped (R2RML §11); a named-graph branch whose graph
-/// map produces no value drops that quad (no silent default-graph fallback).
+/// `sf-core` term-gen path. Bounded-memory: one row in flight via
+/// [`crate::exec_core`]. A triple whose subject/predicate/object column is NULL is
+/// dropped (R2RML §11); a named-graph branch whose graph map produces no value
+/// drops that quad (no silent default-graph fallback).
 pub fn dump_quads_stream(
     maps: &[sf_core::ir::TriplesMap],
     conn: &Connection,
     dialect: sf_sql::Dialect,
-    mut sink: impl FnMut(sf_core::Quad),
+    sink: impl FnMut(sf_core::Quad),
 ) -> Result<()> {
-    use crate::dump::{VAR_G, VAR_O, VAR_P, VAR_S};
-    use sf_core::GraphName;
-
-    let plan = Plan {
-        branches: crate::dump::build_branches(maps),
-        form: PlanForm::Select { vars: Vec::new() }, // unused; we read bindings directly
-        distinct: false,
-        limit: None,
-        offset: 0,
-        order: Vec::new(),
-        rust_group: None,
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::dump_quads_stream(
+        maps,
+        &mut backend,
         dialect,
-    };
-    for_each_solution(&plan, conn, |branch, bindings| {
-        let (Some(s), Some(p), Some(o)) = (
-            bindings.get(VAR_S),
-            bindings.get(VAR_P),
-            bindings.get(VAR_O),
-        ) else {
-            return Ok(()); // a NULL s/p/o column ⇒ no term ⇒ no triple (§11)
-        };
-        // A named-graph branch declares `g` in its bindings *definition*; the
-        // reconstructed value is present only if the graph map produced a term.
-        let graph = if branch.bindings.contains_key(VAR_G) {
-            match bindings.get(VAR_G) {
-                Some(Term::NamedNode(n)) => GraphName::NamedNode(n.clone()),
-                _ => return Ok(()), // graph map yielded no value ⇒ drop this quad
-            }
-        } else {
-            GraphName::DefaultGraph
-        };
-        if let Ok(triple) = Triple::from_terms(s.clone(), p.clone(), o.clone()) {
-            sink(triple.in_graph(graph));
-        }
-        Ok(())
-    })
+        sink,
+    ))
 }
 
 /// Collect the mapping-IR quad dump (conformance convenience; the streaming
@@ -937,9 +587,8 @@ pub fn dump_quads(
     conn: &Connection,
     dialect: sf_sql::Dialect,
 ) -> Result<Vec<sf_core::Quad>> {
-    let mut out = Vec::new();
-    dump_quads_stream(maps, conn, dialect, |q| out.push(q))?;
-    Ok(out)
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::dump_quads(maps, &mut backend, dialect))
 }
 
 /// A SELECT solution: the projected variables (plan order) paired with each
@@ -950,58 +599,28 @@ pub struct Solutions {
 }
 
 /// Stream a SELECT's solutions, invoking `sink` per projected row (in projection
-/// order, `None` = unbound) — one row in flight (bounded memory), the streaming
-/// core behind [`select`]. The HTTP layer drives this to serialise + flush each
-/// row into the response body without ever collecting the result set (ADR-0010
-/// §C). The `&[Option<Term>]` slice is reused across rows (a fixed budget).
+/// order, `None` = unbound) — one row in flight (bounded memory). The HTTP layer
+/// drives this to serialise + flush each row without collecting (ADR-0010 §C).
 pub fn select_each(
     plan: &Plan,
     conn: &Connection,
-    mut sink: impl FnMut(&[Option<Term>]) -> Result<()>,
+    sink: impl FnMut(&[Option<Term>]) -> Result<()>,
 ) -> Result<()> {
-    let vars = match &plan.form {
-        PlanForm::Select { vars } => vars.clone(),
-        _ => {
-            return Err(Error::Unsupported(
-                "select() requires a SELECT plan".to_owned(),
-            ))
-        }
-    };
-    let mut row: Vec<Option<Term>> = Vec::with_capacity(vars.len());
-    for_each_solution(plan, conn, |_branch, bindings| {
-        row.clear();
-        row.extend(vars.iter().map(|v| bindings.get(v).cloned()));
-        sink(&row)
-    })
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::select_each(plan, &mut backend, sink))
 }
 
 /// Execute a SELECT, collecting solutions (bounded-memory streaming is the
-/// `for_each_solution` core; this collects for callers/tests).
+/// [`crate::exec_core`] core; this collects for callers/tests).
 pub fn select(plan: &Plan, conn: &Connection) -> Result<Solutions> {
-    let vars = match &plan.form {
-        PlanForm::Select { vars } => vars.clone(),
-        _ => {
-            return Err(Error::Unsupported(
-                "select() requires a SELECT plan".to_owned(),
-            ))
-        }
-    };
-    let mut rows = Vec::new();
-    for_each_solution(plan, conn, |_branch, bindings| {
-        rows.push(vars.iter().map(|v| bindings.get(v).cloned()).collect());
-        Ok(())
-    })?;
-    Ok(Solutions { vars, rows })
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::select(plan, &mut backend))
 }
 
 /// Execute an ASK — true iff at least one solution exists.
 pub fn ask(plan: &Plan, conn: &Connection) -> Result<bool> {
-    let mut any = false;
-    for_each_solution(plan, conn, |_b, _s| {
-        any = true;
-        Ok(())
-    })?;
-    Ok(any)
+    let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
+    crate::exec_core::block_on(crate::exec_core::ask(plan, &mut backend))
 }
 
 /// Instantiate a CONSTRUCT-template triple against a solution; `None` if any
@@ -1044,50 +663,6 @@ pub fn write_ntriples(triples: &[Triple]) -> String {
 // ---------------------------------------------------------------------------
 // Rust-level GROUP BY (multi-branch inner, SPARQL §11)
 // ---------------------------------------------------------------------------
-
-/// Buffer all solutions from every inner branch, apply GROUP BY and aggregation
-/// in Rust, and stream the resulting group rows.  Called by [`for_each_solution`]
-/// when `plan.rust_group` is set (a UNION/VALUES inner that cannot be grouped in
-/// SQL — see ADR-0007 and [`crate::unfold::Unfolder::group`]).
-fn rust_group_execute(
-    plan: &Plan,
-    conn: &Connection,
-    rg: &RustGroup,
-    sink: &mut impl FnMut(&Branch, &BTreeMap<String, Term>) -> Result<()>,
-) -> Result<()> {
-    // Build a no-modifier plan for the inner execution (GROUP BY applies AFTER
-    // collecting all inner solutions, so DISTINCT/OFFSET/LIMIT must not be
-    // applied to the inner rows; ORDER BY is handled after grouping below).
-    let inner_plan = Plan {
-        distinct: false,
-        limit: None,
-        offset: 0,
-        order: Vec::new(),
-        rust_group: None, // prevent recursion
-        ..plan.clone()
-    };
-
-    // Collect all inner solutions (use for_each_branch_solution to avoid the
-    // rust_group check — the inner_plan has rust_group: None, but calling
-    // for_each_solution would create a recursive monomorphization that the
-    // compiler cannot handle; for_each_branch_solution is the non-recursive core).
-    let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
-    for_each_branch_solution(&inner_plan, conn, &mut |_, bindings| {
-        inner_rows.push(bindings.clone());
-        Ok(())
-    })?;
-
-    // Choose a dummy branch for the sink call (SELECT uses `_branch` only for
-    // CONSTRUCT template lookup; GROUP BY results do not come from a single branch).
-    let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
-
-    // Group + aggregate + ORDER BY + OFFSET/LIMIT via the backend-independent
-    // helper (shared with the PostgreSQL path), then stream the result rows.
-    for result in rust_group_result_rows(plan, rg, inner_rows)? {
-        sink(&dummy, &result)?;
-    }
-    Ok(())
-}
 
 /// Group a collected multiset of inner solutions by `rg.keys`, compute each
 /// aggregate in `rg.aggs`, then apply the plan's ORDER BY + OFFSET/LIMIT to the
