@@ -107,10 +107,11 @@ pub(crate) fn inner_join_one(
     // Shared-variable compatibility → NULL-safe WHERE conditions (R1 analogue).
     for (var, rdef) in &right.bindings {
         if let Some(ldef) = left.bindings.get(var) {
+            let left_nullable = def_is_nullable(ldef, &opt_aliases);
             match unify(ldef, rdef) {
                 Unify::Sat(conds) => {
                     for c in conds {
-                        where_conds.push(null_safe(c));
+                        where_conds.push(null_safe(c, left_nullable));
                     }
                 }
                 Unify::Empty => return Ok(None),
@@ -171,14 +172,16 @@ pub(crate) fn inner_join_one(
 /// of a multi-branch OPTIONAL.  Returns `None` when unification proves the join
 /// always empty (NOT EXISTS is trivially true — omit the condition).
 pub(crate) fn not_exists_cond_for(left: &Branch, right: &Branch) -> Result<Option<SqlCond>> {
+    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
     for (var, rdef) in &right.bindings {
         if let Some(ldef) = left.bindings.get(var) {
+            let left_nullable = def_is_nullable(ldef, &opt_aliases);
             match unify(ldef, rdef) {
                 Unify::Sat(cond_list) => {
                     for c in cond_list {
-                        conds.push(null_safe(c));
+                        conds.push(null_safe(c, left_nullable));
                     }
                 }
                 // Unification is impossible → this Ri can never match left →
@@ -205,12 +208,16 @@ fn build_left_join(
 ) -> Result<Option<Branch>> {
     let mut on = Vec::new();
     let mut extra = right.where_conds.clone(); // constant-position constraints stay in the ON (R5)
+                                               // Prior-OPTIONAL aliases on the preserved (left) side: a shared var whose left def
+                                               // reads one of these can be UNBOUND, so its ON equality needs the NULL-safe guard.
+    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     for (var, rdef) in &right.bindings {
         if let Some(ldef) = left.bindings.get(var) {
+            let left_nullable = def_is_nullable(ldef, &opt_aliases);
             match unify(ldef, rdef) {
                 Unify::Sat(conds) => {
                     for c in conds {
-                        on.push(null_safe(c)); // R1: shared-var compat, never plain a = b
+                        on.push(null_safe(c, left_nullable)); // R1: shared-var compat, never plain a = b
                     }
                 }
                 Unify::Empty => return Ok(None),
@@ -231,7 +238,6 @@ fn build_left_join(
     // COALESCE(left, right) so the right value survives when left is unbound; a
     // mandatory-left shared var is never NULL (COALESCE(left,right)=left) so we keep
     // the simpler left def; a right-only var is the (possibly NULL) right output.
-    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     for (var, rdef) in &right.bindings {
         match left.bindings.get(var) {
             Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
@@ -255,7 +261,21 @@ fn build_left_join(
 /// Turn an inner-join equality into the OPTIONAL NULL-safe form (R1): an unbound
 /// shared variable is compatible with any value, so a nullable side must be
 /// admitted.
-fn null_safe(c: SqlCond) -> SqlCond {
+///
+/// The disjunctive `OR … IS NULL` guard is ONLY emitted when the LEFT (preserved /
+/// outer) binding of the shared variable can actually be NULL — i.e. it reads a
+/// prior-OPTIONAL scan alias (`left_nullable`). When the left binding is mandatory
+/// (e.g. a subject bound by a non-OPTIONAL `?t a gtfs:Trip`) the shared variable is
+/// never unbound, `a IS NULL` is dead, and the RIGHT shared-var column is itself
+/// non-NULL (a subject/FK key by PK, or an object column already carrying an
+/// `IS NOT NULL` where-cond in this branch), so `(a = b OR a IS NULL OR b IS NULL)`
+/// is result-equivalent to the plain `a = b`. Emitting the plain equality lets
+/// PostgreSQL use a hash/merge join instead of a disjunction-forced nested loop —
+/// the O(n²) blow-up on nested/multi-scan OPTIONAL (q14) collapses to a linear join.
+fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
+    if !left_nullable {
+        return c;
+    }
     match c {
         // column = column: `(a = b OR a IS NULL OR b IS NULL)`.
         SqlCond::ColEq(a, b) => SqlCond::NullSafeEq(a, b),

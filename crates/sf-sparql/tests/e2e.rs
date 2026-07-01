@@ -187,10 +187,17 @@ fn optional_is_null_safe_left_join() {
          OPTIONAL {{ ?d <{DEPT_NAME}> ?dn }} }}"
     );
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
-    // The OPTIONAL must use the NULL-safe compatibility form, never a plain a = b.
+    // The OPTIONAL is a SQL LEFT JOIN. The shared var ?d is bound by the MANDATORY
+    // `?e EMP_DEPT ?d`, so its left binding is never NULL: the ON is a plain equality
+    // (`t1.dept_id = t2.id`), NOT the disjunctive null-safe form. The null-safe
+    // `OR … IS NULL` guard is reserved for a NULLABLE (prior-OPTIONAL) left shared var
+    // — emitting it for a mandatory var only defeats hash joins (the q14 O(n²) blow-up).
     let sql = &plan.emitted().unwrap()[0].sql;
     assert!(sql.to_uppercase().contains("LEFT JOIN"), "{sql}");
-    assert!(sql.contains("IS NULL"), "R1 null-safe compatibility: {sql}");
+    assert!(
+        !sql.contains("IS NULL") || sql.contains("IS NOT NULL"),
+        "mandatory-left OPTIONAL shared var → plain equality ON, no null-safe disjunction: {sql}"
+    );
 
     let sol = exec::select(&plan, &conn).unwrap();
     let got: BTreeSet<(String, Option<String>)> = sol
