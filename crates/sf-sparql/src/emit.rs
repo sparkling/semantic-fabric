@@ -407,8 +407,11 @@ fn emit_agg_branch(
     let mut pidx = 0usize;
 
     // FROM (+ LEFT JOIN ON params) renders before WHERE so positional placeholders
-    // bind in text order. A core-less inner (an empty BGP) renders without FROM.
-    let from = if b.core.is_empty() {
+    // bind in text order. A core-less inner with no SubPlan join either (an empty
+    // BGP) renders without FROM; a core-less inner WITH a SubPlan join (the SQL
+    // agg-over-UNION pushdown: the pooled arms' derived table is the sole FROM
+    // relation) still needs `render_from` — mirrors `emit_branch_with`'s condition.
+    let from = if b.core.is_empty() && b.subplan_joins.is_empty() {
         None
     } else {
         Some(render_from(b, dialect, actuals, &mut params, &mut pidx)?)
@@ -700,7 +703,7 @@ fn render_from(
 /// Render all prepared branches of a nested [`Plan`] to a single SQL SELECT string
 /// (for embedding as a derived table). Multi-branch plans become a `UNION ALL`.
 /// Returns `(sql_text, params)` — params in text order, placeholders starting from 1.
-fn emit_subplan_sql(plan: &crate::Plan, _dialect: Dialect) -> Result<(String, Vec<String>)> {
+fn emit_subplan_sql(plan: &crate::Plan, dialect: Dialect) -> Result<(String, Vec<String>)> {
     let emitted = plan.emitted()?;
     if emitted.is_empty() {
         // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
@@ -712,10 +715,18 @@ fn emit_subplan_sql(plan: &crate::Plan, _dialect: Dialect) -> Result<(String, Ve
         return Ok((e.sql.clone(), e.params.clone()));
     }
     // Multiple branches: UNION ALL (bag semantics). Each branch's params in text order.
+    // SQLite's compound-select grammar does NOT accept a parenthesised `select-core`
+    // as a UNION operand (`(SELECT …) UNION ALL (SELECT …)` is a syntax error there —
+    // confirmed against `sqlite3` directly, the q9 agg-pushdown wave's first live
+    // failure); PostgreSQL/MySQL both accept it. So SQLite joins the arms bare.
     let mut all_sql = Vec::new();
     let mut all_params = Vec::new();
     for e in &emitted {
-        all_sql.push(format!("({})", e.sql));
+        if dialect == Dialect::Sqlite {
+            all_sql.push(e.sql.clone());
+        } else {
+            all_sql.push(format!("({})", e.sql));
+        }
         all_params.extend(e.params.clone());
     }
     let sql = all_sql.join(" UNION ALL ");

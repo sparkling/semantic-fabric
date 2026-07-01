@@ -489,10 +489,43 @@ fn agg_union(query: &str) {
     );
     let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
     assert!(
-        tp.rust_group.is_some(),
-        "agg-over-UNION must lower to a rust_group: `{query}`"
+        agg_over_union_is_lowered(&tp),
+        "agg-over-UNION must lower to a `rust_group` OR a SQL-pushed-down \
+         Aggregation-over-SubPlan (q9 agg-pushdown wave): `{query}`"
     );
     assert_vs_spareval(AGG_TTL, query, &tp, &conn);
+}
+
+/// A multi-branch agg-over-UNION closes EITHER via the Rust-level [`Plan::rust_group`]
+/// buffer-and-group (the correctness oracle/fallback) OR the SQL pushdown — one
+/// [`Branch`] carrying both an `agg` (the `Aggregation`) and a non-empty
+/// `subplan_joins` (the pooled `UNION ALL` derived table `try_sql_group_over_union`
+/// builds). Exactly one of the two ever fires for a given query (never both, never
+/// neither) — this only asserts SOME closure happened, the specific choice is an
+/// applicability detail the `=_bag` spareval check right after this is what actually
+/// gates correctness.
+fn agg_over_union_is_lowered(tp: &Plan) -> bool {
+    tp.rust_group.is_some()
+        || tp
+            .branches
+            .iter()
+            .any(|b| b.agg.is_some() && !b.subplan_joins.is_empty())
+}
+
+/// The per-UNION-arm branches an agg-over-UNION plan actually scans, regardless of
+/// which of the two closures (above) fired: the Rust-group path keeps them as
+/// `tp.branches` directly; the SQL-pushdown path nests them inside the pooled
+/// `SubPlanJoin`'s own `Plan`.
+fn agg_over_union_arm_branches(tp: &Plan) -> Vec<&sf_sparql::iq::Branch> {
+    if tp.rust_group.is_some() {
+        tp.branches.iter().collect()
+    } else {
+        tp.branches
+            .iter()
+            .flat_map(|b| b.subplan_joins.iter())
+            .flat_map(|sp| sp.plan.branches.iter())
+            .collect()
+    }
 }
 
 #[test]
@@ -573,8 +606,11 @@ fn agg_over_union_self_join_eliminated_on_shared_table() {
          {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
     ));
     let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
-    assert!(tp.rust_group.is_some(), "must lower to a rust_group");
-    for b in &tp.branches {
+    assert!(
+        agg_over_union_is_lowered(&tp),
+        "must lower to a rust_group or a SQL-pushed-down Aggregation-over-SubPlan"
+    );
+    for b in agg_over_union_arm_branches(&tp) {
         let m_scans = b
             .core
             .iter()

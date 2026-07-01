@@ -487,7 +487,34 @@ pub fn translate_tree(
     if plan.branches.len() == 1 {
         plan.distinct = plan.branches[0].distinct;
     }
+    // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
+    // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
+    // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
+    // them (it only walks `plan.branches`), so self-join elimination and the rest of
+    // the cascade would silently never fire on a pooled/nested arm otherwise. Recurse
+    // into every SubPlan the SAME way: `project: None` (mirrors the `rust_group`
+    // guard above — a nested arm's raw columns feed its outer union/aggregation BY
+    // NAME, so they must never be shrunk away).
+    for b in &mut plan.branches {
+        cascade_subplans(b, schema);
+    }
     Ok(plan)
+}
+
+/// Recursively run the cascade on every [`iq::SubPlanJoin`]'s nested [`Plan`]
+/// branches reachable from `b` (depth-first — a SubPlan can itself carry a
+/// SubPlan). See the call site above for why this is needed.
+fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
+    for sp in &mut b.subplan_joins {
+        let ctx = cascade::CascadeCtx {
+            distinct: false,
+            project: None,
+        };
+        sp.plan.branches = cascade::run(std::mem::take(&mut sp.plan.branches), schema, &ctx);
+        for inner in &mut sp.plan.branches {
+            cascade_subplans(inner, schema);
+        }
+    }
 }
 
 /// Translate through the compiled-plan cache (ADR-0007 *Plan cache, hot path*):

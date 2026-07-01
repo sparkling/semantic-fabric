@@ -1036,8 +1036,18 @@ fn lower_aggregation(
             aggs: agg_cols,
         });
         Ok(vec![branch])
+    } else if let Some(branch) =
+        try_sql_group_over_union(&inner, &grouping, &aggs, dialect, next_alias)
+    {
+        // SQL pushdown (ADR-0023 optimizer-residue, q9 agg-pushdown wave): the union
+        // arms pool into ONE derived-table `UNION ALL` and the DB does the GROUP BY —
+        // no `RustGroup` buffer-and-group. Falls through to the Rust path below when
+        // `try_sql_group_over_union` returns `None` (not provably `=_bag`-safe to pool).
+        Ok(vec![branch])
     } else {
-        // Multi-branch inner: buffer + group in Rust (design §5 Aggregation).
+        // Multi-branch inner: buffer + group in Rust (design §5 Aggregation). This
+        // stays the correctness oracle/fallback for every shape the SQL pushdown
+        // above declines (cross-arm type mismatch, multi-column keys/args, etc.).
         let keys: Vec<String> = grouping.iter().map(|v| v.to_string()).collect();
         let mut rust_aggs = Vec::with_capacity(aggs.len());
         for def in &aggs {
@@ -1049,6 +1059,229 @@ fn lower_aggregation(
         });
         Ok(inner)
     }
+}
+
+/// Attempt to push a multi-branch (UNION) GROUP BY + aggregates down to ONE SQL
+/// statement — `SELECT <keys>, <aggs> FROM (<arm1> UNION ALL <arm2> ...) sub GROUP BY
+/// <keys>` — so the database aggregates instead of `exec_core::rust_group_execute`
+/// buffering every inner solution in Rust (ADR-0023 optimizer-residue horizon, the
+/// q9 headline case). Reuses the SubPlan derived-table machinery (`SubPlanJoin`,
+/// already rendering a multi-branch nested [`Plan`] as `(arm1) UNION ALL (arm2)` via
+/// [`crate::emit::emit_subplan_sql`]) plus the existing single-branch [`Aggregation`]
+/// SQL emission verbatim — pooling the arms under one `Aggregation` branch needs no
+/// new emission code, only this construction.
+///
+/// Returns `None` (never `Err`) when NOT provably `=_bag`-safe to pool — the caller
+/// falls back to [`RustGroup`] (the correctness oracle), so an inapplicable shape is
+/// silently as correct as before, never silently wrong.
+///
+/// **Applicability (the four correctness concerns, each resolved conservatively):**
+/// 1. *Cross-arm type unification.* Every grouping-key / aggregate-argument variable
+///    must resolve, in EVERY arm, to `TermDef::Derived { term_map: TermMap::Column(_,
+///    spec), .. }` — a single raw column (the same shape the single-branch SQL path
+///    already requires via `group_key_columns`/`single_column_of`) — AND `spec`
+///    (term_type + datatype + language: the R2RML-declared XSD type) must be
+///    IDENTICAL across every arm at that position. A `Template`/`Coalesce`/`Concat`/
+///    `Const` def, a column-count mismatch, or a declared-type mismatch bails to the
+///    Rust path — no live DB schema introspection needed, since the mapping's own
+///    declared type is a sound, deterministic proxy the mapping author controls.
+/// 2. *Empty-group semantics.* Unchanged from the single-branch path: when `grouping`
+///    is empty, `Aggregation.keys` is empty too, so `emit_agg_branch` omits `GROUP BY`
+///    entirely — a bare aggregate SELECT over zero rows is ALREADY one row in SQL
+///    (COUNT⇒0, SUM/AVG/MIN/MAX⇒NULL), matching SPARQL §11's implicit-group rule with
+///    zero new code. (An EXPLICIT grouping key legitimately yields zero result rows
+///    over zero input rows in both SPARQL and SQL — no special-casing needed there.)
+/// 3. *`COUNT(DISTINCT ?v)` over the union.* Falls out of pooling into one SQL scope:
+///    `COUNT(DISTINCT col)` dedupes per GROUP BY group under standard SQL semantics,
+///    the same per-group scope `RustAgg.distinct`'s manual dedup targets.
+/// 4. *Scope.* This function is additive (`iq/lower.rs` gains a helper, no rewrite);
+///    `RustGroup`/`rust_group_execute` are untouched and remain the oracle.
+fn try_sql_group_over_union(
+    inner: &[Branch],
+    grouping: &[Var],
+    aggs: &[AggDef],
+    dialect: sf_sql::Dialect,
+    next_alias: &mut usize,
+) -> Option<Branch> {
+    use sf_core::ir::{TermMap, TermSpec};
+    use std::collections::BTreeSet;
+
+    if inner.len() < 2 || inner.iter().any(|b| b.path.is_some() || b.agg.is_some()) {
+        return None;
+    }
+
+    fn column_spec(def: &TermDef) -> Option<&TermSpec> {
+        match def {
+            TermDef::Derived {
+                term_map: TermMap::Column(_, spec),
+                ..
+            } => Some(spec),
+            _ => None,
+        }
+    }
+    fn spec_eq(a: &TermSpec, b: &TermSpec) -> bool {
+        // `base` (relative-IRI resolution context) is irrelevant to SQL storage-type
+        // compatibility — intentionally excluded.
+        a.term_type == b.term_type && a.datatype == b.datatype && a.language == b.language
+    }
+
+    // The needed variable set: every grouping key + every var-backed aggregate
+    // argument (a non-variable aggregate argument, or `COUNT(DISTINCT *)`, bails —
+    // the flat/tree Rust-group path 501s on those too, so this is no new deferral).
+    let mut needed: BTreeSet<String> = grouping.iter().map(|v| v.to_string()).collect();
+    for def in aggs {
+        match &def.arg {
+            Some(AggArg::Var(v)) => {
+                needed.insert(v.to_string());
+            }
+            Some(AggArg::Expr(_)) => return None,
+            None if def.distinct => return None,
+            None => {}
+        }
+    }
+    // BTreeSet iteration order (alphabetical by var name) is EXACTLY the order
+    // `Branch::projection()`/`emit_branch_with` assign positional `c{i}` aliases in,
+    // since a pooled arm's `bindings` (below) contains precisely this var set keyed
+    // by the same `BTreeMap<String, _>` ordering — so `sorted_vars[i]` ↔ `c{i}`.
+    let sorted_vars: Vec<String> = needed.into_iter().collect();
+
+    // Validate shape + cross-arm type compatibility for every needed var.
+    let mut specs: Vec<TermSpec> = Vec::with_capacity(sorted_vars.len());
+    for v in &sorted_vars {
+        let mut common: Option<&TermSpec> = None;
+        for arm in inner {
+            let def = arm.bindings.get(v.as_str())?;
+            let spec = column_spec(def)?;
+            match common {
+                None => common = Some(spec),
+                Some(c) if spec_eq(c, spec) => {}
+                Some(_) => return None, // cross-arm type mismatch — bail to Rust path
+            }
+        }
+        specs.push(common.expect("inner.len() >= 2 checked above").clone());
+    }
+
+    let pos = |v: &str| {
+        sorted_vars
+            .iter()
+            .position(|x| x == v)
+            .expect("validated above")
+    };
+
+    // Pool the arms: each retains its own FROM/WHERE, reduced to ONLY the needed
+    // bindings — but `Branch::projection()` ALSO appends every raw column its
+    // (non-DISTINCT) `where_conds`/`opts`/`subplan_joins` reference (join-key
+    // equalities etc., deduped against the bindings columns) — the SAME mechanism
+    // a normal multi-branch bag-union relies on. Those trailing columns are dead
+    // weight here (the outer `Aggregation` only ever reads positions `0..sorted_vars
+    // .len()`, resolved by `pos()` below) but they DO have to line up 1:1 across
+    // arms for `UNION ALL` to be syntactically valid — checked after the fact
+    // (equal-length gate) rather than suppressed, since suppressing them would mean
+    // `distinct: true`, which would corrupt the pre-aggregation multiset.
+    let pooled_arms: Vec<Branch> = inner
+        .iter()
+        .map(|arm| {
+            let bindings = sorted_vars
+                .iter()
+                .map(|v| (v.clone(), arm.bindings[v.as_str()].clone()))
+                .collect();
+            Branch {
+                bindings,
+                distinct: false,
+                limit: None,
+                offset: 0,
+                order: Vec::new(),
+                ..arm.clone()
+            }
+        })
+        .collect();
+    // Cross-arm column-count parity (the `UNION ALL` syntactic requirement): every
+    // arm's `where_conds`/`opts`/`subplan_joins` may contribute a different number of
+    // trailing dead columns via `projection()` when the arms' shapes are NOT
+    // symmetric (e.g. one arm joins 2 tables, another 3) — bail to the Rust path
+    // rather than emit a `UNION ALL` the database rejects (or, worse, one it
+    // silently accepts with misaligned trailing columns nothing ever reads).
+    let proj_len = pooled_arms.first().map(|b| b.projection().len())?;
+    if pooled_arms.iter().any(|b| b.projection().len() != proj_len) {
+        return None;
+    }
+
+    let sp_alias = *next_alias;
+    *next_alias += 1;
+    let nested_plan = Plan {
+        branches: pooled_arms,
+        form: PlanForm::Select {
+            vars: sorted_vars.clone(),
+        },
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: Vec::new(),
+        rust_group: None,
+        dialect,
+    };
+
+    let mut outer = Branch::empty();
+    outer.subplan_joins.push(SubPlanJoin {
+        alias: sp_alias,
+        plan: Box::new(nested_plan),
+        on: Vec::new(),
+        left: false,
+    });
+
+    let mut out_bindings: BTreeMap<String, TermDef> = BTreeMap::new();
+    let mut keys = Vec::with_capacity(grouping.len());
+    for v in grouping {
+        let p = pos(v.as_ref());
+        let col = ColRef::new(sp_alias, format!("c{p}"));
+        out_bindings.insert(
+            v.to_string(),
+            TermDef::Derived {
+                term_map: TermMap::Column(format!("c{p}").into(), specs[p].clone()),
+                alias: sp_alias,
+            },
+        );
+        keys.push(GroupKey {
+            var: v.to_string(),
+            cols: vec![col],
+        });
+    }
+
+    let agg_alias = *next_alias;
+    *next_alias += 1;
+    let mut agg_cols = Vec::with_capacity(aggs.len());
+    for def in aggs {
+        let arg = match &def.arg {
+            None => None,
+            Some(AggArg::Var(v)) => Some(ColRef::new(sp_alias, format!("c{}", pos(v.as_ref())))),
+            Some(AggArg::Expr(_)) => unreachable!("filtered above"),
+        };
+        let out = ColRef::new(agg_alias, &*def.var);
+        out_bindings.insert(
+            def.var.to_string(),
+            TermDef::Agg {
+                col: out.clone(),
+                kind: def.kind,
+                operand: arg.clone(),
+                fixed_type: def.fixed_type,
+            },
+        );
+        agg_cols.push(AggCol {
+            var: def.var.to_string(),
+            kind: def.kind,
+            arg,
+            distinct: def.distinct,
+            out,
+            fixed_type: def.fixed_type,
+        });
+    }
+
+    outer.bindings = out_bindings;
+    outer.agg = Some(Aggregation {
+        keys,
+        aggs: agg_cols,
+    });
+    Some(outer)
 }
 
 /// Map one [`AggDef`] to a single-branch SQL [`AggCol`] tuple `(kind, arg col, distinct,
@@ -1485,8 +1718,85 @@ mod tests {
     /// aggregate over a multi-branch inner injects a spargebra-internal var + `Extend`
     /// the tree now closes by renaming the `RustGroup` output — see
     /// [`aliased_aggregate_over_multi_branch_closes_via_rust_group`].
+    /// The arms here declare INCOMPATIBLE `TermSpec`s for `?o` (plain literal vs a
+    /// typed `xsd:integer` literal) — `try_sql_group_over_union`'s concern-#1 gate
+    /// (cross-arm type unification) must decline the SQL pushdown for exactly this
+    /// reason, so the plan still falls back to `RustGroup`. See
+    /// [`group_by_multi_branch_pushes_down_to_sql_when_compatible`] for the
+    /// compatible-arms case (the SQL pushdown fires instead).
     #[test]
     fn group_by_multi_branch_uses_rust_group() {
+        use crate::iq::node::{AggArg, AggDef, BindDef};
+        use crate::iq::{AggKind, Scan};
+        use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+
+        let arm = |alias: usize, o_spec: TermSpec| -> IqNode {
+            let col = |c: &str, spec: TermSpec| {
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: TermMap::Column(c.into(), spec),
+                    alias,
+                })
+            };
+            let mut subst = BTreeMap::new();
+            subst.insert("s".into(), col("id", TermSpec::plain_literal()));
+            subst.insert("o".into(), col("v", o_spec));
+            IqNode::Construction {
+                child: Box::new(IqNode::Extensional {
+                    scan: Scan {
+                        alias,
+                        source: LogicalSource::Table("t".to_owned()),
+                    },
+                    bind: BTreeMap::new(),
+                }),
+                subst,
+                project: vec!["s".into(), "o".into()],
+            }
+        };
+        let tree = IqNode::Aggregation {
+            grouping: vec!["s".into()],
+            aggs: vec![AggDef {
+                var: "c".into(),
+                kind: AggKind::Sum,
+                arg: Some(AggArg::Var("o".into())),
+                distinct: false,
+                fixed_type: None,
+            }],
+            child: Box::new(IqNode::Union {
+                children: vec![
+                    arm(0, TermSpec::plain_literal()),
+                    arm(
+                        1,
+                        TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(
+                            "http://www.w3.org/2001/XMLSchema#integer",
+                        )),
+                    ),
+                ],
+                project: vec!["s".into(), "o".into()],
+            }),
+        };
+        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let rg = p.rust_group.expect("multi-branch inner ⇒ Plan.rust_group");
+        assert_eq!(rg.keys, vec!["s".to_owned()]);
+        assert_eq!(rg.aggs.len(), 1);
+        assert_eq!(rg.aggs[0].out_var, "c");
+        assert_eq!(rg.aggs[0].arg_var.as_deref(), Some("o"));
+        assert_eq!(
+            p.branches.len(),
+            2,
+            "the two inner arms are kept for grouping"
+        );
+        assert!(
+            p.branches.iter().all(|b| b.agg.is_none()),
+            "no per-branch SQL GROUP BY"
+        );
+    }
+
+    /// The pushdown counterpart of [`group_by_multi_branch_uses_rust_group`]: the SAME
+    /// shape, but both arms declare the IDENTICAL `?o` `TermSpec` — concern #1's gate
+    /// passes, so `try_sql_group_over_union` fires: ONE branch, no `RustGroup`, an
+    /// `Aggregation` carrying a `SubPlanJoin` that pools the two arms.
+    #[test]
+    fn group_by_multi_branch_pushes_down_to_sql_when_compatible() {
         use crate::iq::node::{AggArg, AggDef, BindDef};
         use crate::iq::{AggKind, Scan};
         use sf_core::ir::{LogicalSource, TermMap, TermSpec};
@@ -1528,20 +1838,24 @@ mod tests {
             }),
         };
         let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
-        let rg = p.rust_group.expect("multi-branch inner ⇒ Plan.rust_group");
-        assert_eq!(rg.keys, vec!["s".to_owned()]);
-        assert_eq!(rg.aggs.len(), 1);
-        assert_eq!(rg.aggs[0].out_var, "c");
-        assert_eq!(rg.aggs[0].arg_var.as_deref(), Some("o"));
-        assert_eq!(
-            p.branches.len(),
-            2,
-            "the two inner arms are kept for grouping"
-        );
         assert!(
-            p.branches.iter().all(|b| b.agg.is_none()),
-            "no per-branch SQL GROUP BY"
+            p.rust_group.is_none(),
+            "compatible arms must push down, not fall back to RustGroup"
         );
+        assert_eq!(p.branches.len(), 1, "pooled into one Aggregation branch");
+        let b = &p.branches[0];
+        let agg = b.agg.as_ref().expect("SQL GROUP BY over the pooled union");
+        assert_eq!(agg.keys.len(), 1);
+        assert_eq!(agg.keys[0].var, "s");
+        assert_eq!(agg.aggs.len(), 1);
+        assert_eq!(agg.aggs[0].var, "c");
+        assert_eq!(agg.aggs[0].kind, AggKind::Sum);
+        assert_eq!(
+            b.subplan_joins.len(),
+            1,
+            "the two arms pool into one SubPlan derived table"
+        );
+        assert_eq!(b.subplan_joins[0].plan.branches.len(), 2);
     }
 
     /// ADR-0023 M4 wave 1 — the agg-over-UNION HEADLINE (design §4.14): an *aliased*
