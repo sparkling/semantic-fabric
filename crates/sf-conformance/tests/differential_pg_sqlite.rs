@@ -86,6 +86,73 @@ const ASK_FALSE_Q: &str = r#"
     PREFIX ex: <http://ex/>
     ASK { ?p ex:name "Nobody" }"#;
 
+/// PG-path regression guard (ADR-0023): each previously **SQLite-green but
+/// PostgreSQL-broken** feature class, as one `=_bag` query over the SAME fixture.
+/// The bug pattern was a blind spot — the SQLite differential passed while the live
+/// PG execution/lowering path aborted, silently emptied, or dropped DISTINCT. Here
+/// the always-run SQLite arm is the oracle and the live-PG arm must reproduce its
+/// bag exactly, so a recurrence fails the gate. Each entry: (name, SPARQL, expected
+/// SQLite/PG bag cardinality). Bob's NULL email (⇒ no `ex:email` triple) is what
+/// makes EXISTS/MINUS/agg-over-UNION non-trivial.
+///
+/// * **agg-over-union** — COUNT over a UNION + GROUP BY. Was SF-501 (q9): the PG
+///   core loop hard-errored on `rust_group`, aborting the response mid-stream.
+///   name(3) + email(2) over dept "Sales" ⇒ one group, COUNT 5.
+/// * **filter-exists** — FILTER EXISTS over a typed/plain column. Was SF-501 (q12):
+///   the correlated sub-plan aborted on the PG bind path. Ann + Zed have email ⇒ 2.
+/// * **minus** — MINUS removing the emailed persons. Was SF-EMPTY (q11): the PG
+///   anti-join removed everything. Only Bob (NULL email) survives ⇒ 1.
+/// * **sequence-path** — property path `ex:dept/ex:label`. Was SF-EMPTY (q10): the
+///   sequence lowered to nothing on PG. All 3 persons reach "Sales" ⇒ 3.
+/// * **distinct-join** — DISTINCT over a duplicate-producing join. Was MISMATCH
+///   (q15): DISTINCT was dropped on PG, leaking duplicates. 3 persons, 1 dept ⇒ 1.
+const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
+    (
+        "agg-over-union",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?label (COUNT(?v) AS ?c) WHERE {
+             ?p ex:dept ?d . ?d ex:label ?label .
+             { ?p ex:name ?v } UNION { ?p ex:email ?v }
+           } GROUP BY ?label"#,
+        1,
+    ),
+    (
+        "filter-exists",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?name WHERE {
+             ?p ex:name ?name .
+             FILTER EXISTS { ?p ex:email ?e }
+           }"#,
+        2,
+    ),
+    (
+        "minus",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?name WHERE {
+             ?p ex:name ?name .
+             MINUS { ?p ex:email ?e }
+           }"#,
+        1,
+    ),
+    (
+        "sequence-path",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?name ?label WHERE {
+             ?p ex:name ?name .
+             ?p ex:dept/ex:label ?label
+           }"#,
+        3,
+    ),
+    (
+        "distinct-join",
+        r#"PREFIX ex: <http://ex/>
+           SELECT DISTINCT ?label WHERE {
+             ?p ex:dept ?d . ?d ex:label ?label
+           }"#,
+        1,
+    ),
+];
+
 /// Base connection params (host/port/user, **no** dbname): `SF_PG_URL` if set,
 /// else a local trust-auth default keyed on `$USER` (matches `pg.rs`).
 fn base_conn() -> String {
@@ -129,8 +196,16 @@ async fn introspect_all_pg(client: &Client) -> Result<Vec<TableSchema>, String> 
     Ok(schemas)
 }
 
-/// SQLite side: load the fixture, introspect, translate (Sqlite), run SELECT/ASK.
-fn sqlite_side() -> (Vec<Vec<Option<sf_core::Term>>>, Vec<String>, bool, bool) {
+/// SQLite side: load the fixture, introspect, translate (Sqlite), run SELECT/ASK,
+/// plus each [`FEATURE_QUERIES`] entry as an `=_bag`-ready binding bag (aligned).
+#[allow(clippy::type_complexity)]
+fn sqlite_side() -> (
+    Vec<Vec<Option<sf_core::Term>>>,
+    Vec<String>,
+    bool,
+    bool,
+    Vec<Vec<std::collections::BTreeMap<String, sf_core::Term>>>,
+) {
     let conn: Connection = sqlite::load(CREATE_SQL).expect("sqlite fixture loads");
     let maps = sf_mapping::parse_r2rml(R2RML).expect("R2RML parses");
     let schema = sqlite::introspect_all(&conn).expect("sqlite introspection");
@@ -165,13 +240,36 @@ fn sqlite_side() -> (Vec<Vec<Option<sf_core::Term>>>, Vec<String>, bool, bool) {
     )
     .expect("sqlite ask-false");
 
-    (sols.rows, sols.vars, ask_t, ask_f)
+    // Feature-class arms — the ADR-0023 PG-path regression guard (SQLite oracle).
+    let features = FEATURE_QUERIES
+        .iter()
+        .map(|(name, q, _)| {
+            let plan =
+                parse_and_translate_with(q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+                    .unwrap_or_else(|e| panic!("translate {name} (sqlite): {e}"));
+            let sols =
+                exec::select(&plan, &conn).unwrap_or_else(|e| panic!("{name} (sqlite): {e}"));
+            engine_bag(&sols)
+        })
+        .collect();
+
+    (sols.rows, sols.vars, ask_t, ask_f, features)
 }
 
 /// PG side: recreate a clean `public` schema, load the SAME rows, introspect,
 /// translate (Postgres), run SELECT/ASK over the live client via `select_pg` /
-/// `ask_pg`.
-async fn pg_side(client: &Client) -> (Vec<Vec<Option<sf_core::Term>>>, Vec<String>, bool, bool) {
+/// `ask_pg`, plus each [`FEATURE_QUERIES`] entry (tree path + Postgres lowering +
+/// live `exec_pg` — the exact production surface sf-serve uses).
+#[allow(clippy::type_complexity)]
+async fn pg_side(
+    client: &Client,
+) -> (
+    Vec<Vec<Option<sf_core::Term>>>,
+    Vec<String>,
+    bool,
+    bool,
+    Vec<Vec<std::collections::BTreeMap<String, sf_core::Term>>>,
+) {
     client
         .batch_execute(
             "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; SET search_path TO public;",
@@ -225,13 +323,24 @@ async fn pg_side(client: &Client) -> (Vec<Vec<Option<sf_core::Term>>>, Vec<Strin
     .await
     .expect("pg ask-false");
 
-    (sols.rows, sols.vars, ask_t, ask_f)
+    // Feature-class arms over the LIVE PostgreSQL cursor — the previously-broken set.
+    let mut features = Vec::with_capacity(FEATURE_QUERIES.len());
+    for (name, q, _) in FEATURE_QUERIES {
+        let plan = parse_and_translate_with(q, &maps, Dialect::Postgres, &Tbox::default(), &schema)
+            .unwrap_or_else(|e| panic!("translate {name} (pg): {e}"));
+        let sols = exec_pg::select_pg(&plan, client)
+            .await
+            .unwrap_or_else(|e| panic!("{name} (pg): {e}"));
+        features.push(engine_bag(&sols));
+    }
+
+    (sols.rows, sols.vars, ask_t, ask_f, features)
 }
 
 #[test]
 fn select_and_ask_agree_across_sqlite_and_pg() {
     // SQLite arm (sync) — always runs.
-    let (s_rows, s_vars, s_ask_t, s_ask_f) = sqlite_side();
+    let (s_rows, s_vars, s_ask_t, s_ask_f, s_features) = sqlite_side();
     let s_sel = engine_bag(&exec::Solutions {
         vars: s_vars,
         rows: s_rows,
@@ -240,6 +349,15 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
     assert_eq!(s_sel.len(), 2, "Ann + Bob survive the FILTER (Zed removed)");
     assert!(s_ask_t, "ASK Ann-in-Sales is true on sqlite");
     assert!(!s_ask_f, "ASK Nobody is false on sqlite");
+    // The SQLite oracle must itself match the hand-computed cardinality per class,
+    // so a symmetric-but-wrong PG match cannot slip through.
+    for ((name, _, want), bag) in FEATURE_QUERIES.iter().zip(&s_features) {
+        assert_eq!(
+            bag.len(),
+            *want,
+            "sqlite oracle cardinality wrong for {name}: {bag:#?}"
+        );
+    }
 
     // PG arm (async) — graceful skip if no server is reachable (CI stays green).
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -269,7 +387,7 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
         let work = connect(&format!("{base} dbname={dbname}"))
             .await
             .expect("connect work db");
-        let (p_rows, p_vars, p_ask_t, p_ask_f) = pg_side(&work).await;
+        let (p_rows, p_vars, p_ask_t, p_ask_f, p_features) = pg_side(&work).await;
         drop(work);
         let _ = admin
             .batch_execute(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
@@ -288,5 +406,21 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
         // And identical ASK answers.
         assert_eq!(s_ask_t, p_ask_t, "ASK-true diverges sqlite vs pg");
         assert_eq!(s_ask_f, p_ask_f, "ASK-false diverges sqlite vs pg");
+
+        // ADR-0023 PG-path regression guard: every previously SQLite-green /
+        // PG-broken feature class must now be `=_bag` on the live PG path.
+        for (((name, _, want), s_bag), p_bag) in
+            FEATURE_QUERIES.iter().zip(&s_features).zip(&p_features)
+        {
+            assert!(
+                solutions_bag_eq(s_bag, p_bag),
+                "{name} diverges sqlite vs pg (PG-path regression):\n sqlite={s_bag:#?}\n pg={p_bag:#?}"
+            );
+            assert_eq!(
+                p_bag.len(),
+                *want,
+                "{name} PG cardinality wrong (expected {want}): {p_bag:#?}"
+            );
+        }
     });
 }

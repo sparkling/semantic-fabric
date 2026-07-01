@@ -21,6 +21,16 @@ identical conditions, that is stated explicitly — see
 > below. The older single-engine tables and the SQLite-only limitation notes are
 > retained for provenance but are superseded by that run for cross-engine claims.
 
+> **Update (2026-07-01):** the ADR-0023 **PG-path fixes** landed. The five
+> feature-class defects the head-to-head first exposed (agg-over-union, sequence
+> property path, MINUS, FILTER EXISTS, DISTINCT-over-join — all PG-only execution/
+> lowering bugs, not the previously-suspected tree wiring) are **fixed and re-raced**
+> at scales 1·100·1000·10000: sf now has **row-parity with Ontop on all 15
+> feature-class queries at every scale**, and the q14 nested-OPTIONAL latency
+> catastrophe (176× slower) is gone (now 6–7× faster than Ontop). A permanent
+> SQLite-vs-live-PG differential (`differential_pg_sqlite.rs`) gates against
+> recurrence. See the corrected matrices and honest reading below.
+
 > **Honesty contract.** semantic-fabric's load-bearing result is the
 > **constant engine memory under growing source data** invariant — a property of
 > the streaming architecture, demonstrated byte-for-byte below. Absolute query
@@ -179,84 +189,94 @@ ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 1000 10
 ```
 
 The new queries and their feature class (each verified to return a **non-empty**
-result against the Ontop oracle over the mapped GTFS data):
+result against the Ontop oracle over the mapped GTFS data). The ❌ cells below were
+the pre-fix state; the **ADR-0023 PG-path fixes (2026-07-01)** closed all five —
+see the corrected matrices and the honest reading:
 
 | query | feature class | sf vs oracle (correctness) |
 |---|---|---|
 | q8 | **UNION** (two-arm short/long name) | ✅ correct |
-| q9 | **AGG-over-UNION** (COUNT over UNION + GROUP BY) — *the ADR-0023 headline* | ❌ **sf aborts** (HTTP 200 then mid-stream error) |
-| q10 | **PROPERTY PATH** (sequence `gtfs:trip/gtfs:route`) | ❌ **sf returns 0 rows** (silently wrong) |
-| q11 | **MINUS** (trips with no headsign) | ❌ **sf returns 0 rows** (removes everything) |
-| q12 | **FILTER EXISTS** (routes with a direction-1 trip) | ❌ **sf aborts** (HTTP 200 then mid-stream error) |
+| q9 | **AGG-over-UNION** (COUNT over UNION + GROUP BY) — *the ADR-0023 headline* | ✅ **fixed** (was: sf aborts mid-stream) |
+| q10 | **PROPERTY PATH** (sequence `gtfs:trip/gtfs:route`) | ✅ **fixed** (was: sf returns 0 rows) |
+| q11 | **MINUS** (trips with no headsign) | ✅ **fixed** (was: sf returns 0 rows) |
+| q12 | **FILTER EXISTS** (routes with a direction-1 trip) | ✅ **fixed** (was: sf aborts mid-stream) |
 | q13 | **SUBQUERY + nested agg** (sub-SELECT COUNT joined to agency) | ✅ correct |
-| q14 | **NESTED OPTIONAL** (Trip ⟕ route ⟕ shortName) | ✅ correct (but catastrophically slow — see below) |
-| q15 | **DISTINCT-over-join** (distinct routes via stop_times) | ❌ **sf returns duplicates** (DISTINCT not applied) |
+| q14 | **NESTED OPTIONAL** (Trip ⟕ route ⟕ shortName) | ✅ correct (**latency fixed** — was catastrophically slow) |
+| q15 | **DISTINCT-over-join** (distinct routes via stop_times) | ✅ **fixed** (was: sf returns duplicates) |
 
-#### Scale 1 (median of 25 warm runs)
+#### Scale 1 (median of 25 warm runs) — post-fix (2026-07-01)
 
 | query | class | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
 |---|---|---|---|---|---|---|---|
-| q1 | BGP | 0.72 | 1.85 | 2.57× | 8 | 8 | OK |
-| q2 | join | 0.69 | 1.62 | 2.35× | 8 | 8 | OK |
-| q3 | 3-way join | 1.50 | 12.03 | **8.02×** | 800 | 800 | OK |
-| q4 | filter | 0.52 | 1.37 | 2.63× | 1 | 1 | OK |
-| q5 | optional | 0.54 | 1.40 | 2.59× | 40 | 40 | OK |
-| q6 | groupby | 0.87 | 1.40 | 1.61× | 2 | 2 | OK |
-| q7 | orderby expr | 0.56 | 1.24 | 2.21× | 8 | 8 | OK |
-| q8 | union | 0.69 | 1.81 | 2.62× | 2 | 2 | OK |
-| q9 | **agg-over-union** | ERR | 2.11 | — | — | 2 | **SF-501** |
-| q10 | **property path** | 0.28 | 12.20 | — | 0 | 800 | **SF-EMPTY** |
-| q11 | **minus** | 0.84 | 1.63 | — | 0 | 14 | **SF-EMPTY** |
-| q12 | **filter exists** | ERR | 1.84 | — | — | 4 | **SF-501** |
-| q13 | subquery | 1.26 | 1.48 | 1.17× | 2 | 2 | OK |
-| q14 | nested optional | 1.80 | 1.61 | 0.89× | 40 | 40 | OK |
-| q15 | **distinct** | 1.25 | 1.43 | — | 40 | 8 | **MISMATCH** |
+| q1 | BGP | 0.52 | 1.98 | 3.81× | 8 | 8 | OK |
+| q2 | join | 0.73 | 1.97 | 2.70× | 8 | 8 | OK |
+| q3 | 3-way join | 1.46 | 13.33 | **9.13×** | 800 | 800 | OK |
+| q4 | filter | 0.62 | 1.51 | 2.44× | 1 | 1 | OK |
+| q5 | optional | 0.57 | 1.73 | 3.04× | 40 | 40 | OK |
+| q6 | groupby | 0.91 | 1.45 | 1.59× | 2 | 2 | OK |
+| q7 | orderby expr | 0.53 | 1.34 | 2.53× | 8 | 8 | OK |
+| q8 | union | 0.79 | 1.61 | 2.04× | 2 | 2 | OK |
+| q9 | **agg-over-union** | 1.65 | 1.52 | 0.92× | 2 | 2 | **OK (fixed)** |
+| q10 | **property path** | 1.81 | 12.95 | **7.15×** | 800 | 800 | **OK (fixed)** |
+| q11 | **minus** | 0.69 | 1.79 | 2.59× | 14 | 14 | **OK (fixed)** |
+| q12 | **filter exists** | 1.59 | 1.53 | 0.96× | 4 | 4 | **OK (fixed)** |
+| q13 | subquery | 1.51 | 1.77 | 1.17× | 2 | 2 | OK |
+| q14 | nested optional | 1.61 | 1.59 | 0.99× | 40 | 40 | OK |
+| q15 | **distinct** | 1.16 | 1.45 | 1.25× | 8 | 8 | **OK (fixed)** |
 
-#### Scale 100 (median of 25 warm runs; 80 000 stop_times)
-
-| query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
-|---|---|---|---|---|---|---|
-| q1 | 1.02 | 5.37 | 5.27× | 800 | 800 | OK |
-| q2 | 1.12 | 3.66 | 3.27× | 800 | 800 | OK |
-| q3 | 57.39 | 594.99 | **10.37×** | 80 000 | 80 000 | OK |
-| q5 | 2.55 | 13.59 | 5.33× | 4 000 | 4 000 | OK |
-| q7 | 1.13 | 4.26 | 3.77× | 800 | 800 | OK |
-| q8 | 1.02 | 2.17 | 2.13× | 222 | 222 | OK |
-| q9 | ERR | 2.20 | — | — | 2 | **SF-501** |
-| q10 | 0.21 | 645.19 | — | 0 | 80 000 | **SF-EMPTY** |
-| q11 | 1.57 | 3.28 | — | 0 | 1 334 | **SF-EMPTY** |
-| q12 | ERR | 4.03 | — | — | 400 | **SF-501** |
-| q14 | 698.11 | 30.49 | **0.04× (Ontop 22.9×)** | 4 000 | 4 000 | OK |
-| q15 | 15.90 | 14.26 | — | 4 000 | 800 | **MISMATCH** |
-
-(q4 0.57/1.43, q6 1.48/1.58, q13 1.41/1.30 — all OK, omitted for brevity.)
-
-#### Scale 1000 (median of 5 warm runs; 800 000 stop_times — primary big-data headline)
+#### Scale 100 (median of 25 warm runs; 80 000 stop_times) — post-fix (2026-07-01)
 
 | query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
 |---|---|---|---|---|---|---|
-| q1 | 6.01 | 27.83 | 4.63× | 8 000 | 8 000 | OK |
-| q2 | 5.48 | 23.48 | 4.28× | 8 000 | 8 000 | OK |
-| q3 | 554.71 | 5 979.30 | **10.78×** | 800 000 | 800 000 | OK |
-| q4 | 1.07 | 2.02 | 1.89× | 1 | 1 | OK |
-| q5 | 20.46 | 122.51 | 5.99× | 40 000 | 40 000 | OK |
-| q6 | 5.43 | 3.58 | 0.66× (Ontop 1.5×) | 2 | 2 | OK |
-| q7 | 6.61 | 33.45 | 5.06× | 8 000 | 8 000 | OK |
-| q8 | 2.28 | 9.35 | 4.10× | 2 222 | 2 222 | OK |
-| q9 | ERR | 8.36 | — | — | 2 | **SF-501** |
-| q10 | 0.24 | 6 419.39 | — | 0 | 800 000 | **SF-EMPTY** |
-| q11 | 9.37 | 26.50 | — | 0 | 13 334 | **SF-EMPTY** |
-| q12 | ERR | 21.12 | — | — | 4 000 | **SF-501** |
-| q13 | 4.45 | 3.36 | 0.76× (Ontop 1.3×) | 2 | 2 | OK |
-| q14 | 50 766.39 | 287.75 | **0.006× (Ontop 176×)** | 40 000 | 40 000 | OK |
-| q15 | 183.93 | 141.20 | — | 40 000 | 8 000 | **MISMATCH** |
+| q1 | 1.13 | 5.41 | 4.79× | 800 | 800 | OK |
+| q2 | 1.14 | 4.11 | 3.61× | 800 | 800 | OK |
+| q3 | 57.43 | 582.91 | **10.15×** | 80 000 | 80 000 | OK |
+| q4 | 0.66 | 1.50 | 2.27× | 1 | 1 | OK |
+| q5 | 2.57 | 14.27 | 5.55× | 4 000 | 4 000 | OK |
+| q6 | 1.33 | 1.50 | 1.13× | 2 | 2 | OK |
+| q7 | 1.17 | 4.30 | 3.68× | 800 | 800 | OK |
+| q8 | 1.03 | 2.05 | 1.99× | 222 | 222 | OK |
+| q9 | 3.92 | 1.96 | 0.50× (Ontop 2.0×) | 2 | 2 | **OK (fixed)** |
+| q10 | 60.15 | 647.90 | **10.77×** | 80 000 | 80 000 | **OK (fixed)** |
+| q11 | 1.78 | 3.45 | 1.94× | 1 334 | 1 334 | **OK (fixed)** |
+| q12 | 3.26 | 3.13 | 0.96× | 400 | 400 | **OK (fixed)** |
+| q13 | 1.36 | 1.39 | 1.02× | 2 | 2 | OK |
+| q14 | 7.39 | 29.85 | **4.04×** | 4 000 | 4 000 | **OK (latency fixed)** |
+| q15 | 13.15 | 14.25 | 1.08× | 800 | 800 | **OK (fixed)** |
+
+#### Scale 1000 (median of 5 warm runs; 800 000 stop_times — primary big-data headline) — post-fix (2026-07-01)
+
+| query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
+|---|---|---|---|---|---|---|
+| q1 | 6.23 | 32.22 | 5.17× | 8 000 | 8 000 | OK |
+| q2 | 5.40 | 23.92 | 4.43× | 8 000 | 8 000 | OK |
+| q3 | 568.89 | 6 095.61 | **10.71×** | 800 000 | 800 000 | OK |
+| q4 | 1.21 | 1.99 | 1.64× | 1 | 1 | OK |
+| q5 | 20.45 | 123.60 | 6.04× | 40 000 | 40 000 | OK |
+| q6 | 5.54 | 4.54 | 0.82× (Ontop 1.2×) | 2 | 2 | OK |
+| q7 | 6.27 | 33.11 | 5.28× | 8 000 | 8 000 | OK |
+| q8 | 2.33 | 10.43 | 4.48× | 2 222 | 2 222 | OK |
+| q9 | 21.69 | 5.86 | 0.27× (Ontop 3.7×) | 2 | 2 | **OK (fixed)** |
+| q10 | 596.04 | 6 487.26 | **10.88×** | 800 000 | 800 000 | **OK (fixed)** |
+| q11 | 10.62 | 26.30 | 2.48× | 13 334 | 13 334 | **OK (fixed)** |
+| q12 | 12.61 | 21.67 | 1.72× | 4 000 | 4 000 | **OK (fixed)** |
+| q13 | 4.88 | 3.94 | 0.81× (Ontop 1.2×) | 2 | 2 | OK |
+| q14 | 44.22 | 285.23 | **6.45×** | 40 000 | 40 000 | **OK (latency fixed)** |
+| q15 | 52.37 | 141.39 | 2.70× | 8 000 | 8 000 | **OK (fixed)** |
 
 #### Scale 10000 (single warm call, RUNS=1 — partial; 8 000 000 stop_times)
 
 At this scale each warm call is slow enough that a median-of-N is impractical for
-the heavy cells (Ontop q10 ≈ 99 s, Ontop q3 ≈ 93 s, **sf q14 ≈ 91 s**), so these
-are **single-call** wall times — directionally representative because execution, not
-transport, dominates entirely here. Everything below completed; nothing was skipped.
+the heavy cells (Ontop q10 ≈ 99 s, Ontop q3 ≈ 93 s), so these are **single-call**
+wall times — directionally representative because execution, not transport,
+dominates entirely here. **Post-fix note (2026-07-01):** the previously-broken cells
+(q9/q10/q11/q12/q15) and q14 were **re-measured on sf** this session and now compute
+the correct rows at 8 M (`sf rows` == the Ontop reference, verified by writing the
+1.13 GB q10 body to disk — a shell-pipe count SIGPIPEs on a stream that size). The
+Ontop columns and the already-OK rows (q1–q8, q13) are carried from the prior 8 M
+run: Ontop's plan and the deterministic dataset are unchanged, so its reference
+answers/latency are stable. sf q14 dropped from **91 s → 0.40 s** (the flat-plan
+catastrophe is gone).
 
 | query | sf ms | ontop ms | sf speedup | sf rows | ont rows | status |
 |---|---|---|---|---|---|---|
@@ -268,60 +288,78 @@ transport, dominates entirely here. Everything below completed; nothing was skip
 | q6 | 44.03 | 29.98 | 0.68× (Ontop 1.5×) | 2 | 2 | OK |
 | q7 | 75.10 | 354.48 | 4.72× | 80 000 | 80 000 | OK |
 | q8 | 19.19 | 101.31 | 5.28× | 22 222 | 22 222 | OK |
-| q9 | ERR | 52.61 | — | — | 2 | **SF-501** |
-| q10 | 0.43 | 99 248.56 | — | 0 | 8 000 000 | **SF-EMPTY** |
-| q11 | 53.94 | 273.12 | — | 0 | 133 334 | **SF-EMPTY** |
-| q12 | ERR | 196.10 | — | — | 40 000 | **SF-501** |
+| q9 | 228.41 | 52.61 | 0.23× (Ontop 4.3×) | 2 | 2 | **OK (fixed)** |
+| q10 | 5 964.76 | 99 248.56 | **16.64×** | 8 000 000 | 8 000 000 | **OK (fixed)** |
+| q11 | 96.15 | 273.12 | 2.84× | 133 334 | 133 334 | **OK (fixed)** |
+| q12 | 68.91 | 196.10 | 2.85× | 40 000 | 40 000 | **OK (fixed)** |
 | q13 | 40.48 | 18.00 | 0.44× (Ontop 2.3×) | 2 | 2 | OK |
-| q14 | 91 103.85 | 2 850.51 | **0.03× (Ontop 32×)** | 400 000 | 400 000 | OK |
-| q15 | 2 155.77 | 2 879.32 | — | 400 000 | 80 000 | **MISMATCH** |
+| q14 | 395.04 | 2 850.51 | **7.22×** | 400 000 | 400 000 | **OK (latency fixed)** |
+| q15 | 757.21 | 2 879.32 | **3.80×** | 80 000 | 80 000 | **OK (fixed)** |
 
-### Honest reading — feature classes × scale
+### Honest reading — feature classes × scale (post-fix, 2026-07-01)
 
 - **Where sf computes the same answer, it wins on execution throughput, and the win
   grows with data.** The marquee cell is **Q3** (the 3-way `stop_time→trip→route`
-  join): **8.0×** at scale 1 → **10.8×** at 800 k rows → **16.5×** at **8 M rows**
+  join): **9.1×** at scale 1 → **10.7×** at 800 k rows → **16.5×** at **8 M rows**
   (5.6 s vs 93.0 s). Q1/Q2/Q5/Q7/Q8 hold a steady **4–7×** at scale. This is genuine
   same-backend engine throughput (both hit the identical PostgreSQL), not the JVM
-  floor. On the canonical correct-answer set sf is the faster engine at every scale.
+  floor. On the correct-answer set sf is the faster engine at every scale.
 
-- **🔴 AGG-over-UNION (Q9) — the ADR-0023 headline feature — FAILS on the live
-  endpoint.** Ontop answers it correctly (2 rows) at every scale; **sf-serve returns
-  HTTP 200 then aborts the response body mid-stream** (an uncaught executor error,
-  not even logged). This is the exact bug class ADR-0023's operator tree was built to
-  close — and it is still open *on the path that actually serves queries.* **Root
-  cause (code-traced, honest):** `sf-serve` compiles via
-  `sf_sparql::translate_cached → translate_with` — the **flat unfold path** — *not*
-  `translate_tree`, the ADR-0023 operator-tree path. The tree IR that closed
-  agg-over-union is proven in differential unit tests (`crates/sf-conformance`) but is
-  **not wired into the `serve` endpoint**, so the live head-to-head exercises the flat
-  path and inherits its gaps. Wiring `translate_tree` into `serve` is the fix.
+- **🟢 All five previously-broken feature classes are now FIXED on the live endpoint
+  (row-parity vs Ontop at every scale 1/100/1000/10000).** These were the ADR-0023
+  PG-path fixes of 2026-07-01:
+  - **Q9 AGG-over-UNION** (the ADR-0023 headline) — was HTTP 200 then a mid-stream
+    abort; now returns the correct 2 groups. Fix: the PG core loop hard-errored on
+    `rust_group`; the SQLite grouping logic was extracted into a shared
+    `rust_group_result_rows` helper and mirrored async as `rust_group_execute_pg`.
+  - **Q10 sequence PROPERTY PATH** — was 0 rows; now returns all 800/80 k/800 k/**8 M**.
+  - **Q11 MINUS** — was 0 rows (removed everything); now the correct 14/1 334/13 334/**133 334**.
+  - **Q12 FILTER EXISTS** — was a mid-stream abort; now 4/400/4 000/**40 000**. Fix: a
+    FILTER constant over a typed (INT4) column lowered to a bare placeholder that
+    `exec_pg` bound as a Rust `String`; PostgreSQL then failed the type inference.
+  - **Q15 DISTINCT-over-join** — was duplicate rows (40 k where Ontop returns 8 k);
+    now the correct distinct 8/800/8 000/**80 000**.
 
-- **🔴 Four more feature classes are silently wrong on sf-serve** (Ontop is the only
-  correct engine): **Q10 sequence property path** → sf returns **0 rows** (Ontop
-  returns all 800/80 k/800 k/8 M); **Q11 MINUS** → sf returns **0 rows** (removes
-  everything; Ontop returns the correct 14/1 334/13 334/133 334); **Q12 FILTER EXISTS**
-  with a join+filter → sf **aborts mid-stream** (Ontop answers 4/400/4 000/40 000);
-  **Q15 DISTINCT-over-join** → sf returns **duplicates** (40 000 rows where Ontop
-  returns 8 000 distinct). Simple variants work (bare `DISTINCT`, single-predicate
-  path, bare `EXISTS`, agg-without-union all return correct rows on sf), so these are
-  flat-path *combination* gaps, not total absences.
+- **🟢 Q14 nested multi-scan OPTIONAL — the latency catastrophe is fixed.** Correct on
+  both engines all along, but sf's plan was **176× slower** at 800 k rows (50.8 s) and
+  ~32× slower at 8 M (91.1 s). Root cause: the null-safe join disjunction
+  (`a = b OR a IS NULL OR b IS NULL`) was emitted even for mandatory non-nullable left
+  keys, defeating PostgreSQL's hash/merge join and forcing an O(n²) nested loop. The
+  fix gates the null-safe wrapper on the left binding's nullability. sf now **beats
+  Ontop**: **6.5×** faster at 800 k (44 ms vs 285 ms), **7.2×** at 8 M (0.40 s vs 2.85 s).
 
-- **🟠 Ontop WINS where sf's flat plan degrades.** **Q14 nested multi-scan OPTIONAL**
-  is correct on both engines but sf's flat plan is **catastrophic at scale**: par at
-  scale 1 (1.8 ms vs 1.6 ms) → **176× slower** at 800 k rows (50.8 s vs 0.29 s) →
-  32× slower at 8 M rows (91.1 s vs 2.85 s). Ontop also edges sf on the tiny-result
-  aggregates **Q6/Q13** at scale ≥ 1000 (≈1.3–2.3×) where the result is 2 rows and
-  plan quality, not scan throughput, decides.
+- **Root-cause correction (supersedes the prior reading).** The earlier version of this
+  section blamed a *wiring* gap — "sf-serve compiles via the flat unfold path, not
+  `translate_tree`." That was **wrong**. sf-serve *does* route through the ADR-0023
+  operator tree (`parse_and_translate_cached → translate_cached → translate_with →
+  translate_tree`). These five defects lived in the **PostgreSQL execution/lowering
+  path** (`crates/sf-sparql/src/exec_pg.rs`, `leftjoin.rs`, and the `Dialect::Postgres`
+  emit) — PG-only shapes the SQLite differential never exercised. They were invisible
+  because the differential ran SQLite-only; that blind spot is now closed by a
+  **permanent SQLite-vs-live-PG differential** over all five classes (see below).
 
-- **No ONTOP-501 — the capability gap runs the *other* way.** The premise that Ontop
-  would 501 on paths/subqueries did **not** materialize: **Ontop 5.5.0 answered every
-  one of q1–q15 correctly at every scale.** There is no sf capability advantage in
-  this set; on the contrary, sf-serve is the engine that fails (q9/q12) or silently
-  mis-answers (q10/q11/q15) five of the eight feature classes. The honest bottom line:
-  **sf is materially faster on the OBDA join/scan workload it executes correctly, but
-  Ontop is more correct and more robust across SPARQL feature classes on the live
-  endpoint today.**
+- **🟠 Ontop still edges sf on tiny-result aggregates.** **Q9** (2-row COUNT-over-UNION)
+  and **Q6/Q13** favour Ontop at scale ≥ 1000 (≈1.2–4.3×) where the result is 2 rows and
+  plan quality, not scan throughput, decides — the sf agg-over-union path collects inner
+  solutions over the PG cursor before grouping. Correct, but not the fastest plan for a
+  2-row answer. This is the remaining honest gap; every cell is row-correct.
+
+- **No ONTOP-501 in this set.** Ontop 5.5.0 answers all of q1–q15 correctly at every
+  scale. The honest bottom line has flipped: **sf-serve now matches Ontop on
+  correctness across all 15 feature-class queries at all four scales, and is materially
+  faster on the join/scan workload** (up to 16.5× on the big 3-way join and 16.6× on the
+  8 M property path); Ontop retains a small edge only on tiny-result aggregations.
+
+### Permanent PG-path differential coverage (regression gate)
+
+The blind spot that let these ship (SQLite-green while the live PG path was broken) is
+now closed by `crates/sf-conformance/tests/differential_pg_sqlite.rs`, which runs each
+of the five classes — **agg-over-union, FILTER EXISTS, MINUS, sequence path,
+DISTINCT-over-join** — through the SAME `parse_and_translate_with` tree path on both
+the sync SQLite executor and the **live PostgreSQL** executor (`exec_pg`), and asserts
+`=_bag` equality plus the hand-computed cardinality on each side. A recurrence of any
+of these PG-only defects now fails `cargo test` (the test gracefully skips only when no
+PostgreSQL server is reachable, keeping CI green).
 
 ---
 
@@ -510,8 +548,9 @@ Stated plainly so the numbers are not over-read:
   executor (`exec_pg`) is now wired; `serve --source pg:…` executes over PostgreSQL
   (used by the head-to-head). The in-process `obda_latency` / `constant_memory`
   benches below still run over embedded SQLite.
-- **Property paths** are single-predicate `P+` / `P*` only (no arbitrary path
-  expressions).
+- **Property paths:** single-predicate `P+` / `P*` and **sequence** paths (`a/b`,
+  exercised by the q10 head-to-head) are supported; arbitrary path expressions
+  (alternation, nested/negated property sets) are not yet complete.
 - **W3C RDB2RDF conformance is not 100%:** 81/82 (SQLite) and 80/81 (PostgreSQL),
   with one documented standards deviation (`R2RMLTC0002f`). Run it yourself:
   `cargo run -p sf-cli -- conformance`.
