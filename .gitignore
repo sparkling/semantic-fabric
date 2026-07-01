@@ -20,3 +20,13 @@
 *.db-wal
 *.sqlite
 *.sqlite3
+
+# Agent / Claude Code / ruflo tooling runtime (per-developer, not source)
+.claude/
+.claude-flow/
+.swarm/
+.metaharness/
+.mcp.json
+agentdb.rvf
+*.rvf
+*.rvf.lock
