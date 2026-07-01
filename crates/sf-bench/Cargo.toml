@@ -19,15 +19,21 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Ontop-vs-sf latency benchmark. Async-only (tokio-postgres); the SQLite path
 # above stays synchronous (rusqlite). Same pin as sf-conformance.
 tokio-postgres = "0.7"
+# Live-MySQL OBDA path (ADR-0024 M5): packet-bounded exec_iter streaming via the
+# driver-agnostic exec_core over MysqlBackend. Same pin/features as sf-sql so the
+# driver crates agree.
+mysql_async = { version = "0.35", default-features = false, features = ["default-rustls"] }
 
 [dev-dependencies]
 # criterion latency benches (ADR-0005). tempfile holds the file-backed source DB
 # off the in-process heap so the constant-memory measurement is not confounded.
 criterion = "0.5"
 tempfile = "3"
-# PG bench group (obda_select_pg_1x): tokio runtime wraps the async criterion
-# iteration and the PG fixture setup (ADR-0023 shootout).
-tokio = { version = "1", features = ["rt", "macros"] }
+# PG + MySQL bench groups (obda_select_pg_1x; constant_memory PG/MySQL variants):
+# a multi-thread tokio runtime wraps the async criterion iteration, the PG/MySQL
+# fixture setup, and the streaming server-side-cursor memory measurement
+# (ADR-0023 shootout; ADR-0024 M5 per-backend bounded-memory re-proof).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [[bench]]
 name = "obda_latency"

@@ -9,6 +9,17 @@
 //! This is the same demonstration as `benches/constant_memory.rs`, at small
 //! scales so it runs in `cargo test --workspace`. The file holds a single test so
 //! the process-wide allocator probe sees no cross-test interference.
+//!
+//! ## Per-backend re-proof (ADR-0024 M5)
+//!
+//! [`engine_memory_is_bounded_pg`] / [`_mysql`](engine_memory_is_bounded_mysql)
+//! re-prove the same invariant through the driver-agnostic execution core over the
+//! **live** PG (server-side `query_raw` cursor) and MySQL (packet-bounded
+//! `exec_iter`) adapters — source rows live server-side, so the engine working set
+//! is cleanly separable by bracketing only the streaming window. Both SKIP cleanly
+//! when no server is reachable (like the differential). Run these serially
+//! (`--test-threads=1`) so the process-wide allocator probe is not shared across a
+//! parallel test.
 
 use sf_bench::{driver, mem, workload};
 use tempfile::TempDir;
@@ -80,4 +91,203 @@ fn engine_memory_is_bounded_under_growing_source() {
         "engine memory must grow far slower than source data: mem_ratio={mem_ratio:.2} \
          vs row_ratio={row_ratio:.1} (peaks={peaks:?})"
     );
+}
+
+/// The scale factors both live-backend variants sweep (mirrors the SQLite test).
+const LIVE_SCALES: [u32; 3] = [1, 4, 16];
+
+/// Shared assertion over a `(triples, peak_bytes, first_result)` sweep: result rows
+/// grow ~linearly, engine peak heap stays ≈ constant (bounded) and far below the row
+/// growth, and first-result latency stays bounded (does not blow up with source
+/// size). `backend` names the arm in failure messages.
+fn assert_bounded(backend: &str, rows: &[u64], peaks: &[i64], firsts: &[std::time::Duration]) {
+    let n = rows.len();
+    let row_ratio = rows[n - 1] as f64 / rows[0].max(1) as f64;
+    assert!(
+        row_ratio >= 8.0,
+        "[{backend}] result rows must grow ~linearly with scale (16x): got {row_ratio:.1}x \
+         ({} → {})",
+        rows[0],
+        rows[n - 1]
+    );
+
+    let floor = 64 * 1024i64; // 64 KiB noise floor
+    let eff_min = peaks.iter().copied().min().unwrap().max(floor);
+    let eff_max = peaks.iter().copied().max().unwrap().max(floor);
+    let mem_ratio = eff_max as f64 / eff_min as f64;
+    assert!(
+        mem_ratio <= 4.0,
+        "[{backend}] engine peak heap must stay ≈ constant across scales: \
+         mem_ratio={mem_ratio:.2} (peaks={peaks:?} bytes)"
+    );
+    assert!(
+        mem_ratio <= row_ratio / 2.0,
+        "[{backend}] engine memory must grow far slower than source data: \
+         mem_ratio={mem_ratio:.2} vs row_ratio={row_ratio:.1} (peaks={peaks:?})"
+    );
+
+    // Bounded first-result: a streaming server-side cursor yields the first triple
+    // in ~constant time regardless of total result size. A weak-but-honest absolute
+    // cap at bench scale (a linear buffer-then-scan would grow this with source size
+    // and blow the cap well before these scales matter in production).
+    let first_max = firsts.iter().copied().max().unwrap();
+    assert!(
+        first_max < std::time::Duration::from_secs(2),
+        "[{backend}] first-result latency must stay bounded under growing source: \
+         got {first_max:?} (firsts={firsts:?})"
+    );
+}
+
+/// PG conninfo: `SF_PG_URL` if set, else the local trust-auth scratch DB
+/// (`host=localhost port=5432 user=$USER`, dbname → $USER) — same convention as the
+/// PG shootout bench + the differential.
+fn pg_conn_str() -> String {
+    std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+        format!("host=localhost port=5432 user={user}")
+    })
+}
+
+/// ADR-0024 M5: constant engine memory + bounded first-result over the **live PG**
+/// server-side `query_raw` cursor (cursor-grade). SKIPs cleanly with no server.
+#[test]
+fn engine_memory_is_bounded_pg() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio rt");
+
+    let client = match rt.block_on(async {
+        let (client, connection) =
+            tokio_postgres::connect(&pg_conn_str(), tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        Ok::<_, tokio_postgres::Error>(client)
+    }) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[constant_memory] no PostgreSQL reachable ({e}) — skipping PG variant");
+            return;
+        }
+    };
+
+    let maps = driver::mapping().expect("parse mapping");
+    let (mut rows, mut peaks, mut firsts) = (Vec::new(), Vec::new(), Vec::new());
+    eprintln!(
+        "\nADR-0024 M5 constant-memory (PG cursor): {:>6} {:>12} {:>16} {:>14}",
+        "scale", "triples", "peak_engine_B", "first_result"
+    );
+    for &s in &LIVE_SCALES {
+        rt.block_on(async {
+            client
+                .batch_execute(workload::PG_SCHEMA_SQL)
+                .await
+                .expect("PG schema");
+            workload::generate_pg(&client, s)
+                .await
+                .expect("PG generate");
+        });
+        let schemas = rt
+            .block_on(driver::introspect_pg_all(&client))
+            .expect("introspect PG");
+        let base = mem::reset_peak();
+        let (triples, first) = rt
+            .block_on(driver::stream_construct_timed_pg(
+                &maps,
+                &client,
+                &schemas,
+                workload::DUMP_QUERY,
+            ))
+            .expect("stream construct PG");
+        let peak = mem::window_peak(base);
+        eprintln!("{s:>36} {triples:>12} {peak:>16} {first:>14?}");
+        rows.push(triples);
+        peaks.push(peak);
+        firsts.push(first);
+    }
+    // Best-effort teardown (idempotent DROPs); ignore failures.
+    let _ = rt.block_on(client.batch_execute(workload::PG_DROP_SQL));
+
+    assert_bounded("pg", &rows, &peaks, &firsts);
+}
+
+/// MySQL URL: `SF_MYSQL_URL` if set, else the `mysql_e2e` container default.
+fn mysql_url() -> String {
+    std::env::var("SF_MYSQL_URL")
+        .unwrap_or_else(|_| "mysql://root:sftest@127.0.0.1:13306/sftest".to_owned())
+}
+
+/// ADR-0024 M5: constant engine memory + bounded first-result over the **live MySQL**
+/// packet-bounded `exec_iter` stream. NOT cursor-grade (no server-side cursor,
+/// §4/§4.2) — the claim is "no client-side full-result buffer + one `RawTuple` in
+/// flight," which is what keeps the engine working set bounded here. SKIPs cleanly
+/// with no server.
+#[test]
+fn engine_memory_is_bounded_mysql() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio rt");
+
+    let mut conn = match rt.block_on(async {
+        let opts = mysql_async::Opts::from_url(&mysql_url()).ok()?;
+        mysql_async::Conn::new(opts).await.ok()
+    }) {
+        Some(c) => c,
+        None => {
+            eprintln!("[constant_memory] no MySQL reachable — skipping MySQL variant");
+            return;
+        }
+    };
+
+    let db = format!("sf_cmem_my_{}", std::process::id());
+    rt.block_on(async {
+        use mysql_async::prelude::Queryable;
+        conn.query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+            .await
+            .expect("drop pre-existing db");
+        conn.query_drop(format!("CREATE DATABASE {db}"))
+            .await
+            .expect("create throwaway db");
+        conn.query_drop(format!("USE {db}"))
+            .await
+            .expect("use throwaway db");
+    });
+
+    let maps = driver::mapping().expect("parse mapping");
+    let (mut rows, mut peaks, mut firsts) = (Vec::new(), Vec::new(), Vec::new());
+    eprintln!(
+        "\nADR-0024 M5 constant-memory (MySQL packet-bounded): {:>6} {:>12} {:>16} {:>14}",
+        "scale", "triples", "peak_engine_B", "first_result"
+    );
+    for &s in &LIVE_SCALES {
+        rt.block_on(workload::generate_mysql(&mut conn, s))
+            .expect("MySQL generate");
+        let schemas = rt
+            .block_on(driver::introspect_mysql_all(&mut conn))
+            .expect("introspect MySQL");
+        let base = mem::reset_peak();
+        let (triples, first) = rt
+            .block_on(driver::stream_construct_timed_mysql(
+                &maps,
+                &mut conn,
+                &schemas,
+                workload::DUMP_QUERY,
+            ))
+            .expect("stream construct MySQL");
+        let peak = mem::window_peak(base);
+        eprintln!("{s:>52} {triples:>12} {peak:>16} {first:>14?}");
+        rows.push(triples);
+        peaks.push(peak);
+        firsts.push(first);
+    }
+    // Best-effort teardown; ignore failures.
+    let _ = rt.block_on(async {
+        use mysql_async::prelude::Queryable;
+        conn.query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+            .await
+    });
+
+    assert_bounded("mysql", &rows, &peaks, &firsts);
 }

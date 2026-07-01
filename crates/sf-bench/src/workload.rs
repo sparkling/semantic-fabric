@@ -489,3 +489,171 @@ pub async fn generate_pg(
         stop_times,
     })
 }
+
+/// MySQL DDL for the six GTFS bench tables (ADR-0024 M5 constant-memory variant).
+/// Table names are backtick-quoted uppercase to match `rr:tableName "AGENCY"` etc.
+/// exactly (case-sensitive on Linux `mysqld`). Key/text columns are `VARCHAR`
+/// (MySQL cannot use unbounded `TEXT` in a `PRIMARY KEY`), `DOUBLE` for lat/lon and
+/// `INT` for integers — the same logical shape as the SQLite/PG schemas so the same
+/// R2RML mapping applies. Statements are `;`-separated (no `;` inside any one), run
+/// one at a time by [`generate_mysql`] (`mysql_async` executes one per call).
+pub const MYSQL_SCHEMA_SQL: &str = r#"
+DROP TABLE IF EXISTS `STOP_TIMES`;
+DROP TABLE IF EXISTS `TRIPS`;
+DROP TABLE IF EXISTS `STOPS`;
+DROP TABLE IF EXISTS `ROUTES`;
+DROP TABLE IF EXISTS `CALENDAR`;
+DROP TABLE IF EXISTS `AGENCY`;
+CREATE TABLE `AGENCY` (
+  agency_id VARCHAR(64) PRIMARY KEY, agency_name VARCHAR(255), agency_url VARCHAR(255), agency_timezone VARCHAR(64));
+CREATE TABLE `CALENDAR` (
+  service_id VARCHAR(64) PRIMARY KEY, monday INT, start_date VARCHAR(32));
+CREATE TABLE `ROUTES` (
+  route_id VARCHAR(64) PRIMARY KEY, agency_id VARCHAR(64), route_short_name VARCHAR(255),
+  route_long_name VARCHAR(255), route_type INT);
+CREATE TABLE `STOPS` (
+  stop_id VARCHAR(64) PRIMARY KEY, stop_name VARCHAR(255), stop_lat DOUBLE, stop_lon DOUBLE, location_type INT);
+CREATE TABLE `TRIPS` (
+  trip_id VARCHAR(64) PRIMARY KEY, route_id VARCHAR(64), service_id VARCHAR(64), trip_headsign VARCHAR(255), direction_id INT);
+CREATE TABLE `STOP_TIMES` (
+  trip_id VARCHAR(64), stop_id VARCHAR(64), arrival_time VARCHAR(32), departure_time VARCHAR(32),
+  stop_sequence INT, stop_headsign VARCHAR(255),
+  PRIMARY KEY (trip_id, stop_id, arrival_time));
+"#;
+
+/// Populate the six GTFS tables in the live **MySQL** database currently selected on
+/// `conn` (the caller has already `CREATE DATABASE` + `USE`-d a throwaway db) at
+/// `scale`. Runs [`MYSQL_SCHEMA_SQL`] (drop+create) then batches the same rows as
+/// [`generate`] / [`generate_pg`], so the three fixtures are directly comparable
+/// (identical row counts ⇒ identical dump-triple counts). Inserts use `exec_batch`
+/// (one prepared statement, batched params) for speed.
+pub async fn generate_mysql(
+    conn: &mut mysql_async::Conn,
+    scale: u32,
+) -> Result<RowCounts, mysql_async::Error> {
+    use mysql_async::prelude::Queryable;
+
+    let sf = scale.max(1) as u64;
+    let n_agency = 2u64;
+    let n_calendar = 3u64;
+    let n_routes = 8 * sf;
+    let n_stops = 40 * sf;
+    let n_trips = 40 * sf;
+
+    for stmt in MYSQL_SCHEMA_SQL.split(';') {
+        let s = stmt.trim();
+        if !s.is_empty() {
+            conn.query_drop(s).await?;
+        }
+    }
+
+    let agency: Vec<(String, String, String, String)> = (0..n_agency)
+        .map(|i| {
+            (
+                format!("A{i}"),
+                format!("Agency {i}"),
+                format!("http://transport.linkeddata.es/madrid/agency/{i}"),
+                "Europe/Madrid".to_owned(),
+            )
+        })
+        .collect();
+    conn.exec_batch(
+        "INSERT INTO `AGENCY` VALUES (?,?,?,?)",
+        agency.iter().map(|(a, b, c, d)| (a, b, c, d)),
+    )
+    .await?;
+
+    let calendar: Vec<(String, i32, String)> = (0..n_calendar)
+        .map(|i| (format!("S{i}"), 1i32, "20260101".to_owned()))
+        .collect();
+    conn.exec_batch(
+        "INSERT INTO `CALENDAR` VALUES (?,?,?)",
+        calendar.iter().map(|(a, b, c)| (a, b, c)),
+    )
+    .await?;
+
+    let routes: Vec<(String, String, String, String, i32)> = (0..n_routes)
+        .map(|i| {
+            (
+                format!("r{i}"),
+                format!("A{}", i % n_agency),
+                format!("R{i}"),
+                format!("Route {i}"),
+                (i % 4) as i32,
+            )
+        })
+        .collect();
+    conn.exec_batch(
+        "INSERT INTO `ROUTES` VALUES (?,?,?,?,?)",
+        routes.iter().map(|(a, b, c, d, e)| (a, b, c, d, e)),
+    )
+    .await?;
+
+    let stops: Vec<(String, String, f64, f64, i32)> = (0..n_stops)
+        .map(|i| {
+            (
+                format!("s{i}"),
+                format!("Stop {i}"),
+                40.0 + (i as f64) * 0.0001,
+                -3.7 + (i as f64) * 0.0001,
+                0i32,
+            )
+        })
+        .collect();
+    conn.exec_batch(
+        "INSERT INTO `STOPS` VALUES (?,?,?,?,?)",
+        stops.iter().map(|(a, b, c, d, e)| (a, b, c, d, e)),
+    )
+    .await?;
+
+    let trips: Vec<(String, String, String, Option<String>, i32)> = (0..n_trips)
+        .map(|i| {
+            let headsign: Option<String> = if i % 3 == 0 {
+                None
+            } else {
+                Some(format!("Trip headsign {i}"))
+            };
+            (
+                format!("t{i}"),
+                format!("r{}", i % n_routes),
+                format!("S{}", i % n_calendar),
+                headsign,
+                (i % 2) as i32,
+            )
+        })
+        .collect();
+    conn.exec_batch(
+        "INSERT INTO `TRIPS` VALUES (?,?,?,?,?)",
+        trips.iter().map(|(a, b, c, d, e)| (a, b, c, d, e)),
+    )
+    .await?;
+
+    let mut stop_times_rows: Vec<(String, String, String, String, i32, String)> = Vec::new();
+    for i in 0..n_trips {
+        let trip = format!("t{i}");
+        for k in 0..STOPS_PER_TRIP {
+            let stop = format!("s{}", (i + k) % n_stops);
+            let arr = format!("{:02}:{:02}:00", (k * 3) / 60 + 5, (k * 3) % 60);
+            let dep = format!("{:02}:{:02}:30", (k * 3) / 60 + 5, (k * 3) % 60);
+            let headsign = format!("To stop {}", (i + k + 1) % n_stops);
+            stop_times_rows.push((trip.clone(), stop, arr, dep, k as i32, headsign));
+        }
+    }
+    let stop_times = stop_times_rows.len() as u64;
+    conn.exec_batch(
+        "INSERT INTO `STOP_TIMES` VALUES (?,?,?,?,?,?)",
+        stop_times_rows
+            .iter()
+            .map(|(a, b, c, d, e, f)| (a, b, c, d, e, f)),
+    )
+    .await?;
+
+    Ok(RowCounts {
+        agency: n_agency,
+        calendar: n_calendar,
+        routes: n_routes,
+        stops: n_stops,
+        trips: n_trips,
+        stop_times,
+    })
+}

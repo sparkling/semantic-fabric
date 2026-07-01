@@ -210,3 +210,70 @@ pub fn stream_construct_timed(
     let total = start.elapsed();
     Ok((count, first.unwrap_or(total), total))
 }
+
+/// Stream a CONSTRUCT over a **live PostgreSQL** source through the bounded-memory
+/// server-side `query_raw` cursor (ADR-0024 M5 per-backend constant-memory re-proof).
+/// Drives the driver-agnostic core ([`sf_sparql::exec_core::construct`]) with the
+/// borrowing [`sf_sql::backend::pg::PgBackend`] — one row in flight, never the result
+/// set — and returns `(triples, first_result_latency)`. The source rows live
+/// server-side, so the engine working set measured around this call is cleanly
+/// separable.
+pub async fn stream_construct_timed_pg(
+    maps: &[TriplesMap],
+    client: &Client,
+    schema: &[TableSchema],
+    sparql: &str,
+) -> DResult<(u64, Duration)> {
+    let plan = parse_and_translate_with(sparql, maps, Dialect::Postgres, &Tbox::default(), schema)?;
+    let mut b = sf_sql::backend::pg::PgBackend::new(client);
+    let start = Instant::now();
+    let mut first: Option<Duration> = None;
+    let count = sf_sparql::exec_core::construct(&plan, &mut b, |_triple| {
+        if first.is_none() {
+            first = Some(start.elapsed());
+        }
+    })
+    .await?;
+    Ok((count, first.unwrap_or_else(|| start.elapsed())))
+}
+
+/// Stream a CONSTRUCT over a **live MySQL** source through the packet-bounded
+/// `exec_iter` cursor (ADR-0024 M5; §4/§4.2 — client-buffer-free, packet-bounded,
+/// NOT cursor-grade). Drives [`sf_sparql::exec_core::construct`] with the borrowing
+/// [`sf_sql::backend::mysql::MysqlBackend`] — one `RawTuple` in flight, no client-side
+/// `Vec<Row>` — and returns `(triples, first_result_latency)`.
+pub async fn stream_construct_timed_mysql(
+    maps: &[TriplesMap],
+    conn: &mut mysql_async::Conn,
+    schema: &[TableSchema],
+    sparql: &str,
+) -> DResult<(u64, Duration)> {
+    let plan = parse_and_translate_with(sparql, maps, Dialect::MySql, &Tbox::default(), schema)?;
+    let mut b = sf_sql::backend::mysql::MysqlBackend::new(conn);
+    let start = Instant::now();
+    let mut first: Option<Duration> = None;
+    let count = sf_sparql::exec_core::construct(&plan, &mut b, |_triple| {
+        if first.is_none() {
+            first = Some(start.elapsed());
+        }
+    })
+    .await?;
+    Ok((count, first.unwrap_or_else(|| start.elapsed())))
+}
+
+/// Introspect every base table of the current **MySQL** database (name order) — the
+/// MySQL analogue of [`introspect_pg_all`], for the constant-memory MySQL variant.
+pub async fn introspect_mysql_all(conn: &mut mysql_async::Conn) -> DResult<Vec<TableSchema>> {
+    use mysql_async::prelude::Queryable;
+    let names: Vec<String> = conn
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY table_name",
+        )
+        .await?;
+    let mut schemas = Vec::with_capacity(names.len());
+    for name in &names {
+        schemas.push(sf_sql::introspect::introspect_mysql(conn, name).await?);
+    }
+    Ok(schemas)
+}
