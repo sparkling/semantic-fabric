@@ -82,6 +82,53 @@ fn pg_xsd_code(ty: &Type) -> Option<XsdTypeCode> {
     }
 }
 
+/// A bound parameter carried as its **lexical SPARQL form** (`&str`), serialised
+/// to whatever PostgreSQL type the prepared statement infers for the placeholder.
+///
+/// All emitted `$n` values arrive as strings (`EmittedBranch::params`), but a
+/// FILTER constant compared against a typed column lowers to a bare placeholder —
+/// e.g. `FILTER(?d = 1)` over an `INT4` column emits `"direction_id" = $1`, where
+/// PostgreSQL infers `$1` as `INT4`. Binding the raw Rust `String` there fails
+/// *client-side* (`String` does not `accepts(INT4)`), aborting the already-200
+/// response body mid-stream. This wrapper inspects the driver-supplied `ty` at
+/// serialise time and parses the lexical form into the native Rust type
+/// (delegating to that type's own `ToSql`), so integer/float/boolean placeholders
+/// bind correctly. Text-like (and any other) placeholders fall through to the
+/// plain string binding — byte-identical to the previous behaviour, so the
+/// passing text/string FILTER paths are untouched. Values stay bound parameters
+/// (ADR-0010 R1) — never interpolated.
+#[derive(Debug)]
+struct LexicalParam<'a>(&'a str);
+
+impl ToSql for LexicalParam<'_> {
+    fn to_sql(
+        &self,
+        ty: &Type,
+        out: &mut bytes::BytesMut,
+    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    {
+        match *ty {
+            Type::BOOL => self.0.parse::<bool>()?.to_sql(ty, out),
+            Type::INT2 => self.0.parse::<i16>()?.to_sql(ty, out),
+            Type::INT4 => self.0.parse::<i32>()?.to_sql(ty, out),
+            Type::INT8 => self.0.parse::<i64>()?.to_sql(ty, out),
+            Type::FLOAT4 => self.0.parse::<f32>()?.to_sql(ty, out),
+            Type::FLOAT8 => self.0.parse::<f64>()?.to_sql(ty, out),
+            // Text-like and everything else: bind the raw lexical string, exactly
+            // as the previous `&String` binding did.
+            _ => self.0.to_sql(ty, out),
+        }
+    }
+
+    // Accept every placeholder type; `to_sql` dispatches on the actual `ty`, so
+    // the driver never rejects the bind before we get to parse it.
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+
+    tokio_postgres::types::to_sql_checked!();
+}
+
 /// Extract column `idx` of `row` as its raw lexical string (NULL ⇒ `None`),
 /// fetched in the most type-faithful driver form (ADR-0015) — integers/floats as
 /// their native Rust type, `bytea` uppercase-hex-encoded, booleans as
@@ -181,8 +228,12 @@ where
     let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
     for (bi, branch) in branches.iter().enumerate() {
         let e = crate::emit::emit_branch_with(branch, plan.dialect, &catalog)?;
+        // Each emitted `$n` value is a lexical string, but a FILTER constant may
+        // bind against a typed column (INT4/FLOAT8/BOOL/…); `LexicalParam` parses
+        // it to the placeholder's inferred PG type at bind time (see its docs).
+        let lex: Vec<LexicalParam> = e.params.iter().map(|s| LexicalParam(s)).collect();
         let params: Vec<&(dyn ToSql + Sync)> =
-            e.params.iter().map(|s| s as &(dyn ToSql + Sync)).collect();
+            lex.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
         let mut stream = PgRowStream::open(client, &e.sql, &params)
             .await
             .map_err(map_sql_err)?;
