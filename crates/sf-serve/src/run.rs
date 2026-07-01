@@ -85,8 +85,7 @@ async fn open_backend(spec: &str) -> Result<(Backend, Vec<sf_sql::TableSchema>),
         Ok((Backend::Pg(Arc::new(client)), schema))
     } else if spec.starts_with("mysql://") {
         // `Pool::from_url` needs the whole `mysql://…` URL — never strip the scheme.
-        let pool =
-            mysql_async::Pool::from_url(spec).map_err(|e| format!("connect MySQL: {e}"))?;
+        let pool = mysql_async::Pool::from_url(spec).map_err(|e| format!("connect MySQL: {e}"))?;
         let mut conn = pool
             .get_conn()
             .await

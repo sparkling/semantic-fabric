@@ -623,7 +623,9 @@ async fn mysql_side(
     run_stmts(conn, CREATE_SQL).await;
 
     let maps = sf_mapping::parse_r2rml(R2RML).expect("R2RML parses");
-    let schema = introspect_all_mysql(conn).await.expect("mysql introspection");
+    let schema = introspect_all_mysql(conn)
+        .await
+        .expect("mysql introspection");
 
     let sel_plan =
         parse_and_translate_with(SELECT_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
@@ -640,8 +642,14 @@ async fn mysql_side(
     .await
     .expect("mysql ask-true");
     let ask_f = exec_mysql::ask_mysql(
-        &parse_and_translate_with(ASK_FALSE_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
-            .expect("translate ASK-false (mysql)"),
+        &parse_and_translate_with(
+            ASK_FALSE_Q,
+            &maps,
+            Dialect::MySql,
+            &Tbox::default(),
+            &schema,
+        )
+        .expect("translate ASK-false (mysql)"),
         conn,
     )
     .await
@@ -660,7 +668,9 @@ async fn mysql_side(
         features.push(engine_bag(&sols));
     }
 
-    let _ = conn.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await;
+    let _ = conn
+        .query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
     (sols.rows, sols.vars, ask_t, ask_f, features)
 }
 
@@ -739,7 +749,9 @@ async fn mysql_a1_typed_values() {
         .expect("introspect sf_a1")];
     let plan = parse_and_translate_with(A1_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
         .expect("translate A1 (mysql)");
-    let sols = exec_mysql::select_mysql(&plan, conn).await.expect("A1 select");
+    let sols = exec_mysql::select_mysql(&plan, conn)
+        .await
+        .expect("A1 select");
     let bag = engine_bag(&sols);
 
     assert_eq!(bag.len(), 1, "A1 exactly one row: {bag:#?}");
@@ -759,7 +771,9 @@ async fn mysql_a1_typed_values() {
         "A1 non-UTF-8 VARBINARY must be UNBOUND (from_utf8 None), NOT from_utf8_lossy: {row:#?}"
     );
 
-    let _ = conn.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await;
+    let _ = conn
+        .query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
 }
 
 #[test]
