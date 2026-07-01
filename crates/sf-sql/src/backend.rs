@@ -14,6 +14,7 @@
 use crate::error::Result;
 use sf_core::datatype::XsdTypeCode;
 
+pub mod mysql;
 pub mod pg;
 pub mod sqlite;
 
