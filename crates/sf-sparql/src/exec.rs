@@ -1077,6 +1077,32 @@ fn rust_group_execute(
         Ok(())
     })?;
 
+    // Choose a dummy branch for the sink call (SELECT uses `_branch` only for
+    // CONSTRUCT template lookup; GROUP BY results do not come from a single branch).
+    let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
+
+    // Group + aggregate + ORDER BY + OFFSET/LIMIT via the backend-independent
+    // helper (shared with the PostgreSQL path), then stream the result rows.
+    for result in rust_group_result_rows(plan, rg, inner_rows)? {
+        sink(&dummy, &result)?;
+    }
+    Ok(())
+}
+
+/// Group a collected multiset of inner solutions by `rg.keys`, compute each
+/// aggregate in `rg.aggs`, then apply the plan's ORDER BY + OFFSET/LIMIT to the
+/// grouped rows (SPARQL §15: order, then slice). Returns the final result rows in
+/// emit order.
+///
+/// Shared by the SQLite ([`rust_group_execute`]) and PostgreSQL
+/// ([`crate::exec_pg`]) multi-branch GROUP BY paths (ADR-0007): the
+/// grouping/aggregation semantics are backend-independent — only the collection of
+/// the inner solutions (SQLite `Connection` vs live PostgreSQL cursor) differs.
+pub(crate) fn rust_group_result_rows(
+    plan: &Plan,
+    rg: &RustGroup,
+    inner_rows: Vec<BTreeMap<String, Term>>,
+) -> Result<Vec<BTreeMap<String, Term>>> {
     // Group by the key variable values, preserving insertion order for stable output.
     // Use a Vec for ordering + a HashMap for O(1) group lookup.
     type GroupKey = Vec<Option<Term>>;
@@ -1103,49 +1129,9 @@ fn rust_group_execute(
         groups.push((vec![], vec![]));
     }
 
-    // Choose a dummy branch for the sink call (SELECT uses `_branch` only for
-    // CONSTRUCT template lookup; GROUP BY results do not come from a single branch).
-    let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
-
-    // Apply ORDER BY (if requested) over the grouped result rows.
-    if !plan.order.is_empty() {
-        // Build the result rows first, then sort.
-        let mut result_rows: Vec<BTreeMap<String, Term>> = Vec::new();
-        for (key_vals, group_rows) in &groups {
-            let mut result = BTreeMap::new();
-            for (k, val) in rg.keys.iter().zip(key_vals.iter()) {
-                if let Some(t) = val {
-                    result.insert(k.clone(), t.clone());
-                }
-            }
-            for agg_spec in &rg.aggs {
-                if let Some(t) = rust_agg(agg_spec, group_rows)? {
-                    result.insert(agg_spec.out_var.clone(), t);
-                }
-            }
-            result_rows.push(result);
-        }
-        result_rows.sort_by(|a, b| order_cmp(&plan.order, a, b));
-        let take = plan.limit.unwrap_or(usize::MAX);
-        for result in result_rows.into_iter().skip(plan.offset).take(take) {
-            sink(&dummy, &result)?;
-        }
-        return Ok(());
-    }
-
-    // Streaming path (no ORDER BY): OFFSET/LIMIT applied row by row.
-    let mut seen = 0usize;
-    let mut emitted = 0usize;
+    // Materialise the result row (key vars + aggregates) for every group.
+    let mut result_rows: Vec<BTreeMap<String, Term>> = Vec::with_capacity(groups.len());
     for (key_vals, group_rows) in &groups {
-        if seen < plan.offset {
-            seen += 1;
-            continue;
-        }
-        if let Some(limit) = plan.limit {
-            if emitted >= limit {
-                break;
-            }
-        }
         let mut result = BTreeMap::new();
         for (k, val) in rg.keys.iter().zip(key_vals.iter()) {
             if let Some(t) = val {
@@ -1157,10 +1143,19 @@ fn rust_group_execute(
                 result.insert(agg_spec.out_var.clone(), t);
             }
         }
-        emitted += 1;
-        sink(&dummy, &result)?;
+        result_rows.push(result);
     }
-    Ok(())
+
+    // ORDER BY over the grouped rows (if requested), then OFFSET/LIMIT.
+    if !plan.order.is_empty() {
+        result_rows.sort_by(|a, b| order_cmp(&plan.order, a, b));
+    }
+    let take = plan.limit.unwrap_or(usize::MAX);
+    Ok(result_rows
+        .into_iter()
+        .skip(plan.offset)
+        .take(take)
+        .collect())
 }
 
 /// Compute one aggregate over a group of solutions. Returns `None` for

@@ -192,18 +192,37 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
 /// the row and flushes it into the response body — `send().await` there applies
 /// backpressure straight back to this `query_raw` cursor, so the whole pipeline
 /// stays bounded-memory end to end (ADR-0006 / ADR-0010 §C).
-async fn for_each_solution_pg<F, Fut>(plan: &Plan, client: &Client, mut sink: F) -> Result<()>
+async fn for_each_solution_pg<F, Fut>(plan: &Plan, client: &Client, sink: F) -> Result<()>
 where
     F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    if plan.rust_group.is_some() {
-        return Err(Error::Unsupported(
-            "GROUP BY over a multi-branch inner on PostgreSQL is not yet implemented \
-             (Rust-level GROUP BY is SQLite-only in v1)"
-                .to_owned(),
-        ));
+    // Multi-branch GROUP BY (aggregate over a UNION/VALUES inner that cannot be
+    // grouped in SQL — ADR-0007): buffer all inner solutions, then group +
+    // aggregate in Rust via the backend-independent helper shared with the SQLite
+    // executor ([`crate::exec::rust_group_result_rows`]). This is the async mirror
+    // of the SQLite [`crate::exec`] `rust_group_execute` — the collection of inner
+    // solutions differs (live PG cursor vs SQLite), the grouping semantics do not.
+    if let Some(rg) = &plan.rust_group {
+        return rust_group_execute_pg(plan, client, rg, sink).await;
     }
+    for_each_branch_solution_pg(plan, client, sink).await
+}
+
+/// Core branches loop over a live PostgreSQL connection — does NOT check
+/// `rust_group`. Called from both [`for_each_solution_pg`] (when no rust_group is
+/// set) and [`rust_group_execute_pg`] (to collect the inner solutions without
+/// re-triggering grouping). The async mirror of the SQLite
+/// [`crate::exec`] `for_each_branch_solution`.
+async fn for_each_branch_solution_pg<F, Fut>(
+    plan: &Plan,
+    client: &Client,
+    mut sink: F,
+) -> Result<()>
+where
+    F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     let branches = plan.prepared_branches();
     let catalog = build_catalog_pg(&branches, client, plan.dialect).await;
     let multi = branches.len() > 1;
@@ -294,6 +313,49 @@ where
         for (bi, bindings) in buffer.iter().skip(plan.offset).take(take) {
             sink(&branches[*bi], bindings).await?;
         }
+    }
+    Ok(())
+}
+
+/// Multi-branch GROUP BY over a live PostgreSQL connection: collect every inner
+/// solution (no DISTINCT/OFFSET/LIMIT/ORDER on the inner — those apply AFTER
+/// grouping), then group + aggregate + slice via the backend-independent
+/// [`crate::exec::rust_group_result_rows`] and stream the grouped rows. The async
+/// mirror of the SQLite [`crate::exec`] `rust_group_execute` (ADR-0007).
+async fn rust_group_execute_pg<F, Fut>(
+    plan: &Plan,
+    client: &Client,
+    rg: &crate::iq::RustGroup,
+    mut sink: F,
+) -> Result<()>
+where
+    F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    // A no-modifier inner plan: GROUP BY applies AFTER collecting all inner rows,
+    // so DISTINCT/OFFSET/LIMIT/ORDER must NOT touch the inner solutions (they are
+    // applied to the grouped result rows by the helper below). `rust_group: None`
+    // routes through the non-recursive core loop.
+    let inner_plan = Plan {
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: Vec::new(),
+        rust_group: None,
+        ..plan.clone()
+    };
+    let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
+    for_each_branch_solution_pg(&inner_plan, client, |_, bindings| {
+        inner_rows.push(bindings.clone());
+        std::future::ready(Ok(()))
+    })
+    .await?;
+
+    // Choose a dummy branch for the sink call (GROUP BY rows are not from a single
+    // branch); mirrors the SQLite path.
+    let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
+    for result in crate::exec::rust_group_result_rows(plan, rg, inner_rows)? {
+        sink(&dummy, &result).await?;
     }
     Ok(())
 }
