@@ -30,6 +30,12 @@ use crate::{Error, Plan, PlanForm, Result};
 /// chain is usually empty, so this is byte-identical to the old `Error::Sql(e)`).
 fn map_sql_err(e: sf_sql::Error) -> Error {
     use std::error::Error as _;
+    // An uncovered PG result type (adapter `pg_value`) is preserved as a distinct
+    // 501 skip — byte-identical to the pre-M3 `exec_pg` path, which returned
+    // `sf_sparql::Error::Unsupported` directly from `pg_value` (never `Sql`).
+    if let sf_sql::Error::Unsupported(m) = &e {
+        return Error::Unsupported(m.clone());
+    }
     let mut msg = e.to_string();
     let mut src = e.source();
     while let Some(s) = src {
@@ -271,6 +277,59 @@ where
         row.clear();
         row.extend(vars.iter().map(|v| bindings.get(v).cloned()));
         std::future::ready(sink(&row))
+    })
+    .await
+}
+
+/// Stream a SELECT's solutions into an ASYNC sink (per projected row, plan order,
+/// `None` = unbound). The PostgreSQL/MySQL serve-lane form: `sink(..).await`
+/// backpressures the server-side cursor (ADR-0006 / ADR-0010 §C). SQLite's serve
+/// lane keeps the sync [`select_each`]. Written once over the shared core, so it
+/// inherits rust_group / DISTINCT / ORDER / OFFSET / LIMIT.
+pub async fn select_each_async<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
+where
+    B: SqlBackend,
+    F: FnMut(Vec<Option<Term>>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let vars = match &plan.form {
+        PlanForm::Select { vars } => vars.clone(),
+        _ => {
+            return Err(Error::Unsupported(
+                "select() requires a SELECT plan".to_owned(),
+            ))
+        }
+    };
+    for_each_solution(plan, b, |_branch, bindings| {
+        let row: Vec<Option<Term>> = vars.iter().map(|v| bindings.get(v).cloned()).collect();
+        sink(row)
+    })
+    .await
+}
+
+/// Stream a CONSTRUCT's per-solution triples into an ASYNC sink (bounded by the
+/// template size — never the whole graph). The PostgreSQL/MySQL serve-lane form of
+/// [`construct`], written once over the shared core.
+pub async fn construct_each_async<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
+where
+    B: SqlBackend,
+    F: FnMut(Vec<Triple>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let template = match &plan.form {
+        PlanForm::Construct { template } => template.clone(),
+        _ => {
+            return Err(Error::Unsupported(
+                "construct() requires a CONSTRUCT plan".to_owned(),
+            ))
+        }
+    };
+    for_each_solution(plan, b, |_branch, bindings| {
+        let triples: Vec<Triple> = template
+            .iter()
+            .filter_map(|tp| instantiate(tp, bindings))
+            .collect();
+        sink(triples)
     })
     .await
 }
