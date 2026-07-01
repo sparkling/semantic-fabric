@@ -8,7 +8,7 @@ description = "semantic-fabric W3C RDB2RDF conformance harness + EARL + M⋈T SH
 
 [dependencies]
 sf-core.workspace = true
-sf-sql.workspace = true
+sf-sql = { workspace = true, features = ["sqlserver-backend", "rest-backends"] }
 sf-mapping.workspace = true
 sf-sparql.workspace = true
 # Graph-isomorphism comparison + N-Quads/Turtle parsing of expected output (ADR-0005).

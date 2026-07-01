@@ -16,6 +16,8 @@ use sf_core::datatype::XsdTypeCode;
 
 #[cfg(feature = "duckdb-backend")]
 pub mod duckdb;
+pub mod hana;
+pub mod monetdb;
 pub mod mysql;
 pub mod odbc;
 pub mod oracle;

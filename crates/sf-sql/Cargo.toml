@@ -8,10 +8,20 @@ description = "semantic-fabric source/SQL layer: dialect emission, introspection
 
 [features]
 ## Enable the DuckDB backend (embedded DuckDB via the `duckdb` crate, `bundled` feature).
-## Other backends (SQL Server, Oracle, ODBC, REST) are scaffolded without optional deps —
-## they compile to `Error::Unsupported` stubs that prove the trait boundary compiles
-## without a live driver. Add `tiberius`/`odbc-api` to enable them when needed.
 duckdb-backend = ["dep:duckdb"]
+## Enable the SQL Server backend (tiberius TDS driver, async, @Pn placeholders).
+## Requires `tokio-util` compat feature for TcpStream → futures_io bridge.
+sqlserver-backend = ["dep:tiberius", "dep:tokio-util"]
+## Enable the Trino/PrestoDB backend (prusto REST client).
+trino-backend = ["dep:prusto"]
+## Enable the SAP HANA backend (hdbconnect synchronous driver).
+hana-backend = ["dep:hdbconnect"]
+## Enable the ODBC backend (odbc-api, covers DB2/H2/Spark/Dremio/Denodo/Teiid).
+odbc-backend = ["dep:odbc-api"]
+## Enable the Oracle backend (oracle crate, requires OCI client libraries).
+oracle-backend = ["dep:oracle"]
+## Enable REST backends (Snowflake/BigQuery/Athena/Databricks via reqwest).
+rest-backends = ["dep:reqwest", "dep:serde_json"]
 
 [dependencies]
 sf-core.workspace = true
@@ -27,3 +37,17 @@ bytes = "1"                                            # BytesMut, for the Lexic
 mysql_async = { version = "0.35", default-features = false, features = ["default-rustls"] } # MySQL source: async query + streaming (WS-D)
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync"] }    # SQLite serve-lane bridge (ADR-0024 §4.1): spawn_blocking + cap-1 mpsc so the !Send Connection lives only on the blocking thread; rt-multi-thread for DuckDb backend tests
 duckdb = { version = "1.1", features = ["bundled"], optional = true } # DuckDB source: embedded OLAP engine (ADR-0024 M8)
+# SQL Server backend — TDS protocol via tiberius, with compat shim for tokio TcpStream.
+tiberius = { version = "0.12", default-features = false, features = ["rustls", "tds73"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
+# Trino/PrestoDB backend — prusto REST page-at-a-time client.
+prusto = { version = "0.5", optional = true }
+# SAP HANA backend — synchronous pure-Rust hdbconnect driver.
+hdbconnect = { version = "0.32", optional = true }
+# ODBC backend — covers DB2/H2/Spark/Dremio/Denodo/Teiid via system ODBC manager.
+odbc-api = { version = "28", optional = true }
+# Oracle backend — requires OCI client libraries (oracle crate).
+oracle = { version = "0.6", optional = true }
+# REST backends — Snowflake / BigQuery / Athena / Databricks via HTTP.
+reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }
+serde_json = { version = "1", optional = true }
