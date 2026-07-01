@@ -1205,6 +1205,30 @@ fn try_sql_group_over_union(
     if pooled_arms.iter().any(|b| b.projection().len() != proj_len) {
         return None;
     }
+    // Degenerate-shape guard: `pos()` below assumes `sorted_vars[i] ↔ c{i}` strictly
+    // (the FIRST `sorted_vars.len()` positions `Branch::projection()` emits, since
+    // bindings are pushed before `where_conds`/`opts`/`subplan_joins` columns). That
+    // holds as long as every needed var's raw column is DISTINCT from every other
+    // needed var's — `projection()` dedups identical `ColRef`s, so two DIFFERENT
+    // vars degenerately bound to the SAME raw column (e.g. two triple patterns
+    // projecting the same column under different variable names) would collapse
+    // the bindings-derived prefix to fewer than `sorted_vars.len()` columns and
+    // shift every position after. Checked directly per arm (cheap, in-memory).
+    let needed_cols_distinct = |b: &Branch| -> bool {
+        let mut cols: Vec<ColRef> = Vec::with_capacity(sorted_vars.len());
+        for v in &sorted_vars {
+            for c in b.bindings[v.as_str()].columns() {
+                if cols.contains(&c) {
+                    return false;
+                }
+                cols.push(c);
+            }
+        }
+        true
+    };
+    if !pooled_arms.iter().all(needed_cols_distinct) {
+        return None;
+    }
 
     let sp_alias = *next_alias;
     *next_alias += 1;

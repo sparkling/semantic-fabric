@@ -504,13 +504,33 @@ pub fn translate_tree(
 /// Recursively run the cascade on every [`iq::SubPlanJoin`]'s nested [`Plan`]
 /// branches reachable from `b` (depth-first — a SubPlan can itself carry a
 /// SubPlan). See the call site above for why this is needed.
+///
+/// **Multi-branch guard** (adversarial review, q9 agg-pushdown wave): a nested
+/// Plan with MORE THAN ONE branch renders as `UNION ALL` ([`emit::emit_subplan_sql`])
+/// — every arm's SELECT-list column COUNT must match, and the SQL agg-pushdown's
+/// [`iq::lower::try_sql_group_over_union`] fixes the exact position each `c{i}`
+/// column occupies BEFORE this cascade runs. A pass like self-join elimination
+/// rewrites/removes `where_conds` per arm (which feeds `Branch::projection()`'s
+/// trailing columns) independently per arm, so it can shrink one arm's column
+/// count without touching a sibling arm the same way — silently invalidating that
+/// contract (a loud `UNION ALL` column-count SQL error, or worse, a shifted
+/// position). So for a multi-branch nested Plan, only ACCEPT the cascaded arms
+/// when every arm still projects the SAME column count as every sibling
+/// (post-cascade) — otherwise keep the pre-cascade arms for this SubPlan (still
+/// correct; this SubPlan alone forgoes the optimization). A single-branch nested
+/// Plan has no such cross-arm contract, so it always keeps the cascaded result.
 fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
     for sp in &mut b.subplan_joins {
         let ctx = cascade::CascadeCtx {
             distinct: false,
             project: None,
         };
-        sp.plan.branches = cascade::run(std::mem::take(&mut sp.plan.branches), schema, &ctx);
+        let pre = sp.plan.branches.clone();
+        let post = cascade::run(pre.clone(), schema, &ctx);
+        let post_lens: Vec<usize> = post.iter().map(|br| br.projection().len()).collect();
+        let safe = pre.len() == 1
+            || (post.len() == pre.len() && post_lens.windows(2).all(|w| w[0] == w[1]));
+        sp.plan.branches = if safe { post } else { pre };
         for inner in &mut sp.plan.branches {
             cascade_subplans(inner, schema);
         }
