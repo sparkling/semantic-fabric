@@ -18,7 +18,7 @@
 use rusqlite::Connection;
 use sf_conformance::oracle::{engine_bag, solutions_bag_eq};
 use sf_conformance::sqlite;
-use sf_sparql::{exec, exec_pg, parse_and_translate_with, Tbox};
+use sf_sparql::{exec, exec_mysql, exec_pg, parse_and_translate_with, Tbox};
 use sf_sql::introspect::introspect_postgres;
 use sf_sql::{Dialect, TableSchema};
 use tokio_postgres::{Client, NoTls};
@@ -530,5 +530,291 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
             vec![vec![("label".to_owned(), "Sales".to_owned())]],
             "q15 distinct-join live-PG value regression"
         );
+    });
+}
+
+// ============================================================================
+// ADR-0024 M4 — MySQL differential arm (graceful skip; live-only A1 guard).
+//
+// Mirrors the PG arm: the always-run SQLite side is the oracle; the live MySQL side
+// (probe → throwaway database → load the SAME fixture → run via `exec_mysql` →
+// `=_bag` vs the oracle) must reproduce every bag, including the q9/q15/sequence/etc.
+// feature classes MySQL now GAINS from the shared `exec_core` (the old buffered
+// `for_each_solution_mysql` never checked `rust_group`, DISTINCT-over-union, or
+// ORDER-expression keys). Plus the design §5-M4 A1 guard: an INTEGER, a DATETIME,
+// and a NON-UTF-8 VARBINARY column proving `mysql_value_to_string` semantics
+// (int → "42", DATETIME → T-separated, non-UTF-8 bytes → UNBOUND, never
+// `from_utf8_lossy` replacement chars).
+// ============================================================================
+
+use mysql_async::prelude::Queryable;
+
+/// Base MySQL URL: `SF_MYSQL_URL` if set, else the `mysql_e2e` default. Includes a
+/// default database; the throwaway db is created/USE-d on the same connection.
+fn mysql_url() -> String {
+    std::env::var("SF_MYSQL_URL")
+        .unwrap_or_else(|_| "mysql://root:sftest@127.0.0.1:13306/sftest".to_owned())
+}
+
+/// Probe; `None` ⇒ graceful skip (design §5 M4; mirrors `mysql_e2e.rs`).
+async fn try_connect_mysql() -> Option<mysql_async::Conn> {
+    let opts = mysql_async::Opts::from_url(&mysql_url()).ok()?;
+    mysql_async::Conn::new(opts).await.ok()
+}
+
+/// Introspect every base table in the current database (name order) over the live
+/// MySQL connection — the same schema set the SQLite side gets, so translation is
+/// symmetric.
+async fn introspect_all_mysql(conn: &mut mysql_async::Conn) -> Result<Vec<TableSchema>, String> {
+    let names: Vec<String> = conn
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY table_name",
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut schemas = Vec::with_capacity(names.len());
+    for name in names {
+        schemas.push(
+            sf_sql::introspect::introspect_mysql(conn, &name)
+                .await
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(schemas)
+}
+
+/// Run each `;`-separated statement of a multi-statement fixture in turn (the fixture
+/// has no `;` inside any statement). `mysql_async` runs one statement per call.
+async fn run_stmts(conn: &mut mysql_async::Conn, sql: &str) {
+    for stmt in sql.split(';') {
+        let s = stmt.trim();
+        if !s.is_empty() {
+            conn.query_drop(s).await.expect("mysql fixture statement");
+        }
+    }
+}
+
+/// MySQL side: create a throwaway database, load the SAME fixture rows, introspect,
+/// translate (MySql), run SELECT/ASK over the live connection via `select_mysql` /
+/// `ask_mysql`, plus each [`FEATURE_QUERIES`] entry (tree path + MySQL lowering +
+/// live `exec_mysql` — the exact production surface sf-serve uses). Returns the same
+/// 5-tuple shape as [`pg_side`].
+#[allow(clippy::type_complexity)]
+async fn mysql_side(
+    conn: &mut mysql_async::Conn,
+) -> (
+    Vec<Vec<Option<sf_core::Term>>>,
+    Vec<String>,
+    bool,
+    bool,
+    Vec<Vec<std::collections::BTreeMap<String, sf_core::Term>>>,
+) {
+    let db = format!("sf_diff_my_{}", std::process::id());
+    conn.query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+        .await
+        .expect("drop pre-existing throwaway db");
+    conn.query_drop(format!("CREATE DATABASE {db}"))
+        .await
+        .expect("create throwaway db");
+    conn.query_drop(format!("USE {db}"))
+        .await
+        .expect("use throwaway db");
+    run_stmts(conn, CREATE_SQL).await;
+
+    let maps = sf_mapping::parse_r2rml(R2RML).expect("R2RML parses");
+    let schema = introspect_all_mysql(conn).await.expect("mysql introspection");
+
+    let sel_plan =
+        parse_and_translate_with(SELECT_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
+            .expect("translate SELECT (mysql)");
+    let sols = exec_mysql::select_mysql(&sel_plan, conn)
+        .await
+        .expect("mysql select");
+
+    let ask_t = exec_mysql::ask_mysql(
+        &parse_and_translate_with(ASK_TRUE_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
+            .expect("translate ASK-true (mysql)"),
+        conn,
+    )
+    .await
+    .expect("mysql ask-true");
+    let ask_f = exec_mysql::ask_mysql(
+        &parse_and_translate_with(ASK_FALSE_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
+            .expect("translate ASK-false (mysql)"),
+        conn,
+    )
+    .await
+    .expect("mysql ask-false");
+
+    // Feature-class arms over the LIVE MySQL cursor — the classes MySQL now GAINS
+    // from the shared core (q9 rust_group, q15 DISTINCT-over-union, sequence path,
+    // ORDER-expression keys).
+    let mut features = Vec::with_capacity(FEATURE_QUERIES.len());
+    for (name, q, _) in FEATURE_QUERIES {
+        let plan = parse_and_translate_with(q, &maps, Dialect::MySql, &Tbox::default(), &schema)
+            .unwrap_or_else(|e| panic!("translate {name} (mysql): {e}"));
+        let sols = exec_mysql::select_mysql(&plan, conn)
+            .await
+            .unwrap_or_else(|e| panic!("{name} (mysql): {e}"));
+        features.push(engine_bag(&sols));
+    }
+
+    let _ = conn.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await;
+    (sols.rows, sols.vars, ask_t, ask_f, features)
+}
+
+/// R2RML for the A1 typed-values table: an INTEGER, a DATETIME, and a NON-UTF-8
+/// VARBINARY column, each a plain-literal object map.
+const A1_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#A1>
+    rr:logicalTable [ rr:tableName "sf_a1" ] ;
+    rr:subjectMap [ rr:template "http://ex/a1/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:intval  ; rr:objectMap [ rr:column "i" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:dtval   ; rr:objectMap [ rr:column "dt" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:blobval ; rr:objectMap [ rr:column "b" ] ] .
+"#;
+
+/// Anchor on the non-null INTEGER; the DATETIME and VARBINARY are OPTIONAL so the
+/// row still surfaces with the NULL-producing (non-UTF-8) blob UNBOUND.
+const A1_Q: &str = r#"
+    PREFIX ex: <http://ex/>
+    SELECT ?intval ?dtval ?blobval WHERE {
+        ?s ex:intval ?intval .
+        OPTIONAL { ?s ex:dtval ?dtval }
+        OPTIONAL { ?s ex:blobval ?blobval }
+    }"#;
+
+/// The design §5-M4 A1 guard: exact computed values (oracle-independent), proving the
+/// adapter's `mysql_value_to_string` semantics — INTEGER→`"42"`, DATETIME→T-separated
+/// `"2021-03-04T05:06:07"`, and a NON-UTF-8 VARBINARY→UNBOUND (NOT `from_utf8_lossy`
+/// replacement chars). A recurrence of the `mysql_for_each` decode fails this.
+///
+/// Runs on its OWN fresh connection (not the shared one from `mysql_side`): the
+/// `MYSQL_COLUMNS_SQL` introspection statement selects `WHERE TABLE_SCHEMA =
+/// DATABASE()`, and a `mysql_async`-cached prepared copy of it binds `DATABASE()` to
+/// the schema live at prepare time. `mysql_side` primes that cache against its own
+/// throwaway db and then drops it, so reusing the connection here would resolve the
+/// cached statement against a now-dropped schema and see zero columns. The
+/// production serve path introspects ONCE on a fresh connection, so it never hits
+/// this — the fresh connection keeps the guard faithful to that path.
+async fn mysql_a1_typed_values() {
+    let mut conn = match try_connect_mysql().await {
+        Some(c) => c,
+        None => {
+            eprintln!("skipping MySQL A1 guard (no server)");
+            return;
+        }
+    };
+    let conn = &mut conn;
+    let db = format!("sf_a1_{}", std::process::id());
+    conn.query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+        .await
+        .expect("drop pre-existing a1 db");
+    conn.query_drop(format!("CREATE DATABASE {db}"))
+        .await
+        .expect("create a1 db");
+    conn.query_drop(format!("USE {db}"))
+        .await
+        .expect("use a1 db");
+    // Regular (non-TEMPORARY) table so it appears in information_schema for
+    // introspection; the whole db is dropped at the end.
+    conn.query_drop("CREATE TABLE sf_a1 (id INT PRIMARY KEY, i INT, dt DATETIME, b VARBINARY(16))")
+        .await
+        .expect("create sf_a1");
+    // Non-UTF-8 bytes (0xFF 0xFE) bound as a parameter; DATETIME non-midnight to dodge
+    // the documented DATE/DATETIME midnight ambiguity.
+    conn.exec_drop(
+        "INSERT INTO sf_a1 (id, i, dt, b) VALUES (?, ?, ?, ?)",
+        (1i32, 42i32, "2021-03-04 05:06:07", vec![0xFFu8, 0xFE]),
+    )
+    .await
+    .expect("insert sf_a1 row");
+
+    let maps = sf_mapping::parse_r2rml(A1_R2RML).expect("A1 R2RML parses");
+    let schema = vec![sf_sql::introspect::introspect_mysql(conn, "sf_a1")
+        .await
+        .expect("introspect sf_a1")];
+    let plan = parse_and_translate_with(A1_Q, &maps, Dialect::MySql, &Tbox::default(), &schema)
+        .expect("translate A1 (mysql)");
+    let sols = exec_mysql::select_mysql(&plan, conn).await.expect("A1 select");
+    let bag = engine_bag(&sols);
+
+    assert_eq!(bag.len(), 1, "A1 exactly one row: {bag:#?}");
+    let row = &bag[0];
+    assert_eq!(
+        row.get("intval").map(term_lex),
+        Some("42".to_owned()),
+        "A1 INTEGER: Value::Int → \"42\""
+    );
+    assert_eq!(
+        row.get("dtval").map(term_lex),
+        Some("2021-03-04T05:06:07".to_owned()),
+        "A1 DATETIME: non-midnight Date branch → T-separated"
+    );
+    assert!(
+        row.get("blobval").is_none(),
+        "A1 non-UTF-8 VARBINARY must be UNBOUND (from_utf8 None), NOT from_utf8_lossy: {row:#?}"
+    );
+
+    let _ = conn.query_drop(format!("DROP DATABASE IF EXISTS {db}")).await;
+}
+
+#[test]
+fn select_and_ask_agree_across_sqlite_and_mysql() {
+    // SQLite arm (sync) — always runs; the oracle.
+    let (s_rows, s_vars, s_ask_t, s_ask_f, s_features) = sqlite_side();
+    let s_sel = engine_bag(&exec::Solutions {
+        vars: s_vars,
+        rows: s_rows,
+    });
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async move {
+        let mut conn = match try_connect_mysql().await {
+            Some(c) => c,
+            None => {
+                eprintln!("skipping MySQL differential");
+                return;
+            }
+        };
+        let (m_rows, m_vars, m_ask_t, m_ask_f, m_features) = mysql_side(&mut conn).await;
+        let m_sel = engine_bag(&exec::Solutions {
+            vars: m_vars,
+            rows: m_rows,
+        });
+        assert!(
+            solutions_bag_eq(&s_sel, &m_sel),
+            "SELECT diverges sqlite vs mysql:\n sqlite={s_sel:#?}\n mysql={m_sel:#?}"
+        );
+        assert_eq!(s_ask_t, m_ask_t, "ASK-true diverges sqlite vs mysql");
+        assert_eq!(s_ask_f, m_ask_f, "ASK-false diverges sqlite vs mysql");
+
+        // MySQL now GAINS q9/q15/sequence/etc. from the shared core — each must be
+        // `=_bag` with the SQLite oracle at the hand-computed cardinality.
+        for (((name, _, want), s_bag), m_bag) in
+            FEATURE_QUERIES.iter().zip(&s_features).zip(&m_features)
+        {
+            assert!(
+                solutions_bag_eq(s_bag, m_bag),
+                "{name} diverges sqlite vs mysql:\n sqlite={s_bag:#?}\n mysql={m_bag:#?}"
+            );
+            assert_eq!(
+                m_bag.len(),
+                *want,
+                "{name} mysql cardinality wrong (expected {want}): {m_bag:#?}"
+            );
+        }
+
+        // A1 exact-value guard (INTEGER / DATETIME / non-UTF-8 VARBINARY) — on its
+        // own fresh connection (see `mysql_a1_typed_values` docs: cached-statement
+        // `DATABASE()` staleness across the shared conn's dropped db).
+        drop(conn);
+        mysql_a1_typed_values().await;
     });
 }

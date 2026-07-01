@@ -22,6 +22,10 @@ thiserror.workspace = true
 # gracefully when no server is reachable (probe / SF_PG_URL), so CI stays green.
 tokio = { version = "1", features = ["rt", "macros"] }
 tokio-postgres = "0.7"
+# Live MySQL differential (ADR-0024 M4): a throwaway database per run over a real
+# server, executed via the packet-streamed exec_iter cursor. Skips gracefully when
+# no server is reachable (probe / SF_MYSQL_URL), so CI stays green.
+mysql_async = { version = "0.35", default-features = false, features = ["default-rustls"] }
 # M⋈T SHACL gate — rudof `shacl` in Native mode (ADR-0005 / ADR-0019 G4). The
 # `oxrdf` it pulls is 0.3.3, identical to the workspace pin (no second RDF stack).
 shacl = "0.3"
