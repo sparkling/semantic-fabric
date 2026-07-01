@@ -169,6 +169,37 @@ const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
     ),
 ];
 
+/// Datatype-agnostic lexical form of a term (value only — no `^^<iri>`), so the
+/// ADR-0024 M3 guards pin actual computed VALUES without brittleness to the exact
+/// datatype IRI.
+fn term_lex(t: &sf_core::Term) -> String {
+    use sf_core::Term::*;
+    match t {
+        NamedNode(n) => n.as_str().to_owned(),
+        BlankNode(b) => b.as_str().to_owned(),
+        Literal(l) => l.value().to_owned(),
+        // The rdf-star `Term::Triple` variant — not produced by these fixtures.
+        _ => "<<triple>>".to_owned(),
+    }
+}
+
+/// One arm's bag → sorted `Vec` of sorted `(var, value)` rows (order-independent
+/// bag equality for the value-level guards).
+fn bag_lex(
+    bag: &[std::collections::BTreeMap<String, sf_core::Term>],
+) -> Vec<Vec<(String, String)>> {
+    let mut rows: Vec<Vec<(String, String)>> = bag
+        .iter()
+        .map(|r| {
+            let mut v: Vec<_> = r.iter().map(|(k, t)| (k.clone(), term_lex(t))).collect();
+            v.sort();
+            v
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
 /// Base connection params (host/port/user, **no** dbname): `SF_PG_URL` if set,
 /// else a local trust-auth default keyed on `$USER` (matches `pg.rs`).
 fn base_conn() -> String {
@@ -440,5 +471,64 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
                 "{name} PG cardinality wrong (expected {want}): {p_bag:#?}"
             );
         }
+
+        // --- ADR-0024 M3: hard live-PG value guards (revert-sensitive, oracle-independent) ---
+        // Each pins the EXACT computed rows on the LIVE PG path (not just cardinality,
+        // not just agreement with the SQLite oracle), so a regression to wrong/empty
+        // output FAILS even if the SQLite oracle co-regressed identically. These run
+        // only when a live PG server is reachable (the enclosing `rt.block_on` returns
+        // early otherwise), matching the q12 `typed-filter` arm's live-only nature.
+        let pg_bag = |name: &str| -> Vec<Vec<(String, String)>> {
+            let i = FEATURE_QUERIES
+                .iter()
+                .position(|(n, _, _)| *n == name)
+                .expect("arm exists");
+            bag_lex(&p_features[i])
+        };
+        // q9 agg-over-UNION: COUNT(name ∪ email) over the single "Sales" group = 5
+        // (3 names + 2 emails; Bob's NULL email drops). Reverting the PG rust_group
+        // route (the deleted exec_pg loop) empties/errors this ⇒ guard fails.
+        assert_eq!(
+            pg_bag("agg-over-union"),
+            vec![vec![
+                ("c".to_owned(), "5".to_owned()),
+                ("label".to_owned(), "Sales".to_owned())
+            ]],
+            "q9 agg-over-union live-PG value regression"
+        );
+        // q10 sequence path ex:dept/ex:label: all 3 persons reach "Sales". Reverting
+        // the q10 lowering ⇒ empty bag.
+        assert_eq!(
+            pg_bag("sequence-path"),
+            vec![
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Ann".to_owned())
+                ],
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Bob".to_owned())
+                ],
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Zed".to_owned())
+                ],
+            ],
+            "q10 sequence-path live-PG value regression"
+        );
+        // q11 MINUS: only Bob (NULL email) survives. Reverting the PG anti-join ⇒
+        // 0 rows (or all 3).
+        assert_eq!(
+            pg_bag("minus"),
+            vec![vec![("name".to_owned(), "Bob".to_owned())]],
+            "q11 minus live-PG value regression"
+        );
+        // q15 DISTINCT-over-join: 3 persons, 1 dept ⇒ one "Sales". Reverting the
+        // DISTINCT dedup (now in exec_core, before the slice) ⇒ 3 duplicate rows.
+        assert_eq!(
+            pg_bag("distinct-join"),
+            vec![vec![("label".to_owned(), "Sales".to_owned())]],
+            "q15 distinct-join live-PG value regression"
+        );
     });
 }
