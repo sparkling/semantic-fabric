@@ -8,9 +8,9 @@
 //! **Graceful skip:** when `SF_TRINO_URL` is unset or the coordinator is
 //! unreachable the test passes as a no-op — CI stays green without a live Trino.
 //!
-//! Uses a dedicated tokio runtime (not `#[tokio::test]`) because `TrinoBackend`
-//! uses `reqwest::blocking`, which panics when called from inside a tokio
-//! current-thread runtime.
+//! Uses `#[tokio::test]` — `TrinoBackend` uses the async `reqwest::Client`.
+//! Fixture tables are created in Trino's `memory.default` schema; each run
+//! drops and recreates them so tests are idempotent.
 
 use rusqlite::Connection;
 use sf_conformance::sqlite;
@@ -30,6 +30,17 @@ INSERT INTO dept VALUES (10, 'Sales');
 INSERT INTO person VALUES (1, 'Ann', 10);
 INSERT INTO person VALUES (2, 'Bob', 10);
 "#;
+
+/// DDL/DML statements executed against Trino's `memory.default` catalog.
+const TRINO_SETUP: &[&str] = &[
+    "DROP TABLE IF EXISTS dept",
+    "DROP TABLE IF EXISTS person",
+    "CREATE TABLE dept (id VARCHAR(20), label VARCHAR(200))",
+    "CREATE TABLE person (id VARCHAR(20), name VARCHAR(200), dept_id VARCHAR(20))",
+    "INSERT INTO dept VALUES ('10', 'Sales')",
+    "INSERT INTO person VALUES ('1', 'Ann', '10')",
+    "INSERT INTO person VALUES ('2', 'Bob', '10')",
+];
 
 const R2RML: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -55,92 +66,93 @@ const SELECT_Q: &str = r#"
         FILTER (?di = 10)
     }"#;
 
-#[test]
-fn trino_differential() {
+#[tokio::test]
+async fn trino_differential() {
     let Ok(url) = std::env::var("SF_TRINO_URL") else {
         eprintln!("SF_TRINO_URL not set — skipping Trino differential");
         return;
     };
 
-    // Build a multi-thread runtime so blocking reqwest inside async fns works.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
+    let trino_user = std::env::var("SF_TRINO_USER").unwrap_or_else(|_| "trino".to_owned());
+    // Use memory.default for fixture tables.
+    let mut backend = TrinoBackend::new(&url, &trino_user).with_catalog("memory", "default");
 
-    rt.block_on(async {
-        let trino_user = std::env::var("SF_TRINO_USER").unwrap_or_else(|_| "trino".to_owned());
-        let mut backend = TrinoBackend::new(&url, trino_user);
+    // ── Trino: set up fixture ────────────────────────────────────────────────
+    for stmt in TRINO_SETUP {
+        if let Err(e) = backend.column_names(stmt).await {
+            eprintln!("Trino setup failed ({e}) — skipping");
+            return;
+        }
+    }
 
-        // Probe column names to verify connectivity and build schema.
-        let dept_cols = match backend.column_names("SELECT * FROM dept LIMIT 0").await {
-            Ok(cols) => cols,
-            Err(e) => {
-                eprintln!("Trino probe failed ({e}) — skipping");
-                return;
-            }
-        };
-        let person_cols = match backend.column_names("SELECT * FROM person LIMIT 0").await {
-            Ok(cols) => cols,
-            Err(e) => {
-                eprintln!("Trino probe failed ({e}) — skipping");
-                return;
-            }
-        };
+    // Probe column names to build schema.
+    let dept_cols = match backend.column_names("SELECT * FROM dept LIMIT 0").await {
+        Ok(cols) => cols,
+        Err(e) => {
+            eprintln!("Trino probe failed ({e}) — skipping");
+            return;
+        }
+    };
+    let person_cols = match backend.column_names("SELECT * FROM person LIMIT 0").await {
+        Ok(cols) => cols,
+        Err(e) => {
+            eprintln!("Trino probe failed ({e}) — skipping");
+            return;
+        }
+    };
 
-        let schema_trino: Vec<TableSchema> = vec![
-            {
-                let mut t = TableSchema::new("dept");
-                t.columns = dept_cols
-                    .into_iter()
-                    .map(|name| Column::new(name, "varchar", false))
-                    .collect();
-                t
-            },
-            {
-                let mut t = TableSchema::new("person");
-                t.columns = person_cols
-                    .into_iter()
-                    .map(|name| Column::new(name, "varchar", false))
-                    .collect();
-                t
-            },
-        ];
+    let schema_trino: Vec<TableSchema> = vec![
+        {
+            let mut t = TableSchema::new("dept");
+            t.columns = dept_cols
+                .into_iter()
+                .map(|name| Column::new(name, "varchar", false))
+                .collect();
+            t
+        },
+        {
+            let mut t = TableSchema::new("person");
+            t.columns = person_cols
+                .into_iter()
+                .map(|name| Column::new(name, "varchar", false))
+                .collect();
+            t
+        },
+    ];
 
-        let maps = sf_mapping::parse_r2rml(R2RML).expect("R2RML");
-        let plan_trino = parse_and_translate_with(
-            SELECT_Q,
-            &maps,
-            Dialect::Trino,
-            &Tbox::default(),
-            &schema_trino,
-        )
-        .expect("translate (trino)");
-        let sols_trino = exec_core::select(&plan_trino, &mut backend)
-            .await
-            .expect("trino exec");
+    let maps = sf_mapping::parse_r2rml(R2RML).expect("R2RML");
+    let plan_trino = parse_and_translate_with(
+        SELECT_Q,
+        &maps,
+        Dialect::Trino,
+        &Tbox::default(),
+        &schema_trino,
+    )
+    .expect("translate (trino)");
+    let sols_trino = exec_core::select(&plan_trino, &mut backend)
+        .await
+        .expect("trino exec");
 
-        // ── SQLite oracle ────────────────────────────────────────────────────
-        let conn: Connection = sqlite::load(CREATE_SQLITE).expect("sqlite fixture");
-        let schema_sqlite = sqlite::introspect_all(&conn).expect("sqlite schema");
-        let plan_sqlite = parse_and_translate_with(
-            SELECT_Q,
-            &maps,
-            Dialect::Sqlite,
-            &Tbox::default(),
-            &schema_sqlite,
-        )
-        .expect("translate (sqlite)");
-        let sols_sqlite = exec::select(&plan_sqlite, &conn).expect("sqlite exec");
+    // ── SQLite oracle ────────────────────────────────────────────────────────
+    let conn: Connection = sqlite::load(CREATE_SQLITE).expect("sqlite fixture");
+    let schema_sqlite = sqlite::introspect_all(&conn).expect("sqlite schema");
+    let plan_sqlite = parse_and_translate_with(
+        SELECT_Q,
+        &maps,
+        Dialect::Sqlite,
+        &Tbox::default(),
+        &schema_sqlite,
+    )
+    .expect("translate (sqlite)");
+    let sols_sqlite = exec::select(&plan_sqlite, &conn).expect("sqlite exec");
 
-        // ── bag equality ─────────────────────────────────────────────────────
-        assert_eq!(
-            sols_sqlite.rows.len(),
-            sols_trino.rows.len(),
-            "row count mismatch: sqlite={} trino={}",
-            sols_sqlite.rows.len(),
-            sols_trino.rows.len()
-        );
-        assert_eq!(sols_trino.rows.len(), 2, "expected 2 rows (Ann + Bob)");
-    });
+    // ── bag equality ─────────────────────────────────────────────────────────
+    assert_eq!(
+        sols_sqlite.rows.len(),
+        sols_trino.rows.len(),
+        "row count mismatch: sqlite={} trino={}",
+        sols_sqlite.rows.len(),
+        sols_trino.rows.len()
+    );
+    assert_eq!(sols_trino.rows.len(), 2, "expected 2 rows (Ann + Bob)");
 }

@@ -5,7 +5,7 @@
 //! (Statement Execution API), and Trino/PrestoDB (native REST protocol).
 //!
 //! All HTTP backends require the `rest-backends` feature which brings in `reqwest`
-//! (blocking HTTP client) and `serde_json`. Without the feature the module
+//! (async HTTP client) and `serde_json`. Without the feature the module
 //! compiles to stubs that return `Error::Unsupported`.
 //!
 //! Authentication: Bearer tokens read from environment variables:
@@ -107,7 +107,7 @@ mod stub {
 pub mod real {
     use std::collections::VecDeque;
 
-    use reqwest::blocking::Client;
+    use reqwest::Client;
     use serde_json::Value;
 
     use crate::backend::{BranchStream, RawTuple, SqlBackend};
@@ -189,7 +189,7 @@ pub mod real {
             Ok(Self::new(url, token))
         }
 
-        fn execute_sql(
+        async fn execute_sql(
             &self,
             sql: &str,
             params: &[String],
@@ -213,10 +213,12 @@ pub mod real {
                 .bearer_auth(&self.token)
                 .json(&body)
                 .send()
+                .await
                 .map_err(|e| Error::Marshal(format!("snowflake HTTP: {e}")))?
                 .error_for_status()
                 .map_err(|e| Error::Marshal(format!("snowflake HTTP status: {e}")))?
                 .json::<Value>()
+                .await
                 .map_err(|e| Error::Marshal(format!("snowflake JSON: {e}")))?;
 
             parse_snowflake_response(&resp)
@@ -258,7 +260,7 @@ pub mod real {
             Self: 's;
 
         async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-            let (names, _) = self.execute_sql(probe_sql, &[])?;
+            let (names, _) = self.execute_sql(probe_sql, &[]).await?;
             Ok(names)
         }
 
@@ -267,7 +269,7 @@ pub mod real {
             sql: &str,
             lexical_params: &[String],
         ) -> Result<SnowflakeStream> {
-            let (_, tuples) = self.execute_sql(sql, lexical_params)?;
+            let (_, tuples) = self.execute_sql(sql, lexical_params).await?;
             Ok(SnowflakeStream {
                 rows: tuples.into(),
             })
@@ -316,7 +318,7 @@ pub mod real {
             Ok(Self::new(project, token))
         }
 
-        fn execute_sql(
+        async fn execute_sql(
             &self,
             sql: &str,
             params: &[String],
@@ -337,10 +339,12 @@ pub mod real {
                 .bearer_auth(&self.token)
                 .json(&body)
                 .send()
+                .await
                 .map_err(|e| Error::Marshal(format!("bigquery HTTP: {e}")))?
                 .error_for_status()
                 .map_err(|e| Error::Marshal(format!("bigquery HTTP status: {e}")))?
                 .json::<Value>()
+                .await
                 .map_err(|e| Error::Marshal(format!("bigquery JSON: {e}")))?;
 
             parse_bigquery_response(&resp)
@@ -398,7 +402,7 @@ pub mod real {
             Self: 's;
 
         async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-            let (names, _) = self.execute_sql(probe_sql, &[])?;
+            let (names, _) = self.execute_sql(probe_sql, &[]).await?;
             Ok(names)
         }
 
@@ -407,7 +411,7 @@ pub mod real {
             sql: &str,
             lexical_params: &[String],
         ) -> Result<BigQueryStream> {
-            let (_, tuples) = self.execute_sql(sql, lexical_params)?;
+            let (_, tuples) = self.execute_sql(sql, lexical_params).await?;
             Ok(BigQueryStream {
                 rows: tuples.into(),
             })
@@ -453,13 +457,21 @@ pub mod real {
             Ok(Self::new(url, user))
         }
 
-        fn execute_sql(
+        async fn execute_sql(
             &self,
             sql: &str,
             params: &[String],
         ) -> Result<(Vec<String>, Vec<RawTuple>)> {
             let sql_with_params = inline_params(sql, params);
-            presto_execute(&self.client, &self.base_url, &self.user, &sql_with_params)
+            presto_execute(
+                &self.client,
+                &self.base_url,
+                &self.user,
+                None,
+                None,
+                &sql_with_params,
+            )
+            .await
         }
     }
 
@@ -470,7 +482,7 @@ pub mod real {
             Self: 's;
 
         async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-            let (names, _) = self.execute_sql(probe_sql, &[])?;
+            let (names, _) = self.execute_sql(probe_sql, &[]).await?;
             Ok(names)
         }
 
@@ -479,7 +491,7 @@ pub mod real {
             sql: &str,
             lexical_params: &[String],
         ) -> Result<AthenaStream> {
-            let (_, tuples) = self.execute_sql(sql, lexical_params)?;
+            let (_, tuples) = self.execute_sql(sql, lexical_params).await?;
             Ok(AthenaStream {
                 rows: tuples.into(),
             })
@@ -537,7 +549,7 @@ pub mod real {
             Ok(Self::new(url, wid, tok))
         }
 
-        fn execute_sql(
+        async fn execute_sql(
             &self,
             sql: &str,
             params: &[String],
@@ -557,10 +569,12 @@ pub mod real {
                 .bearer_auth(&self.token)
                 .json(&body)
                 .send()
+                .await
                 .map_err(|e| Error::Marshal(format!("databricks HTTP: {e}")))?
                 .error_for_status()
                 .map_err(|e| Error::Marshal(format!("databricks HTTP status: {e}")))?
                 .json::<Value>()
+                .await
                 .map_err(|e| Error::Marshal(format!("databricks JSON: {e}")))?;
 
             parse_databricks_response(&resp)
@@ -604,7 +618,7 @@ pub mod real {
             Self: 's;
 
         async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-            let (names, _) = self.execute_sql(probe_sql, &[])?;
+            let (names, _) = self.execute_sql(probe_sql, &[]).await?;
             Ok(names)
         }
 
@@ -613,7 +627,7 @@ pub mod real {
             sql: &str,
             lexical_params: &[String],
         ) -> Result<DatabricksStream> {
-            let (_, tuples) = self.execute_sql(sql, lexical_params)?;
+            let (_, tuples) = self.execute_sql(sql, lexical_params).await?;
             Ok(DatabricksStream {
                 rows: tuples.into(),
             })
@@ -624,72 +638,103 @@ pub mod real {
 
     /// Execute SQL against a Presto-compatible REST endpoint and collect all
     /// pages into (column_names, row_tuples).
-    pub fn presto_execute(
+    ///
+    /// `catalog` and `schema` set session-level defaults via
+    /// `X-Trino-Catalog` / `X-Trino-Schema` headers.
+    pub async fn presto_execute(
         client: &Client,
         base_url: &str,
         user: &str,
+        catalog: Option<&str>,
+        schema: Option<&str>,
         sql: &str,
     ) -> Result<(Vec<String>, Vec<RawTuple>)> {
         let statement_url = format!("{}/v1/statement", base_url);
-        let resp: Value = client
+        let mut req = client
             .post(&statement_url)
             .header("X-Presto-User", user)
             .header("X-Trino-User", user)
-            .body(sql.to_owned())
+            .body(sql.to_owned());
+        if let Some(cat) = catalog {
+            req = req
+                .header("X-Trino-Catalog", cat)
+                .header("X-Presto-Catalog", cat);
+        }
+        if let Some(sch) = schema {
+            req = req
+                .header("X-Trino-Schema", sch)
+                .header("X-Presto-Schema", sch);
+        }
+        let first: Value = req
             .send()
+            .await
             .map_err(|e| Error::Marshal(format!("presto HTTP: {e}")))?
             .error_for_status()
             .map_err(|e| Error::Marshal(format!("presto HTTP status: {e}")))?
             .json()
+            .await
             .map_err(|e| Error::Marshal(format!("presto JSON: {e}")))?;
 
-        // Column names from the first page.
-        let col_names: Vec<String> = resp
-            .get("columns")
-            .and_then(|c| c.as_array())
-            .map(|cols| {
-                cols.iter()
-                    .map(|c| {
-                        c.get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("")
-                            .to_owned()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let ncols = col_names.len();
+        // The Presto REST protocol is async: the first response is often
+        // QUEUED/PLANNING with `nextUri` but no `columns`. We follow `nextUri`
+        // pages until we have column metadata. Rows accumulate across all pages.
+        let mut col_names: Vec<String> = vec![];
         let mut tuples: Vec<RawTuple> = vec![];
 
-        // Collect rows from first page.
-        if let Some(rows) = resp.get("data").and_then(|d| d.as_array()) {
-            tuples.extend(json_rows_to_tuples(rows, ncols));
-        }
-
-        // Follow `nextUri` to collect all pages.
-        let mut next_uri = resp
-            .get("nextUri")
-            .and_then(|u| u.as_str())
-            .map(|s| s.to_owned());
-        while let Some(uri) = next_uri {
-            let page: Value = client
-                .get(&uri)
-                .header("X-Presto-User", user)
-                .header("X-Trino-User", user)
-                .send()
-                .map_err(|e| Error::Marshal(format!("presto page HTTP: {e}")))?
-                .error_for_status()
-                .map_err(|e| Error::Marshal(format!("presto page status: {e}")))?
-                .json()
-                .map_err(|e| Error::Marshal(format!("presto page JSON: {e}")))?;
-
-            if let Some(rows) = page.get("data").and_then(|d| d.as_array()) {
-                tuples.extend(json_rows_to_tuples(rows, ncols));
+        let mut page = first;
+        loop {
+            // Capture column names from the first page that provides them.
+            if col_names.is_empty() {
+                if let Some(cols) = page.get("columns").and_then(|c| c.as_array()) {
+                    col_names = cols
+                        .iter()
+                        .map(|c| {
+                            c.get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_owned()
+                        })
+                        .collect();
+                }
             }
-            next_uri = page
+
+            let ncols = col_names.len();
+            if ncols > 0 {
+                if let Some(rows) = page.get("data").and_then(|d| d.as_array()) {
+                    tuples.extend(json_rows_to_tuples(rows, ncols));
+                }
+            }
+
+            // Check for errors in the response.
+            if let Some(err) = page.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error");
+                return Err(Error::Marshal(format!("presto query error: {msg}")));
+            }
+
+            match page
                 .get("nextUri")
                 .and_then(|u| u.as_str())
-                .map(|s| s.to_owned());
+                .map(|s| s.to_owned())
+            {
+                Some(uri) => {
+                    page = client
+                        .get(&uri)
+                        .header("X-Presto-User", user)
+                        .header("X-Trino-User", user)
+                        .send()
+                        .await
+                        .map_err(|e| Error::Marshal(format!("presto page HTTP: {e}")))?
+                        .error_for_status()
+                        .map_err(|e| Error::Marshal(format!("presto page status: {e}")))?
+                        .json()
+                        .await
+                        .map_err(|e| Error::Marshal(format!("presto page JSON: {e}")))?;
+                }
+                None => break,
+            }
         }
 
         Ok((col_names, tuples))
@@ -734,7 +779,7 @@ pub mod real {
 pub mod trino_real {
     use std::collections::VecDeque;
 
-    use reqwest::blocking::Client;
+    use reqwest::Client;
 
     use crate::backend::{BranchStream, RawTuple, SqlBackend};
     use crate::error::{Error, Result};
@@ -743,6 +788,8 @@ pub mod trino_real {
     pub struct TrinoBackend {
         base_url: String,
         user: String,
+        catalog: Option<String>,
+        schema: Option<String>,
         client: Client,
     }
 
@@ -763,8 +810,21 @@ pub mod trino_real {
             Self {
                 base_url: base_url.into().trim_end_matches('/').to_owned(),
                 user: user.into(),
+                catalog: None,
+                schema: None,
                 client: Client::new(),
             }
+        }
+
+        /// Set the default catalog and schema for all queries.
+        pub fn with_catalog(
+            mut self,
+            catalog: impl Into<String>,
+            schema: impl Into<String>,
+        ) -> Self {
+            self.catalog = Some(catalog.into());
+            self.schema = Some(schema.into());
+            self
         }
 
         /// Build from `SF_TRINO_URL` env var (user defaults to `"trino"`).
@@ -775,13 +835,21 @@ pub mod trino_real {
             Ok(Self::new(url, user))
         }
 
-        fn execute_sql(
+        async fn execute_sql(
             &self,
             sql: &str,
             params: &[String],
         ) -> Result<(Vec<String>, Vec<RawTuple>)> {
             let sql_with_params = super::real::inline_params(sql, params);
-            super::real::presto_execute(&self.client, &self.base_url, &self.user, &sql_with_params)
+            super::real::presto_execute(
+                &self.client,
+                &self.base_url,
+                &self.user,
+                self.catalog.as_deref(),
+                self.schema.as_deref(),
+                &sql_with_params,
+            )
+            .await
         }
     }
 
@@ -792,7 +860,7 @@ pub mod trino_real {
             Self: 's;
 
         async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-            let (names, _) = self.execute_sql(probe_sql, &[])?;
+            let (names, _) = self.execute_sql(probe_sql, &[]).await?;
             Ok(names)
         }
 
@@ -801,7 +869,7 @@ pub mod trino_real {
             sql: &str,
             lexical_params: &[String],
         ) -> Result<TrinoStream> {
-            let (_, tuples) = self.execute_sql(sql, lexical_params)?;
+            let (_, tuples) = self.execute_sql(sql, lexical_params).await?;
             Ok(TrinoStream {
                 rows: tuples.into(),
             })
