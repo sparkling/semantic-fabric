@@ -259,7 +259,7 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
             }
         }
         Backend::Pg(client) => {
-            match tokio::time::timeout(cfg.timeout, exec_pg::ask_pg(&plan, &client)).await {
+            match tokio::time::timeout(cfg.timeout, exec_pg::ask_pg(&plan, client)).await {
                 Err(_) => {
                     return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
                 }

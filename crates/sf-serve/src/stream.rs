@@ -266,7 +266,7 @@ pub fn select_body_pg(
         let result: io::Result<()> = async {
             let mut writer = QueryResultsSerializer::from_format(fmt)
                 .serialize_solutions_to_writer(buf.clone(), varv.clone())?;
-            exec_pg::select_each_pg(&plan, &client, |row| {
+            exec_pg::select_each_pg(&plan, client, |row| {
                 let prepared = (|| -> io::Result<Vec<u8>> {
                     check_deadline(deadline)?;
                     writer.serialize(solution_pairs(&row, &varv))?;
@@ -303,7 +303,7 @@ pub fn construct_body_pg(
         let buf = SharedBuf::default();
         let result: io::Result<()> = async {
             let mut sink = TripleSink::start(fmt, buf.clone());
-            exec_pg::construct_each_pg(&plan, &client, |triples| {
+            exec_pg::construct_each_pg(&plan, client, |triples| {
                 let prepared = (|| -> io::Result<Vec<u8>> {
                     check_deadline(deadline)?;
                     for t in &triples {

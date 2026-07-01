@@ -278,7 +278,7 @@ fn sqlite_side() -> (
 /// live `exec_pg` — the exact production surface sf-serve uses).
 #[allow(clippy::type_complexity)]
 async fn pg_side(
-    client: &Client,
+    client: &std::sync::Arc<Client>,
 ) -> (
     Vec<Vec<Option<sf_core::Term>>>,
     Vec<String>,
@@ -321,7 +321,7 @@ async fn pg_side(
             &schema,
         )
         .expect("translate ASK-true (pg)"),
-        client,
+        std::sync::Arc::clone(client),
     )
     .await
     .expect("pg ask-true");
@@ -334,7 +334,7 @@ async fn pg_side(
             &schema,
         )
         .expect("translate ASK-false (pg)"),
-        client,
+        std::sync::Arc::clone(client),
     )
     .await
     .expect("pg ask-false");
@@ -400,9 +400,11 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
             .await
             .expect("create throwaway db");
 
-        let work = connect(&format!("{base} dbname={dbname}"))
-            .await
-            .expect("connect work db");
+        let work = std::sync::Arc::new(
+            connect(&format!("{base} dbname={dbname}"))
+                .await
+                .expect("connect work db"),
+        );
         let (p_rows, p_vars, p_ask_t, p_ask_f, p_features) = pg_side(&work).await;
         drop(work);
         let _ = admin

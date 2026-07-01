@@ -11,6 +11,8 @@
 //! back to `sf_sparql::Error::Unsupported` (501 skip), keeping the pre-M3
 //! conformance classification byte-identical.
 
+use std::ops::Deref;
+
 use sf_core::datatype::{self, XsdTypeCode};
 use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Client, Row as PgRow};
@@ -19,16 +21,25 @@ use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 use crate::stream::PgRowStream;
 
-/// A PostgreSQL backend over a live `&Client`. Prepare / typed-bind / server-side
-/// cursor all delegate to the client; the returned [`PgRowStream`] is `'static`
-/// (owns its portal), so it satisfies the GAT `Stream<'s>` for any `'s`.
-pub struct PgBackend<'c> {
-    client: &'c Client,
+/// A PostgreSQL backend over any handle that derefs to a live [`Client`]. Generic
+/// over the holder `C` so the same adapter serves both lanes:
+///
+///   * `PgBackend<&Client>` — the borrowing collecting path (`select_pg` / `ask_pg`
+///     / …), driven to completion in place.
+///   * `PgBackend<Arc<Client>>` — the **`'static`** streaming serve lane
+///     (`select_each_pg` / `construct_each_pg`), whose future is `tokio::spawn`ed;
+///     a `'static` backend is what lets the generic core's `Send` bound
+///     (`for<'s> B::Stream<'s>: Send`, ADR-0024 §1.103) hold across the spawn.
+///
+/// The returned [`PgRowStream`] is `'static` (owns its portal), so it satisfies the
+/// GAT `Stream<'s>` for any `'s`.
+pub struct PgBackend<C> {
+    client: C,
 }
 
-impl<'c> PgBackend<'c> {
-    /// Wrap a live client. The client outlives the backend.
-    pub fn new(client: &'c Client) -> Self {
+impl<C: Deref<Target = Client>> PgBackend<C> {
+    /// Wrap a live client handle (`&Client` or `Arc<Client>`).
+    pub fn new(client: C) -> Self {
         Self { client }
     }
 }
@@ -134,7 +145,7 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
     Ok(s)
 }
 
-impl SqlBackend for PgBackend<'_> {
+impl<C: Deref<Target = Client>> SqlBackend for PgBackend<C> {
     // PgRowStream owns its portal (design §0 fact 1: `'static`), so it satisfies
     // any `'s` trivially — no driver lifetime crosses the seam.
     type Stream<'s>
@@ -147,11 +158,7 @@ impl SqlBackend for PgBackend<'_> {
         Ok(stmt.columns().iter().map(|c| c.name().to_owned()).collect())
     }
 
-    async fn open_branch(
-        &mut self,
-        sql: &str,
-        lexical_params: &[String],
-    ) -> Result<PgRowStream> {
+    async fn open_branch(&mut self, sql: &str, lexical_params: &[String]) -> Result<PgRowStream> {
         // Each emitted `$n` value is a lexical string, but a FILTER constant may
         // bind against a typed column (INT4/FLOAT8/BOOL/…); `LexicalParam` parses
         // it to the placeholder's inferred PG type at bind time (see its docs).
@@ -159,7 +166,7 @@ impl SqlBackend for PgBackend<'_> {
         let params: Vec<&(dyn ToSql + Sync)> =
             lex.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
         // query_raw (server-side portal) — never the buffer-all query() (ADR-0010 §C).
-        PgRowStream::open(self.client, sql, &params).await
+        PgRowStream::open(&self.client, sql, &params).await
     }
 }
 

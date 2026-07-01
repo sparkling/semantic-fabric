@@ -288,9 +288,10 @@ where
 /// inherits rust_group / DISTINCT / ORDER / OFFSET / LIMIT.
 pub async fn select_each_async<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
 where
-    B: SqlBackend,
-    F: FnMut(Vec<Option<Term>>) -> Fut,
-    Fut: Future<Output = Result<()>>,
+    B: SqlBackend + Send,
+    for<'s> B::Stream<'s>: Send,
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
 {
     let vars = match &plan.form {
         PlanForm::Select { vars } => vars.clone(),
@@ -312,9 +313,10 @@ where
 /// [`construct`], written once over the shared core.
 pub async fn construct_each_async<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
 where
-    B: SqlBackend,
-    F: FnMut(Vec<Triple>) -> Fut,
-    Fut: Future<Output = Result<()>>,
+    B: SqlBackend + Send,
+    for<'s> B::Stream<'s>: Send,
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
 {
     let template = match &plan.form {
         PlanForm::Construct { template } => template.clone(),
