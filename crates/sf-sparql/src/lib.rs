@@ -463,24 +463,29 @@ pub fn translate_tree(
     // Reuse the PROVEN flat cascade (ADR-0007) on the tree's lowered branches — the same
     // call `translate_inner_flat` makes (ADR-0023 M4 wave 1). `project` is the SELECT scope
     // (CONSTRUCT/ASK project every binding ⇒ `None`); `distinct` is the requested DISTINCT.
-    // A multi-branch aggregation (`rust_group`) is skipped: its pre-group union arms carry
-    // the aggregate-argument columns that `rust_group_execute` reads BY NAME, so the
-    // projection-shrinking pass (which narrows to the SELECT vars, excluding those args)
-    // must not touch them — cross-union aggregate optimization is a LATER M4 wave.
-    if plan.rust_group.is_none() {
-        let project_vars: Option<Vec<String>> = match &plan.form {
+    // A multi-branch aggregation (`rust_group`) still runs the cascade — its pre-group union
+    // arms carry the aggregate-argument columns that `rust_group_execute` reads BY NAME, so
+    // `project` is forced to `None` rather than the SELECT vars: the only pass that consults
+    // `ctx.project` to *drop* bindings (pass 7, projection shrinking) becomes a no-op with
+    // `None` and so can never strip an aggregate-arg column; every other pass (incl. self-join
+    // elimination) is projection-agnostic and safe to run unconditionally. Cross-union
+    // aggregate-specific optimization (agg-through-union rewrites) is a LATER M4 wave.
+    let project_vars: Option<Vec<String>> = if plan.rust_group.is_some() {
+        None
+    } else {
+        match &plan.form {
             PlanForm::Select { vars } => Some(vars.clone()),
             _ => None,
-        };
-        let ctx = cascade::CascadeCtx {
-            distinct: plan.distinct,
-            project: project_vars.as_deref(),
-        };
-        plan.branches = cascade::run(plan.branches, schema, &ctx);
-        // The single-branch DISTINCT decision is recorded on the branch by pass (6).
-        if plan.branches.len() == 1 {
-            plan.distinct = plan.branches[0].distinct;
         }
+    };
+    let ctx = cascade::CascadeCtx {
+        distinct: plan.distinct,
+        project: project_vars.as_deref(),
+    };
+    plan.branches = cascade::run(plan.branches, schema, &ctx);
+    // The single-branch DISTINCT decision is recorded on the branch by pass (6).
+    if plan.branches.len() == 1 {
+        plan.distinct = plan.branches[0].distinct;
     }
     Ok(plan)
 }

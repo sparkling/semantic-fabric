@@ -554,6 +554,39 @@ fn agg_over_union_sum_avg() {
     ));
 }
 
+/// Regression guard (optimizer-residue wave, post-M8): `?s ex:grp ?g` and each UNION
+/// arm's `?s ex:p1`/`ex:p2 ?v` all resolve against the SAME table `m` (single-column PK
+/// `id`), joined on the shared subject `?s` — a self-join on the primary key the cascade
+/// must collapse to one scan per branch, exactly the shape the live GTFS q9 shootout
+/// exposed (`routes`/`agency` self-joins surviving into emitted SQL, HANDOVER-2026-07-01).
+/// Before this fix `translate_tree` skipped `cascade::run` wholesale for any `rust_group`
+/// plan (to protect the aggregate-arg bindings from the projection-shrinking pass), so
+/// self-join elimination never ran on a `rust_group` plan's branches either; now `project`
+/// is forced to `None` instead, so self-join elimination still fires.
+#[test]
+fn agg_over_union_self_join_eliminated_on_shared_table() {
+    let conn = sqlite::load(AGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).expect("R2RML parses");
+    let q = parse(&format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+    let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
+    assert!(tp.rust_group.is_some(), "must lower to a rust_group");
+    for b in &tp.branches {
+        let m_scans = b
+            .core
+            .iter()
+            .filter(|s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "m"))
+            .count();
+        assert_eq!(
+            m_scans, 1,
+            "self-join on `m`'s PK must collapse to a single scan"
+        );
+    }
+}
+
 // --- OVERLAP: two triples-maps over the SAME table both emit ex:val (identical
 // triples), and one map carries the SAME predicate twice. The virtual graph is NOT
 // set-faithful (the duplicate triples collapse in a real RDF graph), so flat-vs-tree
