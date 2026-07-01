@@ -32,7 +32,7 @@ use tokio::sync::mpsc::Sender;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::ReceiverStream;
 
-use sf_sparql::{exec, exec_pg, Plan};
+use sf_sparql::{exec, exec_mysql, exec_pg, Plan};
 
 /// Bytes per streamed body chunk (a flush boundary, not a result-size cap).
 const CHUNK: usize = 16 * 1024;
@@ -304,6 +304,98 @@ pub fn construct_body_pg(
         let result: io::Result<()> = async {
             let mut sink = TripleSink::start(fmt, buf.clone());
             exec_pg::construct_each_pg(&plan, client, |triples| {
+                let prepared = (|| -> io::Result<Vec<u8>> {
+                    check_deadline(deadline)?;
+                    for t in &triples {
+                        sink.write(t)?;
+                    }
+                    Ok(buf.take_if_full())
+                })();
+                let tx = tx.clone();
+                async move { send_prepared(&tx, prepared).await }
+            })
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))?;
+            sink.finish()?;
+            send_chunk(&tx, buf.take_all()).await
+        }
+        .await;
+        if let Err(e) = result {
+            let _ = err_tx.send(Err(e)).await;
+        }
+    });
+    Body::from_stream(ReceiverStream::new(rx))
+}
+
+/// Stream a MySQL SELECT end to end: draw a DEDICATED pooled connection inside the
+/// `spawn`ed task, then drive [`exec_mysql::select_each_mysql`] over it — serialising
+/// each row into a small [`SharedBuf`] and flushing a chunk once it fills.
+/// `send().await` backpressures the packet-streamed `exec_iter` cursor. The owned
+/// `Conn` is held for the stream's full lifetime and dropped (returned-if-clean /
+/// disposed-if-dirty) on early exit — deadline / client-gone / LIMIT (ADR-0024 §4.2).
+pub fn select_body_mysql(
+    pool: mysql_async::Pool,
+    plan: Plan,
+    fmt: QueryResultsFormat,
+    vars: Vec<String>,
+    deadline: Option<Instant>,
+) -> Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(CHANNEL_CAP);
+    let err_tx = tx.clone();
+    tokio::spawn(async move {
+        let varv = variables(&vars);
+        let buf = SharedBuf::default();
+        let result: io::Result<()> = async {
+            // Dedicated pooled connection for this stream's full lifetime (§4.2).
+            let conn = pool
+                .get_conn()
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            let mut writer = QueryResultsSerializer::from_format(fmt)
+                .serialize_solutions_to_writer(buf.clone(), varv.clone())?;
+            exec_mysql::select_each_mysql(&plan, conn, |row| {
+                let prepared = (|| -> io::Result<Vec<u8>> {
+                    check_deadline(deadline)?;
+                    writer.serialize(solution_pairs(&row, &varv))?;
+                    Ok(buf.take_if_full())
+                })();
+                let tx = tx.clone();
+                async move { send_prepared(&tx, prepared).await }
+            })
+            .await
+            .map_err(|e| io::Error::other(e.to_string()))?;
+            writer.finish()?;
+            send_chunk(&tx, buf.take_all()).await
+        }
+        .await;
+        if let Err(e) = result {
+            let _ = err_tx.send(Err(e)).await;
+        }
+    });
+    Body::from_stream(ReceiverStream::new(rx))
+}
+
+/// Stream a MySQL CONSTRUCT end to end (the async mirror of [`construct_body_pg`]):
+/// draw a DEDICATED pooled connection, drive [`exec_mysql::construct_each_mysql`],
+/// serialising each solution's triples into a [`SharedBuf`] and flushing chunks as
+/// they fill. The owned `Conn` is dropped/disposed on early exit (ADR-0024 §4.2).
+pub fn construct_body_mysql(
+    pool: mysql_async::Pool,
+    plan: Plan,
+    fmt: RdfFormat,
+    deadline: Option<Instant>,
+) -> Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(CHANNEL_CAP);
+    let err_tx = tx.clone();
+    tokio::spawn(async move {
+        let buf = SharedBuf::default();
+        let result: io::Result<()> = async {
+            let conn = pool
+                .get_conn()
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            let mut sink = TripleSink::start(fmt, buf.clone());
+            exec_mysql::construct_each_mysql(&plan, conn, |triples| {
                 let prepared = (|| -> io::Result<Vec<u8>> {
                     check_deadline(deadline)?;
                     for t in &triples {

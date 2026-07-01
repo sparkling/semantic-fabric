@@ -83,9 +83,44 @@ async fn open_backend(spec: &str) -> Result<(Backend, Vec<sf_sql::TableSchema>),
         });
         let schema = introspect_pg_all(&client).await?;
         Ok((Backend::Pg(Arc::new(client)), schema))
+    } else if spec.starts_with("mysql://") {
+        // `Pool::from_url` needs the whole `mysql://…` URL — never strip the scheme.
+        let pool =
+            mysql_async::Pool::from_url(spec).map_err(|e| format!("connect MySQL: {e}"))?;
+        let mut conn = pool
+            .get_conn()
+            .await
+            .map_err(|e| format!("MySQL get_conn: {e}"))?;
+        let schema = introspect_mysql_all(&mut conn).await?;
+        drop(conn);
+        Ok((Backend::Mysql(pool), schema))
     } else {
         Err(format!(
-            "unrecognised --source {spec:?}: expected sqlite:<path> or pg:<conninfo>"
+            "unrecognised --source {spec:?}: expected sqlite:<path>, pg:<conninfo>, or mysql://<url>"
         ))
     }
+}
+
+/// Introspect every MySQL base table in the current database (name order) — the
+/// MySQL analogue of [`introspect_pg_all`].
+async fn introspect_mysql_all(
+    conn: &mut mysql_async::Conn,
+) -> Result<Vec<sf_sql::TableSchema>, String> {
+    use mysql_async::prelude::Queryable;
+    let names: Vec<String> = conn
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY table_name",
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut schemas = Vec::with_capacity(names.len());
+    for name in names {
+        schemas.push(
+            sf_sql::introspect::introspect_mysql(conn, &name)
+                .await
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(schemas)
 }

@@ -32,7 +32,9 @@ use axum::routing::get;
 use axum::Router;
 
 use sf_core::ir::TriplesMap;
-use sf_sparql::{exec, exec_pg, Epoch, Error as SparqlError, Plan, PlanCache, PlanForm, Tbox};
+use sf_sparql::{
+    exec, exec_mysql, exec_pg, Epoch, Error as SparqlError, Plan, PlanCache, PlanForm, Tbox,
+};
 use sf_sql::introspect::{introspect_postgres, introspect_sqlite};
 use sf_sql::{Dialect, TableSchema};
 use sparesults::QueryResultsFormat;
@@ -57,6 +59,10 @@ const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
 pub enum Backend {
     Sqlite(Arc<Mutex<rusqlite::Connection>>),
     Pg(Arc<tokio_postgres::Client>),
+    /// MySQL: a cloneable `mysql_async::Pool`; each streaming request draws a
+    /// DEDICATED connection for the stream's lifetime, discarded/reset on early drop
+    /// (ADR-0024 §4.2 — mirrors PG cancel-on-drop).
+    Mysql(mysql_async::Pool),
 }
 
 impl Backend {
@@ -70,6 +76,7 @@ impl Backend {
         match self {
             Backend::Sqlite(_) => Dialect::Sqlite,
             Backend::Pg(_) => Dialect::Postgres,
+            Backend::Mysql(_) => Dialect::MySql,
         }
     }
 }
@@ -236,6 +243,7 @@ async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>)
     let body = match cfg.backend.clone() {
         Backend::Sqlite(conn) => stream::select_body_sqlite(conn, plan, fmt, vars, deadline),
         Backend::Pg(client) => stream::select_body_pg(client, plan, fmt, vars, deadline),
+        Backend::Mysql(pool) => stream::select_body_mysql(pool, plan, fmt, vars, deadline),
     };
     ok_stream(fmt.media_type(), body)
 }
@@ -266,6 +274,32 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 Ok(r) => r,
             }
         }
+        Backend::Mysql(pool) => {
+            // ASK collects (a single boolean). Unlike PG (whose `PgRowStream` is
+            // `'static`), MySQL's branch cursor BORROWS the connection, so awaiting
+            // `ask_mysql` inline in this handler future leaves the borrowing stream
+            // held across an await — an HRTB `Send` obligation axum's handler future
+            // cannot discharge. `tokio::spawn` checks `Send` on the concrete
+            // owned-`Conn` task future directly (provable), and gives the dedicated
+            // conn a task to live in, dropped/disposed after the run (§4.2). Mirrors
+            // the SQLite `spawn_blocking` arm's `Ok(Err)/Ok(Ok)` join handling.
+            let run = tokio::spawn(async move {
+                let conn = pool
+                    .get_conn()
+                    .await
+                    .map_err(|e| SparqlError::Sql(e.to_string()))?;
+                exec_mysql::ask_each_mysql(&plan, conn).await
+            });
+            match tokio::time::timeout(cfg.timeout, run).await {
+                Err(_) => {
+                    return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
+                }
+                Ok(Err(e)) => {
+                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, format!("exec task: {e}"))
+                }
+                Ok(Ok(r)) => r,
+            }
+        }
     };
     match value {
         Ok(b) => match stream::serialize_boolean(b, fmt) {
@@ -284,6 +318,7 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
     let body = match cfg.backend.clone() {
         Backend::Sqlite(conn) => stream::construct_body_sqlite(conn, plan, fmt, deadline),
         Backend::Pg(client) => stream::construct_body_pg(client, plan, fmt, deadline),
+        Backend::Mysql(pool) => stream::construct_body_mysql(pool, plan, fmt, deadline),
     };
     ok_stream(fmt.media_type(), body)
 }

@@ -101,3 +101,18 @@ where
     let mut b = MysqlBackend::new(conn);
     crate::exec_core::construct_each_async(plan, &mut b, sink).await
 }
+
+/// Execute an ASK over a **dedicated** owned MySQL connection (serve lane) — true
+/// iff at least one solution exists.
+///
+/// Takes an owned `Conn` (not `&mut Conn` like [`ask_mysql`]) because this future is
+/// `tokio::spawn`ed by the serve lane. MySQL's branch cursor BORROWS the connection
+/// (`MysqlBranch<'s>` over `&'s mut Conn`), so an `&mut Conn` holder
+/// ([`MysqlBackend<&mut Conn>`]) leaves the borrowing stream's higher-ranked `Send`
+/// obligation (`for<'s> Stream<'s>: Send`) undischargeable once the future is
+/// spawned — the same reason [`select_each_mysql`] takes an owned `Conn`. An owned
+/// backend ([`MysqlBackend<Conn>`]) makes the ASK future `Send` (design §4.2).
+pub async fn ask_each_mysql(plan: &Plan, conn: Conn) -> Result<bool> {
+    let mut b = MysqlBackend::new(conn);
+    crate::exec_core::ask(plan, &mut b).await
+}
