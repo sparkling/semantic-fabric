@@ -52,9 +52,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
 
 /// A live relational backend the endpoint queries (ADR-0006). SQLite is sync
-/// (`rusqlite::Connection`, not `Send` across awaits — held behind a `Mutex` and
-/// driven inside `spawn_blocking`); PostgreSQL is async (a shared `tokio_postgres`
-/// client handle).
+/// (`rusqlite::Connection`, not `Send` across awaits — held behind a `Mutex`); its
+/// blocking now lives entirely in the adapter's cap-1 `spawn_blocking` bridge
+/// (ADR-0024 §4.1 [`SqliteOwnedBackend`]), so the serve lane drives all three
+/// backends through the same async streamer. PostgreSQL is async (a shared
+/// `tokio_postgres` client handle).
 #[derive(Clone)]
 pub enum Backend {
     Sqlite(Arc<Mutex<rusqlite::Connection>>),
@@ -240,10 +242,38 @@ async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>)
     };
     let vars = vars.clone();
     let deadline = Some(Instant::now() + cfg.timeout);
+    // Uniform lane (ADR-0024 M5): every backend drives the generic streamer via a
+    // thin concrete `exec_*::select_each_*` closure. SQLite's blocking now lives in
+    // the adapter's cap-1 bridge (no sf-serve spawn_blocking special-case).
     let body = match cfg.backend.clone() {
-        Backend::Sqlite(conn) => stream::select_body_sqlite(conn, plan, fmt, vars, deadline),
-        Backend::Pg(client) => stream::select_body_pg(client, plan, fmt, vars, deadline),
-        Backend::Mysql(pool) => stream::select_body_mysql(pool, plan, fmt, vars, deadline),
+        Backend::Sqlite(conn) => stream::select_body_streaming(
+            move |sink| {
+                Box::pin(async move { exec::select_each_sqlite_owned(&plan, conn, sink).await })
+            },
+            fmt,
+            vars,
+            deadline,
+        ),
+        Backend::Pg(client) => stream::select_body_streaming(
+            move |sink| Box::pin(async move { exec_pg::select_each_pg(&plan, client, sink).await }),
+            fmt,
+            vars,
+            deadline,
+        ),
+        Backend::Mysql(pool) => stream::select_body_streaming(
+            move |sink| {
+                Box::pin(async move {
+                    let conn = pool
+                        .get_conn()
+                        .await
+                        .map_err(|e| SparqlError::Sql(e.to_string()))?;
+                    exec_mysql::select_each_mysql(&plan, conn, sink).await
+                })
+            },
+            fmt,
+            vars,
+            deadline,
+        ),
     };
     ok_stream(fmt.media_type(), body)
 }
@@ -252,10 +282,11 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
     let fmt = negotiate_results(accept);
     let value = match cfg.backend.clone() {
         Backend::Sqlite(conn) => {
-            let run = tokio::task::spawn_blocking(move || {
-                let conn = conn.lock().unwrap_or_else(|p| p.into_inner());
-                exec::ask(&plan, &conn)
-            });
+            // Uniform lane (ADR-0024 M5): SQLite ASK spawns the owned cap-1-bridge
+            // backend onto the runtime like the MySQL arm — no `spawn_blocking`
+            // special-case; the adapter owns SQLite's blocking. `tokio::spawn` checks
+            // `Send` on the concrete owned-backend future directly (provable).
+            let run = tokio::spawn(async move { exec::ask_sqlite_owned(&plan, conn).await });
             match tokio::time::timeout(cfg.timeout, run).await {
                 Err(_) => {
                     return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
@@ -282,7 +313,7 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
             // cannot discharge. `tokio::spawn` checks `Send` on the concrete
             // owned-`Conn` task future directly (provable), and gives the dedicated
             // conn a task to live in, dropped/disposed after the run (§4.2). Mirrors
-            // the SQLite `spawn_blocking` arm's `Ok(Err)/Ok(Ok)` join handling.
+            // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` join handling.
             let run = tokio::spawn(async move {
                 let conn = pool
                     .get_conn()
@@ -316,9 +347,33 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
     let fmt = negotiate_rdf(accept);
     let deadline = Some(Instant::now() + cfg.timeout);
     let body = match cfg.backend.clone() {
-        Backend::Sqlite(conn) => stream::construct_body_sqlite(conn, plan, fmt, deadline),
-        Backend::Pg(client) => stream::construct_body_pg(client, plan, fmt, deadline),
-        Backend::Mysql(pool) => stream::construct_body_mysql(pool, plan, fmt, deadline),
+        Backend::Sqlite(conn) => stream::construct_body_streaming(
+            move |sink| {
+                Box::pin(async move { exec::construct_each_sqlite_owned(&plan, conn, sink).await })
+            },
+            fmt,
+            deadline,
+        ),
+        Backend::Pg(client) => stream::construct_body_streaming(
+            move |sink| {
+                Box::pin(async move { exec_pg::construct_each_pg(&plan, client, sink).await })
+            },
+            fmt,
+            deadline,
+        ),
+        Backend::Mysql(pool) => stream::construct_body_streaming(
+            move |sink| {
+                Box::pin(async move {
+                    let conn = pool
+                        .get_conn()
+                        .await
+                        .map_err(|e| SparqlError::Sql(e.to_string()))?;
+                    exec_mysql::construct_each_mysql(&plan, conn, sink).await
+                })
+            },
+            fmt,
+            deadline,
+        ),
     };
     ok_stream(fmt.media_type(), body)
 }

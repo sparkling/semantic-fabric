@@ -11,6 +11,9 @@
 //! dedicated rayon pool ([`crate::pool`]); the sync SQLite path here generates
 //! inline (no async runtime to protect — ADR-0006).
 
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+
 use rusqlite::Connection;
 use sf_core::{Term, Triple};
 
@@ -95,6 +98,53 @@ pub fn select(plan: &Plan, conn: &Connection) -> Result<Solutions> {
 pub fn ask(plan: &Plan, conn: &Connection) -> Result<bool> {
     let mut backend = sf_sql::backend::sqlite::SqliteBackend::new(conn);
     crate::exec_core::block_on(crate::exec_core::ask(plan, &mut backend))
+}
+
+// --- SQLite serve-lane wrappers (ADR-0024 M5, §4.1) ---------------------------
+// The async, `Send`-spawnable SQLite mirrors of the PG/MySQL serve wrappers
+// (`exec_pg::select_each_pg` / `exec_mysql::select_each_mysql`): each drives the
+// generic core over the OWNED cap-1-bridge [`SqliteOwnedBackend`], so the
+// monomorphized future is concretely `Send` and `tokio::spawn`-able by the serve
+// lane (the abstract-`B` generic future is NOT provably `Send` — AFIT). Takes an
+// owned `Arc<Mutex<Connection>>` (the serve backend's shape); the sync in-process
+// entry points above keep the borrowing `SqliteBackend` + `block_on`.
+
+/// Stream a SELECT's solution rows over an owned SQLite handle into an async `sink`
+/// (serve lane): the cap-1 `spawn_blocking` bridge streams one row in flight and
+/// `sink(..).await` backpressures it (ADR-0006 / ADR-0010 §C).
+pub async fn select_each_sqlite_owned<F, Fut>(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
+    crate::exec_core::select_each_async(plan, &mut b, sink).await
+}
+
+/// Stream a CONSTRUCT's per-solution triples over an owned SQLite handle into an
+/// async `sink` (serve lane), bounded by the template size — never the whole graph.
+pub async fn construct_each_sqlite_owned<F, Fut>(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
+    crate::exec_core::construct_each_async(plan, &mut b, sink).await
+}
+
+/// Execute an ASK over an owned SQLite handle (serve lane) — true iff at least one
+/// solution exists. Spawnable: the concrete owned-backend future is `Send`.
+pub async fn ask_sqlite_owned(plan: &Plan, conn: Arc<Mutex<Connection>>) -> Result<bool> {
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
+    crate::exec_core::ask(plan, &mut b).await
 }
 
 /// Serialise triples as N-Triples 1.2 (ADR-0019 G1: triple-term graphs serialise
