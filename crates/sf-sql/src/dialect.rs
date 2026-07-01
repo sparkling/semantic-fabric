@@ -17,33 +17,86 @@
 //!   normalised by the same library that parses `rr:sqlQuery`.
 
 use sqlparser::dialect::{
-    Dialect as SqlParserDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect,
+    BigQueryDialect, DatabricksDialect, Dialect as SqlParserDialect, DuckDbDialect, GenericDialect,
+    MsSqlDialect, MySqlDialect, OracleDialect, PostgreSqlDialect, RedshiftSqlDialect,
+    SQLiteDialect, SnowflakeDialect, SparkSqlDialect,
 };
 
 use crate::error::{Error, Result};
 
-/// A SQL dialect target for emission, parsing, and introspection (ADR-0006).
+/// A SQL dialect target for emission, parsing, and introspection (ADR-0006 / ADR-0024 M8).
 ///
-/// PostgreSQL is the primary production source and SQLite the embedded / W3C-suite
-/// CI source (both first-class). **MySQL is a stub**: emission works, but its
-/// `DbTypeMap`, introspection, and driver wiring follow later (ADR-0015 — "MySQL
-/// follows"). No columnar/OLAP dialect appears here (ADR-0006 *Confirmation*).
+/// The three original dialects (Postgres, Sqlite, MySql) are production-wired. Every
+/// other variant has an associated [`Dialect::placeholder`], [`Dialect::quote_char`],
+/// and [`Dialect::parser_dialect`] implementation, so SQL can be emitted for all of
+/// them today. Live driver wiring is tiered:
+///
+/// * **Live-wired**: Postgres, Sqlite, MySql, DuckDb (embedded, requires `duckdb-backend` feature)
+/// * **Wire-compatible**: Redshift (thin alias over PG wire)
+/// * **Scaffolded**: all others (compile + return `Error::Unsupported` at runtime)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dialect {
+    // --- original three (production-wired) ------------------------------------
     /// PostgreSQL — primary production source; `$n` placeholders, `"`-quoted idents.
     Postgres,
     /// SQLite — embedded / CI source; `?` placeholders, `"`-quoted idents.
     Sqlite,
-    /// MySQL — **stub** (emission only); `?` placeholders, backtick-quoted idents.
+    /// MySQL — `?` placeholders, backtick-quoted idents.
     MySql,
+
+    // --- PG-wire-compatible ---------------------------------------------------
+    /// AWS Redshift — PG wire protocol; `$n` placeholders, `"`-quoted idents.
+    Redshift,
+
+    // --- native-driver dialects (ADR-0024 M8) ---------------------------------
+    /// DuckDB — embedded OLAP; `$n` placeholders, `"`-quoted idents.
+    DuckDb,
+    /// Microsoft SQL Server — TDS protocol; `@Pn` placeholders, `"`-quoted idents.
+    SqlServer,
+    /// Oracle Database — OCI/JDBC; `:n` placeholders, `"`-quoted idents.
+    Oracle,
+    /// SAP HANA — JDBC/ODBC; `?` placeholders, `"`-quoted idents (PG-ish dialect).
+    SapHana,
+    /// MonetDB — MAPI; `?` placeholders, `"`-quoted idents (PG-ish dialect).
+    MonetDb,
+
+    // --- REST / HTTP (scaffolded) --------------------------------------------
+    /// Snowflake — REST; `?` placeholders, `"`-quoted idents.
+    Snowflake,
+    /// Google BigQuery — REST; `?` placeholders, backtick-quoted idents.
+    BigQuery,
+    /// AWS Athena — Presto/Trino-based; `?` placeholders, `"`-quoted idents.
+    Athena,
+    /// Databricks — Spark SQL; `?` placeholders, backtick-quoted idents.
+    Databricks,
+    /// Trino — distributed query; `?` placeholders, `"`-quoted idents.
+    Trino,
+    /// PrestoDB — distributed query; `?` placeholders, `"`-quoted idents.
+    PrestoDB,
+
+    // --- ODBC / generic (scaffolded) -----------------------------------------
+    /// IBM DB2 — ODBC/JDBC; `?` placeholders, `"`-quoted idents.
+    Db2,
+    /// H2 (embedded Java) — JDBC; `?` placeholders, `"`-quoted idents.
+    H2,
+    /// Apache Spark SQL — `?` placeholders, backtick-quoted idents.
+    Spark,
+    /// Dremio — SQL over REST; `?` placeholders, `"`-quoted idents.
+    Dremio,
+    /// Denodo — virtual DB; `?` placeholders, `"`-quoted idents.
+    Denodo,
+    /// JBoss Teiid — virtual DB; `?` placeholders, `"`-quoted idents.
+    Teiid,
 }
 
 impl Dialect {
-    /// The identifier quote character: `"` for PostgreSQL/SQLite, `` ` `` for MySQL.
+    /// The identifier quote character.
     pub fn quote_char(self) -> char {
         match self {
-            Dialect::Postgres | Dialect::Sqlite => '"',
-            Dialect::MySql => '`',
+            // backtick group
+            Dialect::MySql | Dialect::BigQuery | Dialect::Databricks | Dialect::Spark => '`',
+            // double-quote for everything else
+            _ => '"',
         }
     }
 
@@ -55,10 +108,8 @@ impl Dialect {
     }
 
     /// Prepare-only metadata probe for a source's result-column names. `LIMIT 0` is
-    /// uniform across SQLite/PG/MySQL: column metadata is available at prepare time
-    /// regardless of LIMIT, and the statement never executes, so `LIMIT 0` vs none is
-    /// immaterial to SQLite/PG and required by the existing MySQL path (ADR-0024
-    /// design §1.1 — the single catalog SQL-gen home, resolves refutation C1).
+    /// uniform across all supported dialects: column metadata is available at prepare
+    /// time regardless of LIMIT, and the statement never executes.
     pub fn probe_sql(&self, source: &sf_core::ir::LogicalSource) -> String {
         use sf_core::ir::LogicalSource;
         match source {
@@ -67,15 +118,22 @@ impl Dialect {
         }
     }
 
-    /// The bound-parameter placeholder for the 1-based `index`-th parameter:
-    /// `$index` for PostgreSQL (numbered), `?` for SQLite/MySQL (positional).
+    /// The bound-parameter placeholder for the 1-based `index`-th parameter.
     ///
-    /// The placeholder is the *only* way a value enters generated SQL (ADR-0010
-    /// R1); the value itself is supplied at execution time, never inlined.
+    /// | Style   | Dialects                                    |
+    /// |---------|---------------------------------------------|
+    /// | `$n`    | Postgres, Redshift, DuckDb                  |
+    /// | `@Pn`   | SqlServer                                   |
+    /// | `:n`    | Oracle                                      |
+    /// | `?`     | everything else (positional)                |
+    ///
+    /// The placeholder is the *only* way a value enters generated SQL (ADR-0010 R1).
     pub fn placeholder(self, index: usize) -> String {
         match self {
-            Dialect::Postgres => format!("${index}"),
-            Dialect::Sqlite | Dialect::MySql => "?".to_owned(),
+            Dialect::Postgres | Dialect::Redshift | Dialect::DuckDb => format!("${index}"),
+            Dialect::SqlServer => format!("@P{index}"),
+            Dialect::Oracle => format!(":{index}"),
+            _ => "?".to_owned(),
         }
     }
 
@@ -83,24 +141,38 @@ impl Dialect {
     /// and to validate/normalise emitted SQL ([`Dialect::emit_via_ast`]).
     pub fn parser_dialect(self) -> Box<dyn SqlParserDialect> {
         match self {
-            Dialect::Postgres => Box::new(PostgreSqlDialect {}),
+            Dialect::Postgres | Dialect::SapHana | Dialect::MonetDb => {
+                Box::new(PostgreSqlDialect {})
+            }
             Dialect::Sqlite => Box::new(SQLiteDialect {}),
             Dialect::MySql => Box::new(MySqlDialect {}),
+            Dialect::Redshift => Box::new(RedshiftSqlDialect {}),
+            Dialect::DuckDb => Box::new(DuckDbDialect {}),
+            Dialect::SqlServer => Box::new(MsSqlDialect {}),
+            Dialect::Oracle => Box::new(OracleDialect {}),
+            Dialect::Snowflake => Box::new(SnowflakeDialect {}),
+            Dialect::BigQuery => Box::new(BigQueryDialect {}),
+            Dialect::Databricks => Box::new(DatabricksDialect {}),
+            Dialect::Spark => Box::new(SparkSqlDialect {}),
+            Dialect::Athena
+            | Dialect::Trino
+            | Dialect::PrestoDB
+            | Dialect::Dremio
+            | Dialect::Db2
+            | Dialect::H2
+            | Dialect::Denodo
+            | Dialect::Teiid => Box::new(GenericDialect {}),
         }
     }
 
-    /// Parse SQL under this dialect into a `sqlparser` AST (e.g. an `rr:sqlQuery`
-    /// R2RML view; ADR-0015). `sqlparser` is *syntax only* — it contributes
-    /// nothing to type semantics (those live in `sf-core`, ADR-0015).
+    /// Parse SQL under this dialect into a `sqlparser` AST.
     pub fn parse(self, sql: &str) -> Result<Vec<sqlparser::ast::Statement>> {
         sqlparser::parser::Parser::parse_sql(&*self.parser_dialect(), sql)
             .map_err(|e| Error::Emit(e.to_string()))
     }
 
     /// Emit `skeleton` as canonical SQL by round-tripping it through the
-    /// `sqlparser` AST: parse with this dialect, then re-render. The returned
-    /// string is the `Display` of a parsed AST (ADR-0010 §A), so it cannot be
-    /// syntactically malformed.
+    /// `sqlparser` AST (ADR-0010 §A).
     pub fn emit_via_ast(self, skeleton: &str) -> Result<String> {
         let statements = self.parse(skeleton)?;
         Ok(statements
@@ -110,17 +182,7 @@ impl Dialect {
             .join("; "))
     }
 
-    /// Emit a parameterised semi-join **reducer probe** — the `IN`-list reducer
-    /// form chosen by the cost planner (`crate::cost::ReducerForm::InList`):
-    ///
-    /// ```sql
-    /// SELECT <project…> FROM <table> WHERE <key> IN (<placeholder…>)
-    /// ```
-    ///
-    /// The shipped key values are bound parameters (`n_keys` placeholders), never
-    /// inlined (ADR-0010 R1); identifiers are quoted via [`Dialect::quote_ident`].
-    /// The temp-table and Bloom reducer forms emit driver-specific DDL/probes and
-    /// are deferred (ADR-0006 *Cross-source semi-join cost*).
+    /// Emit a parameterised semi-join **reducer probe** (ADR-0006 / ADR-0010 R1).
     pub fn in_filter_sql(
         self,
         table: &str,
@@ -163,10 +225,12 @@ mod tests {
         assert_eq!(Dialect::Postgres.quote_ident("emp"), "\"emp\"");
         assert_eq!(Dialect::Sqlite.quote_ident("emp"), "\"emp\"");
         assert_eq!(Dialect::MySql.quote_ident("emp"), "`emp`");
+        assert_eq!(Dialect::DuckDb.quote_ident("emp"), "\"emp\"");
+        assert_eq!(Dialect::BigQuery.quote_ident("emp"), "`emp`");
+        assert_eq!(Dialect::SqlServer.quote_ident("emp"), "\"emp\"");
     }
 
-    /// An embedded quote is escaped (doubled) by the `sqlparser` `Ident` node —
-    /// identifier injection is not expressible (ADR-0010 R2 hygiene).
+    /// An embedded quote is escaped (doubled) by the `sqlparser` `Ident` node.
     #[test]
     fn quoting_escapes_embedded_quote() {
         assert_eq!(Dialect::Postgres.quote_ident("a\"b"), "\"a\"\"b\"");
@@ -174,11 +238,16 @@ mod tests {
     }
 
     #[test]
-    fn placeholders_are_numbered_for_pg_positional_otherwise() {
+    fn placeholders_numbered_or_positional() {
         assert_eq!(Dialect::Postgres.placeholder(1), "$1");
         assert_eq!(Dialect::Postgres.placeholder(7), "$7");
+        assert_eq!(Dialect::Redshift.placeholder(3), "$3");
+        assert_eq!(Dialect::DuckDb.placeholder(2), "$2");
+        assert_eq!(Dialect::SqlServer.placeholder(1), "@P1");
+        assert_eq!(Dialect::Oracle.placeholder(2), ":2");
         assert_eq!(Dialect::Sqlite.placeholder(1), "?");
         assert_eq!(Dialect::MySql.placeholder(3), "?");
+        assert_eq!(Dialect::Snowflake.placeholder(5), "?");
     }
 
     #[test]
@@ -187,7 +256,6 @@ mod tests {
             .parse("SELECT id, name FROM emp WHERE dept = $1")
             .unwrap();
         assert_eq!(stmts.len(), 1);
-        // Malformed SQL is a clean error, not a panic.
         assert!(Dialect::Sqlite.parse("SELEKT oops").is_err());
     }
 
@@ -196,7 +264,6 @@ mod tests {
         let sql = Dialect::Postgres
             .in_filter_sql("emp", &["id", "name"], "dept_id", 3)
             .unwrap();
-        // Numbered placeholders, double-quoted identifiers, no inlined values.
         assert!(
             sql.contains("$1") && sql.contains("$2") && sql.contains("$3"),
             "{sql}"
@@ -217,8 +284,6 @@ mod tests {
         assert!(!sql.contains("$1"), "{sql}");
     }
 
-    /// The emitted reducer is valid SQL (it round-trips through the AST) and is
-    /// stable under re-parse — emission is AST-backed, not string assembly.
     #[test]
     fn emitted_reducer_reparses() {
         let sql = Dialect::Postgres
@@ -245,5 +310,33 @@ mod tests {
         );
         let query = LogicalSource::Query("SELECT 1 AS x".to_owned());
         assert_eq!(Dialect::Postgres.probe_sql(&query), "SELECT 1 AS x");
+    }
+
+    #[test]
+    fn new_dialects_have_correct_quote_char() {
+        // double-quote group
+        for d in [
+            Dialect::Redshift,
+            Dialect::DuckDb,
+            Dialect::SqlServer,
+            Dialect::Oracle,
+            Dialect::SapHana,
+            Dialect::MonetDb,
+            Dialect::Snowflake,
+            Dialect::Athena,
+            Dialect::Trino,
+            Dialect::PrestoDB,
+            Dialect::Db2,
+            Dialect::H2,
+            Dialect::Dremio,
+            Dialect::Denodo,
+            Dialect::Teiid,
+        ] {
+            assert_eq!(d.quote_char(), '"', "{d:?} should use double-quote");
+        }
+        // backtick group
+        for d in [Dialect::BigQuery, Dialect::Databricks, Dialect::Spark] {
+            assert_eq!(d.quote_char(), '`', "{d:?} should use backtick");
+        }
     }
 }

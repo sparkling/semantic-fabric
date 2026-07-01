@@ -431,7 +431,8 @@ fn str_match(
                 }),
                 // SQLite has no built-in REGEXP operator; MySQL regex pushdown is
                 // not wired (stub dialect). Report unsupported — never silently drop.
-                Dialect::Sqlite | Dialect::MySql => Err(
+                // All other dialects (added in ADR-0024 M8) are also not wired.
+                _ => Err(
                     "REGEX pushdown unsupported on this dialect (no built-in regex operator)"
                         .to_owned(),
                 ),

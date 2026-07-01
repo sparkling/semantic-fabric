@@ -15,8 +15,15 @@ use crate::error::Result;
 use sf_core::datatype::XsdTypeCode;
 
 pub mod mysql;
+pub mod odbc;
+pub mod oracle;
 pub mod pg;
+pub mod redshift;
+pub mod rest;
 pub mod sqlite;
+pub mod sqlserver;
+#[cfg(feature = "duckdb-backend")]
+pub mod duckdb;
 
 /// One projected result row, marshalled into the driver-agnostic lexical form the
 /// term-gen core consumes (ADR-0003 R3 / ADR-0007). The adapter has ALREADY

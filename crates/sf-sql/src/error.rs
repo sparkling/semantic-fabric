@@ -36,3 +36,15 @@ pub enum Error {
 
 /// The crate result alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Bridge DuckDB driver errors to [`Error::Marshal`] (ADR-0024 M8).
+///
+/// `duckdb::Error` does not carry `Send + Sync` bounds required by thiserror's
+/// `#[from]` attribute, so we implement `From` manually here, feature-gated so
+/// the `duckdb` crate is not compiled unless `duckdb-backend` is enabled.
+#[cfg(feature = "duckdb-backend")]
+impl From<duckdb::Error> for Error {
+    fn from(e: duckdb::Error) -> Self {
+        Error::Marshal(format!("duckdb: {e}"))
+    }
+}
