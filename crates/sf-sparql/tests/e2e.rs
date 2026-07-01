@@ -1673,3 +1673,49 @@ fn q5_gtfs_mapping_elimination_fires_pg() {
         "self-LEFT-join on trip_id PK must be eliminated — got: {sql}"
     );
 }
+
+/// ADR-0024 §4.1 (M5): the R2 owned cap-1 serve-lane SQLite bridge
+/// ([`sf_sql::backend::sqlite::SqliteOwnedBackend`]) driven through the async core
+/// ([`sf_sparql::exec_core::select_each_async`]) must stream rows **byte-identical**
+/// to the borrowing sync path ([`exec::select_each`]) — same values, same FIFO order
+/// (=_bag). This also compile-proves `SqliteReceiverStream: Send` satisfies the
+/// core's `for<'s> B::Stream<'s>: Send` bound (the spawn-Send sub-gate).
+#[tokio::test]
+async fn sqlite_owned_bridge_matches_borrowing_select_each() {
+    use std::sync::{Arc, Mutex};
+
+    let maps = mapping();
+    let q = "PREFIX ex: <http://ex/> SELECT ?name WHERE { ?e ex:empName ?name }";
+    let plan = parse_and_translate(q, &maps, Dialect::Sqlite).unwrap();
+
+    // Borrowing sync path (the proven reference).
+    let conn = source();
+    let mut sync_rows: Vec<Vec<Option<sf_core::Term>>> = Vec::new();
+    exec::select_each(&plan, &conn, |row| {
+        sync_rows.push(row.to_vec());
+        Ok(())
+    })
+    .unwrap();
+
+    // Owned cap-1 bridge through the async core.
+    let owned_conn = Arc::new(Mutex::new(source()));
+    let mut backend = sf_sql::backend::sqlite::SqliteOwnedBackend::new(owned_conn);
+    let async_rows = Arc::new(Mutex::new(Vec::<Vec<Option<sf_core::Term>>>::new()));
+    let sink_rows = Arc::clone(&async_rows);
+    sf_sparql::exec_core::select_each_async(&plan, &mut backend, move |row| {
+        let sink_rows = Arc::clone(&sink_rows);
+        async move {
+            sink_rows.lock().unwrap().push(row);
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    let async_rows = Arc::try_unwrap(async_rows).unwrap().into_inner().unwrap();
+    assert!(!sync_rows.is_empty(), "fixture must yield rows");
+    assert_eq!(
+        sync_rows, async_rows,
+        "owned cap-1 bridge must stream byte-identical, FIFO-ordered rows vs the borrowing path"
+    );
+}
