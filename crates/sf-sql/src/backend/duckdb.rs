@@ -150,6 +150,101 @@ impl SqlBackend for DuckDbBackend {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    /// Smoke test: open an in-memory DuckDB, create a table, insert rows, and
+    /// drive the `SqlBackend` trait's `open_branch` → `next_row` loop to verify
+    /// the cap-1 channel bridge delivers every row correctly.
+    ///
+    /// Verification tier: live-parity (DuckDB is embedded; no external instance needed).
+    #[test]
+    fn duckdb_backend_streams_rows() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let conn = duckdb::Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE emp (id INTEGER, name VARCHAR, salary DOUBLE);
+                 INSERT INTO emp VALUES (1, 'Alice', 90000.5);
+                 INSERT INTO emp VALUES (2, 'Bob', 80000.0);
+                 INSERT INTO emp VALUES (3, 'Carol', NULL);",
+            )
+            .unwrap();
+            let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn)));
+
+            // column_names probe
+            let cols = backend
+                .column_names("SELECT * FROM emp LIMIT 0")
+                .await
+                .unwrap();
+            assert_eq!(cols, vec!["id", "name", "salary"]);
+
+            // open_branch and stream all rows
+            let mut stream = backend
+                .open_branch("SELECT id, name, salary FROM emp ORDER BY id", &[])
+                .await
+                .unwrap();
+
+            let row1 = stream.next_row().await.unwrap().unwrap();
+            assert_eq!(row1.values[0].as_deref(), Some("1"));
+            assert_eq!(row1.values[1].as_deref(), Some("Alice"));
+            assert_eq!(row1.values[2].as_deref(), Some("90000.5"));
+
+            let row2 = stream.next_row().await.unwrap().unwrap();
+            assert_eq!(row2.values[0].as_deref(), Some("2"));
+            assert_eq!(row2.values[1].as_deref(), Some("Bob"));
+
+            let row3 = stream.next_row().await.unwrap().unwrap();
+            assert_eq!(row3.values[2], None, "NULL salary should be None");
+
+            let eof = stream.next_row().await.unwrap();
+            assert!(eof.is_none(), "should be EOF after 3 rows");
+        });
+    }
+
+    /// Verify that `open_branch` with parameters binds correctly.
+    #[test]
+    fn duckdb_backend_parameter_binding() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let conn = duckdb::Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE val (n INTEGER);
+                 INSERT INTO val VALUES (10);
+                 INSERT INTO val VALUES (20);
+                 INSERT INTO val VALUES (30);",
+            )
+            .unwrap();
+            let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn)));
+            let mut stream = backend
+                .open_branch("SELECT n FROM val WHERE n > ?", &["15".to_owned()])
+                .await
+                .unwrap();
+
+            let r1 = stream.next_row().await.unwrap().unwrap();
+            let r2 = stream.next_row().await.unwrap().unwrap();
+            let eof = stream.next_row().await.unwrap();
+
+            let mut got = vec![
+                r1.values[0].as_deref().unwrap().parse::<i32>().unwrap(),
+                r2.values[0].as_deref().unwrap().parse::<i32>().unwrap(),
+            ];
+            got.sort_unstable();
+            assert_eq!(got, vec![20, 30]);
+            assert!(eof.is_none());
+        });
+    }
+}
+
 /// Map a DuckDB [`duckdb::types::ValueRef`] to a lexical string + XSD type code.
 ///
 /// Primitive scalar types are mapped directly. Complex/nested types
