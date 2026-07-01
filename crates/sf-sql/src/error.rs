@@ -26,6 +26,12 @@ pub enum Error {
     /// HARD error via `BranchStream::next_row` (design A2), never a silent short read.
     #[error("value marshalling error: {0}")]
     Marshal(String),
+    /// A result type a backend adapter's decoder does not cover (ADR-0024): e.g. a
+    /// PostgreSQL result-column type outside `pg_value`'s set. Preserved as a distinct
+    /// variant so `exec_core::map_sql_err` can map it back to `sf_sparql::Error::Unsupported`
+    /// (501 skip), keeping pre-M3 conformance classification byte-identical.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
 }
 
 /// The crate result alias.

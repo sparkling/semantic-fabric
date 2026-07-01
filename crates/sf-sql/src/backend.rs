@@ -14,6 +14,7 @@
 use crate::error::Result;
 use sf_core::datatype::XsdTypeCode;
 
+pub mod pg;
 pub mod sqlite;
 
 /// One projected result row, marshalled into the driver-agnostic lexical form the
