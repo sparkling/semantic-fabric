@@ -51,6 +51,7 @@ const R2RML: &str = r#"
     rr:subjectMap [ rr:template "http://ex/person/{id}" ] ;
     rr:predicateObjectMap [ rr:predicate ex:name  ; rr:objectMap [ rr:column "name" ] ] ;
     rr:predicateObjectMap [ rr:predicate ex:email ; rr:objectMap [ rr:column "email" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:deptId ; rr:objectMap [ rr:column "dept_id" ] ] ;
     rr:predicateObjectMap [
         rr:predicate ex:dept ;
         rr:objectMap [
@@ -98,8 +99,14 @@ const ASK_FALSE_Q: &str = r#"
 /// * **agg-over-union** — COUNT over a UNION + GROUP BY. Was SF-501 (q9): the PG
 ///   core loop hard-errored on `rust_group`, aborting the response mid-stream.
 ///   name(3) + email(2) over dept "Sales" ⇒ one group, COUNT 5.
-/// * **filter-exists** — FILTER EXISTS over a typed/plain column. Was SF-501 (q12):
+/// * **filter-exists** — FILTER EXISTS over a plain (text) column. Was SF-501 (q12):
 ///   the correlated sub-plan aborted on the PG bind path. Ann + Zed have email ⇒ 2.
+/// * **typed-filter** — the *actual* q12 root cause: a FILTER constant compared to a
+///   **typed INT4 column** (`FILTER(?di = 10)` over `dept_id`) lowers to a bare `$1`
+///   placeholder PostgreSQL infers as INT4; binding the raw Rust `String` aborts the
+///   PG stream mid-body (the `filter-exists` arm alone does NOT reproduce this — its
+///   EXISTS is over text — so `LexicalParam` needs a typed-column arm to be guarded).
+///   All 3 persons have dept_id 10 ⇒ 3.
 /// * **minus** — MINUS removing the emailed persons. Was SF-EMPTY (q11): the PG
 ///   anti-join removed everything. Only Bob (NULL email) survives ⇒ 1.
 /// * **sequence-path** — property path `ex:dept/ex:label`. Was SF-EMPTY (q10): the
@@ -124,6 +131,15 @@ const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
              FILTER EXISTS { ?p ex:email ?e }
            }"#,
         2,
+    ),
+    (
+        "typed-filter",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?name WHERE {
+             ?p ex:name ?name ; ex:deptId ?di .
+             FILTER(?di = 10)
+           }"#,
+        3,
     ),
     (
         "minus",

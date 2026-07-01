@@ -354,12 +354,20 @@ catastrophe is gone).
 
 The blind spot that let these ship (SQLite-green while the live PG path was broken) is
 now closed by `crates/sf-conformance/tests/differential_pg_sqlite.rs`, which runs each
-of the five classes — **agg-over-union, FILTER EXISTS, MINUS, sequence path,
-DISTINCT-over-join** — through the SAME `parse_and_translate_with` tree path on both
-the sync SQLite executor and the **live PostgreSQL** executor (`exec_pg`), and asserts
-`=_bag` equality plus the hand-computed cardinality on each side. A recurrence of any
-of these PG-only defects now fails `cargo test` (the test gracefully skips only when no
-PostgreSQL server is reachable, keeping CI green).
+class — **agg-over-union, FILTER EXISTS, a typed-column (INT4) FILTER, MINUS, sequence
+path, DISTINCT-over-join** — through the SAME `parse_and_translate_with` tree path on
+both the sync SQLite executor and the **live PostgreSQL** executor (`exec_pg`), and
+asserts `=_bag` equality plus the hand-computed cardinality on each side. A recurrence
+of any of these PG-only defects now fails `cargo test` (the test gracefully skips only
+when no PostgreSQL server is reachable, keeping CI green).
+
+> **Coverage note (honest).** The q12 fix (`LexicalParam`) repaired a FILTER constant
+> bound against a **typed INT4 column** (`FILTER(?d = 1)`). The original `filter-exists`
+> arm was an EXISTS over a *text* column and did **not** reproduce that root cause —
+> reverting the fix left it green while the real q12 aborted mid-stream. A dedicated
+> `typed-filter` arm (`FILTER(?di = 10)` over an INT4 `dept_id`) was added so a
+> recurrence of the typed-bind bug now genuinely fails the gate (verified: the reverted
+> fix yields `cannot convert between the Rust type String and the Postgres type int4`).
 
 ---
 
