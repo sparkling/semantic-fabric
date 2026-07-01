@@ -41,11 +41,7 @@ impl SqlBackend for SqlServerBackend {
         ))
     }
 
-    async fn open_branch(
-        &mut self,
-        _sql: &str,
-        _params: &[String],
-    ) -> Result<SqlServerStream> {
+    async fn open_branch(&mut self, _sql: &str, _params: &[String]) -> Result<SqlServerStream> {
         Err(Error::Unsupported(
             "SqlServerBackend: tiberius driver not wired yet".to_owned(),
         ))

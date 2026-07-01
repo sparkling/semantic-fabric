@@ -63,10 +63,7 @@ impl SqlBackend for DuckDbBackend {
         let rows = stmt
             .query(params_from_iter(std::iter::empty::<String>()))
             .map_err(|e| Error::Marshal(format!("duckdb query: {e}")))?;
-        let ncols = rows
-            .as_ref()
-            .map(|s| s.column_count())
-            .unwrap_or(0);
+        let ncols = rows.as_ref().map(|s| s.column_count()).unwrap_or(0);
         let names = (0..ncols)
             .map(|i| {
                 rows.as_ref()

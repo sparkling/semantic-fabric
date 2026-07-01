@@ -36,11 +36,7 @@ impl SqlBackend for OracleBackend {
         ))
     }
 
-    async fn open_branch(
-        &mut self,
-        _sql: &str,
-        _params: &[String],
-    ) -> Result<OracleStream> {
+    async fn open_branch(&mut self, _sql: &str, _params: &[String]) -> Result<OracleStream> {
         Err(Error::Unsupported(
             "OracleBackend: OCI driver not wired yet".to_owned(),
         ))

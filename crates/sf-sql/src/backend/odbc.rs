@@ -40,11 +40,7 @@ impl SqlBackend for OdbcBackend {
         ))
     }
 
-    async fn open_branch(
-        &mut self,
-        _sql: &str,
-        _params: &[String],
-    ) -> Result<OdbcStream> {
+    async fn open_branch(&mut self, _sql: &str, _params: &[String]) -> Result<OdbcStream> {
         Err(Error::Unsupported(
             "OdbcBackend: odbc-api driver not wired yet".to_owned(),
         ))

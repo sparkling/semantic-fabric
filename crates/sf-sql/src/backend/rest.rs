@@ -39,11 +39,7 @@ impl SqlBackend for RestBackend {
         ))
     }
 
-    async fn open_branch(
-        &mut self,
-        _sql: &str,
-        _params: &[String],
-    ) -> Result<RestStream> {
+    async fn open_branch(&mut self, _sql: &str, _params: &[String]) -> Result<RestStream> {
         Err(Error::Unsupported(
             "RestBackend: REST/JDBC driver not wired yet".to_owned(),
         ))
