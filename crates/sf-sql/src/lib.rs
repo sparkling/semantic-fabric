@@ -21,6 +21,7 @@
 //! There is **no columnar/OLAP engine on the relational path** — native drivers
 //! (`tokio-postgres`, `rusqlite`) and a SQL AST library (`sqlparser`) only.
 
+pub mod backend;
 pub mod cost;
 pub mod dialect;
 pub mod error;
@@ -28,6 +29,7 @@ pub mod introspect;
 pub mod schema;
 pub mod stream;
 
+pub use backend::{BranchStream, RawTuple, SqlBackend};
 pub use cost::{plan_semijoin, CostConfig, Plan, ReducerForm, Side, SideStats};
 pub use dialect::Dialect;
 pub use error::{Error, Result};

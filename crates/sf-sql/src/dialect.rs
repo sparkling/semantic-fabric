@@ -54,6 +54,19 @@ impl Dialect {
         sqlparser::ast::Ident::with_quote(self.quote_char(), ident).to_string()
     }
 
+    /// Prepare-only metadata probe for a source's result-column names. `LIMIT 0` is
+    /// uniform across SQLite/PG/MySQL: column metadata is available at prepare time
+    /// regardless of LIMIT, and the statement never executes, so `LIMIT 0` vs none is
+    /// immaterial to SQLite/PG and required by the existing MySQL path (ADR-0024
+    /// design §1.1 — the single catalog SQL-gen home, resolves refutation C1).
+    pub fn probe_sql(&self, source: &sf_core::ir::LogicalSource) -> String {
+        use sf_core::ir::LogicalSource;
+        match source {
+            LogicalSource::Table(t) => format!("SELECT * FROM {} LIMIT 0", self.quote_ident(t)),
+            LogicalSource::Query(q) => q.clone(),
+        }
+    }
+
     /// The bound-parameter placeholder for the 1-based `index`-th parameter:
     /// `$index` for PostgreSQL (numbered), `?` for SQLite/MySQL (positional).
     ///
@@ -220,5 +233,17 @@ mod tests {
         assert!(Dialect::Postgres
             .in_filter_sql("t", &["c"], "k", 0)
             .is_err());
+    }
+
+    #[test]
+    fn probe_sql_limits_table_and_passes_query_through() {
+        use sf_core::ir::LogicalSource;
+        let table = LogicalSource::Table("emp".to_owned());
+        assert_eq!(
+            Dialect::Sqlite.probe_sql(&table),
+            "SELECT * FROM \"emp\" LIMIT 0"
+        );
+        let query = LogicalSource::Query("SELECT 1 AS x".to_owned());
+        assert_eq!(Dialect::Postgres.probe_sql(&query), "SELECT 1 AS x");
     }
 }
