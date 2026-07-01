@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-01
+ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
 depends-on:
