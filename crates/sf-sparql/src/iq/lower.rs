@@ -643,7 +643,7 @@ fn left_join_decomposed(
         }
         let mut no_match = l.clone();
         for r in &right {
-            if let Some(cond) = not_exists_cond_for(l, r)? {
+            if let Some(cond) = not_exists_cond_for(l, r, expr, dialect)? {
                 no_match.where_conds.push(cond);
             }
         }
@@ -830,7 +830,7 @@ fn left_join_as_subplan(
             out.push(b);
         }
         let mut no_match = l.clone();
-        if let Some(cond) = crate::leftjoin::not_exists_cond_for(l, &r)? {
+        if let Some(cond) = crate::leftjoin::not_exists_cond_for(l, &r, expr, dialect)? {
             no_match.where_conds.push(cond);
         }
         out.push(no_match);

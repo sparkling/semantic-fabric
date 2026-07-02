@@ -344,6 +344,136 @@ fn p_aggregation() {
 }
 
 // ============================================================================
+// Fixture OD — person ⟕ dept (2 DISTINCT labels) + person ⟕ person (nullable
+// self-join `mentor`) — regression coverage for the OPTIONAL anti-join FILTER
+// bug (`leftjoin.rs` `not_exists_cond_for`): a multi-scan OPTIONAL right (the
+// dept refObjectMap join + the label triple, `core.len() > 1` ⇒ the
+// `left_join_branches`/`left_join_decomposed` decomposition, NOT the
+// single-scan `build_left_join` shortcut) whose OWN inner FILTER removes the
+// only candidate match must NULL-pad the left row, not drop it. Before the
+// fix, `not_exists_cond_for` omitted the inner FILTER from its `NOT EXISTS`
+// condition, so a right row that exists-but-fails-the-filter still counted
+// as "a match exists" for the anti-join — the row vanished from BOTH the
+// match branch (filtered out) and the no-match branch (NOT EXISTS wrongly
+// false): a silent wrong answer (violates ADR-0007). Fixture P (single dept
+// "Sales") can't expose this — the filter needs a SECOND label to discriminate.
+// ============================================================================
+
+const OD_SQL: &str = r#"
+CREATE TABLE dept (id INTEGER PRIMARY KEY, label TEXT NOT NULL);
+CREATE TABLE person (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    dept_id INTEGER NOT NULL,
+    mentor_id INTEGER,
+    FOREIGN KEY (dept_id) REFERENCES dept(id),
+    FOREIGN KEY (mentor_id) REFERENCES person(id)
+);
+INSERT INTO dept VALUES (10, 'Sales');
+INSERT INTO dept VALUES (20, 'Eng');
+INSERT INTO person VALUES (1, 'Ann', 20, NULL);
+INSERT INTO person VALUES (2, 'Bob', 10, 1);
+INSERT INTO person VALUES (3, 'Zed', 10, 2);
+"#;
+
+const OD_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/person/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:dept ;
+        rr:objectMap [
+            rr:parentTriplesMap <#Dept> ;
+            rr:joinCondition [ rr:child "dept_id" ; rr:parent "id" ]
+        ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:mentor ;
+        rr:objectMap [
+            rr:parentTriplesMap <#Person> ;
+            rr:joinCondition [ rr:child "mentor_id" ; rr:parent "id" ]
+        ]
+    ] .
+<#Dept>
+    rr:logicalTable [ rr:tableName "dept" ] ;
+    rr:subjectMap [ rr:template "http://ex/dept/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:label ; rr:objectMap [ rr:column "label" ] ] .
+"#;
+
+const OD_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/person/1> ex:name "Ann" ; ex:dept <http://ex/dept/20> .
+<http://ex/person/2> ex:name "Bob" ; ex:dept <http://ex/dept/10> ; ex:mentor <http://ex/person/1> .
+<http://ex/person/3> ex:name "Zed" ; ex:dept <http://ex/dept/10> ; ex:mentor <http://ex/person/2> .
+<http://ex/dept/10> ex:label "Sales" .
+<http://ex/dept/20> ex:label "Eng" .
+"#;
+
+fn diff_od(query: &str) {
+    diff(OD_SQL, OD_R2RML, Some(OD_TTL), query);
+}
+
+#[test]
+fn optional_anti_join_filter_match_removing() {
+    // THE REPRO: Ann's ONLY candidate dept-label is "Eng", which the inner
+    // FILTER excludes. Correct (spareval): Ann NULL-padded on ?label, Bob/Zed
+    // keep "Sales" -- 3 rows. Buggy (`not_exists_cond_for` missing the filter):
+    // Ann's row vanishes entirely (excluded from the match branch by the
+    // filter, but ALSO excluded from the no-match branch because the
+    // (unfiltered) NOT EXISTS sees her valid dept FK and wrongly concludes a
+    // match exists) -- 2 rows.
+    diff_od(&format!(
+        "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Eng\") }} }}"
+    ));
+}
+
+#[test]
+fn optional_anti_join_filter_no_op_guard() {
+    // GUARD against over-correction: a FILTER that never actually excludes any
+    // candidate (no dept is labelled "ZZZ") must stay correct before AND after
+    // the fix -- every person keeps their real label, 3 rows, nothing unbound.
+    diff_od(&format!(
+        "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"ZZZ\") }} }}"
+    ));
+}
+
+#[test]
+fn optional_anti_join_filter_nested_optional() {
+    // VARIANT (a): the OPTIONAL's own inner FILTER sits ALONGSIDE a nested
+    // OPTIONAL in the same group -- per the SPARQL translation algorithm the
+    // FILTER's scope is the WHOLE group (it wraps the nested OPTIONAL's
+    // LeftJoin too), so this becomes a right-NESTED LeftJoin whose OWN `expr`
+    // is the label filter (`left_join_decomposed`'s §5.3 nested-right closure
+    // re-feeding `left_join_branches`) -- proves the fix's `expr` threading
+    // survives the nested-OPTIONAL flattening, not just the flat multi-scan case.
+    diff_od(&format!(
+        "{PFX} SELECT ?name ?label ?m WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Eng\") \
+         OPTIONAL {{ ?p ex:mentor ?m }} }} }}"
+    ));
+}
+
+#[test]
+fn optional_anti_join_filter_nullable_determinant() {
+    // VARIANT (c): the shared variable feeding the filtered multi-scan
+    // OPTIONAL (?m) is ITSELF nullable -- bound by a PRIOR OPTIONAL that may
+    // not match (Ann has no mentor). Exercises the fix alongside the
+    // pre-existing R1 null-safe-compat / R2 COALESCE machinery
+    // (`def_is_nullable`/`null_safe`) for a left-nullable determinant, not
+    // just a mandatory one.
+    diff_od(&format!(
+        "{PFX} SELECT ?name ?label2 WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:mentor ?m }} \
+         OPTIONAL {{ ?m ex:dept ?d2 . ?d2 ex:label ?label2 FILTER(?label2 != \"Eng\") }} }}"
+    ));
+}
+
+// ============================================================================
 // R5 multiplicity-stress fixtures (§7) — force the multiplicity to actually appear.
 // ============================================================================
 
@@ -621,6 +751,153 @@ fn agg_over_union_self_join_eliminated_on_shared_table() {
             "self-join on `m`'s PK must collapse to a single scan"
         );
     }
+}
+
+/// Test-integrity fix (leftjoin-antijoin-filter wave): `agg_over_union_self_join_eliminated_on_shared_table`
+/// above is now MASKED — its query qualifies for the SQL-pushdown
+/// (`try_sql_group_over_union`, both `?v` arms are plain-TEXT columns with
+/// identical `TermSpec`), so `agg_over_union_arm_branches` reads the arms out
+/// of `subplan_joins`, whose self-join elimination is protected by
+/// `cascade_subplans`, NOT the `rust_group`-specific `ctx.project = None` fix
+/// (commit `4eca009`) that test was written to guard. Reverting `4eca009` no
+/// longer fails it. This fixture forces the ORIGINAL rust_group path instead:
+/// `?v`'s two arms are a TEXT column (`s1`) and an INTEGER column (`n2`) — a
+/// deliberate cross-arm `TermSpec` mismatch `try_sql_group_over_union` declines
+/// on (COUNT doesn't care about the value's type, so this is semantically
+/// sound; it only exists to force the applicability gate to bail) — while
+/// keeping the IDENTICAL self-join topology (`?s ex:grp ?g` + each arm's
+/// `?s ex:pN ?v`, all against the same PK-keyed table `sj`). Note: a plain
+/// `rr:column` (no explicit `rr:datatype`) always gets `TermSpec::plain_literal()`
+/// here regardless of the underlying SQL column type (no natural-mapping
+/// auto-inference for hand-written R2RML) — so the mismatch needs an EXPLICIT
+/// `rr:datatype` on one arm, not just a differently-typed SQL column.
+const SJ_SQL: &str = r#"
+CREATE TABLE sj (id INTEGER PRIMARY KEY, grp TEXT NOT NULL, s1 TEXT NOT NULL, n2 INTEGER NOT NULL);
+INSERT INTO sj VALUES (1, 'g1', 'a', 10);
+INSERT INTO sj VALUES (2, 'g1', 'c', 20);
+INSERT INTO sj VALUES (3, 'g2', 'd', 30);
+"#;
+
+const SJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://ex/> .
+<#SJ>
+    rr:logicalTable [ rr:tableName "sj" ] ;
+    rr:subjectMap [ rr:template "http://ex/sj/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:grp ; rr:objectMap [ rr:column "grp" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p1  ; rr:objectMap [ rr:column "s1" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p2  ; rr:objectMap [ rr:column "n2" ; rr:datatype xsd:integer ] ] .
+"#;
+
+#[test]
+fn agg_over_union_self_join_eliminated_via_rust_group() {
+    let conn = sqlite::load(SJ_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(SJ_R2RML).expect("R2RML parses");
+    let q = parse(&format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+    let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
+    assert!(
+        tp.rust_group.is_some(),
+        "the cross-arm TermSpec mismatch (TEXT vs INTEGER) must decline the SQL \
+         pushdown, so this exercises the rust_group path the guard is meant for"
+    );
+    for b in &tp.branches {
+        let sj_scans = b
+            .core
+            .iter()
+            .filter(|s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "sj"))
+            .count();
+        assert_eq!(
+            sj_scans, 1,
+            "self-join on `sj`'s PK must collapse to a single scan (rust_group path)"
+        );
+    }
+}
+
+/// Test-integrity fix: `d69daa6` (guard q9 agg-pushdown against post-cascade
+/// column-count/position drift) had NO regression test. This constructs the
+/// exact divergent shape the fix guards: TWO union arms sharing the outer
+/// `?s ex:grp ?g` clause, where arm 1 (`?s ex:p1 ?v`) is a SELF-join on the
+/// SAME table `sj2` (eliminable — collapses 2 scans to 1, shrinking its
+/// `where_conds`-derived trailing projection columns), while arm 2
+/// (`?s ex:p2 ?v`) reads a SEPARATE table `other2` joined on `sj2.id =
+/// other2.sid` (a genuine 2-table join, NOT a self-join — self-join
+/// elimination has nothing to collapse there, so its column count is
+/// unaffected). Both arms still qualify for the SQL pushdown (`?v`'s TermSpec
+/// is the same plain-TEXT literal in both `s1`/`s2`), so `cascade_subplans`
+/// runs on the pooled arms and must catch the resulting cross-arm column-count
+/// mismatch post-cascade and revert arm 1 to its PRE-cascade (2-scan) form —
+/// still correct SQL, just forgoing the self-join-elimination optimization for
+/// this one SubPlan, rather than emitting a `UNION ALL` with mismatched arms.
+const CS_SQL: &str = r#"
+CREATE TABLE sj2 (id INTEGER PRIMARY KEY, grp TEXT NOT NULL, s1 TEXT NOT NULL);
+CREATE TABLE other2 (sid INTEGER NOT NULL, s2 TEXT NOT NULL);
+INSERT INTO sj2 VALUES (1, 'g1', 'a');
+INSERT INTO sj2 VALUES (2, 'g1', 'c');
+INSERT INTO sj2 VALUES (3, 'g2', 'd');
+INSERT INTO other2 VALUES (1, 'x');
+INSERT INTO other2 VALUES (2, 'y');
+INSERT INTO other2 VALUES (3, 'z');
+"#;
+
+const CS_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#SJ2>
+    rr:logicalTable [ rr:tableName "sj2" ] ;
+    rr:subjectMap [ rr:template "http://ex/sj2/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:grp ; rr:objectMap [ rr:column "grp" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p1  ; rr:objectMap [ rr:column "s1" ] ] .
+<#Other2>
+    rr:logicalTable [ rr:tableName "other2" ] ;
+    rr:subjectMap [ rr:template "http://ex/sj2/{sid}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p2 ; rr:objectMap [ rr:column "s2" ] ] .
+"#;
+
+const CS_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/sj2/1> ex:grp "g1" ; ex:p1 "a" ; ex:p2 "x" .
+<http://ex/sj2/2> ex:grp "g1" ; ex:p1 "c" ; ex:p2 "y" .
+<http://ex/sj2/3> ex:grp "g2" ; ex:p1 "d" ; ex:p2 "z" .
+"#;
+
+#[test]
+fn agg_over_union_pushdown_survives_asymmetric_self_join_elim() {
+    let conn = sqlite::load(CS_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(CS_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    );
+    let q = parse(&query);
+    let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
+
+    // Must take the SQL-pushdown path (subplan_joins), not rust_group -- that's
+    // the path `cascade_subplans`'s guard protects.
+    let pushdown_branch = tp
+        .branches
+        .iter()
+        .find(|b| b.agg.is_some() && !b.subplan_joins.is_empty())
+        .expect("must lower to the SQL-pushdown Aggregation-over-SubPlan shape");
+    let arms = &pushdown_branch.subplan_joins[0].plan.branches;
+    assert_eq!(arms.len(), 2, "one pooled arm per UNION branch");
+    let lens: Vec<usize> = arms.iter().map(|b| b.projection().len()).collect();
+    assert_eq!(
+        lens[0], lens[1],
+        "cascade_subplans must keep both pooled arms' column counts equal \
+         (reverting the self-joinable arm's elimination if needed), not emit a \
+         column-count-mismatched UNION ALL: got {lens:?}"
+    );
+
+    // Correctness (not just shape): row-bag vs the independent spareval oracle,
+    // regardless of whether self-join-elimination fired or was safely declined.
+    let conn2 = sqlite::load(CS_SQL).expect("fixture reloads");
+    assert_vs_spareval(CS_TTL, &query, &tp, &conn2);
 }
 
 // --- OVERLAP: two triples-maps over the SAME table both emit ex:val (identical

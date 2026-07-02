@@ -77,7 +77,7 @@ pub fn left_join_branches(
         // No-match branch: L with NOT EXISTS for each Ri that can possibly match.
         let mut no_match = l.clone();
         for r in &right {
-            if let Some(cond) = not_exists_cond_for(l, r)? {
+            if let Some(cond) = not_exists_cond_for(l, r, expr, dialect)? {
                 no_match.where_conds.push(cond);
             }
         }
@@ -171,7 +171,22 @@ pub(crate) fn inner_join_one(
 /// Build the `NOT EXISTS` condition for one right branch in the no-match branch
 /// of a multi-branch OPTIONAL.  Returns `None` when unification proves the join
 /// always empty (NOT EXISTS is trivially true — omit the condition).
-pub(crate) fn not_exists_cond_for(left: &Branch, right: &Branch) -> Result<Option<SqlCond>> {
+///
+/// The FILTER inside the OPTIONAL (`expr`) must gate the anti-join too — a
+/// right row that EXISTS but FAILS the filter is not a match, so EXISTS must
+/// be false there (⇒ NOT EXISTS true ⇒ left NULL-padded). Mirrors
+/// `inner_join_one`'s combined-bindings filter application (R5 analogue)
+/// exactly. Omitting it (as this function once did) made a left row whose
+/// only right candidate is filtered out vanish from BOTH the match branch
+/// (excluded by the filter) and this no-match branch (NOT EXISTS wrongly
+/// false, since the unfiltered join still exists) — a silent wrong answer
+/// (ADR-0007).
+pub(crate) fn not_exists_cond_for(
+    left: &Branch,
+    right: &Branch,
+    expr: Option<&spargebra::algebra::Expression>,
+    dialect: sf_sql::Dialect,
+) -> Result<Option<SqlCond>> {
     let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
@@ -190,6 +205,18 @@ pub(crate) fn not_exists_cond_for(left: &Branch, right: &Branch) -> Result<Optio
                 Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
             }
         }
+    }
+
+    // FILTER inside the OPTIONAL goes inside the NOT EXISTS too (R5 analogue):
+    // same combined bindings `inner_join_one` uses for the match branch, so
+    // both branches agree on what counts as "a match" — the tautological
+    // identity `(L⋈R) ∪ (L¬∃R)` this decomposition relies on requires it.
+    if let Some(e) = expr {
+        let mut combined = left.bindings.clone();
+        for (v, d) in &right.bindings {
+            combined.entry(v.clone()).or_insert_with(|| d.clone());
+        }
+        conds.push(filter_cond(e, &combined, dialect).map_err(Error::Unsupported)?);
     }
 
     Ok(Some(SqlCond::NotExists {
