@@ -1200,9 +1200,9 @@ fn table_scans_in(conds: &[SqlCond], table: &str) -> usize {
             SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
                 scans
                     .iter()
-                    .filter(|s| {
-                        matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == table)
-                    })
+                    .filter(
+                        |s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == table),
+                    )
                     .count()
                     + table_scans_in(conds, table)
             }
