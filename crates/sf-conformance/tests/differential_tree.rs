@@ -587,6 +587,134 @@ fn agg_over_union_sum_avg() {
     ));
 }
 
+/// A pooled arm's `Aggregation` branch: `Some((agg, subplan_arm_count))` when the
+/// SQL pushdown fired (`try_sql_group_over_union`), `None` when it fell back to
+/// `RustGroup`. Distinguishes the two `agg_over_union_is_lowered` closures the
+/// SAME query could legitimately take, so a test can assert WHICH one fired
+/// (not just that "some" closure did) — needed here because concern #3
+/// (`COUNT(DISTINCT ?v)`) and the compound-key case are exactly the shapes the
+/// pushdown must actually exercise for these regression guards to mean anything.
+fn pushdown_agg(tp: &Plan) -> Option<&sf_sparql::iq::Aggregation> {
+    tp.branches
+        .iter()
+        .find(|b| b.agg.is_some() && !b.subplan_joins.is_empty())
+        .and_then(|b| b.agg.as_ref())
+}
+
+/// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (concern #3 LIVE
+/// proof): `COUNT(DISTINCT ?v)` over a UNION must push down to SQL `COUNT(DISTINCT
+/// col)` over the pooled `UNION ALL` — ONE SQL scope dedupes across BOTH arms,
+/// matching the `RustAgg.distinct` per-group manual dedup the oracle would use.
+/// The union here is a SELF-union (`?s ex:p1 ?v` twice) so every value is
+/// deliberately DUPLICATED: g1's `?v`s are `{a,c,a,c}` (COUNT=4) but DISTINCT
+/// must dedupe to `{a,c}` (COUNT=2); g2's `{d,d}` → 1. A DISTINCT-not-applied
+/// regression would silently return 4/1 (double-counted) instead of 2/1 — caught
+/// by the spareval `=_bag` gate inside `agg_union`, not just a row-count check.
+#[test]
+fn agg_over_union_count_distinct_pushes_down() {
+    let query = format!(
+        "{PFX} SELECT ?g (COUNT(DISTINCT ?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p1 ?v }} }} GROUP BY ?g"
+    );
+    agg_union(&query);
+    let conn = sqlite::load(AGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema).expect("tree must close agg-over-UNION");
+    let agg = pushdown_agg(&tp).expect(
+        "COUNT(DISTINCT ?v) over a self-union must SQL-pushdown, not fall back to RustGroup",
+    );
+    assert!(agg.aggs[0].distinct, "AggCol.distinct carried through");
+}
+
+/// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.1, compound
+/// grouping key LIVE proof): a TWO-variable `GROUP BY ?g ?s` over a UNION must
+/// push down to a multi-column SQL `GROUP BY c0, c1` over the pooled `UNION ALL`
+/// — `?g` (grp, outside the union) and `?s` (the subject, also outside the union)
+/// together split the p1/p2 union into one group PER SUBJECT (3 subjects ⇒ 3
+/// groups of 2), never collapsing rows across different `?s` values the way a
+/// single-key (`?g` only) grouping would (m/1 and m/2 share `?g="g1"` but must
+/// stay separate groups here).
+#[test]
+fn agg_over_union_compound_grouping_key_pushes_down() {
+    let query = format!(
+        "{PFX} SELECT ?g ?s (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g ?s"
+    );
+    agg_union(&query);
+    let conn = sqlite::load(AGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema).expect("tree must close agg-over-UNION");
+    let agg = pushdown_agg(&tp)
+        .expect("2-var GROUP BY over a union must SQL-pushdown, not fall back to RustGroup");
+    assert_eq!(agg.keys.len(), 2, "both ?g and ?s are SQL GROUP BY keys");
+}
+
+// --- TEMPLATE GROUP KEY: the ?g grouping var is bound via a 2-column INJECTIVE
+// `rr:template "{cc}-{num}"` (separator present) instead of a bare `rr:column`,
+// proving the Wave A.2 pushdown extension end-to-end (real SQL execution, not
+// just IR-shape unit tests in `iq::lower::tests`). ---
+
+const TEMPLATE_KEY_SQL: &str = r#"
+CREATE TABLE m4 (
+    id INTEGER PRIMARY KEY,
+    cc TEXT NOT NULL, num TEXT NOT NULL, p1 TEXT NOT NULL, p2 TEXT NOT NULL
+);
+INSERT INTO m4 VALUES (1, 'g1', 'x', 'a', 'b');
+INSERT INTO m4 VALUES (2, 'g1', 'x', 'c', 'f');
+INSERT INTO m4 VALUES (3, 'g2', 'y', 'd', 'e');
+"#;
+
+const TEMPLATE_KEY_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#M4>
+    rr:logicalTable [ rr:tableName "m4" ] ;
+    rr:subjectMap [ rr:template "http://ex/m4/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:grp ;
+        rr:objectMap [ rr:template "http://ex/g/{cc}-{num}" ]
+    ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p1  ; rr:objectMap [ rr:column "p1" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p2  ; rr:objectMap [ rr:column "p2" ] ] .
+"#;
+
+const TEMPLATE_KEY_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/m4/1> ex:grp <http://ex/g/g1-x> ; ex:p1 "a" ; ex:p2 "b" .
+<http://ex/m4/2> ex:grp <http://ex/g/g1-x> ; ex:p1 "c" ; ex:p2 "f" .
+<http://ex/m4/3> ex:grp <http://ex/g/g2-y> ; ex:p1 "d" ; ex:p2 "e" .
+"#;
+
+/// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.2, LIVE SQL
+/// proof): `GROUP BY ?g` where `?g` is a 2-column injective Template must ACTUALLY
+/// push down to a multi-column SQL `GROUP BY` and execute correctly — g1-x (rows
+/// 1,2): `{a,b,c,f}` ⇒ COUNT 4; g2-y (row 3): `{d,e}` ⇒ COUNT 2. Gated vs the
+/// independent spareval oracle (not just row-count).
+#[test]
+fn agg_over_union_template_group_key_pushes_down_and_executes_correctly() {
+    let query = format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    );
+    let conn = sqlite::load(TEMPLATE_KEY_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(TEMPLATE_KEY_R2RML).expect("R2RML parses");
+    let q = parse(&query);
+    let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
+    let agg = pushdown_agg(&tp).expect(
+        "a 2-column injective Template GROUP BY key must SQL-pushdown, not fall back to RustGroup",
+    );
+    assert_eq!(
+        agg.keys[0].cols.len(),
+        2,
+        "both template columns are the GROUP BY key: {:?}",
+        agg.keys[0].cols
+    );
+    assert_vs_spareval(TEMPLATE_KEY_TTL, &query, &tp, &conn);
+}
+
 /// Regression guard (optimizer-residue wave, post-M8): `?s ex:grp ?g` and each UNION
 /// arm's `?s ex:p1`/`ex:p2 ?v` all resolve against the SAME table `m` (single-column PK
 /// `id`), joined on the shared subject `?s` — a self-join on the primary key the cascade

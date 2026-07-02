@@ -113,6 +113,16 @@ const ASK_FALSE_Q: &str = r#"
 ///   sequence lowered to nothing on PG. All 3 persons reach "Sales" ⇒ 3.
 /// * **distinct-join** — DISTINCT over a duplicate-producing join. Was MISMATCH
 ///   (q15): DISTINCT was dropped on PG, leaking duplicates. 3 persons, 1 dept ⇒ 1.
+/// * **agg-over-union-count-distinct** — ADR-0023 optimizer-residue (q9
+///   agg-pushdown, Wave A.1): `COUNT(DISTINCT ?v)` over a SELF-union (`ex:name`
+///   unioned with itself) must SQL-pushdown `COUNT(DISTINCT col)` over the live
+///   PG/MySQL `UNION ALL` — one group ("Sales"), row count 1 (the aggregate
+///   VALUE, 3 not 6, is pinned by the live-PG value guard below).
+/// * **agg-over-union-compound-key** — ADR-0023 optimizer-residue (Wave A.1): a
+///   TWO-variable `GROUP BY ?label ?email` over a UNION must SQL-pushdown a
+///   multi-column `GROUP BY` on the live PG/MySQL `UNION ALL`. Only Ann/Zed have
+///   an email (Bob's NULL drops him from this pattern) ⇒ 2 groups (one per
+///   person), each COUNT 2 (name + email).
 const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
     (
         "agg-over-union",
@@ -166,6 +176,24 @@ const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
              ?p ex:dept ?d . ?d ex:label ?label
            }"#,
         1,
+    ),
+    (
+        "agg-over-union-count-distinct",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?label (COUNT(DISTINCT ?v) AS ?c) WHERE {
+             ?p ex:dept ?d . ?d ex:label ?label .
+             { ?p ex:name ?v } UNION { ?p ex:name ?v }
+           } GROUP BY ?label"#,
+        1,
+    ),
+    (
+        "agg-over-union-compound-key",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?label ?email (COUNT(?v) AS ?c) WHERE {
+             ?p ex:dept ?d . ?d ex:label ?label . ?p ex:email ?email .
+             { ?p ex:name ?v } UNION { ?p ex:email ?v }
+           } GROUP BY ?label ?email"#,
+        2,
     ),
 ];
 
@@ -529,6 +557,37 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
             pg_bag("distinct-join"),
             vec![vec![("label".to_owned(), "Sales".to_owned())]],
             "q15 distinct-join live-PG value regression"
+        );
+        // ADR-0023 optimizer-residue Wave A.1: COUNT(DISTINCT ?v) over a self-union
+        // must dedupe Ann/Bob/Zed to 3, NOT double-count to 6 — pins the pushdown's
+        // live-PG `COUNT(DISTINCT col)` SQL, not just that some row came back.
+        assert_eq!(
+            pg_bag("agg-over-union-count-distinct"),
+            vec![vec![
+                ("c".to_owned(), "3".to_owned()),
+                ("label".to_owned(), "Sales".to_owned())
+            ]],
+            "agg-over-union-count-distinct live-PG value regression"
+        );
+        // ADR-0023 optimizer-residue Wave A.1: the 2-column GROUP BY ?label ?email
+        // must keep Ann's and Zed's groups SEPARATE (COUNT 2 each: name+email), not
+        // collapse them under the shared ?label — pins the pushdown's live-PG
+        // multi-column `GROUP BY` SQL.
+        assert_eq!(
+            pg_bag("agg-over-union-compound-key"),
+            vec![
+                vec![
+                    ("c".to_owned(), "2".to_owned()),
+                    ("email".to_owned(), "ann@x".to_owned()),
+                    ("label".to_owned(), "Sales".to_owned())
+                ],
+                vec![
+                    ("c".to_owned(), "2".to_owned()),
+                    ("email".to_owned(), "zed@x".to_owned()),
+                    ("label".to_owned(), "Sales".to_owned())
+                ],
+            ],
+            "agg-over-union-compound-key live-PG value regression"
         );
     });
 }
