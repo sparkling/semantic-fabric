@@ -1089,6 +1089,102 @@ fn join_transfer_not_exists_self_join_eliminated() {
 }
 
 // ============================================================================
+// INTEGRATION-MERGE ADVERSARIAL PROBE (integ/optimizer-gaps-on-main): the ONE
+// shape neither side's own test suite exercises. `not_exists_cond_for` (main,
+// the OPTIONAL-anti-join-FILTER fix) now pushes the OPTIONAL's inner FILTER into
+// the SAME `NotExists { conds, .. }` that `self_join_elimination_in_subqueries`
+// (gapfix, 14b53ab) rewrites when it collapses a redundant same-table self-join
+// inside that NOT EXISTS. This is `join_transfer_not_exists_self_join_eliminated`
+// above PLUS a match-removing FILTER, so the self-join-eliminatable shape AND the
+// newly-threaded filter cond are both present in the SAME `conds` vec at once —
+// the composition risk is whether collapsing the redundant `dept` scan correctly
+// rewrites the filter cond's alias too (it references the DROPPED alias's
+// `label` column), not just the pre-existing correlation/`IsNotNull` conds both
+// sides' tests already cover individually.
+// ============================================================================
+
+const MERGE_SQL: &str = r#"
+CREATE TABLE dept (id INTEGER PRIMARY KEY, label TEXT NOT NULL);
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL, dept_id INTEGER NOT NULL);
+INSERT INTO dept VALUES (10, 'Sales');
+INSERT INTO dept VALUES (20, 'Legal');
+INSERT INTO person VALUES (1, 'Ann', 10);
+INSERT INTO person VALUES (2, 'Bob', 20);
+INSERT INTO person VALUES (3, 'Cid', 10);
+"#;
+
+const MERGE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/person/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:dept ;
+        rr:objectMap [
+            rr:parentTriplesMap <#Dept> ;
+            rr:joinCondition [ rr:child "dept_id" ; rr:parent "id" ]
+        ]
+    ] .
+<#Dept>
+    rr:logicalTable [ rr:tableName "dept" ] ;
+    rr:subjectMap [ rr:template "http://ex/dept/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:label ; rr:objectMap [ rr:column "label" ] ] .
+"#;
+
+const MERGE_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/person/1> ex:name "Ann" ; ex:dept <http://ex/dept/10> .
+<http://ex/person/2> ex:name "Bob" ; ex:dept <http://ex/dept/20> .
+<http://ex/person/3> ex:name "Cid" ; ex:dept <http://ex/dept/10> .
+<http://ex/dept/10> ex:label "Sales" .
+<http://ex/dept/20> ex:label "Legal" .
+"#;
+
+/// The decisive check: `?p ex:dept ?d . ?d ex:label ?label` is the SAME
+/// refObjectMap 2-scan-collapsing-to-1 shape as `join_transfer_not_exists_...`
+/// above, but now the OPTIONAL carries its OWN inner `FILTER(?label != "Sales")`
+/// — a MATCH-REMOVING filter for Ann/Cid (both dept 10, label "Sales", so their
+/// only candidate is filtered out -> NULL-padded) but a pass-through for Bob
+/// (dept 20, "Legal" != "Sales" -> right satisfied, `?label` bound). `diff()`
+/// proves flat vs tree row-bag parity AND both vs the independent `spareval`
+/// oracle over the hand-authored graph — a corrupted alias rewrite inside the
+/// NOT EXISTS (dropping or mis-scoping the filter cond when the redundant `dept`
+/// scan collapses) would either error (dangling alias, no such column) or flip
+/// Ann/Cid to wrongly bound / Bob to wrongly NULL, either way a flat/tree or
+/// spareval divergence `diff()` catches.
+#[test]
+fn merge_optional_filter_composes_with_self_join_elim_in_not_exists() {
+    let query = format!(
+        "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Sales\") }} }}"
+    );
+    diff(MERGE_SQL, MERGE_R2RML, Some(MERGE_TTL), &query);
+
+    // Structural: the self-join-elimination-in-subqueries pass must actually have
+    // FIRED here too (not silently bailed on seeing the extra filter cond) --
+    // otherwise the row-bag proof above isn't exercising the composition at all.
+    let conn = sqlite::load(MERGE_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(MERGE_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema)
+        .expect("tree must lower OPTIONAL over multi-atom right + inner FILTER");
+    let no_match = tp
+        .branches
+        .iter()
+        .find(|b| has_not_exists(&b.where_conds))
+        .expect("a NOT EXISTS no-match branch is present (Group C decomposition)");
+    assert_eq!(
+        table_scans_in(&no_match.where_conds, "dept"),
+        1,
+        "the NOT EXISTS anti-join subquery must scan `dept` exactly once (self-join \
+         eliminated) even with the OPTIONAL's own FILTER also present in `conds`: {:#?}",
+        no_match.where_conds
+    );
+}
+
+// ============================================================================
 // ADVERSARIAL REVIEW (commit 14b53ab: self-join elimination inside NOT
 // EXISTS/EXISTS subqueries, plus the `find_self_join_in` `?` -> `continue`
 // generalization). Four targeted counter-example attempts; see each test's doc.
@@ -1203,11 +1299,20 @@ fn adversarial_filter_exists_self_join_eliminated_stays_true() {
     let schema = sqlite::introspect_all(&conn).expect("introspect");
     let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
     let tp = tree(&maps, &parse(&query), &schema).expect("tree must lower FILTER EXISTS");
-    let has_exists = tp.branches.iter().any(|b| {
-        b.where_conds
-            .iter()
-            .any(|c| matches!(c, SqlCond::Exists { .. }))
-    });
+    // `lower_iq_exists` always wraps its per-branch `Exists`(es) in a `SqlCond::Or`
+    // (even for a single inner branch -- "at least one must match"), so this must
+    // recurse the same way `table_scans_in` below does, not just check the
+    // top-level `where_conds` shape.
+    fn has_exists_in(conds: &[SqlCond]) -> bool {
+        conds.iter().any(|c| match c {
+            SqlCond::Exists { .. } => true,
+            SqlCond::NotExists { conds, .. } => has_exists_in(conds),
+            SqlCond::Not(c) => has_exists_in(std::slice::from_ref(c)),
+            SqlCond::And(cs) | SqlCond::Or(cs) => has_exists_in(cs),
+            _ => false,
+        })
+    }
+    let has_exists = tp.branches.iter().any(|b| has_exists_in(&b.where_conds));
     assert!(has_exists, "FILTER EXISTS must lower to a SqlCond::Exists");
     let dept_scans: usize = tp
         .branches
