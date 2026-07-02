@@ -6,6 +6,12 @@
 shipped and Group D reclassified from a feared correctness gap to a confirmed-`=_bag`-safe SQL-shape
 cosmetic — see the Family 3 table and Roll-up section for the corrected dispositions; original
 2026-06-30 figures kept alongside for history, not silently overwritten.
+**RE-CORRECTED 2026-07-03:** the 2026-07-02 Group D "confirmed" verdict was wrong for FDSimplification —
+its probe fixture's inner FILTER was a no-op, so the MATCH it recorded was vacuous, not evidence. A real
+bug existed (`leftjoin.rs`'s anti-join branch dropped the OPTIONAL's own inner FILTER — ADR-0007 silent
+wrong answer), now fixed on the `leftjoin-antijoin-filter` branch. See the Family 3 table + Roll-up
+section below for the corrected per-row disposition; do not trust the "Group D fully closed" framing
+above without reading the correction.
 **Authority:** `docs/adr/ADR-0023-query-ir-architecture-flat-ucq-vs-iq-tree.md`,
 `docs/design/ADR-0023-design-lock.md` §4 (rule catalogue) / §5 (lowering),
 `docs/HANDOVER-2026-06-30-ir-architecture-decision.md` (79 oracle-green / 16 classes / 184 scenarios = OPTION_B),
@@ -144,7 +150,7 @@ Family 2 totals: **27 free-pass, 0 needs-tree-rewrite, 0 M5, 0 charter.** (Whole
 | join-elim | LeftJoinOpt::JoinTransfer/SameTerms single-scan (testLJSameTerms1, testJoinTransferSameTerms1/2, testNonJoinTransferSameTerms1) | DISTINCT over L OPT R, R single same-table scan | free-pass | §4.4 sameterm/FD branch + §4.5 (cascade pass 2c) |
 | join-elim | LeftJoinOpt::LJReductionWithLJOnTheRight (…1/2/3/5-12, testNon…1/2) | L OPT (R1 OPT R2) — right is itself OPTIONAL | free-pass — **CLOSED (Group C, commit `45ae36c`)** | §4 LJ re-association/reduction (Group C) — **probe: was Err 501 on flat, now `Ok(3)` MATCH on tree** |
 | join-elim | LeftJoinOpt::FDOnRight (testFDOnRight1-7) | DISTINCT over L OPT (R1 OPT R2) on shared FD-det | free-pass — **confirmed 2026-07-02** (`option_b_probe.rs` MATCH, commit `9967884`) | Group C re-assoc already `=_bag`-correct; Ontop's FD-collapse is a cheaper-SQL alternative, not a correctness prerequisite |
-| join-elim | LeftJoinOpt::FDSimplification (testFDSimplification) | nested OPT chain + per-right DISTINCT/FILTER + FD + ancestor FILTER | free-pass — **confirmed 2026-07-02** (`option_b_probe.rs` MATCH, commit `9967884`) | Group C re-assoc already `=_bag`-correct; Ontop's multi-LJ FD-merge is a cheaper-SQL alternative, not a correctness prerequisite |
+| join-elim | LeftJoinOpt::FDSimplification (testFDSimplification) | nested OPT chain + per-right DISTINCT/FILTER + FD + ancestor FILTER | **needs-tree-rewrite — CORRECTED 2026-07-02** (the 2026-07-02 "confirmed MATCH" was a NO-OP-filter probe artifact, not evidence; see [[adr-0023-optimizer-residue-horizon]]) | `not_exists_cond_for` (`leftjoin.rs`) omitted the OPTIONAL's own inner FILTER from its NOT-EXISTS condition — a left row whose only right candidate is filtered out vanished instead of NULL-padding (ADR-0007 violation). Fixed on the `leftjoin-antijoin-filter` branch; re-verify MATCH here once merged |
 | join-elim | LeftJoinOpt::PaddingForUnsatisfiableRight single-Construction (testPaddingForUnsatisfiableRight1) | outer FILTER makes single-scan right unsat → NULL-pad | free-pass | §4.2 unsat-equality-prune + §4.13 |
 | join-elim | LeftJoinOpt::PaddingForUnsatisfiableRight UNION-right (testPaddingForUnsatisfiableRight2/3) | right is a UNION, all arms unsat | free-pass — **confirmed 2026-07-02** (`option_b_probe.rs` MATCH, commit `54fd5e9`) | Group C's decomposition re-feeds the opts-free union into `left_join_branches`'s multi-branch NOT-EXISTS arm, which correctly NULL-pads rather than distributing the unsat-prune into the union |
 | join-elim | LeftJoinOpt::LeftJoinUnionConstants/LeftJoinValues (testLeftJoinUnionConstants, testLeftJoinValues) | (L ⋈ Union{const}/Values) OPT R | free-pass | §4.15 fold + §4.16 + §4.4; Values is first-class leaf |
@@ -155,18 +161,31 @@ Family 2 totals: **27 free-pass, 0 needs-tree-rewrite, 0 M5, 0 charter.** (Whole
 | join-elim | MappingCQCOptimizer::test_foreign_keys / ::test_optimisation_order | general containment chase (LIDs + homomorphism) | charter-excluded | semantic chase, not §4 syntactic (ADR-0023 keeps only §4.6) |
 | join-elim | NRAJoinOptimizer (entire class, e.g. testFlattenLift1) | FlattenNode/NestedView/array-unnest lift | charter-excluded | FlattenNode/JSON out of charter; class disabled in Ontop |
 
-Family 3 totals (updated 2026-07-02, see [[adr-0023-optimizer-residue-horizon]]): **25 free-pass, 0
-needs-tree-rewrite, 0 M5 (closed), 2 charter** (27 rows total, unchanged). All 7 rows this table
-originally marked needs-tree-rewrite (Group C: MergeLJs-right-nested, LJReductionWithLJOnTheRight,
-PaddingUnsat-UNION-right; Group D: JoinTransfer PK/FK, JoinTransfer FD, FDOnRight, FDSimplification)
-are now empirically confirmed
-`=_bag`-correct (Group C's general `(L⋈R)∪(L¬∃R)` decomposition, `left_join_decomposed`, closes the whole
-class regardless of FD/key structure — Ontop's FD-driven Group D rules turned out to be a cheaper-SQL
-*alternative* strategy for the same correctness outcome, not a prerequisite for it). The
-LeftJoinJoinLimit/M5 row is also closed (M5 Wave 2, `left_join_as_subplan`). What remains for all of
-these is SQL-SHAPE-ONLY: the tree emits an extra `NOT EXISTS` correlated-subquery scan where Ontop emits
-one collapsed join — a real, in-charter, but now-cosmetic backlog item (folds into the Family 1 cosmetic
-set below, not a separate correctness milestone).
+Family 3 totals (**RE-CORRECTED 2026-07-03**, see [[adr-0023-optimizer-residue-horizon]]): **24
+free-pass, 1 needs-tree-rewrite (FDSimplification), 0 M5 (closed), 2 charter** (27 rows total). The
+2026-07-02 update below moved all 7 originally-needs-tree-rewrite rows to free-pass; ONE of those
+(FDSimplification) has since been moved BACK — its "confirmed MATCH" rested on a probe fixture whose
+inner FILTER was a no-op (never excluded a candidate), so it never actually exercised the anti-join
+branch's own filter and the MATCH verdict was vacuous, not a real confirmation. A genuine bug existed:
+`not_exists_cond_for` (`crates/sf-sparql/src/leftjoin.rs`) omitted the OPTIONAL's inner FILTER from its
+`NOT EXISTS` condition, so a right row that exists-but-fails-the-filter still counted as "a match
+exists" — a left row whose only candidate is filtered out vanished from BOTH branches instead of
+NULL-padding (a silent wrong answer, ADR-0007). Fixed + adversarially re-reviewed on the
+`leftjoin-antijoin-filter` branch (not yet merged here); the probe scenario's filter has been corrected
+to a match-removing one (`docs` + `option_b_probe.rs` both updated) — re-run once the fix merges and
+this should flip back to free-pass with REAL evidence. The other 6 rows this table originally marked
+needs-tree-rewrite (Group C: MergeLJs-right-nested, LJReductionWithLJOnTheRight, PaddingUnsat-UNION-right;
+Group D: JoinTransfer PK/FK, JoinTransfer FD, FDOnRight) remain empirically confirmed `=_bag`-correct —
+none of their probe scenarios exercise a match-removing FILTER inside a multi-scan OPTIONAL right (the
+specific shape the bug needed), so they are NOT suspected to share FDSimplification's gap, but this has
+not been independently re-verified per-scenario beyond that structural check (see the caveat in the
+Roll-up section below). Group C's general `(L⋈R)∪(L¬∃R)` decomposition
+(`left_join_decomposed`) remains sound independent of FD/key structure — Ontop's FD-driven Group D rules
+are a cheaper-SQL *alternative* strategy, not a prerequisite, for the 6 rows this still holds for. The
+LeftJoinJoinLimit/M5 row is also closed (M5 Wave 2, `left_join_as_subplan`) and unaffected (its scenario
+has no inner FILTER either). What remains for the 6 still-confirmed rows is SQL-SHAPE-ONLY: the tree
+emits an extra `NOT EXISTS` correlated-subquery scan where Ontop emits one collapsed join — a real,
+in-charter, but cosmetic backlog item (folds into the Family 1 cosmetic set below).
 
 ---
 
@@ -221,39 +240,63 @@ rows + Group D's 4 rows, 7 total) is now empirically confirmed `=_bag`-correct, 
 needs-tree-rewrite to free-pass below. The table below reflects that; the ORIGINAL (2026-06-30, M4
 planning) counts are kept alongside for history.
 
+**RE-CORRECTED 2026-07-03**: FDSimplification's free-pass move rested on a vacuous (no-op-filter) probe
+and has been reverted to needs-tree-rewrite pending the `leftjoin-antijoin-filter` fix merging here (see
+the correction note above the Family 3 table). The counts below are updated accordingly; the 2026-07-02
+88/27/0/6 figures are superseded by this row, not deleted (see git history for that intermediate state).
+
 | disposition | union-structural | boolean-push | join-elim | projection-and-true | **total** | *(orig. join-elim / total)* |
 |---|---|---|---|---|---|---|
-| free-pass | 6 | 27 | 25 | 30 | **88** | *(17 / 80)* |
-| needs-tree-rewrite | 27 | 0 | 0 | 0 | **27** | *(7 / 34)* |
+| free-pass | 6 | 27 | 24 | 30 | **87** | *(17 / 80)* |
+| needs-tree-rewrite | 27 | 0 | 1 | 0 | **28** | *(7 / 34)* |
 | needs-SubPlan-M5 | 0 | 0 | 0 | 0 | **0** | *(1 / 1, now closed)* |
 | charter-excluded | 0 | 0 | 2 | 4 | **6** | *(2 / 6)* |
-| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, none added/removed)* |
+| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed)* |
 
 Row-count note: these are the **representative analysis rows**; several join-elim rows fold multiple
 Ontop `@Test` methods (e.g. `testJoinTransfer1-14`) into one shape. They cover the full 16-class / 184-test
 OPTION_B surface from the handover — the 184 figure is the Ontop method count, ~120 the distinct shapes.
 
-**`=_bag` reality (2026-07-02, probe + adversarial-review-adjusted):** of the original 34 needs-tree-rewrite
-rows, **all 27 union-structural (Family 1) are [cosmetic]** (the tree is already `=_bag`-correct; the
-rewrite buys only Ontop SQL/node-signature parity) and the **7 join-elim (Group C + Group D) rows are now
-ALSO cosmetic** — Group C's general decomposition closed them all, confirmed by `option_b_probe.rs`
-(commits `9967884`, `54fd5e9`) plus a dedicated adversarial refute-only review (9 fixtures across nullable
-FD determinants, DISTINCT/anti-join interaction, cyclic self-joins, multiplicity — zero mismatches found;
-caveat: SQLite-only, live-PG/MySQL dialect-specific 3VL quirks on this exact shape not separately
-re-verified). **Zero remaining genuine `=_bag` oracle-gaps in this table.** What's left everywhere is
-SQL-shape/signature parity only — 27 union-structural rewrites + the join-elim group's extra `NOT EXISTS`
-scan vs Ontop's collapsed join.
+**`=_bag` reality (RE-CORRECTED 2026-07-03, see [[adr-0023-optimizer-residue-horizon]]):** of the original
+34 needs-tree-rewrite rows, **all 27 union-structural (Family 1) are [cosmetic]** (the tree is already
+`=_bag`-correct; the rewrite buys only Ontop SQL/node-signature parity). Of the 7 join-elim (Group C +
+Group D) rows, **6 are confirmed cosmetic** (Group C: MergeLJs-right-nested, LJReductionWithLJOnTheRight,
+PaddingUnsat-UNION-right; Group D: JoinTransfer PK/FK, JoinTransfer FD, FDOnRight — `option_b_probe.rs`
+commits `9967884`, `54fd5e9`), but **FDSimplification is a REAL, now-fixed `=_bag` gap, not cosmetic**:
+its 2026-07-02 "confirmed MATCH" probe used a no-op inner FILTER (never excluded a candidate against
+fixture P), so the verdict was vacuous — it never exercised `not_exists_cond_for`'s own filter
+application. The actual bug: a left row whose only right candidate is filtered out vanished from BOTH
+the match branch (excluded by the filter) and the no-match branch (`NOT EXISTS` wrongly false, since the
+unfiltered join still exists) instead of being NULL-padded — a silent wrong answer (ADR-0007). Fixed +
+revert-proven + adversarially re-reviewed on the `leftjoin-antijoin-filter` branch (not yet merged here);
+the probe scenario now uses a match-removing filter and correctly shows `Mismatch` until that merge.
+The 2026-07-02 "dedicated adversarial refute-only review (9 fixtures... zero mismatches found)" that
+this row's prior confirmation also leaned on did NOT include a match-removing-filter-on-multi-scan-
+OPTIONAL-right angle among its 4 (nullable FD determinant / DISTINCT-anti-join / cyclic self-join /
+multiplicity) — that blind spot is why it missed this bug; the other 6 rows' scenarios were individually
+re-checked (see the Family 3 table note above) and none of them exercise an inner FILTER on a multi-scan
+OPTIONAL right, so they are not currently suspected to share this gap, but that is a structural argument,
+not a re-run adversarial pass — treat the 6 as probe-confirmed-good, NOT as freshly adversarially
+re-cleared. Also unchanged caveat: SQLite-only, live-PG/MySQL dialect-specific 3VL quirks on these shapes
+not separately re-verified. **One remaining genuine `=_bag` oracle-gap in this table (FDSimplification,
+fixed elsewhere, pending merge here) — not zero.** What's left for the other 33 is SQL-shape/signature
+parity only — 27 union-structural rewrites + the join-elim group's extra `NOT EXISTS` scan vs Ontop's
+collapsed join.
 
 ## Proposed implementation waves (needs-tree-rewrite, dependency order)
 
 - ~~**Wave 3 — Group C: LeftJoin multi-node-right re-association**~~ **SHIPPED** (M4 Wave 3, commit
   `45ae36c`). Unblocked LJReductionWithLJOnTheRight, MergeLJs-right-nested, PaddingUnsat-UNION-right — all
   confirmed `=_bag`-correct.
-- ~~**Wave 4 — Group D: atom/FD transfer at the LeftJoin-over-InnerJoin boundary**~~ **RECLASSIFIED
-  2026-07-02**: not needed for correctness (Group C already closes the whole class independent of FD/key
-  reasoning — see Roll-up above). What remains is a SQL-shape/performance optimization (collapse the
-  `Union`+`NOT EXISTS` decomposition back into a cheaper single-scan join when a key/FD condition proves
-  it's safe) — folded into the cosmetic backlog below, no longer a separate correctness-critical wave.
+- ~~**Wave 4 — Group D: atom/FD transfer at the LeftJoin-over-InnerJoin boundary**~~ **PARTIALLY
+  RECLASSIFIED 2026-07-02, CORRECTED 2026-07-03**: 3 of 4 Group D rows (JoinTransfer PK/FK, JoinTransfer
+  FD, FDOnRight) are not needed for correctness (Group C already closes them independent of FD/key
+  reasoning — see Roll-up above); for those, what remains is a SQL-shape/performance optimization
+  (collapse the `Union`+`NOT EXISTS` decomposition back into a cheaper single-scan join when a key/FD
+  condition proves it's safe) — folded into the cosmetic backlog below. The 4th (FDSimplification) is
+  NOT cosmetic: it was a real `=_bag` gap (the anti-join-FILTER bug, see Roll-up above), now fixed on the
+  `leftjoin-antijoin-filter` branch — pending that merge, do not fold FDSimplification's residual (if any,
+  beyond the correctness fix itself) into the Wave 7 cosmetic-only scope below without re-probing it first.
 - **Wave 5 — Group B: UnionAndBindingLift + Values constant-fold** *(independent; signature parity only,
   NEXT UP — `=_bag` parity is now exhausted per the finding above)*. §4.15 fold-constants-into-Values,
   RDF-term split/lift, multi-column Values. Unblocks: test14-26, test19/23/24,

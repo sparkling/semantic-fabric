@@ -364,11 +364,30 @@ fn scenarios() -> Vec<Scenario> {
             // (Group C decomposition) with a FILTER inside the OPTIONAL right
             // (per-right, on the FD-determined ?label) PLUS an outer ancestor
             // FILTER on ?name — the combination Ontop's FDSimplification targets.
-            // No dept is labelled "X" (inner FILTER a no-op); Bob is dropped by the
-            // outer FILTER. Expected bag: Ann/Sales, Zed/Sales.
+            //
+            // CORRECTED (leftjoin-antijoin-filter wave, see
+            // [[adr-0023-optimizer-residue-horizon]]): the ORIGINAL filter here was
+            // `FILTER(?label != "X")` -- a NO-OP against fixture P (every person is
+            // in dept "Sales", never "X"), so it never actually exercised the
+            // anti-join branch's own filter application and the resulting "MATCH"
+            // verdict this scenario's `NeedsRewrite` disposition recorded was
+            // VACUOUS, not evidence of correctness. `not_exists_cond_for`
+            // (`crates/sf-sparql/src/leftjoin.rs`) omitted the OPTIONAL's own inner
+            // FILTER from its NOT-EXISTS condition, so a right row that
+            // exists-but-fails-the-filter still counted as "a match exists" for the
+            // anti-join -- a left row whose only candidate is filtered out vanished
+            // from BOTH branches instead of being NULL-padded (a silent wrong
+            // answer, ADR-0007). The filter below is now MATCH-REMOVING
+            // (`!= "Sales"` excludes every person's only dept-label) so this
+            // scenario actually exercises that path. Until the fix lands on this
+            // branch this scenario is an HONEST `Mismatch` (0 rows here vs the
+            // correct NULL-padded Ann/Zed) -- expected, not a new regression: Bob is
+            // dropped by the outer FILTER; Ann/Zed's only dept-label ("Sales") fails
+            // the inner FILTER, so they must NULL-pad on ?label, not disappear.
+            // Expected bag once fixed: Ann/unbound, Zed/unbound (2 rows).
             query: format!(
                 "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
-                 OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"X\") }} \
+                 OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Sales\") }} \
                  FILTER(?name != \"Bob\") }}"
             ),
         },
