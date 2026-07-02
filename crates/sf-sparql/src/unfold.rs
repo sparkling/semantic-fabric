@@ -986,12 +986,25 @@ fn parse_rust_agg(
 
 /// The raw key columns a GROUP BY key lowers to: a column/template term map's
 /// columns (grouping by the raw key ≡ grouping by the constructed term, the
-/// term-lifting injectivity assumption, ADR-0007). A constant / COALESCE / CONCAT
-/// key has no single raw key to group by (a constant doesn't partition; a
-/// constructed multi-source term can't be reduced to a GROUP BY column soundly) →
-/// deferred 501 (never silently wrong).
+/// term-lifting injectivity assumption, ADR-0007) — **gated on
+/// [`crate::cascade::binding_is_injective`]**, the same soundness condition
+/// DISTINCT-removal already requires: a `TermMap::Column` is trivially
+/// injective, but a non-injective `TermMap::Template` (adjacent column slots
+/// with no separator, or 2+ column slots on a non-IRI/non-percent-encoded
+/// term type) can map two DISTINCT raw-column tuples to the SAME constructed
+/// term — grouping by the raw columns would then split one SPARQL group into
+/// two, silently under-counting. A constant / COALESCE / CONCAT key has no
+/// single raw key to group by (a constant doesn't partition; a constructed
+/// multi-source term can't be reduced to a GROUP BY column soundly) → deferred
+/// 501 (never silently wrong).
 pub(crate) fn group_key_columns(def: &TermDef, var: &str) -> Result<Vec<ColRef>> {
     match def {
+        TermDef::Derived { .. } if !crate::cascade::binding_is_injective(def) => {
+            Err(Error::Unsupported(format!(
+                "GROUP BY ?{var} is a non-injective template key (two distinct raw-column \
+                 tuples could construct the same term) → 501"
+            )))
+        }
         TermDef::Derived { .. } => {
             let cols = def.columns();
             if cols.is_empty() {

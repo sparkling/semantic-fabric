@@ -896,7 +896,13 @@ fn is_single_scan_selection(cond: &SqlCond) -> bool {
 /// [`Template::is_injective`]); for non-IRI templates only a single column
 /// slot is safe because the lack of percent-encoding means a separator
 /// character can appear in a column value, breaking uniqueness.
-fn binding_is_injective(def: &TermDef) -> bool {
+///
+/// `pub(crate)`: also the gate `unfold::group_key_columns` and
+/// `iq::lower::try_sql_group_over_union` use before treating a `GROUP BY` key's
+/// raw columns as equivalent to grouping by the constructed term (a distinct
+/// injectivity concern from the one this fn was written for — DISTINCT-removal
+/// — but the same underlying soundness condition).
+pub(crate) fn binding_is_injective(def: &TermDef) -> bool {
     let TermDef::Derived {
         term_map: TermMap::Template(t, spec),
         ..

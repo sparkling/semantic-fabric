@@ -623,6 +623,101 @@ fn agg_over_union_self_join_eliminated_on_shared_table() {
     }
 }
 
+// ============================================================================
+// GROUP-BY-TEMPLATE INJECTIVITY (ADR-0023 optimizer-residue wave, q9 agg-pushdown
+// follow-up): `group_key_columns` lowers a `GROUP BY ?v` key to ?v's raw R2RML
+// columns (ADR-0007 term-lifting: grouping by the raw key ≡ grouping by the
+// constructed term) — sound ONLY when the term map is INJECTIVE. A non-injective
+// `rr:template` (two adjacent `{col}` slots with no literal separator between
+// them) can map two DISTINCT raw-column tuples to the SAME constructed term;
+// grouping by the raw columns then silently SPLITS one SPARQL group into two,
+// under-counting. `crate::cascade::binding_is_injective` (already the gate
+// DISTINCT-removal uses for the identical soundness condition) closes this.
+// ============================================================================
+
+const NONINJ_SQL: &str = r#"
+CREATE TABLE nj (id INTEGER PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL, tag TEXT NOT NULL);
+INSERT INTO nj VALUES (1, '1', '23', 't1');
+INSERT INTO nj VALUES (2, '12', '3', 't2');
+"#;
+
+/// `{a}{b}` — adjacent column slots, NO separator: row 1 ('1','23') and row 2
+/// ('12','3') both expand to the SAME subject `http://ex/x/123`.
+const NONINJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#NJ>
+    rr:logicalTable [ rr:tableName "nj" ] ;
+    rr:subjectMap [ rr:template "http://ex/x/{a}{b}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:tag ; rr:objectMap [ rr:column "tag" ] ] .
+"#;
+
+#[test]
+fn group_by_non_injective_template_key_defers_not_miscounts() {
+    // Both DB rows construct the SAME subject `http://ex/x/123` (non-injective
+    // template) but emit DIFFERENT `ex:tag` objects, so the graph is genuinely
+    // 2 distinct triples under 1 collapsed subject — grouping by the RAW (a,b)
+    // columns (the pre-fix behaviour) would wrongly produce 2 groups of count 1
+    // instead of 1 group of count 2. `diff()` asserts flat/tree agree AND defer
+    // (rather than asserting a — now provably wrong — numeric answer): a 501 is
+    // the established "never silently wrong" outcome this file's other deferred
+    // shapes (GROUP_CONCAT, SAMPLE, …) already use.
+    diff(
+        NONINJ_SQL,
+        NONINJ_R2RML,
+        None,
+        &format!("{PFX} SELECT ?s (COUNT(?t) AS ?c) WHERE {{ ?s ex:tag ?t }} GROUP BY ?s"),
+    );
+    let conn = sqlite::load(NONINJ_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(NONINJ_R2RML).expect("R2RML parses");
+    let q = parse(&format!(
+        "{PFX} SELECT ?s (COUNT(?t) AS ?c) WHERE {{ ?s ex:tag ?t }} GROUP BY ?s"
+    ));
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "GROUP BY on a non-injective template key must defer (501), not silently \
+         miscount by grouping on the raw non-injective columns"
+    );
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "flat oracle must defer identically"
+    );
+}
+
+/// Positive control: an INJECTIVE template key (single column slot) must still
+/// group correctly — proves the injectivity gate isn't overly conservative and
+/// doesn't regress the common (single-placeholder subject IRI) case that every
+/// other `agg_over_union_*`/R2RML fixture in this file relies on.
+#[test]
+fn group_by_injective_template_key_still_groups() {
+    let ttl = r#"
+@prefix ex: <http://ex/> .
+<http://ex/x/123> ex:tag "t1" .
+<http://ex/x/23> ex:tag "t2" .
+"#;
+    // `{id}` alone is trivially injective (single column slot, ADR-0007 R2).
+    let r2rml = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#NJ2>
+    rr:logicalTable [ rr:tableName "nj2" ] ;
+    rr:subjectMap [ rr:template "http://ex/x/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:tag ; rr:objectMap [ rr:column "tag" ] ] .
+"#;
+    let sql = r#"
+CREATE TABLE nj2 (id TEXT PRIMARY KEY, tag TEXT NOT NULL);
+INSERT INTO nj2 VALUES ('123', 't1');
+INSERT INTO nj2 VALUES ('23', 't2');
+"#;
+    diff(
+        sql,
+        r2rml,
+        Some(ttl),
+        &format!("{PFX} SELECT ?s (COUNT(?t) AS ?c) WHERE {{ ?s ex:tag ?t }} GROUP BY ?s"),
+    );
+}
+
 // --- OVERLAP: two triples-maps over the SAME table both emit ex:val (identical
 // triples), and one map carries the SAME predicate twice. The virtual graph is NOT
 // set-faithful (the duplicate triples collapse in a real RDF graph), so flat-vs-tree
