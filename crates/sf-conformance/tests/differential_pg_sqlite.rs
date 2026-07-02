@@ -123,6 +123,21 @@ const ASK_FALSE_Q: &str = r#"
 ///   multi-column `GROUP BY` on the live PG/MySQL `UNION ALL`. Only Ann/Zed have
 ///   an email (Bob's NULL drops him from this pattern) ⇒ 2 groups (one per
 ///   person), each COUNT 2 (name + email).
+/// * **group-d-fd-on-right** — ADR-0023 optimizer-residue (Wave B, closing the
+///   SQLite-only adversarial-review caveat): DISTINCT over a right-nested
+///   OPTIONAL (`L OPT (R1 OPT R2)`, Ontop's FDOnRight shape) — Group C's
+///   decomposition must correctly close this on the LIVE PG/MySQL executors
+///   (not just SQLite), including the correlated `NOT EXISTS` subquery the
+///   right-nested decomposition emits. All 3 persons share dept "Sales" ⇒ 3
+///   distinct (?name,?label) rows.
+/// * **group-d-fd-simplification** — ADR-0023 optimizer-residue (Wave B, same
+///   closing purpose): a right-nested OPTIONAL with a FILTER INSIDE the
+///   OPTIONAL right (on the FD-determined `?label`) PLUS an outer ancestor
+///   FILTER (Ontop's FDSimplification shape) — proves the live PG/MySQL
+///   correlated-subquery FILTER placement (inside vs outside the `NOT EXISTS`)
+///   is correct, not just the SQLite embedded engine's. No dept is labelled
+///   "X" (inner FILTER a no-op); Bob is dropped by the outer FILTER ⇒ 2 rows
+///   (Ann/Sales, Zed/Sales).
 const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
     (
         "agg-over-union",
@@ -193,6 +208,28 @@ const FEATURE_QUERIES: &[(&str, &str, usize)] = &[
              ?p ex:dept ?d . ?d ex:label ?label . ?p ex:email ?email .
              { ?p ex:name ?v } UNION { ?p ex:email ?v }
            } GROUP BY ?label ?email"#,
+        2,
+    ),
+    (
+        "group-d-fd-on-right",
+        r#"PREFIX ex: <http://ex/>
+           SELECT DISTINCT ?name ?label WHERE {
+             ?p ex:name ?name
+             OPTIONAL {
+               ?p ex:dept ?d . ?d ex:label ?label
+               OPTIONAL { ?p ex:email ?email }
+             }
+           }"#,
+        3,
+    ),
+    (
+        "group-d-fd-simplification",
+        r#"PREFIX ex: <http://ex/>
+           SELECT ?name ?label WHERE {
+             ?p ex:name ?name
+             OPTIONAL { ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != "X") }
+             FILTER(?name != "Bob")
+           }"#,
         2,
     ),
 ];
@@ -588,6 +625,47 @@ fn select_and_ask_agree_across_sqlite_and_pg() {
                 ],
             ],
             "agg-over-union-compound-key live-PG value regression"
+        );
+        // ADR-0023 optimizer-residue Wave B: FDOnRight on live PG. All 3 persons
+        // share dept "Sales" -- a regression in the live NOT-EXISTS correlated
+        // subquery (right-nested-OPTIONAL decomposition) would drop rows or
+        // duplicate them under DISTINCT, not just return the right cardinality.
+        assert_eq!(
+            pg_bag("group-d-fd-on-right"),
+            vec![
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Ann".to_owned())
+                ],
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Bob".to_owned())
+                ],
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Zed".to_owned())
+                ],
+            ],
+            "group-d-fd-on-right live-PG value regression"
+        );
+        // ADR-0023 optimizer-residue Wave B: FDSimplification on live PG. Bob is
+        // dropped by the ANCESTOR (outer) FILTER; the per-right (inner) FILTER on
+        // ?label is a no-op (no dept named "X") -- a regression that misplaces
+        // either FILTER (inside vs outside the correlated NOT-EXISTS) would drop
+        // Ann/Zed too, or fail to drop Bob.
+        assert_eq!(
+            pg_bag("group-d-fd-simplification"),
+            vec![
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Ann".to_owned())
+                ],
+                vec![
+                    ("label".to_owned(), "Sales".to_owned()),
+                    ("name".to_owned(), "Zed".to_owned())
+                ],
+            ],
+            "group-d-fd-simplification live-PG value regression"
         );
     });
 }
