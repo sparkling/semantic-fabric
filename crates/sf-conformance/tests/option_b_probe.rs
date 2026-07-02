@@ -332,6 +332,47 @@ fn scenarios() -> Vec<Scenario> {
             ),
         },
         Scenario {
+            name: "join-elim/FDOnRight (DISTINCT over L OPT (R1 OPT R2), shared FD-det)",
+            family: "join-elim",
+            disp: Disp::NeedsRewrite,
+            create: P_SQL,
+            r2rml: P_R2RML,
+            ttl: P_TTL,
+            // ADR-0023 optimizer-residue Wave B pre-work: DISTINCT over a right-nested
+            // OPTIONAL (Group C's decomposition), projecting away the innermost
+            // ?email so only the FD-determined (?p -> ?d -> ?label) columns survive.
+            // Ontop's FDOnRight collapses this via FD-driven right-side elimination;
+            // the tree closes it via Group C's decomposition + per-branch dedup
+            // instead — added here (per the "oracle law") to get an EMPIRICAL
+            // verdict before any Group D implementation, since this scenario had
+            // zero probe coverage. Ann/Sales, Bob/Sales, Zed/Sales (each name
+            // already unique, so DISTINCT is a no-op on the bag).
+            query: format!(
+                "{PFX} SELECT DISTINCT ?name ?label WHERE {{ ?p ex:name ?name \
+                 OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label \
+                 OPTIONAL {{ ?p ex:email ?email }} }} }}"
+            ),
+        },
+        Scenario {
+            name: "join-elim/FDSimplification (nested OPT + per-right FILTER + ancestor FILTER)",
+            family: "join-elim",
+            disp: Disp::NeedsRewrite,
+            create: P_SQL,
+            r2rml: P_R2RML,
+            ttl: P_TTL,
+            // ADR-0023 optimizer-residue Wave B pre-work: a right-nested OPTIONAL
+            // (Group C decomposition) with a FILTER inside the OPTIONAL right
+            // (per-right, on the FD-determined ?label) PLUS an outer ancestor
+            // FILTER on ?name — the combination Ontop's FDSimplification targets.
+            // No dept is labelled "X" (inner FILTER a no-op); Bob is dropped by the
+            // outer FILTER. Expected bag: Ann/Sales, Zed/Sales.
+            query: format!(
+                "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+                 OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"X\") }} \
+                 FILTER(?name != \"Bob\") }}"
+            ),
+        },
+        Scenario {
             name: "join-elim/OPTIONAL over a UNION right (multi-branch opts-free right)",
             family: "join-elim",
             // ADR-0023 M4 wave 3 — the OPTIONAL right is a UNION. The right lowers to
