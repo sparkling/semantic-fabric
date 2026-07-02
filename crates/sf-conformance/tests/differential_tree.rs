@@ -31,6 +31,7 @@ use rusqlite::Connection;
 use sf_conformance::graph::{isomorphic, parse_turtle, triples_to_dataset};
 use sf_conformance::oracle::{self, OracleAnswer};
 use sf_conformance::sqlite;
+use sf_sparql::iq::SqlCond;
 use sf_sparql::{exec, translate_tree, translate_with_flat, Error, Plan, PlanForm, Tbox};
 use sf_sql::{Dialect, TableSchema};
 use spargebra::{Query, SparqlParser};
@@ -594,6 +595,10 @@ fn agg_over_union_sum_avg() {
 /// (not just that "some" closure did) — needed here because concern #3
 /// (`COUNT(DISTINCT ?v)`) and the compound-key case are exactly the shapes the
 /// pushdown must actually exercise for these regression guards to mean anything.
+fn has_not_exists(conds: &[SqlCond]) -> bool {
+    conds.iter().any(|c| matches!(c, SqlCond::NotExists { .. }))
+}
+
 fn pushdown_agg(tp: &Plan) -> Option<&sf_sparql::iq::Aggregation> {
     tp.branches
         .iter()
@@ -749,6 +754,61 @@ fn agg_over_union_self_join_eliminated_on_shared_table() {
             "self-join on `m`'s PK must collapse to a single scan"
         );
     }
+}
+
+/// ADR-0023 optimizer-residue wave (the Group-D-adjacent SQL-shape cosmetic fix):
+/// `?p ex:name ?name OPTIONAL { ?p ex:dept ?d . ?d ex:label ?label }` — the
+/// OPTIONAL right is a 2-scan `refObjectMap` join (`person` re-scanned to reach
+/// `dept_id`, joined to `dept`) — Group C's decomposition re-derives the right
+/// side from scratch inside its `NOT EXISTS` anti-join branch, which (before this
+/// fix) left a REDUNDANT extra `dept` scan there (self-joined on `dept.id`, not
+/// collapsed the way the matched-arm `InnerJoin` branch's own self-join
+/// elimination already collapses the redundant `person` scan). After this fix the
+/// `NOT EXISTS` subquery scans `dept` exactly once too — proven both `=_bag`
+/// (via `diff_p`) and structurally (scan count).
+#[test]
+fn join_transfer_not_exists_self_join_eliminated() {
+    let query = format!(
+        "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label }} }}"
+    );
+    diff_p(&query);
+
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema)
+        .expect("tree must lower OPTIONAL over multi-atom right");
+    let no_match = tp
+        .branches
+        .iter()
+        .find(|b| has_not_exists(&b.where_conds))
+        .expect("a NOT EXISTS no-match branch is present (Group C decomposition)");
+    fn dept_scans_in_not_exists(conds: &[SqlCond]) -> usize {
+        conds
+            .iter()
+            .map(|c| {
+                match c {
+                SqlCond::NotExists { scans, .. } | SqlCond::Exists { scans, .. } => scans
+                    .iter()
+                    .filter(|s| {
+                        matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "dept")
+                    })
+                    .count(),
+                SqlCond::Not(c) => dept_scans_in_not_exists(std::slice::from_ref(c)),
+                SqlCond::And(cs) | SqlCond::Or(cs) => dept_scans_in_not_exists(cs),
+                _ => 0,
+            }
+            })
+            .sum()
+    }
+    assert_eq!(
+        dept_scans_in_not_exists(&no_match.where_conds),
+        1,
+        "the NOT EXISTS anti-join subquery must scan `dept` exactly once (no \
+         redundant self-join): {:#?}",
+        no_match.where_conds
+    );
 }
 
 // ============================================================================
