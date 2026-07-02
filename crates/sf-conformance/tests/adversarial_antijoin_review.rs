@@ -236,14 +236,37 @@ fn diff_od(query: &str) {
 //   not claimed as a second confirmed kill. Under the FIXED code both A and B
 //   pass cleanly.
 // * Candidates C/D add a LIMIT-subselect on the LEFT of the OPTIONAL (the
-//   literal Ontop `testLeftJoinJoinLimit` shape). Both translate successfully
-//   but CRASH at SQL-execution time (`no such column: tN.c0`) — confirmed via
+//   literal Ontop `testLeftJoinJoinLimit` shape). At the time this comment was
+//   first written, both translated successfully but CRASHED at SQL-execution
+//   time (`no such column: tN.c0`) — confirmed via
 //   `angle1_followup_isolate_subplan_join_drop_bug` to be a PRE-EXISTING,
-//   FIX-INDEPENDENT defect (reproduces with no FILTER at all, and via both the
-//   single-scan `build_left_join` and multi-scan `inner_join_one` merge paths;
-//   does NOT reproduce for the same LIMIT-subselect joined via a plain
-//   INNER JOIN instead of OPTIONAL) — so neither C nor D can exercise this
-//   review's fix at all, and neither is a counterexample to it.
+//   FIX-INDEPENDENT defect relative to the anti-join-FILTER fix under review
+//   here (reproduced with no FILTER at all; did NOT reproduce for the same
+//   LIMIT-subselect joined via a plain INNER JOIN instead of OPTIONAL) — so
+//   neither C nor D exercised THIS review's fix, and neither was a
+//   counterexample to it.
+//
+//   **UPDATE (2026-07-03, subplan-drop fix, `crates/sf-sparql/src/leftjoin.rs`):**
+//   root-caused and closed, in code this review's own diff never touched. Two
+//   distinct defects: (1) `inner_join_one` built its output `Branch` with
+//   `subplan_joins: Vec::new()`, unconditionally discarding `left.subplan_joins`
+//   (and any `right.subplan_joins`) instead of carrying them forward — fixed by
+//   extending both sides through, mirroring `unfold::merge`'s InnerJoin idiom.
+//   That alone fixes candidate C (and the `i`/`ii` shapes in
+//   `angle1_followup_isolate_subplan_join_drop_bug`). (2) Candidate D goes one
+//   level deeper: the OUTER decomposition's anti-join branch calls
+//   `not_exists_cond_for(l_outer, r=<inner LeftJoin's own decomposed match
+//   branch>, ..)`, and that inner match branch itself carries a SubPlan (the
+//   LIMIT-subselect) — `SqlCond::NotExists::scans` is a plain `Vec<Scan>` with
+//   no room for a nested SubPlan, so the correlated reference into it would
+//   still be unrepresentable. Rather than extend the `SqlCond` enum (a bigger,
+//   riskier change touching emit.rs + cascade + iq.rs traversal for a shape no
+//   test yet needs), `not_exists_cond_for` now detects `right.subplan_joins`
+//   non-empty and returns a sound `Unsupported` (501, ADR-0007) instead of
+//   building unrenderable SQL. D now fails honestly at translate time instead
+//   of crashing at execution time; C is unaffected by this second, narrower
+//   guard (its right side carries no subplan). See
+//   `angle1_followup_isolate_subplan_join_drop_bug` for the revert-proof.
 // * `left_join_as_subplan` specifically (as opposed to `left_join_decomposed`'s
 //   own loop) still appears structurally unreachable in a way that completes
 //   successfully: it is only invoked when some right branch carries non-empty
@@ -253,7 +276,8 @@ fn diff_od(query: &str) {
 //   ever called, no branch can carry non-empty `opts` by construction. No
 //   candidate here (nor any considered) reaches its `inner_join_one`/
 //   `not_exists_cond_for` loop specifically; it remains untested (not "proven
-//   correct", not "proven broken" — simply unreached by any query found).
+//   correct", not "proven broken" — simply unreached by any query found;
+//   unaffected by the 2026-07-03 fix above since it's never actually called).
 // ============================================================================
 
 #[test]
@@ -297,67 +321,64 @@ fn angle1_left_join_as_subplan_probe() {
            OPTIONAL {{ ?m ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Eng\") }} }} }}"
     );
 
+    // A/B/C: must translate AND match spareval bag-for-bag — no more catch_unwind
+    // cataloging now that all three are known-GREEN post subplan-drop fix (C was
+    // the crashing repro; see the UPDATE note above).
     for (name, q_str) in [
         ("A-nested2", &q_a),
         ("B-nested3", &q_b),
         ("C-subselect-limit-toplevel", &q_c),
-        ("D-subselect-limit-nested", &q_d),
     ] {
         let q = parse(q_str);
-        let t = tree(&maps, &q, &schema);
-        match &t {
-            Ok(tp) => {
-                eprintln!("[angle1:{name}] tree translation SUCCEEDED — attempting execution vs spareval oracle");
-                // Use catch_unwind so one candidate's execution panic (SQL error) doesn't
-                // abort the whole probe before the other candidates are tried/reported.
-                let tp2 = tp.clone();
-                let conn_path_unused = &conn; // keep name stable for closure capture below
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    assert_vs_spareval(OD_TTL, q_str, &tp2, conn_path_unused);
-                }));
-                match result {
-                    Ok(()) => {
-                        eprintln!("[angle1:{name}] matches spareval — no counterexample here")
-                    }
-                    Err(payload) => {
-                        let msg = payload
-                            .downcast_ref::<String>()
-                            .cloned()
-                            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                            .unwrap_or_else(|| "<non-string panic payload>".to_owned());
-                        eprintln!(
-                            "[angle1:{name}] EXECUTION PANIC (not a silent-wrong-answer counterexample \
-                             in the anti-join fix itself, but a genuine crash surfaced while probing this \
-                             call site) — see isolate_subplan_join_drop_bug for root-cause isolation:\n{msg}"
-                        );
-                    }
-                }
-            }
-            Err(Error::Unsupported(msg)) => {
-                eprintln!("[angle1:{name}] tree translation returned Unsupported (501): {msg}");
-            }
-            Err(other) => {
-                panic!("[angle1:{name}] unexpected non-Unsupported error: {other:?}");
-            }
+        let tp = tree(&maps, &q, &schema)
+            .unwrap_or_else(|e| panic!("[angle1:{name}] tree translation should succeed: {e:?}"));
+        assert_vs_spareval(OD_TTL, q_str, &tp, &conn);
+    }
+
+    // D: the OUTER anti-join branch's right side itself carries a SubPlan (the
+    // LIMIT-subselect one level down) — an ADR-0023 M5 boundary `not_exists_
+    // cond_for` cannot represent (see UPDATE above). Must fail honestly at
+    // translate time (501), not crash at execution time.
+    let q = parse(&q_d);
+    match tree(&maps, &q, &schema) {
+        Err(Error::Unsupported(msg)) => {
+            assert!(
+                msg.contains("SubPlan"),
+                "[angle1:D-subselect-limit-nested] expected the SubPlan-boundary 501, got: {msg}"
+            );
         }
+        Ok(_) => panic!(
+            "[angle1:D-subselect-limit-nested] now translates OK — if this is a genuine capability \
+             gain, replace this arm with an `assert_vs_spareval` call (matching A/B/C above) and \
+             update the doc comment; a silent behavior change here should not go unnoticed"
+        ),
+        Err(other) => panic!("[angle1:D-subselect-limit-nested] unexpected error: {other:?}"),
     }
 }
 
 /// FOLLOW-UP to angle 1: candidate C (LIMIT-subselect LEFT-joined, then OPTIONAL'd
 /// with a multi-scan filtered right) crashed at SQL EXECUTION time with `no such
 /// column: t4.c0` — the generated SQL's FROM clause never joins in the alias
-/// (`t4`) that its own SELECT-list/WHERE-clause reference. This isolates WHETHER
+/// (`t4`) that its own SELECT-list/WHERE-clause reference. This isolated WHETHER
 /// that crash implicates the anti-join-filter fix under review, or is a
 /// pre-existing, independent defect: `leftjoin.rs::inner_join_one` (NOT touched by
-/// this fix's diff — verified via `git diff`) builds its output `Branch` with
-/// `subplan_joins: Vec::new()`, unconditionally DISCARDING `left.subplan_joins`
-/// instead of carrying it forward (contrast `opts: left.opts.clone()` on the very
-/// next field, which correctly preserves the left's state). If `left` came from a
-/// LIMIT-subselect (a `SubPlanJoin`-carrying branch), any `inner_join_one` call
-/// silently drops the FROM-clause join while its correlated `where_conds` (cloned
-/// from `left.where_conds`, which DOES survive) keep referencing the now-unjoined
+/// that fix's diff) built its output `Branch` with `subplan_joins: Vec::new()`,
+/// unconditionally DISCARDING `left.subplan_joins` instead of carrying it forward
+/// (contrast `opts: left.opts.clone()` on the very next field, which correctly
+/// preserved the left's state). If `left` came from a LIMIT-subselect (a
+/// `SubPlanJoin`-carrying branch), any `inner_join_one` call silently dropped the
+/// FROM-clause join while its correlated `where_conds` (cloned from
+/// `left.where_conds`, which DOES survive) kept referencing the now-unjoined
 /// alias — a `core`/`subplan_joins` inconsistency, independent of whether a
-/// FILTER or even an OPTIONAL-anti-join path is involved at all.
+/// FILTER or even an OPTIONAL-anti-join path was involved at all.
+///
+/// FIXED (2026-07-03, `crates/sf-sparql/src/leftjoin.rs::inner_join_one`):
+/// `subplan_joins` now extends `left.subplan_joins` + `right.subplan_joins`
+/// (mirrors `unfold::merge`'s InnerJoin idiom) instead of being zeroed. All four
+/// shapes below now translate AND match spareval bag-for-bag — asserted directly
+/// (no more catch_unwind cataloging). RED→GREEN, revert-proven: reverting the
+/// `leftjoin.rs` fix makes (i) and (ii) panic again with the `no such column:
+/// tN.c0` execution error; (iii)/(iv) are unaffected controls.
 #[test]
 fn angle1_followup_isolate_subplan_join_drop_bug() {
     let conn = sqlite::load(OD_SQL).expect("fixture loads");
@@ -411,31 +432,9 @@ fn angle1_followup_isolate_subplan_join_drop_bug() {
         ("iv-inner-join-no-optional", &q_inner_join_no_optional),
     ] {
         let q = parse(q_str);
-        let t = tree(&maps, &q, &schema);
-        match &t {
-            Ok(tp) => {
-                eprintln!("[followup:{name}] tree translation SUCCEEDED");
-                let tp2 = tp.clone();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    assert_vs_spareval(OD_TTL, q_str, &tp2, &conn);
-                }));
-                match result {
-                    Ok(()) => eprintln!("[followup:{name}] matches spareval, no crash"),
-                    Err(payload) => {
-                        let msg = payload
-                            .downcast_ref::<String>()
-                            .cloned()
-                            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                            .unwrap_or_else(|| "<non-string panic payload>".to_owned());
-                        eprintln!("[followup:{name}] EXECUTION PANIC:\n{msg}");
-                    }
-                }
-            }
-            Err(Error::Unsupported(msg)) => {
-                eprintln!("[followup:{name}] Unsupported (501): {msg}");
-            }
-            Err(other) => panic!("[followup:{name}] unexpected error: {other:?}"),
-        }
+        let tp = tree(&maps, &q, &schema)
+            .unwrap_or_else(|e| panic!("[followup:{name}] tree translation should succeed: {e:?}"));
+        assert_vs_spareval(OD_TTL, q_str, &tp, &conn);
     }
 }
 

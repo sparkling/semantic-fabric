@@ -153,6 +153,14 @@ pub(crate) fn inner_join_one(
     let mut core = left.core.clone();
     core.extend(right.core.iter().cloned());
 
+    // SubPlan joins from both sides survive the merge (mirrors `unfold::merge`'s
+    // InnerJoin idiom) — an OPTIONAL whose LEFT operand is a derived-table subquery
+    // (e.g. `{SELECT … LIMIT n}`) must keep that join alive here; previously this
+    // was unconditionally zeroed, dropping `left`'s subplan join and producing SQL
+    // that references a FROM alias never introduced (ADR-0007).
+    let mut subplan_joins = left.subplan_joins.clone();
+    subplan_joins.extend(right.subplan_joins.iter().cloned());
+
     Ok(Some(Branch {
         core,
         opts: left.opts.clone(),
@@ -164,7 +172,7 @@ pub(crate) fn inner_join_one(
         order: left.order.clone(),
         path: left.path.clone(),
         agg: left.agg.clone(),
-        subplan_joins: Vec::new(),
+        subplan_joins,
     }))
 }
 
@@ -187,6 +195,23 @@ pub(crate) fn not_exists_cond_for(
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Option<SqlCond>> {
+    // A right branch carrying its own SubPlan (e.g. a nested OPTIONAL whose right
+    // side is itself `(SubselectLimit) OPTIONAL (...)`, forcing the inner
+    // decomposition to hand back a SubPlan-carrying branch here) has no
+    // representation in `SqlCond::NotExists::scans` (a plain `Vec<Scan>` — the
+    // subplan's derived-table alias would be referenced in `conds` below but never
+    // introduced anywhere, producing a crash at SQL-execution time rather than a
+    // wrong answer). `left.subplan_joins` is fine (it rides along via the caller's
+    // `no_match = left.clone()`, same as any other outer-scope column); only a
+    // subplan on the `right` side is unrepresentable here. Sound 501 instead of a
+    // crash (ADR-0007) — an ADR-0023 M5 boundary, not yet a supported shape.
+    if !right.subplan_joins.is_empty() {
+        return Err(Error::Unsupported(
+            "OPTIONAL anti-join whose right side carries its own SubPlan derived \
+             table is not yet supported → 501 (ADR-0023 M5 boundary)"
+                .to_owned(),
+        ));
+    }
     let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
