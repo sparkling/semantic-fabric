@@ -373,6 +373,33 @@ fn scenarios() -> Vec<Scenario> {
             ),
         },
         Scenario {
+            name: "join-elim/PaddingForUnsatisfiableRight (UNION right, ALL arms unsat)",
+            family: "join-elim",
+            disp: Disp::NeedsRewrite,
+            create: P_SQL,
+            r2rml: P_R2RML,
+            ttl: P_TTL,
+            // ADR-0023 optimizer-residue Wave B pre-work: the OPTIONAL right is a UNION
+            // where EVERY arm is provably unsatisfiable (no dept is labelled "NoSuchA"/
+            // "NoSuchB") -- Ontop's PaddingForUnsatisfiableRight (UNION-right variant)
+            // NULL-pads the OPTIONAL rather than distributing the unsat-prune INTO the
+            // union (which would wrongly make the whole OPTIONAL disappear instead of
+            // padding). FILTERs on ?label (a plain `rr:column` binding), NOT ?d (the
+            // refObjectMap-derived dept IRI) -- filtering ?d hits an UNRELATED,
+            // orthogonal v1 limitation ("FILTER on ?d needs a plain column binding")
+            // that would confound this probe with a different gap entirely. Group C's
+            // generic decomposition re-feeds the (opts-free, still 2-armed) union into
+            // `left_join_branches`'s multi-branch path, which emits its OWN correlated
+            // NOT-EXISTS no-match branch over BOTH arms together -- added here (zero
+            // prior probe coverage) to empirically confirm padding, not silent
+            // disappearance. Expected: 3 rows (Ann/Bob/Zed), ?label unbound on every row.
+            query: format!(
+                "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+                 OPTIONAL {{ {{ ?p ex:dept ?d . ?d ex:label ?label . FILTER(?label = \"NoSuchA\") }} \
+                 UNION {{ ?p ex:dept ?d . ?d ex:label ?label . FILTER(?label = \"NoSuchB\") }} }} }}"
+            ),
+        },
+        Scenario {
             name: "join-elim/OPTIONAL over a UNION right (multi-branch opts-free right)",
             family: "join-elim",
             // ADR-0023 M4 wave 3 — the OPTIONAL right is a UNION. The right lowers to
