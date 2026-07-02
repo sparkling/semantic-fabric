@@ -332,6 +332,37 @@ fn p_bind_values_construct_ask() {
     diff_p(&format!("{PFX} SELECT * WHERE {{ ?p ex:name ?name }}"));
 }
 
+/// ADR-0023 optimizer-residue Wave C (Ontop `ValuesNodeOptimization::test1/
+/// test2normalizationSlice`): LIMIT/OFFSET directly over a literal VALUES table (no
+/// other pattern) truncates the row list at NORMALIZE instead of lowering every row
+/// to its own branch and relying on `Plan.limit`/`Plan.offset` to hide the rest.
+#[test]
+fn values_slice_truncates_at_normalize_not_plan_level() {
+    diff_p("SELECT ?x WHERE { VALUES ?x { 1 2 3 } } LIMIT 1");
+    diff_p("SELECT ?x WHERE { VALUES ?x { 1 2 3 } } LIMIT 5 OFFSET 1");
+
+    // Shape: exactly as many branches as survive the slice (1), not `rows.len()`
+    // branches (3) plus a Plan-level limit/offset the executor applies afterward.
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse("SELECT ?x WHERE { VALUES ?x { 1 2 3 } } LIMIT 1");
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert_eq!(
+        tp.branches.len(),
+        1,
+        "the Values table itself must shrink to 1 row/branch: {:?}",
+        tp.branches
+    );
+    assert!(
+        tp.limit.is_none() && tp.offset == 0,
+        "the Slice must be fully absorbed into the Values leaf, leaving nothing for \
+         the Plan's own limit/offset to do: limit={:?} offset={}",
+        tp.limit,
+        tp.offset
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).

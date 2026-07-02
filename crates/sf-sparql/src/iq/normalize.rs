@@ -80,6 +80,7 @@
 use std::collections::BTreeMap;
 
 use crate::iq::node::{BindDef, IqCond, IqNode, Var};
+use crate::iq::TermDef;
 use crate::unify::{unify, Unify};
 use crate::{Error, Result};
 
@@ -155,11 +156,10 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
             child,
             offset,
             limit,
-        } => Ok(IqNode::Slice {
-            child: Box::new(normalize(*child)?),
-            offset,
-            limit,
-        }),
+        } => {
+            let child = normalize(*child)?;
+            Ok(normalize_slice(offset, limit, child))
+        }
         IqNode::OrderBy { child, keys } => Ok(IqNode::OrderBy {
             child: Box::new(normalize(*child)?),
             keys,
@@ -548,6 +548,58 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
     })
 }
 
+// ---- (d) Slice-over-Values truncation (ADR-0023 optimizer-residue Wave C; Ontop
+// ValuesNodeOptimization::test1/test2normalizationSlice) --------------------------
+
+/// Truncate a literal `Values` table directly when a `Slice` sits over it (possibly
+/// through the identity/pure-projection `Construction` the builder wraps a top-level
+/// `SELECT`'s VALUES body in — the common case, confirmed empirically: `SELECT ?x
+/// WHERE { VALUES ?x {…} } LIMIT n` normalizes to `Slice(Construction(Values))`, not
+/// a bare `Slice(Values)`), instead of carrying the `Slice` down to LOWER (which would
+/// lower every row to its own branch and apply offset/limit as a `Plan`-level SQL
+/// clause over the full arm count). A `Values` block's rows have a fixed as-written
+/// order and nothing else can reorder them upstream of this `Slice`, so reading the
+/// same `[offset, offset+limit)` window in Rust here is `=_bag`-identical to lowering
+/// the full table and slicing at emission — just without ever materializing the
+/// dropped rows/branches (cosmetic SQL-shape parity with Ontop, not a correctness fix;
+/// §4.15-adjacent, not a currently-numbered §4 rule). The `Construction`'s `subst`/
+/// `project` apply per-row and don't reorder rows, so they commute with slicing
+/// unconditionally. Any other child shape keeps the `Slice` node as-is.
+fn normalize_slice(offset: usize, limit: Option<usize>, child: IqNode) -> IqNode {
+    match child {
+        IqNode::Values { vars, rows } => IqNode::Values {
+            vars,
+            rows: slice_rows(rows, offset, limit),
+        },
+        IqNode::Construction {
+            child: inner,
+            subst,
+            project,
+        } if matches!(*inner, IqNode::Values { .. }) => IqNode::Construction {
+            child: Box::new(normalize_slice(offset, limit, *inner)),
+            subst,
+            project,
+        },
+        child => IqNode::Slice {
+            child: Box::new(child),
+            offset,
+            limit,
+        },
+    }
+}
+
+/// The `[offset, offset+limit)` window of `rows` (`limit == None` ⇒ to the end).
+fn slice_rows(
+    rows: Vec<Vec<Option<TermDef>>>,
+    offset: usize,
+    limit: Option<usize>,
+) -> Vec<Vec<Option<TermDef>>> {
+    rows.into_iter()
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX))
+        .collect()
+}
+
 // ---- condition normalization (descend into EXISTS / NOT EXISTS payloads) ----------
 
 /// Normalize a conjunction of [`IqCond`]s (design-lock §3 recursion clause). The
@@ -901,6 +953,65 @@ mod tests {
             }
             other => assert_leaf_cq(other),
         }
+    }
+
+    /// Ontop `ValuesNodeOptimization::test1/test2normalizationSlice`: `Slice` directly
+    /// over a literal `Values` table (through the builder's identity-projection
+    /// `Construction` wrapper, confirmed empirically to be the actual top-level shape)
+    /// truncates the row list in place instead of surviving as a `Slice` node — no
+    /// `Slice` reaches LOWER at all, so it can never fall back to lowering the full
+    /// table + a `Plan`-level LIMIT/OFFSET.
+    #[test]
+    fn slice_over_values_truncates_in_place() {
+        let n = norm("SELECT ?x WHERE { VALUES ?x { 1 2 3 } } LIMIT 1");
+        assert!(
+            !matches!(n, IqNode::Slice { .. }),
+            "Slice must not survive normalize when its child is a Values leaf: {n:?}"
+        );
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper to survive: {n:?}")
+        };
+        let IqNode::Values { vars, rows } = child.as_ref() else {
+            panic!("expected a truncated Values leaf: {child:?}")
+        };
+        assert_eq!(vars.len(), 1, "one VALUES var");
+        assert_eq!(rows.len(), 1, "LIMIT 1 keeps exactly one row: {rows:?}");
+        assert_eq!(
+            row_int(&rows[0]),
+            1,
+            "the as-written first row (1), not an arbitrary survivor"
+        );
+    }
+
+    /// The OFFSET half of the same rule, and a limit exceeding the remaining rows
+    /// (clamped, not an out-of-bounds panic).
+    #[test]
+    fn slice_over_values_offset_and_overrun() {
+        let n = norm("SELECT ?x WHERE { VALUES ?x { 1 2 3 } } LIMIT 5 OFFSET 1");
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { rows, .. } = child.as_ref() else {
+            panic!("expected a truncated Values leaf: {child:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|r| row_int(r)).collect::<Vec<_>>(),
+            vec![2, 3],
+            "OFFSET 1 skips the first row; LIMIT 5 overruns the remainder harmlessly"
+        );
+    }
+
+    /// One row's sole cell as a plain integer, for the assertions above.
+    fn row_int(row: &[Option<TermDef>]) -> i64 {
+        let TermDef::Const(t) = row[0].as_ref().expect("VALUES cell is bound") else {
+            panic!("expected a Const cell: {row:?}")
+        };
+        let sf_core::Term::Literal(lit) = t else {
+            panic!("expected a literal term: {t:?}")
+        };
+        lit.value()
+            .parse()
+            .unwrap_or_else(|_| panic!("expected an integer literal: {lit:?}"))
     }
 
     // ---- synthetic R2 test: shared var UNDEF in one union arm = free dimension -----
