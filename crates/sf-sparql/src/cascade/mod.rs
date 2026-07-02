@@ -10,7 +10,12 @@
 //!    established first.
 //! 2. **self-join / self-left-join elimination** — merge two scans of the same
 //!    table joined on a unique key (the same row); the left-join variant
-//!    preserves the right-bound provenance.
+//!    preserves the right-bound provenance. Also applied, independently of
+//!    (0)-(6) below, WITHIN any `NOT EXISTS`/`EXISTS` correlated subquery's own
+//!    locally-scoped scans (ADR-0023 optimizer-residue: the right-nested-OPTIONAL
+//!    decomposition's anti-join branch re-derives its right side from scratch and
+//!    can leave a redundant same-table self-join there even when the branch's own
+//!    `core` is already clean).
 //! 3. **functional-dependency inference** (transitive closure, through unions) —
 //!    *must precede (4)*: eliminating a join is sound only once uniqueness **and**
 //!    match-guarantee hold.
@@ -33,7 +38,7 @@
 use sf_core::ir::{LogicalSource, Segment, TermMap, TermType};
 use sf_sql::TableSchema;
 
-use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, SqlCond, TermDef};
+use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, Scan, SqlCond, TermDef};
 
 mod fd;
 mod joinelim;
@@ -85,7 +90,21 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             // over its inner FROM/WHERE; the constraint-driven passes model neither
             // grouping nor aggregate columns, so pass it through untouched (a sound
             // base translation already — never risk corrupting the grouping).
-            if b.path.is_some() || b.agg.is_some() || branch_has_not_exists(&b) {
+            if b.path.is_some() || b.agg.is_some() {
+                return Some(b);
+            }
+            if branch_has_not_exists(&b) {
+                // The constraint-driven passes below don't model a correlated
+                // subquery's own scans, so they're skipped for this branch (see the
+                // comment above) — but self-join elimination WITHIN the subquery's
+                // own locally-scoped `scans`/`conds` (ADR-0023 optimizer-residue,
+                // the Group-D-adjacent SQL-shape cosmetic wave) never touches
+                // `b.core`/`b.opts`/bindings, so it's always safe to run here too
+                // (e.g. the right-nested-OPTIONAL decomposition's `NOT EXISTS`
+                // re-derives its right side from scratch and can leave a redundant
+                // same-table self-join the outer branch's own self-join elimination
+                // already collapsed).
+                self_join_elimination_in_subqueries(&mut b.where_conds, schema);
                 return Some(b);
             }
             tier0_eliminate(&mut b, schema); // 0
@@ -216,7 +235,7 @@ fn prune_iri_template_mismatch(b: &Branch) -> bool {
 /// bare scan would re-admit them and break `=_bag`). Otherwise a no-op.
 fn self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
     // Single-column unique-key self-join elimination.
-    while let Some((keep, drop, cond_idx)) = find_self_join(b, schema) {
+    while let Some((keep, drop, cond_idx)) = find_self_join_in(&b.core, &b.where_conds, schema) {
         // Remove exactly the key equality that licenses *this* merge (by index,
         // before the rewrite). Removing every trivial `x = x` would also drop a
         // genuine `?x :p ?x` self-comparison, which is an effective `IS NOT NULL`
@@ -226,7 +245,9 @@ fn self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
         b.core.retain(|s| s.alias != drop);
     }
     // Composite-key self-join elimination (all PK cols covered by cross-scan ColEqs).
-    while let Some((keep, drop, mut idxs)) = find_composite_pk_self_join(b, schema) {
+    while let Some((keep, drop, mut idxs)) =
+        find_composite_pk_self_join_in(&b.core, &b.where_conds, schema)
+    {
         // Remove all licensing ColEq conditions, highest index first.
         idxs.sort_unstable_by(|a, c| c.cmp(a));
         for idx in idxs {
@@ -237,16 +258,89 @@ fn self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
     }
 }
 
+/// Self-join elimination WITHIN a `NOT EXISTS`/`EXISTS` correlated subquery's own
+/// locally-scoped `scans`/`conds` — the SAME two merge rules [`self_join_elimination`]
+/// applies to a [`Branch`]'s `core`/`where_conds`, but scoped to the subquery. A
+/// subquery's inner scans feed no outer `bindings`/`opts` (a `NOT EXISTS`/`EXISTS`
+/// is a boolean condition, not a value source), so only `conds` needs rewriting —
+/// no [`rewrite_alias`] (which also walks `bindings`/`opts`) is needed or correct
+/// here (those belong to the OUTER branch, not this subquery).
+fn self_join_elimination_in_subquery(
+    scans: &mut Vec<Scan>,
+    conds: &mut Vec<SqlCond>,
+    schema: &[TableSchema],
+) {
+    let fix_alias = |from: usize, to: usize| {
+        move |c: &mut ColRef| {
+            if c.alias == from {
+                c.alias = to;
+            }
+        }
+    };
+    while let Some((keep, drop, cond_idx)) = find_self_join_in(scans, conds, schema) {
+        conds.remove(cond_idx);
+        let fix = fix_alias(drop, keep);
+        for cond in conds.iter_mut() {
+            rewrite_cond_alias(cond, &fix);
+        }
+        scans.retain(|s| s.alias != drop);
+    }
+    while let Some((keep, drop, mut idxs)) = find_composite_pk_self_join_in(scans, conds, schema) {
+        idxs.sort_unstable_by(|a, c| c.cmp(a));
+        for idx in idxs {
+            conds.remove(idx);
+        }
+        let fix = fix_alias(drop, keep);
+        for cond in conds.iter_mut() {
+            rewrite_cond_alias(cond, &fix);
+        }
+        scans.retain(|s| s.alias != drop);
+    }
+}
+
+/// Recurse `conds` looking for a `NotExists`/`Exists` correlated subquery (through
+/// `Not`/`And`/`Or` wrappers, mirroring [`branch_has_not_exists`]'s traversal) and
+/// apply [`self_join_elimination_in_subquery`] to each one found — including,
+/// defensively, any subquery NESTED inside another (the current lowering never
+/// nests `NOT EXISTS`, but this must not silently skip one if it ever does).
+fn self_join_elimination_in_subqueries(conds: &mut [SqlCond], schema: &[TableSchema]) {
+    for cond in conds.iter_mut() {
+        match cond {
+            SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
+                self_join_elimination_in_subquery(scans, conds, schema);
+                self_join_elimination_in_subqueries(conds, schema);
+            }
+            SqlCond::Not(c) => {
+                self_join_elimination_in_subqueries(std::slice::from_mut(&mut **c), schema)
+            }
+            SqlCond::And(cs) | SqlCond::Or(cs) => self_join_elimination_in_subqueries(cs, schema),
+            _ => {}
+        }
+    }
+}
+
 /// Returns `(keep_alias, drop_alias, where_cond_index)` of an eliminable
-/// self-join, or `None`.
-fn find_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, usize)> {
-    for (idx, cond) in b.where_conds.iter().enumerate() {
+/// self-join within `scans`/`conds`, or `None`. A `ColEq` whose alias resolves
+/// OUTSIDE `scans` (a correlated subquery's reference to an outer alias) is
+/// skipped, not treated as a search-aborting failure — `scan_table_in` returning
+/// `None` for such a `ColEq` must not stop the search from finding a LATER,
+/// legitimately-in-scope self-join.
+fn find_self_join_in(
+    scans: &[Scan],
+    conds: &[SqlCond],
+    schema: &[TableSchema],
+) -> Option<(usize, usize, usize)> {
+    for (idx, cond) in conds.iter().enumerate() {
         let SqlCond::ColEq(a, c) = cond else { continue };
         if a.alias == c.alias || a.column != c.column {
             continue; // a same-alias `?x :p ?x` guard is not a self-join
         }
-        let ta = scan_table(b, a.alias)?;
-        let tc = scan_table(b, c.alias)?;
+        let Some(ta) = scan_table_in(scans, a.alias) else {
+            continue;
+        };
+        let Some(tc) = scan_table_in(scans, c.alias) else {
+            continue;
+        };
         if ta != tc {
             continue;
         }
@@ -265,40 +359,42 @@ fn find_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, u
     None
 }
 
-/// Find `(keep, drop, cond_indices)` for a composite-PK self-join: two core scans
-/// of the same table where the set of cross-scan `ColEq` conditions (same column
-/// name on both sides) covers every column of the composite primary key. Such a
-/// join identifies the same row on both sides, so the merge is `=_bag`-safe. All
-/// PK columns are `NOT NULL` by SQL semantics — no nullable-key hazard.
-fn find_composite_pk_self_join(
-    b: &Branch,
+/// Find `(keep, drop, cond_indices)` for a composite-PK self-join within
+/// `scans`/`conds`: two scans of the same table where the set of cross-scan
+/// `ColEq` conditions (same column name on both sides) covers every column of the
+/// composite primary key. Such a join identifies the same row on both sides, so
+/// the merge is `=_bag`-safe. All PK columns are `NOT NULL` by SQL semantics — no
+/// nullable-key hazard.
+fn find_composite_pk_self_join_in(
+    scans: &[Scan],
+    conds: &[SqlCond],
     schema: &[TableSchema],
 ) -> Option<(usize, usize, Vec<usize>)> {
-    for i in 0..b.core.len() {
-        let LogicalSource::Table(ti) = &b.core[i].source else {
+    for i in 0..scans.len() {
+        let LogicalSource::Table(ti) = &scans[i].source else {
             continue;
         };
-        let ai = b.core[i].alias;
+        let ai = scans[i].alias;
         let Some(ts) = schema.iter().find(|t| &t.name == ti) else {
             continue;
         };
         if ts.primary_key.len() < 2 {
-            continue; // single-column handled by find_self_join
+            continue; // single-column handled by find_self_join_in
         }
-        for j in (i + 1)..b.core.len() {
-            let LogicalSource::Table(tj) = &b.core[j].source else {
+        for scan_j in scans.iter().skip(i + 1) {
+            let LogicalSource::Table(tj) = &scan_j.source else {
                 continue;
             };
             if ti != tj {
                 continue;
             }
-            let aj = b.core[j].alias;
+            let aj = scan_j.alias;
             let (keep, drop) = if ai < aj { (ai, aj) } else { (aj, ai) };
 
             // Collect cross-scan ColEq conditions whose column is part of the composite PK.
             let mut pk_cols_covered: Vec<String> = Vec::new();
             let mut cond_idxs: Vec<usize> = Vec::new();
-            for (idx, cond) in b.where_conds.iter().enumerate() {
+            for (idx, cond) in conds.iter().enumerate() {
                 let SqlCond::ColEq(a, c) = cond else { continue };
                 if a.column != c.column {
                     continue; // different column names — not a direct PK equality
@@ -499,7 +595,13 @@ fn key_is_non_null(t: &TableSchema, col: &str) -> bool {
 
 /// The table name a scan reads, if it is a base table (`rr:tableName`).
 fn scan_table(b: &Branch, alias: usize) -> Option<String> {
-    b.core
+    scan_table_in(&b.core, alias)
+}
+
+/// [`scan_table`], generalized to any scan list (a [`Branch`]'s `core`, or a
+/// `NOT EXISTS`/`EXISTS` correlated subquery's own `scans`).
+fn scan_table_in(scans: &[Scan], alias: usize) -> Option<String> {
+    scans
         .iter()
         .find(|s| s.alias == alias)
         .and_then(|s| match &s.source {
@@ -896,7 +998,13 @@ fn is_single_scan_selection(cond: &SqlCond) -> bool {
 /// [`Template::is_injective`]); for non-IRI templates only a single column
 /// slot is safe because the lack of percent-encoding means a separator
 /// character can appear in a column value, breaking uniqueness.
-fn binding_is_injective(def: &TermDef) -> bool {
+///
+/// `pub(crate)`: also the gate `unfold::group_key_columns` and
+/// `iq::lower::try_sql_group_over_union` use before treating a `GROUP BY` key's
+/// raw columns as equivalent to grouping by the constructed term (a distinct
+/// injectivity concern from the one this fn was written for — DISTINCT-removal
+/// — but the same underlying soundness condition).
+pub(crate) fn binding_is_injective(def: &TermDef) -> bool {
     let TermDef::Derived {
         term_map: TermMap::Template(t, spec),
         ..

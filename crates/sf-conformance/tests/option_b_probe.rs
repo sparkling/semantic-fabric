@@ -332,6 +332,93 @@ fn scenarios() -> Vec<Scenario> {
             ),
         },
         Scenario {
+            name: "join-elim/FDOnRight (DISTINCT over L OPT (R1 OPT R2), shared FD-det)",
+            family: "join-elim",
+            disp: Disp::NeedsRewrite,
+            create: P_SQL,
+            r2rml: P_R2RML,
+            ttl: P_TTL,
+            // ADR-0023 optimizer-residue Wave B pre-work: DISTINCT over a right-nested
+            // OPTIONAL (Group C's decomposition), projecting away the innermost
+            // ?email so only the FD-determined (?p -> ?d -> ?label) columns survive.
+            // Ontop's FDOnRight collapses this via FD-driven right-side elimination;
+            // the tree closes it via Group C's decomposition + per-branch dedup
+            // instead — added here (per the "oracle law") to get an EMPIRICAL
+            // verdict before any Group D implementation, since this scenario had
+            // zero probe coverage. Ann/Sales, Bob/Sales, Zed/Sales (each name
+            // already unique, so DISTINCT is a no-op on the bag).
+            query: format!(
+                "{PFX} SELECT DISTINCT ?name ?label WHERE {{ ?p ex:name ?name \
+                 OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label \
+                 OPTIONAL {{ ?p ex:email ?email }} }} }}"
+            ),
+        },
+        Scenario {
+            name: "join-elim/FDSimplification (nested OPT + per-right FILTER + ancestor FILTER)",
+            family: "join-elim",
+            disp: Disp::NeedsRewrite,
+            create: P_SQL,
+            r2rml: P_R2RML,
+            ttl: P_TTL,
+            // ADR-0023 optimizer-residue Wave B pre-work: a right-nested OPTIONAL
+            // (Group C decomposition) with a FILTER inside the OPTIONAL right
+            // (per-right, on the FD-determined ?label) PLUS an outer ancestor
+            // FILTER on ?name — the combination Ontop's FDSimplification targets.
+            //
+            // CORRECTED (leftjoin-antijoin-filter wave, see
+            // [[adr-0023-optimizer-residue-horizon]]): the ORIGINAL filter here was
+            // `FILTER(?label != "X")` -- a NO-OP against fixture P (every person is
+            // in dept "Sales", never "X"), so it never actually exercised the
+            // anti-join branch's own filter application and the resulting "MATCH"
+            // verdict this scenario's `NeedsRewrite` disposition recorded was
+            // VACUOUS, not evidence of correctness. `not_exists_cond_for`
+            // (`crates/sf-sparql/src/leftjoin.rs`) omitted the OPTIONAL's own inner
+            // FILTER from its NOT-EXISTS condition, so a right row that
+            // exists-but-fails-the-filter still counted as "a match exists" for the
+            // anti-join -- a left row whose only candidate is filtered out vanished
+            // from BOTH branches instead of being NULL-padded (a silent wrong
+            // answer, ADR-0007). The filter below is now MATCH-REMOVING
+            // (`!= "Sales"` excludes every person's only dept-label) so this
+            // scenario actually exercises that path. Until the fix lands on this
+            // branch this scenario is an HONEST `Mismatch` (0 rows here vs the
+            // correct NULL-padded Ann/Zed) -- expected, not a new regression: Bob is
+            // dropped by the outer FILTER; Ann/Zed's only dept-label ("Sales") fails
+            // the inner FILTER, so they must NULL-pad on ?label, not disappear.
+            // Expected bag once fixed: Ann/unbound, Zed/unbound (2 rows).
+            query: format!(
+                "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+                 OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Sales\") }} \
+                 FILTER(?name != \"Bob\") }}"
+            ),
+        },
+        Scenario {
+            name: "join-elim/PaddingForUnsatisfiableRight (UNION right, ALL arms unsat)",
+            family: "join-elim",
+            disp: Disp::NeedsRewrite,
+            create: P_SQL,
+            r2rml: P_R2RML,
+            ttl: P_TTL,
+            // ADR-0023 optimizer-residue Wave B pre-work: the OPTIONAL right is a UNION
+            // where EVERY arm is provably unsatisfiable (no dept is labelled "NoSuchA"/
+            // "NoSuchB") -- Ontop's PaddingForUnsatisfiableRight (UNION-right variant)
+            // NULL-pads the OPTIONAL rather than distributing the unsat-prune INTO the
+            // union (which would wrongly make the whole OPTIONAL disappear instead of
+            // padding). FILTERs on ?label (a plain `rr:column` binding), NOT ?d (the
+            // refObjectMap-derived dept IRI) -- filtering ?d hits an UNRELATED,
+            // orthogonal v1 limitation ("FILTER on ?d needs a plain column binding")
+            // that would confound this probe with a different gap entirely. Group C's
+            // generic decomposition re-feeds the (opts-free, still 2-armed) union into
+            // `left_join_branches`'s multi-branch path, which emits its OWN correlated
+            // NOT-EXISTS no-match branch over BOTH arms together -- added here (zero
+            // prior probe coverage) to empirically confirm padding, not silent
+            // disappearance. Expected: 3 rows (Ann/Bob/Zed), ?label unbound on every row.
+            query: format!(
+                "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+                 OPTIONAL {{ {{ ?p ex:dept ?d . ?d ex:label ?label . FILTER(?label = \"NoSuchA\") }} \
+                 UNION {{ ?p ex:dept ?d . ?d ex:label ?label . FILTER(?label = \"NoSuchB\") }} }} }}"
+            ),
+        },
+        Scenario {
             name: "join-elim/OPTIONAL over a UNION right (multi-branch opts-free right)",
             family: "join-elim",
             // ADR-0023 M4 wave 3 — the OPTIONAL right is a UNION. The right lowers to

@@ -733,3 +733,137 @@ fn fd_inner_join_notnull_det_no_is_not_null_added() {
         b.where_conds
     );
 }
+
+// --- self-join elimination WITHIN a NOT EXISTS/EXISTS correlated subquery
+// (ADR-0023 optimizer-residue, Group-D-adjacent SQL-shape cosmetic wave) -------
+
+/// A branch carrying a `NOT EXISTS` whose OWN `scans`/`conds` redundantly
+/// self-join `dept` on its PK (`id`) — the exact shape the right-nested-OPTIONAL
+/// decomposition (Group C, `leftjoin.rs::not_exists_cond_for`) produces before
+/// this pass. `branch_has_not_exists` routes this branch past the (0)-(6)
+/// constraint-driven passes entirely (they don't model a subquery's own scans),
+/// so this test isolates that the NEW subquery-scoped pass still fires on the
+/// early-return path.
+#[test]
+fn self_join_eliminated_inside_not_exists_subquery() {
+    let mut b = Branch {
+        core: vec![scan(0, "person")],
+        opts: vec![],
+        bindings: BTreeMap::new(),
+        where_conds: vec![
+            SqlCond::IsNotNull(ColRef::new(0, "name")),
+            SqlCond::NotExists {
+                scans: vec![scan(1, "person"), scan(2, "dept"), scan(3, "dept")],
+                conds: vec![
+                    SqlCond::ColEq(ColRef::new(1, "dept_id"), ColRef::new(2, "id")),
+                    SqlCond::ColEq(ColRef::new(2, "id"), ColRef::new(3, "id")), // redundant self-join
+                    SqlCond::IsNotNull(ColRef::new(3, "label")),
+                    SqlCond::ColEq(ColRef::new(0, "id"), ColRef::new(1, "id")), // outer correlation
+                ],
+            },
+        ],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+        subplan_joins: Vec::new(),
+    };
+    b.bindings.insert("name".to_owned(), col_binding(0, "name"));
+    let mut dept = TableSchema::new("dept");
+    dept.primary_key = vec!["id".to_owned()];
+    let out = run(vec![b], std::slice::from_ref(&dept), &CascadeCtx::default());
+    assert_eq!(out.len(), 1);
+    let SqlCond::NotExists { scans, conds } = out[0]
+        .where_conds
+        .iter()
+        .find(|c| matches!(c, SqlCond::NotExists { .. }))
+        .expect("NOT EXISTS survives")
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        scans
+            .iter()
+            .filter(|s| s.alias == 2 || s.alias == 3)
+            .count(),
+        1,
+        "the redundant dept self-join inside NOT EXISTS collapses to one scan: {scans:?}"
+    );
+    // The merge keeps the lower alias (2) and drops the higher (3); no cond may
+    // still reference the dropped alias, and the licensing `dept.id = dept.id`
+    // equality (the ONLY cond that referenced alias 3) must be gone — leaving
+    // exactly the other 3 original conds (4 minus the 1 licensing equality).
+    assert!(
+        !conds.iter().any(|c| {
+            let mut has_alias3 = false;
+            collect_cond_cols(c, &mut |col| has_alias3 |= col.alias == 3);
+            has_alias3
+        }),
+        "no remaining cond may reference the dropped dept alias 3: {conds:?}"
+    );
+    assert_eq!(
+        conds.len(),
+        3,
+        "exactly the licensing dept.id = dept.id equality is removed: {conds:?}"
+    );
+    // The outer correlation (alias 0 -> alias 1, a DIFFERENT table/pair) must
+    // survive untouched — this pass must not merge across the branch boundary.
+    assert!(
+        conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::ColEq(a, b) if a.alias == 0 && b.alias == 1)),
+        "the outer correlation condition must survive: {conds:?}"
+    );
+}
+
+/// Negative control: two DIFFERENT (non-PK-joined) scans of the same table
+/// inside a `NOT EXISTS` must NOT be merged — e.g. a genuine `?f1 :friend ?f2`
+/// self-join on a non-key column. Proves the new pass reuses the same
+/// soundness precondition (`find_self_join_in`) as the branch-level pass, not a
+/// looser one.
+#[test]
+fn distinct_self_scans_inside_not_exists_not_merged_without_key_equality() {
+    let mut b = Branch {
+        core: vec![scan(0, "person")],
+        opts: vec![],
+        bindings: BTreeMap::new(),
+        where_conds: vec![SqlCond::NotExists {
+            scans: vec![scan(1, "person"), scan(2, "person")],
+            conds: vec![
+                // "friend_id" is NOT a unique key — no merge licensed.
+                SqlCond::ColEq(ColRef::new(1, "friend_id"), ColRef::new(2, "id")),
+                SqlCond::ColEq(ColRef::new(0, "id"), ColRef::new(1, "id")),
+            ],
+        }],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+        subplan_joins: Vec::new(),
+    };
+    b.bindings.insert("x".to_owned(), col_binding(0, "id"));
+    let mut person = TableSchema::new("person");
+    person.primary_key = vec!["id".to_owned()];
+    let out = run(
+        vec![b],
+        std::slice::from_ref(&person),
+        &CascadeCtx::default(),
+    );
+    let SqlCond::NotExists { scans, .. } = out[0]
+        .where_conds
+        .iter()
+        .find(|c| matches!(c, SqlCond::NotExists { .. }))
+        .expect("NOT EXISTS survives")
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        scans.len(),
+        2,
+        "a non-key-joined self-scan pair must NOT be merged: {scans:?}"
+    );
+}

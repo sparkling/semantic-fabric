@@ -31,6 +31,7 @@ use rusqlite::Connection;
 use sf_conformance::graph::{isomorphic, parse_turtle, triples_to_dataset};
 use sf_conformance::oracle::{self, OracleAnswer};
 use sf_conformance::sqlite;
+use sf_sparql::iq::SqlCond;
 use sf_sparql::{exec, translate_tree, translate_with_flat, Error, Plan, PlanForm, Tbox};
 use sf_sql::{Dialect, TableSchema};
 use spargebra::{Query, SparqlParser};
@@ -717,6 +718,138 @@ fn agg_over_union_sum_avg() {
     ));
 }
 
+/// A pooled arm's `Aggregation` branch: `Some((agg, subplan_arm_count))` when the
+/// SQL pushdown fired (`try_sql_group_over_union`), `None` when it fell back to
+/// `RustGroup`. Distinguishes the two `agg_over_union_is_lowered` closures the
+/// SAME query could legitimately take, so a test can assert WHICH one fired
+/// (not just that "some" closure did) — needed here because concern #3
+/// (`COUNT(DISTINCT ?v)`) and the compound-key case are exactly the shapes the
+/// pushdown must actually exercise for these regression guards to mean anything.
+fn has_not_exists(conds: &[SqlCond]) -> bool {
+    conds.iter().any(|c| matches!(c, SqlCond::NotExists { .. }))
+}
+
+fn pushdown_agg(tp: &Plan) -> Option<&sf_sparql::iq::Aggregation> {
+    tp.branches
+        .iter()
+        .find(|b| b.agg.is_some() && !b.subplan_joins.is_empty())
+        .and_then(|b| b.agg.as_ref())
+}
+
+/// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (concern #3 LIVE
+/// proof): `COUNT(DISTINCT ?v)` over a UNION must push down to SQL `COUNT(DISTINCT
+/// col)` over the pooled `UNION ALL` — ONE SQL scope dedupes across BOTH arms,
+/// matching the `RustAgg.distinct` per-group manual dedup the oracle would use.
+/// The union here is a SELF-union (`?s ex:p1 ?v` twice) so every value is
+/// deliberately DUPLICATED: g1's `?v`s are `{a,c,a,c}` (COUNT=4) but DISTINCT
+/// must dedupe to `{a,c}` (COUNT=2); g2's `{d,d}` → 1. A DISTINCT-not-applied
+/// regression would silently return 4/1 (double-counted) instead of 2/1 — caught
+/// by the spareval `=_bag` gate inside `agg_union`, not just a row-count check.
+#[test]
+fn agg_over_union_count_distinct_pushes_down() {
+    let query = format!(
+        "{PFX} SELECT ?g (COUNT(DISTINCT ?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p1 ?v }} }} GROUP BY ?g"
+    );
+    agg_union(&query);
+    let conn = sqlite::load(AGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema).expect("tree must close agg-over-UNION");
+    let agg = pushdown_agg(&tp).expect(
+        "COUNT(DISTINCT ?v) over a self-union must SQL-pushdown, not fall back to RustGroup",
+    );
+    assert!(agg.aggs[0].distinct, "AggCol.distinct carried through");
+}
+
+/// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.1, compound
+/// grouping key LIVE proof): a TWO-variable `GROUP BY ?g ?s` over a UNION must
+/// push down to a multi-column SQL `GROUP BY c0, c1` over the pooled `UNION ALL`
+/// — `?g` (grp, outside the union) and `?s` (the subject, also outside the union)
+/// together split the p1/p2 union into one group PER SUBJECT (3 subjects ⇒ 3
+/// groups of 2), never collapsing rows across different `?s` values the way a
+/// single-key (`?g` only) grouping would (m/1 and m/2 share `?g="g1"` but must
+/// stay separate groups here).
+#[test]
+fn agg_over_union_compound_grouping_key_pushes_down() {
+    let query = format!(
+        "{PFX} SELECT ?g ?s (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g ?s"
+    );
+    agg_union(&query);
+    let conn = sqlite::load(AGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema).expect("tree must close agg-over-UNION");
+    let agg = pushdown_agg(&tp)
+        .expect("2-var GROUP BY over a union must SQL-pushdown, not fall back to RustGroup");
+    assert_eq!(agg.keys.len(), 2, "both ?g and ?s are SQL GROUP BY keys");
+}
+
+// --- TEMPLATE GROUP KEY: the ?g grouping var is bound via a 2-column INJECTIVE
+// `rr:template "{cc}-{num}"` (separator present) instead of a bare `rr:column`,
+// proving the Wave A.2 pushdown extension end-to-end (real SQL execution, not
+// just IR-shape unit tests in `iq::lower::tests`). ---
+
+const TEMPLATE_KEY_SQL: &str = r#"
+CREATE TABLE m4 (
+    id INTEGER PRIMARY KEY,
+    cc TEXT NOT NULL, num TEXT NOT NULL, p1 TEXT NOT NULL, p2 TEXT NOT NULL
+);
+INSERT INTO m4 VALUES (1, 'g1', 'x', 'a', 'b');
+INSERT INTO m4 VALUES (2, 'g1', 'x', 'c', 'f');
+INSERT INTO m4 VALUES (3, 'g2', 'y', 'd', 'e');
+"#;
+
+const TEMPLATE_KEY_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#M4>
+    rr:logicalTable [ rr:tableName "m4" ] ;
+    rr:subjectMap [ rr:template "http://ex/m4/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:grp ;
+        rr:objectMap [ rr:template "http://ex/g/{cc}-{num}" ]
+    ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p1  ; rr:objectMap [ rr:column "p1" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p2  ; rr:objectMap [ rr:column "p2" ] ] .
+"#;
+
+const TEMPLATE_KEY_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/m4/1> ex:grp <http://ex/g/g1-x> ; ex:p1 "a" ; ex:p2 "b" .
+<http://ex/m4/2> ex:grp <http://ex/g/g1-x> ; ex:p1 "c" ; ex:p2 "f" .
+<http://ex/m4/3> ex:grp <http://ex/g/g2-y> ; ex:p1 "d" ; ex:p2 "e" .
+"#;
+
+/// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.2, LIVE SQL
+/// proof): `GROUP BY ?g` where `?g` is a 2-column injective Template must ACTUALLY
+/// push down to a multi-column SQL `GROUP BY` and execute correctly — g1-x (rows
+/// 1,2): `{a,b,c,f}` ⇒ COUNT 4; g2-y (row 3): `{d,e}` ⇒ COUNT 2. Gated vs the
+/// independent spareval oracle (not just row-count).
+#[test]
+fn agg_over_union_template_group_key_pushes_down_and_executes_correctly() {
+    let query = format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    );
+    let conn = sqlite::load(TEMPLATE_KEY_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(TEMPLATE_KEY_R2RML).expect("R2RML parses");
+    let q = parse(&query);
+    let tp = tree(&maps, &q, &schema).expect("tree must close agg-over-UNION");
+    let agg = pushdown_agg(&tp).expect(
+        "a 2-column injective Template GROUP BY key must SQL-pushdown, not fall back to RustGroup",
+    );
+    assert_eq!(
+        agg.keys[0].cols.len(),
+        2,
+        "both template columns are the GROUP BY key: {:?}",
+        agg.keys[0].cols
+    );
+    assert_vs_spareval(TEMPLATE_KEY_TTL, &query, &tp, &conn);
+}
+
 /// Regression guard (optimizer-residue wave, post-M8): `?s ex:grp ?g` and each UNION
 /// arm's `?s ex:p1`/`ex:p2 ?v` all resolve against the SAME table `m` (single-column PK
 /// `id`), joined on the shared subject `?s` — a self-join on the primary key the cascade
@@ -898,6 +1031,500 @@ fn agg_over_union_pushdown_survives_asymmetric_self_join_elim() {
     // regardless of whether self-join-elimination fired or was safely declined.
     let conn2 = sqlite::load(CS_SQL).expect("fixture reloads");
     assert_vs_spareval(CS_TTL, &query, &tp, &conn2);
+}
+
+/// ADR-0023 optimizer-residue wave (the Group-D-adjacent SQL-shape cosmetic fix):
+/// `?p ex:name ?name OPTIONAL { ?p ex:dept ?d . ?d ex:label ?label }` — the
+/// OPTIONAL right is a 2-scan `refObjectMap` join (`person` re-scanned to reach
+/// `dept_id`, joined to `dept`) — Group C's decomposition re-derives the right
+/// side from scratch inside its `NOT EXISTS` anti-join branch, which (before this
+/// fix) left a REDUNDANT extra `dept` scan there (self-joined on `dept.id`, not
+/// collapsed the way the matched-arm `InnerJoin` branch's own self-join
+/// elimination already collapses the redundant `person` scan). After this fix the
+/// `NOT EXISTS` subquery scans `dept` exactly once too — proven both `=_bag`
+/// (via `diff_p`) and structurally (scan count).
+#[test]
+fn join_transfer_not_exists_self_join_eliminated() {
+    let query = format!(
+        "{PFX} SELECT ?name ?label WHERE {{ ?p ex:name ?name \
+         OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?label }} }}"
+    );
+    diff_p(&query);
+
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema)
+        .expect("tree must lower OPTIONAL over multi-atom right");
+    let no_match = tp
+        .branches
+        .iter()
+        .find(|b| has_not_exists(&b.where_conds))
+        .expect("a NOT EXISTS no-match branch is present (Group C decomposition)");
+    fn dept_scans_in_not_exists(conds: &[SqlCond]) -> usize {
+        conds
+            .iter()
+            .map(|c| {
+                match c {
+                SqlCond::NotExists { scans, .. } | SqlCond::Exists { scans, .. } => scans
+                    .iter()
+                    .filter(|s| {
+                        matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "dept")
+                    })
+                    .count(),
+                SqlCond::Not(c) => dept_scans_in_not_exists(std::slice::from_ref(c)),
+                SqlCond::And(cs) | SqlCond::Or(cs) => dept_scans_in_not_exists(cs),
+                _ => 0,
+            }
+            })
+            .sum()
+    }
+    assert_eq!(
+        dept_scans_in_not_exists(&no_match.where_conds),
+        1,
+        "the NOT EXISTS anti-join subquery must scan `dept` exactly once (no \
+         redundant self-join): {:#?}",
+        no_match.where_conds
+    );
+}
+
+// ============================================================================
+// ADVERSARIAL REVIEW (commit 14b53ab: self-join elimination inside NOT
+// EXISTS/EXISTS subqueries, plus the `find_self_join_in` `?` -> `continue`
+// generalization). Four targeted counter-example attempts; see each test's doc.
+// ============================================================================
+
+/// Count scans of `table` within `conds`, recursing into NOT EXISTS/EXISTS/Not/
+/// And/Or wrappers (generalizes `dept_scans_in_not_exists` above to any table
+/// name, reused across the adversarial probes below).
+fn table_scans_in(conds: &[SqlCond], table: &str) -> usize {
+    conds
+        .iter()
+        .map(|c| match c {
+            SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
+                scans
+                    .iter()
+                    .filter(|s| {
+                        matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == table)
+                    })
+                    .count()
+                    + table_scans_in(conds, table)
+            }
+            SqlCond::Not(c) => table_scans_in(std::slice::from_ref(c), table),
+            SqlCond::And(cs) | SqlCond::Or(cs) => table_scans_in(cs, table),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Collect every scan alias reachable inside `conds`' NOT EXISTS/EXISTS
+/// subqueries (recursing into nested ones too) — used to prove no alias number
+/// is reused across independent (sibling or nested) subquery scopes.
+fn collect_subquery_aliases(conds: &[SqlCond], out: &mut Vec<usize>) {
+    for c in conds {
+        match c {
+            SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
+                out.extend(scans.iter().map(|s| s.alias));
+                collect_subquery_aliases(conds, out);
+            }
+            SqlCond::Not(c) => collect_subquery_aliases(std::slice::from_ref(c), out),
+            SqlCond::And(cs) | SqlCond::Or(cs) => collect_subquery_aliases(cs, out),
+            _ => {}
+        }
+    }
+}
+
+const MSJ_SQL: &str = r#"
+CREATE TABLE emp (id INTEGER PRIMARY KEY, name TEXT NOT NULL, dept TEXT NOT NULL);
+INSERT INTO emp VALUES (1, 'A', 'd10');
+INSERT INTO emp VALUES (2, 'A', 'd10');
+INSERT INTO emp VALUES (3, 'B', 'd20');
+INSERT INTO emp VALUES (4, 'C', 'd10');
+"#;
+
+const MSJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Emp>
+    rr:logicalTable [ rr:tableName "emp" ] ;
+    rr:subjectMap [ rr:template "http://ex/emp/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:dept ; rr:objectMap [ rr:template "http://ex/dept/{dept}" ] ] .
+"#;
+
+const MSJ_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/emp/1> ex:name "A" ; ex:dept <http://ex/dept/d10> .
+<http://ex/emp/2> ex:name "A" ; ex:dept <http://ex/dept/d10> .
+<http://ex/emp/3> ex:name "B" ; ex:dept <http://ex/dept/d20> .
+<http://ex/emp/4> ex:name "C" ; ex:dept <http://ex/dept/d10> .
+"#;
+
+/// Adversarial angle 1: `?p ex:dept ?d . ?q ex:dept ?d . ?q ex:name "A"` inside a
+/// MINUS anti-join is a same-table (`emp`) self-join on the NON-unique `dept`
+/// column — the merge precondition (`t.is_unique_key`) must reject it. `emp/4`
+/// ("C", dept d10) is the trap: it shares `dept` with the two `"A"`-named rows
+/// but its OWN name is NOT "A", so a WRONG merge (collapsing the `?q` scan into
+/// the `?p` scan and rewriting `?q ex:name "A"` onto the `?p` alias) would
+/// corrupt the anti-join into checking `?p`'s OWN name = "A" instead of some
+/// OTHER row's — `emp/4` would then wrongly SURVIVE the MINUS (its own name is
+/// "C" != "A", so the corrupted check would fail and the MINUS would incorrectly
+/// pass it through). Correct semantics: `emp/4` shares dept d10 with `emp/1`/
+/// `emp/2` (both named "A") ⇒ the MINUS body IS satisfiable ⇒ `emp/4` is
+/// CORRECTLY excluded. `assert_vs_spareval` (inside `diff`) is the decisive
+/// check here — it is untainted by cascade (a tree-vs-flat diff alone would NOT
+/// catch this, since both translators route through the SAME `cascade::run`).
+#[test]
+fn adversarial_minus_non_unique_self_join_not_merged() {
+    let query = format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n \
+         MINUS {{ ?p ex:dept ?d . ?q ex:dept ?d . ?q ex:name \"A\" }} }}"
+    );
+    diff(MSJ_SQL, MSJ_R2RML, Some(MSJ_TTL), &query);
+}
+
+/// Adversarial angle 2a: `FILTER EXISTS { ?p ex:dept ?d . ?d ex:label ?label }`
+/// mirrors the OPTIONAL right side `join_transfer_not_exists_self_join_eliminated`
+/// exercises (a `refObjectMap` join re-scans `dept` against itself, redundantly),
+/// but here it's a literal user-written `FILTER EXISTS` (the `Exists` variant),
+/// not a `NotExists` the Group C decomposition manufactured. Every person's dept
+/// (10) has a label ("Sales"), so EXISTS is true for all 3 — proves the merge
+/// fires (structural: exactly one `dept` scan survives) without corrupting the
+/// semi-join into always-false.
+#[test]
+fn adversarial_filter_exists_self_join_eliminated_stays_true() {
+    let query = format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name \
+         FILTER EXISTS {{ ?p ex:dept ?d . ?d ex:label ?label }} }}"
+    );
+    diff_p(&query);
+
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema).expect("tree must lower FILTER EXISTS");
+    let has_exists = tp.branches.iter().any(|b| {
+        b.where_conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::Exists { .. }))
+    });
+    assert!(has_exists, "FILTER EXISTS must lower to a SqlCond::Exists");
+    let dept_scans: usize = tp
+        .branches
+        .iter()
+        .map(|b| table_scans_in(&b.where_conds, "dept"))
+        .sum();
+    assert_eq!(
+        dept_scans, 1,
+        "the FILTER EXISTS semi-join subquery must scan `dept` exactly once (no \
+         redundant self-join): {:#?}",
+        tp.branches
+    );
+}
+
+/// Adversarial angle 2b: the same redundant-self-join shape, but the EXISTS
+/// condition is UNSATISFIABLE (`?d ex:label "Nonexistent"` — no dept has that
+/// label) — every person must be EXCLUDED. A merge bug that corrupts the
+/// correlation (e.g. rewrites the wrong alias when collapsing the redundant
+/// `dept` scan) could flip this to always-true instead.
+#[test]
+fn adversarial_filter_exists_self_join_eliminated_stays_false() {
+    let query = format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name \
+         FILTER EXISTS {{ ?p ex:dept ?d . ?d ex:label \"Nonexistent\" }} }}"
+    );
+    diff_p(&query);
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema).expect("tree must lower FILTER EXISTS");
+    let rows = oracle::engine_bag(&exec::select(&tp, &conn).expect("select exec"));
+    assert!(
+        rows.is_empty(),
+        "no dept has label 'Nonexistent' -- EXISTS must be false for every person: {rows:#?}"
+    );
+}
+
+/// Adversarial angle 3: a MINUS anti-join whose OWN body contains a FURTHER
+/// nested `FILTER EXISTS`, each with its OWN independent redundant same-table
+/// (`dept`) self-join. `lower_iq_exists` re-lowers EVERY EXISTS/NOT EXISTS body
+/// (including a nested one) via a FRESH lowering-time alias counter (`&mut 0`)
+/// that is independent of the outer plan's counter AND of any ancestor EXISTS
+/// body's own counter — this probes whether that construction can ever produce
+/// a NUMBER coincidence `find_self_join_in` could mistake for an in-scope scan.
+/// It must not: every `Scan.alias` is assigned by `resolve()`'s single GLOBAL
+/// counter, which explicitly descends into `IqCond::Exists`/`NotExists`
+/// subtrees BEFORE `lower()` (and its per-EXISTS-call fresh counter) ever runs —
+/// the lowering-time counter only allocates NEW derived aliases (subplan/agg),
+/// never re-numbers a `Scan` already embedded in the resolved tree. Verified
+/// both structurally (each level collapses independently) and by an explicit
+/// no-duplicate-alias scan across every NOT EXISTS/EXISTS scope in the plan.
+#[test]
+fn adversarial_nested_exists_in_minus_no_cross_scope_alias_collision() {
+    let query = format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name \
+         MINUS {{ ?p ex:dept ?d . ?d ex:label ?label \
+                  FILTER EXISTS {{ ?p ex:dept ?d2 . ?d2 ex:label ?label2 }} }} }}"
+    );
+    diff_p_bag(&query);
+
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let tp = tree(&maps, &parse(&query), &schema)
+        .expect("tree must lower a nested FILTER EXISTS inside MINUS");
+
+    let dept_scans: usize = tp
+        .branches
+        .iter()
+        .map(|b| table_scans_in(&b.where_conds, "dept"))
+        .sum();
+    assert_eq!(
+        dept_scans, 2,
+        "both the outer MINUS's own redundant dept self-join AND the nested \
+         FILTER EXISTS's own redundant dept self-join must independently \
+         collapse to 1 scan each (2 total): {:#?}",
+        tp.branches
+    );
+
+    let mut aliases = Vec::new();
+    for b in &tp.branches {
+        collect_subquery_aliases(&b.where_conds, &mut aliases);
+    }
+    let mut sorted = aliases.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        aliases.len(),
+        "every scan alias inside the nested MINUS/EXISTS subqueries must be \
+         unique -- a duplicate would mean two DIFFERENT scans (possibly at \
+         different nesting levels) share a number: {aliases:?}"
+    );
+}
+
+/// Adversarial angle 4: the `find_self_join_in` `?` -> `continue` behavior
+/// change, exercised at the OUTER BRANCH level (`b.core`/`b.where_conds`) — NOT
+/// inside a subquery. `?p ex:name ?name OPTIONAL { ?p ex:dept ?d }` binds `?d`
+/// to the OptJoin's OWN scan alias (living in `b.opts`, NOT `b.core`); a LATER,
+/// unrelated mandatory pattern that re-joins on `?d` (`?p2 ex:dept ?d`) unifies
+/// against that OPT-owned alias, pushing a ColEq that references an
+/// out-of-`b.core` alias into `b.where_conds` — BEFORE a later, genuinely
+/// eliminable PK self-join (`?p2 ex:name ?name2` re-scans `emp` for `?p2`,
+/// self-joined against the dept-triple's own `?p2` scan on the PK `id`).
+///
+/// Under the OLD `scan_table(b, alias)?` code this out-of-scope ColEq would
+/// have ABORTED the entire search (the `?` short-circuits the whole function,
+/// not just that loop iteration) — the LATER, legitimate self-join would NEVER
+/// have been found. This is a REACHABLE natural-SPARQL shape (not just a
+/// hypothetical Branch construction), so it demonstrates the commit's "a no-op
+/// for the existing branch-level call site" claim is not literally true: the
+/// NEW code finds and performs an elimination the OLD code provably would have
+/// missed. The merge itself is sound (`id` is genuinely `emp`'s PK) — this is a
+/// missed-optimization/claim-accuracy finding, not a correctness regression.
+// `dept` is schema-NULLABLE (so the cascade's OPTIONAL-always-matches downgrade
+// cannot fire — it needs a schema-proven NOT NULL to collapse `b.opts`, per the
+// `adversarial_branch_level_*` doc below) but every ACTUAL row has a non-NULL
+// value, so the (separate, pre-existing, NOT part of this commit) "later
+// mandatory join against a variable that may be genuinely UNBOUND from an
+// OPTIONAL" gap can never fire either — isolating the ONE thing this probe
+// targets from two unrelated confounds (confirmed empirically: see commit
+// message / handover notes for both confounds' independent repros). `dept` lives
+// on a SEPARATE table (`emp_dept`, correlated to `emp` only by sharing the SAME
+// subject URI scheme/`id`, a common R2RML multi-table-per-entity pattern) so the
+// UNRELATED `self_left_join_elimination` cascade pass (which collapses an
+// OptJoin whenever it is a SAME-TABLE unique-key self-match — confirmed
+// empirically: a single-table `emp.dept` version of this fixture gets its
+// OptJoin dissolved by THAT pass before this commit's code ever sees it) cannot
+// fire either — its precondition explicitly requires the opt table to match an
+// existing CORE scan's table, which `emp` vs `emp_dept` never does.
+const A4_SQL: &str = r#"
+CREATE TABLE emp (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE emp_dept (id INTEGER PRIMARY KEY, dept TEXT NOT NULL, code TEXT NOT NULL);
+INSERT INTO emp VALUES (1, 'Ann');
+INSERT INTO emp VALUES (2, 'Bob');
+INSERT INTO emp_dept VALUES (1, 'd10', 'C1');
+INSERT INTO emp_dept VALUES (2, 'd10', 'C2');
+"#;
+
+const A4_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Emp>
+    rr:logicalTable [ rr:tableName "emp" ] ;
+    rr:subjectMap [ rr:template "http://ex/emp/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+<#EmpDept>
+    rr:logicalTable [ rr:tableName "emp_dept" ] ;
+    rr:subjectMap [ rr:template "http://ex/emp/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:dept ; rr:objectMap [ rr:template "http://ex/dept/{dept}" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:code ; rr:objectMap [ rr:column "code" ] ] .
+"#;
+
+const A4_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/emp/1> ex:name "Ann" ; ex:dept <http://ex/dept/d10> ; ex:code "C1" .
+<http://ex/emp/2> ex:name "Bob" ; ex:dept <http://ex/dept/d10> ; ex:code "C2" .
+"#;
+
+/// Adversarial angle 4: the `find_self_join_in` `?` -> `continue` behavior
+/// change, exercised at the OUTER BRANCH level (`b.core`/`b.where_conds`) — NOT
+/// inside a subquery (no MINUS/EXISTS anywhere in this query, so
+/// `self_join_elimination_in_subqueries`, this commit's OTHER change, is never
+/// even called here — this isolates the `find_self_join_in` generalization's
+/// effect on the PRE-EXISTING branch-level call site specifically).
+///
+/// `?p ex:name ?name OPTIONAL { ?p ex:dept ?d }` binds `?d` to the OptJoin's OWN
+/// scan alias (living in `b.opts`, NOT `b.core`). A LATER, unrelated mandatory
+/// pattern that re-joins on `?d` (`?p2 ex:dept ?d`) unifies against that
+/// OPT-owned alias, pushing a ColEq that references an out-of-`b.core` alias
+/// into `b.where_conds` — BEFORE a later, genuinely eliminable PK self-join
+/// (`?p2 ex:code ?c` re-scans `emp_dept` for `?p2`, self-joined against the
+/// dept-triple's own `?p2` scan on the PK `id`).
+///
+/// Under the OLD `scan_table(b, alias)?` code this out-of-scope ColEq would
+/// have ABORTED the entire search (the `?` short-circuits the whole function,
+/// not just that loop iteration) — the LATER, legitimate self-join would NEVER
+/// have been found, leaving 2 separate `emp_dept` core scans for `?p2` instead
+/// of 1. This is a REACHABLE natural-SPARQL shape (not just a hypothetical
+/// Branch construction), so it demonstrates the commit's "a no-op for the
+/// existing branch-level call site" claim is not literally true: the NEW code
+/// finds and performs an elimination the OLD code provably would have missed.
+/// The merge itself is sound (`id` is genuinely `emp_dept`'s PK, confirmed by
+/// the `=_bag` vs spareval check below) — this is a missed-optimization/
+/// claim-accuracy finding, not a correctness regression.
+#[test]
+fn adversarial_branch_level_continue_finds_later_self_join_past_opt_alias() {
+    let query = format!(
+        "{PFX} SELECT ?name ?c WHERE {{ \
+         ?p ex:name ?name OPTIONAL {{ ?p ex:dept ?d }} . \
+         ?p2 ex:dept ?d . ?p2 ex:code ?c }}"
+    );
+    diff(A4_SQL, A4_R2RML, Some(A4_TTL), &query);
+
+    let conn = sqlite::load(A4_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(A4_R2RML).expect("R2RML parses");
+    let tp =
+        tree(&maps, &parse(&query), &schema).expect("tree must lower OPTIONAL + re-join on ?d");
+    for b in &tp.branches {
+        assert!(
+            !b.opts.is_empty(),
+            "the OPTIONAL must remain a genuine b.opts OptJoin (not collapsed by \
+             the unrelated self_left_join_elimination/lj_to_ij_fk_downgrade \
+             passes) for this claim to be exercised: {b:#?}"
+        );
+        let empdept_core_scans = b
+            .core
+            .iter()
+            .filter(
+                |s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "emp_dept"),
+            )
+            .count();
+        assert_eq!(
+            empdept_core_scans, 1,
+            "?p2's dept-scan and code-scan (a genuine PK self-join on `id`) must \
+             collapse to ONE `emp_dept` core scan, even though an EARLIER \
+             where_conds entry (the ?p2/?d correlation) references the OPT's \
+             out-of-core alias -- if this is 2, the later self-join was NOT \
+             found (the OLD `?`-abort behavior): {b:#?}",
+        );
+    }
+}
+
+// ============================================================================
+// GROUP-BY-TEMPLATE INJECTIVITY (ADR-0023 optimizer-residue wave, q9 agg-pushdown
+// follow-up): `group_key_columns` lowers a `GROUP BY ?v` key to ?v's raw R2RML
+// columns (ADR-0007 term-lifting: grouping by the raw key ≡ grouping by the
+// constructed term) — sound ONLY when the term map is INJECTIVE. A non-injective
+// `rr:template` (two adjacent `{col}` slots with no literal separator between
+// them) can map two DISTINCT raw-column tuples to the SAME constructed term;
+// grouping by the raw columns then silently SPLITS one SPARQL group into two,
+// under-counting. `crate::cascade::binding_is_injective` (already the gate
+// DISTINCT-removal uses for the identical soundness condition) closes this.
+// ============================================================================
+
+const NONINJ_SQL: &str = r#"
+CREATE TABLE nj (id INTEGER PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL, tag TEXT NOT NULL);
+INSERT INTO nj VALUES (1, '1', '23', 't1');
+INSERT INTO nj VALUES (2, '12', '3', 't2');
+"#;
+
+/// `{a}{b}` — adjacent column slots, NO separator: row 1 ('1','23') and row 2
+/// ('12','3') both expand to the SAME subject `http://ex/x/123`.
+const NONINJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#NJ>
+    rr:logicalTable [ rr:tableName "nj" ] ;
+    rr:subjectMap [ rr:template "http://ex/x/{a}{b}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:tag ; rr:objectMap [ rr:column "tag" ] ] .
+"#;
+
+#[test]
+fn group_by_non_injective_template_key_defers_not_miscounts() {
+    // Both DB rows construct the SAME subject `http://ex/x/123` (non-injective
+    // template) but emit DIFFERENT `ex:tag` objects, so the graph is genuinely
+    // 2 distinct triples under 1 collapsed subject — grouping by the RAW (a,b)
+    // columns (the pre-fix behaviour) would wrongly produce 2 groups of count 1
+    // instead of 1 group of count 2. `diff()` asserts flat/tree agree AND defer
+    // (rather than asserting a — now provably wrong — numeric answer): a 501 is
+    // the established "never silently wrong" outcome this file's other deferred
+    // shapes (GROUP_CONCAT, SAMPLE, …) already use.
+    diff(
+        NONINJ_SQL,
+        NONINJ_R2RML,
+        None,
+        &format!("{PFX} SELECT ?s (COUNT(?t) AS ?c) WHERE {{ ?s ex:tag ?t }} GROUP BY ?s"),
+    );
+    let conn = sqlite::load(NONINJ_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(NONINJ_R2RML).expect("R2RML parses");
+    let q = parse(&format!(
+        "{PFX} SELECT ?s (COUNT(?t) AS ?c) WHERE {{ ?s ex:tag ?t }} GROUP BY ?s"
+    ));
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "GROUP BY on a non-injective template key must defer (501), not silently \
+         miscount by grouping on the raw non-injective columns"
+    );
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "flat oracle must defer identically"
+    );
+}
+
+/// Positive control: an INJECTIVE template key (single column slot) must still
+/// group correctly — proves the injectivity gate isn't overly conservative and
+/// doesn't regress the common (single-placeholder subject IRI) case that every
+/// other `agg_over_union_*`/R2RML fixture in this file relies on.
+#[test]
+fn group_by_injective_template_key_still_groups() {
+    let ttl = r#"
+@prefix ex: <http://ex/> .
+<http://ex/x/123> ex:tag "t1" .
+<http://ex/x/23> ex:tag "t2" .
+"#;
+    // `{id}` alone is trivially injective (single column slot, ADR-0007 R2).
+    let r2rml = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#NJ2>
+    rr:logicalTable [ rr:tableName "nj2" ] ;
+    rr:subjectMap [ rr:template "http://ex/x/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:tag ; rr:objectMap [ rr:column "tag" ] ] .
+"#;
+    let sql = r#"
+CREATE TABLE nj2 (id TEXT PRIMARY KEY, tag TEXT NOT NULL);
+INSERT INTO nj2 VALUES ('123', 't1');
+INSERT INTO nj2 VALUES ('23', 't2');
+"#;
+    diff(
+        sql,
+        r2rml,
+        Some(ttl),
+        &format!("{PFX} SELECT ?s (COUNT(?t) AS ?c) WHERE {{ ?s ex:tag ?t }} GROUP BY ?s"),
+    );
 }
 
 // --- OVERLAP: two triples-maps over the SAME table both emit ex:val (identical

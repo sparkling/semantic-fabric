@@ -1103,36 +1103,83 @@ fn try_sql_group_over_union(
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
 ) -> Option<Branch> {
-    use sf_core::ir::{TermMap, TermSpec};
+    use sf_core::ir::{Segment, Template, TermMap, TermSpec};
     use std::collections::BTreeSet;
 
     if inner.len() < 2 || inner.iter().any(|b| b.path.is_some() || b.agg.is_some()) {
         return None;
     }
 
-    fn column_spec(def: &TermDef) -> Option<&TermSpec> {
-        match def {
-            TermDef::Derived {
-                term_map: TermMap::Column(_, spec),
-                ..
-            } => Some(spec),
-            _ => None,
-        }
+    // How a needed var's raw column(s) reconstruct its term — shared identically
+    // (spec + structure) across every arm, or the var isn't poolable.
+    enum KeyShape {
+        /// `TermMap::Column` — trivially injective, one raw column.
+        Column(TermSpec),
+        /// An INJECTIVE `TermMap::Template` (`binding_is_injective`) — one or more
+        /// raw columns; the segment structure is reused verbatim (only the column
+        /// NAMES are remapped) to rebuild the term on the pooled derived table.
+        Template(Template, TermSpec),
     }
+
     fn spec_eq(a: &TermSpec, b: &TermSpec) -> bool {
         // `base` (relative-IRI resolution context) is irrelevant to SQL storage-type
         // compatibility — intentionally excluded.
         a.term_type == b.term_type && a.datatype == b.datatype && a.language == b.language
+    }
+    fn key_shape(def: &TermDef) -> Option<KeyShape> {
+        match def {
+            TermDef::Derived {
+                term_map: TermMap::Column(_, spec),
+                ..
+            } => Some(KeyShape::Column(spec.clone())),
+            // A non-injective Template is EXCLUDED here for the identical reason
+            // `unfold::group_key_columns` excludes it: two distinct raw-column
+            // tuples could construct the same term, so grouping by the raw
+            // columns would silently split one SPARQL group into two.
+            TermDef::Derived {
+                term_map: TermMap::Template(t, spec),
+                ..
+            } if crate::cascade::binding_is_injective(def) => {
+                Some(KeyShape::Template(t.clone(), spec.clone()))
+            }
+            // Non-injective Template, Constant, Coalesce, Concat, Agg: none has a
+            // raw column (or set of raw columns) soundly poolable across a UNION —
+            // Coalesce/Concat additionally differ per-arm by construction (which
+            // side of a LEFT JOIN was NULL / which operands are bound), so even
+            // same-shaped raw columns wouldn't mean the same reconstruction.
+            _ => None,
+        }
+    }
+    fn shape_eq(a: &KeyShape, b: &KeyShape) -> bool {
+        match (a, b) {
+            (KeyShape::Column(sa), KeyShape::Column(sb)) => spec_eq(sa, sb),
+            (KeyShape::Template(ta, sa), KeyShape::Template(tb, sb)) => {
+                spec_eq(sa, sb) && ta.segments() == tb.segments()
+            }
+            _ => false, // a Column arm and a Template arm for the same var — bail
+        }
+    }
+    fn col_count(shape: &KeyShape) -> usize {
+        match shape {
+            KeyShape::Column(_) => 1,
+            KeyShape::Template(t, _) => t
+                .segments()
+                .iter()
+                .filter(|s| matches!(s, Segment::Column(_)))
+                .count(),
+        }
     }
 
     // The needed variable set: every grouping key + every var-backed aggregate
     // argument (a non-variable aggregate argument, or `COUNT(DISTINCT *)`, bails —
     // the flat/tree Rust-group path 501s on those too, so this is no new deferral).
     let mut needed: BTreeSet<String> = grouping.iter().map(|v| v.to_string()).collect();
+    let mut agg_arg_vars: BTreeSet<String> = BTreeSet::new();
     for def in aggs {
         match &def.arg {
             Some(AggArg::Var(v)) => {
                 needed.insert(v.to_string());
+                agg_arg_vars.insert(v.to_string());
             }
             Some(AggArg::Expr(_)) => return None,
             None if def.distinct => return None,
@@ -1142,30 +1189,61 @@ fn try_sql_group_over_union(
     // BTreeSet iteration order (alphabetical by var name) is EXACTLY the order
     // `Branch::projection()`/`emit_branch_with` assign positional `c{i}` aliases in,
     // since a pooled arm's `bindings` (below) contains precisely this var set keyed
-    // by the same `BTreeMap<String, _>` ordering — so `sorted_vars[i]` ↔ `c{i}`.
+    // by the same `BTreeMap<String, _>` ordering — so `sorted_vars[i]`'s columns
+    // occupy a contiguous `c{start}..c{start+len}` run, offsets computed below.
     let sorted_vars: Vec<String> = needed.into_iter().collect();
 
-    // Validate shape + cross-arm type compatibility for every needed var.
-    let mut specs: Vec<TermSpec> = Vec::with_capacity(sorted_vars.len());
+    // Validate shape + cross-arm structural/type compatibility for every needed var.
+    let mut shapes: Vec<KeyShape> = Vec::with_capacity(sorted_vars.len());
     for v in &sorted_vars {
-        let mut common: Option<&TermSpec> = None;
+        let mut common: Option<KeyShape> = None;
         for arm in inner {
             let def = arm.bindings.get(v.as_str())?;
-            let spec = column_spec(def)?;
-            match common {
-                None => common = Some(spec),
-                Some(c) if spec_eq(c, spec) => {}
-                Some(_) => return None, // cross-arm type mismatch — bail to Rust path
+            let shape = key_shape(def)?;
+            match &common {
+                None => common = Some(shape),
+                Some(c) if shape_eq(c, &shape) => {}
+                Some(_) => return None, // cross-arm shape/type mismatch — bail to Rust path
             }
         }
-        specs.push(common.expect("inner.len() >= 2 checked above").clone());
+        shapes.push(common.expect("inner.len() >= 2 checked above"));
+    }
+    // An aggregate ARGUMENT must reduce to exactly one SQL value (`SUM`/`COUNT`/…
+    // take a single scalar) — matches `unfold::single_column_of`'s identical
+    // single-branch precedent. A multi-column Template is fine as a GROUP BY key
+    // (grouped positions stay in SQL, the term is only rebuilt at reconstruction)
+    // but not as an aggregate argument.
+    for v in &agg_arg_vars {
+        let i = sorted_vars.iter().position(|x| x == v)?;
+        if col_count(&shapes[i]) != 1 {
+            return None;
+        }
     }
 
-    let pos = |v: &str| {
+    let idx_of = |v: &str| {
         sorted_vars
             .iter()
             .position(|x| x == v)
             .expect("validated above")
+    };
+    // Prefix-sum offsets: `sorted_vars[i]`'s raw columns occupy positions
+    // `offsets[i].0 .. offsets[i].0 + offsets[i].1` in the pooled derived table.
+    let offsets: Vec<(usize, usize)> = {
+        let mut running = 0;
+        shapes
+            .iter()
+            .map(|s| {
+                let n = col_count(s);
+                let start = running;
+                running += n;
+                (start, n)
+            })
+            .collect()
+    };
+    let pos = |v: &str| {
+        let (start, len) = offsets[idx_of(v)];
+        debug_assert_eq!(len, 1, "single-column caller (agg arg)");
+        start
     };
 
     // Pool the arms: each retains its own FROM/WHERE, reduced to ONLY the needed
@@ -1205,15 +1283,15 @@ fn try_sql_group_over_union(
     if pooled_arms.iter().any(|b| b.projection().len() != proj_len) {
         return None;
     }
-    // Degenerate-shape guard: `pos()` below assumes `sorted_vars[i] ↔ c{i}` strictly
-    // (the FIRST `sorted_vars.len()` positions `Branch::projection()` emits, since
-    // bindings are pushed before `where_conds`/`opts`/`subplan_joins` columns). That
-    // holds as long as every needed var's raw column is DISTINCT from every other
-    // needed var's — `projection()` dedups identical `ColRef`s, so two DIFFERENT
-    // vars degenerately bound to the SAME raw column (e.g. two triple patterns
-    // projecting the same column under different variable names) would collapse
-    // the bindings-derived prefix to fewer than `sorted_vars.len()` columns and
-    // shift every position after. Checked directly per arm (cheap, in-memory).
+    // Degenerate-shape guard: `offsets` above assumes each `sorted_vars[i]`'s columns
+    // occupy EXACTLY its own contiguous `c{start}..c{start+len}` run (the FIRST
+    // `total` positions `Branch::projection()` emits, since bindings are pushed
+    // before `where_conds`/`opts`/`subplan_joins` columns). That holds as long as
+    // every needed var's raw column(s) are DISTINCT from every other needed var's
+    // (and, for a multi-column Template, from its OWN other columns too) —
+    // `projection()` dedups identical `ColRef`s, so a collision would collapse the
+    // bindings-derived prefix to fewer than `total` columns and shift every
+    // position after. Checked directly per arm (cheap, in-memory).
     let needed_cols_distinct = |b: &Branch| -> bool {
         let mut cols: Vec<ColRef> = Vec::with_capacity(sorted_vars.len());
         for v in &sorted_vars {
@@ -1253,21 +1331,55 @@ fn try_sql_group_over_union(
         left: false,
     });
 
+    // Rebuild a term map for `v` referencing the pooled derived table's renamed
+    // `c{i}` columns — preserving the ORIGINAL `Column`/`Template` structure
+    // (for a Template, only the column NAMES change; the literal segments and
+    // column-slot order are reused verbatim, so the term still reconstructs
+    // identically to any one arm's original — they're structurally equal,
+    // validated above).
+    let rebuild_def = |v: &str| -> TermDef {
+        let i = idx_of(v);
+        let (start, _) = offsets[i];
+        match &shapes[i] {
+            KeyShape::Column(spec) => TermDef::Derived {
+                term_map: TermMap::Column(format!("c{start}").into(), spec.clone()),
+                alias: sp_alias,
+            },
+            KeyShape::Template(t, spec) => {
+                let mut next_col = (start..).map(|p| format!("c{p}").into_boxed_str());
+                let segments: Vec<Segment> = t
+                    .segments()
+                    .iter()
+                    .map(|s| match s {
+                        Segment::Literal(lit) => Segment::Literal(lit.clone()),
+                        Segment::Column(_) => Segment::Column(
+                            next_col.next().expect("infinite range covers every slot"),
+                        ),
+                    })
+                    .collect();
+                let renamed = Template::from_segments(segments)
+                    .expect("non-empty: mirrors the original non-empty template");
+                TermDef::Derived {
+                    term_map: TermMap::Template(renamed, spec.clone()),
+                    alias: sp_alias,
+                }
+            }
+        }
+    };
+    let key_cols = |v: &str| -> Vec<ColRef> {
+        let (start, len) = offsets[idx_of(v)];
+        (start..start + len)
+            .map(|p| ColRef::new(sp_alias, format!("c{p}")))
+            .collect()
+    };
+
     let mut out_bindings: BTreeMap<String, TermDef> = BTreeMap::new();
     let mut keys = Vec::with_capacity(grouping.len());
     for v in grouping {
-        let p = pos(v.as_ref());
-        let col = ColRef::new(sp_alias, format!("c{p}"));
-        out_bindings.insert(
-            v.to_string(),
-            TermDef::Derived {
-                term_map: TermMap::Column(format!("c{p}").into(), specs[p].clone()),
-                alias: sp_alias,
-            },
-        );
+        out_bindings.insert(v.to_string(), rebuild_def(v.as_ref()));
         keys.push(GroupKey {
             var: v.to_string(),
-            cols: vec![col],
+            cols: key_cols(v.as_ref()),
         });
     }
 
@@ -1880,6 +1992,284 @@ mod tests {
             "the two arms pool into one SubPlan derived table"
         );
         assert_eq!(b.subplan_joins[0].plan.branches.len(), 2);
+    }
+
+    /// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.2): a
+    /// GROUP BY key bound via an INJECTIVE, multi-column `TermMap::Template`
+    /// (`{cc}-{num}`, separator present) — identical template in both arms — now
+    /// ALSO pushes down, not just a bare `TermMap::Column` key. Proves the
+    /// extension: `agg.keys[0].cols` carries BOTH raw columns (positionally
+    /// contiguous on the pooled derived table), and the rebuilt outer binding is
+    /// a `TermMap::Template` (not silently downgraded to a `Column`).
+    #[test]
+    fn group_by_injective_template_key_pushes_down_to_sql() {
+        use crate::iq::node::{AggArg, AggDef, BindDef};
+        use crate::iq::{AggKind, Scan};
+        use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+
+        let arm = |alias: usize| -> IqNode {
+            let mut subst = BTreeMap::new();
+            subst.insert(
+                "s".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: template_iri("http://ex/{cc}-{num}"),
+                    alias,
+                }),
+            );
+            subst.insert(
+                "o".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: TermMap::Column("v".into(), TermSpec::plain_literal()),
+                    alias,
+                }),
+            );
+            IqNode::Construction {
+                child: Box::new(IqNode::Extensional {
+                    scan: Scan {
+                        alias,
+                        source: LogicalSource::Table("t".to_owned()),
+                    },
+                    bind: BTreeMap::new(),
+                }),
+                subst,
+                project: vec!["s".into(), "o".into()],
+            }
+        };
+        let tree = IqNode::Aggregation {
+            grouping: vec!["s".into()],
+            aggs: vec![AggDef {
+                var: "c".into(),
+                kind: AggKind::Sum,
+                arg: Some(AggArg::Var("o".into())),
+                distinct: false,
+                fixed_type: None,
+            }],
+            child: Box::new(IqNode::Union {
+                children: vec![arm(0), arm(1)],
+                project: vec!["s".into(), "o".into()],
+            }),
+        };
+        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        assert!(
+            p.rust_group.is_none(),
+            "an injective Template key must push down, not fall back to RustGroup"
+        );
+        assert_eq!(p.branches.len(), 1, "pooled into one Aggregation branch");
+        let b = &p.branches[0];
+        let agg = b.agg.as_ref().expect("SQL GROUP BY over the pooled union");
+        assert_eq!(agg.keys.len(), 1);
+        assert_eq!(agg.keys[0].var, "s");
+        assert_eq!(
+            agg.keys[0].cols.len(),
+            2,
+            "both {{cc}} and {{num}} raw columns are the GROUP BY key: {:?}",
+            agg.keys[0].cols
+        );
+        // Positionally contiguous on the pooled derived table (offsets, not gaps).
+        assert_eq!(agg.keys[0].cols[0].alias, agg.keys[0].cols[1].alias);
+        match b.bindings.get("s") {
+            Some(TermDef::Derived {
+                term_map: TermMap::Template(t, _),
+                ..
+            }) => {
+                assert_eq!(
+                    t.segments()
+                        .iter()
+                        .filter(|s| matches!(s, sf_core::ir::Segment::Column(_)))
+                        .count(),
+                    2,
+                    "the rebuilt outer Template keeps both column slots: {:?}",
+                    t.segments()
+                );
+            }
+            other => panic!("?s must rebuild as a Template (not downgraded to Column): {other:?}"),
+        }
+    }
+
+    /// The negative counterpart: a NON-injective `TermMap::Template` (`{cc}{num}`,
+    /// NO separator — two distinct raw-column tuples could construct the SAME
+    /// term) must decline the pushdown and fall back to `RustGroup` — never
+    /// silently mis-group by pooling raw columns that don't uniquely determine
+    /// the constructed term.
+    #[test]
+    fn group_by_non_injective_template_key_falls_back_to_rust_group() {
+        use crate::iq::node::{AggArg, AggDef, BindDef};
+        use crate::iq::{AggKind, Scan};
+        use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+
+        let arm = |alias: usize| -> IqNode {
+            let mut subst = BTreeMap::new();
+            subst.insert(
+                "s".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: template_iri("http://ex/{cc}{num}"),
+                    alias,
+                }),
+            );
+            subst.insert(
+                "o".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: TermMap::Column("v".into(), TermSpec::plain_literal()),
+                    alias,
+                }),
+            );
+            IqNode::Construction {
+                child: Box::new(IqNode::Extensional {
+                    scan: Scan {
+                        alias,
+                        source: LogicalSource::Table("t".to_owned()),
+                    },
+                    bind: BTreeMap::new(),
+                }),
+                subst,
+                project: vec!["s".into(), "o".into()],
+            }
+        };
+        let tree = IqNode::Aggregation {
+            grouping: vec!["s".into()],
+            aggs: vec![AggDef {
+                var: "c".into(),
+                kind: AggKind::Sum,
+                arg: Some(AggArg::Var("o".into())),
+                distinct: false,
+                fixed_type: None,
+            }],
+            child: Box::new(IqNode::Union {
+                children: vec![arm(0), arm(1)],
+                project: vec!["s".into(), "o".into()],
+            }),
+        };
+        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        assert!(
+            p.rust_group.is_some(),
+            "a non-injective Template key must fall back to RustGroup, never mis-pool"
+        );
+        assert!(p.branches.iter().all(|b| b.agg.is_none()));
+    }
+
+    /// An aggregate ARGUMENT (not a grouping key) bound via a multi-column Template
+    /// must ALSO decline the pushdown, even when the key itself pools fine — SUM/
+    /// COUNT/MIN/MAX need exactly one SQL value (matches `single_column_of`'s
+    /// identical single-branch precedent).
+    #[test]
+    fn agg_arg_multi_column_template_falls_back_to_rust_group() {
+        use crate::iq::node::{AggArg, AggDef, BindDef};
+        use crate::iq::{AggKind, Scan};
+        use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+
+        let arm = |alias: usize| -> IqNode {
+            let mut subst = BTreeMap::new();
+            subst.insert(
+                "s".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: TermMap::Column("id".into(), TermSpec::plain_literal()),
+                    alias,
+                }),
+            );
+            subst.insert(
+                "o".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: template_iri("http://ex/{cc}-{num}"),
+                    alias,
+                }),
+            );
+            IqNode::Construction {
+                child: Box::new(IqNode::Extensional {
+                    scan: Scan {
+                        alias,
+                        source: LogicalSource::Table("t".to_owned()),
+                    },
+                    bind: BTreeMap::new(),
+                }),
+                subst,
+                project: vec!["s".into(), "o".into()],
+            }
+        };
+        let tree = IqNode::Aggregation {
+            grouping: vec!["s".into()],
+            aggs: vec![AggDef {
+                var: "c".into(),
+                kind: AggKind::Count,
+                arg: Some(AggArg::Var("o".into())),
+                distinct: false,
+                fixed_type: None,
+            }],
+            child: Box::new(IqNode::Union {
+                children: vec![arm(0), arm(1)],
+                project: vec!["s".into(), "o".into()],
+            }),
+        };
+        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        assert!(
+            p.rust_group.is_some(),
+            "a multi-column Template aggregate ARGUMENT must fall back to RustGroup"
+        );
+    }
+
+    /// A grouping key bound via `TermDef::Coalesce` (an OPTIONAL-shared variable
+    /// with two SQL representations, R2/ADR-0007) must decline the pushdown — the
+    /// raw column identity differs PER ARM depending on which LEFT JOIN side
+    /// matched, so even a same-shaped Coalesce isn't soundly poolable across a
+    /// UNION the way a plain Column/Template is.
+    #[test]
+    fn group_by_coalesce_key_falls_back_to_rust_group() {
+        use crate::iq::node::{AggArg, AggDef, BindDef};
+        use crate::iq::{AggKind, Scan};
+        use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+
+        let arm = |alias: usize| -> IqNode {
+            let mut subst = BTreeMap::new();
+            subst.insert(
+                "s".into(),
+                BindDef::Resolved(TermDef::Coalesce(
+                    Box::new(TermDef::Derived {
+                        term_map: TermMap::Column("id_l".into(), TermSpec::plain_literal()),
+                        alias,
+                    }),
+                    Box::new(TermDef::Derived {
+                        term_map: TermMap::Column("id_r".into(), TermSpec::plain_literal()),
+                        alias,
+                    }),
+                )),
+            );
+            subst.insert(
+                "o".into(),
+                BindDef::Resolved(TermDef::Derived {
+                    term_map: TermMap::Column("v".into(), TermSpec::plain_literal()),
+                    alias,
+                }),
+            );
+            IqNode::Construction {
+                child: Box::new(IqNode::Extensional {
+                    scan: Scan {
+                        alias,
+                        source: LogicalSource::Table("t".to_owned()),
+                    },
+                    bind: BTreeMap::new(),
+                }),
+                subst,
+                project: vec!["s".into(), "o".into()],
+            }
+        };
+        let tree = IqNode::Aggregation {
+            grouping: vec!["s".into()],
+            aggs: vec![AggDef {
+                var: "c".into(),
+                kind: AggKind::Sum,
+                arg: Some(AggArg::Var("o".into())),
+                distinct: false,
+                fixed_type: None,
+            }],
+            child: Box::new(IqNode::Union {
+                children: vec![arm(0), arm(1)],
+                project: vec!["s".into(), "o".into()],
+            }),
+        };
+        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        assert!(
+            p.rust_group.is_some(),
+            "a Coalesce grouping key must fall back to RustGroup, never mis-pool"
+        );
     }
 
     /// ADR-0023 M4 wave 1 — the agg-over-UNION HEADLINE (design §4.14): an *aliased*
