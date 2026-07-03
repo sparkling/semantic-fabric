@@ -548,9 +548,12 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
         1 => arms.pop().expect("len checked == 1"),
         _ => match try_fold_constant_union(&arms, &project) {
             Some(values) => values,
-            None => IqNode::Union {
-                children: arms,
-                project,
+            None => match try_partial_fold_constant_union(&arms, &project) {
+                Some(union) => union,
+                None => IqNode::Union {
+                    children: arms,
+                    project,
+                },
             },
         },
     })
@@ -595,64 +598,110 @@ fn try_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
     if arms.len() < 2 {
         return None;
     }
-    let no_vars = BTreeMap::new();
     let mut rows = Vec::with_capacity(arms.len());
     for arm in arms {
-        match arm {
-            // `A UNION B UNION C` is left-associative (`(A UNION B) UNION C`): the
-            // inner `(A UNION B)` normalizes (and, when both are constant, this SAME
-            // rule folds it) *before* the outer Union ever sees it, so an
-            // already-folded `Values` arm must be absorbed directly, not just a
-            // `Construction`. Ontop `ValuesNodeOptimization::test26MergeableCombination`:
-            // the arm's own column ORDER need not match `project`'s — `same_var_set`
-            // (SAME variables, order-independent) is the acceptance test, and
-            // `reorder_row` permutes each row by variable NAME to `project`'s order
-            // before absorbing it (a no-op permutation when the orders already agree).
-            IqNode::Values {
-                vars,
-                rows: inner_rows,
-            } if same_var_set(vars, project) => {
-                rows.extend(inner_rows.iter().map(|r| reorder_row(vars, r, project)))
-            }
-            IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
-                let mut row = Vec::with_capacity(project.len());
-                for var in project {
-                    let cell = match subst.get(var) {
-                        Some(BindDef::Resolved(TermDef::Const(t))) => {
-                            Some(TermDef::Const(t.clone()))
-                        }
-                        Some(BindDef::Expr(e)) => Some(bind_term_def(e, &no_vars).ok()?),
-                        Some(_) => return None, // a resolved non-constant (e.g. a column)
-                        None => None,           // unbound in this arm -- UNDEF (Values semantics)
-                    };
-                    row.push(cell);
-                }
-                rows.push(row);
-            }
-            // test25: a bare `True` arm binds nothing, so it can only fold when
-            // there is nothing TO bind -- an empty `project` -- contributing one
-            // empty-tuple row (the same "counting" shape a zero-column `Values`
-            // leaf already has). Revert-proof note: removing just this arm does
-            // NOT change correctness -- `lift_construction`'s Construction-over-
-            // Union case (this file) individually wraps every bare `True` arm in
-            // an identity `Construction` before a SECOND `try_fold_constant_union`
-            // pass, which the PRE-EXISTING `Construction{child:True,..}` case above
-            // already handles once the `project.is_empty()` guard is lifted. What
-            // this arm changes is WHICH of the two fold opportunities fires first:
-            // with it, the plain (non-lifted) `normalize()` Union dispatch folds
-            // immediately, preserving the outer identity-Construction wrapper this
-            // whole file's other tests consistently expect; without it, the fold
-            // still happens (via `lift_construction`'s second pass) but that path
-            // REPLACES the Construction outright, leaving a bare `Values` -- an
-            // equally `=_bag`-correct but inconsistent shape. Kept for that
-            // consistency, not because the fold would otherwise fail.
-            IqNode::True if project.is_empty() => rows.push(Vec::new()),
-            _ => return None, // a DATA arm (real pattern), or a shape not covered above
-        }
+        rows.extend(const_rows_of(arm, project)?);
     }
     Some(IqNode::Values {
         vars: project.to_vec(),
         rows,
+    })
+}
+
+/// Extract the constant row(s) this ARM alone would contribute to a folded
+/// `Values` leaf projecting `project` — `None` if this arm isn't one of the three
+/// constant-arm shapes `try_fold_constant_union`/`try_partial_fold_constant_union`
+/// recognize (a DATA arm, a real pattern underneath). Shared by both callers so
+/// the fold precondition is defined in exactly one place.
+fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
+    let no_vars = BTreeMap::new();
+    match arm {
+        // `A UNION B UNION C` is left-associative (`(A UNION B) UNION C`): the
+        // inner `(A UNION B)` normalizes (and, when both are constant, this SAME
+        // rule folds it) *before* the outer Union ever sees it, so an
+        // already-folded `Values` arm must be absorbed directly, not just a
+        // `Construction`. Ontop `ValuesNodeOptimization::test26MergeableCombination`:
+        // the arm's own column ORDER need not match `project`'s — `same_var_set`
+        // (SAME variables, order-independent) is the acceptance test, and
+        // `reorder_row` permutes each row by variable NAME to `project`'s order
+        // before absorbing it (a no-op permutation when the orders already agree).
+        IqNode::Values { vars, rows } if same_var_set(vars, project) => {
+            Some(rows.iter().map(|r| reorder_row(vars, r, project)).collect())
+        }
+        IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
+            let mut row = Vec::with_capacity(project.len());
+            for var in project {
+                let cell = match subst.get(var) {
+                    Some(BindDef::Resolved(TermDef::Const(t))) => Some(TermDef::Const(t.clone())),
+                    Some(BindDef::Expr(e)) => Some(bind_term_def(e, &no_vars).ok()?),
+                    Some(_) => return None, // a resolved non-constant (e.g. a column)
+                    None => None,           // unbound in this arm -- UNDEF (Values semantics)
+                };
+                row.push(cell);
+            }
+            Some(vec![row])
+        }
+        // test25: a bare `True` arm binds nothing, so it can only fold when
+        // there is nothing TO bind -- an empty `project` -- contributing one
+        // empty-tuple row (the same "counting" shape a zero-column `Values`
+        // leaf already has). Revert-proof note: removing just this arm does NOT
+        // change correctness -- `lift_construction`'s Construction-over-Union
+        // case (this file) individually wraps every bare `True` arm in an
+        // identity `Construction` before a SECOND fold pass, which the
+        // `Construction{child:True,..}` case above already handles once the
+        // `project.is_empty()` guard is lifted. What this arm changes is WHICH
+        // of the two fold opportunities fires first: with it, the plain
+        // (non-lifted) `normalize()` Union dispatch folds immediately,
+        // preserving the outer identity-Construction wrapper this whole file's
+        // other tests consistently expect; without it, the fold still happens
+        // (via `lift_construction`'s second pass) but that path REPLACES the
+        // Construction outright, leaving a bare `Values` -- an equally
+        // `=_bag`-correct but inconsistent shape. Kept for that consistency,
+        // not because the fold would otherwise fail.
+        IqNode::True if project.is_empty() => Some(vec![Vec::new()]),
+        _ => None, // a DATA arm (real pattern), or a shape not covered above
+    }
+}
+
+/// Partial version of `try_fold_constant_union` (Ontop
+/// `ValuesNodeOptimization::test15ConstructionUnionTrueTrueDataNode`): when SOME
+/// (but not all) of a `Union`'s arms are constant, fold JUST those into one
+/// `Values` arm, keeping the rest (the DATA arms — real patterns underneath)
+/// untouched as sibling `Union` arms. The SAME `=_bag` multiset either way (a
+/// `Union` distributes row-membership independently of how its arms are grouped);
+/// only the SQL shape changes — fewer arms to plan/execute.
+///
+/// Declines (`None`) when fewer than 2 arms are constant (nothing worth
+/// combining — a single constant arm gains nothing from being wrapped in its own
+/// one-arm `Values`, and folding a single ALREADY-a-`Values` arm into itself is a
+/// pure no-op) or when EVERY arm is constant (`try_fold_constant_union`, tried
+/// first by the caller, already produces a strictly simpler bare `Values` for
+/// that case — this function only ever runs after that one has declined).
+fn try_partial_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
+    let mut rows = Vec::new();
+    let mut kept = Vec::new();
+    let mut const_arm_count = 0;
+    for arm in arms {
+        match const_rows_of(arm, project) {
+            Some(r) => {
+                rows.extend(r);
+                const_arm_count += 1;
+            }
+            None => kept.push(arm.clone()),
+        }
+    }
+    if const_arm_count < 2 || kept.is_empty() {
+        return None;
+    }
+    let mut children = Vec::with_capacity(kept.len() + 1);
+    children.push(IqNode::Values {
+        vars: project.to_vec(),
+        rows,
+    });
+    children.extend(kept);
+    Some(IqNode::Union {
+        children,
+        project: project.to_vec(),
     })
 }
 
@@ -1912,8 +1961,14 @@ mod tests {
         );
     }
 
-    /// A DATA arm (a real triple pattern, not a bare constant) blocks the fold
-    /// entirely — no partial fold, the `Union` survives untouched.
+    /// A DATA arm (a real triple pattern, not a bare constant) blocks the FULL
+    /// fold (`try_fold_constant_union`) — no `Values` leaf. With only ONE constant
+    /// arm here (the class-atom `?s <rdf:type> ?x` itself expands to a 2-way
+    /// per-table union during BUILD, so this is 1 constant + 2 data arms, not 1+1),
+    /// the PARTIAL fold (`try_partial_fold_constant_union`, test15) declines too
+    /// (nothing to combine — see that function's own doc comment); see
+    /// `partial_fold_combines_multiple_constant_arms_keeps_data_arm` below for the
+    /// 2-constant-arms case that DOES partially fold.
     #[test]
     fn union_with_a_data_arm_does_not_fold() {
         let n = norm(&format!(
@@ -1922,6 +1977,63 @@ mod tests {
         assert!(
             !matches!(n, IqNode::Values { .. }),
             "a real pattern in one arm must block the constant fold: {n:?}"
+        );
+    }
+
+    /// Ontop `ValuesNodeOptimization::test15ConstructionUnionTrueTrueDataNode`:
+    /// with TWO OR MORE constant arms alongside a data arm, the full fold still
+    /// declines (a real pattern is present), but the PARTIAL fold now combines
+    /// just the constant arms into one `Values`, keeping the data arm(s) as
+    /// sibling `Union` arms — fewer arms, same `=_bag` multiset.
+    ///
+    /// The DATA arm is deliberately FIRST here (`A UNION B UNION C` is
+    /// left-associative — `(A UNION B) UNION C`): with the data arm LAST, the
+    /// inner `{BIND a} UNION {BIND b}` pair would fully fold via the PRE-EXISTING
+    /// `try_fold_constant_union` (test14, both arms constant) before this rule
+    /// ever runs, making the test pass regardless of whether this new function
+    /// exists at all — a mistake caught empirically via this test's OWN
+    /// revert-proof (bypassing `try_partial_fold_constant_union` produced no
+    /// failure with the data arm last, exposing the vacuous ordering).
+    #[test]
+    fn partial_fold_combines_multiple_constant_arms_keeps_data_arm() {
+        let n = norm(&format!(
+            "SELECT ?x WHERE {{ {{ ?s <{RDF_TYPE}> ?x }} UNION {{ BIND(\"a\" AS ?x) }} \
+             UNION {{ BIND(\"b\" AS ?x) }} }}"
+        ));
+        let IqNode::Union { children, .. } = &n else {
+            panic!("expected a Union of [folded-Values, data-arm, data-arm]: {n:?}")
+        };
+        assert_eq!(
+            children.len(),
+            3,
+            "2 constant arms fold to 1 Values arm + the class-atom's own 2-way \
+             per-table data union = 3 total (down from 4): {children:?}"
+        );
+        // The folded Values arrives back here wrapped in an identity Construction
+        // (`lift_construction`'s catch-all re-wraps every non-Union/Construction/
+        // Empty arm when the enclosing top-level query Construction re-processes
+        // this already-normalized Union -- the same double-pass mechanism found
+        // during the test25 investigation), not bare -- confirmed empirically, not
+        // assumed.
+        let IqNode::Construction { child, subst, .. } = &children[0] else {
+            panic!(
+                "expected the FIRST child to be the folded constant Values leaf \
+                     (kept arms are appended after it): {children:?}"
+            )
+        };
+        assert!(
+            subst.is_empty(),
+            "an identity wrapper, no bindings: {subst:?}"
+        );
+        let IqNode::Values { rows, .. } = child.as_ref() else {
+            panic!("expected an identity-Construction-wrapped Values leaf: {child:?}")
+        };
+        assert_eq!(rows.len(), 2, "one row per constant arm: {rows:?}");
+        assert!(
+            children[1..]
+                .iter()
+                .all(|c| !matches!(c, IqNode::Values { .. } | IqNode::Union { .. })),
+            "the remaining (data) arms are untouched, no further folding: {children:?}"
         );
     }
 

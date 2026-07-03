@@ -716,6 +716,28 @@ fn zero_var_union_folds_to_counting_values() {
     );
 }
 
+/// Ontop `ValuesNodeOptimization::test15ConstructionUnionTrueTrueDataNode`: two
+/// constant arms partially fold to one Values arm alongside a genuine data arm.
+/// The rule-sensitive SHAPE proof already lives in `normalize.rs`'s own unit test
+/// (`partial_fold_combines_multiple_constant_arms_keeps_data_arm`, which inspects
+/// the pre-lowering `IqNode::Union` arm count directly); a bare branch-count check
+/// here would be vacuous either way (a folded 2-row Values and 2 separate
+/// single-row constant arms both lower to 2 core-less branches) -- this test's
+/// job is confirming END-TO-END `=_bag` correctness against the independent
+/// spareval oracle, covering the constant arms, the real data arm, and their
+/// combination in one bag.
+#[test]
+fn partial_fold_combines_constant_arms_keeps_data_arm() {
+    // The data arm is deliberately FIRST (`A UNION B UNION C` is left-associative
+    // -- with the data arm last, the inner pair of BIND arms would fully fold via
+    // the pre-existing test14 rule before this one ever ran, exercising the wrong
+    // code path -- see the unit-test-level revert-proof note in normalize.rs).
+    diff_p(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:name ?n }} UNION {{ BIND(\"X\" AS ?n) }} \
+         UNION {{ BIND(\"Y\" AS ?n) }} }}"
+    ));
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
