@@ -549,6 +549,16 @@ fn lower_iq_exists(
     dialect: sf_sql::Dialect,
 ) -> Result<SqlCond> {
     let inner = lower_node(node.clone(), dialect, false, &mut 0)?;
+    // Name the actual operator this call is serving in any deferral message: this
+    // function is shared by MINUS (`is_minus`), FILTER NOT EXISTS (`negated`
+    // without `is_minus`), and FILTER EXISTS (neither).
+    let op = if is_minus {
+        "MINUS"
+    } else if negated {
+        "NOT EXISTS"
+    } else {
+        "EXISTS"
+    };
     if inner.is_empty() {
         // P produces no branches (unmapped): EXISTS → always false, NOT EXISTS → true.
         return Ok(if negated {
@@ -562,7 +572,7 @@ fn lower_iq_exists(
     for r in &inner {
         if r.path.is_some() {
             return Err(Error::Unsupported(
-                "EXISTS with a property-path inner is deferred → 501 (v1)".to_owned(),
+                format!("{op} with a property-path inner is deferred → 501 (v1)"),
             ));
         }
         let mut corr = r.where_conds.clone();
@@ -575,7 +585,7 @@ fn lower_iq_exists(
             shared_var_found = true;
             if def_reads_opt_alias(ldef, &outer_opt_aliases) {
                 return Err(Error::Unsupported(format!(
-                    "EXISTS shared variable ?{v} may be UNBOUND on the outer side (OPTIONAL) → 501 \
+                    "{op} shared variable ?{v} may be UNBOUND on the outer side (OPTIONAL) → 501 \
                      (v1 supports non-OPTIONAL shared variables)"
                 )));
             }
