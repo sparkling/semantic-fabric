@@ -3086,6 +3086,112 @@ fn item1d_subplan_optional_with_inner_filter_stays_sound_501() {
 }
 
 // ============================================================================
+// SOUND-501 BOUNDARIES — ADR-0023 parity backlog items assessed as MUST-STAY-501,
+// each with a precise architectural reason. Locked here via `diff` (BOTH flat and
+// tree must return `Err(Unsupported)` — the identical-501-set arm), so a future
+// change that silently turns any of these into a WRONG answer is caught (ADR-0007:
+// a sound 501 beats a possibly-wrong answer). These are the "here is exactly what is
+// architecturally missing" proofs, not "too hard" hand-waves.
+// ============================================================================
+
+/// Item 4 — a property-path inner inside EXISTS / NOT EXISTS / MINUS. MUST STAY 501:
+/// `SqlCond::Exists`/`NotExists` carry `scans: Vec<Scan>`, and `Scan { alias, source }`
+/// has NO CTE variant — but a property-path closure compiles to a `WITH RECURSIVE` CTE
+/// projecting synthetic `sf_s`/`sf_o` key columns (`emit::emit_path_branch`), a
+/// fundamentally different FROM shape. There is no way to reference that recursive CTE
+/// from inside `EXISTS (SELECT 1 FROM <scans> …)`; closing it needs either a new
+/// `SqlCond` variant carrying a CTE-backed sub-evaluation or embedding the path as a
+/// derived-table SubPlan inside the EXISTS — both out of scope. Flat 501s identically
+/// (its `lower_exists` has the same `r.path.is_some()` guard), so `diff` locks it.
+#[test]
+fn item4_property_path_inner_in_exists_minus_stays_501() {
+    diff(PE_SQL, PE_R2RML, None, &format!(
+        "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER EXISTS {{ ?s ex:reaches+ ?x }} }}"
+    ));
+    diff(PE_SQL, PE_R2RML, None, &format!(
+        "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER NOT EXISTS {{ ?s ex:reaches+ ?x }} }}"
+    ));
+    diff(PE_SQL, PE_R2RML, None, &format!(
+        "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o MINUS {{ ?s ex:reaches+ ?x }} }}"
+    ));
+}
+
+/// Item 7 — GROUP BY over a property-path closure. MUST STAY 501: a path branch has
+/// `path: Some(_)` and an EMPTY `core`; its variables are the recursive CTE's `sf_s`/
+/// `sf_o` columns, NOT raw base-table columns. `lower_aggregation` lowers GROUP BY keys
+/// and aggregate arguments via `group_key_columns`/`single_column_of`, which read a
+/// binding's RAW R2RML columns off a base scan — there are none on a path branch.
+/// Closing it needs the path wrapped as a derived-table SubPlan whose `sf_s`/`sf_o`
+/// become plain groupable columns, then aggregation over that SubPlan — the path-as-
+/// SubPlan mechanism (out of scope). Flat 501s identically. `diff` locks it.
+#[test]
+fn item7_group_by_over_property_path_stays_501() {
+    diff(PE_SQL, PE_R2RML, None, &format!(
+        "{PFX} SELECT ?s (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?s"
+    ));
+}
+
+/// Item 5 — `COUNT(DISTINCT *)`. MUST STAY 501: SPARQL `COUNT(DISTINCT *)` counts
+/// DISTINCT whole solutions (every in-scope variable). The `AggCol`/`RustAgg` shape
+/// targets a SINGLE argument column (or `COUNT(*)`), and a faithful multi-column
+/// `COUNT(DISTINCT c1, …, cn)` is not portable (SQLite rejects multi-arg
+/// `COUNT(DISTINCT …)`); the sound cross-dialect form is `COUNT(*)` over a
+/// `SELECT DISTINCT <all projected cols>` derived table — a structural change to the
+/// aggregate emission. `COUNT(DISTINCT ?v)` over a SINGLE column already works; only
+/// the whole-solution `*` form is deferred. Flat 501s identically. `diff` locks it.
+#[test]
+fn item5_count_distinct_star_stays_501() {
+    diff(P_SQL, P_R2RML, None, &format!(
+        "{PFX} SELECT (COUNT(DISTINCT *) AS ?c) WHERE {{ ?p ex:name ?n }}"
+    ));
+}
+
+/// Item 8 — a post-GROUP-BY EXPRESSION over a multi-branch (UNION) aggregate. MUST STAY
+/// 501: a UNION aggregate lowers to a `Plan::rust_group` (buffer-and-group in Rust); the
+/// aggregate outputs are NOT columns of the pre-group union branches, so the outer
+/// `Construction`'s `(expr AS ?v)` cannot fold into the branch bindings. The rust_group
+/// path can only RENAME an aggregate output (`rename_rust_group_outputs`), never COMPUTE
+/// an expression over it — that would require post-group expression evaluation in the
+/// Rust executor (`exec_core::rust_group_execute`), a new capability. (The single-branch
+/// SQL GROUP BY path DOES support post-aggregate expressions; only the multi-branch Rust
+/// path is deferred.) Flat 501s identically (its own agg-over-UNION limitation). `diff`
+/// locks it.
+#[test]
+fn item8_post_group_by_expr_over_union_aggregate_stays_501() {
+    diff(AGG_SQL, AGG_R2RML, None, &format!(
+        "{PFX} SELECT ?g (COUNT(?v) AS ?c) (STR(COUNT(?v)) AS ?cs) WHERE {{ ?s ex:grp ?g . \
+         {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
+    ));
+}
+
+/// Item 2 / 1b — a MULTI-branch modifier sub-SELECT (a UNION inside a LIMIT, or an
+/// OPTIONAL whose right is a subselect containing a UNION/nested-OPTIONAL) as a join or
+/// OPTIONAL input. MUST STAY 501: `lower_as_subplan` remaps each projected variable's
+/// `TermDef` against ONE inner branch's column projection; a multi-branch (`UNION ALL`)
+/// derived table would need every arm to agree on each variable's term STRUCTURE + type
+/// (the same cross-arm compatibility `try_sql_group_over_union` proves), which is not
+/// checked here — so it is a sound 501 rather than a possibly-mismatched remap. Tree-
+/// only assertion (the flat path translates this shape but emits an un-introduced
+/// derived-table alias — a separate pre-existing flat limitation, so `diff` is not
+/// usable and flat is not exec'd).
+#[test]
+fn item2_multi_branch_subplan_stays_501() {
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    // A subselect containing a UNION, used as a join input.
+    let q = parse(&format!(
+        "{PFX} SELECT ?p ?e WHERE {{ ?p ex:name ?n . \
+         {{ SELECT ?e WHERE {{ {{ ?p ex:email ?e }} UNION {{ ?p ex:name ?e }} }} LIMIT 5 }} }}"
+    ));
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "a multi-branch (UNION) SubPlan must stay a sound 501 (cross-arm term-structure \
+         agreement is not proven)"
+    );
+}
+
+// ============================================================================
 // W3C RDB2RDF corpus — the ?s ?p ?o dump CONSTRUCT through BOTH paths over every
 // loadable vendored case (R2RML + Direct Mapping), asserting flat-vs-tree row-bag
 // parity and identical 501 outcomes (the breadth half of the differential).
