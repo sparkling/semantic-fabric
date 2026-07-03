@@ -1,0 +1,21 @@
+# THROWAWAY SPIKE (ADR-0024 §8 "sqlx fallback impl, gated on a streaming spike").
+# Deliberately its own `[workspace]` root so the parent semantic-fabric workspace
+# (`cargo build --workspace`) never compiles or depends on this crate. NOT wired into
+# any production code path — a standalone measurement harness only.
+[package]
+name = "sqlx-streaming-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Runtime query API only (no `macros`/`migrate`/compile-time checking, no DATABASE_URL
+# needed at build). Plaintext local connections, so no TLS backend compiled in.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "mysql"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+futures-util = "0.3"
+
+[profile.release]
+debug = false
