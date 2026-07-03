@@ -678,6 +678,44 @@ fn constant_union_folds_reordered_columns() {
     );
 }
 
+/// Ontop `ValuesNodeOptimization::test25NoVariableTrueNodesAndValuesNodes`: a
+/// zero-var Union of bare `{}` groups folds to a "counting" Values leaf.
+#[test]
+fn zero_var_union_folds_to_counting_values() {
+    diff_p("SELECT * WHERE { {} UNION {} UNION {} }");
+
+    // Shape proof that distinguishes fold-vs-no-fold: a plain branch-count check
+    // does NOT (each bare True arm already lowers to its own core-less branch
+    // either way, so 3 branches survive with or without this rule -- the SAME
+    // vacuous-test trap the test26 composition check ran into). Composing with
+    // Slice DOES discriminate: `static_rows_of` (the Slice-over-Union rule's own
+    // arm recognizer) does NOT recognize a BARE `True` arm (only `True` wrapped in
+    // a Construction) as foldable, so without this fold firing first, the Slice
+    // rule immediately hits "unknown" on arm 0 and declines entirely, leaving a
+    // real `Slice` in the tree; folded first, Slice-over-Values's bare-Values case
+    // eliminates its own Slice node outright.
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse("SELECT * WHERE { {} UNION {} UNION {} } LIMIT 2");
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert!(
+        tp.limit.is_none() && tp.offset == 0,
+        "the zero-var Union must fold to a counting Values leaf BEFORE Slice sees \
+         it, which then always eliminates its own Slice node outright: limit={:?} \
+         offset={}",
+        tp.limit,
+        tp.offset
+    );
+    assert_eq!(
+        tp.branches.len(),
+        2,
+        "LIMIT 2 truncates the 3-row counting Values to 2 (this alone doesn't \
+         prove the fold fired -- see the limit/offset assertion above): {:?}",
+        tp.branches
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).

@@ -565,13 +565,22 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
 /// instead of an N-arm `Union` of single-row `Construction`s.
 ///
 /// Declines (`None`, leaving the `Union` as-is) on the first arm that isn't in this
-/// exact shape: a `True` arm with no `Construction` at all (the zero-var case,
-/// test25, a separate shape this rule does not attempt), a binding that isn't a
-/// compile-time constant, or a `Construction` over a real pattern (a DATA arm —
-/// test15's "const arms fold, data arm kept" needs a partial fold this rule does not
-/// yet attempt). Never a partial/best-effort fold: any non-qualifying arm aborts the
-/// whole attempt, matching this codebase's sound-no-op-on-precondition-failure
-/// convention elsewhere (e.g. `try_sql_group_over_union`).
+/// exact shape: a binding that isn't a compile-time constant, or a `Construction`
+/// over a real pattern (a DATA arm — test15's "const arms fold, data arm kept"
+/// needs a partial fold this rule does not yet attempt). Never a partial/best-effort
+/// fold: any non-qualifying arm aborts the whole attempt, matching this codebase's
+/// sound-no-op-on-precondition-failure convention elsewhere (e.g.
+/// `try_sql_group_over_union`).
+///
+/// Ontop `ValuesNodeOptimization::test25NoVariableTrueNodesAndValuesNodes`: a bare
+/// `IqNode::True` arm (the zero-var identity — no `Construction` at all, since it
+/// binds nothing) is ALSO foldable, contributing exactly one empty-tuple row, but
+/// ONLY when `project` is itself empty (a `True` arm cannot supply a value for any
+/// projected variable, so it is never a valid fold candidate otherwise). This is
+/// the ONLY place `project.is_empty()` matters: every other arm shape already
+/// degrades correctly on an empty `project` with no special-casing (the per-`var`
+/// loop below simply doesn't execute, producing an empty row, exactly the `Values`
+/// leaf's own "counting" row shape for this case).
 ///
 /// A `BIND`-only arm's binding is still a **symbolic** `BindDef::Expr` at NORMALIZE
 /// time (FILTER/BIND resolve per-leaf-CQ at LOWER, not here — confirmed empirically:
@@ -583,7 +592,7 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
 /// always fails against an empty map), so a successful result is *provably*
 /// column-free — safe to embed directly in a core-less `Values` row.
 fn try_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
-    if arms.len() < 2 || project.is_empty() {
+    if arms.len() < 2 {
         return None;
     }
     let no_vars = BTreeMap::new();
@@ -620,6 +629,24 @@ fn try_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
                 }
                 rows.push(row);
             }
+            // test25: a bare `True` arm binds nothing, so it can only fold when
+            // there is nothing TO bind -- an empty `project` -- contributing one
+            // empty-tuple row (the same "counting" shape a zero-column `Values`
+            // leaf already has). Revert-proof note: removing just this arm does
+            // NOT change correctness -- `lift_construction`'s Construction-over-
+            // Union case (this file) individually wraps every bare `True` arm in
+            // an identity `Construction` before a SECOND `try_fold_constant_union`
+            // pass, which the PRE-EXISTING `Construction{child:True,..}` case above
+            // already handles once the `project.is_empty()` guard is lifted. What
+            // this arm changes is WHICH of the two fold opportunities fires first:
+            // with it, the plain (non-lifted) `normalize()` Union dispatch folds
+            // immediately, preserving the outer identity-Construction wrapper this
+            // whole file's other tests consistently expect; without it, the fold
+            // still happens (via `lift_construction`'s second pass) but that path
+            // REPLACES the Construction outright, leaving a bare `Values` -- an
+            // equally `=_bag`-correct but inconsistent shape. Kept for that
+            // consistency, not because the fold would otherwise fail.
+            IqNode::True if project.is_empty() => rows.push(Vec::new()),
             _ => return None, // a DATA arm (real pattern), or a shape not covered above
         }
     }
@@ -1862,6 +1889,26 @@ mod tests {
             "both rows must survive untouched -- a narrowing dedup here would be \
              the exact =_bag bug an adversarial review caught on the single-arm \
              rule: {rows:?}"
+        );
+    }
+
+    /// Ontop `ValuesNodeOptimization::test25NoVariableTrueNodesAndValuesNodes`: a
+    /// zero-var `Union` of bare `{}` groups (each an `IqNode::True`) folds to a
+    /// "counting" `Values` leaf -- zero columns, one empty-tuple row per arm.
+    #[test]
+    fn zero_var_union_of_true_arms_folds_to_counting_values() {
+        let n = norm("SELECT * WHERE { {} UNION {} UNION {} }");
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { vars, rows } = child.as_ref() else {
+            panic!("expected the Union to fold to a counting Values leaf: {child:?}")
+        };
+        assert!(vars.is_empty(), "zero columns: {vars:?}");
+        assert_eq!(rows.len(), 3, "one empty-tuple row per True arm: {rows:?}");
+        assert!(
+            rows.iter().all(|r| r.is_empty()),
+            "every row is the empty tuple: {rows:?}"
         );
     }
 
