@@ -200,8 +200,9 @@ not deferred work still owed within it).**
 five pre-existing, Wave-C-unrelated bugs — none touched by any Wave C diff itself (the original
 report named what turned out to be the SAME bug twice, as "core-less-branch OptJoin" and
 separately as "zero-var-Union-as-LeftJoin-left" — item 3 below covers both; one further bug was
-found DURING that fix's own adversarial review). Three are now
-fixed (each with its own RED-first/revert-proof/adversarial-review gate); two remain open:
+found DURING that fix's own adversarial review). Three are now fixed (each with its own
+RED-first/revert-proof/adversarial-review gate); one was assessed and found to be NOT a bug (no
+fix needed — a documented, `=_bag`-safe asymmetry, not a gap); one remains genuinely open:
 
 1. ~~`FILTER NOT EXISTS { ... }` with no variable shared with the outer scope silently returns the
    WRONG answer on the tree path~~ — **FIXED, commit `45b395c`** (priority-escalated ahead of Wave C
@@ -232,8 +233,18 @@ fixed (each with its own RED-first/revert-proof/adversarial-review gate); two re
    spareval oracle during review) plus rendering every `opts` entry as its own `LEFT JOIN`.
    Adversarial review (8 angles, mostly via genuine revert-and-recheck, live PG/MySQL
    verification, NOT REFUTED).
-4. **Still open**: a flat-oracle limitation aggregating over a BIND-only union — not yet assessed
-   whether it's a real wrong answer or an inherent, documentable flat-oracle limitation.
+4. ~~A flat-oracle limitation aggregating over a BIND-only union~~ — **ASSESSED, commit
+   `533d839`: NOT a bug, no fix needed.** `COUNT`/`SUM` over a `UNION` whose every arm is a bare
+   `BIND` makes flat's own aggregation-over-UNION mechanism introduce an internal synthetic
+   variable it cannot itself bind, so flat honestly defers (`Unsupported("BIND references unbound
+   ?<synthetic>")`) rather than risk a wrong answer — its own 501 discipline working as designed.
+   TREE computes this correctly via `rust_group`, confirmed directly against the independent
+   `spareval` oracle (bypassing flat, since the standard harness's "both sides must 501 together"
+   check would otherwise misreport "tree succeeds where flat defers" as a mismatch even though
+   tree's answer is genuinely correct) — `=_bag`-safe strengthening, not a regression. Documented
+   with a permanent regression test asserting BOTH flat's 501 and tree's spareval-verified
+   correctness, so a future flat-side capability change surfaces rather than silently invalidating
+   the premise.
 5. **Still open**: a genuine, pre-existing Path bug found incidentally during bug 3's own
    adversarial review, confirmed live and confirmed pre-existing (identical on flat and on
    pre-diff HEAD, so unrelated to that fix): a property-path pattern used as an OPTIONAL's RIGHT
