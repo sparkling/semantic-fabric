@@ -1274,6 +1274,31 @@ mod tests {
         );
     }
 
+    /// Ontop `ValuesNodeOptimization::test4SliceUnionValuesValues`: `Slice` over a
+    /// `Union` of two bare `VALUES` blocks — covered FOR FREE by composing the two
+    /// existing rules above (no new production code): each bare `VALUES` arm is
+    /// already an `IqNode::Values` (no `Construction` wrapper needed, unlike `BIND`),
+    /// so `try_fold_constant_union`'s "absorb an already-Values arm" case (added for
+    /// the left-associative 3-arm fix) folds the whole `Union` to one `Values`, which
+    /// `normalize_slice` then truncates in place — verified here as its own named
+    /// scenario, not assumed from the two rules' own tests.
+    #[test]
+    fn slice_over_union_of_values_values_folds_and_truncates() {
+        let n =
+            norm("SELECT ?x WHERE { { VALUES ?x { 1 2 } } UNION { VALUES ?x { 3 4 } } } LIMIT 3");
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { rows, .. } = child.as_ref() else {
+            panic!("expected the Union to fold to ONE Values leaf, then truncate: {child:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|r| row_int(r)).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "as-written order across both arms, truncated to LIMIT 3: {rows:?}"
+        );
+    }
+
     /// A DATA arm (a real triple pattern, not a bare constant) blocks the fold
     /// entirely — no partial fold, the `Union` survives untouched.
     #[test]

@@ -467,6 +467,35 @@ fn distinct_over_values_dedups_at_normalize_not_exec() {
     );
 }
 
+/// Ontop `ValuesNodeOptimization::test4SliceUnionValuesValues`: covered FOR FREE by
+/// composing the constant-Union fold (Wave C batch 2) with Slice-over-Values (Wave C
+/// batch 1) -- no new production code, verified here as its own named scenario.
+#[test]
+fn slice_over_union_of_bare_values_folds_and_truncates() {
+    // LIMIT with no ORDER BY over a multi-arm shape: diff_p_bag (flat-vs-tree only),
+    // not spareval, for the same implementation-defined-tie-break reason as this
+    // file's other LIMIT-no-ORDER-BY multi-arm tests.
+    diff_p_bag("SELECT ?x WHERE { { VALUES ?x { 1 2 } } UNION { VALUES ?x { 3 4 } } } LIMIT 3");
+
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse("SELECT ?x WHERE { { VALUES ?x { 1 2 } } UNION { VALUES ?x { 3 4 } } } LIMIT 3");
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert_eq!(
+        tp.branches.len(),
+        3,
+        "both bare-VALUES arms fold to one Values leaf, then truncate to 3, not 4 \
+         branches plus a Plan-level limit: {:?}",
+        tp.branches
+    );
+    assert!(
+        tp.limit.is_none(),
+        "the Slice must be fully absorbed: limit={:?}",
+        tp.limit
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
