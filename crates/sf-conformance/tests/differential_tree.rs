@@ -587,6 +587,51 @@ fn slice_over_union_arm_drop_and_residual_limit() {
     );
 }
 
+/// Ontop `ValuesNodeOptimization::test8/9DistinctUnionValuesNonValues`: `Distinct`
+/// over `Union[Values, DATA-arm]` dedups the `Values` arm's own internal duplicates
+/// in place, leaving the outer `Distinct` (cross-arm dedup isn't provable) and the
+/// data arm untouched; an already-duplicate-free `Values` arm is a genuine no-op.
+#[test]
+fn distinct_over_union_dedups_values_arm_only() {
+    diff_p(&format!(
+        "{PFX} SELECT DISTINCT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }}"
+    ));
+    diff_p(&format!(
+        "{PFX} SELECT DISTINCT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Ann\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }}"
+    ));
+
+    // Shape: the Values arm's own duplicate collapses (3 rows -> 2), the data arm's
+    // own branch is untouched, and the outer Distinct flag survives (cross-arm
+    // duplicates -- e.g. "Ann" appearing in both the Values arm and the person
+    // table -- are NOT provable statically, so Distinct still has real work to do).
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse(&format!(
+        "{PFX} SELECT DISTINCT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Ann\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }}"
+    ));
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert!(
+        tp.distinct,
+        "the outer DISTINCT must still be requested: {tp:?}"
+    );
+    assert_eq!(
+        tp.branches.len(),
+        3,
+        "2 deduped Values branches (Ann, Zed) + the data arm's own branch: {:?}",
+        tp.branches
+    );
+    assert!(
+        tp.branches[..2].iter().all(|b| b.core.is_empty()) && !tp.branches[2].core.is_empty(),
+        "first two branches are the core-less deduped Values survivors, third is \
+         the real scan: {:?}",
+        tp.branches
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).

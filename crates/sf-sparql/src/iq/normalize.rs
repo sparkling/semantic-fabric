@@ -892,6 +892,23 @@ fn normalize_distinct(child: IqNode) -> IqNode {
                 project,
             }
         }
+        // Ontop `ValuesNodeOptimization::test9DistinctUnionValuesNonValues`: dedup
+        // each Values-shaped arm's OWN internal duplicates in place, leaving any
+        // other arm (and the outer `Distinct` itself — cross-arm duplicates are NOT
+        // provable statically) untouched. `dedup_one_arm` re-applies the SAME
+        // narrowing-projection guard `same_var_set` enforces above (an arm's own
+        // declared columns must exactly match the Union's `project`, no narrowing)
+        // — the identical `=_bag` hazard that guard exists for applies per-arm here
+        // too, just checked arm-by-arm instead of once at the top.
+        IqNode::Union { children, project } => IqNode::Distinct {
+            child: Box::new(IqNode::Union {
+                children: children
+                    .into_iter()
+                    .map(|arm| dedup_one_arm(arm, &project))
+                    .collect(),
+                project,
+            }),
+        },
         child => IqNode::Distinct {
             child: Box::new(child),
         },
@@ -905,6 +922,56 @@ fn normalize_distinct(child: IqNode) -> IqNode {
 /// would get a false positive here.
 fn same_var_set(a: &[Var], b: &[Var]) -> bool {
     a.len() == b.len() && a.iter().all(|v| b.contains(v))
+}
+
+/// Dedup ONE `Union` arm's own internal duplicate rows (a bare `Values` leaf, or a
+/// lone `VALUES`-as-union-arm wrapped in the builder's identity-projection
+/// `Construction` — the same shape `static_rows_of` recognizes, but returning the
+/// (possibly unchanged) `IqNode` here rather than an extracted row list, since a
+/// non-Values-shaped arm must be handed back completely untouched). Declines (the
+/// arm unchanged) when its own declared columns aren't EXACTLY the Union's
+/// `project` (no narrowing — the outer `IqNode::Union` dispatch in
+/// `normalize_distinct` documents why), when `dedup_rows` itself declines (a
+/// non-Const cell), or when nothing was actually duplicated.
+fn dedup_one_arm(arm: IqNode, project: &[Var]) -> IqNode {
+    match arm {
+        IqNode::Values { vars, rows } if vars.as_slice() == project => {
+            let n = rows.len();
+            match dedup_rows(&rows) {
+                Some(deduped) if deduped.len() < n => IqNode::Values {
+                    vars,
+                    rows: deduped,
+                },
+                _ => IqNode::Values { vars, rows },
+            }
+        }
+        IqNode::Construction {
+            child,
+            subst,
+            project: arm_project,
+        } if subst.is_empty()
+            && arm_project.as_slice() == project
+            && matches!(&*child, IqNode::Values { vars, .. } if vars.as_slice() == project) =>
+        {
+            let IqNode::Values { vars, rows } = *child else {
+                unreachable!("matched above")
+            };
+            let n = rows.len();
+            let deduped_child = match dedup_rows(&rows) {
+                Some(deduped) if deduped.len() < n => IqNode::Values {
+                    vars,
+                    rows: deduped,
+                },
+                _ => IqNode::Values { vars, rows },
+            };
+            IqNode::Construction {
+                child: Box::new(deduped_child),
+                subst,
+                project: arm_project,
+            }
+        }
+        other => other,
+    }
 }
 
 /// Remove duplicate rows, keeping the first occurrence's order (SPARQL DISTINCT:
@@ -1640,6 +1707,101 @@ mod tests {
             panic!("expected a literal term: {t:?}")
         };
         lit.value().to_owned()
+    }
+
+    /// Ontop `ValuesNodeOptimization::test8DistinctUnionValuesNonValues`: `Distinct`
+    /// over `Union[distinct-Values, ext]` is a genuine no-op — covered FOR FREE:
+    /// `normalize_distinct` only recognizes `Values`/`Construction{Values}` as its
+    /// child directly, so a `Union` child (even one with an already-duplicate-free
+    /// `Values` arm) correctly declines and survives untouched. Nothing to dedup
+    /// here that the outer `Distinct` doesn't already have to do regardless.
+    #[test]
+    fn distinct_over_union_of_already_distinct_values_and_data_is_a_no_op() {
+        let n = norm(
+            "SELECT DISTINCT ?n WHERE { { VALUES ?n { \"a\" \"b\" } } \
+             UNION { ?s <http://ex/name> ?n } }",
+        );
+        assert!(
+            matches!(&n, IqNode::Distinct { child } if matches!(child.as_ref(), IqNode::Union { .. })),
+            "no rewrite applies -- Distinct{{Union{{..}}}} survives untouched: {n:?}"
+        );
+    }
+
+    /// Ontop `ValuesNodeOptimization::test9DistinctUnionValuesNonValues`: `Distinct`
+    /// over `Union[Values(dups), ext]` dedups the `Values` arm's OWN internal
+    /// duplicates in place; the outer `Distinct` still survives (cross-arm dedup
+    /// against the data arm isn't statically provable) and the data arm itself is
+    /// untouched.
+    #[test]
+    fn distinct_over_union_dedups_the_values_arm_keeps_distinct_and_data_arm() {
+        let n = norm(
+            "SELECT DISTINCT ?n WHERE { { VALUES ?n { \"a\" \"a\" \"b\" } } \
+             UNION { ?s <http://ex/name> ?n } }",
+        );
+        let IqNode::Distinct { child } = &n else {
+            panic!("the outer Distinct must survive (cross-arm dedup isn't provable): {n:?}")
+        };
+        let IqNode::Union { children, .. } = child.as_ref() else {
+            panic!("expected the Union to survive: {child:?}")
+        };
+        assert_eq!(children.len(), 2, "both arms present: {children:?}");
+        // The arm keeps its ORIGINAL identity-projection Construction wrapper
+        // (confirmed empirically, same pattern as every other Values-as-union-arm
+        // case in this file) -- `dedup_one_arm` rebuilds it around the deduped
+        // Values leaf rather than unwrapping it.
+        let IqNode::Construction { child: values, .. } = &children[0] else {
+            panic!("expected the FIRST child to still be Construction-wrapped: {children:?}")
+        };
+        let IqNode::Values { rows, .. } = values.as_ref() else {
+            panic!("expected the wrapped leaf to be the (deduped) Values arm: {values:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|r| row_str(r)).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "the Values arm's own duplicate \"a\" is gone: {rows:?}"
+        );
+        assert!(
+            !matches!(children[1], IqNode::Values { .. }),
+            "the data arm must still be the untouched real pattern: {:?}",
+            children[1]
+        );
+    }
+
+    /// The identical narrowing-projection hazard `same_var_set` guards against for
+    /// the single-`Values`-child case (test3's adversarial-review-caught bug)
+    /// applies per-arm here too: a `Values` arm whose own columns are a
+    /// STRICT SUPERSET of the Union's `project` (some column is projected away
+    /// above this level) must decline dedup on that arm -- collapsing on the FULL
+    /// pre-projection tuple could wrongly merge two rows that remain genuinely
+    /// distinct after the (elsewhere-applied) projection.
+    #[test]
+    fn distinct_over_union_declines_a_narrowed_values_arm() {
+        // The data arm only ever binds ?n, so the Union's own project is [n] even
+        // though this Values arm's OWN vars are [n, extra] -- same_var_set([n],
+        // [n,extra]) is false, so dedup_one_arm must leave this arm untouched.
+        let n = norm(
+            "SELECT DISTINCT ?n WHERE { { VALUES (?n ?extra) { (\"a\" 1) (\"a\" 2) } } \
+             UNION { ?s <http://ex/name> ?n } }",
+        );
+        let IqNode::Distinct { child } = &n else {
+            panic!("expected Distinct to survive: {n:?}")
+        };
+        let IqNode::Union { children, .. } = child.as_ref() else {
+            panic!("expected the Union to survive: {child:?}")
+        };
+        let IqNode::Construction { child: values, .. } = &children[0] else {
+            panic!("expected the first child to still be Construction-wrapped: {children:?}")
+        };
+        let IqNode::Values { rows, .. } = values.as_ref() else {
+            panic!("expected the wrapped leaf to still be the Values arm: {values:?}")
+        };
+        assert_eq!(
+            rows.len(),
+            2,
+            "both rows must survive untouched -- a narrowing dedup here would be \
+             the exact =_bag bug an adversarial review caught on the single-arm \
+             rule: {rows:?}"
+        );
     }
 
     /// A DATA arm (a real triple pattern, not a bare constant) blocks the fold
