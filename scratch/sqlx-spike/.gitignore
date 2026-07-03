@@ -1,0 +1,3 @@
+# Throwaway spike — build artifacts + re-resolved lockfile (matches repo convention).
+/target/
+/Cargo.lock
