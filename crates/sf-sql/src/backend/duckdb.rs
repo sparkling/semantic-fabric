@@ -150,6 +150,47 @@ impl SqlBackend for DuckDbBackend {
     }
 }
 
+/// Map a DuckDB [`duckdb::types::ValueRef`] to a lexical string + XSD type code.
+///
+/// Primitive scalar types are mapped directly. Complex/nested types
+/// (Timestamp, Date, Time, Decimal, Interval, List, Struct, Enum, Union, Array, Map)
+/// return `Error::Unsupported` — the caller will surface a 501 skip via
+/// `exec_core::map_sql_err` (ADR-0024 design A2).
+fn duck_value(v: duckdb::types::ValueRef<'_>) -> Result<(Option<String>, Option<XsdTypeCode>)> {
+    use duckdb::types::ValueRef;
+    use XsdTypeCode as X;
+    match v {
+        ValueRef::Null => Ok((None, None)),
+        ValueRef::Boolean(b) => Ok((Some(b.to_string()), Some(X::Boolean))),
+        ValueRef::TinyInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
+        ValueRef::SmallInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
+        ValueRef::Int(i) => Ok((Some(i.to_string()), Some(X::Integer))),
+        ValueRef::BigInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
+        ValueRef::HugeInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
+        ValueRef::UTinyInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
+        ValueRef::USmallInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
+        ValueRef::UInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
+        ValueRef::UBigInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
+        ValueRef::Float(f) => Ok((Some(f.to_string()), Some(X::Double))),
+        ValueRef::Double(d) => Ok((Some(d.to_string()), Some(X::Double))),
+        ValueRef::Text(t) => {
+            let s = std::str::from_utf8(t)
+                .map_err(|e| Error::Marshal(format!("duckdb non-UTF8 text: {e}")))?;
+            Ok((Some(s.to_owned()), Some(X::String)))
+        }
+        ValueRef::Blob(b) => {
+            let mut out = String::new();
+            sf_core::datatype::hex_binary_upper(b, &mut out);
+            Ok((Some(out), Some(X::HexBinary)))
+        }
+        // Timestamp, Date32, Time64, Decimal, Interval, List, Struct, Enum, Union, Array, Map
+        other => Err(Error::Unsupported(format!(
+            "DuckDB value type {:?} not supported",
+            other.data_type()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -242,46 +283,5 @@ mod tests {
             assert_eq!(got, vec![20, 30]);
             assert!(eof.is_none());
         });
-    }
-}
-
-/// Map a DuckDB [`duckdb::types::ValueRef`] to a lexical string + XSD type code.
-///
-/// Primitive scalar types are mapped directly. Complex/nested types
-/// (Timestamp, Date, Time, Decimal, Interval, List, Struct, Enum, Union, Array, Map)
-/// return `Error::Unsupported` — the caller will surface a 501 skip via
-/// `exec_core::map_sql_err` (ADR-0024 design A2).
-fn duck_value(v: duckdb::types::ValueRef<'_>) -> Result<(Option<String>, Option<XsdTypeCode>)> {
-    use duckdb::types::ValueRef;
-    use XsdTypeCode as X;
-    match v {
-        ValueRef::Null => Ok((None, None)),
-        ValueRef::Boolean(b) => Ok((Some(b.to_string()), Some(X::Boolean))),
-        ValueRef::TinyInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::SmallInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::Int(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::BigInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::HugeInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::UTinyInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::USmallInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::UInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::UBigInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::Float(f) => Ok((Some(f.to_string()), Some(X::Double))),
-        ValueRef::Double(d) => Ok((Some(d.to_string()), Some(X::Double))),
-        ValueRef::Text(t) => {
-            let s = std::str::from_utf8(t)
-                .map_err(|e| Error::Marshal(format!("duckdb non-UTF8 text: {e}")))?;
-            Ok((Some(s.to_owned()), Some(X::String)))
-        }
-        ValueRef::Blob(b) => {
-            let mut out = String::new();
-            sf_core::datatype::hex_binary_upper(b, &mut out);
-            Ok((Some(out), Some(X::HexBinary)))
-        }
-        // Timestamp, Date32, Time64, Decimal, Interval, List, Struct, Enum, Union, Array, Map
-        other => Err(Error::Unsupported(format!(
-            "DuckDB value type {:?} not supported",
-            other.data_type()
-        ))),
     }
 }
