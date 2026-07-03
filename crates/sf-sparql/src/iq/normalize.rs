@@ -81,7 +81,7 @@ use std::collections::BTreeMap;
 
 use crate::iq::node::{BindDef, IqCond, IqNode, Var};
 use crate::iq::TermDef;
-use crate::unify::{unify, Unify};
+use crate::unify::{bind_term_def, unify, Unify};
 use crate::{Error, Result};
 
 /// Normalize a whole RESOLVED tree to the leaf-CQ spine (design §4). Walks `node`
@@ -525,8 +525,12 @@ fn normalize_left_join(left: IqNode, right: IqNode, cond: Vec<IqCond>) -> Result
 
 /// Normalize a `Union` over already-normalized `children` (design §4(c), ledger R5).
 /// Flattens nested `Union`s (associativity — keeps every arm), prunes `Empty` arms
-/// (the `Union` identity), and unwraps a one-arm `Union`. It performs **NO arm-merge /
-/// structural dedup** — a multiplicity-bearing arm is never collapsed into a sibling.
+/// (the `Union` identity), and unwraps a one-arm `Union`. Beyond that it performs
+/// **NO multiplicity-losing arm-merge / dedup** — a multiplicity-bearing arm is never
+/// collapsed into a sibling — with exactly one exception: [`try_fold_constant_union`]
+/// (ADR-0023 optimizer-residue Wave C, §4.15) combines arms that are ALL bare
+/// constant tuples into one `Values` leaf, which is bag-preserving (N constant arms
+/// → N rows), not a lossy dedup.
 fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
     let mut arms: Vec<IqNode> = Vec::new();
     for c in children {
@@ -541,10 +545,81 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
     Ok(match arms.len() {
         0 => IqNode::Empty { vars: project },
         1 => arms.pop().expect("len checked == 1"),
-        _ => IqNode::Union {
-            children: arms,
-            project,
+        _ => match try_fold_constant_union(&arms, &project) {
+            Some(values) => values,
+            None => IqNode::Union {
+                children: arms,
+                project,
+            },
         },
+    })
+}
+
+/// Fold a `Union` of ALL-CONSTANT arms into one `Values` node (Ontop
+/// `ValuesNodeOptimization::test14ConstructionUnionTrueTrue`): when every arm is a
+/// `Construction` over `True` (i.e. genuinely data-free — a `BIND`-only row, no
+/// pattern underneath) with every one of its bindings already a resolved constant,
+/// the whole `Union` is exactly the literal table of those constant tuples — the
+/// SAME `=_bag` multiset (one row per arm), just represented as a `Values` leaf
+/// instead of an N-arm `Union` of single-row `Construction`s.
+///
+/// Declines (`None`, leaving the `Union` as-is) on the first arm that isn't in this
+/// exact shape: a `True` arm with no `Construction` at all (the zero-var case,
+/// test25, a separate shape this rule does not attempt), a binding that isn't a
+/// compile-time constant, or a `Construction` over a real pattern (a DATA arm —
+/// test15's "const arms fold, data arm kept" needs a partial fold this rule does not
+/// yet attempt). Never a partial/best-effort fold: any non-qualifying arm aborts the
+/// whole attempt, matching this codebase's sound-no-op-on-precondition-failure
+/// convention elsewhere (e.g. `try_sql_group_over_union`).
+///
+/// A `BIND`-only arm's binding is still a **symbolic** `BindDef::Expr` at NORMALIZE
+/// time (FILTER/BIND resolve per-leaf-CQ at LOWER, not here — confirmed empirically:
+/// `{ BIND("a" AS ?x) } UNION { BIND("b" AS ?x) }` normalizes to `Union[Construction{
+/// subst: {x: Expr(Literal("a"))}, child: True}, …]`, never a pre-`Resolved` constant).
+/// [`bind_term_def`] is reused with an EMPTY bindings map to recognize a genuine
+/// constant without resolving it against any column: it only ever succeeds on a bare
+/// IRI/literal or a `CONCAT` of recursively-constant parts (`Expression::Variable`
+/// always fails against an empty map), so a successful result is *provably*
+/// column-free — safe to embed directly in a core-less `Values` row.
+fn try_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
+    if arms.len() < 2 || project.is_empty() {
+        return None;
+    }
+    let no_vars = BTreeMap::new();
+    let mut rows = Vec::with_capacity(arms.len());
+    for arm in arms {
+        match arm {
+            // `A UNION B UNION C` is left-associative (`(A UNION B) UNION C`): the
+            // inner `(A UNION B)` normalizes (and, when both are constant, this SAME
+            // rule folds it) *before* the outer Union ever sees it, so an
+            // already-folded `Values` arm must be absorbed directly, not just a
+            // `Construction`. Declines on a column-order mismatch (no reconciliation
+            // attempted here — a future rule's scope, cf. test26).
+            IqNode::Values {
+                vars,
+                rows: inner_rows,
+            } if vars.as_slice() == project => rows.extend(inner_rows.iter().cloned()),
+            IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
+                let mut row = Vec::with_capacity(project.len());
+                for var in project {
+                    let cell = match subst.get(var) {
+                        Some(BindDef::Resolved(TermDef::Const(t))) => {
+                            Some(TermDef::Const(t.clone()))
+                        }
+                        Some(BindDef::Expr(e)) => Some(bind_term_def(e, &no_vars).ok()?),
+                        Some(_) => return None, // a resolved non-constant (e.g. a column)
+                        None => None,           // unbound in this arm -- UNDEF (Values semantics)
+                    };
+                    row.push(cell);
+                }
+                rows.push(row);
+            }
+            _ => return None, // a DATA arm (real pattern), or a shape not covered above
+        }
+    }
+    Some(IqNode::Values {
+        vars: project.to_vec(),
+        rows,
     })
 }
 
@@ -1012,6 +1087,74 @@ mod tests {
         lit.value()
             .parse()
             .unwrap_or_else(|_| panic!("expected an integer literal: {lit:?}"))
+    }
+
+    /// Ontop `ValuesNodeOptimization::test14ConstructionUnionTrueTrue`: a `Union` of
+    /// bare-constant `BIND`-only arms (each `Construction{child: True, ...}`) folds to
+    /// one `Values` leaf carrying one row per arm.
+    #[test]
+    fn constant_union_folds_to_values() {
+        let n = norm("SELECT ?x WHERE { { BIND(\"a\" AS ?x) } UNION { BIND(\"b\" AS ?x) } }");
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { vars, rows } = child.as_ref() else {
+            panic!("expected the Union to fold to a Values leaf: {child:?}")
+        };
+        assert_eq!(vars.len(), 1);
+        assert_eq!(rows.len(), 2, "one row per constant arm: {rows:?}");
+    }
+
+    /// THREE arms: `A UNION B UNION C` parses left-associative (`(A UNION B) UNION
+    /// C`), so the inner pair folds to a bare `Values` before the outer `Union` (with
+    /// arm C still a `Construction`) ever runs — `try_fold_constant_union` must absorb
+    /// an already-folded `Values` arm's rows directly, not just a `Construction` one.
+    /// (RED before the fix: the outer fold declined on the first arm not being a
+    /// `Construction`, leaving `Union[Values{[a,b]}, Construction{c}]` unfolded.)
+    #[test]
+    fn three_arm_constant_union_folds_to_one_values() {
+        let n = norm(
+            "SELECT ?x WHERE { { BIND(\"a\" AS ?x) } UNION { BIND(\"b\" AS ?x) } \
+             UNION { BIND(\"c\" AS ?x) } }",
+        );
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { rows, .. } = child.as_ref() else {
+            panic!("expected all three arms to fold to ONE Values leaf: {child:?}")
+        };
+        assert_eq!(
+            rows.len(),
+            3,
+            "one row per constant arm, not 2+1 split: {rows:?}"
+        );
+    }
+
+    /// A DATA arm (a real triple pattern, not a bare constant) blocks the fold
+    /// entirely — no partial fold, the `Union` survives untouched.
+    #[test]
+    fn union_with_a_data_arm_does_not_fold() {
+        let n = norm(&format!(
+            "SELECT ?x WHERE {{ {{ BIND(\"a\" AS ?x) }} UNION {{ ?s <{RDF_TYPE}> ?x }} }}"
+        ));
+        assert!(
+            !matches!(n, IqNode::Values { .. }),
+            "a real pattern in one arm must block the constant fold: {n:?}"
+        );
+    }
+
+    /// A variable-referencing `BIND` (not a compile-time constant) also blocks the
+    /// fold — `bind_term_def` against an empty bindings map cannot resolve it.
+    #[test]
+    fn union_with_a_variable_referencing_bind_does_not_fold() {
+        let n = norm(&format!(
+            "SELECT ?x ?y WHERE {{ {{ ?s <{RDF_TYPE}> ?y BIND(?y AS ?x) }} \
+             UNION {{ BIND(\"b\" AS ?x) }} }}"
+        ));
+        assert!(
+            !matches!(n, IqNode::Values { .. }),
+            "a variable-dependent binding must block the constant fold: {n:?}"
+        );
     }
 
     // ---- synthetic R2 test: shared var UNDEF in one union arm = free dimension -----

@@ -363,6 +363,61 @@ fn values_slice_truncates_at_normalize_not_plan_level() {
     );
 }
 
+/// ADR-0023 optimizer-residue Wave C (Ontop `ValuesNodeOptimization::
+/// test14ConstructionUnionTrueTrue`): a `Union` of bare-constant `BIND`-only arms
+/// folds to one `Values` leaf at NORMALIZE, so no per-arm scan survives to LOWER.
+#[test]
+fn constant_union_folds_to_values_leaf() {
+    diff_p("SELECT ?x WHERE { { BIND(\"a\" AS ?x) } UNION { BIND(\"b\" AS ?x) } }");
+    diff_p(
+        "SELECT ?x WHERE { { BIND(\"a\" AS ?x) } UNION { BIND(\"b\" AS ?x) } \
+         UNION { BIND(\"c\" AS ?x) } }",
+    );
+    // A DATA arm (a real triple pattern) alongside a constant arm must NOT fold --
+    // the fixture's own name data mixed with one constant arm.
+    diff_p(&format!(
+        "{PFX} SELECT ?x WHERE {{ {{ BIND(\"extra\" AS ?x) }} UNION {{ ?p ex:name ?x }} }}"
+    ));
+
+    // Shape: the fold must actually happen at NORMALIZE (not just lower to the same
+    // core-less-branches-either-way shape a plain Union of BIND arms already would).
+    // Proof that distinguishes fold-vs-no-fold: composing with the Slice-over-Values
+    // rule (this same Wave C batch) -- a `Union` of 3 constant arms that does NOT
+    // fold stays a `Union` (`Slice{child: Union{..}}` doesn't match the Slice rule's
+    // `Values`/`Construction{Values}` patterns, so all 3 arms would lower to 3
+    // branches with the LIMIT applied at the Plan level); folded into ONE `Values`
+    // first, the Slice rule then truncates it in place, to exactly 1 branch.
+    //
+    // flat-vs-tree only (`diff_p_bag`), NOT spareval: LIMIT with no ORDER BY over a
+    // multi-arm UNION is implementation-defined tie-breaking (confirmed empirically --
+    // spareval picks the LAST arm here, sf's tree the FIRST, as-written order; neither
+    // is wrong, they just disagree, exactly the risk `diff_p_bag` exists for).
+    diff_p_bag(
+        "SELECT ?x WHERE { { BIND(\"a\" AS ?x) } UNION { BIND(\"b\" AS ?x) } \
+         UNION { BIND(\"c\" AS ?x) } } LIMIT 1",
+    );
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse(
+        "SELECT ?x WHERE { { BIND(\"a\" AS ?x) } UNION { BIND(\"b\" AS ?x) } \
+         UNION { BIND(\"c\" AS ?x) } } LIMIT 1",
+    );
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert_eq!(
+        tp.branches.len(),
+        1,
+        "the constant-fold must run before Slice-over-Values sees it, truncating to \
+         1 branch, not all 3 arms plus a Plan-level LIMIT: {:?}",
+        tp.branches
+    );
+    assert!(
+        tp.limit.is_none(),
+        "the Slice must be fully absorbed once the Union folds to Values: limit={:?}",
+        tp.limit
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
