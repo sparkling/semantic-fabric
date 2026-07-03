@@ -815,6 +815,21 @@ fn left_join_over_subplan(
     let sp = &right.subplan_joins[0]; // caller guarantees exactly one (is_single_subplan_branch)
     let mut out = Vec::with_capacity(left.len());
     for mut l in left {
+        // A property-path LEFT branch (`path: Some(_)`, empty `core`) has NO sound
+        // representation once a SubPlan is pushed onto it: `emit_branch_with` dispatches
+        // unconditionally on `b.path` to `emit_path_branch`, which renders ONLY the path's
+        // own recursive CTE + projection and IGNORES `subplan_joins` entirely — the
+        // subplan's derived table is never emitted, so a binding reading `t{sp}` has no
+        // FROM entry ("no such column" at SQL-execution time). Sound 501 instead of a
+        // crash (ADR-0007), mirroring `build_left_join`'s matching path-left guard for the
+        // plain-scan-right case (`path_as_optional_left_via_single_scan_fast_path_...`).
+        if l.path.is_some() {
+            return Err(Error::Unsupported(
+                "OPTIONAL whose preceding pattern is a property-path, with a SubPlan \
+                 (modifier sub-SELECT) right side, is not yet supported → 501"
+                    .to_owned(),
+            ));
+        }
         // Prior-OPTIONAL scan aliases AND prior LEFT-JOINed SubPlan aliases on this left
         // branch are nullable — a shared var reading one needs the R1 null-safe ON / R2
         // COALESCE. (Chained SubPlan-OPTIONALs: the SECOND correlates on the FIRST's

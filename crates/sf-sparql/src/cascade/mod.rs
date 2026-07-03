@@ -108,6 +108,29 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
                 nullable_unique_self_join_elimination(&mut b, schema);
                 return Some(b);
             }
+            // A branch carrying LEFT-JOINed / INNER-JOINed SubPlan derived tables
+            // (`subplan_joins`, ADR-0023 M5 Wave 2 / Item 1d — e.g. a modifier
+            // sub-SELECT as an OPTIONAL's right operand) bypasses the constraint-driven
+            // passes, the same way `path` / `NotExists` branches above do. A SubPlan's
+            // `on` correlation references outer scan/opt aliases, but NONE of the
+            // scan-mutating passes below know about `subplan_joins`: `rewrite_alias`
+            // (self-join / self-LEFT-join elimination) rewrites bindings / where_conds /
+            // opts / agg but NOT `subplan_joins[_].on`, and `distinct_prune_unused_opts`
+            // / `fd_self_join_elimination` / `joinelim` DROP scans a SubPlan's ON still
+            // references — either dangles the correlation at a vanished alias (a "no such
+            // column" crash at exec, ADR-0007). Rather than teach every pass about
+            // `subplan_joins` (a broad, fragile surface — the exact composition class the
+            // Item 1d rounds keep re-finding), skip them wholesale for these rare
+            // branches: the passes are `=_bag`-preserving OPTIMIZATIONS, so forgoing them
+            // only leaves a (correct) less-collapsed plan. The agg-over-UNION pushdown's
+            // own SubPlan branch is core-empty (handled by the `b.agg` arm above, whose
+            // self-join elimination is a no-op with no core scans), so this never blocks
+            // that optimization. (`cascade_subplans` in `lib.rs` still recurses INTO each
+            // SubPlan's own nested `Plan`, so the inside of the derived table is optimized
+            // normally — only the OUTER branch's scan-mutating passes are skipped.)
+            if !b.subplan_joins.is_empty() {
+                return Some(b);
+            }
             if branch_has_not_exists(&b) {
                 // The constraint-driven passes below don't model a correlated
                 // subquery's own scans, so they're skipped for this branch (see the

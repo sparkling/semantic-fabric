@@ -3280,6 +3280,52 @@ fn item1d_r3_two_optionals_empty_left_subplan_correlates_on_prior_opt() {
     ));
 }
 
+/// Defect 3 (crash → sound 501). A property-path LEFT side of a subplan-OPTIONAL:
+/// `left_join_over_subplan` pushed a `SubPlanJoin` onto the path branch, producing a
+/// branch with BOTH `path: Some(_)` AND `subplan_joins` — a combination
+/// `emit_branch_with` routes to `emit_path_branch`, which renders ONLY the path's own
+/// recursive CTE and IGNORES `subplan_joins` entirely (`?c` referencing `t{sp}` then
+/// had no FROM entry → crash). `build_left_join` already guards the analogous
+/// path-left + plain-scan-right case (`path_as_optional_left_via_single_scan_fast_
+/// path_is_a_sound_501`); `left_join_over_subplan` now guards it too. Reverting the
+/// guard makes `tree()` return `Ok` and exec crashes.
+#[test]
+fn item1d_r3_path_left_with_subplan_optional_right_stays_sound_501() {
+    let conn = sqlite::load(PE_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?o ?c WHERE {{ ?s ex:reaches+ ?o \
+         OPTIONAL {{ SELECT ?o (COUNT(?x) AS ?c) WHERE {{ ?x ex:reaches ?o }} GROUP BY ?o }} }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "a property-path LEFT side of a subplan-OPTIONAL must be a SOUND 501 \
+         (emit_path_branch ignores subplan_joins → the subplan's derived table is never \
+         emitted, an invalid-SQL crash): `{query}`"
+    );
+}
+
+/// Defect 4 (crash → correct). A subplan-OPTIONAL correlating on a variable bound by a
+/// PRIOR plain OPTIONAL that is itself a PK self-LEFT-JOIN. The cascade's
+/// `self_left_join_elimination` collapsed the redundant self-join and `rewrite_alias`'d
+/// every reference of the dropped opt alias onto the kept core scan — but it did NOT
+/// rewrite `subplan_joins[_].on`, so the subplan's correlation kept referencing the
+/// vanished alias → `no such column` at exec. The cascade now SKIPS the constraint-driven
+/// passes for any `subplan_joins`-carrying branch (mirroring its existing `path` /
+/// `NotExists` bail), closing the whole class of "an optimizer pass drops / merges a scan
+/// a subplan's ON still needs". spareval = 3 (?nm2 = ?nm by the PK self-join; each name's
+/// COUNT = 1). Reverting the skip makes the cascade dangle the ON → an invalid-SQL crash.
+#[test]
+fn item1d_r3_cascade_self_lj_elim_keeps_subplan_correlation() {
+    item1d(&format!(
+        "{PFX} SELECT ?nm ?nm2 ?c WHERE {{ ?p ex:name ?nm \
+         OPTIONAL {{ ?p ex:name ?nm2 }} \
+         OPTIONAL {{ SELECT ?nm2 (COUNT(?p3) AS ?c) WHERE {{ ?p3 ex:name ?nm2 }} GROUP BY ?nm2 }} }}"
+    ));
+}
+
 // ============================================================================
 // SOUND-501 BOUNDARIES — ADR-0023 parity backlog items assessed as MUST-STAY-501,
 // each with a precise architectural reason. Locked here via `diff` (BOTH flat and
