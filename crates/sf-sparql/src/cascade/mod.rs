@@ -175,7 +175,24 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
     // the SQL). So the proof here applies only to the single-branch case.
     if ctx.distinct && out.len() == 1 && out[0].path.is_none() && out[0].agg.is_none() {
         out[0].distinct = true;
-        distinct_removal(&mut out[0], schema, ctx.project);
+        // Only PROVE the DISTINCT redundant (and drop it) when the single branch is
+        // free of LEFT-JOINed SubPlan derived tables. `distinct_removal` proves
+        // redundancy from the core PK key alone (a projected injective binding reads a
+        // non-null unique key ⇒ distinct output terms) — but a `left == true`
+        // `SubPlanJoin` (a modifier sub-SELECT attached as an OPTIONAL's right operand,
+        // ADR-0023 Item 1d) can MULTIPLY a core PK row into several output rows (its
+        // solution multiset LEFT-JOINed on the correlation), so that proof is invalid:
+        // dropping the DISTINCT would leave those duplicates in the bag (=_bag broken,
+        // ADR-0007 — a silent wrong answer). The `!b.opts.is_empty()` early-return
+        // inside `distinct_removal` guards the ordinary-OPTIONAL analogue but NOT
+        // `subplan_joins` (the OPTIONAL-over-a-modifier-subplan right side lands in
+        // `subplan_joins`, never `opts`), so gate the call here. We still set
+        // `distinct = true` above so the single-branch DISTINCT is pushed into the SQL;
+        // skipping only the *removal* keeps that DISTINCT in place (a correct, merely
+        // un-optimized plan).
+        if out[0].subplan_joins.is_empty() {
+            distinct_removal(&mut out[0], schema, ctx.project);
+        }
     }
     // Projection shrinking: drop bindings not in the project list (pass 7).
     if let Some(project) = ctx.project {

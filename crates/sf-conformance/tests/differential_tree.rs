@@ -3086,6 +3086,77 @@ fn item1d_subplan_optional_with_inner_filter_stays_sound_501() {
 }
 
 // ============================================================================
+// Item 1d — outer SELECT DISTINCT over a ROW-MULTIPLYING SubPlan-OPTIONAL right
+// (ADR-0023 parity backlog, round-4 review defect). `distinct_removal` proves the
+// outer DISTINCT redundant from the core PK key alone (`?d` reads dept's non-null
+// PK ⇒ injective), but a `left == true` `SubPlanJoin` (a modifier sub-SELECT
+// attached as the OPTIONAL's right operand) MULTIPLIES a dept row into several
+// output rows (its solution multiset LEFT-JOINed on the correlation) — so the
+// DISTINCT is NOT redundant and dropping it leaves duplicates in the bag (=_bag
+// broken, ADR-0007 silent wrong answer). The fix gates the `distinct_removal` call
+// on `out[0].subplan_joins.is_empty()` (cascade/mod.rs), keeping the DISTINCT in the
+// emitted SQL. These lock BOTH the multiplying variants (outer DISTINCT must collapse
+// to 3) AND the non-multiplying / non-DISTINCT variants (must be unchanged) so the
+// narrow fix does not overshoot. Fixture I1D: dept 10 "Sales" has 2 persons (Bob,
+// Zed), so the per-label subplan fans dept/10 out to 2 rows; dept 20/30 stay 1 each.
+// Gated =_bag vs the INDEPENDENT spareval oracle (`item1d` ⇒ `assert_vs_spareval`).
+// ============================================================================
+
+#[test]
+fn item1d_distinct_over_multiplying_distinct_subplan_optional() {
+    // Round-4 review repro (verbatim). Outer `SELECT DISTINCT ?d`; the OPTIONAL right
+    // is a DISTINCT sub-SELECT correlated on the label ?l. dept/10 (Sales) fans out to
+    // 2 subplan rows {(Sales,Bob),(Sales,Zed)} ⇒ the OPTIONAL yields d/10 twice; the
+    // outer DISTINCT must collapse those ⇒ {d/10, d/20, d/30} = 3. Pre-fix:
+    // `distinct_removal` dropped the DISTINCT (proved redundant from ?d=dept.PK alone,
+    // ignoring `subplan_joins`) ⇒ emitted SQL had NO DISTINCT ⇒ 4 rows (d/10 ×2).
+    item1d(&format!(
+        "{PFX} SELECT DISTINCT ?d WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?l ?nm WHERE \
+         {{ ?px ex:name ?nm . ?px ex:dept ?dx . ?dx ex:label ?l }} }} }}"
+    ));
+}
+
+#[test]
+fn item1d_distinct_over_multiplying_orderby_subplan_optional() {
+    // Same defect via an ORDER-BY modifier sub-SELECT (no LIMIT/OFFSET ⇒ lowered as a
+    // derived table by `subplan_emits_soundly_as_derived_table`). ORDER BY does not
+    // dedupe, so dept/10 still fans out to 2 rows; the outer DISTINCT ⇒ 3. Pre-fix ⇒ 4.
+    item1d(&format!(
+        "{PFX} SELECT DISTINCT ?d WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT ?l ?nm WHERE \
+         {{ ?px ex:name ?nm . ?px ex:dept ?dx . ?dx ex:label ?l }} ORDER BY ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_nondistinct_over_multiplying_subplan_optional_unchanged() {
+    // No-overshoot lock — the fix is gated on `ctx.distinct`, so this path is untouched.
+    // WITHOUT the outer DISTINCT the bag legitimately keeps every row: dept/10 ×2 +
+    // dept/20 + dept/30 = 4. Must stay 4 both before and after the fix (proves the fix
+    // does not force a spurious DISTINCT onto a non-DISTINCT query).
+    item1d(&format!(
+        "{PFX} SELECT ?d WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?l ?nm WHERE \
+         {{ ?px ex:name ?nm . ?px ex:dept ?dx . ?dx ex:label ?l }} }} }}"
+    ));
+}
+
+#[test]
+fn item1d_distinct_over_nonmultiplying_aggregate_subplan_optional_unchanged() {
+    // No-overshoot lock — an AGGREGATE sub-SELECT yields exactly 1 row per group ⇒ NO
+    // row multiplication ⇒ the outer DISTINCT collapses nothing. Correct = 3 both before
+    // and after the fix (pre-fix `distinct_removal` dropped a genuinely-redundant
+    // DISTINCT, still 3; post-fix keeps the DISTINCT in SQL, still 3). Confirms the fix
+    // narrows to the multiplying case and does not alter a case that was already right.
+    item1d(&format!(
+        "{PFX} SELECT DISTINCT ?d WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT ?l (COUNT(?px) AS ?c) WHERE \
+         {{ ?px ex:dept ?dx . ?dx ex:label ?l }} GROUP BY ?l }} }}"
+    ));
+}
+
+// ============================================================================
 // Item 1d REGRESSION LOCKS — a variable bound by a LEFT-JOINed SubPlan
 // (`left_join_over_subplan`, `SubPlanJoin { left: true }`) may be UNBOUND when the
 // derived-table LEFT JOIN finds no match (dept/30 "Empty"). Any downstream
