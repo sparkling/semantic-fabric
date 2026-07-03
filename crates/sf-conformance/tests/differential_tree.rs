@@ -632,6 +632,24 @@ fn distinct_over_union_dedups_values_arm_only() {
     );
 }
 
+/// Spot-check prompted by a genuine arm-order bug found (and fixed, commit
+/// `84365ff`) in the SIBLING test15/17 partial-fold rule: unlike that rule,
+/// `dedup_one_arm` (test8/9) dedups each `Union` arm IN PLACE -- it never
+/// merges or repositions arms relative to each other -- so there is no
+/// analogous reordering mechanism here. Verified anyway, under a bare LIMIT
+/// with no ORDER BY, rather than assumed from reading the code alone.
+#[test]
+fn distinct_over_union_has_no_arm_order_concern_under_limit() {
+    diff_p_bag(&format!(
+        "{PFX} SELECT DISTINCT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Ann\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 2"
+    ));
+    diff_p_bag(&format!(
+        "{PFX} SELECT DISTINCT ?n WHERE {{ {{ ?p ex:name ?n }} \
+         UNION {{ VALUES ?n {{ \"Ann\" \"Ann\" \"Zed\" }} }} }} LIMIT 2"
+    ));
+}
+
 /// Ontop `ValuesNodeOptimization::test26MergeableCombination`: two `VALUES` blocks
 /// binding the SAME variables in DIFFERENT header order still fold into one
 /// `Values` leaf, cells reordered by name (not position) -- no transposition.
