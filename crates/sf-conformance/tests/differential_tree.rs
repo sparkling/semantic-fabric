@@ -840,6 +840,28 @@ fn partial_fold_preserves_as_written_arm_order_under_limit() {
     ));
 }
 
+/// A representative shape for Ontop `ValuesNodeSimpleQueryOptimization`/
+/// `ValuesNodeComplexQueryOptimization::testTranslatedSQLQuery1` (end-to-end
+/// LIMIT over a mapping union): a union with NO constant arms at all (both arms
+/// are real data, from different tables via different predicates), under a bare
+/// LIMIT/OFFSET. Confirms this doesn't touch `try_partial_fold_constant_union`'s
+/// territory (no constant arm exists to fold), so the just-fixed arm-ordering
+/// bug (which was specifically about constant-vs-data ordering) cannot recur
+/// here, and there is no OTHER ordering concern for a pure-data union: neither
+/// fold function ever runs, the Union passes through unchanged, and
+/// `Slice`-over-Union declines (an unrecognized arm shape) exactly as it always
+/// has -- verified end-to-end via `diff_p_bag` rather than assumed.
+#[test]
+fn pure_data_union_under_limit_has_no_ordering_concern() {
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?d ex:label ?n }} }} LIMIT 2"
+    ));
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?d ex:label ?n }} }} \
+         LIMIT 1 OFFSET 1"
+    ));
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
