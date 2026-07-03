@@ -180,12 +180,7 @@ pub fn emit_branch_with(
     if let Some(order) = render_order(&b.order, b, dialect, &actuals)? {
         skeleton.push_str(&order);
     }
-    if let Some(limit) = b.limit {
-        skeleton.push_str(&format!(" LIMIT {limit}"));
-    }
-    if b.offset > 0 {
-        skeleton.push_str(&format!(" OFFSET {}", b.offset));
-    }
+    push_limit_offset(&mut skeleton, b, dialect);
 
     let sql = dialect
         .emit_via_ast(&skeleton)
@@ -195,6 +190,29 @@ pub fn emit_branch_with(
         projection,
         params,
     })
+}
+
+/// Push a `LIMIT`/`OFFSET` tail onto `skeleton` (called after `WHERE`/`ORDER BY`
+/// have already been rendered, per each caller's own SQL clause order). A BARE
+/// `OFFSET` (no `LIMIT`) is a genuine SPARQL shape (`OFFSET n` with no `LIMIT`
+/// is valid syntax) but not every dialect's grammar accepts a standalone
+/// `OFFSET` clause — `Dialect::bare_offset_limit_sentinel` renders an explicit
+/// "no limit" `LIMIT` first for the dialects that need one (confirmed live: a
+/// bare `OFFSET n` is a SQLite/MySQL syntax error, so this genuinely fixed a
+/// live-emission failure, not a hypothetical one).
+fn push_limit_offset(skeleton: &mut String, b: &Branch, dialect: Dialect) {
+    match b.limit {
+        Some(limit) => skeleton.push_str(&format!(" LIMIT {limit}")),
+        None if b.offset > 0 => {
+            if let Some(sentinel) = dialect.bare_offset_limit_sentinel() {
+                skeleton.push_str(&format!(" LIMIT {sentinel}"));
+            }
+        }
+        None => {}
+    }
+    if b.offset > 0 {
+        skeleton.push_str(&format!(" OFFSET {}", b.offset));
+    }
 }
 
 /// Render an `ORDER BY` clause that pins the SPARQL value-space order, or `None`
@@ -370,12 +388,7 @@ fn emit_path_branch(
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
-    if let Some(limit) = b.limit {
-        skeleton.push_str(&format!(" LIMIT {limit}"));
-    }
-    if b.offset > 0 {
-        skeleton.push_str(&format!(" OFFSET {}", b.offset));
-    }
+    push_limit_offset(&mut skeleton, b, dialect);
 
     let sql = dialect
         .emit_via_ast(&skeleton)
@@ -471,12 +484,7 @@ fn emit_agg_branch(
     // ORDER BY over an aggregate result is applied in `exec` (never pushed to SQL —
     // it sorts the reconstructed terms type-aware). LIMIT/OFFSET on a single agg
     // branch were pushed by `Plan::prepared_branches` only when unordered.
-    if let Some(limit) = b.limit {
-        skeleton.push_str(&format!(" LIMIT {limit}"));
-    }
-    if b.offset > 0 {
-        skeleton.push_str(&format!(" OFFSET {}", b.offset));
-    }
+    push_limit_offset(&mut skeleton, b, dialect);
 
     let sql = dialect
         .emit_via_ast(&skeleton)

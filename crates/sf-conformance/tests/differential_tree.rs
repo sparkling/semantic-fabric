@@ -335,6 +335,21 @@ fn p_modifier_interaction() {
     diff_p(&format!(
         "{PFX} SELECT ?v WHERE {{ {{ ?p ex:name ?v }} UNION {{ ?d ex:label ?v }} }} ORDER BY ?v LIMIT 2"
     ));
+    diff_p(&format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name }} ORDER BY ?name OFFSET 1"
+    ));
+    // A bare OFFSET (no LIMIT, no ORDER BY, single-branch) is the ONLY shape that
+    // triggers Plan::prepared_branches' SQL push-down (single unordered branch),
+    // which is what actually exercises emit.rs's LIMIT/OFFSET rendering -- the
+    // fixed SQLite/MySQL "OFFSET with no LIMIT" syntax-error bug. `diff_p_bag`
+    // (flat vs tree only), not `diff_p`: with no ORDER BY, WHICH row a bare
+    // OFFSET skips is legitimately implementation-defined (spareval's own
+    // iteration order may pick a different-but-equally-valid row than this
+    // engine's as-written-order convention -- the SAME established exception
+    // this file already documents for LIMIT).
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name }} OFFSET 1"
+    ));
 }
 
 /// Adversarial-review-caught regression (ADR-0023 optimizer-residue Wave C,

@@ -137,6 +137,24 @@ impl Dialect {
         }
     }
 
+    /// The "no limit" sentinel to render as `LIMIT <sentinel>` immediately before
+    /// a BARE `OFFSET n` (no LIMIT otherwise present) — `None` for a dialect whose
+    /// grammar accepts a standalone `OFFSET` clause, needing no sentinel at all.
+    ///
+    /// | Sentinel                       | Dialects            | Why                                  |
+    /// |---------------------------------|----------------------|---------------------------------------|
+    /// | `Some("-1")`                    | Sqlite               | SQLite's own "`-1` = unbounded" idiom — confirmed live: a bare `OFFSET n` is a syntax error otherwise |
+    /// | `Some("18446744073709551615")`  | MySql                | `2^64 - 1`, MySQL's own documented "no limit" idiom (MySQL has no negative-LIMIT convention) — confirmed live: a bare `OFFSET n` is a syntax error otherwise |
+    /// | `None`                          | Postgres, Redshift   | ANSI-standard: a standalone `OFFSET` is valid SQL — confirmed live for Postgres; Redshift is PG-wire-compatible |
+    /// | `None`                          | everything else      | not live-tested either way; keep the pre-existing bare-`OFFSET` behavior rather than guess |
+    pub fn bare_offset_limit_sentinel(self) -> Option<&'static str> {
+        match self {
+            Dialect::Sqlite => Some("-1"),
+            Dialect::MySql => Some("18446744073709551615"),
+            _ => None,
+        }
+    }
+
     /// The matching `sqlparser` dialect, used to parse `rr:sqlQuery` (ADR-0015)
     /// and to validate/normalise emitted SQL ([`Dialect::emit_via_ast`]).
     pub fn parser_dialect(self) -> Box<dyn SqlParserDialect> {
