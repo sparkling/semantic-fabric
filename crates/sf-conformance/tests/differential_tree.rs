@@ -738,6 +738,23 @@ fn partial_fold_combines_constant_arms_keeps_data_arm() {
     ));
 }
 
+/// Ontop `ValuesNodeOptimization::test17DBConstant` / `test18RDFConstant` (diff
+/// datatypes -> NO fold, a documented Ontop-only restriction, free-pass negative
+/// per the worklist): Ontop needs a homogeneous-cell-type gate before folding
+/// constant arms into a SQL VALUES clause (a real column-type constraint at the
+/// SQL level). semantic-fabric's `Values` IR node has no such constraint -- it
+/// stores `Option<TermDef>` cells directly, not raw typed SQL columns -- so
+/// `try_fold_constant_union` already folds constant arms of ANY types together
+/// unconditionally (confirmed: an integer + a string literal, and separately an
+/// IRI + a language-tagged literal, both already fold to one `Values` with no
+/// gate at all). test17 (homogeneous case) is thus a strict SUBSET of what's
+/// already correct and already happening -- nothing to implement.
+#[test]
+fn constant_fold_needs_no_type_homogeneity_gate() {
+    diff_p("SELECT ?x WHERE { { BIND(1 AS ?x) } UNION { BIND(\"a\" AS ?x) } }");
+    diff_p("SELECT ?x WHERE { { BIND(<http://ex/a> AS ?x) } UNION { BIND(\"a\"@en AS ?x) } }");
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
