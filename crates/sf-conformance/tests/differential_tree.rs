@@ -352,6 +352,38 @@ fn p_modifier_interaction() {
     ));
 }
 
+/// Pre-existing bug (confirmed live: `sqlite error: no such column: t0.name` for
+/// every dialect, not just SQLite), root-caused and fixed here: a core-less
+/// `LeftJoin` LEFT side (`{}`, the empty-BGP identity — always exactly one
+/// solution to extend) meant `Branch.core.is_empty()`, and the FROM-decision
+/// guard in `emit_branch_with`/`emit_agg_branch` checked only `core`/
+/// `subplan_joins`, never `opts` — so `from = None` was chosen even though
+/// `Branch.opts` (the OPTIONAL's own scan) was non-empty, and the SELECT list
+/// still projected the opt's column, referencing a table alias no FROM clause
+/// ever introduced. Fixed in `render_from`'s core-less branch: when no
+/// `subplan_joins` exist either, synthesize a portable `(SELECT 1)` single-row
+/// anchor (correctly preserving OPTIONAL's "guaranteed at least one row, even
+/// with zero matches" semantics — unlike naively promoting the opt itself to a
+/// hard FROM anchor, which would wrongly drop that guaranteed row whenever it
+/// has zero matches) and LEFT JOIN every opt onto it, same as the core-anchor
+/// case already did.
+#[test]
+fn bare_group_as_leftjoin_left_no_longer_mis_aliases() {
+    diff_p(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{}} OPTIONAL {{ ?p ex:name ?n }} }}"
+    ));
+    // The identical bug via a Construction-wrapped (BIND-only) core-less left
+    // side, not just a bare `{}` — same root cause, same fix.
+    diff_p(&format!(
+        "{PFX} SELECT ?x ?n WHERE {{ BIND(1 AS ?x) OPTIONAL {{ ?p ex:name ?n }} }}"
+    ));
+    // The same core-less-plus-opts shape reaching `emit_agg_branch` (a SEPARATE
+    // FROM-decision guard, fixed identically) via an aggregate over the OPTIONAL.
+    diff_p(&format!(
+        "{PFX} SELECT (COUNT(?n) AS ?c) WHERE {{ {{}} OPTIONAL {{ ?p ex:name ?n }} }}"
+    ));
+}
+
 /// Adversarial-review-caught regression (ADR-0023 optimizer-residue Wave C,
 /// Distinct-over-Values dedup): `?y` is bound by VALUES but not SELECTed, so
 /// `project = [x]` NARROWS the Values leaf's own `vars = [x, y]`. DISTINCT applies

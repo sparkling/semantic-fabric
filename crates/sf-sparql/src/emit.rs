@@ -145,11 +145,13 @@ pub fn emit_branch_with(
 
     // FROM (+ LEFT JOIN ON params) MUST render before WHERE so positional
     // placeholders bind in text order. A core-less branch with no SubPlan joins
-    // (an inline `VALUES` constant row — all `Const` bindings) renders as a
-    // one-row `SELECT <const exprs>` with no FROM. A core-less branch WITH
-    // SubPlan joins (ADR-0023 M5 Wave 2: SubPlan anchor) uses the first SubPlan
-    // as the FROM anchor.
-    let from = if b.core.is_empty() && b.subplan_joins.is_empty() {
+    // AND no opts (an inline `VALUES` constant row — all `Const` bindings)
+    // renders as a one-row `SELECT <const exprs>` with no FROM. A core-less
+    // branch WITH SubPlan joins (ADR-0023 M5 Wave 2: SubPlan anchor) or opts (a
+    // core-less `LeftJoin` left side, e.g. `{} OPTIONAL {...}`) needs
+    // `render_from`'s synthetic/SubPlan anchor — omitting it left the opt's own
+    // columns referenced with no FROM clause ever introducing their alias.
+    let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
         Some(render_from(b, dialect, &actuals, &mut params, &mut pidx)?)
@@ -420,11 +422,12 @@ fn emit_agg_branch(
     let mut pidx = 0usize;
 
     // FROM (+ LEFT JOIN ON params) renders before WHERE so positional placeholders
-    // bind in text order. A core-less inner with no SubPlan join either (an empty
-    // BGP) renders without FROM; a core-less inner WITH a SubPlan join (the SQL
-    // agg-over-UNION pushdown: the pooled arms' derived table is the sole FROM
-    // relation) still needs `render_from` — mirrors `emit_branch_with`'s condition.
-    let from = if b.core.is_empty() && b.subplan_joins.is_empty() {
+    // bind in text order. A core-less inner with no SubPlan join and no opts
+    // either (an empty BGP) renders without FROM; a core-less inner WITH a
+    // SubPlan join (the SQL agg-over-UNION pushdown: the pooled arms' derived
+    // table is the sole FROM relation) or opts (aggregating over `{} OPTIONAL
+    // {...}}`) still needs `render_from` — mirrors `emit_branch_with`'s condition.
+    let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
         Some(render_from(b, dialect, actuals, &mut params, &mut pidx)?)
@@ -641,22 +644,26 @@ fn render_from(
     };
 
     let from = if b.core.is_empty() {
-        // No base scans: first SubPlan is the FROM anchor (no keyword); remaining join with ON.
+        // No base (core) scans: an anchor is still needed for `subplan_joins`/
+        // `opts` to attach to. The first SubPlan is the anchor if one exists
+        // (existing behavior); otherwise a portable "single row" anchor stands in
+        // for the `IqNode::True`/empty-BGP identity this branch's own left side
+        // represents (SPARQL's `{} OPTIONAL {X}` always has exactly one solution
+        // to extend, so no real base relation is needed — what matters is that
+        // every opt/further-subplan attaches via its own JOIN, never as a hard
+        // FROM anchor that would wrongly drop the guaranteed row if it has zero
+        // matches). Confirmed live (a genuine bug, not hypothetical): a core-less
+        // branch with a non-empty `opts` and no `subplan_joins` used to render NO
+        // FROM clause at all (this whole function was never even called — the
+        // caller's own from-decision guard checked only `core`/`subplan_joins`),
+        // yet the SELECT list still projected the opt's columns — "no such
+        // column" on every dialect for `{} OPTIONAL {?p ex:name ?n}` and the
+        // analogous `BIND(...) OPTIONAL {...}` shape.
         let mut sp_iter = b.subplan_joins.iter();
-        let first_sp = sp_iter
-            .next()
-            .ok_or_else(|| Error::Unsupported("branch with no FROM relation".to_owned()))?;
-        let anchor = emit_sp(first_sp, params, pidx, "")?;
-        let on_clause = if !first_sp.on.is_empty() {
-            // The anchor is a naked derived table — no ON clause in the FROM position;
-            // ON-conditions go into WHERE instead. For now emit them into WHERE by
-            // pushing to where_conds is not possible here — the only sound path is to
-            // require sp.on to be empty for the anchor (lower_as_subplan guarantees this).
-            String::new()
-        } else {
-            String::new()
+        let mut from = match sp_iter.next() {
+            Some(first_sp) => emit_sp(first_sp, params, pidx, "")?,
+            None => "(SELECT 1) t_empty".to_owned(),
         };
-        let mut from = format!("{}{anchor}", on_clause);
         for sp in sp_iter {
             let join_kw = if sp.left {
                 " LEFT JOIN "
@@ -671,6 +678,13 @@ fn render_from(
             } else {
                 from.push_str(" ON 1 = 1");
             }
+        }
+        for opt in &b.opts {
+            from.push_str(" LEFT JOIN ");
+            from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
+            from.push_str(" ON ");
+            let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
+            from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
         }
         from
     } else {
