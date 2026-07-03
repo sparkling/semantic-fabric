@@ -196,13 +196,16 @@ SQL-signature-shape concern, not `=_bag`, and this wave's stated charter is `=_b
 rewrites only, not "match Ontop's exact SQL text" — so it is genuinely OUT OF SCOPE for this wave,
 not deferred work still owed within it).**
 
-**Correctness backlog (post-Wave-C, team-lead handoff).** Adversarial review incidentally surfaced
-five pre-existing, Wave-C-unrelated bugs — none touched by any Wave C diff itself (the original
-report named what turned out to be the SAME bug twice, as "core-less-branch OptJoin" and
-separately as "zero-var-Union-as-LeftJoin-left" — item 3 below covers both; one further bug was
-found DURING that fix's own adversarial review). Three are now fixed (each with its own
-RED-first/revert-proof/adversarial-review gate); one was assessed and found to be NOT a bug (no
-fix needed — a documented, `=_bag`-safe asymmetry, not a gap); one remains genuinely open:
+**Correctness backlog (post-Wave-C, team-lead handoff) — COMPLETE.** Adversarial review
+incidentally surfaced five pre-existing, Wave-C-unrelated bugs — none touched by any Wave C diff
+itself (the original report named what turned out to be the SAME bug twice, as
+"core-less-branch OptJoin" and separately as "zero-var-Union-as-LeftJoin-left" — item 3 below
+covers both; item 5 was found DURING item 3's own adversarial review). Four are now fixed (each
+with its own RED-first/revert-proof/adversarial-review gate); one was assessed and found to be NOT
+a bug (no fix needed — a documented, `=_bag`-safe asymmetry, not a gap). Zero items remain
+genuinely open from this original handoff — though item 5's own adversarial review surfaced two
+FURTHER related-but-out-of-scope items, flagged (not fixed) at the end of item 5 below, for a
+future follow-up round:
 
 1. ~~`FILTER NOT EXISTS { ... }` with no variable shared with the outer scope silently returns the
    WRONG answer on the tree path~~ — **FIXED, commit `45b395c`** (priority-escalated ahead of Wave C
@@ -245,12 +248,28 @@ fix needed — a documented, `=_bag`-safe asymmetry, not a gap); one remains gen
    with a permanent regression test asserting BOTH flat's 501 and tree's spareval-verified
    correctness, so a future flat-side capability change surfaces rather than silently invalidating
    the premise.
-5. **Still open**: a genuine, pre-existing Path bug found incidentally during bug 3's own
-   adversarial review, confirmed live and confirmed pre-existing (identical on flat and on
-   pre-diff HEAD, so unrelated to that fix): a property-path pattern used as an OPTIONAL's RIGHT
-   operand loses its path closure during `leftjoin.rs`'s multi-branch decomposition
-   (`inner_join_one` copies `left.path` but never `right.path` when merging), producing an empty
-   FROM before any `emit.rs` code is even reached.
+5. ~~A genuine, pre-existing Path bug found incidentally during bug 3's own adversarial review~~
+   — **FIXED (crash → sound 501), commit `d849f46`**. `Branch` can only ever represent ONE of
+   {a plain core/opts scan model, a path closure} at a time (`emit_branch_with` dispatches
+   unconditionally to `emit_path_branch` whenever `path.is_some()`, which has zero awareness of
+   `core`/`opts`), and `leftjoin.rs` has THREE separate composition functions that each build a
+   merged `Branch` from a left+right pair, none of which accounted for a path on either side:
+   `inner_join_one` (the `P ⋈ R` half) always carried only `left.path` forward, silently dropping
+   `right.path`; `not_exists_cond_for` (the `P − R` half) built a `NotExists` with empty `scans` for
+   a path branch while its `conds` still referenced the path's own CTE-only columns;
+   `build_left_join` (the single-scan fast path, reachable regardless of the LEFT side's own shape)
+   never touches `left.path` at all, so a path-shaped left ends up with `path:Some(_)` AND non-empty
+   `opts` simultaneously. A naive "carry the other side's path across instead" fix would not be
+   sound (it would just trade one dropped side for the other), so fixed with three new guards
+   (matching this file's own pre-existing convention for the analogous `right.subplan_joins` 501
+   boundary) rather than a real fix, which would need a new composition mechanism (e.g. wrapping
+   the path's own rendering as an opaque SubPlan derived table) — explicitly out of scope for a
+   crash-to-501 fix. Adversarial review (8 angles, NOT REFUTED) surfaced two further
+   related-but-out-of-scope items, flagged for separate follow-up: (a) `MINUS` with a path-shaped
+   LEFT operand diverges between flat (501s) and tree (computes correctly, hand-verified) — tree is
+   MORE capable here, not wrong, matching item 4's own "tree surpasses an inherent flat limitation"
+   pattern; (b) a cosmetic "EXISTS"-worded error message on a `MINUS`-triggered 501 in
+   `lower_iq_exists`.
 
 ---
 
