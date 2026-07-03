@@ -3085,6 +3085,69 @@ fn item1d_subplan_optional_with_inner_filter_stays_sound_501() {
     );
 }
 
+/// Revert-proof lock on the SubPlan-INSIDE-an-EXISTS/NOT-EXISTS/MINUS-body SOUND 501
+/// (ADR-0023 Item 1d meta-audit, round 4). `lower_iq_exists` (which serves FILTER
+/// EXISTS, FILTER NOT EXISTS, AND MINUS) lowers each inner body branch into a
+/// `SqlCond::{Exists,NotExists} { scans: Vec<Scan>, conds }`. When the body JOINs a
+/// modifier sub-SELECT (`{ ?a p ?nm . { SELECT DISTINCT/agg … } }`) the inner branch
+/// carries a `subplan_joins` derived table whose alias the correlation `conds`
+/// reference — but `scans` (a plain `Vec<Scan>`) cannot introduce it, so the emitted
+/// correlated subquery references a FROM alias that does not exist ("no such column
+/// t{sp}.c{i}" — a CRASH at exec, verified: `tree()` returned `Ok` then blew up). The
+/// `!r.subplan_joins.is_empty()` guard turns that into a SOUND 501 (ADR-0007: a 501
+/// beats a crash), mirroring `not_exists_cond_for`'s matching boundary for the OPTIONAL
+/// anti-join half — the SAME `SqlCond`-cannot-hold-a-SubPlan limitation reached through
+/// a DIFFERENT entry point than the round-1..3 OPTIONAL-decomposition guards. Reverting
+/// the guard makes `tree()` return `Ok` again (these assertions fail) and executing the
+/// plan is an invalid-SQL error, never a correct answer.
+fn item1d_body_subplan_must_501(query: &str) {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let q = parse(query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "a SubPlan (modifier sub-SELECT) joined INSIDE an EXISTS/NOT EXISTS/MINUS body \
+         must be a SOUND 501 — SqlCond::{{Exists,NotExists}} cannot carry a derived table, \
+         so the un-guarded lowering crashes at exec: `{query}`"
+    );
+}
+
+#[test]
+fn item1d_exists_body_carrying_distinct_subplan_stays_sound_501() {
+    item1d_body_subplan_must_501(&format!(
+        "{PFX} SELECT ?l WHERE {{ ?d ex:label ?l FILTER EXISTS {{ ?px ex:name ?nm . \
+         {{ SELECT DISTINCT ?d WHERE {{ ?p ex:dept ?d }} }} }} }}"
+    ));
+}
+
+#[test]
+fn item1d_not_exists_body_carrying_distinct_subplan_stays_sound_501() {
+    item1d_body_subplan_must_501(&format!(
+        "{PFX} SELECT ?l WHERE {{ ?d ex:label ?l FILTER NOT EXISTS {{ ?px ex:name ?nm . \
+         {{ SELECT DISTINCT ?d WHERE {{ ?p ex:dept ?d }} }} }} }}"
+    ));
+}
+
+#[test]
+fn item1d_minus_body_carrying_distinct_subplan_stays_sound_501() {
+    item1d_body_subplan_must_501(&format!(
+        "{PFX} SELECT ?l WHERE {{ ?d ex:label ?l MINUS {{ ?d ex:label ?l2 . \
+         {{ SELECT DISTINCT ?d WHERE {{ ?p ex:dept ?d }} }} }} }}"
+    ));
+}
+
+#[test]
+fn item1d_exists_body_carrying_aggregate_subplan_stays_sound_501() {
+    // The aggregate-subplan variant crashes identically (the anti-join scans still
+    // drop the derived table) — locked as a 501 too so a future SubPlan-in-SqlCond
+    // capability must consciously revisit BOTH modifier kinds, not silently relax one.
+    item1d_body_subplan_must_501(&format!(
+        "{PFX} SELECT ?l WHERE {{ ?d ex:label ?l FILTER EXISTS {{ ?px ex:name ?nm . \
+         {{ SELECT ?d (COUNT(?p) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d }} }} }}"
+    ));
+}
+
 // ============================================================================
 // Item 1d — outer SELECT DISTINCT over a ROW-MULTIPLYING SubPlan-OPTIONAL right
 // (ADR-0023 parity backlog, round-4 review defect). `distinct_removal` proves the

@@ -597,6 +597,25 @@ fn lower_iq_exists(
                 format!("{op} with a property-path inner is deferred → 501 (v1)"),
             ));
         }
+        // An inner branch carrying its OWN SubPlan derived table (a modifier sub-SELECT
+        // joined INSIDE this EXISTS / NOT EXISTS / MINUS body — e.g. `EXISTS { ?a p ?nm .
+        // { SELECT DISTINCT ?x … } }`, ADR-0023 Item 1d) has NO representation in the
+        // `SqlCond::{Exists,NotExists}::scans` this loop builds below — `scans` is a plain
+        // `Vec<Scan>` (= `r.core`), so the subplan's derived-table alias is DROPPED: the
+        // correlation `conds` still reference `t{sp}.c{i}` (a shared/grouped var reads the
+        // subplan) while the emitted correlated subquery's FROM never introduces it → "no
+        // such column t{sp}.c{i}" at SQL-execution time (a crash, verified over the I1D
+        // fixture — `tree()` returned `Ok` then blew up). Sound 501 instead of a crash
+        // (ADR-0007), mirroring `leftjoin::not_exists_cond_for`'s matching
+        // `!right.subplan_joins.is_empty()` boundary for the OPTIONAL `(P − R)` anti-join
+        // half — the SAME SubPlan-in-SqlCond limitation reached through a DIFFERENT entry
+        // point (FILTER EXISTS / NOT EXISTS / MINUS, not the OPTIONAL decomposition).
+        if !r.subplan_joins.is_empty() {
+            return Err(Error::Unsupported(format!(
+                "{op} whose body carries a SubPlan derived table (a modifier sub-SELECT \
+                 joined inside it) is not yet supported → 501 (ADR-0023 Item 1d boundary)"
+            )));
+        }
         let mut corr = r.where_conds.clone();
         let mut never_compatible = false;
         let mut shared_var_found = false;
