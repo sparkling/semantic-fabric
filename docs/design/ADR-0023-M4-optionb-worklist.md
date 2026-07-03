@@ -271,6 +271,15 @@ future follow-up round:
    pattern; (b) a cosmetic "EXISTS"-worded error message on a `MINUS`-triggered 501 in
    `lower_iq_exists`.
 
+**Also fixed in this batch (gate hygiene, not a correctness bug):** `cargo clippy --workspace
+--all-targets --all-features -- -D warnings` was red on `crates/sf-sql/src/backend/duckdb.rs`
+(`clippy::items_after_test_module`: the free fn `duck_value` sat after `mod tests`) — the only
+thing blocking a clean `--all-features` clippy run. Fixed by moving `duck_value` above the test
+module (no behavior change). `--all-features` clippy is now part of this branch's own gate going
+forward, confirmed fully green; the pre-existing, unrelated `libodbc`-link failure some `--all-features`
+*test* runs hit (missing native library at test-binary link time) does not affect `clippy`, which
+type-checks without linking a test binary.
+
 ---
 
 ## Family 2 — boolean-push
