@@ -62,7 +62,7 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | FlattenUnionOptimizer::flattenUnionTest5 | identity-Construction over union2[Construction(InnerJoin), data] | free-pass | identity collapse + n-ary Union + projection pushdown |
 | union-structural | ValuesNodeOptimization::test1normalizationSlice | Slice(0,1) over Values(3) | **DONE** (Wave C, commit `d313f26`) | `normalize_slice` (`iq/normalize.rs`): Slice-over-Values truncation, incl. through the identity-projection Construction wrapper |
 | union-structural | ValuesNodeOptimization::test2normalizationSlice | Slice(1,1) over Values | **DONE** (Wave C, commit `d313f26`) | same `normalize_slice`, offset half |
-| union-structural | ValuesNodeOptimization::test3normalizationDistinct | Distinct over Values(dups) | needs-tree-rewrite [cosmetic] | §4.15 arm-dedup on Values leaf; SELECT DISTINCT already correct |
+| union-structural | ValuesNodeOptimization::test3normalizationDistinct | Distinct over Values(dups) | **DONE** (Wave C, commit `5611138`) | `normalize_distinct`/`dedup_rows` (`iq/normalize.rs`); guarded by `same_var_set` (a real =_bag bug an adversarial review caught pre-merge — see commit message) |
 | union-structural | ValuesNodeOptimization::test4…SliceUnionValuesValues | Slice(0,4) over Union[Values,Values] | needs-tree-rewrite [cosmetic] | §4.15 Values-fold + NEW slice-over-Values |
 | union-structural | ValuesNodeOptimization::test5…SliceUnionValuesNonValues | Slice(0,2) over Union[Values,ext], Values covers limit | needs-tree-rewrite [cosmetic] | NEW slice-over-union arm-drop |
 | union-structural | ValuesNodeOptimization::test5…SliceUnionValuesValuesNonValues | Slice(0,4) over Union[Values,Values,ext] | needs-tree-rewrite [cosmetic] | §4.15 fold + NEW slice-over-union arm-drop |
@@ -89,26 +89,34 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | ValuesNodeComplexQueryOptimization::testTranslatedSQLQuery1 | end-to-end LIMIT 4 over wide mapping union | needs-tree-rewrite [cosmetic] | same Slice driver scaled |
 | union-structural | BindingLiftTest::testUnionSubstitution | lift common URI-template binding into shared Construction above union | needs-tree-rewrite [cosmetic] | §4.15 binding-lift (load-bearing for signature parity, not `=_bag`) |
 
-Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 3 DONE (test1/test2/test14),
-24 needs-tree-rewrite (all [cosmetic] for `=_bag`), 0 M5, 0 charter.** (Original: 6/27/0/0 —
-kept for history; the 3 DONE rows are no longer counted in the 27.)
+Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 4 DONE (test1/test2/test3/test14),
+23 needs-tree-rewrite (all [cosmetic] for `=_bag`), 0 M5, 0 charter.** (Original: 6/27/0/0 —
+kept for history; the 4 DONE rows are no longer counted in the 27.)
 
 **Wave C progress note (2026-07-03, branch `fix/adr-0023-residue-waves`, worktree
-`adr-0023-residue-waves`):** test1/test2 (Slice-over-Values truncation, commit `d313f26`) and
-test14 (constant-Union-to-Values fold, commit `d3139f5`) shipped — each with unit +
-differential-tree tests (spareval-gated where deterministic, `diff_p_bag` where LIMIT-
-without-ORDER-BY tie-breaking is legitimately implementation-defined), revert-proofs, and a
-passing adversarial refute-only review. test14's fold is a real capability (not a stub) but
-does NOT yet subsume test15/17-26 (partial fold with a DATA arm kept, homogeneous-DB-type
-gating, RDF-term binding-lift/split, zero-var counting, column-order reconciliation) — those
-remain open, each verified to safely DECLINE today (confirmed by both the implementer's own
-tests and the adversarial reviewer) rather than mis-fold. Group A (test4-13, Slice/Distinct-
-over-Union arm-drop + residual-limit pushdown) and `BindingLiftTest::testUnionSubstitution`
-are untouched. Precise remainder: 24 of the original 27 rows. Two pre-existing, Wave-C-
-unrelated bugs were incidentally discovered during adversarial review (a core-less-branch
-OptJoin SQL-emission gap triggered by `BIND(...) OPTIONAL {...}` with no union at all; a flat-
-oracle limitation aggregating over a BIND-only union) — not fixed here (out of scope), flagged
-for a separate follow-up.
+`adr-0023-residue-waves`):** test1/test2 (Slice-over-Values truncation, commit `d313f26`),
+test14 (constant-Union-to-Values fold, commit `d3139f5`), and test3 (Distinct-over-Values
+dedup, commit `5611138`) shipped — each with unit + differential-tree tests (spareval-gated
+where deterministic, `diff_p_bag` where an oracle's tie-breaking is legitimately
+implementation-defined), revert-proofs, and adversarial refute-only review. **test3's first
+adversarial review pass REFUTED the rule as first fixed**: `SELECT DISTINCT ?x WHERE { VALUES
+(?x ?y) {(1 2)(1 3)(1 2)} }` wrongly returned 2 rows instead of 1 (deduped the Values leaf's
+full pre-projection tuple through an identity-projection wrapper, before the wrapper's own
+`project` narrowed away the unselected `?y` — SPARQL applies DISTINCT after Project). Fixed
+with a `same_var_set` guard (decline whenever `project` narrows the Values leaf's own `vars`);
+a second adversarial pass re-verified the fix across 7 further angles and found nothing. This
+is the process working as intended, not a caveat to hide.
+
+test14's fold is a real capability (not a stub) but does NOT yet subsume test15/17-26 (partial
+fold with a DATA arm kept, homogeneous-DB-type gating, RDF-term binding-lift/split, zero-var
+counting, column-order reconciliation) — those remain open, each verified to safely DECLINE
+today (confirmed by the implementer's own tests and two adversarial reviewers) rather than
+mis-fold. Group A (test4-13, Slice/Distinct-over-Union arm-drop + residual-limit pushdown) and
+`BindingLiftTest::testUnionSubstitution` are untouched. Precise remainder: 23 of the original
+27 rows. Two pre-existing, Wave-C-unrelated bugs were incidentally discovered during
+adversarial review (a core-less-branch OptJoin SQL-emission gap triggered by `BIND(...)
+OPTIONAL {...}` with no union at all; a flat-oracle limitation aggregating over a BIND-only
+union) — not fixed here (out of scope), flagged for a separate follow-up.
 
 ---
 
@@ -267,16 +275,16 @@ the correction note above the Family 3 table). The counts below are updated acco
 | disposition | union-structural | boolean-push | join-elim | projection-and-true | **total** | *(orig. join-elim / total)* |
 |---|---|---|---|---|---|---|
 | free-pass | 6 | 27 | 24 | 30 | **87** | *(17 / 80)* |
-| **DONE (Wave C, implemented)** | 3 | 0 | 0 | 0 | **3** | *(new bucket, not in the original 121)* |
-| needs-tree-rewrite | 24 | 0 | 1 | 0 | **25** | *(7 / 34)* |
+| **DONE (Wave C, implemented)** | 4 | 0 | 0 | 0 | **4** | *(new bucket, not in the original 121)* |
+| needs-tree-rewrite | 23 | 0 | 1 | 0 | **24** | *(7 / 34)* |
 | needs-SubPlan-M5 | 0 | 0 | 0 | 0 | **0** | *(1 / 1, now closed)* |
 | charter-excluded | 0 | 0 | 2 | 4 | **6** | *(2 / 6)* |
-| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 3 Wave C DONE rows are a subset of union-structural's 27, not additional rows)* |
+| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 4 Wave C DONE rows are a subset of union-structural's 27, not additional rows)* |
 
-**Wave C update (2026-07-03):** 3 of union-structural's 24 needs-tree-rewrite rows
-(test1/test2/test14) are now DONE, not merely cosmetic-and-pending — see the Family 1 table
-above and the Wave C progress note there. `union-structural`'s needs-tree-rewrite count in the
-table above (24) already reflects this; the roll-up's own historical "27" column headers elsewhere
+**Wave C update (2026-07-03):** 4 of union-structural's 24 needs-tree-rewrite rows
+(test1/test2/test3/test14) are now DONE, not merely cosmetic-and-pending — see the Family 1
+table above and the Wave C progress note there. `union-structural`'s needs-tree-rewrite count in
+the table above (23) already reflects this; the roll-up's own historical "27" column headers elsewhere
 in this doc predate Wave C and are not restated as errors, just superseded by this row.
 
 Row-count note: these are the **representative analysis rows**; several join-elim rows fold multiple
@@ -334,8 +342,10 @@ collapsed join.
 - **Wave 6 — Group A: Slice/Values/Distinct folding drivers** *(pure SQL-shape, all cosmetic)*.
   New Slice-over-Values/Union truncation + arm-drop + arm-distinctness analysis. Unblocks: test1-13,
   Simple/Complex SQL-shape tests. **STARTED 2026-07-03** (same branch/session): test1/test2's slice
-  (`normalize_slice`, commit `d313f26`) — Slice-over-Values truncation only; the Union-arm-drop /
-  residual-limit-pushdown machinery for test4-13 is NOT built.
+  (`normalize_slice`, commit `d313f26`) and test3's dedup (`normalize_distinct`/`dedup_rows`, commit
+  `5611138`, `same_var_set`-guarded after an adversarial review caught a narrowing-projection `=_bag`
+  bug) — Slice/Distinct-over-Values truncation/dedup only; the Union-arm-drop / residual-limit-
+  pushdown machinery for test4-13 is NOT built.
 - **Wave 7 (new) — join-elim SQL-shape collapse** *(the former Group D scope, now understood as cosmetic)*.
   Collapse the Group C `Union`+`NOT EXISTS` decomposition back to a single-scan join/`OptJoin` when a
   provable key/FD match makes the anti-join branch unreachable. Lowest urgency of the four (existing
