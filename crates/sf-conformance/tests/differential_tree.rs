@@ -384,6 +384,43 @@ fn bare_group_as_leftjoin_left_no_longer_mis_aliases() {
     ));
 }
 
+/// Correctness-backlog assessment (per team-lead handoff): "a flat-oracle
+/// limitation aggregating over a BIND-only union" was flagged as a possible
+/// bug during Wave C. Assessed here and found to be NEITHER a bug nor
+/// something needing a fix: `COUNT` over a `UNION` whose every arm is a bare
+/// `BIND` (no real pattern at all) makes FLAT's own aggregation-over-UNION
+/// mechanism introduce an internal synthetic variable it cannot itself bind,
+/// so flat honestly defers (`Error::Unsupported("BIND references unbound
+/// ?<synthetic>")`) rather than risk a wrong answer — this is flat's own
+/// documented 501 discipline working exactly as designed, not a silent
+/// failure. TREE, unlike flat, computes this correctly via its `rust_group`
+/// mechanism — confirmed independently against `spareval` directly (bypassing
+/// flat entirely, since `diff()`'s own "both sides must 501 together"
+/// requirement would otherwise treat "tree succeeds where flat honestly
+/// defers" as a mismatch, even though tree's answer is genuinely correct, not
+/// wrong). This is `=_bag`-safe strengthening (tree is a strict capability
+/// superset of flat here), not a regression to guard against — flat's 501 is
+/// asserted explicitly below specifically so a FUTURE flat-side capability
+/// improvement doesn't silently invalidate this test's own premise unnoticed.
+#[test]
+fn count_over_bind_only_union_is_flats_inherent_limitation_not_a_bug() {
+    let q = format!(
+        "{PFX} SELECT (COUNT(?x) AS ?c) WHERE {{ {{ BIND(1 AS ?x) }} UNION {{ BIND(2 AS ?x) }} }}"
+    );
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "flat is expected to honestly 501 here (its own inherent limitation) \
+         -- if this now succeeds, flat has gained the capability and this \
+         test's premise needs revisiting, not silently relaxing"
+    );
+    let tp = tree(&maps, &parsed, &schema).expect("tree translates");
+    assert_vs_spareval(P_TTL, &q, &tp, &conn);
+}
+
 /// Adversarial-review-caught regression (ADR-0023 optimizer-residue Wave C,
 /// Distinct-over-Values dedup): `?y` is bound by VALUES but not SELECTed, so
 /// `project = [x]` NARROWS the Values leaf's own `vars = [x, y]`. DISTINCT applies
