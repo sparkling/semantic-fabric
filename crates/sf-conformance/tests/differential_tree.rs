@@ -2874,6 +2874,53 @@ fn item3_minus_multibranch_inner_over_optional_shared_var() {
 }
 
 // ============================================================================
+// Nested GROUP BY — an aggregate OVER an aggregate (ADR-0023 parity backlog
+// Item 6). The FLAT oracle DEFERS ("nested GROUP BY (aggregate over an aggregate)
+// is deferred → 501"); the TREE already CLOSES it via the §5.4 SubPlan
+// derived-table lowering (`lower_as_subplan`: the inner `Aggregation` lowers to
+// its own `Plan`, joined as an `INNER JOIN (SELECT …) t{alias}`, so its grouped
+// outputs become plain re-aggregatable columns of the outer group). No production
+// change here — this LOCKS the already-shipped capability (which the flat path
+// lacks) against a future regression, gated =_bag vs the independent spareval
+// oracle. Fixture OD has two depts (10:{Bob,Zed}=2, 20:{Ann}=1), so the inner
+// grouped counts are non-trivial (2 and 1) and the outer aggregate is meaningful.
+// ============================================================================
+
+fn item6_od(query: &str) {
+    let conn = sqlite::load(OD_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(OD_R2RML).expect("R2RML parses");
+    let q = parse(query);
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "flat oracle must DEFER nested GROUP BY (else not a tree-exceeds-flat spec): `{query}`"
+    );
+    let tp = tree(&maps, &q, &schema).expect("tree must close nested GROUP BY");
+    assert_vs_spareval(OD_TTL, query, &tp, &conn);
+}
+
+#[test]
+fn item6_nested_group_by_aggregate_over_aggregate() {
+    // inner: GROUP BY ?d, COUNT(?p) ⇒ {dept/10 ↦ 2, dept/20 ↦ 1}.
+    // outer COUNT(?c): counts the two grouped rows ⇒ 2.
+    item6_od(&format!(
+        "{PFX} SELECT (COUNT(?c) AS ?cc) WHERE \
+         {{ SELECT ?d (COUNT(?p) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d }}"
+    ));
+    // outer SUM(?c): 2 + 1 ⇒ 3 (a value-bearing aggregate over the inner counts,
+    // not just a row count — exercises the inner agg column as a real SUM argument).
+    item6_od(&format!(
+        "{PFX} SELECT (SUM(?c) AS ?t) WHERE \
+         {{ SELECT ?d (COUNT(?p) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d }}"
+    ));
+    // outer GROUP BY on a re-projected inner group key + MAX over the inner count.
+    item6_od(&format!(
+        "{PFX} SELECT (MAX(?c) AS ?m) WHERE \
+         {{ SELECT ?d (COUNT(?p) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d }}"
+    ));
+}
+
+// ============================================================================
 // W3C RDB2RDF corpus — the ?s ?p ?o dump CONSTRUCT through BOTH paths over every
 // loadable vendored case (R2RML + Direct Mapping), asserting flat-vs-tree row-bag
 // parity and identical 501 outcomes (the breadth half of the differential).
