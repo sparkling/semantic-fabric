@@ -100,6 +100,26 @@ pub(crate) fn inner_join_one(
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Option<Branch>> {
+    // A property-path branch on EITHER side has no sound representation in the
+    // merged `Branch` this function builds below: it carries only ONE `path`
+    // field (`path: left.path.clone()`, unconditionally — confirmed live: a
+    // `right.path` was silently dropped here, producing bindings that still
+    // reference the path's own CTE-only `sf_s`/`sf_o` columns with `path: None`
+    // on the merged branch, "no such column" at SQL-execution time), and even
+    // adopting `right.path` instead would silently drop `left`'s own scans/
+    // opts/where_conds the moment `emit_branch_with` dispatches on `b.path` to
+    // `emit_path_branch` (which renders ONLY the path's own CTE + projection,
+    // nothing else). Neither side can be merged into the other's shape without
+    // losing data — sound 501 instead of a crash (ADR-0007); see
+    // `not_exists_cond_for`'s matching guard for the `(P − R)` half of this
+    // same `(P ⋈ R) ∪ (P − R)` decomposition.
+    if left.path.is_some() || right.path.is_some() {
+        return Err(Error::Unsupported(
+            "OPTIONAL decomposition where either side is a property-path pattern \
+             is not yet supported → 501"
+                .to_owned(),
+        ));
+    }
     let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     let mut where_conds = left.where_conds.clone();
     let mut bindings = left.bindings.clone();
@@ -212,6 +232,26 @@ pub(crate) fn not_exists_cond_for(
                 .to_owned(),
         ));
     }
+    // A property-path branch (`path: Some(_)`) has NO representation in
+    // `SqlCond::NotExists::scans` either, for the SAME reason as the SubPlan
+    // case just above: its own rows come from a recursive-CTE derived table
+    // (`sf_s`/`sf_o` columns), never `right.core`'s plain scans (which are
+    // empty for a path branch — confirmed live: `right.core.clone()` renders
+    // as `scans: []`, yet `conds` still references the path's own CTE-only
+    // columns, producing "no such column" at SQL-execution time rather than a
+    // wrong answer). A `left` path is equally unrepresentable — the merged
+    // `no_match` branch this condition attaches to is `left.clone()` at the
+    // call site, so a `left`-side path CTE would need to be preserved onto it
+    // too, which nothing here does. Sound 501 instead of a crash (ADR-0007) —
+    // an architectural gap (this is the P/R decomposition model, not a lowering
+    // omission — see `inner_join_one`'s matching guard for the `(P ⋈ R)` half).
+    if left.path.is_some() || right.path.is_some() {
+        return Err(Error::Unsupported(
+            "OPTIONAL anti-join where either side is a property-path pattern is \
+             not yet supported → 501"
+                .to_owned(),
+        ));
+    }
     let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
     let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
@@ -258,6 +298,29 @@ fn build_left_join(
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Option<Branch>> {
+    // A property-path `left` (the OPTIONAL's OWN preceding pattern) has no sound
+    // representation once this function pushes `right`'s scan into `left.opts`
+    // below: `left.path` is never touched here (this function only ever ADDS an
+    // `OptJoin` onto whatever `left` already is), so the merged branch ends up
+    // with BOTH `path: Some(_)` AND a non-empty `opts` — a combination
+    // `emit_branch_with`'s dispatch on `b.path` routes to `emit_path_branch`,
+    // which renders ONLY the path's own recursive CTE + projection and has no
+    // concept of `opts` at all, silently dropping the OPTIONAL's own JOIN
+    // clause (confirmed live: `no such column: t1.child` — the OPT's alias is
+    // referenced in the SELECT list but its LEFT JOIN clause is never rendered).
+    // `right` can never be path-shaped here (the caller only reaches this
+    // function when `right.core.len() == 1`, and a path branch always has
+    // `core.len() == 0`). Sound 501 instead of a crash (ADR-0007) — the same
+    // architectural gap as `inner_join_one`'s/`not_exists_cond_for`'s matching
+    // guards, found via a third, independent entry point (the single-scan fast
+    // path, not the multi-branch decomposition).
+    if left.path.is_some() {
+        return Err(Error::Unsupported(
+            "OPTIONAL whose preceding pattern is a property-path is not yet \
+             supported → 501"
+                .to_owned(),
+        ));
+    }
     let mut on = Vec::new();
     let mut extra = right.where_conds.clone(); // constant-position constraints stay in the ON (R5)
                                                // Prior-OPTIONAL aliases on the preserved (left) side: a shared var whose left def

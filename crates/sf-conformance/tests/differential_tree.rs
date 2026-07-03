@@ -1134,6 +1134,81 @@ fn optional_anti_join_filter_nullable_determinant() {
     ));
 }
 
+/// Pre-existing bug (found incidentally during a DIFFERENT bug's own adversarial
+/// review, confirmed live on both flat and tree and confirmed pre-existing on
+/// the base commit before this session touched anything — it lives in
+/// `leftjoin.rs`, shared infrastructure): a property-path pattern used as an
+/// OPTIONAL's RIGHT operand loses its path closure. `left_join_branches`
+/// dispatches a non-single-scan right side (a path branch always has
+/// `core.len() == 0`, so it can NEVER take the single-scan fast path) through
+/// `inner_join_one`/`not_exists_cond_for` — the `(P ⋈ R) ∪ (P − R)`
+/// decomposition — and BOTH used to silently drop `right.path`: `inner_join_one`
+/// only ever carried `left.path` forward (`path: left.path.clone()`), and
+/// `not_exists_cond_for` built `SqlCond::NotExists { scans: right.core.clone(),
+/// .. }`, empty for a path branch, yet still referenced the path's own
+/// CTE-only columns in its conditions. Confirmed live: `no such column:
+/// t0.sf_o` for `{} OPTIONAL { ?s ex:reaches+ ?o }`.
+///
+/// A simple "copy `right.path` across instead" fix is NOT sound: `Branch` can
+/// only ever represent ONE of {a plain core/opts scan, a path closure} at a
+/// time (`emit_branch_with` dispatches unconditionally to `emit_path_branch`
+/// whenever `b.path.is_some()`, which renders ONLY the path's own CTE +
+/// projection — nothing about `b.core`/`b.opts`/other conditions). Adopting
+/// `right.path` would silently drop `left`'s own data instead of `right`'s —
+/// trading one silent-wrong-answer shape for another. Fixed with a sound 501
+/// in both `inner_join_one` and `not_exists_cond_for` (matching this file's
+/// own pre-existing convention for the analogous `right.subplan_joins`
+/// boundary a few lines above each) rather than attempting a real fix, which
+/// would need a genuinely new composition mechanism (e.g. wrapping the path's
+/// own rendering as an opaque SubPlan derived table) — out of scope for a
+/// crash-to-501 fix.
+#[test]
+fn path_as_optional_right_operand_is_a_sound_501_not_a_crash() {
+    let q = format!("{PFX} SELECT ?s ?o WHERE {{ {{}} OPTIONAL {{ ?s ex:reaches+ ?o }} }}");
+    let conn = sqlite::load(PE_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "expected an honest 501 on flat, not a crash or a silently wrong answer"
+    );
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "expected an honest 501 on tree, not a crash or a silently wrong answer"
+    );
+}
+
+/// The SAME architectural gap found via a THIRD, independent entry point: a
+/// property-path pattern as the OPTIONAL's own PRECEDING (left) pattern, routed
+/// through the single-scan FAST path (`build_left_join`, not the multi-branch
+/// decomposition above — reachable whenever the OPTIONAL's right side is a
+/// plain single scan, regardless of what the left side is). `build_left_join`
+/// never touches `left.path` at all — it only ever ADDS an `OptJoin` onto
+/// whatever `left` already is — so a path-shaped `left` ends up with BOTH
+/// `path: Some(_)` AND a non-empty `opts`, the same unrepresentable combination
+/// as above, reached from the opposite side. Confirmed live: `no such column:
+/// t1.child` for `?s ex:reaches+ ?o OPTIONAL { ?o ex:reaches ?o2 }`. Fixed with
+/// the same sound-501 convention.
+#[test]
+fn path_as_optional_left_via_single_scan_fast_path_is_a_sound_501() {
+    let q = format!(
+        "{PFX} SELECT ?s ?o ?o2 WHERE {{ ?s ex:reaches+ ?o OPTIONAL {{ ?o ex:reaches ?o2 }} }}"
+    );
+    let conn = sqlite::load(PE_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "expected an honest 501 on flat, not a crash or a silently wrong answer"
+    );
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "expected an honest 501 on tree, not a crash or a silently wrong answer"
+    );
+}
+
 // ============================================================================
 // R5 multiplicity-stress fixtures (§7) — force the multiplicity to actually appear.
 // ============================================================================
