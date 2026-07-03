@@ -199,19 +199,23 @@ BIND-only union; a bare `OFFSET n` with no `LIMIT` failing at SQLite emission, `
 fixed here (out of scope, none touched by any Wave C diff), flagged for a separate follow-up. Two
 more surfaced during the test25 review (both confirmed via `git stash` isolation to reproduce
 identically on the PRE-Wave-C base commit, with a BARE `{}` and no Union/fold involved at all —
-genuinely unrelated to any Wave C rule):
+genuinely unrelated to any Wave C rule); the FIRST of these two (`FILTER NOT EXISTS`, below) was
+escalated by the team lead ahead of everything else the moment it was flagged (a silent wrong
+answer beats cosmetics) and is now FIXED — see the strikethrough entry. The second remains open:
 
-* **`FILTER NOT EXISTS { ... }` with no variable shared with the outer scope silently returns the
-  WRONG answer on the tree path** (flat is correct) — a real silent-wrong-answer bug, not merely a
-  501/emission gap. `lower_iq_exists` (`crates/sf-sparql/src/iq/lower.rs:583-585`) has `if negated
-  && !shared_var_found { continue; }` — this is MINUS's SPARQL §8.3.1 domain-disjointness no-op
-  exception (correct for MINUS: a MINUS with no shared variable is a documented no-op), but it is
-  wrongly ALSO applied to `FILTER NOT EXISTS`, which has no such exception (NOT EXISTS is a pure
-  existence check regardless of shared variables). Every `NotExists` branch is skipped when the
-  body shares no variable with the outer scope, so the condition always evaluates vacuously true
-  instead of correctly testing existence — repro: `ASK { {} FILTER NOT EXISTS { {} UNION {} } }`
-  (or any `FILTER NOT EXISTS { <var-free-body> }`) wrongly keeps rows the flat oracle correctly
-  drops.
+* ~~`FILTER NOT EXISTS { ... }` with no variable shared with the outer scope silently returns the
+  WRONG answer on the tree path~~ — **FIXED** (commit `45b395c`, priority-escalated ahead of Wave C
+  by the team lead the moment it was flagged: a silent wrong answer beats cosmetics). Root cause
+  was a build-time conflation, not just a lowering bug: `GraphPattern::Minus` and
+  `Expression::Not(Expression::Exists(..))` both compiled to the identical `IqCond::NotExists` node
+  (`build.rs`), and `lower_iq_exists` applied MINUS's SPARQL §8.3.2 disjoint-domain no-op exception
+  to FILTER NOT EXISTS too (SPARQL §11.4.7 — a pure existence test with no such exception). Fixed
+  by adding an `is_minus: bool` field to `IqCond::NotExists`, threaded through resolve/normalize's
+  pass-through recursion and gating the skip on it instead of the shared `negated` flag — matching
+  the flat oracle's own reference behavior (MINUS and FILTER-EXISTS/NOT-EXISTS were always two
+  separate functions there, never sharing this precondition). RED-first differential test +
+  revert-proof + adversarial review (9 angles, each claimed regression independently confirmed
+  bug-sensitive by reverting the fix and watching it fail) — NOT REFUTED.
 * A zero-var `{} UNION {}` (or a BARE `{}`) used as a `LeftJoin`'s LEFT operand hits a SQL
   aliasing error (`no such column: t0.name`) on both the flat and tree paths — a `Branch` with
   empty `core` and only `opts` mis-aliases in SQL generation (shared `sf-sql`/exec layer, not
