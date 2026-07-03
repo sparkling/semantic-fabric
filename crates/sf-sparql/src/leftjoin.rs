@@ -387,7 +387,7 @@ fn build_left_join(
 /// is result-equivalent to the plain `a = b`. Emitting the plain equality lets
 /// PostgreSQL use a hash/merge join instead of a disjunction-forced nested loop —
 /// the O(n²) blow-up on nested/multi-scan OPTIONAL (q14) collapses to a linear join.
-fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
+pub(crate) fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
     if !left_nullable {
         return c;
     }
@@ -406,7 +406,7 @@ fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
 
 /// Whether a binding's value can be NULL because it reads a nullable
 /// (prior-OPTIONAL) scan alias — the trigger for the R2 COALESCE projection.
-fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
+pub(crate) fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
     match def {
         TermDef::Const(_) => false,
         TermDef::Derived { alias, .. } => opt_aliases.contains(alias),

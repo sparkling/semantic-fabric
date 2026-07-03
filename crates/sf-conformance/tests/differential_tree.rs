@@ -2921,10 +2921,176 @@ fn item6_nested_group_by_aggregate_over_aggregate() {
 }
 
 // ============================================================================
+// A single modifier sub-SELECT (Aggregation/Distinct/OrderBy) as an OPTIONAL's
+// RIGHT operand — ADR-0023 parity backlog Item 1d ("nested-OPTIONAL-inside-a-
+// subselect" / LeftJoinJoinLimit family). The `(P⋈R)∪(P−R)` decomposition's
+// anti-join half (`not_exists_cond_for`) cannot represent a SubPlan in
+// `SqlCond::NotExists`, so the tree previously 501'd. `left_join_over_subplan`
+// now attaches the nested SubPlan as a derived-table LEFT JOIN
+// (`SubPlanJoin { left: true, on: <correlation> }`, reusing the already-shipped
+// emit LEFT JOIN path) with R1/R5/R2 semantics.
+//
+// The FLAT path is NOT a usable oracle for these shapes: it translates without a 501
+// but emits SQL referencing a derived-table alias it never introduces in the FROM (a
+// hard SQL error at exec, not a silent wrong answer — a separate, pre-existing
+// flat-path limitation, out of scope here). So the gate is the TREE result `=_bag`
+// the INDEPENDENT spareval oracle (the tree exceeds flat in translating AND in
+// executing). `diff` is deliberately NOT used (it would exec flat and crash).
+//
+// Fixture: dept 30 "Empty" has NO persons, so a correlated subplan has no group
+// for it ⇒ the OPTIONAL NULL-pads (the LEFT JOIN no-match path is exercised).
+// ============================================================================
+
+const I1D_SQL: &str = r#"
+CREATE TABLE dept (id INTEGER PRIMARY KEY, label TEXT NOT NULL);
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL, dept_id INTEGER NOT NULL);
+INSERT INTO dept VALUES (10,'Sales');
+INSERT INTO dept VALUES (20,'Eng');
+INSERT INTO dept VALUES (30,'Empty');
+INSERT INTO person VALUES (1,'Ann',20);
+INSERT INTO person VALUES (2,'Bob',10);
+INSERT INTO person VALUES (3,'Zed',10);
+"#;
+
+const I1D_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:dept ;
+        rr:objectMap [ rr:parentTriplesMap <#Dept> ;
+            rr:joinCondition [ rr:child "dept_id" ; rr:parent "id" ] ] ] .
+<#Dept>
+    rr:logicalTable [ rr:tableName "dept" ] ;
+    rr:subjectMap [ rr:template "http://ex/d/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:label ; rr:objectMap [ rr:column "label" ] ] .
+"#;
+
+const I1D_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/d/10> ex:label "Sales" .
+<http://ex/d/20> ex:label "Eng" .
+<http://ex/d/30> ex:label "Empty" .
+<http://ex/p/1> ex:name "Ann" ; ex:dept <http://ex/d/20> .
+<http://ex/p/2> ex:name "Bob" ; ex:dept <http://ex/d/10> .
+<http://ex/p/3> ex:name "Zed" ; ex:dept <http://ex/d/10> .
+"#;
+
+fn item1d(query: &str) {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let q = parse(query);
+    let tp = tree(&maps, &q, &schema).expect("tree must close the subplan-OPTIONAL shape");
+    assert_vs_spareval(I1D_TTL, query, &tp, &conn);
+}
+
+#[test]
+fn item1d_aggregation_subplan_as_optional_right() {
+    // OPTIONAL over an AGGREGATION sub-SELECT, correlated on ?d. dept/30 (Empty) has no
+    // persons ⇒ the inner has no group for it ⇒ ?c is NULL-padded (LEFT JOIN no-match).
+    item1d(&format!(
+        "{PFX} SELECT ?l ?c WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT ?d (COUNT(?p) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d }} }}"
+    ));
+}
+
+#[test]
+fn item1d_distinct_subplan_as_optional_right() {
+    // OPTIONAL over a DISTINCT sub-SELECT, correlated on ?d (fans out per dept's names).
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} }}"
+    ));
+}
+
+#[test]
+fn item1d_left_nullable_determinant_subplan_optional() {
+    // R2 COALESCE / R1 null-safe: a PRIOR OPTIONAL binds the shared var ?d (nullable),
+    // THEN the aggregation sub-SELECT OPTIONAL correlates on it — the determinant on the
+    // preserved side may itself be UNBOUND (every person here has a dept, so it is bound,
+    // but the lowering must still emit the null-safe ON / COALESCE without corrupting it).
+    item1d(&format!(
+        "{PFX} SELECT ?n ?tot WHERE {{ ?p ex:name ?n \
+         OPTIONAL {{ ?p ex:dept ?d }} \
+         OPTIONAL {{ SELECT ?d (COUNT(?p2) AS ?tot) WHERE {{ ?p2 ex:dept ?d }} GROUP BY ?d }} }}"
+    ));
+}
+
+#[test]
+fn item1d_uncorrelated_subplan_as_optional_right() {
+    // OPTIONAL over a sub-SELECT sharing NO variable with the left ⇒ LEFT JOIN ON 1 = 1
+    // (every left row extended by the single aggregate row; a non-empty subplan ⇒ never
+    // NULL-padded here).
+    item1d(&format!(
+        "{PFX} SELECT ?l ?tc WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT (COUNT(?p) AS ?tc) WHERE {{ ?p ex:name ?n2 . ?p ex:dept ?dd }} }} }}"
+    ));
+}
+
+/// Revert-proof lock on the ORDER-BY-+-LIMIT-inside-a-SubPlan-as-OPTIONAL-right SOUND
+/// 501. `is_single_subplan_branch` rejects a nested plan carrying ORDER BY + LIMIT/
+/// OFFSET (`subplan_emits_soundly_as_derived_table`) — a derived table is pure SQL with
+/// no exec stage, but `Plan::prepared_branches` keeps ORDER BY OUT of SQL (exec applies
+/// it type-aware), so an ORDER BY + LIMIT SubPlan would silently drop BOTH and let the
+/// WRONG rows survive. Rejecting it makes the OPTIONAL fall through to the decomposition
+/// and stay a 501 (via `not_exists_cond_for`'s SubPlan boundary). NOTE: the analogous
+/// INNER-JOIN-input shape (`… . {SELECT … ORDER BY … LIMIT n}`) is a SEPARATE,
+/// PRE-EXISTING `lower_as_subplan` wrong-answer (it drops ORDER BY/LIMIT), out of this
+/// change's scope and reported for the team — it is deliberately NOT asserted here.
+#[test]
+fn item1d_orderby_limit_subplan_optional_stays_sound_501() {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} \
+         ORDER BY ?nm LIMIT 1 }} }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "ORDER BY + LIMIT inside a SubPlan-as-OPTIONAL-right must be a SOUND 501 (ORDER BY \
+         is not emitted in SQL, so it cannot be faithfully sliced): `{query}`"
+    );
+}
+
+/// Revert-proof lock on the SubPlan-OPTIONAL-with-inner-FILTER SOUND 501. An
+/// OPTIONAL's own inner FILTER (R5) over a SubPlan right — e.g. `FILTER(?c > 1)` on a
+/// subquery-aggregate output — placed in the LEFT JOIN ON did NOT evaluate correctly
+/// (it wrongly NULL-padded rows the filter should have KEPT — a wrong answer verified
+/// vs spareval during development). So `left_join_over_subplan` is gated on
+/// `expr.is_none()`; the FILTER case falls through to the ordinary decomposition and
+/// stays a 501. Reverting that gate turns this into a WRONG answer (the filter is
+/// dropped, wrongly matching every row). dept/20 (Eng, ?c=1) FAILS `?c > 1` ⇒ must be
+/// NULL-padded, dept/10 (Sales, ?c=2) must KEEP ?c=2 — a dropped filter loses that.
+#[test]
+fn item1d_subplan_optional_with_inner_filter_stays_sound_501() {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?l ?c WHERE {{ ?d ex:label ?l OPTIONAL {{ \
+         {{ SELECT ?d (COUNT(?p) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d }} \
+         FILTER(?c > 1) }} }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "a SubPlan-OPTIONAL carrying an inner FILTER must stay a SOUND 501 (the \
+         FILTER-in-ON over a SubPlan does not evaluate correctly): `{query}`"
+    );
+}
+
+// ============================================================================
 // W3C RDB2RDF corpus — the ?s ?p ?o dump CONSTRUCT through BOTH paths over every
 // loadable vendored case (R2RML + Direct Mapping), asserting flat-vs-tree row-bag
 // parity and identical 501 outcomes (the breadth half of the differential).
 // ============================================================================
+
 const DUMP: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 const W3C_BASE: &str = "http://example.com/base/";
 

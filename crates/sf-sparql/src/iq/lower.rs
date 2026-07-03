@@ -64,7 +64,9 @@ use crate::iq::{
     AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, SqlCond,
     SubPlanJoin, TermDef,
 };
-use crate::leftjoin::{inner_join_one, left_join_branches, not_exists_cond_for};
+use crate::leftjoin::{
+    def_is_nullable, inner_join_one, left_join_branches, not_exists_cond_for, null_safe,
+};
 use crate::unfold::{group_key_columns, join_branches, single_column_of};
 use crate::unify::{bind_term_def, filter_cond, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
@@ -299,6 +301,23 @@ fn lower_node(
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
             let expr = iqconds_to_expr(&cond)?;
+            // The RIGHT is a single modifier-subquery (a pure SubPlan branch produced by
+            // `lower_as_subplan` — an Aggregation/Distinct/Slice/OrderBy as the OPTIONAL's
+            // right operand): attach it as a derived-table LEFT JOIN instead of routing
+            // through the `(P⋈R)∪(P−R)` decomposition (whose `not_exists_cond_for` half
+            // cannot represent a SubPlan in `SqlCond::NotExists`). The result is opts-free,
+            // so it is valid under BOTH the `decompose` and non-decompose contexts.
+            //
+            // Gated on `expr.is_none()`: an OPTIONAL's own inner FILTER (R5) over a SubPlan
+            // right (e.g. `FILTER(?c > 1)` on a subquery-aggregate output) placed in the
+            // LEFT JOIN ON did NOT evaluate correctly (it wrongly NULL-padded rows the
+            // filter should have KEPT — a wrong answer, verified against spareval), so the
+            // FILTER case falls through to the ordinary decomposition and stays a SOUND 501
+            // (ADR-0007) rather than risk it. The no-FILTER SubPlan-OPTIONAL is proven
+            // `=_bag` correct (differential_tree.rs `item1d_*`).
+            if expr.is_none() && is_single_subplan_branch(&r) {
+                return left_join_over_subplan(l, &r[0], dialect);
+            }
             if decompose {
                 // This `LeftJoin` is ITSELF a right operand: its own output must be
                 // opts-free, so force the decomposition (never the single-scan OptJoin).
@@ -692,10 +711,10 @@ fn def_reads_opt_alias(def: &TermDef, opt_aliases: &[usize]) -> bool {
 /// must yield re-feedable opts-free branches (§5.3 nested-right closure). It mirrors the
 /// multi-branch arm of [`left_join_branches`] but NEVER takes the single-scan `OptJoin`
 /// shortcut (which would leave `opts` set), reusing the proven [`inner_join_one`] /
-/// [`not_exists_cond_for`] helpers verbatim. `right` is opts-free (it was lowered with the
-/// `decompose` flag); a `right` branch still carrying `opts` is a genuine SubPlan shape
-/// (e.g. an OPTIONAL the decomposition could not flatten) — lowered via a derived-table
-/// LEFT JOIN (ADR-0023 M5 Wave 2).
+/// [`not_exists_cond_for`] helpers verbatim. `right` is always opts-free here (it was
+/// lowered with the `decompose` flag, and only `build_left_join` — gated on `decompose ==
+/// false` — ever sets `opts`), so the `!r.opts.is_empty()` guard below is a dead defensive
+/// boundary (see [`left_join_as_subplan`]).
 fn left_join_decomposed(
     left: Vec<Branch>,
     right: Vec<Branch>,
@@ -705,8 +724,11 @@ fn left_join_decomposed(
     if right.is_empty() {
         return Ok(left); // OPTIONAL {} = identity
     }
-    // If any right branch still has opts (not fully decomposable), lower the right side
-    // as a SubPlan derived-table LEFT JOIN (ADR-0023 M5 Wave 2: LeftJoinJoinLimit case).
+    // Defensive: a right branch still carrying `opts` would mean the decomposition is
+    // unavailable. This is UNREACHABLE in practice — the `decompose` invariant guarantees
+    // every right branch fed here is opts-free (only `build_left_join`, gated on
+    // `decompose == false`, ever sets `opts`). `left_join_as_subplan` is a dead-code
+    // boundary kept only so this match stays total (see its doc comment).
     if right.iter().any(|r| !r.opts.is_empty()) {
         return left_join_as_subplan(left, right, expr, dialect);
     }
@@ -731,7 +753,118 @@ fn left_join_decomposed(
     Ok(out)
 }
 
-/// Reconstruct the single OPTIONAL ON-`Expression` from a `LeftJoin.cond`
+/// Whether `r` is a single pure-SubPlan branch — a modifier subquery
+/// (Aggregation/Distinct/Slice/OrderBy) lowered by [`lower_as_subplan`]: exactly
+/// one `SubPlanJoin`, and NOTHING else (no base scans, OPTIONALs, path CTE, own
+/// aggregate, or residual WHERE conds). This is the shape [`left_join_over_subplan`]
+/// attaches as a derived-table LEFT JOIN; any richer right shape falls through to the
+/// ordinary decomposition (which stays a sound 501 for the not-yet-supported cases).
+fn is_single_subplan_branch(r: &[Branch]) -> bool {
+    r.len() == 1
+        && r[0].core.is_empty()
+        && r[0].opts.is_empty()
+        && r[0].path.is_none()
+        && r[0].agg.is_none()
+        && r[0].where_conds.is_empty()
+        && r[0].subplan_joins.len() == 1
+        && subplan_emits_soundly_as_derived_table(&r[0].subplan_joins[0].plan)
+}
+
+/// Whether a nested `Plan` is emitted FAITHFULLY when inlined as a `(SELECT …) t`
+/// derived table (`emit::emit_subplan_sql`). A derived table is pure SQL with NO
+/// exec stage, but [`Plan::prepared_branches`] deliberately keeps `ORDER BY` OUT of
+/// SQL (it is applied in `exec` via the type-aware, collation-independent
+/// comparator) — so an `ORDER BY` paired with a `LIMIT`/`OFFSET` inside a SubPlan
+/// would silently drop BOTH, letting the WRONG rows survive the slice (a wrong
+/// answer, not a 501). Reject that exact combination so it falls through to the
+/// ordinary decomposition and stays a SOUND 501 (ADR-0007). `ORDER BY` alone is
+/// `=_bag`-harmless (order does not change the multiset); `LIMIT`/`OFFSET` without
+/// `ORDER BY` is pushed into the branch SQL verbatim and is faithful.
+fn subplan_emits_soundly_as_derived_table(plan: &Plan) -> bool {
+    !(!plan.order.is_empty() && (plan.limit.is_some() || plan.offset > 0))
+}
+
+/// `left OPT right` where `right` is a single pure-SubPlan branch (a modifier
+/// subquery as the OPTIONAL's right operand — ADR-0023 parity backlog Item 1d) and
+/// the OPTIONAL carries NO inner FILTER (the caller gates on `expr.is_none()` — the
+/// FILTER-in-ON case did not evaluate soundly over a SubPlan and stays a 501).
+/// Attaches the nested SubPlan to each left branch as a derived-table LEFT JOIN
+/// (`SubPlanJoin { left: true, on: <correlation> }`), which the emit LEFT JOIN path
+/// (`emit::render_from`) already renders. Mirrors [`crate::leftjoin`]'s
+/// `build_left_join` R1/R2 — the shared-var compatibility ON (R1, [`null_safe`]) and
+/// the `COALESCE(left, right)` projection of a nullable-left shared var (R2,
+/// [`def_is_nullable`]) — but the right side is a derived table, not a single scan.
+/// The result is OPTS-FREE (only `subplan_joins` grow), so it is re-feedable under
+/// the `decompose` nested-right closure (§5.3) with no special case.
+///
+/// The SubPlan is a genuine SPARQL sub-SELECT: it is evaluated INDEPENDENTLY
+/// (bottom-up), producing its own solution multiset, which is then LEFT-JOINed onto
+/// `left` on the shared variables — exactly the LEFT JOIN of a derived table on the
+/// correlation `ON`.
+fn left_join_over_subplan(
+    left: Vec<Branch>,
+    right: &Branch,
+    dialect: sf_sql::Dialect,
+) -> Result<Vec<Branch>> {
+    let _ = dialect; // reserved for parity with the scan-based build_left_join signature
+    let sp = &right.subplan_joins[0]; // caller guarantees exactly one (is_single_subplan_branch)
+    let mut out = Vec::with_capacity(left.len());
+    for mut l in left {
+        let opt_aliases: std::collections::HashSet<usize> =
+            l.opts.iter().map(|o| o.scan.alias).collect();
+        // R1: shared-variable compatibility ON (NullSafeEq when the left side is a
+        // prior-OPTIONAL nullable determinant, else the plain equality).
+        let mut on: Vec<SqlCond> = Vec::new();
+        let mut disjoint = false;
+        for (var, rdef) in &right.bindings {
+            if let Some(ldef) = l.bindings.get(var) {
+                let left_nullable = def_is_nullable(ldef, &opt_aliases);
+                match unify(ldef, rdef) {
+                    Unify::Sat(conds) => {
+                        for c in conds {
+                            on.push(null_safe(c, left_nullable));
+                        }
+                    }
+                    // Provably disjoint on a shared var ⇒ the OPTIONAL can never match ⇒
+                    // right vars stay UNBOUND (absent); the left row survives unchanged.
+                    Unify::Empty => {
+                        disjoint = true;
+                        break;
+                    }
+                    Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+                }
+            }
+        }
+        if disjoint {
+            out.push(l);
+            continue;
+        }
+        // R2: COALESCE for a nullable-left shared var (its value comes from the right when
+        // the left was unbound); plain right def for a right-only var (possibly NULL output).
+        for (var, rdef) in &right.bindings {
+            match l.bindings.get(var) {
+                Some(ldef) if def_is_nullable(ldef, &opt_aliases) => {
+                    l.bindings.insert(
+                        var.clone(),
+                        TermDef::Coalesce(Box::new(ldef.clone()), Box::new(rdef.clone())),
+                    );
+                }
+                Some(_) => {} // mandatory-left shared var — value equals right by the ON
+                None => {
+                    l.bindings.insert(var.clone(), rdef.clone());
+                }
+            }
+        }
+        let mut sp2 = sp.clone();
+        sp2.left = true;
+        sp2.on = on;
+        l.subplan_joins.push(sp2);
+        out.push(l);
+    }
+    Ok(out)
+}
+
+
 /// (`Vec<IqCond>`) for [`left_join_branches`] (design §5.3). BUILD split the original
 /// `&&` into conjuncts ([`crate::build`]); re-AND them (AND is associative, so `=_bag` is
 /// preserved). An `Sql`/`Exists`/`NotExists` ON-leaf cannot be expressed as a pushable
@@ -871,21 +1004,36 @@ fn lower_as_subplan(
     Ok(vec![outer])
 }
 
-/// Lower a `LeftJoin` whose right branches still carry `opts` (the
-/// `LeftJoinJoinLimit` case: an OPTIONAL whose right side cannot be fully opts-freed)
-/// as a SubPlan derived-table LEFT JOIN (ADR-0023 M5 Wave 2). Re-lowering the right side
-/// to a `Plan` and embedding it as a LEFT JOIN SubPlan avoids the multi-branch decomposition
-/// that would require opts-free right branches (which we cannot guarantee here).
+/// Fallback for a `left_join_decomposed` right branch that still carries `opts`.
+///
+/// **This is currently UNREACHABLE dead code, retained only as a defensive boundary.**
+/// It is called from exactly one site — [`left_join_decomposed`], guarded by
+/// `right.iter().any(|r| !r.opts.is_empty())` — but NO branch fed there can carry
+/// `opts`: the only producer of `opts` is `build_left_join` (via the single-scan fast
+/// path of [`left_join_branches`]), which the tree invokes ONLY under `decompose ==
+/// false`; under `decompose == true` a `LeftJoin` routes to [`left_join_decomposed`]
+/// (never `build_left_join`), so its right operand — itself lowered with `decompose ==
+/// true` — is always opts-free. Hence the guard at the call site never fires and this
+/// function is never entered. Its `right.len() != 1` and `!r.opts.is_empty()` arms below
+/// therefore both 501 defensively, and the inner-join/NOT-EXISTS "happy path" at the
+/// bottom is DOUBLY dead (the `!r.opts.is_empty()` arm always precedes it given the
+/// caller's own precondition). It is NOT the mechanism that closes any real
+/// subplan-OPTIONAL shape: a SubPlan as the OPTIONAL's right operand is handled up front
+/// by [`left_join_over_subplan`] (Item 1d), and a nested-OPTIONAL-inside-a-subselect that
+/// this could conceivably see still 501s via `not_exists_cond_for`'s SubPlan boundary.
+/// Left in place (rather than deleted) so the `left_join_decomposed` guard stays a total,
+/// panic-free match; a future engineer should not mistake the happy path below for a live
+/// code path.
 fn left_join_as_subplan(
     left: Vec<Branch>,
     right: Vec<Branch>,
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Vec<Branch>> {
-    // Sanity: right branches carrying opts means the decomposed form is unavailable.
-    // We lower the right side as a SubPlan — but since we already have the lowered right
-    // branches (not the original IqNode), we cannot re-lower them. For now, the right
-    // branch set is single or we 501.
+    // Unreachable in practice (see the doc comment): a right branch here would need
+    // non-empty `opts`, which the `decompose` invariant forbids. Both 501 arms below are
+    // defensive; the inner-join/NOT-EXISTS tail is dead (the `!r.opts.is_empty()` arm
+    // always fires first given the caller's precondition).
     if right.len() != 1 {
         return Err(Error::Unsupported(
             "LeftJoinJoinLimit: multi-branch right-side SubPlan not yet supported → 501 (M5 Wave 2 scope)"
@@ -899,10 +1047,8 @@ fn left_join_as_subplan(
                 .to_owned(),
         ));
     }
-    // Treat `r` as the right side and join LEFT style; left branches remain.
-    // Since `r.opts` is empty here (opts-carrying was handled above), simply return the
-    // decomposed form as a fallback (inner join + NOT EXISTS) — the opts-free decomposition
-    // path covers this case when `r.opts.is_empty()`.
+    // Dead tail (see the doc comment): reached only if a caller ever passes a single
+    // opts-free right branch, which the `left_join_decomposed` guard never does.
     let mut out = Vec::new();
     for l in &left {
         if let Some(b) = crate::leftjoin::inner_join_one(l, &r, expr, dialect)? {
