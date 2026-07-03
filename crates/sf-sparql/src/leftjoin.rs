@@ -120,7 +120,10 @@ pub(crate) fn inner_join_one(
                 .to_owned(),
         ));
     }
-    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
+    if shared_reads_left_subplan(left, right) {
+        return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
+    }
+    let opt_aliases: HashSet<usize> = left.nullable_aliases();
     let mut where_conds = left.where_conds.clone();
     let mut bindings = left.bindings.clone();
 
@@ -252,7 +255,10 @@ pub(crate) fn not_exists_cond_for(
                 .to_owned(),
         ));
     }
-    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
+    if shared_reads_left_subplan(left, right) {
+        return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
+    }
+    let opt_aliases: HashSet<usize> = left.nullable_aliases();
     let mut conds: Vec<SqlCond> = right.where_conds.clone();
 
     for (var, rdef) in &right.bindings {
@@ -321,11 +327,14 @@ fn build_left_join(
                 .to_owned(),
         ));
     }
+    if shared_reads_left_subplan(left, right) {
+        return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
+    }
     let mut on = Vec::new();
     let mut extra = right.where_conds.clone(); // constant-position constraints stay in the ON (R5)
                                                // Prior-OPTIONAL aliases on the preserved (left) side: a shared var whose left def
                                                // reads one of these can be UNBOUND, so its ON equality needs the NULL-safe guard.
-    let opt_aliases: HashSet<usize> = left.opts.iter().map(|o| o.scan.alias).collect();
+    let opt_aliases: HashSet<usize> = left.nullable_aliases();
     for (var, rdef) in &right.bindings {
         if let Some(ldef) = left.bindings.get(var) {
             let left_nullable = def_is_nullable(ldef, &opt_aliases);
@@ -417,4 +426,48 @@ pub(crate) fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bo
         // An aggregate result is produced post-grouping, never under an OPTIONAL.
         TermDef::Agg { .. } => false,
     }
+}
+
+/// The sound-501 message for a shared-variable correlation that reads a LEFT-JOINed
+/// SubPlan's derived-table alias (see [`shared_reads_left_subplan`]).
+pub(crate) const SHARED_LEFT_SUBPLAN_501: &str =
+    "OPTIONAL/MINUS decomposition correlating on a variable bound by a LEFT-JOINed \
+     SubPlan derived table (its ON/anti-join would reference a table emitted to its \
+     right) is not yet supported → 501 (ADR-0023 Item 1d boundary)";
+
+/// Whether any shared variable's LEFT (preserved) binding reads a LEFT-JOINed SubPlan's
+/// derived-table alias (`left.subplan_joins` with `left == true`).
+///
+/// Such a correlation cannot be lowered soundly by the flat LEFT-JOIN / anti-join
+/// builders in this module: the SubPlan is emitted as a derived table AFTER `opts` in
+/// the FROM clause ([`crate::emit`] `render_from`), so an `OptJoin.on` referencing it is
+/// an "ON clause references a table to its right" SQL error — a CRASH at execution, not
+/// a wrong answer, reproduced by an adversarial review of `e7cb7e6` (ADR-0023 Item 1d) —
+/// and the `(P − R)` anti-join half of the decomposition cannot faithfully carry it
+/// either. Detect it and return a sound 501 (ADR-0007: a 501 beats a crash), narrowing
+/// Item 1d's capability to the case where a SubPlan-OPTIONAL's bound variable is NOT
+/// re-correlated by a following plain OPTIONAL or decomposed MINUS.
+///
+/// A correlating `FILTER EXISTS` / `NOT EXISTS` / `MINUS` over such a variable does NOT
+/// reach here: `lower_iq_exists` handles those correctly (its null-safe
+/// EXISTS-substitution guard references the derived table from the WHERE clause, where it
+/// is legally in scope), and a SubPlan RIGHT operand of a following OPTIONAL is handled
+/// by `left_join_over_subplan` (subplans emit in order, so a later one may reference an
+/// earlier one). Only a plain-scan / multi-scan right side routed through these builders
+/// hits the FROM-ordering wall.
+fn shared_reads_left_subplan(left: &Branch, right: &Branch) -> bool {
+    let sp_aliases: HashSet<usize> = left
+        .subplan_joins
+        .iter()
+        .filter(|s| s.left)
+        .map(|s| s.alias)
+        .collect();
+    if sp_aliases.is_empty() {
+        return false;
+    }
+    right.bindings.keys().any(|v| {
+        left.bindings
+            .get(v)
+            .is_some_and(|ldef| ldef.columns().iter().any(|c| sp_aliases.contains(&c.alias)))
+    })
 }

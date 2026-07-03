@@ -15,7 +15,7 @@
 //! (the bounded-memory equivalent of a SQL `UNION ALL` over heterogeneous
 //! per-branch projections — ADR-0006).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use sf_core::datatype::XsdTypeCode;
 use sf_core::ir::{LogicalSource, TermMap, TermType};
@@ -573,6 +573,34 @@ impl Branch {
         // `sf_o` keys, not raw base columns), so it contributes no alias→source
         // entry here.
         out
+    }
+
+    /// Scan/derived-table aliases whose columns can be NULL because the row came
+    /// from the no-match side of a LEFT JOIN — the trigger for the R1 null-safe ON,
+    /// the R2 `COALESCE` projection, and the EXISTS-substitution unbound-variable
+    /// guard. This is the union of:
+    ///
+    /// * every prior-OPTIONAL scan alias (`opts` — the `OptJoin` right sides), and
+    /// * every LEFT-JOINed SubPlan derived-table alias (`subplan_joins` with
+    ///   `left == true` — a modifier sub-SELECT attached as an OPTIONAL's right
+    ///   operand, ADR-0023 Item 1d): when that LEFT JOIN finds no match the
+    ///   subplan's output variables are UNBOUND, exactly like an unmatched OPTIONAL.
+    ///
+    /// Every downstream detector that decides "might this variable be unbound?"
+    /// ([`crate::leftjoin::def_is_nullable`], the tree's `def_reads_opt_alias`) MUST
+    /// consult THIS set, not `opts` alone — a variable bound by a LEFT-JOINed SubPlan
+    /// is just as nullable as one bound by an unmatched OPTIONAL, and treating it as
+    /// mandatory silently corrupts a correlating EXISTS / NOT EXISTS / MINUS /
+    /// second-OPTIONAL (ADR-0007). Flat-path branches never set `subplan_joins`, so
+    /// this degrades to exactly the old `opts`-only set there (no flat SQL change).
+    pub fn nullable_aliases(&self) -> HashSet<usize> {
+        let mut aliases: HashSet<usize> = self.opts.iter().map(|o| o.scan.alias).collect();
+        for sp in &self.subplan_joins {
+            if sp.left {
+                aliases.insert(sp.alias);
+            }
+        }
+        aliases
     }
 
     /// All raw columns the branch must project: every binding's columns plus

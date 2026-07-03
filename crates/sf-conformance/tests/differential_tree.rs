@@ -3086,6 +3086,145 @@ fn item1d_subplan_optional_with_inner_filter_stays_sound_501() {
 }
 
 // ============================================================================
+// Item 1d REGRESSION LOCKS — a variable bound by a LEFT-JOINed SubPlan
+// (`left_join_over_subplan`, `SubPlanJoin { left: true }`) may be UNBOUND when the
+// derived-table LEFT JOIN finds no match (dept/30 "Empty"). Any downstream
+// EXISTS / NOT EXISTS / MINUS / second-OPTIONAL that correlates on it MUST treat it
+// as nullable — the same rule the engine already applies to a prior-OPTIONAL scan
+// alias. The `nullable_aliases()` detector (opts + left-subplan aliases) closes the
+// gap that `e7cb7e6` opened by consulting only `opts`. These lock the exact
+// counterexamples an adversarial review reproduced (silent wrong answers + a SQL
+// emission crash), diffed against the INDEPENDENT `spareval` oracle over the I1D
+// fixture (dept 30 "Empty" has no persons ⇒ the subplan var is genuinely UNBOUND).
+// ============================================================================
+
+#[test]
+fn item1d_exists_over_subplan_bound_var() {
+    // Reviewer CE1. `?nm` comes from a DISTINCT sub-SELECT LEFT-JOINed as the OPTIONAL
+    // right; dept 30 (Empty) NULL-pads it. `FILTER EXISTS { ?p2 ex:name ?nm }` with an
+    // UNBOUND `?nm` is a free-variable existence test (SPARQL §18.6 substitution) ⇒ TRUE
+    // (people exist), so the Empty row is KEPT — spareval = 4 rows. The pre-fix bug
+    // treated `?nm` as mandatory ⇒ `t.cNm = name` over a NULL ⇒ EXISTS false ⇒ Empty
+    // silently DROPPED (3 rows).
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         FILTER EXISTS {{ ?p2 ex:name ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_not_exists_over_subplan_bound_var() {
+    // Reviewer CE2. NOT EXISTS of CE1's body: every row's EXISTS is TRUE ⇒ NOT EXISTS
+    // FALSE ⇒ spareval = 0 rows. The pre-fix bug KEPT the Empty row (NULL never matched
+    // the un-guarded equality ⇒ NOT EXISTS wrongly TRUE) — 1 silently-added row.
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         FILTER NOT EXISTS {{ ?p2 ex:name ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_exists_multivar_mandatory_plus_subplan_nullable() {
+    // Adversarial: a mandatory shared var (?l, from `?d ex:label ?l`) AND a
+    // subplan-nullable shared var (?nm) in ONE EXISTS correlation. For the Empty row
+    // ?l="Empty" is bound and DOES match the body's `?d2 ex:label ?l`, while ?nm is
+    // UNBOUND (free ⇒ matches any person) ⇒ EXISTS TRUE ⇒ KEEP (spareval = 4). The bug's
+    // mandatory-treatment of ?nm makes `t.cNm = name` over NULL false ⇒ EXISTS false ⇒
+    // Empty wrongly dropped (3). Isolates the nullable-var handling from the mandatory one.
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         FILTER EXISTS {{ ?d2 ex:label ?l . ?p2 ex:name ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_not_exists_multivar_mandatory_plus_subplan_nullable() {
+    // NOT EXISTS of the multi-var body: all rows EXISTS-true ⇒ 0 rows (spareval). Bug
+    // keeps Empty ⇒ 1 row.
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         FILTER NOT EXISTS {{ ?d2 ex:label ?l . ?p2 ex:name ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_minus_multivar_mandatory_plus_subplan_nullable() {
+    // MINUS body sharing mandatory ?l + subplan-nullable ?nm. For Empty (?l="Empty"
+    // bound, ?nm unbound) the body DOES have rows with ?l="Empty" (dept 30 × every
+    // person name), and μ agrees on the shared BOUND var ?l with a non-empty domain
+    // overlap ⇒ COMPATIBLE ⇒ Empty is REMOVED (spareval = 0 rows). The bug treats ?nm as
+    // mandatory ⇒ its NULL equality is never satisfied ⇒ NOT EXISTS wrongly TRUE ⇒ Empty
+    // WRONGLY KEPT (1 row) — the null-safe `(t.cNm IS NULL OR …)` guard is what lets the
+    // ?l-only match remove it.
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         MINUS {{ ?d2 ex:label ?l . ?p2 ex:name ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_minus_single_subplan_nullable_var_no_regression() {
+    // MINUS sharing ONLY the subplan-nullable ?nm. For Empty (?nm unbound) the domain is
+    // disjoint from the body's ⇒ MINUS is a documented no-op (§8.3.2) ⇒ Empty KEPT; the
+    // three bound rows share a bound ?nm with a compatible body row ⇒ removed. spareval =
+    // 1 row (Empty). A lock that the fix does not over-remove the disjoint-domain row.
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         MINUS {{ ?p2 ex:name ?nm }} }}"
+    ));
+}
+
+#[test]
+fn item1d_chained_subplan_optionals_propagate_nullability() {
+    // Two SubPlan-OPTIONALs in sequence; the SECOND correlates on ?nm, bound by the
+    // FIRST's LEFT-JOINed subplan (a left-subplan alias). Both go through
+    // `left_join_over_subplan` (subplan RIGHT sides), which emits subplans in order
+    // (sp1 before sp2) so sp2's ON referencing sp1 is valid SQL. With `nullable_aliases`
+    // seeing sp1's alias, ?nm's left def is flagged nullable ⇒ null-safe ON + COALESCE:
+    // for the Empty row (?nm unbound) the second join's `(t1.cNm IS NULL OR …)` is TRUE
+    // ⇒ it fans out over every sp2 row (SPARQL: an unbound join var is free) — matching
+    // spareval. Exercises the chained-nullability path that stays CORRECT (no 501).
+    item1d(&format!(
+        "{PFX} SELECT ?l ?nm ?cc WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         OPTIONAL {{ SELECT ?nm (COUNT(?p3) AS ?cc) WHERE {{ ?p3 ex:name ?nm }} GROUP BY ?nm }} }}"
+    ));
+}
+
+/// Reviewer CE3 — a PLAIN-scan second OPTIONAL (`?p2 ex:name ?nm`) chained after a
+/// SubPlan-OPTIONAL, correlating on the subplan-bound ?nm. `build_left_join` would push
+/// an `OptJoin` whose ON references the SubPlan's derived-table alias `t{sp}`, but emit
+/// renders `opts` BEFORE `subplan_joins`, so the ON references a table to its right — an
+/// invalid-SQL CRASH at execution (`e7cb7e6` produced `Ok(plan)` that then blew up). The
+/// `shared_reads_left_subplan` guard turns that into a SOUND 501 (ADR-0007: a 501 beats a
+/// crash). Reverting the guard makes `tree()` return `Ok` again (this assertion fails)
+/// and executing that plan is an invalid-SQL error — never a correct answer.
+#[test]
+fn item1d_plain_second_optional_over_subplan_var_stays_sound_501() {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?l ?nm ?p2 WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} \
+         OPTIONAL {{ ?p2 ex:name ?nm }} }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "a plain second OPTIONAL correlating on a LEFT-JOINed-SubPlan-bound variable \
+         must be a SOUND 501 (its LEFT JOIN ON would reference a derived table emitted \
+         to its right — an invalid-SQL crash): `{query}`"
+    );
+}
+
+// ============================================================================
 // SOUND-501 BOUNDARIES — ADR-0023 parity backlog items assessed as MUST-STAY-501,
 // each with a precise architectural reason. Locked here via `diff` (BOTH flat and
 // tree must return `Err(Unsupported)` — the identical-501-set arm), so a future

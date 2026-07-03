@@ -55,7 +55,7 @@
 //! scope; each is an [`Error::Unsupported`] here (a variable graph is already a build 501).
 //! (Multi-scan/Union OPTIONAL right is **NOT** a 501 — it lowers via §5.3.)
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use spargebra::algebra::Expression;
 
@@ -586,7 +586,10 @@ fn lower_iq_exists(
             SqlCond::Or(Vec::new()) // vacuously false — rendered as 1=0
         });
     }
-    let outer_opt_aliases: Vec<usize> = outer.opts.iter().map(|o| o.scan.alias).collect();
+    // Aliases whose columns may be UNBOUND on the OUTER (preserved) side — prior
+    // OPTIONAL scans AND LEFT-JOINed SubPlan derived tables (ADR-0023 Item 1d): a shared
+    // variable reading one of these needs the null-safe EXISTS-substitution guard below.
+    let outer_opt_aliases: HashSet<usize> = outer.nullable_aliases();
     let mut sub_conds = Vec::with_capacity(inner.len());
     for r in &inner {
         if r.path.is_some() {
@@ -700,9 +703,11 @@ fn lower_iq_exists(
     })
 }
 
-/// Whether a term def reads any of the given OPTIONAL scan aliases — its value may be
-/// UNBOUND (the trigger to defer an EXISTS shared variable → 501, flat parity).
-fn def_reads_opt_alias(def: &TermDef, opt_aliases: &[usize]) -> bool {
+/// Whether a term def reads any of the given possibly-UNBOUND scan aliases (prior
+/// OPTIONAL scans + LEFT-JOINed SubPlan derived tables, per [`Branch::nullable_aliases`])
+/// — its value may be UNBOUND (the trigger to guard an EXISTS shared variable with the
+/// null-safe EXISTS-substitution rule, flat parity).
+fn def_reads_opt_alias(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
     def.columns().iter().any(|c| opt_aliases.contains(&c.alias))
 }
 
@@ -810,8 +815,12 @@ fn left_join_over_subplan(
     let sp = &right.subplan_joins[0]; // caller guarantees exactly one (is_single_subplan_branch)
     let mut out = Vec::with_capacity(left.len());
     for mut l in left {
-        let opt_aliases: std::collections::HashSet<usize> =
-            l.opts.iter().map(|o| o.scan.alias).collect();
+        // Prior-OPTIONAL scan aliases AND prior LEFT-JOINed SubPlan aliases on this left
+        // branch are nullable — a shared var reading one needs the R1 null-safe ON / R2
+        // COALESCE. (Chained SubPlan-OPTIONALs: the SECOND correlates on the FIRST's
+        // subplan var, which `nullable_aliases` now flags, and emit renders subplans in
+        // order so the ON reference is valid SQL.)
+        let opt_aliases: HashSet<usize> = l.nullable_aliases();
         // R1: shared-variable compatibility ON (NullSafeEq when the left side is a
         // prior-OPTIONAL nullable determinant, else the plain equality).
         let mut on: Vec<SqlCond> = Vec::new();
