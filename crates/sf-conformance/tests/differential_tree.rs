@@ -3225,6 +3225,62 @@ fn item1d_plain_second_optional_over_subplan_var_stays_sound_501() {
 }
 
 // ============================================================================
+// Item 1d ROUND-3 REGRESSION LOCKS — the `left_join_over_subplan` Branch shape (a
+// `SubPlanJoin { left: true }`, introduced by `e7cb7e6`) composing with pre-existing
+// merge / emit / cascade machinery that predates it. A third adversarial review found
+// more silent-crash / silent-wrong-answer paths of the SAME root shape as Rounds 1-2.
+// Each is diffed against the INDEPENDENT `spareval` oracle (correct-answer cases) or
+// asserted as a sound 501 (ADR-0007: a 501 or a correct bag, never a crash / wrong bag).
+// ============================================================================
+
+/// Defect 1 (crash → sound 501). A nested subplan-OPTIONAL `{ ?a ex:name ?nm
+/// OPTIONAL { <subSELECT> } }` lowers (via `left_join_over_subplan`) to a branch
+/// carrying BOTH a core scan AND a `subplan_joins` entry. When THAT branch is the
+/// RIGHT side of an OUTER OPTIONAL, `left_join_branches`' single-scan fast path
+/// (`right[0].core.len() == 1`) routed it to `build_left_join`, which pushed the
+/// core scan as an `OptJoin` but SILENTLY DROPPED `right.subplan_joins` — the
+/// derived-table alias `t{sp}` stayed referenced in the SELECT (`?c`) with no FROM
+/// entry ever introducing it → `no such column t{sp}.c1` at exec. `build_left_join`
+/// now declines (sound 501) when the right carries `subplan_joins`, matching
+/// `not_exists_cond_for`'s existing same-condition boundary. Reverting the guard
+/// makes `tree()` return `Ok` again and executing it is an invalid-SQL crash.
+#[test]
+fn item1d_r3_nested_subplan_optional_as_outer_optional_right_stays_sound_501() {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?l ?nm ?c WHERE {{ ?d ex:label ?l \
+         OPTIONAL {{ ?a ex:name ?nm \
+         OPTIONAL {{ SELECT ?nm (COUNT(?p) AS ?c) WHERE {{ ?p ex:name ?nm }} GROUP BY ?nm }} }} }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "a subplan-carrying OPTIONAL-right routed through build_left_join's fast path \
+         must be a SOUND 501 (dropping right.subplan_joins references a derived table \
+         never introduced in FROM — an invalid-SQL crash): `{query}`"
+    );
+}
+
+/// Defect 2 (wrong answer → correct). A LEADING bare `OPTIONAL {?p ex:name ?nm}`
+/// makes the enclosing branch core-EMPTY (its left is the empty-BGP identity) with
+/// the person scan in `opts`; the following subplan-OPTIONAL correlates on ?nm
+/// (bound by that opt). `render_from`'s core-empty path made the FIRST subplan the
+/// FROM anchor and emitted it with NO ON clause — silently DROPPING the
+/// `person.name = t.c0` correlation → an uncorrelated cross join (9 rows, not 3).
+/// `render_from` now uses a synthetic `(SELECT 1)` anchor and renders opts BEFORE
+/// subplans (the SAME order as the core-bearing path), so the correlated subplan
+/// keeps its ON and references the opt already emitted to its left. spareval = 3.
+#[test]
+fn item1d_r3_two_optionals_empty_left_subplan_correlates_on_prior_opt() {
+    item1d(&format!(
+        "{PFX} SELECT ?nm ?c WHERE {{ OPTIONAL {{ ?p ex:name ?nm }} \
+         OPTIONAL {{ SELECT ?nm (COUNT(?p2) AS ?c) WHERE {{ ?p2 ex:name ?nm }} GROUP BY ?nm }} }}"
+    ));
+}
+
+// ============================================================================
 // SOUND-501 BOUNDARIES — ADR-0023 parity backlog items assessed as MUST-STAY-501,
 // each with a precise architectural reason. Locked here via `diff` (BOTH flat and
 // tree must return `Err(Unsupported)` — the identical-501-set arm), so a future

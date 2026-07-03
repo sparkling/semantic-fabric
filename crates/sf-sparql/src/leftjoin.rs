@@ -327,6 +327,27 @@ fn build_left_join(
                 .to_owned(),
         ));
     }
+    // A `right` carrying its OWN SubPlan derived table (e.g. it is itself the product
+    // of a nested subplan-OPTIONAL — `{ ?a p ?nm OPTIONAL { <subSELECT> } }` — which
+    // `left_join_over_subplan` lowered to a core-scan-PLUS-`subplan_joins` branch) has
+    // no representation on this single-scan fast path: it pushes `right.core[0]` as an
+    // `OptJoin` but has NOWHERE to carry `right.subplan_joins` — the derived-table alias
+    // `t{sp}` would stay referenced by the merged bindings (a right-only var maps to
+    // `t{sp}.c{i}`) while no FROM clause ever introduces it ("no such column t{sp}.c{i}"
+    // at SQL-execution time). Merely copying `right.subplan_joins` onto the merged branch
+    // is NOT sound either: the SubPlan's `on` correlation references `right.core[0]` (now
+    // a LEFT-JOINed opt), and a shared variable whose RIGHT def reads the SubPlan alias
+    // would place a `t{sp}` reference into the OptJoin's own ON — a table emitted to its
+    // right. Sound 501 instead of a crash (ADR-0007), mirroring `not_exists_cond_for`'s
+    // matching `!right.subplan_joins.is_empty()` boundary for the `(P − R)` anti-join half.
+    if !right.subplan_joins.is_empty() {
+        return Err(Error::Unsupported(
+            "OPTIONAL whose right side is a nested subplan-OPTIONAL (a branch carrying \
+             its own SubPlan derived table) is not yet supported → 501 \
+             (ADR-0023 Item 1d boundary)"
+                .to_owned(),
+        ));
+    }
     if shared_reads_left_subplan(left, right) {
         return Err(Error::Unsupported(SHARED_LEFT_SUBPLAN_501.to_owned()));
     }

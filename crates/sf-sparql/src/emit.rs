@@ -644,27 +644,34 @@ fn render_from(
     };
 
     let from = if b.core.is_empty() {
-        // No base (core) scans: an anchor is still needed for `subplan_joins`/
-        // `opts` to attach to. The first SubPlan is the anchor if one exists
-        // (existing behavior); otherwise a portable "single row" anchor stands in
-        // for the `IqNode::True`/empty-BGP identity this branch's own left side
-        // represents (SPARQL's `{} OPTIONAL {X}` always has exactly one solution
-        // to extend, so no real base relation is needed — what matters is that
-        // every opt/further-subplan attaches via its own JOIN, never as a hard
-        // FROM anchor that would wrongly drop the guaranteed row if it has zero
-        // matches). Confirmed live (a genuine bug, not hypothetical): a core-less
-        // branch with a non-empty `opts` and no `subplan_joins` used to render NO
-        // FROM clause at all (this whole function was never even called — the
-        // caller's own from-decision guard checked only `core`/`subplan_joins`),
-        // yet the SELECT list still projected the opt's columns — "no such
-        // column" on every dialect for `{} OPTIONAL {?p ex:name ?n}` and the
-        // analogous `BIND(...) OPTIONAL {...}` shape.
-        let mut sp_iter = b.subplan_joins.iter();
-        let mut from = match sp_iter.next() {
-            Some(first_sp) => emit_sp(first_sp, params, pidx, "")?,
-            None => "(SELECT 1) t_empty".to_owned(),
-        };
-        for sp in sp_iter {
+        // No base (core) scans. A synthetic one-row anchor stands in for the
+        // `IqNode::True` / empty-BGP identity this branch's own left side represents
+        // (SPARQL's `{} OPTIONAL {X}` always has exactly one solution to extend), and
+        // EVERY opt / SubPlan attaches to it via its own JOIN — never as a hard FROM
+        // anchor that would wrongly drop that guaranteed row on zero matches.
+        //
+        // Opts render BEFORE SubPlans — the SAME order as the core-bearing branch below
+        // — so a SubPlan whose `on` correlates on a prior opt (or earlier SubPlan)
+        // references a table already emitted to its LEFT (valid SQL). Previously this
+        // path made the FIRST SubPlan the FROM anchor and emitted it with NO `ON` clause
+        // AND rendered opts AFTER SubPlans: a SubPlan correlated on an opt then either
+        // silently DROPPED its correlation (a wrong answer — an uncorrelated cross join)
+        // or referenced an opt emitted to its right (a crash) — both ADR-0007 violations.
+        // The uniform "(SELECT 1) anchor, then opts, then SubPlans" order fixes them and
+        // matches the already-shipped core-less-plus-opts fix
+        // (`bare_group_as_leftjoin_left_no_longer_mis_aliases`). A one-row cross join is
+        // `=_bag`-transparent, so the previously-anchor-was-a-SubPlan cases (an
+        // uncorrelated `{} OPTIONAL {sub}`, the SQL agg-over-UNION pushdown) keep their
+        // meaning — only their cosmetic SQL shape changes.
+        let mut from = "(SELECT 1) t_empty".to_owned();
+        for opt in &b.opts {
+            from.push_str(" LEFT JOIN ");
+            from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
+            from.push_str(" ON ");
+            let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
+            from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+        }
+        for sp in &b.subplan_joins {
             let join_kw = if sp.left {
                 " LEFT JOIN "
             } else {
@@ -678,13 +685,6 @@ fn render_from(
             } else {
                 from.push_str(" ON 1 = 1");
             }
-        }
-        for opt in &b.opts {
-            from.push_str(" LEFT JOIN ");
-            from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
-            from.push_str(" ON ");
-            let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
-            from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
         }
         from
     } else {
