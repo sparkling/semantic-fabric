@@ -194,40 +194,52 @@ reinstated old bug before trusting a pass against the fix) found nothing further
 needs-tree-rewrite to charter-excluded: it was already known from the start to be a pure
 SQL-signature-shape concern, not `=_bag`, and this wave's stated charter is `=_bag` cosmetic
 rewrites only, not "match Ontop's exact SQL text" — so it is genuinely OUT OF SCOPE for this wave,
-not deferred work still owed within it).** Five pre-existing,
-Wave-C-unrelated bugs were incidentally
-discovered during adversarial review (a core-less-branch OptJoin SQL-emission gap triggered by
-`BIND(...) OPTIONAL {...}` with no union at all; a flat-oracle limitation aggregating over a
-BIND-only union; ~~a bare `OFFSET n` with no `LIMIT` failing at SQLite emission, `emit.rs`~~ —
-**FIXED, commit `d29e550`**: confirmed live against both a real `sqlite3` CLI and a live MySQL
-server (both reject a bare `OFFSET`; PostgreSQL doesn't and needed no change); fixed with a new
-`Dialect::bare_offset_limit_sentinel()` emitting an explicit "no limit" `LIMIT` before the `OFFSET`
-for exactly the 2 confirmed-broken dialects, revert-proven, adversarial-reviewed (8 angles, live
-SQLite/MySQL/Postgres evidence, NOT REFUTED) — none of the other two pre-existing bugs above are
-fixed here (out of scope, none touched by any Wave C diff), flagged for a separate follow-up. Two
-more surfaced during the test25 review (both confirmed via `git stash` isolation to reproduce
-identically on the PRE-Wave-C base commit, with a BARE `{}` and no Union/fold involved at all —
-genuinely unrelated to any Wave C rule); the FIRST of these two (`FILTER NOT EXISTS`, below) was
-escalated by the team lead ahead of everything else the moment it was flagged (a silent wrong
-answer beats cosmetics) and is now FIXED — see the strikethrough entry. The second remains open:
+not deferred work still owed within it).**
 
-* ~~`FILTER NOT EXISTS { ... }` with no variable shared with the outer scope silently returns the
-  WRONG answer on the tree path~~ — **FIXED** (commit `45b395c`, priority-escalated ahead of Wave C
-  by the team lead the moment it was flagged: a silent wrong answer beats cosmetics). Root cause
-  was a build-time conflation, not just a lowering bug: `GraphPattern::Minus` and
-  `Expression::Not(Expression::Exists(..))` both compiled to the identical `IqCond::NotExists` node
-  (`build.rs`), and `lower_iq_exists` applied MINUS's SPARQL §8.3.2 disjoint-domain no-op exception
-  to FILTER NOT EXISTS too (SPARQL §11.4.7 — a pure existence test with no such exception). Fixed
-  by adding an `is_minus: bool` field to `IqCond::NotExists`, threaded through resolve/normalize's
-  pass-through recursion and gating the skip on it instead of the shared `negated` flag — matching
-  the flat oracle's own reference behavior (MINUS and FILTER-EXISTS/NOT-EXISTS were always two
-  separate functions there, never sharing this precondition). RED-first differential test +
-  revert-proof + adversarial review (9 angles, each claimed regression independently confirmed
-  bug-sensitive by reverting the fix and watching it fail) — NOT REFUTED.
-* A zero-var `{} UNION {}` (or a BARE `{}`) used as a `LeftJoin`'s LEFT operand hits a SQL
-  aliasing error (`no such column: t0.name`) on both the flat and tree paths — a `Branch` with
-  empty `core` and only `opts` mis-aliases in SQL generation (shared `sf-sql`/exec layer, not
-  `sf-sparql`'s tree normalize).
+**Correctness backlog (post-Wave-C, team-lead handoff).** Adversarial review incidentally surfaced
+five pre-existing, Wave-C-unrelated bugs — none touched by any Wave C diff itself (the original
+report named what turned out to be the SAME bug twice, as "core-less-branch OptJoin" and
+separately as "zero-var-Union-as-LeftJoin-left" — item 3 below covers both; one further bug was
+found DURING that fix's own adversarial review). Three are now
+fixed (each with its own RED-first/revert-proof/adversarial-review gate); two remain open:
+
+1. ~~`FILTER NOT EXISTS { ... }` with no variable shared with the outer scope silently returns the
+   WRONG answer on the tree path~~ — **FIXED, commit `45b395c`** (priority-escalated ahead of Wave C
+   by the team lead the moment it was flagged: a silent wrong answer beats cosmetics). Root cause:
+   a build-time conflation, not just a lowering bug — `GraphPattern::Minus` and
+   `Expression::Not(Expression::Exists(..))` both compiled to the identical `IqCond::NotExists` node
+   (`build.rs`), and `lower_iq_exists` applied MINUS's SPARQL §8.3.2 disjoint-domain no-op exception
+   to FILTER NOT EXISTS too (SPARQL §11.4.7 — a pure existence test with no such exception). Fixed
+   with an `is_minus: bool` field on `IqCond::NotExists`, threaded through resolve/normalize's
+   pass-through recursion, gating the skip on it instead of the shared `negated` flag. Adversarial
+   review (9 angles, NOT REFUTED).
+2. ~~A bare `OFFSET n` with no `LIMIT` fails at SQL emission~~ — **FIXED, commit `d29e550`**.
+   Confirmed live against a real `sqlite3` CLI and a live MySQL server (both reject a bare
+   `OFFSET`; PostgreSQL doesn't and needed no change). Fixed with a new
+   `Dialect::bare_offset_limit_sentinel()` emitting an explicit "no limit" `LIMIT` before the
+   `OFFSET` for exactly the 2 confirmed-broken dialects. Adversarial review (8 angles, live
+   SQLite/MySQL/Postgres evidence, NOT REFUTED).
+3. ~~A core-less `LeftJoin` LEFT operand (a bare `{}` or a `BIND(...)`-only Construction, no real
+   scan) mis-aliases the OPTIONAL's own columns~~ — **FIXED, commit `b1148dc`**. `Branch.opts` was
+   non-empty but `Branch.core` was empty, and two separate FROM-decision guards
+   (`emit_branch_with`, `emit_agg_branch`) checked only `core`/`subplan_joins`, never `opts` — so no
+   FROM clause was rendered at all, yet the SELECT list still projected the opt's own column,
+   referencing an alias no FROM clause ever introduced (confirmed live: `no such column: t0.name`
+   on every dialect — this is the SAME bug regardless of whether the core-less left side is a bare
+   `{}`, a zero-var Union, or a `BIND(...)`-only Construction). Fixed with a synthetic `(SELECT 1)`
+   single-row anchor (deliberately not promoting the opt to a hard anchor, which would break
+   OPTIONAL's "guaranteed at least one row" semantics — concretely proven wrong via the independent
+   spareval oracle during review) plus rendering every `opts` entry as its own `LEFT JOIN`.
+   Adversarial review (8 angles, mostly via genuine revert-and-recheck, live PG/MySQL
+   verification, NOT REFUTED).
+4. **Still open**: a flat-oracle limitation aggregating over a BIND-only union — not yet assessed
+   whether it's a real wrong answer or an inherent, documentable flat-oracle limitation.
+5. **Still open**: a genuine, pre-existing Path bug found incidentally during bug 3's own
+   adversarial review, confirmed live and confirmed pre-existing (identical on flat and on
+   pre-diff HEAD, so unrelated to that fix): a property-path pattern used as an OPTIONAL's RIGHT
+   operand loses its path closure during `leftjoin.rs`'s multi-branch decomposition
+   (`inner_join_one` copies `left.path` but never `right.path` when merging), producing an empty
+   FROM before any `emit.rs` code is even reached.
 
 ---
 
