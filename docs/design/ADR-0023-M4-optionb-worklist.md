@@ -198,7 +198,12 @@ not deferred work still owed within it).** Five pre-existing,
 Wave-C-unrelated bugs were incidentally
 discovered during adversarial review (a core-less-branch OptJoin SQL-emission gap triggered by
 `BIND(...) OPTIONAL {...}` with no union at all; a flat-oracle limitation aggregating over a
-BIND-only union; a bare `OFFSET n` with no `LIMIT` failing at SQLite emission, `emit.rs`) — none
+BIND-only union; ~~a bare `OFFSET n` with no `LIMIT` failing at SQLite emission, `emit.rs`~~ —
+**FIXED, commit `d29e550`**: confirmed live against both a real `sqlite3` CLI and a live MySQL
+server (both reject a bare `OFFSET`; PostgreSQL doesn't and needed no change); fixed with a new
+`Dialect::bare_offset_limit_sentinel()` emitting an explicit "no limit" `LIMIT` before the `OFFSET`
+for exactly the 2 confirmed-broken dialects, revert-proven, adversarial-reviewed (8 angles, live
+SQLite/MySQL/Postgres evidence, NOT REFUTED) — none of the other two pre-existing bugs above are
 fixed here (out of scope, none touched by any Wave C diff), flagged for a separate follow-up. Two
 more surfaced during the test25 review (both confirmed via `git stash` isolation to reproduce
 identically on the PRE-Wave-C base commit, with a BARE `{}` and no Union/fold involved at all —
