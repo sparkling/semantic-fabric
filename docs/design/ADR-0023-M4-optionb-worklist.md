@@ -60,8 +60,8 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | FlattenUnionOptimizer::flattenUnionTest3 | union arm = InnerJoin(data, union); Ontop asserts no-op | free-pass (divergent tree, `=_bag`) | §4.16 join-over-union distribution (bag-exact) |
 | union-structural | FlattenUnionOptimizer::flattenUnionTest4 | innermost union under Construction inside InnerJoin | free-pass | identity collapse + n-ary Union (+ §4.16) |
 | union-structural | FlattenUnionOptimizer::flattenUnionTest5 | identity-Construction over union2[Construction(InnerJoin), data] | free-pass | identity collapse + n-ary Union + projection pushdown |
-| union-structural | ValuesNodeOptimization::test1normalizationSlice | Slice(0,1) over Values(3) | needs-tree-rewrite [cosmetic] | NEW Slice-over-Values truncation (not in §4); bare-LIMIT non-det |
-| union-structural | ValuesNodeOptimization::test2normalizationSlice | Slice(1,1) over Values | needs-tree-rewrite [cosmetic] | NEW Slice-over-Values w/ offset |
+| union-structural | ValuesNodeOptimization::test1normalizationSlice | Slice(0,1) over Values(3) | **DONE** (Wave C, commit `d313f26`) | `normalize_slice` (`iq/normalize.rs`): Slice-over-Values truncation, incl. through the identity-projection Construction wrapper |
+| union-structural | ValuesNodeOptimization::test2normalizationSlice | Slice(1,1) over Values | **DONE** (Wave C, commit `d313f26`) | same `normalize_slice`, offset half |
 | union-structural | ValuesNodeOptimization::test3normalizationDistinct | Distinct over Values(dups) | needs-tree-rewrite [cosmetic] | §4.15 arm-dedup on Values leaf; SELECT DISTINCT already correct |
 | union-structural | ValuesNodeOptimization::test4…SliceUnionValuesValues | Slice(0,4) over Union[Values,Values] | needs-tree-rewrite [cosmetic] | §4.15 Values-fold + NEW slice-over-Values |
 | union-structural | ValuesNodeOptimization::test5…SliceUnionValuesNonValues | Slice(0,2) over Union[Values,ext], Values covers limit | needs-tree-rewrite [cosmetic] | NEW slice-over-union arm-drop |
@@ -74,7 +74,7 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | ValuesNodeOptimization::test11…LimitDistinctUnionValues | Slice·Distinct·Union, Values distinct | needs-tree-rewrite [cosmetic] | NEW slice-over-distinct-union arm-drop |
 | union-structural | ValuesNodeOptimization::test12…LimitDistinctUnionDistinctTree | limit pushed onto both distinct arms | needs-tree-rewrite [cosmetic] | NEW slice-over-union + arm-distinctness (UC + IS NOT NULL) |
 | union-structural | ValuesNodeOptimization::test13…LimitDistinctUnionNonDistinctTree | limit pushed onto the one distinct arm | needs-tree-rewrite [cosmetic] | NEW selective per-arm limit-pushdown |
-| union-structural | ValuesNodeOptimization::test14…ConstructionUnionTrueTrue | Union[const-Construct/True ×2] → Values | needs-tree-rewrite [cosmetic] | §4.15 fold-constants-into-Values (probe: free-win) |
+| union-structural | ValuesNodeOptimization::test14…ConstructionUnionTrueTrue | Union[const-Construct/True ×2] → Values | **DONE** (Wave C, commit `d3139f5`) | `try_fold_constant_union` (`iq/normalize.rs`): folds an all-constant-BIND Union to one Values leaf; foundation for test15/17-26 below (not itself implemented — see note) |
 | union-structural | ValuesNodeOptimization::test15…ConstructionUnionTrueTrueDataNode | const arms fold, data arm kept | needs-tree-rewrite [cosmetic] | §4.15 partial Values-fold |
 | union-structural | ValuesNodeOptimization::test17…DBConstant | same-DB-type DBConstant arms fold | needs-tree-rewrite [cosmetic] | §4.15 fold w/ homogeneous-cell-type gate |
 | union-structural | ValuesNodeOptimization::test18…RDFConstant (diff datatypes) | heterogeneous RDF constants → NO fold | free-pass (negative) | §4.15 precondition forbids fold → matches Ontop |
@@ -89,7 +89,26 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | ValuesNodeComplexQueryOptimization::testTranslatedSQLQuery1 | end-to-end LIMIT 4 over wide mapping union | needs-tree-rewrite [cosmetic] | same Slice driver scaled |
 | union-structural | BindingLiftTest::testUnionSubstitution | lift common URI-template binding into shared Construction above union | needs-tree-rewrite [cosmetic] | §4.15 binding-lift (load-bearing for signature parity, not `=_bag`) |
 
-Family 1 totals: **6 free-pass, 27 needs-tree-rewrite (all [cosmetic] for `=_bag`), 0 M5, 0 charter.**
+Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 3 DONE (test1/test2/test14),
+24 needs-tree-rewrite (all [cosmetic] for `=_bag`), 0 M5, 0 charter.** (Original: 6/27/0/0 —
+kept for history; the 3 DONE rows are no longer counted in the 27.)
+
+**Wave C progress note (2026-07-03, branch `fix/adr-0023-residue-waves`, worktree
+`adr-0023-residue-waves`):** test1/test2 (Slice-over-Values truncation, commit `d313f26`) and
+test14 (constant-Union-to-Values fold, commit `d3139f5`) shipped — each with unit +
+differential-tree tests (spareval-gated where deterministic, `diff_p_bag` where LIMIT-
+without-ORDER-BY tie-breaking is legitimately implementation-defined), revert-proofs, and a
+passing adversarial refute-only review. test14's fold is a real capability (not a stub) but
+does NOT yet subsume test15/17-26 (partial fold with a DATA arm kept, homogeneous-DB-type
+gating, RDF-term binding-lift/split, zero-var counting, column-order reconciliation) — those
+remain open, each verified to safely DECLINE today (confirmed by both the implementer's own
+tests and the adversarial reviewer) rather than mis-fold. Group A (test4-13, Slice/Distinct-
+over-Union arm-drop + residual-limit pushdown) and `BindingLiftTest::testUnionSubstitution`
+are untouched. Precise remainder: 24 of the original 27 rows. Two pre-existing, Wave-C-
+unrelated bugs were incidentally discovered during adversarial review (a core-less-branch
+OptJoin SQL-emission gap triggered by `BIND(...) OPTIONAL {...}` with no union at all; a flat-
+oracle limitation aggregating over a BIND-only union) — not fixed here (out of scope), flagged
+for a separate follow-up.
 
 ---
 
@@ -248,10 +267,17 @@ the correction note above the Family 3 table). The counts below are updated acco
 | disposition | union-structural | boolean-push | join-elim | projection-and-true | **total** | *(orig. join-elim / total)* |
 |---|---|---|---|---|---|---|
 | free-pass | 6 | 27 | 24 | 30 | **87** | *(17 / 80)* |
-| needs-tree-rewrite | 27 | 0 | 1 | 0 | **28** | *(7 / 34)* |
+| **DONE (Wave C, implemented)** | 3 | 0 | 0 | 0 | **3** | *(new bucket, not in the original 121)* |
+| needs-tree-rewrite | 24 | 0 | 1 | 0 | **25** | *(7 / 34)* |
 | needs-SubPlan-M5 | 0 | 0 | 0 | 0 | **0** | *(1 / 1, now closed)* |
 | charter-excluded | 0 | 0 | 2 | 4 | **6** | *(2 / 6)* |
-| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed)* |
+| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 3 Wave C DONE rows are a subset of union-structural's 27, not additional rows)* |
+
+**Wave C update (2026-07-03):** 3 of union-structural's 24 needs-tree-rewrite rows
+(test1/test2/test14) are now DONE, not merely cosmetic-and-pending — see the Family 1 table
+above and the Wave C progress note there. `union-structural`'s needs-tree-rewrite count in the
+table above (24) already reflects this; the roll-up's own historical "27" column headers elsewhere
+in this doc predate Wave C and are not restated as errors, just superseded by this row.
 
 Row-count note: these are the **representative analysis rows**; several join-elim rows fold multiple
 Ontop `@Test` methods (e.g. `testJoinTransfer1-14`) into one shape. They cover the full 16-class / 184-test
@@ -297,13 +323,19 @@ collapsed join.
   NOT cosmetic: it was a real `=_bag` gap (the anti-join-FILTER bug, see Roll-up above), now fixed on the
   `leftjoin-antijoin-filter` branch — pending that merge, do not fold FDSimplification's residual (if any,
   beyond the correctness fix itself) into the Wave 7 cosmetic-only scope below without re-probing it first.
-- **Wave 5 — Group B: UnionAndBindingLift + Values constant-fold** *(independent; signature parity only,
-  NEXT UP — `=_bag` parity is now exhausted per the finding above)*. §4.15 fold-constants-into-Values,
-  RDF-term split/lift, multi-column Values. Unblocks: test14-26, test19/23/24,
-  BindingLiftTest::testUnionSubstitution, end-to-end SQL-shape tests. Cosmetic for `=_bag`.
+- **Wave 5 — Group B: UnionAndBindingLift + Values constant-fold** *(independent; signature parity only)*.
+  §4.15 fold-constants-into-Values, RDF-term split/lift, multi-column Values. Unblocks: test14-26,
+  test19/23/24, BindingLiftTest::testUnionSubstitution, end-to-end SQL-shape tests. Cosmetic for `=_bag`.
+  **STARTED 2026-07-03** (branch `fix/adr-0023-residue-waves`, "Wave C" in that session's own commit
+  naming): test14's core mechanism (`try_fold_constant_union`, commit `d3139f5`) — an all-constant-BIND
+  Union folds to one Values leaf. Does NOT yet subsume test15/17-26/BindingLiftTest (partial fold with a
+  kept DATA arm, homogeneous-type gating, RDF-term binding-lift/split, zero-var counting, column-order
+  reconciliation) — each confirmed to safely DECLINE today rather than mis-fold.
 - **Wave 6 — Group A: Slice/Values/Distinct folding drivers** *(pure SQL-shape, all cosmetic)*.
   New Slice-over-Values/Union truncation + arm-drop + arm-distinctness analysis. Unblocks: test1-13,
-  Simple/Complex SQL-shape tests.
+  Simple/Complex SQL-shape tests. **STARTED 2026-07-03** (same branch/session): test1/test2's slice
+  (`normalize_slice`, commit `d313f26`) — Slice-over-Values truncation only; the Union-arm-drop /
+  residual-limit-pushdown machinery for test4-13 is NOT built.
 - **Wave 7 (new) — join-elim SQL-shape collapse** *(the former Group D scope, now understood as cosmetic)*.
   Collapse the Group C `Union`+`NOT EXISTS` decomposition back to a single-scan join/`OptJoin` when a
   provable key/FD match makes the anti-join branch unreachable. Lowest urgency of the four (existing
