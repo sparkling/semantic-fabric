@@ -309,6 +309,20 @@ fn p_modifier_interaction() {
     ));
 }
 
+/// Adversarial-review-caught regression (ADR-0023 optimizer-residue Wave C,
+/// Distinct-over-Values dedup): `?y` is bound by VALUES but not SELECTed, so
+/// `project = [x]` NARROWS the Values leaf's own `vars = [x, y]`. DISTINCT applies
+/// AFTER Project (SPARQL 18.2.5) — deduping the leaf's full `(x,y)` tuples before
+/// projection would keep `(1,2)`/`(1,3)` as distinct (only the exact `(1,2)`
+/// duplicate pair collapses), leaving 2 post-projection `x=1` rows where DISTINCT
+/// must yield exactly 1. `diff_p_bag`, not spareval: the projected-away `?y` makes
+/// this a `p`-fixture-style nullable/nondeterminism case outside `diff_p`'s
+/// set-faithful scope (mirrors this file's own `diff_p_bag` convention).
+#[test]
+fn distinct_over_values_does_not_dedup_before_a_narrowing_projection() {
+    diff_p_bag("SELECT DISTINCT ?x WHERE { VALUES (?x ?y) { (1 2) (1 3) (1 2) } }");
+}
+
 #[test]
 fn p_bind_values_construct_ask() {
     // BIND (symbolic BindDef::Expr resolved per leaf-CQ at LOWER).
@@ -415,6 +429,41 @@ fn constant_union_folds_to_values_leaf() {
         tp.limit.is_none(),
         "the Slice must be fully absorbed once the Union folds to Values: limit={:?}",
         tp.limit
+    );
+}
+
+/// ADR-0023 optimizer-residue Wave C (Ontop `ValuesNodeOptimization::
+/// test3normalizationDistinct`): `DISTINCT` directly over a literal `Values` table
+/// dedups the row list at NORMALIZE, so `Distinct` and the duplicate branches never
+/// reach LOWER at all.
+#[test]
+fn distinct_over_values_dedups_at_normalize_not_exec() {
+    diff_p("SELECT DISTINCT ?x WHERE { VALUES ?x { 1 1 2 2 2 3 } }");
+    // A non-Const cell (CONCAT of constants, via the constant-Union fold) declines
+    // the in-tree dedup but must still be CORRECT end-to-end -- Distinct still runs
+    // downstream, just not collapsed into the Values leaf itself.
+    diff_p(
+        "SELECT DISTINCT ?x WHERE { { BIND(CONCAT(\"a\",\"b\") AS ?x) } \
+         UNION { BIND(CONCAT(\"a\",\"b\") AS ?x) } }",
+    );
+
+    // Shape: exactly as many branches as survive the dedup (2), not `rows.len()`
+    // branches (6) relying on `Plan.distinct`/the executor to collapse them.
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse("SELECT DISTINCT ?x WHERE { VALUES ?x { 1 1 2 2 2 3 } }");
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert_eq!(
+        tp.branches.len(),
+        3,
+        "the Values table itself must dedup to 3 rows/branches: {:?}",
+        tp.branches
+    );
+    assert!(
+        !tp.distinct,
+        "DISTINCT must be fully absorbed into the Values leaf, leaving nothing for \
+         the Plan's own distinct flag to do"
     );
 }
 

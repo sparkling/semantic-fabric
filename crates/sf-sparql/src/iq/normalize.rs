@@ -149,9 +149,10 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
             grouping,
             aggs,
         }),
-        IqNode::Distinct { child } => Ok(IqNode::Distinct {
-            child: Box::new(normalize(*child)?),
-        }),
+        IqNode::Distinct { child } => {
+            let child = normalize(*child)?;
+            Ok(normalize_distinct(child))
+        }
         IqNode::Slice {
             child,
             offset,
@@ -675,6 +676,97 @@ fn slice_rows(
         .collect()
 }
 
+// ---- (e) Distinct-over-Values dedup (ADR-0023 optimizer-residue Wave C; Ontop
+// ValuesNodeOptimization::test3normalizationDistinct) -----------------------------
+
+/// Dedup a literal `Values` table directly when a `Distinct` sits over it (through
+/// the same identity-projection `Construction` wrapper `normalize_slice` handles),
+/// instead of carrying the `Distinct` down to LOWER (where `SELECT DISTINCT` already
+/// produces the right *answer*, but every duplicate row still lowers to its own
+/// branch first — the cosmetic cost this rule removes). Any other child shape keeps
+/// the `Distinct` node as-is.
+fn normalize_distinct(child: IqNode) -> IqNode {
+    match child {
+        // `dedup_rows` declining (a non-Const cell) must NOT silently drop the
+        // `Distinct` requirement itself — only discard the node when dedup actually
+        // ran, else the duplicates it left behind would reach LOWER unguarded (a
+        // wrong answer, not merely a missed optimization).
+        IqNode::Values { vars, rows } => match dedup_rows(&rows) {
+            Some(deduped) => IqNode::Values {
+                vars,
+                rows: deduped,
+            },
+            None => IqNode::Distinct {
+                child: Box::new(IqNode::Values { vars, rows }),
+            },
+        },
+        // SAFETY: only when `project` is the SAME variable set as the Values leaf's
+        // own `vars` (a pure identity/reorder wrapper) — never a narrowing. DISTINCT
+        // in SPARQL algebra applies AFTER Project (18.2.5): if `project` drops a
+        // column, rows that differ only in the dropped column must collapse into
+        // ONE post-projection row, but deduping the Values leaf's FULL (pre-
+        // projection) tuples here would keep them as two — an `=_bag` violation an
+        // adversarial review caught (`VALUES (?x ?y) {(1 2)(1 3)(1 2)} SELECT DISTINCT
+        // ?x` must yield 1 row, not 2). Declining is always sound: `Distinct` still
+        // runs (correctly) at LOWER/exec, same as before this rule existed.
+        IqNode::Construction {
+            child: inner,
+            subst,
+            project,
+        } if matches!(&*inner, IqNode::Values { vars, .. } if same_var_set(&project, vars)) => {
+            IqNode::Construction {
+                child: Box::new(normalize_distinct(*inner)),
+                subst,
+                project,
+            }
+        }
+        child => IqNode::Distinct {
+            child: Box::new(child),
+        },
+    }
+}
+
+/// Whether `a` and `b` name exactly the same set of variables (order-independent,
+/// no narrowing either way). Assumes both are already duplicate-free (true of every
+/// `project`/`vars` this crate builds — SPARQL rejects a repeated variable name in a
+/// projection or a `VALUES` header); a caller passing a list with a repeated name
+/// would get a false positive here.
+fn same_var_set(a: &[Var], b: &[Var]) -> bool {
+    a.len() == b.len() && a.iter().all(|v| b.contains(v))
+}
+
+/// Remove duplicate rows, keeping the first occurrence's order (SPARQL DISTINCT:
+/// multiset → set). `oxrdf::Term` already derives structural `PartialEq`/`Hash`
+/// (`TermDef` itself does not), so comparison goes by each cell's underlying `Term`
+/// — a `None` (UNDEF) cell compares equal to another `None`. Declines (returns
+/// `rows` unchanged — still correct, `Distinct`/`SELECT DISTINCT` still runs at
+/// LOWER as before) the moment any cell isn't a plain `Const`: a `Concat`/`Coalesce`/
+/// `Agg`/`Derived` `TermDef` has no reconstruction-time-only comparable form here.
+fn dedup_rows(rows: &[Vec<Option<TermDef>>]) -> Option<Vec<Vec<Option<TermDef>>>> {
+    let keys: Option<Vec<Vec<Option<&sf_core::Term>>>> = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| match cell {
+                    None => Some(None),
+                    Some(TermDef::Const(t)) => Some(Some(t)),
+                    Some(_) => None,
+                })
+                .collect()
+        })
+        .collect();
+    let keys = keys?; // some cell isn't a plain constant -- decline (caller keeps Distinct)
+    let mut seen: Vec<&Vec<Option<&sf_core::Term>>> = Vec::new();
+    let mut out = Vec::new();
+    for (row, key) in rows.iter().zip(keys.iter()) {
+        if !seen.contains(&key) {
+            seen.push(key);
+            out.push(row.clone());
+        }
+    }
+    Some(out)
+}
+
 // ---- condition normalization (descend into EXISTS / NOT EXISTS payloads) ----------
 
 /// Normalize a conjunction of [`IqCond`]s (design-lock §3 recursion clause). The
@@ -1087,6 +1179,58 @@ mod tests {
         lit.value()
             .parse()
             .unwrap_or_else(|_| panic!("expected an integer literal: {lit:?}"))
+    }
+
+    /// Ontop `ValuesNodeOptimization::test3normalizationDistinct`: `Distinct` directly
+    /// over a literal `Values` table (through the identity-projection `Construction`
+    /// wrapper) dedups the row list in place instead of surviving as a `Distinct` node.
+    #[test]
+    fn distinct_over_values_dedups_in_place() {
+        let n = norm("SELECT DISTINCT ?x WHERE { VALUES ?x { 1 1 2 2 2 } }");
+        assert!(
+            !matches!(n, IqNode::Distinct { .. }),
+            "Distinct must not survive normalize when its child is a Values leaf: {n:?}"
+        );
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { rows, .. } = child.as_ref() else {
+            panic!("expected a deduped Values leaf: {child:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|r| row_int(r)).collect::<Vec<_>>(),
+            vec![1, 2],
+            "first-occurrence order preserved, duplicates removed: {rows:?}"
+        );
+    }
+
+    /// A cell that isn't a plain `Const` (here, a `CONCAT` `TermDef::Concat` produced
+    /// by the constant-Union fold) has no comparable form at this stage — the dedup
+    /// declines (a safe no-op: `Distinct` still runs, correctly, at LOWER/exec).
+    #[test]
+    fn distinct_over_non_const_cells_declines_safely() {
+        let n = norm(
+            "SELECT DISTINCT ?x WHERE { { BIND(CONCAT(\"a\",\"b\") AS ?x) } \
+             UNION { BIND(CONCAT(\"a\",\"b\") AS ?x) } }",
+        );
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        // The constant-Union fold (test14's rule) still fires here (CONCAT of
+        // constants IS foldable into a Values row) -- it's the DEDUP that must
+        // decline on the resulting non-Const cell, leaving 2 (duplicate) rows for
+        // Distinct/exec to handle downstream, same as before this rule existed.
+        let IqNode::Distinct { child: values } = child.as_ref() else {
+            panic!("expected Distinct to survive (decline) over a non-Const Values cell: {child:?}")
+        };
+        let IqNode::Values { rows, .. } = values.as_ref() else {
+            panic!("expected the folded (but not deduped) Values leaf: {values:?}")
+        };
+        assert_eq!(
+            rows.len(),
+            2,
+            "the dedup declined, leaving both rows: {rows:?}"
+        );
     }
 
     /// Ontop `ValuesNodeOptimization::test14ConstructionUnionTrueTrue`: a `Union` of
