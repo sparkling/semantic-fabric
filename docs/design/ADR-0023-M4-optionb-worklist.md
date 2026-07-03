@@ -84,14 +84,14 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | ValuesNodeOptimization::test23…RDFConstant (2-var) | multi-column Values under lifted Construction | needs-tree-rewrite [cosmetic] | §4.15 binding-lift, multi-projected-var generalisation |
 | union-structural | ValuesNodeOptimization::test24…RDFConstantSub | heterogeneous → split term, lift wrapper, no Values fold | needs-tree-rewrite [cosmetic] | §4.15 RDF-term binding-lift (deepest UnionAndBindingLift) |
 | union-structural | ValuesNodeOptimization::test25NoVariableTrueNodesAndValuesNodes | zero-var Union[True,True,Values] → counting Values | needs-tree-rewrite [cosmetic] | §4.15 + True≡single-0-arity-row identity |
-| union-structural | ValuesNodeOptimization::test26MergeableCombination… | mixed True/Construction/Values arms, diff col order → one Values | needs-tree-rewrite [cosmetic] | §4.15 general arm-merge + col-order reconcile |
+| union-structural | ValuesNodeOptimization::test26MergeableCombination… | mixed True/Construction/Values arms, diff col order → one Values | **DONE** (Wave C, commit `487b4fb`) | `same_var_set`/`reorder_row` in `try_fold_constant_union` — Values/Construction-True arms in ANY column order fold correctly; a genuinely bare zero-var `IqNode::True` arm mixed into a non-empty-project union is not separately exercised (unclear it's reachable at all with `project` non-empty — not attempted) |
 | union-structural | ValuesNodeSimpleQueryOptimization::testTranslatedSQLQuery1 | end-to-end LIMIT 2, assert SQL has no union/limit | needs-tree-rewrite [cosmetic] | Slice-over-Union/Values drivers; `=_bag` count already correct |
 | union-structural | ValuesNodeComplexQueryOptimization::testTranslatedSQLQuery1 | end-to-end LIMIT 4 over wide mapping union | needs-tree-rewrite [cosmetic] | same Slice driver scaled |
 | union-structural | BindingLiftTest::testUnionSubstitution | lift common URI-template binding into shared Construction above union | needs-tree-rewrite [cosmetic] | §4.15 binding-lift (load-bearing for signature parity, not `=_bag`) |
 
-Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 11 DONE (test1/test2/test3/test4/
-test5/test5b/test6/test7/test8/test9/test14), 4 documented-boundary (test10/11/12/13 -- see
-Family 1 table for why each is a genuine architectural gap, not an effort gap), 12 needs-tree-
+Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 12 DONE (test1/test2/test3/test4/
+test5/test5b/test6/test7/test8/test9/test14/test26), 4 documented-boundary (test10/11/12/13 --
+see Family 1 table for why each is a genuine architectural gap, not an effort gap), 11 needs-tree-
 rewrite (all [cosmetic] for `=_bag`), 0 M5, 0
 charter.** (Original: 6/27/0/0 —
 kept for history; the 11 DONE + 4 documented-boundary rows are no longer counted in the 27.)
@@ -136,8 +136,13 @@ once earlier arms' output can silently absorb it), qualitatively harder than any
 wave, not a same-pattern extension. test12/13 need DATABASE SCHEMA-level uniqueness reasoning (UC
 + IS NOT NULL) that plain tree-level `normalize` has no access to at all (schema-aware passes live
 in the flat path's POST-lowering `cascade` module) — an architectural gap, not an effort gap.
-`BindingLiftTest::testUnionSubstitution` (Group B) is separately untouched. Precise remainder: 12
-genuinely open + 4 documented-boundary = 16 of the original 27 rows. Three pre-existing,
+test26 (mixed-order arm-merge, `same_var_set`/`reorder_row` in `try_fold_constant_union`, commit
+`487b4fb`) closes the column-order-reconciliation half of Group B's general arm-merge scope; the
+RDF-term binding-lift half (test15/17/19/21-24 — splitting a term into lexical value + datatype,
+lifting a shared datatype/wrapper Construction above the union) is qualitatively different work
+(term decomposition, not row-level reordering) and is untouched, as is test25 (zero-var counting)
+and `BindingLiftTest::testUnionSubstitution`. Precise remainder: 11 genuinely open + 4
+documented-boundary = 15 of the original 27 rows. Three pre-existing,
 Wave-C-unrelated bugs were incidentally
 discovered during adversarial review (a core-less-branch OptJoin SQL-emission gap triggered by
 `BIND(...) OPTIONAL {...}` with no union at all; a flat-oracle limitation aggregating over a
@@ -301,12 +306,12 @@ the correction note above the Family 3 table). The counts below are updated acco
 | disposition | union-structural | boolean-push | join-elim | projection-and-true | **total** | *(orig. join-elim / total)* |
 |---|---|---|---|---|---|---|
 | free-pass | 6 | 27 | 24 | 30 | **87** | *(17 / 80)* |
-| **DONE (Wave C, implemented)** | 11 | 0 | 0 | 0 | **11** | *(new bucket, not in the original 121)* |
+| **DONE (Wave C, implemented)** | 12 | 0 | 0 | 0 | **12** | *(new bucket, not in the original 121)* |
 | **documented-boundary (Wave C)** | 4 | 0 | 0 | 0 | **4** | *(new bucket, not in the original 121 — architectural gaps, see Family 1 table)* |
-| needs-tree-rewrite | 12 | 0 | 1 | 0 | **13** | *(7 / 34)* |
+| needs-tree-rewrite | 11 | 0 | 1 | 0 | **12** | *(7 / 34)* |
 | needs-SubPlan-M5 | 0 | 0 | 0 | 0 | **0** | *(1 / 1, now closed)* |
 | charter-excluded | 0 | 0 | 2 | 4 | **6** | *(2 / 6)* |
-| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 11 Wave C DONE + 4 documented-boundary rows are a subset of union-structural's 27, not additional rows)* |
+| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 12 Wave C DONE + 4 documented-boundary rows are a subset of union-structural's 27, not additional rows)* |
 
 **Wave C update (2026-07-03):** 9 of union-structural's 24 needs-tree-rewrite rows
 (test1/test2/test3/test4/test5/test5b/test6/test7/test14) are now DONE, not merely
