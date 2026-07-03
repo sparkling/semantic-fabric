@@ -296,6 +296,29 @@ catastrophe is gone).
 | q14 | 395.04 | 2 850.51 | **7.22×** | 400 000 | 400 000 | **OK (latency fixed)** |
 | q15 | 757.21 | 2 879.32 | **3.80×** | 80 000 | 80 000 | **OK (fixed)** |
 
+#### q9 agg-pushdown re-race — 2026-07-03 (supersedes the q9 rows in the four tables above)
+
+The q9 rows in the tables above are **pre-pushdown**: recorded 2026-07-01 02:00, ~22 h
+before the `try_sql_group_over_union` SQL pushdown landed (2026-07-01 23:47, `d822b35`;
+injective-Template extension 2026-07-02 08:39, `3991e15`). Re-raced 2026-07-03 on the
+same live Ontop 5.5.0 + PostgreSQL harness with a rebuilt post-pushdown `sf-serve`
+(HEAD `273fc64`), q9 flips from Ontop-faster to parity-to-faster at **every** scale
+(row-parity preserved, 2 groups each side):
+
+| scale | q9 sf ms (pre → post) | q9 ontop ms | q9 ratio (pre → post) |
+|---|---|---|---|
+| 1 | 1.65 → **1.18** | 2.14 | 0.92× → **1.81× (sf)** |
+| 100 | 3.92 → **1.43** | 2.20 | 0.50× → **1.54× (sf)** |
+| 1000 | 21.69 → **6.60** | 6.67 | 0.27× → **1.01× (parity)** |
+| 10000 | 228.41 → **13.25** | 19.05 | 0.23× → **1.44× (sf)** |
+
+At scale 10000 that is a **17× absolute** improvement (228 → 13 ms): the database now does
+the `GROUP BY` over the `UNION ALL` derived table, so sf no longer buffers every
+pre-aggregation union row in Rust (`rust_group`). The small tiny-result-aggregate edge
+Ontop retains has **moved off q9 onto the single-source aggregates** q6 (17.05 vs 9.92 ms,
+≈1.7× @10000) and q13 (17.22 vs 9.54 ms, ≈1.8× @10000), which the q9 pushdown does not
+cover. q1/q3 re-raced as sanity stayed sf-faster (q3 = 563 vs 6319 ms @1000, **11.2×**).
+
 ### Honest reading — feature classes × scale (post-fix, 2026-07-01)
 
 - **Where sf computes the same answer, it wins on execution throughput, and the win
@@ -338,11 +361,15 @@ catastrophe is gone).
   because the differential ran SQLite-only; that blind spot is now closed by a
   **permanent SQLite-vs-live-PG differential** over all five classes (see below).
 
-- **🟠 Ontop still edges sf on tiny-result aggregates.** **Q9** (2-row COUNT-over-UNION)
-  and **Q6/Q13** favour Ontop at scale ≥ 1000 (≈1.2–4.3×) where the result is 2 rows and
-  plan quality, not scan throughput, decides — the sf agg-over-union path collects inner
-  solutions over the PG cursor before grouping. Correct, but not the fastest plan for a
-  2-row answer. This is the remaining honest gap; every cell is row-correct.
+- **🟠 The remaining tiny-result-aggregate edge is Q6/Q13 — no longer Q9.** Re-raced
+  2026-07-03 (post-pushdown; see the q9 re-race table above), **Q9 flipped to
+  parity-to-faster at every scale** (1.81× / 1.54× / 1.01× / 1.44× at 1/100/1000/10000)
+  once `try_sql_group_over_union` replaced the `rust_group` buffer with a DB-side
+  `GROUP BY` over `UNION ALL`. The residual now lives in **Q6** (GROUP BY + ORDER BY) and
+  **Q13** (nested-subquery agg) — single-source aggregates the q9 pushdown does not touch
+  — where Ontop leads ≈1.5–1.8× at scale ≥ 1000 on a 2-row result (plan quality, not scan
+  throughput). Every cell is row-correct; this is the honest remaining gap, now smaller
+  and relocated.
 
 - **No ONTOP-501 in this set.** Ontop 5.5.0 answers all of q1–q15 correctly at every
   scale. The honest bottom line has flipped: **sf-serve now matches Ontop on
