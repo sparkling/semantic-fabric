@@ -671,34 +671,55 @@ fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef
 /// `Union` distributes row-membership independently of how its arms are grouped);
 /// only the SQL shape changes — fewer arms to plan/execute.
 ///
-/// Declines (`None`) when fewer than 2 arms are constant (nothing worth
-/// combining — a single constant arm gains nothing from being wrapped in its own
-/// one-arm `Values`, and folding a single ALREADY-a-`Values` arm into itself is a
-/// pure no-op) or when EVERY arm is constant (`try_fold_constant_union`, tried
-/// first by the caller, already produces a strictly simpler bare `Values` for
-/// that case — this function only ever runs after that one has declined).
+/// Declines (`None`) when NO maximal contiguous run of 2+ constant arms exists
+/// anywhere in `arms` (a single isolated constant arm gains nothing from being
+/// wrapped in its own one-arm `Values`) or when the whole list folds into ONE
+/// run spanning every arm (`try_fold_constant_union`, tried first by the caller,
+/// already produces a strictly simpler bare `Values` for that case).
+///
+/// Folds each maximal contiguous run of 2+ constant arms into one `Values` arm
+/// AT that run's own starting position — never combining constant arms
+/// separated by a DATA arm. A LIMIT without ORDER BY is implementation-defined
+/// SPARQL-wise, but flat and tree are two implementations of the SAME engine
+/// that must agree with EACH OTHER on which rows survive (the `=_bag` gate this
+/// whole differential proves); flat iterates every arm in its own as-written
+/// order, so combining two constant arms that straddle a data arm would move
+/// the SECOND one's row earlier (or the data arm's rows later) relative to
+/// flat — a real bug an adversarial review caught (`SELECT ?n WHERE {{data}}
+/// UNION {{c1}} UNION {{c2}} LIMIT 2` returned the data arm's rows on the flat
+/// side but the folded constants on the tree side, because an earlier version
+/// of this function unconditionally prepended the fold regardless of position).
 fn try_partial_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
-    let mut rows = Vec::new();
-    let mut kept = Vec::new();
-    let mut const_arm_count = 0;
-    for arm in arms {
-        match const_rows_of(arm, project) {
-            Some(r) => {
-                rows.extend(r);
-                const_arm_count += 1;
+    let mut children = Vec::with_capacity(arms.len());
+    let mut folded_a_run = false;
+    let mut i = 0;
+    while i < arms.len() {
+        let mut run_rows = Vec::new();
+        let mut run_len = 0;
+        while i + run_len < arms.len() {
+            match const_rows_of(&arms[i + run_len], project) {
+                Some(r) => {
+                    run_rows.extend(r);
+                    run_len += 1;
+                }
+                None => break,
             }
-            None => kept.push(arm.clone()),
+        }
+        if run_len >= 2 {
+            children.push(IqNode::Values {
+                vars: project.to_vec(),
+                rows: run_rows,
+            });
+            folded_a_run = true;
+            i += run_len;
+        } else {
+            children.push(arms[i].clone());
+            i += 1;
         }
     }
-    if const_arm_count < 2 || kept.is_empty() {
+    if !folded_a_run || children.len() == 1 {
         return None;
     }
-    let mut children = Vec::with_capacity(kept.len() + 1);
-    children.push(IqNode::Values {
-        vars: project.to_vec(),
-        rows,
-    });
-    children.extend(kept);
     Some(IqNode::Union {
         children,
         project: project.to_vec(),
@@ -2001,7 +2022,7 @@ mod tests {
              UNION {{ BIND(\"b\" AS ?x) }} }}"
         ));
         let IqNode::Union { children, .. } = &n else {
-            panic!("expected a Union of [folded-Values, data-arm, data-arm]: {n:?}")
+            panic!("expected a Union of [data-arm, data-arm, folded-Values]: {n:?}")
         };
         assert_eq!(
             children.len(),
@@ -2009,16 +2030,30 @@ mod tests {
             "2 constant arms fold to 1 Values arm + the class-atom's own 2-way \
              per-table data union = 3 total (down from 4): {children:?}"
         );
+        // The two constant arms (BIND a, BIND b) come LAST in this query's own
+        // source order (the class-atom's 2-way data union comes first), so the
+        // fold lands LAST too -- never reordered relative to the data arms
+        // (a real bug an adversarial review caught in an earlier version of
+        // this rule: unconditionally prepending the fold silently changed which
+        // rows a bare LIMIT kept relative to the flat oracle's as-written
+        // order; fixed by folding each maximal contiguous run of constant arms
+        // AT its own starting position instead).
+        assert!(
+            children[..2]
+                .iter()
+                .all(|c| !matches!(c, IqNode::Values { .. } | IqNode::Union { .. })),
+            "the first two (data) arms are untouched, no further folding: {children:?}"
+        );
         // The folded Values arrives back here wrapped in an identity Construction
         // (`lift_construction`'s catch-all re-wraps every non-Union/Construction/
         // Empty arm when the enclosing top-level query Construction re-processes
         // this already-normalized Union -- the same double-pass mechanism found
         // during the test25 investigation), not bare -- confirmed empirically, not
         // assumed.
-        let IqNode::Construction { child, subst, .. } = &children[0] else {
+        let IqNode::Construction { child, subst, .. } = &children[2] else {
             panic!(
-                "expected the FIRST child to be the folded constant Values leaf \
-                     (kept arms are appended after it): {children:?}"
+                "expected the LAST child to be the folded constant Values leaf \
+                     (at the position its own 2 source arms started): {children:?}"
             )
         };
         assert!(
@@ -2029,12 +2064,6 @@ mod tests {
             panic!("expected an identity-Construction-wrapped Values leaf: {child:?}")
         };
         assert_eq!(rows.len(), 2, "one row per constant arm: {rows:?}");
-        assert!(
-            children[1..]
-                .iter()
-                .all(|c| !matches!(c, IqNode::Values { .. } | IqNode::Union { .. })),
-            "the remaining (data) arms are untouched, no further folding: {children:?}"
-        );
     }
 
     /// A variable-referencing `BIND` (not a compile-time constant) also blocks the

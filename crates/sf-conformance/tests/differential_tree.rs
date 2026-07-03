@@ -755,6 +755,91 @@ fn constant_fold_needs_no_type_homogeneity_gate() {
     diff_p("SELECT ?x WHERE { { BIND(<http://ex/a> AS ?x) } UNION { BIND(\"a\"@en AS ?x) } }");
 }
 
+/// Ontop `ValuesNodeOptimization::test19/test21/test22/test23/test24` (the
+/// RDF-term "binding-lift" family — splitting a constant/data arm's RDF term
+/// into lexical value + datatype and hoisting a SHARED datatype/wrapper
+/// Construction above the whole `Union`, so every arm underneath only supplies
+/// its own raw lexical value): Ontop needs this hoist to collapse the SQL shape
+/// (fewer `RDFTermFunctionNode`s, one shared wrapper instead of one per arm) --
+/// but, exactly like test17's finding, semantic-fabric's lowering does not
+/// depend on it for `=_bag` correctness. `IqNode::Union` always explodes into N
+/// independent branches regardless of what (if anything) wraps it, and
+/// `IqNode::Construction` folds its substitution into each resulting branch
+/// separately -- neither behavior is conditioned on whether a shared wrapper
+/// was hoisted, so the UNCHANGED tree (no fold attempted, no wrapper hoisted)
+/// is already correct for every representative shape below: same-type
+/// constants + a data arm (test19); constant IRIs + a real IRI-template arm
+/// (test21); constants + a data arm gated by a nullable-column FILTER (test22);
+/// a 2-variable generalization (test23); and HETEROGENEOUS types where even
+/// Ontop's own Values-fold declines, confirming correctness never depended on
+/// folding at all (test24).
+///
+/// Caveat, stated plainly: these are REPRESENTATIVE constructions matching each
+/// test's OWN description in the worklist, not a line-for-line port of Ontop's
+/// Java test source (not available in this environment) -- the underlying
+/// architectural reason (Union/Construction lowering is wrapper-agnostic) is
+/// shape-invariant, not scenario-specific, which is why one reasoning covers
+/// all five; but the exact Ontop fixtures were not independently cross-checked.
+#[test]
+fn rdf_term_binding_lift_family_needs_no_rewrite_for_correctness() {
+    // test19: same-type (xsd:string) RDF consts + a data arm.
+    diff_p(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:name ?n }} UNION {{ BIND(\"X\" AS ?n) }} \
+         UNION {{ BIND(\"Y\" AS ?n) }} }}"
+    ));
+    // test21: constant IRI arms + a real IRI-template (subject) arm.
+    diff_p(&format!(
+        "{PFX} SELECT ?s WHERE {{ {{ ?s ex:name ?n }} UNION {{ BIND(<http://ex/c1> AS ?s) }} \
+         UNION {{ BIND(<http://ex/c2> AS ?s) }} }}"
+    ));
+    // test22: constants + a data arm involving a nullable-column FILTER (an
+    // IS-NOT-NULL-ish expression via BOUND()).
+    diff_p(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:email ?n . FILTER(BOUND(?n)) }} \
+         UNION {{ BIND(\"X\" AS ?n) }} UNION {{ BIND(\"Y\" AS ?n) }} }}"
+    ));
+    // test23: multi-column (2-var) version of test19.
+    diff_p(&format!(
+        "{PFX} SELECT ?s ?n WHERE {{ {{ ?s ex:name ?n }} \
+         UNION {{ BIND(<http://ex/c1> AS ?s) BIND(\"X\" AS ?n) }} \
+         UNION {{ BIND(<http://ex/c2> AS ?s) BIND(\"Y\" AS ?n) }} }}"
+    ));
+    // test24: HETEROGENEOUS types (no Values fold even attempted) + a data arm
+    // -- confirms the UNCHANGED tree is still correct with no rewrite.
+    diff_p(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:name ?n }} UNION {{ BIND(1 AS ?n) }} \
+         UNION {{ BIND(\"Y\"@en AS ?n) }} }}"
+    ));
+}
+
+/// Regression test for a bug an adversarial review caught in `try_partial_fold_
+/// constant_union` (test15/test17, commit `9bb21b8`): an earlier version
+/// unconditionally PREPENDED the folded Values arm to position 0, silently
+/// reordering rows relative to the flat oracle's own as-written-arm-order
+/// convention -- a real flat-vs-tree divergence under a bare LIMIT (no ORDER
+/// BY), where the two engines are supposed to agree with EACH OTHER (the
+/// `=_bag` gate this whole differential suite proves) even though SPARQL
+/// itself leaves the tie-break implementation-defined. Covers: data arm first
+/// (the fold moves to the END, matching where its own 2 source arms sat);
+/// constant arms sandwiching a data arm (non-adjacent constants must NOT
+/// combine at all -- combining them would necessarily move something out of
+/// its as-written position no matter where the merged arm lands, so the fix
+/// only ever folds a maximal CONTIGUOUS run of constant arms, declining
+/// entirely here rather than risk it).
+#[test]
+fn partial_fold_preserves_as_written_arm_order_under_limit() {
+    // Data arm first: the fold (2 contiguous constant arms) lands LAST.
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ ?p ex:name ?n }} UNION {{ BIND(\"X\" AS ?n) }} \
+         UNION {{ BIND(\"Y\" AS ?n) }} }} LIMIT 2"
+    ));
+    // Constant arms sandwiching a data arm: non-adjacent, must not combine.
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ BIND(\"X\" AS ?n) }} UNION {{ ?p ex:name ?n }} \
+         UNION {{ BIND(\"Y\" AS ?n) }} }} LIMIT 2"
+    ));
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
