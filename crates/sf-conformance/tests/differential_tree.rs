@@ -1686,6 +1686,76 @@ fn agg_over_union_self_join_eliminated_via_rust_group() {
     }
 }
 
+/// Regression guard (q6/q13 tiny-aggregate perf, 2026-07-03): a SINGLE-branch
+/// `GROUP BY` + aggregate over a self-join — two predicate-object maps of the SAME
+/// PK-keyed table (`ex:grp`, `ex:p` both on `m`), joined on the shared subject `?s`
+/// (m's PK `id`) — must collapse to ONE scan of `m`. This is the exact shape the
+/// live GTFS q6/q13 shootout exposed: `SELECT ?agencyName (COUNT(?route) …) … GROUP
+/// BY ?agencyName` emitted `routes`×2 CROSS JOIN `agency`×2 self-joins (≈1.7–1.8×
+/// slower than Ontop at scale ≥1000). Before this fix `cascade::run` passed every
+/// `agg.is_some()` branch through UNTOUCHED, so self-join elimination never ran on a
+/// single-branch aggregate (the multi-branch `rust_group`/pushdown paths were fixed
+/// in earlier waves; this one was missed). Now self-join elimination runs on
+/// aggregate branches and `rewrite_alias` follows the merge into the `Aggregation`'s
+/// key/argument `ColRef`s. **Revert-proof**: reverting either half (the `run` gate or
+/// the `rewrite_alias` agg-coverage) makes the scan-count assertion fail (2, not 1).
+/// `=_bag` preserved — a 1:1 PK self-join changes neither the group nor the COUNT.
+const SBAGG_SQL: &str = r#"
+CREATE TABLE m (id INTEGER PRIMARY KEY, grp TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO m VALUES (1,'g1','a');
+INSERT INTO m VALUES (2,'g1','b');
+INSERT INTO m VALUES (3,'g1','c');
+INSERT INTO m VALUES (4,'g2','d');
+INSERT INTO m VALUES (5,'g2','e');
+"#;
+
+const SBAGG_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#M>
+    rr:logicalTable [ rr:tableName "m" ] ;
+    rr:subjectMap [ rr:template "http://ex/m/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:grp ; rr:objectMap [ rr:column "grp" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p   ; rr:objectMap [ rr:column "v" ] ] .
+"#;
+
+const SBAGG_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/m/1> ex:grp "g1" ; ex:p "a" .
+<http://ex/m/2> ex:grp "g1" ; ex:p "b" .
+<http://ex/m/3> ex:grp "g1" ; ex:p "c" .
+<http://ex/m/4> ex:grp "g2" ; ex:p "d" .
+<http://ex/m/5> ex:grp "g2" ; ex:p "e" .
+"#;
+
+#[test]
+fn single_branch_group_by_self_join_collapses_to_one_scan() {
+    let conn = sqlite::load(SBAGG_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(SBAGG_R2RML).expect("R2RML parses");
+    let query = format!("{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g ; ex:p ?v }} GROUP BY ?g");
+    let q = parse(&query);
+    let tp = tree(&maps, &q, &schema).expect("single-branch GROUP BY translates");
+    // A plain single-branch aggregate: one branch, `agg` set, NOT a UNION pushdown
+    // (no `subplan_joins`) — the path that was passing through the cascade untouched.
+    let b = tp
+        .branches
+        .iter()
+        .find(|b| b.agg.is_some() && b.subplan_joins.is_empty())
+        .expect("single-branch Aggregation");
+    let m_scans = b
+        .core
+        .iter()
+        .filter(|s| matches!(&s.source, sf_core::ir::LogicalSource::Table(t) if t == "m"))
+        .count();
+    assert_eq!(
+        m_scans, 1,
+        "the PK self-join must collapse to one scan of `m` (was 2 pre-fix): {:?}",
+        b.core
+    );
+    assert_vs_spareval(SBAGG_TTL, &query, &tp, &conn);
+}
+
 /// Test-integrity fix: `d69daa6` (guard q9 agg-pushdown against post-cascade
 /// column-count/position drift) had NO regression test. This constructs the
 /// exact divergent shape the fix guards: TWO union arms sharing the outer

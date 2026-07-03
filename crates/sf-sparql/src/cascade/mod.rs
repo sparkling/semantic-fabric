@@ -87,10 +87,25 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             // through so a self-join/FK rewrite never silently corrupts the
             // correlation (the anti-join is already a sound base translation).
             // A GROUP BY + aggregates branch (SPARQL §11) carries an `Aggregation`
-            // over its inner FROM/WHERE; the constraint-driven passes model neither
-            // grouping nor aggregate columns, so pass it through untouched (a sound
-            // base translation already — never risk corrupting the grouping).
-            if b.path.is_some() || b.agg.is_some() {
+            // over its inner FROM/WHERE. The constraint-driven passes that touch
+            // grouping/aggregate semantics stay skipped — FK/PK join elimination could
+            // drop a table the GROUP BY key needs (it inspects bindings/conds, not
+            // `b.agg`); `prune_iri_template_mismatch` would wrongly delete an empty
+            // *implicit*-group branch that must still yield one row (COUNT ⇒ 0);
+            // selection pushdown / DISTINCT-driven prunes are likewise not modelled.
+            // But self-join elimination IS `=_bag`-safe on an aggregate branch: it
+            // merges two scans of the SAME table on a unique key — a 1:1 self-join that
+            // changes neither the group multiplicity nor the COUNT — and `rewrite_alias`
+            // now follows the merge into `b.agg`'s key/argument `ColRef`s. This collapses
+            // the redundant self-joins q6/q13 emit (routes×2, agency×2) to one scan of
+            // each table, the same win Wave 1 brought to the multi-branch `rust_group`
+            // path (which the single-branch aggregate path had been missing).
+            if b.path.is_some() {
+                return Some(b);
+            }
+            if b.agg.is_some() {
+                self_join_elimination(&mut b, schema);
+                nullable_unique_self_join_elimination(&mut b, schema);
                 return Some(b);
             }
             if branch_has_not_exists(&b) {
@@ -626,6 +641,25 @@ fn rewrite_alias(b: &mut Branch, from: usize, to: usize) {
     for opt in &mut b.opts {
         for cond in opt.on.iter_mut().chain(opt.extra.iter_mut()) {
             rewrite_cond_alias(cond, &fix);
+        }
+    }
+    // A GROUP BY + aggregates branch (§11) holds its grouping-key columns and
+    // aggregate-argument columns as `ColRef`s on `b.agg`, OUTSIDE `bindings`/conds.
+    // Self-join elimination now runs on aggregate branches (see `run`), so the merged
+    // alias must be followed here too, or the GROUP BY key / COUNT argument would
+    // dangle at the dropped scan. (`out` is the synthetic aggregate-result alias, never
+    // a base scan being merged; rewriting it is a harmless no-op kept for uniformity.)
+    if let Some(agg) = &mut b.agg {
+        for key in &mut agg.keys {
+            for c in &mut key.cols {
+                fix(c);
+            }
+        }
+        for a in &mut agg.aggs {
+            if let Some(arg) = &mut a.arg {
+                fix(arg);
+            }
+            fix(&mut a.out);
         }
     }
 }
