@@ -75,7 +75,7 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | ValuesNodeOptimization::test12…LimitDistinctUnionDistinctTree | limit pushed onto both distinct arms | **documented boundary** (not attempted) | needs DATABASE SCHEMA-level uniqueness reasoning (UC + IS NOT NULL on the underlying table) — `normalize` runs purely on the IR tree with NO catalog/schema access at all (schema-aware passes live in the flat path's POST-lowering `cascade` module); this is an architectural gap, not an effort gap |
 | union-structural | ValuesNodeOptimization::test13…LimitDistinctUnionNonDistinctTree | limit pushed onto the one distinct arm | **documented boundary** (not attempted) | same architectural gap as test12 |
 | union-structural | ValuesNodeOptimization::test14…ConstructionUnionTrueTrue | Union[const-Construct/True ×2] → Values | **DONE** (Wave C, commit `d3139f5`) | `try_fold_constant_union` (`iq/normalize.rs`): folds an all-constant-BIND Union to one Values leaf; foundation for test15/17-26 below (not itself implemented — see note) |
-| union-structural | ValuesNodeOptimization::test15…ConstructionUnionTrueTrueDataNode | const arms fold, data arm kept | needs-tree-rewrite [cosmetic] | §4.15 partial Values-fold |
+| union-structural | ValuesNodeOptimization::test15…ConstructionUnionTrueTrueDataNode | const arms fold, data arm kept | **DONE** (Wave C, commit `9bb21b8`) | new `try_partial_fold_constant_union` (`iq/normalize.rs`), sharing a `const_rows_of` helper extracted from `try_fold_constant_union` (test14): folds 2+ constant arms into one `Values`, keeps data arm(s) as sibling `Union` arms; adversarial review found a pre-existing, `=_bag`-safe missed-optimization gap composing with test26's column reordering when a data arm widens the union's own variable scope (declines to fold rather than mishandling — not fixed, not blocking) |
 | union-structural | ValuesNodeOptimization::test17…DBConstant | same-DB-type DBConstant arms fold | needs-tree-rewrite [cosmetic] | §4.15 fold w/ homogeneous-cell-type gate |
 | union-structural | ValuesNodeOptimization::test18…RDFConstant (diff datatypes) | heterogeneous RDF constants → NO fold | free-pass (negative) | §4.15 precondition forbids fold → matches Ontop |
 | union-structural | ValuesNodeOptimization::test19…RDFConstant (same type) | same-type RDF consts → Construction(RDFLiteral) over Union[Values,data] | needs-tree-rewrite [cosmetic] | §4.15 binding-lift: split term, lift type, fold lexical |
@@ -89,10 +89,10 @@ shows mis-evaluating/erroring are **[oracle-gap]**.
 | union-structural | ValuesNodeComplexQueryOptimization::testTranslatedSQLQuery1 | end-to-end LIMIT 4 over wide mapping union | needs-tree-rewrite [cosmetic] | same Slice driver scaled |
 | union-structural | BindingLiftTest::testUnionSubstitution | lift common URI-template binding into shared Construction above union | needs-tree-rewrite [cosmetic] | §4.15 binding-lift (load-bearing for signature parity, not `=_bag`) |
 
-Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 13 DONE (test1/test2/test3/test4/
-test5/test5b/test6/test7/test8/test9/test14/test25/test26), 4 documented-boundary (test10/11/12/13
--- see Family 1 table for why each is a genuine architectural gap, not an effort gap), 10
-needs-tree-rewrite (all [cosmetic] for `=_bag`), 0 M5, 0
+Family 1 totals (2026-07-03, Wave C progress): **6 free-pass, 14 DONE (test1/test2/test3/test4/
+test5/test5b/test6/test7/test8/test9/test14/test15/test25/test26), 4 documented-boundary
+(test10/11/12/13 -- see Family 1 table for why each is a genuine architectural gap, not an effort
+gap), 9 needs-tree-rewrite (all [cosmetic] for `=_bag`), 0 M5, 0
 charter.** (Original: 6/27/0/0 —
 kept for history; the 11 DONE + 4 documented-boundary rows are no longer counted in the 27.)
 
@@ -110,11 +110,14 @@ with a `same_var_set` guard (decline whenever `project` narrows the Values leaf'
 a second adversarial pass re-verified the fix across 7 further angles and found nothing. This
 is the process working as intended, not a caveat to hide.
 
-test14's fold is a real capability (not a stub) but does NOT yet subsume test15/17-26 (partial
-fold with a DATA arm kept, homogeneous-DB-type gating, RDF-term binding-lift/split, zero-var
-counting, column-order reconciliation) — those remain open, each verified to safely DECLINE
-today (confirmed by the implementer's own tests and two adversarial reviewers) rather than
-mis-fold. test4 (Slice over Union[Values,Values]) needed NO new code — covered by composing
+test14's fold is a real capability (not a stub) but did NOT at the time yet subsume test15/17-26
+(partial fold with a DATA arm kept, homogeneous-DB-type gating, RDF-term binding-lift/split,
+zero-var counting, column-order reconciliation) — those remained open, each verified to safely
+DECLINE at the time (confirmed by the implementer's own tests and two adversarial reviewers)
+rather than mis-fold. UPDATE: test15 (partial fold, sharing a `const_rows_of` helper extracted
+from test14's own logic), test25 (zero-var counting), and test26 (column-order reconciliation)
+are since DONE — see the Family 1 table for each. test4 (Slice over Union[Values,Values]) needed
+NO new code — covered by composing
 test1/test2 + test14's rules, confirmed with its own named/rule-sensitivity-checked test (commit
 `1e5dd60`), no separate adversarial round (no new production logic). test5/test5b/test6/test7
 (Slice-over-Union arm-drop + residual-limit, commit `38a3f07`) are a genuinely NEW, materially
@@ -139,14 +142,16 @@ in the flat path's POST-lowering `cascade` module) — an architectural gap, not
 test26 (mixed-order arm-merge, `same_var_set`/`reorder_row` in `try_fold_constant_union`, commit
 `487b4fb`) closes the column-order-reconciliation half of Group B's general arm-merge scope; test25
 (zero-var counting, lifting `try_fold_constant_union`'s `project.is_empty()` guard, commit
-`2d492f2`) closes the last non-binding-lift item. The RDF-term binding-lift half (test15/17/19/21-24
-— splitting a term into lexical value + datatype, lifting a shared datatype/wrapper Construction
-above the union) is qualitatively different work (term decomposition, not row-level reordering) and
-is untouched, as is `BindingLiftTest::testUnionSubstitution`. Precise remainder: 10 genuinely open +
-4 documented-boundary = 14 of the original 27 rows: 7 RDF-term binding-lift rows (test15/17/19/
-21-24), `BindingLiftTest::testUnionSubstitution` (a related but separate mechanism), and the two
-end-to-end composition rows (`testTranslatedSQLQuery1` Simple/Complex) that likely depend on
-binding-lift being done first. Five pre-existing,
+`2d492f2`) and test15 (partial fold — 2+ constant arms combine even alongside a genuine DATA arm,
+`try_partial_fold_constant_union` sharing a `const_rows_of` helper extracted from test14's own
+logic, commit `9bb21b8`) close the remaining non-binding-lift items. The RDF-term binding-lift half
+(test17/19/21-24 — splitting a term into lexical value + datatype, lifting a shared datatype/
+wrapper Construction above the union) is qualitatively different work (term decomposition, not
+row-level reordering) and is untouched, as is `BindingLiftTest::testUnionSubstitution`. Precise
+remainder: 9 genuinely open + 4 documented-boundary = 13 of the original 27 rows: 6 RDF-term
+binding-lift rows (test17/19/21-24), `BindingLiftTest::testUnionSubstitution` (a related but
+separate mechanism), and the two end-to-end composition rows (`testTranslatedSQLQuery1` Simple/
+Complex) that likely depend on binding-lift being done first. Five pre-existing,
 Wave-C-unrelated bugs were incidentally
 discovered during adversarial review (a core-less-branch OptJoin SQL-emission gap triggered by
 `BIND(...) OPTIONAL {...}` with no union at all; a flat-oracle limitation aggregating over a
@@ -329,12 +334,12 @@ the correction note above the Family 3 table). The counts below are updated acco
 | disposition | union-structural | boolean-push | join-elim | projection-and-true | **total** | *(orig. join-elim / total)* |
 |---|---|---|---|---|---|---|
 | free-pass | 6 | 27 | 24 | 30 | **87** | *(17 / 80)* |
-| **DONE (Wave C, implemented)** | 13 | 0 | 0 | 0 | **13** | *(new bucket, not in the original 121)* |
+| **DONE (Wave C, implemented)** | 14 | 0 | 0 | 0 | **14** | *(new bucket, not in the original 121)* |
 | **documented-boundary (Wave C)** | 4 | 0 | 0 | 0 | **4** | *(new bucket, not in the original 121 — architectural gaps, see Family 1 table)* |
-| needs-tree-rewrite | 10 | 0 | 1 | 0 | **11** | *(7 / 34)* |
+| needs-tree-rewrite | 9 | 0 | 1 | 0 | **10** | *(7 / 34)* |
 | needs-SubPlan-M5 | 0 | 0 | 0 | 0 | **0** | *(1 / 1, now closed)* |
 | charter-excluded | 0 | 0 | 2 | 4 | **6** | *(2 / 6)* |
-| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 13 Wave C DONE + 4 documented-boundary rows are a subset of union-structural's 27, not additional rows)* |
+| **enumerated rows** | 33 | 27 | 27 | 34 | **121** | *(same 121 rows as the original table — 7 needs-tree-rewrite + 1 M5 reclassified to free-pass within join-elim, minus FDSimplification's 2026-07-03 revert, none added/removed; the 14 Wave C DONE + 4 documented-boundary rows are a subset of union-structural's 27, not additional rows)* |
 
 **Wave C update (2026-07-03):** 9 of union-structural's 24 needs-tree-rewrite rows
 (test1/test2/test3/test4/test5/test5b/test6/test7/test14) are now DONE, not merely
@@ -390,6 +395,8 @@ collapsed join.
 - **Wave 5 — Group B: UnionAndBindingLift + Values constant-fold** *(independent; signature parity only)*.
   §4.15 fold-constants-into-Values, RDF-term split/lift, multi-column Values. Unblocks: test14-26,
   test19/23/24, BindingLiftTest::testUnionSubstitution, end-to-end SQL-shape tests. Cosmetic for `=_bag`.
+  STATUS (Wave C, 2026-07-03): test14/15/25/26 DONE (the constant-fold half — see Family 1 table);
+  test17/19/21-24 (RDF-term split/lift) and `BindingLiftTest::testUnionSubstitution` remain open.
   **STARTED 2026-07-03** (branch `fix/adr-0023-residue-waves`, "Wave C" in that session's own commit
   naming): test14's core mechanism (`try_fold_constant_union`, commit `d3139f5`) — an all-constant-BIND
   Union folds to one Values leaf. Does NOT yet subsume test15/17-26/BindingLiftTest (partial fold with a
