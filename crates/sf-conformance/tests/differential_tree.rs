@@ -496,6 +496,97 @@ fn slice_over_union_of_bare_values_folds_and_truncates() {
     );
 }
 
+/// Ontop `ValuesNodeOptimization::test5-7SliceUnionValuesNonValues`: a `Slice` over
+/// `Union[Values, DATA-arm]` drops the data arm entirely when the `Values` arm alone
+/// (after OFFSET/LIMIT) already satisfies the window, or keeps it under a reduced
+/// residual `Slice` when it doesn't.
+#[test]
+fn slice_over_union_arm_drop_and_residual_limit() {
+    // LIMIT with no ORDER BY over a multi-arm shape: diff_p_bag, not spareval, same
+    // implementation-defined-tie-break reason as this file's other such tests.
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 2"
+    ));
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Bob\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 2 OFFSET 1"
+    ));
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Bob\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 5 OFFSET 1"
+    ));
+    // Adversarial-review-caught regression: OFFSET exceeds the Values arm's entire
+    // row count (3) while the data arm still remains. A first draft hardcoded the
+    // residual Slice's offset to 0, silently dropping the 1-row shortfall and
+    // leaking an extra row ("Ann") the true OFFSET should have skipped -- confirmed
+    // as a real flat-vs-tree divergence (flat=2 rows, buggy tree=3 rows) before the
+    // fix (`offset: offset.saturating_sub(cursor)`, not a hardcoded 0).
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Bob\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 5 OFFSET 4"
+    ));
+    diff_p_bag(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Bob\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 5 OFFSET 10"
+    ));
+
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+
+    // Shape: the data arm is unreachable (Values alone covers the window) -- fully
+    // resolves to a bare Values leaf (2 rows -> 2 core-less branches, ADR-0023's
+    // one-branch-per-row lowering), no branch touches the person/dept tables.
+    let q_drop = parse(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 2"
+    ));
+    let tp_drop = tree(&maps, &q_drop, &schema).expect("tree translates");
+    assert_eq!(
+        tp_drop.branches.len(),
+        2,
+        "the data arm's scan must not survive, only the 2 Values rows: {:?}",
+        tp_drop.branches
+    );
+    assert!(
+        tp_drop.branches.iter().all(|b| b.core.is_empty()),
+        "every surviving branch must be core-less (pure Values, no scan): {:?}",
+        tp_drop.branches
+    );
+
+    // Shape: the data arm survives (Values alone doesn't cover the window), but
+    // under a residual Slice(offset=0, ORIGINAL limit) -- not the original offset.
+    let q_residual = parse(&format!(
+        "{PFX} SELECT ?n WHERE {{ {{ VALUES ?n {{ \"Ann\" \"Bob\" \"Zed\" }} }} \
+         UNION {{ ?p ex:name ?n }} }} LIMIT 5 OFFSET 1"
+    ));
+    let tp_residual = tree(&maps, &q_residual, &schema).expect("tree translates");
+    assert_eq!(
+        tp_residual.offset, 0,
+        "the offset skip is already baked into the surviving Values rows"
+    );
+    assert_eq!(
+        tp_residual.limit,
+        Some(5),
+        "the ORIGINAL limit, not reduced"
+    );
+    // OFFSET 1 drops "Ann", leaving 2 survivor rows (Bob, Zed) -> 2 core-less
+    // branches, plus the data arm's own (real-scan) branch = 3 total.
+    assert_eq!(
+        tp_residual.branches.len(),
+        3,
+        "2 surviving Values branches (Bob, Zed) + the data arm's own branch: {:?}",
+        tp_residual.branches
+    );
+    assert!(
+        tp_residual.branches[..2].iter().all(|b| b.core.is_empty())
+            && !tp_residual.branches[2].core.is_empty(),
+        "first two branches are the core-less Values survivors, third is the real scan: {:?}",
+        tp_residual.branches
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).

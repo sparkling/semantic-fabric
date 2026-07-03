@@ -647,15 +647,27 @@ fn normalize_slice(offset: usize, limit: Option<usize>, child: IqNode) -> IqNode
             vars,
             rows: slice_rows(rows, offset, limit),
         },
+        IqNode::Union { children, project } => {
+            match try_slice_over_union(offset, limit, &children, &project) {
+                Some(node) => node,
+                None => IqNode::Slice {
+                    child: Box::new(IqNode::Union { children, project }),
+                    offset,
+                    limit,
+                },
+            }
+        }
         IqNode::Construction {
             child: inner,
             subst,
             project,
-        } if matches!(*inner, IqNode::Values { .. }) => IqNode::Construction {
-            child: Box::new(normalize_slice(offset, limit, *inner)),
-            subst,
-            project,
-        },
+        } if matches!(*inner, IqNode::Values { .. } | IqNode::Union { .. }) => {
+            IqNode::Construction {
+                child: Box::new(normalize_slice(offset, limit, *inner)),
+                subst,
+                project,
+            }
+        }
         child => IqNode::Slice {
             child: Box::new(child),
             offset,
@@ -674,6 +686,166 @@ fn slice_rows(
         .skip(offset)
         .take(limit.unwrap_or(usize::MAX))
         .collect()
+}
+
+// ---- (d2) Slice-over-Union arm-drop / residual-limit (ADR-0023 optimizer-residue
+// Wave C; Ontop ValuesNodeOptimization::test5-7SliceUnionValuesNonValues) ---------
+
+/// An arm's statically-known row set matching `project` in EXACT column order: a
+/// bare `Values` leaf, or a single-row all-constant `Construction{child: True, ...}`
+/// (the same two shapes [`try_fold_constant_union`] recognizes for a WHOLE `Union`,
+/// generalized here to one arm at a time — a mixed `Union` with a genuine DATA arm
+/// declines `try_fold_constant_union` entirely, so an all-constant arm can still
+/// reach this function unfolded). `None` ⇒ unknown cardinality (a real pattern, or
+/// a column-order mismatch this rule doesn't reconcile — cf. test26).
+fn static_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
+    if let IqNode::Values { vars, rows } = arm {
+        return (vars.as_slice() == project).then(|| rows.clone());
+    }
+    // A lone `VALUES` block as a Union arm is ALSO wrapped in the builder's identity-
+    // projection `Construction` (confirmed empirically — the same pattern `normalize_
+    // slice`/`normalize_distinct` already handle for the top-level-body case, but here
+    // for one arm among several). `child.as_ref()` decides which of the two shapes
+    // this is; no ambiguity between them (`Values`/`True` are distinct variants).
+    let IqNode::Construction {
+        child,
+        subst,
+        project: arm_project,
+    } = arm
+    else {
+        return None;
+    };
+    match child.as_ref() {
+        IqNode::Values { vars, rows }
+            if subst.is_empty()
+                && arm_project.as_slice() == project
+                && vars.as_slice() == project =>
+        {
+            Some(rows.clone())
+        }
+        IqNode::True => {
+            let no_vars = BTreeMap::new();
+            let mut row = Vec::with_capacity(project.len());
+            for var in project {
+                let cell = match subst.get(var) {
+                    Some(BindDef::Resolved(TermDef::Const(t))) => Some(TermDef::Const(t.clone())),
+                    Some(BindDef::Expr(e)) => Some(bind_term_def(e, &no_vars).ok()?),
+                    Some(_) => return None,
+                    None => None,
+                };
+                row.push(cell);
+            }
+            Some(vec![row])
+        }
+        _ => None,
+    }
+}
+
+/// Resolve a `Slice(offset, limit)` over a `Union` whose LEADING arms have a
+/// statically-known row count ([`static_rows_of`]) by walking them in as-written
+/// order, tracking `cursor` (the true row count consumed so far) and `survivors`
+/// (the rows the `[offset, offset+limit)` window actually keeps from them):
+///
+/// * An arm entirely BEFORE the window (`cursor + n <= offset`) contributes nothing
+///   — dropped outright.
+/// * An arm straddling the window contributes its own local `[offset-cursor,
+///   limit_end-cursor)` slice — dropped down to just the surviving rows.
+/// * Once `survivors.len()` already reaches `limit`, every remaining arm is
+///   unreachable regardless of its own size or kind — dropped, INCLUDING an
+///   unknown-cardinality one.
+/// * An unknown-cardinality arm reached BEFORE the window is satisfied means we
+///   genuinely cannot tell how many (if any) of its rows are needed — processing
+///   STOPS there: that arm and everything after survives untouched, under a fresh
+///   `Slice(0, limit)` over `[the truncated survivor prefix (if non-empty), the
+///   unknown arm, ...the rest]` — offset 0 because the survivors already account
+///   for everything before them in as-written order, so a plain Slice-over-Union
+///   (whose own semantics already read arms in order from position 0) does the
+///   right thing for whatever follows, at any depth, with no further bookkeeping.
+///
+/// Returns `None` (decline, keep `Slice{Union}` as-is) when nothing at all could be
+/// dropped or truncated — e.g. the very first arm is already unknown and the window
+/// isn't yet satisfied — matching every other rule's sound-decline convention.
+fn try_slice_over_union(
+    offset: usize,
+    limit: Option<usize>,
+    arms: &[IqNode],
+    project: &[Var],
+) -> Option<IqNode> {
+    let limit_n = limit.unwrap_or(usize::MAX);
+    let window_end = offset.saturating_add(limit_n);
+    let mut cursor = 0usize;
+    let mut survivors: Vec<Vec<Option<TermDef>>> = Vec::new();
+    let mut i = 0;
+    let mut changed = false;
+
+    while i < arms.len() {
+        if survivors.len() >= limit_n {
+            // Everything from here on (including arms[i] itself, not yet processed)
+            // is unreachable -- drop the whole remaining tail, not just what's
+            // already been looked at.
+            changed = true;
+            i = arms.len();
+            break;
+        }
+        match static_rows_of(&arms[i], project) {
+            Some(rows) => {
+                let n = rows.len();
+                let local_start = offset.saturating_sub(cursor).min(n);
+                let local_end = window_end.saturating_sub(cursor).min(n);
+                if local_start > 0 || local_end < n {
+                    changed = true; // this arm got truncated (partly or fully outside the window)
+                }
+                if local_start < local_end {
+                    survivors.extend(rows[local_start..local_end].iter().cloned());
+                }
+                cursor += n;
+                i += 1;
+            }
+            None => break, // unknown cardinality -- stop, keep this arm + the rest
+        }
+    }
+
+    if !changed {
+        return None;
+    }
+
+    let remaining = &arms[i..];
+    if remaining.is_empty() {
+        Some(IqNode::Values {
+            vars: project.to_vec(),
+            rows: survivors,
+        })
+    } else {
+        let mut new_arms = Vec::new();
+        if !survivors.is_empty() {
+            new_arms.push(IqNode::Values {
+                vars: project.to_vec(),
+                rows: survivors,
+            });
+        }
+        new_arms.extend(remaining.iter().cloned());
+        let child = if new_arms.len() == 1 {
+            new_arms.pop().expect("len checked == 1")
+        } else {
+            IqNode::Union {
+                children: new_arms,
+                project: project.to_vec(),
+            }
+        };
+        Some(IqNode::Slice {
+            child: Box::new(child),
+            // NOT unconditionally 0: an adversarial review caught that the known
+            // arms' cumulative row count (`cursor`) may still fall SHORT of the
+            // original `offset` when it isn't enough to cover the whole skip on its
+            // own (e.g. `offset=4` over a single known 3-row arm then a data arm --
+            // all 3 rows are dropped, but 1 MORE row of skip still needs to land on
+            // the data arm itself). `survivors` only ever holds what's already
+            // correctly positioned at `offset` or later, so the residual is exactly
+            // however much of `offset` the known prefix DIDN'T already consume.
+            offset: offset.saturating_sub(cursor),
+            limit,
+        })
+    }
 }
 
 // ---- (e) Distinct-over-Values dedup (ADR-0023 optimizer-residue Wave C; Ontop
@@ -1297,6 +1469,177 @@ mod tests {
             vec![1, 2, 3],
             "as-written order across both arms, truncated to LIMIT 3: {rows:?}"
         );
+    }
+
+    /// Ontop `ValuesNodeOptimization::test5SliceUnionValuesNonValues`: a `Slice`
+    /// window that falls ENTIRELY within a leading `Values` arm's known row count
+    /// drops the trailing DATA (real-pattern) arm outright — no scan of it survives.
+    #[test]
+    fn slice_over_union_drops_unreachable_data_arm() {
+        let n = norm(
+            "SELECT ?n WHERE { { VALUES ?n { \"a\" \"b\" } } \
+             UNION { ?s <http://ex/name> ?n } } LIMIT 2",
+        );
+        let IqNode::Values { vars, rows } = &n else {
+            panic!(
+                "expected full resolution to a bare Values leaf (no Slice/Union survives): {n:?}"
+            )
+        };
+        assert_eq!(vars.len(), 1);
+        assert_eq!(
+            rows.iter().map(|r| row_str(r)).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "the data arm must not appear at all: {rows:?}"
+        );
+    }
+
+    /// The OFFSET half: a leading `Values` arm big enough to cover BOTH the offset
+    /// skip and the whole limit drops the data arm too, keeping only the surviving
+    /// window from the `Values` arm.
+    #[test]
+    fn slice_over_union_offset_fully_satisfied_by_values_drops_data_arm() {
+        let n = norm(
+            "SELECT ?n WHERE { { VALUES ?n { \"a\" \"b\" \"c\" } } \
+             UNION { ?s <http://ex/name> ?n } } LIMIT 2 OFFSET 1",
+        );
+        let IqNode::Values { rows, .. } = &n else {
+            panic!("expected full resolution to a bare Values leaf: {n:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|r| row_str(r)).collect::<Vec<_>>(),
+            vec!["b", "c"],
+            "OFFSET 1 skips \"a\"; the data arm is still unreachable: {rows:?}"
+        );
+    }
+
+    /// Ontop `ValuesNodeOptimization::test6/7SliceUnionValuesNonValues` (residual
+    /// limit): the `Values` arm doesn't cover the whole window, so the data arm
+    /// survives — but under a Slice reset to `offset=0` (the survivors already
+    /// account for everything before them in as-written order) with the ORIGINAL
+    /// limit (not reduced: a plain Slice-over-Union already reads the reconstructed
+    /// sequence from position 0, so the survivor rows themselves count toward it).
+    #[test]
+    fn slice_over_union_residual_limit_keeps_the_data_arm() {
+        let n = norm(
+            "SELECT ?n WHERE { { VALUES ?n { \"a\" \"b\" \"c\" } } \
+             UNION { ?s <http://ex/name> ?n } } LIMIT 5 OFFSET 1",
+        );
+        let IqNode::Slice {
+            child,
+            offset,
+            limit,
+        } = &n
+        else {
+            panic!("expected a residual Slice to survive (the data arm is still needed): {n:?}")
+        };
+        assert_eq!(
+            *offset, 0,
+            "the offset skip is already baked into the survivors"
+        );
+        assert_eq!(*limit, Some(5), "the ORIGINAL limit, not reduced");
+        let IqNode::Union { children, .. } = child.as_ref() else {
+            panic!("expected the survivor Values arm + the data arm: {child:?}")
+        };
+        assert_eq!(
+            children.len(),
+            2,
+            "one survivor arm + the data arm: {children:?}"
+        );
+        let IqNode::Values { rows, .. } = &children[0] else {
+            panic!("expected the FIRST child to be the bare survivor Values arm: {children:?}")
+        };
+        assert_eq!(
+            rows.iter().map(|r| row_str(r)).collect::<Vec<_>>(),
+            vec!["b", "c"],
+            "OFFSET 1 dropped \"a\"; \"b\"/\"c\" survive as explicit rows: {rows:?}"
+        );
+        assert!(
+            !matches!(children[1], IqNode::Values { .. }),
+            "the second child must still be the untouched data arm: {:?}",
+            children[1]
+        );
+    }
+
+    /// Adversarial-review-caught regression: OFFSET exceeds the known (`Values`) arm's
+    /// ENTIRE row count while a data arm still remains -- the whole `Values` arm is
+    /// dropped (all of it falls before the window), but the LEFTOVER skip must carry
+    /// forward onto the data arm itself, not vanish. A first draft hardcoded the
+    /// residual `Slice`'s offset to 0 unconditionally, silently discarding that
+    /// leftover and leaking extra rows the true OFFSET should have skipped.
+    #[test]
+    fn slice_over_union_offset_exceeding_values_carries_forward_onto_data_arm() {
+        let n = norm(
+            "SELECT ?n WHERE { { VALUES ?n { \"a\" \"b\" \"c\" } } \
+             UNION { ?s <http://ex/name> ?n } } LIMIT 5 OFFSET 4",
+        );
+        let IqNode::Slice {
+            child,
+            offset,
+            limit,
+        } = &n
+        else {
+            panic!("expected a residual Slice to survive (the data arm is still needed): {n:?}")
+        };
+        assert_eq!(
+            *offset, 1,
+            "3 of the 4 requested skips are consumed by the (fully-dropped) Values \
+             arm; exactly 1 more must land on the data arm: {n:?}"
+        );
+        assert_eq!(*limit, Some(5));
+        assert!(
+            !matches!(child.as_ref(), IqNode::Union { .. }),
+            "the Values arm contributed ZERO survivor rows (all 3 before the window) \
+             -- the reconstructed child is the data arm alone, no Union wrapper: {child:?}"
+        );
+    }
+
+    /// Nothing to drop or truncate at all (OFFSET 0, the `Values` arm fully survives
+    /// unmodified, the data arm is reached before the window is satisfied) — the
+    /// rule must decline (keep `Slice{Union{..}}` byte-identical to the input),
+    /// not needlessly rebuild an identical tree.
+    #[test]
+    fn slice_over_union_declines_when_nothing_changes() {
+        let n = norm(
+            "SELECT ?n WHERE { { VALUES ?n { \"a\" \"b\" } } \
+             UNION { ?s <http://ex/name> ?n } } LIMIT 5",
+        );
+        let IqNode::Slice { child, .. } = &n else {
+            panic!("expected the Slice to survive untouched: {n:?}")
+        };
+        let IqNode::Union { children, .. } = child.as_ref() else {
+            panic!("expected the Union to survive untouched: {child:?}")
+        };
+        assert_eq!(children.len(), 2, "both arms untouched: {children:?}");
+        assert!(
+            matches!(&children[0], IqNode::Construction { child, .. } if matches!(**child, IqNode::Values { .. })),
+            "the Values arm keeps its ORIGINAL Construction wrapper (not rebuilt): {:?}",
+            children[0]
+        );
+    }
+
+    /// A DATA arm appearing BEFORE any `Values` arm can never be dropped (its
+    /// cardinality is unknown from the very first arm) — declines immediately.
+    #[test]
+    fn slice_over_union_declines_when_data_arm_is_first() {
+        let n = norm(
+            "SELECT ?n WHERE { { ?s <http://ex/name> ?n } \
+             UNION { VALUES ?n { \"a\" \"b\" } } } LIMIT 1",
+        );
+        assert!(
+            matches!(&n, IqNode::Slice { child, .. } if matches!(child.as_ref(), IqNode::Union { .. })),
+            "must decline -- the data arm is first, nothing is provably unreachable: {n:?}"
+        );
+    }
+
+    /// One row's sole cell as a plain string, for the arm-drop assertions above.
+    fn row_str(row: &[Option<TermDef>]) -> String {
+        let TermDef::Const(t) = row[0].as_ref().expect("VALUES cell is bound") else {
+            panic!("expected a Const cell: {row:?}")
+        };
+        let sf_core::Term::Literal(lit) = t else {
+            panic!("expected a literal term: {t:?}")
+        };
+        lit.value().to_owned()
     }
 
     /// A DATA arm (a real triple pattern, not a bare constant) blocks the fold
