@@ -2864,3 +2864,240 @@ fn subplan_distinct_as_join_operand() {
          ?s ex:name ?n }}"
     ));
 }
+
+// ============================================================================
+// COMPOSITION SWEEP (ADR-0023 optimizer-residue) — closes the demonstrated
+// blind spot: the normalize.rs rewrites were each tested in isolation, but a
+// rewrite COMPOSED with a query modifier (the partial-fold + bare-LIMIT
+// row-order bug, commit 84365ff) slipped every green gate because compositions
+// were never exercised. This drives every normalize rewrite through the full
+// modifier matrix { none, DISTINCT, ORDER BY, LIMIT, OFFSET, LIMIT+OFFSET,
+// ORDER BY+LIMIT, DISTINCT+ORDER BY+LIMIT } against the =_bag oracle.
+//
+// Routing rationale (mirrors this file's established conventions):
+//   * Non-slice variants (none / DISTINCT / ORDER BY) produce a deterministic
+//     row SET → `diff_p` (flat-vs-tree =_bag AND vs the independent spareval
+//     oracle over the set-faithful fixture-P graph).
+//   * Any LIMIT/OFFSET variant has an implementation-defined tie-break WITHOUT a
+//     total ORDER BY (and even with one, at the window boundary under a
+//     collation spareval and this engine needn't share) → `diff_p_bag`
+//     (flat-vs-tree =_bag only — always sound, both are the same engine).
+//   * ORDER BY sequence (which `solutions_bag_eq` does NOT check) is verified
+//     separately by `assert_ordered_ft`: flat vs tree row-sequence equality
+//     (collation-neutral — both sides are this engine), so a rewrite that
+//     reorders rows relative to the flat oracle fails even when the bag matches.
+// ============================================================================
+
+mod composition_sweep {
+    use super::*;
+
+    /// Ordered SEQUENCE parity, flat vs tree, for an ORDER BY query. The harness's
+    /// `solutions_bag_eq` compares MULTISETS and is blind to row order; this asserts
+    /// the tree's rewrites emit the flat oracle's rows in the SAME position-for-
+    /// position sequence (unbound cells kept in place, so a mis-slotted NULL also
+    /// fails). Compares only when BOTH translate (a divergence in Ok-ness is the
+    /// `diff` helpers' job); both being 501 leaves nothing to compare.
+    fn assert_ordered_ft(query: &str) {
+        let conn = sqlite::load(P_SQL).expect("fixture loads");
+        let schema = sqlite::introspect_all(&conn).expect("introspect");
+        let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+        let q = parse(query);
+        if let (Ok(fp), Ok(tp)) = (flat(&maps, &q, &schema), tree(&maps, &q, &schema)) {
+            let fr = exec::select(&fp, &conn).expect("flat select");
+            let tr = exec::select(&tp, &conn).expect("tree select");
+            assert_eq!(
+                (&fr.vars, &fr.rows),
+                (&tr.vars, &tr.rows),
+                "flat vs tree ORDER BY sequence divergence on `{query}`"
+            );
+        }
+    }
+
+    /// Drive one WHERE `body` (projecting the single var `proj`, e.g. "?v") through
+    /// the whole modifier matrix. Every variant is asserted =_bag; ORDER BY also gets
+    /// a flat-vs-tree sequence check.
+    fn sweep(body: &str, proj: &str) {
+        let sel = |m: &str| format!("{PFX} SELECT {proj} WHERE {{ {body} }} {m}");
+        let seld = |m: &str| format!("{PFX} SELECT DISTINCT {proj} WHERE {{ {body} }} {m}");
+        let ob = format!("ORDER BY {proj}");
+
+        // deterministic row SET → flat-vs-tree AND vs spareval.
+        diff_p(&sel(""));
+        diff_p(&seld(""));
+        diff_p(&sel(&ob));
+        // ORDER BY row SEQUENCE (bag-blind) → flat vs tree.
+        assert_ordered_ft(&sel(&ob));
+
+        // slice variants → flat-vs-tree =_bag only (impl-defined tie-break).
+        diff_p_bag(&sel("LIMIT 2"));
+        diff_p_bag(&sel("OFFSET 1"));
+        diff_p_bag(&sel("LIMIT 2 OFFSET 1"));
+        diff_p_bag(&sel(&format!("{ob} LIMIT 2")));
+        diff_p_bag(&seld(&format!("{ob} LIMIT 2")));
+    }
+
+    /// `try_fold_constant_union` (normalize.rs) — a Union whose arms are ALL bare
+    /// constants folds to one `Values` leaf. Composed with every modifier.
+    #[test]
+    fn fold_constant_union_x_modifiers() {
+        sweep(
+            "{ BIND(\"mp1\" AS ?v) } UNION { BIND(\"mp2\" AS ?v) } UNION { BIND(\"mp3\" AS ?v) }",
+            "?v",
+        );
+    }
+
+    /// `try_partial_fold_constant_union` — a DATA arm plus 2+ contiguous constant
+    /// arms: the constants fold to one `Values` arm kept AT their own position (the
+    /// exact rule whose partial-fold + bare-LIMIT reorder bug this sweep exists for).
+    /// Data arm FIRST (left-associative parse) so the partial fold — not the full
+    /// `try_fold_constant_union` — is what fires.
+    #[test]
+    fn partial_fold_constant_union_x_modifiers() {
+        sweep(
+            "{ ?p ex:name ?v } UNION { BIND(\"Xx\" AS ?v) } UNION { BIND(\"Yy\" AS ?v) }",
+            "?v",
+        );
+    }
+
+    /// `try_slice_over_union` — a Slice over `Union[Values.., data-arm]` drops/
+    /// truncates leading known-cardinality arms. Only the LIMIT/OFFSET variants of
+    /// the matrix actually build the Slice that triggers this rule; the rest exercise
+    /// the underlying plain Union.
+    #[test]
+    fn slice_over_union_x_modifiers() {
+        sweep(
+            "{ VALUES ?v { \"va\" \"vb\" \"vc\" } } UNION { ?d ex:label ?v }",
+            "?v",
+        );
+    }
+
+    /// `normalize_slice` — a Slice directly over a `Values` leaf truncates the row
+    /// list in place. Triggered by the LIMIT/OFFSET variants.
+    #[test]
+    fn slice_over_values_x_modifiers() {
+        sweep("VALUES ?v { \"sa\" \"sb\" \"sc\" \"sd\" }", "?v");
+    }
+
+    /// `normalize_distinct` — a Distinct over a `Values` leaf dedups in place. The
+    /// duplicate rows also exercise the LIMIT-over-duplicates tie-break path.
+    #[test]
+    fn distinct_over_values_x_modifiers() {
+        sweep("VALUES ?v { \"da\" \"da\" \"db\" \"dc\" \"dc\" }", "?v");
+    }
+
+    /// `normalize_union` identity pruning — an unmapped-predicate arm (`ex:nope`)
+    /// becomes `Empty` and is pruned, keeping the surviving arms, under every
+    /// modifier.
+    #[test]
+    fn union_empty_arm_prune_x_modifiers() {
+        sweep(
+            "{ ?p ex:name ?v } UNION { ?x ex:nope ?v } UNION { ?d ex:label ?v }",
+            "?v",
+        );
+    }
+
+    /// `normalize_left_join` (right operand preserved) — a plain single-scan
+    /// OPTIONAL, the common LeftJoin shape, under every modifier.
+    #[test]
+    fn left_join_plain_optional_x_modifiers() {
+        sweep("?p ex:name ?v OPTIONAL { ?p ex:dept ?dd }", "?v");
+    }
+
+    /// `normalize_left_join` (LEFT-union distribution) — `(A ∪ B) ⟕ C` distributes
+    /// to `(A⟕C) ∪ (B⟕C)`. A self-union LEFT deliberately doubles the bag so a
+    /// multiplicity-losing distribution would be caught.
+    #[test]
+    fn left_join_over_left_union_x_modifiers() {
+        sweep(
+            "{ { ?p ex:name ?v } UNION { ?p ex:name ?v } } OPTIONAL { ?p ex:dept ?dd }",
+            "?v",
+        );
+    }
+
+    /// `normalize_inner_join` (join-over-union distribution) — `A ⋈ (B ∪ C)`
+    /// distributes to `(A⋈B) ∪ (A⋈C)`, under every modifier.
+    #[test]
+    fn inner_join_over_union_x_modifiers() {
+        sweep(
+            "?p ex:name ?nm . { ?p ex:name ?v } UNION { ?p ex:dept ?v }",
+            "?v",
+        );
+    }
+
+    /// `normalize_filter` (filter-over-union distribution) — `FILTER(σ)(B ∪ C)`
+    /// clones the symbolic condition into each arm, under every modifier.
+    #[test]
+    fn filter_over_union_x_modifiers() {
+        sweep(
+            "{ { ?p ex:name ?v } UNION { ?d ex:label ?v } } FILTER(?v != \"Bob\")",
+            "?v",
+        );
+    }
+}
+
+/// Item 1b (ADR-0023 optimizer-residue): GROUP BY over a MULTI-branch (UNION)
+/// OPTIONAL right side, then aggregated — `?e ex:name ?n OPTIONAL { R1 ∪ R2 }`
+/// grouped by `?e` with `COUNT(?v)`. An unmerged flat-path-era commit (git
+/// 2015846) closed two 501s for this shape on the OLD flat executor that ADR-0024
+/// has since refactored away; verified empirically here that today's tree-IR path
+/// already handles it CORRECTLY (=_bag the independent spareval oracle), while the
+/// FLAT oracle honestly DEFERS (its inherent agg-over-UNION 501 — the same
+/// synthetic-unbound limitation `count_over_bind_only_union_*` documents). The tree
+/// is thus a strict capability SUPERSET here, not a wrong answer — so commit
+/// 2015846 is OBSOLETE (do NOT merge that stale pre-refactor code). Gated vs
+/// spareval directly (not `diff`, whose "both must 501" rule would misread
+/// tree-exceeds-flat as a mismatch), mirroring `agg_union`.
+///
+/// emp1: dept d10 + tags {x,y} ⇒ COUNT(?v)=3; emp2: dept d10, no tag ⇒ 1;
+/// emp3: dept d20 + tag z ⇒ 2.
+#[test]
+fn group_by_over_multibranch_optional_is_tree_superset_of_flat() {
+    let q = format!(
+        "{PFX} SELECT ?e (COUNT(?v) AS ?c) WHERE {{ ?e ex:name ?n \
+         OPTIONAL {{ {{ ?e ex:dept ?v }} UNION {{ ?e ex:tag ?v }} }} }} GROUP BY ?e"
+    );
+    let conn = sqlite::load(STRESS_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(STRESS_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "flat is expected to honestly 501 (its inherent agg-over-UNION limitation) \
+         -- if this now succeeds, flat gained the capability and this test's premise \
+         needs revisiting, not silently relaxing"
+    );
+    let tp = tree(&maps, &parsed, &schema)
+        .expect("tree must handle GROUP BY over multi-branch OPTIONAL");
+    assert_vs_spareval(STRESS_TTL, &q, &tp, &conn);
+}
+
+/// Item 3a (ADR-0023 optimizer-residue): `MINUS` whose LEFT operand is a
+/// property-path pattern (`?s ex:reaches+ ?o MINUS { ?s ex:reaches ?o }`). The
+/// FLAT path honestly DEFERS this shape ("MINUS over a property-path left side is
+/// deferred → 501"); the tree-IR path computes it CORRECTLY — verified here =_bag
+/// the independent spareval oracle. This is a pure capability DIFFERENCE (tree is
+/// a strict superset of flat), NOT a wrong answer, so it is documented here rather
+/// than "fixed": flat's 501 is asserted explicitly so a future flat-side
+/// capability gain doesn't silently invalidate this test's premise. Gated vs
+/// spareval directly (not `diff`, whose "both must 501" rule would misread
+/// tree-exceeds-flat as a mismatch), mirroring `agg_union` / `count_over_bind_only_union`.
+///
+/// Transitive closure of {1→2,2→3,3→4,1→5} minus the direct hops leaves the
+/// 3 strictly-transitive pairs (1,3), (2,4), (1,4).
+#[test]
+fn minus_over_path_left_operand_is_tree_superset_of_flat() {
+    let q =
+        format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches+ ?o MINUS {{ ?s ex:reaches ?o }} }}");
+    let conn = sqlite::load(PE_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "flat is expected to honestly 501 (property-path MINUS left side) -- if this \
+         now succeeds, flat gained the capability and this test's premise needs \
+         revisiting, not silently relaxing"
+    );
+    let tp = tree(&maps, &parsed, &schema).expect("tree must handle MINUS over a path left side");
+    assert_vs_spareval(PE_TTL, &q, &tp, &conn);
+}
