@@ -535,6 +535,38 @@ collapsed join.
   Collapse the Group C `Union`+`NOT EXISTS` decomposition back to a single-scan join/`OptJoin` when a
   provable key/FD match makes the anti-join branch unreachable. Lowest urgency of the four (existing
   correctness is already proven; this is pure SQL-shape/perf).
+  **ASSESSED 2026-07-03 — NOT LANDED (attempted, deferred with a proven design; cosmetic, `=_bag`-neutral):**
+    - *The "easy" single-scan case is a red herring here.* Even `?p ex:dept ?d` alone is a MULTI-scan
+      pattern under R2RML (the `refObjectMap` re-scans `person` for `dept_id` and joins `dept` to build
+      the object IRI), so it already routes through Group C's decomposition — `lj_to_ij_fk_downgrade`
+      (which only downgrades a **single-scan `OptJoin`**) does not apply, and there is no trivial slice.
+    - *The primary target (JoinTransfer, `?p ex:name ?n OPTIONAL {?p ex:dept ?d . ?d ex:label ?l}`)*
+      emits a no-match branch whose `NOT EXISTS` carries (empirically, over fixture P):
+      `[ColEq(person'.dept_id, dept'.id), IsNotNull(dept'.label), ColEq(person'.id, person.id)]` over
+      `scans:[person', dept']`. Proving that anti-join **unreachable** = proving this correlated
+      subquery is satisfiable for EVERY outer row: the FK join always matches (`dept_id` NOT-NULL FK →
+      `dept.id` key), the `IsNotNull(label)` conjunct is a **tautology** (only because `label` is a
+      NOT-NULL column — were it nullable, that same conjunct would be a MATCH-REMOVING filter and the
+      collapse would be UNSOUND), and the self-correlation `person'.id = person.id` trivially matches
+      (same PK). That is a **multi-atom, multi-condition satisfiability/chase proof**, not a single
+      FK→PK lookup — and its "is this residual conjunct a tautology or a match-removing filter?" step is
+      the EXACT blind spot that produced the `not_exists_cond_for` inner-FILTER bug (`feb7336`). A general
+      sound version borders the **charter-EXCLUDED** semantic containment chase (MappingCQCOptimizer,
+      Family-3 row `test_foreign_keys`).
+    - *Sound design if ever pursued (recorded so it need not be re-derived):* an additive cascade pass
+      that DROPS a whole branch whose `where_conds` contain a `NOT EXISTS` proven always-FALSE — sound
+      because an always-false conjunct makes the branch empty, `=_bag`-neutral regardless of decomposition
+      provenance (also correct for a MINUS/EXISTS branch). The always-false proof must require: `scans`
+      is exactly the right pattern; every correlation is a plain `ColEq` (NOT `NullSafeEq` — a null-safe
+      cond signals a nullable outer col that can be UNBOUND) whose outer side is a NOT-NULL column on a
+      **core** scan that is a declared FK to the scanned key; every internal join is FK/key-backed; and
+      every *other* conjunct is a provable tautology (e.g. `IsNotNull` on a NOT-NULL column) — ANY
+      residual predicate that is not a tautology (a real FILTER) ⇒ DECLINE. Gate: `=_bag` differential
+      (SQLite + spareval) + a mandatory adversarial "match-removing FILTER on the OPTIONAL right"
+      regression that must confirm the pass DECLINES, + an "FK precondition removed" regression that must
+      confirm it declines. Deferred because it is purely cosmetic (Group C's SQL is already `=_bag`-proven
+      correct), it is the lowest-priority backlog item, and the soundness envelope is fragile enough that
+      rushing it risks re-introducing the very bug class just fixed.
 
 **Recommended next: Wave 5/6 (Group A+B cosmetic rewrites)** — per the 2026-07-02 finding, `=_bag` parity
 is exhausted (zero remaining oracle-gaps), so the M4 worklist's own sequencing rule ("defer [cosmetic
