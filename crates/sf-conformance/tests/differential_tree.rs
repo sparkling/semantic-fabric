@@ -3359,6 +3359,85 @@ fn item1d_plain_second_optional_over_subplan_var_stays_sound_501() {
 }
 
 // ============================================================================
+// Item 1d ROUND-5 REGRESSION LOCKS — consumer-side sweep of `subplan_joins`. The
+// round-1..4 guards covered every OPTIONAL-decomposition / FILTER-EXISTS entry point
+// (`build_left_join`, `inner_join_one`, `not_exists_cond_for`, `lower_iq_exists`) that
+// correlates on a LEFT-JOINed-SubPlan-bound (nullable) variable — but NOT the plain
+// InnerJoin / BGP-merge one (`IqNode::InnerJoin` → `join_branches` → `unfold::merge`).
+// `merge` pushes a PLAIN (non-null-safe) equality per shared variable, so a mandatory
+// pattern joined with a subplan-OPTIONAL group that shares the subplan-bound var
+// silently DROPPED the subplan-no-match rows (SPARQL compatible-merge KEEPS them, binding
+// the var from the mandatory side). Verified vs the INDEPENDENT spareval oracle: tree 3,
+// oracle 6 (dept/30 "Empty" NULL-pads the subplan ⇒ ?nm unbound ⇒ the mandatory
+// `?p2 ex:name ?nm` should re-bind it over every name). `unfold::merge` now returns a
+// sound 501 for that shape (either merge orientation), mirroring `shared_reads_left_subplan`.
+// NOTE: the flat path SUPPORTS this shape correctly (6 rows) via its own subquery
+// lowering — this is a deliberate tree-side 501 boundary (ADR-0023 Item 1d), tested
+// outside `diff` (whose flat/tree 501-parity rule does not apply to a tree-only capability
+// boundary), exactly like `item1d_plain_second_optional_over_subplan_var_stays_sound_501`.
+// ============================================================================
+
+/// Primary repro (silent wrong answer → sound 501). Subplan-OPTIONAL group FIRST, then a
+/// mandatory `?p2 ex:name ?nm` sharing the subplan-bound (nullable) ?nm. Reverting the
+/// `merge_correlates_on_nullable_subplan` guard makes `tree()` return `Ok` and executing
+/// it yields 3 rows where spareval yields 6 (the three dept/30 "Empty" rows — where ?nm is
+/// unbound and must be re-bound from the mandatory pattern — are silently dropped).
+#[test]
+fn item1d_r5_innerjoin_after_subplan_optional_shared_var_stays_sound_501() {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ \
+         {{ ?d ex:label ?l OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} }} \
+         ?p2 ex:name ?nm }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "an INNER JOIN correlating a mandatory pattern on a LEFT-JOINed-SubPlan-bound \
+         (nullable) variable must be a SOUND 501 — `unfold::merge` pushes a plain \
+         non-null-safe equality that silently drops the subplan-no-match rows: `{query}`"
+    );
+}
+
+/// Mirror orientation (also a silent wrong answer → sound 501). The mandatory pattern
+/// FIRST, then the subplan-OPTIONAL group — the subplan-carrying branch is the INCOMING
+/// `right` operand of `join_branches`/`merge` (the guard must catch both orientations).
+/// Same 3-vs-6 divergence when the guard is reverted.
+#[test]
+fn item1d_r5_innerjoin_before_subplan_optional_shared_var_stays_sound_501() {
+    let conn = sqlite::load(I1D_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I1D_R2RML).expect("R2RML parses");
+    let query = format!(
+        "{PFX} SELECT ?l ?nm WHERE {{ ?p2 ex:name ?nm . \
+         {{ ?d ex:label ?l OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} }} }}"
+    );
+    let q = parse(&query);
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "the mirror orientation (subplan group as the incoming merge right operand) must \
+         ALSO be a SOUND 501: `{query}`"
+    );
+}
+
+/// No-overshoot lock. The InnerJoin's shared variable is the MANDATORY ?d (bound by
+/// `?d ex:label ?l`, a core scan), NOT the subplan-bound ?nm — so the guard must NOT fire
+/// and the query stays a correct answer. Proves the 501 is narrow (keyed on a shared var
+/// actually reading a `left == true` subplan alias, not "any branch carrying a subplan").
+/// dept/30 "Empty" NULL-pads ?nm but ?d is bound ⇒ the `?d ex:label ?l2` join keeps it;
+/// diffed vs the independent spareval oracle.
+#[test]
+fn item1d_r5_innerjoin_sharing_mandatory_var_not_501_and_correct() {
+    item1d(&format!(
+        "{PFX} SELECT ?l ?l2 ?nm WHERE {{ \
+         {{ ?d ex:label ?l OPTIONAL {{ SELECT DISTINCT ?d ?nm WHERE {{ ?p ex:dept ?d ; ex:name ?nm }} }} }} \
+         ?d ex:label ?l2 }}"
+    ));
+}
+
+// ============================================================================
 // Item 1d ROUND-3 REGRESSION LOCKS — the `left_join_over_subplan` Branch shape (a
 // `SubPlanJoin { left: true }`, introduced by `e7cb7e6`) composing with pre-existing
 // merge / emit / cascade machinery that predates it. A third adversarial review found

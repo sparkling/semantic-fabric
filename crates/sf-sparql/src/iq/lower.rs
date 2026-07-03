@@ -472,15 +472,57 @@ fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
             b.bindings.insert(v.to_string(), td);
             Ok(false)
         }
-        Some(existing) => match unify(existing, &td) {
-            Unify::Sat(conds) => {
-                b.where_conds.extend(conds);
-                Ok(false)
+        Some(existing) => {
+            // A shared variable whose EXISTING or incoming definition reads a LEFT-JOINed
+            // SubPlan derived-table alias (`subplan_joins` with `left == true`, ADR-0023
+            // Item 1d) may be UNBOUND — the derived-table LEFT JOIN found no match. The
+            // plain equality `unify` yields below then silently DROPS those no-match rows
+            // (SPARQL compatible-merge KEEPS them, binding the variable from the OTHER,
+            // mandatory side): verified vs the independent spareval oracle, tree 3 / oracle
+            // 6 (fixture I1D, dept/30 "Empty"). This is the InnerJoin / BGP-merge entry
+            // point (`IqNode::InnerJoin` folds the join's shared-var equality through the
+            // `Construction` subst → here) that the round-1..4 guards did not cover — every
+            // OPTIONAL-decomposition / FILTER-EXISTS path (`build_left_join`,
+            // `not_exists_cond_for`, `lower_iq_exists`, `shared_reads_left_subplan`) already
+            // 501s the same shape. The sound compatible-merge is leftjoin's R1/R2 null-safe
+            // ON + COALESCE, which this Construction-fold does not carry — sound 501
+            // (ADR-0007: a 501 beats a silent wrong answer). Gated on a NON-EMPTY `Sat` so
+            // an identical-def unify (no correlating equality, drops nothing) is untouched;
+            // a disjoint `Empty` still soundly prunes the branch; flat never sets
+            // `subplan_joins`, so `reads_left_subplan` is always false there (no-op).
+            let nullable = reads_left_subplan(b, existing) || reads_left_subplan(b, &td);
+            match unify(existing, &td) {
+                Unify::Sat(conds) => {
+                    if nullable && !conds.is_empty() {
+                        return Err(Error::Unsupported(
+                            "INNER JOIN correlating on a variable bound by a LEFT-JOINed \
+                             SubPlan derived table (a modifier sub-SELECT attached as an \
+                             OPTIONAL's right operand) is not yet supported → 501 (ADR-0023 \
+                             Item 1d boundary — the plain-equality merge cannot null-safely \
+                             compatible-merge it)"
+                                .to_owned(),
+                        ));
+                    }
+                    b.where_conds.extend(conds);
+                    Ok(false)
+                }
+                Unify::Empty => Ok(true),
+                Unify::Unsupported(why) => Err(Error::Unsupported(why)),
             }
-            Unify::Empty => Ok(true),
-            Unify::Unsupported(why) => Err(Error::Unsupported(why)),
-        },
+        }
     }
+}
+
+/// Whether `def` reads a LEFT-JOINed SubPlan derived-table alias of `b` (`subplan_joins`
+/// with `left == true`) — i.e. a value that may be UNBOUND when the derived-table LEFT
+/// JOIN finds no match. `TermDef::columns` recurses through `Coalesce`/`Concat`, so a
+/// composite binding over such an alias is caught too. Empty (a no-op) whenever `b`
+/// carries no `left == true` SubPlan — the flat path and every non-subplan branch.
+fn reads_left_subplan(b: &Branch, def: &TermDef) -> bool {
+    let cols = def.columns();
+    b.subplan_joins
+        .iter()
+        .any(|sp| sp.left && cols.iter().any(|c| c.alias == sp.alias))
 }
 
 /// Peel the leading `Filter` node(s) directly under a `Construction`, returning the
