@@ -1471,26 +1471,36 @@ fn named_graph_triples_invisible_without_graph_clause() {
 }
 
 #[test]
-fn filter_exists_with_optional_derived_var_returns_501() {
-    // Regression for outer_opt_aliases dead-code bug: FILTER EXISTS where a
-    // shared variable (?dept) comes from the outer OPTIONAL arm must NOT emit
-    // wrong SQL `col = col` correlation (NULL = value → false → wrong). Instead
-    // the engine must surface a 501 Unsupported error so the caller can handle
-    // or fall back gracefully.
+fn filter_exists_with_optional_derived_var_now_closes_soundly() {
+    // ADR-0023 parity backlog (Item 3): FILTER EXISTS where a shared variable
+    // (?dept) comes from an outer OPTIONAL arm. Previously deferred → 501 to avoid a
+    // wrong `col = col` correlation (NULL = value). The tree path now closes this
+    // SOUNDLY: a possibly-unbound outer determinant guards its raw-key correlation
+    // with `(determinant IS NULL OR eq)`, so an unbound outer row leaves the shared
+    // var FREE in the inner (SPARQL §18.6 substitution), never a wrong NULL = value.
+    // Here both emps have a (non-null) dept whose dept row has a name, so EXISTS holds
+    // for both → both survive. (=_bag correctness across the full 3-valued matrix —
+    // incl. genuinely-unbound rows and the MINUS/NOT-EXISTS divergence — is gated in
+    // `sf-conformance/tests/differential_tree.rs` vs the independent spareval oracle.)
     let maps = mapping();
+    let conn = source();
     let q = format!(
         "SELECT ?n WHERE {{ ?e <{EMP_NAME}> ?n . OPTIONAL {{ ?e <{EMP_DEPT}> ?dept }} \
          FILTER EXISTS {{ ?dept <{DEPT_NAME}> ?dn }} }}"
     );
-    let result = parse_and_translate(&q, &maps, Dialect::Sqlite);
-    assert!(
-        result.is_err(),
-        "EXISTS with OPTIONAL-derived outer variable must return 501, not Ok: {result:?}"
-    );
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("UNBOUND") || msg.contains("501") || msg.contains("OPTIONAL"),
-        "error should mention OPTIONAL/UNBOUND/501, got: {msg}"
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite)
+        .expect("EXISTS over an OPTIONAL-derived shared var now translates (no 501)");
+    let mut got: Vec<String> = exec::select(&plan, &conn)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| lit(&r[0]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec!["Ada".to_owned(), "Grace".to_owned()],
+        "both emps have a named dept ⇒ EXISTS holds for both"
     );
 }
 

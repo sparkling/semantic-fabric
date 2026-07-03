@@ -578,24 +578,52 @@ fn lower_iq_exists(
         let mut corr = r.where_conds.clone();
         let mut never_compatible = false;
         let mut shared_var_found = false;
+        // Per-branch tracking for the possibly-UNBOUND shared-variable rule below.
+        // `nullable_determinants`: a representative raw column of each shared var whose
+        // OUTER binding may be UNBOUND (reads an OPTIONAL alias) — used to probe "did
+        // that OPTIONAL fire in this row?". `any_mandatory_shared`: at least one shared
+        // var is ALWAYS bound on the outer side (so the MINUS domains always overlap).
+        let mut nullable_determinants: Vec<ColRef> = Vec::new();
+        let mut any_mandatory_shared = false;
         for (v, ldef) in &outer.bindings {
             let Some(rdef) = r.bindings.get(v) else {
                 continue; // not shared
             };
             shared_var_found = true;
-            if def_reads_opt_alias(ldef, &outer_opt_aliases) {
-                return Err(Error::Unsupported(format!(
-                    "{op} shared variable ?{v} may be UNBOUND on the outer side (OPTIONAL) → 501 \
-                     (v1 supports non-OPTIONAL shared variables)"
-                )));
-            }
-            match unify(ldef, rdef) {
-                Unify::Sat(conds) => corr.extend(conds),
+            let outer_may_be_unbound = def_reads_opt_alias(ldef, &outer_opt_aliases);
+            let conds = match unify(ldef, rdef) {
+                Unify::Sat(conds) => conds,
                 Unify::Empty => {
                     never_compatible = true;
                     break;
                 }
                 Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+            };
+            if outer_may_be_unbound {
+                // The outer determinant may be UNBOUND (it reads an OPTIONAL alias that
+                // did not fire). Per SPARQL EXISTS-substitution semantics (§18.6), a
+                // variable NOT in the outer solution's domain is left FREE in the inner
+                // pattern — it must NOT correlate on this variable. So guard the raw-key
+                // equality: when the determinant is NULL (unbound) this conjunct becomes
+                // non-constraining; when bound it is the ordinary equality.
+                //
+                // `unify` refuses COALESCE/CONCAT bindings (→ Unsupported, handled above),
+                // so `ldef` reaching here is a plain `Derived` — ALL its columns share the
+                // ONE (OPTIONAL) alias, hence any one is a sound "did the OPTIONAL fire?"
+                // probe (the whole opt row is present-or-absent together).
+                let Some(repr) = ldef.columns().into_iter().next() else {
+                    return Err(Error::Unsupported(format!(
+                        "{op} shared variable ?{v}: nullable determinant with no columns → 501"
+                    )));
+                };
+                nullable_determinants.push(repr.clone());
+                corr.push(SqlCond::Or(vec![
+                    SqlCond::IsNull(repr),
+                    SqlCond::And(conds),
+                ]));
+            } else {
+                any_mandatory_shared = true;
+                corr.extend(conds);
             }
         }
         if never_compatible {
@@ -614,6 +642,25 @@ fn lower_iq_exists(
         // correctly testing existence.
         if is_minus && !shared_var_found {
             continue;
+        }
+        // MINUS disjoint-domain exception, evaluated PER ROW (SPARQL §8.3.2). MINUS
+        // removes an outer row only if it shares at least one BOUND variable with a
+        // compatible inner row. When EVERY shared variable is nullable (OPTIONAL-bound)
+        // and ALL are unbound in a given outer row, that row's domain is disjoint from
+        // the inner's ⇒ MINUS must be a no-op for it ⇒ the anti-join must NOT match. So
+        // require at least one nullable determinant to be bound (`OR determinant IS NOT
+        // NULL`). Skipped when `any_mandatory_shared` (an always-bound shared var already
+        // guarantees domain overlap). EXISTS / NOT EXISTS have NO such exception
+        // (§8.4 / §11.4.7 pure existence test) — the guard is MINUS-only. Without it a
+        // MINUS whose only shared var is OPTIONAL-unbound would wrongly remove rows a
+        // free-variable NOT EXISTS removes but a disjoint-domain MINUS must keep.
+        if is_minus && !any_mandatory_shared && !nullable_determinants.is_empty() {
+            corr.push(SqlCond::Or(
+                nullable_determinants
+                    .iter()
+                    .map(|c| SqlCond::IsNotNull(c.clone()))
+                    .collect(),
+            ));
         }
         if negated {
             sub_conds.push(SqlCond::NotExists {

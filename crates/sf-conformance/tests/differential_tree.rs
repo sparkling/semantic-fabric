@@ -2731,11 +2731,153 @@ fn path_deferred_shapes_tree_eq_flat_501() {
 }
 
 // ============================================================================
+// EXISTS / NOT EXISTS / MINUS over an OPTIONAL-bound (possibly-UNBOUND) shared
+// variable — ADR-0023 parity backlog Item 3. The FLAT oracle DEFERS this shape
+// (→ 501, its documented v1 restriction: a shared variable that may be UNBOUND on
+// the outer side would emit a wrong `NULL = value` correlation); the TREE now
+// closes it SOUNDLY. So the rigorous gate is the TREE result `=_bag` the
+// INDEPENDENT `spareval` oracle over a hand-authored set-faithful graph (tree
+// EXCEEDS flat by design — the bespoke `agg_union`-style pattern, NOT `diff`,
+// whose identical-501-set assertion does not apply when the tree legitimately
+// exceeds flat).
+//
+// The SOUND rule, per SPARQL semantics: when the outer determinant is UNBOUND the
+// shared variable is FREE in the inner (§18.6 substitution), so its raw-key
+// correlation is guarded `(determinant IS NULL OR eq)`. The DECISIVE property this
+// fixture pins: on an outer row where the shared var is UNBOUND, MINUS
+// (§8.3.2 disjoint-domain no-op) and FILTER NOT EXISTS (§11.4.7 pure existence)
+// must DIVERGE — NOT EXISTS removes the row (free-var existence holds), MINUS keeps
+// it (domains disjoint). A single null-safe rule for all three would be WRONG;
+// MINUS additionally requires a per-row `at-least-one-shared-var-bound` guard.
+//
+// Fixture: Ann email 'x' g1, Bob email NULL g1, Zed email 'y' g2; tokens {'x','g1'}.
+// ?e (email) is OPTIONAL-bound ⇒ UNBOUND for Bob.
+// ============================================================================
+
+const I3_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT, grp TEXT NOT NULL);
+CREATE TABLE token (id INTEGER PRIMARY KEY, val TEXT NOT NULL);
+INSERT INTO person VALUES (1,'Ann','x','g1');
+INSERT INTO person VALUES (2,'Bob',NULL,'g1');
+INSERT INTO person VALUES (3,'Zed','y','g2');
+INSERT INTO token VALUES (100,'x');
+INSERT INTO token VALUES (101,'g1');
+"#;
+
+const I3_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:email ; rr:objectMap [ rr:column "email" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:grp ; rr:objectMap [ rr:column "grp" ] ] .
+<#Token>
+    rr:logicalTable [ rr:tableName "token" ] ;
+    rr:subjectMap [ rr:template "http://ex/t/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:tok ; rr:objectMap [ rr:column "val" ] ] .
+"#;
+
+// Set-faithful: Bob's NULL email ⇒ no ex:email triple (matches OPTIONAL-unbound).
+const I3_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/p/1> ex:name "Ann" ; ex:email "x" ; ex:grp "g1" .
+<http://ex/p/2> ex:name "Bob" ; ex:grp "g1" .
+<http://ex/p/3> ex:name "Zed" ; ex:email "y" ; ex:grp "g2" .
+<http://ex/t/100> ex:tok "x" .
+<http://ex/t/101> ex:tok "g1" .
+"#;
+
+/// Assert the FLAT oracle DEFERS (its documented v1 limitation) AND the TREE
+/// result `=_bag` the independent spareval oracle over `I3_TTL` (the SELECT
+/// projects only always-bound `?n`, so it is set-faithful).
+fn item3(query: &str) {
+    let conn = sqlite::load(I3_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(I3_R2RML).expect("R2RML parses");
+    let q = parse(query);
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "flat oracle must DEFER EXISTS/MINUS over an OPTIONAL-bound shared var \
+         (else not a tree-exceeds-flat spec): `{query}`"
+    );
+    let tp = tree(&maps, &q, &schema).expect("tree must close the OPTIONAL-shared-var shape");
+    assert_vs_spareval(I3_TTL, query, &tp, &conn);
+}
+
+#[test]
+fn item3_exists_over_optional_bound_shared_var() {
+    // EXISTS: Bob's ?e is UNBOUND ⇒ FREE in the inner ⇒ EXISTS true iff ANY token
+    // exists ⇒ Bob KEPT. Ann e='x' matches token 'x' ⇒ kept. Zed e='y' no token ⇒ out.
+    item3(&format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} \
+         FILTER EXISTS {{ ?t ex:tok ?e }} }}"
+    ));
+}
+
+#[test]
+fn item3_not_exists_over_optional_bound_shared_var() {
+    // NOT EXISTS: Bob's free-var existence holds ⇒ NOT EXISTS false ⇒ Bob REMOVED
+    // (the DIVERGENCE from MINUS below). Only Zed survives.
+    item3(&format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} \
+         FILTER NOT EXISTS {{ ?t ex:tok ?e }} }}"
+    ));
+}
+
+#[test]
+fn item3_minus_over_optional_bound_shared_var_is_disjoint_domain_no_op() {
+    // MINUS: Bob's ?e UNBOUND and it is the ONLY shared var ⇒ disjoint domain ⇒
+    // MINUS is a NO-OP ⇒ Bob KEPT (diverges from NOT EXISTS, which removes Bob).
+    // Ann e='x' compatible with token 'x' ⇒ removed. Zed no match ⇒ kept. {Bob,Zed}.
+    item3(&format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} \
+         MINUS {{ ?t ex:tok ?e }} }}"
+    ));
+}
+
+#[test]
+fn item3_minus_with_additional_mandatory_shared_var() {
+    // A mandatory shared var ?g (grp, always bound) ALSO shared with the inner:
+    // the domains always overlap on ?g, so the disjoint-domain no-op never applies
+    // and the `any_mandatory_shared` guard-suppression path is exercised. Remove iff
+    // inner agrees on ?g (any ?e): Ann/Bob g1 (token 'g1' exists) removed, Zed g2 kept.
+    item3(&format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n ; ex:grp ?g OPTIONAL {{ ?p ex:email ?e }} \
+         MINUS {{ ?t ex:tok ?e . ?t2 ex:tok ?g }} }}"
+    ));
+}
+
+#[test]
+fn item3_exists_inner_match_removing_filter() {
+    // Adversarial (the 3-valued blind spot): the inner body's own FILTER removes the
+    // only correlated match. Ann's token 'x' matches the correlation but FAILS
+    // FILTER(?e != "x") ⇒ EXISTS false ⇒ Ann out. Bob free ⇒ a token with val != (free)
+    // exists ⇒ kept. Zed no match ⇒ out. {Bob}. (Companion NOT EXISTS/MINUS variants
+    // exercised in the sf-sparql validation harness; here the EXISTS sense pins it.)
+    item3(&format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} \
+         FILTER EXISTS {{ ?t ex:tok ?e FILTER(?e != \"x\") }} }}"
+    ));
+}
+
+#[test]
+fn item3_minus_multibranch_inner_over_optional_shared_var() {
+    // Adversarial: a UNION (multi-branch) inner MINUS body with the OPTIONAL-unbound
+    // shared var. Bob (unbound, only shared var) ⇒ disjoint no-op ⇒ kept regardless of
+    // branch count. Correlation guarding must hold per inner branch. {Bob,Zed}.
+    item3(&format!(
+        "{PFX} SELECT ?n WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} \
+         MINUS {{ {{ ?t ex:tok ?e }} UNION {{ ?t2 ex:name ?e }} }} }}"
+    ));
+}
+
+// ============================================================================
 // W3C RDB2RDF corpus — the ?s ?p ?o dump CONSTRUCT through BOTH paths over every
 // loadable vendored case (R2RML + Direct Mapping), asserting flat-vs-tree row-bag
 // parity and identical 501 outcomes (the breadth half of the differential).
 // ============================================================================
-
 const DUMP: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 const W3C_BASE: &str = "http://example.com/base/";
 
