@@ -594,12 +594,17 @@ fn try_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
             // inner `(A UNION B)` normalizes (and, when both are constant, this SAME
             // rule folds it) *before* the outer Union ever sees it, so an
             // already-folded `Values` arm must be absorbed directly, not just a
-            // `Construction`. Declines on a column-order mismatch (no reconciliation
-            // attempted here — a future rule's scope, cf. test26).
+            // `Construction`. Ontop `ValuesNodeOptimization::test26MergeableCombination`:
+            // the arm's own column ORDER need not match `project`'s — `same_var_set`
+            // (SAME variables, order-independent) is the acceptance test, and
+            // `reorder_row` permutes each row by variable NAME to `project`'s order
+            // before absorbing it (a no-op permutation when the orders already agree).
             IqNode::Values {
                 vars,
                 rows: inner_rows,
-            } if vars.as_slice() == project => rows.extend(inner_rows.iter().cloned()),
+            } if same_var_set(vars, project) => {
+                rows.extend(inner_rows.iter().map(|r| reorder_row(vars, r, project)))
+            }
             IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
                 let mut row = Vec::with_capacity(project.len());
                 for var in project {
@@ -922,6 +927,27 @@ fn normalize_distinct(child: IqNode) -> IqNode {
 /// would get a false positive here.
 fn same_var_set(a: &[Var], b: &[Var]) -> bool {
     a.len() == b.len() && a.iter().all(|v| b.contains(v))
+}
+
+/// Permute one row's cells from `from_order` to `to_order` by variable NAME (both
+/// lists name the SAME set of variables — the caller checks with [`same_var_set`]
+/// first; a name absent from `from_order` here would panic, which never happens
+/// under that precondition). A no-op permutation when the two orders already agree.
+fn reorder_row(
+    from_order: &[Var],
+    row: &[Option<TermDef>],
+    to_order: &[Var],
+) -> Vec<Option<TermDef>> {
+    to_order
+        .iter()
+        .map(|v| {
+            let i = from_order
+                .iter()
+                .position(|w| w == v)
+                .expect("same_var_set checked by the caller");
+            row[i].clone()
+        })
+        .collect()
 }
 
 /// Dedup ONE `Union` arm's own internal duplicate rows (a bare `Values` leaf, or a
@@ -1510,6 +1536,41 @@ mod tests {
             rows.len(),
             3,
             "one row per constant arm, not 2+1 split: {rows:?}"
+        );
+    }
+
+    /// Ontop `ValuesNodeOptimization::test26MergeableCombination`: two `VALUES`
+    /// blocks binding the SAME two variables but declaring them in DIFFERENT header
+    /// order still fold into one `Values` leaf, cells correctly reordered by name
+    /// (not position) to the outer `project`'s canonical order — no transposition.
+    #[test]
+    fn constant_union_folds_reordered_columns_without_transposing() {
+        let n = norm(
+            "SELECT ?x ?y WHERE { { VALUES (?x ?y) { (1 2) } } \
+             UNION { VALUES (?y ?x) { (3 4) } } }",
+        );
+        let IqNode::Construction { child, .. } = &n else {
+            panic!("expected the identity-projection Construction wrapper: {n:?}")
+        };
+        let IqNode::Values { vars, rows } = child.as_ref() else {
+            panic!("expected both arms to fold to ONE Values leaf: {child:?}")
+        };
+        assert_eq!(
+            vars.iter().map(|v| v.as_ref()).collect::<Vec<&str>>(),
+            vec!["x", "y"],
+            "outer project order: {vars:?}"
+        );
+        // Second VALUES block declared (?y ?x) with row (3 4): y=3, x=4 -- must
+        // land as (x=4, y=3) once reordered to the [x,y] project order, NOT (x=3,
+        // y=4) (a transposition the naive positional copy this rule replaced would
+        // produce).
+        assert_eq!(
+            rows.iter()
+                .map(|r| (row_int(&r[0..1]), row_int(&r[1..2])))
+                .collect::<Vec<_>>(),
+            vec![(1, 2), (4, 3)],
+            "row order preserved, but each row's OWN cells reordered by name, not \
+             position: {rows:?}"
         );
     }
 

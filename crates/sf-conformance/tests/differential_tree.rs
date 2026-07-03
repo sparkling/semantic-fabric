@@ -632,6 +632,52 @@ fn distinct_over_union_dedups_values_arm_only() {
     );
 }
 
+/// Ontop `ValuesNodeOptimization::test26MergeableCombination`: two `VALUES` blocks
+/// binding the SAME variables in DIFFERENT header order still fold into one
+/// `Values` leaf, cells reordered by name (not position) -- no transposition.
+#[test]
+fn constant_union_folds_reordered_columns() {
+    diff_p(
+        "SELECT ?x ?y WHERE { { VALUES (?x ?y) { (1 2) } } UNION { VALUES (?y ?x) { (3 4) } } }",
+    );
+
+    // Shape proof that distinguishes fold-vs-no-fold. `LIMIT 2` (the TOTAL row
+    // count, not less) is deliberate: with a smaller limit, the first arm ALONE
+    // would already satisfy the window regardless of whether the second arm is
+    // ever recognized, making the shape assertion vacuous (a mistake caught while
+    // authoring this test) -- LIMIT 2 forces `try_slice_over_union` to actually
+    // examine the second arm. Without the reordering fold, the column-order
+    // mismatch makes `static_rows_of` (the Slice-over-Union rule's own arm
+    // recognizer) treat that second arm as unknown-cardinality too, leaving a
+    // residual `Slice` in the tree (`tp.limit == Some(2)`); folded first, the
+    // whole thing collapses to Slice-over-Values's own bare-Values case, which
+    // ALWAYS eliminates the Slice node outright (`tp.limit.is_none()`).
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let q = parse(
+        "SELECT ?x ?y WHERE { { VALUES (?x ?y) { (1 2) } } \
+         UNION { VALUES (?y ?x) { (3 4) } } } LIMIT 2",
+    );
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    assert!(
+        tp.limit.is_none() && tp.offset == 0,
+        "both arms must fold to one Values leaf BEFORE Slice-over-Values sees it, \
+         which then always eliminates its own Slice node outright -- a residual \
+         Slice surviving here means the second (reordered) arm was never \
+         recognized as foldable: limit={:?} offset={}",
+        tp.limit,
+        tp.offset
+    );
+    assert_eq!(
+        tp.branches.len(),
+        2,
+        "both rows present either way (this alone doesn't prove the fold fired -- \
+         see the limit/offset assertion above): {:?}",
+        tp.branches
+    );
+}
+
 #[test]
 fn p_aggregation() {
     // GROUP BY + COUNT over a single-branch inner (SQL GROUP BY).
