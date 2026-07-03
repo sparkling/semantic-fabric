@@ -287,6 +287,34 @@ fn p_minus_exists_union_nullable() {
     ));
 }
 
+/// RED (pre-fix): `FILTER NOT EXISTS { <body sharing no variable with the outer
+/// scope> }` is a PURE existence test (SPARQL §11.4.7) -- it must evaluate the
+/// same regardless of whether the body happens to share a variable with the
+/// outer scope. `MINUS`, in contrast, has a documented no-op exception for
+/// exactly this case (SPARQL §8.3.2: disjoint variable domains mean the right
+/// side can never remove a left solution). `lower_iq_exists` conflated the two
+/// (both build to the same `IqCond::NotExists` node, `build.rs`) and applied
+/// MINUS's no-op skip to FILTER NOT EXISTS too -- silently keeping every row
+/// instead of correctly testing existence. `dept` has a `label='Sales'` row
+/// (fixture), so `NOT EXISTS { ?x ex:label "Sales" }` is unconditionally FALSE
+/// for every person (the pattern always matches, uncorrelated) -- the correct
+/// answer is 0 rows; the MINUS analog is a documented no-op -- the correct
+/// answer is all 3 rows, unfiltered. `diff_p` (not `_bag`): both sides fully
+/// set-faithful here (no nullable column exposed).
+#[test]
+fn not_exists_with_no_shared_variable_is_not_a_minus_no_op() {
+    diff_p(&format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name \
+         FILTER NOT EXISTS {{ ?x ex:label \"Sales\" }} }}"
+    ));
+    // Companion guard: MINUS's own no-op exception must NOT regress while fixing
+    // the above -- same shape, different (correct) SPARQL semantics.
+    diff_p(&format!(
+        "{PFX} SELECT ?name WHERE {{ ?p ex:name ?name \
+         MINUS {{ ?x ex:label \"Sales\" }} }}"
+    ));
+}
+
 #[test]
 fn p_modifier_interaction() {
     // (c) DISTINCT, ORDER BY, LIMIT/OFFSET — single-branch SQL push paths.

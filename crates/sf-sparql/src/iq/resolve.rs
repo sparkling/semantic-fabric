@@ -226,7 +226,10 @@ fn resolve_cond(cond: IqCond, cx: &mut ResolveCx) -> Result<IqCond> {
         IqCond::Or(cs) => Ok(IqCond::Or(resolve_conds(cs, cx)?)),
         IqCond::Not(c) => Ok(IqCond::Not(Box::new(resolve_cond(*c, cx)?))),
         IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(resolve(*n, cx)?))),
-        IqCond::NotExists(n) => Ok(IqCond::NotExists(Box::new(resolve(*n, cx)?))),
+        IqCond::NotExists { inner, is_minus } => Ok(IqCond::NotExists {
+            inner: Box::new(resolve(*inner, cx)?),
+            is_minus,
+        }),
     }
 }
 
@@ -429,7 +432,7 @@ mod tests {
             IqCond::Expr(_) | IqCond::Sql(_) => false,
             IqCond::And(cs) | IqCond::Or(cs) => cs.iter().any(cond_has_intensional),
             IqCond::Not(c) => cond_has_intensional(c),
-            IqCond::Exists(n) | IqCond::NotExists(n) => has_intensional(n),
+            IqCond::Exists(n) | IqCond::NotExists { inner: n, .. } => has_intensional(n),
         }
     }
 

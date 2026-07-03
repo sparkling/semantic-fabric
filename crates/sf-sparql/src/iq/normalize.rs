@@ -1148,7 +1148,10 @@ fn normalize_cond(cond: IqCond) -> Result<IqCond> {
         IqCond::Or(cs) => Ok(IqCond::Or(normalize_conds(cs)?)),
         IqCond::Not(c) => Ok(IqCond::Not(Box::new(normalize_cond(*c)?))),
         IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(normalize(*n)?))),
-        IqCond::NotExists(n) => Ok(IqCond::NotExists(Box::new(normalize(*n)?))),
+        IqCond::NotExists { inner, is_minus } => Ok(IqCond::NotExists {
+            inner: Box::new(normalize(*inner)?),
+            is_minus,
+        }),
     }
 }
 

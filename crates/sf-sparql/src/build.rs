@@ -170,10 +170,10 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Resul
         // concerns (the §4.2 positional caveat), not built here.
         GraphPattern::Minus { left, right } => Ok(IqNode::Filter {
             child: Box::new(build_tree(left, current_graph)?),
-            cond: vec![IqCond::NotExists(Box::new(build_tree(
-                right,
-                current_graph,
-            )?))],
+            cond: vec![IqCond::NotExists {
+                inner: Box::new(build_tree(right, current_graph)?),
+                is_minus: true,
+            }],
         }),
 
         // ---- GRAPH <g> { P } -----------------------------------------------------
@@ -342,7 +342,10 @@ fn lower_iqcond(expr: &Expression, current_graph: Option<&NamedNode>) -> Result<
     match expr {
         Expression::Exists(p) => Ok(IqCond::Exists(Box::new(build_tree(p, current_graph)?))),
         Expression::Not(inner) => match inner.as_ref() {
-            Expression::Exists(p) => Ok(IqCond::NotExists(Box::new(build_tree(p, current_graph)?))),
+            Expression::Exists(p) => Ok(IqCond::NotExists {
+                inner: Box::new(build_tree(p, current_graph)?),
+                is_minus: false,
+            }),
             other => Ok(IqCond::Not(Box::new(lower_iqcond(other, current_graph)?))),
         },
         Expression::And(a, b) => Ok(IqCond::And(vec![
@@ -614,7 +617,38 @@ mod tests {
         let IqNode::Filter { cond, .. } = child.as_ref() else {
             panic!("expected Filter, got {child:?}");
         };
-        assert!(matches!(cond.as_slice(), [IqCond::NotExists(_)]));
+        assert!(matches!(
+            cond.as_slice(),
+            [IqCond::NotExists { is_minus: true, .. }]
+        ));
+    }
+
+    /// The missing companion to `minus_builds_filter_not_exists` above: `MINUS`
+    /// and `FILTER NOT EXISTS` build to the SAME `IqCond::NotExists` shape but
+    /// must carry a DIFFERENT `is_minus` — this distinction not being exercised
+    /// anywhere at build-time is exactly the gap that let a genuine `=_bag` bug
+    /// (silently treating FILTER NOT EXISTS as if it had MINUS's disjoint-domain
+    /// no-op) go untested through this whole layer.
+    #[test]
+    fn filter_not_exists_builds_not_exists_non_minus() {
+        let t = build_tree(
+            &pattern("SELECT * WHERE { ?s ?p ?o FILTER NOT EXISTS { ?s ?p2 ?x } }"),
+            None,
+        )
+        .unwrap();
+        let IqNode::Construction { child, .. } = &t else {
+            panic!("expected Project, got {t:?}");
+        };
+        let IqNode::Filter { cond, .. } = child.as_ref() else {
+            panic!("expected Filter, got {child:?}");
+        };
+        assert!(matches!(
+            cond.as_slice(),
+            [IqCond::NotExists {
+                is_minus: false,
+                ..
+            }]
+        ));
     }
 
     #[test]

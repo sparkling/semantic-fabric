@@ -514,24 +514,38 @@ fn lower_iq_cond(cond: &IqCond, outer: &Branch, dialect: sf_sql::Dialect) -> Res
                 .collect::<Result<_>>()?,
         )),
         IqCond::Not(c) => Ok(SqlCond::Not(Box::new(lower_iq_cond(c, outer, dialect)?))),
-        IqCond::Exists(n) => lower_iq_exists(n, outer, false, dialect),
-        IqCond::NotExists(n) => lower_iq_exists(n, outer, true, dialect),
+        IqCond::Exists(n) => lower_iq_exists(n, outer, false, false, dialect),
+        IqCond::NotExists { inner, is_minus } => {
+            lower_iq_exists(inner, outer, true, *is_minus, dialect)
+        }
     }
 }
 
 /// `EXISTS { P }` / `NOT EXISTS { P }` (and `MINUS`) → a correlated semi/anti-join
-/// [`SqlCond`] (design §5 Filter; SPARQL §8.3/§8.4). A verbatim port of the flat
-/// `Unfolder::lower_exists`, sourcing the inner branches from [`lower_node`] (the inner
-/// `IqNode` is already RESOLVED+NORMALIZED) instead of `translate_pattern`: each inner
-/// branch correlates to the outer row by raw-key equality on every shared variable
-/// (term-construction lifting); a shared var that may be UNBOUND on the outer side (reads
-/// an OPTIONAL alias) defers → 501 (never a wrong `NULL = value`). For NOT EXISTS every
-/// branch must fail (AND of `NotExists`); for EXISTS at least one must match (OR of
-/// `Exists`) — only existence is tested, so right multiplicity is irrelevant (`=_bag`).
+/// [`SqlCond`] (design §5 Filter; SPARQL §8.3/§8.4). A port of the flat
+/// `Unfolder::lower_exists`/`minus_branches`, sourcing the inner branches from
+/// [`lower_node`] (the inner `IqNode` is already RESOLVED+NORMALIZED) instead of
+/// `translate_pattern`: each inner branch correlates to the outer row by raw-key
+/// equality on every shared variable (term-construction lifting); a shared var
+/// that may be UNBOUND on the outer side (reads an OPTIONAL alias) defers → 501
+/// (never a wrong `NULL = value`). For NOT EXISTS/MINUS every branch must fail
+/// (AND of `NotExists`); for EXISTS at least one must match (OR of `Exists`) —
+/// only existence is tested, so right multiplicity is irrelevant (`=_bag`).
+///
+/// `is_minus` distinguishes `MINUS` from `FILTER NOT EXISTS` (both build to
+/// `IqCond::NotExists` and share this function, since both are correlated
+/// anti-joins over the SAME machinery) for exactly one precondition (SPARQL
+/// §8.3.2 vs §11.4.7): flat's `minus_branches` skips a branch sharing NO
+/// variable with the outer scope (a disjoint-domain MINUS is a documented
+/// no-op — the right side can never remove a left solution); flat's
+/// `lower_exists` (FILTER EXISTS/NOT EXISTS) has NO such skip at all — it is a
+/// pure existence test regardless of shared variables, gated only by genuine
+/// incompatibility (`never_compatible`, unchanged either way).
 fn lower_iq_exists(
     node: &IqNode,
     outer: &Branch,
     negated: bool,
+    is_minus: bool,
     dialect: sf_sql::Dialect,
 ) -> Result<SqlCond> {
     let inner = lower_node(node.clone(), dialect, false, &mut 0)?;
@@ -577,10 +591,18 @@ fn lower_iq_exists(
         if never_compatible {
             continue; // this branch can never match the outer row
         }
-        // SPARQL §8.3: if outer and inner have disjoint variable domains, MINUS is a
-        // NO-OP for this (outer, inner) pair — the inner branch can never remove the
-        // left row. Skip it (mirrors flat `minus_branches` line: `if shared.is_empty() { continue }`).
-        if negated && !shared_var_found {
+        // SPARQL §8.3.2: if outer and inner have disjoint variable domains, MINUS
+        // (only) is a NO-OP for this (outer, inner) pair — the inner branch can
+        // never remove the left row. Skip it (mirrors flat `minus_branches` line:
+        // `if shared.is_empty() { continue }`). FILTER NOT EXISTS has NO such
+        // exception (SPARQL §11.4.7 — a pure existence test regardless of shared
+        // variables, matching flat's `lower_exists`, which has no analogous skip
+        // at all): gating this on `is_minus` (not the shared `negated` flag,
+        // which is also true for FILTER NOT EXISTS) is the fix for a real bug an
+        // adversarial review caught — the un-gated version silently kept every
+        // row for a var-free-relative-to-outer NOT EXISTS body instead of
+        // correctly testing existence.
+        if is_minus && !shared_var_found {
             continue;
         }
         if negated {
@@ -678,7 +700,7 @@ fn iqcond_to_expr(c: &IqCond) -> Result<Expression> {
         IqCond::Not(c) => Ok(Expression::Not(Box::new(iqcond_to_expr(c)?))),
         IqCond::And(cs) => fold_expr(cs, |a, b| Expression::And(Box::new(a), Box::new(b))),
         IqCond::Or(cs) => fold_expr(cs, |a, b| Expression::Or(Box::new(a), Box::new(b))),
-        IqCond::Sql(_) | IqCond::Exists(_) | IqCond::NotExists(_) => Err(Error::Unsupported(
+        IqCond::Sql(_) | IqCond::Exists(_) | IqCond::NotExists { .. } => Err(Error::Unsupported(
             "OPTIONAL ON-condition with a resolved/EXISTS leaf cannot be reconstructed \
              to a pushable FILTER expression → 501"
                 .to_owned(),

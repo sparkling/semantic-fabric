@@ -239,8 +239,18 @@ pub enum IqCond {
     /// `FILTER EXISTS { P }` — a correlated semi-join over the built subtree (correlated
     /// on the variables shared with the enclosing scope, resolved at lowering).
     Exists(Box<IqNode>),
-    /// `FILTER NOT EXISTS { P }` and `MINUS` — a correlated anti-join over the subtree.
-    NotExists(Box<IqNode>),
+    /// `FILTER NOT EXISTS { P }` (SPARQL §11.4.7 — a pure correlated existence test,
+    /// true/false regardless of whether `P` shares a variable with the enclosing
+    /// scope) and `MINUS` (SPARQL §8.3.2 — a DIFFERENT semantics: a documented
+    /// no-op when the outer and inner variable domains are disjoint, since a
+    /// disjoint-domain right side can never remove a left solution). Both lower
+    /// through the same correlated-anti-join machinery (`lower_iq_exists`) and
+    /// differ in exactly this one precondition; `is_minus` says which SPARQL
+    /// construct built this node so that machinery can apply the right one.
+    NotExists {
+        inner: Box<IqNode>,
+        is_minus: bool,
+    },
 }
 
 /// A [`IqNode::Construction`] substitution entry: either a resolved [`TermDef`] (the
