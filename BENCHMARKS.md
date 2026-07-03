@@ -314,10 +314,27 @@ same live Ontop 5.5.0 + PostgreSQL harness with a rebuilt post-pushdown `sf-serv
 
 At scale 10000 that is a **17× absolute** improvement (228 → 13 ms): the database now does
 the `GROUP BY` over the `UNION ALL` derived table, so sf no longer buffers every
-pre-aggregation union row in Rust (`rust_group`). The small tiny-result-aggregate edge
-Ontop retains has **moved off q9 onto the single-source aggregates** q6 (17.05 vs 9.92 ms,
-≈1.7× @10000) and q13 (17.22 vs 9.54 ms, ≈1.8× @10000), which the q9 pushdown does not
-cover. q1/q3 re-raced as sanity stayed sf-faster (q3 = 563 vs 6319 ms @1000, **11.2×**).
+pre-aggregation union row in Rust (`rust_group`). q1/q3 re-raced as sanity stayed sf-faster
+(q3 = 563 vs 6319 ms @1000, **11.2×**).
+
+#### q6/q13 self-join elimination — 2026-07-03 (closes the last tiny-aggregate gap)
+
+The q9 re-race left q6 (`GROUP BY`+`ORDER BY`) and q13 (nested-subquery agg) as the only
+queries where Ontop still led (≈1.7–1.8× at scale 10000). Root cause, found by capturing
+the emitted SQL: sf's single-branch aggregate plans carried **redundant PK self-joins**
+(`routes`×2 CROSS JOIN `agency`×2) because `cascade::run` skipped self-join elimination on
+any aggregate branch. Fixed (commit `2d3e4f6`) — self-join elimination now runs on
+aggregate branches (`=_bag`-safe: a 1:1 unique-key self-join changes neither the group nor
+the COUNT). Re-raced, both flip to parity-to-faster, sf latency down ~40%:
+
+| query | scale 1000 (pre → post) | scale 10000 (pre → post) |
+|---|---|---|
+| q6 | 4.64 → **3.17 ms** (0.88× → **1.74× sf**) | 17.05 → **10.21 ms** (0.58× → **1.08× sf**) |
+| q13 | 5.88 → **3.94 ms** (0.72× → **1.32× sf**) | 17.22 → **9.41 ms** (0.55× → **1.03× sf**) |
+
+Row-parity preserved. With q9, q6, and q13 all closed, **sf is now at parity-or-faster than
+Ontop on every one of the 15 feature-class queries at every scale** — the tiny-result
+aggregate edge Ontop held is gone.
 
 ### Honest reading — feature classes × scale (post-fix, 2026-07-01)
 
@@ -361,21 +378,21 @@ cover. q1/q3 re-raced as sanity stayed sf-faster (q3 = 563 vs 6319 ms @1000, **1
   because the differential ran SQLite-only; that blind spot is now closed by a
   **permanent SQLite-vs-live-PG differential** over all five classes (see below).
 
-- **🟠 The remaining tiny-result-aggregate edge is Q6/Q13 — no longer Q9.** Re-raced
-  2026-07-03 (post-pushdown; see the q9 re-race table above), **Q9 flipped to
-  parity-to-faster at every scale** (1.81× / 1.54× / 1.01× / 1.44× at 1/100/1000/10000)
-  once `try_sql_group_over_union` replaced the `rust_group` buffer with a DB-side
-  `GROUP BY` over `UNION ALL`. The residual now lives in **Q6** (GROUP BY + ORDER BY) and
-  **Q13** (nested-subquery agg) — single-source aggregates the q9 pushdown does not touch
-  — where Ontop leads ≈1.5–1.8× at scale ≥ 1000 on a 2-row result (plan quality, not scan
-  throughput). Every cell is row-correct; this is the honest remaining gap, now smaller
-  and relocated.
+- **🟢 The tiny-result-aggregate gap is now CLOSED (q9 + q6 + q13 all fixed).** Re-raced
+  2026-07-03, **Q9 flipped to parity-to-faster at every scale** (1.81× / 1.54× / 1.01× /
+  1.44× at 1/100/1000/10000) once `try_sql_group_over_union` replaced the `rust_group`
+  buffer with a DB-side `GROUP BY` over `UNION ALL`. **Q6 and Q13** — the single-source
+  aggregates the q9 pushdown did not cover — were then fixed by running self-join
+  elimination on aggregate branches (commit `2d3e4f6`; see the q6/q13 table above): both
+  flip from Ontop-led (≈1.7–1.8× @10000) to parity-to-faster, sf latency down ~40%. Every
+  cell is row-correct. There is no longer a feature-class query where Ontop leads sf.
 
 - **No ONTOP-501 in this set.** Ontop 5.5.0 answers all of q1–q15 correctly at every
-  scale. The honest bottom line has flipped: **sf-serve now matches Ontop on
-  correctness across all 15 feature-class queries at all four scales, and is materially
-  faster on the join/scan workload** (up to 16.5× on the big 3-way join and 16.6× on the
-  8 M property path); Ontop retains a small edge only on tiny-result aggregations.
+  scale. The honest bottom line: **sf-serve matches Ontop on correctness across all 15
+  feature-class queries at all four scales, and is at parity-or-faster on latency across
+  the board** — materially faster on the join/scan workload (up to 16.5× on the big 3-way
+  join and 16.6× on the 8 M property path), and now at parity-to-faster on the
+  tiny-result aggregates that were Ontop's last edge.
 
 ### Permanent PG-path differential coverage (regression gate)
 
