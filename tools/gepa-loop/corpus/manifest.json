@@ -1,0 +1,755 @@
+{
+  "tasks": [
+    {
+      "id": "bb0821640359",
+      "commit": "bb0821640359ec5f562bc1e004adb1bfc44381d8",
+      "parent": "8fbcded04dea7dccca04ece4d2f5466fe8441ea2",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql): InnerJoin correlating on a LEFT-JOINed-SubPlan var drops rows — sound 501 (Item 1d round-5 consumer sweep)"
+    },
+    {
+      "id": "8fbcded04dea",
+      "commit": "8fbcded04dea7dccca04ece4d2f5466fe8441ea2",
+      "parent": "8d960fa1e14c9d1efa6f5aeadabf18f753c441a4",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql): SubPlan inside an EXISTS/NOT EXISTS/MINUS body crashes at exec — sound 501 (Item 1d round-4 meta-audit)"
+    },
+    {
+      "id": "8d960fa1e14c",
+      "commit": "8d960fa1e14c9d1efa6f5aeadabf18f753c441a4",
+      "parent": "6ba0cdfeb3c41308b167c2b10a2544a36a7faa38",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql): DISTINCT over a row-multiplying SubPlan-OPTIONAL drops duplicates (Item 1d round 4)"
+    },
+    {
+      "id": "6ba0cdfeb3c4",
+      "commit": "6ba0cdfeb3c41308b167c2b10a2544a36a7faa38",
+      "parent": "e562886cd87e14511741b2208f88bad74b8126b9",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/iq/lower.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql): sweep — two more left:true-SubPlanJoin composition defects (Item 1d round 3)"
+    },
+    {
+      "id": "e562886cd87e",
+      "commit": "e562886cd87e14511741b2208f88bad74b8126b9",
+      "parent": "4509e5b87c43a5aad8a8e34188af9ec1cdccc0b9",
+      "srcFiles": [
+        "crates/sf-sparql/src/emit.rs",
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql): close two left:true-SubPlanJoin composition defects (Item 1d round 3)"
+    },
+    {
+      "id": "79b5b4efedf5",
+      "commit": "79b5b4efedf5ff06c52f94cacf0501f6a4276d11",
+      "parent": "dd73b4aa56f6c3c50ecfc54e3c58208e06d6a28b",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq.rs",
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql/tree): subplan-OPTIONAL-bound var is nullable downstream (e7cb7e6 regression)"
+    },
+    {
+      "id": "e7cb7e6ea86f",
+      "commit": "e7cb7e6ea86fd543f5b455ae712da9fa4a791e8c",
+      "parent": "56e6981dd07971886b9a159098173e2828b7dd2a",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(sparql/tree): close single-SubPlan-as-OPTIONAL-right via derived-table LEFT JOIN (Item 1d)"
+    },
+    {
+      "id": "2d3e4f622ae5",
+      "commit": "2d3e4f622ae575adf19a4aa90fdd6e9ec12a7ae5",
+      "parent": "e7d86e1a37c344e0335249e6144031736b988d95",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "perf(cascade): run self-join elimination on single-branch aggregate plans (q6/q13)"
+    },
+    {
+      "id": "d849f462383c",
+      "commit": "d849f462383c39eca51e7548f8f705e3ff0558b1",
+      "parent": "d01962d06a228c911143884203bab4271b94e0ca",
+      "srcFiles": [
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sparql): property-path + OPTIONAL crashes -- turn into a sound 501"
+    },
+    {
+      "id": "b1148dcbfc06",
+      "commit": "b1148dcbfc063cf6130f49c1373ee0d09ae31255",
+      "parent": "9dc00bf0fa479e0759c6a3f9781b7a1f92234676",
+      "srcFiles": [
+        "crates/sf-sparql/src/emit.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sql): core-less LeftJoin left operand mis-aliases OPTIONAL's own columns"
+    },
+    {
+      "id": "d29e550969fe",
+      "commit": "d29e550969feea774b940e6913e44fce7ebf419b",
+      "parent": "39b25aadfc7ee13a98cde9a8bcaf2f46374f437d",
+      "srcFiles": [
+        "crates/sf-sparql/src/emit.rs",
+        "crates/sf-sql/src/dialect.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(sql): bare OFFSET-without-LIMIT SQLite/MySQL syntax error"
+    },
+    {
+      "id": "45b395cd10c9",
+      "commit": "45b395cd10c966e3b0408c281e35cb149fd2bbb3",
+      "parent": "8a941f6ea2420f6e480d1df6ff62dcf6252a5e73",
+      "srcFiles": [
+        "crates/sf-sparql/src/build.rs",
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/iq/node.rs",
+        "crates/sf-sparql/src/iq/normalize.rs",
+        "crates/sf-sparql/src/iq/resolve.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(iq): FILTER NOT EXISTS silent-wrong-answer -- distinguish it from MINUS's disjoint-domain no-op"
+    },
+    {
+      "id": "84365ff38e46",
+      "commit": "84365ff38e46d84a7f59b2b14a686101bc75f424",
+      "parent": "7b51223d12019a37522bb9ace5bd1bae294e5f9d",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(iq): ADR-0023 optimizer-residue -- partial-fold arm-order regression (flat vs tree diverge under LIMIT)"
+    },
+    {
+      "id": "487b4fb0c79f",
+      "commit": "487b4fb0c79fb153b912ec192f00097fbb842f5c",
+      "parent": "7d506c993460664d18851936a8b47d8e05b4f774",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 optimizer-residue Wave C -- constant-Union column-order reconciliation"
+    },
+    {
+      "id": "3380d4406a9c",
+      "commit": "3380d4406a9c8687df7f50441197913ea94c7a9d",
+      "parent": "6333824a671eabdf357ee737f7e10fa3567eaf70",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 optimizer-residue Wave C -- Distinct-over-Union per-arm dedup"
+    },
+    {
+      "id": "38a3f076db66",
+      "commit": "38a3f076db66c7f4e315c4a3fffd44c52a53b8a2",
+      "parent": "77ce2c7949938b7f99213561499a38339104ca4b",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 optimizer-residue Wave C -- Slice-over-Union arm-drop / residual limit"
+    },
+    {
+      "id": "561113881bf7",
+      "commit": "561113881bf7e0f86eefd8495ed4450638232cfc",
+      "parent": "666dd833c1d48bc392af3a9f6425349f7bb958f6",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 optimizer-residue Wave C -- Distinct-over-Values dedup"
+    },
+    {
+      "id": "d3139f5ad73e",
+      "commit": "d3139f5ad73ee82cf0481ff2151c9af47e6f6c5f",
+      "parent": "d313f2626d51732443553535fe1c45ac700b3391",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 optimizer-residue Wave C -- constant-Union-to-Values fold"
+    },
+    {
+      "id": "d313f2626d51",
+      "commit": "d313f2626d51732443553535fe1c45ac700b3391",
+      "parent": "edc9117c91d324bbe7619237882eeb710163ea21",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/normalize.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 optimizer-residue Wave C -- Slice-over-Values truncation"
+    },
+    {
+      "id": "edc9117c91d3",
+      "commit": "edc9117c91d324bbe7619237882eeb710163ea21",
+      "parent": "27079cbf9a8dc83fba4b99689b6966e89cf43fce",
+      "srcFiles": [
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/adversarial_antijoin_review.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test adversarial_antijoin_review",
+      "description": "fix(sparql): OPTIONAL decomposition must carry SubPlan joins through (ADR-0007)"
+    },
+    {
+      "id": "feb7336aa26b",
+      "commit": "feb7336aa26b9c884cd4434a7c7767cfe3d809e5",
+      "parent": "d69daa6336a866d94829ea43d3e027d58c168767",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/adversarial_antijoin_review.rs",
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test adversarial_antijoin_review --test differential_tree",
+      "description": "fix(sparql): OPTIONAL anti-join must apply its own inner FILTER (ADR-0007)"
+    },
+    {
+      "id": "14b53ab8615f",
+      "commit": "14b53ab8615f8c402d1e54863d373009654a3cae",
+      "parent": "575167c0fd4335bc6ae904a8d21b5fba5755c565",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/cascade/tests.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(cascade): ADR-0023 optimizer-residue -- self-join elimination inside NOT EXISTS/EXISTS subqueries"
+    },
+    {
+      "id": "3991e15bc949",
+      "commit": "3991e15bc949fa57c1c5a91b434458d443274124",
+      "parent": "062a723257abb6e6357eece8afabd44fa37c5906",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_pg_sqlite.rs",
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_pg_sqlite --test differential_tree",
+      "description": "feat(iq): extend q9 agg-pushdown to injective Template GROUP BY keys + live A.1 coverage"
+    },
+    {
+      "id": "062a723257ab",
+      "commit": "062a723257abb6e6357eece8afabd44fa37c5906",
+      "parent": "d69daa6336a866d94829ea43d3e027d58c168767",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(iq): gate GROUP BY key lowering on term-construction injectivity"
+    },
+    {
+      "id": "4eca00962cb4",
+      "commit": "4eca00962cb48c914d4f1a41fa179e38c15f4f98",
+      "parent": "260d24e07b7a1bfde4b21bccd51ab62d9c2c3b99",
+      "srcFiles": [
+        "crates/sf-sparql/src/lib.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "fix(iq): self-join elimination on rust_group (agg-over-UNION) plans"
+    },
+    {
+      "id": "774dc07c93c3",
+      "commit": "774dc07c93c31d8fce0ea63c9c1b7dc31c464ad2",
+      "parent": "399f8d9a9f44b1d9e516e514ae6709a440290321",
+      "srcFiles": [
+        "crates/sf-sql/src/backend/rest.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_trino.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_trino",
+      "description": "fix(m8): migrate REST backends to async reqwest; fix Trino live differential"
+    },
+    {
+      "id": "991cde84fd07",
+      "commit": "991cde84fd0784f2bb99f7d3ca4b5cac1ec71ac8",
+      "parent": "e984cf4fdf75391c0e02d091dd5ad260f689e1ff",
+      "srcFiles": [
+        "crates/sf-sql/src/backend/sqlite.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(adr0024-m5): R2 owned cap-1 SQLite serve-bridge (design §4.1)"
+    },
+    {
+      "id": "2e0eb5802049",
+      "commit": "2e0eb580204939229eb26597d2027ad72e374854",
+      "parent": "cdfd0d77f913e6dee88f6c29251372b71cf4514b",
+      "srcFiles": [
+        "crates/sf-bench/src/driver.rs",
+        "crates/sf-bench/src/workload.rs"
+      ],
+      "testFiles": [
+        "crates/sf-bench/tests/constant_memory.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-bench --test constant_memory",
+      "description": "test(adr0024-m5): per-backend bounded-memory re-proof (PG cursor + MySQL packet-bounded)"
+    },
+    {
+      "id": "e3d655e4a6e4",
+      "commit": "e3d655e4a6e4f19067d6c71268e1f2be78d564b4",
+      "parent": "38521f080d14c946a95b4325119a7da41685bf00",
+      "srcFiles": [
+        "crates/sf-serve/src/lib.rs",
+        "crates/sf-serve/src/stream.rs",
+        "crates/sf-sparql/src/exec_core.rs",
+        "crates/sf-sparql/src/exec_pg.rs",
+        "crates/sf-sql/src/backend/pg.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_pg_sqlite.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_pg_sqlite",
+      "description": "M3 step C: route PG entry points through exec_core; delete PG loop"
+    },
+    {
+      "id": "dac6755f93d4",
+      "commit": "dac6755f93d440efe2b480fa8a87f1209a2fd5a5",
+      "parent": "ad1c820af0aa1cfadf31db79093d67589679fb5f",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/lib.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs",
+        "crates/sf-conformance/tests/option_b_probe.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree --test option_b_probe",
+      "description": "feat(iq): ADR-0023 M8 — flip default to tree path + honest parity report"
+    },
+    {
+      "id": "4fcf16f39288",
+      "commit": "4fcf16f392882111b89656c62c25b4cf65f8e091",
+      "parent": "45ae36ca5a4e7a6e363276cd77629a476ff879a1",
+      "srcFiles": [
+        "crates/sf-sparql/src/build.rs",
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/iq/node.rs",
+        "crates/sf-sparql/src/iq/normalize.rs",
+        "crates/sf-sparql/src/iq/resolve.rs",
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 M5 Wave 1 — SPARQL property paths in the tree (reuse flat path.rs)"
+    },
+    {
+      "id": "45ae36ca5a4e",
+      "commit": "45ae36ca5a4e7a6e363276cd77629a476ff879a1",
+      "parent": "7c96d907a78fda95a15de9c57ffa485486881809",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/option_b_probe.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test option_b_probe",
+      "description": "feat(iq): ADR-0023 M4 Wave 3 — close OPTION_B Group C (nested/multi-node-right LeftJoin)"
+    },
+    {
+      "id": "56ec635f58e7",
+      "commit": "56ec635f58e75c85c993ece4ba791974387a4690",
+      "parent": "ca2e62e8b84bb94f9601e15d3c5a8a64d42017d5",
+      "srcFiles": [
+        "crates/sf-sparql/src/exec.rs",
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/lib.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 M4 Wave 1 — close the agg-over-UNION bug (tree exceeds flat) + cascade reuse"
+    },
+    {
+      "id": "ca2e62e8b84b",
+      "commit": "ca2e62e8b84bb94f9601e15d3c5a8a64d42017d5",
+      "parent": "09c0f200cb0d5c8894ec4603ca358c17065b3313",
+      "srcFiles": [
+        "crates/sf-sparql/src/iq/lower.rs",
+        "crates/sf-sparql/src/lib.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_tree.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_tree",
+      "description": "feat(iq): ADR-0023 M3d shadow differential — tree path proven =_bag to flat"
+    },
+    {
+      "id": "02096dd6fe40",
+      "commit": "02096dd6fe4026849cdc336e6ef742cb32096c8c",
+      "parent": "83cf52e12b76e8c9669864b9e517c7248306d47c",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/fd.rs",
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sql/src/lib.rs",
+        "crates/sf-sql/src/schema.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/ontop_intent_b0.rs",
+        "crates/sf-sparql/tests/ontop_intent_b3.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test ontop_intent_b0 --test ontop_intent_b3",
+      "description": "feat(cascade): wave-E — FD model + 6 RED-specs promoted to GREEN"
+    },
+    {
+      "id": "83cf52e12b76",
+      "commit": "83cf52e12b76e8c9669864b9e517c7248306d47c",
+      "parent": "3dff52348444150fa3e38e6f7dce216a7be28324",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/ontop_intent_b0.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test ontop_intent_b0",
+      "description": "feat(cascade): wave-D — DISTINCT-driven pruning of unused OPTIONAL right sides (pass 2d)"
+    },
+    {
+      "id": "3dff52348444",
+      "commit": "3dff52348444150fa3e38e6f7dce216a7be28324",
+      "parent": "54d478293fe692404db57803342b09016adcbabd",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/cascade/tests.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/ontop_intent_b2.rs",
+        "crates/sf-sparql/tests/ontop_intent_b4.rs",
+        "crates/sf-sparql/tests/ontop_port_b2.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test ontop_intent_b2 --test ontop_intent_b4 --test ontop_port_b2",
+      "description": "feat(cascade): wave-C optimizer — 9 RED-specs promoted to GREEN"
+    },
+    {
+      "id": "54d478293fe6",
+      "commit": "54d478293fe692404db57803342b09016adcbabd",
+      "parent": "5a60a277f28c0ee8b342fbdc33e9985963527b7a",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/joinelim.rs",
+        "crates/sf-sparql/src/cascade/mod.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/ontop_intent_b0.rs",
+        "crates/sf-sparql/tests/ontop_intent_b1.rs",
+        "crates/sf-sparql/tests/ontop_intent_b5.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test ontop_intent_b0 --test ontop_intent_b1 --test ontop_intent_b5",
+      "description": "feat(cascade): P1 optimizer wave — 7 RED-SPEC tests promoted to GREEN"
+    },
+    {
+      "id": "dea22cc05562",
+      "commit": "dea22cc055621aaf6f5388cbe431d9d09a73b6d0",
+      "parent": "8cf5a3655fd9abc9986c773dd142c044f5e461c1",
+      "srcFiles": [
+        "crates/sf-sparql/src/leftjoin.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sparql): close multi-scan OPTIONAL right side 501"
+    },
+    {
+      "id": "444e49e7a54c",
+      "commit": "444e49e7a54c7deeed68975903db5eda6eff36b9",
+      "parent": "90efc9bbeb0ae53aa534e49811b688c36976fabf",
+      "srcFiles": [
+        "crates/sf-sparql/src/exec.rs",
+        "crates/sf-sparql/src/exec_mysql.rs",
+        "crates/sf-sparql/src/iq.rs",
+        "crates/sf-sparql/src/leftjoin.rs",
+        "crates/sf-sparql/src/lib.rs",
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sparql): close ORDER BY expressions + DESCRIBE CBD 501s"
+    },
+    {
+      "id": "ea12d7950374",
+      "commit": "ea12d7950374d6d8b3cdd1ab96ad10a3b05c2610",
+      "parent": "ef8797a3ddb0768447f333038fb1284c6ee4f4f9",
+      "srcFiles": [
+        "crates/sf-sparql/src/exec_mysql.rs",
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "fix(sparql): adversarial QA fixes — graph_maps_match multi-graph; MySQL BLOB UTF-8"
+    },
+    {
+      "id": "926a23b2920d",
+      "commit": "926a23b2920de4e4910ab0f7588dfb162725ba41",
+      "parent": "bdcd29cbb32e72449a25a7459c27b04facef5aca",
+      "srcFiles": [
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "fix(sparql): EXISTS+OPTIONAL dead opt_alias guard; named-graph default-graph leak"
+    },
+    {
+      "id": "2bf9d5a629bf",
+      "commit": "2bf9d5a629bfdf44a2ab31c872e6aaae02209fef",
+      "parent": "914e25a7ff04681aa899188a0fa6dba745df06bb",
+      "srcFiles": [
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sf-sparql): WS-C wave 1 — GRAPH <g> { P } named-graph filtering"
+    },
+    {
+      "id": "914e25a7ff04",
+      "commit": "914e25a7ff04681aa899188a0fa6dba745df06bb",
+      "parent": "872fdaa3e26de68755b5cfc021975732cd1642a3",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/joinelim.rs",
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/emit.rs",
+        "crates/sf-sparql/src/iq.rs",
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sf-sparql): WS-B wave 5 — FILTER EXISTS / NOT EXISTS correlated subqueries"
+    },
+    {
+      "id": "872fdaa3e26d",
+      "commit": "872fdaa3e26de68755b5cfc021975732cd1642a3",
+      "parent": "56810dc6ac354a99df73e948b5039b22ae8a8bc0",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/joinelim.rs",
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/cascade/tests.rs",
+        "crates/sf-sparql/src/cascade/ws_g.rs",
+        "crates/sf-sparql/src/emit.rs",
+        "crates/sf-sparql/src/exec.rs",
+        "crates/sf-sparql/src/iq.rs",
+        "crates/sf-sparql/src/leftjoin.rs",
+        "crates/sf-sparql/src/unfold.rs",
+        "crates/sf-sparql/src/unify.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sf-sparql): WS-B wave 4 — GROUP BY / aggregates (SUM/COUNT/AVG/MIN/MAX)"
+    },
+    {
+      "id": "56810dc6ac35",
+      "commit": "56810dc6ac354a99df73e948b5039b22ae8a8bc0",
+      "parent": "78706b590d73a2164d3c1f08219e8104dfd17e38",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/joinelim.rs",
+        "crates/sf-sparql/src/cascade/mod.rs",
+        "crates/sf-sparql/src/emit.rs",
+        "crates/sf-sparql/src/iq.rs",
+        "crates/sf-sparql/src/lib.rs",
+        "crates/sf-sparql/src/unfold.rs",
+        "crates/sf-sparql/src/unify.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sf-sparql): WS-B wave 3 — MINUS (correlated anti-join, §8.3 + sameTerm)"
+    },
+    {
+      "id": "6ef04ce26bcc",
+      "commit": "6ef04ce26bcc9a93536c4ff42827bf87e65f6487",
+      "parent": "deb3a685164a825e19bf9ff39d101ddf2dacd092",
+      "srcFiles": [
+        "crates/sf-sparql/src/cascade/tests.rs",
+        "crates/sf-sparql/src/cascade/ws_g.rs",
+        "crates/sf-sparql/src/emit.rs",
+        "crates/sf-sparql/src/exec.rs",
+        "crates/sf-sparql/src/exec_pg.rs",
+        "crates/sf-sparql/src/iq.rs",
+        "crates/sf-sparql/src/lib.rs",
+        "crates/sf-sparql/src/unfold.rs"
+      ],
+      "testFiles": [
+        "crates/sf-sparql/tests/e2e.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-sparql --test e2e",
+      "description": "feat(sf-sparql): WS-B wave 2 — ORDER BY (collation-independent, exec-side sort)"
+    },
+    {
+      "id": "ea51a2d44def",
+      "commit": "ea51a2d44deff1396222fb94e3ed43eb7d63e9c3",
+      "parent": "ebdce8e1d3b1c749e9b5e85be236fb910b0f039e",
+      "srcFiles": [
+        "crates/sf-bench/src/driver.rs",
+        "crates/sf-sparql/src/exec_pg.rs"
+      ],
+      "testFiles": [
+        "crates/sf-conformance/tests/differential_pg_sqlite.rs"
+      ],
+      "failingTestCmd": "cargo test -p sf-conformance --test differential_pg_sqlite",
+      "description": "feat(exec): PostgreSQL OBDA executor — async select_pg/ask_pg + driver PG path"
+    }
+  ],
+  "train": [
+    "3380d4406a9c",
+    "feb7336aa26b",
+    "54d478293fe6",
+    "487b4fb0c79f",
+    "56810dc6ac35",
+    "561113881bf7",
+    "991cde84fd07",
+    "38a3f076db66",
+    "b1148dcbfc06",
+    "79b5b4efedf5",
+    "02096dd6fe40",
+    "bb0821640359",
+    "edc9117c91d3",
+    "872fdaa3e26d",
+    "45b395cd10c9",
+    "56ec635f58e7",
+    "e562886cd87e",
+    "e3d655e4a6e4",
+    "4fcf16f39288",
+    "ea12d7950374",
+    "8d960fa1e14c",
+    "d3139f5ad73e",
+    "3991e15bc949",
+    "d313f2626d51",
+    "444e49e7a54c",
+    "926a23b2920d",
+    "2d3e4f622ae5",
+    "914e25a7ff04",
+    "6ef04ce26bcc",
+    "83cf52e12b76",
+    "ea51a2d44def",
+    "6ba0cdfeb3c4",
+    "dea22cc05562",
+    "84365ff38e46"
+  ],
+  "holdout": [
+    "062a723257ab",
+    "774dc07c93c3",
+    "3dff52348444",
+    "d29e550969fe",
+    "d849f462383c",
+    "8fbcded04dea",
+    "e7cb7e6ea86f",
+    "14b53ab8615f",
+    "dac6755f93d4",
+    "ca2e62e8b84b",
+    "45ae36ca5a4e",
+    "2bf9d5a629bf",
+    "4eca00962cb4",
+    "2e0eb5802049"
+  ],
+  "sha256": "b1985e49f1fa02cd781f09a6277cd5b76b8ed4c6d0556fcb85b90c245e0dce7f"
+}

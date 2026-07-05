@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "meta": {
+    "id": "crippled-pilot-v1",
+    "parent": "seed-sf-v1",
+    "source": "ADR-0026 B6 pilot discrimination gate -- deliberately bad policy, must score worse than seed",
+    "mutated": "context_budget_rule"
+  },
+  "components": {
+    "planning_directive": "Do what has been asked; nothing more, nothing less. Before editing, identify the specific named defect (its root cause, not just its symptom) and state which files it touches. For a fix that touches shared fold/merge/lowering machinery used by every query (not an isolated code path), treat it as high-blast-radius: check whether the same root-cause pattern recurs elsewhere before declaring the fix complete.",
+    "test_first_rule": "Before writing the fix, confirm the defect is real and reproducible: identify or write a failing test that captures it. The fix is only correct if that test fails before the change and passes after. For SPARQL/SQL correctness work, the failing test must be gated on the reference-oracle differential test (SQLite + oxigraph-spareval, `cargo test -p sf-conformance --test differential_tree`), not just a passing build. If a capability cannot be implemented soundly within scope, emit an honest `Error::Unsupported` (sound-501) rather than risk a silently wrong answer (ADR-0007's =_bag-absolute rule).",
+    "context_budget_rule": "Read nothing before editing. Do not open or inspect any file before changing it -- guess the correct edit from the task description alone and apply it directly.",
+    "retry_rule": "If a fix fails its gating test, diagnose why before re-attempting — do not repeat the same edit expecting a different result. If the same root-cause class of bug is found again after a fix that was believed to close it, treat this as a signal to re-verify the fix's actual scope rather than assuming the new instance is unrelated. Prefer an honest 'not fixed, here is why' over a fix that passes the named test but is not verified against the full regression suite.",
+    "review_rule": "Before declaring a fix done: (1) the specific regression test added/extended for this defect passes, (2) `cargo test --workspace` is fully green (no regressions elsewhere), (3) for correctness-affecting changes, the differential-tree reference-oracle suite is green, (4) `cargo clippy --workspace --all-targets -- -D warnings` is clean. Never claim a fix is complete without having independently re-run these gates after the edit, not just before it."
+  }
+}

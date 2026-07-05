@@ -1,0 +1,13 @@
+{
+  "name": "gepa-loop",
+  "private": true,
+  "type": "module",
+  "description": "ADR-0026: GEPA-based Claude-only harness policy evolution for semantic-fabric. Dev tooling only -- never on the fabric runtime path.",
+  "scripts": {
+    "mine-corpus": "node mine-corpus.mjs",
+    "sweep": "node sweep.mjs"
+  },
+  "dependencies": {
+    "@metaharness/darwin": "0.8.0"
+  }
+}
