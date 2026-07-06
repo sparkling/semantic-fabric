@@ -201,8 +201,7 @@ constraint locally (79% idle at last check) or expected to be on `hz`.
 **To resume:**
 ```bash
 ssh hz
-git clone git@github.com:sparkling/semantic-fabric.git   # or cd into an existing clone + fetch
-cd semantic-fabric
+cd ~/source/semantic-fabric   # already cloned here; `git fetch && git pull` if stale
 git checkout feat/adr-0026-gepa-loop
 source ~/.cargo/env
 cd tools/gepa-loop
