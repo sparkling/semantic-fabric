@@ -736,11 +736,13 @@ fn emit_subplan_sql(plan: &crate::Plan, dialect: Dialect) -> Result<(String, Vec
         let e = &emitted[0];
         return Ok((e.sql.clone(), e.params.clone()));
     }
-    // Multiple branches: UNION ALL (bag semantics). Each branch's params in text order.
-    // SQLite's compound-select grammar does NOT accept a parenthesised `select-core`
-    // as a UNION operand (`(SELECT …) UNION ALL (SELECT …)` is a syntax error there —
-    // confirmed against `sqlite3` directly, the q9 agg-pushdown wave's first live
-    // failure); PostgreSQL/MySQL both accept it. So SQLite joins the arms bare.
+    // Multiple branches: `UNION ALL` (bag semantics) by default, or `UNION` (dedup) when the
+    // plan carries a DISTINCT (a multi-branch DISTINCT SubPlan, ADR-0025 Tier-2 gap 2 — the
+    // pooling requires injective cross-arm reconstruction, so SQL `UNION`'s raw-column dedup
+    // equals SPARQL DISTINCT on the reconstructed terms). SQLite's compound-select grammar
+    // does NOT accept a parenthesised `select-core` as a UNION operand (`(SELECT …) UNION …`
+    // is a syntax error there — the q9 agg-pushdown wave's first live failure); PG/MySQL
+    // accept it. So SQLite joins the arms bare.
     let mut all_sql = Vec::new();
     let mut all_params = Vec::new();
     for e in &emitted {
@@ -751,7 +753,12 @@ fn emit_subplan_sql(plan: &crate::Plan, dialect: Dialect) -> Result<(String, Vec
         }
         all_params.extend(e.params.clone());
     }
-    let sql = all_sql.join(" UNION ALL ");
+    let op = if plan.distinct {
+        " UNION "
+    } else {
+        " UNION ALL "
+    };
+    let sql = all_sql.join(op);
     Ok((sql, all_params))
 }
 

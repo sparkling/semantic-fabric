@@ -4402,3 +4402,104 @@ fn adr0025_tier2_count_distinct_star_mixed_with_count_star() {
         &conn,
     );
 }
+
+// ============================================================================
+// ADR-0025 Tier-2 gap 2: a multi-branch (UNION) SubPlan as a join input. Was 501; now the
+// tree pools the arms into ONE UNION-ALL/UNION derived table when every projected var
+// reconstructs identically across all arms (else sound 501). Per the Ontop dossier this is
+// the primitive that also unblocks gaps 4/5.
+// ============================================================================
+
+#[test] // DISTINCT sub-SELECT over a UNION, joined with a triple => distinct ?p then join.
+fn adr0025_tier2_gap2_multibranch_distinct_subplan_join() {
+    let q = format!(
+        "{PFX} SELECT ?p ?label WHERE {{ \
+           {{ SELECT DISTINCT ?p WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:email ?e }} }} }} \
+           ?p ex:name ?label . }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree pools it"),
+        &conn,
+    );
+}
+
+#[test] // cross-arm INCOMPATIBLE: ?x is a literal (name) in one arm, an IRI (dept) in the
+        // other => must sound-501 (not silently pool a type-mismatched UNION).
+fn adr0025_tier2_gap2_incompatible_arms_sound_501() {
+    let q = format!(
+        "{PFX} SELECT ?p ?x WHERE {{ \
+           {{ SELECT DISTINCT ?p ?x WHERE {{ {{ ?p ex:name ?x }} UNION {{ ?p ex:dept ?x }} }} }} \
+           ?p ex:name ?nm . }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "type-incompatible cross-arm SubPlan must sound-501"
+    );
+}
+
+#[test] // non-distinct multi-branch SubPlan (ORDER BY-only over UNION) => UNION ALL bag, joined.
+        // Boundary: a non-DISTINCT OrderBy SubPlan over a UNION whose arms bind DIFFERENT internal
+        // vars (?n vs ?e). Without the DISTINCT narrowing, those arm-local vars stay in the pooled
+        // projection and reconstruct differently across arms (one bound, one absent), needing UNION
+        // column-padding the pooling does not emit — so it soundly 501s (never a wrong answer). The
+        // DISTINCT-over-shared-var shape above is the gap-2 win; padding is future work.
+fn adr0025_tier2_gap2_nondistinct_disjoint_arm_vars_sound_501() {
+    let q = format!(
+        "{PFX} SELECT ?p WHERE {{ \
+           {{ SELECT ?p WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:email ?e }} }} ORDER BY ?p }} \
+           ?p ex:name ?label . }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "non-distinct arms binding disjoint internal vars must sound-501 (needs UNION padding)"
+    );
+}
+
+// ADR-0025 gap-2 injectivity gate (adversarial review): a multi-branch DISTINCT SubPlan
+// whose projected var is a NON-INJECTIVE IRI template (distinct raw tuples → the same term)
+// must stay a sound 501 — the pooled UNION dedups raw columns, which would NOT match SPARQL
+// DISTINCT on the reconstructed term. Was 501 pre-gap-2; the pooling must not regress it.
+// (The analogous SINGLE-branch `SELECT DISTINCT ?s` over a non-injective template is a
+// separate, PRE-EXISTING soundness gap in DISTINCT emission — tracked as its own item.)
+const NIT_SQL: &str = r#"
+CREATE TABLE pair (a TEXT NOT NULL, b TEXT NOT NULL, val TEXT NOT NULL);
+INSERT INTO pair VALUES ('1','23','X');
+INSERT INTO pair VALUES ('12','3','Y');
+"#;
+const NIT_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#P> rr:logicalTable [ rr:tableName "pair" ] ;
+    rr:subjectMap [ rr:template "http://ex/{a}{b}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:val ; rr:objectMap [ rr:column "val" ] ] .
+"#;
+#[test]
+fn adr0025_tier2_gap2_multibranch_distinct_noninjective_sound_501() {
+    let conn = sqlite::load(NIT_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(NIT_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT ?s WHERE {{ \
+           {{ SELECT DISTINCT ?s WHERE {{ {{ ?s ex:val ?v }} UNION {{ ?s ex:val ?w }} }} }} \
+           ?s ex:val ?any . }}"
+    );
+    let parsed = parse(&q);
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "multi-branch DISTINCT over a non-injective template must sound-501 (not pool)"
+    );
+}
