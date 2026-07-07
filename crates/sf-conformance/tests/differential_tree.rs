@@ -4750,3 +4750,39 @@ fn adr0025_tier2_gap1_reflexive_path_in_exists_sound_501() {
         "reflexive P* inside EXISTS must sound-501"
     );
 }
+
+// ADR-0025 Tier-3: the =_bag-meaningful content of the cosmetic SQL-shape backlog is CLOSED
+// (Wave C + Group C, commits d313f26..487b4fb / 45ae36c). This regression test locks in that
+// each shape computes the CORRECT =_bag result on current main. What remains UNimplemented in
+// Tier-3 is pure SQL-*signature*-shape (binding-lift wrapper-hoist: not =_bag, architecturally
+// N/A — sf's IqNode::Union explodes into independent branches, no shared wrapper to hoist; and
+// the test10/11 Slice·Distinct·Union fold: a correct-but-unoptimized boundary). Neither affects
+// =_bag correctness — this test proves the results are already right regardless of SQL shape.
+#[test]
+fn adr0025_tier3_bag_content_closed() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let cases = [
+        // right-nested OPTIONAL — L OPT (R1 OPT R2) — Group C (was flat-501, now tree Ok)
+        format!("{PFX} SELECT ?p ?e ?d WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e OPTIONAL {{ ?p ex:dept ?d }} }} }}"),
+        // MergeLJs-right-nested — OPT chain — Group C
+        format!("{PFX} SELECT * WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} OPTIONAL {{ ?p ex:dept ?d }} }}"),
+        // Slice-over-Values (Wave 6 test1); Distinct-over-Values (test3); constant-Union fold (test14)
+        format!("{PFX} SELECT ?x WHERE {{ VALUES ?x {{ 1 2 3 }} }} LIMIT 1"),
+        format!("{PFX} SELECT DISTINCT ?x WHERE {{ VALUES ?x {{ 1 1 2 }} }}"),
+        format!("{PFX} SELECT ?x WHERE {{ {{ BIND(1 AS ?x) }} UNION {{ BIND(2 AS ?x) }} }}"),
+        // test10 shape WITHOUT the non-deterministic LIMIT — the DISTINCT-over-Union SET is correct
+        // (the missing OPTIMIZATION is SQL-shape only; the =_bag result is already right).
+        format!("{PFX} SELECT DISTINCT ?x WHERE {{ {{ VALUES ?x {{ 1 2 }} }} UNION {{ VALUES ?x {{ 2 3 }} }} }}"),
+    ];
+    for q in cases {
+        let parsed = parse(&q);
+        assert_vs_spareval(
+            P_TTL,
+            &q,
+            &tree(&maps, &parsed, &schema).expect("tree computes it"),
+            &conn,
+        );
+    }
+}
