@@ -3584,21 +3584,30 @@ fn item4_property_path_inner_in_exists_minus_stays_501() {
     );
 }
 
-/// Item 7 — GROUP BY over a property-path closure. MUST STAY 501: a path branch has
-/// `path: Some(_)` and an EMPTY `core`; its variables are the recursive CTE's `sf_s`/
-/// `sf_o` columns, NOT raw base-table columns. `lower_aggregation` lowers GROUP BY keys
-/// and aggregate arguments via `group_key_columns`/`single_column_of`, which read a
-/// binding's RAW R2RML columns off a base scan — there are none on a path branch.
-/// Closing it needs the path wrapped as a derived-table SubPlan whose `sf_s`/`sf_o`
-/// become plain groupable columns, then aggregation over that SubPlan — the path-as-
-/// SubPlan mechanism (out of scope). Flat 501s identically. `diff` locks it.
+/// Item 7 — GROUP BY over a property-path closure. SUPERSEDED 2026-07-07 by ADR-0025 Tier-2
+/// gap 4: the TREE now computes it by routing the path aggregation to the Rust group path
+/// (`rust_group_execute` runs the path branch's own SQL and groups the solutions by variable
+/// name — no base-column access needed, so no path-as-SubPlan machinery was required after
+/// all). Tree matches spareval; FLAT still soundly 501s (its `unfold` group() lacks the same
+/// routing — the documented tree-exceeds-flat limitation). Full coverage: the
+/// `adr0025_tier2_gap4_group_by_over_path_closure` variants (both group directions, implicit
+/// group, P*, cyclic).
 #[test]
-fn item7_group_by_over_property_path_stays_501() {
-    diff(
-        PE_SQL,
-        PE_R2RML,
-        None,
-        &format!("{PFX} SELECT ?s (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?s"),
+fn item7_group_by_over_property_path_now_tree_superset_of_flat() {
+    let conn = sqlite::load(PE_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).unwrap();
+    let q = format!("{PFX} SELECT ?s (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?s");
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        PE_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree computes it"),
+        &conn,
+    );
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "flat still soundly 501s GROUP BY over a path closure"
     );
 }
 
@@ -4596,4 +4605,72 @@ fn adr0025_tier2_gap5_decimal_or_division_stays_501() {
         assert!(matches!(tree(&maps,&parsed,&schema).and_then(|p| p.emitted().map(|_|())), Err(Error::Unsupported(_))),
             "decimal/division post-group arithmetic must sound-501: {q}");
     }
+}
+
+// ADR-0025 Tier-2 gap 4: GROUP BY over a property-path CLOSURE. Was 501 (path vars live in
+// the recursive CTE, not base columns); now routed to the Rust group path, which runs the
+// path branch's own SQL and groups the solutions by variable name. Gated vs spareval.
+fn gap4_case(sql: &str, r2rml: &str, ttl: &str, q: &str) {
+    let conn = sqlite::load(sql).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(r2rml).unwrap();
+    let parsed = parse(q);
+    assert_vs_spareval(
+        ttl,
+        q,
+        &tree(&maps, &parsed, &schema).expect("tree groups the path"),
+        &conn,
+    );
+}
+#[test]
+fn adr0025_tier2_gap4_group_by_over_path_closure() {
+    // group by reachable target, count sources
+    gap4_case(
+        PE_SQL,
+        PE_R2RML,
+        PE_TTL,
+        &format!("{PFX} SELECT ?o (COUNT(?s) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?o"),
+    );
+    // group by source, count reachable targets
+    gap4_case(
+        PE_SQL,
+        PE_R2RML,
+        PE_TTL,
+        &format!("{PFX} SELECT ?s (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?s"),
+    );
+    // implicit group (one COUNT over the whole closure)
+    gap4_case(
+        PE_SQL,
+        PE_R2RML,
+        PE_TTL,
+        &format!("{PFX} SELECT (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }}"),
+    );
+    // reflexive-transitive closure (P*) grouped
+    gap4_case(
+        PE_SQL,
+        PE_R2RML,
+        PE_TTL,
+        &format!("{PFX} SELECT ?o (COUNT(?s) AS ?c) WHERE {{ ?s ex:reaches* ?o }} GROUP BY ?o"),
+    );
+    // cyclic graph, grouped — must terminate + count each reachable pair once
+    gap4_case(
+        PC_SQL,
+        PE_R2RML,
+        PC_TTL,
+        &format!("{PFX} SELECT ?o (COUNT(?s) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?o"),
+    );
+}
+#[test] // gap-4 edges: COUNT(DISTINCT) over a path, and a path joined with a bound pattern, grouped.
+fn adr0025_tier2_gap4_count_distinct_over_path() {
+    // COUNT(DISTINCT) over a path closure, grouped. (A path JOINED with another pattern is a
+    // SEPARATE pre-existing 501 -- "joining a path closure with another pattern" -- orthogonal
+    // to gap 4's GROUP-BY-over-path, so not exercised here.)
+    gap4_case(
+        PE_SQL,
+        PE_R2RML,
+        PE_TTL,
+        &format!(
+            "{PFX} SELECT ?o (COUNT(DISTINCT ?s) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?o"
+        ),
+    );
 }
