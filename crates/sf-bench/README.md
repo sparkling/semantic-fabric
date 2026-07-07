@@ -6,7 +6,7 @@ The performance benchmark driver for semantic-fabric (ADR-0005), on the
 1. **OBDA query latency** — live SPARQL→SQL over a relational source, no
    materialisation (ADR-0006).
 2. **Constant engine memory + bounded first-result latency under growing source
-   data** — the differentiator (ADR-0006 / ADR-0013): the source DB does the
+   data** — the differentiator (ADR-0006): the source DB does the
    set-work, the engine streams, so the engine working set is
    `O(|T| + |M| + batch)`, independent of source size.
 
@@ -156,7 +156,7 @@ columns; a per-process **database** isolates the catalog cleanly without touchin
 Measured on this box (Apple Silicon, macOS), `--release` via criterion (3 s warm-up,
 50 samples, 5 s measurement), one clean single-process run. Numbers are indicative —
 the *invariant* (constant memory, bounded first result), not the absolute latency, is
-the load-bearing result; absolute latency feeds the Path-B objective (ADR-0013).
+the load-bearing result; absolute latency feeds the Ontop-vs-port performance comparison.
 
 ### Dataset scale (rows per scale factor `s`)
 

@@ -55,7 +55,7 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 ### Targets & correctness gates
 
 - **Correctness** — the **W3C RDB2RDF test cases** (Direct Mapping + R2RML), executed as CONSTRUCT through the rewriter and compared to the expected output; the **Ontop** offline differential oracle on a shared R2RML set (ADR-0005); NoREC internal-differential + MR1 metamorphic (ADR-0012).
-- **Performance** — the **GTFS-Madrid-Bench OBDA track**: query latency, first-result latency, and **constant engine memory under growing source data** (ADR-0013). Materialisation benchmarks (KROWN) do not apply.
+- **Performance** — the **GTFS-Madrid-Bench OBDA track**: query latency, first-result latency, and **constant engine memory under growing source data** (ADR-0005). Materialisation benchmarks (KROWN) do not apply.
 - The engine is exercised only against these standard suites/benchmarks and Ontop — **never against production mappings**, which remain runtime build output (the upstream source-mapping decision).
 
 ### Consequences

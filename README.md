@@ -465,7 +465,6 @@ canonical index.
 | ADR | Decision |
 |---|---|
 | [ADR-0012](docs/adr/ADR-0012-test-strategy.md) | Test strategy (unit/integration/property/fuzz + snapshot) |
-| [ADR-0013](docs/adr/ADR-0013-meta-harness-dev-loop.md) | Meta-harness dev loop (readiness drift + perf tuning) |
 
 **Data & provenance**
 

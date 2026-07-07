@@ -1,5 +1,7 @@
 # ruflo MetaHarness — what it is and how it applies to semantic-fabric
 
+> **Historical (2026-07-05).** Grounding for the now-superseded ADR-0013. The read-layer half (§2–3) remains accurate; the Darwin/evolve half was invalidated by first-hand verification — see [ADR-0025](../adr/ADR-0025-claude-only-gepa-harness-evolution.md).
+
 **Research key:** `ruflo-metaharness`
 **Date:** 2026-06-27
 **Evidence grade:** High — read from the installed packages + the upstream ADR + npm metadata, cross-checked with the ruvnet repos.

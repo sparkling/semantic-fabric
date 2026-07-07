@@ -30,3 +30,10 @@
 agentdb.rvf
 *.rvf
 *.rvf.lock
+
+# MetaHarness drop-in — keep the text/KB, drop the large media
+docs/metaharness-dropin/for-humans/studio/*.m4a
+docs/metaharness-dropin/for-humans/studio/*.png
+
+# Handover docs — local-only session notes, not tracked
+docs/handover/

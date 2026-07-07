@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-28
-tags: [ontop-parity, program, umbrella, roadmap, optimizer, sparql-surface, mapping, dialects, hardening, charter, spec-oracle, metaharness]
+tags: [ontop-parity, program, umbrella, roadmap, optimizer, sparql-surface, mapping, dialects, hardening, charter, spec-oracle]
 supersedes: []
 depends-on:
   - ADR-0004
@@ -9,7 +9,6 @@ depends-on:
   - ADR-0007
   - ADR-0008
   - ADR-0012
-  - ADR-0013
   - ADR-0020
 implements:
   - ADR-0001
@@ -38,7 +37,7 @@ This ADR is the **umbrella** for a program to close those gaps and reach parity 
 
 ## Decision Outcome
 
-Chosen: **spec + oracle, parity within charter, Wave 1 = WS-G (tests first)** — the three operator decisions below, executed one workstream per wave through the ADR-0013 gated-wave loop.
+Chosen: **spec + oracle, parity within charter, Wave 1 = WS-G (tests first)** — the three operator decisions below, executed one workstream per wave through the gated wave loop.
 
 ### The three locked decisions (operator, 2026-06-28)
 
@@ -63,9 +62,9 @@ Chosen: **spec + oracle, parity within charter, Wave 1 = WS-G (tests first)** �
 * **OWL 2 QL tier-2 entailment** (RHS-existential / tree-witness saturation) — **excluded**, held by **ADR-0008** (tier-2 evidence-gated/deferred) and the external **ODR-0030** (in the `semantic-modelling` repo; cross-corpus reference). Tier-2 queries stay depth-0 / `501`.
 * **Protégé / `.obda`** — N/A: Java GUI, no place in a no-JVM Rust engine.
 
-### Execution model — the ADR-0013 metaharness gated-wave loop
+### Execution model — gated wave loop
 
-One workstream per wave: **implement → verify → adversarial review → conditional promotion.** The verify gate is `=_bag` differential + W3C RDB2RDF floor + `cargo clippy --all-targets -D warnings` + `cargo fmt --check` (ADR-0005/0012). The metaharness `score`/`genome`/`oia-audit` ride alongside as a **readiness/safety** gate — **not** the quality discriminator (~0.985 ceiling; ADR-0013). Darwin `evolve` (dev-harness) and the engine-perf Path-B sweep are reserved for the closing **optimise** milestone, never auto-run in CI. No speed for correctness: cost may choose only among `=_bag`-equivalent plans.
+One workstream per wave: **implement → verify → adversarial review → conditional promotion.** The verify gate is `=_bag` differential + W3C RDB2RDF floor + `cargo clippy --all-targets -D warnings` + `cargo fmt --check` (ADR-0005/0012). The engine-perf Path-B sweep is reserved for the closing **optimise** milestone, never auto-run in CI. No speed for correctness: cost may choose only among `=_bag`-equivalent plans.
 
 ### Incremental ADRs (avoid design-target drift)
 
@@ -79,13 +78,13 @@ ADR-0007 §"v1 SPARQL coverage" lists `BIND, VALUES, ORDER BY, aggregates, GRAPH
 
 * Good, because tests-first (WS-G) de-risks the hardest reimplementation surface (OPTIONAL/NULL) before any optimizer change.
 * Good, because the charter keeps scope honest — excluded surfaces are recorded against ADR-0008 / ODR-0030, not silently attempted.
-* Good, because the ADR-0013 gated loop forbids trading correctness for speed (`=_bag`-equivalent plans only).
+* Good, because the gated verify loop forbids trading correctness for speed (`=_bag`-equivalent plans only).
 * Bad, because Wave 1 produces an oracle, not user-visible features — slower to visible parity.
 * Neutral, because WS-A…F ADRs are authored per-wave rather than all up front.
 
 ### Confirmation
 
-* Each wave holds the ADR-0013 verify gate (`=_bag` + W3C floor + clippy + fmt) and the metaharness readiness gate before promotion.
+* Each wave holds the verify gate (`=_bag` + W3C floor + clippy + fmt) before promotion.
 * Parity is measured by re-running `COMPARISON.md` (GTFS-Madrid OBDA track) and the W3C RDB2RDF conformance suite; the **benchmark** milestone re-measures Q5 and the full GTFS-18 against Ontop 5.5.0.
 * The `horizon-tracker` agent owns the program objective and milestone checkpoints until *validated, benchmarked, and optimised*.
 
@@ -93,6 +92,6 @@ ADR-0007 §"v1 SPARQL coverage" lists `BIND, VALUES, ORDER BY, aggregates, GRAPH
 
 * **Ontop spec/oracle:** `~/source/ontop` (HEAD just past tag `ontop-5.5.0`; `git checkout ontop-5.5.0` for an exact match); `docs/research/ontop.md` (§5 optimizer, §10 modules, §13 reuse-vs-reimplement).
 * **Charter exclusion:** ODR-0030 (`semantic-modelling` repo — cross-corpus; not in this `docs/adr/` index).
-* **Gates / loop / registers:** ADR-0005 (conformance + bench), ADR-0012 (test strategy), ADR-0013 (metaharness dev loop), ADR-0020 (outstanding SOTA optimisations), ADR-0007 (rewriter cascade), ADR-0008 (reasoning / charter), ADR-0004 (own the rewriter).
+* **Gates / loop / registers:** ADR-0005 (conformance + bench), ADR-0012 (test strategy), ADR-0020 (outstanding SOTA optimisations), ADR-0007 (rewriter cascade), ADR-0008 (reasoning / charter), ADR-0004 (own the rewriter).
 * **Workstream ADRs:** ADR-0022 (WS-G, Wave 1). WS-A…F created at the start of their waves.
 * **Theory anchor (WS-A):** Xiao/Kontchakov et al., *Efficient Handling of SPARQL OPTIONAL for OBDA* (ISWC 2018).

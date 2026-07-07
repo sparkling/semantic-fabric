@@ -1,5 +1,7 @@
 # ruflo MetaHarness — Darwin Mode (`@metaharness/darwin`)
 
+> **Historical (2026-07-05).** Grounding for the now-superseded ADR-0013, written against 0.3.1 and vendor-reported results. First-hand verification (2026-07-04/05) showed the `evolve` CLI's real-repo evaluation is variant-blind in shipped code through 0.8.0, and its self-reported benchmark numbers are unverified. Superseded by [ADR-0025](../adr/ADR-0025-claude-only-gepa-harness-evolution.md) (GEPA-as-library, Claude-only).
+
 **Research key:** `ruflo-metaharness-darwin`
 **Date:** 2026-06-27
 **Evidence grade:** High — read from the installed `@metaharness/darwin@0.3.1`, the upstream integration ADR-153, and the ruflo plugin wrappers (`_darwin.mjs` / `evolve.mjs`); academic lineage web-verified.

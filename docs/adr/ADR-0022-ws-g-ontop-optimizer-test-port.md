@@ -33,7 +33,7 @@ Ontop already encodes that oracle: its JUnit **IQ-optimizer tests** assert exact
 
 ## Decision Outcome
 
-Chosen: **port four Ontop optimizer test classes to Rust** oracle/equivalence tests against `iq.rs` + the `=_bag` differential, run under the ADR-0013 gated-wave loop; the failing subset is the WS-A backlog.
+Chosen: **port four Ontop optimizer test classes to Rust** oracle/equivalence tests against `iq.rs` + the `=_bag` differential; the failing subset is the WS-A backlog.
 
 ### The four test classes to port
 
@@ -49,7 +49,7 @@ Under `~/source/ontop/core/optimization/src/test/java/`:
 * JUnit IQ assertions (input tree → expected optimized tree) → Rust tests over `iq.rs`, checked structurally and via the `=_bag` NoREC-style differential (unoptimized vs optimized IQ) of ADR-0012.
 * WS-A spec classes these tests target (for the next wave): `LeftJoinIQOptimizer` (+ `impl/lj/`), `SelfJoinUCIQOptimizer`, `SelfJoinSameTermIQOptimizer` / `AbstractSelfJoinSimplifier`, `RedundantJoinFKOptimizer`, and `LeftJoinNormalizerImpl` (null-safe LJ).
 
-### Execution (ADR-0013 gated-wave loop)
+### Execution
 
 implement (port tests) → verify (`cargo test --workspace` + `=_bag` differential + W3C RDB2RDF floor + `cargo clippy --all-targets -D warnings` + `cargo fmt --check`) → adversarial review → conditional fix. Tests are re-expressed against `iq.rs`, never transliterated.
 
@@ -68,7 +68,7 @@ implement (port tests) → verify (`cargo test --workspace` + `=_bag` differenti
 
 ## More Information
 
-* **Umbrella:** ADR-0021. **Rewriter / cascade:** ADR-0007. **Test strategy / differential oracle:** ADR-0012. **Conformance + bench gate:** ADR-0005. **Dev loop:** ADR-0013.
+* **Umbrella:** ADR-0021. **Rewriter / cascade:** ADR-0007. **Test strategy / differential oracle:** ADR-0012. **Conformance + bench gate:** ADR-0005.
 * **Ontop source:** `~/source/ontop` (tag `ontop-5.5.0`). Optimizer spec classes under `core/optimization/src/main/java/it/unibz/inf/ontop/iq/optimizer/`; tests under `core/optimization/src/test/java/`.
 * **Q5 root cause (WS-A target):** `HANDOVER-2026-06-28-ontop-parity.md §Findings 1` — redundant self-left-join + unconditional null-safe ON (`leftjoin.rs:58`, `emit.rs:472–475`); no self-(left-)join elimination (`joinelim.rs:64–66` refuses OPTIONAL sides).
 * **Theory anchor:** Xiao/Kontchakov et al., *Efficient Handling of SPARQL OPTIONAL for OBDA* (ISWC 2018).
