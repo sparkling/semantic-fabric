@@ -134,7 +134,9 @@ The outstanding work is organized into three tiers (detailed below), with recomm
 
 **Blocker:** the multi-branch aggregation path lowers to `rust_group` (in-process grouping, Rust executor). The executor can only RENAME aggregate outputs (e.g. `SUM→total`), not COMPUTE expressions over them (e.g. `SUM / COUNT`). Single-branch SQL GROUP BY already supports post-aggregate expressions via SQL's native `SELECT` projection logic, but Rust `rust_group` cannot.
 
-**Requires:** a new post-group expression evaluator in the Rust executor that computes expressions over the `rust_group` outputs. Existing code: `crates/sf-sql/src/exec.rs`.
+**Requires:** a new post-group expression evaluator in the Rust executor that computes expressions over the `rust_group` outputs. Existing code: `crates/sf-sparql/src/exec_core.rs` (`rust_group_execute` / `rust_group_result_rows`).
+
+**Dossier note (2026-07-07, `docs/research/ontop-optimizer-dossier.md`):** Ontop NEVER executes aggregation in-process — it emits one SQL statement or fails outright. So the true mismatch is sf's `rust_group` in-process fallback, not a missing expression evaluator: the primary fix is to widen the gap-2 UNION-pooling proof so fewer shapes reach `rust_group` at all; a Rust-side post-agg evaluator is fallback-of-last-resort.
 
 **Effort:** M2 or M3 milestone (executor extension ~400 lines + gate on agg-expr correctness under bag semantics).
 
@@ -167,7 +169,10 @@ The `left_join_*` / `not_exists_cond_for` machinery — the most sensitive tier-
 ## Recommended Sequencing
 
 1. **Tier 1 first (correctness risk).** Both bugs are genuine ADR-0007 violations; neither is optional. Tier 1 execution should be a dedicated session.
-2. **Tier 2 as dedicated milestones.** Each item (items 1–5) is a separate M1/M2/M3 milestone. Order: item 3 (COUNT DISTINCT *) first (simplest lowering change), then item 2 (multi-branch SubPlan), then item 4 (path-group-by), then item 5 (post-group expr), then item 1 (CTE-aware Exists) last (largest SqlCond generalization). This order minimizes dependency friction.
+2. **Tier 2 — revised by the Ontop dossier (2026-07-07, `docs/research/ontop-optimizer-dossier.md`).** The dossier grounds each gap in Ontop's actual source and reshapes the plan:
+   - **Gaps 2, 4, 5 collapse into ONE milestone.** All three reduce to a single missing primitive — "pool N UNION branches into one derived table with proven cross-arm compatibility" — which sf already has one narrow working instance of (`try_sql_group_over_union`). Generalizing that into `lower_as_subplan`'s multi-branch path likely closes all three at once (gap 4 grouping-over-path falls out for free once paths are SubPlan-lowerable; gap 5's real fix is fewer shapes reaching `rust_group`, not a new evaluator). Do this milestone first.
+   - **Gap 3 (COUNT DISTINCT *)** next — small, self-contained lowering change; note Ontop itself has a *live bug* here (silently drops DISTINCT), so sf's `SELECT DISTINCT`+`COUNT(*)` rewrite is original and more correct than the reference.
+   - **Gap 1 (path-in-EXISTS)** last, and reframed as **original work, not a port** — Ontop has no general recursive-path support (only a hard-coded `rdfs:subClassOf*` TBox closure; no `WITH RECURSIVE` anywhere), so sf is already ahead of Ontop here. Largest effort (CTE-aware `SqlCond`).
 3. **Tier 3 after tier-2 correctness is stable.** Waves can run in parallel on separate worktrees (one agent per wave), but shared commits must serial-gate:
    - Agents working Waves 5/6 in parallel; open PRs simultaneously.
    - Wave 7 PR waits for Waves 5/6 to merge.
