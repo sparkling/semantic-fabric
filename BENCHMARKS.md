@@ -336,6 +336,37 @@ Row-parity preserved. With q9, q6, and q13 all closed, **sf is now at parity-or-
 Ontop on every one of the 15 feature-class queries at every scale** — the tiny-result
 aggregate edge Ontop held is gone.
 
+#### Full re-race confirmation — 2026-07-07 (current `main` @ `7a4f88d`, ADR-0025)
+
+Re-raced the complete q1–q15 head-to-head on current `main` (no engine changes since
+`dc29c77`; only chore/docs commits), live Ontop 5.5.0 + PostgreSQL, `scripts/compare/race.sh`
+with a freshly-built `target/release/semantic-fabric`. **All 15 queries row-parity, sf
+faster on every one at both scales tested** — independently re-confirming the 2026-07-01/03
+results above hold on current HEAD.
+
+| query | scale 1 sf/ontop ms (×) | scale 1000 sf/ontop ms (×) | rows @1000 |
+|---|---|---|---|
+| q1 | 0.88 / 2.66 (**3.0×**) | 5.77 / 41.95 (**7.3×**) | 8000 |
+| q2 | 1.15 / 2.28 (2.0×) | 5.44 / 24.49 (**4.5×**) | 8000 |
+| q3 | 1.62 / 17.13 (**10.6×**) | 567.35 / 6264.71 (**11.0×**) | 800000 |
+| q4 | 0.78 / 1.76 (2.3×) | 1.17 / 2.57 (2.2×) | 1 |
+| q5 | 0.66 / 2.57 (**3.9×**) | 20.45 / 130.60 (**6.4×**) | 40000 |
+| q6 | 1.15 / 2.41 (2.1×) | 3.84 / 5.19 (1.35×) | 2 |
+| q7 | 0.87 / 1.55 (1.8×) | 7.85 / 36.51 (**4.7×**) | 8000 |
+| q8 | 0.87 / 2.15 (2.5×) | 2.53 / 11.09 (4.4×) | 2222 |
+| q9 | 1.25 / 1.98 (1.6×) | 8.59 / 8.94 (1.04× parity) | 2 |
+| q10 | 1.69 / 14.53 (**8.6×**) | 593.29 / 6842.56 (**11.5×**) | 800000 |
+| q11 | 0.67 / 1.51 (2.3×) | 11.10 / 27.42 (2.5×) | 13334 |
+| q12 | 1.26 / 2.19 (1.7×) | 12.77 / 22.91 (1.8×) | 4000 |
+| q13 | 1.00 / 2.57 (2.6×) | 3.54 / 5.98 (1.69×) | 2 |
+| q14 | 1.98 / 2.32 (1.2×) | 44.21 / 300.23 (**6.8×**) | 40000 |
+| q15 | 1.43 / 1.97 (1.4×) | 61.22 / 163.19 (2.7×) | 8000 |
+
+Tightest margin anywhere is **q9 at scale 1000 (1.04×, parity)** — a 2-row aggregate result
+where there is essentially nothing left to gain. There is no remaining performance residue
+vs Ontop; outstanding parity work is correctness/feature-completeness (see ADR-0025), not
+speed.
+
 ### Honest reading — feature classes × scale (post-fix, 2026-07-01)
 
 - **Where sf computes the same answer, it wins on execution throughput, and the win

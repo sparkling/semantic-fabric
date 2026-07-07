@@ -1,0 +1,234 @@
+---
+status: accepted
+date: 2026-07-07
+ratified: 2026-07-07
+tags: [ontop-parity, residue-closure, correctness, feature-completeness, cosmetic, charter, sound-501, =_bag, deferral]
+supersedes: []
+depends-on:
+  - ADR-0004
+  - ADR-0005
+  - ADR-0007
+  - ADR-0008
+  - ADR-0012
+  - ADR-0021
+  - ADR-0022
+  - ADR-0023
+  - ADR-0024
+implements: ADR-0021
+---
+
+# Ontop-parity residue closure — catalog outstanding work and document deferral decisions
+
+## Context and Problem Statement
+
+As of 2026-07-07 (main == 7a4f88d), semantic-fabric has achieved **=_bag CORRECTNESS parity** with Ontop 5.5.0 on everything verified:
+
+- **Row parity** on all 15 GTFS feature-class queries at scales 1/100/1000/10000
+- **Performance parity or faster** on all 15 (geomean ~3× on small queries, up to ~11× on large joins/paths; q9/q6/q13 tiny-aggregate residual closed 2026-07-03)
+- **W3C RDB2RDF conformance floor**: 81/82 on SQLite, 80/81 on PostgreSQL
+- **Differential oracle** `differential_tree`: 117/117 queries vs. the SQLite+oxigraph-spareval reference
+
+Milestones M0–M8 of the operator-tree IR program (ADR-0023) are complete. The =_bag-absolute rule (ADR-0007) — where sf cannot answer soundly, it emits an honest `Error::Unsupported` ("sound 501") rather than risk a wrong answer — is both the correctness anchor and the reason this ADR is needed: **everything that remains is either a genuine bug with bounded blast radius, a capability that *requires* architectural change to handle soundly, or a cosmetic SQL-shape parity that does not affect =_bag correctness**.
+
+This ADR catalogs all three tiers, documents acceptance criteria for fixing tier-1 bugs, and records deferral rationale and stale-branch warnings for future sessions.
+
+## Decision Drivers
+
+* **Correctness anchor (ADR-0007).** No `=_bag` violations on verified queries; any remaining bugs must be fixed with the same rigor (oracle proof, revert-test, adversarial review, regression gate).
+* **Honest roadmap (ADR-0021).** A documented deferral is more valuable than a silent gap — every item here is actionable by a future session with known effort size and gating criteria.
+* **Charter discipline.** The program is **within charter** (ADR-0004/0021); the residue stays within ADR-0008 (tier-2 entailment excluded).
+
+## Decision Outcome
+
+The outstanding work is organized into three tiers (detailed below), with recommended execution order: Tier 1 (correctness risk) → Tier 2 (feature completeness) → Tier 3 (cosmetics). Each tier has acceptance criteria, architectural blocking points, and per-item effort estimates.
+
+---
+
+## TIER 1 — Real correctness bugs (HIGHEST PRIORITY)
+
+**Two pre-existing bugs with genuinely wrong answers, but NARROW blast radius — confirmed zero impact on any of the 15 GTFS feature-class queries and zero impact on W3C RDB2RDF conformance. Both are explicit ADR-0007 violations and must be fixed with full rigor.** Found as side effects of the SubPlan-OPTIONAL hardening (ADR-0025 session notes) and deliberately deferred outside assigned scope. Caution: both touch machinery used by every query; fixing either requires adversarial review with a specific angle (see acceptance criteria).
+
+### 1. **opts-nullability bug** — OPTIONAL-left-unbound variable incompatible-mapping join semantics
+
+**Symptom:** an OPTIONAL-left-unbound variable, later reused as a join key by a DIFFERENT, later mandatory pattern via a DIFFERENT anchor variable, is incorrectly treated as SQL `NULL` with ordinary equi-join semantics (drops rows) instead of SPARQL compatible-mapping semantics (§18.5: an empty domain intersection is vacuously compatible — should ADD rows, not drop them).
+
+**Confirmed via:** independent manual derivation matching oxigraph-spareval's actual output.
+
+**Affected paths:** BOTH flat and tree, identically rooted in the same InnerJoin/BGP binding-merge logic:
+- Flat: `crates/sf-sparql/src/unfold.rs` → `merge`/`join_branches` binding-merge logic (verify against current HEAD before acting — this churns fast)
+- Tree: `crates/sf-sparql/src/iq/lower.rs` → `insert_or_unify` (the InnerJoin/BGP fold)
+
+**Confirmed NARROW:** same-anchor-variable reuse (the common case) is unaffected — only the cross-anchor binding-reuse scenario mis-handles NULL compatibility.
+
+**Acceptance criteria for fix:**
+1. Re-verify file:line citations against current HEAD; file locations may have drifted.
+2. RED test: write a failing unit test that reproduces the silent wrong answer (actual vs. spareval mismatch).
+3. =_bag proof on the reference oracle (SQLite in-process + oxigraph-spareval, using `crates/sf-conformance/tests/differential_tree.rs`).
+4. Revert-proof: fix reverted ⇒ test fails.
+5. Permanent regression test added to the harness.
+6. Adversarial refute-only review **with a cross-anchor NULL-compatibility angle** — both paths (`insert_or_unify` + `merge`/`join_branches`) touch core join-fold machinery every query uses; the review MUST specifically verify no silent row-drops on cross-anchor binding reuse, since that exact blind spot previously masked the related `not_exists_cond_for` anti-join-FILTER bug (see Wave 7 / Consequences below).
+7. All gates hold: `cargo test --workspace`, `cargo clippy -D warnings --all-targets`, `cargo fmt --check`, W3C RDB2RDF ≥81/82 SQLite floor.
+
+### 2. **lower_as_subplan ORDER BY + LIMIT silent drop** — derived-table lowering drops ORDER/LIMIT, produces wrong answer
+
+**Symptom:** `iq/lower.rs`'s `lower_as_subplan` function silently drops `ORDER BY` + `LIMIT` when lowering to a derived table used as an INNER JOIN input, producing a silent wrong answer instead of a sound 501 (distinct from the OPTIONAL/`left_join_over_subplan` path, which correctly sound-501s that shape).
+
+**Confirmed via:** pre-existing bug found earlier in the broader program, now documented.
+
+**Affected path:** `crates/sf-sparql/src/iq/lower.rs` → `lower_as_subplan` (plain INNER-JOIN SubPlan path, not OPTIONAL)
+
+**Root cause:** the function apparently does not guard ORDER BY+LIMIT the same way as the OPTIONAL path does (which correctly 501s this shape in commit `e7cb7e6`).
+
+**Acceptance criteria for fix:**
+1. Re-verify file:line, function signature, and surrounding context against current HEAD.
+2. RED test: failing test reproducing the wrong answer (e.g. a query with ORDER BY+LIMIT inside an INNER-joined SubPlan).
+3. =_bag proof on the reference oracle.
+4. Revert-proof: fix reverted ⇒ test fails.
+5. Permanent regression test.
+6. Adversarial refute-only review **checking whether the fix makes the path sound-501 (correct behavior) or whether the fix silently rewires ORDER BY+LIMIT handling without that guard** — given that the OPTIONAL path has already proven this is non-trivial, the fix must demonstrate it doesn't just hide the bug in a different code path.
+7. All gates hold as for Tier 1 item 1.
+
+---
+
+## TIER 2 — Sound-501 feature-completeness gaps (REAL ONTOP CAPABILITIES SF SOUNDLY DECLINES)
+
+**Five architecturally-proven must-stay-501 items under ADR-0007 — each is a real Ontop capability that sf currently sounds 501 on (correct behavior: better to refuse than to risk a wrong answer). Implementing any requires architectural change, not just effort. Each is a milestone-sized effort, NOT a quick fix. A rushed fix that turns any of these into a possibly-wrong answer is explicitly forbidden (ADR-0007 absolute rule).**
+
+### 1. **Property-path inner inside EXISTS/NOT EXISTS/MINUS**
+
+**Blocker:** `SqlCond::Exists` and `SqlCond::NotExists` carry `Vec<Scan>` (base table scans only); a property path compiles to a `WITH RECURSIVE` CTE (`sf_s`/`sf_o`), which is not referenceable from `EXISTS (… FROM scans)`.
+
+**Requires:** a new CTE-aware variant of `SqlCond` (or a generalised `SqlCond::WithTable` that wraps both base scans and CTEs). This is real future work, not "too hard."
+
+**Effort:** M1 or M2 milestone (SQL layer generalization + Exists path hardening).
+
+### 2. **Multi-branch (UNION) SubPlan as a join/OPTIONAL input**
+
+**Blocker:** `lower_as_subplan` remaps the inner plan's projection against ONE inner branch's output columns. A `UNION ALL` derived table has multiple branches with potentially different term-structures and types — it needs the same cross-arm type agreement that `try_sql_group_over_union` separately proves and gates (q9 agg-over-UNION pushdown). That check is not present in the SubPlan-as-join path.
+
+**Also affects:** the unverified boundary "`LeftJoinJoinLimit: multi-branch right-side SubPlan → 501`" — likely the same class, but this specific boundary was not independently re-verified this session. Whoever picks this up should check whether fixing item 2 already subsumes it.
+
+**Requires:** proof of cross-arm TermSpec agreement (same column types and IRI-template structures across all union arms) before lowering a multi-branch SubPlan as a join key or OPTIONAL input. Could be integrated into `try_as_subplan` or `lower_as_subplan`.
+
+**Effort:** M1 milestone (SubPlan machinery extension, ~500 lines of proof + guard).
+
+### 3. **COUNT(DISTINCT \*)**
+
+**Blocker:** counts distinct *whole solutions* (all columns together). The `AggCol` IR node targets a single column, and multi-column `COUNT(DISTINCT …)` is non-portable (SQLite rejects multi-column DISTINCT in an aggregate). Sound form: `COUNT(*)` over `SELECT DISTINCT <all cols>` — a structural emission change in the lowering path.
+
+**Note:** `COUNT(DISTINCT ?v)` for a single-column DISTINCT already works today.
+
+**Requires:** a new emission path in `iq/lower.rs` → `emit.rs` that wraps the aggregation's project columns in a derived-table `SELECT DISTINCT` before applying `COUNT(*)`.
+
+**Effort:** M1 or M2 milestone (lowering + emission layer ~300 lines).
+
+### 4. **GROUP BY over a property-path closure**
+
+**Blocker:** a property-path branch has an empty `core` — its variables live only in the CTE output (`sf_s`/`sf_o` columns), not in the raw base columns that `group_key_columns` / `single_column_of` read. Grouping over a CTE output requires the CTE as a SubPlan (similar blocker to item 2).
+
+**Requires:** path-as-derived-table + aggregation-over-SubPlan (real future work).
+
+**Effort:** M2 milestone (path refactoring + SubPlan aggregation, ~800 lines + adversarial gate on GROUP-BY-over-path correctness).
+
+### 5. **Post-GROUP-BY expression over a UNION aggregate**
+
+**Blocker:** the multi-branch aggregation path lowers to `rust_group` (in-process grouping, Rust executor). The executor can only RENAME aggregate outputs (e.g. `SUM→total`), not COMPUTE expressions over them (e.g. `SUM / COUNT`). Single-branch SQL GROUP BY already supports post-aggregate expressions via SQL's native `SELECT` projection logic, but Rust `rust_group` cannot.
+
+**Requires:** a new post-group expression evaluator in the Rust executor that computes expressions over the `rust_group` outputs. Existing code: `crates/sf-sql/src/exec.rs`.
+
+**Effort:** M2 or M3 milestone (executor extension ~400 lines + gate on agg-expr correctness under bag semantics).
+
+---
+
+## TIER 3 — Cosmetic SQL-shape parity (LOWEST VALUE)
+
+**~27 union-structural and join-elimination rewrites that make sf's emitted SQL resemble Ontop's exact join shapes. NONE of these affect =_bag correctness — the database re-optimises the emitted SQL regardless. All are already specced in `docs/design/ADR-0023-M4-optionb-worklist.md` (§Family 2/3/4/5 / Wave 5/6/7 sections; verify against current design doc before acting). Parallelizable across sub-agents (disjoint shapes), but shared `lower.rs`/`normalize.rs`/`leftjoin.rs` commits must serial-gate per the program's collision rule.**
+
+### Wave 5 — Group B binding-lift / Values-fold
+
+Structurally simplest (no LeftJoin involvement); touching `iq/normalize.rs` only. Sub-items: shared-variable binding hoisting above UNION, Values-row reordering, constant-arm folding. **Effort:** ~200 lines, 1 agent, 2–3 days.
+
+### Wave 6 — Group A Slice/Values/Distinct folding
+
+Slice-over-Values truncation; Distinct-over-Values deduplication; interactions. **Effort:** ~250 lines, 1 agent, 2–3 days. (Note: Wave C of the M4 probe — June 2026 — already implemented most of this; verify what remains in the current codebase.)
+
+### Wave 7 — Join-elimination SQL-shape collapse
+
+The `left_join_*` / `not_exists_cond_for` machinery — the most sensitive tier-3 path. Rewrites left-join chains into NOT EXISTS conditions or MINUS operators, matching Ontop's SQL shapes.
+
+**Caution:** Wave 7 touches shared lowering paths that were a blind spot for a pre-existing `not_exists_cond_for` anti-join-FILTER bug (commit `feb7336`, already fixed and merged into main). **Whoever implements Wave 7 MUST re-run the adversarial review WITH a match-removing-filter angle after any change**, specifically checking that the OPTIONAL's own inner FILTER is correctly threaded through all variants of the anti-join code path. (See commit message `feb7336` for the bug pattern.)
+
+**Effort:** ~300 lines, 1 agent, 3–4 days + specialized review gate.
+
+### Total Tier 3 effort: ~750 lines, parallelizable into 1–2-week milestones.
+
+---
+
+## Recommended Sequencing
+
+1. **Tier 1 first (correctness risk).** Both bugs are genuine ADR-0007 violations; neither is optional. Tier 1 execution should be a dedicated session.
+2. **Tier 2 as dedicated milestones.** Each item (items 1–5) is a separate M1/M2/M3 milestone. Order: item 3 (COUNT DISTINCT *) first (simplest lowering change), then item 2 (multi-branch SubPlan), then item 4 (path-group-by), then item 5 (post-group expr), then item 1 (CTE-aware Exists) last (largest SqlCond generalization). This order minimizes dependency friction.
+3. **Tier 3 after tier-2 correctness is stable.** Waves can run in parallel on separate worktrees (one agent per wave), but shared commits must serial-gate:
+   - Agents working Waves 5/6 in parallel; open PRs simultaneously.
+   - Wave 7 PR waits for Waves 5/6 to merge.
+   - **Before Wave 7 merge:** mandatory adversarial review with the `not_exists_cond_for` match-removing-filter focus.
+
+---
+
+## Benchmark and Validation Posture
+
+**Out-of-scope work:** The honest sf-vs-Ontop head-to-head re-race (ONTOP_HOME=~/ontop-work/ontop-cli scripts/compare/race.sh at scales 1/100/1000/10000) is a **valuable validation step** for any tier-2/3 milestone, but is not a gating criterion for this ADR itself. Note:
+
+- Must rebuild `target/release/semantic-fabric` first (`cargo build --release -p sf-cli`); a stale binary will hide wins or mask regressions (empirically discovered 2026-07-03).
+- BENCHMARKS.md's checked-in numbers may lag the current engine; re-race if claiming a win.
+- Report fractions (e.g. "0.92×–1.81×") never "100%/parity" — be precise about scale and direction.
+
+---
+
+## Consequences and Tradeoffs
+
+**Good:**
+- Tier 1 work is scoped and gated; no surprise regressions once fixed.
+- Tier 2 items each have a proven architectural blocker; no "just implement it harder" surprises.
+- Tier 3 is parallelizable and cosmetic; can proceed in parallel to new features without correctness risk.
+
+**Bad/Cost:**
+- Tier 1 bugs touch hot-path machinery (every query uses InnerJoin/OPTIONAL); fixes require surgical adversarial review and carry risk if the review misses an angle.
+- Tier 2 items are each M1–M3 milestones; no quick wins in feature completeness.
+- Tier 3 work is 27 rewrites, not one; requires coordination across multiple agents/worktrees.
+
+**Neutral:**
+- The ADR-0007 =_bag rule is preserved throughout all tiers.
+- The differential oracle (`differential_tree.rs`) provides the correctness floor for all work.
+
+---
+
+## Stale-Branch Warnings (Do-Not-Do)
+
+**Branch `feat/optimizer-gaps-close` is STALE / PRUNED.** The `not_exists_cond_for` fix it re-discovered already lives on main (commit `feb7336`, "OPTIONAL anti-join must apply its own inner FILTER"). Do NOT merge `feat/optimizer-gaps-close`. The redundant fix lives upstream; re-basing would create a duplicate conflict. If you see a PR for this branch, close it with a link to commit `feb7336`.
+
+**Commit `2015846` (flat-era, pre-tree IR) is OBSOLETE.** Do NOT cherry-pick or merge. All value has been ported to the tree IR.
+
+**Branch `feat/ontop-parity-wave-a-b` is the superseded flat-UCQ approach.** The tree IR (ADR-0023) is the current architecture. Do NOT merge.
+
+---
+
+## Charter Exclusions (Out of Scope)
+
+- **OWL 2 QL tier-2 entailment** (RHS-existential / tree-witness saturation) — excluded by ADR-0008 and held externally in ODR-0030 (`semantic-modelling` repo). Tier-2 queries stay depth-0 / `501`.
+- **Protégé / `.obda`** — N/A (Java GUI, no place in a no-JVM Rust engine).
+- **General CQ-containment chase** — out of charter; a separable optimization workstream.
+
+---
+
+## More Information
+
+* **ADR-0007** (=_bag absolute rule, ADR-0005/0012 gates) — the correctness anchor; quoted extensively above.
+* **ADR-0021** (ontop parity program umbrella) — the charter and wave structure; this ADR is the **closing document** for ADR-0021.
+* **ADR-0022** (WS-G, Wave 1 oracle/test port) — prerequisite for all work.
+* **ADR-0023** (operator-tree IR, M0–M8 complete) — the architecture enabling this work.
+* **ADR-0024** (SqlBackend abstraction, streaming spike ADOPT-LATER) — execution layer unification; independent of this ADR.
+* **docs/design/ADR-0023-M4-optionb-worklist.md** — detailed tier-3 wave specs (verify against current design doc; it churns fast).
+* **crates/sf-conformance/tests/differential_tree.rs** — the oracle harness for all =_bag proofs (117/117 tests as of 2026-07-07).
+* **BENCHMARKS.md** — q9/q6/q13 re-raced and updated 2026-07-03; live race data; not a gating criterion.
+* **Horizon trackers:** [[adr-0023-optimizer-residue-horizon]], [[adr-0024-executor-backend-abstraction-horizon]], [[ontop-parity-horizon]] (if applicable in your session).
