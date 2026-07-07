@@ -473,27 +473,32 @@ fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
             Ok(false)
         }
         Some(existing) => {
-            // A shared variable whose EXISTING or incoming definition reads a LEFT-JOINed
-            // SubPlan derived-table alias (`subplan_joins` with `left == true`, ADR-0023
-            // Item 1d) may be UNBOUND — the derived-table LEFT JOIN found no match. The
-            // plain equality `unify` yields below then silently DROPS those no-match rows
-            // (SPARQL compatible-merge KEEPS them, binding the variable from the OTHER,
-            // mandatory side): verified vs the independent spareval oracle, tree 3 / oracle
-            // 6 (fixture I1D, dept/30 "Empty"). This is the InnerJoin / BGP-merge entry
-            // point (`IqNode::InnerJoin` folds the join's shared-var equality through the
-            // `Construction` subst → here) that the round-1..4 guards did not cover — every
-            // OPTIONAL-decomposition / FILTER-EXISTS path (`build_left_join`,
-            // `not_exists_cond_for`, `lower_iq_exists`, `shared_reads_left_subplan`) already
-            // 501s the same shape. The sound compatible-merge is leftjoin's R1/R2 null-safe
-            // ON + COALESCE, which this Construction-fold does not carry — sound 501
-            // (ADR-0007: a 501 beats a silent wrong answer). Gated on a NON-EMPTY `Sat` so
-            // an identical-def unify (no correlating equality, drops nothing) is untouched;
-            // a disjoint `Empty` still soundly prunes the branch; flat never sets
-            // `subplan_joins`, so `reads_left_subplan` is always false there (no-op).
-            let nullable = reads_left_subplan(b, existing) || reads_left_subplan(b, &td);
-            match unify(existing, &td) {
+            // Clone so we can consult `b` (nullable-alias set, subplan joins) and then
+            // mutate its bindings/conds below without a borrow conflict.
+            let existing = existing.clone();
+            // A shared variable may be UNBOUND when its EXISTING or incoming definition
+            // reads a nullable (LEFT-JOINed) alias — a prior OPTIONAL's scan OR a
+            // LEFT-JOINed SubPlan derived table (`Branch::nullable_aliases`). The plain
+            // equality `unify` below then treats the unbound side as SQL NULL and DROPS the
+            // row, but SPARQL compatible-merge (§18.5) KEEPS it and binds the variable from
+            // the OTHER, mandatory side. This is the InnerJoin / BGP-merge entry point
+            // (`IqNode::InnerJoin` folds the join's shared-var equality through the
+            // `Construction` subst → here).
+            let opt_aliases = b.nullable_aliases();
+            let nullable =
+                def_is_nullable(&existing, &opt_aliases) || def_is_nullable(&td, &opt_aliases);
+            // A nullable SubPlan derived-table alias (`subplan_joins` with `left == true`,
+            // ADR-0023 Item 1d) is emitted differently and the R1/R2 machinery below is NOT
+            // verified for a subplan alias — keep the established sound 501 for that shape
+            // (every OPTIONAL-decomposition / FILTER-EXISTS path already 501s it too).
+            let subplan_nullable = reads_left_subplan(b, &existing) || reads_left_subplan(b, &td);
+            match unify(&existing, &td) {
                 Unify::Sat(conds) => {
-                    if nullable && !conds.is_empty() {
+                    if conds.is_empty() {
+                        // Identical defs (no correlating equality) — drops nothing, untouched.
+                        return Ok(false);
+                    }
+                    if subplan_nullable {
                         return Err(Error::Unsupported(
                             "INNER JOIN correlating on a variable bound by a LEFT-JOINed \
                              SubPlan derived table (a modifier sub-SELECT attached as an \
@@ -503,9 +508,37 @@ fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
                                 .to_owned(),
                         ));
                     }
-                    b.where_conds.extend(conds);
+                    if nullable {
+                        // ADR-0025 Tier-1 (opts-nullability): a plain-OPTIONAL nullable
+                        // shared var. R1 — `null_safe` equality (`NullSafeEq` =
+                        // `a=b OR a IS NULL OR b IS NULL`) so an unbound (NULL) side is
+                        // vacuously compatible and the row is KEPT; R2 — `COALESCE(existing,
+                        // incoming)` so the merged value comes from whichever side bound it.
+                        // Same machinery `build_left_join` / `left_join_over_subplan` use for
+                        // a nullable-left shared var — proven for plain-scan aliases.
+                        for c in conds {
+                            b.where_conds.push(null_safe(c, true));
+                        }
+                        b.bindings.insert(
+                            v.to_string(),
+                            TermDef::Coalesce(Box::new(existing), Box::new(td)),
+                        );
+                    } else {
+                        b.where_conds.extend(conds);
+                    }
                     Ok(false)
                 }
+                // A nullable side that is provably disjoint on VALUES can still be UNBOUND
+                // (compatible) — dropping the whole branch would lose those unbound rows, and
+                // the plain-equality fold cannot express "keep only the unbound-compatible
+                // rows" from an `Empty` unify → sound 501 (ADR-0007) rather than silently
+                // wrong. (A nullable side is a column, so `Empty` here is a rare edge.)
+                Unify::Empty if nullable => Err(Error::Unsupported(
+                    "INNER JOIN correlating on an OPTIONAL-bound (nullable) variable whose \
+                     definitions are provably disjoint is not yet supported → 501 \
+                     (compatible-merge must keep the unbound-compatible rows)"
+                        .to_owned(),
+                )),
                 Unify::Empty => Ok(true),
                 Unify::Unsupported(why) => Err(Error::Unsupported(why)),
             }
