@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "generator": "0.1.0",
+  "template": "vertical:coding",
+  "template_version": "0.0.0",
+  "vars": {
+    "name": "coding-harness",
+    "description": "Harness for semantic-fabric",
+    "host": "claude-code"
+  },
+  "hosts": [
+    "claude-code"
+  ],
+  "files": {
+    ".claude/commands/doctor.md": "2f1475fa0ed34729cb2ed9d6cecf29e99781da0a56afef133361e3ff0a17bb52",
+    ".claude/commands/review-diff.md": "2ab52f01487bfe67335f4de5193d7a6fb0f72f646411114613d8fa5da071ef2b",
+    ".claude/settings.json": "be862fd5c2e413f477b63722a7db98915c2ac06c6322c764b77ba23d949dbb0d",
+    ".claude/skills/plan-change/SKILL.md": "84e1c44ca264b999ebf80cd8fa0e5ebf554275bbd8023b1530ad053a44482e30",
+    ".claude-plugin/plugin.json": "2f7709ecd1f4e96d90841a609c0753b56ae16562bca82094da1b602f2db12677",
+    "CLAUDE.md": "3ab476f064b40d071d765d98176791cc739a70be2607f838d83735b4ac1928af",
+    "README.md": "485cf3b0d943556bb4f4c6ef10814d8708a62704acf635b02b62d69ad1e46fc4",
+    "__tests__/smoke.test.ts": "715d516829c1545136fcc20c391e1f2f0635327b64a9eff411df9add70226416",
+    "bin/cli.js": "e90d136edaa411e52fe4db378ea9455d4df34f26de0d21416239cbc23a6d88d8",
+    "package.json": "8254768234f4690f71147c9f938f2217dc031363fb9c235cac5931e61d203da6",
+    "src/agents/architect.ts": "897c305891e2764578cd55cf0ae8583902a217e78e86c2b2786491d3340d2d25",
+    "src/agents/implementer.ts": "249a01c93e9aaacbb95b75449f88364d3747d49947d70471f6ccdfe06c03669a",
+    "src/agents/reviewer.ts": "ef3f91e961d0c69c4fbf75604b1870817cbea82dcdd90b4dfa186c4968b04f56",
+    "src/agents/test-writer.ts": "b4cd9adf477a434bc71f9773f30fd97fa8b631c52b9655130755a519ba473d2f",
+    "src/init.ts": "fc2a5a7e6f09e5409e6256fcc233459707d7da1651e2d7a8560e29e7e824ccac",
+    "tsconfig.json": "8b4e730a1aa39162ac574455d7a98e1881f5313ca80ffe503b9652dcf0c76b9d",
+    "vitest.config.ts": "e9e94875611ab1cd602c1f6923902c2dab7953a75ac022962973639d1937587a",
+    "LICENSE": "d8cfcd99e34cedff2d98cc1df83dc2545db38af4f54bf114fd28b7699d32ea71",
+    ".claude/skills/evolve/SKILL.md": "e1921f576bd850179b27ba9d99313cd525dbecb360204d6d64caf98a1b6519a4"
+  },
+  "generated_at": "2026-07-07T12:04:08.316Z",
+  "meta": {
+    "surface": "cli"
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+.metaharness/
+.claude-flow/
+dist/
+suite.json

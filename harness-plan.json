@@ -1,0 +1,47 @@
+{
+  "name": "semantic-fabric-harness",
+  "hosts": [
+    "claude-code"
+  ],
+  "template": "vertical:coding",
+  "archetypeId": "rust-crate-harness",
+  "confidence": 0.65,
+  "engine": "lexical",
+  "agents": [
+    "architect",
+    "implementer",
+    "reviewer",
+    "test-writer"
+  ],
+  "skills": [
+    "plan-change"
+  ],
+  "commands": [
+    "doctor",
+    "review-diff"
+  ],
+  "mcp": "local",
+  "policy": {
+    "defaultDeny": true,
+    "allowNetwork": false,
+    "allowShell": false,
+    "allowFileWrite": false,
+    "requireApprovalForDangerous": true,
+    "toolTimeoutMs": 30000,
+    "maxToolCallsPerTurn": 8,
+    "auditLog": true
+  },
+  "riskProfile": "shell gated, network gated, file-write read-scoped",
+  "suggestedCommands": [
+    {
+      "command": "cargo build",
+      "trust": "inferred",
+      "execution": "disabled"
+    },
+    {
+      "command": "cargo test",
+      "trust": "inferred",
+      "execution": "disabled"
+    }
+  ]
+}
