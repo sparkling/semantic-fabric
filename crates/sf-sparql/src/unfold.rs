@@ -116,6 +116,8 @@ impl<'a> Unfolder<'a> {
             GraphPattern::Join { left, right } => {
                 let l = self.translate_pattern(left)?;
                 let r = self.translate_pattern(right)?;
+                reject_dropped_slice(&l)?;
+                reject_dropped_slice(&r)?;
                 Ok(TransPattern::plain(join_branches(l.branches, r.branches)?))
             }
             GraphPattern::LeftJoin {
@@ -125,6 +127,8 @@ impl<'a> Unfolder<'a> {
             } => {
                 let l = self.translate_pattern(left)?;
                 let r = self.translate_pattern(right)?;
+                reject_dropped_slice(&l)?;
+                reject_dropped_slice(&r)?;
                 Ok(TransPattern::plain(left_join_branches(
                     l.branches,
                     r.branches,
@@ -146,6 +150,8 @@ impl<'a> Unfolder<'a> {
             GraphPattern::Union { left, right } => {
                 let mut l = self.translate_pattern(left)?;
                 let r = self.translate_pattern(right)?;
+                reject_dropped_slice(&l)?;
+                reject_dropped_slice(&r)?;
                 l.branches.extend(r.branches);
                 Ok(TransPattern::plain(l.branches))
             }
@@ -246,6 +252,8 @@ impl<'a> Unfolder<'a> {
             GraphPattern::Minus { left, right } => {
                 let l = self.translate_pattern(left)?;
                 let r = self.translate_pattern(right)?;
+                reject_dropped_slice(&l)?;
+                reject_dropped_slice(&r)?;
                 Ok(TransPattern::plain(minus_branches(l.branches, r.branches)?))
             }
             // GROUP BY + aggregates (SPARQL §11). v1 groups a SINGLE-branch inner:
@@ -1235,6 +1243,25 @@ fn def_reads_opt_alias(def: &TermDef, opt_aliases: &[usize]) -> bool {
 }
 
 /// Join two bag-unions (the product), unifying shared variables in each pair.
+/// ADR-0025 Tier-1 bug #2 (flat mirror): a nested sub-SELECT with a SLICE (LIMIT/OFFSET) as
+/// a Join/LeftJoin/Union/Minus operand would have its slice SILENTLY DROPPED — the
+/// branch-combining operators consume only `.branches`, discarding the operand's own
+/// `limit`/`offset`. It cannot be emitted soundly either (the surviving subset depends on
+/// the SPARQL ORDER BY, which sf applies in the executor, not in SQL — SQL collation ≠
+/// SPARQL order). Sound 501 (ADR-0007), mirroring the tree `lower_as_subplan` boundary. An
+/// ORDER BY with NO slice is a no-op for a bag-valued operand and is allowed through.
+fn reject_dropped_slice(t: &TransPattern) -> Result<()> {
+    if t.limit.is_some() || t.offset > 0 {
+        return Err(Error::Unsupported(
+            "SubPlan with LIMIT/OFFSET as a join/union/minus operand is not yet supported → \
+             501 (the slice would be silently dropped; its surviving subset depends on the \
+             SPARQL ORDER BY, applied in the executor not SQL — ADR-0025 Tier-1)"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn join_branches(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>> {
     let mut out = Vec::new();
     for l in &left {

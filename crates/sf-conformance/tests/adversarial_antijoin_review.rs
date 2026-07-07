@@ -321,18 +321,25 @@ fn angle1_left_join_as_subplan_probe() {
            OPTIONAL {{ ?m ex:dept ?d . ?d ex:label ?label FILTER(?label != \"Eng\") }} }} }}"
     );
 
-    // A/B/C: must translate AND match spareval bag-for-bag — no more catch_unwind
-    // cataloging now that all three are known-GREEN post subplan-drop fix (C was
-    // the crashing repro; see the UPDATE note above).
-    for (name, q_str) in [
-        ("A-nested2", &q_a),
-        ("B-nested3", &q_b),
-        ("C-subselect-limit-toplevel", &q_c),
-    ] {
+    // A/B: nested-OPTIONAL shapes (no slice) — must translate AND match spareval.
+    for (name, q_str) in [("A-nested2", &q_a), ("B-nested3", &q_b)] {
         let q = parse(q_str);
         let tp = tree(&maps, &q, &schema)
             .unwrap_or_else(|e| panic!("[angle1:{name}] tree translation should succeed: {e:?}"));
         assert_vs_spareval(OD_TTL, q_str, &tp, &conn);
+    }
+    // C: a LIMIT-subselect as a join operand. Since ADR-0025 Tier-1 bug #2 this soundly
+    // 501s — the derived table cannot carry the slice, and dropping it is a wrong answer
+    // whenever the LIMIT bites (here `LIMIT 10` on ≤10 rows was harmless, so C used to pass
+    // coincidentally). The inner_join_one subplan-carrying coverage C once exercised is
+    // preserved by `subplan_aggregate_as_join_operand` / `subplan_distinct_as_join_operand`
+    // (aggregate/DISTINCT subplans have no slice, so they still translate).
+    {
+        let q = parse(&q_c);
+        assert!(
+            matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(msg)) if msg.contains("SubPlan")),
+            "[angle1:C-subselect-limit] LIMIT-subselect as a join operand must sound-501 (ADR-0025 bug #2)"
+        );
     }
 
     // D: the OUTER anti-join branch's right side itself carries a SubPlan (the
@@ -374,11 +381,16 @@ fn angle1_left_join_as_subplan_probe() {
 ///
 /// FIXED (2026-07-03, `crates/sf-sparql/src/leftjoin.rs::inner_join_one`):
 /// `subplan_joins` now extends `left.subplan_joins` + `right.subplan_joins`
-/// (mirrors `unfold::merge`'s InnerJoin idiom) instead of being zeroed. All four
-/// shapes below now translate AND match spareval bag-for-bag — asserted directly
-/// (no more catch_unwind cataloging). RED→GREEN, revert-proven: reverting the
-/// `leftjoin.rs` fix makes (i) and (ii) panic again with the `no such column:
-/// tN.c0` execution error; (iii)/(iv) are unaffected controls.
+/// (mirrors `unfold::merge`'s InnerJoin idiom) instead of being zeroed.
+///
+/// SUPERSEDED (2026-07-07, ADR-0025 Tier-1 bug #2): shapes (i)/(ii)/(iv) use a
+/// LIMIT-subselect as a join operand, which now soundly 501s — the derived table
+/// cannot carry the slice, and silently dropping it is a wrong answer whenever the
+/// LIMIT bites (these passed before only because `LIMIT 10` was a no-op on the ≤10-row
+/// fixture). They therefore now assert the sound 501, not a spareval match. The
+/// inner_join_one subplan-carrying fix above stays covered by the aggregate/DISTINCT
+/// subplan-as-join-operand tests (no slice). (iii) — a plain BGP left, no slice — is the
+/// unaffected control that still translates and matches spareval.
 #[test]
 fn angle1_followup_isolate_subplan_join_drop_bug() {
     let conn = sqlite::load(OD_SQL).expect("fixture loads");
@@ -425,16 +437,27 @@ fn angle1_followup_isolate_subplan_join_drop_bug() {
          ?p ex:dept ?d . ?d ex:label ?label }}"
     );
 
+    // (iii) plain BGP left (NO slice) — still translates + matches spareval (control).
+    {
+        let q = parse(&q_plain_left);
+        let tp = tree(&maps, &q, &schema)
+            .unwrap_or_else(|e| panic!("[followup:iii-plain-left-control] should succeed: {e:?}"));
+        assert_vs_spareval(OD_TTL, &q_plain_left, &tp, &conn);
+    }
+    // (i)/(ii)/(iv) all use a LIMIT-subselect as a join operand → sound-501 since ADR-0025
+    // Tier-1 bug #2 (they used to pass only because `LIMIT 10` didn't bite on ≤10 rows; the
+    // slice was silently dropped). The inner_join_one subplan-carrying fix these once
+    // exercised stays covered by the aggregate/DISTINCT subplan-as-join-operand tests.
     for (name, q_str) in [
         ("i-no-filter", &q_no_filter),
         ("ii-single-scan-right", &q_single_scan_right),
-        ("iii-plain-left-control", &q_plain_left),
         ("iv-inner-join-no-optional", &q_inner_join_no_optional),
     ] {
         let q = parse(q_str);
-        let tp = tree(&maps, &q, &schema)
-            .unwrap_or_else(|e| panic!("[followup:{name}] tree translation should succeed: {e:?}"));
-        assert_vs_spareval(OD_TTL, q_str, &tp, &conn);
+        assert!(
+            matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(msg)) if msg.contains("SubPlan")),
+            "[followup:{name}] LIMIT-subselect as join operand must sound-501 (ADR-0025 bug #2)"
+        );
     }
 }
 
