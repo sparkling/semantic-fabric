@@ -1954,7 +1954,37 @@ fn is_arith_over_agg(e: &Expression) -> bool {
     }
 }
 
+/// Whether `e` is post-GROUP-BY arithmetic that `eval_expr` computes TYPE-EXACTLY: only
+/// `+ - *` and unary `-` (NOT `/`, which yields xsd:decimal in SPARQL) over xsd:integer
+/// literals and INTEGER-typed aggregate outputs (`int_agg_vars` = COUNT). `eval_expr` does
+/// f64 math and emits only xsd:integer/xsd:double — never xsd:decimal — so any decimal
+/// operand (SUM/AVG/MIN/MAX, a decimal literal) or a division would silently retype/round
+/// the result (gap-5 adversarial review). Everything outside this subset stays a sound 501.
+fn is_int_safe_arith(e: &Expression, int_agg_vars: &std::collections::HashSet<String>) -> bool {
+    match e {
+        Expression::Variable(v) => int_agg_vars.contains(v.as_str()),
+        Expression::Literal(l) => {
+            l.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#integer"
+        }
+        Expression::Add(a, b) | Expression::Subtract(a, b) | Expression::Multiply(a, b) => {
+            is_int_safe_arith(a, int_agg_vars) && is_int_safe_arith(b, int_agg_vars)
+        }
+        Expression::UnaryMinus(a) => is_int_safe_arith(a, int_agg_vars),
+        _ => false, // Divide (integer/integer = xsd:decimal) and everything else
+    }
+}
+
 fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup) -> Result<()> {
+    // Aggregate outputs that are xsd:integer-typed (COUNT). `eval_expr`'s f64 arithmetic is
+    // type-exact ONLY over integers; SUM/AVG/MIN/MAX may be xsd:decimal, which it would
+    // silently retype/round — so post-group arithmetic is collected only when every operand
+    // is one of these integer aggregates or an integer literal (see `is_int_safe_arith`).
+    let int_agg_vars: std::collections::HashSet<String> = rg
+        .aggs
+        .iter()
+        .filter(|a| a.fixed_type == Some(sf_core::datatype::XsdTypeCode::Integer))
+        .map(|a| a.out_var.clone())
+        .collect();
     for (out_var, def) in subst {
         let BindDef::Expr(e) = def else {
             return Err(Error::Unsupported(
@@ -1970,7 +2000,7 @@ fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup)
             // `rust_group_result_rows`. Only the arithmetic subset `eval_expr` evaluates
             // exactly is collected — any other expression (STR, functions, comparisons, …)
             // stays a sound 501 (collecting it would risk an unbound/wrong result).
-            if is_arith_over_agg(e.as_ref()) {
+            if is_int_safe_arith(e.as_ref(), &int_agg_vars) {
                 rg.post_exprs
                     .push((out_var.to_string(), e.as_ref().clone()));
                 continue;

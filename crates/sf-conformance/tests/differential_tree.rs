@@ -4581,3 +4581,19 @@ fn adr0025_tier2_gap5_non_arith_post_group_stays_501() {
         "non-arithmetic post-group expr over UNION aggregate must sound-501"
     );
 }
+#[test] // gap-5 boundary (adversarial review): arithmetic over a DECIMAL aggregate (AVG/SUM)
+        // or a DIVISION must sound-501 — eval_expr's f64 arithmetic emits int/double, never
+        // xsd:decimal, so it would mistype/round the result. Integer COUNT arithmetic is safe.
+fn adr0025_tier2_gap5_decimal_or_division_stays_501() {
+    let conn = sqlite::load(AGG_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(AGG_R2RML).unwrap();
+    for q in [
+        format!("{PFX} SELECT ((AVG(?v) * 2) AS ?c) WHERE {{ {{ ?x ex:p1 ?v }} UNION {{ ?x ex:p2 ?v }} }}"),
+        format!("{PFX} SELECT ((SUM(?v) / COUNT(?v)) AS ?c) WHERE {{ {{ ?x ex:p1 ?v }} UNION {{ ?x ex:p2 ?v }} }}"),
+    ] {
+        let parsed = parse(&q);
+        assert!(matches!(tree(&maps,&parsed,&schema).and_then(|p| p.emitted().map(|_|())), Err(Error::Unsupported(_))),
+            "decimal/division post-group arithmetic must sound-501: {q}");
+    }
+}
