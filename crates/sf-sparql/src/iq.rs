@@ -291,6 +291,16 @@ pub enum SqlCond {
         scans: Vec<Scan>,
         conds: Vec<SqlCond>,
     },
+    /// `[NOT] EXISTS (<path WITH prelude> SELECT 1 FROM t{pc.alias} WHERE <conds>)` — a
+    /// correlated semi/anti-join whose inner is a property-path CLOSURE (ADR-0025 Tier-2
+    /// gap 1). Unlike `Exists`/`NotExists` (base-table `scans`), the inner relation is the
+    /// recursive-CTE distinct-pairs table `t{pc.alias}(sf_s, sf_o)`; `conds` correlate its
+    /// `sf_s`/`sf_o` columns with the outer bound columns. `negated` ⇒ NOT EXISTS / MINUS.
+    PathExists {
+        pc: PathClosure,
+        conds: Vec<SqlCond>,
+        negated: bool,
+    },
 }
 
 /// How a [`SqlCond::StrMatch`] matches (the near-free FTS baseline, ADR-0020 §2).
@@ -670,7 +680,7 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
         // column collection: their inner conditions reference the subquery's own
         // scans, and the outer correlation columns are already projected via the
         // outer bindings — nothing is added here.
-        SqlCond::NotExists { .. } | SqlCond::Exists { .. } => {}
+        SqlCond::NotExists { .. } | SqlCond::Exists { .. } | SqlCond::PathExists { .. } => {}
     }
 }
 

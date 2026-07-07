@@ -318,38 +318,24 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 /// bound params. RDF terms are still built only at the outer projection
 /// ([`crate::exec`]). This wave targets the SQLite dialect; the PostgreSQL
 /// `CYCLE`/PG14 variant is the later MB-4 wave.
-fn emit_path_branch(
-    b: &Branch,
+/// The `WITH …` prelude defining the path closure's distinct-pairs relation
+/// `t{alias}(sf_s, sf_o)` — a plain CTE for length-1 shapes, a `WITH RECURSIVE` for `+`/`*`.
+/// Shared by [`emit_path_branch`] (a standalone path result) and the `PathExists`
+/// correlated-EXISTS emission (ADR-0025 Tier-2 gap 1); both reference `t{alias}.sf_s`/`.sf_o`.
+fn path_with_prelude(
     pc: &PathClosure,
     dialect: Dialect,
     catalog: &ColumnCatalog,
-) -> Result<EmittedBranch> {
-    // ORDER BY over a path result is handled at the exec layer (plan.order →
-    // Rust-level order_cmp) — Branch.order is always empty here, so no guard needed.
-    let projection = b.projection();
-    let mut params = Vec::new();
-    let mut pidx = 0usize;
-
-    // `cte` is the distinct-pairs relation the outer projection reads (colref binds
-    // `t{alias}`). Its columns are the canonical `sf_s` / `sf_o` keys, never base
-    // columns, so the outer projection / WHERE resolve against an empty catalog.
+) -> Result<String> {
     let cte = format!("t{}", pc.alias);
-    let outer_actuals: HashMap<usize, Vec<String>> = HashMap::new();
     let hop = hop_sql(&pc.hop, dialect, catalog);
     let (sf_s, sf_o, sf_d) = (
         dialect.quote_ident("sf_s"),
         dialect.quote_ident("sf_o"),
         dialect.quote_ident("sf_d"),
     );
-
-    // The `WITH …` prelude that defines `t{alias}(sf_s, sf_o)` as the distinct
-    // reachable node pairs, per path kind.
-    let with = match pc.kind {
+    Ok(match pc.kind {
         PathKind::One => {
-            // A negated property set is bag-valued (the hop already emits its own
-            // per-predicate `DISTINCT` over a `UNION ALL`); every other length-one
-            // composite (`^p`/`p/q`/`p|q`) is set-valued. Omitting / keeping the
-            // outer `DISTINCT` accordingly is what matches the oracle's bag vs set.
             let one_distinct = if matches!(pc.hop, HopExpr::Nps(_)) {
                 ""
             } else {
@@ -386,7 +372,27 @@ fn emit_path_branch(
                  {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
             )
         }
-    };
+    })
+}
+
+fn emit_path_branch(
+    b: &Branch,
+    pc: &PathClosure,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> Result<EmittedBranch> {
+    // ORDER BY over a path result is handled at the exec layer (plan.order →
+    // Rust-level order_cmp) — Branch.order is always empty here, so no guard needed.
+    let projection = b.projection();
+    let mut params = Vec::new();
+    let mut pidx = 0usize;
+
+    // `cte` is the distinct-pairs relation the outer projection reads (colref binds
+    // `t{alias}`). Its columns are the canonical `sf_s` / `sf_o` keys, never base
+    // columns, so the outer projection / WHERE resolve against an empty catalog.
+    let cte = format!("t{}", pc.alias);
+    let outer_actuals: HashMap<usize, Vec<String>> = HashMap::new();
+    let with = path_with_prelude(pc, dialect, catalog)?;
 
     let select_list = projection
         .iter()
@@ -940,6 +946,25 @@ fn render_cond(
             } else {
                 format!("{kw} (SELECT 1 FROM {from} WHERE {where_sql})")
             }
+        }
+        // ADR-0025 Tier-2 gap 1: a correlated [NOT] EXISTS whose inner is a property-path
+        // CLOSURE — the recursive-CTE distinct-pairs table `t{pc.alias}(sf_s, sf_o)`. The
+        // prelude uses dialect-neutral (empty-catalog) column resolution — exact for the
+        // SQLite `=_bag` oracle and standard mappings. Only the INFALLIBLE `One`/`OneOrMore`
+        // path kinds reach here (`lower_iq_exists` sound-501s the reflexive `P*`/`P?` kinds,
+        // whose prelude calls the fallible `reflexive_sql`), so `unwrap_or_default` never
+        // fires; if it ever did, the empty prelude yields an undefined-table SQL ERROR (a
+        // sound failure), never a wrong answer.
+        SqlCond::PathExists { pc, conds, negated } => {
+            let with =
+                path_with_prelude(pc, dialect, &ColumnCatalog::default()).unwrap_or_default();
+            let refs: Vec<&SqlCond> = conds.iter().collect();
+            let where_sql = render_conjunction(&refs, dialect, actuals, params, pidx);
+            let kw = if *negated { "NOT EXISTS" } else { "EXISTS" };
+            format!(
+                "{kw} ({with} SELECT 1 FROM t{} WHERE {where_sql})",
+                pc.alias
+            )
         }
     }
 }

@@ -3549,39 +3549,28 @@ fn item1d_r3_cascade_self_lj_elim_keeps_subplan_correlation() {
 // architecturally missing" proofs, not "too hard" hand-waves.
 // ============================================================================
 
-/// Item 4 — a property-path inner inside EXISTS / NOT EXISTS / MINUS. MUST STAY 501:
-/// `SqlCond::Exists`/`NotExists` carry `scans: Vec<Scan>`, and `Scan { alias, source }`
-/// has NO CTE variant — but a property-path closure compiles to a `WITH RECURSIVE` CTE
-/// projecting synthetic `sf_s`/`sf_o` key columns (`emit::emit_path_branch`), a
-/// fundamentally different FROM shape. There is no way to reference that recursive CTE
-/// from inside `EXISTS (SELECT 1 FROM <scans> …)`; closing it needs either a new
-/// `SqlCond` variant carrying a CTE-backed sub-evaluation or embedding the path as a
-/// derived-table SubPlan inside the EXISTS — both out of scope. Flat 501s identically
-/// (its `lower_exists` has the same `r.path.is_some()` guard), so `diff` locks it.
+/// Item 4 — a property-path inner inside EXISTS / NOT EXISTS / MINUS. SUPERSEDED 2026-07-07
+/// by ADR-0025 Tier-2 gap 1: the TREE now computes it via a new `SqlCond::PathExists` variant
+/// (a correlated `[NOT] EXISTS` over the path's recursive-CTE derived table `t{alias}` —
+/// exactly the "new SqlCond variant carrying a CTE-backed sub-evaluation" this comment
+/// predicted). Tree matches spareval for P+ and length-1 composites; FLAT still soundly 501s
+/// (its `unfold::lower_exists` keeps the `r.path.is_some()` guard — tree-exceeds-flat). Full
+/// coverage: `adr0025_tier2_gap1_path_in_exists_notexists_minus` (+ the reflexive-501 test).
 #[test]
-fn item4_property_path_inner_in_exists_minus_stays_501() {
-    diff(
-        PE_SQL,
-        PE_R2RML,
-        None,
-        &format!(
-            "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER EXISTS {{ ?s ex:reaches+ ?x }} }}"
-        ),
-    );
-    diff(
-        PE_SQL,
-        PE_R2RML,
-        None,
-        &format!(
-        "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER NOT EXISTS {{ ?s ex:reaches+ ?x }} }}"
-    ),
-    );
-    diff(
-        PE_SQL,
-        PE_R2RML,
-        None,
-        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o MINUS {{ ?s ex:reaches+ ?x }} }}"),
-    );
+fn item4_property_path_inner_in_exists_minus_now_tree_superset_of_flat() {
+    let conn = sqlite::load(PE_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).unwrap();
+    for q in [
+        format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER EXISTS {{ ?s ex:reaches+ ?x }} }}"),
+        format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER NOT EXISTS {{ ?s ex:reaches+ ?x }} }}"),
+        format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o MINUS {{ ?s ex:reaches+ ?x }} }}"),
+    ] {
+        let parsed = parse(&q);
+        assert_vs_spareval(PE_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree computes it"), &conn);
+        assert!(matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+            "flat still soundly 501s a path inside EXISTS/NOT EXISTS/MINUS: {q}");
+    }
 }
 
 /// Item 7 — GROUP BY over a property-path closure. SUPERSEDED 2026-07-07 by ADR-0025 Tier-2
@@ -4708,5 +4697,56 @@ fn adr0025_c4_avg_empty_group_stays_zero() {
         &q,
         &tree(&maps, &parsed, &schema).expect("tree"),
         &conn,
+    );
+}
+
+// ADR-0025 Tier-2 gap 1: a property-path CLOSURE inside FILTER EXISTS / NOT EXISTS / MINUS,
+// lowered to a correlated `PathExists` (recursive-CTE derived table). P+ and length-1
+// composites (p/q, ^p, p|q) work; the REFLEXIVE kinds (P*, P?) sound-501 (fallible prelude).
+fn gap1_case(q: &str) {
+    let conn = sqlite::load(PE_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).unwrap();
+    let parsed = parse(q);
+    assert_vs_spareval(
+        PE_TTL,
+        q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+#[test]
+fn adr0025_tier2_gap1_path_in_exists_notexists_minus() {
+    // FILTER EXISTS: targets that themselves have an outgoing P+ path (filters out sinks)
+    gap1_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER EXISTS {{ ?s ex:reaches+ ?y }} }}"
+    ));
+    // FILTER NOT EXISTS: targets with NO outgoing path (the sinks)
+    gap1_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER NOT EXISTS {{ ?s ex:reaches+ ?y }} }}"
+    ));
+    // MINUS a path (anti-join)
+    gap1_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s MINUS {{ ?s ex:reaches+ ?y }} }}"
+    ));
+    // a length-1 SEQUENCE composite path inside EXISTS (2-hop)
+    gap1_case(&format!("{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER EXISTS {{ ?s ex:reaches/ex:reaches ?y }} }}"));
+    // both endpoints outer-bound: correlate on sf_s AND sf_o
+    gap1_case(&format!(
+        "{PFX} SELECT ?a ?b WHERE {{ ?a ex:reaches ?b FILTER EXISTS {{ ?a ex:reaches+ ?b }} }}"
+    ));
+}
+#[test] // reflexive P* / P? inside EXISTS is a sound 501 (fallible prelude — documented boundary).
+fn adr0025_tier2_gap1_reflexive_path_in_exists_sound_501() {
+    let conn = sqlite::load(PE_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(PE_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER EXISTS {{ ?s ex:reaches* ?y }} }}"
+    );
+    let parsed = parse(&q);
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "reflexive P* inside EXISTS must sound-501"
     );
 }

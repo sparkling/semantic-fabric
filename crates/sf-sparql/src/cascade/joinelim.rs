@@ -301,7 +301,9 @@ fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
                 rewrite_parent_cond_multi(c, e);
             }
         }
-        SqlCond::NotExists { conds, .. } | SqlCond::Exists { conds, .. } => {
+        SqlCond::NotExists { conds, .. }
+        | SqlCond::Exists { conds, .. }
+        | SqlCond::PathExists { conds, .. } => {
             for c in conds {
                 rewrite_parent_cond_multi(c, e);
             }
@@ -477,7 +479,9 @@ fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
         // A MINUS anti-join's or FILTER EXISTS semi-join's correlation may reference
         // the eliminated parent alias; recurse so it tracks the child. (Branches
         // carrying subquery conds bypass the cascade, so this is defensive.)
-        SqlCond::NotExists { conds, .. } | SqlCond::Exists { conds, .. } => {
+        SqlCond::NotExists { conds, .. }
+        | SqlCond::Exists { conds, .. }
+        | SqlCond::PathExists { conds, .. } => {
             for c in conds {
                 rewrite_parent_cond(c, e);
             }
