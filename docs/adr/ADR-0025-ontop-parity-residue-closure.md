@@ -42,6 +42,32 @@ This ADR catalogs all three tiers, documents acceptance criteria for fixing tier
 
 The outstanding work is organized into three tiers (detailed below), with recommended execution order: Tier 1 (correctness risk) → Tier 2 (feature completeness) → Tier 3 (cosmetics). Each tier has acceptance criteria, architectural blocking points, and per-item effort estimates.
 
+## Progress log (updated 2026-07-07)
+
+The tiers below are the ORIGINAL catalog; this log records what has actually shipped. Each item was RED-tested → adversarially refute-reviewed → fully gated (`differential_tree` + workspace + W3C floor + clippy `-D` + fmt) → merged `--no-ff` and pushed.
+
+**DONE — merged to `main`:**
+
+| Item | Commit (merge) | Outcome / correction to the plan below |
+|---|---|---|
+| Tier-1 bug #1 (opts-nullability) | `502029c` | Compatible-merge fix; the adversarial review found **2 further bugs + 1 residual**, all closed (flat join-order drop; DISTINCT-over-COALESCE; both-nullable → sound 501). |
+| Tier-1 bug #2 (`lower_as_subplan` slice drop) | `9ff2ea0` | Sound-501 both paths; two coincidentally-passing adversarial tests updated. |
+| **Tier-2 gap 3** (COUNT(DISTINCT *)) | `43b5506` | Tree computes it via `rust_agg` whole-solution dedup; flat stays 501 (tree-exceeds-flat). |
+| **Tier-2 gap 2** (multi-branch UNION SubPlan pooling) | `b10b3b4` | Unified single/multi-branch `lower_as_subplan`; the refuter found an **injectivity regression** (non-injective DISTINCT pooling), now gated to a sound 501. |
+| **Tier-2 gap 5** (post-GROUP-BY expr over UNION aggregate) | `7f2a15d` | **NARROWED vs the plan**: `force_rust_group` + a Rust-side `eval_expr` evaluator, restricted to INTEGER-safe arithmetic (`+ - *`, unary `-` over COUNT + int literals). The refuter found that decimal aggregates (AVG/SUM) / division corrupt the XSD type in `eval_expr`'s f64 core → those stay sound 501. |
+| **Tier-2 gap 4** (GROUP BY over a property-path closure) | `c43fe54` | **Much simpler than the dossier feared**: NOT path-as-SubPlan — just routing a single-branch path aggregation to the Rust group path (which runs the path branch's own SQL and groups by variable name). |
+| **C.3** (SELECT DISTINCT over a non-injective template) | `4d47dc9` | A **pre-existing** silent-wrong-answer bug surfaced by the gap-2 refuter (both paths, no SubPlan). Fixed: `emit_branch_with` refuses SQL-DISTINCT emission over a non-injective binding → sound 501. |
+
+**Corrections to this ADR's plan, learned by shipping:** the "gaps 2/4/5 collapse into one UNION-pooling milestone" framing (from the dossier, §Recommended Sequencing) proved **wrong** — gap 4 was a routing change, and gap 5's blocker was `bind_term_def` arithmetic + `eval_expr`'s numeric types, not pooling ("widen the pooling" is backwards there). Item-5/7/8 must-stay-501 tests were superseded to tree-superset/now-works tests.
+
+**Two NEW pre-existing bugs discovered by adversarial review (not in the original catalog):**
+- **C.3** — non-injective-template DISTINCT (above) — **FIXED** `4d47dc9`.
+- **C.4** — `AVG(?missing)` over an always-unbound operand var returns `"0"^^xsd:integer` vs spareval's UNBOUND (`rust_agg` `AggKind::Avg` conflates empty-group with unbound-operand). Pre-existing, NOT yet fixed; narrow (no W3C/GTFS impact). Tracked here + in the horizon memory.
+
+**REMAINING:**
+- **Tier-2 gap 1** (property path inside EXISTS/NOT EXISTS/MINUS) — the one genuinely-large feature: a CTE-aware `SqlCond` variant embedding a recursive CTE in a *correlated* EXISTS, with correlation mapping + NOT-EXISTS/MINUS anti-join semantics. Least parity-critical (Ontop has no general recursive-path-in-EXISTS either — sf would be ahead). Not started.
+- **Tier-3** (~27 cosmetic SQL-shape rewrites, Waves 5/6/7) — no correctness/perf value (the DB re-optimizes emitted SQL). Not started.
+
 ---
 
 ## TIER 1 — Real correctness bugs (HIGHEST PRIORITY)
