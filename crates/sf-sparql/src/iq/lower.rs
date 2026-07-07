@@ -135,6 +135,13 @@ struct Spine {
     order: Vec<OrderKey>,
     rust_group: Option<RustGroup>,
     project: Option<Vec<Var>>,
+    /// ADR-0025 Tier-2 gap 5: force the multi-branch aggregation onto the Rust group path
+    /// (never the SQL single-branch / UNION-pushdown path) when the outer Construction
+    /// carries a post-GROUP-BY ARITHMETIC expression over an aggregate output. The SQL path
+    /// lowers such an Extend through `bind_term_def`, which 501s all arithmetic; the Rust
+    /// path evaluates it via `eval_expr` (`RustGroup::post_exprs`). Set in the Construction
+    /// handler before lowering the aggregation.
+    force_rust_group: bool,
 }
 
 /// Peel the query-modifier spine (`Distinct`/`Slice`/`OrderBy`/`Aggregation` and a pure
@@ -188,6 +195,15 @@ fn lower_spine(
         ) =>
         {
             spine.project.get_or_insert_with(|| project.clone());
+            // ADR-0025 Tier-2 gap 5: a post-GROUP-BY expression that is NOT a bare-variable
+            // rename of an aggregate output (e.g. `?c := COUNT(?x) * 2`) must be evaluated in
+            // the Rust executor — the SQL aggregation path cannot compute it (`bind_term_def`
+            // 501s arithmetic). Force the aggregation onto the rust_group path so the Extend
+            // is collected as a `post_expr` and evaluated by `eval_expr` after grouping.
+            spine.force_rust_group = subst.values().any(|d| {
+                matches!(d, BindDef::Expr(e)
+                    if !matches!(e.as_ref(), Expression::Variable(_)) && is_arith_over_agg(e.as_ref()))
+            });
             let mut branches = lower_spine(*child, dialect, spine, next_alias)?;
             // A MULTI-branch aggregation lowers to a `rust_group`: the aggregate outputs
             // are computed in Rust AFTER grouping, so they are NOT columns of the pre-group
@@ -1400,7 +1416,7 @@ fn lower_aggregation(
     // even for a single-branch inner (SQL COUNT(DISTINCT *) is non-portable; the dedup lives
     // in `rust_agg`). ADR-0025 Tier-2 gap 3.
     let has_count_distinct_star = aggs.iter().any(|d| d.arg.is_none() && d.distinct);
-    if inner.len() == 1 && !has_count_distinct_star {
+    if inner.len() == 1 && !has_count_distinct_star && !spine.force_rust_group {
         let mut branch = inner.into_iter().next().expect("len checked == 1");
         if branch.path.is_some() {
             return Err(Error::Unsupported(
@@ -1460,9 +1476,11 @@ fn lower_aggregation(
             aggs: agg_cols,
         });
         Ok(vec![branch])
-    } else if let Some(branch) =
+    } else if let Some(branch) = if spine.force_rust_group {
+        None
+    } else {
         try_sql_group_over_union(&inner, &grouping, &aggs, dialect, next_alias)
-    {
+    } {
         // SQL pushdown (ADR-0023 optimizer-residue, q9 agg-pushdown wave): the union
         // arms pool into ONE derived-table `UNION ALL` and the DB does the GROUP BY —
         // no `RustGroup` buffer-and-group. Falls through to the Rust path below when
@@ -1480,6 +1498,7 @@ fn lower_aggregation(
         spine.rust_group = Some(RustGroup {
             keys,
             aggs: rust_aggs,
+            post_exprs: Vec::new(),
         });
         Ok(inner)
     }
@@ -1918,6 +1937,23 @@ fn lower_rust_agg(def: &AggDef) -> Result<RustAgg> {
 /// the `RustAgg::out_var` from the internal var to the SELECT var. Each subst entry must
 /// be such a bare-variable rename of an aggregate output; anything else (arithmetic over
 /// an aggregate, a group-key rename) is a tracked sound-501 (never silently dropped).
+/// Whether `e` is a post-GROUP-BY expression composed ONLY of the arithmetic operators
+/// `exec_core::eval_expr` evaluates exactly (`+ - * /`, unary `-`) over variables (the
+/// aggregate outputs / group keys) and numeric literals — the ADR-0025 Tier-2 gap-5 subset.
+/// Anything else (STR, other functions, comparisons, IF/COALESCE, …) returns false so the
+/// caller keeps a sound 501 rather than risk `eval_expr` returning an unbound/wrong value.
+fn is_arith_over_agg(e: &Expression) -> bool {
+    match e {
+        Expression::Variable(_) | Expression::Literal(_) => true,
+        Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => is_arith_over_agg(a) && is_arith_over_agg(b),
+        Expression::UnaryMinus(a) => is_arith_over_agg(a),
+        _ => false,
+    }
+}
+
 fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup) -> Result<()> {
     for (out_var, def) in subst {
         let BindDef::Expr(e) = def else {
@@ -1928,6 +1964,17 @@ fn rename_rust_group_outputs(subst: &BTreeMap<Var, BindDef>, rg: &mut RustGroup)
             ));
         };
         let Expression::Variable(inner) = e.as_ref() else {
+            // ADR-0025 Tier-2 gap 5: a post-GROUP-BY ARITHMETIC expression over the aggregate
+            // output(s) (e.g. `?c := COUNT(?x) * 2`). Collect it; the aggregate's internal
+            // out_var stays bound in the result row, so `eval_expr` computes the value in
+            // `rust_group_result_rows`. Only the arithmetic subset `eval_expr` evaluates
+            // exactly is collected — any other expression (STR, functions, comparisons, …)
+            // stays a sound 501 (collecting it would risk an unbound/wrong result).
+            if is_arith_over_agg(e.as_ref()) {
+                rg.post_exprs
+                    .push((out_var.to_string(), e.as_ref().clone()));
+                continue;
+            }
             return Err(Error::Unsupported(format!(
                 "post-GROUP-BY expression over a UNION aggregate is deferred → 501: {e:?}"
             )));

@@ -142,6 +142,12 @@ pub struct RustGroup {
     pub keys: Vec<String>,
     /// Aggregate output descriptors, in projection order.
     pub aggs: Vec<RustAgg>,
+    /// Post-GROUP-BY expressions `(out_var, expr)` computed OVER the aggregate outputs
+    /// (ADR-0025 Tier-2 gap 5) — e.g. `(?c := COUNT(?x) * 2)`. `expr` references the
+    /// aggregate's internal output var (bound in the result row) and is evaluated by
+    /// `eval_expr` in `rust_group_result_rows` after every aggregate is materialised. Empty
+    /// for the common bare-rename case (handled by renaming the aggregate's own `out_var`).
+    pub post_exprs: Vec<(String, spargebra::algebra::Expression)>,
 }
 
 /// One aggregate column in a [`RustGroup`].

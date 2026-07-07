@@ -4533,3 +4533,51 @@ fn adr0025_c3_distinct_over_injective_template_ok() {
     let q = format!("{PFX} SELECT DISTINCT ?p WHERE {{ ?p ex:name ?n }}");
     diff_p(&q);
 }
+
+// ADR-0025 Tier-2 gap 5: a post-GROUP-BY arithmetic EXPRESSION over a UNION aggregate (e.g.
+// COUNT(?p) * 2). Forced onto the rust_group path and computed via eval_expr. Was 501.
+// Tree-only (flat 501s aggregate-over-UNION).
+#[test]
+fn adr0025_tier2_gap5_post_group_expr_over_union_aggregate() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    for q in [
+        format!("{PFX} SELECT ?d ((COUNT(?p) * 2) AS ?c) WHERE {{ {{ ?p ex:dept ?d }} UNION {{ ?p ex:dept ?d }} }} GROUP BY ?d"),
+        format!("{PFX} SELECT ((COUNT(?p) + 1) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:email ?e }} }}"),
+    ] {
+        let parsed = parse(&q);
+        assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree computes it"), &conn);
+    }
+}
+#[test] // single-branch post-group arithmetic (forced to rust_group) still matches spareval.
+fn adr0025_tier2_gap5_single_branch_post_group_arith() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT ?d (((COUNT(?p) * 2) + 1) AS ?c) WHERE {{ ?p ex:dept ?d }} GROUP BY ?d"
+    );
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+#[test] // boundary: a NON-arithmetic post-group expr (STR) over a UNION aggregate stays sound-501.
+fn adr0025_tier2_gap5_non_arith_post_group_stays_501() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!("{PFX} SELECT ?d (STR(COUNT(?p)) AS ?c) WHERE {{ {{ ?p ex:dept ?d }} UNION {{ ?p ex:dept ?d }} }} GROUP BY ?d");
+    let parsed = parse(&q);
+    assert!(
+        matches!(
+            tree(&maps, &parsed, &schema).and_then(|p| p.emitted().map(|_| ())),
+            Err(Error::Unsupported(_))
+        ),
+        "non-arithmetic post-group expr over UNION aggregate must sound-501"
+    );
+}
