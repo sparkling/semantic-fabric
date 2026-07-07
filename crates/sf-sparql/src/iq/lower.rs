@@ -1060,6 +1060,25 @@ fn lower_as_subplan(
     next_alias: &mut usize,
 ) -> Result<Vec<Branch>> {
     let nested_plan = lower(node, dialect)?;
+    // ADR-0025 Tier-1 bug #2: a SubPlan used as a join input is emitted as a derived table
+    // via `emit_subplan_sql` → `plan.emitted()`, which renders only per-branch SQL. A
+    // plan-level SLICE (LIMIT/OFFSET) is applied by the Rust executor on the OUTER result,
+    // NOT inside the derived table — so a nested slice here would be SILENTLY DROPPED and
+    // the join would see the full, unsliced set (a wrong answer). It also cannot be emitted
+    // soundly as raw SQL: the slice's surviving subset depends on the SPARQL ORDER BY, whose
+    // ordering sf computes in the executor precisely because SQL collation ≠ SPARQL order,
+    // so a SQL `ORDER BY … LIMIT` could keep a DIFFERENT subset. Sound 501 (ADR-0007),
+    // matching the OPTIONAL / `left_join_over_subplan` path's identical boundary. (An ORDER
+    // BY with NO slice is a no-op for a bag-valued join input and is safely dropped below.)
+    if nested_plan.limit.is_some() || nested_plan.offset > 0 {
+        return Err(Error::Unsupported(
+            "SubPlan with LIMIT/OFFSET as a join input is not yet supported → 501 (the slice \
+             would be silently dropped from the derived table, and its surviving row subset \
+             depends on the SPARQL ORDER BY, which sf applies in the executor, not in SQL — \
+             ADR-0025 Tier-1)"
+                .to_owned(),
+        ));
+    }
     let vars = match &nested_plan.form {
         crate::PlanForm::Select { vars } => vars.clone(),
         _ => {

@@ -4198,3 +4198,60 @@ fn adr0025_tier1_both_sides_nullable_join_sound_501() {
         "both-nullable correlated join must sound-501 (flat)"
     );
 }
+
+// ============================================================================
+// ADR-0025 Tier-1 bug #2: a sub-SELECT with a SLICE (LIMIT/OFFSET) as a join operand used
+// to SILENTLY DROP the slice (tree `lower_as_subplan` derived table; flat Join/Union/Minus
+// dropping the operand's limit) → the join saw the full unsliced set (wrong answer). The
+// slice can't be emitted soundly (SQL collation ≠ SPARQL ORDER BY), so the fix is a sound
+// 501 (ADR-0007), matching the OPTIONAL/`left_join_over_subplan` boundary.
+// ============================================================================
+
+/// Slice as a join input must sound-501 on BOTH paths (was: tree 3 rows vs oracle 1).
+#[test]
+fn adr0025_tier1_subplan_slice_as_join_input_sound_501() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    for q in [
+        format!(
+            "{PFX} SELECT ?name WHERE {{ \
+               {{ SELECT ?p WHERE {{ ?p ex:name ?pn }} ORDER BY ?pn LIMIT 1 }} \
+               ?p ex:name ?name . }}"
+        ),
+        format!(
+            "{PFX} SELECT ?name WHERE {{ \
+               {{ SELECT ?p WHERE {{ ?p ex:name ?pn }} LIMIT 2 }} ?p ex:name ?name . }}"
+        ),
+        format!(
+            "{PFX} SELECT ?name WHERE {{ \
+               {{ SELECT ?p WHERE {{ ?p ex:name ?pn }} OFFSET 1 }} ?p ex:name ?name . }}"
+        ),
+    ] {
+        let parsed = parse(&q);
+        assert!(
+            matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+            "SubPlan slice as join input must sound-501 (tree): {q}"
+        );
+        assert!(
+            matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+            "SubPlan slice as join input must sound-501 (flat): {q}"
+        );
+    }
+}
+
+/// Companion: ORDER BY with NO slice as a join input is a no-op for a bag-valued operand,
+/// so it is safely dropped and still answers correctly (proves no over-501). Both paths.
+#[test]
+fn adr0025_tier1_subplan_orderby_only_as_join_input_ok() {
+    let q = format!(
+        "{PFX} SELECT ?name WHERE {{ \
+           {{ SELECT ?p WHERE {{ ?p ex:name ?pn }} ORDER BY ?pn }} ?p ex:name ?name . }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree"), &conn);
+    assert_vs_spareval(P_TTL, &q, &flat(&maps, &parsed, &schema).expect("flat"), &conn);
+}
