@@ -943,6 +943,9 @@ fn parse_rust_agg(
 ) -> Result<(AggKind, Option<String>, bool, Option<XsdTypeCode>)> {
     match expr {
         AggregateExpression::CountSolutions { distinct } => {
+            // Flat's Rust-group path cannot bind an aggregate-over-UNION result var (the
+            // documented agg-var limitation), so COUNT(DISTINCT *) stays a sound 501 here —
+            // the TREE path handles it (ADR-0025 Tier-2 gap 3; tree exceeds flat).
             if *distinct {
                 return Err(Error::Unsupported(
                     "COUNT(DISTINCT *) is deferred → 501 (v1 supports COUNT(*))".to_owned(),

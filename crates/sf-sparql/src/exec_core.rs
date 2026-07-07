@@ -1085,6 +1085,21 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
     match agg.kind {
         AggKind::Count => {
             let count = match &agg.arg_var {
+                // COUNT(DISTINCT *) — count DISTINCT whole solutions in the group. A row's
+                // canonical key is its (var, term) pairs; `BTreeMap` iterates in sorted key
+                // order, so the key is order-independent. Uses the same `Term::to_string`
+                // canonicalisation as COUNT(DISTINCT ?v) below (ADR-0025 Tier-2 gap 3).
+                None if agg.distinct => {
+                    let mut seen: std::collections::HashSet<Vec<(String, String)>> =
+                        std::collections::HashSet::new();
+                    rows.iter()
+                        .filter(|r| {
+                            let key: Vec<(String, String)> =
+                                r.iter().map(|(k, v)| (k.clone(), v.to_string())).collect();
+                            seen.insert(key)
+                        })
+                        .count()
+                }
                 None => rows.len(), // COUNT(*)
                 Some(var) => {
                     if agg.distinct {

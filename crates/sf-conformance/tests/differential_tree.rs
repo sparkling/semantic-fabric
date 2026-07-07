@@ -1733,7 +1733,8 @@ fn single_branch_group_by_self_join_collapses_to_one_scan() {
     let conn = sqlite::load(SBAGG_SQL).expect("fixture loads");
     let schema = sqlite::introspect_all(&conn).expect("introspect");
     let maps = sf_mapping::parse_r2rml(SBAGG_R2RML).expect("R2RML parses");
-    let query = format!("{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g ; ex:p ?v }} GROUP BY ?g");
+    let query =
+        format!("{PFX} SELECT ?g (COUNT(?v) AS ?c) WHERE {{ ?s ex:grp ?g ; ex:p ?v }} GROUP BY ?g");
     let q = parse(&query);
     let tp = tree(&maps, &q, &schema).expect("single-branch GROUP BY translates");
     // A plain single-branch aggregate: one branch, `agg` set, NOT a UNION pushdown
@@ -3559,15 +3560,28 @@ fn item1d_r3_cascade_self_lj_elim_keeps_subplan_correlation() {
 /// (its `lower_exists` has the same `r.path.is_some()` guard), so `diff` locks it.
 #[test]
 fn item4_property_path_inner_in_exists_minus_stays_501() {
-    diff(PE_SQL, PE_R2RML, None, &format!(
-        "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER EXISTS {{ ?s ex:reaches+ ?x }} }}"
-    ));
-    diff(PE_SQL, PE_R2RML, None, &format!(
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        None,
+        &format!(
+            "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER EXISTS {{ ?s ex:reaches+ ?x }} }}"
+        ),
+    );
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        None,
+        &format!(
         "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o FILTER NOT EXISTS {{ ?s ex:reaches+ ?x }} }}"
-    ));
-    diff(PE_SQL, PE_R2RML, None, &format!(
-        "{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o MINUS {{ ?s ex:reaches+ ?x }} }}"
-    ));
+    ),
+    );
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        None,
+        &format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:reaches ?o MINUS {{ ?s ex:reaches+ ?x }} }}"),
+    );
 }
 
 /// Item 7 — GROUP BY over a property-path closure. MUST STAY 501: a path branch has
@@ -3580,24 +3594,37 @@ fn item4_property_path_inner_in_exists_minus_stays_501() {
 /// SubPlan mechanism (out of scope). Flat 501s identically. `diff` locks it.
 #[test]
 fn item7_group_by_over_property_path_stays_501() {
-    diff(PE_SQL, PE_R2RML, None, &format!(
-        "{PFX} SELECT ?s (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?s"
-    ));
+    diff(
+        PE_SQL,
+        PE_R2RML,
+        None,
+        &format!("{PFX} SELECT ?s (COUNT(?o) AS ?c) WHERE {{ ?s ex:reaches+ ?o }} GROUP BY ?s"),
+    );
 }
 
-/// Item 5 — `COUNT(DISTINCT *)`. MUST STAY 501: SPARQL `COUNT(DISTINCT *)` counts
-/// DISTINCT whole solutions (every in-scope variable). The `AggCol`/`RustAgg` shape
-/// targets a SINGLE argument column (or `COUNT(*)`), and a faithful multi-column
-/// `COUNT(DISTINCT c1, …, cn)` is not portable (SQLite rejects multi-arg
-/// `COUNT(DISTINCT …)`); the sound cross-dialect form is `COUNT(*)` over a
-/// `SELECT DISTINCT <all projected cols>` derived table — a structural change to the
-/// aggregate emission. `COUNT(DISTINCT ?v)` over a SINGLE column already works; only
-/// the whole-solution `*` form is deferred. Flat 501s identically. `diff` locks it.
+/// Item 5 — `COUNT(DISTINCT *)`. SUPERSEDED 2026-07-07 by ADR-0025 Tier-2 gap 3: the TREE
+/// now IMPLEMENTS it (counts DISTINCT whole solutions via `rust_agg` whole-row dedup, rather
+/// than the non-portable SQL `COUNT(DISTINCT c1,…,cn)`), so it is no longer a must-stay-501.
+/// Tree computes it (matching spareval); FLAT still soundly 501s — its Rust-group path cannot
+/// bind an aggregate result var (tree exceeds flat). Full coverage: the
+/// `adr0025_tier2_count_distinct_star_*` tests below (single-branch, UNION, GROUP BY).
 #[test]
-fn item5_count_distinct_star_stays_501() {
-    diff(P_SQL, P_R2RML, None, &format!(
-        "{PFX} SELECT (COUNT(DISTINCT *) AS ?c) WHERE {{ ?p ex:name ?n }}"
-    ));
+fn item5_count_distinct_star_now_tree_superset_of_flat() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!("{PFX} SELECT (COUNT(DISTINCT *) AS ?c) WHERE {{ ?p ex:name ?n }}");
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree computes it"),
+        &conn,
+    );
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "flat still soundly 501s COUNT(DISTINCT *)"
+    );
 }
 
 /// Item 8 — a post-GROUP-BY EXPRESSION over a multi-branch (UNION) aggregate. MUST STAY
@@ -3612,10 +3639,15 @@ fn item5_count_distinct_star_stays_501() {
 /// locks it.
 #[test]
 fn item8_post_group_by_expr_over_union_aggregate_stays_501() {
-    diff(AGG_SQL, AGG_R2RML, None, &format!(
-        "{PFX} SELECT ?g (COUNT(?v) AS ?c) (STR(COUNT(?v)) AS ?cs) WHERE {{ ?s ex:grp ?g . \
+    diff(
+        AGG_SQL,
+        AGG_R2RML,
+        None,
+        &format!(
+            "{PFX} SELECT ?g (COUNT(?v) AS ?c) (STR(COUNT(?v)) AS ?cs) WHERE {{ ?s ex:grp ?g . \
          {{ ?s ex:p1 ?v }} UNION {{ ?s ex:p2 ?v }} }} GROUP BY ?g"
-    ));
+        ),
+    );
 }
 
 /// Item 2 / 1b — a MULTI-branch modifier sub-SELECT (a UNION inside a LIMIT, or an
@@ -4152,8 +4184,18 @@ fn adr0025_tier1_optional_as_right_join_operand() {
     let schema = sqlite::introspect_all(&conn).unwrap();
     let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
     let parsed = parse(&q);
-    assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree"), &conn);
-    assert_vs_spareval(P_TTL, &q, &flat(&maps, &parsed, &schema).expect("flat"), &conn);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &flat(&maps, &parsed, &schema).expect("flat"),
+        &conn,
+    );
 }
 
 /// Bug B (adversarial review): `SELECT DISTINCT` over the merged shared var. The single-
@@ -4170,8 +4212,18 @@ fn adr0025_tier1_distinct_over_merged_var_single_nullable() {
     let schema = sqlite::introspect_all(&conn).unwrap();
     let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
     let parsed = parse(&q);
-    assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree"), &conn);
-    assert_vs_spareval(P_TTL, &q, &flat(&maps, &parsed, &schema).expect("flat"), &conn);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &flat(&maps, &parsed, &schema).expect("flat"),
+        &conn,
+    );
 }
 
 /// Both-sides-nullable: the shared var is bound by TWO OPTIONALs, so the merged value would
@@ -4252,6 +4304,101 @@ fn adr0025_tier1_subplan_orderby_only_as_join_input_ok() {
     let schema = sqlite::introspect_all(&conn).unwrap();
     let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
     let parsed = parse(&q);
-    assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree"), &conn);
-    assert_vs_spareval(P_TTL, &q, &flat(&maps, &parsed, &schema).expect("flat"), &conn);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &flat(&maps, &parsed, &schema).expect("flat"),
+        &conn,
+    );
+}
+
+// ============================================================================
+// ADR-0025 Tier-2 gap 3: COUNT(DISTINCT *) — count DISTINCT whole solutions. Was 501 on
+// both paths; now deduped in rust_agg. Ontop itself has a live bug here (drops DISTINCT),
+// so sf is ahead. Gated vs the spareval oracle.
+// ============================================================================
+
+/// Assert the TREE path (production) matches spareval for COUNT(DISTINCT *). The flat path
+/// cannot bind an aggregate result var over its Rust-group path, so it soundly 501s every
+/// COUNT(DISTINCT *) (the documented tree-exceeds-flat limitation) — only the tree is checked.
+fn count_distinct_star_case(q: &str) {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(q);
+    assert_vs_spareval(
+        P_TTL,
+        q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+    // Flat soundly 501s (agg result var over UNION/rust-group is unbindable — tree exceeds flat).
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "flat should sound-501 COUNT(DISTINCT *): {q}"
+    );
+}
+
+#[test] // 2 identical UNION arms over 3 persons => 6 solutions; DISTINCT * => 3.
+fn adr0025_tier2_count_distinct_star_over_union() {
+    count_distinct_star_case(&format!(
+        "{PFX} SELECT (COUNT(DISTINCT *) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:name ?n }} }}"
+    ));
+}
+
+#[test] // single-branch, all solutions already distinct => COUNT(DISTINCT *) == COUNT(*) == 3.
+fn adr0025_tier2_count_distinct_star_single_branch() {
+    count_distinct_star_case(&format!(
+        "{PFX} SELECT (COUNT(DISTINCT *) AS ?c) WHERE {{ ?p ex:name ?n }}"
+    ));
+}
+
+#[test] // control: COUNT(*) must NOT dedup => 6 over the duplicated union.
+fn adr0025_tier2_count_star_not_deduped_control() {
+    count_distinct_star_case(&format!(
+        "{PFX} SELECT (COUNT(*) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:name ?n }} }}"
+    ));
+}
+
+#[test] // COUNT(DISTINCT *) with GROUP BY: per-group distinct whole-solution count.
+fn adr0025_tier2_count_distinct_star_grouped() {
+    count_distinct_star_case(&format!(
+        "{PFX} SELECT ?d (COUNT(DISTINCT *) AS ?c) WHERE {{ {{ ?p ex:dept ?d }} UNION {{ ?p ex:dept ?d }} }} GROUP BY ?d"
+    ));
+}
+#[test] // edge: unbound var in some solutions (OPTIONAL) — dedup must treat absent != bound
+fn adr0025_tier2_count_distinct_star_with_unbound_var() {
+    // arm1 binds ?e for Ann/Zed only (email); union with itself => dups; DISTINCT * over (?p,?e)
+    // where Bob has ?e unbound. spareval counts distinct (?p,?e) incl the unbound-e Bob row.
+    let q = format!("{PFX} SELECT (COUNT(DISTINCT *) AS ?c) WHERE {{ {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} }} UNION {{ ?p ex:name ?n OPTIONAL {{ ?p ex:email ?e }} }} }}");
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+#[test] // edge: COUNT(DISTINCT *) alongside a non-distinct agg in the same group
+fn adr0025_tier2_count_distinct_star_mixed_with_count_star() {
+    let q = format!("{PFX} SELECT (COUNT(DISTINCT *) AS ?cd) (COUNT(*) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:name ?n }} }}");
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
 }
