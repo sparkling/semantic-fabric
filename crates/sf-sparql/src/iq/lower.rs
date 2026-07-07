@@ -1416,7 +1416,13 @@ fn lower_aggregation(
     // even for a single-branch inner (SQL COUNT(DISTINCT *) is non-portable; the dedup lives
     // in `rust_agg`). ADR-0025 Tier-2 gap 3.
     let has_count_distinct_star = aggs.iter().any(|d| d.arg.is_none() && d.distinct);
-    if inner.len() == 1 && !has_count_distinct_star && !spine.force_rust_group {
+    // ADR-0025 Tier-2 gap 4: a GROUP BY over a property-path closure. The single-branch SQL
+    // aggregation path 501s a path branch (its vars live in the recursive CTE `sf_s`/`sf_o`,
+    // not raw base columns `group_key_columns` can read). Route it to the Rust group path
+    // instead: `rust_group_execute` runs the path branch's own SQL and groups the resulting
+    // solutions by variable name — no base-column access needed.
+    let inner_is_path = inner.len() == 1 && inner[0].path.is_some();
+    if inner.len() == 1 && !has_count_distinct_star && !spine.force_rust_group && !inner_is_path {
         let mut branch = inner.into_iter().next().expect("len checked == 1");
         if branch.path.is_some() {
             return Err(Error::Unsupported(
