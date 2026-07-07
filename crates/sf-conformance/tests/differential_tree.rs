@@ -4086,3 +4086,115 @@ fn minus_over_path_left_operand_is_tree_superset_of_flat() {
     let tp = tree(&maps, &parsed, &schema).expect("tree must handle MINUS over a path left side");
     assert_vs_spareval(PE_TTL, &q, &tp, &conn);
 }
+
+// ============================================================================
+// ADR-0025 Tier-1 bug #1 (opts-nullability) — RED reproduction.
+// An OPTIONAL-left-unbound variable (?x, unbound for Bob whose email is NULL)
+// is re-joined via a DIFFERENT anchor (?q) in a later MANDATORY pattern.
+// SPARQL §18.5: an unbound shared var is vacuously compatible, so Bob must MERGE
+// with every ?q-email row (ADD rows). If sf treats the unbound ?x as SQL NULL and
+// equi-joins, Bob is dropped. Expected spareval: 4 rows
+// {(Ann,ann@x),(Zed,zed@x),(Bob,ann@x),(Bob,zed@x)}. Buggy sf: 2 rows.
+#[test]
+fn adr0025_tier1_opts_nullability_cross_anchor_rejoin() {
+    let q = format!(
+        "{PFX} SELECT ?name ?x WHERE {{ \
+           ?p ex:name ?name . \
+           OPTIONAL {{ ?p ex:email ?x }} \
+           ?q ex:email ?x . \
+         }}"
+    );
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    let tp = tree(&maps, &parsed, &schema).expect("tree translates");
+    assert_vs_spareval(P_TTL, &q, &tp, &conn);
+}
+
+// ADR-0025 Tier-1 (opts-nullability) — FLAT-path mirror of the tree repro above.
+// The flat `merge` (unfold.rs) had the identical plain-equality drop; same expected
+// 4 rows vs spareval. Asserts the flat plan directly (flat is the differential oracle).
+#[test]
+fn adr0025_tier1_opts_nullability_cross_anchor_rejoin_flat() {
+    let q = format!(
+        "{PFX} SELECT ?name ?x WHERE {{ \
+           ?p ex:name ?name . \
+           OPTIONAL {{ ?p ex:email ?x }} \
+           ?q ex:email ?x . \
+         }}"
+    );
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    let fp = flat(&maps, &parsed, &schema).expect("flat translates");
+    assert_vs_spareval(P_TTL, &q, &fp, &conn);
+}
+
+// ============================================================================
+// ADR-0025 Tier-1 (opts-nullability) — regression set for the adversarial-review
+// findings on the compatible-merge fix (insert_or_unify / merge R1 null-safe + R2).
+// ============================================================================
+
+/// Bug A (adversarial review): the OPTIONAL-bearing group as the RIGHT join operand.
+/// Flat `merge` built its nullable-alias set from `left` only, missing `right`'s OPTIONAL,
+/// so it fell back to plain equality and dropped the unbound row (order-dependent). Fixed
+/// by unioning both branches' `nullable_aliases`. Assert BOTH paths vs spareval.
+#[test]
+fn adr0025_tier1_optional_as_right_join_operand() {
+    let q = format!(
+        "{PFX} SELECT ?name ?qname ?x WHERE {{ \
+           {{ ?q ex:name ?qname . ?q ex:email ?x }} \
+           {{ ?p ex:name ?name . OPTIONAL {{ ?p ex:email ?x }} }} }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree"), &conn);
+    assert_vs_spareval(P_TTL, &q, &flat(&maps, &parsed, &schema).expect("flat"), &conn);
+}
+
+/// Bug B (adversarial review): `SELECT DISTINCT` over the merged shared var. The single-
+/// nullable case must NOT introduce a non-injective COALESCE (SQL DISTINCT dedups raw
+/// columns before term reconstruction), so the merged value uses the mandatory side's raw
+/// column and DISTINCT collapses correctly. spareval = {ann@x, zed@x}.
+#[test]
+fn adr0025_tier1_distinct_over_merged_var_single_nullable() {
+    let q = format!(
+        "{PFX} SELECT DISTINCT ?x WHERE {{ ?p ex:name ?name . \
+           OPTIONAL {{ ?p ex:email ?x }} ?q ex:email ?x . }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert_vs_spareval(P_TTL, &q, &tree(&maps, &parsed, &schema).expect("tree"), &conn);
+    assert_vs_spareval(P_TTL, &q, &flat(&maps, &parsed, &schema).expect("flat"), &conn);
+}
+
+/// Both-sides-nullable: the shared var is bound by TWO OPTIONALs, so the merged value would
+/// need a non-injective COALESCE (unsafe under DISTINCT/dedup — adversarial-review Bug B
+/// residual). Sound 501 on BOTH paths (ADR-0007: a 501 beats a shape that is wrong under
+/// DISTINCT). Exactly-one-nullable (the common opts-nullability bug) stays correct above.
+#[test]
+fn adr0025_tier1_both_sides_nullable_join_sound_501() {
+    let q = format!(
+        "{PFX} SELECT ?name ?x WHERE {{ ?p ex:name ?name . \
+           {{ OPTIONAL {{ ?p ex:email ?x }} }} \
+           {{ ?q ex:name ?qn . OPTIONAL {{ ?q ex:email ?x }} }} }}"
+    );
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let parsed = parse(&q);
+    assert!(
+        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "both-nullable correlated join must sound-501 (tree)"
+    );
+    assert!(
+        matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
+        "both-nullable correlated join must sound-501 (flat)"
+    );
+}

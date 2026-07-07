@@ -18,7 +18,7 @@ use crate::iq::{
     AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan,
     SqlCond, TermDef,
 };
-use crate::leftjoin::left_join_branches;
+use crate::leftjoin::{def_is_nullable, left_join_branches, null_safe};
 use crate::saturate::Tbox;
 use crate::unify::{filter_cond, unify, Unify};
 use crate::{Error, Result};
@@ -1256,13 +1256,64 @@ fn merge(mut left: Branch, right: &Branch) -> Result<Option<Branch>> {
                 .to_owned(),
         ));
     }
+    // ADR-0025 Tier-1 (opts-nullability), flat mirror of the tree `insert_or_unify` fix:
+    // a shared var whose LEFT def reads a nullable (prior-OPTIONAL) alias may be UNBOUND;
+    // plain equality then drops the row, but SPARQL compatible-merge (§18.5) keeps it and
+    // binds from the mandatory side. `nullable_aliases` here reflects `left`'s accumulated
+    // OPTIONAL scans (the bug shape: OPTIONAL on the left, mandatory re-join on the right).
+    // Union BOTH branches' nullable aliases: the OPTIONAL-bearing group can be the RIGHT
+    // operand (its OPTIONAL scans live in `right`), so a set from `left` alone would miss it
+    // and silently fall through to plain equality — an order-dependent row drop (the tree
+    // path is immune because its fold has already merged both operands' opts into one
+    // accumulator by the time the shared-var equality runs).
+    let opt_aliases = &left.nullable_aliases() | &right.nullable_aliases();
     for (var, rdef) in &right.bindings {
         match left.bindings.get(var) {
-            Some(ldef) => match unify(ldef, rdef) {
-                Unify::Sat(conds) => left.where_conds.extend(conds),
-                Unify::Empty => return Ok(None),
-                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
-            },
+            Some(ldef) => {
+                let ldef = ldef.clone();
+                let l_nullable = def_is_nullable(&ldef, &opt_aliases);
+                let r_nullable = def_is_nullable(rdef, &opt_aliases);
+                match unify(&ldef, rdef) {
+                    Unify::Sat(conds) => {
+                        if (l_nullable || r_nullable) && !conds.is_empty() {
+                            // BOTH sides nullable ⇒ non-injective COALESCE needed, which
+                            // SQL DISTINCT/dedup cannot collapse → sound 501 (mirror of the
+                            // tree `insert_or_unify` fix; ADR-0025 both-nullable residual).
+                            if l_nullable && r_nullable {
+                                return Err(Error::Unsupported(
+                                    "INNER JOIN correlating on a variable bound by TWO OPTIONALs \
+                                     (both sides nullable) is not yet supported → 501 (the \
+                                     compatible-merge value needs a non-injective COALESCE that \
+                                     SQL-level DISTINCT/dedup cannot collapse — ADR-0025)"
+                                        .to_owned(),
+                                ));
+                            }
+                            // R1 null-safe equality; R2 mandatory-side raw value (no COALESCE).
+                            for c in conds {
+                                left.where_conds.push(null_safe(c, true));
+                            }
+                            let merged = if l_nullable { rdef.clone() } else { ldef };
+                            left.bindings.insert(var.clone(), merged);
+                        } else {
+                            left.where_conds.extend(conds);
+                        }
+                    }
+                    // A nullable side that is provably disjoint on VALUES can still be UNBOUND
+                    // (compatible) — pruning the whole branch would lose those rows; the
+                    // plain-equality fold cannot express "keep only the unbound-compatible
+                    // rows" → sound 501, mirroring the tree path.
+                    Unify::Empty if l_nullable || r_nullable => {
+                        return Err(Error::Unsupported(
+                            "INNER JOIN correlating on an OPTIONAL-bound (nullable) variable \
+                             whose definitions are provably disjoint is not yet supported → \
+                             501 (compatible-merge must keep the unbound-compatible rows)"
+                                .to_owned(),
+                        ));
+                    }
+                    Unify::Empty => return Ok(None),
+                    Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+                }
+            }
             None => {
                 left.bindings.insert(var.clone(), rdef.clone());
             }
