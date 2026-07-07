@@ -682,9 +682,9 @@ fn lower_iq_exists(
     let mut sub_conds = Vec::with_capacity(inner.len());
     for r in &inner {
         if r.path.is_some() {
-            return Err(Error::Unsupported(
-                format!("{op} with a property-path inner is deferred → 501 (v1)"),
-            ));
+            return Err(Error::Unsupported(format!(
+                "{op} with a property-path inner is deferred → 501 (v1)"
+            )));
         }
         // An inner branch carrying its OWN SubPlan derived table (a modifier sub-SELECT
         // joined INSIDE this EXISTS / NOT EXISTS / MINUS body — e.g. `EXISTS { ?a p ?nm .
@@ -995,7 +995,6 @@ fn left_join_over_subplan(
     }
     Ok(out)
 }
-
 
 /// (`Vec<IqCond>`) for [`left_join_branches`] (design §5.3). BUILD split the original
 /// `&&` into conjuncts ([`crate::build`]); re-AND them (AND is associative, so `=_bag` is
@@ -1352,7 +1351,11 @@ fn lower_aggregation(
         out
     });
 
-    if inner.len() == 1 {
+    // COUNT(DISTINCT *) counts DISTINCT WHOLE solutions — route it to the Rust group path
+    // even for a single-branch inner (SQL COUNT(DISTINCT *) is non-portable; the dedup lives
+    // in `rust_agg`). ADR-0025 Tier-2 gap 3.
+    let has_count_distinct_star = aggs.iter().any(|d| d.arg.is_none() && d.distinct);
+    if inner.len() == 1 && !has_count_distinct_star {
         let mut branch = inner.into_iter().next().expect("len checked == 1");
         if branch.path.is_some() {
             return Err(Error::Unsupported(
@@ -1840,14 +1843,9 @@ fn lower_agg_col(
 /// non-variable argument are sound 501s.
 fn lower_rust_agg(def: &AggDef) -> Result<RustAgg> {
     let arg_var = match &def.arg {
-        None => {
-            if def.distinct {
-                return Err(Error::Unsupported(
-                    "COUNT(DISTINCT *) is deferred → 501 (v1 supports COUNT(*))".to_owned(),
-                ));
-            }
-            None
-        }
+        // COUNT(*) / COUNT(DISTINCT *) — no argument column; `distinct` (set on RustAgg
+        // below) is honoured by `rust_agg`'s whole-solution dedup (ADR-0025 Tier-2 gap 3).
+        None => None,
         Some(AggArg::Var(v)) => Some(v.to_string()),
         Some(AggArg::Expr(_)) => {
             return Err(Error::Unsupported(
