@@ -1058,7 +1058,7 @@ fn lower_as_subplan(
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
 ) -> Result<Vec<Branch>> {
-    let nested_plan = lower(node, dialect)?;
+    let mut nested_plan = lower(node, dialect)?;
     // ADR-0025 Tier-1 bug #2: a SubPlan used as a join input is emitted as a derived table
     // via `emit_subplan_sql` → `plan.emitted()`, which renders only per-branch SQL. A
     // plan-level SLICE (LIMIT/OFFSET) is applied by the Rust executor on the OUTER result,
@@ -1089,60 +1089,89 @@ fn lower_as_subplan(
     if vars.is_empty() {
         return Ok(Vec::new());
     }
-    let prepared = nested_plan.prepared_branches();
-    if prepared.len() != 1 {
-        return Err(Error::Unsupported(
-            "SubPlan: multi-branch inner plan not yet supported → 501 (M5 Wave 2 scope)".to_owned(),
-        ));
-    }
-    let inner_branch = &prepared[0];
-    // Use the ACTUAL emission projection (the order `emit_branch` assigns to c0, c1, …)
-    // rather than `inner_branch.projection()` (BTreeMap / binding-insertion order):
-    // for agg branches the emitter places GROUP BY key columns before aggregate
-    // columns, which differs from the BTreeMap alphabetical order of `bindings`.
-    // Mismatching these would remap `?s` to the wrong positional column.
-    let inner_projection = crate::emit::emit_branch(inner_branch, dialect)
-        .map_err(|e| Error::Sql(format!("SubPlan inner emit for remapping: {e}")))?
-        .projection;
-    let sp_alias = *next_alias;
-    *next_alias += 1;
-    // Build outer bindings: each projected var remapped to ColRef(sp_alias, "c{i}").
-    let mut outer_bindings = std::collections::BTreeMap::new();
-    for (i, v) in vars.iter().enumerate() {
-        if let Some(def) = inner_branch.bindings.get(v.as_str()) {
-            match remap_termdef(def, &inner_projection, sp_alias) {
-                Ok(remapped) => {
-                    outer_bindings.insert(v.clone(), remapped);
-                }
-                Err(_) => {
-                    // Remap failed: fall back to a positional Column TermDef (safe for
-                    // reconstruction when the inner emits a single column at c{i}).
-                    outer_bindings.insert(
-                        v.clone(),
-                        TermDef::Derived {
-                            term_map: sf_core::ir::TermMap::Column(
-                                format!("c{i}").into(),
-                                sf_core::ir::TermSpec::plain_literal(),
-                            ),
-                            alias: sp_alias,
-                        },
-                    );
-                }
-            }
-        } else {
-            // Variable not in inner bindings: expose positionally.
-            outer_bindings.insert(
-                v.clone(),
-                TermDef::Derived {
-                    term_map: sf_core::ir::TermMap::Column(
-                        format!("c{i}").into(),
-                        sf_core::ir::TermSpec::plain_literal(),
-                    ),
-                    alias: sp_alias,
-                },
-            );
+    // For a multi-branch DISTINCT SubPlan, narrow each arm's SELECT list to exactly the
+    // projected vars so the pooled `UNION` dedups on THOSE columns only. An arm may bind
+    // internal vars — e.g. `SELECT DISTINCT ?p { {?p :a ?n} UNION {?p :b ?e} }` binds ?n/?e
+    // per arm — which would otherwise appear as extra UNION columns and defeat the dedup.
+    // (Single-branch / non-distinct pooling is unaffected: the outer reads only the vars'
+    // positions, and `UNION ALL` keeps every row regardless.) ADR-0025 Tier-2 gap 2.
+    if nested_plan.branches.len() >= 2 && nested_plan.distinct {
+        let keep: std::collections::HashSet<String> = vars.iter().map(|v| v.to_string()).collect();
+        for b in &mut nested_plan.branches {
+            b.bindings.retain(|k, _| keep.contains(k));
+            // Mark the arm DISTINCT so `Branch::projection()` excludes WHERE/JOIN-ON columns
+            // (which are enforced in the predicate, never read back) — otherwise a pattern's
+            // filter column (e.g. `name IS NOT NULL`) would appear as an extra SELECT column
+            // and defeat the pooled `UNION` dedup on the projected vars.
+            b.distinct = true;
         }
     }
+    let prepared = nested_plan.prepared_branches();
+    if prepared.is_empty() {
+        return Err(Error::Unsupported(
+            "SubPlan: empty inner plan → 501".to_owned(),
+        ));
+    }
+    let sp_alias = *next_alias;
+    // Use each arm's ACTUAL emission projection (the order `emit_branch` assigns to c0,c1,…)
+    // rather than `Branch::projection()` (BTreeMap order): for agg branches the emitter
+    // places GROUP BY key columns before aggregate columns. Mismatching would remap a var
+    // to the wrong positional column.
+    let arm_projections: Vec<Vec<ColRef>> = prepared
+        .iter()
+        .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| Error::Sql(format!("SubPlan inner emit for remapping: {e}")))?;
+    // A positional-column fallback binding (`c{i}` of the derived table) — used when a var
+    // cannot be term-remapped, or is absent from an arm's bindings (exposed positionally).
+    let positional_col = |i: usize| TermDef::Derived {
+        term_map: sf_core::ir::TermMap::Column(
+            format!("c{i}").into(),
+            sf_core::ir::TermSpec::plain_literal(),
+        ),
+        alias: sp_alias,
+    };
+    // Multi-branch pooling (ADR-0025 Tier-2 gap 2): a UNION-inner SubPlan pools into ONE
+    // `UNION ALL` derived table IFF every projected var remaps to the IDENTICAL outer
+    // TermDef across ALL arms — a single equality (compared via the `Debug` canonical form,
+    // as `TermDef` has no `PartialEq`) that enforces BOTH column-position alignment AND
+    // matching reconstruction (spec + structure). Any divergence → sound 501 (the arms are
+    // not provably poolable). The `UNION ALL` column-count contract is preserved
+    // post-cascade by `cascade_subplans`' multi-branch guard, and every pooled shape is
+    // `=_bag`-gated. A single-branch inner trivially satisfies the equality (one arm).
+    if arm_projections
+        .iter()
+        .any(|p| p.len() != arm_projections[0].len())
+    {
+        return Err(Error::Unsupported(
+            "SubPlan: multi-branch arms with differing projection widths → 501".to_owned(),
+        ));
+    }
+    let mut outer_bindings = std::collections::BTreeMap::new();
+    for (i, v) in vars.iter().enumerate() {
+        let mut agreed: Option<TermDef> = None;
+        for (arm, proj) in prepared.iter().zip(&arm_projections) {
+            let remapped = match arm.bindings.get(v.as_str()) {
+                Some(def) => {
+                    remap_termdef(def, proj, sp_alias).unwrap_or_else(|_| positional_col(i))
+                }
+                None => positional_col(i),
+            };
+            match &agreed {
+                None => agreed = Some(remapped),
+                Some(prev) => {
+                    if format!("{prev:?}") != format!("{remapped:?}") {
+                        return Err(Error::Unsupported(format!(
+                            "SubPlan: multi-branch arms reconstruct ?{v} differently → 501 \
+                             (cross-arm type/position mismatch — not provably poolable)"
+                        )));
+                    }
+                }
+            }
+        }
+        outer_bindings.insert(v.clone(), agreed.expect("at least one arm"));
+    }
+    *next_alias += 1;
     let mut outer = Branch::empty();
     outer.subplan_joins.push(SubPlanJoin {
         alias: sp_alias,
