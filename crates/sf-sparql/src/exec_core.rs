@@ -1157,9 +1157,18 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             };
             let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
             if vals.is_empty() {
-                // AVG over an empty multiset ⇒ "0"^^xsd:integer (SPARQL §11, like SUM —
-                // NOT UNBOUND; the spareval oracle confirms 0).
-                return Ok(Some(integer_term(0)));
+                // ADR-0025 C.4: AVG over no bound values. If the GROUP is genuinely EMPTY
+                // (0 rows — e.g. implicit grouping over an unmatched pattern), AVG ⇒
+                // "0"^^xsd:integer (SPARQL §11, like SUM; spareval-confirmed). But if the
+                // group HAS rows and the operand is simply UNBOUND in every one of them
+                // (e.g. `AVG(?missing)` over a UNION arm that never binds it), there are no
+                // numeric values to average ⇒ the result is UNBOUND, NOT 0. The old
+                // `vals.is_empty()` conflated these two — discriminate on `rows`.
+                return if rows.is_empty() {
+                    Ok(Some(integer_term(0)))
+                } else {
+                    Ok(None)
+                };
             }
             let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
             if nums.is_empty() {
