@@ -697,10 +697,20 @@ fn lower_iq_exists(
     let outer_opt_aliases: HashSet<usize> = outer.nullable_aliases();
     let mut sub_conds = Vec::with_capacity(inner.len());
     for r in &inner {
-        if r.path.is_some() {
-            return Err(Error::Unsupported(format!(
-                "{op} with a property-path inner is deferred → 501 (v1)"
-            )));
+        // ADR-0025 Tier-2 gap 1: a property-path CLOSURE inside EXISTS/NOT EXISTS/MINUS is
+        // lowered to a correlated `SqlCond::PathExists` (built at the construction below).
+        // The REFLEXIVE kinds (`P*`/`P?`) still 501: their emitted prelude calls the fallible
+        // `reflexive_sql`, which the infallible `render_cond` cannot propagate — a bounded
+        // follow-up. `P+` and the length-1 composites (`p/q`/`^p`/`p|q`) proceed.
+        if let Some(pc) = &r.path {
+            if matches!(
+                pc.kind,
+                crate::iq::PathKind::ZeroOrMore | crate::iq::PathKind::ZeroOrOne
+            ) {
+                return Err(Error::Unsupported(format!(
+                    "{op} with a reflexive property-path inner (P* / P?) is deferred → 501 (v1)"
+                )));
+            }
         }
         // An inner branch carrying its OWN SubPlan derived table (a modifier sub-SELECT
         // joined INSIDE this EXISTS / NOT EXISTS / MINUS body — e.g. `EXISTS { ?a p ?nm .
@@ -808,7 +818,17 @@ fn lower_iq_exists(
                     .collect(),
             ));
         }
-        if negated {
+        if let Some(pc) = &r.path {
+            // ADR-0025 Tier-2 gap 1: the inner is a property-path closure. `corr` already
+            // holds the correlation equalities (built above by unifying the outer bindings
+            // with the path's `sf_s`/`sf_o` bindings) plus the path branch's own
+            // `where_conds`; emit them against the recursive-CTE derived table `t{pc.alias}`.
+            sub_conds.push(SqlCond::PathExists {
+                pc: pc.clone(),
+                conds: corr,
+                negated,
+            });
+        } else if negated {
             sub_conds.push(SqlCond::NotExists {
                 scans: r.core.clone(),
                 conds: corr,

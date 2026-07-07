@@ -209,7 +209,7 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
 fn branch_has_not_exists(b: &Branch) -> bool {
     fn has(c: &SqlCond) -> bool {
         match c {
-            SqlCond::NotExists { .. } | SqlCond::Exists { .. } => true,
+            SqlCond::NotExists { .. } | SqlCond::Exists { .. } | SqlCond::PathExists { .. } => true,
             SqlCond::Not(c) => has(c),
             SqlCond::And(cs) | SqlCond::Or(cs) => cs.iter().any(has),
             _ => false,
@@ -747,7 +747,9 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
         // `NotExists` and `Exists` correlate on outer (left) aliases, which a
         // self-join merge may rename; recurse so those references track the kept
         // alias. (Inner scan aliases are globally unique and never a merge target.)
-        SqlCond::NotExists { conds, .. } | SqlCond::Exists { conds, .. } => {
+        SqlCond::NotExists { conds, .. }
+        | SqlCond::Exists { conds, .. }
+        | SqlCond::PathExists { conds, .. } => {
             for c in conds {
                 rewrite_cond_alias(c, fix);
             }
