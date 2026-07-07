@@ -4086,3 +4086,28 @@ fn minus_over_path_left_operand_is_tree_superset_of_flat() {
     let tp = tree(&maps, &parsed, &schema).expect("tree must handle MINUS over a path left side");
     assert_vs_spareval(PE_TTL, &q, &tp, &conn);
 }
+
+// ============================================================================
+// ADR-0025 Tier-1 bug #1 (opts-nullability) — RED reproduction.
+// An OPTIONAL-left-unbound variable (?x, unbound for Bob whose email is NULL)
+// is re-joined via a DIFFERENT anchor (?q) in a later MANDATORY pattern.
+// SPARQL §18.5: an unbound shared var is vacuously compatible, so Bob must MERGE
+// with every ?q-email row (ADD rows). If sf treats the unbound ?x as SQL NULL and
+// equi-joins, Bob is dropped. Expected spareval: 4 rows
+// {(Ann,ann@x),(Zed,zed@x),(Bob,ann@x),(Bob,zed@x)}. Buggy sf: 2 rows.
+#[test]
+fn adr0025_tier1_opts_nullability_cross_anchor_rejoin() {
+    let q = format!(
+        "{PFX} SELECT ?name ?x WHERE {{ \
+           ?p ex:name ?name . \
+           OPTIONAL {{ ?p ex:email ?x }} \
+           ?q ex:email ?x . \
+         }}"
+    );
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    let tp = tree(&maps, &parsed, &schema).expect("tree translates");
+    assert_vs_spareval(P_TTL, &q, &tp, &conn);
+}
