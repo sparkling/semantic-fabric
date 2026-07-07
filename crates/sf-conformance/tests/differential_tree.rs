@@ -4111,3 +4111,23 @@ fn adr0025_tier1_opts_nullability_cross_anchor_rejoin() {
     let tp = tree(&maps, &parsed, &schema).expect("tree translates");
     assert_vs_spareval(P_TTL, &q, &tp, &conn);
 }
+
+// ADR-0025 Tier-1 (opts-nullability) — FLAT-path mirror of the tree repro above.
+// The flat `merge` (unfold.rs) had the identical plain-equality drop; same expected
+// 4 rows vs spareval. Asserts the flat plan directly (flat is the differential oracle).
+#[test]
+fn adr0025_tier1_opts_nullability_cross_anchor_rejoin_flat() {
+    let q = format!(
+        "{PFX} SELECT ?name ?x WHERE {{ \
+           ?p ex:name ?name . \
+           OPTIONAL {{ ?p ex:email ?x }} \
+           ?q ex:email ?x . \
+         }}"
+    );
+    let conn = sqlite::load(P_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(P_R2RML).expect("R2RML parses");
+    let parsed = parse(&q);
+    let fp = flat(&maps, &parsed, &schema).expect("flat translates");
+    assert_vs_spareval(P_TTL, &q, &fp, &conn);
+}

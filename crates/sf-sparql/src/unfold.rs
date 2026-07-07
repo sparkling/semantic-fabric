@@ -18,7 +18,7 @@ use crate::iq::{
     AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan,
     SqlCond, TermDef,
 };
-use crate::leftjoin::left_join_branches;
+use crate::leftjoin::{def_is_nullable, left_join_branches, null_safe};
 use crate::saturate::Tbox;
 use crate::unify::{filter_cond, unify, Unify};
 use crate::{Error, Result};
@@ -1256,13 +1256,37 @@ fn merge(mut left: Branch, right: &Branch) -> Result<Option<Branch>> {
                 .to_owned(),
         ));
     }
+    // ADR-0025 Tier-1 (opts-nullability), flat mirror of the tree `insert_or_unify` fix:
+    // a shared var whose LEFT def reads a nullable (prior-OPTIONAL) alias may be UNBOUND;
+    // plain equality then drops the row, but SPARQL compatible-merge (§18.5) keeps it and
+    // binds from the mandatory side. `nullable_aliases` here reflects `left`'s accumulated
+    // OPTIONAL scans (the bug shape: OPTIONAL on the left, mandatory re-join on the right).
+    let opt_aliases = left.nullable_aliases();
     for (var, rdef) in &right.bindings {
         match left.bindings.get(var) {
-            Some(ldef) => match unify(ldef, rdef) {
-                Unify::Sat(conds) => left.where_conds.extend(conds),
-                Unify::Empty => return Ok(None),
-                Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
-            },
+            Some(ldef) => {
+                let ldef = ldef.clone();
+                let nullable =
+                    def_is_nullable(&ldef, &opt_aliases) || def_is_nullable(rdef, &opt_aliases);
+                match unify(&ldef, rdef) {
+                    Unify::Sat(conds) => {
+                        if nullable && !conds.is_empty() {
+                            // R1 null-safe equality + R2 COALESCE (build_left_join's machinery).
+                            for c in conds {
+                                left.where_conds.push(null_safe(c, true));
+                            }
+                            left.bindings.insert(
+                                var.clone(),
+                                TermDef::Coalesce(Box::new(ldef), Box::new(rdef.clone())),
+                            );
+                        } else {
+                            left.where_conds.extend(conds);
+                        }
+                    }
+                    Unify::Empty => return Ok(None),
+                    Unify::Unsupported(why) => return Err(Error::Unsupported(why)),
+                }
+            }
             None => {
                 left.bindings.insert(var.clone(), rdef.clone());
             }
