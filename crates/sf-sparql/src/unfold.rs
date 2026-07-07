@@ -1261,27 +1261,54 @@ fn merge(mut left: Branch, right: &Branch) -> Result<Option<Branch>> {
     // plain equality then drops the row, but SPARQL compatible-merge (§18.5) keeps it and
     // binds from the mandatory side. `nullable_aliases` here reflects `left`'s accumulated
     // OPTIONAL scans (the bug shape: OPTIONAL on the left, mandatory re-join on the right).
-    let opt_aliases = left.nullable_aliases();
+    // Union BOTH branches' nullable aliases: the OPTIONAL-bearing group can be the RIGHT
+    // operand (its OPTIONAL scans live in `right`), so a set from `left` alone would miss it
+    // and silently fall through to plain equality — an order-dependent row drop (the tree
+    // path is immune because its fold has already merged both operands' opts into one
+    // accumulator by the time the shared-var equality runs).
+    let opt_aliases = &left.nullable_aliases() | &right.nullable_aliases();
     for (var, rdef) in &right.bindings {
         match left.bindings.get(var) {
             Some(ldef) => {
                 let ldef = ldef.clone();
-                let nullable =
-                    def_is_nullable(&ldef, &opt_aliases) || def_is_nullable(rdef, &opt_aliases);
+                let l_nullable = def_is_nullable(&ldef, &opt_aliases);
+                let r_nullable = def_is_nullable(rdef, &opt_aliases);
                 match unify(&ldef, rdef) {
                     Unify::Sat(conds) => {
-                        if nullable && !conds.is_empty() {
-                            // R1 null-safe equality + R2 COALESCE (build_left_join's machinery).
+                        if (l_nullable || r_nullable) && !conds.is_empty() {
+                            // BOTH sides nullable ⇒ non-injective COALESCE needed, which
+                            // SQL DISTINCT/dedup cannot collapse → sound 501 (mirror of the
+                            // tree `insert_or_unify` fix; ADR-0025 both-nullable residual).
+                            if l_nullable && r_nullable {
+                                return Err(Error::Unsupported(
+                                    "INNER JOIN correlating on a variable bound by TWO OPTIONALs \
+                                     (both sides nullable) is not yet supported → 501 (the \
+                                     compatible-merge value needs a non-injective COALESCE that \
+                                     SQL-level DISTINCT/dedup cannot collapse — ADR-0025)"
+                                        .to_owned(),
+                                ));
+                            }
+                            // R1 null-safe equality; R2 mandatory-side raw value (no COALESCE).
                             for c in conds {
                                 left.where_conds.push(null_safe(c, true));
                             }
-                            left.bindings.insert(
-                                var.clone(),
-                                TermDef::Coalesce(Box::new(ldef), Box::new(rdef.clone())),
-                            );
+                            let merged = if l_nullable { rdef.clone() } else { ldef };
+                            left.bindings.insert(var.clone(), merged);
                         } else {
                             left.where_conds.extend(conds);
                         }
+                    }
+                    // A nullable side that is provably disjoint on VALUES can still be UNBOUND
+                    // (compatible) — pruning the whole branch would lose those rows; the
+                    // plain-equality fold cannot express "keep only the unbound-compatible
+                    // rows" → sound 501, mirroring the tree path.
+                    Unify::Empty if l_nullable || r_nullable => {
+                        return Err(Error::Unsupported(
+                            "INNER JOIN correlating on an OPTIONAL-bound (nullable) variable \
+                             whose definitions are provably disjoint is not yet supported → \
+                             501 (compatible-merge must keep the unbound-compatible rows)"
+                                .to_owned(),
+                        ));
                     }
                     Unify::Empty => return Ok(None),
                     Unify::Unsupported(why) => return Err(Error::Unsupported(why)),

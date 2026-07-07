@@ -485,8 +485,9 @@ fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
             // (`IqNode::InnerJoin` folds the join's shared-var equality through the
             // `Construction` subst → here).
             let opt_aliases = b.nullable_aliases();
-            let nullable =
-                def_is_nullable(&existing, &opt_aliases) || def_is_nullable(&td, &opt_aliases);
+            let existing_nullable = def_is_nullable(&existing, &opt_aliases);
+            let td_nullable = def_is_nullable(&td, &opt_aliases);
+            let nullable = existing_nullable || td_nullable;
             // A nullable SubPlan derived-table alias (`subplan_joins` with `left == true`,
             // ADR-0023 Item 1d) is emitted differently and the R1/R2 machinery below is NOT
             // verified for a subplan alias — keep the established sound 501 for that shape
@@ -509,20 +510,33 @@ fn insert_or_unify(b: &mut Branch, v: &Var, td: TermDef) -> Result<bool> {
                         ));
                     }
                     if nullable {
-                        // ADR-0025 Tier-1 (opts-nullability): a plain-OPTIONAL nullable
-                        // shared var. R1 — `null_safe` equality (`NullSafeEq` =
-                        // `a=b OR a IS NULL OR b IS NULL`) so an unbound (NULL) side is
-                        // vacuously compatible and the row is KEPT; R2 — `COALESCE(existing,
-                        // incoming)` so the merged value comes from whichever side bound it.
-                        // Same machinery `build_left_join` / `left_join_over_subplan` use for
-                        // a nullable-left shared var — proven for plain-scan aliases.
+                        // ADR-0025 Tier-1 (opts-nullability): a nullable (OPTIONAL-bound)
+                        // shared var. BOTH sides nullable ⇒ the merged value genuinely
+                        // depends per-row on which side is bound, needing a non-injective
+                        // `COALESCE` that SQL-level DISTINCT/dedup cannot collapse (it dedups
+                        // raw columns before term reconstruction). Sound 501 (ADR-0007;
+                        // adversarial-review Bug B, both-nullable residual) rather than a wrong
+                        // answer under DISTINCT/GROUP. Exactly-one-nullable is the common,
+                        // safe case handled below.
+                        if existing_nullable && td_nullable {
+                            return Err(Error::Unsupported(
+                                "INNER JOIN correlating on a variable bound by TWO OPTIONALs \
+                                 (both sides nullable) is not yet supported → 501 (the \
+                                 compatible-merge value needs a non-injective COALESCE that \
+                                 SQL-level DISTINCT/dedup cannot collapse — ADR-0025)"
+                                    .to_owned(),
+                            ));
+                        }
+                        // R1 — `null_safe` equality (`NullSafeEq` = `a=b OR a IS NULL OR b IS
+                        // NULL`) so an unbound (NULL) side is vacuously compatible, row KEPT.
                         for c in conds {
                             b.where_conds.push(null_safe(c, true));
                         }
-                        b.bindings.insert(
-                            v.to_string(),
-                            TermDef::Coalesce(Box::new(existing), Box::new(td)),
-                        );
+                        // R2 — the row survives only where the two agree (R1), so the value
+                        // equals the MANDATORY (non-nullable) side's raw def; use it directly
+                        // — no COALESCE, so DISTINCT stays correct on the injective raw column.
+                        let merged = if existing_nullable { td } else { existing };
+                        b.bindings.insert(v.to_string(), merged);
                     } else {
                         b.where_conds.extend(conds);
                     }
