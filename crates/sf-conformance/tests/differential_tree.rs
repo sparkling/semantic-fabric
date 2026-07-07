@@ -4674,3 +4674,39 @@ fn adr0025_tier2_gap4_count_distinct_over_path() {
         ),
     );
 }
+
+// ADR-0025 C.4: AVG over a group whose operand var is UNBOUND in every row (rows>0) must be
+// UNBOUND, not 0. A genuinely EMPTY group (0 rows) stays 0. (SUM stays 0 in both cases;
+// MIN/MAX already return unbound uniformly.) Found by the gap-5 adversarial review.
+#[test] // tree-only: aggregate-over-UNION is a documented flat 501.
+fn adr0025_c4_avg_unbound_operand_is_unbound() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!("{PFX} SELECT (AVG(?missing) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:email ?e }} }}");
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+#[test] // control (rust_group path, the one my fix touches): AVG over a genuinely EMPTY group
+        // — a UNION whose arms match nothing, 0 rows — stays "0"^^xsd:integer. Confirms the
+        // fix's `rows.is_empty()` branch. Tree-only (aggregate-over-UNION is a flat 501).
+fn adr0025_c4_avg_empty_group_stays_zero() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT (AVG(?x) AS ?c) WHERE {{ {{ ?p ex:none1 ?x }} UNION {{ ?p ex:none2 ?x }} }}"
+    );
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
