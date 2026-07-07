@@ -139,6 +139,23 @@ pub fn emit_branch_with(
     if let Some(agg) = &b.agg {
         return emit_agg_branch(b, agg, dialect, &actuals);
     }
+    // ADR-0025 (C.3): SQL `DISTINCT` dedups RAW columns, so it implements SPARQL DISTINCT
+    // (dedup on the RECONSTRUCTED term) only when every projected term is INJECTIVE in its
+    // raw columns. A non-injective template (distinct raw tuples → the same RDF term, e.g.
+    // `http://ex/{a}{b}` over `(1,23)`/`(12,3)`) would survive SQL DISTINCT as duplicates
+    // SPARQL must collapse — a silent wrong answer. Sound 501. Injective templates pass.
+    if b.distinct {
+        for def in b.bindings.values() {
+            if !crate::cascade::binding_is_injective(def) {
+                return Err(Error::Unsupported(
+                    "SELECT DISTINCT over a non-injective term (a multi-column template that \
+                     maps distinct raw tuples to the same RDF term) cannot be pushed to SQL \
+                     DISTINCT soundly → 501 (ADR-0025 C.3)"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
     let projection = b.projection();
     let mut params = Vec::new();
     let mut pidx = 0usize;

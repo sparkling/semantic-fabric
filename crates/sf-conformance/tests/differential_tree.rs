@@ -4503,3 +4503,33 @@ fn adr0025_tier2_gap2_multibranch_distinct_noninjective_sound_501() {
         "multi-branch DISTINCT over a non-injective template must sound-501 (not pool)"
     );
 }
+
+// ADR-0025 C.3: SELECT DISTINCT over a NON-INJECTIVE IRI template must sound-501 (the query
+// translates, but emission refuses: SQL DISTINCT dedups raw cols, which would NOT match
+// SPARQL DISTINCT on the reconstructed term). Pre-existing bug found by the gap-2 refuter.
+const C3_SQL: &str = "CREATE TABLE pair (a TEXT NOT NULL, b TEXT NOT NULL, val TEXT NOT NULL);\nINSERT INTO pair VALUES ('1','23','X');\nINSERT INTO pair VALUES ('12','3','Y');";
+const C3_R2RML: &str = "@prefix rr: <http://www.w3.org/ns/r2rml#> .\n@prefix ex: <http://ex/> .\n<#P> rr:logicalTable [ rr:tableName \"pair\" ] ; rr:subjectMap [ rr:template \"http://ex/{a}{b}\" ] ; rr:predicateObjectMap [ rr:predicate ex:val ; rr:objectMap [ rr:column \"val\" ] ] .";
+#[test]
+fn adr0025_c3_distinct_over_noninjective_template_sound_501() {
+    let conn = sqlite::load(C3_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C3_R2RML).unwrap();
+    let q = format!("{PFX} SELECT DISTINCT ?s WHERE {{ ?s ex:val ?v }}");
+    let parsed = parse(&q);
+    // Both paths: translation succeeds, EMISSION soundly 501s (no silent duplicate rows).
+    let tp = tree(&maps, &parsed, &schema).expect("translates");
+    assert!(
+        tp.emitted().is_err(),
+        "non-injective DISTINCT must sound-501 at emit (tree)"
+    );
+    let fp = flat(&maps, &parsed, &schema).expect("translates");
+    assert!(
+        fp.emitted().is_err(),
+        "non-injective DISTINCT must sound-501 at emit (flat)"
+    );
+}
+#[test] // control: an INJECTIVE template DISTINCT (fixture P's http://ex/person/{id}) still works.
+fn adr0025_c3_distinct_over_injective_template_ok() {
+    let q = format!("{PFX} SELECT DISTINCT ?p WHERE {{ ?p ex:name ?n }}");
+    diff_p(&q);
+}
