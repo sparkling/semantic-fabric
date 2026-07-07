@@ -930,7 +930,11 @@ fn rust_group_plan(
         });
     }
     Ok(TransPattern {
-        rust_group: Some(RustGroup { keys, aggs }),
+        rust_group: Some(RustGroup {
+            keys,
+            aggs,
+            post_exprs: Vec::new(),
+        }),
         ..t
     })
 }

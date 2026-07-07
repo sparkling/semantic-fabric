@@ -1058,6 +1058,15 @@ pub(crate) fn rust_group_result_rows(
                 result.insert(agg_spec.out_var.clone(), t);
             }
         }
+        // ADR-0025 Tier-2 gap 5: post-GROUP-BY expressions over the aggregate outputs
+        // (e.g. `COUNT(?x) * 2`). Evaluate each over the row's now-materialised aggregate +
+        // group-key bindings via the shared `eval_expr`; an unbound reference yields no
+        // binding (SPARQL: the value is unbound), never a wrong answer.
+        for (out_var, expr) in &rg.post_exprs {
+            if let Some(t) = eval_expr(expr, &result) {
+                result.insert(out_var.clone(), t);
+            }
+        }
         result_rows.push(result);
     }
 
