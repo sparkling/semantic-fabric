@@ -1097,6 +1097,22 @@ fn lower_as_subplan(
     // positions, and `UNION ALL` keeps every row regardless.) ADR-0025 Tier-2 gap 2.
     if nested_plan.branches.len() >= 2 && nested_plan.distinct {
         let keep: std::collections::HashSet<String> = vars.iter().map(|v| v.to_string()).collect();
+        // Gate (gap-2 adversarial review): the pooled `UNION` dedups RAW columns, so it
+        // equals SPARQL DISTINCT (reconstructed-term dedup) ONLY when every projected term is
+        // INJECTIVE. A non-injective template (distinct raw tuples → the same RDF term) would
+        // pool into a wrong-answer dedup — keep the sound 501 (the pre-gap-2 behavior for a
+        // multi-branch SubPlan) for that case rather than regress it to a silent wrong answer.
+        for b in &nested_plan.branches {
+            for (k, def) in &b.bindings {
+                if keep.contains(k) && !crate::cascade::binding_is_injective(def) {
+                    return Err(Error::Unsupported(
+                        "SubPlan: multi-branch DISTINCT over a non-injective projected term \
+                         (raw-column UNION dedup would not match SPARQL DISTINCT) → 501 (ADR-0025)"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
         for b in &mut nested_plan.branches {
             b.bindings.retain(|k, _| keep.contains(k));
             // Mark the arm DISTINCT so `Branch::projection()` excludes WHERE/JOIN-ON columns
