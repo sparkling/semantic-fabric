@@ -1156,7 +1156,7 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             if vals.iter().all(|t| is_xsd_integer(t)) {
                 Ok(Some(integer_term(sum as i64)))
             } else {
-                Ok(Some(decimal_term(sum)))
+                Ok(Some(decimal_term(sum)?))
             }
         }
         AggKind::Avg => {
@@ -1187,7 +1187,7 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
             }
             let avg = nums.iter().sum::<f64>() / nums.len() as f64;
-            Ok(Some(decimal_term(avg)))
+            Ok(Some(decimal_term(avg)?))
         }
         AggKind::Min | AggKind::Max => {
             let Some(var) = &agg.arg_var else {
@@ -1237,17 +1237,19 @@ fn integer_term(n: i64) -> Term {
 }
 
 /// Build an `xsd:decimal` literal from an `f64`.
-fn decimal_term(n: f64) -> Term {
-    // Use a compact decimal representation (avoid scientific notation).
-    let s = if n.fract() == 0.0 {
+fn decimal_term(n: f64) -> Result<Term> {
+    // Compact (non-scientific) representation, then run it through the shared XSD-decimal
+    // canonicaliser (`oxsdatatypes::Decimal`, the SAME library the oxigraph oracle uses) so
+    // the lexical form is canonical and oracle-matching: an integral value renders "30", not
+    // "30.0" (RDF term equality is by lexical form, so "30.0"^^decimal ≠ "30"^^decimal would
+    // be a =_bag divergence), and trailing zeros trim ("1.50" → "1.5"). Consistent with the
+    // SUM / `natural_literal` reconstruction path.
+    let raw = if n.fract() == 0.0 {
         format!("{n:.1}")
     } else {
         format!("{n}")
     };
-    Term::Literal(Literal::new_typed_literal(
-        s,
-        sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
-    ))
+    natural_literal(&raw, XsdTypeCode::Decimal)
 }
 
 // --- M2 Send-future / GAT monomorphization gate (design §1 line 103, §5 M2) ----
