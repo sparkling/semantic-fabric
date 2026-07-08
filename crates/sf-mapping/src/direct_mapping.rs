@@ -190,3 +190,328 @@ fn encode(name: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sf_core::ir::TermType;
+    use sf_core::term::generate_into;
+    use sf_sql::{Column, ForeignKey};
+
+    const BASE: &str = "http://example.com/base/";
+
+    fn single_pk_table() -> TableSchema {
+        let mut t = TableSchema::new("employees");
+        t.columns = vec![
+            Column::new("id", "integer", true),
+            Column::new("name", "text", false),
+        ];
+        t.primary_key = vec!["id".to_owned()];
+        t
+    }
+
+    // --- subject map: single-column primary key -----------------------------
+
+    #[test]
+    fn single_pk_table_produces_iri_template_subject() {
+        let t = single_pk_table();
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+
+        assert_eq!(tm.id, "http://example.com/base/employees");
+        match &tm.subject.term {
+            TermMap::Template(template, spec) => {
+                assert_eq!(spec.term_type, TermType::Iri);
+                assert_eq!(
+                    template.segments(),
+                    &[
+                        Segment::Literal("http://example.com/base/employees/".into()),
+                        Segment::Literal("id=".into()),
+                        Segment::Column("id".into()),
+                    ]
+                );
+            }
+            other => panic!("expected a Template subject term, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_pk_table_attaches_table_class() {
+        let t = single_pk_table();
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+
+        assert_eq!(tm.subject.classes.len(), 1);
+        assert_eq!(
+            tm.subject.classes[0].as_str(),
+            "http://example.com/base/employees"
+        );
+    }
+
+    #[test]
+    fn single_pk_table_produces_one_pom_per_column() {
+        let t = single_pk_table();
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+
+        // Two columns (id, name), no FKs ⇒ exactly two predicate-object maps.
+        assert_eq!(tm.predicate_object_maps.len(), 2);
+
+        let name_pom = &tm.predicate_object_maps[1];
+        match &name_pom.predicates[0] {
+            TermMap::Constant(Term::NamedNode(n)) => {
+                assert_eq!(n.as_str(), "http://example.com/base/employees#name");
+            }
+            other => panic!("expected a constant IRI predicate, got {other:?}"),
+        }
+        match &name_pom.objects[0] {
+            ObjectMap::Term(TermMap::Column(col, spec)) => {
+                assert_eq!(&**col, "name");
+                assert_eq!(spec.term_type, TermType::Literal);
+                assert!(spec.datatype.is_none());
+                assert!(spec.language.is_none());
+            }
+            other => panic!("expected a Column literal object, got {other:?}"),
+        }
+    }
+
+    // --- subject map: composite primary key ----------------------------------
+
+    #[test]
+    fn composite_pk_table_joins_segments_with_semicolon() {
+        let mut t = TableSchema::new("order_items");
+        t.columns = vec![
+            Column::new("order_id", "integer", true),
+            Column::new("line_no", "integer", true),
+        ];
+        t.primary_key = vec!["order_id".to_owned(), "line_no".to_owned()];
+
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        match &tm.subject.term {
+            TermMap::Template(template, _) => {
+                assert_eq!(
+                    template.segments(),
+                    &[
+                        Segment::Literal("http://example.com/base/order_items/".into()),
+                        Segment::Literal("order_id=".into()),
+                        Segment::Column("order_id".into()),
+                        Segment::Literal(";line_no=".into()),
+                        Segment::Column("line_no".into()),
+                    ]
+                );
+            }
+            other => panic!("expected a Template subject term, got {other:?}"),
+        }
+    }
+
+    // --- subject map: no primary key ⇒ blank node -----------------------------
+
+    #[test]
+    fn no_pk_table_uses_a_rowid_keyed_blank_node() {
+        let mut t = TableSchema::new("log");
+        t.columns = vec![Column::new("message", "text", false)];
+        // primary_key left empty.
+
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        match &tm.subject.term {
+            TermMap::Template(template, spec) => {
+                assert_eq!(spec.term_type, TermType::BlankNode);
+                assert_eq!(
+                    template.segments(),
+                    &[
+                        Segment::Literal("log_".into()),
+                        Segment::Column("rowid".into()),
+                    ]
+                );
+            }
+            other => panic!("expected a Template blank-node subject term, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_pk_table_still_gets_the_table_class() {
+        let mut t = TableSchema::new("log");
+        t.columns = vec![Column::new("message", "text", false)];
+
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        assert_eq!(
+            tm.subject.classes[0].as_str(),
+            "http://example.com/base/log"
+        );
+    }
+
+    // --- foreign keys ----------------------------------------------------------
+
+    #[test]
+    fn single_column_fk_generates_referencing_object_map() {
+        let mut t = single_pk_table();
+        t.foreign_keys = vec![ForeignKey {
+            columns: vec!["dept_id".to_owned()],
+            parent_table: "departments".to_owned(),
+            parent_columns: vec!["id".to_owned()],
+        }];
+
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        // 2 column POMs (id, name) + 1 FK POM.
+        assert_eq!(tm.predicate_object_maps.len(), 3);
+
+        let fk_pom = &tm.predicate_object_maps[2];
+        match &fk_pom.predicates[0] {
+            TermMap::Constant(Term::NamedNode(n)) => {
+                assert_eq!(n.as_str(), "http://example.com/base/employees#ref-dept_id");
+            }
+            other => panic!("expected a constant IRI predicate, got {other:?}"),
+        }
+        match &fk_pom.objects[0] {
+            ObjectMap::Ref(rom) => {
+                assert_eq!(
+                    rom.parent_triples_map,
+                    "http://example.com/base/departments"
+                );
+                assert_eq!(rom.joins.len(), 1);
+                assert_eq!(rom.joins[0].child, "dept_id");
+                assert_eq!(rom.joins[0].parent, "id");
+            }
+            other => panic!("expected a referencing object map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn composite_fk_joins_column_names_with_semicolon_in_predicate() {
+        let mut t = single_pk_table();
+        t.foreign_keys = vec![ForeignKey {
+            columns: vec!["a".to_owned(), "b".to_owned()],
+            parent_table: "parent".to_owned(),
+            parent_columns: vec!["pa".to_owned(), "pb".to_owned()],
+        }];
+
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        let fk_pom = tm.predicate_object_maps.last().expect("fk pom present");
+        match &fk_pom.predicates[0] {
+            TermMap::Constant(Term::NamedNode(n)) => {
+                assert_eq!(n.as_str(), "http://example.com/base/employees#ref-a;b");
+            }
+            other => panic!("expected a constant IRI predicate, got {other:?}"),
+        }
+        match &fk_pom.objects[0] {
+            ObjectMap::Ref(rom) => {
+                assert_eq!(rom.joins[0].child, "a");
+                assert_eq!(rom.joins[0].parent, "pa");
+                assert_eq!(rom.joins[1].child, "b");
+                assert_eq!(rom.joins[1].parent, "pb");
+            }
+            other => panic!("expected a referencing object map, got {other:?}"),
+        }
+    }
+
+    // --- NULL column handling ---------------------------------------------------
+    //
+    // direct_mapping.rs itself carries no NULL-specific logic: it emits a plain
+    // `TermMap::Column` object map per column, and NULL-omission (W3C DM §2 / R2RML
+    // §11: no column value ⇒ no triple) is enforced once, generically, by
+    // `sf_core::term::generate_into` for *every* `rr:column` object map — Direct
+    // Mapping gets it "for free" rather than re-implementing it. These tests pin
+    // that the object map this module builds actually drives that shared path
+    // correctly in both directions (see final report note).
+
+    #[test]
+    fn null_column_value_yields_no_term_via_the_generated_object_map() {
+        let t = single_pk_table();
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        let name_pom = &tm.predicate_object_maps[1]; // the `name` column POM
+        let ObjectMap::Term(term_map) = &name_pom.objects[0] else {
+            panic!("expected a Term object map");
+        };
+
+        let row: &[(&str, Option<&str>)] = &[("id", Some("1")), ("name", None)];
+        let mut buf = String::new();
+        let generated = generate_into(term_map, row, &mut buf).expect("generation succeeds");
+        assert!(generated.is_none(), "NULL column must yield no term/triple");
+    }
+
+    #[test]
+    fn non_null_column_value_yields_a_literal_via_the_generated_object_map() {
+        let t = single_pk_table();
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        let name_pom = &tm.predicate_object_maps[1];
+        let ObjectMap::Term(term_map) = &name_pom.objects[0] else {
+            panic!("expected a Term object map");
+        };
+
+        let row: &[(&str, Option<&str>)] = &[("id", Some("1")), ("name", Some("Ada"))];
+        let mut buf = String::new();
+        let generated = generate_into(term_map, row, &mut buf).expect("generation succeeds");
+        match generated {
+            Some(sf_core::term::GenTerm::Literal(lit)) => assert_eq!(lit.value(), "Ada"),
+            other => panic!("expected a literal term, got {other:?}"),
+        }
+    }
+
+    // --- direct_mapping(): multi-table driver -----------------------------------
+
+    #[test]
+    fn direct_mapping_produces_one_triples_map_per_table() {
+        let tables = vec![single_pk_table(), TableSchema::new("log")];
+        let maps = direct_mapping(&tables, BASE).expect("direct_mapping succeeds");
+        assert_eq!(maps.len(), 2);
+        assert_eq!(maps[0].id, "http://example.com/base/employees");
+        assert_eq!(maps[1].id, "http://example.com/base/log");
+    }
+
+    #[test]
+    fn invalid_base_iri_surfaces_as_a_mapping_error() {
+        let t = single_pk_table();
+        // A space is not valid in an IRI, and `base` is used verbatim (only table/
+        // column *names* are percent-encoded), so this must fail NamedNode parsing.
+        let err = table_map(&t, "not a valid base ").unwrap_err();
+        match err {
+            sf_core::Error::Mapping(msg) => {
+                assert!(
+                    msg.contains("invalid DM class IRI"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected a Mapping error, got {other:?}"),
+        }
+    }
+
+    // --- name encoding (fixed IRI parts: table/column names, not row values) ---
+
+    #[test]
+    fn encode_passes_unreserved_ascii_through_untouched() {
+        assert_eq!(encode("Table-Name_1.2~3"), "Table-Name_1.2~3");
+    }
+
+    #[test]
+    fn encode_percent_encodes_ascii_specials_with_uppercase_hex() {
+        assert_eq!(encode("a b"), "a%20b");
+        assert_eq!(encode("a#b"), "a%23b");
+        assert_eq!(encode("a/b"), "a%2Fb");
+    }
+
+    #[test]
+    fn encode_passes_non_ascii_through_verbatim() {
+        // W3C DM uses RFC 3987 IRI encoding: ucschar (e.g. CJK) is not %-escaped,
+        // unlike a strict RFC 3986 URI encoder.
+        assert_eq!(encode("café"), "café");
+        assert_eq!(encode("表"), "表");
+    }
+
+    #[test]
+    fn fk_predicate_name_encodes_special_characters_in_column_names() {
+        let mut t = single_pk_table();
+        t.foreign_keys = vec![ForeignKey {
+            columns: vec!["dept id".to_owned()],
+            parent_table: "departments".to_owned(),
+            parent_columns: vec!["id".to_owned()],
+        }];
+        let tm = table_map(&t, BASE).expect("table_map succeeds");
+        let fk_pom = tm.predicate_object_maps.last().expect("fk pom present");
+        match &fk_pom.predicates[0] {
+            TermMap::Constant(Term::NamedNode(n)) => {
+                assert_eq!(
+                    n.as_str(),
+                    "http://example.com/base/employees#ref-dept%20id"
+                );
+            }
+            other => panic!("expected a constant IRI predicate, got {other:?}"),
+        }
+    }
+}
