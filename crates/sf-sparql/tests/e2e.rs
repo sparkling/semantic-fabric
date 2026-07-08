@@ -1204,10 +1204,14 @@ fn sum_over_empty_group_is_zero_integer() {
 }
 
 #[test]
-fn sum_over_all_null_optional_is_zero_integer() {
-    // SPARQL §11: an OPTIONAL column unbound in every solution leaves SUM an empty
-    // multiset of bound values ⇒ "0"^^xsd:integer (NOT unbound). Linus is matched
-    // but has no salary, so ?sal is unbound in his (only) solution.
+fn sum_over_all_null_optional_is_unbound() {
+    // ADR-0025 C.6 (corrected): an OPTIONAL operand unbound in every solution of a
+    // NON-empty group makes SUM UNBOUND, NOT "0" — SPARQL §11 error propagation, verified
+    // against the spareval oracle (`differential_tree`'s `adr0025_c6_*`). This is DISTINCT
+    // from `sum_over_empty_group_is_zero_integer` above: there the FILTER empties the group
+    // (0 rows) ⇒ SUM(∅)=0; here Linus IS matched (1 row) but has no salary ⇒ the operand is
+    // unbound over a non-empty group ⇒ UNBOUND. The old assertion ("...is 0") encoded the
+    // pre-C.6 bug (SQL SUM(all-NULL) reconstructing to 0); the oracle says unbound.
     let maps = agg_typed_mapping();
     let conn = agg_typed_source();
     let q = format!(
@@ -1216,13 +1220,13 @@ fn sum_over_all_null_optional_is_zero_integer() {
     );
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
     let sol = exec::select(&plan, &conn).unwrap();
-    assert_eq!(sol.rows.len(), 1);
-    assert_eq!(
-        lit(&sol.rows[0][0]),
-        "0",
-        "SUM over an all-NULL optional is 0"
+    assert_eq!(sol.rows.len(), 1, "implicit grouping yields exactly one row");
+    assert!(
+        sol.rows[0][0].is_none(),
+        "SUM over an all-unbound operand in a non-empty group is UNBOUND (SPARQL §11), \
+         got {:?}",
+        sol.rows[0][0]
     );
-    assert_eq!(dt(&sol.rows[0][0]), XSD_INTEGER);
 }
 
 #[test]

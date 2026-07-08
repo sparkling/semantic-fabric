@@ -4978,3 +4978,49 @@ fn adr0025_tier3_slice_distinct_union_folds_bag_correct() {
         &conn,
     );
 }
+
+// ADR-0025 C.6: SQL-pushdown aggregates over a NULLABLE (OPTIONAL) operand diverged from
+// SPARQL §11 — SQL SUM(all-NULL) reconstructed to "0" (should be UNBOUND under GROUP BY,
+// where a group is never empty), and SQL silently skipped NULLs in a MIXED group where
+// SPARQL propagates the error to the whole aggregate. Fixed by routing a nullable-operand
+// SUM/AVG/MIN/MAX to the rust_group path (ADR-0025 C.5-correct). Also fixed rust_agg's
+// decimal canonicalisation (AVG 30.0 → "30", oxsdatatypes, matching the oracle).
+const C6_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE score (sid INTEGER PRIMARY KEY, pid INTEGER, pts INTEGER);
+INSERT INTO person VALUES (1,'Ann'),(2,'Bob'),(3,'Zed');
+INSERT INTO score VALUES (1,1,10),(2,1,5),(3,3,30);
+"#;
+const C6_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#P> rr:logicalTable [ rr:tableName "person" ] ; rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+<#S> rr:logicalTable [ rr:tableName "score" ] ; rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:pts ; rr:objectMap [ rr:column "pts" ] ] .
+"#;
+const C6_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/p/1> ex:name "Ann" ; ex:pts 10 ; ex:pts 5 .
+<http://ex/p/2> ex:name "Bob" .
+<http://ex/p/3> ex:name "Zed" ; ex:pts 30 .
+"#;
+#[test] // Bob has a name but no pts (OPTIONAL unbound) ⇒ his SUM/AVG/MIN/MAX must be UNBOUND,
+        // not 0/skipped. Ann (10,5) and Zed (30) compute. Also pins AVG(30)="30" canonical.
+fn adr0025_c6_grouped_aggregate_over_optional_numeric() {
+    let conn = sqlite::load(C6_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C6_R2RML).unwrap();
+    for agg in ["SUM", "AVG", "MIN", "MAX", "COUNT"] {
+        let q = format!(
+            "{PFX} SELECT ?p ({agg}(?v) AS ?s) WHERE {{ ?p ex:name ?nm OPTIONAL {{ ?p ex:pts ?v }} }} GROUP BY ?p"
+        );
+        let parsed = parse(&q);
+        assert_vs_spareval(
+            C6_TTL,
+            &q,
+            &tree(&maps, &parsed, &schema).expect("tree"),
+            &conn,
+        );
+    }
+}

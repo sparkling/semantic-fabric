@@ -1423,6 +1423,29 @@ fn lower_aggregation(
         out
     });
 
+    // ADR-0025 C.6: SQL's NULL-skipping aggregate semantics DIVERGE from SPARQL §11 when a
+    // SUM/AVG/MIN/MAX operand can be UNBOUND (nullable — read from an OPTIONAL scan or a
+    // LEFT-joined SubPlan). SQL `SUM(all-NULL)` reconstructs to `"0"` (wrong: a GROUP-BY group
+    // is never empty, so an all-NULL operand means "non-empty, all-unbound" ⇒ UNBOUND), and in
+    // a MIXED group SQL silently skips the NULL rows while SPARQL propagates the error to the
+    // WHOLE aggregate. Route any such aggregation to the Rust group path, whose `rust_agg`
+    // (ADR-0025 C.5) discriminates empty / all-unbound / mixed correctly. COUNT is EXEMPT: SQL
+    // `COUNT(col)` skips NULLs = SPARQL COUNT filters unbound operands (they already agree).
+    if !spine.force_rust_group {
+        let nullable_operand = aggs.iter().any(|d| {
+            d.kind != crate::iq::AggKind::Count
+                && matches!(&d.arg, Some(AggArg::Var(v)) if inner.iter().any(|b| {
+                    let opt = b.nullable_aliases();
+                    b.bindings
+                        .get(v.as_ref())
+                        .is_some_and(|def| def_reads_opt_alias(def, &opt))
+                }))
+        });
+        if nullable_operand {
+            spine.force_rust_group = true;
+        }
+    }
+
     // COUNT(DISTINCT *) counts DISTINCT WHOLE solutions — route it to the Rust group path
     // even for a single-branch inner (SQL COUNT(DISTINCT *) is non-portable; the dedup lives
     // in `rust_agg`). ADR-0025 Tier-2 gap 3.
