@@ -5146,3 +5146,16 @@ fn adr0025_c8_sum_avg_distinct_dedups_before_aggregating() {
         );
     }
 }
+
+// Round-2 coverage: end-to-end proof that the LJ->IJ FK-guaranteed downgrade
+// (cascade::joinelim::lj_to_ij_fk_downgrade) produces a =_bag-correct result when
+// composed with the rest of the optimizer pipeline and real SQL execution --
+// unit tests in cascade::tests exercise the IR transformation in isolation; this
+// proves it end-to-end. person.dept_id is a NOT NULL FK to dept.id (PK), so
+// `OPTIONAL { ?p ex:dept ?d }` is eligible for the downgrade.
+#[test]
+fn cascade_lj_to_ij_downgrade_end_to_end_matches_oracle() {
+    diff_p(&format!(
+        "{PFX} SELECT ?p ?n ?d WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d }} }}"
+    ));
+}
