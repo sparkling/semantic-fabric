@@ -5024,3 +5024,61 @@ fn adr0025_c6_grouped_aggregate_over_optional_numeric() {
         );
     }
 }
+
+// ADR-0025 C.6b: rust_agg SUM/AVG must PRESERVE the xsd:double operand type (SPARQL §11.4
+// numeric promotion). C.6's nullable-operand gate routes a double-operand aggregate to
+// rust_group, which previously always emitted decimal_term — a datatype =_bag regression
+// (xsd:decimal, not xsd:double). Self-asserting (NOT assert_vs_spareval): a computed
+// xsd:double's lexical form is DELIBERATELY R2RML-§10 canonical E-notation (ADR-0015), which
+// oxigraph's non-canonical f64 Display ("7.5" vs "7.5E0") does not match — a known,
+// charter-mandated representation difference, not a bug. So assert sf's own datatype + value.
+const C6DBL_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE score (sid INTEGER PRIMARY KEY, pid INTEGER, pts REAL);
+INSERT INTO person VALUES (1,'Ann'),(2,'Bob'),(3,'Zed');
+INSERT INTO score VALUES (1,1,10.0),(2,1,5.0),(3,3,30.0);
+"#;
+const C6DBL_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://ex/> .
+<#P> rr:logicalTable [ rr:tableName "person" ] ; rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+<#S> rr:logicalTable [ rr:tableName "score" ] ; rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:pts ; rr:objectMap [ rr:column "pts" ; rr:datatype xsd:double ] ] .
+"#;
+#[test]
+fn adr0025_c6b_double_operand_aggregate_stays_xsd_double() {
+    let conn = sqlite::load(C6DBL_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C6DBL_R2RML).unwrap();
+    const DBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+    for agg in ["SUM", "AVG"] {
+        // Bob has no pts (OPTIONAL unbound) ⇒ his group forces the C.6 rust_group route.
+        let q = format!(
+            "{PFX} SELECT ?p ({agg}(?v) AS ?s) WHERE {{ ?p ex:name ?nm OPTIONAL {{ ?p ex:pts ?v }} }} GROUP BY ?p"
+        );
+        let parsed = parse(&q);
+        let tp = tree(&maps, &parsed, &schema).expect("tree");
+        let bag = oracle::engine_bag(&exec::select(&tp, &conn).expect("exec"));
+        for row in &bag {
+            let p = row.get("p").expect("?p bound");
+            let is_bob = matches!(p, sf_core::Term::NamedNode(n) if n.as_str().ends_with("/p/2"));
+            match row.get("s") {
+                None => assert!(
+                    is_bob,
+                    "{agg}: only Bob (unbound operand) is unbound, got unbound for {p:?}"
+                ),
+                Some(sf_core::Term::Literal(l)) => {
+                    assert!(!is_bob, "{agg}: Bob's group must be UNBOUND, got {l:?}");
+                    assert_eq!(
+                        l.datatype().as_str(),
+                        DBL,
+                        "{agg}: double operand ⇒ xsd:double result (not decimal)"
+                    );
+                }
+                other => panic!("{agg}: unexpected {other:?}"),
+            }
+        }
+    }
+}

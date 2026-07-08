@@ -1153,7 +1153,13 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 return Ok(None); // non-numeric operand ⇒ UNBOUND (type error)
             }
             let sum: f64 = nums.iter().sum();
-            if vals.iter().all(|t| is_xsd_integer(t)) {
+            // SPARQL §11.4 / XPath numeric type promotion: any xsd:double operand ⇒ double
+            // result; else all-integer ⇒ integer; else decimal. (C.6b: rust_agg previously
+            // always emitted integer-or-decimal, losing xsd:double — a datatype =_bag
+            // divergence exposed once C.6 routed nullable double-operand SUMs here.)
+            if vals.iter().any(|t| is_xsd_double(t)) {
+                Ok(Some(double_term(sum)?))
+            } else if vals.iter().all(|t| is_xsd_integer(t)) {
                 Ok(Some(integer_term(sum as i64)))
             } else {
                 Ok(Some(decimal_term(sum)?))
@@ -1187,7 +1193,13 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
             }
             let avg = nums.iter().sum::<f64>() / nums.len() as f64;
-            Ok(Some(decimal_term(avg)?))
+            // SPARQL §11.4: AVG of xsd:double values stays xsd:double (else decimal). See the
+            // SUM promotion note above (C.6b) — mirrors the SQL path's `avg_result_code`.
+            if vals.iter().any(|t| is_xsd_double(t)) {
+                Ok(Some(double_term(avg)?))
+            } else {
+                Ok(Some(decimal_term(avg)?))
+            }
         }
         AggKind::Min | AggKind::Max => {
             let Some(var) = &agg.arg_var else {
@@ -1226,6 +1238,25 @@ fn is_xsd_integer(t: &Term) -> bool {
         Term::Literal(l) => l.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#integer",
         _ => false,
     }
+}
+
+/// Whether an RDF term is an `xsd:double` (or `xsd:float`, which this codebase folds into
+/// double) literal — the promotion signal for SUM/AVG result typing (SPARQL §11.4 / XPath
+/// numeric type promotion: any `double` operand makes the aggregate result `double`).
+fn is_xsd_double(t: &Term) -> bool {
+    match t {
+        Term::Literal(l) => matches!(
+            l.datatype().as_str(),
+            "http://www.w3.org/2001/XMLSchema#double" | "http://www.w3.org/2001/XMLSchema#float"
+        ),
+        _ => false,
+    }
+}
+
+/// Build a canonical `xsd:double` literal from an `f64` (via the shared canonicaliser — the
+/// oracle's `oxsdatatypes` library — so the lexical form matches, e.g. `1.0E1`).
+fn double_term(n: f64) -> Result<Term> {
+    natural_literal(&format!("{n}"), XsdTypeCode::Double)
 }
 
 /// Build an `xsd:integer` literal from an `i64`.
