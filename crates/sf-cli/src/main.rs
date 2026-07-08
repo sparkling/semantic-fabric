@@ -180,3 +180,63 @@ fn conformance() -> ExitCode {
         ExitCode::FAILURE
     }
 }
+
+/// `sf-cli` had zero tests at any level. `serve`/`bench`/`conformance` mostly
+/// dispatch into other crates (`sf-serve`/`sf-bench`/`sf-conformance`), which own
+/// their own coverage — re-testing their internals here would duplicate, not add,
+/// coverage. What genuinely belongs at THIS layer: `suite_root()`'s own
+/// path-building logic, and that the dispatch functions surface a clean non-zero
+/// exit (never panic) on bad input, since that's this crate's own responsibility
+/// as the process entry point.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suite_root_points_at_the_vendored_w3c_suite_relative_to_the_crate() {
+        let root = suite_root();
+        // Fixed relative to CARGO_MANIFEST_DIR (compile-time constant for this
+        // crate), so the exact path is deterministic across machines/CI.
+        assert!(
+            root.ends_with("tests/w3c/rdb2rdf"),
+            "expected the path to end in tests/w3c/rdb2rdf, got {root:?}"
+        );
+        assert!(
+            root.is_absolute(),
+            "CARGO_MANIFEST_DIR-based path should be absolute, got {root:?}"
+        );
+    }
+
+    #[test]
+    fn suite_root_cases_dir_and_earl_report_paths_exist_under_the_workspace() {
+        // suite_root() itself doesn't touch the filesystem, but conformance()
+        // immediately joins "cases" and two EARL filenames onto it — confirm the
+        // real checked-in suite directory is where suite_root() says it is (a
+        // silent path-mismatch here would make every conformance() call fail
+        // with a confusing "could not read dir" rather than a clear message).
+        let root = suite_root();
+        assert!(
+            root.join("cases").is_dir(),
+            "expected {:?} to exist (the vendored W3C RDB2RDF cases)",
+            root.join("cases")
+        );
+    }
+
+    #[test]
+    fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
+        // The one cheap, crate-local integration check on serve(): a mapping path
+        // that doesn't exist must surface as a clean ExitCode::FAILURE (via
+        // serve_blocking's Result -> the eprintln!+FAILURE arm), never a panic —
+        // that's this crate's own responsibility as the process entry point,
+        // regardless of how sf-serve itself is implemented/tested.
+        let opts = ServeArgs {
+            source: "sqlite::memory:".to_owned(),
+            mapping: "/nonexistent/path/does-not-exist.ttl".to_owned(),
+            ontology: None,
+            bind: "127.0.0.1:0".to_owned(),
+            timeout_secs: 1,
+            max_query_len: 1024,
+        };
+        assert_eq!(serve(opts), ExitCode::FAILURE);
+    }
+}
