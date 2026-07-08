@@ -969,3 +969,75 @@ fn select_and_ask_agree_across_sqlite_and_mysql() {
         mysql_a1_typed_values().await;
     });
 }
+/// PostgreSQL DATE/TIME/TIMESTAMP column read, end-to-end through the real R2RML
+/// pipeline (translate -> emit -> `select_pg` -> `pg_value`/`pg_xsd_code` ->
+/// reconstruction/canonicalisation) -- not just the raw driver-level decode (see
+/// `sf_sql::backend::pg::tests::pg_value_reads_date_time_timestamp_columns` for
+/// that unit-level coverage). Before this fix `pg_value` had no extraction arm
+/// for these PostgreSQL types, so `select_pg` hard-501'd on ANY DATE/TIME/
+/// TIMESTAMP column -- a real functionality gap on the primary production
+/// dialect. Confirms the space-separated PG TIMESTAMP lexical form normalises to
+/// ISO 'T'-separated xsd:dateTime through the SAME `normalize_timestamp` path
+/// every other backend already uses. Live-PG only; gracefully skips when no
+/// server is reachable.
+#[tokio::test]
+async fn pg_date_time_columns_readable_end_to_end() {
+    let base = base_conn();
+    let conn_str = format!("{base} dbname=postgres");
+    let Ok(admin) = connect(&conn_str).await else {
+        eprintln!(
+            "skipping pg_date_time_columns_readable_end_to_end: no live PostgreSQL reachable"
+        );
+        return;
+    };
+    let db = format!("sf_pgdt_e2e_{}", std::process::id());
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+    admin
+        .batch_execute(&format!("CREATE DATABASE {db}"))
+        .await
+        .expect("create test db");
+    let conn_str2 = format!("{base} dbname={db}");
+    let client = connect(&conn_str2).await.expect("connect to test db");
+    client
+        .batch_execute(
+            "CREATE TABLE ev (id INTEGER PRIMARY KEY, d DATE, ts TIMESTAMP);
+             INSERT INTO ev VALUES (1, '2024-03-15', '2024-03-15 13:45:30');",
+        )
+        .await
+        .expect("seed table");
+
+    let r2rml = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#E> rr:logicalTable [ rr:tableName "ev" ] ;
+    rr:subjectMap [ rr:template "http://ex/e/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:d ; rr:objectMap [ rr:column "d" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:ts ; rr:objectMap [ rr:column "ts" ] ] .
+"#;
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let schema = introspect_all_pg(&client).await.expect("pg introspection");
+    let q = "PREFIX ex: <http://ex/> SELECT ?d ?ts WHERE { <http://ex/e/1> ex:d ?d ; ex:ts ?ts }";
+    let tp = parse_and_translate_with(q, &maps, Dialect::Postgres, &Tbox::default(), &schema)
+        .expect("translate SELECT (pg)");
+    let sol = exec_pg::select_pg(&tp, &client)
+        .await
+        .expect("select_pg — previously hard-501'd on DATE/TIMESTAMP columns");
+
+    assert_eq!(sol.rows.len(), 1);
+    let d = sol.rows[0][0].as_ref().expect("?d bound");
+    let ts = sol.rows[0][1].as_ref().expect("?ts bound");
+    assert_eq!(
+        d.to_string(),
+        "\"2024-03-15\"^^<http://www.w3.org/2001/XMLSchema#date>"
+    );
+    assert_eq!(
+        ts.to_string(),
+        "\"2024-03-15T13:45:30\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+    );
+
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+}

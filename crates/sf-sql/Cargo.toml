@@ -31,7 +31,8 @@ thiserror.workspace = true
 # Confirmation: no librocksdb-sys here).
 sqlparser = "0.62"                                      # dialect SQL emission + rr:sqlQuery parsing (ADR-0015)
 rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] } # SQLite source: introspection + cursor streaming + per-statement column decl types (R2RML §10 over rr:sqlQuery views, ADR-0015)
-tokio-postgres = "0.7"                                  # PostgreSQL source: query_raw server-side cursor (ADR-0010 §C)
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] } # PostgreSQL source: query_raw server-side cursor (ADR-0010 §C); chrono decode for DATE/TIME/TIMESTAMP columns
+chrono = { version = "0.4", default-features = false }  # NaiveDate/NaiveTime/NaiveDateTime FromSql for pg_value (DATE/TIME/TIMESTAMP columns)
 futures-util = "0.3"                                    # poll the tokio-postgres RowStream
 bytes = "1"                                            # BytesMut, for the LexicalParam ToSql wrapper (ADR-0024 M3, moved from sf-sparql)
 mysql_async = { version = "0.35", default-features = false, features = ["default-rustls"] } # MySQL source: async query + streaming (WS-D)
