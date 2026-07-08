@@ -5112,3 +5112,37 @@ fn adr0025_c7_avg_over_empty_group_is_zero() {
         );
     }
 }
+
+// ADR-0025 C.8: SUM(DISTINCT ?v)/AVG(DISTINCT ?v) on the in-process rust_group path (any
+// aggregation that can't pool to SQL — e.g. hits the C.6 nullable-operand gate) previously
+// ignored `agg.distinct` entirely (only COUNT read it), silently double-counting duplicate
+// operand values. Ann's group has pts {10, 10, 5} (a genuine duplicate row) — DISTINCT must
+// dedup to {10, 5} before summing/averaging: SUM=15 (not 25), AVG=7.5 (not 8.333...). Bob's
+// group (single value, no duplicates) is an unaffected control. MIN/MAX are unaffected by
+// DISTINCT by construction (not regression-tested here — see the code comment at their arm).
+const C8_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE score (sid INTEGER PRIMARY KEY, pid INTEGER, pts INTEGER);
+INSERT INTO person VALUES (1,'Ann'),(2,'Bob');
+INSERT INTO score VALUES (1,1,10),(2,1,10),(3,1,5),(4,2,7);
+"#;
+const C8_R2RML: &str = C6_R2RML;
+const C8_TTL: &str = "@prefix ex: <http://ex/> .\n<http://ex/p/1> ex:name \"Ann\" ; ex:pts 10, 5 .\n<http://ex/p/2> ex:name \"Bob\" ; ex:pts 7 .";
+#[test]
+fn adr0025_c8_sum_avg_distinct_dedups_before_aggregating() {
+    let conn = sqlite::load(C8_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C8_R2RML).unwrap();
+    for agg in ["SUM", "AVG"] {
+        let q = format!(
+            "{PFX} SELECT ?p ({agg}(DISTINCT ?v) AS ?s) WHERE {{ ?p ex:name ?nm OPTIONAL {{ ?p ex:pts ?v }} }} GROUP BY ?p"
+        );
+        let parsed = parse(&q);
+        assert_vs_spareval(
+            C8_TTL,
+            &q,
+            &tree(&maps, &parsed, &schema).expect("tree"),
+            &conn,
+        );
+    }
+}

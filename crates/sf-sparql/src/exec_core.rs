@@ -1148,7 +1148,10 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             if !rows.is_empty() && rows.iter().any(|r| r.get(var).is_none()) {
                 return Ok(None);
             }
-            let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
+            let vals: Vec<&Term> = dedup_if_distinct(
+                rows.iter().filter_map(|r| r.get(var)).collect(),
+                agg.distinct,
+            );
             if vals.is_empty() {
                 // SUM over empty multiset ⇒ "0"^^xsd:integer (SPARQL §11).
                 return Ok(Some(Term::Literal(Literal::new_typed_literal(
@@ -1181,7 +1184,10 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             if !rows.is_empty() && rows.iter().any(|r| r.get(var).is_none()) {
                 return Ok(None);
             }
-            let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
+            let vals: Vec<&Term> = dedup_if_distinct(
+                rows.iter().filter_map(|r| r.get(var)).collect(),
+                agg.distinct,
+            );
             if vals.is_empty() {
                 // ADR-0025 C.4: AVG over no bound values. If the GROUP is genuinely EMPTY
                 // (0 rows — e.g. implicit grouping over an unmatched pattern), AVG ⇒
@@ -1217,6 +1223,11 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             if !rows.is_empty() && rows.iter().any(|r| r.get(var).is_none()) {
                 return Ok(None);
             }
+            // NOTE (ADR-0025 C.8): `agg.distinct` is deliberately NOT applied here — deduping
+            // the multiset before MIN/MAX cannot change the result (the minimum/maximum of a
+            // set equals that of the multiset it came from), unlike SUM/AVG (see
+            // `dedup_if_distinct` below), so `MIN(DISTINCT ?v)`/`MAX(DISTINCT ?v)` are already
+            // correct without special-casing `distinct`.
             let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
             if vals.is_empty() {
                 return Ok(None); // UNBOUND for empty multiset (§11)
@@ -1229,6 +1240,25 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             Ok(result.map(|t| (*t).clone()))
         }
     }
+}
+
+/// ADR-0025 C.8: dedup a `rust_agg` operand multiset when `SUM(DISTINCT ?v)`/`AVG(DISTINCT
+/// ?v)` requires it (SPARQL §11 — DISTINCT reduces the aggregate's input multiset to a SET
+/// before applying the set function). `RustAgg.distinct` was previously read only by `Count`;
+/// `Sum`/`Avg` silently ignored it and double-counted duplicate rows, a real `=_bag` wrong
+/// answer (the SQL-pushdown sibling, `emit.rs`'s `agg_expr_sql`, already renders `SUM(DISTINCT
+/// col)` correctly — only this in-process path had the gap). Canonicalises on the SAME lexical
+/// key (`Term::to_string()`) the existing `COUNT(DISTINCT …)` branches above use, so dedup is
+/// order-independent and consistent across every aggregate. No-op (returns `vals` unchanged)
+/// when `distinct` is false.
+fn dedup_if_distinct<'a>(vals: Vec<&'a Term>, distinct: bool) -> Vec<&'a Term> {
+    if !distinct {
+        return vals;
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    vals.into_iter()
+        .filter(|t| seen.insert(t.to_string()))
+        .collect()
 }
 
 /// Extract the `f64` numeric value of an RDF term (returns `None` for
