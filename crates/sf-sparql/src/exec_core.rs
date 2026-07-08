@@ -1251,7 +1251,7 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
 /// key (`Term::to_string()`) the existing `COUNT(DISTINCT …)` branches above use, so dedup is
 /// order-independent and consistent across every aggregate. No-op (returns `vals` unchanged)
 /// when `distinct` is false.
-fn dedup_if_distinct<'a>(vals: Vec<&'a Term>, distinct: bool) -> Vec<&'a Term> {
+fn dedup_if_distinct(vals: Vec<&Term>, distinct: bool) -> Vec<&Term> {
     if !distinct {
         return vals;
     }
