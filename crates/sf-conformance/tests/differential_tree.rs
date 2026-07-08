@@ -5082,3 +5082,33 @@ fn adr0025_c6b_double_operand_aggregate_stays_xsd_double() {
         }
     }
 }
+
+// ADR-0025 C.7: AVG over an EMPTY group (implicit grouping, FILTER excludes every row) ⇒
+// "0"^^xsd:integer (SPARQL §11, like SUM), not UNBOUND. The single-branch SQL-pushdown
+// reconstruction previously returned UNBOUND for a NULL AVG; now safe to return 0 because
+// C.6 routes nullable operands to rust_group, so a NULL AVG on this path ⟺ empty group.
+// MIN/MAX over empty stay UNBOUND (correct). Regression-locked vs spareval.
+const C7_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE score (sid INTEGER PRIMARY KEY, pid INTEGER, pts INTEGER);
+INSERT INTO person VALUES (1,'Ann'); INSERT INTO score VALUES (1,1,10);
+"#;
+const C7_TTL: &str = "@prefix ex: <http://ex/> .\n<http://ex/p/1> ex:name \"Ann\" ; ex:pts 10 .";
+#[test]
+fn adr0025_c7_avg_over_empty_group_is_zero() {
+    let conn = sqlite::load(C7_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C6_R2RML).unwrap();
+    // SUM already 0; AVG now 0 (was unbound); MIN/MAX stay unbound.
+    for agg in ["AVG", "SUM"] {
+        let q =
+            format!("{PFX} SELECT ({agg}(?v) AS ?s) WHERE {{ ?p ex:pts ?v FILTER(?v > 1000) }}");
+        let parsed = parse(&q);
+        assert_vs_spareval(
+            C7_TTL,
+            &q,
+            &tree(&maps, &parsed, &schema).expect("tree"),
+            &conn,
+        );
+    }
+}

@@ -552,11 +552,19 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
                 alias: col.alias,
             };
             let Some(value) = row.value(&col.column) else {
+                // A NULL SQL aggregate value on the single-branch SQL-pushdown path. ADR-0025
+                // C.7: SUM/AVG/COUNT over an EMPTY group ⇒ "0"^^xsd:integer (SPARQL §11); only
+                // MIN/MAX of an empty multiset are UNBOUND. This is sound HERE specifically
+                // because ADR-0025 C.6 routes any NULLABLE-operand aggregate to `rust_group` —
+                // so on this SQL path the operand is MANDATORY (bound in every row), hence a
+                // NULL aggregate value means 0 rows (empty group), never "non-empty but all
+                // operands unbound" (which must be UNBOUND and is handled correctly by
+                // `rust_agg` C.4/C.5). Pre-C.6 this branch conflated the two for AVG.
                 return match kind {
-                    AggKind::Sum | AggKind::Count => {
+                    AggKind::Sum | AggKind::Count | AggKind::Avg => {
                         Ok(Some(natural_literal("0", XsdTypeCode::Integer)?))
                     }
-                    AggKind::Avg | AggKind::Min | AggKind::Max => Ok(None),
+                    AggKind::Min | AggKind::Max => Ok(None),
                 };
             };
             let code = match kind {
