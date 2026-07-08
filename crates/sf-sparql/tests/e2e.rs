@@ -1110,30 +1110,30 @@ fn agg_source_nullable() -> Connection {
 fn scratch_count_var_over_optional_unbound() {
     let maps = agg_mapping_nullable();
     let conn = agg_source_nullable();
-    // 3 employees; only 2 have a salary. SPARQL §11:
-    //   COUNT(*)    = 3 (counts solutions)
-    //   COUNT(?sal) = 2 (counts only BOUND ?sal)
+    // 3 employees; only 2 have a salary (Ada=100, Grace=300; Linus's :empSalary
+    // triple does not exist — NULL source column). SPARQL §11:
+    //   COUNT(*)             = 3 (counts solutions, bound or not)
+    //   COUNT(?sal)          = 2 (counts only BOUND ?sal)
+    //   COUNT(DISTINCT ?sal) = 2 (100 and 300 are distinct)
     let q = format!(
         "SELECT (COUNT(*) AS ?all) (COUNT(?sal) AS ?bound) (COUNT(DISTINCT ?sal) AS ?dist) \
          WHERE {{ ?e <{EMP_NAME}> ?n OPTIONAL {{ ?e <http://ex/empSalary> ?sal }} }}"
     );
-    let r = parse_and_translate(&q, &maps, Dialect::Sqlite);
-    match r {
-        Ok(plan) => {
-            eprintln!("SQL = {}", plan.emitted().unwrap()[0].sql);
-            let sol = exec::select(&plan, &conn).unwrap();
-            eprintln!("vars = {:?}", sol.vars);
-            for row in &sol.rows {
-                eprintln!(
-                    "all={} bound={} dist={}",
-                    lit(&row[0]),
-                    lit(&row[1]),
-                    lit(&row[2])
-                );
-            }
-        }
-        Err(e) => eprintln!("DEFERRED/ERR: {e:?}"),
-    }
+    let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).expect("tree translates");
+    let sol = exec::select(&plan, &conn).unwrap();
+    assert_eq!(
+        sol.rows.len(),
+        1,
+        "implicit grouping yields exactly one row"
+    );
+    let row = &sol.rows[0];
+    assert_eq!(lit(&row[0]), "3", "COUNT(*) counts every solution");
+    assert_eq!(lit(&row[1]), "2", "COUNT(?sal) counts only BOUND ?sal");
+    assert_eq!(
+        lit(&row[2]),
+        "2",
+        "COUNT(DISTINCT ?sal) — 100 and 300 are distinct"
+    );
 }
 
 // ---- SPARQL §11 aggregate correctness: empty-group SUM = 0; AVG datatype ----

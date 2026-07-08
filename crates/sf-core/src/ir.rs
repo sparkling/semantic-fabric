@@ -427,4 +427,71 @@ mod tests {
         let mut buf = String::new();
         assert!(!t.expand(row, true, &mut buf));
     }
+
+    // -- Template::is_injective — DISTINCT-elimination soundness gate --------
+
+    #[test]
+    fn is_injective_true_when_columns_separated_by_nonempty_literal() {
+        // "http://ex/{a}/{b}" — the '/' separator makes collisions impossible:
+        // (a="1", b="23") and (a="12", b="3") expand to different strings
+        // because the separator can never appear verbatim inside a percent-
+        // encoded column value.
+        let t = Template::parse("http://ex/{a}/{b}").unwrap();
+        assert!(t.is_injective());
+    }
+
+    #[test]
+    fn is_injective_false_when_adjacent_columns_have_no_separator() {
+        // "http://ex/{a}{b}" — no separator between `a` and `b`: (a="1",
+        // b="23") and (a="12", b="3") both expand to "http://ex/123".
+        let t = Template::parse("http://ex/{a}{b}").unwrap();
+        assert!(!t.is_injective());
+
+        // Collision witness, concretely, via `expand`.
+        let mut buf1 = String::new();
+        let row1: &[(&str, Option<&str>)] = &[("a", Some("1")), ("b", Some("23"))];
+        assert!(t.expand(row1, false, &mut buf1));
+
+        let mut buf2 = String::new();
+        let row2: &[(&str, Option<&str>)] = &[("a", Some("12")), ("b", Some("3"))];
+        assert!(t.expand(row2, false, &mut buf2));
+
+        assert_eq!(
+            buf1, buf2,
+            "distinct column tuples collided to the same string"
+        );
+    }
+
+    #[test]
+    fn is_injective_true_for_single_column_template() {
+        // A single column slot has no adjacent-column pair to collide with,
+        // regardless of surrounding literals (or their absence).
+        let t = Template::parse("http://ex/{id}").unwrap();
+        assert!(t.is_injective());
+
+        let bare = Template::parse("{id}").unwrap();
+        assert!(bare.is_injective());
+    }
+
+    #[test]
+    fn is_injective_true_for_constant_only_template() {
+        // No column slots at all — vacuously injective (there is only ever
+        // one output string, so distinct tuples of zero columns can't exist).
+        let t = Template::parse("http://ex/constant").unwrap();
+        assert!(t.is_injective());
+    }
+
+    #[test]
+    fn is_injective_false_when_only_empty_literal_between_columns() {
+        // An empty Literal segment between two Columns must not reset
+        // adjacency — it is indistinguishable from no separator at all.
+        let t = Template::from_segments(vec![col("a"), lit(""), col("b")]).unwrap();
+        assert!(!t.is_injective());
+    }
+
+    #[test]
+    fn is_injective_true_for_three_columns_each_separated() {
+        let t = Template::parse("{a}-{b}-{c}").unwrap();
+        assert!(t.is_injective());
+    }
 }
