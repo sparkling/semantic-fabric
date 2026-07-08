@@ -1132,6 +1132,14 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             let Some(var) = &agg.arg_var else {
                 return Ok(None);
             };
+            // ADR-0025 C.5: SUM/AVG/MIN/MAX PROPAGATE an unbound operand — a NON-empty group
+            // with ANY row whose operand var is unbound ⇒ the whole aggregate is UNBOUND
+            // (SPARQL §11; spareval-confirmed). Only COUNT filters errors. This extends C.4,
+            // which handled only the all-unbound case for AVG; the mixed bound+unbound group
+            // (and SUM over all-unbound) was still wrongly computed over just the bound rows.
+            if !rows.is_empty() && rows.iter().any(|r| r.get(var).is_none()) {
+                return Ok(None);
+            }
             let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
             if vals.is_empty() {
                 // SUM over empty multiset ⇒ "0"^^xsd:integer (SPARQL §11).
@@ -1155,6 +1163,10 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             let Some(var) = &agg.arg_var else {
                 return Ok(None);
             };
+            // ADR-0025 C.5 (see SUM): any unbound operand row in a non-empty group ⇒ UNBOUND.
+            if !rows.is_empty() && rows.iter().any(|r| r.get(var).is_none()) {
+                return Ok(None);
+            }
             let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
             if vals.is_empty() {
                 // ADR-0025 C.4: AVG over no bound values. If the GROUP is genuinely EMPTY
@@ -1181,6 +1193,10 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             let Some(var) = &agg.arg_var else {
                 return Ok(None);
             };
+            // ADR-0025 C.5 (see SUM): any unbound operand row in a non-empty group ⇒ UNBOUND.
+            if !rows.is_empty() && rows.iter().any(|r| r.get(var).is_none()) {
+                return Ok(None);
+            }
             let vals: Vec<&Term> = rows.iter().filter_map(|r| r.get(var)).collect();
             if vals.is_empty() {
                 return Ok(None); // UNBOUND for empty multiset (§11)

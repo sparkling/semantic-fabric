@@ -4790,6 +4790,138 @@ fn adr0025_tier2_gap1_reflexive_path_in_exists_now_computes() {
     }
 }
 
+// ADR-0025 Tier-2 gap 1 (composite coverage): the gap-1 commit's docstring claimed p/q, ^p,
+// and p|q composites are ALL covered inside EXISTS/NOT EXISTS/MINUS, but only the p/q
+// SEQUENCE composite (`adr0025_tier2_gap1_path_in_exists_notexists_minus`, the 2-hop case)
+// was actually exercised. `path.rs::compile_path`'s `Reverse` and `Alternative` arms build a
+// `HopExpr` the SAME way `Sequence` does (any composite compiles to `PathKind::One` and rides
+// the identical `bridge_branch` -> `IqNode::Path` -> `lower_iq_exists`'s `SqlCond::PathExists`
+// machinery), so this closes the untested ^p / p|q cases directly against spareval.
+#[test]
+fn adr0025_tier2_gap1_inverse_path_in_exists_notexists_minus() {
+    // FILTER EXISTS: subjects with an outgoing edge that ALSO have an INCOMING edge (via the
+    // inverse path `^ex:reaches`, i.e. some other node reaches them). Node 1 is source-only
+    // (no incoming edge) -> excluded; nodes 2 and 3 both have an incoming edge -> included.
+    gap1_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?s ex:reaches ?o FILTER EXISTS {{ ?s ^ex:reaches ?y }} }}"
+    ));
+    // FILTER NOT EXISTS: the complement — only node 1 passes, once per its two outgoing
+    // edges (row multiplicity preserved: two rows, both s=1).
+    gap1_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?s ex:reaches ?o FILTER NOT EXISTS {{ ?s ^ex:reaches ?y }} }}"
+    ));
+    // MINUS: the same anti-join via the inverse path.
+    gap1_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?s ex:reaches ?o MINUS {{ ?s ^ex:reaches ?y }} }}"
+    ));
+}
+
+/// `gap1_case`'s twin over the two-predicate PA fixture (`ex:p`/`ex:q`), needed for the
+/// ALTERNATIVE composite `p|q` (the PE fixture is single-predicate, so `p|q` there would
+/// degenerate to just `p`).
+fn gap1_pa_case(q: &str) {
+    let conn = sqlite::load(PA_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(PA_R2RML).unwrap();
+    let parsed = parse(q);
+    assert_vs_spareval(
+        PA_TTL,
+        q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+
+#[test]
+fn adr0025_tier2_gap1_alternative_path_in_exists_notexists_minus() {
+    // PA fixture: 1-p->2-p->3, 2-q->20, 3-q->30.
+    // FILTER EXISTS: targets of `p|q` that themselves have a FURTHER outgoing `p|q` edge —
+    // 2 (has both an outgoing p and an outgoing q) and 3 (has an outgoing q) qualify; the
+    // sinks 20 and 30 (no outgoing edges at all) do not.
+    gap1_pa_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?a ex:p|ex:q ?s FILTER EXISTS {{ ?s ex:p|ex:q ?y }} }}"
+    ));
+    // FILTER NOT EXISTS: the complement — the sinks 20 and 30.
+    gap1_pa_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?a ex:p|ex:q ?s FILTER NOT EXISTS {{ ?s ex:p|ex:q ?y }} }}"
+    ));
+    // MINUS: the same anti-join via the alternative path.
+    gap1_pa_case(&format!(
+        "{PFX} SELECT ?s WHERE {{ ?a ex:p|ex:q ?s MINUS {{ ?s ex:p|ex:q ?y }} }}"
+    ));
+}
+
+// ADR-0025 gap 2: MIN/MAX over a group whose operand var is UNBOUND in every row (rows>0)
+// — C.4 only regression-tested AVG for this `rust_group` shape (aggregate over a UNION where
+// the operand var is never bound in either arm). `rust_agg`'s `Min`/`Max` arms already return
+// UNBOUND unconditionally whenever no row supplies a bound value (`exec_core.rs`'s
+// `AggKind::Min | AggKind::Max` never had a `rows.is_empty()` special case at all, unlike
+// C.4's `AggKind::Avg` fix) — this locks that in against the independent spareval oracle.
+#[test]
+fn adr0025_gap2_min_max_unbound_operand_is_unbound() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    for agg in ["MIN", "MAX"] {
+        let q = format!(
+            "{PFX} SELECT ({agg}(?missing) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:email ?e }} }}"
+        );
+        let parsed = parse(&q);
+        assert_vs_spareval(
+            P_TTL,
+            &q,
+            &tree(&maps, &parsed, &schema).expect("tree"),
+            &conn,
+        );
+    }
+}
+
+// ADR-0025 C.5 (regression): SUM over a NON-empty group whose operand is unbound in EVERY
+// row must be UNBOUND, not "0" (SPARQL §11 error-propagation; only COUNT filters). C.4 gave
+// AVG this discrimination; C.5 extends it to SUM/MIN/MAX. Now spareval-gated (passes post-fix).
+#[test]
+fn adr0025_gap2_sum_unbound_operand_is_unbound() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT (SUM(?missing) AS ?c) WHERE {{ {{ ?p ex:name ?n }} UNION {{ ?p ex:email ?e }} }}"
+    );
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+
+// ADR-0025 C.5 (regression): a MIXED group — some rows bind the aggregate operand, others
+// leave it unbound — makes SUM/MIN/MAX/AVG UNBOUND for that whole group (SPARQL §11 error
+// propagation; only COUNT filters). Ann/Zed have an unbound ?x row (email arm) so ALL four
+// aggregates are unbound for them; Bob's group is all-bound so it computes (SUM=7 etc.).
+// Now spareval-gated (passes post-fix); previously rust_agg wrongly skipped the unbound row.
+#[test]
+fn adr0025_gap2_mixed_bound_unbound_group_all_aggregates() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT ?p (SUM(?x) AS ?s) (MIN(?x) AS ?mn) (MAX(?x) AS ?mx) (AVG(?x) AS ?av) WHERE {{
+            {{ ?p ex:name ?n BIND(2 AS ?x) }}
+            UNION {{ ?p ex:dept ?d BIND(5 AS ?x) }}
+            UNION {{ ?p ex:email ?e }}
+        }} GROUP BY ?p"
+    );
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+
 // ADR-0025 Tier-3: the =_bag-meaningful content of the cosmetic SQL-shape backlog is CLOSED
 // (Wave C + Group C, commits d313f26..487b4fb / 45ae36c). This regression test locks in that
 // each shape computes the CORRECT =_bag result on current main. What remains UNimplemented in

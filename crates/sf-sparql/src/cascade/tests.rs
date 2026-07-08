@@ -867,3 +867,142 @@ fn distinct_self_scans_inside_not_exists_not_merged_without_key_equality() {
         "a non-key-joined self-scan pair must NOT be merged: {scans:?}"
     );
 }
+
+/// Composite-PK sibling of [`self_join_eliminated_inside_not_exists_subquery`].
+/// `org` has a 2-column composite PK (`id1`, `id2`); the `NOT EXISTS` subquery
+/// redundantly self-joins `org` on BOTH PK columns. This exercises
+/// `find_composite_pk_self_join_in` (mod.rs ~343, the SUBQUERY-scoped call site)
+/// which — unlike the single-column pass exercised by the sibling test — had
+/// ZERO coverage at this call site before this test; only the top-level call
+/// site (mod.rs ~304) was covered, by `ontop_intent_b1.rs::composite_pk_self_join_elim`.
+/// SPARQL `MINUS` lowers to the same `SqlCond::NotExists` IR node (see the
+/// `NotExists` doc comment in `iq.rs`), so this one test also covers the MINUS
+/// call site — there is no separate MINUS variant to exercise.
+#[test]
+fn composite_pk_self_join_eliminated_inside_not_exists_subquery() {
+    let mut b = Branch {
+        core: vec![scan(0, "person")],
+        opts: vec![],
+        bindings: BTreeMap::new(),
+        where_conds: vec![
+            SqlCond::IsNotNull(ColRef::new(0, "name")),
+            SqlCond::NotExists {
+                scans: vec![scan(1, "person"), scan(2, "org"), scan(3, "org")],
+                conds: vec![
+                    SqlCond::ColEq(ColRef::new(1, "org_id"), ColRef::new(2, "id1")),
+                    SqlCond::ColEq(ColRef::new(2, "id1"), ColRef::new(3, "id1")), // PK col 1 — redundant self-join
+                    SqlCond::ColEq(ColRef::new(2, "id2"), ColRef::new(3, "id2")), // PK col 2 — redundant self-join
+                    SqlCond::IsNotNull(ColRef::new(3, "label")),
+                    SqlCond::ColEq(ColRef::new(0, "id"), ColRef::new(1, "id")), // outer correlation
+                ],
+            },
+        ],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+        subplan_joins: Vec::new(),
+    };
+    b.bindings.insert("name".to_owned(), col_binding(0, "name"));
+    let mut org = TableSchema::new("org");
+    org.primary_key = vec!["id1".to_owned(), "id2".to_owned()];
+    let out = run(vec![b], std::slice::from_ref(&org), &CascadeCtx::default());
+    assert_eq!(out.len(), 1);
+    let SqlCond::NotExists { scans, conds } = out[0]
+        .where_conds
+        .iter()
+        .find(|c| matches!(c, SqlCond::NotExists { .. }))
+        .expect("NOT EXISTS survives")
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        scans
+            .iter()
+            .filter(|s| s.alias == 2 || s.alias == 3)
+            .count(),
+        1,
+        "the redundant composite-PK org self-join inside NOT EXISTS collapses to one scan: {scans:?}"
+    );
+    // No remaining cond may reference the dropped alias 3.
+    assert!(
+        !conds.iter().any(|c| {
+            let mut has_alias3 = false;
+            collect_cond_cols(c, &mut |col| has_alias3 |= col.alias == 3);
+            has_alias3
+        }),
+        "no remaining cond may reference the dropped org alias 3: {conds:?}"
+    );
+    // Both PK-licensing equalities (id1, id2) are removed; the link cond, the
+    // outer correlation, and the rewritten IsNotNull survive: 5 - 2 = 3.
+    assert_eq!(
+        conds.len(),
+        3,
+        "exactly the two composite-PK licensing equalities are removed: {conds:?}"
+    );
+    // The surviving IsNotNull must have been rewritten from alias 3 onto the
+    // KEPT alias 2 — proving rewrite_cond_alias actually ran for the composite
+    // merge path, not just that scans/conds were dropped. This is the precise
+    // shape where the earlier single-column-PK anti-join-FILTER bug lived.
+    assert!(
+        conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::IsNotNull(r) if r == &ColRef::new(2, "label"))),
+        "IsNotNull(label) must be rewritten onto the kept alias 2: {conds:?}"
+    );
+    // The outer correlation (alias 0 -> alias 1) must survive untouched.
+    assert!(
+        conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::ColEq(a, b) if a.alias == 0 && b.alias == 1)),
+        "the outer correlation condition must survive: {conds:?}"
+    );
+}
+
+/// Negative control: only ONE of the two composite-PK columns is equated
+/// between the two `org` scans inside the `NOT EXISTS` — a partial-key match
+/// does NOT identify the same row, so no merge may fire. Proves
+/// `find_composite_pk_self_join_in` requires ALL PK columns covered at the
+/// subquery call site too, not just at the top-level call site.
+#[test]
+fn composite_pk_self_scans_inside_not_exists_not_merged_on_partial_key_equality() {
+    let mut b = Branch {
+        core: vec![scan(0, "person")],
+        opts: vec![],
+        bindings: BTreeMap::new(),
+        where_conds: vec![SqlCond::NotExists {
+            scans: vec![scan(1, "person"), scan(2, "org"), scan(3, "org")],
+            conds: vec![
+                SqlCond::ColEq(ColRef::new(1, "org_id"), ColRef::new(2, "id1")),
+                SqlCond::ColEq(ColRef::new(2, "id1"), ColRef::new(3, "id1")), // only PK col 1 matched
+                SqlCond::ColEq(ColRef::new(0, "id"), ColRef::new(1, "id")),
+            ],
+        }],
+        distinct: false,
+        limit: None,
+        offset: 0,
+        order: vec![],
+        path: None,
+        agg: None,
+        subplan_joins: Vec::new(),
+    };
+    b.bindings.insert("x".to_owned(), col_binding(0, "id"));
+    let mut org = TableSchema::new("org");
+    org.primary_key = vec!["id1".to_owned(), "id2".to_owned()];
+    let out = run(vec![b], std::slice::from_ref(&org), &CascadeCtx::default());
+    let SqlCond::NotExists { scans, .. } = out[0]
+        .where_conds
+        .iter()
+        .find(|c| matches!(c, SqlCond::NotExists { .. }))
+        .expect("NOT EXISTS survives")
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        scans.len(),
+        3,
+        "a partial composite-key match must NOT be merged: {scans:?}"
+    );
+}

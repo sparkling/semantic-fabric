@@ -505,3 +505,136 @@ impl Graph {
 
 #[cfg(test)]
 mod tests;
+
+/// Unit coverage for `build_term_spec`'s R2RML §7.4 rejection branches — the
+/// validation gate a malformed `rr:termType` / `rr:datatype` / `rr:language`
+/// combination must fail through before it ever reaches the IR. Each test
+/// drives `build_term_spec` directly against a single-node Turtle fixture
+/// (rather than a full `parse_r2rml` pipeline) so the assertion is scoped to
+/// exactly the branch under test.
+#[cfg(test)]
+mod term_spec_tests {
+    use super::*;
+
+    /// Load `turtle` and run the term map at `<http://ex.org/tm>` through
+    /// `build_term_spec` for `position`/`is_column`.
+    fn term_spec(turtle: &str, position: Position, is_column: bool) -> Result<TermSpec> {
+        let g = Graph::load(turtle).expect("fixture parses as turtle");
+        let node = NamedOrBlankNode::NamedNode(NamedNode::new("http://ex.org/tm").unwrap());
+        build_term_spec(&g, &node, position, is_column)
+    }
+
+    /// Unwrap an `Error::Mapping` message, panicking on any other outcome —
+    /// keeps each test's assertion pinned to *why* it failed, not just *that*
+    /// it failed.
+    fn mapping_err_message(result: Result<TermSpec>) -> String {
+        match result {
+            Err(Error::Mapping(msg)) => msg,
+            Err(other) => panic!("expected Error::Mapping, got {other:?}"),
+            Ok(spec) => panic!("expected a rejection, got {spec:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_bcp47_language_tag() {
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://ex.org/tm> rr:language "english" .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Object, true));
+        assert!(
+            msg.contains("not a valid BCP47 language tag"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_datatype_and_language_both_set() {
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+            <http://ex.org/tm> rr:datatype xsd:string ; rr:language "en" .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Object, true));
+        assert!(
+            msg.contains("has both rr:datatype and rr:language"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_term_type_that_is_not_an_iri() {
+        // rr:termType given a plain literal instead of an IRI (rr:IRI / rr:Literal / …).
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://ex.org/tm> rr:termType "not-an-iri" .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Object, true));
+        assert!(
+            msg.contains("rr:termType of") && msg.contains("must be an IRI"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_term_type_iri() {
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://ex.org/tm> rr:termType <http://example.com/bogus> .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Object, true));
+        assert!(
+            msg.contains("unknown rr:termType"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_literal_term_type_on_a_subject_map() {
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://ex.org/tm> rr:termType rr:Literal .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Subject, false));
+        assert!(
+            msg.contains("must be IRI or blank node"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_non_iri_term_type_on_a_predicate_map() {
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://ex.org/tm> rr:termType rr:BlankNode .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Predicate, false));
+        assert!(
+            msg.contains("must have rr:termType rr:IRI"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_non_iri_term_type_on_a_graph_map() {
+        let turtle = r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            <http://ex.org/tm> rr:termType rr:BlankNode .
+        "#;
+        let msg = mapping_err_message(term_spec(turtle, Position::Graph, false));
+        assert!(
+            msg.contains("must have rr:termType rr:IRI"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    // Not a rejection branch: R2RML §7.4 gives literal/blank-node term maps
+    // (rr:IRI is not requested) no datatype/language-driven default beyond
+    // "IRI unless object + column/datatype/language" — accepting the request
+    // and letting default_term_type() decide is intended, not a validation
+    // gap. Likewise `rr:column` *and* `rr:template` both present on one term
+    // map is not rejected by `build_term_spec`: `parse_term_map`'s
+    // `match (column, template)` silently prefers `rr:column` and ignores the
+    // template (see `parse_term_map`, ~line 278) — there is no "both set" error
+    // to trigger here.
+}

@@ -210,3 +210,141 @@ pub fn run_and_report(cases_dir: &Path, out_dir: &Path) -> std::io::Result<Repor
     )?;
     Ok(report)
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for `Report`'s deviation-filtering logic — the guard between a
+    //! real W3C regression and a silently-absorbed failure. `EXPECTED_DEVIATIONS`
+    //! is a real, non-empty const (`R2RMLTC0002f`), so these tests exercise it
+    //! directly rather than mocking it: a typo in that list, or a case id that
+    //! merely resembles a documented deviation, must never remove a genuine
+    //! failure from `unexpected_failures()`.
+
+    use super::*;
+
+    fn case(id: &str, status: Status) -> CaseResult {
+        CaseResult {
+            id: id.to_string(),
+            kind: Kind::R2rml,
+            status,
+            reason: "test fixture".to_string(),
+        }
+    }
+
+    /// The one real, documented deviation id — used so these tests exercise the
+    /// actual `EXPECTED_DEVIATIONS` const, not a stand-in.
+    const KNOWN_DEVIATION_ID: &str = "R2RMLTC0002f";
+
+    #[test]
+    fn should_list_documented_failure_in_expected_deviations_when_id_matches() {
+        let report = Report {
+            cases: vec![case(KNOWN_DEVIATION_ID, Status::Failed)],
+        };
+
+        let deviations = report.expected_deviations();
+        assert_eq!(deviations.len(), 1);
+        assert!(deviations[0].starts_with(KNOWN_DEVIATION_ID));
+    }
+
+    #[test]
+    fn should_not_list_documented_failure_in_unexpected_failures_when_id_matches() {
+        let report = Report {
+            cases: vec![case(KNOWN_DEVIATION_ID, Status::Failed)],
+        };
+
+        assert!(report.unexpected_failures().is_empty());
+    }
+
+    #[test]
+    fn should_surface_undocumented_failure_in_unexpected_failures() {
+        let report = Report {
+            cases: vec![case("R2RMLTC9999z", Status::Failed)],
+        };
+
+        let unexpected = report.unexpected_failures();
+        assert_eq!(unexpected.len(), 1);
+        assert!(unexpected[0].starts_with("R2RMLTC9999z"));
+    }
+
+    #[test]
+    fn should_not_list_undocumented_failure_in_expected_deviations() {
+        let report = Report {
+            cases: vec![case("R2RMLTC9999z", Status::Failed)],
+        };
+
+        assert!(report.expected_deviations().is_empty());
+    }
+
+    #[test]
+    fn should_not_count_a_passing_case_as_an_expected_deviation_even_if_its_id_is_listed() {
+        // A deviation that has since been fixed: the case now passes, but its id
+        // is still (stale-ly) present in EXPECTED_DEVIATIONS. A pass must never
+        // be filed as a deviation or a regression — both filters key on
+        // `Status::Failed`, so a passing case must vanish from both lists.
+        let report = Report {
+            cases: vec![case(KNOWN_DEVIATION_ID, Status::Passed)],
+        };
+
+        assert!(report.expected_deviations().is_empty());
+        assert!(report.unexpected_failures().is_empty());
+        assert!(report.failures().is_empty());
+        assert_eq!(report.passed(None), 1);
+    }
+
+    #[test]
+    fn should_surface_genuine_failure_when_its_id_only_resembles_a_documented_deviation() {
+        // Simulates a typo: this failing case's id is one character off from the
+        // real EXPECTED_DEVIATIONS entry ("R2RMLTC0002f" -> "...0002g"), so it
+        // matches no known deviation. A typo anywhere in this relationship (in
+        // the const, or in a case id that was meant to match it) must not hide a
+        // real failure from the regression gate.
+        let typo_id = "R2RMLTC0002g";
+        assert!(
+            expected_deviation(typo_id).is_none(),
+            "fixture id must NOT match a real documented deviation"
+        );
+
+        let report = Report {
+            cases: vec![case(typo_id, Status::Failed)],
+        };
+
+        let unexpected = report.unexpected_failures();
+        assert_eq!(unexpected.len(), 1);
+        assert!(unexpected[0].starts_with(typo_id));
+        assert!(report.expected_deviations().is_empty());
+    }
+
+    #[test]
+    fn should_return_empty_lists_when_report_has_no_cases() {
+        let report = Report { cases: vec![] };
+
+        assert!(report.failures().is_empty());
+        assert!(report.expected_deviations().is_empty());
+        assert!(report.unexpected_failures().is_empty());
+    }
+
+    #[test]
+    fn should_return_empty_failure_lists_when_all_cases_pass() {
+        let report = Report {
+            cases: vec![
+                case("R2RMLTC0001a", Status::Passed),
+                case("R2RMLTC0003a", Status::Passed),
+                case(KNOWN_DEVIATION_ID, Status::Passed),
+            ],
+        };
+
+        assert!(report.expected_deviations().is_empty());
+        assert!(report.unexpected_failures().is_empty());
+        assert_eq!(report.passed(None), 3);
+    }
+
+    #[test]
+    fn should_report_none_for_expected_deviation_lookup_on_unknown_id() {
+        assert!(expected_deviation("not-a-real-id").is_none());
+    }
+
+    #[test]
+    fn should_report_some_for_expected_deviation_lookup_on_known_id() {
+        assert!(expected_deviation(KNOWN_DEVIATION_ID).is_some());
+    }
+}

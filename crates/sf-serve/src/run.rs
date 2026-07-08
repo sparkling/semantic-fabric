@@ -123,3 +123,110 @@ async fn introspect_mysql_all(
     }
     Ok(schemas)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unique path under the OS temp dir — avoids clashing with other tests
+    /// or a stale file from a previous run.
+    fn temp_db_path(tag: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "sf_serve_open_backend_{tag}_{}_{unique}.db",
+            std::process::id()
+        ))
+    }
+
+    /// Create a fresh SQLite file at `path` with one `widgets(id, name)` table
+    /// and a single row, then close the connection so `open_backend` can reopen it.
+    fn seed_sqlite_db(path: &std::path::Path) {
+        let conn = rusqlite::Connection::open(path).expect("create temp sqlite db");
+        conn.execute_batch(
+            "CREATE TABLE widgets (id INTEGER PRIMARY KEY, name TEXT NOT NULL); \
+             INSERT INTO widgets (id, name) VALUES (1, 'sprocket');",
+        )
+        .expect("seed widgets table");
+    }
+
+    #[tokio::test]
+    async fn should_open_backend_when_spec_is_a_valid_sqlite_path() {
+        let path = temp_db_path("valid");
+        seed_sqlite_db(&path);
+        let spec = format!("sqlite:{}", path.display());
+
+        let result = open_backend(&spec).await;
+
+        let (backend, schema) = result.expect("valid sqlite spec should open");
+        assert!(matches!(backend, Backend::Sqlite(_)));
+        assert!(
+            !schema.is_empty(),
+            "expected at least one introspected table"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn should_introspect_known_table_when_sqlite_db_has_a_table() {
+        let path = temp_db_path("introspect");
+        seed_sqlite_db(&path);
+        let spec = format!("sqlite:{}", path.display());
+
+        let (_backend, schema) = open_backend(&spec)
+            .await
+            .expect("valid sqlite spec should open");
+
+        let widgets = schema
+            .iter()
+            .find(|t| t.name == "widgets")
+            .expect("widgets table should be introspected");
+        assert!(
+            widgets.columns.iter().any(|c| c.name == "id"),
+            "widgets schema should include the id column"
+        );
+        assert!(
+            widgets.columns.iter().any(|c| c.name == "name"),
+            "widgets schema should include the name column"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn should_error_when_spec_scheme_is_unsupported() {
+        let result = open_backend("redis://localhost:6379").await;
+
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("unrecognised scheme should error, not open"),
+        };
+        assert!(
+            err.contains("unrecognised --source"),
+            "error should name the problem, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_error_not_panic_when_sqlite_path_is_malformed() {
+        // A path whose parent directory does not exist: rusqlite can neither
+        // find nor create the file, so `Connection::open` errors.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let bogus_dir = std::env::temp_dir().join(format!("sf_serve_no_such_dir_{unique}"));
+        let path = bogus_dir.join("db.sqlite");
+        let spec = format!("sqlite:{}", path.display());
+
+        let result = open_backend(&spec).await;
+
+        assert!(
+            result.is_err(),
+            "opening a sqlite path under a nonexistent directory should error"
+        );
+    }
+}
