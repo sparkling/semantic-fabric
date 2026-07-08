@@ -1006,3 +1006,279 @@ fn composite_pk_self_scans_inside_not_exists_not_merged_on_partial_key_equality(
         "a partial composite-key match must NOT be merged: {scans:?}"
     );
 }
+
+// --- LJ→IJ FK-guaranteed downgrade (round-2 coverage) ----------------------
+// A NOT NULL FK on a core scan + referential integrity to the opt scan's unique
+// (PK) column guarantees a 1:1 match, so OPTIONAL degrades soundly to INNER JOIN.
+
+fn fk_downgrade_schema() -> Vec<TableSchema> {
+    // Reuses the trips/routes shape: trips.rid is a NOT NULL FK to routes.route_id (PK).
+    gtfs_schema()
+}
+
+fn fk_downgrade_branch() -> Branch {
+    let mut b = Branch::single(scan(0, "trips"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "routes"),
+        on: vec![SqlCond::NullSafeEq(
+            ColRef::new(0, "rid"),
+            ColRef::new(1, "route_id"),
+        )],
+        extra: Vec::new(),
+    });
+    b.bindings.insert(
+        "route".into(),
+        iri_template_binding(1, "http://ex/route/", "route_id"),
+    );
+    b
+}
+
+#[test]
+fn lj_downgraded_to_ij_on_notnull_fk_to_unique_opt_column() {
+    // Call the pass DIRECTLY (not through the full `run()` cascade): this fixture's
+    // downgraded shape ALSO qualifies for `fk_pk_join_elimination` (composing
+    // correctly — see the full-pipeline test below), which would eliminate the
+    // routes scan entirely and mask what THIS pass, in isolation, actually does.
+    let mut b = fk_downgrade_branch();
+    joinelim::lj_to_ij_fk_downgrade(&mut b, &fk_downgrade_schema());
+    assert!(
+        b.opts.is_empty(),
+        "the OptJoin must be promoted, not left as OPTIONAL"
+    );
+    assert_eq!(
+        b.core.len(),
+        2,
+        "the opt scan is promoted into core (not eliminated — only downgraded)"
+    );
+    assert!(
+        b.core.iter().any(|s| s.alias == 1),
+        "the promoted routes scan keeps its alias"
+    );
+    // The NullSafeEq becomes a plain ColEq once both sides are proven NOT NULL.
+    assert!(
+        b.where_conds
+            .iter()
+            .any(|c| matches!(c, SqlCond::ColEq(a, o) if a.column.as_ref() == "rid" && o.column.as_ref() == "route_id")),
+        "ON moved to where_conds as a plain ColEq: {:?}", b.where_conds
+    );
+}
+
+#[test]
+fn lj_downgrade_composes_with_fk_pk_elimination_in_the_full_pipeline() {
+    // End-to-end through run(): the downgrade fires first (2b-pre), producing an
+    // inner join that THEN qualifies for full FK/PK elimination (pass 4) — the
+    // routes scan disappears entirely, same end-state as a query that wrote the
+    // join as mandatory (non-OPTIONAL) from the start. Proves the two passes
+    // compose soundly rather than leaving a redundant downgraded-but-unmerged join.
+    let out = run(
+        vec![fk_downgrade_branch()],
+        &fk_downgrade_schema(),
+        &CascadeCtx::default(),
+    );
+    let b = &out[0];
+    assert!(b.opts.is_empty());
+    assert_eq!(
+        b.core.len(),
+        1,
+        "routes fully eliminated after downgrade+FK/PK merge"
+    );
+    assert!(b.where_conds.is_empty());
+}
+
+#[test]
+fn lj_not_downgraded_when_fk_nullable() {
+    // A nullable FK does NOT guarantee a match — LEFT JOIN must stay OPTIONAL
+    // (downgrading would drop rows whose FK is NULL, since INNER JOIN excludes them
+    // while LEFT JOIN keeps them with the opt side unbound).
+    let mut schema = fk_downgrade_schema();
+    schema[0].columns[1].not_null = false; // trips.rid nullable
+    let mut b = fk_downgrade_branch();
+    joinelim::lj_to_ij_fk_downgrade(&mut b, &schema);
+    assert_eq!(b.opts.len(), 1, "nullable FK ⇒ OPTIONAL must be preserved");
+}
+
+#[test]
+fn lj_not_downgraded_when_opt_column_not_unique() {
+    // The opt-side join column must be a unique key (typically the PK) — otherwise
+    // the "match" could be many-to-one and downgrading would fan out rows.
+    let mut schema = fk_downgrade_schema();
+    schema[1].primary_key.clear(); // routes.route_id no longer a declared key
+    let mut b = fk_downgrade_branch();
+    joinelim::lj_to_ij_fk_downgrade(&mut b, &schema);
+    assert_eq!(
+        b.opts.len(),
+        1,
+        "non-unique opt column ⇒ OPTIONAL must be preserved"
+    );
+}
+
+// --- disjunction/IN-shaped intersection simplify (round-2 coverage) --------
+// Two same-column equality-disjunctions (VALUES/IN-shaped) combined by the
+// implicit AND of where_conds must simplify to their SET INTERSECTION.
+
+#[test]
+fn disjunction_intersection_simplifies_two_in_lists_to_their_overlap() {
+    let mut b = Branch::single(scan(0, "emp"));
+    let col = ColRef::new(0, "id");
+    // (id=1 OR id=2 OR id=3) AND (id=2 OR id=3 OR id=4) => id=2 OR id=3
+    b.where_conds.push(SqlCond::Or(vec![
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "1".into()),
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "2".into()),
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "3".into()),
+    ]));
+    b.where_conds.push(SqlCond::Or(vec![
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "2".into()),
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "3".into()),
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "4".into()),
+    ]));
+    let out = run(vec![b], &[], &CascadeCtx::default());
+    assert_eq!(out.len(), 1, "intersection is non-empty; branch survives");
+    assert_eq!(
+        out[0].where_conds.len(),
+        1,
+        "the two disjunctions collapse into one: {:?}",
+        out[0].where_conds
+    );
+    match &out[0].where_conds[0] {
+        SqlCond::Or(arms) => {
+            let vals: Vec<&str> = arms
+                .iter()
+                .map(|a| match a {
+                    SqlCond::Cmp(_, CmpOp::Eq, v) => v.as_str(),
+                    other => panic!("expected Cmp arm, got {other:?}"),
+                })
+                .collect();
+            assert_eq!(vals.len(), 2);
+            assert!(vals.contains(&"2") && vals.contains(&"3"));
+        }
+        other => panic!("expected an Or of the intersection, got {other:?}"),
+    }
+}
+
+#[test]
+fn disjunction_intersection_prunes_branch_when_disjoint() {
+    let mut b = Branch::single(scan(0, "emp"));
+    let col = ColRef::new(0, "id");
+    // (id=1 OR id=2) AND (id=3 OR id=4) => empty intersection => branch unsatisfiable.
+    b.where_conds.push(SqlCond::Or(vec![
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "1".into()),
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "2".into()),
+    ]));
+    b.where_conds.push(SqlCond::Or(vec![
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "3".into()),
+        SqlCond::Cmp(col.clone(), CmpOp::Eq, "4".into()),
+    ]));
+    let out = run(vec![b], &[], &CascadeCtx::default());
+    assert!(
+        out.is_empty(),
+        "disjoint id-lists ⇒ unsatisfiable ⇒ branch pruned"
+    );
+}
+
+#[test]
+fn disjunction_intersection_does_not_fire_on_different_columns() {
+    let mut b = Branch::single(scan(0, "emp"));
+    // (id=1 OR id=2) AND (dept=3 OR dept=4) — different columns, must NOT be
+    // treated as intersectable (they constrain different columns, both must hold).
+    b.where_conds.push(SqlCond::Or(vec![
+        SqlCond::Cmp(ColRef::new(0, "id"), CmpOp::Eq, "1".into()),
+        SqlCond::Cmp(ColRef::new(0, "id"), CmpOp::Eq, "2".into()),
+    ]));
+    b.where_conds.push(SqlCond::Or(vec![
+        SqlCond::Cmp(ColRef::new(0, "dept"), CmpOp::Eq, "3".into()),
+        SqlCond::Cmp(ColRef::new(0, "dept"), CmpOp::Eq, "4".into()),
+    ]));
+    let out = run(vec![b], &[], &CascadeCtx::default());
+    assert_eq!(out.len(), 1);
+    assert_eq!(
+        out[0].where_conds.len(),
+        2,
+        "different-column disjunctions must both survive untouched: {:?}",
+        out[0].where_conds
+    );
+}
+
+// --- DISTINCT-driven unused-OPTIONAL pruning (round-2 coverage) ------------
+// Under DISTINCT, an OPTIONAL whose bound columns are never projected cannot
+// affect the (deduplicated) result — safe to drop regardless of match/no-match.
+
+#[test]
+fn unused_opt_pruned_under_distinct_when_not_projected() {
+    let mut b = Branch::single(scan(0, "emp"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "dept"),
+        on: vec![SqlCond::NullSafeEq(
+            ColRef::new(0, "dept_id"),
+            ColRef::new(1, "id"),
+        )],
+        extra: Vec::new(),
+    });
+    b.bindings.insert("name".into(), col_binding(0, "name"));
+    b.bindings
+        .insert("dept_label".into(), col_binding(1, "label"));
+    let project = vec!["name".to_owned()]; // dept_label NOT projected
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: Some(&project),
+    };
+    let out = run(vec![b], &[], &ctx);
+    assert!(
+        out[0].opts.is_empty(),
+        "the unprojected OPTIONAL must be pruned under DISTINCT"
+    );
+}
+
+#[test]
+fn used_opt_kept_under_distinct_when_projected() {
+    let mut b = Branch::single(scan(0, "emp"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "dept"),
+        on: vec![SqlCond::NullSafeEq(
+            ColRef::new(0, "dept_id"),
+            ColRef::new(1, "id"),
+        )],
+        extra: Vec::new(),
+    });
+    b.bindings.insert("name".into(), col_binding(0, "name"));
+    b.bindings
+        .insert("dept_label".into(), col_binding(1, "label"));
+    let project = vec!["name".to_owned(), "dept_label".to_owned()]; // dept_label IS projected
+    let ctx = CascadeCtx {
+        distinct: true,
+        project: Some(&project),
+    };
+    let out = run(vec![b], &[], &ctx);
+    assert_eq!(
+        out[0].opts.len(),
+        1,
+        "a projected OPTIONAL must be KEPT even under DISTINCT"
+    );
+}
+
+#[test]
+fn unused_opt_not_pruned_without_distinct() {
+    // Without DISTINCT, an unprojected OPTIONAL can still change the projected
+    // ROW COUNT (a matching opt row can fan out the core row) — must NOT be
+    // pruned when DISTINCT is absent.
+    let mut b = Branch::single(scan(0, "emp"));
+    b.opts.push(OptJoin {
+        scan: scan(1, "dept"),
+        on: vec![SqlCond::NullSafeEq(
+            ColRef::new(0, "dept_id"),
+            ColRef::new(1, "id"),
+        )],
+        extra: Vec::new(),
+    });
+    b.bindings.insert("name".into(), col_binding(0, "name"));
+    let project = vec!["name".to_owned()];
+    let ctx = CascadeCtx {
+        distinct: false,
+        project: Some(&project),
+    };
+    let out = run(vec![b], &[], &ctx);
+    assert_eq!(
+        out[0].opts.len(),
+        1,
+        "no DISTINCT ⇒ the unprojected OPTIONAL must be kept (fan-out risk)"
+    );
+}
