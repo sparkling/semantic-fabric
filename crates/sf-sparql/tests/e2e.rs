@@ -1220,7 +1220,11 @@ fn sum_over_all_null_optional_is_unbound() {
     );
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
     let sol = exec::select(&plan, &conn).unwrap();
-    assert_eq!(sol.rows.len(), 1, "implicit grouping yields exactly one row");
+    assert_eq!(
+        sol.rows.len(),
+        1,
+        "implicit grouping yields exactly one row"
+    );
     assert!(
         sol.rows[0][0].is_none(),
         "SUM over an all-unbound operand in a non-empty group is UNBOUND (SPARQL §11), \
