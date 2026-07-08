@@ -4736,19 +4736,58 @@ fn adr0025_tier2_gap1_path_in_exists_notexists_minus() {
         "{PFX} SELECT ?a ?b WHERE {{ ?a ex:reaches ?b FILTER EXISTS {{ ?a ex:reaches+ ?b }} }}"
     ));
 }
-#[test] // reflexive P* / P? inside EXISTS is a sound 501 (fallible prelude — documented boundary).
-fn adr0025_tier2_gap1_reflexive_path_in_exists_sound_501() {
-    let conn = sqlite::load(PE_SQL).unwrap();
+const MP_SQL: &str = r#"
+CREATE TABLE edge (parent INTEGER NOT NULL, child INTEGER NOT NULL);
+INSERT INTO edge VALUES (1, 2);
+CREATE TABLE tagged (id INTEGER PRIMARY KEY, tag TEXT NOT NULL);
+INSERT INTO tagged VALUES (2, 'b');
+INSERT INTO tagged VALUES (9, 'isolated');
+"#;
+const MP_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Edge> rr:logicalTable [ rr:tableName "edge" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{parent}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:reaches ; rr:objectMap [ rr:template "http://ex/n/{child}" ] ] .
+<#Tag> rr:logicalTable [ rr:tableName "tagged" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:tag ; rr:objectMap [ rr:column "tag" ] ] .
+"#;
+
+// ADR-0025 gap 1 (reflexive) SOUNDNESS BOUNDARY: reflexive P*/P? inside EXISTS over a
+// MULTI-predicate graph must sound-501 (never wrong-answer). sf scopes the reflexive (x,x)
+// ZeroLengthPath to the hop predicate's node set, but SPARQL §18.4 covers ALL graph nodes;
+// over a multi-predicate mapping these diverge, so reflexive_sql already 501s the graph-node
+// enumeration (ADR-0007). The Result threading added for gap-1 propagates that 501 through
+// render_cond into the EXISTS instead of a crash-or-wrong-answer. Node 9 is tagged but in NO
+// reaches edge -- the exact case where a naive reflexive would wrongly make EXISTS true.
+#[test]
+fn adr0025_tier2_gap1_reflexive_in_exists_multipred_sound_501() {
+    let conn = sqlite::load(MP_SQL).unwrap();
     let schema = sqlite::introspect_all(&conn).unwrap();
-    let maps = sf_mapping::parse_r2rml(PE_R2RML).unwrap();
-    let q = format!(
-        "{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER EXISTS {{ ?s ex:reaches* ?y }} }}"
-    );
+    let maps = sf_mapping::parse_r2rml(MP_R2RML).unwrap();
+    let q =
+        format!("{PFX} SELECT ?s WHERE {{ ?s ex:tag ?t FILTER EXISTS {{ ?s ex:reaches* ?y }} }}");
     let parsed = parse(&q);
     assert!(
-        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
-        "reflexive P* inside EXISTS must sound-501"
+        tree(&maps, &parsed, &schema).is_err(),
+        "multi-predicate reflexive-in-EXISTS must sound-501, not return a (possibly wrong) answer"
     );
+}
+
+#[test] // reflexive P* / P? inside EXISTS/NOT EXISTS/MINUS now COMPUTE (was sound-501): the
+        // render_cond chain threads the live catalog + returns Result, so the reflexive
+        // prelude's fallible reflexive_sql resolves + propagates at emit. P* is reflexive, so
+        // `EXISTS { ?s :p* ?y }` is always true (?s reaches itself) — spareval agrees.
+fn adr0025_tier2_gap1_reflexive_path_in_exists_now_computes() {
+    for q in [
+        format!("{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER EXISTS {{ ?s ex:reaches* ?y }} }}"),
+        format!("{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER NOT EXISTS {{ ?s ex:reaches* ?y }} }}"),
+        format!("{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s FILTER EXISTS {{ ?s ex:reaches? ?y }} }}"),
+        format!("{PFX} SELECT ?s WHERE {{ ?x ex:reaches ?s MINUS {{ ?s ex:reaches* ?y }} }}"),
+    ] {
+        gap1_case(&q);
+    }
 }
 
 // ADR-0025 Tier-3: the =_bag-meaningful content of the cosmetic SQL-shape backlog is CLOSED

@@ -137,7 +137,7 @@ pub fn emit_branch_with(
         return emit_path_branch(b, pc, dialect, catalog);
     }
     if let Some(agg) = &b.agg {
-        return emit_agg_branch(b, agg, dialect, &actuals);
+        return emit_agg_branch(b, agg, dialect, catalog, &actuals);
     }
     // ADR-0025 (C.3): SQL `DISTINCT` dedups RAW columns, so it implements SPARQL DISTINCT
     // (dedup on the RECONSTRUCTED term) only when every projected term is INJECTIVE in its
@@ -171,9 +171,23 @@ pub fn emit_branch_with(
     let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
-        Some(render_from(b, dialect, &actuals, &mut params, &mut pidx)?)
+        Some(render_from(
+            b,
+            dialect,
+            catalog,
+            &actuals,
+            &mut params,
+            &mut pidx,
+        )?)
     };
-    let where_sql = render_where(&b.where_conds, dialect, &actuals, &mut params, &mut pidx);
+    let where_sql = render_where(
+        &b.where_conds,
+        dialect,
+        catalog,
+        &actuals,
+        &mut params,
+        &mut pidx,
+    )?;
 
     let select_list = if projection.is_empty() {
         "1 AS c0".to_owned()
@@ -406,10 +420,11 @@ fn emit_path_branch(
     if let Some(w) = render_where(
         &b.where_conds,
         dialect,
+        catalog,
         &outer_actuals,
         &mut params,
         &mut pidx,
-    ) {
+    )? {
         skeleton.push_str(" WHERE ");
         skeleton.push_str(&w);
     }
@@ -439,6 +454,7 @@ fn emit_agg_branch(
     b: &Branch,
     agg: &Aggregation,
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     actuals: &HashMap<usize, Vec<String>>,
 ) -> Result<EmittedBranch> {
     let mut params = Vec::new();
@@ -453,9 +469,23 @@ fn emit_agg_branch(
     let from = if b.core.is_empty() && b.subplan_joins.is_empty() && b.opts.is_empty() {
         None
     } else {
-        Some(render_from(b, dialect, actuals, &mut params, &mut pidx)?)
+        Some(render_from(
+            b,
+            dialect,
+            catalog,
+            actuals,
+            &mut params,
+            &mut pidx,
+        )?)
     };
-    let where_sql = render_where(&b.where_conds, dialect, actuals, &mut params, &mut pidx);
+    let where_sql = render_where(
+        &b.where_conds,
+        dialect,
+        catalog,
+        actuals,
+        &mut params,
+        &mut pidx,
+    )?;
 
     // The projection + SELECT list, in lockstep: grouping-key raw columns first
     // (also the GROUP BY columns), then each aggregate expression.
@@ -639,6 +669,7 @@ fn source_sql(source: &LogicalSource, dialect: Dialect) -> String {
 fn render_from(
     b: &Branch,
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     actuals: &HashMap<usize, Vec<String>>,
     params: &mut Vec<String>,
     pidx: &mut usize,
@@ -692,7 +723,9 @@ fn render_from(
             from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
-            from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+            from.push_str(&render_conjunction(
+                &conds, dialect, catalog, actuals, params, pidx,
+            )?);
         }
         for sp in &b.subplan_joins {
             let join_kw = if sp.left {
@@ -704,7 +737,9 @@ fn render_from(
             if !sp.on.is_empty() {
                 from.push_str(" ON ");
                 let conds: Vec<&SqlCond> = sp.on.iter().collect();
-                from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+                from.push_str(&render_conjunction(
+                    &conds, dialect, catalog, actuals, params, pidx,
+                )?);
             } else {
                 from.push_str(" ON 1 = 1");
             }
@@ -723,7 +758,9 @@ fn render_from(
             from.push_str(&scan_ref(&opt.scan.source, opt.scan.alias, dialect));
             from.push_str(" ON ");
             let conds: Vec<&SqlCond> = opt.on.iter().chain(opt.extra.iter()).collect();
-            from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+            from.push_str(&render_conjunction(
+                &conds, dialect, catalog, actuals, params, pidx,
+            )?);
         }
         for sp in &b.subplan_joins {
             let join_kw = if sp.left {
@@ -735,7 +772,9 @@ fn render_from(
             if !sp.on.is_empty() {
                 from.push_str(" ON ");
                 let conds: Vec<&SqlCond> = sp.on.iter().collect();
-                from.push_str(&render_conjunction(&conds, dialect, actuals, params, pidx));
+                from.push_str(&render_conjunction(
+                    &conds, dialect, catalog, actuals, params, pidx,
+                )?);
             } else {
                 from.push_str(" ON 1 = 1");
             }
@@ -829,42 +868,47 @@ fn scan_ref(source: &LogicalSource, alias: usize, dialect: Dialect) -> String {
 fn render_where(
     conds: &[SqlCond],
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     actuals: &HashMap<usize, Vec<String>>,
     params: &mut Vec<String>,
     pidx: &mut usize,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if conds.is_empty() {
-        return None;
+        return Ok(None);
     }
     let refs: Vec<&SqlCond> = conds.iter().collect();
-    Some(render_conjunction(&refs, dialect, actuals, params, pidx))
+    Ok(Some(render_conjunction(
+        &refs, dialect, catalog, actuals, params, pidx,
+    )?))
 }
 
 fn render_conjunction(
     conds: &[&SqlCond],
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     actuals: &HashMap<usize, Vec<String>>,
     params: &mut Vec<String>,
     pidx: &mut usize,
-) -> String {
+) -> Result<String> {
     if conds.is_empty() {
-        return "1 = 1".to_owned();
+        return Ok("1 = 1".to_owned());
     }
-    conds
+    Ok(conds
         .iter()
-        .map(|c| render_cond(c, dialect, actuals, params, pidx))
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .map(|c| render_cond(c, dialect, catalog, actuals, params, pidx))
+        .collect::<Result<Vec<_>>>()?
+        .join(" AND "))
 }
 
 fn render_cond(
     cond: &SqlCond,
     dialect: Dialect,
+    catalog: &ColumnCatalog,
     actuals: &HashMap<usize, Vec<String>>,
     params: &mut Vec<String>,
     pidx: &mut usize,
-) -> String {
-    match cond {
+) -> Result<String> {
+    Ok(match cond {
         SqlCond::ColEq(a, b) => {
             format!(
                 "{} = {}",
@@ -902,22 +946,25 @@ fn render_cond(
         }
         SqlCond::IsNotNull(a) => format!("{} IS NOT NULL", colref(a, dialect, actuals)),
         SqlCond::IsNull(a) => format!("{} IS NULL", colref(a, dialect, actuals)),
-        SqlCond::Not(c) => format!("(NOT {})", render_cond(c, dialect, actuals, params, pidx)),
+        SqlCond::Not(c) => format!(
+            "(NOT {})",
+            render_cond(c, dialect, catalog, actuals, params, pidx)?
+        ),
         SqlCond::And(cs) => {
             let refs: Vec<&SqlCond> = cs.iter().collect();
             format!(
                 "({})",
-                render_conjunction(&refs, dialect, actuals, params, pidx)
+                render_conjunction(&refs, dialect, catalog, actuals, params, pidx)?
             )
         }
         SqlCond::Or(cs) => {
             if cs.is_empty() {
-                return "1 = 0".to_owned();
+                return Ok("1 = 0".to_owned());
             }
             let parts: Vec<String> = cs
                 .iter()
-                .map(|c| render_cond(c, dialect, actuals, params, pidx))
-                .collect();
+                .map(|c| render_cond(c, dialect, catalog, actuals, params, pidx))
+                .collect::<Result<Vec<_>>>()?;
             format!("({})", parts.join(" OR "))
         }
         // MINUS anti-join (SPARQL §8.3): a correlated `NOT EXISTS` over the right
@@ -939,7 +986,7 @@ fn render_cond(
                     acc
                 });
             let refs: Vec<&SqlCond> = conds.iter().collect();
-            let where_sql = render_conjunction(&refs, dialect, actuals, params, pidx);
+            let where_sql = render_conjunction(&refs, dialect, catalog, actuals, params, pidx)?;
             let kw = if neg { "NOT EXISTS" } else { "EXISTS" };
             if from.is_empty() {
                 format!("{kw} (SELECT 1 WHERE {where_sql})")
@@ -949,24 +996,21 @@ fn render_cond(
         }
         // ADR-0025 Tier-2 gap 1: a correlated [NOT] EXISTS whose inner is a property-path
         // CLOSURE — the recursive-CTE distinct-pairs table `t{pc.alias}(sf_s, sf_o)`. The
-        // prelude uses dialect-neutral (empty-catalog) column resolution — exact for the
-        // SQLite `=_bag` oracle and standard mappings. Only the INFALLIBLE `One`/`OneOrMore`
-        // path kinds reach here (`lower_iq_exists` sound-501s the reflexive `P*`/`P?` kinds,
-        // whose prelude calls the fallible `reflexive_sql`), so `unwrap_or_default` never
-        // fires; if it ever did, the empty prelude yields an undefined-table SQL ERROR (a
-        // sound failure), never a wrong answer.
+        // prelude resolves its own base columns against the live `catalog` (threaded through
+        // this render chain), so ALL path kinds — including the reflexive `P*`/`P?`, whose
+        // prelude calls the fallible `reflexive_sql` — render here; the `?` propagates any
+        // prelude error soundly instead of the old empty-catalog `unwrap_or_default`.
         SqlCond::PathExists { pc, conds, negated } => {
-            let with =
-                path_with_prelude(pc, dialect, &ColumnCatalog::default()).unwrap_or_default();
+            let with = path_with_prelude(pc, dialect, catalog)?;
             let refs: Vec<&SqlCond> = conds.iter().collect();
-            let where_sql = render_conjunction(&refs, dialect, actuals, params, pidx);
+            let where_sql = render_conjunction(&refs, dialect, catalog, actuals, params, pidx)?;
             let kw = if *negated { "NOT EXISTS" } else { "EXISTS" };
             format!(
                 "{kw} ({with} SELECT 1 FROM t{} WHERE {where_sql})",
                 pc.alias
             )
         }
-    }
+    })
 }
 
 fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {

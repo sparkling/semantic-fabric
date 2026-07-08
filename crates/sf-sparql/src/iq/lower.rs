@@ -699,19 +699,10 @@ fn lower_iq_exists(
     for r in &inner {
         // ADR-0025 Tier-2 gap 1: a property-path CLOSURE inside EXISTS/NOT EXISTS/MINUS is
         // lowered to a correlated `SqlCond::PathExists` (built at the construction below).
-        // The REFLEXIVE kinds (`P*`/`P?`) still 501: their emitted prelude calls the fallible
-        // `reflexive_sql`, which the infallible `render_cond` cannot propagate — a bounded
-        // follow-up. `P+` and the length-1 composites (`p/q`/`^p`/`p|q`) proceed.
-        if let Some(pc) = &r.path {
-            if matches!(
-                pc.kind,
-                crate::iq::PathKind::ZeroOrMore | crate::iq::PathKind::ZeroOrOne
-            ) {
-                return Err(Error::Unsupported(format!(
-                    "{op} with a reflexive property-path inner (P* / P?) is deferred → 501 (v1)"
-                )));
-            }
-        }
+        // ALL path kinds proceed — including the reflexive `P*`/`P?`: `render_cond` now
+        // threads the live `ColumnCatalog` and returns `Result`, so their prelude's fallible
+        // `reflexive_sql` is resolved + error-propagated at emit time (a sound failure, never
+        // a wrong answer) rather than pre-emptively 501'd here.
         // An inner branch carrying its OWN SubPlan derived table (a modifier sub-SELECT
         // joined INSIDE this EXISTS / NOT EXISTS / MINUS body — e.g. `EXISTS { ?a p ?nm .
         // { SELECT DISTINCT ?x … } }`, ADR-0023 Item 1d) has NO representation in the
