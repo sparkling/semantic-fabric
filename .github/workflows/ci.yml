@@ -23,6 +23,17 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: test
         run: cargo test --workspace
+      # DuckDB backend (embedded, `bundled` feature — no external service needed).
+      # `cargo test --workspace` above doesn't enable `duckdb-backend` and no other
+      # crate in the dependency graph turns it on, so these tests never ran in CI
+      # until this dedicated step was added.
+      - name: test (sf-sql duckdb-backend)
+        run: cargo test -p sf-sql --features duckdb-backend
+      # SAP HANA marshalling/quoting unit tests only (backend::hana::tests::with_driver) —
+      # pure value-marshalling logic with no connection, safe to run here. The rest of
+      # the hana-backend surface needs a live SAP HANA server, so it's excluded.
+      - name: test (sf-sql hana-backend marshalling)
+        run: cargo test -p sf-sql --features hana-backend backend::hana::tests::with_driver
       # W3C RDB2RDF conformance gate (ADR-0005) — verified 2026-07-05: 82 adjudicated,
       # 0 unexpected failures, 1 documented deviation (ADR-0015). The conformance run
       # regenerates the EARL report files with non-deterministic bnode labels; that
