@@ -120,7 +120,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0004b> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — mapping parse: mapping error: subject map _:dc7f1b5cc4ab8351fb9721cb81aaa3a3 has rr:termType rr:Literal (must be IRI or blank node)" ] .
+    dct:description "error correctly surfaced — mapping parse: mapping error: subject map _:aab596d1440c81f27aa5a3d65f505337 has rr:termType rr:Literal (must be IRI or blank node)" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
@@ -187,7 +187,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0007h> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — mapping parse: mapping error: predicate/graph term map _:fa8f5f90972a1b682520d8f805e38109 must have rr:termType rr:IRI" ] .
+    dct:description "error correctly surfaced — mapping parse: mapping error: predicate/graph term map _:ff0866264fbc714bb8dd7be9a8bca828 must have rr:termType rr:IRI" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
@@ -334,7 +334,7 @@
   earl:subject <https://example.org/tools/semantic-fabric> ;
   earl:test <http://www.w3.org/2001/sw/rdb2rdf/test-cases/#R2RMLTC0015b> ;
   earl:result [ a earl:TestResult ; earl:outcome earl:passed ;
-    dct:description "error correctly surfaced — mapping parse: mapping error: rr:language \"english\" of _:c52c7bc0edccdbbf3b9c7672dcab419 is not a valid BCP47 language tag" ] .
+    dct:description "error correctly surfaced — mapping parse: mapping error: rr:language \"english\" of _:e7345fb45f10a60a42e8cce06ed5be64 is not a valid BCP47 language tag" ] .
 
 [] a earl:Assertion ;
   earl:assertedBy <https://example.org/tools/semantic-fabric> ;
