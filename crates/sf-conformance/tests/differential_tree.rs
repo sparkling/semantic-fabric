@@ -5159,3 +5159,81 @@ fn cascade_lj_to_ij_downgrade_end_to_end_matches_oracle() {
         "{PFX} SELECT ?p ?n ?d WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d }} }}"
     ));
 }
+
+// Round-2 adversarial bug hunt (leftjoin.rs / unfold.rs, the OPTIONAL/MINUS
+// decomposition machinery): 7 hypotheses attacking the shapes NOT already
+// covered by leftjoin.rs's own extensive documented prior-bug guards. ALL
+// matched the spareval oracle — no wrong answer found. Locked in as regression
+// tests for these previously-unexercised shapes.
+#[test]
+fn leftjoin_hunt_no_shared_variable_multibranch_optional_is_cartesian() {
+    // OPTIONAL right shares NO variable with left, right is multi-branch (UNION)
+    // — degenerates to a full cross-join per SPARQL's Join()-on-disjoint-domains
+    // algebra (forces the ISWC-2018 decomposition path, not the single-scan fast
+    // path used elsewhere in this file's other coverage).
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?lbl WHERE {{ ?p ex:name ?n OPTIONAL {{ {{ ?x ex:label ?lbl }} UNION {{ ?y ex:label2 ?lbl }} }} }}"
+    ));
+}
+
+#[test]
+fn leftjoin_hunt_filter_on_union_arm_specific_variable() {
+    // FILTER inside a multi-branch (UNION) OPTIONAL referencing a var bound by
+    // only ONE arm — the other arm's not_exists_cond_for/inner_join_one call must
+    // evaluate the FILTER using ONLY that arm's own bindings.
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?a ?b WHERE {{ ?p ex:name ?n OPTIONAL {{ {{ ?p ex:a ?a }} UNION {{ ?p ex:b ?b }} FILTER(?a > 5) }} }}"
+    ));
+}
+
+#[test]
+fn leftjoin_hunt_triple_nested_optional_coalesce_cascade() {
+    // Three sequential OPTIONALs cascading COALESCE — nullable_aliases() must
+    // accumulate correctly across all three so null-safety composes through the
+    // whole chain, not just a single hop.
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?d ?e WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d }} OPTIONAL {{ ?d ex:label ?e }} OPTIONAL {{ ?e ex:extra ?f }} }}"
+    ));
+}
+
+#[test]
+fn leftjoin_hunt_multibranch_optional_preserves_per_arm_multiplicity() {
+    // A left row matching BOTH UNION arms of the OPTIONAL right must produce TWO
+    // solutions (bag union of matches), not deduped to one or miscounted.
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?d WHERE {{ ?p ex:name ?n OPTIONAL {{ {{ ?p ex:dept ?d }} UNION {{ ?p ex:dept ?d }} }} }}"
+    ));
+}
+
+#[test]
+fn leftjoin_hunt_multiscan_optional_join_inside_right() {
+    // OPTIONAL right is a MULTI-SCAN single branch (a JOIN inside the OPTIONAL,
+    // `?p ex:dept ?d . ?d ex:label ?e` — two scans in ONE branch) — forces the
+    // decomposition via right.core.len()>1, a different trigger than a UNION.
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?d ?e WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?e }} }}"
+    ));
+}
+
+#[test]
+fn leftjoin_hunt_multiscan_optional_filter_on_second_scan_var() {
+    // Same multi-scan OPTIONAL, with an inner FILTER on the SECOND scan's own
+    // variable (not a left/right-shared var) — the FILTER's combined bindings
+    // must correctly resolve a variable that right binds entirely internally.
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?d ?e WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d . ?d ex:label ?e FILTER(?e = \"Sales\") }} }}"
+    ));
+}
+
+#[test]
+fn leftjoin_hunt_nullable_left_var_shared_with_multibranch_right() {
+    // The FIRST optional binds ?d (nullable via COALESCE). The SECOND optional's
+    // right is MULTI-BRANCH (UNION) and shares ?d with the now-nullable left —
+    // proves null-safety composes correctly into inner_join_one/
+    // not_exists_cond_for (the decomposition path), not just build_left_join
+    // (the single-scan fast path, already covered by the triple-cascade test
+    // above where every hop is single-scan).
+    diff_p(&format!(
+        "{PFX} SELECT ?n ?d ?x WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d }} OPTIONAL {{ {{ ?d ex:label ?x }} UNION {{ ?d ex:altlabel ?x }} }} }}"
+    ));
+}
