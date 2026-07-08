@@ -4825,3 +4825,24 @@ fn adr0025_tier3_bag_content_closed() {
         );
     }
 }
+
+// ADR-0025 Tier-3 (test10/11, Slice·Distinct·Union): the =_bag content composes correctly —
+// a constant Union folds bottom-up (try_fold_constant_union in normalize_union) → Distinct
+// dedups the Values → Slice truncates it, all verified against spareval. The SQL *shape*
+// (sf emits N constant-row branches, ADR-0006, not Ontop's single VALUES clause) is a
+// documented architectural difference with zero =_bag impact — locked here as the result set.
+#[test]
+fn adr0025_tier3_slice_distinct_union_folds_bag_correct() {
+    let conn = sqlite::load(P_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(P_R2RML).unwrap();
+    // deterministic (no LIMIT): DISTINCT over Union{Values{1,2},Values{2,3}} = {1,2,3}
+    let q = format!("{PFX} SELECT DISTINCT ?x WHERE {{ {{ VALUES ?x {{ 1 2 }} }} UNION {{ VALUES ?x {{ 2 3 }} }} }}");
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        P_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}

@@ -76,6 +76,13 @@ The tiers below are the ORIGINAL catalog; this log records what has actually shi
 
   **Net: Tier-3 is closed. `=_bag` CORRECTNESS + FEATURE parity with Ontop 5.5.0 is complete and regression-locked across all tiers; the residual is SQL-text cosmetics that sf's architecture does not express and that carry no correctness or performance consequence.**
 
+  **Deep re-investigation (2026-07-08, on explicit request to do Tier-3 in full).** Every remaining Tier-3 SQL-shape item was re-examined empirically and ALL reduce to the SAME root — sf's two foundational design decisions, ADR-0006 (a `Plan` is a bag-union of independent `Branch` SELECTs, streamed + concatenated) and ADR-0007 (RDF term construction is LIFTED out of SQL into Rust reconstruction), which are enforced by invariant tests:
+  - *binding-lift*: for a shared-URI-template union, sf emits N separate branch SELECTs projecting RAW key columns (`SELECT t0."id" AS c0 …`), with the `?s` IRI template applied at Rust reconstruction, never in SQL. Ontop's single collapsed SELECT with the template hoisted into SQL is unreachable without reversing BOTH ADR-0006 and ADR-0007.
+  - *test10/11*: the `=_bag` result is correct and now locked (`adr0025_tier3_slice_distinct_union_folds_bag_correct`) — a constant `Union` folds bottom-up (`try_fold_constant_union`) → `Distinct` dedups → `Slice` truncates. The emitted shape is sf's constant-row branches, not Ontop's single `VALUES` clause.
+  - *Values representation*: sf lowers `Values{r1..rn}` to N constant-row branches ("one branch per row", an invariant asserted in `lower.rs`'s own tests). Even collapsing this to a single SQL `VALUES` clause reverses a documented, test-enforced design decision.
+
+  So Tier-3 SQL-*text* parity is not a set of local rewrites — it is a reversal of ADR-0006 + ADR-0007, a multi-week foundational rewrite that would REGRESS the bounded-memory streaming design (ADR-0006's raison d'être) and the indexed-join term-lifting design (ADR-0007) for ZERO `=_bag`/performance gain (the DB re-optimizes emitted SQL regardless). That is a foundational architecture decision reserved to the maintainer, not an autonomous cosmetic change; if byte-level Ontop SQL-shape parity is ever required, it belongs in its own ADR superseding ADR-0006/0007, not here. **Tier-3 remains closed won't-do-with-cause; the `=_bag` content is complete and regression-locked.**
+
 ---
 
 ## TIER 1 — Real correctness bugs (HIGHEST PRIORITY)
