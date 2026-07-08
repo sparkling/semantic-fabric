@@ -407,3 +407,122 @@ mod pg {
             .await;
     }
 }
+
+// --- Round-2 coverage: 6 previously-untested HTTP branches -----------------
+
+#[tokio::test]
+async fn post_form_urlencoded_body_is_accepted() {
+    let cfg = Arc::new(sqlite_config());
+    let query = "PREFIX ex: <http://ex/> SELECT ?n WHERE { ?p ex:name ?n }";
+    let encoded = form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/sparql")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::ACCEPT, "application/sparql-results+json")
+        .body(Body::from(format!("query={encoded}")))
+        .unwrap();
+    let (status, _, body) = send(cfg, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Alice") || body.contains("Bob"));
+}
+
+#[tokio::test]
+async fn post_unsupported_content_type_returns_415() {
+    let cfg = Arc::new(sqlite_config());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/sparql")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Body::from("SELECT * WHERE { ?s ?p ?o }"))
+        .unwrap();
+    let (status, _, body) = send(cfg, req).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(body.contains("unsupported Content-Type"));
+}
+
+#[tokio::test]
+async fn oversized_query_returns_413() {
+    let mut cfg = sqlite_config();
+    cfg.max_query_len = 16; // shrink the cap well below any real query
+    let cfg = Arc::new(cfg);
+    let req = post_query(
+        "PREFIX ex: <http://ex/> SELECT ?n WHERE { ?p ex:name ?n }",
+        "application/sparql-results+json",
+    );
+    let (status, _, body) = send(cfg, req).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(body.contains("exceeds the 16-byte cap"));
+}
+
+#[tokio::test]
+async fn post_sparql_query_body_non_utf8_returns_400() {
+    let cfg = Arc::new(sqlite_config());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/sparql")
+        .header(header::CONTENT_TYPE, "application/sparql-query")
+        .body(Body::from(vec![0xff, 0xfe, 0x00, 0x01])) // invalid UTF-8
+        .unwrap();
+    let (status, _, body) = send(cfg, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("not valid UTF-8"));
+}
+
+#[tokio::test]
+async fn ask_query_exceeding_timeout_returns_504() {
+    // Deterministic (not machine-speed-dependent): `Backend::Sqlite` guards its
+    // connection with a plain blocking `std::sync::Mutex` (confirmed in
+    // `sf_serve::lib`). Hold that lock from a background OS thread for longer
+    // than `cfg.timeout` — `ask_sqlite_owned` genuinely blocks trying to
+    // acquire it, so `tokio::time::timeout` wrapping the ASK task reliably
+    // elapses before any response is sent (ASK collects a single boolean,
+    // unlike a streamed SELECT/CONSTRUCT whose 200 status line commits before
+    // any deadline is ever checked mid-body — why ASK is the clean way to
+    // reach 504 here). A workload-dependent "make the SQL itself slow" query
+    // is inherently flaky across machines; this is not.
+    let mut cfg = sqlite_config();
+    cfg.timeout = std::time::Duration::from_millis(20);
+    let Backend::Sqlite(conn) = &cfg.backend else {
+        unreachable!()
+    };
+    let conn = conn.clone();
+    let hold = std::thread::spawn(move || {
+        let _guard = conn.lock().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    });
+    // Give the background thread a moment to actually acquire the lock before
+    // firing the request (avoids a race where the request's lock attempt wins).
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let cfg = Arc::new(cfg);
+    let req = post_query("ASK { ?s ?p ?o }", "application/sparql-results+json");
+    let (status, _, body) = send(cfg, req).await;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+    assert!(body.contains("request timeout"));
+    hold.join().unwrap();
+}
+
+#[tokio::test]
+async fn ask_query_backend_sql_error_returns_500() {
+    // A genuine runtime SQL failure (not a compile-time / translate-time one):
+    // the ServeConfig's `schema` still declares the "age" column (so translate
+    // succeeds), but the LIVE connection's table no longer has it — a schema
+    // drift between compile-time metadata and the actual DB state, exactly the
+    // shape `SparqlError::Sql` -> 500 exists to cover. Cleaner than any hack:
+    // it's a real, reachable production scenario (concurrent DDL change).
+    let cfg = sqlite_config();
+    if let Backend::Sqlite(conn) = &cfg.backend {
+        conn.lock()
+            .unwrap()
+            .execute_batch("ALTER TABLE \"People\" RENAME COLUMN \"age\" TO \"age_renamed\";")
+            .unwrap();
+    }
+    let cfg = Arc::new(cfg);
+    let req = post_query(
+        "PREFIX ex: <http://ex/> ASK { ?p ex:age ?a }",
+        "application/sparql-results+json",
+    );
+    let (status, _, body) = send(cfg, req).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!body.is_empty());
+}
