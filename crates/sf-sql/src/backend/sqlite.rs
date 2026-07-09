@@ -341,3 +341,145 @@ fn lexical_typed(v: ValueRef<'_>, code: Option<XsdTypeCode>) -> Result<Option<St
     }
     lexical(v)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- storage_class_code -----------------------------------------------
+
+    #[test]
+    fn storage_class_code_integer_maps_to_xsd_integer() {
+        assert_eq!(
+            storage_class_code(&ValueRef::Integer(42)),
+            Some(XsdTypeCode::Integer)
+        );
+    }
+
+    #[test]
+    fn storage_class_code_real_maps_to_xsd_double() {
+        assert_eq!(
+            storage_class_code(&ValueRef::Real(1.5)),
+            Some(XsdTypeCode::Double)
+        );
+    }
+
+    #[test]
+    fn storage_class_code_blob_maps_to_hex_binary() {
+        assert_eq!(
+            storage_class_code(&ValueRef::Blob(&[1, 2, 3])),
+            Some(XsdTypeCode::HexBinary)
+        );
+    }
+
+    #[test]
+    fn storage_class_code_text_and_null_carry_no_implied_type() {
+        assert_eq!(storage_class_code(&ValueRef::Text(b"hi")), None);
+        assert_eq!(storage_class_code(&ValueRef::Null), None);
+    }
+
+    // --- char_pad_len -------------------------------------------------------
+
+    #[test]
+    fn char_pad_len_parses_char_with_length() {
+        assert_eq!(char_pad_len("CHAR(10)"), Some(10));
+        assert_eq!(char_pad_len("CHARACTER(5)"), Some(5));
+        assert_eq!(char_pad_len("NCHAR(3)"), Some(3));
+    }
+
+    #[test]
+    fn char_pad_len_is_case_insensitive_and_tolerates_whitespace() {
+        assert_eq!(char_pad_len("char (7)"), Some(7));
+        assert_eq!(char_pad_len("  Character(2)"), Some(2));
+    }
+
+    #[test]
+    fn char_pad_len_rejects_varying_types() {
+        // VARCHAR is a *varying*-length type — never padded, even with an
+        // explicit (n).
+        assert_eq!(char_pad_len("VARCHAR(10)"), None);
+    }
+
+    #[test]
+    fn char_pad_len_rejects_no_length_or_malformed_decl() {
+        assert_eq!(char_pad_len("CHAR"), None); // no parens at all
+        assert_eq!(char_pad_len("CHAR()"), None); // empty parens
+        assert_eq!(char_pad_len("TEXT"), None);
+    }
+
+    // --- lexical --------------------------------------------------------------
+
+    #[test]
+    fn lexical_null_is_none() {
+        assert_eq!(lexical(ValueRef::Null).unwrap(), None);
+    }
+
+    #[test]
+    fn lexical_integer_and_real_render_via_to_string() {
+        assert_eq!(lexical(ValueRef::Integer(7)).unwrap(), Some("7".to_owned()));
+        assert_eq!(
+            lexical(ValueRef::Real(1.5)).unwrap(),
+            Some("1.5".to_owned())
+        );
+    }
+
+    #[test]
+    fn lexical_valid_utf8_text_passes_through() {
+        assert_eq!(
+            lexical(ValueRef::Text(b"hello")).unwrap(),
+            Some("hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn lexical_non_utf8_text_is_a_hard_marshal_error() {
+        let invalid = &[0xff, 0xfe][..];
+        let err = lexical(ValueRef::Text(invalid)).unwrap_err();
+        assert!(
+            matches!(err, Error::Marshal(_)),
+            "expected Marshal, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn lexical_bare_blob_is_a_hard_marshal_error() {
+        // lexical() (unlike lexical_typed()) has no target-type context, so it
+        // can never soundly decide a BLOB is hexBinary — always errors.
+        let err = lexical(ValueRef::Blob(&[1, 2, 3])).unwrap_err();
+        assert!(
+            matches!(err, Error::Marshal(_)),
+            "expected Marshal, got {err:?}"
+        );
+    }
+
+    // --- lexical_typed --------------------------------------------------------
+
+    #[test]
+    fn lexical_typed_blob_with_hexbinary_target_encodes_uppercase_hex() {
+        let out = lexical_typed(
+            ValueRef::Blob(&[0xde, 0xad, 0xbe, 0xef]),
+            Some(XsdTypeCode::HexBinary),
+        )
+        .unwrap();
+        assert_eq!(out, Some("DEADBEEF".to_owned()));
+    }
+
+    #[test]
+    fn lexical_typed_blob_without_hexbinary_target_still_errors() {
+        // A BLOB feeding a non-hexBinary-typed column (or no declared type) has
+        // no sound rendering — falls through to lexical()'s hard error.
+        let err = lexical_typed(ValueRef::Blob(&[1, 2, 3]), None).unwrap_err();
+        assert!(matches!(err, Error::Marshal(_)));
+        let err2 =
+            lexical_typed(ValueRef::Blob(&[1, 2, 3]), Some(XsdTypeCode::String)).unwrap_err();
+        assert!(matches!(err2, Error::Marshal(_)));
+    }
+
+    #[test]
+    fn lexical_typed_non_blob_delegates_to_lexical_regardless_of_code() {
+        assert_eq!(
+            lexical_typed(ValueRef::Integer(9), Some(XsdTypeCode::HexBinary)).unwrap(),
+            Some("9".to_owned())
+        );
+    }
+}

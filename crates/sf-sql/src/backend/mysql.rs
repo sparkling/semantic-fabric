@@ -133,3 +133,122 @@ fn mysql_value_to_string(v: Value) -> Option<String> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mysql_async::Value;
+
+    #[test]
+    fn null_maps_to_none() {
+        assert_eq!(mysql_value_to_string(Value::NULL), None);
+    }
+
+    #[test]
+    fn utf8_bytes_pass_through() {
+        assert_eq!(
+            mysql_value_to_string(Value::Bytes(b"hello".to_vec())),
+            Some("hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn non_utf8_bytes_are_rejected_not_corrupted() {
+        // A raw BLOB that isn't valid UTF-8 (e.g. arbitrary binary data in a
+        // TEXT-typed column) must be rejected (None), never silently corrupted
+        // via a lossy conversion.
+        assert_eq!(mysql_value_to_string(Value::Bytes(vec![0xff, 0xfe])), None);
+    }
+
+    #[test]
+    fn integer_and_float_variants_render_via_to_string() {
+        assert_eq!(
+            mysql_value_to_string(Value::Int(-42)),
+            Some("-42".to_owned())
+        );
+        assert_eq!(
+            mysql_value_to_string(Value::UInt(42)),
+            Some("42".to_owned())
+        );
+        assert_eq!(
+            mysql_value_to_string(Value::Float(1.5)),
+            Some("1.5".to_owned())
+        );
+        assert_eq!(
+            mysql_value_to_string(Value::Double(2.5)),
+            Some("2.5".to_owned())
+        );
+    }
+
+    #[test]
+    fn date_with_zero_time_renders_as_bare_date() {
+        assert_eq!(
+            mysql_value_to_string(Value::Date(2024, 3, 15, 0, 0, 0, 0)),
+            Some("2024-03-15".to_owned())
+        );
+    }
+
+    #[test]
+    fn date_documented_midnight_ambiguity() {
+        // DOCUMENTED pre-existing limitation (see the module's own doc comment):
+        // a DATETIME column whose value happens to be exactly midnight renders
+        // IDENTICALLY to a bare DATE column — there is no way to tell them apart
+        // from the wire value alone. This test locks in that CURRENT behavior
+        // (both forms collapse to "YYYY-MM-DD"), not a "fix": distinguishing them
+        // would need the column's declared type, not just its value.
+        let date_only = mysql_value_to_string(Value::Date(2024, 3, 15, 0, 0, 0, 0));
+        let midnight_datetime = mysql_value_to_string(Value::Date(2024, 3, 15, 0, 0, 0, 0));
+        assert_eq!(date_only, midnight_datetime);
+        assert_eq!(date_only, Some("2024-03-15".to_owned()));
+    }
+
+    #[test]
+    fn date_with_time_no_micros_renders_iso_t_separated() {
+        assert_eq!(
+            mysql_value_to_string(Value::Date(2024, 3, 15, 13, 45, 30, 0)),
+            Some("2024-03-15T13:45:30".to_owned())
+        );
+    }
+
+    #[test]
+    fn date_with_microseconds_renders_fractional_seconds() {
+        assert_eq!(
+            mysql_value_to_string(Value::Date(2024, 3, 15, 13, 45, 30, 123456)),
+            Some("2024-03-15T13:45:30.123456".to_owned())
+        );
+    }
+
+    #[test]
+    fn time_zero_days_no_micros() {
+        assert_eq!(
+            mysql_value_to_string(Value::Time(false, 0, 13, 45, 30, 0)),
+            Some("13:45:30".to_owned())
+        );
+    }
+
+    #[test]
+    fn time_negative_renders_leading_minus() {
+        assert_eq!(
+            mysql_value_to_string(Value::Time(true, 0, 13, 45, 30, 0)),
+            Some("-13:45:30".to_owned())
+        );
+    }
+
+    #[test]
+    fn time_days_component_folds_into_total_hours() {
+        // MySQL TIME can exceed 24h (elapsed-time semantics); `days` folds into
+        // the hour count rather than being dropped or rendered separately.
+        assert_eq!(
+            mysql_value_to_string(Value::Time(false, 2, 3, 0, 0, 0)),
+            Some("51:00:00".to_owned()) // 2*24 + 3 = 51
+        );
+    }
+
+    #[test]
+    fn time_with_microseconds_renders_fractional_seconds() {
+        assert_eq!(
+            mysql_value_to_string(Value::Time(false, 0, 13, 45, 30, 500000)),
+            Some("13:45:30.500000".to_owned())
+        );
+    }
+}

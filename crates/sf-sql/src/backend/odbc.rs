@@ -228,6 +228,84 @@ pub mod real {
         }
         result
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::inline_params_odbc;
+
+        #[test]
+        fn no_params_returns_sql_unchanged() {
+            assert_eq!(inline_params_odbc("SELECT 1", &[]), "SELECT 1");
+        }
+
+        #[test]
+        fn single_param_is_quoted_in_place() {
+            assert_eq!(
+                inline_params_odbc("SELECT * FROM t WHERE id = ?", &["42".to_owned()]),
+                "SELECT * FROM t WHERE id = '42'"
+            );
+        }
+
+        #[test]
+        fn multiple_params_substitute_positionally_in_order() {
+            assert_eq!(
+                inline_params_odbc(
+                    "SELECT * FROM t WHERE a = ? AND b = ?",
+                    &["x".to_owned(), "y".to_owned()]
+                ),
+                "SELECT * FROM t WHERE a = 'x' AND b = 'y'"
+            );
+        }
+
+        #[test]
+        fn embedded_single_quote_in_a_value_is_escaped_by_doubling() {
+            // The SQL-injection-relevant path: a value containing `'` must be
+            // escaped ('' ) so it can never terminate the literal early and
+            // splice attacker-controlled SQL into the statement.
+            assert_eq!(
+                inline_params_odbc("SELECT * FROM t WHERE name = ?", &["O'Brien".to_owned()]),
+                "SELECT * FROM t WHERE name = 'O''Brien'"
+            );
+        }
+
+        #[test]
+        fn a_value_containing_a_literal_question_mark_is_not_treated_as_a_placeholder() {
+            // Only `?` characters in the SQL TEXT are placeholders; a `?` that
+            // arrives INSIDE a bound value's content must pass through as plain
+            // data (it isn't re-scanned once inside the quoted literal).
+            assert_eq!(
+                inline_params_odbc("SELECT * FROM t WHERE q = ?", &["what?".to_owned()]),
+                "SELECT * FROM t WHERE q = 'what?'"
+            );
+        }
+
+        #[test]
+        fn more_placeholders_than_params_leaves_the_extra_question_marks_untouched() {
+            // Fewer params than `?`s: the exhausted iterator leaves each
+            // remaining placeholder as a literal `?` rather than panicking or
+            // silently dropping characters.
+            assert_eq!(
+                inline_params_odbc("SELECT * FROM t WHERE a = ? AND b = ?", &["x".to_owned()]),
+                "SELECT * FROM t WHERE a = 'x' AND b = ?"
+            );
+        }
+
+        #[test]
+        fn empty_string_param_renders_as_empty_quotes() {
+            assert_eq!(
+                inline_params_odbc("SELECT * FROM t WHERE a = ?", &[String::new()]),
+                "SELECT * FROM t WHERE a = ''"
+            );
+        }
+
+        #[test]
+        fn non_placeholder_text_is_passed_through_verbatim() {
+            assert_eq!(
+                inline_params_odbc("SELECT * FROM t WHERE a = 1", &["unused".to_owned()]),
+                "SELECT * FROM t WHERE a = 1"
+            );
+        }
+    }
 }
 
 // ─── per-database named type aliases ─────────────────────────────────────────
