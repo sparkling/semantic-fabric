@@ -34,6 +34,16 @@ jobs:
       # the hana-backend surface needs a live SAP HANA server, so it's excluded.
       - name: test (sf-sql hana-backend marshalling)
         run: cargo test -p sf-sql --features hana-backend backend::hana::tests::with_driver
+      # ODBC quote-escaping unit tests only (backend::odbc::real::tests) — pure string
+      # logic, no live driver/DSN needed. `odbc-api` links against the SYSTEM unixODBC
+      # library at COMPILE time even for this (confirmed: the feature fails to link
+      # without libodbc present, despite the test itself doing no ODBC I/O), so the
+      # driver manager package is installed first; the rest of the odbc-backend surface
+      # (DB2/H2/Spark/Dremio/Denodo/Teiid) needs a live DSN, so it's excluded.
+      - name: install unixODBC (odbc-backend link dependency)
+        run: sudo apt-get update && sudo apt-get install -y unixodbc-dev
+      - name: test (sf-sql odbc-backend quote-escaping)
+        run: cargo test -p sf-sql --features odbc-backend backend::odbc::real::tests
       # W3C RDB2RDF conformance gate (ADR-0005) — verified 2026-07-05: 82 adjudicated,
       # 0 unexpected failures, 1 documented deviation (ADR-0015). The conformance run
       # regenerates the EARL report files with non-deterministic bnode labels; that

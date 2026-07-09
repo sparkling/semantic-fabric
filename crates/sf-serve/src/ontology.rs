@@ -78,4 +78,68 @@ mod tests {
             .inverse_predicates("http://ex/parentOf")
             .contains(&"http://ex/childOf".to_owned()));
     }
+
+    #[test]
+    fn malformed_turtle_surfaces_as_an_err_not_a_panic() {
+        let err = tbox_from_turtle("this is not valid turtle @@@ ][ .").unwrap_err();
+        assert!(
+            err.contains("ontology Turtle parse error"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_document_yields_an_empty_tbox() {
+        let tbox = tbox_from_turtle("").unwrap();
+        assert!(tbox.is_empty());
+    }
+
+    #[test]
+    fn blank_node_subject_is_skipped_not_an_error() {
+        // A blank-node subject can never be a class/property IRI the saturator
+        // keys on — `tbox_from_turtle` must skip it (continue) rather than error
+        // or attempt to stringify the blank node id as an IRI.
+        let ttl = r#"
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix ex: <http://ex/> .
+            _:b1 rdfs:subClassOf ex:Person .
+        "#;
+        let tbox = tbox_from_turtle(ttl).unwrap();
+        assert!(
+            tbox.is_empty(),
+            "a blank-node-subject triple must contribute no axiom"
+        );
+    }
+
+    #[test]
+    fn non_iri_object_is_skipped_not_an_error() {
+        // The saturator's axioms (subClassOf/subPropertyOf/inverseOf) all key on
+        // an IRI OBJECT; a literal object on one of these predicates has no
+        // representation and must be skipped, not misinterpreted as an IRI or
+        // cause an error.
+        let ttl = r#"
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix ex: <http://ex/> .
+            ex:Student rdfs:subClassOf "not an IRI" .
+        "#;
+        let tbox = tbox_from_turtle(ttl).unwrap();
+        assert!(
+            tbox.is_empty(),
+            "a literal-object subClassOf triple must contribute no axiom"
+        );
+    }
+
+    #[test]
+    fn irrelevant_predicates_are_ignored() {
+        // Any triple whose predicate isn't one of the 4 tier-1 axiom predicates
+        // (or rdf:type owl:SymmetricProperty) contributes nothing — confirms the
+        // `_ => {}` catch-all doesn't accidentally swallow-as-error or otherwise
+        // misbehave on ordinary application data mixed into the same document.
+        let ttl = r#"
+            @prefix ex: <http://ex/> .
+            ex:Student ex:enrolledIn ex:CS101 .
+        "#;
+        let tbox = tbox_from_turtle(ttl).unwrap();
+        assert!(tbox.is_empty());
+    }
 }
