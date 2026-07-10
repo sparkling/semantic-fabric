@@ -65,9 +65,7 @@ SendMessage({ to: "researcher", summary: "Start", message: "[task context]" })
 - **HNSW**: Enabled
 - **Neural**: Enabled
 
-```bash
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized
-```
+Prefer the MCP tool `swarm_init` (topology: hierarchical, maxAgents: 8, strategy: specialized) over shelling out — the `claude-flow` MCP server is already connected for this session, so a `npx @claude-flow/cli@latest` invocation just spawns a redundant fresh process. CLI fallback (MCP unavailable only): `npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized`
 
 ### Agent Routing
 
@@ -93,19 +91,7 @@ npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --
 
 ## Memory & Learning
 
-### Before Any Task
-```bash
-npx @claude-flow/cli@latest memory search --query "[task keywords]" --namespace patterns
-npx @claude-flow/cli@latest hooks route --task "[task description]"
-```
-
-### After Success
-```bash
-npx @claude-flow/cli@latest memory store --namespace patterns --key "[name]" --value "[what worked]"
-npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --store-results true
-```
-
-### MCP Tools (use `ToolSearch("keyword")` to discover)
+### MCP Tools (preferred — use `ToolSearch("keyword")` to discover, then call directly)
 
 | Category | Key Tools |
 |----------|-----------|
@@ -117,6 +103,24 @@ npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --st
 | **Security** | `aidefence_scan`, `aidefence_is_safe`, `aidefence_has_pii` |
 | **Hive-Mind** | `hive-mind_init`, `hive-mind_consensus`, `hive-mind_spawn` |
 
+Call these as `mcp__claude-flow__*` tools directly — the `claude-flow` MCP server is already running and connected for the whole session. Only use the `npx @claude-flow/cli@latest ...` CLI form below as a fallback when the MCP tool is genuinely unavailable: each CLI invocation spawns a brand-new node process (with cold-start cost), so routine per-task calls should never go through Bash.
+
+### Before Any Task
+- MCP (preferred): `memory_search` (query: "[task keywords]", namespace: "patterns"), then `hooks_route` (task: "[task description]")
+- CLI fallback:
+  ```bash
+  npx @claude-flow/cli@latest memory search --query "[task keywords]" --namespace patterns
+  npx @claude-flow/cli@latest hooks route --task "[task description]"
+  ```
+
+### After Success
+- MCP (preferred): `memory_store` (namespace: "patterns", key: "[name]", value: "[what worked]"), then `hooks_post-task` (taskId: "[id]", success: true, storeResults: true)
+- CLI fallback:
+  ```bash
+  npx @claude-flow/cli@latest memory store --namespace patterns --key "[name]" --value "[what worked]"
+  npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --store-results true
+  ```
+
 ### Background Workers
 
 | Worker | When |
@@ -127,9 +131,7 @@ npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --st
 | `map` | Every 5+ file changes |
 | `document` | After API changes |
 
-```bash
-npx @claude-flow/cli@latest hooks worker dispatch --trigger audit
-```
+MCP (preferred): `hooks_worker-dispatch` (trigger: "audit"). CLI fallback: `npx @claude-flow/cli@latest hooks worker dispatch --trigger audit`
 
 ## Agents
 
@@ -151,7 +153,9 @@ Any string works as a custom agent type.
 npm run build && npm test
 ```
 
-## CLI Quick Reference
+## CLI Fallback Reference (use only when MCP tools are unavailable)
+
+Every command below has a preferred `mcp__claude-flow__*` equivalent — see the MCP Tools table above. Reach for this CLI form only when the `claude-flow` MCP server isn't connected.
 
 ```bash
 npx @claude-flow/cli@latest init --wizard           # Setup
@@ -168,9 +172,13 @@ npx @claude-flow/cli@latest performance benchmark    # Benchmarks
 ## Setup
 
 ```bash
-claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
-npx @claude-flow/cli@latest daemon start
-npx @claude-flow/cli@latest doctor --fix
+claude mcp add claude-flow -- npx -y ruflo@latest mcp start
+npx ruflo@latest doctor --fix
 ```
 
-**Agent tool** handles execution (agents, files, code, git). **MCP tools** handle coordination (swarm, memory, hooks). **CLI** is the same via Bash.
+> The background `daemon` is optional. It runs interval workers that each spawn
+> a headless `claude` session, so it consumes tokens continuously. Start it only
+> if you want those sweeps: `npx ruflo@latest daemon start` (self-stops after 12h
+> by default; `--ttl 0` to disable, `daemon status --all` to audit running daemons).
+
+**Agent tool** handles execution (agents, files, code, git). **MCP tools** (`mcp__claude-flow__*`) are the preferred way to reach swarm/memory/hooks coordination — call them directly instead of shelling out. **CLI** (`npx @claude-flow/cli@latest`) is a fallback only, for when the MCP server isn't connected.
