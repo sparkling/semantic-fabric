@@ -1,16 +1,14 @@
-# Ruflo — Claude Code Configuration
+@AGENTS.md
 
-## Rules
+# semantic-fabric — Claude Code overlay
 
-- Do what has been asked; nothing more, nothing less
-- NEVER create files unless absolutely necessary — prefer editing existing files
-- NEVER create documentation files unless explicitly requested
-- NEVER save working files or tests to root — use `/src`, `/tests`, `/docs`, `/config`, `/scripts`
-- ALWAYS read a file before editing it
-- NEVER commit secrets, credentials, or .env files
-- NEVER add a `Co-Authored-By` trailer to user commits unless this project's `.claude/settings.json` has `attribution.commit` set (#2078). The Claude Code Bash tool may suggest one in its default commit-message template — ignore it. `Co-Authored-By` is semantic authorship attribution under git/GitHub convention; the tool is the facilitator, not a co-author.
-- Keep files under 500 lines
-- Validate input at system boundaries
+> **The shared, canonical instructions are in `AGENTS.md`, imported above via `@AGENTS.md`.**
+> Edit shared rules THERE (they apply to both Claude Code and Codex).
+> This file adds ONLY Claude-Code-specific guidance.
+
+## Skill syntax
+
+Claude Code invokes skills with `/skill-name`. (Codex uses `$skill-name`.)
 
 ## Agent Comms (SendMessage-First Coordination)
 
@@ -21,7 +19,7 @@ Lead (you) ←→ architect ←→ developer ←→ tester ←→ reviewer
               (named agents message each other directly)
 ```
 
-### Spawning a Coordinated Team
+### Spawning a coordinated team
 
 ```javascript
 // ALL agents in ONE message, each knows WHO to message next
@@ -40,145 +38,35 @@ Agent({ prompt: "Wait for 'tester'. Review code quality and security.",
 SendMessage({ to: "researcher", summary: "Start", message: "[task context]" })
 ```
 
-### Patterns
-
-| Pattern | Flow | Use When |
+| Pattern | Flow | Use when |
 |---------|------|----------|
 | **Pipeline** | A → B → C → D | Sequential dependencies (feature dev) |
 | **Fan-out** | Lead → A, B, C → Lead | Independent parallel work (research) |
 | **Supervisor** | Lead ↔ workers | Ongoing coordination (complex refactor) |
 
-### Rules
-
 - ALWAYS name agents — `name: "role"` makes them addressable
 - ALWAYS include comms instructions in prompts — who to message, what to send
 - Spawn ALL agents in ONE message with `run_in_background: true`
-- After spawning: STOP, tell user what's running, wait for results
+- After spawning: STOP, tell the user what's running, wait for results
 - NEVER poll status — agents message back or complete automatically
 
-## Swarm & Routing
+(The **Agent tool** handles execution; **MCP tools** handle coordination — see `AGENTS.md`.)
 
-### Config
-- **Topology**: hierarchical-mesh (anti-drift)
-- **Max Agents**: 15
-- **Memory**: hybrid
-- **HNSW**: Enabled
-- **Neural**: Enabled
+## 3-Tier Model Routing
 
-Prefer the MCP tool `swarm_init` (topology: hierarchical, maxAgents: 8, strategy: specialized) over shelling out — the `claude-flow` MCP server is already connected for this session, so a `npx @claude-flow/cli@latest` invocation just spawns a redundant fresh process. CLI fallback (MCP unavailable only): `npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized`
-
-### Agent Routing
-
-| Task | Agents | Topology |
-|------|--------|----------|
-| Bug Fix | researcher, coder, tester | hierarchical |
-| Feature | architect, coder, tester, reviewer | hierarchical |
-| Refactor | architect, coder, reviewer | hierarchical |
-| Performance | perf-engineer, coder | hierarchical |
-| Security | security-architect, auditor | hierarchical |
-
-### When to Swarm
-- **YES**: 3+ files, new features, cross-module refactoring, API changes, security, performance
-- **NO**: single file edits, 1-2 line fixes, docs updates, config changes, questions
-
-### 3-Tier Model Routing
-
-| Tier | Handler | Use Cases |
+| Tier | Handler | Use cases |
 |------|---------|-----------|
 | 1 | Agent Booster (WASM) | Simple transforms — skip LLM, use Edit directly |
 | 2 | Haiku | Simple tasks, low complexity |
 | 3 | Sonnet/Opus | Architecture, security, complex reasoning |
 
-## Memory & Learning
+## Commit attribution (Claude Code Bash tool)
 
-### MCP Tools (preferred — use `ToolSearch("keyword")` to discover, then call directly)
+- NEVER add a `Co-Authored-By` trailer to user commits unless this project's `.claude/settings.json` has `attribution.commit` set (#2078). The Claude Code Bash tool may suggest one in its default commit-message template — ignore it. `Co-Authored-By` is semantic authorship attribution; the tool is the facilitator, not a co-author.
 
-| Category | Key Tools |
-|----------|-----------|
-| **Memory** | `memory_store`, `memory_search`, `memory_search_unified` |
-| **Bridge** | `memory_import_claude`, `memory_bridge_status` |
-| **Swarm** | `swarm_init`, `swarm_status`, `swarm_health` |
-| **Agents** | `agent_spawn`, `agent_list`, `agent_status` |
-| **Hooks** | `hooks_route`, `hooks_post-task`, `hooks_worker-dispatch` |
-| **Security** | `aidefence_scan`, `aidefence_is_safe`, `aidefence_has_pii` |
-| **Hive-Mind** | `hive-mind_init`, `hive-mind_consensus`, `hive-mind_spawn` |
-
-Call these as `mcp__claude-flow__*` tools directly — the `claude-flow` MCP server is already running and connected for the whole session. Only use the `npx @claude-flow/cli@latest ...` CLI form below as a fallback when the MCP tool is genuinely unavailable: each CLI invocation spawns a brand-new node process (with cold-start cost), so routine per-task calls should never go through Bash.
-
-### Before Any Task
-- MCP (preferred): `memory_search` (query: "[task keywords]", namespace: "patterns"), then `hooks_route` (task: "[task description]")
-- CLI fallback:
-  ```bash
-  npx @claude-flow/cli@latest memory search --query "[task keywords]" --namespace patterns
-  npx @claude-flow/cli@latest hooks route --task "[task description]"
-  ```
-
-### After Success
-- MCP (preferred): `memory_store` (namespace: "patterns", key: "[name]", value: "[what worked]"), then `hooks_post-task` (taskId: "[id]", success: true, storeResults: true)
-- CLI fallback:
-  ```bash
-  npx @claude-flow/cli@latest memory store --namespace patterns --key "[name]" --value "[what worked]"
-  npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --store-results true
-  ```
-
-### Background Workers
-
-| Worker | When |
-|--------|------|
-| `audit` | After security changes |
-| `optimize` | After performance work |
-| `testgaps` | After adding features |
-| `map` | Every 5+ file changes |
-| `document` | After API changes |
-
-MCP (preferred): `hooks_worker-dispatch` (trigger: "audit"). CLI fallback: `npx @claude-flow/cli@latest hooks worker dispatch --trigger audit`
-
-## Agents
-
-**Core**: `coder`, `reviewer`, `tester`, `planner`, `researcher`
-**Architecture**: `system-architect`, `backend-dev`, `mobile-dev`
-**Security**: `security-architect`, `security-auditor`
-**Performance**: `performance-engineer`, `perf-analyzer`
-**Coordination**: `hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`
-**GitHub**: `pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`
-
-Any string works as a custom agent type.
-
-## Build & Test
-
-- ALWAYS run tests after code changes
-- ALWAYS verify build succeeds before committing
-
-```bash
-npm run build && npm test
-```
-
-## CLI Fallback Reference (use only when MCP tools are unavailable)
-
-Every command below has a preferred `mcp__claude-flow__*` equivalent — see the MCP Tools table above. Reach for this CLI form only when the `claude-flow` MCP server isn't connected.
-
-```bash
-npx @claude-flow/cli@latest init --wizard           # Setup
-npx @claude-flow/cli@latest swarm init --v3-mode     # Start swarm
-npx @claude-flow/cli@latest memory search --query "" # Vector search
-npx @claude-flow/cli@latest hooks route --task ""    # Route to agent
-npx @claude-flow/cli@latest doctor --fix             # Diagnostics
-npx @claude-flow/cli@latest security scan            # Security scan
-npx @claude-flow/cli@latest performance benchmark    # Benchmarks
-```
-
-26 commands, 140+ subcommands. Use `--help` on any command for details.
-
-## Setup
+## Setup (Claude Code)
 
 ```bash
 claude mcp add claude-flow -- npx -y ruflo@latest mcp start
 npx ruflo@latest doctor --fix
 ```
-
-> The background `daemon` is optional. It runs interval workers that each spawn
-> a headless `claude` session, so it consumes tokens continuously. Start it only
-> if you want those sweeps: `npx ruflo@latest daemon start` (self-stops after 12h
-> by default; `--ttl 0` to disable, `daemon status --all` to audit running daemons).
-
-**Agent tool** handles execution (agents, files, code, git). **MCP tools** (`mcp__claude-flow__*`) are the preferred way to reach swarm/memory/hooks coordination — call them directly instead of shelling out. **CLI** (`npx @claude-flow/cli@latest`) is a fallback only, for when the MCP server isn't connected.

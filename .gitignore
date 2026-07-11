@@ -68,3 +68,19 @@ ruvector.db-wal
 agentdb.rvf.lock
 hnsw.index
 **/hnsw.index
+
+# Codex local configuration
+.codex/
+
+# Claude Flow runtime data
+.claude-flow/data/
+.claude-flow/logs/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# ruflo-add-codex:gitignore — secrets + runtime
+.claude-flow/sessions/
+*.bak
