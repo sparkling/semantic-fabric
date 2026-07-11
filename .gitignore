@@ -37,3 +37,34 @@ docs/metaharness-dropin/for-humans/studio/*.png
 
 # Handover docs — local-only session notes, not tracked
 docs/handover/
+.ruvnet-brain/
+
+# --- ruflo/tooling artifacts (normalized 2026-07-11) ---
+**/.claude-flow/
+!/.claude-flow/
+/.claude-flow/data/
+/.claude-flow/logs/
+/.claude-flow/metrics/
+/.claude-flow/models/
+/.claude-flow/neural/
+/.claude-flow/sessions/
+/.claude-flow/hive-mind/
+/.claude-flow/security/
+/.claude-flow/daemon-state.json
+/.claude-flow/daemon.pid
+/.claude-flow/daemon.sock
+/.claude-flow/agents/store.json
+/.claude-flow/daa/store.json
+/.claude-flow/cjs-intelligence-signals.json
+/.claude-flow/memory.rvf
+/.claude-flow/memory.rvf.meta
+**/.claude-flow/data/
+**/.claude-flow/logs/
+**/.claude-flow/neural/
+**/.swarm/
+ruvector.db
+ruvector.db-shm
+ruvector.db-wal
+agentdb.rvf.lock
+hnsw.index
+**/hnsw.index

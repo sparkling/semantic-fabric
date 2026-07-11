@@ -1,0 +1,24 @@
+{
+  "swarms": {
+    "swarm-1782675015169-mlocbg": {
+      "swarmId": "swarm-1782675015169-mlocbg",
+      "topology": "hierarchical",
+      "maxAgents": 15,
+      "status": "running",
+      "agents": [],
+      "tasks": [],
+      "config": {
+        "topology": "hierarchical",
+        "maxAgents": 15,
+        "strategy": "specialized",
+        "communicationProtocol": "message-bus",
+        "autoScaling": true,
+        "consensusMechanism": "majority"
+      },
+      "createdAt": "2026-06-28T19:30:15.169Z",
+      "updatedAt": "2026-06-28T19:30:15.169Z",
+      "pid": 39708
+    }
+  },
+  "version": "3.0.0"
+}
