@@ -10,9 +10,9 @@
 ## Rules
 
 - Do what has been asked; nothing more, nothing less
-- NEVER create files unless absolutely necessary — prefer editing existing files
+- NEVER create files unless absolutely necessary; prefer editing existing files
 - NEVER create documentation files unless explicitly requested
-- NEVER save working files or tests to root — use `/src`, `/tests`, `/docs`, `/config`, `/scripts`
+- NEVER save working files or tests to root; use `/src`, `/tests`, `/docs`, `/config`, `/scripts`
 - ALWAYS read a file before editing it
 - NEVER commit secrets, credentials, or `.env` files
 - Do NOT add a `Co-Authored-By` trailer to user commits unless this project explicitly opts in
@@ -52,7 +52,7 @@ Also: `security-architect`, `security-auditor`, `performance-engineer`, `perf-an
 
 ## MCP Integration
 
-Use MCP tools for coordination, then keep working — coordination calls return instantly.
+Use MCP tools for coordination, then keep working. Coordination calls return instantly.
 
 | Category | Key tools |
 |----------|-----------|
@@ -124,8 +124,8 @@ npm run build && npm test
 
 ## Codex platform notes
 
-- **Skill syntax**: invoke skills with `$skill-name`. (Claude Code uses `/skill-name` — see `CLAUDE.md`.)
-- **Execution model**: `claude-flow` = LEDGER (coordinates memory, routing, swarm state); **Codex = EXECUTOR** (writes code, runs tests, creates files). Coordination commands return instantly — DON'T STOP after them; continue immediately with the next implementation step.
+- **Skill syntax**: invoke skills with `$skill-name`. (Claude Code uses `/skill-name`; see `CLAUDE.md`.)
+- **Execution model**: `claude-flow` = LEDGER (coordinates memory, routing, swarm state); **Codex = EXECUTOR** (writes code, runs tests, creates files). Coordination commands return instantly, so DON'T STOP after them; continue immediately with the next implementation step.
 - Codex config lives in `.agents/config.toml` (project) and `.codex/config.toml` (local overrides, gitignored).
 
 ## Links
