@@ -619,12 +619,12 @@ Deduplicated across all four streams + the process finding:
 15. `ADR-0017` provenance/lineage — currently zero.
 16. Track `LUBM4OBDA`/`Sparqloscope` as future benchmark targets if inference or
     per-feature performance claims are ever made externally.
-17. **RDF-star via plain-RDF encoding (§E)** — research-stage only, not a scoped
-    feature: prototype whether a `rr:template`-keyed "basic encoding" R2RML
-    mapping plus a new SPARQL-star algebra rewrite pass could offer RDF-star
-    query support without extending the R2RML term-map model. Genuinely novel
-    (no prior art combines these two halves); scope to the single-level
-    non-nested case first per §E's own caveat.
+17. **RDF-star via plain-RDF encoding (§E/§G)** — **graduated from
+    research-stage to a first concrete design: see `ADR-0029`** (proposed,
+    2026-07-16). `ADR-0029` covers the mapping-compiler half only (reusing
+    RML-STAR's vocabulary, compiled to the W3C basic encoding, single-level
+    non-nested scope); the query-side SPARQL-star rewrite pass (§G) remains
+    unscoped follow-on work, not yet designed.
 
 ## Consequences
 
