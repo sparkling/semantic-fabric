@@ -10,11 +10,63 @@ jobs:
   build:
     name: fmt · clippy · build · test
     runs-on: ubuntu-latest
+    # Live PostgreSQL/MySQL/SQL Server service containers so the graceful-skip
+    # integration suites (differential_pg_sqlite, mysql_e2e, differential_mssql,
+    # mysql_release, constant_memory, adversarial_antijoin_review) actually run in
+    # CI instead of silently no-op'ing. `sqlserver-backend` is already enabled here
+    # via workspace feature unification (sf-conformance depends on sf-sql with it
+    # on) — no extra --features flag needed for the `test` step below.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sftest
+          POSTGRES_PASSWORD: sftest
+          POSTGRES_DB: sftest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: sftest
+          MYSQL_DATABASE: sftest
+        ports:
+          - 13306:3306
+        options: >-
+          --health-cmd "mysqladmin ping --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: SfTest123!
+        ports:
+          - 11433:1433
+    env:
+      SF_PG_URL: "host=localhost port=5432 user=sftest password=sftest dbname=sftest"
+      SF_MYSQL_URL: "mysql://root:sftest@127.0.0.1:13306/sftest"
+      SF_MSSQL_URL: "server=tcp:localhost,11433;user id=SA;password=SfTest123!"
     steps:
       - uses: actions/checkout@v4
       - name: Rust toolchain (pinned via rust-toolchain.toml)
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+      # SQL Server has no lightweight in-container healthcheck tool available to
+      # `options:`, unlike postgres/mysql above — poll the TCP port directly instead.
+      - name: wait for SQL Server
+        run: |
+          for i in $(seq 1 30); do
+            (echo > /dev/tcp/localhost/11433) >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "::warning::SQL Server did not become reachable in time — differential_mssql will skip gracefully"
       - name: rustfmt
         run: cargo fmt --all --check
       - name: clippy
