@@ -263,18 +263,21 @@ the quoted triple), and `rml:AssertedTriplesMap`/`rml:NonAssertedTriplesMap`
 triples). This is a genuine RML-specific extension, not reproducible with vanilla
 R2RML/RML term maps alone.
 
-**A real, unresolved status discrepancy (flag, don't resolve)**: this repo's own
-`docs/research/rml-yarrrml.md` (dated 2026-06-26) states RML-Core *and* RML-STAR
-"have also been adopted as Final Community Group Reports," citing a 16 March 2026
-draft date. A fresh direct fetch of the live RML-STAR spec page today shows
-**"Draft Community Group Report (10 May 2023)"** — an *older* date, which is the
-suspicious part; a live spec page regressing to a date three weeks before this
-repo's own already-current research doc would be unusual. GitHub's only tagged
-`kg-construct/rml-star` release is also `10 May 2023`. The most likely
-reconciliation: RML-Core progressed to Final while RML-STAR specifically did not,
-and the local doc's parenthetical conflated the two modules' status. **Do not cite
-RML-STAR as finalized without re-checking the live spec page** at whatever point
-this actually informs a build decision — the mechanism description above is solid
+**A real status discrepancy — confirmed, not just flagged (independently re-verified
+twice)**: this repo's own `docs/research/rml-yarrrml.md` (dated 2026-06-26) states
+RML-Core *and* RML-STAR "have also been adopted as Final Community Group Reports,"
+citing a 16 March 2026 draft date. Two independent direct fetches of the live
+RML-STAR spec page — one by `rdfstar-encoding-researcher`, one done separately by
+the main session itself as a doubt-check — both show **"Draft Community Group
+Report, dated 10 May 2023"**, and the GitHub API confirms `kg-construct/rml-star`
+has exactly one release, `v0.1.0`, published 2023-05-10 ("Initial draft of the new
+RML ontology"). Two agreeing fetches, done independently, is solid confirmation:
+**RML-STAR specifically is still Draft status, not Final** — this repo's own
+research doc's "Final" claim is wrong for RML-STAR (it most likely conflated
+RML-Core's progression with RML-STAR's, since the two are versioned/reported
+together in that doc's prose). `docs/research/rml-yarrrml.md` should be corrected
+in a future pass. **Do not cite RML-STAR as finalized** — the mechanism description
+above is solid
 regardless of exact CG-report status.
 
 **The plain-RDF encoding question — precise answer, W3C-spec-grounded**:
