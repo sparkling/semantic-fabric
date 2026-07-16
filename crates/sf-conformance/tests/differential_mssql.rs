@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use sf_conformance::sqlite;
 use sf_sparql::{exec, exec_core, parse_and_translate_with, Tbox};
 use sf_sql::backend::sqlserver::SqlServerBackend;
-use sf_sql::backend::SqlBackend;
+use sf_sql::backend::{BranchStream, SqlBackend};
 use sf_sql::{Column, Dialect, TableSchema};
 
 const CREATE_SQLITE: &str = r#"
@@ -146,4 +146,60 @@ async fn mssql_differential() {
         sols_ms.rows.len()
     );
     assert_eq!(sols_ms.rows.len(), 2, "expected 2 rows (Ann + Bob)");
+}
+
+/// Live round-trip proof for `marshal_column_data`'s DATE/DATETIME2/SMALLDATETIME
+/// branches: reads real values back from a live SQL Server and checks the marshaled
+/// lexical strings against known-correct ISO values, independent of the in-memory
+/// `tiberius::time` unit tests in `sqlserver.rs` (guards the calendar-math bug fixed
+/// alongside this test — `date_from_proleptic` was silently computing the wrong
+/// epoch, e.g. DATE '0001-01-01' marshaled as "1970-01-01").
+#[tokio::test]
+async fn mssql_date_time_marshaling_matches_live_server_values() {
+    let Ok(url) = std::env::var("SF_MSSQL_URL") else {
+        eprintln!(
+            "SF_MSSQL_URL not set — skipping mssql_date_time_marshaling_matches_live_server_values"
+        );
+        return;
+    };
+    let mut backend = match SqlServerBackend::connect(&url).await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("SF_MSSQL_URL set but connection failed ({e}) — skipping");
+            return;
+        }
+    };
+
+    const SETUP: &[&str] = &[
+        "IF OBJECT_ID('sf_dt_e2e','U') IS NOT NULL DROP TABLE sf_dt_e2e",
+        "CREATE TABLE sf_dt_e2e (id INT NOT NULL PRIMARY KEY, d DATE, dt2 DATETIME2, sdt SMALLDATETIME)",
+        "INSERT INTO sf_dt_e2e VALUES (1, '2024-03-15', '2024-03-15T13:45:30', '2024-03-15T13:45:00')",
+    ];
+    for stmt in SETUP {
+        backend.column_names(stmt).await.expect("mssql setup ddl");
+    }
+
+    let mut stream = backend
+        .open_branch("SELECT d, dt2, sdt FROM sf_dt_e2e WHERE id = 1", &[])
+        .await
+        .expect("open_branch");
+    let row = stream
+        .next_row()
+        .await
+        .expect("next_row")
+        .expect("one row expected");
+
+    assert_eq!(row.values[0].as_deref(), Some("2024-03-15"), "DATE column");
+    assert_eq!(
+        row.values[1].as_deref(),
+        Some("2024-03-15T13:45:30"),
+        "DATETIME2 column"
+    );
+    assert_eq!(
+        row.values[2].as_deref(),
+        Some("2024-03-15T13:45:00"),
+        "SMALLDATETIME column"
+    );
+
+    let _ = backend.column_names("DROP TABLE sf_dt_e2e").await;
 }
