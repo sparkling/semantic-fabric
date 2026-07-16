@@ -280,6 +280,16 @@ in a future pass. **Do not cite RML-STAR as finalized** — the mechanism descri
 above is solid
 regardless of exact CG-report status.
 
+**Corroborating check (main session, direct)**: `rml.io` itself (the canonical RML
+portal — tools, editor, playground) doesn't cover spec/CG status at all, so it adds
+nothing on the status question either way. But it pointed at the actual reference
+implementation, `RMLio/rmlmapper-java`, which is worth checking independently of
+spec status: **zero code-level references to `StarMap`/RML-star anywhere in the
+repo, and its README (latest release v8.1.0, 2025-12-23 — actively maintained) makes
+no mention of RDF-star support at all.** Consistent with, and independent
+reinforcement of, the Draft-not-Final finding above: even the primary reference
+implementation hasn't implemented RML-STAR.
+
 **The plain-RDF encoding question — precise answer, W3C-spec-grounded**:
 
 - RDF 1.2 Concepts (§1.5, "Triple Terms and Reification") treats a triple term as
