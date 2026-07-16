@@ -416,6 +416,75 @@ cite** — a real, non-trivial build (add to the backlog below as an explicitly
 research-stage item, not a scoped feature) if RDF-star support is ever prioritized,
 offering a path that avoids extending the R2RML term-map model itself.
 
+## F. Real peer-reviewed answer, from the actual paper: Morph-KGC^star (2025)
+
+Directly read (not summarized secondhand) the actual PDF: Arenas-Guerrero, Iglesias-
+Molina, Chaves-Fraga, Garijo, Corcho, Dimou, *"Declarative generation of RDF-star
+graphs from heterogeneous data,"* Semantic Web Journal (IOS Press), 2025. This is
+real, peer-reviewed, and changes/sharpens several things above.
+
+**Correction to §E's "novel pattern" claim.** The paper's own §3.1 ("Reification
+with RML") works through **standard reification** and **singleton properties** as
+two established alternatives to RDF-star, both achievable with **vanilla,
+unmodified RML term maps — no RDF-star extension needed** (Listings 2-5, full
+worked mapping-to-triples examples for both). This is exactly the "R2RML/RML
+mapping emits a plain-RDF encoding, no term-map extension required" pattern §E
+called genuinely novel and unprecedented. **That framing was too strong**: the
+general technique (vanilla RML producing a reification-shaped plain-RDF output) is
+established, published, worked-example prior art. What remains genuinely novel is
+narrower: a mapping specifically targeting the *SPARQL-star-reconstructable* "basic
+encoding" vocabulary (`rdf:PropositionForm` etc., §E) keyed deterministically for
+round-tripping, paired with a query-time rewrite layer — that combination is still
+unattested anywhere, but the general "classical reification via vanilla RML" half
+is not new.
+
+**Nested/recursive quoted triples: solved, and the reference algorithm is public.**
+Morph-KGC^star's Algorithm 1 (`MaterializeMappingRule`) is explicitly recursive,
+carrying a `nestLevel` parameter, with the paper stating outright: *"As star maps
+entail nested rules, processors should deal with any level of nesting... the
+materialization of RDF-star graphs must also be implemented recursively."* This is
+a real, published, working answer to arbitrary-depth nesting — a sharp contrast to
+`MappingWeaver-java`'s current 0%. Two different real tools, two different honest
+states: `MappingWeaver-java` (RMLio's own successor line) doesn't work yet;
+Morph-KGC^star (a separate research group's implementation, UPM/KU Leuven) does,
+with CI currently green (checked directly: 3 of the last 5 workflow runs green,
+latest release `v2.10.0`, 2026-01-20) and its own test suite genuinely enabled
+(unlike `MappingWeaver-java`'s `@Disabled` cases — `test_RMLSTARTC001a_CSV.py`
+calls the real `morph_kgc.materialize_set()` with no skip marker).
+
+**Directly relevant to semantic-fabric's own dependency graph**: Morph-KGC^star can
+export straight into **Oxigraph** — semantic-fabric's own RDF/SPARQL substrate
+(`ADR-0004`) — as a library call ("create an Oxigraph store populated with RDF-star
+triples... exploit them with Oxigraph entirely with Python," since Oxigraph's other
+integration, RDFLib, doesn't support RDF-star). This is a concrete, working,
+peer-reviewed pipeline: relational data → RML-star mapping → Morph-KGC^star →
+Oxigraph, using the exact triple-store dependency semantic-fabric already has.
+
+**The one thing this does NOT solve, and the honest scope boundary to keep**:
+Morph-KGC^star is **materialization** — generate the whole RDF-star graph once,
+load it, then query the copy. Semantic-fabric's entire architecture is the
+opposite: never materialize, rewrite SPARQL to SQL live against the source
+(`ADR-0001`/`ADR-0002`). This paper proves the *mapping-generation* half of
+RDF-star-from-relational-data is a solved, peer-reviewed problem with a working
+reference algorithm — it does not solve, or even attempt, the harder
+*virtualization* half (rewriting a live SPARQL-star query into SQL without ever
+materializing), which remains open for both Ontop and semantic-fabric alike. Don't
+let "Morph-KGC^star solved it" become "OBDA virtualization of RDF-star is solved" —
+those are different problems, and only the first has a real answer today.
+
+**W3C/community-group landscape, precisely stated (per this paper's own
+citations)**: the base RDF-star data model went through the W3C RDF-DEV Community
+Group (Final CG Report) and is now formalized by the **W3C RDF-star Working
+Group** (a real, chartered W3C Working Group — this is `RDF & SPARQL Working
+Group`, chartered April 2025, producing RDF 1.2/SPARQL 1.2, already covered in
+§B/§E above). The **mapping-language** side (RML-star specifically) remains at
+**W3C Knowledge Graph Construction Community Group** level (Draft CG Report), one
+step below full Working Group status — though a **draft RML Working Group
+Charter** exists (`kg-construct.github.io/rml-wg-charter/`, checked directly),
+proposing to formalize RML-Core *and* RML-star onto the real W3C standards track,
+citing CG reports dated 2025-10-31. It is still a draft proposal with placeholder
+dates, not yet a chartered group — real signal of intent, not yet a done deal.
+
 ## Consolidated Prioritized Backlog
 
 Deduplicated across all four streams + the process finding:
