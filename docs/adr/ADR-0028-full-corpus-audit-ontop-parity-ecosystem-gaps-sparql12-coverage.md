@@ -485,6 +485,101 @@ proposing to formalize RML-Core *and* RML-star onto the real W3C standards track
 citing CG reports dated 2025-10-31. It is still a draft proposal with placeholder
 dates, not yet a chartered group — real signal of intent, not yet a done deal.
 
+## G. No live-rewriting prior art anywhere, plus Oxigraph internals for a future rewrite pass
+
+Two more follow-up agents (`obda-rdfstar-researcher`, `oxigraph-hooks-researcher`)
+closed out the two open questions §E/§F left unanswered: has any OTHER
+live-query-rewriting OBDA/virtualization engine attempted RDF-star (not just
+Ontop, already covered in §B), and does Oxigraph's own query-algebra layer offer
+any hook semantic-fabric could reuse rather than building detection/rewriting
+from scratch.
+
+**No live-rewriting prior art exists anywhere (checked, not assumed).** Seven
+systems plus the 2023-2026 literature: Morph-RDB and D2RQ are dead/archived with
+no RDF-star mention ever; Ultrawrap, Sparqlify, Squerall, and Ontario are alive
+(Sparqlify pushed as recently as 2024-10-11) but never added RDF-star; Ontotext
+GraphDB's virtualization is confirmed, directly (`docs.ontotext.com`, cross-checked
+independently of the agent's own claim), to be built **on Ontop itself**
+(GraphDB 11.2/11.3 uses Ontop 5.3.0), so it inherits Ontop's zero support
+structurally, not as a separate gap; TopBraid EDG has RDF-star in its native
+triple store but its own docs say that doesn't reach its relational-virtualization
+(Remote Data Sources) feature. **Stardog is the one genuine open question** —
+broad "SPARQL-star support" marketing claims exist but nothing in its docs ties
+that specifically to Virtual Graphs (the relational-virtualization feature);
+resolving this needs hands-on testing against a live instance, not more
+docs-reading. Academically, LUBM4OBDA (Arenas-Guerrero et al., 2024, the closest
+hit) benchmarks RDF-star *meta-knowledge extraction*, not live rewriting. **Verdict
+unchanged from §E/§F, now on firmer ground**: live SPARQL-star-to-SQL query
+rewriting with zero materialization is genuinely unattempted ground industry-wide,
+not just an Ontop/semantic-fabric gap.
+
+**Correction to this ADR's own §E/§F Oxigraph framing — issue #1286 is CLOSED,
+not open.** §E/§F cited Oxigraph GitHub issue #1286 ("Migration from RDF-star to
+RDF 1.2") as proposing an unimplemented "hash to deterministic blank node"
+option. Directly checked via `gh api`: **issue #1286 closed 2025-07-23**, resolved
+by Oxigraph 0.5.0-beta.1 (2025-06-20) shipping full RDF 1.2/SPARQL 1.2 support
+("all 1.2-related tests from `w3c/rdf-tests` passing"). The `rdf-star` Cargo
+feature was removed outright; RDF-star's own terminology and grammar were
+replaced by RDF 1.2's ("triple terms," disallowed in subject position, unlike
+classic RDF-star). **What did NOT change**: the "hash to blank node" idea was not
+adopted. Direct check of the exact pinned version — `oxrdf-0.3.3/src/triple.rs:170-177`
+— confirms `Term::Triple(Box<Triple>)` still exists as a genuine native term
+variant, just gated behind the renamed `#[cfg(feature = "rdf-12")]` instead of the
+old `rdf-star` flag. **Semantic-fabric's own `Cargo.toml` already pins post-migration
+versions and already enables `rdf-12`/`sparql-12` features** (confirmed:
+`oxrdf = { version = "0.3.3", features = ["rdf-12", "rdfc-10"] }`,
+`spargebra = { version = "0.4.6", features = ["sparql-12", ...] }`) — so there is
+no drift on semantic-fabric's own side, only this ADR's characterization of
+Oxigraph's upstream issue-tracker state was stale. §E/§F's substantive claim (no
+decomposition, storage keeps a native triple term) remains correct; only the
+"open/proposed" framing needed fixing.
+
+**Oxigraph's query-algebra internals (source-grounded, current `rdf-12`/`sparql-12`
+gate)** — the concrete mechanics for anyone building the actual rewrite pass:
+
+1. **`spargebra` — detection is trivial.** No distinct AST node for a
+   quoted-triple pattern: `TermPattern::Triple(Box<TriplePattern>)`
+   (`term.rs:402-409`) sits alongside `NamedNode`/`BlankNode`/`Literal`/`Variable`,
+   self-referentially (`TriplePattern` is `{subject, predicate, object}` of
+   `TermPattern`s). Detecting one is `matches!(term, TermPattern::Triple(_))` — no
+   new grammar or preprocessing pass needed.
+2. **`sparopt` — no special-casing.** Quoted-triple patterns flow through the
+   existing BGP-to-algebra lowering unchanged and recursively
+   (`algebra.rs:1297-1333`). The only RDF-star-aware logic anywhere is a
+   `triple: bool` flag on `VariableType` for type inference, and recursive
+   cardinality/boundedness estimation (`optimizer.rs:1339-1354`, `:1404-1415`) —
+   no join-decomposition or normalization touches the nested pattern itself.
+3. **`spareval` — a real mechanism, but one that doesn't transfer directly.**
+   `TupleSelector::TriplePattern` (`eval.rs:2545`): when subject/predicate/object
+   are all already-bound, it composes one opaque composite term up front; when
+   not, it recursively unifies against a value already pulled from storage
+   (`put_pattern_value`, `eval.rs:2684`). This works only because `oxrdf`'s
+   storage has quoted triples as one atomic indexed value to scan against — a SQL
+   backend has no equivalent atomic value, so this exact strategy does not
+   transfer; see point 5.
+4. **No prior art for "rewrite SPARQL-star into a non-native/virtualized
+   target."** Neither Oxigraph's own issue tracker nor a broader search turned up
+   anyone having faced this problem before (search-based, not exhaustive — treat
+   as a likely gap, not a proven one).
+5. **Practical read for semantic-fabric (inference, source-grounded but not
+   itself verified against a real implementation)**: detecting a quoted-triple
+   pattern is shallow (point 1); the actual work is semantic, not syntactic —
+   basic-encoding rewrites a quoted triple into an auxiliary IRI/blank-node
+   standing for the reified statement, which needs a **new SQL join/subquery**
+   correlating "this row's synthetic identifier corresponds to
+   subject=X,predicate=Y,object=Z," with no Oxigraph-side analog to crib from
+   (Oxigraph's evaluator sidesteps exactly this problem via its atomic stored
+   term). This is a moderate-to-deep addition to the rewriter — new join
+   generation for the reification encoding — not a shallow AST match-and-substitute
+   pass.
+
+**Net effect on the backlog item (§E/backlog #17)**: still correctly scoped as
+research-stage, not a scoped feature. This section sharpens what a design would
+need to solve (a new join-generation strategy in the SQL rewriter, since
+Oxigraph's own internals offer detection but no reusable execution-side
+analog) and confirms, industry-wide, that no one has solved this problem before —
+neither a reason to deprioritize nor a shortcut available if it is prioritized.
+
 ## Consolidated Prioritized Backlog
 
 Deduplicated across all four streams + the process finding:
@@ -553,7 +648,9 @@ not resolved.
 
 * Full unabridged per-agent reports (all per-ADR rows, full file/line citations):
   this session's transcript, agents `adr-auditor`, `ontop-parity-analyst`,
-  `framework-researcher`, `sparql12-coverage-auditor` (2026-07-16).
+  `framework-researcher`, `sparql12-coverage-auditor`, `ontop-rdfstar-researcher`,
+  `rdfstar-encoding-researcher`, `obda-rdfstar-researcher`,
+  `oxigraph-hooks-researcher` (2026-07-16).
 * Related: `ADR-0010`/`ADR-0015`/`ADR-0024`/`ADR-0026`/`ADR-0027` (amended/created
   earlier this session; this ADR's findings are consistent with and build on all
   five).
@@ -561,4 +658,7 @@ not resolved.
   `Cargo.toml`, `Cargo.lock`, `crates/sf-sparql/src/{iq/build.rs,iq/lower.rs,lib.rs}`,
   `crates/sf-sql/src/cost.rs`, plus grep sweeps for `deadpool`, `tracing`/`metrics`,
   `SET LOCAL`/RLS/ABAC terms, `proptest`/`cargo-fuzz`/`insta`, `plan_semijoin`
-  call-sites.
+  call-sites; `docs.ontotext.com` GraphDB virtualization docs (GraphDB-on-Ontop
+  version pinning); Oxigraph GitHub issue #1286 via `gh api` (confirmed closed,
+  not open); the exact pinned `oxrdf-0.3.3/src/triple.rs` `Term` enum definition
+  (local registry cache) confirming `Term::Triple` survives under `rdf-12`.
