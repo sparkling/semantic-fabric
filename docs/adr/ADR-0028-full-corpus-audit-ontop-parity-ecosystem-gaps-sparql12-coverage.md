@@ -247,6 +247,97 @@ differential-oracle suite (166 tests against `spareval`/oxigraph), a real but
 methodologically distinct form of evidence. Don't conflate the two when citing
 "conformance" externally.
 
+## E. RDF-star follow-up: RML-STAR status and a plain-RDF encoding path
+
+Two more follow-up agents (`rdfstar-encoding-researcher`, after
+`ontop-rdfstar-researcher` in §B) closed out the RDF-star question in full —
+whether RML (the actively-developed R2RML superset) supports it, and whether
+RDF-star's own semantics reduce to a plain-RDF encoding semantic-fabric could
+exploit without adding a genuinely new R2RML term type.
+
+**RML-STAR mechanism (real, spec-grounded)**: RML-STAR does not add a new
+`TermMap` kind. It adds `rml:StarMap` (nests inside a Subject/ObjectMap),
+`rml:quotedTriplesMap` (links a StarMap to the `TriplesMap` whose output becomes
+the quoted triple), and `rml:AssertedTriplesMap`/`rml:NonAssertedTriplesMap`
+(controls whether the underlying triples are also emitted as regular asserted
+triples). This is a genuine RML-specific extension, not reproducible with vanilla
+R2RML/RML term maps alone.
+
+**A real, unresolved status discrepancy (flag, don't resolve)**: this repo's own
+`docs/research/rml-yarrrml.md` (dated 2026-06-26) states RML-Core *and* RML-STAR
+"have also been adopted as Final Community Group Reports," citing a 16 March 2026
+draft date. A fresh direct fetch of the live RML-STAR spec page today shows
+**"Draft Community Group Report (10 May 2023)"** — an *older* date, which is the
+suspicious part; a live spec page regressing to a date three weeks before this
+repo's own already-current research doc would be unusual. GitHub's only tagged
+`kg-construct/rml-star` release is also `10 May 2023`. The most likely
+reconciliation: RML-Core progressed to Final while RML-STAR specifically did not,
+and the local doc's parenthetical conflated the two modules' status. **Do not cite
+RML-STAR as finalized without re-checking the live spec page** at whatever point
+this actually informs a build decision — the mechanism description above is solid
+regardless of exact CG-report status.
+
+**The plain-RDF encoding question — precise answer, W3C-spec-grounded**:
+
+- RDF 1.2 Concepts (§1.5, "Triple Terms and Reification") treats a triple term as
+  its own RDF-term kind, distinct from IRI/blank-node/literal, and is explicit that
+  asserting a triple *containing* a triple term does not assert the embedded
+  proposition. It does **not** itself define a plain-RDF compatibility encoding.
+- That encoding lives in a separate document, **RDF 1.2 Interoperability**: the
+  **"basic encoding"** replaces each triple term with a fresh blank node `b` and
+  adds four plain triples — `(b rdf:type rdf:PropositionForm)`,
+  `(b rdf:propositionFormSubject s)`, `(b rdf:propositionFormPredicate p)`,
+  `(b rdf:propositionFormObject o)` — with **basic decoding** as the exact reverse.
+  The spec deliberately mints new predicate names rather than reusing classic
+  `rdf:Statement`/`rdf:subject`/`rdf:predicate`/`rdf:object`, specifically because
+  that legacy vocabulary already appears in real datasets (Uniprot cited by name)
+  and reusing it risked silent corruption on graph merge.
+- **Real prior art exists, using the classic vocabulary instead**: RDF4J ships
+  `Models.convertRDFStarToReification`/`convertReificiationtoRDFStar` doing
+  structurally the same shape with `rdf:Statement` etc. Jena's docs independently
+  confirm the load-bearing invariant: round-tripping requires "only one
+  reification for each unique quoted triple term" — i.e. the identifier must be
+  *stable*, not merely fresh-per-run.
+- **Oxigraph itself — semantic-fabric's own RDF/SPARQL substrate (ADR-0004) — does
+  not do this decomposition internally.** It stores a triple term as a genuine
+  native term (`Term::Triple(Box<Triple>)` in `oxrdf`), confirmed by direct source
+  fetch. The "hash to a deterministic blank node" idea is **only a proposed,
+  unimplemented option** in open Oxigraph issue #1286 ("Migration from RDF-star to
+  RDF 1.2") — do not cite it as current Oxigraph behavior.
+
+**Concrete exploitability verdict**: yes, structurally, for the **single-level
+(non-nested)** case, using only ordinary R2RML/RML constructs — no RDF-star-specific
+mapping feature needed:
+1. A `rr:template`-generated identifier (IRI or blank node) as the synthetic stand-in
+   for the quoted triple, plus plain constant-predicate `PredicateObjectMap`s for
+   the four linking triples, is expressible in vanilla R2RML today.
+2. The one place vanilla R2RML must go beyond the spec's own default: the
+   identifier must be **deterministically** derived from the same relational
+   columns producing s/p/o (satisfying the Jena-documented one-reification-per-term
+   invariant needed for repeated query execution over the same rows) — solvable via
+   plain templating when s/p/o are simple column values; nested triple-term
+   components would need SQL-view precomputation or RML-FNML functions, so this
+   is **not** unconditionally solvable for arbitrary nesting depth, only the common
+   single-level case.
+3. **The reverse leg — a SPARQL-star engine rewriting `<<?s ?p ?o>>` query patterns
+   into the corresponding join against this plain-triple data at query time — does
+   not exist anywhere as prior art.** Oxigraph has zero built-in support for
+   interpreting externally-authored basic-encoded triples as native quoted triples.
+   Semantic-fabric would have to build this translation layer itself (most
+   naturally as a SPARQL-star algebra rewrite pass alongside the existing R2RML-to-
+   SQL unfolding).
+
+**Bottom line**: the target plain-RDF shape is real and W3C-specified ("basic
+encoding") with independent precedent (RDF4J's converter, using different
+vocabulary). But "author an R2RML/RML mapping that emits this shape, keyed
+deterministically off relational columns, for a downstream SPARQL-star rewrite
+layer to reconstruct" appears nowhere in the RML-STAR spec, the KGCW literature, or
+any engine's documentation checked this session. **This would be a genuinely novel
+pattern for semantic-fabric to pursue and document, not established practice to
+cite** — a real, non-trivial build (add to the backlog below as an explicitly
+research-stage item, not a scoped feature) if RDF-star support is ever prioritized,
+offering a path that avoids extending the R2RML term-map model itself.
+
 ## Consolidated Prioritized Backlog
 
 Deduplicated across all four streams + the process finding:
@@ -286,6 +377,12 @@ Deduplicated across all four streams + the process finding:
 15. `ADR-0017` provenance/lineage — currently zero.
 16. Track `LUBM4OBDA`/`Sparqloscope` as future benchmark targets if inference or
     per-feature performance claims are ever made externally.
+17. **RDF-star via plain-RDF encoding (§E)** — research-stage only, not a scoped
+    feature: prototype whether a `rr:template`-keyed "basic encoding" R2RML
+    mapping plus a new SPARQL-star algebra rewrite pass could offer RDF-star
+    query support without extending the R2RML term-map model. Genuinely novel
+    (no prior art combines these two halves); scope to the single-level
+    non-nested case first per §E's own caveat.
 
 ## Consequences
 
