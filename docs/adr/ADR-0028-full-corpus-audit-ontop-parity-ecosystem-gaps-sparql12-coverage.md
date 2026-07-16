@@ -305,10 +305,35 @@ RML-IO — partial, not binary). One correction made in the course of this check
 `RML-Model` first looked like it might be a newer successor worth checking, but its
 own README clarifies it's the **old**, deprecated predecessor — "rebuilt from the
 ground up on another repository (rmlmapper-java); all future development will now
-happen there." **Verdict, now checked at ecosystem breadth**: RML-STAR is
-Draft-status and unimplemented everywhere in the `RMLio` organization as of
-2026-07-16 — the spec, the primary executor, and the newer mapping-algebra family
-all agree.
+happen there."
+
+**Correction (same day, user follow-up) — RML-STAR is real and partially
+implemented, in RMLStreamer's actual alpha successor.** The above checked
+`Algebraic-Mapping-Operators` and `mappingloom-rs` (the operator/algebra libraries)
+but not the application that consumes them. Confirmed directly from an `RMLio`
+maintainer's own comment (GitHub issue `RMLStreamer#63`, 2025-10-23): *"This project
+[RMLStreamer] is on maintenance mode with very little activities. A successor
+project is here `RMLio/MappingWeaver-java` which would eventually replace
+RMLStreamer. That project is still in alpha mode and being worked on actively."*
+`MappingWeaver-java` is genuinely alpha and genuinely active — commits as recent as
+2026-07-15/16 (this ADR's own edit date), latest tagged release `v0.2.0`
+(2026-05-27). It embeds Flink internally to execute algebraic mapping plans compiled
+via `mappingloom-rs`/`Algebraic-Mapping-Operators` — architecturally still a
+materialization/ETL engine like RMLStreamer, **not** an OBDA/virtualization engine,
+so still not directly comparable to semantic-fabric's own architecture. But it has
+**real, measured, partial RML-STAR support: 11% of RML-STAR test cases passing**
+(vs. RML-Core 92%, RML-FNML 85%, RML-LV 61%, RML-CC 0%), with a live commit dated
+2026-07-09 ("RMLSTARTest.java and surrounding test cases updated") showing active,
+current work specifically on RDF-star coverage, not an abandoned stub.
+
+**Revised verdict**: RML-STAR is Draft-status and unimplemented in every *mature/
+legacy* tool checked (`rmlmapper-java`, `RML-Model`), and the standalone operator
+libraries have no dedicated star handling — but the ecosystem's actual live edge
+(`MappingWeaver-java`, alpha, active this week) has real, partial, growing support.
+"Unimplemented everywhere" was accurate for what was checked, not for the
+ecosystem as a whole — the corrected, complete claim is **"Draft-status; no mature
+tool implements it; the one active alpha successor has measured 11% test-case
+coverage and rising."**
 
 **The plain-RDF encoding question — precise answer, W3C-spec-grounded**:
 
