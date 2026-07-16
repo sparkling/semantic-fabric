@@ -98,7 +98,7 @@ pub mod real {
     }
 
     /// Parse an ADO.NET connection string into a `tiberius::Config`.
-    fn parse_conn_str(s: &str) -> Result<Config> {
+    pub fn parse_conn_str(s: &str) -> Result<Config> {
         let mut config = Config::new();
         let mut host = "localhost".to_owned();
         let mut port: u16 = 1433;
@@ -362,9 +362,65 @@ pub mod real {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "sqlserver-backend")]
-    use super::real::marshal_column_data;
+    use super::real::{marshal_column_data, parse_conn_str};
     #[cfg(feature = "sqlserver-backend")]
     use tiberius::ColumnData;
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_defaults_host_and_port_when_unspecified() {
+        let config = parse_conn_str("user id=SA;password=SfTest123!").unwrap();
+        assert_eq!(config.get_addr(), "localhost:1433");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_parses_server_host_and_port() {
+        let config = parse_conn_str("server=tcp:myhost,5555;user id=SA;password=x").unwrap();
+        assert_eq!(config.get_addr(), "myhost:5555");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_defaults_port_when_server_has_no_port() {
+        let config = parse_conn_str("server=tcp:myhost;user id=SA;password=x").unwrap();
+        assert_eq!(config.get_addr(), "myhost:1433");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_accepts_data_source_as_a_server_alias() {
+        let config = parse_conn_str("data source=tcp:otherhost,7777").unwrap();
+        assert_eq!(config.get_addr(), "otherhost:7777");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_keys_are_case_insensitive() {
+        let config = parse_conn_str("SERVER=tcp:myhost,123;USER ID=sa;PASSWORD=x").unwrap();
+        assert_eq!(config.get_addr(), "myhost:123");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_falls_back_to_default_port_on_non_numeric_port() {
+        let config = parse_conn_str("server=tcp:myhost,notaport").unwrap();
+        assert_eq!(config.get_addr(), "myhost:1433");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_tolerates_blank_segments_and_whitespace() {
+        let config = parse_conn_str("  ; server = tcp:myhost,42 ; ; password = x ; ").unwrap();
+        assert_eq!(config.get_addr(), "myhost:42");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_ignores_unknown_keys() {
+        let config = parse_conn_str("server=tcp:myhost,42;some_unknown_key=whatever").unwrap();
+        assert_eq!(config.get_addr(), "myhost:42");
+    }
 
     #[cfg(feature = "sqlserver-backend")]
     #[test]
