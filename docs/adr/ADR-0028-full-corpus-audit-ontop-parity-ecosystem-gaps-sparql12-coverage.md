@@ -290,6 +290,26 @@ no mention of RDF-star support at all.** Consistent with, and independent
 reinforcement of, the Draft-not-Final finding above: even the primary reference
 implementation hasn't implemented RML-STAR.
 
+**Org-wide sweep (main session, direct — all ~60 `RMLio` GitHub repos listed and the
+most relevant ones checked)**: the null result holds across the whole ecosystem, not
+just `rmlmapper-java`. `Algebraic-Mapping-Operators` (a newer "mapping algebra"
+operator library, a different lineage from the direct-execution tools) states
+outright "further operators will be implemented as they're defined" — no
+star/quoted-triple operator exists yet. `mappingloom-rs` (Rust, updated the same day
+as this research) has **zero code-level hits for "star"**; its README lists
+RML-STAR only as one of the six modules in the *official conformance test corpus it
+runs against*, with no claim of actually passing or implementing those specific
+cases — the same "covered by the test suite ≠ fully passing" distinction RMLMapper's
+own published conformance numbers already illustrate (98.70% RML-Core, 50.75%
+RML-IO — partial, not binary). One correction made in the course of this check:
+`RML-Model` first looked like it might be a newer successor worth checking, but its
+own README clarifies it's the **old**, deprecated predecessor — "rebuilt from the
+ground up on another repository (rmlmapper-java); all future development will now
+happen there." **Verdict, now checked at ecosystem breadth**: RML-STAR is
+Draft-status and unimplemented everywhere in the `RMLio` organization as of
+2026-07-16 — the spec, the primary executor, and the newer mapping-algebra family
+all agree.
+
 **The plain-RDF encoding question — precise answer, W3C-spec-grounded**:
 
 - RDF 1.2 Concepts (§1.5, "Triple Terms and Reification") treats a triple term as
