@@ -239,4 +239,16 @@ mod tests {
         };
         assert_eq!(serve(opts), ExitCode::FAILURE);
     }
+
+    #[test]
+    fn conformance_returns_success_exit_code_on_the_real_suite() {
+        // Drives the real vendored W3C RDB2RDF suite (tests/w3c/rdb2rdf, checked
+        // into the repo) — no live DB or network needed. This is this crate's own
+        // responsibility per the module doc above: surface a clean SUCCESS/FAILURE
+        // exit code, not just delegate correctly. Side effect: like the dedicated
+        // CI conformance step, this regenerates the two EARL report files with
+        // non-deterministic bnode labels — that diff is expected and not committed
+        // (same convention as ci.yml's own conformance step).
+        assert_eq!(conformance(), ExitCode::SUCCESS);
+    }
 }
