@@ -464,4 +464,109 @@ mod tests {
         let r = backend.column_names("SELECT 1").await;
         assert!(r.is_err(), "should fail with no server on port 59999");
     }
+
+    /// A local mock MAPI server (real TCP loopback, no live MonetDB needed): sends
+    /// the challenge, accepts any auth response, replies READY, then answers the
+    /// next query with a canned MAPI result. Exercises `MapiConn::connect` +
+    /// `.query()` — i.e. `read_mapi_message`/`send_mapi_message` — end to end over
+    /// a real socket, the same framing code a live server would drive.
+    fn spawn_mock_mapi_server(result: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock mapi server");
+        let port = listener.local_addr().expect("local_addr").port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone for read"));
+            // Challenge: "server:challenge:protocol:hashes:bigendian:database:"
+            send_mapi_message(&stream, b"mockserver:chal:9:MD5,SHA256:0:testdb:\n")
+                .expect("send challenge");
+            let _auth_response = read_mapi_message(&mut reader).expect("read auth response");
+            // Any non-'!'-prefixed reply signals auth success.
+            send_mapi_message(&stream, b"\n").expect("send auth ok");
+            let _query = read_mapi_message(&mut reader).expect("read query");
+            send_mapi_message(&stream, result.as_bytes()).expect("send result");
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn monetdb_column_names_via_mock_mapi_server() {
+        let port = spawn_mock_mapi_server("&1 0 1 1\n% n # name\n% int # type\n[ 1\t]\n");
+        let mut backend = MonetDbBackend::new("127.0.0.1", port, "monetdb", "monetdb", "testdb");
+        let cols = backend
+            .column_names("SELECT n FROM t")
+            .await
+            .expect("column_names over mock server");
+        assert_eq!(cols, vec!["n".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn monetdb_open_branch_returns_data_rows() {
+        let port = spawn_mock_mapi_server(
+            "&1 0 2 2\n% id,\tname # name\n% int,\tvarchar # type\n[ 1,\tAlice ]\n[ 2,\tNULL ]\n",
+        );
+        let mut backend = MonetDbBackend::new("127.0.0.1", port, "monetdb", "monetdb", "testdb");
+        let mut stream = backend
+            .open_branch("SELECT id, name FROM t", &[])
+            .await
+            .expect("open_branch over mock server");
+        let row1 = stream.next_row().await.unwrap().expect("row 1");
+        assert_eq!(
+            row1.values,
+            vec![Some("1".to_owned()), Some("Alice".to_owned())]
+        );
+        let row2 = stream.next_row().await.unwrap().expect("row 2");
+        assert_eq!(row2.values, vec![Some("2".to_owned()), None]);
+        assert!(stream.next_row().await.unwrap().is_none(), "no third row");
+    }
+
+    #[tokio::test]
+    async fn monetdb_auth_rejected_surfaces_error() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            send_mapi_message(&stream, b"mockserver:chal:9:MD5,SHA256:0:testdb:\n")
+                .expect("send challenge");
+            let _auth_response = read_mapi_message(&mut reader).expect("read auth response");
+            send_mapi_message(&stream, b"!InvalidCredentialsException:bad login\n")
+                .expect("send auth rejection");
+        });
+        let mut backend = MonetDbBackend::new("127.0.0.1", port, "baduser", "badpass", "testdb");
+        let r = backend.column_names("SELECT 1").await;
+        assert!(
+            r.is_err(),
+            "auth rejection ('!' reply) must surface as an error"
+        );
+    }
+
+    /// `read_mapi_message` must reassemble a message spanning multiple MAPI blocks
+    /// (the `last` bit unset on all but the final block) — `send_mapi_message`
+    /// always sends a single block, so this drives the wire format directly to
+    /// exercise the continuation-loop branch nothing else in this file reaches.
+    #[test]
+    fn read_mapi_message_reassembles_multiple_blocks() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        let writer = std::thread::spawn(move || {
+            let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+            // Block 1: "hello, " with last_flag=0.
+            let part1 = b"hello, ";
+            let hdr1: u16 = (part1.len() as u16) << 1; // last bit unset
+            stream.write_all(&hdr1.to_le_bytes()).unwrap();
+            stream.write_all(part1).unwrap();
+            // Block 2: "world" with last_flag=1.
+            let part2 = b"world";
+            let hdr2: u16 = ((part2.len() as u16) << 1) | 1;
+            stream.write_all(&hdr2.to_le_bytes()).unwrap();
+            stream.write_all(part2).unwrap();
+            stream.flush().unwrap();
+        });
+        let (server_side, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(server_side);
+        let msg = read_mapi_message(&mut reader).expect("reassemble multi-block message");
+        assert_eq!(msg, "hello, world");
+        writer.join().unwrap();
+    }
 }
