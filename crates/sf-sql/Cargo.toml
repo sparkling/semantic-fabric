@@ -48,3 +48,10 @@ oracle = { version = "0.6", optional = true }
 # REST backends — Snowflake / BigQuery / Athena / Databricks via HTTP.
 reqwest = { version = "0.12", features = ["json"], optional = true }
 serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+# Mocked HTTP server for the rest-backends test suite (Snowflake/Athena/Databricks/
+# Trino execute_sql + presto_execute pagination) — these backends take an arbitrary
+# base_url already, so a local mock server exercises the real request/response path
+# without needing live cloud credentials.
+wiremock = "0.6"
