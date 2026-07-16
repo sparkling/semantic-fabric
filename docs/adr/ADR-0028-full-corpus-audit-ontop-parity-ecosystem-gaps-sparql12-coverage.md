@@ -320,20 +320,40 @@ RMLStreamer. That project is still in alpha mode and being worked on actively."*
 (2026-05-27). It embeds Flink internally to execute algebraic mapping plans compiled
 via `mappingloom-rs`/`Algebraic-Mapping-Operators` — architecturally still a
 materialization/ETL engine like RMLStreamer, **not** an OBDA/virtualization engine,
-so still not directly comparable to semantic-fabric's own architecture. But it has
-**real, measured, partial RML-STAR support: 11% of RML-STAR test cases passing**
-(vs. RML-Core 92%, RML-FNML 85%, RML-LV 61%, RML-CC 0%), with a live commit dated
-2026-07-09 ("RMLSTARTest.java and surrounding test cases updated") showing active,
-current work specifically on RDF-star coverage, not an abandoned stub.
+so still not directly comparable to semantic-fabric's own architecture.
 
-**Revised verdict**: RML-STAR is Draft-status and unimplemented in every *mature/
-legacy* tool checked (`rmlmapper-java`, `RML-Model`), and the standalone operator
-libraries have no dedicated star handling — but the ecosystem's actual live edge
-(`MappingWeaver-java`, alpha, active this week) has real, partial, growing support.
-"Unimplemented everywhere" was accurate for what was checked, not for the
-ecosystem as a whole — the corrected, complete claim is **"Draft-status; no mature
-tool implements it; the one active alpha successor has measured 11% test-case
-coverage and rising."**
+**Second correction, same day (user asked specifically about nested star patterns)
+— the "11% passing" figure was numerically right but substantively misleading.**
+Read the actual JUnit test file directly
+(`src/test/java/.../rml_kgc/RMLSTARTest.java`) rather than trust a secondhand
+summary of it. Its own code comment: *"RDF-star plan generation (quoted / asserted
+triples) is not supported, so translation throws before any output is produced."*
+All 16 **positive** (should-succeed) test cases — `RMLSTARTC001a` through `008b`,
+including `RMLSTARTC008a`/`008b` ("two-level non-asserted quoted triple... both
+triples have in turn non-asserted quoted triples," i.e. the nested case this
+question was actually about) — are `@Disabled("Not running known failing test
+cases in CI")`. The only 2 cases that pass, `RMLSTARTC009`/`010`, are **negative**
+tests (quoted triples as a predicate map, or as an object without an object map —
+both correctly expected to error) that pass by correctly *rejecting* invalid
+input, not by producing real RDF-star output. So the honest figure is **0% of the
+"does RDF-star generation actually work" cases pass — nested or otherwise**;
+there is currently no meaningful difference between MappingWeaver-java's
+non-nested and nested handling because neither path produces output yet. What is
+real and valuable: the full 18-case official test corpus (correct expected
+outputs already transcribed from the spec) is built and wired into the harness,
+disabled-but-ready — normal test-first scaffolding ahead of the feature landing,
+not evidence the feature itself exists.
+
+**Twice-revised verdict**: RML-STAR is Draft-status and unimplemented in every
+*mature/legacy* tool checked (`rmlmapper-java`, `RML-Model`), the standalone
+operator libraries have no dedicated star handling, and even the ecosystem's
+active alpha successor (`MappingWeaver-java`) has zero working RDF-star
+generation today — single-level or nested. The one genuinely real thing that
+exists anywhere in the `RMLio` organization is a complete, spec-accurate test
+corpus sitting ready for whenever the feature itself gets built. Do not cite any
+percentage of "RML-STAR support" for `MappingWeaver-java` without checking
+whether the underlying JUnit tests are `@Disabled` — a naive test-pass-rate
+number reads as partial support when the truth is zero.
 
 **The plain-RDF encoding question — precise answer, W3C-spec-grounded**:
 
