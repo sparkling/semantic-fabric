@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-16
-ratified:
+ratified: 2026-07-16
 tags: [testing, load-testing, concurrency, resource-governance, sf-serve, agentic-qe, adr-drift]
 supersedes: []
 depends-on:
@@ -96,10 +96,78 @@ comparable in kind, not just novel) with three target scenarios:
    "accepted, not yet implemented" (a status correction) or gets scheduled as
    real follow-up work.
 
-Status left `proposed`, not `accepted`: this ADR plans the test; it does not
-yet report a result. Update this ADR's status to `accepted` with the measured
-findings once run, per this project's own "ADRs are living plans" discipline —
-do not let it sit here describing an unexecuted intention.
+### Correction (2026-07-16, same day) — `qe_tests_load` was not actually used
+
+On trying to invoke it, `qe_tests_load`'s own description and source
+(`agentic-qe/src/domains/chaos-resilience/services/load-tester.ts`) turned out
+to test **`agentic-qe`'s own agent-fleet scalability** (spawning N QE agents,
+gated behind `fleet_init`), not an arbitrary HTTP target. `qe_workflows_browser-load`
+is browser-automation only (login/OAuth flow templates). Neither fits "fire
+concurrent requests at a plain SPARQL HTTP endpoint." No RuvNet tool covers
+generic HTTP load generation. Disclosing plainly rather than forcing a
+mismatched tool or silently hand-rolling: installed **`oha`** (Homebrew,
+`brew install oha`, a maintained Rust HTTP load generator) plus plain `curl`
+for finer per-request control, and ran the three scenarios below directly
+against a locally-launched `sf-serve`.
+
+## Measured Results (2026-07-16)
+
+Setup: PostgreSQL 16 in Docker (port 15432, avoiding collision with a
+locally-installed native Postgres), GTFS fixture at scale 3000
+(`scripts/load_gtfs_postgres.sh 3000` — 2.4M `stop_times` rows), `sf-serve`
+built in `--release`. Baseline: one unthrottled full `CONSTRUCT {?s ?p ?o}`
+dump (15,560,014 triples) takes **12.4s** solo.
+
+**1. Timeout under concurrency — holds, once measured correctly.** First
+attempt (3 concurrent dumps, `--timeout-secs 2`, output discarded via
+`-o /dev/null`) appeared to show the timeout not firing — all three eventually
+returned `http=200` after 25-30s. That reading was wrong: discarding the
+response body hides mid-stream truncation, since the `200` status line is
+sent before the body streams and can't retroactively change. Re-run capturing
+the actual body: all three requests truncated at **~2.0-2.07s** (`curl exit
+18`, "partial file") — the deadline check in `stream.rs` does fire close to
+the configured bound. Lesson banked: a load test must check response
+completeness, not just the status code.
+
+A genuine, unexplained-but-not-alarming sub-finding from that same run: the
+three "identical" concurrent requests got very unequal throughput in the same
+~2s window (two streamed ~34MB, one streamed ~370MB) — the shared
+single-connection model does not guarantee fairness across concurrent
+requests. Not a correctness bug (no data corruption — see scenario 3), but
+worth knowing before assuming equal service under load.
+
+**2. `max_query_len` under concurrency — holds cleanly.** 10 concurrent
+oversized-query (`--max-query-len 1024`) requests: all 10 correctly rejected
+with `413` and the ADR-0010 cap message. No degradation under concurrency.
+
+**3. Overload (5-way, then 20-way concurrent full-dump CONSTRUCT, 30s
+timeout) — no crash, no hang, no data corruption; degrades via proportional
+slowdown + the existing timeout, not via any admission control.** All 25
+requests (5 + 20) returned clean `200`s with well-formed (if
+deadline-truncated) N-Triples output — line counts ranged from 85K to 12.6M
+triples per request depending on how much of its own 30s window each got
+before contention slowed it down. Verified this is truncation, not
+corruption: initial byte-count comparison looked alarming (some outputs
+appeared larger than a rough mental estimate of the full dump size), but
+checking actual line counts confirmed every output was a **prefix** of the
+full 15.56M-line dump, never more, never duplicated. Confirms
+`ADR-0026`/`ADR-0010`'s drift finding in practice: there is no stream-lane
+pool and no `503`+`Retry-After` shedding — concurrent load simply shares the
+one PG connection's throughput unevenly and lets each request's own timeout
+be the only backstop. That backstop **works** (nothing hangs indefinitely,
+nothing corrupts), but a well-behaved client under real overload gets a slow,
+incomplete stream after waiting out its full timeout, not a fast, honest
+`503` — worse UX than what `ADR-0010` describes, though not unsafe.
+
+### Recommendation
+
+`ADR-0010`'s stream-lane-pool/`503`-shedding clause should have its status
+corrected from implicitly-accepted-and-built to **accepted, not implemented**
+(a documentation fix, done by this ADR's cross-reference) — and separately,
+whether to actually build it is a real prioritization call: current behavior
+is *safe* (bounded by existing timeouts, no crashes) but not *graceful*
+(slow truncated responses instead of fast, honest rejection) under
+concurrent overload. Not decided here — flagged for the user.
 
 ## Consequences
 

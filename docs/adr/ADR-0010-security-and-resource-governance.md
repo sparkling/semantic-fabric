@@ -51,6 +51,23 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 * A `P+` query over a cyclic fixture terminates within the depth bound; a pathological query hits cost-reject or timeout — not OOM/hang.
 * A million-row `SELECT` streams with bounded memory; a slow/abandoned client is bounded by `transaction_timeout` and does not exhaust the stream-lane pool.
 
+> **Status correction (2026-07-16, measured, `ADR-0027`).** The "stream-lane
+> connection pool" / "shed overflow as `503` + `Retry-After`" clause above
+> describes design intent this ADR presented as decided, but it was never
+> built: `grep` for `stream_lane`/`Retry-After`/`503` across `sf-serve`'s
+> source and tests returns zero matches, and PostgreSQL is served over a
+> single `tokio_postgres::Client`, not a pool. Live load testing (`ADR-0027`)
+> confirmed the practical consequence: under concurrent overload, requests do
+> **not** crash, hang, or corrupt data (the existing per-request `timeout` and
+> `max_query_len` both hold correctly under concurrency, verified directly)
+> — but there is no fast, honest overload signal either. Concurrent clients
+> simply share the one connection's throughput unevenly and each waits out
+> its own full timeout before getting a truncated response, worse UX than
+> this clause describes, though not unsafe. Treat this clause as **accepted,
+> not implemented** until the pool/shedding is actually built or is formally
+> descoped — do not read the rest of this ADR's "accepted" status as implying
+> this specific piece shipped.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
