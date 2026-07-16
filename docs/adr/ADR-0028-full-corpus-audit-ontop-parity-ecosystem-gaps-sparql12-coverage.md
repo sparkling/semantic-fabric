@@ -105,6 +105,19 @@ parity."**
   `DISTINCT` flag for the wildcard form). Both claims are time-bound to Ontop 5.5.0
   as documented in `docs/research/ontop.md` — a future Ontop release could close
   either.
+- **RDF-star — genuine parity, not an asymmetry (added 2026-07-16, follow-up
+  research)**: mainline Ontop ships **zero** RDF-star support — checked directly
+  against Ontop's own release notes (every version 1.5.1-RC1 through 5.5.0) and
+  its SPARQL 1.1 compliance page, no mention anywhere. The only related artifact is
+  a 2022 MSc thesis ("Extending VKG Systems with RDF-star Support," Sundqvist, Free
+  University of Bozen-Bolzano) hosted on Ontop's own publications page, proposing
+  an R2RML-star mapping extension — academically affiliated with the Ontop group
+  but never merged, never productized, no evidence of a maintained fork. So this
+  is **not** "Ontop supports RDF-star and semantic-fabric doesn't" — both engines
+  have zero shipped capability here. The honest asymmetry is narrower: Ontop's
+  research community has published a design sketch for *how* R2RML could be
+  extended to construct quoted triples; semantic-fabric has no equivalent design
+  document. Not a functional gap in today's parity comparison.
 - **Optimization parity**: matching passes confirmed (self-join/left-join
   elimination, FK/redundant-join elimination, IRI-template pruning, FD closure,
   agg-through-union pushdown, the full ADR-0023 operator-tree IR mirroring Ontop's
@@ -199,7 +212,12 @@ operands.
   `sf-core/src/term.rs` correctly rejects `Term::Triple` as an R2RML term-map value
   (R2RML has no construct that could ever produce a quoted triple from relational
   rows); recommend treating this as out-of-scope-by-architecture in any future
-  SPARQL-1.2-readiness claim, not a checklist item to close.
+  SPARQL-1.2-readiness claim, not a checklist item to close. **Confirmed this isn't
+  a competitive gap either** (follow-up research, 2026-07-16): mainline Ontop 5.5.0
+  ships zero RDF-star support too — see §B's RDF-star note for the full citation.
+  Both engines are at parity here (neither has shipped capability); Ontop's
+  research group has an unmerged 2022 thesis design (R2RML-star) semantic-fabric
+  has no equivalent of, which is the only real asymmetry.
 
 **3. Untested-but-implemented (the risk bucket)**: two candidates flagged — negated
 property sets nested inside a set-composite, and `!p` over a graph mixing
