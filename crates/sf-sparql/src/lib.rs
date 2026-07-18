@@ -76,7 +76,6 @@ pub mod exec_pg;
 pub mod iq;
 pub mod leftjoin;
 pub mod path;
-pub mod pool;
 pub mod saturate;
 pub mod star;
 pub mod unfold;

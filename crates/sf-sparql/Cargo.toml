@@ -19,7 +19,7 @@ oxsdatatypes.workspace = true  # exact Decimal accumulation for AVG (M3 fix 1) โ
 # (ADR-0007); re-add once an upstream sparopt release covers 1.2.
 oxjsonld.workspace = true      # JSON-LD 1.2 output for CONSTRUCT/DESCRIBE (ADR-0006/0019); wired now so the 1.2 surface resolves
 thiserror.workspace = true
-rayon = "1.12"                 # SEPARATE CPU pool for term-gen (ADR-0006 rayon/tokio separation)
+quick_cache = "0.7"             # PlanCache production drop-in (ADR-0007 cache.rs doc comment): approximately-LRU, never a wholesale clear
 rusqlite = { version = "0.32", features = ["bundled"] } # SQLite execution of emitted SQL (this-wave target)
 tokio-postgres = "0.7"         # PostgreSQL execution of emitted SQL via PgRowStream/query_raw (ADR-0010 ยงC)
 bytes = "1"                    # BytesMut, for the ToSql wrapper that binds lexical params to the placeholder's inferred PG type

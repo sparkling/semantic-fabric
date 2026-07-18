@@ -26,16 +26,17 @@ use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::{RawQuery, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
+use deadpool_postgres::PoolError;
 
 use sf_core::ir::TriplesMap;
 use sf_sparql::{
     exec, exec_mysql, exec_pg, Epoch, Error as SparqlError, Plan, PlanCache, PlanForm, Tbox,
 };
-use sf_sql::introspect::{introspect_postgres, introspect_sqlite};
+use sf_sql::introspect::introspect_sqlite;
 use sf_sql::{Dialect, TableSchema};
 use sparesults::QueryResultsFormat;
 
@@ -51,16 +52,39 @@ pub use stream::RdfFormat;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
 
+/// The PG serve-lane pool's cap (ADR-0010 §C "small, hard-capped stream-lane
+/// connection pool") and how long a request waits for a free connection before
+/// being shed as `503` rather than queued indefinitely (M4 wave-2 finding 2).
+const PG_POOL_MAX_SIZE: usize = 16;
+const PG_POOL_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A pooled PostgreSQL connection, re-derefed to `tokio_postgres::Client` in one
+/// hop. `deadpool_postgres::Object` derefs to its own `ClientWrapper` (adds
+/// statement caching), not directly to `Client` — `sf_sparql::exec_pg`'s generic
+/// client-handle bound (`Deref<Target = Client>`, shared with the conformance
+/// harness's plain `Arc<Client>`) needs the single hop this newtype provides.
+struct PgConn(deadpool_postgres::Object);
+
+impl std::ops::Deref for PgConn {
+    type Target = tokio_postgres::Client;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// A live relational backend the endpoint queries (ADR-0006). SQLite is sync
 /// (`rusqlite::Connection`, not `Send` across awaits — held behind a `Mutex`); its
 /// blocking now lives entirely in the adapter's cap-1 `spawn_blocking` bridge
 /// (ADR-0024 §4.1 [`SqliteOwnedBackend`]), so the serve lane drives all three
-/// backends through the same async streamer. PostgreSQL is async (a shared
-/// `tokio_postgres` client handle).
+/// backends through the same async streamer. PostgreSQL is a bounded
+/// `deadpool_postgres::Pool` (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2
+/// finding 2) — was a single shared `Client` serialising every PG HTTP request;
+/// each request now draws a pooled connection for its lifetime, mirroring MySQL's
+/// existing `mysql_async::Pool`.
 #[derive(Clone)]
 pub enum Backend {
     Sqlite(Arc<Mutex<rusqlite::Connection>>),
-    Pg(Arc<tokio_postgres::Client>),
+    Pg(deadpool_postgres::Pool),
     /// MySQL: a cloneable `mysql_async::Pool`; each streaming request draws a
     /// DEDICATED connection for the stream's lifetime, discarded/reset on early drop
     /// (ADR-0024 §4.2 — mirrors PG cancel-on-drop).
@@ -254,12 +278,20 @@ async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>)
             vars,
             deadline,
         ),
-        Backend::Pg(client) => stream::select_body_streaming(
-            move |sink| Box::pin(async move { exec_pg::select_each_pg(&plan, client, sink).await }),
-            fmt,
-            vars,
-            deadline,
-        ),
+        Backend::Pg(pool) => {
+            let conn = match acquire_pg(&pool).await {
+                Ok(c) => c,
+                Err(resp) => return resp,
+            };
+            stream::select_body_streaming(
+                move |sink| {
+                    Box::pin(async move { exec_pg::select_each_pg(&plan, conn, sink).await })
+                },
+                fmt,
+                vars,
+                deadline,
+            )
+        }
         Backend::Mysql(pool) => stream::select_body_streaming(
             move |sink| {
                 Box::pin(async move {
@@ -297,8 +329,12 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 Ok(Ok(r)) => r,
             }
         }
-        Backend::Pg(client) => {
-            match tokio::time::timeout(cfg.timeout, exec_pg::ask_pg(&plan, client)).await {
+        Backend::Pg(pool) => {
+            let conn = match acquire_pg(&pool).await {
+                Ok(c) => c,
+                Err(resp) => return resp,
+            };
+            match tokio::time::timeout(cfg.timeout, exec_pg::ask_pg(&plan, conn)).await {
                 Err(_) => {
                     return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
                 }
@@ -354,13 +390,19 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
             fmt,
             deadline,
         ),
-        Backend::Pg(client) => stream::construct_body_streaming(
-            move |sink| {
-                Box::pin(async move { exec_pg::construct_each_pg(&plan, client, sink).await })
-            },
-            fmt,
-            deadline,
-        ),
+        Backend::Pg(pool) => {
+            let conn = match acquire_pg(&pool).await {
+                Ok(c) => c,
+                Err(resp) => return resp,
+            };
+            stream::construct_body_streaming(
+                move |sink| {
+                    Box::pin(async move { exec_pg::construct_each_pg(&plan, conn, sink).await })
+                },
+                fmt,
+                deadline,
+            )
+        }
         Backend::Mysql(pool) => stream::construct_body_streaming(
             move |sink| {
                 Box::pin(async move {
@@ -376,6 +418,29 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
         ),
     };
     ok_stream(fmt.media_type(), body)
+}
+
+/// Acquire a pooled PostgreSQL connection (ADR-0010 §C stream-lane pool, ADR-0027;
+/// M4 wave-2 finding 2). Pool exhaustion (no free connection within
+/// [`PG_POOL_WAIT_TIMEOUT`]) is shed as a fast, honest `503` + `Retry-After`
+/// rather than queued indefinitely or reported as a generic `500` — the ADR-0010
+/// "shed overflow" clause this pass implements.
+async fn acquire_pg(pool: &deadpool_postgres::Pool) -> Result<PgConn, Response> {
+    pool.get().await.map(PgConn).map_err(|e| match e {
+        PoolError::Timeout(_) => {
+            let mut resp = err_text(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "PostgreSQL connection pool exhausted, retry shortly (ADR-0010)",
+            );
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            resp
+        }
+        other => err_text(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("PostgreSQL pool: {other}"),
+        ),
+    })
 }
 
 /// Map a rewriter error to an HTTP status (ADR-0010 §error handling).
@@ -463,7 +528,10 @@ pub fn introspect_sqlite_all(conn: &rusqlite::Connection) -> Result<Vec<TableSch
     Ok(schemas)
 }
 
-/// Introspect every PostgreSQL public base table.
+/// Introspect every PostgreSQL public base table in 5 set-based round trips
+/// total, rather than 5 **per table** (M4 wave-2 finding 4 — the N+1 this
+/// function used to drive via a per-table
+/// [`introspect_postgres`](sf_sql::introspect::introspect_postgres) loop).
 pub async fn introspect_pg_all(
     client: &tokio_postgres::Client,
 ) -> Result<Vec<TableSchema>, String> {
@@ -475,16 +543,10 @@ pub async fn introspect_pg_all(
         )
         .await
         .map_err(|e| e.to_string())?;
-    let mut schemas = Vec::with_capacity(rows.len());
-    for r in rows {
-        let name: String = r.get(0);
-        schemas.push(
-            introspect_postgres(client, &name)
-                .await
-                .map_err(|e| e.to_string())?,
-        );
-    }
-    Ok(schemas)
+    let names: Vec<String> = rows.into_iter().map(|r| r.get(0)).collect();
+    sf_sql::introspect::introspect_postgres_all(client, &names)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

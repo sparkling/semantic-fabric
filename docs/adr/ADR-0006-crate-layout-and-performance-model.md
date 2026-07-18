@@ -63,6 +63,15 @@ Results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw
 ### Parallelism & dialects
 
 * `tokio` owns all async I/O (drivers, result streaming, the OBDA endpoint); `rayon` parallelises any CPU-bound term generation. **The pools stay separate** (mixing causes latency spikes); CPU work invoked from async goes through `spawn_blocking`.
+  > **Measured correction (2026-07-18, M4 wave-2).** The rayon term-gen pool was
+  > built but never wired to a caller, and measurement settled it: per-row
+  > dispatch of a ~10ns unit of work is **~2× slower** than inline (~1.9–2.4ms
+  > vs ~0.93–1.0ms per 100k rows) — scheduling overhead dominates — so
+  > `pool.rs` and the `rayon` dependency are **removed**; term generation runs
+  > inline on the calling thread/task everywhere. A **chunked** dispatch
+  > (1000 rows/task) measured a genuine **~6× win** (~155µs), but it requires
+  > restructuring `exec_core`'s per-row solution loop into a batch shape —
+  > real, unscheduled follow-up work, recorded here rather than half-shipped.
 * First-class source dialects: **PostgreSQL** (primary production), **SQLite** (embedded / W3C-suite CI); **MySQL** follows. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
 * Crate pins + 1.2 feature flags: ADR-0004 / ADR-0019. Toolchain pinned via `rust-toolchain.toml`.
 

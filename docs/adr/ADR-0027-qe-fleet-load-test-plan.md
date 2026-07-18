@@ -182,6 +182,10 @@ concurrent overload. Not decided here — flagged for the user.
   that's new, unscheduled work: either implement the pool/503-shedding
   `ADR-0010` already describes, or formally descope it with a status update
   on `ADR-0010` — a product/priority decision, not this ADR's to make alone.
+  > **Resolved (2026-07-18, M4 wave-2):** the implement path was taken — PG
+  > pool + 503/`Retry-After` shedding built and measured (~2.3× under 16
+  > concurrent clients, exhaustion path test-locked). See `ADR-0010`'s
+  > part-2 status correction for the details and remaining refinements.
 * Load testing a live local server needs the same kind of real-infra
   verification discipline `ADR-0026` used for the DB containers (run it for
   real, don't trust a dry-run).

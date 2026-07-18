@@ -75,14 +75,28 @@ async fn open_backend(spec: &str) -> Result<(Backend, Vec<sf_sql::TableSchema>),
         let schema = introspect_sqlite_all(&conn)?;
         Ok((Backend::sqlite(conn), schema))
     } else if let Some(conninfo) = spec.strip_prefix("pg:") {
-        let (client, connection) = tokio_postgres::connect(conninfo, NoTls)
+        // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
+        // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
+        let pg_config: tokio_postgres::Config = conninfo
+            .parse()
+            .map_err(|e| format!("parse PG conninfo {conninfo:?}: {e}"))?;
+        let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
+        let pool = deadpool_postgres::Pool::builder(manager)
+            .max_size(crate::PG_POOL_MAX_SIZE)
+            .wait_timeout(Some(crate::PG_POOL_WAIT_TIMEOUT))
+            // The wait timeout needs an async runtime to enforce it (deadpool is
+            // runtime-agnostic by default) — without this, `pool.get()` errors
+            // `NoRuntimeSpecified` instead of ever honouring the timeout.
+            .runtime(deadpool_postgres::Runtime::Tokio1)
+            .build()
+            .map_err(|e| format!("build PostgreSQL pool: {e}"))?;
+        let conn = pool
+            .get()
             .await
-            .map_err(|e| format!("connect PostgreSQL: {e}"))?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        let schema = introspect_pg_all(&client).await?;
-        Ok((Backend::Pg(Arc::new(client)), schema))
+            .map_err(|e| format!("PostgreSQL pool get (introspection): {e}"))?;
+        let schema = introspect_pg_all(&conn).await?;
+        drop(conn);
+        Ok((Backend::Pg(pool), schema))
     } else if spec.starts_with("mysql://") {
         // `Pool::from_url` needs the whole `mysql://…` URL — never strip the scheme.
         let pool = mysql_async::Pool::from_url(spec).map_err(|e| format!("connect MySQL: {e}"))?;

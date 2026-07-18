@@ -68,6 +68,19 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > descoped — do not read the rest of this ADR's "accepted" status as implying
 > this specific piece shipped.
 
+> **Status correction, part 2 (2026-07-18, built + measured).** The PG half of
+> the clause above IS now implemented (M4 wave-2): `Backend::Pg` is a
+> `deadpool_postgres::Pool` (`max_size` 16, `wait_timeout` 5s,
+> `Runtime::Tokio1` — the runtime must be set explicitly or the timeout is
+> silently never enforced), and pool exhaustion sheds `503` + `Retry-After: 1`
+> instead of queueing (`acquire_pg`, test-locked incl. the exhaustion path).
+> Measured under 16 concurrent SELECTs: ~2.3× wall-clock improvement over the
+> single-client behavior (4.10s→1.75s / 3.94s→1.68s, all responses complete
+> and correct). SQLite remains a single `Mutex<Connection>` by choice (an
+> embedded-source serialization question, out of this clause's scope);
+> `Retry-After` is a fixed `1`, not pressure-derived — both recorded as open
+> refinements, not gaps in the clause.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
