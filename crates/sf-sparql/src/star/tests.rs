@@ -1,7 +1,7 @@
-//! Unit tests for the ADR-0031 star rewrite: pure `GraphPattern`-shape
+//! Unit tests for the ADR-0032 D3 star rewrite: pure `GraphPattern`-shape
 //! assertions (no DB, no mapping) — the SQL-level, cross-mapping behavior
-//! (reifies elision matching real data, tree/flat parity, the locked v1
-//! boundaries) is covered by `sf-conformance/tests/differential_star.rs`.
+//! (reifies join matching real data, tree/flat parity, the locked boundaries)
+//! is covered by `sf-conformance/tests/differential_star.rs`.
 //! `use super::*` re-uses the parent module's rewrite functions (all
 //! private except the two `pub` entry points) plus its spargebra imports.
 
@@ -52,10 +52,32 @@ fn assert_basic_encoding(out: &[TriplePattern], start: usize, identity: &TermPat
     );
 }
 
+/// A rewritten `GraphPattern` is the rule-R1 zero-solution replacement: a
+/// `Values` clause with a single fresh `__sf_star_empty_*` variable and no
+/// rows.
+fn assert_empty(gp: &GraphPattern) {
+    let GraphPattern::Values {
+        variables,
+        bindings,
+    } = gp
+    else {
+        panic!("expected a zero-row Values, got {gp:#?}");
+    };
+    assert_eq!(variables.len(), 1);
+    assert!(
+        variables[0].as_str().starts_with("__sf_star_empty_"),
+        "unexpected empty-marker variable: {}",
+        variables[0]
+    );
+    assert!(bindings.is_empty());
+}
+
 #[test]
-fn reifies_wrapper_is_elided_not_translated() {
+fn reifies_wrapper_is_kept_pointing_at_a_fresh_pf_var() {
     // `_:b rdf:reifies <<( ?p ex:hasAge ?age )>> . _:b ex:assertedBy ?src .`
-    // — spargebra's bare-syntax desugar shape (ADR-0031 Context).
+    // — spargebra's bare-syntax desugar shape (ADR-0031 Context). ADR-0032 D3
+    // rule R2: NO elision — the wrapper triple is KEPT, now pointing at a
+    // fresh `?pf` var (decoupled from `_:b`, which stays the reifier).
     let b = TermPattern::BlankNode(BlankNode::new_unchecked("b"));
     let quoted = TriplePattern {
         subject: var("p"),
@@ -75,29 +97,37 @@ fn reifies_wrapper_is_elided_not_translated() {
         },
     ]);
     let mut n = 0;
-    let rewritten = rewrite_pattern(&gp, &mut n).expect("reifies elision must succeed");
+    let rewritten = rewrite_pattern(&gp, &mut n).expect("no-elision rewrite must succeed");
     let GraphPattern::Bgp { patterns } = rewritten else {
         panic!("expected a Bgp");
     };
-    // The reifies wrapper triple is GONE (dropped, never translated — R2):
-    // 4 basic-encoding patterns + the untouched assertedBy triple = 5.
-    assert_eq!(patterns.len(), 5, "got {patterns:#?}");
-    assert_basic_encoding(&patterns, 0, &b);
+    // 4 basic-encoding patterns on the fresh `?pf` + the KEPT reifies triple
+    // (subject `_:b`, object `?pf`) + the untouched assertedBy triple = 6.
+    assert_eq!(patterns.len(), 6, "got {patterns:#?}");
+    let pf = var("__sf_star_0");
+    assert_basic_encoding(&patterns, 0, &pf);
     assert_eq!(patterns[1].object, var("p"));
     assert_eq!(patterns[2].object, pred("http://example.com/hasAge").into());
     assert_eq!(patterns[3].object, var("age"));
-    // The assertedBy triple is untouched, same blank node identity.
+    // The reifies triple survives, `_:b` untouched, object now `?pf`.
     assert_eq!(patterns[4].subject, b);
-    assert_eq!(patterns[4].predicate, pred("http://example.com/assertedBy"));
-    assert_eq!(patterns[4].object, var("src"));
-    // No fresh variable was needed (the identity was the existing `_:b`).
-    assert_eq!(n, 0);
+    assert_eq!(patterns[4].predicate, pred(RDF_REIFIES));
+    assert_eq!(patterns[4].object, pf);
+    // The assertedBy triple is untouched, same blank node identity.
+    assert_eq!(patterns[5].subject, b);
+    assert_eq!(patterns[5].predicate, pred("http://example.com/assertedBy"));
+    assert_eq!(patterns[5].object, var("src"));
+    // One fresh var was needed for `?pf` (unlike v1, where the identity was
+    // the existing `_:b` and the wrapper was dropped).
+    assert_eq!(n, 1);
 }
 
 #[test]
-fn subject_substitution_mints_a_fresh_var_and_4_patterns() {
-    // `<<( ?p ex:hasAge ?age )>> ex:assertedBy ?src` — parenthesized syntax,
-    // parses directly to a Triple in subject position (no reifies).
+fn subject_position_triple_term_rewrites_to_empty_values() {
+    // `<<( ?p ex:hasAge ?age )>> ex:assertedBy ?src` — parenthesized syntax
+    // parses directly to a Triple in SUBJECT position. SPARQL 1.2 §18.1.3: a
+    // triple pattern with a Triple-typed subject can never match — rule R1
+    // rewrites the whole BGP to a zero-row VALUES, never an error.
     let quoted = TriplePattern {
         subject: var("p"),
         predicate: pred("http://example.com/hasAge"),
@@ -109,18 +139,9 @@ fn subject_substitution_mints_a_fresh_var_and_4_patterns() {
         object: var("src"),
     }]);
     let mut n = 0;
-    let rewritten = rewrite_pattern(&gp, &mut n).expect("subject substitution must succeed");
-    let GraphPattern::Bgp { patterns } = rewritten else {
-        panic!("expected a Bgp");
-    };
-    assert_eq!(patterns.len(), 5, "got {patterns:#?}");
-    let fresh = var("__sf_star_0");
-    assert_basic_encoding(&patterns, 0, &fresh);
-    // The wrapper triple's subject was replaced with the fresh var.
-    assert_eq!(patterns[4].subject, fresh);
-    assert_eq!(patterns[4].predicate, pred("http://example.com/assertedBy"));
-    assert_eq!(patterns[4].object, var("src"));
-    assert_eq!(n, 1, "the whole-query counter must have advanced");
+    let rewritten = rewrite_pattern(&gp, &mut n).expect("must succeed, never error");
+    assert_empty(&rewritten);
+    assert_eq!(n, 1, "one empty-marker var minted");
 }
 
 #[test]
@@ -141,9 +162,9 @@ fn object_substitution_is_symmetric_with_subject() {
         panic!("expected a Bgp");
     };
     assert_eq!(patterns.len(), 5, "got {patterns:#?}");
-    // Rule 3 emits the object's 4 basic-encoding patterns as it discovers them
-    // (before the wrapper triple is pushed) — same emission order as rule 1's
-    // subject case, just mirrored onto the object position.
+    // Rule R3 emits the object's 4 basic-encoding patterns as it discovers them
+    // (before the wrapper triple is pushed) — same emission order as R2's
+    // reifies case, just mirrored onto an ordinary predicate.
     let fresh = var("__sf_star_0");
     assert_basic_encoding(&patterns, 0, &fresh);
     assert_eq!(patterns[4].subject, var("q"));
@@ -152,31 +173,95 @@ fn object_substitution_is_symmetric_with_subject() {
 }
 
 #[test]
-fn nested_quoted_triple_pattern_is_unsupported() {
+fn object_side_nesting_recurses_bottom_up() {
+    // `?x ex:hasQuote <<( ?p ex:hasAge <<( ?p ex:hasScore ?s )>> )>>` — the
+    // outer quote's own OBJECT is ANOTHER quoted triple (rule R4): the inner
+    // quote must mint its own identity + 4 patterns FIRST (pattern EMISSION
+    // is bottom-up), and the outer's propositionFormObject must point at
+    // that inner identity rather than embedding the raw `TermPattern::Triple`.
+    let inner_quoted = TriplePattern {
+        subject: var("p"),
+        predicate: pred("http://example.com/hasScore"),
+        object: var("s"),
+    };
+    let outer_quoted = TriplePattern {
+        subject: var("p"),
+        predicate: pred("http://example.com/hasAge"),
+        object: TermPattern::Triple(Box::new(inner_quoted)),
+    };
+    let gp = bgp_of(vec![TriplePattern {
+        subject: var("x"),
+        predicate: pred("http://example.com/hasQuote"),
+        object: TermPattern::Triple(Box::new(outer_quoted)),
+    }]);
+    let mut n = 0;
+    let rewritten = rewrite_pattern(&gp, &mut n).expect("object-side nesting must succeed");
+    let GraphPattern::Bgp { patterns } = rewritten else {
+        panic!("expected a Bgp");
+    };
+    assert_eq!(patterns.len(), 9, "got {patterns:#?}");
+    // VARIABLE NUMBERING is outer-first (`substitute_triple` mints the outer
+    // identity before ever recursing into `emit_basic_encoding`, which only
+    // THEN mints the inner one while expanding the outer's own object) even
+    // though pattern EMISSION is inner-first (bottom-up).
+    let outer_id = var("__sf_star_0");
+    let inner_id = var("__sf_star_1");
+    assert_basic_encoding(&patterns, 0, &inner_id);
+    assert_eq!(patterns[1].object, var("p"));
+    assert_eq!(
+        patterns[2].object,
+        pred("http://example.com/hasScore").into()
+    );
+    assert_eq!(patterns[3].object, var("s"));
+    assert_basic_encoding(&patterns, 4, &outer_id);
+    assert_eq!(patterns[5].object, var("p"));
+    assert_eq!(patterns[6].object, pred("http://example.com/hasAge").into());
+    assert_eq!(
+        patterns[7].object, inner_id,
+        "outer's propositionFormObject must point at the inner identity, not embed the raw Triple"
+    );
+    assert_eq!(patterns[8].subject, var("x"));
+    assert_eq!(patterns[8].predicate, pred("http://example.com/hasQuote"));
+    assert_eq!(patterns[8].object, outer_id);
+    assert_eq!(n, 2, "two identities minted, one per nesting level");
+}
+
+#[test]
+fn object_chain_nested_subject_side_triple_term_is_empty() {
+    // `?r rdf:reifies <<( <<( ?a ex:p ?b )>> ex:q ?c )>>` — the quoted
+    // triple reached through the reifies rule's object has its OWN subject
+    // be another quoted triple (subject-side nesting, spec-impossible at any
+    // depth per RDF 1.2 Concepts §3.1). `has_subject_position_triple_term`'s
+    // object-chain recursion must catch this even though it is not the
+    // TOP-level pattern's own subject (that case is
+    // `subject_position_triple_term_rewrites_to_empty_values`, above).
     let innermost = TriplePattern {
         subject: var("a"),
         predicate: pred("http://example.com/p"),
         object: var("b"),
     };
-    let outer = TriplePattern {
+    let mid = TriplePattern {
         subject: TermPattern::Triple(Box::new(innermost)),
         predicate: pred("http://example.com/q"),
         object: var("c"),
     };
     let gp = bgp_of(vec![TriplePattern {
-        subject: TermPattern::Triple(Box::new(outer)),
-        predicate: pred("http://example.com/assertedBy"),
-        object: var("src"),
+        subject: var("r"),
+        predicate: pred(RDF_REIFIES),
+        object: TermPattern::Triple(Box::new(mid)),
     }]);
-    let err = rewrite_pattern(&gp, &mut 0).expect_err("nesting must be rejected");
-    assert!(matches!(err, Error::Unsupported(_)));
+    let mut n = 0;
+    let rewritten = rewrite_pattern(&gp, &mut n).expect("must succeed, never error");
+    assert_empty(&rewritten);
 }
 
 #[test]
 fn counter_does_not_collide_across_bgp_and_exists_body() {
     // Two independent quoted patterns — one in the outer BGP, one inside a
-    // FILTER EXISTS body — must mint DISTINCT fresh vars (R3: one counter
-    // spans the whole query, not reset per clause).
+    // FILTER EXISTS body — must mint DISTINCT fresh vars (the whole-query
+    // counter spans the whole query, not reset per clause). Object position
+    // (rule R3) is used for both: subject-position quotes (rule R1) no
+    // longer mint an identity at all, they rewrite straight to empty.
     let quoted_outer = TriplePattern {
         subject: var("p"),
         predicate: pred("http://example.com/hasAge"),
@@ -188,16 +273,16 @@ fn counter_does_not_collide_across_bgp_and_exists_body() {
         object: var("y"),
     };
     let exists_body = bgp_of(vec![TriplePattern {
-        subject: TermPattern::Triple(Box::new(quoted_inner)),
+        subject: var("z"),
         predicate: pred("http://example.com/assertedBy"),
-        object: var("src2"),
+        object: TermPattern::Triple(Box::new(quoted_inner)),
     }]);
     let gp = GraphPattern::Filter {
         expr: Expression::Exists(Box::new(exists_body)),
         inner: Box::new(bgp_of(vec![TriplePattern {
-            subject: TermPattern::Triple(Box::new(quoted_outer)),
+            subject: var("w"),
             predicate: pred("http://example.com/assertedBy"),
-            object: var("src"),
+            object: TermPattern::Triple(Box::new(quoted_outer)),
         }])),
     };
     let mut n = 0;
@@ -224,12 +309,12 @@ fn counter_does_not_collide_across_bgp_and_exists_body() {
         panic!("expected a Bgp");
     };
     assert_eq!(
-        inner_patterns[4].subject,
+        inner_patterns[4].object,
         var("__sf_star_0"),
         "the EXISTS body is rewritten first"
     );
     assert_eq!(
-        outer_patterns[4].subject,
+        outer_patterns[4].object,
         var("__sf_star_1"),
         "the outer BGP must continue the SAME counter, not restart at 0"
     );
