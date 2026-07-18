@@ -10,15 +10,19 @@
 //! Since ADR-0024 M3 this file is a thin set of delegators: the branches loop,
 //! `rust_group` dispatch (q9), DISTINCT dedup (q15), ORDER/OFFSET/LIMIT, and the §10
 //! catalog probe all live once in [`crate::exec_core`]; the q12 typed-column bind,
-//! `pg_value`, and `pg_xsd_code` live in [`sf_sql::backend::pg`]. The public
-//! entry-point signatures are unchanged, so every caller (conformance, serve, bench)
-//! is untouched.
+//! `pg_value`, and `pg_xsd_code` live in [`sf_sql::backend::pg`]. Every existing
+//! caller (conformance, serve, bench) is untouched: `construct_each_pg` /
+//! `select_each_pg` / `ask_pg` took a hardcoded `Arc<Client>` and are now generic
+//! over any owned, `Send + 'static` handle that derefs to a `Client` (ADR-0027 PG
+//! connection pooling, M4 wave-2 finding 2) — conformance's `Arc<Client>` and the
+//! serve lane's pooled `deadpool_postgres::Object` both satisfy it, so no caller's
+//! argument type needs to change.
 //!
 //! Requires a live server, so this path is exercised by the conformance
 //! integration suite (ADR-0012), never the in-crate unit tests.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::ops::Deref;
 
 use sf_core::{Quad, Term, Triple};
 use sf_sql::backend::pg::PgBackend;
@@ -41,12 +45,15 @@ pub async fn construct_triples_pg(plan: &Plan, client: &Client) -> Result<Vec<Tr
 /// template size — never the whole graph). `sink(..).await` backpressures the
 /// server-side `query_raw` cursor (ADR-0010 §C).
 ///
-/// Takes an owned `Arc<Client>` (not `&Client`) because this future is
-/// `tokio::spawn`ed by the serve lane: a `'static` backend
-/// ([`PgBackend<Arc<Client>>`]) is what lets the generic core's `Send` bound hold
-/// across the spawn (ADR-0024 §1.103 — the AFIT `Send`-future requirement).
-pub async fn construct_each_pg<F, Fut>(plan: &Plan, client: Arc<Client>, sink: F) -> Result<()>
+/// Takes an owned client handle `C` (not `&Client`) because this future is
+/// `tokio::spawn`ed by the serve lane: a `'static` backend (`PgBackend<C>`) is
+/// what lets the generic core's `Send` bound hold across the spawn (ADR-0024
+/// §1.103 — the AFIT `Send`-future requirement). `C: Deref<Target = Client>` so
+/// both `Arc<Client>` (conformance) and a pooled `deadpool_postgres::Object`
+/// (the serve lane, ADR-0027) work unchanged.
+pub async fn construct_each_pg<C, F, Fut>(plan: &Plan, client: C, sink: F) -> Result<()>
 where
+    C: Deref<Target = Client> + Send + 'static,
     F: FnMut(Vec<Triple>) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
 {
@@ -70,12 +77,10 @@ pub async fn select_pg(plan: &Plan, client: &Client) -> Result<Solutions> {
 /// response body without ever collecting the result set, and `sink(..).await`
 /// applies per-row backpressure to the `query_raw` cursor (ADR-0006 / ADR-0010 §C).
 ///
-/// Takes an owned `Arc<Client>` (not `&Client`) because this future is
-/// `tokio::spawn`ed by the serve lane: a `'static` backend
-/// ([`PgBackend<Arc<Client>>`]) is what lets the generic core's `Send` bound hold
-/// across the spawn (ADR-0024 §1.103 — the AFIT `Send`-future requirement).
-pub async fn select_each_pg<F, Fut>(plan: &Plan, client: Arc<Client>, sink: F) -> Result<()>
+/// Generic over the owned client handle `C` — see [`construct_each_pg`].
+pub async fn select_each_pg<C, F, Fut>(plan: &Plan, client: C, sink: F) -> Result<()>
 where
+    C: Deref<Target = Client> + Send + 'static,
     F: FnMut(Vec<Option<Term>>) -> Fut + Send,
     Fut: Future<Output = Result<()>> + Send,
 {
@@ -87,10 +92,15 @@ where
 /// solution exists. The async mirror of the sync [`crate::exec::ask`] (same
 /// streaming core, same reconstruction).
 ///
-/// Takes an owned `Arc<Client>` (not `&Client`) because the serve lane awaits this
-/// inside a `tokio::spawn`ed axum handler: a `'static` backend
-/// ([`PgBackend<Arc<Client>>`]) makes the handler future `Send` (ADR-0024 §1.103).
-pub async fn ask_pg(plan: &Plan, client: Arc<Client>) -> Result<bool> {
+/// Takes an owned client handle `C` (not `&Client`) because the serve lane
+/// awaits this inside an axum handler future that must be `Send`; `C: Deref<Target
+/// = Client> + Send + 'static` — see [`construct_each_pg`] — covers both
+/// conformance's `Arc<Client>` and the serve lane's pooled
+/// `deadpool_postgres::Object`.
+pub async fn ask_pg<C>(plan: &Plan, client: C) -> Result<bool>
+where
+    C: Deref<Target = Client> + Send + 'static,
+{
     let mut b = PgBackend::new(client);
     crate::exec_core::ask(plan, &mut b).await
 }

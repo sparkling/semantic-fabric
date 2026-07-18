@@ -245,6 +245,179 @@ const PG_RELTUPLES_SQL: &str = "SELECT GREATEST(reltuples, 0)::bigint FROM pg_cl
 
 const PG_NDISTINCT_SQL: &str = "SELECT attname, n_distinct FROM pg_stats WHERE tablename = $1";
 
+// --- PostgreSQL, set-based (all tables in one round trip each) -----------
+
+/// Set-based sibling of [`PG_COLUMNS_SQL`]: every table in `$1` at once.
+const PG_COLUMNS_SQL_ALL: &str = "SELECT table_name, column_name, data_type, is_nullable \
+     FROM information_schema.columns WHERE table_name = ANY($1) \
+     ORDER BY table_name, ordinal_position";
+
+/// Set-based sibling of [`PG_KEYS_SQL`].
+const PG_KEYS_SQL_ALL: &str =
+    "SELECT tc.table_name, tc.constraint_type, tc.constraint_name, kcu.column_name \
+     FROM information_schema.table_constraints tc \
+     JOIN information_schema.key_column_usage kcu \
+       ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+     WHERE tc.table_name = ANY($1) AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
+     ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position";
+
+/// Set-based sibling of [`PG_FK_SQL`]. Constraint names are only unique *per
+/// table* in PostgreSQL, so grouping below is keyed on `(child.relname,
+/// con.conname)`, never `conname` alone.
+const PG_FK_SQL_ALL: &str = "SELECT child.relname, con.conname, ca.attname, parent.relname, pa.attname \
+     FROM pg_constraint con \
+     JOIN pg_class child ON child.oid = con.conrelid \
+     JOIN pg_class parent ON parent.oid = con.confrelid \
+     JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(child_attnum, parent_attnum, ord) ON true \
+     JOIN pg_attribute ca ON ca.attrelid = con.conrelid AND ca.attnum = k.child_attnum \
+     JOIN pg_attribute pa ON pa.attrelid = con.confrelid AND pa.attnum = k.parent_attnum \
+     WHERE con.contype = 'f' AND child.relname = ANY($1) \
+     ORDER BY child.relname, con.conname, k.ord";
+
+/// Set-based sibling of [`PG_RELTUPLES_SQL`].
+const PG_RELTUPLES_SQL_ALL: &str = "SELECT relname, GREATEST(reltuples, 0)::bigint FROM pg_class \
+     WHERE relname = ANY($1) AND relkind IN ('r', 'p', 'm', 'v')";
+
+/// Set-based sibling of [`PG_NDISTINCT_SQL`].
+const PG_NDISTINCT_SQL_ALL: &str =
+    "SELECT tablename, attname, n_distinct FROM pg_stats WHERE tablename = ANY($1)";
+
+/// Introspect every table in `tables` from a live PostgreSQL connection in **5
+/// set-based round trips total** (one per catalog: columns/keys/FKs/reltuples/
+/// ndistinct), instead of 5 round trips **per table** ([`introspect_postgres`]
+/// driven in a per-table loop) — the ADR-0012-integration-tested fix for the M4
+/// wave-2 finding-4 N+1 (`sf-serve`'s `introspect_pg_all` used to award every
+/// introspected table its own 5-query round trip). Assembles byte-identical
+/// [`TableSchema`] values to calling [`introspect_postgres`] once per table, in
+/// `tables` order; [`introspect_postgres`] itself stays available unchanged for
+/// callers that introspect one table at a time (conformance, bench).
+pub async fn introspect_postgres_all(
+    client: &tokio_postgres::Client,
+    tables: &[String],
+) -> Result<Vec<TableSchema>> {
+    if tables.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut schemas: BTreeMap<String, TableSchema> = tables
+        .iter()
+        .map(|t| (t.clone(), TableSchema::new(t)))
+        .collect();
+
+    for row in client.query(PG_COLUMNS_SQL_ALL, &[&tables]).await? {
+        let table: String = row.get(0);
+        let name: String = row.get(1);
+        let data_type: String = row.get(2);
+        let is_nullable: String = row.get(3);
+        if let Some(schema) = schemas.get_mut(&table) {
+            schema.columns.push(Column::new(
+                name,
+                data_type,
+                is_nullable.eq_ignore_ascii_case("NO"),
+            ));
+        }
+    }
+    for (table, schema) in &schemas {
+        if schema.columns.is_empty() {
+            return Err(Error::Introspection(format!(
+                "PostgreSQL table {table:?} not found in information_schema"
+            )));
+        }
+    }
+
+    let mut pk_by_table: HashMap<String, Vec<String>> = HashMap::new();
+    let mut uniques_by_table: HashMap<String, BTreeMap<String, Vec<String>>> = HashMap::new();
+    for row in client.query(PG_KEYS_SQL_ALL, &[&tables]).await? {
+        let table: String = row.get(0);
+        let ctype: String = row.get(1);
+        let cname: String = row.get(2);
+        let col: String = row.get(3);
+        if ctype == "PRIMARY KEY" {
+            pk_by_table.entry(table).or_default().push(col);
+        } else {
+            uniques_by_table
+                .entry(table)
+                .or_default()
+                .entry(cname)
+                .or_default()
+                .push(col);
+        }
+    }
+    for (table, schema) in schemas.iter_mut() {
+        if let Some(pk) = pk_by_table.remove(table) {
+            schema.primary_key = pk;
+        }
+        if let Some(uniques) = uniques_by_table.remove(table) {
+            schema.unique = uniques.into_values().collect();
+        }
+    }
+
+    let mut fks_by_table: HashMap<String, BTreeMap<String, ForeignKey>> = HashMap::new();
+    for row in client.query(PG_FK_SQL_ALL, &[&tables]).await? {
+        let table: String = row.get(0);
+        let cname: String = row.get(1);
+        let col: String = row.get(2);
+        let parent_table: String = row.get(3);
+        let parent_col: String = row.get(4);
+        let fk = fks_by_table
+            .entry(table)
+            .or_default()
+            .entry(cname)
+            .or_insert_with(|| ForeignKey {
+                columns: Vec::new(),
+                parent_table,
+                parent_columns: Vec::new(),
+            });
+        fk.columns.push(col);
+        fk.parent_columns.push(parent_col);
+    }
+    for (table, schema) in schemas.iter_mut() {
+        if let Some(fks) = fks_by_table.remove(table) {
+            schema.foreign_keys = fks.into_values().collect();
+        }
+    }
+
+    for row in client.query(PG_RELTUPLES_SQL_ALL, &[&tables]).await? {
+        let table: String = row.get(0);
+        let rt: i64 = row.get(1);
+        if rt >= 0 {
+            if let Some(schema) = schemas.get_mut(&table) {
+                schema.row_estimate = Some(rt as u64);
+            }
+        }
+    }
+
+    for row in client.query(PG_NDISTINCT_SQL_ALL, &[&tables]).await? {
+        let table: String = row.get(0);
+        let attname: String = row.get(1);
+        let n_distinct: f32 = row.get(2);
+        if let Some(schema) = schemas.get_mut(&table) {
+            let distinct = if n_distinct >= 0.0 {
+                n_distinct as u64
+            } else {
+                // Negative n_distinct is a fraction of the row count (-1 = unique).
+                schema
+                    .row_estimate
+                    .map(|r| ((-n_distinct as f64) * r as f64).round() as u64)
+                    .unwrap_or(0)
+            };
+            if distinct > 0 {
+                if let Some(col) = schema.columns.iter_mut().find(|c| c.name == attname) {
+                    col.distinct_estimate = Some(distinct);
+                }
+            }
+        }
+    }
+
+    Ok(tables
+        .iter()
+        .map(|t| {
+            schemas
+                .remove(t)
+                .expect("schema present for every requested table")
+        })
+        .collect())
+}
+
 /// Introspect `table` from a live PostgreSQL connection (`information_schema` +
 /// `pg_class.reltuples` + `pg_stats`). All catalog SQL binds the table name as a
 /// parameter (ADR-0010 R1). Requires a live server, so it is covered by the
@@ -567,6 +740,24 @@ mod tests {
     }
 
     #[test]
+    fn pg_catalog_sql_all_binds_table_list_as_parameter() {
+        // The set-based introspect_postgres_all queries (M4 wave-2 finding 4) must
+        // bind the table-name array too, never inline it.
+        for sql in [
+            PG_COLUMNS_SQL_ALL,
+            PG_KEYS_SQL_ALL,
+            PG_FK_SQL_ALL,
+            PG_RELTUPLES_SQL_ALL,
+            PG_NDISTINCT_SQL_ALL,
+        ] {
+            assert!(
+                sql.contains("= ANY($1)"),
+                "batched catalog SQL must bind the table-name array: {sql}"
+            );
+        }
+    }
+
+    #[test]
     fn mysql_catalog_sql_binds_table_as_parameter() {
         // MySQL catalog SQL must use ? placeholders (Dialect::MySql) — never inline.
         for sql in [MYSQL_COLUMNS_SQL, MYSQL_KEYS_SQL, MYSQL_FK_SQL] {
@@ -575,5 +766,109 @@ mod tests {
                 "MySQL catalog SQL must bind table name: {sql}"
             );
         }
+    }
+
+    /// M4 wave-2 finding 4 RECEIPT: batched (`introspect_postgres_all`, 5 round
+    /// trips total) vs the old per-table loop (`introspect_postgres` called once
+    /// per table, 5*N+1 round trips) over 20 real tables — timed, and asserted
+    /// byte-identical. Gate-skips cleanly when no PostgreSQL server is reachable
+    /// (matches the crate's live-PG test convention, e.g. `backend::pg::tests`).
+    #[tokio::test]
+    async fn introspect_postgres_all_matches_per_table_loop_and_is_faster() {
+        use tokio_postgres::NoTls;
+
+        let base = std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+            let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+            format!("host=localhost port=5432 user={user}")
+        });
+        let conn_str = format!("{base} dbname=postgres");
+        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+            eprintln!(
+                "SKIP introspect_postgres_all_matches_per_table_loop_and_is_faster: \
+                 no live PostgreSQL reachable"
+            );
+            return;
+        };
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let db = format!("sf_sql_introspect_batch_test_{}", std::process::id());
+        let _ = client
+            .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+            .await;
+        client
+            .batch_execute(&format!("CREATE DATABASE {db}"))
+            .await
+            .expect("create test db");
+
+        let conn_str2 = format!("{base} dbname={db}");
+        let (client2, connection2) = tokio_postgres::connect(&conn_str2, NoTls)
+            .await
+            .expect("connect to test db");
+        tokio::spawn(async move {
+            let _ = connection2.await;
+        });
+
+        // 20 tables, each with a PK, a UNIQUE column, and (past the first) an FK
+        // to the previous table — so columns/keys/FKs/stats all have real work.
+        const N: usize = 20;
+        let mut ddl = String::new();
+        for i in 0..N {
+            let fk_col = if i > 0 {
+                format!(", prev_id INTEGER REFERENCES t{}(id)", i - 1)
+            } else {
+                String::new()
+            };
+            ddl.push_str(&format!(
+                "CREATE TABLE t{i} (id INTEGER PRIMARY KEY, code TEXT UNIQUE NOT NULL, \
+                 val INTEGER NOT NULL{fk_col});\n"
+            ));
+            let (extra_col, extra_val) = if i > 0 {
+                (", prev_id", ", g")
+            } else {
+                ("", "")
+            };
+            ddl.push_str(&format!(
+                "INSERT INTO t{i} (id, code, val{extra_col}) \
+                 SELECT g, 'code' || g, g % 7{extra_val} FROM generate_series(1, 50) AS g;\n"
+            ));
+        }
+        ddl.push_str("ANALYZE;\n");
+        client2.batch_execute(&ddl).await.expect("seed 20 tables");
+
+        let names: Vec<String> = (0..N).map(|i| format!("t{i}")).collect();
+
+        // OLD shape: the per-table loop sf-serve's introspect_pg_all used to run —
+        // introspect_postgres itself is untouched and still available.
+        let start = std::time::Instant::now();
+        let mut old_schemas = Vec::with_capacity(N);
+        for name in &names {
+            old_schemas.push(
+                introspect_postgres(&client2, name)
+                    .await
+                    .expect("per-table introspect"),
+            );
+        }
+        let old_elapsed = start.elapsed();
+
+        // NEW shape: 5 set-based round trips total, regardless of N.
+        let start = std::time::Instant::now();
+        let new_schemas = introspect_postgres_all(&client2, &names)
+            .await
+            .expect("batched introspect");
+        let new_elapsed = start.elapsed();
+
+        eprintln!(
+            "introspect {N} PG tables: per_table_loop={old_elapsed:?} batched={new_elapsed:?}"
+        );
+        assert_eq!(
+            old_schemas, new_schemas,
+            "batched introspection must match the per-table loop byte-for-byte"
+        );
+
+        let _ = client
+            .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+            .await;
     }
 }

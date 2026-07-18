@@ -328,9 +328,29 @@ mod pg {
         })
     }
 
+    /// A bounded pool over `conn_str` sized `max_size` (mirrors
+    /// `sf_serve::run::open_backend`'s PG branch — ADR-0010 §C stream-lane pool,
+    /// ADR-0027, M4 wave-2 finding 2).
+    fn pg_pool_sized(conn_str: &str, max_size: usize) -> deadpool_postgres::Pool {
+        let pg_config: tokio_postgres::Config = conn_str.parse().expect("valid PG conninfo");
+        let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
+        deadpool_postgres::Pool::builder(manager)
+            .max_size(max_size)
+            .runtime(deadpool_postgres::Runtime::Tokio1)
+            .build()
+            .expect("build test PG pool")
+    }
+
+    fn pg_pool(conn_str: &str) -> deadpool_postgres::Pool {
+        pg_pool_sized(conn_str, 16)
+    }
+
     #[tokio::test]
     async fn pg_select_and_construct() {
         let conn_str = base_conn();
+        // A plain admin connection drives DDL/seed/cleanup; the endpoint itself is
+        // exercised over a real pool (`Backend::Pg` is a `deadpool_postgres::Pool`,
+        // not a single shared client).
         let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!("SKIP pg_select_and_construct: no PostgreSQL on localhost:5432");
             return;
@@ -365,9 +385,11 @@ mod pg {
         );
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
         let schema = sf_serve::introspect_pg_all(&client).await.unwrap();
-        let client = Arc::new(client);
+        // Same conninfo as the admin connection (no dbname override) so the pool's
+        // connections see the table the admin connection just created.
+        let pool = pg_pool(&conn_str);
         let cfg = Arc::new(ServeConfig::new(
-            Backend::Pg(client.clone()),
+            Backend::Pg(pool),
             maps,
             Tbox::default(),
             schema,
@@ -402,6 +424,239 @@ mod pg {
         assert!(turtle.contains("Alice"), "{turtle}");
 
         // Best-effort cleanup.
+        let _ = client
+            .batch_execute(&format!("DROP TABLE IF EXISTS \"{table}\""))
+            .await;
+    }
+
+    /// M4 wave-2 finding 2 RECEIPT: N=16 concurrent SELECT requests over a
+    /// `max_size=1` pool (behaviourally identical to the OLD design — every
+    /// request serialises through the one PG connection a `max_size=1` pool
+    /// hands out) vs the real `max_size=16` pool (ADR-0010 §C stream-lane pool).
+    /// A pool-size comparison isolates the one variable under test instead of
+    /// diffing across the whole lib.rs change. Correctness: all 32 responses
+    /// (16 old-shape + 16 new-shape) must be `200 OK` with the full 16-row
+    /// SELECT payload — pooling must not lose or corrupt data, only parallelise
+    /// the connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn pg_pool_concurrency_receipt() {
+        let conn_str = base_conn();
+        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+            eprintln!("SKIP pg_pool_concurrency_receipt: no PostgreSQL on localhost:5432");
+            return;
+        };
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let table = format!("sf_serve_pool_receipt_{}", std::process::id());
+        const ROWS: i64 = 300_000;
+        client
+            .batch_execute(&format!(
+                "DROP TABLE IF EXISTS \"{table}\"; \
+                 CREATE TABLE \"{table}\" (\"id\" INTEGER PRIMARY KEY, \"name\" TEXT); \
+                 INSERT INTO \"{table}\" SELECT g, 'Person' || g \
+                 FROM generate_series(1, {ROWS}) AS g;"
+            ))
+            .await
+            .expect("seed big table for concurrency receipt");
+
+        let mapping_ttl = format!(
+            r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#People> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "{table}" ] ;
+  rr:subjectMap [ rr:template "http://ex/person/{{id}}" ; rr:class ex:Person ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+"#
+        );
+        let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
+        let schema = sf_serve::introspect_pg_all(&client).await.unwrap();
+
+        const N: usize = 16;
+
+        /// Fire `n` concurrent SELECTs at a fresh endpoint over `pool`, asserting
+        /// every response is a complete `200`, and return the wall-clock elapsed.
+        async fn run_concurrent(
+            pool: deadpool_postgres::Pool,
+            maps: Vec<sf_core::ir::TriplesMap>,
+            schema: Vec<sf_sql::TableSchema>,
+            n: usize,
+            rows: i64,
+        ) -> std::time::Duration {
+            let cfg = Arc::new(ServeConfig::new(
+                Backend::Pg(pool),
+                maps,
+                Tbox::default(),
+                schema,
+            ));
+            let start = std::time::Instant::now();
+            let mut handles = Vec::with_capacity(n);
+            for _ in 0..n {
+                let cfg = cfg.clone();
+                handles.push(tokio::spawn(async move {
+                    send(
+                        cfg,
+                        post_query(
+                            "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                            "application/sparql-results+json",
+                        ),
+                    )
+                    .await
+                }));
+            }
+            for h in handles {
+                let (status, _ctype, body) = h.await.expect("request task join");
+                assert_eq!(status, StatusCode::OK, "{body}");
+                let json: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+                assert_eq!(
+                    json["results"]["bindings"].as_array().unwrap().len(),
+                    rows as usize,
+                    "every concurrent response must carry the full result set"
+                );
+            }
+            start.elapsed()
+        }
+
+        let pool1 = pg_pool_sized(&conn_str, 1);
+        let single_conn_elapsed =
+            run_concurrent(pool1, maps.clone(), schema.clone(), N, ROWS).await;
+
+        let pool16 = pg_pool_sized(&conn_str, 16);
+        let pooled_elapsed = run_concurrent(pool16, maps, schema, N, ROWS).await;
+
+        eprintln!(
+            "PG pool concurrency ({N} concurrent SELECTs, {ROWS} rows each): \
+             max_size=1 (OLD-equivalent)={single_conn_elapsed:?} max_size=16 (NEW)={pooled_elapsed:?}"
+        );
+        assert!(
+            pooled_elapsed < single_conn_elapsed,
+            "a 16-connection pool should beat a single connection under 16-way \
+             concurrency: max_size=1={single_conn_elapsed:?} max_size=16={pooled_elapsed:?}"
+        );
+
+        let _ = client
+            .batch_execute(&format!("DROP TABLE IF EXISTS \"{table}\""))
+            .await;
+    }
+
+    /// The ADR-0010 §C admission-control addition ([`sf_serve::acquire_pg`], not
+    /// public — exercised only through the endpoint): a `max_size=1` pool with a
+    /// short wait timeout sheds a second concurrent request as `503` +
+    /// `Retry-After` while the first still holds the only connection, rather than
+    /// queueing it indefinitely or failing with a generic `500`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn pg_pool_exhaustion_sheds_503_with_retry_after() {
+        let conn_str = base_conn();
+        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+            eprintln!(
+                "SKIP pg_pool_exhaustion_sheds_503_with_retry_after: \
+                 no PostgreSQL on localhost:5432"
+            );
+            return;
+        };
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let table = format!("sf_serve_pool_503_{}", std::process::id());
+        const ROWS: i64 = 300_000;
+        client
+            .batch_execute(&format!(
+                "DROP TABLE IF EXISTS \"{table}\"; \
+                 CREATE TABLE \"{table}\" (\"id\" INTEGER PRIMARY KEY, \"name\" TEXT); \
+                 INSERT INTO \"{table}\" SELECT g, 'Person' || g \
+                 FROM generate_series(1, {ROWS}) AS g;"
+            ))
+            .await
+            .expect("seed table");
+
+        let mapping_ttl = format!(
+            r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#People> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "{table}" ] ;
+  rr:subjectMap [ rr:template "http://ex/person/{{id}}" ; rr:class ex:Person ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+"#
+        );
+        let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
+        let schema = sf_serve::introspect_pg_all(&client).await.unwrap();
+
+        // One connection, a short wait: a second concurrent request has no
+        // chance of acquiring one before the first (a slow full-table dump)
+        // finishes.
+        let pg_config: tokio_postgres::Config = conn_str.parse().unwrap();
+        let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
+        let pool = deadpool_postgres::Pool::builder(manager)
+            .max_size(1)
+            .wait_timeout(Some(std::time::Duration::from_millis(50)))
+            .runtime(deadpool_postgres::Runtime::Tokio1)
+            .build()
+            .unwrap();
+        let cfg = Arc::new(ServeConfig::new(
+            Backend::Pg(pool),
+            maps,
+            Tbox::default(),
+            schema,
+        ));
+
+        let cfg1 = cfg.clone();
+        let first = tokio::spawn(async move {
+            router(cfg1)
+                .oneshot(post_query(
+                    "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                    "application/sparql-results+json",
+                ))
+                .await
+                .unwrap()
+        });
+        // Give the first request a head start so it actually holds the pool's
+        // one connection before the second competes for it.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let resp2 = router(cfg.clone())
+            .oneshot(post_query(
+                "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                "application/sparql-results+json",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp2.headers().get(header::RETRY_AFTER).unwrap(),
+            "1",
+            "shed response must carry Retry-After (ADR-0010 §C)"
+        );
+        let body2 = String::from_utf8(
+            resp2
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body2.contains("exhausted"), "{body2}");
+
+        let resp1 = first.await.expect("first request task join");
+        assert_eq!(
+            resp1.status(),
+            StatusCode::OK,
+            "the request that held the connection must still succeed"
+        );
+        // Drop the body WITHOUT draining it (cancel-on-drop, ADR-0010 §C) instead
+        // of streaming all 300k rows: the background streaming task otherwise
+        // blocks forever on channel backpressure once its buffer fills, holding
+        // the size-1 pool's one connection and deadlocking the DROP TABLE cleanup
+        // below against the still-open cursor's table lock (mirrors
+        // `mysql_release.rs`'s drop-the-body release check).
+        drop(resp1);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
         let _ = client
             .batch_execute(&format!("DROP TABLE IF EXISTS \"{table}\""))
             .await;

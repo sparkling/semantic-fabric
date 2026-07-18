@@ -255,6 +255,38 @@ The `left_join_*` / `not_exists_cond_for` machinery — the most sensitive tier-
 
 ---
 
+## Progress log addendum (2026-07-18) — two tracked residues CLOSED, one hazard removed
+
+* **C.9 — AVG decimal-division precision residue (the "AVG f64" item): FIXED.** Both paths.
+  `rust_agg`'s AVG now accumulates `oxsdatatypes::Decimal` (i128 fixed-point `checked_add`/
+  `checked_div` — the spareval oracle's own type, so `=_bag` equality is by construction)
+  for integer/decimal operands; overflow → UNBOUND (FOAR semantics), doubles keep the C.6b
+  f64/promotion path. SQL-side: `lower_aggregation` routes AVG to `rust_group` whenever the
+  operand is not *provably* `xsd:double`/`xsd:float` from its declared `rr:datatype`
+  (mirrors C.6's declared-type-as-sound-proxy reasoning; SUM/MIN/MAX/COUNT routing
+  untouched). Tests: `adr0025_c9_avg_exact_decimal_non_nullable` (RED showed the exact
+  f64 artifact `3.6666666666666665` vs oracle `3.666666666666666666`), `c9b` double-stays-
+  double; `differential_tree` 166→**168/0**. Deliberately preserved, separately trackable:
+  the pre-existing "average the numeric-parseable subset" quirk (now also bounding an
+  extreme-magnitude corner where a literal parses as f64 but exceeds `Decimal` range).
+* **PG NUMERIC unreadable (TRACKED RESIDUE in `backend/pg.rs`): FIXED.** `postgres-types`
+  0.2.14 has **no** decimal `FromSql` route at all (verified against the crate's real
+  feature list — not merely unactivated), so the fix is a hand-rolled decode of the
+  NUMERIC binary wire format (`decode_pg_numeric` + `PgNumeric` FromSql wrapper): base-10000
+  digit groups, weight/dscale reconstruction with implicit leading/trailing zero groups,
+  arbitrary precision, never a float. NaN/±Infinity have no `xsd:decimal` form → honest
+  error (ADR-0007), never a wrong value. 9 unit tests on hand-built wire buffers + a live-PG
+  end-to-end round trip (`pg_numeric_columns_readable_end_to_end`, ran against a real
+  server). The `pg_xsd_code` residue comment is updated in place.
+* **`stream::mysql_for_each` REMOVED.** Dead (zero call sites, never re-exported) and
+  hazardous (its `from_utf8_lossy` decode is the documented `=_bag`/3VL regression the
+  `mysql.rs` adapter header warns about). The design-A1 rationale survives in the rewritten
+  header as a rule ("never lossy-decode raw row bytes") rather than a pointer to a dead fn.
+  `dump_quads_stream` was checked in the same pass and KEPT — it has a real call site
+  (`exec.rs` → public API).
+
+---
+
 ## Stale-Branch Warnings (Do-Not-Do)
 
 **Branch `feat/optimizer-gaps-close` is STALE / PRUNED.** The `not_exists_cond_for` fix it re-discovered already lives on main (commit `feb7336`, "OPTIONAL anti-join must apply its own inner FILTER"). Do NOT merge `feat/optimizer-gaps-close`. The redundant fix lives upstream; re-basing would create a duplicate conflict. If you see a PR for this branch, close it with a link to commit `feb7336`.

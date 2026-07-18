@@ -21,11 +21,27 @@
 //! (`--test-threads=1`) so the process-wide allocator probe is not shared across a
 //! parallel test.
 
+use std::sync::Mutex;
+
 use sf_bench::{driver, mem, workload};
 use tempfile::TempDir;
 
 #[global_allocator]
 static GLOBAL: mem::Tracking = mem::Tracking;
+
+/// Serializes the three tests in this file: they share the process-wide
+/// [`mem::Tracking`] allocator state, so running them concurrently (libtest's
+/// default) lets one test's allocations pollute another's peak-heap window. Live
+/// PG/MySQL connections used to make this harmless in practice (near-instant
+/// no-op skips when no server was reachable); a live server turns them into real,
+/// memory-allocating work that can overlap the SQLite test's measurement window.
+static SERIALIZE: Mutex<()> = Mutex::new(());
+
+fn serialize_guard() -> std::sync::MutexGuard<'static, ()> {
+    SERIALIZE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// One measured streaming run at a scale: (streamed triples, peak engine bytes).
 fn measure(scale: u32) -> (u64, i64) {
@@ -46,6 +62,7 @@ fn measure(scale: u32) -> (u64, i64) {
 
 #[test]
 fn engine_memory_is_bounded_under_growing_source() {
+    let _guard = serialize_guard();
     // Small, fast scales (the bench covers 1x/10x/100x).
     let scales = [1u32, 4, 16];
     let mut rows = Vec::new();
@@ -152,6 +169,7 @@ fn pg_conn_str() -> String {
 /// server-side `query_raw` cursor (cursor-grade). SKIPs cleanly with no server.
 #[test]
 fn engine_memory_is_bounded_pg() {
+    let _guard = serialize_guard();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -225,6 +243,7 @@ fn mysql_url() -> String {
 /// with no server.
 #[test]
 fn engine_memory_is_bounded_mysql() {
+    let _guard = serialize_guard();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

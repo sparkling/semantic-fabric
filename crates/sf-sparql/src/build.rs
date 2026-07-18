@@ -8,11 +8,12 @@
 //! becomes one [`IqNode::InnerJoin`], a `Union` becomes one [`IqNode::Union`], and
 //! every node publishes a bottom-up scope via [`IqNode::output_vars`].
 //!
-//! ## Status: structural only (NOT the live engine)
+//! ## Status: PRODUCTION (tree default since ADR-0023 M8; banner corrected 2026-07-18)
 //!
-//! This is the M2 *tree shape*; it is **not** wired into the live
-//! [`Plan`](crate::Plan)/exec/unfold path. The flat [`crate::unfold`] stays the
-//! production engine until M3. Consequently the builder is **context-free**: it has
+//! This builder IS the live engine's first stage: `translate`/`translate_with`
+//! route through [`crate::translate_tree`] by default (`lib.rs`), and the flat
+//! [`crate::unfold`] is the `=_bag` oracle / fallback — the reverse of what this
+//! banner said during M2/M3 bring-up. The builder is **context-free**: it has
 //! no resolved column bindings, no mapping set, and no SQL dialect. Three things
 //! therefore cannot be produced here and surface as **tracked sound-501s** (never a
 //! silent wrong answer — the no-deferrals mandate is met by the explicit 501 plus

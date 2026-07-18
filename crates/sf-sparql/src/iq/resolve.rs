@@ -9,12 +9,13 @@
 //! an [`IqCond::Expr`] and a [`BindDef::Expr`] are carried through untouched and
 //! resolved per-leaf-CQ only at LOWER (M3 design §3, §5).
 //!
-//! ## Status: tree path only (NOT the live engine)
+//! ## Status: PRODUCTION (tree default since ADR-0023 M8; banner corrected 2026-07-18)
 //!
-//! This is M3a; it is **not** wired into the live [`Plan`](crate::Plan)/exec/unfold
-//! path. The flat [`crate::unfold`] stays the production engine and the proven
-//! oracle. `cargo test --workspace` must stay green with the flat path byte-for-byte
-//! unchanged.
+//! This RESOLVE stage runs in the live engine: `translate`/`translate_with` route
+//! through [`crate::translate_tree`] by default (`lib.rs`); the flat
+//! [`crate::unfold`] remains the `=_bag` oracle / fallback (and this stage still
+//! reuses the flat `Unfolder` verbatim as its resolution bridge — byte-identical
+//! arm sets by construction).
 //!
 //! ## Smallest change: the bridge over the flat oracle (M3 design §3.3 fallback)
 //!

@@ -16,6 +16,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::future::Future;
 
+use oxsdatatypes::Decimal;
 use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::{TermMap, TermType};
 use sf_core::{Literal, Row, Term, Triple};
@@ -94,26 +95,60 @@ where
     if let Some(rg) = &plan.rust_group {
         return rust_group_execute(plan, b, rg, sink).await;
     }
-    for_each_branch_solution(plan, b, sink).await
+    let branches = plan.prepared_branches();
+    let ctx = PlanCtx {
+        dialect: plan.dialect,
+        distinct: plan.distinct,
+        form: &plan.form,
+        order: &plan.order,
+        offset: plan.offset,
+        limit: plan.limit,
+    };
+    run_branches(&branches, ctx, b, sink).await
 }
 
-/// Core branches loop — does NOT check `rust_group` (the non-recursive split, so
-/// `rust_group_execute` can reuse it to collect inner solutions). One row in flight.
-async fn for_each_branch_solution<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
+/// The scalar [`Plan`] fields [`run_branches`] needs, threaded independently of
+/// `branches` — decoupled so [`rust_group_execute`]'s inner-collection call can
+/// override just the modifiers ([`Plan::prepared_branches`]'s single-branch
+/// push-down values) without cloning the whole `Plan` first (see `run_branches`'
+/// doc comment).
+struct PlanCtx<'a> {
+    dialect: Dialect,
+    distinct: bool,
+    form: &'a PlanForm,
+    order: &'a [OrderKey],
+    offset: usize,
+    limit: Option<usize>,
+}
+
+/// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
+/// `rust_group` (the non-recursive split, so `rust_group_execute` can reuse it to
+/// collect inner solutions). One row in flight. Takes already-prepared branches
+/// ([`Plan::prepared_branches`]) plus the plan's scalar fields via [`PlanCtx`]
+/// rather than `&Plan`, so a caller that already holds a `Vec<Branch>` (the
+/// `rust_group` inner-collection path) is not forced to clone a whole `Plan` just
+/// to get one straight back out of `Plan::prepared_branches` again (ADR-0024/M4
+/// perf: this used to clone `plan.branches` twice — once building a throwaway
+/// `inner_plan`, once more inside `prepared_branches` — for exactly that reason).
+async fn run_branches<B, F, Fut>(
+    branches: &[Branch],
+    ctx: PlanCtx<'_>,
+    b: &mut B,
+    mut sink: F,
+) -> Result<()>
 where
     B: SqlBackend,
     F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let branches = plan.prepared_branches();
     // Catalog: one probe per distinct source; SWALLOW column_names errors (design
     // A4 — a source whose metadata cannot be read is omitted; resolution falls back
     // to the raw identifier).
     let mut catalog = ColumnCatalog::default();
     let mut seen_probe = std::collections::HashSet::new();
-    for branch in &branches {
+    for branch in branches {
         for (_, source) in branch.alias_sources() {
-            let probe = plan.dialect.probe_sql(source);
+            let probe = ctx.dialect.probe_sql(source);
             if !seen_probe.insert(probe.clone()) {
                 continue;
             }
@@ -126,7 +161,7 @@ where
     // DISTINCT over a multi-branch bag-union: SQL dedups only within each branch, so
     // dedup the projected solutions here — before OFFSET/LIMIT (SPARQL evaluates
     // DISTINCT before slicing). The single-branch case pushes DISTINCT into SQL.
-    let distinct_vars: Option<Vec<String>> = match (plan.distinct && multi, &plan.form) {
+    let distinct_vars: Option<Vec<String>> = match (ctx.distinct && multi, ctx.form) {
         (true, PlanForm::Select { vars }) => Some(vars.clone()),
         _ => None,
     };
@@ -137,10 +172,14 @@ where
                               // ORDER BY is applied HERE for every plan, never in SQL (a SQL ORDER BY inherits
                               // the column's collation/affinity). Buffer, stable-sort via the type-aware
                               // order_cmp, then OFFSET/LIMIT (SPARQL §15: order, then slice).
-    let ordered = !plan.order.is_empty();
+    let ordered = !ctx.order.is_empty();
     let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
     for (bi, branch) in branches.iter().enumerate() {
-        let e = emit::emit_branch_with(branch, plan.dialect, &catalog)?;
+        let e = emit::emit_branch_with(branch, ctx.dialect, &catalog)?;
+        // The column schema is fixed for this branch's whole row stream, so index
+        // it ONCE here rather than per row (ADR-0024/M4 perf — `RawRow::code_for`/
+        // `AliasRow::value` used to `schema.iter().position(...)` on every lookup).
+        let col_index = build_col_index(&e.projection);
         // The ONLY bind site: `e.params` bound as N positional params by the adapter.
         let mut s = b
             .open_branch(&e.sql, &e.params)
@@ -148,9 +187,9 @@ where
             .map_err(map_sql_err)?;
         while let Some(t) = s.next_row().await.map_err(map_sql_err)? {
             let raw = RawRow {
-                schema: &e.projection,
                 values: &t.values,
                 codes: &t.codes,
+                index: &col_index,
             };
             // Reconstruct first: DISTINCT needs the projected terms, and dedup must
             // precede OFFSET/LIMIT (SPARQL order).
@@ -167,18 +206,18 @@ where
             // ORDER BY (any branch count): defer slicing — buffer for the global
             // type-aware sort after every row (OFFSET/LIMIT applied after the sort).
             if ordered {
-                let bindings = inject_order_expr_keys(&plan.order, bindings);
+                let bindings = inject_order_expr_keys(ctx.order, bindings);
                 buffer.push((bi, bindings));
                 continue;
             }
             // Streaming OFFSET/LIMIT only when SQL didn't apply them (a multi-branch
             // bag-union; a single unordered branch sliced in SQL).
             if multi {
-                if seen < plan.offset {
+                if seen < ctx.offset {
                     seen += 1;
                     continue;
                 }
-                if let Some(limit) = plan.limit {
+                if let Some(limit) = ctx.limit {
                     if emitted >= limit {
                         break;
                     }
@@ -189,10 +228,23 @@ where
         }
     }
     // The buffered bag-union ORDER BY: stable-sort by the keys, then OFFSET/LIMIT.
+    // Schwartzian transform (ADR-0024/M4 perf): precompute each row's sort keys
+    // ONCE — the O(n log n)-comparison sort then looks them up instead of
+    // re-deriving `cmp_term`'s (possibly-allocating) fallback string from the
+    // bound `Term`s on every comparison. Sorting INDICES (not `buffer` itself)
+    // keeps the precomputed keys' borrow of `buffer` and the final read of
+    // `buffer` both immutable, and preserves `sort_by`'s stability identically to
+    // sorting `buffer` directly (the indices start in `buffer`'s original order).
     if ordered {
-        buffer.sort_by(|(_, a), (_, b)| order_cmp(&plan.order, a, b));
-        let take = plan.limit.unwrap_or(usize::MAX);
-        for (bi, bindings) in buffer.iter().skip(plan.offset).take(take) {
+        let keys: Vec<Vec<Option<TermSortKey>>> = buffer
+            .iter()
+            .map(|(_, bindings)| precompute_order_keys(ctx.order, bindings))
+            .collect();
+        let mut idx: Vec<usize> = (0..buffer.len()).collect();
+        idx.sort_by(|&i, &j| order_cmp_precomputed(ctx.order, &keys[i], &keys[j]));
+        let take = ctx.limit.unwrap_or(usize::MAX);
+        for &i in idx.iter().skip(ctx.offset).take(take) {
+            let (bi, bindings) = &buffer[i];
             sink(&branches[*bi], bindings).await?;
         }
     }
@@ -202,8 +254,8 @@ where
 /// Multi-branch GROUP BY: collect every inner solution (no DISTINCT/OFFSET/LIMIT/
 /// ORDER on the inner — those apply AFTER grouping), then group + aggregate + slice
 /// via the backend-independent [`rust_group_result_rows`] and stream the grouped
-/// rows. Uses the non-recursive [`for_each_branch_solution`] to avoid a recursive
-/// `async fn` monomorphization (design §2).
+/// rows. Drives [`run_branches`] directly (see its doc comment) instead of
+/// wrapping the inner modifiers into a freshly-cloned `Plan`.
 async fn rust_group_execute<B, F, Fut>(
     plan: &Plan,
     b: &mut B,
@@ -215,16 +267,28 @@ where
     F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let inner_plan = Plan {
+    // The inner collection's "prepared branches" — `Plan::prepared_branches`'s
+    // single-branch push-down (distinct/limit/offset onto branches[0]), specialised
+    // to the KNOWN inner-modifier values (no DISTINCT/OFFSET/LIMIT/ORDER: those
+    // apply AFTER grouping) so `plan.branches` is cloned exactly ONCE here, not
+    // once here and once more inside `prepared_branches`.
+    let mut inner_branches = plan.branches.clone();
+    if inner_branches.len() == 1 {
+        let branch = &mut inner_branches[0];
+        branch.distinct = false;
+        branch.limit = None;
+        branch.offset = 0;
+    }
+    let inner_ctx = PlanCtx {
+        dialect: plan.dialect,
         distinct: false,
-        limit: None,
+        form: &plan.form,
+        order: &[],
         offset: 0,
-        order: Vec::new(),
-        rust_group: None, // prevent recursion
-        ..plan.clone()
+        limit: None,
     };
     let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
-    for_each_branch_solution(&inner_plan, b, |_, bindings| {
+    run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
         inner_rows.push(bindings.clone());
         std::future::ready(Ok(()))
     })
@@ -450,23 +514,52 @@ pub async fn dump_quads<B: SqlBackend>(
 
 // --- single-homed term-gen helpers (relocated from exec.rs, ADR-0024 M5) ------
 
+/// `(alias, column) -> index` into a branch's fixed row schema — built ONCE per
+/// branch ([`build_col_index`]), since the projection schema doesn't change row
+/// to row, so [`RawRow`]'s per-row column lookups are an O(log n) binary search
+/// instead of an O(n) `schema.iter().position(...)` scan per var, per row
+/// (ADR-0024/M4 perf). A SORTED `Vec` + binary search, not a `HashMap`: a
+/// branch's schema is typically a handful of columns, small enough that a
+/// `HashMap`'s constant-factor overhead (table allocation, `SipHash` over the
+/// `(usize, &str)` key) measurably LOST to the plain linear scan in a criterion
+/// bench — a sorted `Vec` avoids both the allocation and the hashing while still
+/// beating an O(n) scan once a branch's schema is large (e.g. a multi-table join).
+type ColIndex<'a> = Vec<((usize, &'a str), usize)>;
+
+/// Build a [`ColIndex`] over a branch's projection schema (see its doc comment).
+fn build_col_index(schema: &[ColRef]) -> ColIndex<'_> {
+    let mut index: ColIndex<'_> = schema
+        .iter()
+        .enumerate()
+        .map(|(i, c)| ((c.alias, &*c.column), i))
+        .collect();
+    index.sort_unstable_by_key(|&(key, _)| key);
+    index
+}
+
+/// Look up `(alias, column)` in a [`ColIndex`] via binary search.
+fn col_index_get(index: &ColIndex<'_>, alias: usize, column: &str) -> Option<usize> {
+    index
+        .binary_search_by_key(&(alias, column), |&(key, _)| key)
+        .ok()
+        .map(|pos| index[pos].1)
+}
+
 /// One projected result row's raw column values plus each value's resolved §10
-/// type (declared type, else storage-class fallback), addressed by [`ColRef`].
-/// `pub(crate)` so the PostgreSQL executor ([`crate::exec_pg`]) drives the same
-/// single term-gen path (ADR-0003 R3) with PG-extracted values.
+/// type (declared type, else storage-class fallback), addressed by [`ColRef`] via
+/// a precomputed [`ColIndex`]. `pub(crate)` so the PostgreSQL executor
+/// ([`crate::exec_pg`]) drives the same single term-gen path (ADR-0003 R3) with
+/// PG-extracted values.
 pub(crate) struct RawRow<'a> {
-    pub(crate) schema: &'a [ColRef],
     pub(crate) values: &'a [Option<String>],
     pub(crate) codes: &'a [Option<XsdTypeCode>],
+    pub(crate) index: &'a ColIndex<'a>,
 }
 
 impl RawRow<'_> {
     /// The resolved §10 XSD type of `column` under `alias`, if any.
     fn code_for(&self, alias: usize, column: &str) -> Option<XsdTypeCode> {
-        self.schema
-            .iter()
-            .position(|c| c.alias == alias && &*c.column == column)
-            .and_then(|i| self.codes[i])
+        col_index_get(self.index, alias, column).and_then(|i| self.codes[i])
     }
 }
 
@@ -479,10 +572,7 @@ struct AliasRow<'a> {
 
 impl Row for AliasRow<'_> {
     fn value(&self, column: &str) -> Option<&str> {
-        self.raw
-            .schema
-            .iter()
-            .position(|c| c.alias == self.alias && &*c.column == column)
+        col_index_get(self.raw.index, self.alias, column)
             .and_then(|i| self.raw.values[i].as_deref())
     }
 }
@@ -646,20 +736,113 @@ pub(crate) fn reconstruct(branch: &Branch, raw: &RawRow<'_>) -> Result<BTreeMap<
     Ok(out)
 }
 
-/// Compare two solutions by the ORDER BY keys (SPARQL §15.1), honoring each key's
-/// direction with explicit UNBOUND placement: an unbound key sorts FIRST for ASC
-/// and LAST for DESC — matching the SQL `NULLS FIRST/LAST` the single-branch path
-/// emits, so single- and multi-branch orderings agree. Bound terms order
-/// blank-node < IRI < literal; numeric-typed literals compare by value (so
-/// xsd:integer 2 < 10, not lexical "10" < "2"). `pub(crate)` so the PostgreSQL
-/// executor sorts its bag-union identically.
-pub(crate) fn order_cmp(
+/// SPARQL term order extended to a total order for sorting: blank node < IRI <
+/// literal; within a kind by value.
+fn cmp_term(a: &Term, b: &Term) -> Ordering {
+    match (a, b) {
+        (Term::BlankNode(x), Term::BlankNode(y)) => x.as_str().cmp(y.as_str()),
+        (Term::NamedNode(x), Term::NamedNode(y)) => x.as_str().cmp(y.as_str()),
+        (Term::Literal(x), Term::Literal(y)) => cmp_literal(x, y),
+        _ => term_rank(a)
+            .cmp(&term_rank(b))
+            .then_with(|| a.to_string().cmp(&b.to_string())),
+    }
+}
+
+/// [`cmp_term`]'s kind ordering, factored out so [`term_sort_key`] shares it.
+fn term_rank(t: &Term) -> u8 {
+    match t {
+        Term::BlankNode(_) => 0,
+        Term::NamedNode(_) => 1,
+        Term::Literal(_) => 2,
+        _ => 3, // quoted triple (RDF-star) — sorts last, by lexical form
+    }
+}
+
+/// A [`Term`]'s [`cmp_term`]-relevant shape, precomputed ONCE per term rather than
+/// re-derived on every comparison a sort makes (Schwartzian transform, ADR-0024/M4
+/// perf). `BlankNode`/`NamedNode` borrow their `&str`; `Literal` borrows the whole
+/// literal (its own comparison, `cmp_literal`, is already allocation-free). `Other`
+/// (any kind besides those three — currently only a quoted triple, RDF-star) is the
+/// ONLY variant that allocates, and does so HERE, once, instead of inside
+/// `cmp_term`'s wildcard tie-break on every comparison it participates in.
+enum TermSortKey<'a> {
+    BlankNode(&'a str),
+    NamedNode(&'a str),
+    Literal(&'a Literal),
+    Other(String),
+}
+
+/// Build a term's [`TermSortKey`]. See its doc comment for why this is where the
+/// (possibly) allocating work happens.
+fn term_sort_key(t: &Term) -> TermSortKey<'_> {
+    match t {
+        Term::BlankNode(n) => TermSortKey::BlankNode(n.as_str()),
+        Term::NamedNode(n) => TermSortKey::NamedNode(n.as_str()),
+        Term::Literal(l) => TermSortKey::Literal(l),
+        other => TermSortKey::Other(other.to_string()),
+    }
+}
+
+/// [`cmp_term`], comparing precomputed [`TermSortKey`]s instead of the `Term`s
+/// directly. Byte-identical order to `cmp_term` by construction: the SAME three
+/// same-kind arms (borrowed, not cloned data), and the SAME rank-then-lexical
+/// wildcard tie-break — `term_rank` assigns each kind a UNIQUE rank except for
+/// `Other`, so two keys only ever reach the tie-break when BOTH are `Other`
+/// (whatever concrete non-Blank/Named/Literal `Term` variant they came from),
+/// exactly the one case `cmp_term`'s own wildcard allocates for.
+fn cmp_sort_key(a: &TermSortKey, b: &TermSortKey) -> Ordering {
+    fn rank(k: &TermSortKey) -> u8 {
+        match k {
+            TermSortKey::BlankNode(_) => 0,
+            TermSortKey::NamedNode(_) => 1,
+            TermSortKey::Literal(_) => 2,
+            TermSortKey::Other(_) => 3,
+        }
+    }
+    match (a, b) {
+        (TermSortKey::BlankNode(x), TermSortKey::BlankNode(y)) => x.cmp(y),
+        (TermSortKey::NamedNode(x), TermSortKey::NamedNode(y)) => x.cmp(y),
+        (TermSortKey::Literal(x), TermSortKey::Literal(y)) => cmp_literal(x, y),
+        _ => rank(a).cmp(&rank(b)).then_with(|| match (a, b) {
+            (TermSortKey::Other(x), TermSortKey::Other(y)) => x.cmp(y),
+            // Same rank implies the same variant among Blank/Named/Literal/Other
+            // (each of the first three has a UNIQUE rank, handled above), so a
+            // tie here is only ever reached by two `Other`s.
+            _ => unreachable!("equal TermSortKey rank implies both are Other"),
+        }),
+    }
+}
+
+/// Precompute one row's ORDER BY sort keys — one [`TermSortKey`] per [`OrderKey`]
+/// in `order`, `None` for an unbound one — see [`order_cmp_precomputed`].
+fn precompute_order_keys<'a>(
     order: &[OrderKey],
-    a: &BTreeMap<String, Term>,
-    b: &BTreeMap<String, Term>,
+    bindings: &'a BTreeMap<String, Term>,
+) -> Vec<Option<TermSortKey<'a>>> {
+    order
+        .iter()
+        .map(|key| bindings.get(&key.var).map(term_sort_key))
+        .collect()
+}
+
+/// Compare two solutions' PRECOMPUTED ORDER BY keys ([`precompute_order_keys`],
+/// SPARQL §15.1), honoring each key's direction with explicit UNBOUND placement:
+/// an unbound key sorts FIRST for ASC and LAST for DESC — matching the SQL `NULLS
+/// FIRST/LAST` the single-branch path emits, so single- and multi-branch orderings
+/// agree. Bound terms order blank-node < IRI < literal; numeric-typed literals
+/// compare by value (so xsd:integer 2 < 10, not lexical "10" < "2") — see
+/// [`cmp_sort_key`]. Used by the buffered ORDER BY sorts
+/// ([`run_branches`]/[`rust_group_result_rows`]) with keys precomputed once per
+/// row (a Schwartzian transform, ADR-0024/M4 perf), so an `n`-row sort computes
+/// each term's (possibly allocating) fallback string O(n) times, not O(n log n).
+fn order_cmp_precomputed(
+    order: &[OrderKey],
+    a: &[Option<TermSortKey>],
+    b: &[Option<TermSortKey>],
 ) -> Ordering {
-    for key in order {
-        let ord = match (a.get(&key.var), b.get(&key.var)) {
+    for ((key, ka), kb) in order.iter().zip(a.iter()).zip(b.iter()) {
+        let ord = match (ka, kb) {
             (None, None) => Ordering::Equal,
             (None, Some(_)) => {
                 if key.descending {
@@ -676,7 +859,7 @@ pub(crate) fn order_cmp(
                 }
             }
             (Some(x), Some(y)) => {
-                let c = cmp_term(x, y);
+                let c = cmp_sort_key(x, y);
                 if key.descending {
                     c.reverse()
                 } else {
@@ -689,27 +872,6 @@ pub(crate) fn order_cmp(
         }
     }
     Ordering::Equal
-}
-
-/// SPARQL term order extended to a total order for sorting: blank node < IRI <
-/// literal; within a kind by value.
-fn cmp_term(a: &Term, b: &Term) -> Ordering {
-    fn rank(t: &Term) -> u8 {
-        match t {
-            Term::BlankNode(_) => 0,
-            Term::NamedNode(_) => 1,
-            Term::Literal(_) => 2,
-            _ => 3, // quoted triple (RDF-star) — sorts last, by lexical form
-        }
-    }
-    match (a, b) {
-        (Term::BlankNode(x), Term::BlankNode(y)) => x.as_str().cmp(y.as_str()),
-        (Term::NamedNode(x), Term::NamedNode(y)) => x.as_str().cmp(y.as_str()),
-        (Term::Literal(x), Term::Literal(y)) => cmp_literal(x, y),
-        _ => rank(a)
-            .cmp(&rank(b))
-            .then_with(|| a.to_string().cmp(&b.to_string())),
-    }
 }
 
 /// Compare two literals: numerically when both carry a numeric XSD datatype, else
@@ -1078,9 +1240,30 @@ pub(crate) fn rust_group_result_rows(
         result_rows.push(result);
     }
 
-    // ORDER BY over the grouped rows (if requested), then OFFSET/LIMIT.
+    // ORDER BY over the grouped rows (if requested), then OFFSET/LIMIT. Schwartzian
+    // transform (ADR-0024/M4 perf, see `order_cmp_precomputed`): precompute each
+    // row's sort keys once, sort a permutation of INDICES by them (keeps the keys'
+    // borrow of `result_rows` and the final move out of it both sound), then
+    // reorder `result_rows` by that permutation — moving each row exactly once
+    // (`Option::take`), never cloning it.
     if !plan.order.is_empty() {
-        result_rows.sort_by(|a, b| order_cmp(&plan.order, a, b));
+        let keys: Vec<Vec<Option<TermSortKey>>> = result_rows
+            .iter()
+            .map(|r| precompute_order_keys(&plan.order, r))
+            .collect();
+        let mut idx: Vec<usize> = (0..result_rows.len()).collect();
+        idx.sort_by(|&i, &j| order_cmp_precomputed(&plan.order, &keys[i], &keys[j]));
+        drop(keys);
+        let mut slots: Vec<Option<BTreeMap<String, Term>>> =
+            result_rows.into_iter().map(Some).collect();
+        result_rows = idx
+            .into_iter()
+            .map(|i| {
+                slots[i]
+                    .take()
+                    .expect("permutation index used exactly once")
+            })
+            .collect();
     }
     let take = plan.limit.unwrap_or(usize::MAX);
     Ok(result_rows
@@ -1093,26 +1276,23 @@ pub(crate) fn rust_group_result_rows(
 /// Compute one aggregate over a group of solutions. Returns `None` for
 /// UNBOUND (AVG/MIN/MAX over an empty multiset — SPARQL §11).
 fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Term>> {
-    // Collect bound numeric values of the argument variable.
-    let _bound_vals: Vec<&Term> = match &agg.arg_var {
-        None => rows.iter().flat_map(|r| r.values()).collect(), // COUNT(*) — not used for numerics
-        Some(var) => rows.iter().filter_map(|r| r.get(var)).collect(),
-    };
-
     match agg.kind {
         AggKind::Count => {
             let count = match &agg.arg_var {
                 // COUNT(DISTINCT *) — count DISTINCT whole solutions in the group. A row's
                 // canonical key is its (var, term) pairs; `BTreeMap` iterates in sorted key
-                // order, so the key is order-independent. Uses the same `Term::to_string`
-                // canonicalisation as COUNT(DISTINCT ?v) below (ADR-0025 Tier-2 gap 3).
+                // order, so the key is order-independent. `oxrdf::Term` derives `Hash`/`Eq`
+                // (already relied on elsewhere in this file, e.g. `seen_tuples` above), and
+                // N-Triples serialisation is injective, so a `&Term`-keyed dedup set yields
+                // the IDENTICAL classes a `Term::to_string()`-keyed one would — without the
+                // per-value allocation (ADR-0025 Tier-2 gap 3; ADR-0024/M4 perf).
                 None if agg.distinct => {
-                    let mut seen: std::collections::HashSet<Vec<(String, String)>> =
+                    let mut seen: std::collections::HashSet<Vec<(&str, &Term)>> =
                         std::collections::HashSet::new();
                     rows.iter()
                         .filter(|r| {
-                            let key: Vec<(String, String)> =
-                                r.iter().map(|(k, v)| (k.clone(), v.to_string())).collect();
+                            let key: Vec<(&str, &Term)> =
+                                r.iter().map(|(k, v)| (k.as_str(), v)).collect();
                             seen.insert(key)
                         })
                         .count()
@@ -1120,11 +1300,11 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 None => rows.len(), // COUNT(*)
                 Some(var) => {
                     if agg.distinct {
-                        let mut seen: std::collections::HashSet<String> =
+                        let mut seen: std::collections::HashSet<&Term> =
                             std::collections::HashSet::new();
                         rows.iter()
                             .filter_map(|r| r.get(var))
-                            .filter(|t| seen.insert(t.to_string()))
+                            .filter(|t| seen.insert(*t))
                             .count()
                     } else {
                         rows.iter().filter(|r| r.contains_key(var.as_str())).count()
@@ -1202,17 +1382,41 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                     Ok(None)
                 };
             }
-            let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
-            if nums.is_empty() {
-                return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
-            }
-            let avg = nums.iter().sum::<f64>() / nums.len() as f64;
             // SPARQL §11.4: AVG of xsd:double values stays xsd:double (else decimal). See the
             // SUM promotion note above (C.6b) — mirrors the SQL path's `avg_result_code`.
             if vals.iter().any(|t| is_xsd_double(t)) {
+                let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
+                if nums.is_empty() {
+                    return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
+                }
+                let avg = nums.iter().sum::<f64>() / nums.len() as f64;
                 Ok(Some(double_term(avg)?))
             } else {
-                Ok(Some(decimal_term(avg)?))
+                // M3 fix 1: every remaining operand is xsd:integer/xsd:decimal (the
+                // xsd:double case already returned above), so accumulate with
+                // `oxsdatatypes::Decimal` — exact i128 fixed-point, NEVER `f64` — instead of
+                // the old `nums.iter().sum::<f64>() / len`. A non-terminating quotient (e.g.
+                // 11/3) rendered as an f64 artifact ("3.6666666666666665") that diverged from
+                // the spareval oracle's own exact decimal AVG ("3.666666666666666666"): same
+                // `oxsdatatypes::Decimal` type on both sides ⇒ =_bag equality. Mirrors the
+                // f64 branch's "silently average just the numeric-parseable subset" quirk
+                // verbatim (a separate, pre-existing behaviour, out of scope here) — only the
+                // arithmetic TYPE changes.
+                let nums: Vec<Decimal> =
+                    vals.iter().filter_map(|t| decimal_term_value(t)).collect();
+                if nums.is_empty() {
+                    return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
+                }
+                let Some(sum) = nums
+                    .iter()
+                    .try_fold(Decimal::from(0_i64), |acc, &d| acc.checked_add(d))
+                else {
+                    return Ok(None); // FOAR0002 overflow ⇒ UNBOUND (never a wrong answer)
+                };
+                match sum.checked_div(nums.len() as i64) {
+                    Some(avg) => Ok(Some(decimal_term_exact(avg)?)),
+                    None => Ok(None), // FOAR0001/FOAR0002 ⇒ UNBOUND
+                }
             }
         }
         AggKind::Min | AggKind::Max => {
@@ -1247,18 +1451,17 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
 /// before applying the set function). `RustAgg.distinct` was previously read only by `Count`;
 /// `Sum`/`Avg` silently ignored it and double-counted duplicate rows, a real `=_bag` wrong
 /// answer (the SQL-pushdown sibling, `emit.rs`'s `agg_expr_sql`, already renders `SUM(DISTINCT
-/// col)` correctly — only this in-process path had the gap). Canonicalises on the SAME lexical
-/// key (`Term::to_string()`) the existing `COUNT(DISTINCT …)` branches above use, so dedup is
-/// order-independent and consistent across every aggregate. No-op (returns `vals` unchanged)
-/// when `distinct` is false.
+/// col)` correctly — only this in-process path had the gap). Canonicalises on `Term`'s own
+/// `Hash`/`Eq` (structural equality agrees with N-Triples lexical equality, so this is the
+/// SAME dedup key the `COUNT(DISTINCT …)` branches above use, just without their `to_string()`
+/// allocation — ADR-0024/M4 perf), so dedup is order-independent and consistent across every
+/// aggregate. No-op (returns `vals` unchanged) when `distinct` is false.
 fn dedup_if_distinct(vals: Vec<&Term>, distinct: bool) -> Vec<&Term> {
     if !distinct {
         return vals;
     }
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    vals.into_iter()
-        .filter(|t| seen.insert(t.to_string()))
-        .collect()
+    let mut seen: std::collections::HashSet<&Term> = std::collections::HashSet::new();
+    vals.into_iter().filter(|t| seen.insert(*t)).collect()
 }
 
 /// Extract the `f64` numeric value of an RDF term (returns `None` for
@@ -1266,6 +1469,20 @@ fn dedup_if_distinct(vals: Vec<&Term>, distinct: bool) -> Vec<&Term> {
 fn numeric_term(t: &Term) -> Option<f64> {
     match t {
         Term::Literal(l) => numeric_value(l),
+        _ => None,
+    }
+}
+
+/// Extract the EXACT `oxsdatatypes::Decimal` value of an RDF term (M3 fix 1):
+/// the same "numeric literal" gate as [`numeric_term`] (so a non-numeric operand
+/// is rejected identically), but parsed WITHOUT ever going through `f64` —
+/// `Decimal::from_str` reads the literal's own lexical digits directly, so a
+/// non-terminating AVG quotient stays exact end to end. Only reached once the
+/// `xsd:double`/`xsd:float` case has already been handled elsewhere, so the
+/// lexical form here is always plain-digit (never `E`-notation).
+fn decimal_term_value(t: &Term) -> Option<Decimal> {
+    match t {
+        Term::Literal(l) if numeric_value(l).is_some() => l.value().parse().ok(),
         _ => None,
     }
 }
@@ -1319,6 +1536,16 @@ fn decimal_term(n: f64) -> Result<Term> {
         format!("{n}")
     };
     natural_literal(&raw, XsdTypeCode::Decimal)
+}
+
+/// Build an `xsd:decimal` literal from an EXACT `oxsdatatypes::Decimal` (M3 fix 1's
+/// AVG accumulator — never route through `f64`, which cannot represent a non-terminating
+/// quotient like 11/3 exactly). `Decimal`'s own `Display` is ALREADY XSD-canonical
+/// (`sf-core/datatype.rs` module doc), so this round-trips through `natural_literal`
+/// exactly like [`decimal_term`]/[`double_term`], for consistency, not because
+/// canonicalisation is needed here.
+fn decimal_term_exact(d: Decimal) -> Result<Term> {
+    natural_literal(&d.to_string(), XsdTypeCode::Decimal)
 }
 
 // --- M2 Send-future / GAT monomorphization gate (design §1 line 103, §5 M2) ----
@@ -1391,5 +1618,124 @@ mod probe_backend {
             let joined = tokio::spawn(assert_send(fut)).await.unwrap();
             assert!(!joined.unwrap());
         });
+    }
+}
+
+// --- Schwartzian-transform ORDER BY sort order-identity gate (ADR-0024/M4 perf) ---
+
+#[cfg(test)]
+mod order_sort_key_tests {
+    //! Locks the Schwartzian-transform ORDER BY refactor (`TermSortKey` /
+    //! `cmp_sort_key` / `order_cmp_precomputed`): a mixed vector of every term
+    //! kind — IRIs, literals, blank nodes, quoted triples (RDF-star; only same-kind
+    //! pairs of THESE ever reach the allocating tie-break) — sorts IDENTICALLY
+    //! through the reference [`cmp_term`] (which allocates a fallback string per
+    //! comparison it needs one) and the new precomputed path (which allocates it
+    //! once per term, ever).
+    use super::*;
+    use sf_core::{BlankNode, NamedNode, Triple};
+
+    fn iri(s: &str) -> Term {
+        Term::NamedNode(NamedNode::new_unchecked(s))
+    }
+    fn lit(s: &str) -> Term {
+        Term::Literal(Literal::new_simple_literal(s))
+    }
+    fn bnode(s: &str) -> Term {
+        Term::BlankNode(BlankNode::new_unchecked(s))
+    }
+    fn triple(s: &str) -> Term {
+        Term::Triple(Box::new(Triple::new(
+            NamedNode::new_unchecked(s),
+            NamedNode::new_unchecked("http://ex.org/p"),
+            NamedNode::new_unchecked("http://ex.org/o"),
+        )))
+    }
+
+    fn mixed_terms() -> Vec<Term> {
+        vec![
+            iri("http://b.example/2"),
+            lit("zzz"),
+            bnode("b2"),
+            triple("http://s/2"),
+            iri("http://a.example/1"),
+            lit("aaa"),
+            bnode("b1"),
+            triple("http://s/1"),
+            triple("http://s/1"), // duplicate — exercises stability
+            lit("aaa"),           // duplicate literal
+        ]
+    }
+
+    #[test]
+    fn precomputed_sort_matches_cmp_term_reference() {
+        let terms = mixed_terms();
+
+        // Reference: the original per-comparison comparator, unchanged.
+        let mut via_cmp_term = terms.clone();
+        via_cmp_term.sort_by(cmp_term);
+
+        // New: precompute each term's sort key ONCE, then sort via the keys.
+        let keys: Vec<TermSortKey> = terms.iter().map(term_sort_key).collect();
+        let mut idx: Vec<usize> = (0..terms.len()).collect();
+        idx.sort_by(|&i, &j| cmp_sort_key(&keys[i], &keys[j]));
+        let via_precomputed: Vec<Term> = idx.into_iter().map(|i| terms[i].clone()).collect();
+
+        assert_eq!(via_cmp_term, via_precomputed);
+    }
+
+    /// The same equivalence one layer up, at [`order_cmp_precomputed`] — the
+    /// actual multi-row, `OrderKey`-driven machinery `run_branches` /
+    /// `rust_group_result_rows` call — including an UNBOUND row (no "v" binding),
+    /// exercising the `None`-placement arms `cmp_sort_key` alone doesn't cover.
+    /// The reference comparator is `order_cmp`'s original body, reimplemented
+    /// here directly over the unchanged [`cmp_term`] — `order_cmp` itself was
+    /// superseded (both its call sites now use the precomputed path) and removed,
+    /// so this stands in for it per the fix's own "reimplement the old comparator
+    /// in the test" instruction.
+    #[test]
+    fn order_cmp_precomputed_matches_reference_over_solutions() {
+        let order = vec![OrderKey {
+            var: "v".to_owned(),
+            descending: false,
+            expr: None,
+        }];
+        let mut rows: Vec<BTreeMap<String, Term>> = mixed_terms()
+            .into_iter()
+            .map(|t| {
+                let mut m = BTreeMap::new();
+                m.insert("v".to_owned(), t);
+                m
+            })
+            .collect();
+        rows.push(BTreeMap::new()); // UNBOUND — no "v" key
+
+        let reference_cmp = |a: &BTreeMap<String, Term>, b: &BTreeMap<String, Term>| {
+            for key in &order {
+                let ord = match (a.get(&key.var), b.get(&key.var)) {
+                    (None, None) => Ordering::Equal,
+                    (None, Some(_)) => Ordering::Less,
+                    (Some(_), None) => Ordering::Greater,
+                    (Some(x), Some(y)) => cmp_term(x, y),
+                };
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            Ordering::Equal
+        };
+        let mut via_reference = rows.clone();
+        via_reference.sort_by(reference_cmp);
+
+        let keys: Vec<Vec<Option<TermSortKey>>> = rows
+            .iter()
+            .map(|r| precompute_order_keys(&order, r))
+            .collect();
+        let mut idx: Vec<usize> = (0..rows.len()).collect();
+        idx.sort_by(|&i, &j| order_cmp_precomputed(&order, &keys[i], &keys[j]));
+        let via_precomputed: Vec<BTreeMap<String, Term>> =
+            idx.into_iter().map(|i| rows[i].clone()).collect();
+
+        assert_eq!(via_reference, via_precomputed);
     }
 }

@@ -57,6 +57,25 @@ R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) ide
 
 A `(SQL source type × dialect) → expected RDF literal` matrix, realised as **per-DBMS forked golden N-Triples fixtures** (the RML-community layout; ADR-0012) run against real PostgreSQL/SQLite, plus: **cross-dialect** byte-identity (the §10 consistency clause), Rust canonicalization unit tests over the raw dialect renderings, and SQLite affinity-violation + STRICT tests. The W3C RDB2RDF suite (ADR-0005) is the floor.
 
+> **Amendment (2026-07-16, impl-verified).** This ADR's Confirmation clause calls
+> for "Rust canonicalization unit tests over the raw dialect renderings" per
+> dialect. SQL Server's had none: `marshal_column_data` (`sf-sql`) converts
+> `tiberius`'s typed `ColumnData` into a lexical string *before* anything reaches
+> this ADR's chokepoint — and that per-driver decode step is exactly where a
+> real bug lived, undetected, because it produces a syntactically-valid-but-
+> factually-wrong string (e.g. `"1970-01-01"` for a stored `0001-01-01`) that
+> `oxsdatatypes` has no way to catch: it validates lexical *form*, not whether
+> the driver decoded the value correctly. `date_from_proleptic()`'s epoch
+> arithmetic was wrong (fed a Rata Die day-count into an algorithm expecting
+> days-since-1970-01-01), compounded by an independently-wrong constant in the
+> 1900 epoch path. Fixed, and now covered by 8 new direct unit tests plus a live
+> round-trip test against a real SQL Server container — see ADR-0026 for the
+> full account. Worth remembering: this class of bug is invisible to the
+> chokepoint's own correctness guarantees precisely because it happens
+> upstream of it, in per-dialect driver decoding — any *new* per-dialect decode
+> step (a future backend's own date/time marshaling) needs its own such tests,
+> not just trust that the shared chokepoint will catch it.
+
 ## More Information
 * **Term-generation home:** `sf-core` (ADR-0003 R3). **Execution:** ADR-0006. **Conformance:** ADR-0005. **Test strategy:** ADR-0012.
 * **Research:** `docs/research/` — `dialect-correctness`, `r2rml-spec-tests`.

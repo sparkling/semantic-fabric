@@ -79,6 +79,21 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 * The bounded-memory invariant (ADR-0006/0010) is re-confirmed on each backend: server-side cursor, constant engine memory + bounded first-result latency under growing source data (`sf-bench` `constant_memory`), for both the hand-rolled adapters and — if pursued — the `sqlx` spike.
 * Adding a new backend is demonstrated to require only a dialect entry + a `SqlBackend` adapter, with no change to the executor core, and its correctness follows from the shared differential rather than a new per-backend feature port.
 
+> **Amendment (2026-07-16).** This ADR's Confirmation clause calls for "a live
+> per-backend smoke" and re-confirming correctness per backend "rather than a
+> new per-backend feature port." A coverage-gap pass found this had a real gap
+> for the SQL Server adapter specifically: its own value-marshaling step
+> (`marshal_column_data`, upstream of the shared executor core) had a live,
+> undetected date/time epoch bug — see ADR-0015's amendment and ADR-0026 for
+> the full account and fix. Closed with 8 new unit tests plus a live
+> DATE/DATETIME2/SMALLDATETIME round-trip test against a real SQL Server
+> container (`differential_mssql.rs`). The MonetDB adapter's own per-backend
+> surface (MAPI/TCP framing) and the REST-family adapters (Snowflake/Athena/
+> Databricks/Trino) gained equivalent adapter-conformance coverage in the same
+> pass — a mocked local MAPI server for MonetDB, `wiremock`-mocked HTTP servers
+> for the REST family — closing what had been zero adapter-level test coverage
+> for four of the eight backend adapters this ADR's abstraction covers.
+
 ## More Information
 
 * **Evidence (2026-07-01):** the live Ontop 5.5.0 vs semantic-fabric head-to-head (`BENCHMARKS.md`, `scripts/compare/race.sh`) — five Postgres-path-only correctness defects (q9 agg-over-union, q10 sequence path, q11 MINUS, q12 FILTER-EXISTS/typed-column, q15 DISTINCT-over-join) + one perf blowup (q14), all invisible to the green SQLite differential; fixed in `exec_pg.rs`/`unfold.rs`/`iq.rs`/`leftjoin.rs` and re-verified at row-parity on the live PG endpoint.

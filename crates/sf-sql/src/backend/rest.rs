@@ -994,6 +994,183 @@ mod tests {
         }
     }
 
+    /// Mocked-HTTP tests for the backends that accept an arbitrary `base_url`
+    /// (Snowflake/Athena/Databricks/Trino) — a local `wiremock` server stands in
+    /// for the live cloud endpoint, so these exercise the real request-building +
+    /// response-parsing path end to end without needing live cloud credentials.
+    /// (BigQuery hardcodes `bigquery.googleapis.com` and can't be redirected this
+    /// way without a code change, so it's not covered here.)
+    #[cfg(feature = "rest-backends")]
+    mod http_mock {
+        use serde_json::json;
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        use super::super::real::{
+            presto_execute, AthenaBackend, DatabricksBackend, SnowflakeBackend,
+        };
+        use super::super::trino_real::TrinoBackend;
+        use crate::backend::SqlBackend;
+
+        #[tokio::test]
+        async fn snowflake_execute_sql_via_mock_server() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/api/v2/statements"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "resultSetMetaData": {
+                        "rowType": [{"name": "ID", "type": "fixed"}, {"name": "NAME", "type": "text"}]
+                    },
+                    "data": [["1", "Alice"], ["2", null]]
+                })))
+                .mount(&server)
+                .await;
+
+            let mut backend = SnowflakeBackend::new(server.uri(), "fake-token");
+            let cols = backend.column_names("SELECT * FROM t").await.unwrap();
+            assert_eq!(cols, vec!["ID", "NAME"]);
+        }
+
+        #[tokio::test]
+        async fn databricks_execute_sql_via_mock_server() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/api/2.0/sql/statements"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "manifest": {"schema": {"columns": [{"name": "x"}, {"name": "y"}]}},
+                    "result": {"data_array": [["1", "hello"], ["2", null]]}
+                })))
+                .mount(&server)
+                .await;
+
+            let mut backend = DatabricksBackend::new(server.uri(), "warehouse-123", "fake-token");
+            let cols = backend.column_names("SELECT * FROM t").await.unwrap();
+            assert_eq!(cols, vec!["x", "y"]);
+        }
+
+        #[tokio::test]
+        async fn trino_execute_sql_via_mock_server() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/statement"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "columns": [{"name": "a"}, {"name": "b"}],
+                    "data": [["1", "2"]]
+                })))
+                .mount(&server)
+                .await;
+
+            let mut backend = TrinoBackend::new(server.uri(), "trino-user");
+            let cols = backend.column_names("SELECT * FROM t").await.unwrap();
+            assert_eq!(cols, vec!["a", "b"]);
+        }
+
+        #[tokio::test]
+        async fn athena_execute_sql_via_mock_server() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/statement"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "columns": [{"name": "route_id"}],
+                    "data": [["R1"], ["R2"]]
+                })))
+                .mount(&server)
+                .await;
+
+            let mut backend = AthenaBackend::new(server.uri(), "athena-user");
+            let cols = backend
+                .column_names("SELECT route_id FROM routes")
+                .await
+                .unwrap();
+            assert_eq!(cols, vec!["route_id"]);
+        }
+
+        /// The presto REST protocol is async: an initial QUEUED/PLANNING page can
+        /// carry no `columns`/`data`, only a `nextUri` to poll. This is the branch
+        /// none of the single-page tests above exercise.
+        #[tokio::test]
+        async fn presto_execute_follows_next_uri_pagination() {
+            let server = MockServer::start().await;
+            let next_uri = format!("{}/v1/statement/queryid/1", server.uri());
+
+            Mock::given(method("POST"))
+                .and(path("/v1/statement"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "nextUri": next_uri
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/statement/queryid/1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "columns": [{"name": "n"}],
+                    "data": [["1"], ["2"], ["3"]]
+                })))
+                .mount(&server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let (cols, rows) =
+                presto_execute(&client, &server.uri(), "user", None, None, "SELECT n")
+                    .await
+                    .unwrap();
+            assert_eq!(cols, vec!["n"]);
+            assert_eq!(rows.len(), 3);
+        }
+
+        #[tokio::test]
+        async fn presto_execute_surfaces_query_error() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/statement"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "error": {"message": "line 1:1: mismatched input"}
+                })))
+                .mount(&server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let result =
+                presto_execute(&client, &server.uri(), "user", None, None, "SELECT bad").await;
+            match result {
+                Err(e) => assert!(
+                    e.to_string().contains("mismatched input"),
+                    "expected the presto error message to surface, got: {e}"
+                ),
+                Ok(_) => panic!("expected presto_execute to surface the query error"),
+            }
+        }
+
+        /// Catalog/schema headers are session defaults Trino/Presto use to resolve
+        /// unqualified table names — verify they're actually sent, not just accepted.
+        #[tokio::test]
+        async fn presto_execute_sends_catalog_and_schema_headers() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/statement"))
+                .and(body_string_contains("SELECT 1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "columns": [{"name": "one"}],
+                    "data": [["1"]]
+                })))
+                .mount(&server)
+                .await;
+
+            let client = reqwest::Client::new();
+            let (cols, _) = presto_execute(
+                &client,
+                &server.uri(),
+                "user",
+                Some("hive"),
+                Some("default"),
+                "SELECT 1",
+            )
+            .await
+            .unwrap();
+            assert_eq!(cols, vec!["one"]);
+        }
+    }
+
     #[cfg(not(feature = "rest-backends"))]
     #[tokio::test]
     async fn stub_returns_unsupported() {

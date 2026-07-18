@@ -15,9 +15,6 @@
 //! wrong hit); the data/schema split that lets two `FILTER(?x = <data>)` queries
 //! share one plan is the documented refinement (ADR-0007), tracked here.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use spargebra::Query;
 
 /// A monotonic `⟨T, M⟩` + schema epoch. Bump it whenever the ontology, the
@@ -69,38 +66,35 @@ pub fn plan_key(query: &Query, epoch: Epoch) -> PlanKey {
 
 /// A bounded plan cache. Generic over the cached plan type `P` so the cache does
 /// not couple to the (large) plan struct. Bounded by `⟨T, M⟩` size via `capacity`
-/// (a simple clear-on-overflow keeps it dependency-light; `quick_cache` is the
-/// production drop-in — ADR-0007).
+/// — backed by `quick_cache` (ADR-0007's named production drop-in): an
+/// approximately-LRU sharded cache that evicts individual cold entries under
+/// pressure, never the whole map at once (the prior `HashMap` + clear-on-overflow
+/// collapsed the hit rate to ~0 past `capacity` distinct keys — M4 wave-2 finding 1).
 pub struct PlanCache<P> {
-    inner: Mutex<HashMap<PlanKey, P>>,
-    capacity: usize,
+    inner: quick_cache::sync::Cache<PlanKey, P>,
 }
 
 impl<P: Clone> PlanCache<P> {
     pub fn new(capacity: usize) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
-            capacity,
+            inner: quick_cache::sync::Cache::new(capacity),
         }
     }
 
     /// Look up a compiled plan.
     pub fn get(&self, key: &PlanKey) -> Option<P> {
-        self.inner.lock().unwrap().get(key).cloned()
+        self.inner.get(key)
     }
 
-    /// Insert a compiled plan, evicting wholesale if over capacity (the cache is
-    /// `⟨T, M⟩`-bounded, so this rarely fires).
+    /// Insert a compiled plan. Eviction (approximately-LRU, `quick_cache`) drops
+    /// individual cold entries as capacity is reached — the cache is
+    /// `⟨T, M⟩`-bounded, so eviction rarely fires in practice.
     pub fn put(&self, key: PlanKey, plan: P) {
-        let mut map = self.inner.lock().unwrap();
-        if map.len() >= self.capacity {
-            map.clear();
-        }
-        map.insert(key, plan);
+        self.inner.insert(key, plan);
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.inner.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -171,7 +165,7 @@ mod tests {
         let k1 = plan_key(&parse("SELECT * WHERE { ?a ?b ?c }"), Epoch(0));
         cache.put(k1.clone(), 10);
         assert_eq!(cache.get(&k1), Some(10));
-        // Overflow clears wholesale (⟨T,M⟩-bounded eviction).
+        // Overflow evicts approximately-LRU, never wholesale (quick_cache).
         cache.put(
             plan_key(&parse("SELECT * WHERE { ?d ?e ?f }"), Epoch(0)),
             20,
@@ -181,5 +175,63 @@ mod tests {
             30,
         );
         assert!(cache.len() <= 2);
+    }
+
+    /// A synthetic key distinguished only by `canonical` (real `plan_key` overkill
+    /// for a hit-rate workload of thousands of accesses).
+    fn synth_key(id: usize) -> PlanKey {
+        PlanKey {
+            epoch: 0,
+            structural_hash: id as u64,
+            canonical: format!("synthetic-plan-{id}"),
+        }
+    }
+
+    /// M4 wave-2 finding 1 RECEIPT: a realistic hot/cold workload — a small hot
+    /// working set (well within `capacity`) accessed repeatedly, interleaved with
+    /// a much larger cold set each touched rarely (so the cache overflows
+    /// `capacity` many times over). The prior `HashMap` + clear-on-overflow wipes
+    /// the whole map — including the hot set — every time a cold miss pushes it
+    /// over capacity, so hot-key hit rate stays near zero; `quick_cache`'s
+    /// approximately-LRU eviction should keep the hot set resident and answer most
+    /// hot accesses from cache. Get-or-put on every access (the real
+    /// `parse_and_translate_cached` call pattern); asserts only a generous
+    /// floor, since the interesting number is the OLD-vs-NEW comparison reported
+    /// alongside this test, not a tight bound on `quick_cache`'s internals.
+    #[test]
+    fn hot_working_set_survives_cold_churn_past_capacity() {
+        const CAPACITY: usize = 64;
+        const HOT: usize = 32;
+        const COLD: usize = 128;
+        const ITERS: usize = 3000;
+
+        let cache: PlanCache<u32> = PlanCache::new(CAPACITY);
+        let mut hits = 0u32;
+        let mut accesses = 0u32;
+        for i in 0..ITERS {
+            // 2/3 of accesses hit a small, fixed hot set (round-robin); 1/3 hit a
+            // much larger cold set that churns through far more distinct keys than
+            // fit in `capacity`, forcing the cache to evict repeatedly.
+            let key = if i % 3 != 0 {
+                synth_key(i % HOT)
+            } else {
+                synth_key(HOT + (i / 3) % COLD)
+            };
+            accesses += 1;
+            if cache.get(&key).is_some() {
+                hits += 1;
+            } else {
+                cache.put(key, i as u32);
+            }
+        }
+        let hit_rate = f64::from(hits) / f64::from(accesses);
+        eprintln!(
+            "PlanCache hot/cold hit rate over {ITERS} accesses ({HOT} hot + {COLD} cold keys, \
+             capacity {CAPACITY}): {hits}/{accesses} = {hit_rate:.3}"
+        );
+        assert!(
+            hit_rate > 0.5,
+            "hot working set should survive cold churn past capacity, got hit_rate={hit_rate:.3}"
+        );
     }
 }

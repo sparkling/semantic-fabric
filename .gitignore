@@ -22,11 +22,15 @@
 *.sqlite3
 
 # Agent / Claude Code / ruflo tooling runtime (per-developer, not source)
-.claude/
+# (.mcp.json, CLAUDE.md and .claude/settings.json stay tracked, like the sibling repos.)
+.claude/worktrees/
+.claude/memory.db
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/settings.json.before-stop-fix-*
 .claude-flow/
 .swarm/
 .metaharness/
-.mcp.json
 agentdb.rvf
 *.rvf
 *.rvf.lock

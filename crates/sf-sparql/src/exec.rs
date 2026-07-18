@@ -7,9 +7,11 @@
 //! term per output position — terms are built here, in the outermost projection,
 //! never inside a join/filter (ADR-0007 lifting). Streaming uses `sf-sql`'s
 //! bounded SQLite cursor ([`sf_sql::sqlite_for_each`]) — one row in flight, so
-//! memory is independent of result size. CPU-bound term-gen belongs on the
-//! dedicated rayon pool ([`crate::pool`]); the sync SQLite path here generates
-//! inline (no async runtime to protect — ADR-0006).
+//! memory is independent of result size. CPU-bound term-gen runs inline on the
+//! calling thread everywhere, including here (no async runtime to protect): the
+//! separate rayon pool ADR-0006 called for was built but never wired to a caller,
+//! and a measured per-row dispatch was ~2x slower than inline (M4 wave-2 finding
+//! 3 — see the ADR-0006 status note), so it was removed rather than left dead.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};

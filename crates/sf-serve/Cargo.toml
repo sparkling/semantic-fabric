@@ -25,6 +25,7 @@ form_urlencoded.workspace = true
 # Source drivers (held in the server backend; ADR-0006).
 rusqlite = { version = "0.32", features = ["bundled"] }
 tokio-postgres = "0.7"
+deadpool-postgres = "0.14" # PG connection pool for the serve lane (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding 2) — was a single shared Client, serialising all PG HTTP requests
 mysql_async = { version = "0.35", default-features = false, features = ["default-rustls"] } # MySQL serve backend (ADR-0024 M4, §4.2 dedicated-conn lane)
 thiserror.workspace = true
 

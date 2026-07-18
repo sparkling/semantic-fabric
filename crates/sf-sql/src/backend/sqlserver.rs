@@ -98,7 +98,7 @@ pub mod real {
     }
 
     /// Parse an ADO.NET connection string into a `tiberius::Config`.
-    fn parse_conn_str(s: &str) -> Result<Config> {
+    pub fn parse_conn_str(s: &str) -> Result<Config> {
         let mut config = Config::new();
         let mut host = "localhost".to_owned();
         let mut port: u16 = 1433;
@@ -330,8 +330,8 @@ pub mod real {
     /// Convert days since 1900-01-01 (SQL Server DateTime/SmallDateTime baseline)
     /// to (year, month, day).
     fn date_from_days_1900(days: i32) -> (i32, u8, u8) {
-        // 1900-01-01 in proleptic Gregorian day count (day 1 = 0001-01-01): 693961.
-        let proleptic = days as i64 + 693_961;
+        // 1900-01-01 in proleptic Gregorian day count (day 1 = 0001-01-01): 693596.
+        let proleptic = days as i64 + 693_596;
         date_from_proleptic(proleptic)
     }
 
@@ -340,10 +340,14 @@ pub mod real {
         date_from_proleptic(days as i64 + 1) // day 0 == 0001-01-01 in tiberius
     }
 
-    /// Convert a 1-based proleptic Gregorian day number to (year, month, day).
-    /// Uses the algorithm from https://howardhinnant.github.io/date_algorithms.html
+    /// Convert a 1-based proleptic Gregorian day number (Rata Die: day 1 =
+    /// 0001-01-01) to (year, month, day).
+    /// Uses the algorithm from https://howardhinnant.github.io/date_algorithms.html,
+    /// whose `civil_from_days(z)` expects `z` = days since 1970-01-01 (Unix epoch,
+    /// 0-based) — shift our Rata Die input into that frame first (1970-01-01 is
+    /// Rata Die 719_163) before applying Hinnant's own +719_468 internal shift.
     fn date_from_proleptic(d: i64) -> (i32, u8, u8) {
-        let z = d - 1 + 719_468;
+        let z = d - 719_163 + 719_468;
         let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
         let doe = z - era * 146_097;
         let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
@@ -362,9 +366,65 @@ pub mod real {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "sqlserver-backend")]
-    use super::real::marshal_column_data;
+    use super::real::{marshal_column_data, parse_conn_str};
     #[cfg(feature = "sqlserver-backend")]
     use tiberius::ColumnData;
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_defaults_host_and_port_when_unspecified() {
+        let config = parse_conn_str("user id=SA;password=SfTest123!").unwrap();
+        assert_eq!(config.get_addr(), "localhost:1433");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_parses_server_host_and_port() {
+        let config = parse_conn_str("server=tcp:myhost,5555;user id=SA;password=x").unwrap();
+        assert_eq!(config.get_addr(), "myhost:5555");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_defaults_port_when_server_has_no_port() {
+        let config = parse_conn_str("server=tcp:myhost;user id=SA;password=x").unwrap();
+        assert_eq!(config.get_addr(), "myhost:1433");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_accepts_data_source_as_a_server_alias() {
+        let config = parse_conn_str("data source=tcp:otherhost,7777").unwrap();
+        assert_eq!(config.get_addr(), "otherhost:7777");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_keys_are_case_insensitive() {
+        let config = parse_conn_str("SERVER=tcp:myhost,123;USER ID=sa;PASSWORD=x").unwrap();
+        assert_eq!(config.get_addr(), "myhost:123");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_falls_back_to_default_port_on_non_numeric_port() {
+        let config = parse_conn_str("server=tcp:myhost,notaport").unwrap();
+        assert_eq!(config.get_addr(), "myhost:1433");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_tolerates_blank_segments_and_whitespace() {
+        let config = parse_conn_str("  ; server = tcp:myhost,42 ; ; password = x ; ").unwrap();
+        assert_eq!(config.get_addr(), "myhost:42");
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn parse_conn_str_ignores_unknown_keys() {
+        let config = parse_conn_str("server=tcp:myhost,42;some_unknown_key=whatever").unwrap();
+        assert_eq!(config.get_addr(), "myhost:42");
+    }
 
     #[cfg(feature = "sqlserver-backend")]
     #[test]
@@ -416,6 +476,109 @@ mod tests {
             marshal_column_data(Some(&ColumnData::Binary(Some(vec![0xAB_u8, 0xCD].into()))))
                 .unwrap(),
             Some("ABCD".to_owned())
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_numeric() {
+        use tiberius::numeric::Numeric;
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::Numeric(Some(Numeric::new_with_scale(
+                12345, 2
+            )))))
+            .unwrap(),
+            Some("123.45".to_owned())
+        );
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::Numeric(None))).unwrap(),
+            None
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_xml_is_unsupported() {
+        let err = marshal_column_data(Some(&ColumnData::Xml(None))).unwrap_err();
+        assert!(matches!(err, crate::error::Error::Unsupported(_)));
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_datetimeoffset_is_unsupported() {
+        let err = marshal_column_data(Some(&ColumnData::DateTimeOffset(None))).unwrap_err();
+        assert!(matches!(err, crate::error::Error::Unsupported(_)));
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_date_at_year_one_epoch() {
+        use tiberius::time::Date;
+        // tiberius Date day 0 == 0001-01-01 (see date_from_days_year1's own doc).
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::Date(Some(Date::new(0))))).unwrap(),
+            Some("0001-01-01".to_owned())
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_time_with_whole_seconds() {
+        use tiberius::time::Time;
+        // scale 0 => 1 increment == 1 second (10^(9-0) ns per increment).
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::Time(Some(Time::new(3661, 0))))).unwrap(),
+            Some("01:01:01".to_owned())
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_time_with_fractional_seconds() {
+        use tiberius::time::Time;
+        // scale 7 => 100ns per increment; 15_000_000 * 100ns = 1.5s.
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::Time(Some(Time::new(15_000_000, 7))))).unwrap(),
+            Some("00:00:01.500000000".to_owned())
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_datetime_at_1900_epoch() {
+        use tiberius::time::DateTime;
+        // tiberius DateTime day 0 == 1900-01-01 (see date_from_days_1900's own doc).
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::DateTime(Some(DateTime::new(0, 0))))).unwrap(),
+            Some("1900-01-01T00:00:00".to_owned())
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_small_datetime_rounds_to_the_minute() {
+        use tiberius::time::SmallDateTime;
+        // seconds_fragments for SmallDateTime are whole minutes: 61 == 1h01m.
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::SmallDateTime(Some(SmallDateTime::new(
+                0, 61
+            )))))
+            .unwrap(),
+            Some("1900-01-01T01:01:00".to_owned())
+        );
+    }
+
+    #[cfg(feature = "sqlserver-backend")]
+    #[test]
+    fn marshal_datetime2_combines_date_and_time() {
+        use tiberius::time::{Date, DateTime2, Time};
+        assert_eq!(
+            marshal_column_data(Some(&ColumnData::DateTime2(Some(DateTime2::new(
+                Date::new(0),
+                Time::new(3661, 0)
+            )))))
+            .unwrap(),
+            Some("0001-01-01T01:01:01".to_owned())
         );
     }
 }

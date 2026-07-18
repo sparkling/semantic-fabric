@@ -40,6 +40,32 @@ use sf_sql::TableSchema;
 
 use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, Scan, SqlCond, TermDef};
 
+/// `table name -> TableSchema` — built ONCE per [`run`] call ([`build_schema_map`])
+/// and threaded to every constraint-driven pass below, so a pass's schema lookup is
+/// an O(log n) binary search instead of an O(n) `schema.iter().find(...)` linear
+/// scan repeated at every one of its call sites (some inside per-branch or
+/// per-round loops — ADR-0024/M4 perf). A SORTED `Vec`, not a `HashMap`: a
+/// mapping's schema is typically a handful of tables, small enough that a
+/// `HashMap`'s constant-factor overhead (table allocation, `SipHash`) measurably
+/// LOST to the plain linear scan in a criterion bench (the same finding as
+/// `exec_core::ColIndex`) — a sorted `Vec` avoids both the allocation and the
+/// hashing while still beating an O(n) scan at the largest mappings.
+type SchemaMap<'a> = Vec<(&'a str, &'a TableSchema)>;
+
+/// Build a [`SchemaMap`] over `schema` (see its doc comment).
+fn build_schema_map(schema: &[TableSchema]) -> SchemaMap<'_> {
+    let mut map: SchemaMap<'_> = schema.iter().map(|t| (t.name.as_str(), t)).collect();
+    map.sort_unstable_by_key(|&(name, _)| name);
+    map
+}
+
+/// Look up a table by name in a [`SchemaMap`] via binary search.
+fn schema_map_get<'a>(map: &SchemaMap<'a>, name: &str) -> Option<&'a TableSchema> {
+    map.binary_search_by_key(&name, |&(n, _)| n)
+        .ok()
+        .map(|pos| map[pos].1)
+}
+
 mod fd;
 mod joinelim;
 mod sameterm;
@@ -77,6 +103,7 @@ pub struct CascadeCtx<'a> {
 /// `ctx` and, for the single-branch case, records its DISTINCT decision on the
 /// returned branch's [`Branch::distinct`] flag.
 pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> Vec<Branch> {
+    let schema_map: SchemaMap = build_schema_map(schema);
     let mut out: Vec<Branch> = branches
         .into_iter()
         .filter_map(|mut b| {
@@ -104,8 +131,8 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
                 return Some(b);
             }
             if b.agg.is_some() {
-                self_join_elimination(&mut b, schema);
-                nullable_unique_self_join_elimination(&mut b, schema);
+                self_join_elimination(&mut b, &schema_map);
+                nullable_unique_self_join_elimination(&mut b, &schema_map);
                 return Some(b);
             }
             // A branch carrying LEFT-JOINed / INNER-JOINed SubPlan derived tables
@@ -142,23 +169,23 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
                 // re-derives its right side from scratch and can leave a redundant
                 // same-table self-join the outer branch's own self-join elimination
                 // already collapsed).
-                self_join_elimination_in_subqueries(&mut b.where_conds, schema);
+                self_join_elimination_in_subqueries(&mut b.where_conds, &schema_map);
                 return Some(b);
             }
-            tier0_eliminate(&mut b, schema); // 0
+            tier0_eliminate(&mut b, &schema_map); // 0
             if !prune_iri_template_mismatch(&b) {
                 return None; // 1 — unsatisfiable branch
             }
-            self_join_elimination(&mut b, schema); // 2a (inner-join variant — unique key)
-            nullable_unique_self_join_elimination(&mut b, schema); // 2a-ext (nullable unique + IS NOT NULL)
+            self_join_elimination(&mut b, &schema_map); // 2a (inner-join variant — unique key)
+            nullable_unique_self_join_elimination(&mut b, &schema_map); // 2a-ext (nullable unique + IS NOT NULL)
             if !prune_iri_template_mismatch(&b) {
                 return None; // 1b — contradiction exposed after merge
             }
             joinelim::lj_to_ij_fk_downgrade(&mut b, schema); // 2b-pre — LJ→IJ FK guarantee
-            self_left_join_elimination(&mut b, schema); // 2b (left-join variant — Q5)
+            self_left_join_elimination(&mut b, &schema_map); // 2b (left-join variant — Q5)
             sameterm::same_terms_elimination(&mut b, ctx); // 2c (same terms under DISTINCT — ADR-0022)
             distinct_prune_unused_opts(&mut b, ctx); // 2d — DISTINCT-driven prune of unused OPTIONAL right
-            fd_self_join_elimination(&mut b, schema, ctx); // 2e — FD-driven self-join elim under DISTINCT
+            fd_self_join_elimination(&mut b, &schema_map, ctx); // 2e — FD-driven self-join elim under DISTINCT
             let fds = fd::infer_functional_dependencies(&b, schema); // 3
             joinelim::fk_pk_join_elimination(&mut b, schema, &fds); // 4
             selection_pushdown(&mut b); // 5
@@ -191,7 +218,7 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
         // skipping only the *removal* keeps that DISTINCT in place (a correct, merely
         // un-optimized plan).
         if out[0].subplan_joins.is_empty() {
-            distinct_removal(&mut out[0], schema, ctx.project);
+            distinct_removal(&mut out[0], &schema_map, ctx.project);
         }
     }
     // Projection shrinking: drop bindings not in the project list (pass 7).
@@ -224,7 +251,7 @@ fn branch_has_not_exists(b: &Branch) -> bool {
 /// during unfold (the parent subject is built from the child row); the
 /// parent==child PK self-join collapse is handled by pass (2). Kept as an
 /// explicit, documented stage so the pipeline shape matches the ADR.
-fn tier0_eliminate(_b: &mut Branch, _schema: &[TableSchema]) {}
+fn tier0_eliminate(_b: &mut Branch, _schema: &SchemaMap) {}
 
 // --- 1. IRI-template-mismatch pruning -------------------------------------
 
@@ -288,7 +315,7 @@ fn prune_iri_template_mismatch(b: &Branch) -> bool {
 /// is NOT NULL** (ADR-0007: a nullable unique column is *not* a true key — the
 /// `NULL = NULL ⇒ UNKNOWN` join already excludes its NULL rows, so collapsing to a
 /// bare scan would re-admit them and break `=_bag`). Otherwise a no-op.
-fn self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
+fn self_join_elimination(b: &mut Branch, schema: &SchemaMap) {
     // Single-column unique-key self-join elimination.
     while let Some((keep, drop, cond_idx)) = find_self_join_in(&b.core, &b.where_conds, schema) {
         // Remove exactly the key equality that licenses *this* merge (by index,
@@ -323,7 +350,7 @@ fn self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
 fn self_join_elimination_in_subquery(
     scans: &mut Vec<Scan>,
     conds: &mut Vec<SqlCond>,
-    schema: &[TableSchema],
+    schema: &SchemaMap,
 ) {
     let fix_alias = |from: usize, to: usize| {
         move |c: &mut ColRef| {
@@ -358,7 +385,7 @@ fn self_join_elimination_in_subquery(
 /// apply [`self_join_elimination_in_subquery`] to each one found — including,
 /// defensively, any subquery NESTED inside another (the current lowering never
 /// nests `NOT EXISTS`, but this must not silently skip one if it ever does).
-fn self_join_elimination_in_subqueries(conds: &mut [SqlCond], schema: &[TableSchema]) {
+fn self_join_elimination_in_subqueries(conds: &mut [SqlCond], schema: &SchemaMap) {
     for cond in conds.iter_mut() {
         match cond {
             SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
@@ -383,7 +410,7 @@ fn self_join_elimination_in_subqueries(conds: &mut [SqlCond], schema: &[TableSch
 fn find_self_join_in(
     scans: &[Scan],
     conds: &[SqlCond],
-    schema: &[TableSchema],
+    schema: &SchemaMap,
 ) -> Option<(usize, usize, usize)> {
     for (idx, cond) in conds.iter().enumerate() {
         let SqlCond::ColEq(a, c) = cond else { continue };
@@ -399,7 +426,7 @@ fn find_self_join_in(
         if ta != tc {
             continue;
         }
-        if let Some(t) = schema.iter().find(|t| t.name == ta) {
+        if let Some(t) = schema_map_get(schema, ta.as_str()) {
             if t.is_unique_key(&a.column) && key_is_non_null(t, &a.column) {
                 // Keep the lower alias, drop the higher.
                 let (keep, drop) = if a.alias < c.alias {
@@ -423,14 +450,14 @@ fn find_self_join_in(
 fn find_composite_pk_self_join_in(
     scans: &[Scan],
     conds: &[SqlCond],
-    schema: &[TableSchema],
+    schema: &SchemaMap,
 ) -> Option<(usize, usize, Vec<usize>)> {
     for i in 0..scans.len() {
         let LogicalSource::Table(ti) = &scans[i].source else {
             continue;
         };
         let ai = scans[i].alias;
-        let Some(ts) = schema.iter().find(|t| &t.name == ti) else {
+        let Some(ts) = schema_map_get(schema, ti.as_str()) else {
             continue;
         };
         if ts.primary_key.len() < 2 {
@@ -489,7 +516,7 @@ fn find_composite_pk_self_join_in(
 /// preserves multiplicities and every binding value. A nullable unique determinant
 /// is *not* a true key (the null-safe `ON` would admit NULL rows the bare scan
 /// re-reads differently → `=_bag` break), so the pass refuses (ADR-0007).
-fn self_left_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
+fn self_left_join_elimination(b: &mut Branch, schema: &SchemaMap) {
     while let Some((keep, opt_alias, opt_idx)) = find_self_left_join(b, schema) {
         // The ON lived on the OptJoin, never in `where_conds`; remove the whole
         // OptJoin, then rebind every reference to the optional scan onto the kept
@@ -510,7 +537,7 @@ fn self_left_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
 /// (col = Y, X ≠ Y) is therefore impossible — the OPTIONAL never matches and
 /// all right-side variables are always NULL. Sound to drop the OptJoin and
 /// remove bindings that exclusively reference the vanished alias.
-fn lj_contradiction_elim(b: &mut Branch, schema: &[TableSchema]) {
+fn lj_contradiction_elim(b: &mut Branch, schema: &SchemaMap) {
     let mut i = 0;
     while i < b.opts.len() {
         if opt_has_pk_contradiction(b, i, schema) {
@@ -531,7 +558,7 @@ fn lj_contradiction_elim(b: &mut Branch, schema: &[TableSchema]) {
 /// Returns `true` when the OptJoin at `opt_idx` is a PK-keyed self-LEFT-JOIN
 /// whose extra conditions contain a constant that contradicts a core WHERE
 /// constant on the same column (same physical cell, impossible value).
-fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &[TableSchema]) -> bool {
+fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &SchemaMap) -> bool {
     let opt = &b.opts[opt_idx];
     let LogicalSource::Table(opt_table) = &opt.scan.source else {
         return false;
@@ -559,7 +586,7 @@ fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &[TableSchema]) 
         return false;
     }
     // The shared key must be a NON-NULL unique key (ensures same-row identity).
-    let Some(ts) = schema.iter().find(|t| &t.name == opt_table) else {
+    let Some(ts) = schema_map_get(schema, opt_table.as_str()) else {
         return false;
     };
     if !ts.is_unique_key(&keep.column) || !key_is_non_null(ts, &keep.column) {
@@ -591,7 +618,7 @@ fn opt_has_pk_contradiction(b: &Branch, opt_idx: usize, schema: &[TableSchema]) 
 /// sides, one side the kept scan and the other the optional scan); that column is a
 /// NON-NULL single-column unique key; and `extra` is empty (a FILTER inside the
 /// OPTIONAL makes the match conditional → not always-matching → not eliminable).
-fn find_self_left_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, usize)> {
+fn find_self_left_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, usize)> {
     for (idx, opt) in b.opts.iter().enumerate() {
         let opt_alias = opt.scan.alias;
         // A FILTER inside the OPTIONAL can make the match conditional → keep it.
@@ -631,7 +658,7 @@ fn find_self_left_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usi
             continue;
         }
         // The shared column must be a NON-NULL single-column unique key.
-        if let Some(t) = schema.iter().find(|t| &t.name == opt_table) {
+        if let Some(t) = schema_map_get(schema, opt_table.as_str()) {
             if t.is_unique_key(&keep.column) && key_is_non_null(t, &keep.column) {
                 return Some((keep.alias, opt_alias, idx));
             }
@@ -817,7 +844,7 @@ fn distinct_prune_unused_opts(b: &mut Branch, ctx: &CascadeCtx) {
 /// equi-join on a nullable `C` excludes NULL rows (`NULL = NULL ⇒ UNKNOWN`). After
 /// merging to a single scan, NULL rows would be re-admitted, breaking `=_bag`. A
 /// synthetic `IS NOT NULL(C)` guard on the kept alias restores the exclusion.
-fn fd_self_join_elimination(b: &mut Branch, schema: &[TableSchema], ctx: &CascadeCtx) {
+fn fd_self_join_elimination(b: &mut Branch, schema: &SchemaMap, ctx: &CascadeCtx) {
     if !ctx.distinct {
         return;
     }
@@ -833,7 +860,7 @@ fn fd_self_join_elimination(b: &mut Branch, schema: &[TableSchema], ctx: &Cascad
         // 1c: if the determinant is nullable, the equi-join excluded NULL rows.
         // Synthesise IS NOT NULL to preserve that exclusion after the merge.
         let is_nullable = scan_table(b, keep)
-            .and_then(|tbl| schema.iter().find(|t| t.name == tbl))
+            .and_then(|tbl| schema_map_get(schema, tbl.as_str()))
             .is_some_and(|ts| !key_is_non_null(ts, &det_col));
 
         b.where_conds.remove(cond_idx);
@@ -880,7 +907,7 @@ fn fd_self_join_elimination(b: &mut Branch, schema: &[TableSchema], ctx: &Cascad
 ///    different rows could have the same `NULL` det but different dep values.
 /// 5. The schema declares `det_col` as a non-unique FD determinant (`det_col → dep`),
 ///    and ALL bindings that reference the opt scan use only columns in `{det_col} ∪ dep`.
-fn find_fd_self_left_join(b: &Branch, schema: &[TableSchema], opt_idx: usize) -> Option<usize> {
+fn find_fd_self_left_join(b: &Branch, schema: &SchemaMap, opt_idx: usize) -> Option<usize> {
     let opt = &b.opts[opt_idx];
     let opt_alias = opt.scan.alias;
 
@@ -917,7 +944,7 @@ fn find_fd_self_left_join(b: &Branch, schema: &[TableSchema], opt_idx: usize) ->
     }
 
     // Precondition 4: det_col must be NOT NULL (FDs only constrain non-NULL rows).
-    let ts = schema.iter().find(|t| &t.name == opt_table)?;
+    let ts = schema_map_get(schema, opt_table.as_str())?;
     if !key_is_non_null(ts, det_col) {
         return None;
     }
@@ -947,7 +974,7 @@ fn find_fd_self_left_join(b: &Branch, schema: &[TableSchema], opt_idx: usize) ->
     }
 }
 
-fn find_fd_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize, usize)> {
+fn find_fd_self_join(b: &Branch, schema: &SchemaMap) -> Option<(usize, usize, usize)> {
     for i in 0..b.core.len() {
         for j in (i + 1)..b.core.len() {
             let (alias_i, alias_j) = (b.core[i].alias, b.core[j].alias);
@@ -959,7 +986,7 @@ fn find_fd_self_join(b: &Branch, schema: &[TableSchema]) -> Option<(usize, usize
             if tbl_i != tbl_j {
                 continue;
             }
-            let ts = schema.iter().find(|s| &s.name == tbl_i)?;
+            let ts = schema_map_get(schema, tbl_i.as_str())?;
             // Require exactly one ColEq joining the two scans on the SAME column name.
             let Some((cond_idx, det_col)) =
                 b.where_conds.iter().enumerate().find_map(|(idx, c)| {
@@ -1110,7 +1137,7 @@ pub(crate) fn binding_is_injective(def: &TermDef) -> bool {
 /// tuples — the DISTINCT removes nothing. `project == None` ⇒ every binding is
 /// projected (`SELECT *` / CONSTRUCT). Any join/OPTIONAL ⇒ a non-key projection
 /// could hide duplicates ⇒ no-op.
-fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[String]>) {
+fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String]>) {
     if !b.distinct || b.core.is_empty() || !b.opts.is_empty() {
         return;
     }
@@ -1120,7 +1147,7 @@ fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[St
         let LogicalSource::Table(table) = &scan.source else {
             return;
         };
-        let Some(ts) = schema.iter().find(|t| &t.name == table) else {
+        let Some(ts) = schema_map_get(schema, table.as_str()) else {
             return;
         };
         // Only a NOT-NULL single-column key proves DISTINCT redundant: a nullable
@@ -1185,7 +1212,7 @@ fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[St
             let LogicalSource::Table(table) = &scan.source else {
                 return false;
             };
-            let Some(ts) = schema.iter().find(|t| &t.name == table) else {
+            let Some(ts) = schema_map_get(schema, table.as_str()) else {
                 return false;
             };
             !ts.primary_key.is_empty()
@@ -1212,7 +1239,7 @@ fn distinct_removal(b: &mut Branch, schema: &[TableSchema], project: Option<&[St
 /// already produces a 1:1 match. After merge, an explicit `IS NOT NULL(col)` filter
 /// replicates the NULL-exclusion the equi-join enforced implicitly. Loops to fixpoint
 /// to handle chains of same-table scans. `=_bag`-safe by the same argument.
-fn nullable_unique_self_join_elimination(b: &mut Branch, schema: &[TableSchema]) {
+fn nullable_unique_self_join_elimination(b: &mut Branch, schema: &SchemaMap) {
     while let Some((keep, drop, cond_idx, not_null_col)) = find_nullable_unique_self_join(b, schema)
     {
         b.where_conds.remove(cond_idx);
@@ -1232,7 +1259,7 @@ fn nullable_unique_self_join_elimination(b: &mut Branch, schema: &[TableSchema])
 /// two core scans of the same table with a `ColEq` on a UNIQUE but nullable column.
 fn find_nullable_unique_self_join(
     b: &Branch,
-    schema: &[TableSchema],
+    schema: &SchemaMap,
 ) -> Option<(usize, usize, usize, ColRef)> {
     for (idx, cond) in b.where_conds.iter().enumerate() {
         let SqlCond::ColEq(a, c) = cond else { continue };
@@ -1248,7 +1275,7 @@ fn find_nullable_unique_self_join(
         if ta != tc {
             continue;
         }
-        if let Some(t) = schema.iter().find(|t| t.name == ta) {
+        if let Some(t) = schema_map_get(schema, ta.as_str()) {
             // Unique but NOT non-null: pass (2) already handles the non-null case.
             if t.is_unique_key(&a.column) && !key_is_non_null(t, &a.column) {
                 let (keep, drop) = if a.alias < c.alias {
