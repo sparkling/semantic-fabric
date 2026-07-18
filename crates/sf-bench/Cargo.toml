@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "constant_memory"
 harness = false
+
+[[bench]]
+name = "micro_hotpaths"
+harness = false

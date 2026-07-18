@@ -97,13 +97,19 @@ pub fn infer_functional_dependencies(b: &Branch, schema: &[TableSchema]) -> Fds 
     // Closure to a fixpoint.
     loop {
         let mut changed = false;
+        // Propagate column-level FDs through equality: if det→dep and ColEq(det, x),
+        // then x→dep; and if dep→x and ColEq(det, dep), then det→x. Snapshot
+        // col_deps ONCE per ROUND (not once per condition, ADR-0024/M4 perf) — a
+        // condition later in this same round that would have seen an earlier
+        // condition's additions instead picks them up on the NEXT round; the
+        // fixpoint loop already runs until nothing changes, so the FINAL `fds` is
+        // identical, only the round count can grow (mirrors the `deps` snapshot
+        // below, which was already round-scoped).
+        let col_snapshot: Vec<(ColRef, ColRef)> = fds.col_deps.clone();
         for cond in &b.where_conds {
             if let SqlCond::ColEq(a, c) = cond {
                 changed |= propagate_eq(&mut fds, a, c);
                 changed |= propagate_eq(&mut fds, c, a);
-                // Propagate column-level FDs through equality: if det→dep and ColEq(det, x),
-                // then x→dep; and if dep→x and ColEq(det, dep), then det→x.
-                let col_snapshot: Vec<(ColRef, ColRef)> = fds.col_deps.clone();
                 for (det, dep) in &col_snapshot {
                     if det == a {
                         changed |= fds.add_col_dep(c.clone(), dep.clone());
