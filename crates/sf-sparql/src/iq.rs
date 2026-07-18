@@ -101,6 +101,21 @@ pub enum TermDef {
         operand: Option<ColRef>,
         fixed_type: Option<XsdTypeCode>,
     },
+    /// **ADR-0032 D2** — a native RDF 1.2 triple term (`<<( s p o )>>`), realized
+    /// at reconstruction by recursively building `subject`/`predicate`/`object`
+    /// and composing them via `oxrdf::Triple::from_terms` (`exec_core::build_term`).
+    /// This is the ONLY route by which this engine ever produces a `Term::Triple`
+    /// — deliberately bypassing `sf_core::term::generate` (its `GenTerm` has no
+    /// triple arm by design, ADR-0006 zero-alloc). `object` recurses for object-side
+    /// nesting (arbitrary depth) for free. Every downstream consumer that matches
+    /// exhaustively on `TermDef` (unify/leftjoin/cascade) treats this the same way
+    /// it treats `Coalesce`/`Concat` — a multi-source constructed term, not
+    /// reducible to a single raw column.
+    ComposedTriple {
+        subject: Box<TermDef>,
+        predicate: Box<TermDef>,
+        object: Box<TermDef>,
+    },
 }
 
 impl TermDef {
@@ -128,6 +143,16 @@ impl TermDef {
                 cols
             }
             TermDef::Agg { col, .. } => vec![col.clone()],
+            TermDef::ComposedTriple {
+                subject,
+                predicate,
+                object,
+            } => {
+                let mut cols = subject.columns();
+                cols.extend(predicate.columns());
+                cols.extend(object.columns());
+                cols
+            }
         }
     }
 }

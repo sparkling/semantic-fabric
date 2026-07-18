@@ -48,6 +48,19 @@ live regression check. Three implementation findings recorded:
   question about duplicate-emitting mappings**, not introduced here —
   recorded for a dedicated oracle comparison.
 
+## Superseded in part (2026-07-18, same day — ADR-0032)
+
+`ADR-0032` (accepted, implemented) supersedes this ADR's **R2** (reifies
+*elision*) and **R5** (identity binds a synthetic IRI, never a native triple
+term), and lifts most of its v1 boundaries: the rewrite now **keeps** the
+`rdf:reifies` triple (matching the role-split emission), projected reification
+variables bind **native `Term::Triple`** values, object-side nesting / VALUES /
+the five functions / CONSTRUCT production are implemented, and subject-position
+triple-term patterns return the spec-mandated **empty** instead of matching the
+encoding. The algebra-level pre-pass architecture (R1, R3), the fresh-variable
+discipline, and the CBD-precedent placement all stand. Read this ADR as the v1
+historical design; `ADR-0032` D3 is the current query semantics.
+
 ## Context and Problem Statement
 
 `ADR-0029` (accepted, implemented) compiles `rml:StarMap` mappings to the W3C

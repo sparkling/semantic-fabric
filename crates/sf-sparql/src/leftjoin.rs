@@ -446,6 +446,20 @@ pub(crate) fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bo
         TermDef::Concat(parts) => parts.iter().any(|p| def_is_nullable(p, opt_aliases)),
         // An aggregate result is produced post-grouping, never under an OPTIONAL.
         TermDef::Agg { .. } => false,
+        // ADR-0032 D2: forced arm (new `TermDef` variant) — not actually reachable
+        // here in practice (a `ComposedTriple` binding is only installed by `lib.rs`'s
+        // env-composed projection override, AFTER every OPTIONAL is already built),
+        // but recurses through its three components for the same reason `Coalesce`/
+        // `Concat` do, should that ever change.
+        TermDef::ComposedTriple {
+            subject,
+            predicate,
+            object,
+        } => {
+            def_is_nullable(subject, opt_aliases)
+                || def_is_nullable(predicate, opt_aliases)
+                || def_is_nullable(object, opt_aliases)
+        }
     }
 }
 

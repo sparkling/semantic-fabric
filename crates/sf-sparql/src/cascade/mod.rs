@@ -754,6 +754,19 @@ pub(super) fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
                 col.alias = to;
             }
         }
+        // ADR-0032 D2: forced arm (new `TermDef` variant) — recurses like
+        // `Coalesce`/`Concat`. Not reachable in practice (see `unify::unify`'s
+        // identical note): a `ComposedTriple` binding is installed only by
+        // `lib.rs`'s env-composed projection override, after this cascade pass runs.
+        TermDef::ComposedTriple {
+            subject,
+            predicate,
+            object,
+        } => {
+            rewrite_def_alias(subject, from, to);
+            rewrite_def_alias(predicate, from, to);
+            rewrite_def_alias(object, from, to);
+        }
     }
 }
 

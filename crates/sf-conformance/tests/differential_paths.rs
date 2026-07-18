@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use sf_conformance::graph::parse_turtle;
 use sf_conformance::oracle::{self, OracleAnswer};
 use sf_conformance::sqlite;
-use sf_sparql::{exec, translate_with, Tbox};
+use sf_sparql::{exec, translate_with, translate_with_flat, Tbox};
 use sf_sql::Dialect;
 use spargebra::SparqlParser;
 use std::collections::BTreeMap;
@@ -340,5 +340,131 @@ fn deferred_path_shapes_return_501() {
     assert_deferred(
         A_R2RML,
         "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { ?s (!ex:p)|ex:q ?o }",
+    );
+}
+
+// --- D6 non-star path-endpoint join boundary pin (ADR-0032 D6 item 4): the
+// GENERAL "no join onto any path branch" restriction, with NO star pattern
+// anywhere, pinned precisely so a future change to `align_templates` or the
+// tree/flat join machinery cannot silently shift this boundary unnoticed —
+// exactly the boundary `differential_star.rs`'s own
+// `star_pattern_at_property_path_endpoint_flat_501s_tree_proves_empty_a_known_divergence`
+// found the TREE path escaping (via literal-prefix disjointness) for a STAR
+// shape; this fixture asks the SAME structural question with an ORDINARY
+// `rr:class`-derived `rdf:type` fact instead of a star pattern, to isolate
+// whether that escape is star-specific or a general consequence of the W2b
+// lift. `#Cls` is a SEPARATE, small triples map (not `rr:class` piggybacked
+// on `#Q`'s own subjectMap) so the `rdf:type ex:C` fact genuinely
+// DISCRIMINATES (only `http://ex/n/1` carries it) rather than trivially
+// holding for every `?id` — proving the join actually filters, not merely
+// that it is accepted. ---
+
+const PJ_SQL: &str = r#"
+CREATE TABLE pj_q (qs INTEGER NOT NULL, qo INTEGER NOT NULL);
+CREATE TABLE pj_r (rs INTEGER NOT NULL, ro INTEGER NOT NULL);
+CREATE TABLE pj_cls (id INTEGER NOT NULL);
+INSERT INTO pj_q VALUES (1, 2);
+INSERT INTO pj_q VALUES (2, 3);
+INSERT INTO pj_r VALUES (2, 20);
+INSERT INTO pj_r VALUES (3, 30);
+INSERT INTO pj_cls VALUES (1);
+"#;
+
+const PJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Q>
+    rr:logicalTable [ rr:tableName "pj_q" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{qs}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:q ; rr:objectMap [ rr:template "http://ex/n/{qo}" ] ] .
+<#R>
+    rr:logicalTable [ rr:tableName "pj_r" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{rs}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:r ; rr:objectMap [ rr:template "http://ex/n/{ro}" ] ] .
+<#Cls>
+    rr:logicalTable [ rr:tableName "pj_cls" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ; rr:class ex:C ] .
+"#;
+
+const PJ_SEQ_QUERY: &str =
+    "PREFIX ex: <http://ex/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+     SELECT ?id ?x WHERE { ?id ex:q/ex:r ?x . ?id rdf:type ex:C }";
+const PJ_PLUS_QUERY: &str =
+    "PREFIX ex: <http://ex/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+     SELECT ?id ?x WHERE { ?id ex:q+ ?x . ?id rdf:type ex:C }";
+
+/// The BARE-SEQUENCE variant (`?id ex:q/ex:r ?x . ?id rdf:type ex:C`) is
+/// **not actually a path-endpoint join at all**: spargebra lowers a bare
+/// top-level sequence to an ordinary BGP joined on a fresh blank-node
+/// variable (`?id ex:q ?_b . ?_b ex:r ?x .`, this file's own established
+/// finding, see the module doc above) — it never becomes a
+/// `GraphPattern::Path` node, so the "no join onto a path branch" boundary
+/// never triggers. Both engines translate and execute it as an ORDINARY
+/// 3-triple-pattern BGP; verified end to end (not just "doesn't 501") —
+/// `?id = n/2` also satisfies `ex:q/ex:r` (n/2→n/3→n/30) but is correctly
+/// EXCLUDED because only `n/1` carries `rdf:type ex:C`, proving the extra
+/// pattern genuinely filters rather than merely being accepted.
+#[test]
+fn bare_sequence_joined_with_class_pattern_is_an_ordinary_bgp_not_a_path_join() {
+    assert_eq!(
+        assert_differential(
+            PJ_SQL,
+            PJ_R2RML,
+            "@prefix ex: <http://ex/> . \
+             <http://ex/n/1> ex:q <http://ex/n/2> . <http://ex/n/2> ex:q <http://ex/n/3> . \
+             <http://ex/n/2> ex:r <http://ex/n/20> . <http://ex/n/3> ex:r <http://ex/n/30> . \
+             <http://ex/n/1> a ex:C .",
+            PJ_SEQ_QUERY
+        ),
+        1,
+        "only n/1 (rdf:type ex:C) survives the join; n/2's own ex:q/ex:r pair is filtered out"
+    );
+
+    // Same fixture, run directly (not through the oracle) to pin the EXACT
+    // surviving row, independent of `assert_differential`'s bag-count check.
+    let engine = engine_bag(PJ_SQL, PJ_R2RML, PJ_SEQ_QUERY);
+    assert_eq!(engine.len(), 1, "engine={engine:#?}");
+    assert_eq!(
+        engine[0]["id"].to_string(),
+        "<http://ex/n/1>",
+        "engine={engine:#?}"
+    );
+    assert_eq!(
+        engine[0]["x"].to_string(),
+        "<http://ex/n/20>",
+        "engine={engine:#?}"
+    );
+}
+
+/// The CLOSURE variant (`?id ex:q+ ?x . ?id rdf:type ex:C`) IS a genuine
+/// `GraphPattern::Path` node joined on its own subject endpoint — the actual
+/// general "no join onto any path branch" boundary
+/// (`unfold::merge`'s unconditional `left.path.is_some() ||
+/// right.path.is_some()` check on the flat side). Unlike the STAR case this
+/// file's sibling pins (where the quoted identity's `urn:sf-star:pf:...`
+/// template and the path predicate's OWN domain template are literal-prefix
+/// DISJOINT by construction, letting `align_templates` prove the join
+/// provably empty and so escape the restriction on the TREE side only), HERE
+/// `rdf:type ex:C`'s subject template (`http://ex/n/{id}`, from `#Cls`) and
+/// `ex:q`'s own domain template (`http://ex/n/{qs}`, from `#Q`) are the
+/// IDENTICAL shape — not disjoint — so no such escape is available: the W2b
+/// lift changes NOTHING here, and both engines 501 IDENTICALLY, exactly as
+/// D6 originally framed this as a pre-existing, star-independent boundary.
+#[test]
+fn closure_joined_with_class_pattern_hits_the_identical_general_boundary_on_both_engines() {
+    let maps = sf_mapping::parse_r2rml(PJ_R2RML).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(PJ_PLUS_QUERY)
+        .expect("query parses");
+    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
+    assert!(
+        matches!(flat, Err(sf_sparql::Error::Unsupported(_))),
+        "expected 501 on the flat path: {flat:?}"
+    );
+    assert!(
+        matches!(tree, Err(sf_sparql::Error::Unsupported(_))),
+        "expected 501 on the tree path TOO (no literal-prefix-disjointness escape available \
+         here — the class fact and the path's domain share the identical template): {tree:?}"
     );
 }

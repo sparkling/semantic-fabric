@@ -31,6 +31,22 @@ are all implemented and tested. Code: `crates/sf-mapping/src/r2rml.rs` +
 as the unwritten ADR-0031) — this ADR alone does not make RDF-star queries work
 end-to-end.
 
+## Superseded in part (2026-07-18, same day — ADR-0032)
+
+`ADR-0032` (accepted, implemented) supersedes this ADR's **§B** compiled shape
+and narrows two rules: the single synthetic identifier is replaced by
+**role-split id families** (proposition `urn:sf-star:pf:` — still the pure
+function of the quoted shape this ADR's R2 demands — plus per-declaration
+reifier `urn:sf-star:r:`), subject-position star maps now additionally emit the
+explicit `rdf:reifies` triple with the description on a standalone deduped map,
+**object-side nesting is supported** (recursive template composition — no SQL
+views needed, contrary to §D's assumption; subject-side stays rejected, now
+citing RDF 1.2 Concepts §3.1), and **cross-source quoted maps are supported**
+via `rr:joinCondition` on the star map. The vocabulary-reuse decision, the
+basic-encoding target (as the internal wire format), R2's determinism-by-
+construction invariant, and R4 all stand. Read `ADR-0032` D1 for the current
+emission.
+
 ## Context and Problem Statement
 
 `ADR-0028` is **accepted**. Its backlog item **#17** ("RDF-star via plain-RDF

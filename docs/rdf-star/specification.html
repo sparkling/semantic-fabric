@@ -79,7 +79,7 @@
     <dt>This version</dt><dd><code>docs/rdf-star/specification.html</code></dd>
     <dt>Status</dt><dd>Project Specification — Implemented (semantic-fabric <code>feat/rdf-star</code>)</dd>
     <dt>Latest update</dt><dd>2026-07-18</dd>
-    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query)</dd>
+    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification)</dd>
     <dt>Editorial model</dt><dd>Structured after the W3C <em>R2RML: RDB to RDF Mapping Language</em> Recommendation</dd>
   </dl>
 </header>
@@ -100,13 +100,21 @@
   <a href="https://www.w3.org/TR/r2rml/">R2RML</a> maps relational rows to RDF triples for
   virtual, non-materializing access (OBDA). RDF-star (RDF&nbsp;1.2) adds <em>quoted triples</em> —
   triples that are themselves the subject or object of other triples — enabling statements
-  <em>about</em> statements (provenance, certainty, temporal validity). This specification defines
-  <dfn>R2RML-star</dfn>: a minimal extension letting a mapping author declare that a triples map's
-  subject or object represents a quoted triple, and defining how a SPARQL-star query
-  <code>&lt;&lt;?s ?p ?o&gt;&gt;</code> is answered against relational data. The extension compiles
-  quoted triples to the W3C RDF&nbsp;1.2 Interoperability <em>basic encoding</em> — plain RDF
-  reachable by an ordinary SQL rewrite — rather than to a native triple term, because a virtualizing
-  SQL backend has no atomic triple-term value to store or scan.
+  <em>about</em> statements (provenance, certainty, temporal validity), expressed either as
+  <strong>reified triples</strong> (<code>&lt;&lt;s p o&gt;&gt;</code>, asking about the
+  <em>reifier</em> of a statement) or as bare <strong>triple terms</strong>
+  (<code>&lt;&lt;( s p o )&gt;&gt;</code>, the statement itself as a value). This specification
+  defines <dfn>R2RML-star</dfn>: an extension letting a mapping author declare that a triples map's
+  subject or object represents a quoted triple, and defining how SPARQL-star patterns — of either
+  kind — are answered against relational data. The virtualized graph is a <strong>native
+  RDF&nbsp;1.2 graph</strong>: reifiers, <code>rdf:reifies</code> triples and triple terms are real,
+  queryable, projectable RDF&nbsp;1.2 values at every surface a client sees — SELECT bindings,
+  CONSTRUCT output, serializations. Underneath, the extension compiles quoted triples to the W3C
+  RDF&nbsp;1.2 Interoperability <em>basic encoding</em> — plain RDF reachable by an ordinary SQL
+  rewrite — used purely as an <strong>internal wire format below the SQL line</strong>, because a
+  virtualizing SQL backend has no atomic triple-term value to store or scan. Soundness and
+  completeness are defined, and mechanically verified, as answer equivalence with a native
+  SPARQL&nbsp;1.2 evaluator run over the decoded graph (ADR-0032).
 </p>
 
 <div class="toc" role="doc-toc">
@@ -119,19 +127,25 @@
       <ol>
         <li><a href="#starmap-subject">Subject-position star maps</a></li>
         <li><a href="#starmap-object">Object-position star maps</a></li>
+        <li><a href="#starmap-reifiermap">Overriding the reifier: <code>rml:reifierMap</code></a></li>
       </ol>
     </li>
     <li><a href="#encoding">Compilation to the Basic Encoding</a>
       <ol>
-        <li><a href="#synthetic-id">The synthetic proposition identifier</a></li>
+        <li><a href="#synthetic-id">The two identifier families</a></li>
         <li><a href="#four-triples">The four basic-encoding triples</a></li>
+        <li><a href="#reifies-triple">The <code>rdf:reifies</code> triple</a></li>
       </ol>
     </li>
     <li><a href="#assertion">Asserted and Non-Asserted Triples Maps</a></li>
     <li><a href="#query">Query Semantics (SPARQL-star)</a>
       <ol>
-        <li><a href="#reifies">The <code>rdf:reifies</code> desugaring</a></li>
+        <li><a href="#matching-law">The matching law</a></li>
         <li><a href="#rewrite">The pattern rewrite</a></li>
+        <li><a href="#subject-empty">Subject-position patterns are statically empty</a></li>
+        <li><a href="#functions-values">Nesting, VALUES, and the five functions</a></li>
+        <li><a href="#equality-order">Equality and ORDER BY</a></li>
+        <li><a href="#native-results">Native results</a></li>
       </ol>
     </li>
     <li><a href="#scope">Scope and Restrictions</a></li>
@@ -157,23 +171,27 @@
   maps and what a SQL rewrite already reconstructs, so the extension is additive — it introduces no new
   execution machinery.
 </p>
-<div class="note"><span class="lbl">Note — why not native triple terms</span>
-  <a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> defines the basic
-  encoding precisely as the plain-RDF form a system without native triple-term storage can round-trip.
-  A survey of seven OBDA/virtualization engines and the 2023–2026 literature (ADR-0028 §G) found <em>no
-  prior art</em> for RDF-star over live SQL rewriting; the basic encoding is the only shape a
-  query-time SQL rewrite can reconstruct.
+<div class="note"><span class="lbl">Note — encoding is an implementation detail, not what you query</span>
+  A SQL row has no atomic triple-term value to store or scan, so <em>underneath</em> the engine
+  still represents each quoted triple as a synthetic identifier plus plain triples — the
+  <a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> <em>basic
+  encoding</em>, reachable by an ordinary SQL rewrite. But the engine <em>decodes</em> at every
+  query boundary (§<a href="#native-results">7.6</a>): a client never has to reason about the
+  encoding to get a correct answer, only to know it exists below the SQL line. A survey of seven
+  OBDA/virtualization engines and the 2023–2026 literature (ADR-0028 §G) found <em>no prior
+  art</em> for RDF-star over live SQL rewriting either way.
 </div>
 
 <h2 id="terminology"><span class="secno">2.</span>Terminology and Conformance</h2>
 <p>The key words <em>MUST</em>, <em>MUST NOT</em>, <em>SHOULD</em> and <em>MAY</em> are to be interpreted as in RFC&nbsp;2119.</p>
 <table>
   <tr><th>Term</th><th>Meaning</th></tr>
-  <tr><td><span class="term">quoted triple</span></td><td>An RDF-star triple appearing as the subject or object of another triple, written <code>&lt;&lt;s p o&gt;&gt;</code>.</td></tr>
+  <tr><td><span class="term">quoted triple</span></td><td>An RDF-star triple appearing as the subject or object of another triple, written <code>&lt;&lt;s p o&gt;&gt;</code> (reified) or <code>&lt;&lt;( s p o )&gt;&gt;</code> (a triple term) — see §7.1.</td></tr>
   <tr><td><span class="term">star map</span></td><td>A term map (§4) that generates the identity of a quoted triple instead of an ordinary term.</td></tr>
   <tr><td><span class="term">quoted triples map</span></td><td>The triples map whose (subject, predicate, object) is the quoted triple.</td></tr>
-  <tr><td><span class="term">proposition identifier</span></td><td>The synthetic IRI that stands in for a quoted triple in the basic encoding (§5.1).</td></tr>
-  <tr><td><span class="term">basic encoding</span></td><td>The plain-RDF reification of a quoted triple: <code>rdf:PropositionForm</code> + <code>rdf:propositionForm{Subject,Predicate,Object}</code> (§5.2).</td></tr>
+  <tr><td><span class="term">proposition identifier</span></td><td>The synthetic <code>urn:sf-star:pf:…</code> IRI that stands in, in the basic encoding, for a quoted triple's <strong>triple term</strong> — a pure function of its (s,p,o) shape (§5.1).</td></tr>
+  <tr><td><span class="term">reifier identifier</span></td><td>The synthetic <code>urn:sf-star:r:…</code> IRI that stands in, in the basic encoding, for the <strong>reifier</strong> of a subject-position quoted triple — one per star-map declaration (§5.1).</td></tr>
+  <tr><td><span class="term">basic encoding</span></td><td>The plain-RDF reification of a quoted triple: <code>rdf:PropositionForm</code> + <code>rdf:propositionForm{Subject,Predicate,Object}</code>, plus <code>rdf:reifies</code> where a reifier exists (§5).</td></tr>
 </table>
 <p>
   A <strong>conforming R2RML-star processor</strong> MUST compile every <code>rml:starMap</code> it
@@ -189,26 +207,42 @@
   <tr><td><code>rml:starMap</code></td><td>property</td><td>Attached to a subject or object map; its value is a star-map node declaring a quoted triple.</td></tr>
   <tr><td><code>rml:quotedTriplesMap</code></td><td>property</td><td>The quoted triples map, <em>asserted</em> (its plain triple is also produced — §6).</td></tr>
   <tr><td><code>rml:nonAssertedTriplesMap</code></td><td>property</td><td>The quoted triples map, <em>non-asserted</em> (its plain triple is suppressed — §6).</td></tr>
+  <tr><td><code>rml:reifierMap</code></td><td>property</td><td>A documented R2RML-star extension, <strong>subject-position star maps only</strong>: overrides the default deterministic reifier term map with an author-supplied one (§4.3).</td></tr>
 </table>
 <p>Compilation targets the RDF&nbsp;1.2 basic-encoding vocabulary (namespace <code>http://www.w3.org/1999/02/22-rdf-syntax-ns#</code>, prefix <code>rdf:</code>):</p>
 <table>
   <tr><th>IRI</th><th>Role</th></tr>
+  <tr><td><code>rdf:reifies</code></td><td>The RDF&nbsp;1.2 native reification predicate. <strong>Emitted directly by every subject-position star map</strong>, linking its reifier identifier to its proposition identifier (§4.1, §5.3); also the predicate every SPARQL-star reifying-triple sugar (bare, explicit-reifier, annotation) desugars to at query time (§7.1–§7.2).</td></tr>
   <tr><td><code>rdf:PropositionForm</code></td><td>The class of a proposition identifier.</td></tr>
-  <tr><td><code>rdf:propositionFormSubject</code></td><td>Links the identifier to the quoted triple's subject.</td></tr>
-  <tr><td><code>rdf:propositionFormPredicate</code></td><td>Links the identifier to the quoted triple's predicate.</td></tr>
-  <tr><td><code>rdf:propositionFormObject</code></td><td>Links the identifier to the quoted triple's object.</td></tr>
-  <tr><td><code>rdf:reifies</code></td><td>The RDF&nbsp;1.2 native reification predicate that SPARQL-star bare syntax desugars to at query time (§7.1).</td></tr>
+  <tr><td><code>rdf:propositionFormSubject</code></td><td>Links the proposition identifier to the quoted triple's subject.</td></tr>
+  <tr><td><code>rdf:propositionFormPredicate</code></td><td>Links the proposition identifier to the quoted triple's predicate.</td></tr>
+  <tr><td><code>rdf:propositionFormObject</code></td><td>Links the proposition identifier to the quoted triple's object — itself a nested proposition identifier when the quote is nested (§5.1).</td></tr>
 </table>
 
 <h2 id="starmaps"><span class="secno">4.</span>Star Maps</h2>
 <p>
   A star map is an <code>rml:starMap</code> node nested inside a subject map or an object map. Its
-  <code>rml:quotedTriplesMap</code> (or <code>rml:nonAssertedTriplesMap</code>) references the triples
-  map whose subject/predicate/object is the quoted triple.
+  <code>rml:quotedTriplesMap</code> (or <code>rml:nonAssertedTriplesMap</code>) references the
+  triples map whose subject/predicate/object is the quoted triple. Authoring syntax is identical
+  regardless of position; what differs is what the star map compiles to (§5).
 </p>
 
 <h3 id="starmap-subject"><span class="secno">4.1</span>Subject-position star maps</h3>
-<p>When the star map sits in the subject map, the enclosing triples map's subject <em>is</em> the quoted triple. The four basic-encoding triples are emitted onto that same triples map (they share its synthetic subject).</p>
+<p>
+  When the star map sits in the subject map, the enclosing triples map's subject is native
+  RDF&nbsp;1.2's <strong>reifier</strong> of the quoted triple, not the triple term itself
+  (Concepts §1.5: a reifier and the proposition it reifies are distinct). The processor emits, per
+  row:
+</p>
+<ul>
+  <li>the outer triples map's own predicate-object maps, now hanging off the <strong>reifier
+    identifier</strong> as their subject — this is where author annotations (like
+    <code>ex:assertedBy</code> below) land, exactly the native RDF&nbsp;1.2 annotation shape;</li>
+  <li>one injected <code>rid rdf:reifies pfid</code> predicate-object map, linking the reifier to
+    the proposition identifier (§5.3);</li>
+  <li>the four basic-encoding triples describing the proposition identifier (§5.2), on a
+    <em>standalone</em> triples map shared by every reference to the same quoted shape (§5.1).</li>
+</ul>
 <pre><code>&lt;#PersonAgeAssertion&gt;
     a rr:TriplesMap ;
     rr:logicalTable [ rr:tableName "census_row" ] ;
@@ -219,31 +253,105 @@
         rr:predicate ex:assertedBy ;
         rr:objectMap [ rr:constant ex:CensusRecord2026 ]
     ] .</code></pre>
+<p>This is the same mapping v1 authors already wrote; only its compiled shape changed — §10 walks both identifiers for this exact example.</p>
 
 <h3 id="starmap-object"><span class="secno">4.2</span>Object-position star maps</h3>
-<p>When the star map sits in an object map, the quoted triple is the object of the enclosing triple. Because the proposition identifier is the <em>object</em> here (not the enclosing subject), the four basic-encoding triples are emitted as a <em>separate</em> synthetic triples map keyed on that identifier.</p>
-<div class="note"><span class="lbl">Note</span> Both positions are supported. The mapping is identical in spirit; only where the four basic-encoding triples attach differs. A quoted triple MUST NOT appear in <em>predicate</em> position — see §8.</div>
+<p>
+  When the star map sits in an object map, the quoted triple is the <strong>object</strong> of the
+  enclosing triple — legal per RDF&nbsp;1.2 Concepts §3.1, and the only position a triple term may
+  occupy. The object is the proposition identifier directly; a reifier stands for an assertion
+  <em>about</em> a triple, and here the quoted triple is just a value the outer map's own
+  predicate-object map happens to point at — not a statement the outer map is making about it — so
+  there is nothing to reify (RDF&nbsp;1.2 Concepts §3.1): no <code>rdf:reifies</code> triple or
+  reifier identifier is minted. The four basic-encoding triples are emitted onto the same
+  standalone description map §4.1 uses for the identical shape — deduplicated, whichever position
+  reaches it first.
+</p>
+<div class="note"><span class="lbl">Note</span> Both positions are supported, including
+  arbitrarily deep <strong>nesting</strong> on the object side — a quoted triple whose own object
+  is itself a quoted triple (§5.1). Subject-side nesting and predicate-position quoting both stay
+  load-time errors — see §8, citing RDF&nbsp;1.2 Concepts §3.1.</div>
+
+<h3 id="starmap-reifiermap"><span class="secno">4.3</span>Overriding the reifier: <code>rml:reifierMap</code></h3>
+<p>
+  <span class="rule-id">R2</span> The default reifier identifier is deterministic and
+  compiler-derived, keyed on the declaring star map's own triples-map id (§5.1). A subject-position
+  star map MAY instead supply <code>rml:reifierMap</code> — an ordinary term map, constrained to
+  IRI or blank-node terms (RDF&nbsp;1.2 requires a reifier to be a non-literal) — to control the
+  reifier's own identity:
+</p>
+<pre><code>rr:subjectMap [
+    rml:starMap [
+        rml:quotedTriplesMap &lt;#PersonAge&gt; ;
+        rml:reifierMap [ rr:template "http://ex.org/reifier/{person_id}" ]
+    ]
+] .</code></pre>
+<p>
+  <code>rml:reifierMap</code> is rejected at load time on an object-position star map: object
+  position mints no reifier to override (§4.2).
+</p>
 
 <h2 id="encoding"><span class="secno">5.</span>Compilation to the Basic Encoding</h2>
 
-<h3 id="synthetic-id"><span class="secno">5.1</span>The synthetic proposition identifier</h3>
+<h3 id="synthetic-id"><span class="secno">5.1</span>The two identifier families</h3>
 <p>
-  <span class="rule-id">R2</span> The proposition identifier is <strong>compiler-derived, never author-supplied</strong>.
-  It is a deterministic IRI template of the form <code>urn:sf-star:&lt;predicate-slug&gt;:{cols…}</code>,
-  built from the quoted triple's predicate and the column references of its subject and object term
-  maps. Determinism is structural: the same underlying row always expands to the same identifier, so
-  the <em>one reification per quoted triple</em> invariant holds by construction rather than by author
-  discipline. A collision-safe delimiter is used, and no run-time hash function is required (keeping the
-  identifier backend-portable).
+  <span class="rule-id">R2</span> Two distinct, deterministic, <strong>compiler-derived, never
+  author-supplied</strong> (barring §4.3) IRI families realize RDF&nbsp;1.2's own split between a
+  proposition and its reifiers (Concepts §1.5, Semantics §5):
+</p>
+<table>
+  <tr><th>Family</th><th>Template shape</th><th>Keyed on</th><th>Stands in for</th></tr>
+  <tr><td><strong>Proposition id</strong></td><td><code>urn:sf-star:pf:&lt;predicate-slug&gt;|{s-cols…}|{o-cols…}|</code></td><td>The quoted (s,p,o) <em>shape</em></td><td>The triple term itself</td></tr>
+  <tr><td><strong>Reifier id</strong></td><td><code>urn:sf-star:r:&lt;declaring-map-slug&gt;|{cols…}|</code></td><td>The declaring star map, plus the same columns as the proposition id it reifies</td><td>One reifier of that proposition</td></tr>
+</table>
+<p>
+  A proposition id is a <strong>pure function of the quoted shape</strong>: every reference to the
+  same (s,p,o) shape — from anywhere in the mapping, subject position or object position — expands
+  to the identical identifier for the identical row, realizing Semantics §5's injective co-identity
+  mapping <code>IT(s,p,o)</code> structurally rather than by convention. A reifier id is instead
+  keyed on <strong>which star map declared it</strong>: two different subject-position star maps
+  quoting the same shape mint two <em>distinct</em> reifiers of the <em>one</em> (deduplicated)
+  proposition — Concepts §1.5's "there can be multiple, distinct reifiers related to the same
+  abstract proposition." Both families use structural determinism, not a run-time hash: the same
+  row always expands to the same string, so identifiers are backend-portable and reproducible
+  across independent runs.
+</p>
+<p>
+  <strong>Nesting.</strong> When a quoted triple's own object is itself a quoted triple (§4.2), the
+  outer proposition id splices the inner one's own template segments in verbatim, rather than
+  flattening to bare column names — so two different inner shapes that happen to reuse the same
+  leaf column names still cannot collide, at any nesting depth.
 </p>
 
 <h3 id="four-triples"><span class="secno">5.2</span>The four basic-encoding triples</h3>
-<p><span class="rule-id">R1</span> For a quoted triple <code>(s, p, o)</code> with proposition identifier <code>I</code>, the processor emits:</p>
-<pre><code>I  rdf:type                     rdf:PropositionForm .
-I  rdf:propositionFormSubject    s .
-I  rdf:propositionFormPredicate  p .
-I  rdf:propositionFormObject     o .</code></pre>
-<p>The subject <code>s</code>, predicate <code>p</code> and object <code>o</code> are copied verbatim from the quoted triples map's own term maps, so they generate exactly the terms they would in an ordinary mapping. No new SQL construction is introduced: these are ordinary predicate-object maps.</p>
+<p><span class="rule-id">R1</span> For a quoted triple <code>(s, p, o)</code> with proposition identifier <code>pfid</code>, the processor emits, onto a standalone triples map keyed on <code>pfid</code> (§4):</p>
+<pre><code>pfid  rdf:type                     rdf:PropositionForm .
+pfid  rdf:propositionFormSubject    s .
+pfid  rdf:propositionFormPredicate  p .
+pfid  rdf:propositionFormObject     o .</code></pre>
+<p>
+  The subject <code>s</code>, predicate <code>p</code> and object <code>o</code> are copied
+  verbatim from the quoted triples map's own term maps, so they generate exactly the terms they
+  would in an ordinary mapping — except where <code>o</code> is itself a nested quote (§4.2), in
+  which case it is that inner quote's own <code>pfid</code>. These triples are always keyed on the
+  <strong>proposition</strong> id, never the reifier id: a reifier reifies the proposition, it does
+  not have its own description. No new SQL construction is introduced beyond ordinary
+  predicate-object maps.
+</p>
+
+<h3 id="reifies-triple"><span class="secno">5.3</span>The <code>rdf:reifies</code> triple</h3>
+<p>
+  A subject-position star map (§4.1) additionally emits one predicate-object map onto the outer
+  triples map:
+</p>
+<pre><code>rid  rdf:reifies  pfid .</code></pre>
+<p>
+  where <code>rid</code> is the reifier identifier (§5.1, or an <code>rml:reifierMap</code>
+  override, §4.3) — now the outer triples map's own subject — and <code>pfid</code> is the
+  proposition identifier of the quoted shape. This triple is the native RDF&nbsp;1.2 reification
+  link (Concepts §1.5) and is what §7's query rewrite matches against; it is never emitted for an
+  object-position star map, which mints no reifier (§4.2).
+</p>
 
 <h2 id="assertion"><span class="secno">6.</span>Asserted and Non-Asserted Triples Maps</h2>
 <p>Whether the quoted triple is <em>also</em> a plain, independently-matchable triple is chosen by which property references the quoted triples map:</p>
@@ -256,50 +364,186 @@ I  rdf:propositionFormObject     o .</code></pre>
 
 <h2 id="query"><span class="secno">7.</span>Query Semantics (SPARQL-star)</h2>
 
-<h3 id="reifies"><span class="secno">7.1</span>The <code>rdf:reifies</code> desugaring</h3>
+<h3 id="matching-law"><span class="secno">7.1</span>The matching law</h3>
 <p>
-  A SPARQL-star parser conformant to RDF&nbsp;1.2 desugars the everyday <em>bare</em> syntax
-  <code>&lt;&lt;s p o&gt;&gt;</code> into a fresh blank node plus a triple
-  <code>_:b rdf:reifies &lt;&lt;( s p o )&gt;&gt;</code> — the RDF&nbsp;1.2 <em>native</em> reification
-  form. Since no relational mapping ever asserts <code>rdf:reifies</code>, a rewrite that merely
-  translated the quoted triple in place would leave an unmatchable <code>rdf:reifies</code> triple in
-  the pattern and <strong>every bare-syntax query would silently return zero rows</strong>. A conforming
-  processor MUST therefore recognize and <em>elide</em> the <code>rdf:reifies</code> wrapper.
+  <span class="rule-id">R3</span> SPARQL-star has two distinct node kinds wherever a quoted triple
+  appears, and they are <strong>never interchangeable</strong>:
+</p>
+<table>
+  <tr><th>Syntax</th><th>Node kind</th><th>Asks about</th></tr>
+  <tr><td><code>&lt;&lt; s p o &gt;&gt;</code> (bare)</td><td>ReifiedTriple</td><td>Reifiers — desugars to <code>_:b rdf:reifies &lt;&lt;( s p o )&gt;&gt;</code>, §7.2</td></tr>
+  <tr><td><code>&lt;&lt; s p o ~ r &gt;&gt;</code> (explicit reifier)</td><td>ReifiedTriple</td><td>Reifiers — same as bare, with <code>r</code> in place of the fresh blank node</td></tr>
+  <tr><td><code>s p o {| … |}</code> (annotation)</td><td>ReifiedTriple, plus the plain triple</td><td>Reifiers — <strong>and</strong> asserts <code>s p o</code> itself (the only sugar that does both)</td></tr>
+  <tr><td><code>&lt;&lt;( s p o )&gt;&gt;</code> (parenthesized)</td><td>TripleTerm</td><td>Triple terms — the statement as a value, in place</td></tr>
+</table>
+<p>
+  Bare and explicit-reifier sugar <strong>do not assert</strong> <code>s p o</code> and
+  <strong>do not match</strong> an unreified object-position triple term — they match only a
+  genuine <code>rdf:reifies</code> statement (§5.3, §7.2). Annotation sugar is the one spelling
+  that both asserts and reifies in one step, mirroring Turtle&nbsp;1.2's own data-side table
+  exactly. A query that writes <code>&lt;&lt; ?s ?p ?o &gt;&gt; ?p2 ?o2</code> is asking
+  <em>"who/what reifies this statement, and what do they say about it?"</em>; one that writes
+  <code>?x ?p2 &lt;&lt;( ?s ?p ?o )&gt;&gt;</code> is asking <em>"is this exact statement, as a
+  value, the object of some other triple?"</em> — different questions, different answers.
 </p>
 
 <h3 id="rewrite"><span class="secno">7.2</span>The pattern rewrite</h3>
-<p><span class="rule-id">R1</span> Quoted-triple patterns are rewritten to the basic encoding at the algebra level, before query planning, so no downstream stage encounters a quoted triple. For each quoted triple <code>&lt;&lt;s p o&gt;&gt;</code> the processor introduces a fresh identity variable <code>?id</code> and the four patterns:</p>
-<pre><code>?id  rdf:type                     rdf:PropositionForm .
-?id  rdf:propositionFormSubject    s .
-?id  rdf:propositionFormPredicate  p .
-?id  rdf:propositionFormObject     o .</code></pre>
+<p>Quoted-triple patterns are rewritten to the basic encoding at the algebra level, before query planning, so no downstream stage encounters a quoted triple.</p>
 <p>
-  <span class="rule-id">R2</span> The wrapper <code>X rdf:reifies &lt;&lt;( s p o )&gt;&gt;</code> is elided:
-  the <code>rdf:reifies</code> triple is dropped and the four patterns are bound on <code>X</code>
-  directly (where <code>X</code> may be a blank node the parser introduced, or an author variable).
-  <span class="rule-id">R5</span> An identity position always binds the synthetic proposition IRI —
-  v1 never fabricates a native triple term in results.
+  <strong>Reified-triple patterns</strong> — <code>X rdf:reifies TT</code>, whatever sugar produced
+  them — are rewritten with <strong>no elision</strong>: the <code>rdf:reifies</code> triple is
+  <em>kept</em>, as <code>X rdf:reifies ?pf</code> (a fresh variable), joined against the four
+  basic-encoding patterns on <code>?pf</code>:
+</p>
+<pre><code>X    rdf:reifies                   ?pf .
+?pf  rdf:type                      rdf:PropositionForm .
+?pf  rdf:propositionFormSubject    s .
+?pf  rdf:propositionFormPredicate  p .
+?pf  rdf:propositionFormObject     o .</code></pre>
+<p>
+  This matches only rows where a real <code>rdf:reifies</code> triple exists (§5.3) — i.e. a
+  subject-position star map's output. Projecting <code>X</code> binds the <strong>reifier
+  identifier</strong> (§5.1); the four-pattern join is what actually locates it.
+</p>
+<p>
+  <strong>Triple-term patterns</strong> in object position —
+  <code>?x pred &lt;&lt;( s p o )&gt;&gt;</code> — rewrite to <code>?x pred ?pf</code> plus the
+  same four basic-encoding patterns on <code>?pf</code>, matching any triple-term object
+  regardless of whether it is also reified.
+</p>
+<p>
+  <strong>Nesting</strong> (§4.2, §5.1): where <code>o</code> is itself a quoted-triple pattern,
+  the rewrite recurses bottom-up — the innermost quote mints its own fresh identity variable and
+  four patterns first, spliced in as the enclosing level's <code>propositionFormObject</code> — to
+  arbitrary depth. Subject-side nesting never reaches this rule; see §7.3.
 </p>
 
-<h2 id="scope"><span class="secno">8.</span>Scope and Restrictions (v1)</h2>
-<p>The following are <strong>rejected as explicit errors</strong> — never silent empties, never silent wrong values:</p>
+<h3 id="subject-empty"><span class="secno">7.3</span>Subject-position patterns are statically empty</h3>
+<p>
+  <span class="rule-id">R4</span> SPARQL&nbsp;1.2 §18.1.3 is explicit: "a triple pattern that has
+  another triple pattern in its subject position will fail to match on any RDF graph." A
+  triple-term pattern — bare or parenthesized — in subject position is <strong>legal to
+  write</strong> and compiles to a statically empty group: never an error, never a match, checked
+  before the predicate is even inspected (so it also covers a nested quote whose own subject is a
+  triple term, reached through an outer quote's object chain).
+</p>
+
+<h3 id="functions-values"><span class="secno">7.4</span>Nesting, VALUES, and the five functions</h3>
+<p>
+  <span class="rule-id">R5</span> A ground triple term in <code>VALUES</code> decomposes into its
+  three components, joined against the basic-encoding patterns wherever the variable is also
+  matched elsewhere; where the variable is only projected, the ground term is reprojected
+  directly — including nested ground terms, decomposed recursively. Rows mixing a triple-term cell
+  and a plain-value cell for the <em>same</em> VALUES column are rejected (an explicit
+  <code>501</code>): one flat relational column cannot represent both shapes for one variable.
+</p>
+<p>
+  The five SPARQL&nbsp;1.2 triple-term functions (§17.4.6) are implemented by
+  <strong>engine-totality</strong>: relational data can never itself contain a native triple term,
+  so every triple-term-valued expression in a supported query is one the rewrite already knows
+  about statically. <code>TRIPLE(e1,e2,e3)</code> builds a composed value (legality errors
+  enforced per §17.4.6); <code>SUBJECT</code>/<code>PREDICATE</code>/<code>OBJECT</code> on a known
+  composed value return its component, and on anything else raise the spec's ERROR —
+  row-eliminating in <code>FILTER</code>, genuinely unbound (not a wrong value) in
+  <code>BIND</code>; <code>isTRIPLE</code> never errors, returning a constant
+  <code>true</code>/<code>false</code>.
+</p>
+
+<h3 id="equality-order"><span class="secno">7.5</span>Equality and ORDER BY</h3>
+<p>
+  <code>sameTerm</code> over two composed values is component-wise syntactic conjunction.
+  <code>=</code> is recursive component <code>sameValue</code> equality (§17.4.2.2), propagating a
+  component error; comparing a composed value against a non-composed one is statically
+  <code>false</code>, never an error. <code>ORDER BY</code> places triple terms in SPARQL's highest
+  sort category (§15.1); the spec leaves ordering <em>among</em> triple terms undefined, so the
+  engine's deterministic serialization order is a permissible choice — consistent across repeated
+  runs of the same query, not standardized across implementations.
+</p>
+
+<h3 id="native-results"><span class="secno">7.6</span>Native results</h3>
+<p>
+  <span class="rule-id">R1</span> Every visible surface speaks native RDF&nbsp;1.2 reification
+  form. A projected reified-triple-pattern variable binds the reifier's plain IRI (§5.1); a
+  projected triple-term variable — from a triple-term pattern, a decomposed <code>VALUES</code>
+  row, or a <code>TRIPLE()</code> call — binds a <strong>real triple term</strong>, decoded at the
+  query boundary from the composed components the rewrite tracked all along. In SPARQL&nbsp;1.2
+  Results JSON this is the standard recursive <code>"type":"triple"</code> binding shape (§10
+  walks a full example); Turtle&nbsp;1.2 CONSTRUCT output serializes the same value as
+  <code>&lt;&lt;( … )&gt;&gt;</code> in place. A <code>CONSTRUCT</code> template that instantiates
+  a triple term in object position produces a genuine one; an instantiation landing it in a
+  position RDF&nbsp;1.2 forbids is silently <strong>dropped</strong> from the output graph, per
+  SPARQL §16.2 — not an error.
+</p>
+
+<h2 id="scope"><span class="secno">8.</span>Scope and Restrictions</h2>
+<p>
+  Nearly every boundary v1 declared a <code>501</code>-class error is now implemented and
+  test-gated (ADR-0032). What follows splits what changed from what genuinely remains — every
+  remaining item is still an <strong>explicit</strong> error, or an explicit empty match, never a
+  silent wrong answer.
+</p>
+
+<h3><span class="secno">8.1</span>Now supported (v1 boundaries lifted)</h3>
+<table>
+  <tr><th>Capability</th><th>Notes</th></tr>
+  <tr><td>Object-side nesting</td><td>Any depth, recursive identifiers (§5.1) — subject-side nesting stays impossible, see §8.2.</td></tr>
+  <tr><td>Cross-source quoted maps</td><td>The quoted triples map may live on a different logical source, joined via <code>rr:joinCondition</code> declared on the star map (§4).</td></tr>
+  <tr><td><code>rml:reifierMap</code></td><td>Optional author-controlled reifier term map, subject position only (§4.3).</td></tr>
+  <tr><td><code>VALUES</code> with ground triple terms</td><td>Decomposed and reprojected, including nested ground terms and multiple rows (§7.4).</td></tr>
+  <tr><td><code>TRIPLE()</code> / <code>SUBJECT()</code> / <code>PREDICATE()</code> / <code>OBJECT()</code> / <code>isTRIPLE()</code></td><td>All five, with SPARQL §17.4.6 error semantics observably enforced (§7.4).</td></tr>
+  <tr><td><code>=</code> / <code>sameTerm</code> on triple terms</td><td>Component-wise, per §17.4.2.2 (§7.5) — with one residual, see §8.2.</td></tr>
+  <tr><td><code>CONSTRUCT</code> producing triple-term objects</td><td>Real instantiation; illegal positions silently dropped per SPARQL §16.2, not an error (§7.6).</td></tr>
+  <tr><td>Native results</td><td>A projected reification variable binds a real triple term at every surface — SELECT JSON/XML/CSV, Turtle CONSTRUCT (§7.6).</td></tr>
+</table>
+
+<h3><span class="secno">8.2</span>Remaining boundaries</h3>
 <table>
   <tr><th></th><th>Restriction</th><th>Rationale</th></tr>
-  <tr><td><span class="rule-id">R3</span></td><td><strong>No nesting.</strong> A quoted triple whose own subject or object is itself a quoted triple is rejected.</td><td>Single-level only; nesting needs SQL-view precomputation.</td></tr>
-  <tr><td><span class="rule-id">R4</span></td><td><strong>No predicate position.</strong> A quoted triple in predicate position is rejected.</td><td>Consistent with RML-STAR and with the SPARQL grammar (predicate is a name, not a term).</td></tr>
-  <tr><td>—</td><td><strong>Cross-source (mapping):</strong> a quoted triples map whose logical source differs from the outer map is rejected in v1.</td><td>The join case is deferred; single-row derivation only.</td></tr>
-  <tr><td>—</td><td><strong>Query boundaries:</strong> a ground quoted triple in <code>VALUES</code>, the <code>TRIPLE()/SUBJECT()/PREDICATE()/OBJECT()/isTRIPLE()</code> functions, a <code>CONSTRUCT</code> template quoting a triple, and a quoted pattern at a property-path endpoint each return an explicit <code>501</code>-class error in v1.</td><td>Each needs machinery outside the pattern rewrite; declared, tested boundaries rather than silent gaps.</td></tr>
+  <tr><td><span class="rule-id">R4</span></td><td><strong>No predicate position.</strong> A quoted triple in predicate position is rejected at load time.</td><td>RDF&nbsp;1.2 Concepts §3.1: a predicate is always an IRI. Not an engine limitation — spec-impossible.</td></tr>
+  <tr><td><span class="rule-id">R4</span></td><td><strong>No subject position in data.</strong> A quoted triple as a mapping's own quoted-triples-map subject is rejected at load time; as a <em>query pattern</em> it instead matches nothing (§7.3) — never an error.</td><td>RDF&nbsp;1.2 Concepts §3.1: a subject is an IRI or blank node. Spec-impossible, not a scope choice.</td></tr>
+  <tr><td>—</td><td><strong>Quoted pattern at a property-path endpoint.</strong> Joining a path-carrying branch with anything else is rejected.</td><td>An engine-general boundary — <em>any</em> path joined with anything else 501s today, star or not (ADR-0032 D6). A narrow tree-vs-flat divergence on this exact cell is test-locked.</td></tr>
+  <tr><td>—</td><td><strong>Uniform composed-ness.</strong> A <code>UNION</code>'s two arms disagreeing on whether a shared variable is a triple term, or a single <code>VALUES</code> column mixing triple-term and plain cells, are rejected.</td><td>One SPARQL variable cannot be "sometimes a triple term" depending on which arm or row produced it.</td></tr>
+  <tr><td>—</td><td><strong>Whole-composed-variable equality over a template-bound component.</strong> <code>?t1 = ?t2</code> where a component traces back to an <code>rr:template</code> (not a bare <code>rr:column</code>) is a sound, explicit <code>501</code>.</td><td>A pre-existing v1 scope limit in the underlying comparison machinery, inherited rather than introduced by star. Comparing the individual component directly (e.g. <code>OBJECT(?t1) = OBJECT(?t2)</code>) is unaffected.</td></tr>
 </table>
 
 <h2 id="divergence"><span class="secno">9.</span>Divergence from RML-STAR</h2>
-<div class="warn"><span class="lbl">Important — documented semantic divergence</span>
-  R2RML-star reuses RML-STAR's vocabulary but defines its <strong>own compiled semantics</strong>: an
-  <code>rml:starMap</code> compiles to the plain-RDF basic encoding, <strong>never</strong> to a native
-  RDF-star/RDF&nbsp;1.2 triple term. An author or portability tool that assumes <code>rml:starMap</code>
-  asserts a native triple term portable to any RML-STAR processor will be wrong about what querying the
-  result returns. This is a deliberate choice for a virtualizing engine (which has no triple-term
-  storage), and it is stated wherever this vocabulary is used.
+<div class="note"><span class="lbl">The headline divergence is dissolved</span>
+  Through ADR-0032, <strong>every visible surface — SELECT bindings, CONSTRUCT output,
+  serializations — speaks native RDF&nbsp;1.2 reification form</strong>: reifiers are real IRIs,
+  <code>rdf:reifies</code> triples are real, and a projected triple-term variable binds a genuine
+  triple term (§7.6). v1's loudly-documented divergence — "an <code>rml:starMap</code> never
+  produces a native triple term, only its basic-encoding stand-in" — no longer holds. A client or
+  portability tool reasoning about query <em>results</em> can treat this engine as an ordinary
+  RDF&nbsp;1.2 store.
 </div>
+<p>
+  What remains is narrower, and lives entirely <strong>below the SQL line</strong>, where a
+  relational row genuinely has no atomic triple-term value to hold. The proposition-form encoding
+  (§5) is R2RML-star's own internal wire format for that layer only — modeled on, but not
+  identical to, the W3C RDF&nbsp;1.2 Interoperability <em>basic encoding</em> (itself
+  non-normative, note-track, Group&nbsp;Note DRAFT). Two deliberate, documented divergences from
+  that note:
+</p>
+<ul>
+  <li><strong>Deterministic IRIs, not fresh blank nodes.</strong> The interop note mints a fresh
+    blank node per encoded proposition; R2RML-star mints a structurally deterministic IRI (§5.1),
+    because a virtualizing engine re-derives the same encoding on every query and needs the same
+    row to always yield the same identifier — a blank node's scope-local freshness would break
+    that invariant across queries.</li>
+  <li><strong>Hybrid visibility.</strong> The interop note's basic-encoding triples remain, in
+    principle, ordinarily matchable RDF (it explicitly contemplates hybrid graphs as future work);
+    R2RML-star relies on exactly that — a query <em>can</em> match
+    <code>rdf:PropositionForm</code>/<code>rdf:propositionForm…</code> triples directly if it goes
+    looking, alongside the native answers the query rewrite (§7) normally produces.</li>
+</ul>
+<p>
+  R2RML-star still reuses the RML-STAR authoring vocabulary (<code>rml:starMap</code>,
+  <code>rml:quotedTriplesMap</code>) without adopting RML-STAR's own target compiled semantics
+  one-for-one — the role-split identifiers, the deterministic-IRI choice, and the
+  <code>rml:reifierMap</code> extension are R2RML-star's own. An author moving a mapping to another
+  RML-STAR processor should expect the same <em>query answers</em> (the soundness/completeness bar
+  ADR-0032 sets) but not byte-identical internal identifiers.
+</p>
 
 <h2 id="examples"><span class="secno">10.</span>Worked Example</h2>
 <p>A relational table of census claims, mapped so each age claim is quoted and attributed to a record.</p>
@@ -330,7 +574,22 @@ I  rdf:propositionFormObject     o .</code></pre>
         rr:predicate ex:assertedBy ;
         rr:objectMap [ rr:constant ex:CensusRecord2026 ]
     ] .</code></pre></div>
-<div class="example"><span class="lbl">SPARQL-star query</span>
+<p>
+  This is byte-for-byte the same mapping v1 authors wrote (§4.1). What changed is what it compiles
+  to. For person 1042's row, the <strong>proposition id</strong> is a pure function of
+  <code>ex:hasAge</code>'s IRI and the two quoted columns (§5.1):
+</p>
+<pre><code>urn:sf-star:pf:http_example_com_hasAge|1042|34|</code></pre>
+<p>
+  and the <strong>reifier id</strong> is keyed on the declaring map, <code>#PersonAgeAssertion</code>
+  (its slug prefix — abbreviated <code>…</code> below — depends on how the mapping document's base
+  IRI resolves that fragment; what matters is that it is deterministic and distinct per declaring
+  map):
+</p>
+<pre><code>urn:sf-star:r:…_PersonAgeAssertion|1042|34|</code></pre>
+<p>The outer triples map's subject <em>is</em> that reifier id — not the proposition id — linked to it by the injected <code>rdf:reifies</code> triple (§5.3).</p>
+
+<div class="example"><span class="lbl">Query 1 — bare sugar, asking about the reifier</span>
 <pre><code>PREFIX ex: &lt;http://example.com/&gt;
 SELECT ?person ?age ?src WHERE {
     &lt;&lt; ?person ex:hasAge ?age &gt;&gt; ex:assertedBy ?src .
@@ -340,15 +599,46 @@ SELECT ?person ?age ?src WHERE {
 ----------------------------+------+---------------------------------
 http://ex.org/person/1042   | 34   | http://example.com/CensusRecord2026
 http://ex.org/person/2087   | 29   | http://example.com/CensusRecord2026</code></pre></div>
-<p>The engine answered the quoted pattern by joining the basic-encoding rows the mapping compiles to — no triple term was materialized, no data left the database.</p>
+<p>
+  <code>&lt;&lt; ?person ex:hasAge ?age &gt;&gt;</code> desugars to a fresh-variable
+  <code>rdf:reifies</code> pattern (§7.1–§7.2); <code>ex:assertedBy</code> is asserted on that same
+  reifier (§4.1), so the join resolves without the query ever naming an identifier.
+</p>
+
+<div class="example"><span class="lbl">Query 2 — projecting the reifier and the triple term itself</span>
+<pre><code>PREFIX ex:  &lt;http://example.com/&gt;
+PREFIX rdf: &lt;http://www.w3.org/1999/02/22-rdf-syntax-ns#&gt;
+SELECT ?r ?t WHERE {
+    ?r rdf:reifies ?t .
+    ?r ex:assertedBy ex:CensusRecord2026 .
+}</code></pre></div>
+<p>
+  Here <code>?r</code> and <code>?t</code> are projected directly. <code>?r</code> binds the plain
+  reifier IRI; <code>?t</code> — a variable the rewrite tracked as composed throughout (§7.6) —
+  binds a genuine native triple term. In SPARQL&nbsp;1.2 Results JSON, person 1042's row is:
+</p>
+<pre><code>{
+  "r": { "type": "uri", "value": "urn:sf-star:r:…_PersonAgeAssertion|1042|34|" },
+  "t": {
+    "type": "triple",
+    "value": {
+      "subject":   { "type": "uri", "value": "http://ex.org/person/1042" },
+      "predicate": { "type": "uri", "value": "http://example.com/hasAge" },
+      "object":    { "type": "literal", "value": "34", "datatype": "http://www.w3.org/2001/XMLSchema#integer" }
+    }
+  }
+}</code></pre>
+<p>No triple term was ever stored — <code>?t</code> is reconstructed at the query boundary from the same basic-encoding join Query 1 used — but what the client receives is indistinguishable from a native RDF-star store's own answer.</p>
 
 <h2 id="references"><span class="secno">11.</span>References</h2>
 <ul>
   <li><a href="https://www.w3.org/TR/r2rml/">R2RML: RDB to RDF Mapping Language</a> — W3C Recommendation.</li>
-  <li><a href="https://www.w3.org/TR/rdf12-concepts/">RDF 1.2 Concepts and Abstract Syntax</a> — triple terms and reification.</li>
-  <li><a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> — the basic encoding / basic decoding.</li>
+  <li><a href="https://www.w3.org/TR/rdf12-concepts/">RDF 1.2 Concepts and Abstract Syntax</a> — triple terms and reification, §3.1 (triple-term positions), §1.5 (reification).</li>
+  <li><a href="https://www.w3.org/TR/rdf12-semantics/">RDF 1.2 Semantics</a> — §5, the injective co-identity mapping <code>IT(s,p,o)</code> this specification's proposition identifiers realize structurally.</li>
+  <li><a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> — the (non-normative) basic encoding / basic decoding this specification's internal wire format is modeled on (§9).</li>
+  <li><a href="https://www.w3.org/TR/sparql12-query/">SPARQL 1.2 Query</a> — §15.1 (ORDER BY), §16.2 (CONSTRUCT instantiation), §17.4.6 (triple-term functions and their error semantics), §18.1.3 (subject-position triple patterns never match).</li>
   <li>RML-STAR Draft CG Report — <code>kg-construct/rml-star</code>.</li>
-  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite).</li>
+  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite), ADR-0032 (soundness &amp; completeness, native reification).</li>
 </ul>
 
 </main>

@@ -672,6 +672,29 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
             };
             Ok(Some(natural_literal(value, code)?))
         }
+        // ADR-0032 D2 — the ONLY route by which this engine ever produces a native
+        // `Term::Triple`: recursively realize the three components, then compose via
+        // `Triple::from_terms`, which is fallible and enforces RDF 1.2 §3.1 position
+        // legality (subject IRI/bnode, predicate IRI) for free. A failed composition
+        // (illegal shape) OR an unbound component ⇒ unbound (`None`) — never an error,
+        // matching SPARQL's usual "error in construction ⇒ unbound" discipline at
+        // projection. Deliberately bypasses `sf_core::term::generate` (`GenTerm` has
+        // no triple arm by design, ADR-0006 zero-alloc — see the module-level note on
+        // `TermDef::ComposedTriple`).
+        TermDef::ComposedTriple {
+            subject,
+            predicate,
+            object,
+        } => {
+            let (Some(s), Some(p), Some(o)) = (
+                build_term(subject, raw)?,
+                build_term(predicate, raw)?,
+                build_term(object, raw)?,
+            ) else {
+                return Ok(None);
+            };
+            Ok(Triple::from_terms(s, p, o).ok().map(Term::from))
+        }
     }
 }
 
@@ -755,7 +778,24 @@ fn term_rank(t: &Term) -> u8 {
         Term::BlankNode(_) => 0,
         Term::NamedNode(_) => 1,
         Term::Literal(_) => 2,
-        _ => 3, // quoted triple (RDF-star) — sorts last, by lexical form
+        // Quoted triple (RDF-star / ADR-0032 D2's `Term::Triple`, including a
+        // reconstructed `TermDef::ComposedTriple`) — SPARQL §15.1: triple
+        // terms are the HIGHEST category, and order AMONG them is spec-
+        // undefined. This engine's choice — sort last (this rank), by lexical
+        // form (`cmp_term`'s wildcard tie-break / `TermSortKey::Other`) — is
+        // therefore a PERMISSIBLE, merely DETERMINISTIC one, not a spec
+        // requirement: ordering AMONG values sharing this rank is by the
+        // triple's own `Display` (N-Triples-like) text, stable and repeatable
+        // across runs (no hashing / no non-deterministic input anywhere in
+        // this comparison), never mixed with a non-triple-term rank (a
+        // `TermDef::ComposedTriple`-composed variable and an ordinary
+        // variable can never land in the same result column — the
+        // uniform-composedness law, `star::rewrite_union`'s doc comment — so
+        // "highest category" never needs to interleave with another kind's
+        // ordering here). See `differential_star.rs`'s
+        // `order_by_composed_var_is_deterministic_across_runs` for the
+        // end-to-end proof over a REAL env-composed `?t`.
+        _ => 3,
     }
 }
 
@@ -1133,6 +1173,56 @@ fn eval_function(func: &Function, args: &[Expression], b: &BTreeMap<String, Term
             let v = term_to_f64(&t)?;
             f64_to_term(v.round())
         }
+        // ADR-0032 D3 item 3 — the five triple-term functions, operating on
+        // an already-materialized `Term::Triple` value. `star::rewrite_expr`
+        // resolves every statically-known case (an env-composed variable, or
+        // a literal `TRIPLE(...)`/`<<(...)>>` operand) BEFORE this evaluator
+        // ever runs, so these arms exist as a defense-in-depth fallback for
+        // whatever reaches ORDER BY / post-GROUP-BY expression evaluation
+        // unresolved. None-discipline audit (this wave): EVERY existing arm
+        // above already uses `eval_expr(...)?` / `str_val(...)?` — an
+        // unbound/wrong-shape operand makes the WHOLE function call `None`,
+        // uniformly, for every function in this evaluator (not row-
+        // eliminating or silently-skipped — the CALLER decides what `None`
+        // means: `inject_order_expr_keys` leaves the ORDER BY key absent,
+        // which `order_cmp_precomputed` sorts first/last per direction — a
+        // documented, sound simplification, see this evaluator's module doc
+        // — and `rust_group_result_rows`'s post-agg-expression path leaves
+        // the target variable genuinely UNBOUND, the exact §10 ASSIGN
+        // "expression error ⇒ unbound" behavior). These new arms follow the
+        // SAME convention (R5: never silently produce a WRONG bound value —
+        // §17.4.6's error is `None` here, exactly like every other function's
+        // type error already is).
+        Function::Subject => match eval_expr(args.first()?, b)? {
+            Term::Triple(t) => Some(t.subject.into()),
+            _ => None,
+        },
+        Function::Predicate => match eval_expr(args.first()?, b)? {
+            Term::Triple(t) => Some(Term::NamedNode(t.predicate)),
+            _ => None,
+        },
+        Function::Object => match eval_expr(args.first()?, b)? {
+            Term::Triple(t) => Some(t.object),
+            _ => None,
+        },
+        // §17.4.6 asymmetry: isTRIPLE never errors on a WRONG-KIND argument —
+        // but (like every other function here) an argument that fails to
+        // EVALUATE at all (`eval_expr` returns `None`, e.g. references an
+        // unbound variable) still makes the whole call `None`, consistent
+        // with this evaluator's uniform convention above; `star::rewrite_expr`
+        // is what gives isTRIPLE its full always-a-value spec semantics
+        // (resolved statically, never reaching here for the common case).
+        Function::IsTriple => {
+            let t = eval_expr(args.first()?, b)?;
+            bool_literal(matches!(t, Term::Triple(_)))
+        }
+        Function::Triple => {
+            let [s, p, o] = args else { return None };
+            let s = eval_expr(s, b)?;
+            let p = eval_expr(p, b)?;
+            let o = eval_expr(o, b)?;
+            Triple::from_terms(s, p, o).ok().map(Term::from)
+        }
         _ => None,
     }
 }
@@ -1145,29 +1235,53 @@ pub struct Solutions {
 }
 
 /// Instantiate a CONSTRUCT-template triple against a solution; `None` if any
-/// variable is unbound or the triple would be ill-formed. `pub(crate)` so the
-/// PostgreSQL executor instantiates CONSTRUCT templates identically.
+/// variable is unbound or the triple would be ill-formed (SPARQL §16.2: an
+/// ill-formed instantiation is silently dropped, never an error). `pub(crate)`
+/// so the PostgreSQL executor instantiates CONSTRUCT templates identically.
 pub(crate) fn instantiate(
     tp: &spargebra::term::TriplePattern,
     bindings: &BTreeMap<String, Term>,
 ) -> Option<Triple> {
-    use spargebra::term::{NamedNodePattern, TermPattern};
-    let term = |p: &TermPattern| -> Option<Term> {
-        match p {
-            TermPattern::Variable(v) => bindings.get(v.as_str()).cloned(),
-            TermPattern::NamedNode(n) => Some(Term::NamedNode(n.clone())),
-            TermPattern::Literal(l) => Some(Term::Literal(l.clone())),
-            TermPattern::BlankNode(b) => Some(Term::BlankNode(b.clone())),
-            _ => None,
-        }
-    };
-    let subject = term(&tp.subject)?;
+    use spargebra::term::NamedNodePattern;
+    let subject = instantiate_term(&tp.subject, bindings)?;
     let predicate = match &tp.predicate {
         NamedNodePattern::NamedNode(n) => Term::NamedNode(n.clone()),
         NamedNodePattern::Variable(v) => bindings.get(v.as_str()).cloned()?,
     };
-    let object = term(&tp.object)?;
+    let object = instantiate_term(&tp.object, bindings)?;
     Triple::from_terms(subject, predicate, object).ok()
+}
+
+/// A CONSTRUCT-template term slot → its bound `Term`, or `None` if unbound /
+/// ill-formed. `TermPattern::Triple` (ADR-0032 D2) recurses — a nested quoted
+/// triple in a template (`star::substitute_construct_template` is the ONLY
+/// producer of this shape in a template today, but the arm is general) builds
+/// its own s/p/o first, bottom-up, then composes via `Triple::from_terms`,
+/// whose fallibility naturally enforces RDF 1.2 §3.1 position legality — an
+/// illegal-position nested triple silently drops (§16.2), never errors. A
+/// standalone (non-closure) function so it can recurse into itself.
+fn instantiate_term(
+    p: &spargebra::term::TermPattern,
+    bindings: &BTreeMap<String, Term>,
+) -> Option<Term> {
+    use spargebra::term::TermPattern;
+    match p {
+        TermPattern::Variable(v) => bindings.get(v.as_str()).cloned(),
+        TermPattern::NamedNode(n) => Some(Term::NamedNode(n.clone())),
+        TermPattern::Literal(l) => Some(Term::Literal(l.clone())),
+        TermPattern::BlankNode(b) => Some(Term::BlankNode(b.clone())),
+        TermPattern::Triple(inner) => {
+            let s = instantiate_term(&inner.subject, bindings)?;
+            let p = match &inner.predicate {
+                spargebra::term::NamedNodePattern::NamedNode(n) => Term::NamedNode(n.clone()),
+                spargebra::term::NamedNodePattern::Variable(v) => {
+                    bindings.get(v.as_str()).cloned()?
+                }
+            };
+            let o = instantiate_term(&inner.object, bindings)?;
+            Triple::from_terms(s, p, o).ok().map(Term::from)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1737,5 +1851,110 @@ mod order_sort_key_tests {
             idx.into_iter().map(|i| rows[i].clone()).collect();
 
         assert_eq!(via_reference, via_precomputed);
+    }
+}
+
+// --- ADR-0032 D3 item 3: eval_function's triple-term runtime arms ----------
+
+#[cfg(test)]
+mod triple_function_tests {
+    //! `eval_expr`/`eval_function`'s Subject/Predicate/Object/IsTriple/Triple
+    //! arms, operating on an already-materialized `Term::Triple` — the
+    //! defense-in-depth fallback for whatever `star::rewrite_expr` did not
+    //! resolve statically (ORDER BY / post-GROUP-BY expression evaluation
+    //! only; see those arms' own doc comment for the full None-discipline).
+    use super::*;
+    use sf_core::NamedNode;
+    use spargebra::algebra::Function;
+    use spargebra::term::Variable;
+
+    fn iri(s: &str) -> Term {
+        Term::NamedNode(NamedNode::new_unchecked(s))
+    }
+    fn triple_term(s: &str, p: &str, o: Term) -> Term {
+        Term::Triple(Box::new(Triple::new(
+            NamedNode::new_unchecked(s),
+            NamedNode::new_unchecked(p),
+            o,
+        )))
+    }
+    fn bindings_with(var: &str, t: Term) -> BTreeMap<String, Term> {
+        BTreeMap::from([(var.to_owned(), t)])
+    }
+    fn call(f: Function, var: &str) -> Expression {
+        Expression::FunctionCall(f, vec![Expression::Variable(Variable::new(var).unwrap())])
+    }
+
+    #[test]
+    fn subject_predicate_object_extract_components_from_a_materialized_triple() {
+        let t = triple_term("http://ex/s", "http://ex/p", iri("http://ex/o"));
+        let b = bindings_with("t", t);
+        assert_eq!(
+            eval_expr(&call(Function::Subject, "t"), &b),
+            Some(iri("http://ex/s"))
+        );
+        assert_eq!(
+            eval_expr(&call(Function::Predicate, "t"), &b),
+            Some(iri("http://ex/p"))
+        );
+        assert_eq!(
+            eval_expr(&call(Function::Object, "t"), &b),
+            Some(iri("http://ex/o"))
+        );
+    }
+
+    #[test]
+    fn subject_predicate_object_error_on_a_non_triple_is_none() {
+        let b = bindings_with("t", iri("http://ex/plain"));
+        assert_eq!(eval_expr(&call(Function::Subject, "t"), &b), None);
+        assert_eq!(eval_expr(&call(Function::Predicate, "t"), &b), None);
+        assert_eq!(eval_expr(&call(Function::Object, "t"), &b), None);
+    }
+
+    #[test]
+    fn is_triple_never_errors_true_and_false_cases() {
+        let triple_b = bindings_with(
+            "t",
+            triple_term("http://ex/s", "http://ex/p", iri("http://ex/o")),
+        );
+        let plain_b = bindings_with("t", iri("http://ex/plain"));
+        let true_lit = eval_expr(&call(Function::IsTriple, "t"), &triple_b);
+        let false_lit = eval_expr(&call(Function::IsTriple, "t"), &plain_b);
+        assert_eq!(true_lit, bool_literal(true));
+        assert_eq!(false_lit, bool_literal(false));
+    }
+
+    #[test]
+    fn triple_function_composes_legal_components_and_drops_illegal_ones() {
+        let e = Expression::FunctionCall(
+            Function::Triple,
+            vec![
+                Expression::NamedNode(NamedNode::new_unchecked("http://ex/s")),
+                Expression::NamedNode(NamedNode::new_unchecked("http://ex/p")),
+                Expression::NamedNode(NamedNode::new_unchecked("http://ex/o")),
+            ],
+        );
+        let b = BTreeMap::new();
+        assert_eq!(
+            eval_expr(&e, &b),
+            Some(triple_term(
+                "http://ex/s",
+                "http://ex/p",
+                iri("http://ex/o")
+            ))
+        );
+
+        // A literal in SUBJECT position is illegal (RDF 1.2 §3.1: subject
+        // must be IRI/bnode) — `Triple::from_terms` rejects it, so the whole
+        // call is `None` (never a malformed Term::Triple).
+        let illegal = Expression::FunctionCall(
+            Function::Triple,
+            vec![
+                Expression::Literal(Literal::new_simple_literal("not-a-subject")),
+                Expression::NamedNode(NamedNode::new_unchecked("http://ex/p")),
+                Expression::NamedNode(NamedNode::new_unchecked("http://ex/o")),
+            ],
+        );
+        assert_eq!(eval_expr(&illegal, &b), None);
     }
 }

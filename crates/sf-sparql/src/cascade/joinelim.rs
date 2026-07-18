@@ -335,6 +335,19 @@ fn rewrite_parent_def_multi(def: &mut TermDef, e: &MultiFkElim) {
             }
         }
         TermDef::Agg { .. } => {}
+        // ADR-0032 D2: forced arm (new `TermDef` variant) — recurses through the
+        // three components like `Coalesce`/`Concat`. Not reachable in practice: a
+        // `ComposedTriple` binding is installed only by `lib.rs`'s env-composed
+        // projection override, after this cascade pass has already run.
+        TermDef::ComposedTriple {
+            subject,
+            predicate,
+            object,
+        } => {
+            rewrite_parent_def_multi(subject, e);
+            rewrite_parent_def_multi(predicate, e);
+            rewrite_parent_def_multi(object, e);
+        }
     }
 }
 
@@ -513,6 +526,17 @@ fn rewrite_parent_def(def: &mut TermDef, e: &FkElim) {
         // An aggregate result reads its synthetic group alias, never a base-scan
         // parent alias — nothing to rewrite (agg branches bypass this cascade).
         TermDef::Agg { .. } => {}
+        // ADR-0032 D2: forced arm (new `TermDef` variant) — see the identical note
+        // on `rewrite_parent_def_multi`, above.
+        TermDef::ComposedTriple {
+            subject,
+            predicate,
+            object,
+        } => {
+            rewrite_parent_def(subject, e);
+            rewrite_parent_def(predicate, e);
+            rewrite_parent_def(object, e);
+        }
     }
 }
 

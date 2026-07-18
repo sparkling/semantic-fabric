@@ -243,10 +243,14 @@ fn translate_inner_flat(
     schema: &[TableSchema],
     optimize: bool,
 ) -> Result<Plan> {
-    // ADR-0031: desugar quoted-triple patterns onto the ADR-0029 basic encoding
-    // BEFORE anything else sees the WHERE pattern — everything below this line
-    // (and everywhere else in this module) never encounters a `TermPattern::Triple`.
-    let query = star::rewrite_query(query)?;
+    // ADR-0031/ADR-0032: desugar quoted-triple patterns onto the ADR-0029 basic
+    // encoding BEFORE anything else sees the WHERE pattern — everything below
+    // this line (and everywhere else in this module) never encounters a
+    // `TermPattern::Triple`. `star_env` records every variable the rewrite
+    // determined to be triple-term-valued (ADR-0032 D3 item 2); consulted below
+    // to pre-substitute the CONSTRUCT template and, once `branches` is
+    // otherwise finalized, to install the native projection (D2).
+    let (query, star_env) = star::rewrite_query(query)?;
     let query = &query;
     // M6 offline T-mapping: fold Tbox hierarchy into the maps once at startup so
     // the per-query unfold can use an empty Tbox (no runtime hash-map lookups).
@@ -270,24 +274,15 @@ fn translate_inner_flat(
         Query::Construct {
             template, pattern, ..
         } => {
-            // ADR-0031 rule 9: v1 never fabricates a native triple term, so a
-            // CONSTRUCT template quoting one would otherwise silently drop that
-            // template triple at execution time (`exec_core::instantiate`'s
-            // `TermPattern → Term` wildcard) — turn it into an honest 501 here.
-            if star::construct_template_has_quoted_triple(template) {
-                return Err(Error::Unsupported(
-                    "CONSTRUCT template containing a quoted-triple term (<<...>>) is \
-                     not supported in v1 → 501 (ADR-0031 rule 9)"
-                        .to_owned(),
-                ));
-            }
+            // ADR-0032 D2: the old ADR-0031 rule-9 501 guard is superseded —
+            // real instantiation now happens (`exec_core::instantiate`'s
+            // recursive `TermPattern::Triple` arm) — but the template must
+            // first be pre-substituted so an env-composed variable becomes an
+            // explicit `TermPattern::Triple` over its component vars
+            // (`star::substitute_construct_template`'s doc comment).
+            let template = star::substitute_construct_template(template, &star_env);
             let t = uf.translate_pattern(pattern)?;
-            (
-                t,
-                PlanForm::Construct {
-                    template: template.clone(),
-                },
-            )
+            (t, PlanForm::Construct { template })
         }
         Query::Ask { pattern, .. } => {
             let t = uf.translate_pattern(pattern)?;
@@ -343,12 +338,16 @@ fn translate_inner_flat(
     };
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
     // a DISTINCT redundant; SELECT carries an explicit projection, CONSTRUCT/ASK
-    // project every binding (`None`).
+    // project every binding (`None`). ADR-0032 D3 item 2: expanded with any
+    // env-composed variable's component names — see
+    // `star::expand_projection_for_cascade`'s doc comment for why pass 7
+    // (projection shrinking) needs this BEFORE it can see the `ComposedTriple`
+    // binding `apply_composed_bindings` installs only at the very end.
     let project_vars: Option<Vec<String>> = match &form {
-        PlanForm::Select { vars } => Some(vars.clone()),
+        PlanForm::Select { vars } => Some(star::expand_projection_for_cascade(vars, &star_env)),
         _ => None,
     };
-    let (branches, distinct) = if optimize {
+    let (mut branches, distinct) = if optimize {
         let ctx = cascade::CascadeCtx {
             distinct: trans.distinct,
             project: project_vars.as_deref(),
@@ -364,6 +363,10 @@ fn translate_inner_flat(
     } else {
         (trans.branches, trans.distinct)
     };
+    // ADR-0032 D3 item 2 — the projection seam, applied LAST (every real
+    // join/filter unification is already done; `unify::unify` never sees a
+    // `ComposedTriple` on this path in practice).
+    star::apply_composed_bindings(&mut branches, &star_env);
     Ok(Plan {
         branches,
         form,
@@ -399,12 +402,18 @@ pub fn translate_tree(
     dialect: Dialect,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    // ADR-0031: the SAME shared pre-pass `translate_inner_flat` runs, so both
-    // engines see an identical, already-desugared WHERE pattern (never a
-    // `TermPattern::Triple`) — `build.rs`/`iq/*.rs` need no star-specific code.
-    let query = star::rewrite_query(query)?;
+    // ADR-0031/ADR-0032: the SAME shared pre-pass `translate_inner_flat` runs, so
+    // both engines see an identical, already-desugared WHERE pattern (never a
+    // `TermPattern::Triple`) — `build.rs`/`iq/resolve.rs`/`iq/normalize.rs` need
+    // no star-specific code. `iq/lower.rs` is the one exception (`extra_keep`,
+    // below): its OWN internal projection-restrict retains run even before
+    // `cascade`'s pass 7, so it needs to know which columns a LATER stage will
+    // still need — see `lower`'s own doc comment for why. `star_env` — see the
+    // identical note in `translate_inner_flat`.
+    let (query, star_env) = star::rewrite_query(query)?;
     let query = &query;
     let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect);
+    let extra_keep = star::all_component_var_names(&star_env);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
     // (e.g. DESCRIBE's CBD join) keeps disjoint aliases across them.
@@ -412,7 +421,7 @@ pub fn translate_tree(
         let built = build::build_tree(pattern, None)?;
         let resolved = iq::resolve::resolve(built, &mut cx)?;
         let normalized = iq::normalize::normalize(resolved)?;
-        iq::lower::lower(normalized, dialect)
+        iq::lower::lower(normalized, dialect, &extra_keep)
     };
 
     let mut plan = match query {
@@ -424,18 +433,10 @@ pub fn translate_tree(
         Query::Construct {
             template, pattern, ..
         } => {
-            // ADR-0031 rule 9 — see the identical guard in `translate_inner_flat`.
-            if star::construct_template_has_quoted_triple(template) {
-                return Err(Error::Unsupported(
-                    "CONSTRUCT template containing a quoted-triple term (<<...>>) is \
-                     not supported in v1 → 501 (ADR-0031 rule 9)"
-                        .to_owned(),
-                ));
-            }
+            // ADR-0032 D2 — see the identical note in `translate_inner_flat`.
+            let template = star::substitute_construct_template(template, &star_env);
             let mut plan = compile(pattern)?;
-            plan.form = PlanForm::Construct {
-                template: template.clone(),
-            };
+            plan.form = PlanForm::Construct { template };
             plan
         }
         // ASK — compile the WHERE pattern, carry the `Ask` form.
@@ -499,11 +500,12 @@ pub fn translate_tree(
     // `None` and so can never strip an aggregate-arg column; every other pass (incl. self-join
     // elimination) is projection-agnostic and safe to run unconditionally. Cross-union
     // aggregate-specific optimization (agg-through-union rewrites) is a LATER M4 wave.
+    // ADR-0032 D3 item 2 — see the identical note in `translate_inner_flat`.
     let project_vars: Option<Vec<String>> = if plan.rust_group.is_some() {
         None
     } else {
         match &plan.form {
-            PlanForm::Select { vars } => Some(vars.clone()),
+            PlanForm::Select { vars } => Some(star::expand_projection_for_cascade(vars, &star_env)),
             _ => None,
         }
     };
@@ -527,6 +529,9 @@ pub fn translate_tree(
     for b in &mut plan.branches {
         cascade_subplans(b, schema);
     }
+    // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
+    // identical note in `translate_inner_flat`).
+    star::apply_composed_bindings(&mut plan.branches, &star_env);
     Ok(plan)
 }
 
