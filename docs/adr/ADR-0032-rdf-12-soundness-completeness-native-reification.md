@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-18
+updated: 2026-07-18
 tags: [rdf-star, rdf-1.2, sparql-1.2, soundness, completeness, native-reification, query-rewrite, mapping-model]
 supersedes: []
 depends-on:
@@ -12,6 +13,35 @@ implements: []
 ---
 
 # RDF 1.2 soundness and completeness: native reification at every visible surface, encoding only under SQL
+
+## Implementation status (2026-07-18, same day)
+
+**Accepted and implemented**, four reviewed waves on `feat/rdf-star-12`:
+
+* `d7e4bc0` **W1** — D1 mapping emission (role-split ids, `rdf:reifies`,
+  standalone deduped description maps, recursive nesting, cross-source
+  RefObjectMap, `rml:reifierMap`).
+* `f8d9282` **W2a** — D3 rewrite (no-elision reifies joins, the matching-matrix
+  law test-locked per cell, §18.1.3 statically-empty subjects, recursive
+  nesting; annotation semantics settled empirically: asserts **and** reifies).
+* `e7f2af8` **W2b** — D2/D3 realization (`TermDef::ComposedTriple`
+  decode-at-boundary — projected reification variables bind native
+  `Term::Triple`; the five functions via engine-totality; VALUES decomposition;
+  CONSTRUCT production + §16.2 dropping; the D6 `align_templates`
+  literal-prefix-disjointness lift).
+* `58ce12b` **W3** — R6 operationalized: `star_decode` decoder + `spareval`
+  running the **original** queries over the **decoded** graph — **17 oracle
+  cells, zero disagreements**; D6 path pins added (the non-star closure case
+  hits the identical boundary on both engines).
+
+Gate state at completion: `differential_star` 46/0, `differential_tree` 168/0,
+`differential_paths` 11/0, full `sf-conformance` green, workspace clippy clean.
+Remaining documented boundaries: the engine-general path-join restriction (with
+its narrow star-cell tree-exceeds-flat divergence, test-locked), the
+uniform-composedness laws (union-mixed / VALUES-mixed → explicit 501s), the
+`var_col` template-bound-component equality residual, and the in-code deferred
+notes (subplan-joins recursion, EXISTS-only composed vars) — all carried in the
+follow-up ledger.
 
 ## Context and Problem Statement
 

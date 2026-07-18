@@ -83,8 +83,8 @@
     <li><a href="#tutorial">3. Tutorial: your first quoted triple</a></li>
     <li><a href="#asserted">4. Asserted vs. non-asserted</a></li>
     <li><a href="#object">5. Quoting in object position</a></li>
-    <li><a href="#querying">6. Querying: the syntax that bites</a></li>
-    <li><a href="#limits">7. What v1 does not do (yet)</a></li>
+    <li><a href="#querying">6. Querying: the matching law</a></li>
+    <li><a href="#limits">7. What works now, and what still doesn't</a></li>
     <li><a href="#faq">8. FAQ</a></li>
   </ul>
 </div>
@@ -98,13 +98,14 @@
 <p>The <code>&lt;&lt; … &gt;&gt;</code> is a <strong>quoted triple</strong>: a triple used as the subject (or object) of another triple. That is RDF-star. R2RML-star lets you produce and query these directly over relational data.</p>
 
 <h2 id="model"><span class="n">2.</span>The mental model (30 seconds)</h2>
-<p>Your database has no column that stores "a triple." So R2RML-star represents each quoted triple as <strong>a synthetic id plus four ordinary triples</strong> — the RDF 1.2 <em>basic encoding</em>:</p>
-<pre><code>?id  rdf:type                     rdf:PropositionForm .
-?id  rdf:propositionFormSubject    ex:alice .
-?id  rdf:propositionFormPredicate  ex:hasAge .
-?id  rdf:propositionFormObject     34 .</code></pre>
+<p>Your database has no column that stores "a triple." So under the hood, R2RML-star represents each quoted triple as <strong>a synthetic id plus plain triples</strong> — the RDF 1.2 <em>basic encoding</em>:</p>
+<pre><code>?pf  rdf:type                     rdf:PropositionForm .
+?pf  rdf:propositionFormSubject    ex:alice .
+?pf  rdf:propositionFormPredicate  ex:hasAge .
+?pf  rdf:propositionFormObject     34 .</code></pre>
 <p>Those are just plain triples — exactly what R2RML already maps and what a SQL query already reconstructs. So the whole feature is <em>additive</em>: nothing new happens at execution time, and nothing is materialized.</p>
-<div class="tip"><span class="lbl">The key idea</span> You write RDF-star. semantic-fabric compiles it — both the mapping and the query — down to plain triples over your live tables, and compiles the query answer back up. The <code>&lt;&lt; … &gt;&gt;</code> never touches your database.</div>
+<p>Here's the part that's easy to miss: that encoding is <strong>invisible to you</strong>. semantic-fabric encodes once, under SQL, and decodes once, right back at the query boundary — so what you get back is a real RDF&nbsp;1.2 triple term, not the synthetic id. You write RDF-star, and you <em>see</em> RDF-star.</p>
+<div class="tip"><span class="lbl">The key idea</span> You write RDF-star. semantic-fabric compiles it — both the mapping and the query — down to plain triples over your live tables, and decodes the answer back up to native RDF&nbsp;1.2 terms. The <code>&lt;&lt; … &gt;&gt;</code> never touches your database, but it's exactly what comes back out.</div>
 
 <h2 id="tutorial"><span class="n">3.</span>Tutorial: your first quoted triple</h2>
 <p>Goal: model a census table so each age claim can be attributed to the record it came from.</p>
@@ -140,7 +141,7 @@
         rr:predicate ex:assertedBy ;
         rr:objectMap [ rr:constant ex:CensusRecord2026 ]
     ] .</code></pre>
-  <p>That's the whole change. The engine now emits, per row, the four basic-encoding triples plus the <code>ex:assertedBy</code> triple hanging off the same synthetic id.</p>
+  <p>That's the whole change. The engine now emits, per row, four basic-encoding triples describing the quoted (person, age) statement, plus an <code>rdf:reifies</code> triple linking that description to a second id — the <em>reifier</em> — which is what <code>ex:assertedBy</code> actually hangs off. You don't have to manage this split yourself; it's what makes the query in step 3 answerable.</p>
 </div></div>
 
 <div class="step"><div class="num">3</div><div class="body">
@@ -169,37 +170,62 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
 <p>A quoted triple can also be the <em>object</em> — "record R states that ⟨…⟩":</p>
 <pre><code>ex:CensusRecord2026  ex:states  &lt;&lt; ex:alice ex:hasAge 34 &gt;&gt; .</code></pre>
 <p>Put the <code>rml:starMap</code> inside an <code>rr:objectMap</code> instead of the subject map. The engine attaches the four basic-encoding triples to a separate synthetic map keyed on the same id — you don't have to think about that; it just works.</p>
+<div class="tip"><span class="lbl">Going deeper: nesting</span>
+<p>An object-position quote can itself quote another triple, to any depth — "the reifier of ⟨Alice's age⟩ says it comes from ⟨a leaf record's score⟩":</p>
+<pre><code>SELECT ?r ?p ?leaf ?score WHERE {
+  ?r rdf:reifies &lt;&lt;( ?p ex:hasAge &lt;&lt;( ?leaf ex:hasScore ?score )&gt;&gt; )&gt;&gt;
+}</code></pre>
+<p>Each level mints its own identifiers and joins bottom-up automatically. The quoted triples map for the inner quote doesn't even need to share a table with the outer one — cross-source quoting works too, by adding <code>rr:joinCondition</code> to the star map.</p>
+</div>
 
-<h2 id="querying"><span class="n">6.</span>Querying: the syntax that bites</h2>
-<p>SPARQL-star has two spellings of a quoted triple, and it matters to know they're equivalent:</p>
+<h2 id="querying"><span class="n">6.</span>Querying: the matching law</h2>
+<p>SPARQL-star has two spellings of a quoted triple, and — unlike in v1 — <strong>they now ask different questions</strong>:</p>
 <table>
-  <tr><th>You write</th><th>What the parser does</th></tr>
-  <tr><td><code>&lt;&lt; ?s ?p ?o &gt;&gt;</code> (bare)</td><td>Rewrites to <code>_:b rdf:reifies &lt;&lt;( ?s ?p ?o )&gt;&gt;</code> internally.</td></tr>
-  <tr><td><code>&lt;&lt;( ?s ?p ?o )&gt;&gt;</code> (parenthesized)</td><td>A quoted triple term, in place.</td></tr>
+  <tr><th>You write</th><th>What it asks</th></tr>
+  <tr><td><code>&lt;&lt; ?s ?p ?o &gt;&gt;</code> (bare)</td><td>"Who/what <strong>reifies</strong> this statement?" — desugars to <code>_:b rdf:reifies &lt;&lt;( ?s ?p ?o )&gt;&gt;</code>. Matches only a statement someone actually annotated (a subject-position star map).</td></tr>
+  <tr><td><code>&lt;&lt; ?s ?p ?o ~ ?r &gt;&gt;</code> (explicit reifier)</td><td>Same question, with <code>?r</code> naming the reifier yourself instead of an anonymous blank node.</td></tr>
+  <tr><td><code>?s ?p ?o {| ?pred ?val |}</code> (annotation)</td><td>Both: asserts <code>?s ?p ?o</code> <em>and</em> asks who reifies it, in one triple.</td></tr>
+  <tr><td><code>&lt;&lt;( ?s ?p ?o )&gt;&gt;</code> (parenthesized)</td><td>"Is this exact statement, <strong>as a value</strong>, sitting somewhere?" — matches a triple-term object directly, reified or not.</td></tr>
 </table>
-<p>Both are supported and return the same rows. semantic-fabric recognizes the <code>rdf:reifies</code> form the parser produces and rewrites it to the basic-encoding join.</p>
-<div class="warn"><span class="lbl">Why this note exists</span> If a system ignored the <code>rdf:reifies</code> wrapper, every bare-syntax query would <em>silently</em> return nothing — the most dangerous kind of bug, because the query looks fine. semantic-fabric handles it (and is tested for exactly this). Good to know it's the tricky part.</div>
+<p>The two kinds are not interchangeable, and it matters which one you reach for. Take the census mapping from §3: it only ever quotes <code>person ex:hasAge age</code> as a <em>subject</em> (a reifier annotation), never stores it bare as someone else's object. So:</p>
+<div class="grid2">
+  <div><h4>Bare, in object position</h4><pre><code>SELECT ?p ?age WHERE {
+  ?x ex:mentions &lt;&lt;( ?p ex:hasAge ?age )&gt;&gt;
+}</code></pre><p>Matches nothing for this mapping — nobody's <code>ex:mentions</code> quotes this shape as a plain value.</p></div>
+  <div><h4>Reified, as taught in §3</h4><pre><code>SELECT ?p ?age ?src WHERE {
+  &lt;&lt; ?p ex:hasAge ?age &gt;&gt; ex:assertedBy ?src
+}</code></pre><p>Matches — <code>#PersonAgeAssertion</code> <em>is</em> a reifier, and <code>ex:assertedBy</code> hangs off it.</p></div>
+</div>
+<div class="warn"><span class="lbl">The v1 behavior this replaces</span> v1 treated both spellings as the same thing and let bare syntax match a quoted-triple <em>object</em> too — a real unsoundness (SPARQL 1.2 draws the ReifiedTriple/TripleTerm distinction precisely so this doesn't happen). If you have queries written against v1, audit any bare <code>&lt;&lt; … &gt;&gt;</code> pattern matched against an object-position quote — it now returns empty; switch it to the parenthesized form.</div>
 
-<h2 id="limits"><span class="n">7.</span>What v1 does not do (yet)</h2>
-<p>These are <strong>explicit, honest errors</strong> — you get a clear message, never a wrong answer:</p>
+<h2 id="limits"><span class="n">7.</span>What works now, and what still doesn't</h2>
+<p>As of ADR-0032, almost everything v1 declared a boundary is implemented:</p>
 <ul>
-  <li><strong>Nesting</strong> — a quoted triple inside a quoted triple.</li>
-  <li><strong>Predicate position</strong> — a quoted triple used as a predicate (also disallowed by RDF-star itself).</li>
-  <li><strong>Ground quoted triples in <code>VALUES</code></strong>, the <strong><code>TRIPLE()/isTRIPLE()/SUBJECT()/…</code> functions</strong>, quoted terms in a <strong><code>CONSTRUCT</code> template</strong>, and a quoted pattern directly on a <strong>property-path endpoint</strong>.</li>
-  <li><strong>Cross-source quoting</strong> — the quoted triples map must share the outer map's table in v1.</li>
+  <li><strong>Nesting</strong> (object side, any depth — §5), <strong>cross-source quoting</strong> (§5), and <strong>author-controlled reifiers</strong> via <code>rml:reifierMap</code>.</li>
+  <li>Ground quoted triples in <strong><code>VALUES</code></strong>, all five <strong><code>TRIPLE()/SUBJECT()/PREDICATE()/OBJECT()/isTRIPLE()</code></strong> functions, <strong><code>=</code>/<code>sameTerm</code></strong> over triple terms, and quoted terms in a <strong><code>CONSTRUCT</code> template</strong> (a real triple term comes out; an illegal position is silently dropped, per the SPARQL spec — not an error).</li>
+  <li><strong>Native results</strong> — project a reified pattern's identity and you get the reifier's IRI; project a triple-term variable and you get a real triple term back, not a stand-in id.</li>
 </ul>
-<p>Everything else — subject/object position, asserted/non-asserted, variables or constants in any of s/p/o, patterns inside <code>FILTER EXISTS</code> — works.</p>
+<p>What's left is honest, and mostly not star-specific:</p>
+<ul>
+  <li><strong>Predicate position</strong> — a quoted triple used as a predicate. Not an engine limit: RDF&nbsp;1.2 itself requires a predicate to be an IRI.</li>
+  <li><strong>Subject-side nesting</strong> — a quoted triple whose own subject is another quoted triple. Also spec-impossible, not a scope choice; as a query pattern it matches nothing rather than erroring (see the matching law, §6).</li>
+  <li><strong>A quoted pattern directly on a property-path endpoint</strong> — inherited from a general engine boundary (<em>any</em> path joined with anything else 501s today, not just star ones).</li>
+  <li><strong>Mixing triple terms and plain values for one variable</strong> — across <code>UNION</code> arms, or within one <code>VALUES</code> column. A SPARQL variable can't be a triple term on one branch and a plain value on another.</li>
+  <li>One narrow case of <strong>whole-triple-term equality</strong> (<code>?t1 = ?t2</code>) where a component comes from an <code>rr:template</code> rather than a bare column — comparing the component directly (<code>OBJECT(?t1) = OBJECT(?t2)</code>) always works.</li>
+</ul>
+<p>Everything else — subject/object position, asserted/non-asserted, variables or constants in any of s/p/o, patterns inside <code>FILTER EXISTS</code> — works, same as before.</p>
 
 <h2 id="faq"><span class="n">8.</span>FAQ</h2>
-<details><summary>Is this real RDF-star, or a workaround?</summary><p>It's real RDF-star at the <em>surface</em> you write and query. Underneath, semantic-fabric uses the W3C RDF 1.2 <em>basic encoding</em> (plain triples) instead of native triple terms, because a virtualizing SQL engine has nothing to store a triple term in. The <a href="specification.html#divergence">specification §9</a> documents this divergence precisely — it matters if you move mappings to a native RDF-star store.</p></details>
+<details><summary>Is this real RDF-star, or a workaround?</summary><p>Yes, and now at every surface you touch: what you write, what you query, and what comes back. Underneath, semantic-fabric still uses the W3C RDF 1.2 <em>basic encoding</em> (plain triples) as its own internal wire format, because a virtualizing SQL engine has nothing to store a triple term in at the row level — but it decodes back to native RDF&nbsp;1.2 at the query boundary, so a result set is indistinguishable from a native RDF-star store's own answer. The <a href="specification.html#divergence">specification §9</a> documents exactly what (narrower) divergence remains, entirely below the SQL line.</p></details>
 <details><summary>Does anything get materialized?</summary><p>No. Both the mapping and the query compile to plain triples / SQL over your live tables. No copy of the data is made.</p></details>
-<details><summary>What does the quoted-triple identity look like if I select it?</summary><p>A synthetic <code>urn:sf-star:…</code> IRI, deterministic per row (same row → same id, always). It's a stand-in for the proposition, not a native triple term — so <code>isTRIPLE()</code> on it is a v1 boundary rather than returning a possibly-misleading value.</p></details>
-<details><summary>Has anyone done RDF-star over live SQL before?</summary><p>Per the project's research (ADR-0028 §G, a survey of seven OBDA engines plus the literature): no. This is novel ground — which is why the design is documented so carefully and every boundary is an explicit, tested error.</p></details>
+<details><summary>What does the identity look like if I select it?</summary><p>Depends what you project. A reified pattern's identity (<code>?r</code> in <code>?r rdf:reifies &lt;&lt;(…)&gt;&gt;</code>) is a plain <code>urn:sf-star:r:…</code> IRI, deterministic per declaring star map and row. A triple-term variable (<code>?t</code> in <code>?r rdf:reifies ?t</code>, or anywhere a <code>&lt;&lt;( … )&gt;&gt;</code> pattern binds one) is a <strong>real native triple term</strong> — not a stand-in — so <code>isTRIPLE(?t)</code> now genuinely returns <code>true</code>.</p></details>
+<details><summary>What's the difference between <code>&lt;&lt; s p o &gt;&gt;</code> and <code>&lt;&lt;( s p o )&gt;&gt;</code>?</summary><p>The first asks who reifies the statement; the second asks whether the statement itself, as a value, appears somewhere. See the matching law in §6 — they're deliberately not the same question, and (unlike in v1) they can return different rows.</p></details>
+<details><summary>Has anyone done RDF-star over live SQL before?</summary><p>Per the project's research (ADR-0028 §G, a survey of seven OBDA engines plus the literature): no. This is novel ground — which is why the design is documented so carefully and every remaining boundary is an explicit, tested error or a spec-mandated empty match.</p></details>
 
 </main>
 <footer>
   <p>semantic-fabric — R2RML-star Guide &amp; Tutorial. For the normative details see the
-  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031.</p>
+  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031 / ADR-0032.</p>
 </footer>
 </body>
 </html>
