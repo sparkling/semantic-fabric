@@ -78,6 +78,7 @@ pub mod leftjoin;
 pub mod path;
 pub mod pool;
 pub mod saturate;
+pub mod star;
 pub mod unfold;
 pub mod unify;
 
@@ -243,6 +244,11 @@ fn translate_inner_flat(
     schema: &[TableSchema],
     optimize: bool,
 ) -> Result<Plan> {
+    // ADR-0031: desugar quoted-triple patterns onto the ADR-0029 basic encoding
+    // BEFORE anything else sees the WHERE pattern — everything below this line
+    // (and everywhere else in this module) never encounters a `TermPattern::Triple`.
+    let query = star::rewrite_query(query)?;
+    let query = &query;
     // M6 offline T-mapping: fold Tbox hierarchy into the maps once at startup so
     // the per-query unfold can use an empty Tbox (no runtime hash-map lookups).
     let empty_tbox = Tbox::default();
@@ -265,6 +271,17 @@ fn translate_inner_flat(
         Query::Construct {
             template, pattern, ..
         } => {
+            // ADR-0031 rule 9: v1 never fabricates a native triple term, so a
+            // CONSTRUCT template quoting one would otherwise silently drop that
+            // template triple at execution time (`exec_core::instantiate`'s
+            // `TermPattern → Term` wildcard) — turn it into an honest 501 here.
+            if star::construct_template_has_quoted_triple(template) {
+                return Err(Error::Unsupported(
+                    "CONSTRUCT template containing a quoted-triple term (<<...>>) is \
+                     not supported in v1 → 501 (ADR-0031 rule 9)"
+                        .to_owned(),
+                ));
+            }
             let t = uf.translate_pattern(pattern)?;
             (
                 t,
@@ -383,6 +400,11 @@ pub fn translate_tree(
     dialect: Dialect,
     schema: &[TableSchema],
 ) -> Result<Plan> {
+    // ADR-0031: the SAME shared pre-pass `translate_inner_flat` runs, so both
+    // engines see an identical, already-desugared WHERE pattern (never a
+    // `TermPattern::Triple`) — `build.rs`/`iq/*.rs` need no star-specific code.
+    let query = star::rewrite_query(query)?;
+    let query = &query;
     let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
@@ -403,6 +425,14 @@ pub fn translate_tree(
         Query::Construct {
             template, pattern, ..
         } => {
+            // ADR-0031 rule 9 — see the identical guard in `translate_inner_flat`.
+            if star::construct_template_has_quoted_triple(template) {
+                return Err(Error::Unsupported(
+                    "CONSTRUCT template containing a quoted-triple term (<<...>>) is \
+                     not supported in v1 → 501 (ADR-0031 rule 9)"
+                        .to_owned(),
+                ));
+            }
             let mut plan = compile(pattern)?;
             plan.form = PlanForm::Construct {
                 template: template.clone(),
