@@ -31,9 +31,9 @@ use sf_conformance::sqlite;
 use sf_sparql::{exec, translate_with, translate_with_flat, Error, Plan, PlanForm, Tbox};
 use sf_sql::Dialect;
 use spargebra::SparqlParser;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use oxrdf::{NamedNode, Term};
+use oxrdf::{NamedNode, Term, Triple};
 
 // ============================================================================
 // Fixture — `census_row` (mirrors `sf-mapping`'s `STAR_ASSERTED_FIXTURE` shape:
@@ -279,6 +279,40 @@ fn diff(create: &str, r2rml: &str, query: &str) -> Vec<BTreeMap<String, Term>> {
                 "flat vs tree row-bag divergence on `{query}`:\n flat={fa:#?}\n tree={ta:#?}"
             );
             ta
+        }
+        (Err(Error::Unsupported(_)), Err(Error::Unsupported(_))) => Vec::new(),
+        _ => panic!(
+            "501-set mismatch on `{query}` (flat and tree must agree on Unsupported):\n \
+             flat={flat:?}\n tree={tree:?}"
+        ),
+    }
+}
+
+/// [`diff`]'s CONSTRUCT counterpart (ADR-0032 D2): both translators must
+/// either both succeed with the SAME triple bag, or both return
+/// `Unsupported`. Returns the tree engine's triples, sorted (a `Vec`, not a
+/// `HashSet`, so a duplicate triple's MULTIPLICITY is preserved for the
+/// caller's own assertion, though this suite's cases don't happen to produce
+/// duplicates).
+fn diff_construct(create: &str, r2rml: &str, query: &str) -> Vec<Triple> {
+    let conn = sqlite::load(create).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(query)
+        .expect("query parses");
+
+    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema);
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema);
+
+    match (&flat, &tree) {
+        (Ok(fp), Ok(tp)) => {
+            let mut ft = exec::construct_triples(fp, &conn).expect("construct exec");
+            let mut tt = exec::construct_triples(tp, &conn).expect("construct exec");
+            ft.sort_by_key(ToString::to_string);
+            tt.sort_by_key(ToString::to_string);
+            assert_eq!(ft, tt, "flat vs tree triple-bag divergence on `{query}`");
+            tt
         }
         (Err(Error::Unsupported(_)), Err(Error::Unsupported(_))) => Vec::new(),
         _ => panic!(
@@ -620,43 +654,80 @@ fn explicit_reifier_sugar_e2e_matches_same_rows_as_manual_reifies_pattern() {
 }
 
 // ============================================================================
-// 4e — object-side nesting, depth 2, end to end (ADR-0032 D3 rule R4):
-// `#Outer` reifies `#Mid`'s proposition, whose OWN object is `#Leaf`'s
-// nested proposition. The REWRITE itself is verified correct — inspected
-// directly (`star::rewrite_query`): `__sf_star_1` (Leaf's identity) carries
-// its 4 patterns, `__sf_star_0` (Mid's identity) carries its 4 with
-// `propositionFormObject` pointing at `__sf_star_1`, and `?r rdf:reifies
-// __sf_star_0` closes the chain — exactly D3's rule R4. But EXECUTING it
-// structurally reaches a PRE-EXISTING, unrelated boundary: `desc(#Leaf)` and
-// `desc(#Mid)` are TWO DISTINCT quoted shapes' description maps, and EVERY
-// description map shares the identical 4-predicate vocabulary (rdf:type,
-// propositionForm{Subject,Predicate,Object}) by construction (ADR-0032 D1) —
-// so `__sf_star_0`'s own 4-pattern group is candidate-ambiguous per pattern
-// (each COULD source from either map) until the CONSTANT-valued
-// propositionFormPredicate pattern narrows it. `unify.rs::align_templates`
-// explores candidate pairings before that narrowing completes and hits a
-// `desc(#Leaf)`-vs-`desc(#Mid)` SUBJECT-template pairing (5 segments vs 8) —
-// a pairing that IS provably disjoint (different literal prefixes) but
-// `align_templates` bails `Unsupported("template length mismatch")` on the
-// length check alone, by conservative design ("a kind/length mismatch is
-// conservatively unsupported (never an unsound prune)", `unify.rs` doc
-// comment), rather than proving disjointness via the prefix text. This is
-// NOT specific to nesting: it reproduces for ANY query touching 2+ DISTINCT
-// quoted shapes' description maps in one BGP with a shared variable (nesting
-// just guarantees ≥2 distinct shapes by construction) — reported to the
-// team lead as a new, out-of-file-scope finding (`unify.rs`/`unfold.rs`
-// candidate narrowing, not `star.rs`'s rewrite).
+// 4e — object-side nesting, depth 2, end to end (ADR-0032 D3 rule R4) —
+// FLIPPED (Wave 2b, item 5's align_templates literal-prefix lift) from a
+// locked 501 into the bindings differential it was designed to be. The
+// REWRITE itself was already verified correct at the AST level (W2a):
+// `__sf_star_1` (Leaf's identity) carries its 4 patterns, `__sf_star_0`
+// (Mid's identity) carries its 4 with `propositionFormObject` pointing at
+// `__sf_star_1`, and `?r rdf:reifies __sf_star_0` closes the chain — rule
+// R4. EXECUTING it used to hit a PRE-EXISTING, unrelated boundary:
+// `desc(#Leaf)` and `desc(#Mid)` are TWO DISTINCT quoted shapes' description
+// maps sharing the identical 4-predicate vocabulary (ADR-0032 D1), so
+// `__sf_star_0`'s own 4-pattern group was candidate-ambiguous per pattern
+// until the CONSTANT-valued propositionFormPredicate narrowed it —
+// `unify.rs::align_templates` explored a `desc(#Leaf)`-vs-`desc(#Mid)`
+// SUBJECT-template pairing (5 segments vs 8, provably disjoint by differing
+// literal prefixes) and used to bail `Unsupported` on the length mismatch
+// alone. Item 5's leading-literal-prefix disjointness check now proves that
+// EXACT pairing disjoint instead, pruning the bad candidate soundly.
 // ============================================================================
 
 #[test]
-fn object_side_nesting_depth_2_hits_a_pre_existing_multi_shape_unify_boundary() {
+fn object_side_nesting_depth_2_e2e_matches_hand_computed_bindings() {
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?r ?p ?leaf ?score WHERE {{ \
            ?r rdf:reifies <<( ?p ex:hasAge <<( ?leaf ex:hasScore ?score )>> )>> \
          }}"
     );
-    assert_locked_501(STAR_NESTED_DEPTH2_R2RML, &query);
+    let got = diff(CENSUS_SQL, STAR_NESTED_DEPTH2_R2RML, &query);
+    assert_eq!(got.len(), 3, "got={got:#?}");
+
+    // `#Leaf`'s own hasScore is a PLAIN (non-star) pattern — a sound baseline
+    // for `?score`'s correlation, cross-checked through the SAME engine
+    // (this file's established philosophy — never a hand-typed XSD form).
+    let leaf_scores = diff(
+        CENSUS_SQL,
+        STAR_NESTED_DEPTH2_R2RML,
+        &format!("{EX}SELECT ?leaf ?score WHERE {{ ?leaf ex:hasScore ?score }}"),
+    );
+    let scores_by_leaf: HashMap<Term, Term> = leaf_scores
+        .into_iter()
+        .map(|mut r| (r.remove("leaf").unwrap(), r.remove("score").unwrap()))
+        .collect();
+
+    for row in &got {
+        let r = match &row["r"] {
+            Term::NamedNode(n) => n,
+            other => panic!("?r must bind an IRI, got {other:?}"),
+        };
+        assert!(
+            r.as_str().starts_with("urn:sf-star:r:"),
+            "?r must bind the reifier-family synthetic IRI: {r}"
+        );
+        let p = match &row["p"] {
+            Term::NamedNode(n) => n.as_str(),
+            other => panic!("?p must be an IRI, got {other:?}"),
+        };
+        let leaf = match &row["leaf"] {
+            Term::NamedNode(n) => n.as_str(),
+            other => panic!("?leaf must be an IRI, got {other:?}"),
+        };
+        // Same person_id correlates ?p (http://ex.org/person/{id}) and ?leaf
+        // (http://ex.org/leaf/{id}) — both templates key off the SAME column.
+        let p_id = p.rsplit('/').next().unwrap();
+        let leaf_id = leaf.rsplit('/').next().unwrap();
+        assert_eq!(
+            p_id, leaf_id,
+            "?p and ?leaf must share the same person_id: {row:#?}"
+        );
+        assert_eq!(
+            row.get("score"),
+            scores_by_leaf.get(&row["leaf"]),
+            "?score must match the baseline for ?leaf: {row:#?}"
+        );
+    }
 }
 
 // ============================================================================
@@ -689,20 +760,58 @@ fn non_asserted_triples_map_hides_plain_pattern_but_star_pattern_still_matches()
 // ============================================================================
 
 #[test]
-fn construct_template_quoting_a_triple_is_a_locked_501() {
-    // The CONSTRUCT-template guard (not the WHERE-pattern rewrite): today,
-    // `exec_core::instantiate`'s `TermPattern → Term` closure silently
-    // returns `None` for `Triple` (its wildcard arm) — that SILENTLY DROPS the
-    // templated triple from CONSTRUCT output rather than erring. The translate-time
-    // check in `lib.rs` (both engines, via `star::construct_template_has_quoted_triple`)
-    // turns that into an honest 501 instead. ADR-0032 D2 replaces this with
-    // real instantiation + spec-defined dropping of illegal output, but that
-    // is Wave-2b's `exec_core` work — untouched here.
+fn construct_template_quoting_a_triple_in_object_position_produces_real_triples() {
+    // ADR-0032 D2: the old 501 guard (`star::construct_template_has_quoted_triple`)
+    // is gone — `star::substitute_construct_template` + `exec_core::instantiate`'s
+    // recursive `TermPattern::Triple` arm now REALLY instantiate a native
+    // `Term::Triple` object (RDF 1.2 §3.1: object position is legal).
+    let query = format!(
+        "{EX}CONSTRUCT {{ ?p ex:hasQuote <<( ?p ex:hasAge ?age )>> }} \
+         WHERE {{ ?p ex:hasAge ?age }}"
+    );
+    let got = diff_construct(CENSUS_SQL, CENSUS_R2RML, &query);
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    let mut expected: Vec<Triple> = ages
+        .iter()
+        .map(|(p, age)| {
+            let inner = Triple::new(
+                p.clone(),
+                NamedNode::new_unchecked("http://example.com/hasAge"),
+                age.clone(),
+            );
+            Triple::new(
+                p.clone(),
+                NamedNode::new_unchecked("http://example.com/hasQuote"),
+                Term::Triple(Box::new(inner)),
+            )
+        })
+        .collect();
+    expected.sort_by_key(ToString::to_string);
+    assert_eq!(got, expected, "got={got:#?}\nexpected={expected:#?}");
+    assert_eq!(got.len(), 3);
+    // The produced object is a genuine native Term::Triple (not, say, some
+    // string-encoded stand-in) — the acceptance bar D2 sets.
+    assert!(matches!(got[0].object, Term::Triple(_)));
+}
+
+#[test]
+fn construct_template_quoting_a_triple_in_illegal_subject_position_drops_silently() {
+    // RDF 1.2 §3.1: only the OBJECT position may hold a triple term — a
+    // template quoting one in SUBJECT position (`<<(...)>> ex:assertedBy
+    // ?src`) is legal to WRITE but every instantiation is ill-formed. §16.2:
+    // an ill-formed instantiation is silently DROPPED from the CONSTRUCT
+    // output, never an error — `Triple::from_terms` naturally rejects it
+    // (`Term::Triple` has no `TryInto<NamedOrBlankNode>`), so
+    // `exec_core::instantiate` returns `None` for every row and the
+    // translated plan runs successfully to an EMPTY graph (not a 501 — the
+    // old guard covered this shape too, indiscriminately; now it is
+    // distinguished from the object-position "production" cell above).
     let query = format!(
         "{EX}CONSTRUCT {{ <<( ?p ex:hasAge ?age )>> ex:assertedBy ?src }} \
          WHERE {{ ?p ex:hasAge ?age . BIND(ex:CensusRecord2026 AS ?src) }}"
     );
-    assert_locked_501(CENSUS_R2RML, &query);
+    let got = diff_construct(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert!(got.is_empty(), "got={got:#?}");
 }
 
 #[test]
@@ -724,22 +833,123 @@ fn subject_side_nested_quoted_triple_is_statically_empty() {
 }
 
 #[test]
-fn values_ground_quoted_triple_stays_a_locked_501() {
-    // Pre-existing (`unfold::ground_term_to_term`'s wildcard) — rule R6:
-    // Values is untouched by this rewrite, so this behavior is unchanged.
+fn values_projected_only_ground_triple_decomposes_and_reprojects_natively() {
+    // ADR-0032 D3 item 2, R6: a VALUES ground triple term, referenced
+    // NOWHERE else in the query (pure pass-through) — `star::rewrite_values`
+    // decomposes ?t's column into 3 fresh component columns carrying the
+    // ground s/p/o as CONSTANT rows, and the projection seam
+    // (`star::apply_composed_bindings`) reassembles them into the SAME
+    // native `Term::Triple` at output. No DB correlation needed — the
+    // decomposed value IS the whole answer.
     let query = format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> }} }}");
-    assert_locked_501(CENSUS_R2RML, &query);
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(got.len(), 1, "got={got:#?}");
+    let expected = Term::Triple(Box::new(Triple::new(
+        NamedNode::new_unchecked("http://example.com/a"),
+        NamedNode::new_unchecked("http://example.com/hasAge"),
+        iri("http://example.com/b"),
+    )));
+    assert_eq!(got[0]["t"], expected, "got={got:#?}");
 }
 
 #[test]
-fn is_triple_function_stays_a_locked_501() {
-    // Pre-existing (`unify::filter_cond`'s `str_match` wildcard, shared by both
-    // engines via `iq/lower.rs`'s reuse of the SAME function) — this rewrite
-    // never fabricates a native triple term, so `isTRIPLE`/`TRIPLE`/`SUBJECT`/
-    // `PREDICATE`/`OBJECT` are untouched (Wave-2b: TT-valued variables flowing
-    // into expressions).
-    let query = format!("{EX}SELECT ?p WHERE {{ ?p ex:hasAge ?age . FILTER isTRIPLE(?age) }}");
-    assert_locked_501(CENSUS_R2RML, &query);
+fn values_multi_row_ground_triples_decompose_and_reproject_per_row() {
+    // Multiple VALUES rows, each carrying a DIFFERENT ground triple —
+    // row count and per-row correlation must both be preserved through the
+    // column-major decompose / transpose-back / re-project round trip.
+    let query = format!(
+        "{EX}SELECT ?t WHERE {{ VALUES ?t {{ \
+           <<( ex:a ex:hasAge ex:b )>> \
+           <<( ex:c ex:hasAge ex:d )>> \
+         }} }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(got.len(), 2, "got={got:#?}");
+    let expect_triple = |s: &str, o: &str| {
+        Term::Triple(Box::new(Triple::new(
+            NamedNode::new_unchecked(s),
+            NamedNode::new_unchecked("http://example.com/hasAge"),
+            iri(o),
+        )))
+    };
+    let mut got_terms: Vec<&Term> = got.iter().map(|r| &r["t"]).collect();
+    got_terms.sort_by_key(|t| t.to_string());
+    let mut expected = vec![
+        expect_triple("http://example.com/a", "http://example.com/b"),
+        expect_triple("http://example.com/c", "http://example.com/d"),
+    ];
+    expected.sort_by_key(ToString::to_string);
+    assert_eq!(
+        got_terms.into_iter().cloned().collect::<Vec<_>>(),
+        expected,
+        "got={got:#?}"
+    );
+}
+
+#[test]
+fn values_ground_triple_matched_against_real_reifies_data() {
+    // ADR-0032 D3 item 2's "decomposed matched" cell: `?t` is ALSO reified
+    // via a real `?r rdf:reifies ?t` pattern — `star::rewrite_triple`'s
+    // reifies-bare-variable case and `star::rewrite_values`'s decomposition
+    // BOTH register `?t` in the SAME env entry (lookup-before-mint), so they
+    // share the SAME component vars and correlate via an ORDINARY
+    // shared-variable join: the VALUES-supplied ground components constrain
+    // which REAL reifier row(s) match. Uses the SAME engine's own baseline
+    // age Term (never a hand-typed XSD lexical form, per this file's module
+    // doc) to build the VALUES literal for person 1.
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    let age1 = ages
+        .get(&NamedNode::new_unchecked("http://ex.org/person/1"))
+        .expect("person 1 must have a baseline age")
+        .clone();
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?r WHERE {{ \
+           ?r rdf:reifies ?t . \
+           VALUES ?t {{ <<( <http://ex.org/person/1> ex:hasAge {age1} )>> }} \
+         }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(
+        got.len(),
+        1,
+        "exactly one reifier for person 1's real (?p,ex:hasAge,?age) proposition: got={got:#?}"
+    );
+    let r = match &got[0]["r"] {
+        Term::NamedNode(n) => n,
+        other => panic!("?r must bind an IRI, got {other:?}"),
+    };
+    assert!(
+        r.as_str().starts_with("urn:sf-star:r:"),
+        "?r must bind the reifier-family synthetic IRI: {r}"
+    );
+}
+
+#[test]
+fn is_triple_true_and_false_cells() {
+    // ADR-0032 D3 item 3, §17.4.6 asymmetry: isTRIPLE NEVER errors, always a
+    // definite boolean — `star::rewrite_expr` resolves it STATICALLY:
+    // composed → `true` (every row survives `FILTER isTRIPLE(?t)`);
+    // non-composed → `false` (`FILTER isTRIPLE(?age)` eliminates every row,
+    // and `FILTER !isTRIPLE(?age)` — the negation — keeps every row,
+    // confirming `false` is a real computed value, not some OTHER
+    // elimination reason).
+    let rdf = "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ";
+
+    let composed_true =
+        format!("{EX}{rdf}SELECT ?r WHERE {{ ?r rdf:reifies ?t . FILTER isTRIPLE(?t) }}");
+    let got_true = diff(CENSUS_SQL, CENSUS_R2RML, &composed_true);
+    assert_eq!(got_true.len(), 3, "got={got_true:#?}");
+
+    let non_composed_false =
+        format!("{EX}SELECT ?p WHERE {{ ?p ex:hasAge ?age . FILTER isTRIPLE(?age) }}");
+    let got_false = diff(CENSUS_SQL, CENSUS_R2RML, &non_composed_false);
+    assert!(got_false.is_empty(), "got={got_false:#?}");
+
+    let non_composed_negated =
+        format!("{EX}SELECT ?p WHERE {{ ?p ex:hasAge ?age . FILTER (!isTRIPLE(?age)) }}");
+    let got_negated = diff(CENSUS_SQL, CENSUS_R2RML, &non_composed_negated);
+    assert_eq!(got_negated.len(), 3, "got={got_negated:#?}");
 }
 
 // ============================================================================
@@ -771,21 +981,322 @@ fn star_pattern_inside_filter_exists_matches_hand_computed_bindings() {
 
 // ============================================================================
 // 10 — a star pattern at a property-path endpoint (rule R5b: the identity's 4
-// patterns joined alongside the Path node). This structurally reaches a
-// PRE-EXISTING, unrelated boundary: `unfold::merge` (shared by both engines
-// — `iq/lower.rs`'s `InnerJoin` arm calls the SAME `join_branches`) already
-// refuses to join ANY `Branch` carrying a property-path closure with anything
-// else ("v1 = a standalone ?s P+ ?o"). The rewrite's Join-wrapped-Bgp+Path
-// injection is architecturally correct per the ADR (mirrors the DESCRIBE→CBD
-// precedent) and forward-compatible if that restriction is ever lifted — but
-// TODAY it necessarily lands on that boundary for EVERY star-at-path-endpoint
-// query, so this is a locked 501, not a bindings differential. Lifting the
-// join-with-path restriction is a separate, substantial path-composition
-// feature, out of scope for this rewrite (D6) — reported to the team lead.
+// patterns joined alongside the Path node). Item 5's align_templates
+// literal-prefix lift has an UNANTICIPATED side effect HERE, reported to the
+// team lead as a NEW finding (not fixed this wave — `unfold.rs` is out of
+// this file's scope): the TREE path now proves this query PROVABLY EMPTY
+// (the quoted identity's proposition-form template, `urn:sf-star:pf:...`,
+// and `ex:knows`'s own subject template, `http://ex.org/person/...` read via
+// the path's canonical `sf_s` key column, have CONFLICTING literal prefixes
+// from the very first character — `ex:knows`'s domain is disjoint from a
+// proposition identity's range BY CONSTRUCTION, so `?pf ex:knows+ ?x` can
+// never match ANY row) BEFORE the PRE-EXISTING, unrelated "no join onto any
+// path branch" boundary is ever reached in ITS OWN pipeline. But the FLAT
+// path's `unfold::merge` checks `left.path.is_some() || right.path.is_some()`
+// UNCONDITIONALLY, as its very FIRST statement — before ever attempting
+// `unify()` — so it STILL 501s, unimproved. The two engines now DISAGREE
+// (tree: `Ok` with an empty plan; flat: `Err(Unsupported)`) — a genuine,
+// narrow flat/tree inconsistency THIS wave's align_templates change
+// surfaced, not created (the underlying "no path join" restriction is
+// pre-existing and unrelated to star). This test LOCKS the current,
+// understood-but-imperfect state (mirroring this file's established pattern
+// for documenting a boundary precisely) rather than papering over it via the
+// stricter `diff()` helper, which enforces agreement and would legitimately
+// (and unhelpfully, for THIS test's purpose) panic on it.
 // ============================================================================
 
 #[test]
-fn star_pattern_at_property_path_endpoint_is_a_locked_501() {
+fn star_pattern_at_property_path_endpoint_flat_501s_tree_proves_empty_a_known_divergence() {
     let query = format!("{EX}SELECT ?age ?x WHERE {{ <<( ?p ex:hasAge ?age )>> ex:knows+ ?x }}");
+    let maps = sf_mapping::parse_r2rml(CENSUS_R2RML).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(&query)
+        .expect("query parses");
+    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
+    assert!(
+        matches!(flat, Err(Error::Unsupported(_))),
+        "flat must still 501 (unfold::merge's unconditional path-join check, unchanged): {flat:?}"
+    );
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
+    match &tree {
+        Ok(plan) => assert!(
+            plan.branches.is_empty(),
+            "tree must prove this provably empty (0 branches), got {tree:?}"
+        ),
+        Err(e) => {
+            panic!("tree was expected to prove this empty via align_templates, not 501: {e:?}")
+        }
+    }
+}
+
+// ============================================================================
+// Wave 2b (ADR-0032 D3 items 2-4, 6) — the composed-variable environment: the
+// reifies-bare-variable decode-at-boundary acceptance test, the five
+// triple-term functions over a composed / non-composed argument, TRIPLE(...)
+// as a BIND target, composed-aware `=`/`sameTerm`, the UNION uniform-
+// composed-ness boundary, and ORDER BY determinism.
+// ============================================================================
+
+#[test]
+fn reifies_object_variable_projects_as_a_native_triple_term() {
+    // THE decode-at-boundary acceptance test (ADR-0032 D2's headline mandate:
+    // "every visible surface speaks native reification form"): `?r rdf:reifies
+    // ?t` composes `?t` (item 2's reifies-bare-variable case) — projecting it
+    // directly must realize the REAL native `Term::Triple`, never the
+    // internal proposition-form IRI.
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ ?r rdf:reifies ?t }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(got.len(), 3, "got={got:#?}");
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    let mut expected: Vec<Term> = ages
+        .iter()
+        .map(|(p, age)| {
+            Term::Triple(Box::new(Triple::new(
+                p.clone(),
+                NamedNode::new_unchecked("http://example.com/hasAge"),
+                age.clone(),
+            )))
+        })
+        .collect();
+    let mut got_terms: Vec<Term> = got
+        .into_iter()
+        .map(|mut r| r.remove("t").unwrap())
+        .collect();
+    got_terms.sort_by_key(ToString::to_string);
+    expected.sort_by_key(ToString::to_string);
+    assert_eq!(
+        got_terms, expected,
+        "got={got_terms:#?}\nexpected={expected:#?}"
+    );
+    assert!(
+        matches!(got_terms[0], Term::Triple(_)),
+        "must be a genuine native Term::Triple: {:?}",
+        got_terms[0]
+    );
+}
+
+#[test]
+fn subject_predicate_object_on_composed_variable_bind_the_components() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?s ?p ?o WHERE {{ \
+           ?r rdf:reifies ?t . \
+           BIND(SUBJECT(?t) AS ?s) . BIND(PREDICATE(?t) AS ?p) . BIND(OBJECT(?t) AS ?o) \
+         }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(got.len(), 3, "got={got:#?}");
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    for row in &got {
+        let s = match &row["s"] {
+            Term::NamedNode(n) => n.clone(),
+            other => panic!("?s must be an IRI, got {other:?}"),
+        };
+        assert_eq!(row["p"], iri("http://example.com/hasAge"), "row={row:#?}");
+        assert_eq!(row.get("o"), ages.get(&s), "row={row:#?}");
+    }
+}
+
+#[test]
+fn subject_predicate_object_on_a_non_composed_variable_error_observably() {
+    // §17.4.6: SUBJECT/PREDICATE/OBJECT on a provably-non-composed argument
+    // is the spec ERROR (engine-totality — `star::rewrite_function_call`'s
+    // doc comment) — in FILTER context it eliminates the row; in BIND
+    // context the target var stays genuinely unbound (R5: never a wrong
+    // value silently substituted for the error).
+    let filter_query =
+        format!("{EX}SELECT ?p WHERE {{ ?p ex:hasAge ?age . FILTER(SUBJECT(?age)) }}");
+    let filtered = diff(CENSUS_SQL, CENSUS_R2RML, &filter_query);
+    assert!(filtered.is_empty(), "got={filtered:#?}");
+
+    let bind_query =
+        format!("{EX}SELECT ?p ?s WHERE {{ ?p ex:hasAge ?age . BIND(SUBJECT(?age) AS ?s) }}");
+    let bound = diff(CENSUS_SQL, CENSUS_R2RML, &bind_query);
+    assert_eq!(
+        bound.len(),
+        3,
+        "every row still appears, just with ?s left unbound: got={bound:#?}"
+    );
+    for row in &bound {
+        assert!(
+            !row.contains_key("s"),
+            "?s must be genuinely UNBOUND, not present: {row:#?}"
+        );
+    }
+}
+
+#[test]
+fn triple_function_bind_projects_as_a_native_triple_term() {
+    let query = format!(
+        "{EX}SELECT ?p ?age ?t WHERE {{ \
+           ?p ex:hasAge ?age . BIND(TRIPLE(?p, ex:hasAge, ?age) AS ?t) \
+         }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(got.len(), 3, "got={got:#?}");
+    for row in &got {
+        let p = match &row["p"] {
+            Term::NamedNode(n) => n.clone(),
+            other => panic!("?p must be an IRI, got {other:?}"),
+        };
+        let expected = Term::Triple(Box::new(Triple::new(
+            p,
+            NamedNode::new_unchecked("http://example.com/hasAge"),
+            row["age"].clone(),
+        )));
+        assert_eq!(row["t"], expected, "row={row:#?}");
+        assert!(matches!(row["t"], Term::Triple(_)));
+    }
+}
+
+#[test]
+fn equality_and_same_term_over_composed_variables() {
+    // `#AssertionA`/`#AssertionB` (CENSUS_R2RML_TWO_ASSERTIONS) both reify the
+    // SAME `#PersonAge` shape — `?t1`/`?t2`, drawn from two INDEPENDENT
+    // reifies patterns (no shared variable besides the cartesian join),
+    // structurally correlate ONLY through equality: same person ⇒ equal
+    // OBJECT component ⇒ `=`/`sameTerm` true; different person ⇒ false.
+    // Compares `OBJECT(?t1)`/`OBJECT(?t2)` specifically (the `age` column, a
+    // bare `rr:column`), not the whole `?t1 = ?t2` — `#PersonAge`'s SUBJECT
+    // is `rr:template`-valued, and `unify::filter_cond`'s `var_col` (which
+    // both the pre-existing `Equal`/`Greater`/etc. machinery and this wave's
+    // new var-vs-var `cmp` arm share) only resolves a bare-column binding —
+    // a PRE-EXISTING v1 `filter_cond` scope limit, inherited (not
+    // introduced) by composed-variable equality once component-wise
+    // recursion reaches a template-bound component; see the SEPARATE
+    // `whole_composed_variable_equality_over_a_template_bound_component_is_a_sound_501`
+    // test below for that exact, honestly-documented boundary.
+    // `=` is infix; `sameTerm` is a FUNCTION CALL (`sameTerm(a, b)`), not an
+    // infix operator — spargebra `parser.rs`'s `sameTerm` grammar rule.
+    let filter_eq = |expr: &str| {
+        format!(
+            "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+             SELECT ?rA ?rB WHERE {{ \
+               ?rA rdf:reifies ?t1 . ?rA ex:assertedBy ex:SourceA . \
+               ?rB rdf:reifies ?t2 . ?rB ex:assertedBy ex:SourceB . \
+               FILTER({expr}) \
+             }}"
+        )
+    };
+    // CENSUS_SQL's ages (30, 40, 30) are NOT unique per person (persons 1
+    // and 3 share age 30), so the equal-age pair count is computed from the
+    // SAME engine's own baseline — never hand-guessed — rather than assumed
+    // to be "one pairing per person" (3x3 cartesian, one match per row).
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML_TWO_ASSERTIONS);
+    let age_values: Vec<Term> = ages.values().cloned().collect();
+    let expected_equal: usize = age_values
+        .iter()
+        .map(|a| age_values.iter().filter(|b| a == *b).count())
+        .sum();
+    let total = age_values.len() * age_values.len();
+
+    let equal = diff(
+        CENSUS_SQL,
+        CENSUS_R2RML_TWO_ASSERTIONS,
+        &filter_eq("OBJECT(?t1) = OBJECT(?t2)"),
+    );
+    assert_eq!(equal.len(), expected_equal, "got={equal:#?}");
+    let same_term = diff(
+        CENSUS_SQL,
+        CENSUS_R2RML_TWO_ASSERTIONS,
+        &filter_eq("sameTerm(OBJECT(?t1), OBJECT(?t2))"),
+    );
+    assert_eq!(
+        same_term.len(),
+        expected_equal,
+        "sameTerm agrees with = here (same-typed integer literals): got={same_term:#?}"
+    );
+    let unequal = diff(
+        CENSUS_SQL,
+        CENSUS_R2RML_TWO_ASSERTIONS,
+        &filter_eq("OBJECT(?t1) != OBJECT(?t2)"),
+    );
+    assert_eq!(unequal.len(), total - expected_equal, "got={unequal:#?}");
+
+    // Exactly-one-composed → constant FALSE (never an error, resolved
+    // STATICALLY at rewrite time — never reaches `var_col` at all).
+    let mixed = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p WHERE {{ \
+           ?r rdf:reifies ?t . ?p ex:hasAge ?age . FILTER(?t = ?age) \
+         }}"
+    );
+    let one_composed = diff(CENSUS_SQL, CENSUS_R2RML, &mixed);
+    assert!(
+        one_composed.is_empty(),
+        "a triple term can never equal a non-triple-term value: got={one_composed:#?}"
+    );
+}
+
+#[test]
+fn whole_composed_variable_equality_over_a_template_bound_component_is_a_sound_501() {
+    // The FULL `?t1 = ?t2` (both composed, component-wise conjunction —
+    // `star::rewrite_equality`) recurses into comparing the SUBJECT
+    // components directly (`http://ex.org/person/{person_id}`, an
+    // `rr:template`) — `unify::filter_cond`'s `var_col` only resolves a bare
+    // `rr:column` binding (pre-existing v1 scope, unrelated to star). Sound
+    // 501 (never a silent wrong answer), not the `equal.len()==3` a fully
+    // general implementation would give — documented explicitly rather than
+    // silently mis-asserted (see the previous test's doc comment).
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?rA ?rB WHERE {{ \
+           ?rA rdf:reifies ?t1 . ?rA ex:assertedBy ex:SourceA . \
+           ?rB rdf:reifies ?t2 . ?rB ex:assertedBy ex:SourceB . \
+           FILTER(?t1 = ?t2) \
+         }}"
+    );
+    assert_locked_501(CENSUS_R2RML_TWO_ASSERTIONS, &query);
+}
+
+#[test]
+fn union_arms_disagreeing_on_composed_ness_is_a_locked_501() {
+    // ADR-0032 D3 item 2's uniform-composed-ness law: the left arm composes
+    // `?t` (via `rdf:reifies`); the right arm binds the SAME `?t` as an
+    // ordinary, non-composing pattern variable — never allowed silently.
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ \
+           {{ ?r rdf:reifies ?t }} \
+           UNION \
+           {{ ?t ex:assertedBy ex:CensusRecord2026 }} \
+         }}"
+    );
     assert_locked_501(CENSUS_R2RML, &query);
+}
+
+#[test]
+fn values_mixed_triple_and_plain_cells_is_a_locked_501() {
+    // A VALUES column mixing a ground triple-term cell with a plain-IRI cell
+    // for the SAME variable is a genuine shape ambiguity this transform
+    // cannot represent in one flat table (`star::decompose_column`'s doc
+    // comment) — explicit Unsupported, never a silent prune.
+    let query =
+        format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} }}");
+    assert_locked_501(CENSUS_R2RML, &query);
+}
+
+#[test]
+fn order_by_composed_var_is_deterministic_across_runs() {
+    // ADR-0032 D3 item 6: triple terms are SPARQL's highest ORDER BY category
+    // (§15.1); order AMONG them is spec-undefined. This engine's choice
+    // (sort last, by lexical form — `exec_core::term_rank`'s doc comment) is
+    // merely a PERMISSIBLE, deterministic one — verified by running the SAME
+    // query twice and requiring the SAME row order both times (mirrors
+    // `explicit_reifier_variable_binds_synthetic_iri_deterministically`'s own
+    // "run twice, compare" pattern).
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ ?r rdf:reifies ?t }} ORDER BY ?t"
+    );
+    let run1 = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    let run2 = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(run1.len(), 3, "got={run1:#?}");
+    assert_eq!(
+        run1, run2,
+        "the same ORDER BY query must produce the SAME row order across independent runs"
+    );
 }

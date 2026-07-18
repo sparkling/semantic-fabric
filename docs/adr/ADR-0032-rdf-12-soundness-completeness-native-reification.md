@@ -244,6 +244,14 @@ tier-1 scope, recorded to prevent future conflation).
   instead of Unsupported. Sound (prune only on proof), general (benefits
   non-star mappings with distinct constant-prefixed templates), and gated by
   the full differential suites.
+  **Lift landed (W2b), one divergence surfaced**: the tree path now *proves*
+  the star-at-path-endpoint cell empty (prefix disjointness fires before the
+  path-join restriction is reached) while the flat path still 501s
+  (`unfold::merge` rejects on path-presence before ever unifying) — a
+  genuine, narrow tree-exceeds-flat divergence the lift surfaced, not
+  created; test-locked explicitly. Follow-up: mirror the prefix check in
+  `unfold::merge` (or reorder its guards) if flat/tree 501-parity on this
+  cell is ever wanted.
 
 ## Consequences
 

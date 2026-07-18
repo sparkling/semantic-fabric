@@ -104,10 +104,26 @@ fn max_alias_in_tree(node: &IqNode) -> usize {
 /// then folds the relational body to a bag-union of [`Branch`]es via [`lower_node`].
 /// `form` is `SELECT` over the outermost projected scope (the tree models the WHERE
 /// pattern + modifiers; CONSTRUCT/ASK form is a `Query`-level concern out of M3c scope).
-pub fn lower(node: IqNode, dialect: sf_sql::Dialect) -> Result<Plan> {
+/// `extra_keep` — ADR-0032 D3 item 2: variable names that must survive the
+/// `Construction` "restrict to project" retains below EVEN THOUGH they are
+/// not literally in the node's own `project` field — the composed-variable
+/// component vars (`star::apply_composed_bindings`'s later projection seam
+/// needs them still bound in `Branch::bindings` when it runs, but nothing in
+/// THIS tree-lowering stage otherwise references them, e.g.
+/// `SELECT ?t WHERE { VALUES ?t { <<(...)>> } }` after `star::rewrite_values`
+/// leaves ?t's own column entirely replaced by its 3 fresh components).
+/// Deliberately coarse (every composed variable's components across the
+/// WHOLE query, not just ones reachable from THIS particular projection) —
+/// over-keeping a column here is harmless (a LATER, precise pass, `cascade`'s
+/// pass 7 with `star::expand_projection_for_cascade`'s per-query-accurate
+/// set, does the final correct pruning); under-keeping would silently lose
+/// the projection seam's input. Empty (`&HashSet::new()`) for a query with no
+/// composed variables — a plain, unconditional no-op past the `.contains`
+/// checks below.
+pub fn lower(node: IqNode, dialect: sf_sql::Dialect, extra_keep: &HashSet<String>) -> Result<Plan> {
     let mut next_alias = max_alias_in_tree(&node) + 1;
     let mut spine = Spine::default();
-    let branches = lower_spine(node, dialect, &mut spine, &mut next_alias)?;
+    let branches = lower_spine(node, dialect, &mut spine, &mut next_alias, extra_keep)?;
     let vars = spine
         .project
         .map(|p| p.iter().map(|v| v.to_string()).collect())
@@ -153,11 +169,12 @@ fn lower_spine(
     dialect: sf_sql::Dialect,
     spine: &mut Spine,
     next_alias: &mut usize,
+    extra_keep: &HashSet<String>,
 ) -> Result<Vec<Branch>> {
     match node {
         IqNode::Distinct { child } => {
             spine.distinct = true;
-            lower_spine(*child, dialect, spine, next_alias)
+            lower_spine(*child, dialect, spine, next_alias, extra_keep)
         }
         IqNode::Slice {
             child,
@@ -166,17 +183,19 @@ fn lower_spine(
         } => {
             spine.offset = offset;
             spine.limit = limit;
-            lower_spine(*child, dialect, spine, next_alias)
+            lower_spine(*child, dialect, spine, next_alias, extra_keep)
         }
         IqNode::OrderBy { child, keys } => {
             spine.order = keys;
-            lower_spine(*child, dialect, spine, next_alias)
+            lower_spine(*child, dialect, spine, next_alias, extra_keep)
         }
         IqNode::Aggregation {
             child,
             grouping,
             aggs,
-        } => lower_aggregation(*child, grouping, aggs, dialect, spine, next_alias),
+        } => lower_aggregation(
+            *child, grouping, aggs, dialect, spine, next_alias, extra_keep,
+        ),
         // A `Construction` over a spine node — the SELECT projection / a post-GROUP-BY
         // `(agg AS ?v)` Extend over an `Aggregation`/`Distinct`/`Slice`/`OrderBy`. Record
         // the projected scope, lower the spine, then fold this `subst` into the (now
@@ -204,7 +223,7 @@ fn lower_spine(
                 matches!(d, BindDef::Expr(e)
                     if !matches!(e.as_ref(), Expression::Variable(_)) && is_arith_over_agg(e.as_ref()))
             });
-            let mut branches = lower_spine(*child, dialect, spine, next_alias)?;
+            let mut branches = lower_spine(*child, dialect, spine, next_alias, extra_keep)?;
             // A MULTI-branch aggregation lowers to a `rust_group`: the aggregate outputs
             // are computed in Rust AFTER grouping, so they are NOT columns of the pre-group
             // union branches. The outer `Construction`'s `(agg AS ?v)` Extend must rewrite
@@ -219,8 +238,9 @@ fn lower_spine(
             }
             for b in &mut branches {
                 fold_subst(&subst, b)?;
-                b.bindings
-                    .retain(|k, _| project.iter().any(|p| p.as_ref() == k.as_str()));
+                b.bindings.retain(|k, _| {
+                    project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
+                });
             }
             Ok(branches)
         }
@@ -228,7 +248,7 @@ fn lower_spine(
         // leaf): the projected scope is its output scope; fold it to branches.
         other => {
             spine.project.get_or_insert_with(|| other.output_vars());
-            lower_node(other, dialect, false, next_alias)
+            lower_node(other, dialect, false, next_alias, extra_keep)
         }
     }
 }
@@ -247,6 +267,7 @@ fn lower_node(
     dialect: sf_sql::Dialect,
     decompose: bool,
     next_alias: &mut usize,
+    extra_keep: &HashSet<String>,
 ) -> Result<Vec<Branch>> {
     match node {
         // ---- leaves --------------------------------------------------------------
@@ -291,7 +312,7 @@ fn lower_node(
             // merge is a pure CROSS JOIN; the shared-var equalities ride `cond`.
             let mut acc = vec![Branch::empty()];
             for child in children {
-                let cbr = lower_node(child, dialect, decompose, next_alias)?;
+                let cbr = lower_node(child, dialect, decompose, next_alias, extra_keep)?;
                 acc = join_branches(acc, cbr)?;
                 if acc.is_empty() {
                     break;
@@ -308,11 +329,11 @@ fn lower_node(
             // The LEFT operand inherits the enclosing `decompose` context (a left-nested
             // OPTIONAL is already opts-free-compatible: `left_join_branches` only requires
             // the RIGHT to be opts-free, so the left keeps the efficient path at top level).
-            let l = lower_node(*left, dialect, decompose, next_alias)?;
+            let l = lower_node(*left, dialect, decompose, next_alias, extra_keep)?;
             // The RIGHT operand MUST lower to OPTS-FREE branches to be re-feedable into
             // `left_join_branches` (§5.3 nested-right closure): force any OPTIONAL inside
             // the right to its `(P⋈R)∪(P−R)` decomposition rather than the OptJoin form.
-            let r = lower_node(*right, dialect, true, next_alias)?;
+            let r = lower_node(*right, dialect, true, next_alias, extra_keep)?;
             // The OPTIONAL ON-expression (R5 inner FILTER) is reconstructed to a single
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
@@ -347,7 +368,7 @@ fn lower_node(
 
         // ---- selection: resolve each cond per resulting branch (R4) ---------------
         IqNode::Filter { child, cond } => {
-            let mut branches = lower_node(*child, dialect, decompose, next_alias)?;
+            let mut branches = lower_node(*child, dialect, decompose, next_alias, extra_keep)?;
             for b in &mut branches {
                 apply_conds(&cond, b, dialect)?;
             }
@@ -358,7 +379,7 @@ fn lower_node(
         IqNode::Union { children, .. } => {
             let mut out = Vec::new();
             for c in children {
-                out.extend(lower_node(c, dialect, decompose, next_alias)?);
+                out.extend(lower_node(c, dialect, decompose, next_alias, extra_keep)?);
             }
             Ok(out)
         }
@@ -375,7 +396,7 @@ fn lower_node(
             // pattern, THEN FILTER — `unfold.rs:135-142`), so peel the leading FILTER(s)
             // and apply their conds per branch once the bindings are in place (R4).
             let (body, filters) = peel_filters(*child);
-            let branches = lower_node(body, dialect, decompose, next_alias)?;
+            let branches = lower_node(body, dialect, decompose, next_alias, extra_keep)?;
             let mut out = Vec::with_capacity(branches.len());
             for mut b in branches {
                 // A `fold_subst` shared-var unify may prove the branch unsatisfiable
@@ -387,8 +408,13 @@ fn lower_node(
                 for cond in &filters {
                     apply_conds(cond, &mut b, dialect)?;
                 }
-                b.bindings
-                    .retain(|k, _| project.iter().any(|p| p.as_ref() == k.as_str()));
+                // ADR-0032 D3 item 2: `extra_keep` widens this restrict-to-project so a
+                // composed variable's component vars survive to the later projection
+                // seam even when nothing else in this leaf-CQ references them — see
+                // `lower`'s doc comment on the parameter.
+                b.bindings.retain(|k, _| {
+                    project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
+                });
                 out.push(b);
             }
             Ok(out)
@@ -404,7 +430,7 @@ fn lower_node(
         IqNode::Aggregation { .. }
         | IqNode::Distinct { .. }
         | IqNode::Slice { .. }
-        | IqNode::OrderBy { .. } => lower_as_subplan(node, dialect, next_alias),
+        | IqNode::OrderBy { .. } => lower_as_subplan(node, dialect, next_alias, extra_keep),
         IqNode::Intensional { .. } => Err(Error::Unsupported(
             "Intensional survived to LOWER — the RESOLVE invariant (ZERO Intensional) \
              was violated → 501"
@@ -672,7 +698,16 @@ fn lower_iq_exists(
     is_minus: bool,
     dialect: sf_sql::Dialect,
 ) -> Result<SqlCond> {
-    let inner = lower_node(node.clone(), dialect, false, &mut 0)?;
+    // ADR-0032 D3 item 2: an EMPTY `extra_keep` here (not threaded further from
+    // `lower`/`lower_node`, unlike the main line) is a documented, narrow gap —
+    // a composed variable referenced ONLY inside a FILTER EXISTS/NOT EXISTS/MINUS
+    // body would not survive this inner lowering's own projection-restrict retain.
+    // `apply_conds`/`lower_iq_cond` (this function's only callers) are invoked
+    // from many more sites than the main lowering line, so threading the real set
+    // this deep was judged out of proportion to this wave's actual test matrix
+    // (no test exercises a composed variable inside an EXISTS body) — mirrors
+    // `apply_composed_bindings`'s own documented SubPlan-pooling gap.
+    let inner = lower_node(node.clone(), dialect, false, &mut 0, &HashSet::new())?;
     // Name the actual operator this call is serving in any deferral message: this
     // function is shared by MINUS (`is_minus`), FILTER NOT EXISTS (`negated`
     // without `is_minus`), and FILTER EXISTS (neither).
@@ -1107,8 +1142,9 @@ fn lower_as_subplan(
     node: IqNode,
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
+    extra_keep: &HashSet<String>,
 ) -> Result<Vec<Branch>> {
-    let mut nested_plan = lower(node, dialect)?;
+    let mut nested_plan = lower(node, dialect, extra_keep)?;
     // ADR-0025 Tier-1 bug #2: a SubPlan used as a join input is emitted as a derived table
     // via `emit_subplan_sql` → `plan.emitted()`, which renders only per-branch SQL. A
     // plan-level SLICE (LIMIT/OFFSET) is applied by the Rust executor on the OUTER result,
@@ -1364,6 +1400,19 @@ fn remap_termdef(def: &TermDef, projection: &[ColRef], sp_alias: usize) -> Resul
                 fixed_type: *fixed_type,
             })
         }
+        // ADR-0032 D2: forced arm (new `TermDef` variant) — recurses like
+        // `Coalesce`/`Concat`. Not reachable in practice: a `ComposedTriple` binding
+        // is installed only by `lib.rs`'s env-composed projection override, after
+        // SubPlan pooling has already run.
+        TermDef::ComposedTriple {
+            subject,
+            predicate,
+            object,
+        } => Ok(TermDef::ComposedTriple {
+            subject: Box::new(remap_termdef(subject, projection, sp_alias)?),
+            predicate: Box::new(remap_termdef(predicate, projection, sp_alias)?),
+            object: Box::new(remap_termdef(object, projection, sp_alias)?),
+        }),
     }
 }
 
@@ -1434,8 +1483,9 @@ fn lower_aggregation(
     dialect: sf_sql::Dialect,
     spine: &mut Spine,
     next_alias: &mut usize,
+    extra_keep: &HashSet<String>,
 ) -> Result<Vec<Branch>> {
-    let inner = lower_node(child, dialect, false, next_alias)?;
+    let inner = lower_node(child, dialect, false, next_alias, extra_keep)?;
     spine.project.get_or_insert_with(|| {
         let mut out = grouping.clone();
         for a in &aggs {
@@ -2230,7 +2280,7 @@ mod tests {
         let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         let normalized = crate::iq::normalize::normalize(resolved).unwrap();
-        lower(normalized, sf_sql::Dialect::Sqlite).unwrap()
+        lower(normalized, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap()
     }
 
     /// build → resolve → normalize → lower, returning the lower `Result` (for 501 cases).
@@ -2240,7 +2290,7 @@ mod tests {
         let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         let normalized = crate::iq::normalize::normalize(resolved).unwrap();
-        lower(normalized, sf_sql::Dialect::Sqlite)
+        lower(normalized, sf_sql::Dialect::Sqlite, &HashSet::new())
     }
 
     fn has_col_eq(conds: &[SqlCond]) -> bool {
@@ -2490,7 +2540,7 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
         let rg = p.rust_group.expect("multi-branch inner ⇒ Plan.rust_group");
         assert_eq!(rg.keys, vec!["s".to_owned()]);
         assert_eq!(rg.aggs.len(), 1);
@@ -2553,7 +2603,7 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
         assert!(
             p.rust_group.is_none(),
             "compatible arms must push down, not fall back to RustGroup"
@@ -2629,7 +2679,7 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
         assert!(
             p.rust_group.is_none(),
             "an injective Template key must push down, not fall back to RustGroup"
@@ -2719,7 +2769,7 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
         assert!(
             p.rust_group.is_some(),
             "a non-injective Template key must fall back to RustGroup, never mis-pool"
@@ -2779,7 +2829,7 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
         assert!(
             p.rust_group.is_some(),
             "a multi-column Template aggregate ARGUMENT must fall back to RustGroup"
@@ -2845,7 +2895,7 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite).unwrap();
+        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
         assert!(
             p.rust_group.is_some(),
             "a Coalesce grouping key must fall back to RustGroup, never mis-pool"

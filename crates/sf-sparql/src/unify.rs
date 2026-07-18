@@ -54,15 +54,30 @@ pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
         // equalities is deferred (ADR-0007 v1 — never silently wrong). So sharing a
         // BIND variable with a later pattern (a join/filter on it) defers to 501.
         // An aggregate result is produced post-grouping and is never re-unified into
-        // a join/filter (the group is the outermost pattern in v1).
-        (TermDef::Coalesce(..) | TermDef::Concat(..) | TermDef::Agg { .. }, _)
-        | (_, TermDef::Coalesce(..) | TermDef::Concat(..) | TermDef::Agg { .. }) => {
-            Unify::Unsupported(
-                "unification of a COALESCE'd / CONCAT'd / aggregate (multi-source / computed) \
-                 binding"
-                    .to_owned(),
-            )
-        }
+        // a join/filter (the group is the outermost pattern in v1). A `ComposedTriple`
+        // (ADR-0032 D2) is likewise multi-source (three component defs) and is, in
+        // practice, only ever installed at the very end of translation (`lib.rs`'s
+        // env-composed projection override, AFTER unify has already run for every
+        // real join/filter) — never actually reached here, but the same conservative
+        // "not reducible to one raw-column equality" verdict applies if it ever were.
+        (
+            TermDef::Coalesce(..)
+            | TermDef::Concat(..)
+            | TermDef::Agg { .. }
+            | TermDef::ComposedTriple { .. },
+            _,
+        )
+        | (
+            _,
+            TermDef::Coalesce(..)
+            | TermDef::Concat(..)
+            | TermDef::Agg { .. }
+            | TermDef::ComposedTriple { .. },
+        ) => Unify::Unsupported(
+            "unification of a COALESCE'd / CONCAT'd / aggregate / composed-triple \
+             (multi-source / computed) binding"
+                .to_owned(),
+        ),
     }
 }
 
@@ -147,7 +162,8 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
 /// at each literal position, a column slot at each column position). Aligned
 /// columns become pairwise raw-column equalities; a fixed-text mismatch proves
 /// disjointness; a kind/length mismatch is conservatively unsupported (never an
-/// unsound prune).
+/// unsound prune) UNLESS the ADR-0032 D6 leading-literal-prefix check below
+/// already proved disjointness.
 fn align_templates(
     x: &sf_core::ir::Template,
     a1: usize,
@@ -155,6 +171,23 @@ fn align_templates(
     a2: usize,
 ) -> Unify {
     let (sx, sy) = (x.segments(), y.segments());
+    // ADR-0032 D6 lift: a conflict in the two templates' LEADING LITERAL text
+    // (the fixed characters before either's first column reference) proves
+    // disjointness REGARDLESS of overall shape/length — a column's value
+    // never contains the raw delimiter/prefix characters the template's OWN
+    // literal segments do (the same percent-encoding injectivity argument
+    // `TemplateShape`'s prefix/suffix splitting, above, already relies on),
+    // so two templates whose prefixes conflict before their first column can
+    // never expand to the same value. Checked BEFORE the length/shape
+    // conservatism below — that is precisely the case this lift targets: two
+    // DIFFERENT quoted shapes' description maps (distinct subject templates,
+    // typically distinct lengths) sharing the SAME 4-predicate ADR-0032 D1
+    // vocabulary (`differential_star.rs`'s object-side-nesting-depth-2 test).
+    // NEVER prunes without that proof — a length/shape MATCH with no prefix
+    // conflict still falls through to the existing, unchanged logic below.
+    if leading_literal_prefixes_conflict(sx, sy) {
+        return Unify::Empty;
+    }
     if sx.len() != sy.len() {
         return Unify::Unsupported("template length mismatch".to_owned());
     }
@@ -176,6 +209,34 @@ fn align_templates(
         }
     }
     Unify::Sat(eqs)
+}
+
+/// Whether `sx`/`sy`'s leading literal text — see [`leading_literal_prefix`]
+/// — differs at some position BOTH have fixed text for (a shorter prefix
+/// simply has nothing to conflict with beyond its own length, which is fine:
+/// e.g. `"http://ex/a/"` vs `"http://ex/ab"` DO conflict at the 12th
+/// character, but `"http://ex/a"` (ending exactly there) vs `"http://ex/a/"`
+/// do NOT — the shorter one could still be a strict prefix of a longer
+/// literal run the longer template's OWN later segments complete).
+fn leading_literal_prefixes_conflict(sx: &[Segment], sy: &[Segment]) -> bool {
+    let px = leading_literal_prefix(sx);
+    let py = leading_literal_prefix(sy);
+    px.bytes().zip(py.bytes()).any(|(a, b)| a != b)
+}
+
+/// The concatenated text of every `Segment::Literal` from the start of
+/// `segs` up to (not including) the first `Segment::Column` — the portion of
+/// a template whose exact characters are fixed by the template itself,
+/// independent of any row's column values.
+fn leading_literal_prefix(segs: &[Segment]) -> String {
+    let mut s = String::new();
+    for seg in segs {
+        match seg {
+            Segment::Literal(l) => s.push_str(l),
+            Segment::Column(_) => break,
+        }
+    }
+    s
 }
 
 enum TemplateShape {
@@ -276,12 +337,13 @@ fn const_lexical(c: &Term, want: Option<TermType>) -> Result<String, ()> {
 // --- FILTER lowering ------------------------------------------------------
 
 use spargebra::algebra::{Expression, Function};
-use spargebra::term::Variable;
+use spargebra::term::{Literal, Variable};
 use std::collections::BTreeMap;
 
 /// Lower a FILTER expression to a [`SqlCond`] over raw columns + bound params
 /// (ADR-0007 v1 subset: comparisons / `&&` / `||` / `!` / `BOUND`, plus the
-/// ADR-0020 §2 near-free FTS baseline `CONTAINS`/`STRSTARTS`/`STRENDS`/`REGEX`).
+/// ADR-0020 §2 near-free FTS baseline `CONTAINS`/`STRSTARTS`/`STRENDS`/`REGEX`,
+/// plus ADR-0032 D3's `sameTerm` / constant-boolean / error-marker arms below).
 /// Anything outside the subset is reported unsupported — never dropped (dropping a
 /// FILTER would be unsound). `bindings` resolves a variable to its raw column (the
 /// variable must be a plain `rr:column` binding in v1); `dialect` gates the
@@ -303,13 +365,61 @@ pub fn filter_cond(
         Expression::Not(a) => Ok(SqlCond::Not(Box::new(filter_cond(a, bindings, dialect)?))),
         Expression::Bound(v) => var_col(v, bindings).map(SqlCond::IsNotNull),
         Expression::Equal(a, b) => cmp(a, b, CmpOp::Eq, bindings),
+        // ADR-0032 D3 item 4: this v1 slice treats `sameTerm` identically to
+        // `=` at the raw-column-comparison level it shares with `cmp` — sound
+        // for the IRI-valued components `star::rewrite_equality`'s
+        // component-wise recursion produces (subject/predicate are always
+        // IRIs; RDF term equality for IRIs has no `=`-vs-`sameTerm` value/
+        // syntactic distinction), and no worse than the SQL `=` every OTHER
+        // `cmp`-routed comparison in this v1 subset already relies on (which
+        // likewise does not distinguish e.g. `"1"^^xsd:integer` from
+        // `"1.0"^^xsd:decimal` by dialect-native numeric equality). A
+        // genuinely general `sameTerm` (full value/syntactic distinction for
+        // arbitrary literal operands) is unrelated pre-existing v1 scope, not
+        // added here.
+        Expression::SameTerm(a, b) => cmp(a, b, CmpOp::Eq, bindings),
         Expression::Greater(a, b) => cmp(a, b, CmpOp::Gt, bindings),
         Expression::GreaterOrEqual(a, b) => cmp(a, b, CmpOp::Ge, bindings),
         Expression::Less(a, b) => cmp(a, b, CmpOp::Lt, bindings),
         Expression::LessOrEqual(a, b) => cmp(a, b, CmpOp::Le, bindings),
+        // ADR-0032 D3 items 3-4: a constant `xsd:boolean` literal — the
+        // representation `star::rewrite_expr` uses for `isTRIPLE`'s result
+        // and an `=`/`sameTerm` "exactly one side composed" comparison.
+        // Lowers to the SAME `1 = 1` / `1 = 0` sentinel `render_conjunction`
+        // (an empty `SqlCond::And`) and `SqlCond::Or([])`'s own `render_cond`
+        // arm already use — no new emission code, just these two constructors.
+        Expression::Literal(l) => match xsd_boolean_value(l) {
+            Some(true) => Ok(SqlCond::And(vec![])),
+            Some(false) => Ok(SqlCond::Or(vec![])),
+            None => Err(format!(
+                "FILTER expression not supported in v1: non-boolean bare literal {l:?}"
+            )),
+        },
+        // ADR-0032 D3 item 3's error marker (`star::error_marker_expr`'s doc
+        // comment has the full rationale): a provably-non-composed
+        // SUBJECT/PREDICATE/OBJECT argument — an erroring FILTER operand
+        // eliminates the row, the same observable effect as constant false.
+        Expression::FunctionCall(f, args) if is_error_marker(f, args) => Ok(SqlCond::Or(vec![])),
         Expression::FunctionCall(f, args) => str_match(f, args, bindings, dialect),
         other => Err(format!("FILTER expression not supported in v1: {other:?}")),
     }
+}
+
+/// Whether `l` is a plain `xsd:boolean` literal, and if so its value.
+fn xsd_boolean_value(l: &Literal) -> Option<bool> {
+    if l.datatype().as_str() == "http://www.w3.org/2001/XMLSchema#boolean" {
+        Some(l.value() == "true")
+    } else {
+        None
+    }
+}
+
+/// Whether `(f, args)` is exactly `star::error_marker_expr`'s shape — a
+/// single `NamedNode` argument to `CONCAT`. See that function's doc comment
+/// for the full rationale (this is the FILTER-side half; `bind_term_def`'s
+/// EXISTING, unmodified `Function::Concat` arm already handles the BIND side).
+fn is_error_marker(f: &Function, args: &[Expression]) -> bool {
+    matches!(f, Function::Concat) && matches!(args, [Expression::NamedNode(_)])
 }
 
 /// Lower a `BIND(expr AS ?v)` expression to the [`TermDef`] for `?v`, reusing the
@@ -481,6 +591,23 @@ fn cmp(
     bindings: &BTreeMap<String, TermDef>,
 ) -> Result<SqlCond, String> {
     match (a, b) {
+        // ADR-0032 D3 item 4: `star::rewrite_equality`'s "both composed"
+        // component-wise conjunction compares two component VARIABLES
+        // directly (e.g. `?t1_s = ?t2_s`), not a variable against a constant
+        // — `SqlCond::ColEq` (column = column, the SAME condition ordinary
+        // join-key equality already uses) covers `Eq`; the other operators
+        // have no column-vs-column `SqlCond` and stay unsupported (never
+        // silently wrong — sound over complete).
+        (Expression::Variable(v1), Expression::Variable(v2)) => {
+            if op != CmpOp::Eq {
+                return Err(format!(
+                    "{op:?} between two variables needs a constant operand in v1"
+                ));
+            }
+            let c1 = var_col(v1, bindings)?;
+            let c2 = var_col(v2, bindings)?;
+            Ok(SqlCond::ColEq(c1, c2))
+        }
         (Expression::Variable(v), rhs) => {
             let col = var_col(v, bindings)?;
             Ok(SqlCond::Cmp(col, op, expr_const(rhs)?))
@@ -680,5 +807,142 @@ mod tests {
             Dialect::Sqlite
         )
         .is_err());
+    }
+
+    /// ADR-0032 D3: a constant `xsd:boolean` literal FILTER expression
+    /// (`star::rewrite_expr`'s isTRIPLE / one-side-composed-equality output)
+    /// lowers to the pre-existing empty-And/Or sentinels.
+    #[test]
+    fn boolean_literal_filter_lowers_to_the_constant_true_false_sentinels() {
+        let bool_lit = |v: &str| {
+            Expression::Literal(Literal::new_typed_literal(
+                v,
+                sf_core::NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+            ))
+        };
+        let b = BTreeMap::new();
+        assert!(matches!(
+            filter_cond(&bool_lit("true"), &b, Dialect::Sqlite),
+            Ok(SqlCond::And(v)) if v.is_empty()
+        ));
+        assert!(matches!(
+            filter_cond(&bool_lit("false"), &b, Dialect::Sqlite),
+            Ok(SqlCond::Or(v)) if v.is_empty()
+        ));
+        // A non-boolean bare literal is NOT a FILTER expression in v1
+        // (unrelated to ADR-0032 — a pre-existing gap, still 501s).
+        assert!(filter_cond(&lit("plain"), &b, Dialect::Sqlite).is_err());
+    }
+
+    /// ADR-0032 D3 item 3: `star::error_marker_expr`'s exact shape
+    /// (`CONCAT(<a NamedNode>)`) lowers to the constant-false sentinel in
+    /// FILTER context (an erroring operand eliminates the row).
+    #[test]
+    fn error_marker_filter_lowers_to_constant_false() {
+        let marker = func(
+            Function::Concat,
+            vec![Expression::NamedNode(sf_core::NamedNode::new_unchecked(
+                "urn:sf-star:error-marker",
+            ))],
+        );
+        let b = BTreeMap::new();
+        assert!(matches!(
+            filter_cond(&marker, &b, Dialect::Sqlite),
+            Ok(SqlCond::Or(v)) if v.is_empty()
+        ));
+    }
+
+    /// ADR-0032 D3 item 4: `sameTerm` lowers via the same `cmp` machinery as
+    /// `=` (this v1 slice's documented simplification — see `filter_cond`'s
+    /// `SameTerm` arm).
+    #[test]
+    fn same_term_lowers_like_equal() {
+        let b = col_binding("x", "name");
+        let eq = filter_cond(
+            &Expression::Equal(Box::new(var("x")), Box::new(lit("Ada"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        let st = filter_cond(
+            &Expression::SameTerm(Box::new(var("x")), Box::new(lit("Ada"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(
+            matches!((&eq, &st), (SqlCond::Cmp(c1, CmpOp::Eq, v1), SqlCond::Cmp(c2, CmpOp::Eq, v2))
+                if c1 == c2 && v1 == v2),
+            "eq={eq:?} st={st:?}"
+        );
+    }
+
+    /// ADR-0032 D3 item 4: two component variables compared directly (the
+    /// "both composed" component-wise conjunction's leaf shape) lowers to a
+    /// column-vs-column `SqlCond::ColEq` — NOT the constant-operand `Cmp`.
+    #[test]
+    fn variable_vs_variable_equality_lowers_to_col_eq() {
+        let mut b = col_binding("t1_s", "col_a");
+        b.extend(col_binding("t2_s", "col_b"));
+        let cond = filter_cond(
+            &Expression::Equal(Box::new(var("t1_s")), Box::new(var("t2_s"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(
+            matches!(&cond, SqlCond::ColEq(a, b) if &*a.column == "col_a" && &*b.column == "col_b"),
+            "{cond:?}"
+        );
+        // Any op OTHER than Eq between two bare variables stays unsupported
+        // (no column-vs-column SqlCond exists for it — sound over complete).
+        assert!(filter_cond(
+            &Expression::Greater(Box::new(var("t1_s")), Box::new(var("t2_s"))),
+            &b,
+            Dialect::Sqlite
+        )
+        .is_err());
+    }
+
+    // -- ADR-0032 D6 lift: align_templates literal-prefix disjointness -----
+
+    /// Two templates whose LEADING LITERAL prefixes CONFLICT (differ at a
+    /// shared position) are provably disjoint — pruned even though their
+    /// lengths differ, the exact case the old length-check-only conservatism
+    /// could not resolve (`differential_star.rs`'s object-side-nesting-
+    /// depth-2 test: two distinct quoted shapes' description maps).
+    #[test]
+    fn align_templates_conflicting_prefix_is_disjoint_even_with_different_lengths() {
+        let x = Template::parse("http://ex.org/leaf/{id}").unwrap();
+        let y = Template::parse("http://ex.org/person/{id}/{sub}").unwrap();
+        assert!(matches!(align_templates(&x, 0, &y, 1), Unify::Empty));
+    }
+
+    /// Same leading literal prefix, but different overall length — the
+    /// prefix alone does NOT prove disjointness (the shorter template's own
+    /// text could still continue to match, just via a shape this lift does
+    /// not attempt to reason about further), so this stays the pre-existing
+    /// conservative Unsupported — never an unsound prune.
+    #[test]
+    fn align_templates_same_prefix_different_length_stays_unsupported() {
+        let x = Template::parse("http://ex.org/person/{id}").unwrap();
+        let y = Template::parse("http://ex.org/person/{id}/{sub}").unwrap();
+        assert!(matches!(
+            align_templates(&x, 0, &y, 1),
+            Unify::Unsupported(_)
+        ));
+    }
+
+    /// Identical prefix AND identical shape (same length, same segment
+    /// kinds) — unchanged from the pre-lift behavior: the columns align
+    /// pairwise into a satisfiable raw-column equality.
+    #[test]
+    fn align_templates_identical_prefix_and_columns_unify_normally() {
+        let x = Template::parse("http://ex.org/person/{id}").unwrap();
+        let y = Template::parse("http://ex.org/person/{pid}").unwrap();
+        assert!(matches!(
+            align_templates(&x, 0, &y, 1),
+            Unify::Sat(eqs) if eqs.len() == 1
+        ));
     }
 }
