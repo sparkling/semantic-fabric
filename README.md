@@ -384,7 +384,8 @@ content-negotiated, governed) over **both** SQLite and PostgreSQL — both backe
 execute the OBDA path; SPARQL 1.2 → SQL over R2RML + Direct Mapping; full
 property-path expressions (`^p`, `p/q`, `p|q`, `p?`, `!p`, composite `+`/`*`);
 conformance and bench end-to-end; named-graph output; R2RML §10 datatype
-canonicalisation; constant-memory streaming.
+canonicalisation; constant-memory streaming; **RDF-star quoted triples**
+end-to-end over SQL (R2RML-star extension — see the subsection below).
 
 **Limitations — stated plainly so the numbers are not over-read:**
 
@@ -398,6 +399,27 @@ canonicalisation; constant-memory streaming.
 
 Features outside the v1 surface return 501 / are skipped — they are not silently
 wrong, but they are not done.
+
+### RDF-star: quoted triples over SQL (R2RML-star extension)
+
+semantic-fabric supports **RDF-star** — statements *about* statements (provenance,
+certainty, validity) — end to end over live relational data, without
+materialisation. A mapping declares a quoted triple with the RML-STAR vocabulary
+(`rml:starMap` / `rml:quotedTriplesMap`), and a SPARQL-star query
+`<< ?s ?p ?o >>` is answered by rewriting it to a SQL join against the W3C RDF 1.2
+Interoperability *basic encoding*. Both the mapping compiler
+([ADR-0029](docs/adr/ADR-0029-rdf-star-mapping-extension-rml-star-vocabulary-basic-encoding.md))
+and the query rewrite
+([ADR-0031](docs/adr/ADR-0031-rdf-star-query-rewrite-quoted-triple-patterns-basic-encoding.md))
+are implemented and test-gated — there is **no prior art** for RDF-star over live
+SQL rewriting ([ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
+
+- **[R2RML-star specification](docs/rdf-star/specification.html)** — the normative
+  extension spec (vocabulary, basic-encoding compilation, query semantics, v1
+  scope), structured after the W3C R2RML Recommendation.
+- **[R2RML-star guide &amp; tutorial](docs/rdf-star/guide.html)** — a hands-on
+  walkthrough: why quote a triple, the mental model, and worked mapping + query
+  examples.
 
 ## 10. Architecture / workspace
 

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R2RML-star: RDF-star Extension to R2RML — semantic-fabric Project Specification</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#555; --rule:#d9dee3; --bg:#fff;
+    --accent:#005a9c;         /* the classic W3C link blue */
+    --accent-2:#0a6c74;
+    --note:#e9f6f9; --note-br:#0a6c74;
+    --ex:#f4f7f9; --ex-br:#005a9c;
+    --warn:#fbf3e3; --warn-br:#b8860b;
+    --code-bg:#f5f7f9; --code-ink:#1c2b33;
+    --maxw:46rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.62 "Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif;
+  }
+  .band{height:8px;background:linear-gradient(90deg,var(--accent),var(--accent-2))}
+  header.doc{max-width:var(--maxw);margin:0 auto;padding:2.4rem 1.5rem 1rem}
+  header.doc .logo{
+    display:inline-block;font-weight:800;letter-spacing:.5px;color:var(--accent);
+    border:2px solid var(--accent);border-radius:6px;padding:.15rem .5rem;font-size:.8rem;text-transform:uppercase
+  }
+  h1{font-size:1.9rem;line-height:1.25;margin:1rem 0 .3rem;font-weight:800}
+  .subtitle{color:var(--muted);font-size:1.05rem;margin:0 0 1rem}
+  .docmeta{font-size:.9rem;color:var(--muted);border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:.8rem 0;margin:1.2rem 0}
+  .docmeta dt{font-weight:700;color:var(--ink)}
+  .docmeta dd{margin:0 0 .35rem}
+  main{max-width:var(--maxw);margin:0 auto;padding:0 1.5rem 4rem}
+  h2{font-size:1.4rem;margin:2.6rem 0 .6rem;padding-top:.4rem;border-top:1px solid var(--rule);font-weight:800}
+  h3{font-size:1.12rem;margin:1.8rem 0 .4rem;font-weight:700}
+  h2 .secno,h3 .secno{color:var(--accent-2);font-weight:800;margin-right:.5rem}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  p,li{max-width:100%}
+  code,pre,.term{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace}
+  code{background:var(--code-bg);color:var(--code-ink);padding:.08em .35em;border-radius:4px;font-size:.9em}
+  pre{background:var(--code-bg);color:var(--code-ink);padding:1rem 1.1rem;border-radius:8px;overflow-x:auto;font-size:.86rem;line-height:1.5;border:1px solid var(--rule)}
+  pre code{background:none;padding:0}
+  dfn{font-style:normal;font-weight:700}
+  .term{color:var(--accent-2);font-weight:600}
+  .note,.example,.warn{border-radius:8px;padding:.9rem 1.1rem;margin:1.2rem 0;font-size:.96rem}
+  .note{background:var(--note);border-left:4px solid var(--note-br)}
+  .example{background:var(--ex);border-left:4px solid var(--ex-br)}
+  .warn{background:var(--warn);border-left:4px solid var(--warn-br)}
+  .note .lbl,.example .lbl,.warn .lbl{display:block;font-weight:800;text-transform:uppercase;font-size:.72rem;letter-spacing:.6px;margin-bottom:.4rem}
+  .note .lbl{color:var(--note-br)} .example .lbl{color:var(--ex-br)} .warn .lbl{color:var(--warn-br)}
+  table{border-collapse:collapse;width:100%;margin:1.2rem 0;font-size:.92rem;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--rule);padding:.5rem .65rem;text-align:left;vertical-align:top}
+  th{background:var(--code-bg);font-weight:700}
+  .toc{background:#fafbfc;border:1px solid var(--rule);border-radius:8px;padding:1rem 1.2rem 1rem 1.2rem;margin:1.5rem 0}
+  .toc .lbl{font-weight:800;text-transform:uppercase;font-size:.72rem;letter-spacing:.6px;color:var(--muted)}
+  .toc ol{margin:.5rem 0 0;padding-left:1.4rem}
+  .toc ol ol{padding-left:1.1rem}
+  .toc li{margin:.15rem 0}
+  .rule-id{display:inline-block;font-weight:800;color:#fff;background:var(--accent-2);border-radius:5px;padding:0 .45rem;font-size:.78rem;margin-right:.4rem;font-family:inherit}
+  footer{max-width:var(--maxw);margin:0 auto;padding:2rem 1.5rem 4rem;color:var(--muted);font-size:.85rem;border-top:1px solid var(--rule)}
+  .status-box{background:#fafbfc;border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:8px;padding:1rem 1.2rem;margin:1.4rem 0}
+  @media (prefers-color-scheme: dark){
+    :root{--ink:#e6e6e6;--muted:#a2acb4;--rule:#2c333a;--bg:#14181c;--note:#0e2b30;--ex:#15202a;--warn:#2a2418;--code-bg:#1b2127;--code-ink:#d6e2ea;--accent:#5aa9e6;--accent-2:#4fc5cf}
+    .toc,.status-box{background:#181d22}
+    th{background:#1b2127}
+  }
+</style>
+</head>
+<body>
+<div class="band"></div>
+<header class="doc">
+  <span class="logo">semantic-fabric · Project Specification</span>
+  <h1>R2RML-star: An RDF-star Extension to R2RML</h1>
+  <p class="subtitle">Declaring and querying quoted (reified) triples over relational data, without materialization.</p>
+  <dl class="docmeta">
+    <dt>This version</dt><dd><code>docs/rdf-star/specification.html</code></dd>
+    <dt>Status</dt><dd>Project Specification — Implemented (semantic-fabric <code>feat/rdf-star</code>)</dd>
+    <dt>Latest update</dt><dd>2026-07-18</dd>
+    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query)</dd>
+    <dt>Editorial model</dt><dd>Structured after the W3C <em>R2RML: RDB to RDF Mapping Language</em> Recommendation</dd>
+  </dl>
+</header>
+
+<main>
+
+<div class="status-box">
+  <strong>Status of This Document.</strong> This is a <em>project</em> specification produced by the
+  <strong>semantic-fabric</strong> project. It is <strong>not</strong> a W3C Standard and does not represent the
+  consensus of the W3C or the RML Community Group; it is styled after the W3C R2RML Recommendation for
+  familiarity only. It documents an extension that is <em>implemented and test-gated</em> in semantic-fabric.
+  Where this specification reuses the RML-STAR vocabulary, it defines its <em>own</em> compiled semantics for
+  those terms — a deliberate, documented divergence described in §<a href="#divergence">9</a>.
+</div>
+
+<h2 id="abstract"><span class="secno">§</span>Abstract</h2>
+<p>
+  <a href="https://www.w3.org/TR/r2rml/">R2RML</a> maps relational rows to RDF triples for
+  virtual, non-materializing access (OBDA). RDF-star (RDF&nbsp;1.2) adds <em>quoted triples</em> —
+  triples that are themselves the subject or object of other triples — enabling statements
+  <em>about</em> statements (provenance, certainty, temporal validity). This specification defines
+  <dfn>R2RML-star</dfn>: a minimal extension letting a mapping author declare that a triples map's
+  subject or object represents a quoted triple, and defining how a SPARQL-star query
+  <code>&lt;&lt;?s ?p ?o&gt;&gt;</code> is answered against relational data. The extension compiles
+  quoted triples to the W3C RDF&nbsp;1.2 Interoperability <em>basic encoding</em> — plain RDF
+  reachable by an ordinary SQL rewrite — rather than to a native triple term, because a virtualizing
+  SQL backend has no atomic triple-term value to store or scan.
+</p>
+
+<div class="toc" role="doc-toc">
+  <span class="lbl">Table of Contents</span>
+  <ol>
+    <li><a href="#intro">Introduction</a></li>
+    <li><a href="#terminology">Terminology and Conformance</a></li>
+    <li><a href="#vocabulary">The R2RML-star Vocabulary</a></li>
+    <li><a href="#starmaps">Star Maps</a>
+      <ol>
+        <li><a href="#starmap-subject">Subject-position star maps</a></li>
+        <li><a href="#starmap-object">Object-position star maps</a></li>
+      </ol>
+    </li>
+    <li><a href="#encoding">Compilation to the Basic Encoding</a>
+      <ol>
+        <li><a href="#synthetic-id">The synthetic proposition identifier</a></li>
+        <li><a href="#four-triples">The four basic-encoding triples</a></li>
+      </ol>
+    </li>
+    <li><a href="#assertion">Asserted and Non-Asserted Triples Maps</a></li>
+    <li><a href="#query">Query Semantics (SPARQL-star)</a>
+      <ol>
+        <li><a href="#reifies">The <code>rdf:reifies</code> desugaring</a></li>
+        <li><a href="#rewrite">The pattern rewrite</a></li>
+      </ol>
+    </li>
+    <li><a href="#scope">Scope and Restrictions</a></li>
+    <li><a href="#divergence">Divergence from RML-STAR</a></li>
+    <li><a href="#examples">Worked Example</a></li>
+    <li><a href="#references">References</a></li>
+  </ol>
+</div>
+
+<h2 id="intro"><span class="secno">1.</span>Introduction</h2>
+<p>
+  A quoted triple <code>&lt;&lt;s p o&gt;&gt;</code> lets an RDF graph carry statements about other
+  statements. The canonical example is provenance: not merely <em>"Alice is 34"</em>, but <em>"the
+  claim that Alice is 34 was asserted by the 2026 census."</em> In a native RDF-star store, the quoted
+  triple is a first-class term. In an OBDA setting the data lives in relational tables and is never
+  materialized, so there is no place to store a triple term and no atomic value for a SQL
+  <code>SELECT</code> to scan.
+</p>
+<p>
+  R2RML-star resolves this by <em>compiling</em> a quoted triple, at both mapping and query time, into
+  the RDF&nbsp;1.2 Interoperability <dfn>basic encoding</dfn>: a synthetic identifier plus four plain
+  triples that name its subject, predicate and object. Plain triples are exactly what R2RML already
+  maps and what a SQL rewrite already reconstructs, so the extension is additive — it introduces no new
+  execution machinery.
+</p>
+<div class="note"><span class="lbl">Note — why not native triple terms</span>
+  <a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> defines the basic
+  encoding precisely as the plain-RDF form a system without native triple-term storage can round-trip.
+  A survey of seven OBDA/virtualization engines and the 2023–2026 literature (ADR-0028 §G) found <em>no
+  prior art</em> for RDF-star over live SQL rewriting; the basic encoding is the only shape a
+  query-time SQL rewrite can reconstruct.
+</div>
+
+<h2 id="terminology"><span class="secno">2.</span>Terminology and Conformance</h2>
+<p>The key words <em>MUST</em>, <em>MUST NOT</em>, <em>SHOULD</em> and <em>MAY</em> are to be interpreted as in RFC&nbsp;2119.</p>
+<table>
+  <tr><th>Term</th><th>Meaning</th></tr>
+  <tr><td><span class="term">quoted triple</span></td><td>An RDF-star triple appearing as the subject or object of another triple, written <code>&lt;&lt;s p o&gt;&gt;</code>.</td></tr>
+  <tr><td><span class="term">star map</span></td><td>A term map (§4) that generates the identity of a quoted triple instead of an ordinary term.</td></tr>
+  <tr><td><span class="term">quoted triples map</span></td><td>The triples map whose (subject, predicate, object) is the quoted triple.</td></tr>
+  <tr><td><span class="term">proposition identifier</span></td><td>The synthetic IRI that stands in for a quoted triple in the basic encoding (§5.1).</td></tr>
+  <tr><td><span class="term">basic encoding</span></td><td>The plain-RDF reification of a quoted triple: <code>rdf:PropositionForm</code> + <code>rdf:propositionForm{Subject,Predicate,Object}</code> (§5.2).</td></tr>
+</table>
+<p>
+  A <strong>conforming R2RML-star processor</strong> MUST compile every <code>rml:starMap</code> it
+  accepts to the basic encoding of §5, MUST reject the constructs of §8 at mapping-load time with an
+  explicit error (never a silent wrong result), and MUST answer a SPARQL-star quoted-triple pattern by
+  the rewrite of §7.
+</p>
+
+<h2 id="vocabulary"><span class="secno">3.</span>The R2RML-star Vocabulary</h2>
+<p>R2RML-star reuses the <strong>RML-STAR</strong> vocabulary verbatim at the authoring surface (namespace <code>http://semweb.mmlab.be/ns/rml#</code>, prefix <code>rml:</code>):</p>
+<table>
+  <tr><th>IRI</th><th>Kind</th><th>Role</th></tr>
+  <tr><td><code>rml:starMap</code></td><td>property</td><td>Attached to a subject or object map; its value is a star-map node declaring a quoted triple.</td></tr>
+  <tr><td><code>rml:quotedTriplesMap</code></td><td>property</td><td>The quoted triples map, <em>asserted</em> (its plain triple is also produced — §6).</td></tr>
+  <tr><td><code>rml:nonAssertedTriplesMap</code></td><td>property</td><td>The quoted triples map, <em>non-asserted</em> (its plain triple is suppressed — §6).</td></tr>
+</table>
+<p>Compilation targets the RDF&nbsp;1.2 basic-encoding vocabulary (namespace <code>http://www.w3.org/1999/02/22-rdf-syntax-ns#</code>, prefix <code>rdf:</code>):</p>
+<table>
+  <tr><th>IRI</th><th>Role</th></tr>
+  <tr><td><code>rdf:PropositionForm</code></td><td>The class of a proposition identifier.</td></tr>
+  <tr><td><code>rdf:propositionFormSubject</code></td><td>Links the identifier to the quoted triple's subject.</td></tr>
+  <tr><td><code>rdf:propositionFormPredicate</code></td><td>Links the identifier to the quoted triple's predicate.</td></tr>
+  <tr><td><code>rdf:propositionFormObject</code></td><td>Links the identifier to the quoted triple's object.</td></tr>
+  <tr><td><code>rdf:reifies</code></td><td>The RDF&nbsp;1.2 native reification predicate that SPARQL-star bare syntax desugars to at query time (§7.1).</td></tr>
+</table>
+
+<h2 id="starmaps"><span class="secno">4.</span>Star Maps</h2>
+<p>
+  A star map is an <code>rml:starMap</code> node nested inside a subject map or an object map. Its
+  <code>rml:quotedTriplesMap</code> (or <code>rml:nonAssertedTriplesMap</code>) references the triples
+  map whose subject/predicate/object is the quoted triple.
+</p>
+
+<h3 id="starmap-subject"><span class="secno">4.1</span>Subject-position star maps</h3>
+<p>When the star map sits in the subject map, the enclosing triples map's subject <em>is</em> the quoted triple. The four basic-encoding triples are emitted onto that same triples map (they share its synthetic subject).</p>
+<pre><code>&lt;#PersonAgeAssertion&gt;
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap &lt;#PersonAge&gt; ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:CensusRecord2026 ]
+    ] .</code></pre>
+
+<h3 id="starmap-object"><span class="secno">4.2</span>Object-position star maps</h3>
+<p>When the star map sits in an object map, the quoted triple is the object of the enclosing triple. Because the proposition identifier is the <em>object</em> here (not the enclosing subject), the four basic-encoding triples are emitted as a <em>separate</em> synthetic triples map keyed on that identifier.</p>
+<div class="note"><span class="lbl">Note</span> Both positions are supported. The mapping is identical in spirit; only where the four basic-encoding triples attach differs. A quoted triple MUST NOT appear in <em>predicate</em> position — see §8.</div>
+
+<h2 id="encoding"><span class="secno">5.</span>Compilation to the Basic Encoding</h2>
+
+<h3 id="synthetic-id"><span class="secno">5.1</span>The synthetic proposition identifier</h3>
+<p>
+  <span class="rule-id">R2</span> The proposition identifier is <strong>compiler-derived, never author-supplied</strong>.
+  It is a deterministic IRI template of the form <code>urn:sf-star:&lt;predicate-slug&gt;:{cols…}</code>,
+  built from the quoted triple's predicate and the column references of its subject and object term
+  maps. Determinism is structural: the same underlying row always expands to the same identifier, so
+  the <em>one reification per quoted triple</em> invariant holds by construction rather than by author
+  discipline. A collision-safe delimiter is used, and no run-time hash function is required (keeping the
+  identifier backend-portable).
+</p>
+
+<h3 id="four-triples"><span class="secno">5.2</span>The four basic-encoding triples</h3>
+<p><span class="rule-id">R1</span> For a quoted triple <code>(s, p, o)</code> with proposition identifier <code>I</code>, the processor emits:</p>
+<pre><code>I  rdf:type                     rdf:PropositionForm .
+I  rdf:propositionFormSubject    s .
+I  rdf:propositionFormPredicate  p .
+I  rdf:propositionFormObject     o .</code></pre>
+<p>The subject <code>s</code>, predicate <code>p</code> and object <code>o</code> are copied verbatim from the quoted triples map's own term maps, so they generate exactly the terms they would in an ordinary mapping. No new SQL construction is introduced: these are ordinary predicate-object maps.</p>
+
+<h2 id="assertion"><span class="secno">6.</span>Asserted and Non-Asserted Triples Maps</h2>
+<p>Whether the quoted triple is <em>also</em> a plain, independently-matchable triple is chosen by which property references the quoted triples map:</p>
+<table>
+  <tr><th>Declaration</th><th>Plain triple <code>s p o</code> emitted?</th><th>Basic encoding emitted?</th></tr>
+  <tr><td><code>rml:quotedTriplesMap</code> (asserted)</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td><code>rml:nonAssertedTriplesMap</code> (non-asserted)</td><td>No</td><td>Yes</td></tr>
+</table>
+<p>A quoted triples map referenced only by non-asserted star maps is suppressed from the plain output; an assertion by any star map anywhere reinstates it.</p>
+
+<h2 id="query"><span class="secno">7.</span>Query Semantics (SPARQL-star)</h2>
+
+<h3 id="reifies"><span class="secno">7.1</span>The <code>rdf:reifies</code> desugaring</h3>
+<p>
+  A SPARQL-star parser conformant to RDF&nbsp;1.2 desugars the everyday <em>bare</em> syntax
+  <code>&lt;&lt;s p o&gt;&gt;</code> into a fresh blank node plus a triple
+  <code>_:b rdf:reifies &lt;&lt;( s p o )&gt;&gt;</code> — the RDF&nbsp;1.2 <em>native</em> reification
+  form. Since no relational mapping ever asserts <code>rdf:reifies</code>, a rewrite that merely
+  translated the quoted triple in place would leave an unmatchable <code>rdf:reifies</code> triple in
+  the pattern and <strong>every bare-syntax query would silently return zero rows</strong>. A conforming
+  processor MUST therefore recognize and <em>elide</em> the <code>rdf:reifies</code> wrapper.
+</p>
+
+<h3 id="rewrite"><span class="secno">7.2</span>The pattern rewrite</h3>
+<p><span class="rule-id">R1</span> Quoted-triple patterns are rewritten to the basic encoding at the algebra level, before query planning, so no downstream stage encounters a quoted triple. For each quoted triple <code>&lt;&lt;s p o&gt;&gt;</code> the processor introduces a fresh identity variable <code>?id</code> and the four patterns:</p>
+<pre><code>?id  rdf:type                     rdf:PropositionForm .
+?id  rdf:propositionFormSubject    s .
+?id  rdf:propositionFormPredicate  p .
+?id  rdf:propositionFormObject     o .</code></pre>
+<p>
+  <span class="rule-id">R2</span> The wrapper <code>X rdf:reifies &lt;&lt;( s p o )&gt;&gt;</code> is elided:
+  the <code>rdf:reifies</code> triple is dropped and the four patterns are bound on <code>X</code>
+  directly (where <code>X</code> may be a blank node the parser introduced, or an author variable).
+  <span class="rule-id">R5</span> An identity position always binds the synthetic proposition IRI —
+  v1 never fabricates a native triple term in results.
+</p>
+
+<h2 id="scope"><span class="secno">8.</span>Scope and Restrictions (v1)</h2>
+<p>The following are <strong>rejected as explicit errors</strong> — never silent empties, never silent wrong values:</p>
+<table>
+  <tr><th></th><th>Restriction</th><th>Rationale</th></tr>
+  <tr><td><span class="rule-id">R3</span></td><td><strong>No nesting.</strong> A quoted triple whose own subject or object is itself a quoted triple is rejected.</td><td>Single-level only; nesting needs SQL-view precomputation.</td></tr>
+  <tr><td><span class="rule-id">R4</span></td><td><strong>No predicate position.</strong> A quoted triple in predicate position is rejected.</td><td>Consistent with RML-STAR and with the SPARQL grammar (predicate is a name, not a term).</td></tr>
+  <tr><td>—</td><td><strong>Cross-source (mapping):</strong> a quoted triples map whose logical source differs from the outer map is rejected in v1.</td><td>The join case is deferred; single-row derivation only.</td></tr>
+  <tr><td>—</td><td><strong>Query boundaries:</strong> a ground quoted triple in <code>VALUES</code>, the <code>TRIPLE()/SUBJECT()/PREDICATE()/OBJECT()/isTRIPLE()</code> functions, a <code>CONSTRUCT</code> template quoting a triple, and a quoted pattern at a property-path endpoint each return an explicit <code>501</code>-class error in v1.</td><td>Each needs machinery outside the pattern rewrite; declared, tested boundaries rather than silent gaps.</td></tr>
+</table>
+
+<h2 id="divergence"><span class="secno">9.</span>Divergence from RML-STAR</h2>
+<div class="warn"><span class="lbl">Important — documented semantic divergence</span>
+  R2RML-star reuses RML-STAR's vocabulary but defines its <strong>own compiled semantics</strong>: an
+  <code>rml:starMap</code> compiles to the plain-RDF basic encoding, <strong>never</strong> to a native
+  RDF-star/RDF&nbsp;1.2 triple term. An author or portability tool that assumes <code>rml:starMap</code>
+  asserts a native triple term portable to any RML-STAR processor will be wrong about what querying the
+  result returns. This is a deliberate choice for a virtualizing engine (which has no triple-term
+  storage), and it is stated wherever this vocabulary is used.
+</div>
+
+<h2 id="examples"><span class="secno">10.</span>Worked Example</h2>
+<p>A relational table of census claims, mapped so each age claim is quoted and attributed to a record.</p>
+<div class="example"><span class="lbl">Relational source — <code>census_row</code></span>
+<pre><code>person_id | age
+----------+----
+     1042 |  34
+     2087 |  29</code></pre></div>
+<div class="example"><span class="lbl">R2RML-star mapping</span>
+<pre><code>@prefix rr:  &lt;http://www.w3.org/ns/r2rml#&gt; .
+@prefix rml: &lt;http://semweb.mmlab.be/ns/rml#&gt; .
+@prefix ex:  &lt;http://example.com/&gt; .
+
+&lt;#PersonAge&gt;
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+&lt;#PersonAgeAssertion&gt;
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [ rml:starMap [ rml:quotedTriplesMap &lt;#PersonAge&gt; ] ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:CensusRecord2026 ]
+    ] .</code></pre></div>
+<div class="example"><span class="lbl">SPARQL-star query</span>
+<pre><code>PREFIX ex: &lt;http://example.com/&gt;
+SELECT ?person ?age ?src WHERE {
+    &lt;&lt; ?person ex:hasAge ?age &gt;&gt; ex:assertedBy ?src .
+}</code></pre></div>
+<div class="example"><span class="lbl">Result</span>
+<pre><code>?person                     | ?age | ?src
+----------------------------+------+---------------------------------
+http://ex.org/person/1042   | 34   | http://example.com/CensusRecord2026
+http://ex.org/person/2087   | 29   | http://example.com/CensusRecord2026</code></pre></div>
+<p>The engine answered the quoted pattern by joining the basic-encoding rows the mapping compiles to — no triple term was materialized, no data left the database.</p>
+
+<h2 id="references"><span class="secno">11.</span>References</h2>
+<ul>
+  <li><a href="https://www.w3.org/TR/r2rml/">R2RML: RDB to RDF Mapping Language</a> — W3C Recommendation.</li>
+  <li><a href="https://www.w3.org/TR/rdf12-concepts/">RDF 1.2 Concepts and Abstract Syntax</a> — triple terms and reification.</li>
+  <li><a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> — the basic encoding / basic decoding.</li>
+  <li>RML-STAR Draft CG Report — <code>kg-construct/rml-star</code>.</li>
+  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite).</li>
+</ul>
+
+</main>
+<footer>
+  <p>semantic-fabric — R2RML-star project specification. Modeled on the W3C R2RML editorial format; not a W3C Standard.
+  For a hands-on introduction see the <a href="guide.html">R2RML-star Guide &amp; Tutorial</a>.</p>
+</footer>
+</body>
+</html>

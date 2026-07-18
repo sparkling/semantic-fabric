@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R2RML-star Guide &amp; Tutorial — semantic-fabric</title>
+<style>
+  :root{
+    --ink:#181c22; --muted:#5b6570; --rule:#e3e8ee; --bg:#fdfdfc;
+    --brand:#6d3bd6; --brand-2:#0e8a7d; --brand-ink:#4a248f;
+    --panel:#faf9fe; --code-bg:#f4f6f9; --code-ink:#1c2b33;
+    --ok:#e7f6ef; --ok-br:#0e8a7d; --tip:#eef0fe; --tip-br:#6d3bd6; --warn:#fdf1e6; --warn-br:#c9772a;
+    --maxw:48rem;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 "Inter","Helvetica Neue",Helvetica,Arial,sans-serif}
+  .hero{background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;padding:3rem 1.5rem 2.4rem}
+  .hero .wrap{max-width:var(--maxw);margin:0 auto}
+  .hero .kicker{display:inline-block;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.35);border-radius:100px;padding:.2rem .8rem;font-size:.78rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+  .hero h1{font-size:2.2rem;line-height:1.15;margin:1rem 0 .5rem;font-weight:800}
+  .hero p{font-size:1.12rem;margin:0;max-width:34rem;opacity:.95}
+  main{max-width:var(--maxw);margin:0 auto;padding:0 1.5rem 4rem}
+  h2{font-size:1.5rem;margin:2.8rem 0 .6rem;font-weight:800;letter-spacing:-.01em}
+  h2 .n{color:var(--brand);font-weight:800;margin-right:.5rem}
+  h3{font-size:1.14rem;margin:1.8rem 0 .4rem;font-weight:700}
+  a{color:var(--brand-ink);font-weight:600;text-decoration:none} a:hover{text-decoration:underline}
+  p,li{max-width:100%}
+  code,pre{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace}
+  code{background:var(--code-bg);color:var(--code-ink);padding:.08em .35em;border-radius:5px;font-size:.9em}
+  pre{background:var(--code-bg);color:var(--code-ink);padding:1rem 1.1rem;border-radius:10px;overflow-x:auto;font-size:.86rem;line-height:1.55;border:1px solid var(--rule)}
+  pre code{background:none;padding:0}
+  .lead{font-size:1.1rem;color:var(--muted)}
+  .callout{border-radius:10px;padding:1rem 1.15rem;margin:1.3rem 0;font-size:.97rem}
+  .tip{background:var(--tip);border-left:4px solid var(--tip-br)}
+  .ok{background:var(--ok);border-left:4px solid var(--ok-br)}
+  .warn{background:var(--warn);border-left:4px solid var(--warn-br)}
+  .callout .lbl{display:block;font-weight:800;text-transform:uppercase;font-size:.72rem;letter-spacing:.6px;margin-bottom:.35rem}
+  .tip .lbl{color:var(--tip-br)} .ok .lbl{color:var(--ok-br)} .warn .lbl{color:var(--warn-br)}
+  .step{display:flex;gap:1rem;align-items:flex-start;margin:1.5rem 0}
+  .step .num{flex:0 0 auto;width:2rem;height:2rem;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1rem}
+  .step .body{flex:1;min-width:0}
+  .step .body h3{margin-top:.1rem}
+  table{border-collapse:collapse;width:100%;margin:1.2rem 0;font-size:.92rem;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--rule);padding:.55rem .7rem;text-align:left;vertical-align:top}
+  th{background:var(--panel);font-weight:700}
+  .toc{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:1.1rem 1.3rem;margin:2rem 0}
+  .toc .lbl{font-weight:800;font-size:.72rem;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  .toc ul{margin:.5rem 0 0;padding-left:1.1rem} .toc li{margin:.2rem 0}
+  .pill{display:inline-block;background:var(--panel);border:1px solid var(--rule);border-radius:100px;padding:.05rem .55rem;font-size:.78rem;font-weight:700;color:var(--brand-ink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1.2rem 0}
+  .grid2 > div{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:.9rem 1rem}
+  .grid2 h4{margin:.1rem 0 .4rem;font-size:.95rem}
+  @media (max-width:560px){.grid2{grid-template-columns:1fr}}
+  details{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:.4rem 1rem;margin:.7rem 0}
+  summary{font-weight:700;cursor:pointer;padding:.5rem 0}
+  footer{max-width:var(--maxw);margin:0 auto;padding:2rem 1.5rem 4rem;color:var(--muted);font-size:.85rem;border-top:1px solid var(--rule)}
+  @media (prefers-color-scheme: dark){
+    :root{--ink:#e7e9ee;--muted:#9aa4b0;--rule:#2b323b;--bg:#12151a;--panel:#191d24;--code-bg:#1b2128;--code-ink:#d6e2ea;--brand:#a78bfa;--brand-2:#3fc7b9;--brand-ink:#c3b0fb;--ok:#12302a;--tip:#1b1c33;--warn:#2c2115}
+    th{background:#1b2128}
+  }
+</style>
+</head>
+<body>
+<div class="hero"><div class="wrap">
+  <span class="kicker">semantic-fabric · Guide &amp; Tutorial</span>
+  <h1>RDF-star over your SQL database</h1>
+  <p>Make statements about statements — provenance, certainty, time — and query them with SPARQL-star, without ever copying a row out of your database.</p>
+</div></div>
+
+<main>
+<p class="lead">
+  This is the hands-on companion to the <a href="specification.html">R2RML-star specification</a>.
+  It walks from the idea, through a working mapping and query, to the edges you should know about —
+  no prior RDF-star experience assumed.
+</p>
+
+<div class="toc">
+  <span class="lbl">On this page</span>
+  <ul>
+    <li><a href="#why">1. Why quote a triple?</a></li>
+    <li><a href="#model">2. The mental model (30 seconds)</a></li>
+    <li><a href="#tutorial">3. Tutorial: your first quoted triple</a></li>
+    <li><a href="#asserted">4. Asserted vs. non-asserted</a></li>
+    <li><a href="#object">5. Quoting in object position</a></li>
+    <li><a href="#querying">6. Querying: the syntax that bites</a></li>
+    <li><a href="#limits">7. What v1 does not do (yet)</a></li>
+    <li><a href="#faq">8. FAQ</a></li>
+  </ul>
+</div>
+
+<h2 id="why"><span class="n">1.</span>Why quote a triple?</h2>
+<p>An ordinary triple states a fact:</p>
+<pre><code>ex:alice ex:hasAge 34 .</code></pre>
+<p>But often you need to say something <em>about</em> that fact — who claimed it, how sure you are, when it was true:</p>
+<pre><code>&lt;&lt; ex:alice ex:hasAge 34 &gt;&gt;  ex:assertedBy   ex:CensusRecord2026 .
+&lt;&lt; ex:alice ex:hasAge 34 &gt;&gt;  ex:confidence   0.98 .</code></pre>
+<p>The <code>&lt;&lt; … &gt;&gt;</code> is a <strong>quoted triple</strong>: a triple used as the subject (or object) of another triple. That is RDF-star. R2RML-star lets you produce and query these directly over relational data.</p>
+
+<h2 id="model"><span class="n">2.</span>The mental model (30 seconds)</h2>
+<p>Your database has no column that stores "a triple." So R2RML-star represents each quoted triple as <strong>a synthetic id plus four ordinary triples</strong> — the RDF 1.2 <em>basic encoding</em>:</p>
+<pre><code>?id  rdf:type                     rdf:PropositionForm .
+?id  rdf:propositionFormSubject    ex:alice .
+?id  rdf:propositionFormPredicate  ex:hasAge .
+?id  rdf:propositionFormObject     34 .</code></pre>
+<p>Those are just plain triples — exactly what R2RML already maps and what a SQL query already reconstructs. So the whole feature is <em>additive</em>: nothing new happens at execution time, and nothing is materialized.</p>
+<div class="tip"><span class="lbl">The key idea</span> You write RDF-star. semantic-fabric compiles it — both the mapping and the query — down to plain triples over your live tables, and compiles the query answer back up. The <code>&lt;&lt; … &gt;&gt;</code> never touches your database.</div>
+
+<h2 id="tutorial"><span class="n">3.</span>Tutorial: your first quoted triple</h2>
+<p>Goal: model a census table so each age claim can be attributed to the record it came from.</p>
+
+<div class="step"><div class="num">1</div><div class="body">
+  <h3>Start from a plain mapping</h3>
+  <p>A normal triples map turning each <code>census_row</code> into <code>person ex:hasAge age</code>:</p>
+<pre><code>@prefix rr:  &lt;http://www.w3.org/ns/r2rml#&gt; .
+@prefix ex:  &lt;http://example.com/&gt; .
+
+&lt;#PersonAge&gt;
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .</code></pre>
+</div></div>
+
+<div class="step"><div class="num">2</div><div class="body">
+  <h3>Quote it with a star map</h3>
+  <p>Add a second triples map whose <em>subject</em> is the quoted triple from step 1, using <code>rml:starMap</code> → <code>rml:quotedTriplesMap</code>:</p>
+<pre><code>@prefix rml: &lt;http://semweb.mmlab.be/ns/rml#&gt; .
+
+&lt;#PersonAgeAssertion&gt;
+    a rr:TriplesMap ;
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap &lt;#PersonAge&gt; ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:CensusRecord2026 ]
+    ] .</code></pre>
+  <p>That's the whole change. The engine now emits, per row, the four basic-encoding triples plus the <code>ex:assertedBy</code> triple hanging off the same synthetic id.</p>
+</div></div>
+
+<div class="step"><div class="num">3</div><div class="body">
+  <h3>Ask a SPARQL-star question</h3>
+<pre><code>PREFIX ex: &lt;http://example.com/&gt;
+SELECT ?person ?age ?src WHERE {
+    &lt;&lt; ?person ex:hasAge ?age &gt;&gt; ex:assertedBy ?src .
+}</code></pre>
+  <div class="ok"><span class="lbl">Result</span>
+<pre><code>?person                    | ?age | ?src
+---------------------------+------+-------------------------------
+http://ex.org/person/1042  | 34   | .../CensusRecord2026
+http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
+  <p>Under the hood the quoted pattern became a join over the basic-encoding rows. You wrote RDF-star; the database saw ordinary SQL.</p>
+</div></div>
+
+<h2 id="asserted"><span class="n">4.</span>Asserted vs. non-asserted</h2>
+<p>Do you also want the plain fact <code>person ex:hasAge age</code> to exist on its own, matchable by <code>?p ex:hasAge ?a</code>? That's the one knob:</p>
+<div class="grid2">
+  <div><h4><span class="pill">asserted</span></h4><p><code>rml:quotedTriplesMap</code> — the quoted triple <em>and</em> its plain form both exist. Use when the fact is true <em>and</em> you want to annotate it.</p></div>
+  <div><h4><span class="pill">non-asserted</span></h4><p><code>rml:nonAssertedTriplesMap</code> — only the quoted form exists; the plain triple is suppressed. Use to talk about a claim without asserting it (e.g. "someone <em>alleged</em> X").</p></div>
+</div>
+<p>Swap the property; nothing else changes.</p>
+
+<h2 id="object"><span class="n">5.</span>Quoting in object position</h2>
+<p>A quoted triple can also be the <em>object</em> — "record R states that ⟨…⟩":</p>
+<pre><code>ex:CensusRecord2026  ex:states  &lt;&lt; ex:alice ex:hasAge 34 &gt;&gt; .</code></pre>
+<p>Put the <code>rml:starMap</code> inside an <code>rr:objectMap</code> instead of the subject map. The engine attaches the four basic-encoding triples to a separate synthetic map keyed on the same id — you don't have to think about that; it just works.</p>
+
+<h2 id="querying"><span class="n">6.</span>Querying: the syntax that bites</h2>
+<p>SPARQL-star has two spellings of a quoted triple, and it matters to know they're equivalent:</p>
+<table>
+  <tr><th>You write</th><th>What the parser does</th></tr>
+  <tr><td><code>&lt;&lt; ?s ?p ?o &gt;&gt;</code> (bare)</td><td>Rewrites to <code>_:b rdf:reifies &lt;&lt;( ?s ?p ?o )&gt;&gt;</code> internally.</td></tr>
+  <tr><td><code>&lt;&lt;( ?s ?p ?o )&gt;&gt;</code> (parenthesized)</td><td>A quoted triple term, in place.</td></tr>
+</table>
+<p>Both are supported and return the same rows. semantic-fabric recognizes the <code>rdf:reifies</code> form the parser produces and rewrites it to the basic-encoding join.</p>
+<div class="warn"><span class="lbl">Why this note exists</span> If a system ignored the <code>rdf:reifies</code> wrapper, every bare-syntax query would <em>silently</em> return nothing — the most dangerous kind of bug, because the query looks fine. semantic-fabric handles it (and is tested for exactly this). Good to know it's the tricky part.</div>
+
+<h2 id="limits"><span class="n">7.</span>What v1 does not do (yet)</h2>
+<p>These are <strong>explicit, honest errors</strong> — you get a clear message, never a wrong answer:</p>
+<ul>
+  <li><strong>Nesting</strong> — a quoted triple inside a quoted triple.</li>
+  <li><strong>Predicate position</strong> — a quoted triple used as a predicate (also disallowed by RDF-star itself).</li>
+  <li><strong>Ground quoted triples in <code>VALUES</code></strong>, the <strong><code>TRIPLE()/isTRIPLE()/SUBJECT()/…</code> functions</strong>, quoted terms in a <strong><code>CONSTRUCT</code> template</strong>, and a quoted pattern directly on a <strong>property-path endpoint</strong>.</li>
+  <li><strong>Cross-source quoting</strong> — the quoted triples map must share the outer map's table in v1.</li>
+</ul>
+<p>Everything else — subject/object position, asserted/non-asserted, variables or constants in any of s/p/o, patterns inside <code>FILTER EXISTS</code> — works.</p>
+
+<h2 id="faq"><span class="n">8.</span>FAQ</h2>
+<details><summary>Is this real RDF-star, or a workaround?</summary><p>It's real RDF-star at the <em>surface</em> you write and query. Underneath, semantic-fabric uses the W3C RDF 1.2 <em>basic encoding</em> (plain triples) instead of native triple terms, because a virtualizing SQL engine has nothing to store a triple term in. The <a href="specification.html#divergence">specification §9</a> documents this divergence precisely — it matters if you move mappings to a native RDF-star store.</p></details>
+<details><summary>Does anything get materialized?</summary><p>No. Both the mapping and the query compile to plain triples / SQL over your live tables. No copy of the data is made.</p></details>
+<details><summary>What does the quoted-triple identity look like if I select it?</summary><p>A synthetic <code>urn:sf-star:…</code> IRI, deterministic per row (same row → same id, always). It's a stand-in for the proposition, not a native triple term — so <code>isTRIPLE()</code> on it is a v1 boundary rather than returning a possibly-misleading value.</p></details>
+<details><summary>Has anyone done RDF-star over live SQL before?</summary><p>Per the project's research (ADR-0028 §G, a survey of seven OBDA engines plus the literature): no. This is novel ground — which is why the design is documented so carefully and every boundary is an explicit, tested error.</p></details>
+
+</main>
+<footer>
+  <p>semantic-fabric — R2RML-star Guide &amp; Tutorial. For the normative details see the
+  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031.</p>
+</footer>
+</body>
+</html>
