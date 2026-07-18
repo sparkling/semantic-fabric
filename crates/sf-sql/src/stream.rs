@@ -168,49 +168,6 @@ impl PgRowStream {
 
 // --- MySQL (async, packet-buffered) ------------------------------------------
 
-/// Execute `sql` against a MySQL connection and invoke `f` for each row.
-///
-/// MySQL's text protocol does not expose a server-side cursor equivalent to
-/// PostgreSQL's `query_raw`. Instead, `mysql_async` fetches the result set
-/// packet-by-packet from the server and delivers rows individually through the
-/// async `QueryResult` API. Memory is bounded by the server's
-/// `max_allowed_packet` setting (typically 64 MiB), not the full result set —
-/// satisfying ADR-0010 §C for query-level workloads.
-///
-/// Bound `params` follow the `?` positional placeholder syntax (Dialect::MySql).
-/// Values are always bound parameters — never interpolated (ADR-0010 R1).
-///
-/// Requires a live MySQL server; exercised by the integration suite, not here.
-pub async fn mysql_for_each<F>(
-    conn: &mut mysql_async::Conn,
-    sql: &str,
-    params: Vec<mysql_async::Value>,
-    mut f: F,
-) -> Result<u64>
-where
-    F: FnMut(Vec<Option<String>>) -> Result<()>,
-{
-    use mysql_async::prelude::Queryable;
-    let stmt = conn.prep(sql).await?;
-    let mut result = conn
-        .exec_iter(stmt, mysql_async::Params::Positional(params))
-        .await?;
-    let mut seen = 0u64;
-    while let Some(row) = result.next().await? {
-        let ncols = row.len();
-        let mut vals = Vec::with_capacity(ncols);
-        for i in 0..ncols {
-            // Text-protocol columns arrive as Option<Vec<u8>>; all MySQL text
-            // values are UTF-8 (or the configured charset — we require utf8mb4).
-            let v: Option<Vec<u8>> = row.get(i);
-            vals.push(v.map(|b| String::from_utf8_lossy(&b).into_owned()));
-        }
-        f(vals)?;
-        seen += 1;
-    }
-    Ok(seen)
-}
-
 /// The result-column **names** of `sql` as reported by MySQL's prepared-statement
 /// metadata, in projection order. Used by the executor to resolve identifier
 /// case-folding (MySQL lowercases column names by default, like PostgreSQL).

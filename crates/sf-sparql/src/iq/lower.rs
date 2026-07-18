@@ -846,6 +846,29 @@ fn def_reads_opt_alias(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
     def.columns().iter().any(|c| opt_aliases.contains(&c.alias))
 }
 
+/// Whether a term def is PROVABLY `xsd:double`/`xsd:float` from its R2RML-declared
+/// type (a `TermMap::Column`/`TermMap::Template`'s `TermSpec.datatype`) — the AVG
+/// exact-decimal routing gate's negative condition (M3 fix 1): only a PROVEN double
+/// operand may safely stay off the `rust_group` path (SQLite/PostgreSQL's `AVG`
+/// already returns a float there, matching `rust_agg`'s existing double handling).
+/// Every other operand — an explicit `xsd:integer`/`xsd:decimal`, or (the common
+/// case) no explicit `rr:datatype` at all — must route to `rust_group` so
+/// `rust_agg`'s `oxsdatatypes::Decimal` accumulation applies.
+fn operand_is_double(def: &TermDef) -> bool {
+    use sf_core::ir::TermMap;
+    let spec = match def {
+        TermDef::Derived {
+            term_map: TermMap::Column(_, spec) | TermMap::Template(_, spec),
+            ..
+        } => spec,
+        _ => return false,
+    };
+    matches!(
+        spec.datatype.as_ref().map(sf_core::NamedNode::as_str),
+        Some("http://www.w3.org/2001/XMLSchema#double" | "http://www.w3.org/2001/XMLSchema#float")
+    )
+}
+
 /// The OPTS-FREE form of `left OPT right` — the ISWC-2018 `(P⋈R)∪(P−R)` decomposition,
 /// used when this `LeftJoin` is itself the RIGHT operand of an enclosing `LeftJoin` and so
 /// must yield re-feedable opts-free branches (§5.3 nested-right closure). It mirrors the
@@ -1441,7 +1464,28 @@ fn lower_aggregation(
                         .is_some_and(|def| def_reads_opt_alias(def, &opt))
                 }))
         });
-        if nullable_operand {
+
+        // M3 fix 1: SQL's AVG always returns a lossy float (SQLite REAL / any
+        // dialect's floating aggregation), even for an xsd:integer/xsd:decimal
+        // operand — a precision loss `rust_agg`'s `oxsdatatypes::Decimal`
+        // accumulation avoids (exec_core.rs). Route AVG to the Rust group path
+        // whenever the operand is NOT PROVABLY xsd:double/xsd:float: an explicit
+        // non-double `rr:datatype`, or (the common case) no explicit `rr:datatype`
+        // at all, deferring to the natural SQL decltype — mirrors the C.6
+        // reasoning just above ("the mapping's own declared type is a sound,
+        // deterministic proxy", `try_sql_group_over_union`'s doc comment) rather
+        // than threading live schema/decltype access into this stage. SUM/MIN/MAX
+        // are unaffected (SUM doesn't divide; MIN/MAX don't accumulate at all).
+        let avg_needs_exact_decimal = aggs.iter().any(|d| {
+            d.kind == crate::iq::AggKind::Avg
+                && matches!(&d.arg, Some(AggArg::Var(v)) if inner.iter().any(|b| {
+                    b.bindings
+                        .get(v.as_ref())
+                        .is_some_and(|def| !operand_is_double(def))
+                }))
+        });
+
+        if nullable_operand || avg_needs_exact_decimal {
             spine.force_rust_group = true;
         }
     }

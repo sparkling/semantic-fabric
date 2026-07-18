@@ -5147,6 +5147,102 @@ fn adr0025_c8_sum_avg_distinct_dedups_before_aggregating() {
     }
 }
 
+// ADR-0025 C.9 (M3 fix 1): AVG over xsd:integer/xsd:decimal operands must divide
+// EXACTLY (SPARQL §11.4), matching the oracle's own `oxsdatatypes::Decimal`
+// arithmetic. Before this fix `rust_agg`'s AVG accumulated with `f64`
+// (`nums.iter().sum::<f64>() / len`), so a non-terminating quotient like 11/3
+// rendered as the f64 lexical artifact "3.6666666666666665" instead of the exact
+// decimal oracle answer -- an =_bag divergence. The SQL-pushdown single-branch
+// path had the SAME bug one layer up (SQLite's `AVG` always returns a lossy
+// `REAL`), fixed by additionally routing a non-double AVG to `rust_group` even
+// when the operand isn't nullable (`iq/lower.rs`'s extended C.6 gate). This
+// fixture -- no OPTIONAL, a single mandatory BGP -- exercises exactly that new
+// routing arm, not the pre-existing nullable-operand one. The three `pts` values
+// are pairwise DISTINCT (never a repeated value for the same subject/predicate):
+// a repeated literal object (e.g. `1, 1, 5`) would round-trip through the
+// hand-authored TTL oracle graph as only TWO triples -- RDF graphs are SETS, so a
+// duplicate (s,p,o) triple silently collapses -- which would prove the wrong
+// thing (a =_bag/dedup divergence, not the f64-precision bug this test targets).
+const C9_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE score (sid INTEGER PRIMARY KEY, pid INTEGER NOT NULL, pts INTEGER NOT NULL);
+INSERT INTO person VALUES (1,'Ann');
+INSERT INTO score VALUES (1,1,1),(2,1,2),(3,1,8);
+"#;
+const C9_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#P> rr:logicalTable [ rr:tableName "person" ] ; rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+<#S> rr:logicalTable [ rr:tableName "score" ] ; rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:pts ; rr:objectMap [ rr:column "pts" ] ] .
+"#;
+const C9_TTL: &str =
+    "@prefix ex: <http://ex/> .\n<http://ex/p/1> ex:name \"Ann\" ; ex:pts 1, 2, 8 .";
+#[test] // Ann's group: AVG(1,2,8) = 11/3, a non-terminating decimal quotient.
+fn adr0025_c9_avg_exact_decimal_non_nullable() {
+    let conn = sqlite::load(C9_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C9_R2RML).unwrap();
+    let q = format!(
+        "{PFX} SELECT ?p (AVG(?v) AS ?a) WHERE {{ ?p ex:name ?nm . ?p ex:pts ?v }} GROUP BY ?p"
+    );
+    let parsed = parse(&q);
+    assert_vs_spareval(
+        C9_TTL,
+        &q,
+        &tree(&maps, &parsed, &schema).expect("tree"),
+        &conn,
+    );
+}
+
+// ADR-0025 C.9b: a NON-NULLABLE xsd:double AVG (an explicit `rr:datatype
+// xsd:double`) must stay on the double path -- C.9's new gate only fires for a
+// PROVABLY non-double operand, so this locks that the routing extension does not
+// over-fire and break the C.6b double-preservation guarantee for the
+// non-nullable shape too (C.6b only covered the nullable/OPTIONAL case).
+// Self-asserting (NOT assert_vs_spareval) for the SAME reason as C.6b: sf's
+// canonical E-notation double lexical form deliberately diverges from
+// oxigraph's non-canonical f64 Display.
+const C9DBL_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE score (sid INTEGER PRIMARY KEY, pid INTEGER NOT NULL, pts REAL NOT NULL);
+INSERT INTO person VALUES (1,'Ann');
+INSERT INTO score VALUES (1,1,1.0),(2,1,1.0),(3,1,5.0);
+"#;
+const C9DBL_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://ex/> .
+<#P> rr:logicalTable [ rr:tableName "person" ] ; rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+<#S> rr:logicalTable [ rr:tableName "score" ] ; rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:pts ; rr:objectMap [ rr:column "pts" ; rr:datatype xsd:double ] ] .
+"#;
+#[test]
+fn adr0025_c9b_avg_double_non_nullable_stays_double() {
+    let conn = sqlite::load(C9DBL_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(C9DBL_R2RML).unwrap();
+    const DBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+    let q = format!(
+        "{PFX} SELECT ?p (AVG(?v) AS ?a) WHERE {{ ?p ex:name ?nm . ?p ex:pts ?v }} GROUP BY ?p"
+    );
+    let parsed = parse(&q);
+    let tp = tree(&maps, &parsed, &schema).expect("tree");
+    let bag = oracle::engine_bag(&exec::select(&tp, &conn).expect("exec"));
+    assert_eq!(bag.len(), 1, "one group (Ann)");
+    let a = bag[0].get("a").expect("?a bound");
+    match a {
+        sf_core::Term::Literal(l) => assert_eq!(
+            l.datatype().as_str(),
+            DBL,
+            "double operand ⇒ xsd:double result (not decimal)"
+        ),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
 // Round-2 coverage: end-to-end proof that the LJ->IJ FK-guaranteed downgrade
 // (cascade::joinelim::lj_to_ij_fk_downgrade) produces a =_bag-correct result when
 // composed with the rest of the optimizer pipeline and real SQL execution --

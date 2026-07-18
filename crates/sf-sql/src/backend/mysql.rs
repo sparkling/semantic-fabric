@@ -2,8 +2,10 @@
 //! borrows the handle: `Stream<'s>` is a native `mysql_async::QueryResult` borrowing
 //! `&'s mut Conn` (the reason the GAT exists — design §0 fact 3). Built on
 //! `exec_iter` + `row.take::<Value>` + `mysql_value_to_string` (moved VERBATIM from
-//! the old `sf-sparql::exec_mysql` loop), NEVER `stream::mysql_for_each` — whose
-//! `from_utf8_lossy` decode is a `=_bag` / 3-valued-logic regression (design A1).
+//! the old `sf-sparql::exec_mysql` loop) — NEVER `String::from_utf8_lossy` over the
+//! raw row bytes: silently masking an encoding error behind a replacement char is a
+//! `=_bag` / 3-valued-logic regression (design A1). `row.take::<Value>` +
+//! `mysql_value_to_string` is the one strict decode this adapter uses.
 //! `mysql_async` has no server-side cursor, so this is client-buffer-free /
 //! packet-bounded, not cursor-grade (design §4 / §4.2).
 

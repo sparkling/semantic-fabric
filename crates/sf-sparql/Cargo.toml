@@ -11,6 +11,7 @@ sf-core.workspace = true
 sf-sql.workspace = true
 sf-mapping.workspace = true
 spargebra.workspace = true
+oxsdatatypes.workspace = true  # exact Decimal accumulation for AVG (M3 fix 1) — the SAME fixed-point i128 type the spareval oracle uses for decimal AVG, never f64
 # sparopt (ADR-0007 pipeline step 2, opt-in/bypassable) is intentionally NOT
 # wired in v1: sparopt 0.3.6 fails to compile against spargebra's `sparql-12` /
 # `sep-0006` feature set (non-exhaustive matches over the new triple-term /

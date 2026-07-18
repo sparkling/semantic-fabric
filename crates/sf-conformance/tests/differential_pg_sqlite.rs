@@ -1041,3 +1041,74 @@ async fn pg_date_time_columns_readable_end_to_end() {
         .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
         .await;
 }
+
+/// PostgreSQL NUMERIC column read, end-to-end through the real R2RML pipeline
+/// (translate -> emit -> `select_pg` -> `pg_value`/`pg_xsd_code` ->
+/// reconstruction/canonicalisation) -- not just the raw wire-decode (see
+/// `sf_sql::backend::pg::tests` for that unit-level coverage). Before this fix
+/// `pg_value` had NO extraction arm for `Type::NUMERIC` (the TRACKED RESIDUE), so
+/// `select_pg` hard-501'd on ANY NUMERIC column -- a real functionality gap on
+/// the primary production dialect. The four values are all "non-even" (not
+/// exactly representable in binary floating point), proving the decode never
+/// touches `f64` -- an exact PostgreSQL decimal in, an exact `xsd:decimal`
+/// lexical form out. Live-PG only; gracefully skips when no server is reachable.
+#[tokio::test]
+async fn pg_numeric_columns_readable_end_to_end() {
+    let base = base_conn();
+    let conn_str = format!("{base} dbname=postgres");
+    let Ok(admin) = connect(&conn_str).await else {
+        eprintln!("skipping pg_numeric_columns_readable_end_to_end: no live PostgreSQL reachable");
+        return;
+    };
+    let db = format!("sf_pgnum_e2e_{}", std::process::id());
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+    admin
+        .batch_execute(&format!("CREATE DATABASE {db}"))
+        .await
+        .expect("create test db");
+    let conn_str2 = format!("{base} dbname={db}");
+    let client = connect(&conn_str2).await.expect("connect to test db");
+    client
+        .batch_execute(
+            "CREATE TABLE amt (id INTEGER PRIMARY KEY, p1 NUMERIC, p2 NUMERIC, p3 NUMERIC, p4 NUMERIC);
+             INSERT INTO amt VALUES (1, 12345.678, 0.0001, -42, 100000000);",
+        )
+        .await
+        .expect("seed table");
+
+    let r2rml = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#A> rr:logicalTable [ rr:tableName "amt" ] ;
+    rr:subjectMap [ rr:template "http://ex/a/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p1 ; rr:objectMap [ rr:column "p1" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p2 ; rr:objectMap [ rr:column "p2" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p3 ; rr:objectMap [ rr:column "p3" ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p4 ; rr:objectMap [ rr:column "p4" ] ] .
+"#;
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let schema = introspect_all_pg(&client).await.expect("pg introspection");
+    let q = "PREFIX ex: <http://ex/> SELECT ?p1 ?p2 ?p3 ?p4 WHERE { \
+             <http://ex/a/1> ex:p1 ?p1 ; ex:p2 ?p2 ; ex:p3 ?p3 ; ex:p4 ?p4 }";
+    let tp = parse_and_translate_with(q, &maps, Dialect::Postgres, &Tbox::default(), &schema)
+        .expect("translate SELECT (pg)");
+    let sol = exec_pg::select_pg(&tp, &client)
+        .await
+        .expect("select_pg — previously hard-501'd on NUMERIC columns");
+
+    assert_eq!(sol.rows.len(), 1);
+    const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    let want = ["12345.678", "0.0001", "-42", "100000000"];
+    for (idx, expected) in want.iter().enumerate() {
+        let t = sol.rows[0][idx]
+            .as_ref()
+            .unwrap_or_else(|| panic!("?p{} bound", idx + 1));
+        assert_eq!(t.to_string(), format!("\"{expected}\"^^<{XSD_DECIMAL}>"));
+    }
+
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+}

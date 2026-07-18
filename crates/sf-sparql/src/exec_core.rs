@@ -16,6 +16,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::future::Future;
 
+use oxsdatatypes::Decimal;
 use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::{TermMap, TermType};
 use sf_core::{Literal, Row, Term, Triple};
@@ -1202,17 +1203,41 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                     Ok(None)
                 };
             }
-            let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
-            if nums.is_empty() {
-                return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
-            }
-            let avg = nums.iter().sum::<f64>() / nums.len() as f64;
             // SPARQL §11.4: AVG of xsd:double values stays xsd:double (else decimal). See the
             // SUM promotion note above (C.6b) — mirrors the SQL path's `avg_result_code`.
             if vals.iter().any(|t| is_xsd_double(t)) {
+                let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
+                if nums.is_empty() {
+                    return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
+                }
+                let avg = nums.iter().sum::<f64>() / nums.len() as f64;
                 Ok(Some(double_term(avg)?))
             } else {
-                Ok(Some(decimal_term(avg)?))
+                // M3 fix 1: every remaining operand is xsd:integer/xsd:decimal (the
+                // xsd:double case already returned above), so accumulate with
+                // `oxsdatatypes::Decimal` — exact i128 fixed-point, NEVER `f64` — instead of
+                // the old `nums.iter().sum::<f64>() / len`. A non-terminating quotient (e.g.
+                // 11/3) rendered as an f64 artifact ("3.6666666666666665") that diverged from
+                // the spareval oracle's own exact decimal AVG ("3.666666666666666666"): same
+                // `oxsdatatypes::Decimal` type on both sides ⇒ =_bag equality. Mirrors the
+                // f64 branch's "silently average just the numeric-parseable subset" quirk
+                // verbatim (a separate, pre-existing behaviour, out of scope here) — only the
+                // arithmetic TYPE changes.
+                let nums: Vec<Decimal> =
+                    vals.iter().filter_map(|t| decimal_term_value(t)).collect();
+                if nums.is_empty() {
+                    return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
+                }
+                let Some(sum) = nums
+                    .iter()
+                    .try_fold(Decimal::from(0_i64), |acc, &d| acc.checked_add(d))
+                else {
+                    return Ok(None); // FOAR0002 overflow ⇒ UNBOUND (never a wrong answer)
+                };
+                match sum.checked_div(nums.len() as i64) {
+                    Some(avg) => Ok(Some(decimal_term_exact(avg)?)),
+                    None => Ok(None), // FOAR0001/FOAR0002 ⇒ UNBOUND
+                }
             }
         }
         AggKind::Min | AggKind::Max => {
@@ -1270,6 +1295,20 @@ fn numeric_term(t: &Term) -> Option<f64> {
     }
 }
 
+/// Extract the EXACT `oxsdatatypes::Decimal` value of an RDF term (M3 fix 1):
+/// the same "numeric literal" gate as [`numeric_term`] (so a non-numeric operand
+/// is rejected identically), but parsed WITHOUT ever going through `f64` —
+/// `Decimal::from_str` reads the literal's own lexical digits directly, so a
+/// non-terminating AVG quotient stays exact end to end. Only reached once the
+/// `xsd:double`/`xsd:float` case has already been handled elsewhere, so the
+/// lexical form here is always plain-digit (never `E`-notation).
+fn decimal_term_value(t: &Term) -> Option<Decimal> {
+    match t {
+        Term::Literal(l) if numeric_value(l).is_some() => l.value().parse().ok(),
+        _ => None,
+    }
+}
+
 /// Whether an RDF term is an `xsd:integer`-typed literal.
 fn is_xsd_integer(t: &Term) -> bool {
     match t {
@@ -1319,6 +1358,16 @@ fn decimal_term(n: f64) -> Result<Term> {
         format!("{n}")
     };
     natural_literal(&raw, XsdTypeCode::Decimal)
+}
+
+/// Build an `xsd:decimal` literal from an EXACT `oxsdatatypes::Decimal` (M3 fix 1's
+/// AVG accumulator — never route through `f64`, which cannot represent a non-terminating
+/// quotient like 11/3 exactly). `Decimal`'s own `Display` is ALREADY XSD-canonical
+/// (`sf-core/datatype.rs` module doc), so this round-trips through `natural_literal`
+/// exactly like [`decimal_term`]/[`double_term`], for consistency, not because
+/// canonicalisation is needed here.
+fn decimal_term_exact(d: Decimal) -> Result<Term> {
+    natural_literal(&d.to_string(), XsdTypeCode::Decimal)
 }
 
 // --- M2 Send-future / GAT monomorphization gate (design §1 line 103, §5 M2) ----
