@@ -7,7 +7,7 @@
 //! vocabulary onto the IR. RDF terms stay `oxrdf` types end to end (ADR-0003 R2);
 //! the IR they populate is the single rewrite target for the virtualiser.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oxttl::TurtleParser;
 
@@ -21,6 +21,9 @@ mod sql;
 use sql::{
     normalize_template_idents, resolve_iri_template, sql_identifier, strip_trailing_semicolon,
 };
+
+mod star;
+use star::StarAssertion;
 
 // --- R2RML vocabulary (namespace `http://www.w3.org/ns/r2rml#`, R2RML §11) ----
 
@@ -54,6 +57,25 @@ const RR_IRI: &str = "http://www.w3.org/ns/r2rml#IRI";
 const RR_BLANK_NODE: &str = "http://www.w3.org/ns/r2rml#BlankNode";
 const RR_LITERAL: &str = "http://www.w3.org/ns/r2rml#Literal";
 
+// --- RML-STAR vocabulary (namespace `http://semweb.mmlab.be/ns/rml#`) — the
+// first RML-namespace terms this processor parses (ADR-0029). ------------------
+
+const RML_STAR_MAP: &str = "http://semweb.mmlab.be/ns/rml#starMap";
+const RML_QUOTED_TRIPLES_MAP: &str = "http://semweb.mmlab.be/ns/rml#quotedTriplesMap";
+const RML_NON_ASSERTED_TRIPLES_MAP: &str = "http://semweb.mmlab.be/ns/rml#nonAssertedTriplesMap";
+
+// --- RDF 1.2 Interoperability "basic encoding" (ADR-0029 §B.2) — the compiled
+// target for an `rml:StarMap`, namespace `http://www.w3.org/1999/02/22-rdf-syntax-ns#`.
+
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDF_PROPOSITION_FORM: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PropositionForm";
+const RDF_PROPOSITION_FORM_SUBJECT: &str =
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#propositionFormSubject";
+const RDF_PROPOSITION_FORM_PREDICATE: &str =
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#propositionFormPredicate";
+const RDF_PROPOSITION_FORM_OBJECT: &str =
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#propositionFormObject";
+
 /// Base IRI applied to the mapping document so relative triples-map identifiers
 /// (`<#TriplesMap1>`, ubiquitous in R2RML) resolve to absolute IRIs consistently;
 /// a `@base` directive in the document overrides it. R2RML's own examples use
@@ -66,6 +88,11 @@ const DEFAULT_BASE_IRI: &str = "http://example.com/base/";
 /// regardless of hash-map iteration order. A triples map is any resource bearing
 /// `rr:logicalTable` / `rr:subjectMap` / `rr:subject`; each must resolve to a
 /// logical table and a subject map or parsing fails.
+///
+/// An `rml:starMap` subject (ADR-0029) is expanded in place into a synthetic-id
+/// subject plus 4 injected basic-encoding predicate-object maps; the quoted
+/// triples map it references is suppressed from the result when every
+/// `rml:starMap` referencing it marks it `rml:nonAssertedTriplesMap`.
 pub fn parse_r2rml(turtle: &str) -> Result<Vec<TriplesMap>> {
     let graph = Graph::load(turtle)?;
 
@@ -78,9 +105,41 @@ pub fn parse_r2rml(turtle: &str) -> Result<Vec<TriplesMap>> {
     subjects.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut maps = Vec::with_capacity(subjects.len());
+    // ADR-0029 §B.3: a quoted triples map is suppressed only if every
+    // `rml:starMap` referencing it marks it non-asserted — an explicit
+    // assertion anywhere (a plain occurrence in the doc doesn't count; only
+    // another StarMap's bare `rml:quotedTriplesMap`) wins.
+    let mut asserted_ids: HashSet<String> = HashSet::new();
+    let mut non_asserted_ids: HashSet<String> = HashSet::new();
+    // Object-position `rml:starMap`s (ADR-0029 §B; see `parse_object_map`)
+    // each carry a standalone synthetic TriplesMap for their 4 basic-encoding
+    // predicate-object maps — collected here and appended after the outer
+    // maps, deduplicated by id (a repeated identical quote of the same
+    // content under the same outer map yields an identical carrier).
+    let mut standalone_maps: Vec<TriplesMap> = Vec::new();
+    let mut standalone_ids_seen: HashSet<String> = HashSet::new();
     for (_, subject) in subjects {
-        maps.push(parse_triples_map(&graph, subject)?);
+        let (map, stars, tm_standalone) = parse_triples_map(&graph, subject)?;
+        for assertion in stars {
+            if assertion.asserted {
+                asserted_ids.insert(assertion.quoted_id);
+            } else {
+                non_asserted_ids.insert(assertion.quoted_id);
+            }
+        }
+        maps.push(map);
+        for standalone in tm_standalone {
+            if standalone_ids_seen.insert(standalone.id.clone()) {
+                standalone_maps.push(standalone);
+            }
+        }
     }
+    maps.extend(standalone_maps);
+    maps.retain(|m| asserted_ids.contains(&m.id) || !non_asserted_ids.contains(&m.id));
+    // Re-sort: the standalone carriers were appended after the (already
+    // sorted) outer maps, so the doc-comment invariant ("sorted by
+    // identifier") needs restoring here.
+    maps.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(maps)
 }
 
@@ -94,23 +153,41 @@ fn is_triples_map(g: &Graph, s: &NamedOrBlankNode) -> bool {
         || g.object(s, RR_SUBJECT).is_some()
 }
 
-fn parse_triples_map(g: &Graph, tm: &NamedOrBlankNode) -> Result<TriplesMap> {
+fn parse_triples_map(
+    g: &Graph,
+    tm: &NamedOrBlankNode,
+) -> Result<(TriplesMap, Vec<StarAssertion>, Vec<TriplesMap>)> {
     let source = parse_logical_source(g, tm)?;
-    let subject = parse_subject_map(g, tm)?;
+    let outer_id = node_id(tm);
+    let (subject, injected_poms, subject_star) = parse_subject_map(g, tm, &source)?;
     let pom_nodes: Vec<NamedOrBlankNode> = g
         .objects(tm, RR_PREDICATE_OBJECT_MAP)
         .map(as_resource)
         .collect::<Result<_>>()?;
-    let mut predicate_object_maps = Vec::with_capacity(pom_nodes.len());
+    let mut predicate_object_maps = Vec::with_capacity(pom_nodes.len() + injected_poms.len());
+    let mut star_assertions: Vec<StarAssertion> = subject_star.into_iter().collect();
+    let mut standalone_maps = Vec::new();
     for pom in &pom_nodes {
-        predicate_object_maps.push(parse_predicate_object_map(g, pom)?);
+        let (pom_ir, pom_standalone, pom_stars) =
+            parse_predicate_object_map(g, pom, &outer_id, &source)?;
+        predicate_object_maps.push(pom_ir);
+        standalone_maps.extend(pom_standalone);
+        star_assertions.extend(pom_stars);
     }
-    Ok(TriplesMap {
-        id: node_id(tm),
-        source,
-        subject,
-        predicate_object_maps,
-    })
+    // ADR-0029 §B: the 4 injected basic-encoding POMs are appended after the
+    // author's own — order-stable either way, appending keeps the author's
+    // mapping-authored POMs first in the common (non-star) diff-review case.
+    predicate_object_maps.extend(injected_poms);
+    Ok((
+        TriplesMap {
+            id: outer_id,
+            source,
+            subject,
+            predicate_object_maps,
+        },
+        star_assertions,
+        standalone_maps,
+    ))
 }
 
 /// `rr:logicalTable` → `rr:tableName` (base table/view) or `rr:sqlQuery` (R2RML
@@ -149,7 +226,16 @@ fn parse_logical_source(g: &Graph, tm: &NamedOrBlankNode) -> Result<LogicalSourc
 
 /// The subject map (`rr:subjectMap`, or the `rr:subject` constant shortcut) plus
 /// its `rr:class` types and graph maps (R2RML §6.1).
-fn parse_subject_map(g: &Graph, tm: &NamedOrBlankNode) -> Result<SubjectMap> {
+///
+/// When the subject-map node carries `rml:starMap` (ADR-0029), the subject is
+/// instead a compiler-derived synthetic-id [`TermMap`] and this also returns
+/// the 4 basic-encoding predicate-object maps to inject onto the enclosing
+/// triples map, plus the quoted triples map's asserted/non-asserted bookkeeping.
+fn parse_subject_map(
+    g: &Graph,
+    tm: &NamedOrBlankNode,
+    outer_source: &LogicalSource,
+) -> Result<(SubjectMap, Vec<PredicateObjectMap>, Option<StarAssertion>)> {
     // R2RML §6: a triples map has *exactly one* subject map (two is an error).
     let subject_map_count = g.objects(tm, RR_SUBJECT_MAP).count();
     let subject_count = g.objects(tm, RR_SUBJECT).count();
@@ -159,10 +245,20 @@ fn parse_subject_map(g: &Graph, tm: &NamedOrBlankNode) -> Result<SubjectMap> {
             node_id(tm)
         )));
     }
+    let mut injected_poms = Vec::new();
+    let mut star_assertion = None;
     let (term, carrier) = if let Some(sm) = g.object(tm, RR_SUBJECT_MAP) {
         let node = as_resource(sm)?;
-        let term = parse_term_map(g, &node, Position::Subject)?;
-        (term, node)
+        if let Some(star_map) = g.object(&node, RML_STAR_MAP) {
+            let star_node = as_resource(star_map)?;
+            let (term, injected, assertion) = star::expand_star_map(g, &star_node, outer_source)?;
+            injected_poms = injected;
+            star_assertion = Some(assertion);
+            (term, node)
+        } else {
+            let term = parse_term_map(g, &node, Position::Subject)?;
+            (term, node)
+        }
     } else if let Some(constant) = g.object(tm, RR_SUBJECT) {
         (TermMap::Constant(constant.clone()), tm.clone())
     } else {
@@ -176,22 +272,46 @@ fn parse_subject_map(g: &Graph, tm: &NamedOrBlankNode) -> Result<SubjectMap> {
         .map(as_named_node)
         .collect::<Result<_>>()?;
     let graphs = parse_graph_maps(g, &carrier)?;
-    Ok(SubjectMap {
-        term,
-        classes,
-        graphs,
-    })
+    Ok((
+        SubjectMap {
+            term,
+            classes,
+            graphs,
+        },
+        injected_poms,
+        star_assertion,
+    ))
 }
 
 /// A predicate-object map: `rr:predicateMap`/`rr:predicate` paired with
 /// `rr:objectMap`/`rr:object`, plus graph maps (R2RML §6.3).
-fn parse_predicate_object_map(g: &Graph, node: &NamedOrBlankNode) -> Result<PredicateObjectMap> {
+///
+/// `outer_tm_id`/`outer_source` are the enclosing triples map's own id and
+/// logical source — needed only to build the standalone synthetic TriplesMap
+/// an object-position `rml:starMap` requires (ADR-0029 §B; see
+/// [`parse_object_map`]). Returns any such standalone triples maps alongside
+/// the ordinary [`PredicateObjectMap`], plus every `rml:starMap` assertion
+/// bookkeeping entry encountered among this predicate-object map's objects.
+fn parse_predicate_object_map(
+    g: &Graph,
+    node: &NamedOrBlankNode,
+    outer_tm_id: &str,
+    outer_source: &LogicalSource,
+) -> Result<(PredicateObjectMap, Vec<TriplesMap>, Vec<StarAssertion>)> {
     let pm_nodes: Vec<NamedOrBlankNode> = g
         .objects(node, RR_PREDICATE_MAP)
         .map(as_resource)
         .collect::<Result<_>>()?;
     let mut predicates = Vec::with_capacity(pm_nodes.len());
     for pm in &pm_nodes {
+        // ADR-0029 R4: rml:starMap is rejected in predicate position, matching
+        // RML-STAR's own restriction.
+        if g.object(pm, RML_STAR_MAP).is_some() {
+            return Err(Error::Mapping(format!(
+                "rml:starMap is not allowed in predicate position ({})",
+                node_id(pm)
+            )));
+        }
         predicates.push(parse_term_map(g, pm, Position::Predicate)?);
     }
     for constant in g.objects(node, RR_PREDICATE) {
@@ -203,26 +323,89 @@ fn parse_predicate_object_map(g: &Graph, node: &NamedOrBlankNode) -> Result<Pred
         .map(as_resource)
         .collect::<Result<_>>()?;
     let mut objects = Vec::with_capacity(om_nodes.len());
+    let mut standalone_maps = Vec::new();
+    let mut star_assertions = Vec::new();
     for om in &om_nodes {
-        objects.push(parse_object_map(g, om)?);
+        let (object, om_standalone, om_star) = parse_object_map(g, om, outer_tm_id, outer_source)?;
+        objects.push(object);
+        standalone_maps.extend(om_standalone);
+        star_assertions.extend(om_star);
     }
     for constant in g.objects(node, RR_OBJECT) {
         objects.push(ObjectMap::Term(TermMap::Constant(constant.clone())));
     }
 
     let graphs = parse_graph_maps(g, node)?;
-    Ok(PredicateObjectMap {
-        predicates,
-        objects,
-        graphs,
-    })
+    Ok((
+        PredicateObjectMap {
+            predicates,
+            objects,
+            graphs,
+        },
+        standalone_maps,
+        star_assertions,
+    ))
 }
 
-/// An object map is a referencing object map when it has `rr:parentTriplesMap`
-/// (R2RML §8); otherwise it is a plain term map.
-fn parse_object_map(g: &Graph, node: &NamedOrBlankNode) -> Result<ObjectMap> {
+/// An object map is: an `rml:starMap` (ADR-0029, object position — see below),
+/// a referencing object map when it has `rr:parentTriplesMap` (R2RML §8), or
+/// otherwise a plain term map.
+///
+/// When the object-map node carries `rml:starMap`, the synthetic-id term
+/// (shared core: [`star::expand_star_map`]) becomes the object here — but
+/// unlike subject position, the object-map's enclosing triples map cannot
+/// host the 4 basic-encoding predicate-object maps directly: its own subject
+/// is not the synthetic id, only this one object is. Those 4 POMs (whose
+/// subject IS the synthetic id) instead get their own standalone
+/// [`TriplesMap`], returned alongside the ordinary [`ObjectMap`] and threaded
+/// up through [`parse_predicate_object_map`] → [`parse_triples_map`] →
+/// [`parse_r2rml`], which appends it to the output (subject to the same
+/// asserted/non-asserted retain filter as any other map — though its id never
+/// matches a `quoted_id`, so that filter is always a no-op for it; the
+/// standalone carrier is unconditional, exactly like the subject-position
+/// injected POMs).
+///
+/// Standalone id scheme: `urn:sf-star:objectmap:{outer_tm_id}::{quoted_id}`
+/// — deterministic and stable across repeated parses because both halves are
+/// the same node identifiers `rml:StarMap`'s own asserted/non-asserted
+/// suppression bookkeeping already relies on being stable (never derived from
+/// a Turtle parser's internal blank-node counter).
+fn parse_object_map(
+    g: &Graph,
+    node: &NamedOrBlankNode,
+    outer_tm_id: &str,
+    outer_source: &LogicalSource,
+) -> Result<(ObjectMap, Vec<TriplesMap>, Vec<StarAssertion>)> {
+    if let Some(star_map) = g.object(node, RML_STAR_MAP) {
+        let star_node = as_resource(star_map)?;
+        let (synthetic_term, injected_poms, assertion) =
+            star::expand_star_map(g, &star_node, outer_source)?;
+        let standalone_id = format!(
+            "urn:sf-star:objectmap:{outer_tm_id}::{}",
+            assertion.quoted_id
+        );
+        let standalone = TriplesMap {
+            id: standalone_id,
+            source: outer_source.clone(),
+            subject: SubjectMap {
+                term: synthetic_term.clone(),
+                classes: Vec::new(),
+                graphs: Vec::new(),
+            },
+            predicate_object_maps: injected_poms,
+        };
+        return Ok((
+            ObjectMap::Term(synthetic_term),
+            vec![standalone],
+            vec![assertion],
+        ));
+    }
     let Some(parent) = g.object(node, RR_PARENT_TRIPLES_MAP) else {
-        return Ok(ObjectMap::Term(parse_term_map(g, node, Position::Object)?));
+        return Ok((
+            ObjectMap::Term(parse_term_map(g, node, Position::Object)?),
+            Vec::new(),
+            Vec::new(),
+        ));
     };
     let parent_triples_map = ref_id(parent)?;
     let jc_nodes: Vec<NamedOrBlankNode> = g
@@ -242,10 +425,14 @@ fn parse_object_map(g: &Graph, node: &NamedOrBlankNode) -> Result<ObjectMap> {
             parent: sql_identifier(lexical(parent_col)?),
         });
     }
-    Ok(ObjectMap::Ref(RefObjectMap {
-        parent_triples_map,
-        joins,
-    }))
+    Ok((
+        ObjectMap::Ref(RefObjectMap {
+            parent_triples_map,
+            joins,
+        }),
+        Vec::new(),
+        Vec::new(),
+    ))
 }
 
 /// `rr:graphMap` (term-map form) + `rr:graph` (constant shortcut). Empty ⇒ the

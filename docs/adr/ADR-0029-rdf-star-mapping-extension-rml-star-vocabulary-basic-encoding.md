@@ -1,7 +1,8 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-16
-tags: [rdf-star, r2rml, rml-star, mapping-model, obda, virtualization, research-stage]
+updated: 2026-07-18
+tags: [rdf-star, r2rml, rml-star, mapping-model, obda, virtualization]
 supersedes: []
 depends-on:
   - ADR-0002
@@ -12,6 +13,23 @@ implements: []
 ---
 
 # RDF-star mapping support: reuse RML-STAR vocabulary, compile it to the plain-RDF basic encoding
+
+## Implementation status (2026-07-18)
+
+**Accepted and implemented in `sf-mapping`.** The mapping-compiler half (§A/§B/§D)
+ships: `rml:starMap` in **both subject and object position** desugars, parser-side,
+into the existing R2RML IR (a synthetic-id `TermMap::Template` + the four
+`rdf:PropositionForm` basic-encoding POMs) — no new `sf-core` IR variant, no
+executor/SQL change (§B, decision 1). The synthetic id is a deterministic,
+percent-encoding-injective `urn:sf-star:` template (R2; hashing deferred per the
+Neutral clause). `rml:AssertedTriplesMap`/`NonAsserted` suppression, and the four
+load-time rejections (R3 nested, R4 predicate-position, cross-source v1, non-single-spo)
+are all implemented and tested. Code: `crates/sf-mapping/src/r2rml.rs` +
+`crates/sf-mapping/src/r2rml/star.rs`; 12 new unit tests (`r2rml/tests.rs`),
+`cargo test -p sf-mapping` green, `differential_tree` 166/0 (no parity regression).
+**Still out of scope (unchanged):** the query-side SPARQL-star rewrite (§C, tracked
+as the unwritten ADR-0031) — this ADR alone does not make RDF-star queries work
+end-to-end.
 
 ## Context and Problem Statement
 
