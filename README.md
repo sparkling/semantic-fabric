@@ -414,12 +414,13 @@ and the query rewrite
 are implemented and test-gated — there is **no prior art** for RDF-star over live
 SQL rewriting ([ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
 
-- **[R2RML-star specification](docs/rdf-star/specification.html)** — the normative
-  extension spec (vocabulary, basic-encoding compilation, query semantics, v1
-  scope), structured after the W3C R2RML Recommendation.
-- **[R2RML-star guide &amp; tutorial](docs/rdf-star/guide.html)** — a hands-on
-  walkthrough: why quote a triple, the mental model, and worked mapping + query
-  examples.
+- **[R2RML-star specification](https://sparkling.github.io/semantic-fabric/rdf-star/specification.html)**
+  ([source](docs/rdf-star/specification.html)) — the normative extension spec
+  (vocabulary, basic-encoding compilation, query semantics, v1 scope),
+  structured after the W3C R2RML Recommendation.
+- **[R2RML-star guide &amp; tutorial](https://sparkling.github.io/semantic-fabric/rdf-star/guide.html)**
+  ([source](docs/rdf-star/guide.html)) — a hands-on walkthrough: why quote a
+  triple, the mental model, and worked mapping + query examples.
 
 ## 10. Architecture / workspace
 
