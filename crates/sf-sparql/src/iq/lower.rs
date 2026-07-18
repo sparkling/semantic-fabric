@@ -8,11 +8,11 @@
 //! against the now-known per-branch bindings, by reusing the *identical* flat
 //! [`filter_cond`]/[`bind_term_def`] the live [`crate::unfold`] Filter/Extend arms call.
 //!
-//! ## Status: tree path only (NOT the live engine)
+//! ## Status: PRODUCTION (tree default since ADR-0023 M8; banner corrected 2026-07-18)
 //!
-//! This is M3c; it is **not** wired into the live [`Plan`](crate::Plan)/exec/unfold
-//! path. The flat [`crate::unfold`] stays the production engine and the proven oracle.
-//! `cargo test --workspace` must stay green with the flat path byte-for-byte unchanged.
+//! This LOWER stage runs in the live engine: `translate`/`translate_with` route
+//! through [`crate::translate_tree`] by default (`lib.rs`); the flat
+//! [`crate::unfold`] remains the `=_bag` oracle / fallback.
 //!
 //! ## The fold, per node kind (design §5)
 //!

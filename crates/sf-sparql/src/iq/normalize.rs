@@ -8,12 +8,11 @@
 //! most ONE `Construction`** (one `var → BindDef` bindings map) — exactly what one
 //! flat [`Branch`](crate::iq::Branch) lowers from.
 //!
-//! ## Status: tree path only (NOT the live engine)
+//! ## Status: PRODUCTION (tree default since ADR-0023 M8; banner corrected 2026-07-18)
 //!
-//! This is M3b; it is **not** wired into the live [`Plan`](crate::Plan)/exec/unfold
-//! path. The flat [`crate::unfold`] stays the production engine and the proven
-//! oracle. `cargo test --workspace` must stay green with the flat path byte-for-byte
-//! unchanged.
+//! This NORMALIZE stage runs in the live engine: `translate`/`translate_with`
+//! route through [`crate::translate_tree`] by default (`lib.rs`); the flat
+//! [`crate::unfold`] remains the `=_bag` oracle / fallback.
 //!
 //! ## The THREE transformations (design §4 — NOTHING cost-driven)
 //!
