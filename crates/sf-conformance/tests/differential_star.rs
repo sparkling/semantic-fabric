@@ -12,12 +12,15 @@
 //! oracle/fallback — both routed here through the SAME `star::rewrite_query`
 //! pre-pass, so this harness proves they stay byte-identical on every case).
 //!
-//! **Oracle strategy** (ADR-0032 §Test plan): `spareval` evaluates SPARQL-star
-//! *natively* (reifies + triple terms), so it cannot evaluate the *original*
-//! query over a graph materializing the basic encoding — that graph has no
-//! `rdf:reifies`/triple-term statements for spareval to match. Every case below
-//! therefore hand-asserts expected bindings (never spareval) and relies on the
-//! tree/flat differential for cross-engine agreement. Bindings that carry a
+//! **Oracle strategy** (ADR-0032 §Test plan, realized by Wave 3): `spareval`
+//! evaluates SPARQL-star *natively*, and since Wave 3 it DOES run the
+//! *original* query — the materialized encoding is first passed through
+//! [`sf_conformance::star_decode::decode_proposition_forms`], yielding the
+//! native RDF 1.2 graph (real `rdf:reifies` statements + `Term::Triple`
+//! objects), and the `_oracle_agrees` companions below assert answer
+//! equivalence per ADR-0032 R6 (zero disagreements as of 2026-07-18). The
+//! hand-asserted bindings remain as belt-and-braces alongside the tree/flat
+//! differential. Bindings that carry a
 //! `rr:column`-sourced literal (`?age`) are cross-checked against a baseline
 //! non-star query run through the SAME engine ([`baseline_ages`]) rather than
 //! hand-encoding the exact XSD lexical form R2RML's natural-type mapping
@@ -26,14 +29,15 @@
 //! elsewhere).
 
 use rusqlite::Connection;
-use sf_conformance::oracle;
-use sf_conformance::sqlite;
+use sf_conformance::oracle::{self, OracleAnswer};
+use sf_conformance::star_decode::decode_proposition_forms;
+use sf_conformance::{graph, sqlite};
 use sf_sparql::{exec, translate_with, translate_with_flat, Error, Plan, PlanForm, Tbox};
 use sf_sql::Dialect;
 use spargebra::SparqlParser;
 use std::collections::{BTreeMap, HashMap};
 
-use oxrdf::{NamedNode, Term, Triple};
+use oxrdf::{Dataset, NamedNode, Term, Triple};
 
 // ============================================================================
 // Fixture — `census_row` (mirrors `sf-mapping`'s `STAR_ASSERTED_FIXTURE` shape:
@@ -1299,4 +1303,345 @@ fn order_by_composed_var_is_deterministic_across_runs() {
         run1, run2,
         "the same ORDER BY query must produce the SAME row order across independent runs"
     );
+}
+
+// ============================================================================
+// Wave 3 (ADR-0032 D0 / R6) — the END-TO-END SPAREVAL ORACLE. Every test
+// above hand-computes its expectation and cross-checks the tree/flat SQL
+// translators against EACH OTHER ([`diff`]/[`diff_construct`]) — real, but
+// not independent of the rewrite itself (`sf_sparql::star`): a bug shared by
+// both translators (they share the SAME `star::rewrite_query` pre-pass, per
+// the module doc) would sail through undetected. This section adds the THIRD,
+// genuinely independent leg D0 demands: materialize the mapping's FULL
+// encoded graph (every triples map, including the synthetic description maps
+// — `exec::dump_quads`, the SAME mapping-IR walk `runner.rs`'s named-graph
+// path already uses), decode it to native RDF 1.2 reification form
+// (`sf_conformance::star_decode`, verified in isolation by its own unit
+// tests), and run the query AS THE USER WROTE IT — never rewritten — through
+// `spareval` (verified fully SPARQL-star-native: reifies triples, triple-term
+// objects, the five functions, CONSTRUCT templates, all natively evaluated
+// over the DECODED graph, no rewrite pass involved on this side at all).
+//
+// Since ADR-0032 D1 ids are all deterministic IRIs (`urn:sf-star:pf:...` /
+// `urn:sf-star:r:...`, never a blank node anywhere in this encoding), the
+// SAME mapping run through BOTH the engine's SQL path and this decode path
+// mints the IDENTICAL reifier/proposition IRIs — so SELECT bindings compare
+// with PLAIN bag equality ([`oracle::solutions_bag_eq`]), no canonicalization
+// needed (this file's module doc, "Oracle strategy", is updated by this
+// finding: the SAME-graph decode now makes the spareval oracle usable after
+// all — see that doc comment for why it was previously ruled out). CONSTRUCT
+// still goes through [`graph::isomorphic`] (the crate's established
+// graph-comparison primitive), even though no blank node ever actually
+// appears in this particular data.
+// ============================================================================
+
+/// Materialize `r2rml`'s FULL encoded graph over `create` — every triples
+/// map, synthetic description maps included ([`exec::dump_quads`]'s
+/// mapping-IR walk, not a SPARQL CONSTRUCT dump: it needs no translation at
+/// all, so it also exercises the description maps a `?s ?p ?o` CONSTRUCT
+/// would technically also reach, but more directly) — then decode it to
+/// native RDF 1.2 form (ADR-0032 D2).
+fn decoded_graph(create: &str, r2rml: &str) -> Dataset {
+    let conn = sqlite::load(create).expect("fixture loads");
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let quads = exec::dump_quads(&maps, &conn, Dialect::Sqlite).expect("materialize");
+    let encoded = graph::quads_to_dataset(&quads);
+    decode_proposition_forms(&encoded)
+        .expect("decode must succeed for a well-formed ADR-0032 D1 emission")
+}
+
+/// The D0 oracle answer: `query` (the ORIGINAL SPARQL-star surface syntax,
+/// never rewritten) evaluated by `spareval` over the decoded native graph.
+fn oracle_star(create: &str, r2rml: &str, query: &str) -> OracleAnswer {
+    oracle::evaluate(&decoded_graph(create, r2rml), query).expect("oracle eval")
+}
+
+fn oracle_star_bag(create: &str, r2rml: &str, query: &str) -> Vec<BTreeMap<String, Term>> {
+    match oracle_star(create, r2rml, query) {
+        OracleAnswer::Solutions(rows) => rows,
+        other => panic!("expected Solutions, got {other:?}"),
+    }
+}
+
+/// The engine's (tree/flat-agreed, [`diff`]) row bag vs the decoded-graph
+/// spareval oracle's row bag: both must agree EXACTLY (ADR-0032 R6's
+/// acceptance bar). Returns the agreed rows for the caller's own additional
+/// assertions (row count, structural sanity).
+fn assert_oracle_agrees(create: &str, r2rml: &str, query: &str) -> Vec<BTreeMap<String, Term>> {
+    let engine = diff(create, r2rml, query);
+    let oracle_rows = oracle_star_bag(create, r2rml, query);
+    assert!(
+        oracle::solutions_bag_eq(&engine, &oracle_rows),
+        "ADR-0032 R6 divergence on `{query}`:\n \
+         engine (SQL-rewritten encoding) = {engine:#?}\n \
+         oracle (decoded native graph, spareval) = {oracle_rows:#?}"
+    );
+    engine
+}
+
+/// [`assert_oracle_agrees`]'s CONSTRUCT counterpart: the engine's produced
+/// triples vs spareval's CONSTRUCT output over the decoded graph, compared by
+/// [`graph::isomorphic`].
+fn assert_oracle_agrees_construct(create: &str, r2rml: &str, query: &str) -> Vec<Triple> {
+    let engine = diff_construct(create, r2rml, query);
+    let oracle_graph = match oracle_star(create, r2rml, query) {
+        OracleAnswer::Graph(g) => *g,
+        other => panic!("expected Graph, got {other:?}"),
+    };
+    let engine_graph = graph::triples_to_dataset(&engine);
+    assert!(
+        graph::isomorphic(&engine_graph, &oracle_graph),
+        "ADR-0032 R6 CONSTRUCT divergence on `{query}`:\n engine={engine:#?}\n oracle={oracle_graph:?}"
+    );
+    engine
+}
+
+// --- Matrix cells (ADR-0032 Test plan): each companions a hand-computed test
+// above — same fixture, same query, cross-checked against the independent
+// decoded-graph oracle instead of (or in addition to) the hand-computed
+// expectation. ---
+
+/// Companions [`bare_syntax_reifies_elision_matches_hand_computed_bindings`].
+#[test]
+fn bare_syntax_reifies_elision_oracle_agrees() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ <<?p ex:hasAge ?age>> ex:assertedBy ?src }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+}
+
+/// Companions [`parenthesized_subject_position_triple_term_is_statically_empty`]
+/// — the subject-position statically-empty matrix cell: the oracle (a real
+/// evaluator, not a stub) independently agrees the answer is empty, over data
+/// that DOES contain the reified statement (proving the emptiness is a
+/// genuine syntactic-position law, not merely "no matching data").
+#[test]
+fn parenthesized_subject_position_triple_term_oracle_agrees_empty() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ <<( ?p ex:hasAge ?age )>> ex:assertedBy ?src }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert!(rows.is_empty(), "rows={rows:#?}");
+}
+
+/// Companions [`subject_side_nested_quoted_triple_is_statically_empty`] — the
+/// SAME law, one level of (statically-empty, spec-impossible) subject-side
+/// nesting deeper.
+#[test]
+fn subject_side_nested_quoted_triple_oracle_agrees_empty() {
+    let query = format!(
+        "{EX}SELECT * WHERE {{ <<( <<( ?a ex:hasAge ?b )>> ex:assertedBy ?c )>> ex:assertedBy ?d }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert!(rows.is_empty(), "rows={rows:#?}");
+}
+
+/// Companions [`object_position_star_pattern_matches_hand_computed_bindings`]
+/// — object-position `<<( )>>` TripleTerm match.
+#[test]
+fn object_position_star_pattern_oracle_agrees() {
+    let query =
+        format!("{EX}SELECT ?q ?p ?age WHERE {{ ?q ex:hasQuote <<( ?p ex:hasAge ?age )>> }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML_OBJECT, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+}
+
+/// Companions
+/// [`bare_syntax_in_object_position_does_not_match_an_unreified_triple_term`]
+/// — the bare-in-object EMPTY cell.
+#[test]
+fn bare_syntax_in_object_position_oracle_agrees_empty() {
+    let query = format!("{EX}SELECT ?q ?p ?age WHERE {{ ?q ex:hasQuote << ?p ex:hasAge ?age >> }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML_OBJECT, &query);
+    assert!(rows.is_empty(), "rows={rows:#?}");
+}
+
+/// Companions
+/// [`reifier_multiplicity_two_star_maps_same_shape_yield_distinct_reifiers`]
+/// — reifier multiplicity (two reifiers, one proposition).
+#[test]
+fn reifier_multiplicity_oracle_agrees() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?r ?src WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+           ?r ex:assertedBy ?src \
+         }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML_TWO_ASSERTIONS, &query);
+    assert_eq!(rows.len(), 6, "rows={rows:#?}");
+}
+
+/// Companions [`annotation_sugar_asserts_and_reifies_matches_same_rows_as_bare_sugar`]
+/// — annotation sugar, asserted.
+#[test]
+fn annotation_sugar_asserts_and_reifies_oracle_agrees() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ ?p ex:hasAge ?age {{| ex:assertedBy ?src |}} }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+}
+
+/// Companions [`annotation_sugar_also_requires_the_plain_triple_unlike_bare_sugar`]
+/// — the non-asserted EMPTY distinguisher: spareval's OWN annotation-sugar
+/// desugaring (parser-level, independent of `sf_sparql::star`'s rewrite)
+/// empirically corroborates the engine's plain-triple-required reading,
+/// end to end through the SAME decoded graph.
+#[test]
+fn annotation_sugar_non_asserted_oracle_agrees_empty() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ ?p ex:hasAge ?age {{| ex:assertedBy ?src |}} }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML_NON_ASSERTED, &query);
+    assert!(rows.is_empty(), "rows={rows:#?}");
+}
+
+/// Companions [`explicit_reifier_sugar_e2e_matches_same_rows_as_manual_reifies_pattern`]
+/// — explicit reifier sugar `<< s p o ~ ?r >>`.
+#[test]
+fn explicit_reifier_sugar_oracle_agrees() {
+    let query = format!(
+        "{EX}SELECT ?p ?age ?r ?src WHERE {{ << ?p ex:hasAge ?age ~ ?r >> . ?r ex:assertedBy ?src }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+}
+
+/// Companions [`object_side_nesting_depth_2_e2e_matches_hand_computed_bindings`]
+/// — nested depth-2 bindings.
+#[test]
+fn object_side_nesting_depth_2_oracle_agrees() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?r ?p ?leaf ?score WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge <<( ?leaf ex:hasScore ?score )>> )>> \
+         }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, STAR_NESTED_DEPTH2_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+}
+
+/// Companions [`values_projected_only_ground_triple_decomposes_and_reprojects_natively`]
+/// — VALUES, projected-only native ground triple.
+#[test]
+fn values_projected_only_ground_triple_oracle_agrees() {
+    let query = format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> }} }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+}
+
+/// Companions [`values_ground_triple_matched_against_real_reifies_data`] —
+/// VALUES, matched against real reifies data.
+#[test]
+fn values_matched_against_real_reifies_data_oracle_agrees() {
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    let age1 = ages
+        .get(&NamedNode::new_unchecked("http://ex.org/person/1"))
+        .expect("person 1 must have a baseline age")
+        .clone();
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?r WHERE {{ \
+           ?r rdf:reifies ?t . \
+           VALUES ?t {{ <<( <http://ex.org/person/1> ex:hasAge {age1} )>> }} \
+         }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+}
+
+/// Companions [`subject_predicate_object_on_composed_variable_bind_the_components`]
+/// — SUBJECT/PREDICATE/OBJECT on a composed variable.
+#[test]
+fn subject_predicate_object_functions_oracle_agrees() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?s ?p ?o WHERE {{ \
+           ?r rdf:reifies ?t . \
+           BIND(SUBJECT(?t) AS ?s) . BIND(PREDICATE(?t) AS ?p) . BIND(OBJECT(?t) AS ?o) \
+         }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+}
+
+/// Companions [`is_triple_true_and_false_cells`] — isTRIPLE true/false cells.
+#[test]
+fn is_triple_cells_oracle_agrees() {
+    let rdf = "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> ";
+
+    let composed_true =
+        format!("{EX}{rdf}SELECT ?r WHERE {{ ?r rdf:reifies ?t . FILTER isTRIPLE(?t) }}");
+    let rows_true = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &composed_true);
+    assert_eq!(rows_true.len(), 3, "rows={rows_true:#?}");
+
+    let non_composed_false =
+        format!("{EX}SELECT ?p WHERE {{ ?p ex:hasAge ?age . FILTER isTRIPLE(?age) }}");
+    let rows_false = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &non_composed_false);
+    assert!(rows_false.is_empty(), "rows={rows_false:#?}");
+}
+
+/// Companions [`equality_and_same_term_over_composed_variables`] — equality
+/// cells (`=` and `sameTerm` over composed variables).
+#[test]
+fn equality_and_same_term_oracle_agrees() {
+    let filter_eq = |expr: &str| {
+        format!(
+            "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+             SELECT ?rA ?rB WHERE {{ \
+               ?rA rdf:reifies ?t1 . ?rA ex:assertedBy ex:SourceA . \
+               ?rB rdf:reifies ?t2 . ?rB ex:assertedBy ex:SourceB . \
+               FILTER({expr}) \
+             }}"
+        )
+    };
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML_TWO_ASSERTIONS);
+    let age_values: Vec<Term> = ages.values().cloned().collect();
+    let expected_equal: usize = age_values
+        .iter()
+        .map(|a| age_values.iter().filter(|b| a == *b).count())
+        .sum();
+
+    let equal = assert_oracle_agrees(
+        CENSUS_SQL,
+        CENSUS_R2RML_TWO_ASSERTIONS,
+        &filter_eq("OBJECT(?t1) = OBJECT(?t2)"),
+    );
+    assert_eq!(equal.len(), expected_equal, "rows={equal:#?}");
+
+    let same_term = assert_oracle_agrees(
+        CENSUS_SQL,
+        CENSUS_R2RML_TWO_ASSERTIONS,
+        &filter_eq("sameTerm(OBJECT(?t1), OBJECT(?t2))"),
+    );
+    assert_eq!(same_term.len(), expected_equal, "rows={same_term:#?}");
+}
+
+/// Companions [`reifies_object_variable_projects_as_a_native_triple_term`] —
+/// `?r rdf:reifies ?t` with `?t` projected: native TT binding equality
+/// against spareval's OWN native TT binding (both sides genuinely native
+/// here, unlike the hand-computed test, which only asserts the ENGINE side
+/// is native).
+#[test]
+fn reifies_object_variable_projection_oracle_agrees() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ ?r rdf:reifies ?t }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+    for row in &rows {
+        assert!(matches!(row["t"], Term::Triple(_)), "row={row:#?}");
+    }
+}
+
+/// Companions [`construct_template_quoting_a_triple_in_object_position_produces_real_triples`]
+/// — CONSTRUCT producing TT objects: graph isomorphism against spareval's OWN
+/// CONSTRUCT output (both sides independently build the triple-term object).
+#[test]
+fn construct_object_position_triple_term_oracle_agrees() {
+    let query = format!(
+        "{EX}CONSTRUCT {{ ?p ex:hasQuote <<( ?p ex:hasAge ?age )>> }} \
+         WHERE {{ ?p ex:hasAge ?age }}"
+    );
+    let triples = assert_oracle_agrees_construct(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(triples.len(), 3, "triples={triples:#?}");
 }
