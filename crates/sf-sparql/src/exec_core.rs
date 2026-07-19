@@ -185,6 +185,17 @@ where
     let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
     for (bi, branch) in branches.iter().enumerate() {
         let e = emit::emit_branch_with(branch, ctx.dialect, &catalog)?;
+        // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path — see `cascade::
+        // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
+        // scope rule): `e.sql` above omitted DISTINCT even though `branch.distinct` is
+        // set, because `emit_branch_with` deferred to this dedup instead of refusing.
+        // `term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is shared
+        // across branches and keys on the OUTER projected vars) — a different scope and
+        // question: this collapses duplicates WITHIN this one branch's own relation, on
+        // its FULL reconstructed solution tuple (every bound variable), independent of
+        // whatever the outer query later projects or whether it asked for DISTINCT at all.
+        let term_dedup = crate::cascade::eligible_for_term_dedup(branch);
+        let mut term_seen: std::collections::HashSet<Vec<Term>> = std::collections::HashSet::new();
         // The column schema is fixed for this branch's whole row stream, so index
         // it ONCE here rather than per row (ADR-0024/M4 perf — `RawRow::code_for`/
         // `AliasRow::value` used to `schema.iter().position(...)` on every lookup).
@@ -253,6 +264,12 @@ where
                         if !seen_tuples.insert(key) {
                             continue; // duplicate projected solution
                         }
+                    }
+                }
+                if term_dedup {
+                    let key: Vec<Term> = bindings.values().cloned().collect();
+                    if !term_seen.insert(key) {
+                        continue; // duplicate reconstructed solution (ADR-0034 D1 term dedup)
                     }
                 }
                 // ORDER BY (any branch count): defer slicing — buffer for the global

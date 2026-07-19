@@ -140,69 +140,99 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                     cx.unfolder.dialect,
                 );
             }
-            // ADR-0034 D2: when this pattern's own candidate-map arms are not
+            // ADR-0034 D2: when this pattern's own candidate-map arms are not ALL
             // provably disjoint (the SAME elision check the flat engine's
-            // `unfold::pool_pattern_relation` applies), they must be deduped, not
-            // bag-concatenated. `IqNode` has no representation for a pre-pooled
-            // `Branch` (RESOLVE/NORMALIZE never see anything but algebra nodes), so
-            // instead of pooling here directly, wrap the arms in `IqNode::Distinct`
-            // — the tree's established "must become its own derived table" modifier
-            // boundary (`iq::lower::lower_node`'s `Aggregation|Distinct|Slice|
-            // OrderBy => lower_as_subplan` arm) — which routes them through THAT
-            // function's existing multi-branch pooling (ADR-0025 Tier-2 gap 2:
-            // narrow-to-vars, injectivity gate, cross-arm reconstruction-agreement
-            // gate, `UNION`-vs-`UNION ALL` via `emit_subplan_sql`) unmodified. This
-            // reuses the identical pooling algorithm the flat engine's own
-            // `pool_pattern_relation` runs (via the shared `remap_termdef`/
-            // `remap_colref` helpers), so the two engines stay `=_bag`-identical by
-            // construction — the elision check is duplicated (one boolean test),
-            // the pooling mechanism is not.
+            // `unfold::pool_pattern_relation` applies), `unfold::disjoint_groups`
+            // partitions them into maximal not-provably-disjoint groups — only a
+            // group whose members can't all be told apart needs deduping together;
+            // an arm disjoint from every other arm stays a plain bag-union
+            // alternative even when SOME OTHER pair in this pattern is not disjoint
+            // (see that function's own doc comment, and W3C R2RMLTC0004a). `IqNode`
+            // has no representation for a pre-pooled `Branch` (RESOLVE/NORMALIZE
+            // never see anything but algebra nodes), so instead of pooling here
+            // directly, each group of size ≥2 gets its arms wrapped in
+            // `IqNode::Distinct` — the tree's established "must become its own
+            // derived table" modifier boundary (`iq::lower::lower_node`'s
+            // `Aggregation|Distinct|Slice|OrderBy => lower_as_subplan` arm) — which
+            // routes them through THAT function's existing multi-branch pooling
+            // (ADR-0025 Tier-2 gap 2: narrow-to-vars, injectivity gate, cross-arm
+            // reconstruction-agreement gate, `UNION`-vs-`UNION ALL` via
+            // `emit_subplan_sql`) unmodified. This reuses the identical pooling
+            // algorithm the flat engine's own `pool_group` runs (via the shared
+            // `remap_termdef`/`remap_colref` helpers), so the two engines stay
+            // `=_bag`-identical by construction — the elision check and grouping are
+            // duplicated (`unfold::all_pairwise_disjoint`/`unfold::disjoint_groups`,
+            // pure boolean/partition tests), the pooling mechanism is not.
             //
-            // Wrapped in a condition-free `IqNode::Filter` around the `Distinct`:
-            // `iq::lower::lower_spine` special-cases a `Distinct`/`Aggregation`/
-            // `Slice`/`OrderBy` node it reaches DIRECTLY (or immediately under a
-            // `Construction` whose OWN child is exactly one of those four shapes)
-            // as the outer query-modifier SPINE — peeling it straight into
-            // `Plan::distinct` instead of routing it through `lower_node`'s
-            // `lower_as_subplan` arm. That peeling is correct for a REAL top-level
-            // SPARQL DISTINCT, but this `Distinct` is an internal D2 pooling
-            // marker, not a user modifier — when this single triple pattern
-            // happens to BE the entire WHERE clause (no sibling pattern to force
-            // an enclosing `InnerJoin`, the only other thing that routes a child
-            // through `lower_node` instead of `lower_spine`), the bare `Distinct`
-            // reaches the spine directly and gets silently un-pooled (found via
-            // `differential_tree.rs`'s `r5_ii_overlapping_maps_same_predicate`'s
-            // CONSTRUCT-form assertion — flat/tree diverged: flat deduped via
-            // `unfold::pool_pattern_relation`, tree did not). Two earlier attempts
-            // at this fix failed: a plain `Construction` wrapper still has the
-            // `Distinct` as its DIRECT child, so the SAME guard matches; a
-            // one-child condition-free `InnerJoin` wrapper is torn back down to
-            // its bare child by `iq::normalize`'s OWN InnerJoin-identity pruning
-            // (`children.len() == 1 && cond.is_empty()`) before LOWER ever sees
-            // it. `Filter` has no such identity-unwrap for an unrecognized child
-            // shape (`normalize_filter`'s `other => Filter{child, cond}` arm keeps
-            // the wrapper), and `lower_spine` never special-cases `Filter` at all
-            // — it always falls to the "other" arm, which delegates the whole
-            // subtree to `lower_node`, whose own `Filter` arm then calls
+            // Each pooled group is wrapped in a condition-free `IqNode::Filter`
+            // around its `Distinct`: `iq::lower::lower_spine` special-cases a
+            // `Distinct`/`Aggregation`/`Slice`/`OrderBy` node it reaches DIRECTLY (or
+            // immediately under a `Construction` whose OWN child is exactly one of
+            // those four shapes) as the outer query-modifier SPINE — peeling it
+            // straight into `Plan::distinct` instead of routing it through
+            // `lower_node`'s `lower_as_subplan` arm. That peeling is correct for a
+            // REAL top-level SPARQL DISTINCT, but this `Distinct` is an internal D2
+            // pooling marker, not a user modifier — when a SINGLE group spans the
+            // pattern's entire arm set (so there is no enclosing `Union` over
+            // multiple groups) and this triple pattern happens to BE the entire
+            // WHERE clause (no sibling pattern to force an enclosing `InnerJoin`
+            // either, the only other thing that routes a child through `lower_node`
+            // instead of `lower_spine`), the bare `Distinct` reaches the spine
+            // directly and gets silently un-pooled (found via `differential_tree.rs`'s
+            // `r5_ii_overlapping_maps_same_predicate`'s CONSTRUCT-form assertion —
+            // flat/tree diverged: flat deduped via `unfold::pool_pattern_relation`,
+            // tree did not). Two earlier attempts at this fix failed: a plain
+            // `Construction` wrapper still has the `Distinct` as its DIRECT child, so
+            // the SAME guard matches; a one-child condition-free `InnerJoin` wrapper
+            // is torn back down to its bare child by `iq::normalize`'s OWN
+            // InnerJoin-identity pruning (`children.len() == 1 && cond.is_empty()`)
+            // before LOWER ever sees it. `Filter` has no such identity-unwrap for an
+            // unrecognized child shape (`normalize_filter`'s `other => Filter{child,
+            // cond}` arm keeps the wrapper), and `lower_spine` never special-cases
+            // `Filter` at all — it always falls to the "other" arm, which delegates
+            // the whole subtree to `lower_node`, whose own `Filter` arm then calls
             // `lower_node` on `child` again, reaching the `Distinct =>
-            // lower_as_subplan` arm correctly regardless of tree position. An
-            // empty `cond` is a true no-op (`apply_conds` over zero conditions),
-            // so this adds no semantic content — the identical pooling outcome as
-            // the already-working nested case, just reached uniformly instead of
-            // by position.
+            // lower_as_subplan` arm correctly regardless of tree position (including
+            // as one of several children under an enclosing `Union` over multiple
+            // groups, the ordinary "nested" case this mechanism already handles). An
+            // empty `cond` is a true no-op (`apply_conds` over zero conditions), so
+            // this adds no semantic content.
             if !cx.unfolder.in_existential
                 && branches.len() >= 2
                 && !all_pairwise_disjoint(&branches)
             {
-                let arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
-                return Ok(IqNode::Filter {
-                    child: Box::new(IqNode::Distinct {
-                        child: Box::new(IqNode::Union {
-                            children: arms,
-                            project: vars,
+                let groups = crate::unfold::disjoint_groups(&branches);
+                let mut branches: Vec<Option<Branch>> = branches.into_iter().map(Some).collect();
+                let mut children: Vec<IqNode> = Vec::with_capacity(groups.len());
+                for group in groups {
+                    if group.len() == 1 {
+                        children.push(bridge_branch(
+                            branches[group[0]].take().expect("each index visited once"),
+                        ));
+                        continue;
+                    }
+                    let arms: Vec<IqNode> = group
+                        .iter()
+                        .map(|&i| {
+                            bridge_branch(branches[i].take().expect("each index visited once"))
+                        })
+                        .collect();
+                    children.push(IqNode::Filter {
+                        child: Box::new(IqNode::Distinct {
+                            child: Box::new(IqNode::Union {
+                                children: arms,
+                                project: vars.clone(),
+                            }),
                         }),
-                    }),
-                    cond: Vec::new(),
+                        cond: Vec::new(),
+                    });
+                }
+                return Ok(match children.len() {
+                    1 => children.pop().expect("checked len == 1"),
+                    _ => IqNode::Union {
+                        children,
+                        project: vars,
+                    },
                 });
             }
             let mut arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();

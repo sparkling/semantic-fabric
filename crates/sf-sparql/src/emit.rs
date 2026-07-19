@@ -143,8 +143,15 @@ pub fn emit_branch_with(
     // (dedup on the RECONSTRUCTED term) only when every projected term is INJECTIVE in its
     // raw columns. A non-injective template (distinct raw tuples → the same RDF term, e.g.
     // `http://ex/{a}{b}` over `(1,23)`/`(12,3)`) would survive SQL DISTINCT as duplicates
-    // SPARQL must collapse — a silent wrong answer. Sound 501. Injective templates pass.
-    if b.distinct {
+    // SPARQL must collapse — a silent wrong answer. Sound 501 — UNLESS `b` also qualifies
+    // for Run 4 Wave C0d's term-level dedup ([`crate::cascade::eligible_for_term_dedup`]):
+    // a branch whose relation stands alone in its plan slot answers instead of refusing —
+    // `term_dedup` below suppresses the SQL `DISTINCT` this function would otherwise emit,
+    // leaving the raw, duplicate-bearing rows for `exec_core::run_branches` to dedup AFTER
+    // reconstruction, on the actual term values. Injective templates need neither path —
+    // SQL DISTINCT already implements SPARQL DISTINCT for them.
+    let term_dedup = crate::cascade::eligible_for_term_dedup(b);
+    if b.distinct && !term_dedup {
         for def in b.bindings.values() {
             if !crate::cascade::binding_is_injective(def) {
                 return Err(Error::Unsupported(
@@ -200,7 +207,14 @@ pub fn emit_branch_with(
             .join(", ")
     };
 
-    let distinct = if b.distinct { "DISTINCT " } else { "" };
+    // `term_dedup` skips SQL DISTINCT even though `b.distinct` is set (see the C.3 gate
+    // above) — its raw, non-injective duplicates are collapsed downstream, by TERM, not
+    // by raw-column SQL DISTINCT (which would be the unsound operation C.3 refuses).
+    let distinct = if b.distinct && !term_dedup {
+        "DISTINCT "
+    } else {
+        ""
+    };
     let mut skeleton = match from {
         Some(f) => format!("SELECT {distinct}{select_list} FROM {f}"),
         None => format!("SELECT {distinct}{select_list}"),
@@ -1167,6 +1181,68 @@ fn render_template_concat(
              {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
         ))),
     }
+}
+
+/// Render one template's segments as a dialect-appropriate SQL string
+/// concatenation with every LITERAL segment INLINED (no bound parameter) — Run 4
+/// Wave C0d Mechanism B's building block (`iq::lower::pool_rendered`'s own doc
+/// comment has the full mechanism), called at TRANSLATE time from `unfold::
+/// pool_group` / `iq::lower::lower_as_subplan`, before any live per-statement
+/// param-binding context exists. [`render_template_concat`] (the FILTER/WHERE
+/// use case) binds each literal as a parameter instead — sound there because it
+/// renders into ONE branch's own emission, where `pidx`/`params` are threaded
+/// end to end; here the rendered expression becomes a SELECT-list column of ONE
+/// arm inside a multi-arm `UNION`, and `emit_subplan_sql` does not renumber a
+/// later arm's own placeholders against an earlier arm's (only SQLite's
+/// unnumbered `?` tolerates that; PostgreSQL's `$N` would collide). Inlining
+/// sidesteps the question rather than depending on a fix outside this
+/// mechanism's scope. A template's literal segments are MAPPING-TRUSTED TEXT
+/// (parsed from the R2RML document, never SPARQL-query-supplied) — inlining as a
+/// properly `''`-escaped SQL string literal is the SAME "trusted mapping text is
+/// inlined, not parameterised" precedent [`Dialect::quote_ident`] already sets
+/// for identifiers (ADR-0010 R2), not a departure from it. `alias` is a bare
+/// local alias STRING (e.g. `"sfs3"`, matching [`crate::cascade::
+/// wrap_scan_distinct`]'s own naming) rather than a numbered scan alias: this
+/// runs before a live [`ColumnCatalog`] exists, so there is no case-fold
+/// resolution to thread through [`colref`]. Reuses [`percent_encode_col`]
+/// verbatim for IRI-kind columns — no second encoder.
+pub(crate) fn render_template_inline(
+    segs: &[sf_core::ir::Segment],
+    alias: &str,
+    encode_iri: bool,
+    dialect: Dialect,
+) -> Result<String> {
+    use sf_core::ir::Segment;
+    let mut parts = Vec::with_capacity(segs.len());
+    for seg in segs {
+        parts.push(match seg {
+            Segment::Literal(text) => sql_string_literal(text),
+            Segment::Column(c) => {
+                let col = format!("{alias}.{}", dialect.quote_ident(c));
+                if encode_iri {
+                    percent_encode_col(&col, dialect)?
+                } else {
+                    col
+                }
+            }
+        });
+    }
+    match dialect {
+        Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
+        Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
+        other => Err(Error::Unsupported(format!(
+            "ADR-0034 D2 rendered-projection pooling (SQL CONCAT fallback) is not implemented \
+             for {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
+        ))),
+    }
+}
+
+/// A SQL single-quoted string literal for mapping-trusted text `text` — ANSI
+/// `''`-doubling, the one escaping rule SQLite/PostgreSQL/MySQL all share for a
+/// single-quoted string (unlike percent-encoding, no per-dialect split applies
+/// here). [`render_template_inline`]'s only caller.
+fn sql_string_literal(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
 }
 
 /// Percent-encode `col_sql`'s runtime value EXACTLY the way `sf_core::ir::

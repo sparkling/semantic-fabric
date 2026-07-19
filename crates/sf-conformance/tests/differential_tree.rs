@@ -3793,17 +3793,6 @@ fn w3c_compare(
                 (a, b) => panic!("W3C {id}: exec Ok/Err mismatch:\n flat={a:?}\n tree={b:?}"),
             }
         }
-        // ADR-0034 × ADR-0025 C.3 known asymmetry: a NON-INJECTIVE multi-column
-        // template (TC0005b's blank-node `{fname}_{lname}` — distinct raw tuples
-        // can render the same term) on an UNKEYED table forces D1's dedup, and
-        // the tree's SubPlan wrap eagerly surfaces the pre-existing C.3 guard
-        // ("DISTINCT over a non-injective term cannot be pushed to SQL
-        // DISTINCT soundly") at TRANSLATE time, while flat builds its Plan
-        // lazily and never validates until execution. flat=Ok / tree=Err(C.3)
-        // is therefore a sound, documented split — tree refuses, flat answers
-        // (correct on this fixture's collision-free data). Term-level rust-side
-        // dedup for non-injective templates is the ledgered restoration path.
-        (Ok(_), Err(Error::Unsupported(m))) if m.contains("ADR-0025 C.3") => None,
         _ => panic!("W3C {id}: translate Ok/Err mismatch:\n flat={f:?}\n tree={t:?}"),
     }
 }

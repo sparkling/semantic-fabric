@@ -1404,6 +1404,141 @@ fn apply_dup_safety(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect
     }
 }
 
+/// Run 4 Wave C0d — ADR-0034 D1's THIRD path, alongside the per-scan `DISTINCT`
+/// wrap ([`wrap_scan_distinct`]) and the branch-level flag's sound-501 fallback
+/// ([`apply_dup_safety`]'s doc comment): when `b.distinct` is set (by D1's own
+/// `need_flag` fallback, OR by an explicit SPARQL `DISTINCT` — the mechanism
+/// below is equally sound either way, since BOTH need "dedup by RECONSTRUCTED
+/// TERM", not raw columns) over a NON-INJECTIVE binding, AND `b`'s relation
+/// stands ALONE in its plan slot, term-level Rust-side dedup answers instead of
+/// refusing.
+///
+/// **The sound-scope rule** (state it here, once, for every caller):
+/// `b.core.len() + b.opts.len() + b.subplan_joins.len() <= 1` — AT MOST ONE
+/// thing contributes rows to this branch (one base/view scan, XOR one SubPlan
+/// derived table, XOR nothing at all) and nothing else joins against it. A
+/// branch with a join partner (a second `core` scan, an `OptJoin`, an
+/// INNER/LEFT-JOINed `SubPlanJoin` alongside another source) is excluded: the
+/// join would consume/multiply this relation's raw-row multiplicity BEFORE a
+/// dedup pass downstream ever sees the pre-join picture, so post-execution
+/// dedup on the FINAL joined row would be dedup applied too late — those shapes
+/// keep the ADR-0025 C.3 sound 501. The `<= 1` form (not `== 1` per field)
+/// deliberately admits BOTH the plain "one unkeyed scan" shape ([`emit_
+/// branch_with`](crate::emit::emit_branch_with)'s direct C.3 site, and
+/// `iq::lower::lower_as_subplan`'s OWN inner `arm_projections` pre-check on a
+/// single un-pooled arm) and the "this branch IS one SubPlan, wrapping nothing
+/// else" pass-through shape a bridged tree arm's `Distinct` produces when it is
+/// NOT the query spine (`iq::resolve::bridge_branch`'s doc comment) — the
+/// SAME rule, checked at the SAME call, covers both without a second flag.
+///
+/// **Mechanism.** When eligible, [`crate::emit::emit_branch_with`]'s C.3 gate
+/// answers instead of refusing: it emits the branch's SQL WITHOUT `DISTINCT`
+/// (raw rows, duplicates and all — pushing `SELECT DISTINCT` on non-injective
+/// raw columns is exactly the unsound operation C.3 exists to prevent), and
+/// [`crate::exec_core`]'s `run_branches` — seeing this same eligibility on the
+/// SAME branch — reconstructs every row as usual, THEN drops a row whose full
+/// reconstructed solution tuple (every one of `b.bindings`' bound variables,
+/// compared by `Term`'s own `Eq`: full lexical form + kind + datatype/lang) was
+/// already emitted, via a streaming `HashSet` scoped to this one branch. This
+/// deliberately relaxes the ADR-0006 constant-memory invariant for EXACTLY this
+/// branch class (bounded by DISTINCT OUTPUT rows, not total input rows) —
+/// answering correctly beats refusing; the invariant holds everywhere else
+/// untouched. `iq::lower::lower_as_subplan` propagates eligibility outward: when
+/// a SubPlan wraps exactly one eligible inner arm (the pass-through shape
+/// above), it sets `distinct = true` on the OUTER wrapper branch too, so this
+/// same check — re-run once more at the point the outer branch is finally
+/// executed — fires there and the term-level dedup runs over the FULLY
+/// reconstructed (positionally-remapped) row, not the never-independently-
+/// executed inner one.
+///
+/// **Literal/BlankNode only, never IRI.** A non-injective offending binding must
+/// be a `TermType::Literal` or `TermType::BlankNode` multi-column template — R2RML
+/// gives EITHER no way to become provably injective (no percent-encoding exists to
+/// protect a separator character between column slots, unlike IRI's RFC-3987
+/// escaping), so a mapping author has no alternative design that avoids this class
+/// entirely; a `{FirstName} {LastName}`-shaped literal or a no-PK default-mapping
+/// blank-node template is a common, unavoidable R2RML pattern (the W3C target
+/// shape this wave restores: Student/IOUs/Lives, every one Literal- or BlankNode-
+/// typed). An IRI's non-injectivity is narrower and avoidable — ADJACENT column
+/// slots with NO literal separator at all (`Template::is_injective`'s own doc
+/// comment); adding so much as one separator character fixes it, since IRI
+/// percent-encoding then guarantees that character can never appear verbatim
+/// inside a column's own value. `adversarial_adr0034_refute.rs`'s `s2a_
+/// noninjective_binding_does_not_cover_key_sound_501` deliberately probes exactly
+/// that IRI edge case (`http://ex/{a}{b}`, over a table that DOES declare a
+/// composite key `(a,b)` the binding merely can't use for elision) and pins the
+/// sound-501 outcome — term-dedup answering it instead would regress that lock,
+/// which is testing a DIFFERENT property (the elision proof's injectivity filter)
+/// than this mechanism addresses.
+pub(crate) fn eligible_for_term_dedup(b: &Branch) -> bool {
+    b.distinct
+        && b.path.is_none()
+        && b.agg.is_none()
+        && b.core.len() + b.opts.len() + b.subplan_joins.len() <= 1
+        && b.bindings.values().any(|def| !binding_is_injective(def))
+        && b.bindings.values().all(binding_is_term_dedup_safe)
+}
+
+/// Whether `def` is safe for term-level dedup: already injective (nothing to
+/// dedup), or a Literal/BlankNode multi-column template — the ONLY non-injective
+/// shape [`eligible_for_term_dedup`] / [`group_eligible_for_term_dedup`] cover
+/// (see the former's "Literal/BlankNode only, never IRI" doc section for why). A
+/// non-`Derived` non-injective shape never arises in practice (`Coalesce`/
+/// `Concat`/`Agg`/`ComposedTriple` are not `binding_is_injective`'s `Template`
+/// match arm to begin with) but is excluded defensively rather than assumed.
+fn binding_is_term_dedup_safe(def: &TermDef) -> bool {
+    if binding_is_injective(def) {
+        return true;
+    }
+    let TermDef::Derived { term_map, .. } = def else {
+        return false;
+    };
+    crate::iq::term_map_type(term_map) != Some(TermType::Iri)
+}
+
+/// Run 4 Wave C0d's GROUP extension — [`eligible_for_term_dedup`]'s own sound
+/// scope rule, applied to a whole D2 pooling GROUP of `branches.len() >= 2` arms
+/// (`iq::lower::lower_as_subplan`'s / `unfold::pool_group`'s own multi-arm
+/// injectivity gate) instead of one standalone branch. A group arm need not
+/// itself carry `distinct` — an arm with an already-injective binding has
+/// nothing of its own to dedup; the group-wide term-dedup this licenses covers
+/// it regardless once SOME sibling arm is an offender. Requires: EVERY arm is
+/// standalone (the SAME rule, checked per arm — a joined arm's multiplicity
+/// would be consumed before the group-wide dedup could ever see it, even when
+/// that one arm's own binding happens to be injective); and every offending
+/// (non-injective) `keep`-projected binding, across every arm, is
+/// [`binding_is_term_dedup_safe`]. `keep` is the pattern's own projected
+/// variable set (`iq::lower::lower_as_subplan`'s `vars`) — an arm's own
+/// internal-only binding (never read by the outer query) is not a dedup key and
+/// must not gate this.
+pub(crate) fn group_eligible_for_term_dedup(
+    branches: &[Branch],
+    keep: &std::collections::HashSet<String>,
+) -> bool {
+    if branches.len() < 2 {
+        return false;
+    }
+    let mut any_offender = false;
+    for b in branches {
+        if b.path.is_some()
+            || b.agg.is_some()
+            || b.core.len() + b.opts.len() + b.subplan_joins.len() > 1
+        {
+            return false;
+        }
+        for (k, def) in &b.bindings {
+            if !keep.contains(k) || binding_is_injective(def) {
+                continue;
+            }
+            if !binding_is_term_dedup_safe(def) {
+                return false;
+            }
+            any_offender = true;
+        }
+    }
+    any_offender
+}
+
 /// Whether `scan`'s table is covered by a declared PK/UNIQUE key over
 /// `bindings` ([`table_key_covered_by_bindings`]). An `rr:sqlQuery` view scan
 /// (no `TableSchema` entry to prove anything from) is conservatively treated as

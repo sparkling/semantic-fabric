@@ -80,6 +80,36 @@ string-literal fallback would have silently converted a wrap-projection
 typo into a bogus value — wrap columns are alias-qualified, which restores
 hard errors on every dialect.
 
+**Update (same day, Waves C0c+C0d) — W3C conformance restored to baseline 62;
+phase 2 implemented.** C0's D2 pooled ALL arms the moment ANY pair failed
+disjointness; now `disjoint_groups` (union-find connected components) pools
+only genuinely-colliding groups, singletons stay bag-union — plus term-kind/
+language disjointness (`term_specs_disjoint`; datatype deliberately excluded —
+a pinned refute test requires datatype-mismatched pairs to route through the
+agreement gate). Phase 2, both mechanisms: (A) **term-level rust-side dedup**
+as the third D1 path — `distinct` + non-injective + STANDALONE branch (≤1
+row-contributor, no join partner: post-exec dedup of a joined relation would
+dedup too late — those keep C.3) executes without SQL DISTINCT and dedups on
+the full reconstructed solution tuple, an O(distinct-results) HashSet that
+deliberately relaxes the constant-memory invariant for exactly this class;
+restricted to Literal/BlankNode non-injectivity (**the IRI-exclusion rule**:
+IRI templates can always be made injective by adding a separator — RFC-3987
+escaping protects it — so IRI shapes stay 501 as an avoidable mapping-design
+gap, preserving the C.3/s2a adversarial pins). Group extension covers D2
+multi-arm pools (UNION ALL + outer term-dedup). (B) **rendered-projection
+pooling** for width-mismatched arms: each arm projects its RENDERED term per
+shared var (reusing the percent-encoding machinery), making widths uniform by
+construction; gated on term classes where rendered-lexical+kind is term
+identity. The flat/tree C.3 dump carve-out is RETIRED (proven dead after the
+fix). W3C construct conformance: 53→62/63 adjudicated (baseline met); every
+restored case verified by full oracle isomorphism, not just non-error.
+
+**Known residual (PG lane, next wave):** the D1 wrap and the new pooling
+render identifiers at translate time without live-catalog case-folding, and
+reference SQLite's synthetic `rowid` on Direct-Mapping no-PK tables —
+`w3c_pg_suite` (green at the run's base) currently fails on those
+interactions; tracked as the C0e repair.
+
 **Known completeness costs (sound 501s, pinned, with restoration paths):**
 (1) GROUP-BY-over-multibranch-OPTIONAL on unkeyed tables — D1's dedup wrap
 routes through the SubPlan mechanism and hits the ADR-0023 M5 boundary; both

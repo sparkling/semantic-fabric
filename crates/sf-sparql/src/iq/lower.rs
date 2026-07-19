@@ -1353,21 +1353,33 @@ fn lower_as_subplan(
     // per arm — which would otherwise appear as extra UNION columns and defeat the dedup.
     // (Single-branch / non-distinct pooling is unaffected: the outer reads only the vars'
     // positions, and `UNION ALL` keeps every row regardless.) ADR-0025 Tier-2 gap 2.
+    // Run 4 Wave C0d: whether this whole group answers via term-level dedup instead
+    // of the injectivity gate's sound 501 below (`cascade::group_eligible_for_term_
+    // dedup`'s own doc comment has the full mechanism and its "Literal/BlankNode
+    // only, never IRI" restriction) — computed before the narrowing loop mutates
+    // `nested_plan.branches`, and consulted again after `prepared` is built (below)
+    // to propagate eligibility onto the OUTER wrapper branch this function returns.
+    let mut term_dedup_group = false;
     if nested_plan.branches.len() >= 2 && nested_plan.distinct {
         let keep: std::collections::HashSet<String> = vars.iter().map(|v| v.to_string()).collect();
         // Gate (gap-2 adversarial review): the pooled `UNION` dedups RAW columns, so it
         // equals SPARQL DISTINCT (reconstructed-term dedup) ONLY when every projected term is
         // INJECTIVE. A non-injective template (distinct raw tuples → the same RDF term) would
         // pool into a wrong-answer dedup — keep the sound 501 (the pre-gap-2 behavior for a
-        // multi-branch SubPlan) for that case rather than regress it to a silent wrong answer.
-        for b in &nested_plan.branches {
-            for (k, def) in &b.bindings {
-                if keep.contains(k) && !crate::cascade::binding_is_injective(def) {
-                    return Err(Error::Unsupported(
-                        "SubPlan: multi-branch DISTINCT over a non-injective projected term \
-                         (raw-column UNION dedup would not match SPARQL DISTINCT) → 501 (ADR-0025)"
-                            .to_owned(),
-                    ));
+        // multi-branch SubPlan) for that case rather than regress it to a silent wrong answer —
+        // UNLESS `term_dedup_group` licenses the term-level fallback instead (below).
+        term_dedup_group =
+            crate::cascade::group_eligible_for_term_dedup(&nested_plan.branches, &keep);
+        if !term_dedup_group {
+            for b in &nested_plan.branches {
+                for (k, def) in &b.bindings {
+                    if keep.contains(k) && !crate::cascade::binding_is_injective(def) {
+                        return Err(Error::Unsupported(
+                            "SubPlan: multi-branch DISTINCT over a non-injective projected term \
+                             (raw-column UNION dedup would not match SPARQL DISTINCT) → 501 (ADR-0025)"
+                                .to_owned(),
+                        ));
+                    }
                 }
             }
         }
@@ -1379,8 +1391,16 @@ fn lower_as_subplan(
             // and defeat the pooled `UNION` dedup on the projected vars.
             b.distinct = true;
         }
+        if term_dedup_group {
+            // No SQL-level dedup at all (raw-column UNION would be exactly the unsound
+            // operation the gate above refuses) — `UNION ALL` bag-concatenates every
+            // arm's raw rows; the OUTER wrapper's `distinct = true` (propagated below)
+            // makes `exec_core::run_branches` term-dedup the fully reconstructed row
+            // across the whole group once it is finally executed.
+            nested_plan.distinct = false;
+        }
     }
-    let prepared = nested_plan.prepared_branches();
+    let mut prepared = nested_plan.prepared_branches();
     if prepared.is_empty() {
         return Err(Error::Unsupported(
             "SubPlan: empty inner plan → 501".to_owned(),
@@ -1391,25 +1411,27 @@ fn lower_as_subplan(
     // rather than `Branch::projection()` (BTreeMap order): for agg branches the emitter
     // places GROUP BY key columns before aggregate columns. Mismatching would remap a var
     // to the wrong positional column.
-    let arm_projections: Vec<Vec<ColRef>> = prepared
-        .iter()
-        .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
-        .collect::<std::result::Result<_, _>>()
-        .map_err(|e| match e {
-            // ADR-0034: a sound, intentional 501 from the inner `emit_branch` (e.g. its
-            // own ADR-0025 C.3 non-injective-DISTINCT gate, reachable here once a
-            // narrowed arm's `distinct = true` templated binding turns out
-            // non-injective) must stay `Unsupported`, not get relabelled `Sql` — the
-            // flat engine's mirror of this same gate (`unfold::pool_pattern_relation`)
-            // already reports `Unsupported`, and `differential_tree.rs`'s own "flat and
-            // tree must agree on Unsupported" 501-set check requires the SAME variant
-            // on both sides (`w3c_rdb2rdf_dump_flat_eq_tree`, W3C R2RMLTC0005b, caught
-            // the mismatch). A GENUINE SQL-emission failure keeps its `Sql` wrapping.
-            Error::Unsupported(msg) => {
-                Error::Unsupported(format!("SubPlan inner emit for remapping: {msg}"))
-            }
-            other => Error::Sql(format!("SubPlan inner emit for remapping: {other}")),
-        })?;
+    let emit_projections = |arms: &[Branch]| -> Result<Vec<Vec<ColRef>>> {
+        arms.iter()
+            .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|e| match e {
+                // ADR-0034: a sound, intentional 501 from the inner `emit_branch` (e.g. its
+                // own ADR-0025 C.3 non-injective-DISTINCT gate, reachable here once a
+                // narrowed arm's `distinct = true` templated binding turns out
+                // non-injective) must stay `Unsupported`, not get relabelled `Sql` — the
+                // flat engine's mirror of this same gate (`unfold::pool_pattern_relation`)
+                // already reports `Unsupported`, and `differential_tree.rs`'s own "flat and
+                // tree must agree on Unsupported" 501-set check requires the SAME variant
+                // on both sides (`w3c_rdb2rdf_dump_flat_eq_tree`, W3C R2RMLTC0005b, caught
+                // the mismatch). A GENUINE SQL-emission failure keeps its `Sql` wrapping.
+                Error::Unsupported(msg) => {
+                    Error::Unsupported(format!("SubPlan inner emit for remapping: {msg}"))
+                }
+                other => Error::Sql(format!("SubPlan inner emit for remapping: {other}")),
+            })
+    };
+    let mut arm_projections = emit_projections(&prepared)?;
     // A positional-column fallback binding (`c{i}` of the derived table) — used when a var
     // cannot be term-remapped, or is absent from an arm's bindings (exposed positionally).
     let positional_col = |i: usize| TermDef::Derived {
@@ -1431,9 +1453,44 @@ fn lower_as_subplan(
         .iter()
         .any(|p| p.len() != arm_projections[0].len())
     {
-        return Err(Error::Unsupported(
-            "SubPlan: multi-branch arms with differing projection widths → 501".to_owned(),
-        ));
+        // Run 4 Wave C0d Mechanism B (`pool_rendered`'s own doc comment has the full
+        // mechanism — `unfold::pool_group` runs the identical fallback for the flat
+        // engine): positional (raw-column) pooling cannot align two arms whose own
+        // projections need a different number of raw columns (W3C R2RMLTC0011a: one
+        // candidate map's subject template has 3 column slots, a sibling's has 2).
+        // Try rendering every projected var's FULL lexical form as one uniform-width
+        // column per arm instead; only on that also failing does this stay the
+        // ordinary sound 501.
+        match pool_rendered(&prepared, &vars, dialect)? {
+            Some(rewritten) => {
+                prepared = rewritten;
+                arm_projections = emit_projections(&prepared)?;
+                if arm_projections
+                    .iter()
+                    .any(|p| p.len() != arm_projections[0].len())
+                {
+                    return Err(Error::Unsupported(
+                        "SubPlan: multi-branch arms with differing projection widths → 501 \
+                         (rendered-projection fallback also failed to align widths)"
+                            .to_owned(),
+                    ));
+                }
+                // `prepared` is a CLONE of `nested_plan.branches` (`Plan::prepared_
+                // branches`), not a view onto it — `emit_subplan_sql` later emits
+                // `nested_plan.branches` directly (never `prepared`, which exists
+                // only to drive the remap loop below), so the rewrite must also land
+                // there or the ACTUAL SQL sent to the database stays the original,
+                // width-mismatched arms while translation itself sees the fixed-up
+                // ones (a real, caught-live divergence: a translate-time-clean plan
+                // whose emitted SQL still 42S22/SQLITE_ERRORs on UNION column count).
+                nested_plan.branches = prepared.clone();
+            }
+            None => {
+                return Err(Error::Unsupported(
+                    "SubPlan: multi-branch arms with differing projection widths → 501".to_owned(),
+                ));
+            }
+        }
     }
     // ADR-0032 D3 cross-boundary fix: `v`'s own arm binding, PREFERRING a freshly-built
     // `TermDef::ComposedTriple` over the arm's OWN component bindings when `v` is a
@@ -1473,6 +1530,29 @@ fn lower_as_subplan(
     }
     *next_alias += 1;
     let mut outer = Branch::empty();
+    // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path, `cascade::eligible_for_
+    // term_dedup`'s own doc comment): propagate term-dedup eligibility to the OUTER
+    // wrapper branch built below, so the SAME check fires again once THIS branch is
+    // executed at the top level and `exec_core::run_branches` dedups the fully
+    // reconstructed, positionally-remapped row — the inner arm(s) are never
+    // independently executed, so their own `distinct`/non-injective shape is
+    // invisible past this point otherwise. Two shapes propagate:
+    // * `prepared.len() == 1` — the pass-through shape produced when `iq::resolve::
+    //   bridge_branch` individually wraps a sibling `Union` arm in `Distinct` (D1's
+    //   per-pattern flag, not a real multi-arm D2 pool).
+    // * `term_dedup_group` — a genuine multi-arm D2 pool (`prepared.len() >= 2`)
+    //   the gate above licensed for the SAME term-level fallback instead of its
+    //   ordinary sound 501 (mutually exclusive with the first: `term_dedup_group`
+    //   implies `prepared.len() >= 2`).
+    // `outer.distinct` otherwise stays `false` (its `Branch::empty()` default): a
+    // genuine multi-arm pool the gate did NOT license keeps the gap-2 sound 501
+    // above (ADR-0034's D2 non-injective-IRI pin is a distinct, narrower 501 this
+    // mechanism deliberately does not touch).
+    if term_dedup_group
+        || (prepared.len() == 1 && crate::cascade::eligible_for_term_dedup(&prepared[0]))
+    {
+        outer.distinct = true;
+    }
     outer.subplan_joins.push(SubPlanJoin {
         alias: sp_alias,
         plan: Box::new(nested_plan),
@@ -1684,6 +1764,237 @@ fn remap_term_map(
                 Template::from_segments(new_segments).map_err(|e| Error::Sql(e.to_string()))?;
             Ok(TermMap::Template(new_tmpl, spec.clone()))
         }
+    }
+}
+
+/// Run 4 Wave C0d Mechanism B — the D2 pooling FALLBACK for a group of arms
+/// whose positional (raw-column) projections have DIFFERING WIDTHS (the width
+/// check just above, in both this function's caller and `unfold::pool_group`'s
+/// mirror): e.g. two candidate maps' subject templates with a different number
+/// of column slots (W3C R2RMLTC0011a — one TriplesMap's subject has 3 slots
+/// `{ID}/{FirstName};{LastName}`, a sibling's has 2 `{ID}/{Description}` — no
+/// positional raw-column alignment is possible; positional pooling can only
+/// ever align arms whose OWN internal column-dedup happens to produce the same
+/// count).
+///
+/// Instead of projecting each arm's OWN raw columns (width = however many raw
+/// columns THAT arm's OWN bindings happen to need, which can differ arm-to-arm
+/// even for the SAME projected var set), every arm projects exactly
+/// `vars.len()` non-constant columns — ONE per projected var, in `vars` order —
+/// each the var's FULLY RENDERED lexical form: a `rr:template` binding's
+/// segments concatenated via [`crate::emit::render_template_inline`] (reusing
+/// [`crate::emit::percent_encode_col`] for an IRI-kind template — the Run 4
+/// B-repair Fix 2 machinery `unify::align_templates`'s `TemplateEq` fallback
+/// already established; NOT a second encoder); a plain `rr:column` binding
+/// passes its raw column reference through unchanged (nothing to render — it
+/// already IS one column). This makes every arm's rendered width `vars.len()`
+/// minus however many vars are `Const` in every arm — by construction the SAME
+/// for every arm — so the positional-width mismatch cannot recur, and the
+/// EXISTING positional-pooling machinery (width check, per-var remap,
+/// cross-arm agreement) runs UNCHANGED on the rewritten arms this returns.
+///
+/// **Why rendered-lexical equality is safe to `UNION`-dedup on.** The eventual
+/// pooled `UNION`'s raw-column dedup compares these rendered STRINGS byte for
+/// byte — which equals RDF term equality only within one term class (same term
+/// type; same language/datatype for a literal) where the render is injective in
+/// the term's own lexical form. R2RML template expansion IS that injective map
+/// for IRI/Literal/BlankNode alike (`sf_core::ir::Template::is_injective`'s own
+/// doc comment, and `render_template_inline`'s percent-encoding for IRI); a bare
+/// `rr:column` value trivially is its own lexical form. [`term_class`]'s gate
+/// below enforces the "same term class across every arm" half of that argument
+/// per var; the render itself supplies the "injective" half. (A residual gap —
+/// e.g. two `rr:column` IRI bindings with differing `rr:template`-inherited
+/// `base` — is not this gate's job to catch: the caller's EXISTING cross-arm
+/// `TermDef` agreement check, run on the rewritten arms this returns, compares
+/// the full remapped spec and 501s on any such divergence before any SQL runs.)
+///
+/// Returns `Ok(None)` — the caller keeps the ordinary sound 501, never a
+/// silently wrong answer — for any shape not (yet) covered:
+/// * an arm that is not a plain single-scan relation (`core.len() != 1`, or any
+///   `opts`/`subplan_joins`) — the wrap below rebuilds FROM as ONE nested
+///   subquery over the arm's own scan; a join or OPTIONAL has more structure
+///   than that preserves;
+/// * a `where_conds` entry that is not a parameter-free `col IS [NOT] NULL`
+///   guard on the arm's own scan (R2RML §11 NULL-exclusion — the only shape a
+///   plain candidate-map arm's conditions carry in practice) —
+///   [`render_null_guard`] recognises exactly that shape and nothing else;
+/// * a projected var whose binding is `Const` in some arms but `Derived` in
+///   others (a disagreeing shape `disjoint_groups`' conservative "not provably
+///   disjoint" grouping can in principle admit, even though no real R2RML
+///   candidate-map pair does today), or absent from some arm's bindings;
+/// * a projected var whose [`term_class`] (term type + language/datatype for a
+///   `Derived` binding; the value itself for `Const`) disagrees across arms —
+///   the safety argument above then does not hold;
+/// * any binding that is not `Const` or `Derived{Column|Template}` (`Coalesce`/
+///   `Concat`/`Agg`/`ComposedTriple` never arise as a plain R2RML candidate-map
+///   arm's own binding, but excluded defensively rather than assumed).
+pub(crate) fn pool_rendered(
+    arms: &[Branch],
+    vars: &[String],
+    dialect: sf_sql::Dialect,
+) -> Result<Option<Vec<Branch>>> {
+    use sf_core::ir::{LogicalSource, TermMap, TermType};
+
+    if arms
+        .iter()
+        .any(|b| b.core.len() != 1 || !b.opts.is_empty() || !b.subplan_joins.is_empty())
+    {
+        return Ok(None);
+    }
+    // Every projected var's declared term class must agree across every arm —
+    // else rendered-lexical equality is not term identity (see the doc comment).
+    for v in vars {
+        let mut class: Option<TermClass> = None;
+        for b in arms {
+            let Some(def) = b.bindings.get(v.as_str()) else {
+                return Ok(None);
+            };
+            let Some(this) = term_class(def) else {
+                return Ok(None);
+            };
+            match &class {
+                None => class = Some(this),
+                Some(c) if *c == this => {}
+                Some(_) => return Ok(None),
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(arms.len());
+    for b in arms {
+        let scan = &b.core[0];
+        let local = format!("sfs{}", scan.alias);
+        let Some(guards): Option<Vec<String>> = b
+            .where_conds
+            .iter()
+            .map(|c| render_null_guard(c, scan.alias, &local, dialect))
+            .collect()
+        else {
+            return Ok(None);
+        };
+
+        let mut select_items = Vec::with_capacity(vars.len());
+        let mut new_bindings = BTreeMap::new();
+        for (i, v) in vars.iter().enumerate() {
+            // Presence + term-class agreement already checked above.
+            let def = b.bindings.get(v.as_str()).expect("checked above");
+            match def {
+                TermDef::Const(t) => {
+                    new_bindings.insert(v.clone(), TermDef::Const(t.clone()));
+                }
+                TermDef::Derived { term_map, .. } => {
+                    let (expr, spec) = match term_map {
+                        TermMap::Column(c, spec) => {
+                            (format!("{local}.{}", dialect.quote_ident(c)), spec.clone())
+                        }
+                        TermMap::Template(t, spec) => {
+                            let encode_iri = spec.term_type == TermType::Iri;
+                            let expr = crate::emit::render_template_inline(
+                                t.segments(),
+                                &local,
+                                encode_iri,
+                                dialect,
+                            )?;
+                            (expr, spec.clone())
+                        }
+                        TermMap::Constant(_) => return Ok(None), // unreachable: `def_of` never builds this
+                    };
+                    select_items.push(format!("{expr} AS rv{i}"));
+                    new_bindings.insert(
+                        v.clone(),
+                        TermDef::Derived {
+                            term_map: TermMap::Column(format!("rv{i}").into(), spec),
+                            alias: scan.alias,
+                        },
+                    );
+                }
+                _ => return Ok(None), // Coalesce/Concat/Agg/ComposedTriple — not this shape
+            }
+        }
+        let from_inner = match &scan.source {
+            LogicalSource::Table(t) => format!("{} {local}", dialect.quote_ident(t)),
+            LogicalSource::Query(q) => format!("({q}) {local}"),
+        };
+        let mut sql = if select_items.is_empty() {
+            // Every var is `Const` in every arm — pathological (nothing to pool on
+            // at all), but still a syntactically valid derived table.
+            format!("SELECT 1 AS __sf_dummy FROM {from_inner}")
+        } else {
+            format!("SELECT {} FROM {from_inner}", select_items.join(", "))
+        };
+        if !guards.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&guards.join(" AND "));
+        }
+        let mut rewritten = b.clone();
+        rewritten.core = vec![Scan {
+            alias: scan.alias,
+            source: LogicalSource::Query(sql),
+        }];
+        rewritten.where_conds = Vec::new();
+        rewritten.bindings = new_bindings;
+        out.push(rewritten);
+    }
+    Ok(Some(out))
+}
+
+/// A projected var's declared term class for [`pool_rendered`]'s cross-arm
+/// agreement gate: a `Const` binding's OWN value (compared via `Debug` — the
+/// arm's binding IS the exact term, no coarser class needed), or a `Derived`
+/// binding's term type + (for a literal) language/datatype, ALSO compared via
+/// `Debug` (sidesteps naming `oxrdf::NamedNode`/`Box<str>` here just to derive
+/// `PartialEq` on them). `None` for anything else (`Coalesce`/`Concat`/`Agg`/
+/// `ComposedTriple`).
+#[derive(PartialEq)]
+enum TermClass {
+    Const(String),
+    Derived {
+        term_type: sf_core::ir::TermType,
+        language: Option<String>,
+        datatype: Option<String>,
+    },
+}
+
+fn term_class(def: &TermDef) -> Option<TermClass> {
+    match def {
+        TermDef::Const(t) => Some(TermClass::Const(format!("{t:?}"))),
+        TermDef::Derived { term_map, .. } => {
+            let spec = match term_map {
+                sf_core::ir::TermMap::Column(_, spec) | sf_core::ir::TermMap::Template(_, spec) => {
+                    spec
+                }
+                sf_core::ir::TermMap::Constant(_) => return None, // unreachable: `def_of`
+            };
+            Some(TermClass::Derived {
+                term_type: spec.term_type,
+                language: spec.language.as_ref().map(|s| s.to_string()),
+                datatype: spec.datatype.as_ref().map(|n| format!("{n:?}")),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Render `cond` as inline SQL text against local alias `local`, IFF it is a
+/// simple, parameter-free `col IS [NOT] NULL` guard on `alias`'s own scan —
+/// [`pool_rendered`]'s doc comment explains why this is the only condition
+/// shape it folds into the wrap. `None` for anything else.
+fn render_null_guard(
+    cond: &SqlCond,
+    alias: usize,
+    local: &str,
+    dialect: sf_sql::Dialect,
+) -> Option<String> {
+    match cond {
+        SqlCond::IsNotNull(c) if c.alias == alias => Some(format!(
+            "{local}.{} IS NOT NULL",
+            dialect.quote_ident(&c.column)
+        )),
+        SqlCond::IsNull(c) if c.alias == alias => Some(format!(
+            "{local}.{} IS NULL",
+            dialect.quote_ident(&c.column)
+        )),
+        _ => None,
     }
 }
 
