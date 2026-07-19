@@ -20,7 +20,7 @@ use crate::iq::{
 };
 use crate::leftjoin::{def_is_nullable, left_join_branches, null_safe};
 use crate::saturate::Tbox;
-use crate::unify::{filter_cond, unify, Unify};
+use crate::unify::{filter_cond, templates_provably_disjoint, unify, Unify};
 use crate::{Error, Result};
 
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -1284,6 +1284,30 @@ pub fn join_branches(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch
 /// Merge a right branch into a left branch (inner join). `None` ⇒ pruned.
 fn merge(mut left: Branch, right: &Branch) -> Result<Option<Branch>> {
     if left.path.is_some() || right.path.is_some() {
+        // ADR-0032 D6 flat/tree 501-parity: before surfacing the unconditional
+        // "no join onto any path branch" 501 below, check whether this join is
+        // PROVABLY DISJOINT via the same leading-literal-prefix mechanism
+        // `unify::align_templates` applies during ordinary unification on the tree
+        // path. The tree path has no preemptive path check, so it reaches
+        // `align_templates` and proves an empty join BEFORE its own (otherwise
+        // identical) path restriction would ever fire; the flat path used to 501
+        // unconditionally first, never getting that far — a genuine, narrow
+        // tree-exceeds-flat divergence (differential_star.rs's
+        // `star_pattern_at_property_path_endpoint_*` pin). Only the disjointness
+        // proof is checked here, never the full `unify()` — a Sat/Unsupported
+        // verdict on a path-carrying branch is not safe to act on before the path
+        // restriction it would otherwise bypass. Everything else keeps 501ing
+        // exactly as before (e.g. differential_paths.rs's
+        // `closure_joined_with_class_pattern_hits_the_identical_general_boundary_
+        // on_both_engines` pin: its templates are IDENTICAL, not disjoint, so no
+        // escape applies and both engines still 501).
+        for (var, rdef) in &right.bindings {
+            if let Some(ldef) = left.bindings.get(var) {
+                if templates_provably_disjoint(ldef, rdef) {
+                    return Ok(None);
+                }
+            }
+        }
         return Err(Error::Unsupported(
             "joining a property-path closure with another pattern deferred → 501 \
              (v1 = a standalone ?s P+ ?o)"

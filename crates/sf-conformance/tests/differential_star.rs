@@ -983,54 +983,99 @@ fn star_pattern_inside_filter_exists_matches_hand_computed_bindings() {
     assert_eq!(got.len(), 3);
 }
 
+/// ADR-0032 D3 item 2 — INVESTIGATED, no reachable bug: `iq::lower::
+/// lower_iq_exists` passes an empty `extra_keep` to its inner `lower_node`
+/// call (a documented, narrow suspected gap — a composed variable's
+/// component vars referenced ONLY inside a FILTER EXISTS/NOT EXISTS/MINUS
+/// body might not survive that inner lowering's own projection-restrict
+/// retain). This is the best near-miss shape found after genuinely trying 7
+/// distinct ones (see that function's own doc comment for the full list and
+/// the three structural reasons none of them reach it): `?t` is composed
+/// OUTSIDE (and projected), and the SAME `?t` is ALSO referenced via a
+/// SECOND, independent `rdf:reifies` occurrence INSIDE the FILTER EXISTS
+/// body — reusing the SAME component-variable names across occurrences
+/// (`reifies_bare_variable_env_lookup_reuses_component_vars_across_
+/// occurrences`, `star/tests.rs`). This survives WITHOUT `extra_keep`
+/// because the EXISTS body's own top-level scope has no explicit SPARQL
+/// SELECT list, so its default projection is every variable the body binds
+/// (broad, `output_vars()`) — the 3 component vars, each bound by a pattern
+/// DIRECTLY inside this same body, are already in that broad set regardless
+/// of `extra_keep`'s emptiness. Locks the CURRENT, CORRECT behavior — this
+/// is a regression guard, not a reachable-bug repro.
+#[test]
+fn star_pattern_reused_inside_filter_exists_survives_without_extra_keep() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ \
+           ?r rdf:reifies ?t . \
+           FILTER EXISTS {{ ?r2 rdf:reifies ?t . ?r2 ex:assertedBy ?src }} \
+         }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    // Every row is asserted (CENSUS_R2RML's #PersonAgeAssertion), so EXISTS
+    // holds for every row — the same 3-row shape as this file's sibling
+    // `star_pattern_inside_filter_exists_matches_hand_computed_bindings`.
+    assert_eq!(got.len(), 3, "got={got:#?}");
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    let mut expected: Vec<Term> = ages
+        .iter()
+        .map(|(p, age)| {
+            Term::Triple(Box::new(Triple::new(
+                p.clone(),
+                NamedNode::new_unchecked("http://example.com/hasAge"),
+                age.clone(),
+            )))
+        })
+        .collect();
+    let mut got_terms: Vec<Term> = got
+        .into_iter()
+        .map(|mut r| r.remove("t").unwrap())
+        .collect();
+    got_terms.sort_by_key(ToString::to_string);
+    expected.sort_by_key(ToString::to_string);
+    assert_eq!(
+        got_terms, expected,
+        "?t must still realize as a genuine native Term::Triple — got={got_terms:#?}\n\
+         expected={expected:#?}"
+    );
+}
+
 // ============================================================================
 // 10 — a star pattern at a property-path endpoint (rule R5b: the identity's 4
 // patterns joined alongside the Path node). Item 5's align_templates
-// literal-prefix lift has an UNANTICIPATED side effect HERE, reported to the
-// team lead as a NEW finding (not fixed this wave — `unfold.rs` is out of
-// this file's scope): the TREE path now proves this query PROVABLY EMPTY
-// (the quoted identity's proposition-form template, `urn:sf-star:pf:...`,
-// and `ex:knows`'s own subject template, `http://ex.org/person/...` read via
-// the path's canonical `sf_s` key column, have CONFLICTING literal prefixes
-// from the very first character — `ex:knows`'s domain is disjoint from a
-// proposition identity's range BY CONSTRUCTION, so `?pf ex:knows+ ?x` can
-// never match ANY row) BEFORE the PRE-EXISTING, unrelated "no join onto any
-// path branch" boundary is ever reached in ITS OWN pipeline. But the FLAT
-// path's `unfold::merge` checks `left.path.is_some() || right.path.is_some()`
-// UNCONDITIONALLY, as its very FIRST statement — before ever attempting
-// `unify()` — so it STILL 501s, unimproved. The two engines now DISAGREE
-// (tree: `Ok` with an empty plan; flat: `Err(Unsupported)`) — a genuine,
-// narrow flat/tree inconsistency THIS wave's align_templates change
-// surfaced, not created (the underlying "no path join" restriction is
-// pre-existing and unrelated to star). This test LOCKS the current,
-// understood-but-imperfect state (mirroring this file's established pattern
-// for documenting a boundary precisely) rather than papering over it via the
-// stricter `diff()` helper, which enforces agreement and would legitimately
-// (and unhelpfully, for THIS test's purpose) panic on it.
+// literal-prefix lift ORIGINALLY surfaced an unanticipated flat/tree
+// divergence HERE (reported to the team lead as a NEW finding): the TREE path
+// proves this query PROVABLY EMPTY (the quoted identity's proposition-form
+// template, `urn:sf-star:pf:...`, and `ex:knows`'s own subject template,
+// `http://ex.org/person/...` read via the path's canonical `sf_s` key column,
+// have CONFLICTING literal prefixes from the very first character —
+// `ex:knows`'s domain is disjoint from a proposition identity's range BY
+// CONSTRUCTION, so `?pf ex:knows+ ?x` can never match ANY row) BEFORE the
+// PRE-EXISTING, unrelated "no join onto any path branch" boundary is ever
+// reached in ITS OWN pipeline, while the FLAT path's `unfold::merge` checked
+// `left.path.is_some() || right.path.is_some()` UNCONDITIONALLY, as its very
+// FIRST statement — before ever attempting `unify()` — so it STILL 501'd,
+// unimproved. ADR-0032 D6's follow-up ("mirror the prefix check in
+// `unfold::merge`") CLOSES that divergence: `merge` now runs the SAME
+// leading-literal-prefix disjointness proof (`unify::templates_provably_
+// disjoint`, sharing `align_templates`'s exact mechanism, not duplicating it)
+// over the join-correlated bindings BEFORE its unconditional path-join 501,
+// so flat now ALSO proves this join empty instead of 501ing — both engines
+// AGREE (0 rows), verified through the strict `diff()` helper (flat/tree
+// row-bag parity), not the looser divergence-locking pattern this slot used
+// before the fix landed.
 // ============================================================================
 
 #[test]
-fn star_pattern_at_property_path_endpoint_flat_501s_tree_proves_empty_a_known_divergence() {
+fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
     let query = format!("{EX}SELECT ?age ?x WHERE {{ <<( ?p ex:hasAge ?age )>> ex:knows+ ?x }}");
-    let maps = sf_mapping::parse_r2rml(CENSUS_R2RML).expect("R2RML parses");
-    let q = SparqlParser::new()
-        .parse_query(&query)
-        .expect("query parses");
-    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
     assert!(
-        matches!(flat, Err(Error::Unsupported(_))),
-        "flat must still 501 (unfold::merge's unconditional path-join check, unchanged): {flat:?}"
+        got.is_empty(),
+        "both engines must agree this join is PROVABLY EMPTY (ADR-0032 D6: the quoted \
+         identity's proposition-form template and ex:knows's own subject template have \
+         conflicting literal prefixes from the first character): got={got:#?}"
     );
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    match &tree {
-        Ok(plan) => assert!(
-            plan.branches.is_empty(),
-            "tree must prove this provably empty (0 branches), got {tree:?}"
-        ),
-        Err(e) => {
-            panic!("tree was expected to prove this empty via align_templates, not 501: {e:?}")
-        }
-    }
 }
 
 // ============================================================================

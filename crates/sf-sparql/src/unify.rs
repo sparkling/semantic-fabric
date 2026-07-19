@@ -211,6 +211,34 @@ fn align_templates(
     Unify::Sat(eqs)
 }
 
+/// ADR-0032 D6 flat/tree 501-parity: whether two term definitions for the SAME
+/// (join-correlated) variable are provably disjoint via the leading-literal-prefix
+/// check ALONE — the narrow proof `unfold::merge` reuses to prune a path-carrying
+/// join as empty BEFORE its unconditional "no join onto any path branch" 501 would
+/// otherwise fire (the tree path has no such preemptive check, so it reaches
+/// [`align_templates`] during ordinary unification and proves the SAME join empty).
+/// Only the template/template, conflicting-prefix case answers `true`; every other
+/// shape (a `Const`, a `Column`, a `Coalesce`/`Concat`/`Agg`/`ComposedTriple`, or two
+/// templates with no prefix conflict) answers `false` — deliberately NOT the full
+/// [`unify`], whose `Sat`/`Unsupported` verdicts make no sense to act on before the
+/// path restriction they would otherwise bypass.
+pub(crate) fn templates_provably_disjoint(a: &TermDef, b: &TermDef) -> bool {
+    let (
+        TermDef::Derived {
+            term_map: TermMap::Template(tx, _),
+            ..
+        },
+        TermDef::Derived {
+            term_map: TermMap::Template(ty, _),
+            ..
+        },
+    ) = (a, b)
+    else {
+        return false;
+    };
+    leading_literal_prefixes_conflict(tx.segments(), ty.segments())
+}
+
 /// Whether `sx`/`sy`'s leading literal text — see [`leading_literal_prefix`]
 /// — differs at some position BOTH have fixed text for (a shorter prefix
 /// simply has nothing to conflict with beyond its own length, which is fine:

@@ -698,15 +698,42 @@ fn lower_iq_exists(
     is_minus: bool,
     dialect: sf_sql::Dialect,
 ) -> Result<SqlCond> {
-    // ADR-0032 D3 item 2: an EMPTY `extra_keep` here (not threaded further from
-    // `lower`/`lower_node`, unlike the main line) is a documented, narrow gap —
-    // a composed variable referenced ONLY inside a FILTER EXISTS/NOT EXISTS/MINUS
-    // body would not survive this inner lowering's own projection-restrict retain.
-    // `apply_conds`/`lower_iq_cond` (this function's only callers) are invoked
-    // from many more sites than the main lowering line, so threading the real set
-    // this deep was judged out of proportion to this wave's actual test matrix
-    // (no test exercises a composed variable inside an EXISTS body) — mirrors
-    // `apply_composed_bindings`'s own documented SubPlan-pooling gap.
+    // ADR-0032 D3 item 2 — INVESTIGATED, downgraded to defensive (not
+    // load-bearing): an EMPTY `extra_keep` here (not threaded from
+    // `lower`/`lower_node`, unlike the main line) was originally flagged as a
+    // gap — a composed variable's components referenced ONLY inside a FILTER
+    // EXISTS/NOT EXISTS/MINUS body might not survive this inner lowering's
+    // own projection-restrict retain. Genuinely tried to reach it (7 distinct
+    // shapes: a component reused via a second `rdf:reifies` occurrence
+    // inside EXISTS; a component-extracting FILTER `SUBJECT(?t)`; a
+    // `BIND(TRIPLE(...))` inside EXISTS; a nested sub-SELECT re-establishing
+    // the composed var, both a star and a plain-variable control; a bare
+    // outer-only FILTER, both a star and a plain-variable control) — NONE
+    // reach it, for three independent, structural reasons, confirmed by
+    // temporarily threading a deliberately over-wide `extra_keep` here and
+    // observing ZERO change in any of the 7 outcomes:
+    // (1) a component bound by a pattern DIRECTLY inside the EXISTS body's
+    //     own top-level scope is already covered by that scope's default,
+    //     IMPLICIT `project` (`output_vars()` — every variable the body
+    //     binds), which is broad regardless of `extra_keep`;
+    // (2) a NESTED sub-SELECT inside the body is an INDEPENDENT SPARQL
+    //     scope — a variable there that isn't in ITS OWN declared SELECT
+    //     list can never correlate with an outer-scope variable of the same
+    //     name (SPARQL 1.1 sub-SELECT scoping, not an engine limitation), so
+    //     there is nothing `extra_keep` could preserve a correlation FOR;
+    // (3) a whole-body modifier sub-SELECT (Aggregation/Distinct/Slice/
+    //     OrderBy as the ENTIRE EXISTS body) lowers to a branch whose
+    //     `subplan_joins` is non-empty, hitting the PRE-EXISTING, already-
+    //     sound 501 a few lines below (`!r.subplan_joins.is_empty()`)
+    //     BEFORE `extra_keep` would ever matter.
+    // The genuinely-reachable shape (1) is locked correct-today by
+    // `differential_star.rs`'s `star_pattern_reused_inside_filter_exists_
+    // survives_without_extra_keep`. Kept as `HashSet::new()` — threading the
+    // real set this deep (`apply_conds`/`lower_iq_cond` fan out to many more
+    // call sites than the main lowering line) is not warranted for a gap
+    // with no reachable failing shape; mirrors `star::apply_composed_
+    // bindings`'s own SubPlan-pooling doc comment, which similarly
+    // downgrades a suspected gap once actually investigated.
     let inner = lower_node(node.clone(), dialect, false, &mut 0, &HashSet::new())?;
     // Name the actual operator this call is serving in any deferral message: this
     // function is shared by MINUS (`is_minus`), FILTER NOT EXISTS (`negated`

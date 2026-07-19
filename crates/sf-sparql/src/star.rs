@@ -73,7 +73,7 @@ use spargebra::Query;
 
 use crate::iq::{Branch, TermDef};
 use crate::unfold::RDF_TYPE;
-use crate::{Error, Result};
+use crate::{Error, Plan, Result};
 
 /// RDF 1.2's native "reifies" predicate (`oxrdf::vocab::rdf::REIFIES`, cited
 /// verbatim in ADR-0031's Context) — `oxrdf` itself is only a dev-dependency
@@ -1440,29 +1440,149 @@ pub fn all_component_var_names(env: &StarEnv) -> HashSet<String> {
 /// every real join/filter unification involving it is already done by this
 /// point, so the raw binding has nothing further to participate in).
 ///
-/// **Known gap** (reported, not fixed this wave): does not recurse into a
-/// branch's `subplan_joins` (ADR-0023 M5 derived-table pooling) — an
-/// env-composed variable whose components end up bound only inside a pooled
-/// SubPlan, rather than the outer branch directly, would not be realized.
-/// Not reachable by any test in this wave's matrix; flagged for a future
-/// wave if it bites (mirrors `lib.rs::cascade_subplans`' own recursion, which
-/// a future fix should follow the shape of).
+/// Recurses into every branch's `subplan_joins` (ADR-0023 M5 derived-table
+/// pooling), SAFELY — see [`apply_composed_bindings_checked`]'s doc comment
+/// for why a naive mirror of `lib.rs::cascade_subplans`' recursion shape is
+/// UNSOUND here (an EMPIRICALLY CONFIRMED SQL-emission crash, not a
+/// hypothetical) and what the guard does instead.
+///
+/// **Deeper, CONFIRMED-reachable gap (not closed by this recursion even with
+/// the guard passing, reported to the team lead as a new finding)**: when the
+/// composed variable itself CROSSES the SubPlan boundary — i.e. it is one of
+/// the inner sub-SELECT's own declared `vars` (so it participates in the
+/// outer query), but its component vars are NOT (they are synthetic, never
+/// user-selected) — the gap is NOT here at all. `iq::lower::lower_as_subplan`
+/// builds the outer branch's binding for that variable by remapping ONLY
+/// `vars` (the SPARQL-declared projected names) through the derived table's
+/// columns; the component vars, though kept alive INSIDE the inner branch by
+/// `extra_keep`, are never among `vars` and so never reach the outer branch
+/// AT ALL — no raw SQL column carries them across, and no recursion run
+/// AFTER `lower_as_subplan` (which has already frozen the outer remap) can
+/// retroactively fix that. Empirically confirmed: `SELECT ?t ?friend WHERE {
+/// ?p ex:knows ?friend . { SELECT DISTINCT ?t WHERE { ?r rdf:reifies ?t } } }`
+/// against the `differential_star.rs` CENSUS fixture lowers to an outer
+/// branch whose `bindings["t"]` is still the RAW (pre-composition) template
+/// def. A real fix needs `lower_as_subplan` itself to be `StarEnv`-aware —
+/// build each `vars` entry's `ComposedTriple` from the ARM's own bindings
+/// (which DO have the components) before remapping, reusing
+/// `remap_termdef`'s already-present-but-currently-dead `TermDef::
+/// ComposedTriple` arm (its own doc comment already anticipates exactly
+/// this: "not reachable in practice... after SubPlan pooling has already
+/// run"). That means threading `&StarEnv` alongside `extra_keep` through the
+/// `lower`/`lower_spine`/`lower_node`/`lower_aggregation`/`lower_as_subplan`
+/// chain — materially bigger than this recursion, out of this fix's scope;
+/// flagged for a follow-up decision rather than attempted silently.
 pub fn apply_composed_bindings(branches: &mut [Branch], env: &StarEnv) {
     for branch in branches {
-        // Two passes (collect then insert) — inserting while iterating `env`
-        // would be fine (env isn't mutated), but collecting first keeps the
-        // borrow of `branch.bindings` used by `composed_term_def` read-only
-        // for the whole scan, independent of the mutation that follows.
-        let updates: Vec<(String, TermDef)> = env
-            .keys()
-            .filter_map(|var| {
-                composed_term_def(var, env, &branch.bindings)
-                    .map(|def| (var.as_str().to_owned(), def))
-            })
-            .collect();
-        for (var, def) in updates {
-            branch.bindings.insert(var, def);
+        apply_to_one_branch(branch, env);
+        for sp in &mut branch.subplan_joins {
+            propagate_single_branch_distinct(&mut sp.plan);
+            for inner in &mut sp.plan.branches {
+                apply_composed_bindings_checked(inner, env);
+            }
         }
+    }
+}
+
+/// Mirror [`Plan::prepared_branches`]'s single-branch DISTINCT propagation
+/// (never persisted by that method itself — it returns a fresh clone) onto
+/// `plan`'s OWN stored branch, PERMANENTLY. Needed so a `projection()` check
+/// run directly on `plan.branches` (as [`apply_composed_bindings_checked`]
+/// does, never going through `prepared_branches`) sees the SAME view
+/// `iq::lower::lower_as_subplan` (which froze the outer positional column
+/// remap) and the later, real SQL emission (`emit::emit_subplan_sql` →
+/// `Plan::emitted` → `prepared_branches` again) both use. Without this, a
+/// branch still showing its pre-propagation `distinct: false` could
+/// UNDER-detect a real footprint change in that check: a bindings-column
+/// composing away can be silently "backfilled" by a WHERE-condition
+/// reference to the SAME column ([`Branch::projection`] only excludes
+/// WHERE/JOIN-ON columns under `distinct: true`), which the TRUE
+/// (post-propagation) view correctly excludes but a stale `distinct: false`
+/// view would not — confirmed reachable by direct inspection of the SubPlan
+/// this file's own doc comments cite as the empirical crash repro
+/// (`apply_composed_bindings_checked`'s doc comment): its raw `distinct:
+/// false` branch and its `distinct: true`-forced view disagree (10 columns
+/// vs. 4) on exactly this branch. Harmless elsewhere: the final emission's
+/// OWN `prepared_branches` call re-derives the identical value from
+/// `plan.distinct` regardless of whether this ran first. A multi-branch
+/// SubPlan needs no such propagation — `iq::lower::lower_as_subplan`'s own
+/// multi-branch DISTINCT-narrowing already sets `distinct: true` on EVERY
+/// arm directly (ADR-0025 Tier-2 gap 2).
+fn propagate_single_branch_distinct(plan: &mut Plan) {
+    if plan.branches.len() == 1 {
+        plan.branches[0].distinct = plan.distinct;
+    }
+}
+
+/// Try composing every [`StarEnv`] variable in `branch.bindings` (recursing
+/// into any FURTHER-nested `subplan_joins` the same way, each level guarded
+/// independently), but keep the result ONLY if it does not change `branch`'s
+/// [`Branch::projection`] — i.e. the exact raw-column list, same columns,
+/// same order — otherwise discard the attempt and leave `branch` untouched.
+///
+/// **Why this guard exists (found empirically, not anticipated by the
+/// original ask to "mirror `cascade_subplans`'s recursion shape")**: a
+/// composed variable's OWN pre-composition binding (e.g. its raw
+/// proposition-form template) may read raw columns nothing else in the
+/// branch needs, while its `ComposedTriple` replacement reads its
+/// components' OWN raw columns instead — columns already counted via THEIR
+/// separate, `extra_keep`-kept bindings. Swapping the shape can therefore
+/// shrink (or relocate) `projection()`'s deduplicated column list. That list
+/// is exactly what `iq::lower::lower_as_subplan` used, EARLIER and ONCE, to
+/// freeze the OUTER branch's positional column references
+/// (`t{subplan_alias}.c{i}`) into that branch's OWN bindings — a frozen
+/// snapshot this function has no way to reach or update (it runs strictly
+/// afterward, from `lib.rs`, on the already-built `Plan`). A silent width
+/// change here desyncs those already-frozen positions from the derived
+/// table's ACTUAL (later re-emitted, ADR-0025 Tier-2 gap 2) SELECT list.
+/// Confirmed by direct execution: `SELECT ?t ?friend WHERE { ?p ex:knows
+/// ?friend . { SELECT DISTINCT ?t WHERE { ?r rdf:reifies ?t } } }` against
+/// the CENSUS fixture, composing `?t` UNGUARDED inside its SubPlan branch,
+/// shrank that branch's SQLite `DISTINCT` derived-table SELECT list from 4
+/// columns to 2 (the ComposedTriple's `subject`/`object` columns already
+/// counted via the separately-kept `__sf_star_0`/`__sf_star_2` bindings), and
+/// the outer join's frozen `t6.c2`/`t6.c3` references then hit a real SQLite
+/// `no such column` error at execution — a hard CRASH, not merely a wrong
+/// answer. `cascade_subplans` avoids this identical hazard by running its
+/// nested cascade with `project: None`, which disables the ONE pass
+/// (projection shrinking) that could change a branch's column footprint;
+/// this function has no equivalent lever (it always changes footprint when a
+/// composed variable's own raw shape differs from its components'), so it
+/// verifies safety directly instead. See [`apply_composed_bindings`]'s doc
+/// comment for the closely related, NOT-closed-by-this-guard-either
+/// cross-boundary gap.
+fn apply_composed_bindings_checked(branch: &mut Branch, env: &StarEnv) {
+    let before = branch.projection();
+    let mut candidate = branch.clone();
+    apply_to_one_branch(&mut candidate, env);
+    for sp in &mut candidate.subplan_joins {
+        propagate_single_branch_distinct(&mut sp.plan);
+        for inner in &mut sp.plan.branches {
+            apply_composed_bindings_checked(inner, env);
+        }
+    }
+    if candidate.projection() == before {
+        *branch = candidate;
+    }
+}
+
+/// Install every [`StarEnv`] variable's [`TermDef::ComposedTriple`] binding
+/// that `branch.bindings` currently has the components for — no recursion
+/// into `subplan_joins`, no safety check; see [`apply_composed_bindings`] /
+/// [`apply_composed_bindings_checked`] for the two call sites that add those.
+fn apply_to_one_branch(branch: &mut Branch, env: &StarEnv) {
+    // Two passes (collect then insert) — inserting while iterating `env`
+    // would be fine (env isn't mutated), but collecting first keeps the
+    // borrow of `branch.bindings` used by `composed_term_def` read-only
+    // for the whole scan, independent of the mutation that follows.
+    let updates: Vec<(String, TermDef)> = env
+        .keys()
+        .filter_map(|var| {
+            composed_term_def(var, env, &branch.bindings).map(|def| (var.as_str().to_owned(), def))
+        })
+        .collect();
+    for (var, def) in updates {
+        branch.bindings.insert(var, def);
     }
 }
 
