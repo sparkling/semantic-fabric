@@ -59,7 +59,12 @@ impl TransPattern {
 pub struct Unfolder<'a> {
     pub(crate) maps: &'a [TriplesMap],
     tbox: &'a Tbox,
-    dialect: sf_sql::Dialect,
+    /// `pub(crate)`: also read directly by `iq::resolve`'s `Intensional` arm to
+    /// pass through to its own `cascade::force_distinct_for_dup_safety` call
+    /// (ADR-0034 D1's per-scan wrap needs the dialect to quote the wrapped
+    /// derived table's identifiers) — the same reason `schema` below is
+    /// `pub(crate)`.
+    pub(crate) dialect: sf_sql::Dialect,
     next_alias: usize,
     /// The named graph currently active inside a `GRAPH <g> { ... }` clause, or
     /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
@@ -489,7 +494,7 @@ impl<'a> Unfolder<'a> {
         for tp in patterns {
             let alts = self.pattern_branches(tp)?;
             let mut alts = pool_pattern_relation(alts, tp, self.dialect, &mut self.next_alias)?;
-            crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema);
+            crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema, self.dialect);
             acc = join_branches(acc, alts)?;
             if acc.is_empty() {
                 break; // an empty product stays empty (all pruned)

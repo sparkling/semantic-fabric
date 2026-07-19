@@ -679,34 +679,37 @@ fn optional_right_is_path_engine_matches_oracle() {
     );
 }
 
-/// The UNKEYED counterpart of `optional_right_is_path_engine_matches_oracle`:
-/// without a declared key, ADR-0034 D1 must assume duplicate rows are possible
-/// and wraps the path branch's dedup in a SubPlan — which, on the preserved
-/// side of an OPTIONAL, hits the pre-existing ADR-0023 Item 1d correlation
-/// boundary. The sound answer is an explicit 501 (dedup is REQUIRED for
-/// set-semantics correctness here and the tree cannot yet express a bare
-/// DISTINCT outside the SubPlan mechanism) — never a wrong/duplicate-inflated
-/// answer. Restoration path: the tagged bare-DISTINCT node ledgered in
-/// ADR-0034's implementation notes.
+/// The UNKEYED counterpart of `optional_right_is_path_engine_matches_oracle`.
+/// UN-PINNED by Run 4 Wave C0b Item 1 (ADR-0034 D1's per-scan `SELECT DISTINCT`
+/// wrap, `cascade::apply_dup_safety`): without a declared key, D1 still assumes
+/// duplicate rows are possible on `oj_person`, but now dedups by rewriting
+/// THAT SCAN's own source in place (`oj_person`'s bindings are both injective —
+/// a single-column IRI template and a plain column — so it is wrap-eligible)
+/// instead of routing the whole branch through the SubPlan mechanism. The
+/// preserved side of the OPTIONAL therefore never acquires a SubPlan at all,
+/// so the pre-existing ADR-0023 Item 1d correlation boundary this used to trip
+/// is simply never reached — a real capability gain, not a coincidence of this
+/// fixture happening to hold no duplicate rows (the wrap dedups `oj_person`
+/// unconditionally, so a duplicate-carrying variant would still be correct).
 #[test]
-fn optional_right_is_path_over_unkeyed_table_is_an_adr0034_sound_501() {
+fn optional_right_is_path_over_unkeyed_table_now_answers_on_tree() {
     const UNKEYED_SQL: &str = r#"
 CREATE TABLE oj_person (id INTEGER NOT NULL, name TEXT NOT NULL);
 CREATE TABLE oj_edge (a INTEGER NOT NULL, b INTEGER NOT NULL);
 INSERT INTO oj_person VALUES (1, 'Ann');
 INSERT INTO oj_edge VALUES (1, 10);
 "#;
+    const UNKEYED_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:name "Ann" .
+<http://ex/n/1> ex:next <http://ex/n/10> .
+"#;
     let q = "PREFIX ex: <http://ex/> SELECT ?id ?name ?reached \
              WHERE { ?id ex:name ?name OPTIONAL { ?id ex:next+ ?reached } }";
-    let conn: Connection = sqlite::load(UNKEYED_SQL).expect("fixture loads");
-    let maps = sf_mapping::parse_r2rml(OJ_R2RML).expect("R2RML parses");
-    let schema = sqlite::introspect_all(&conn).expect("introspection");
-    let parsed = SparqlParser::new().parse_query(q).expect("query parses");
-    let r = translate_with(&parsed, &maps, Dialect::Sqlite, &Tbox::default(), &schema);
-    assert!(
-        matches!(r, Err(sf_sparql::Error::Unsupported(_))),
-        "unkeyed OPTIONAL-right-path must refuse soundly (D1 dedup required, \
-         Item 1d boundary), got {r:?}"
+    assert_eq!(
+        assert_differential(UNKEYED_SQL, OJ_R2RML, UNKEYED_TTL, q),
+        1,
+        "Ann's only edge reaches {{10}} — 1 row"
     );
 }
 

@@ -52,6 +52,34 @@ ever re-applied post-`convert_path_branches`, the correct per-scan
 set-semantics formula is `!b.nps` at the conversion point — worked out, not
 shipped (no reachable call site today).
 
+**Update (same day, Wave C0b) — D1 rebuilt as a per-scan derived-table wrap
+after the r2 refute pass proved the branch-flag design wrong on flat.** The
+per-Branch `distinct` flag degraded into a projected-subset final DISTINCT
+after projection narrowing (under-count) and was dropped across NPS merges
+(over-count) — both flat-only wrong answers, tree was correct. D1 now
+rewrites the uncovered SCAN itself: `Table("t")` →
+`Query("SELECT DISTINCT sfs{alias}.cols … FROM t")`, alias-preserved
+(ADR-0033 precedent), columns = the branch's full per-alias read set
+(bindings + where_conds + OPTIONAL ons + SubPlan correlations;
+`cascade::alias_used_columns`). Survives merges, NPS, and projection by
+construction. **Injectivity gate**: the wrap fires only when every binding
+on the alias is injective (raw-tuple DISTINCT equals term dedup only then —
+the C.3 argument); non-injective aliases keep the old branch-flag path,
+whose C.3 sound-501 still guards them (the W3C TC0005b carve-out remains
+load-bearing — verified by instrumentation, not assumption). Because the
+decision function is shared, the tree got the same fix for free and TWO
+pinned completeness costs UN-PINNED (the M5 group-by shape and the unkeyed
+OPTIONAL-right-path both answer again, oracle-verified). Also landed: §16.2
+CONSTRUCT set-dedup at SQL level when the template's vars are a strict
+subset of the pattern's and bnode-free (projection-level DISTINCT is
+correct for CONSTRUCT's set output, wrong for SELECT — streaming-safe,
+constant-memory invariant intact). Residual, flagged in-code: cross-branch
+CONSTRUCT same-triple dedup (two maps instantiating one triple) is
+unimplemented. Found during landing: SQLite's bare-double-quoted-identifier
+string-literal fallback would have silently converted a wrap-projection
+typo into a bogus value — wrap columns are alias-qualified, which restores
+hard errors on every dialect.
+
 **Known completeness costs (sound 501s, pinned, with restoration paths):**
 (1) GROUP-BY-over-multibranch-OPTIONAL on unkeyed tables — D1's dedup wrap
 routes through the SubPlan mechanism and hits the ADR-0023 M5 boundary; both

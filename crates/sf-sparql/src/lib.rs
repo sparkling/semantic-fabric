@@ -367,6 +367,15 @@ fn translate_inner_flat(
     // own `distinct` flag rather than needing `schema` again (see `cascade::
     // dedup_before_aggregate`'s doc comment).
     cascade::dedup_before_aggregate(&mut branches, dialect);
+    // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup: MUST run before the
+    // `distinct` capture just below, for the identical reason
+    // `dedup_before_aggregate` above does — it can itself just have SET a
+    // branch's `distinct`, and reading the flag any earlier would capture a
+    // stale `false` that `Plan::prepared_branches` would blindly write back at
+    // emission, silently undoing the fix.
+    if let PlanForm::Construct { template } = &form {
+        dedup_construct_template_projected_vars(&mut branches, template);
+    }
     // The single-branch DISTINCT decision is recorded on the branch by pass (6)
     // — computed HERE, AFTER `dedup_before_aggregate`, which can itself just have
     // CHANGED that same branch's `distinct` (clearing it once the dedup moved
@@ -550,6 +559,11 @@ pub fn translate_tree(
     // applies it per pattern, before this tree's own aggregation lowering
     // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
     cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+    // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
+    // `translate_inner_flat`): MUST run before the `distinct` capture below.
+    if let PlanForm::Construct { template } = &plan.form {
+        dedup_construct_template_projected_vars(&mut plan.branches, template);
+    }
     // The single-branch DISTINCT decision is recorded on the branch by pass (6)
     // — read HERE, AFTER `dedup_before_aggregate`, not before it: see the
     // identical note in `translate_inner_flat` for why reading it any earlier
@@ -712,6 +726,127 @@ fn visible_vars(branches: &[Branch]) -> Vec<String> {
         }
     }
     set.into_iter().collect()
+}
+
+/// ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup: the CONSTRUCT output is a
+/// **set** of triples, but the underlying WHERE solutions are a bag; when the
+/// template drops a variable the WHERE pattern still binds (`?p ex:age ?a`
+/// constructing only `?p ex:type ex:Person`), otherwise-distinct solutions that
+/// agree on every TEMPLATE variable instantiate the SAME triple more than once
+/// — a bag-count nonconformance the D1/D2 BGP-level dedup never targets (D1
+/// dedups the WHERE clause's OWN rows; this is downstream of it, keyed on the
+/// template rather than the source schema).
+///
+/// Fires only per-branch, when: the template's variables are a STRICT SUBSET
+/// of that branch's own bound variables (nothing to drop ⇒ D1 already
+/// suffices, `s6_construct_template_keeps_vars_control`'s own premise) and the
+/// template carries NO blank node (a CONSTRUCT-template blank node is scoped
+/// per solution — §16.2 — so two solutions sharing every template variable are
+/// still meant to mint two distinct blank nodes and are never duplicates;
+/// bnode-carrying templates keep today's per-solution behavior, whatever it
+/// is, unchanged).
+///
+/// Mechanism: narrow the branch's bindings to just the template's variables
+/// and push `Branch::distinct` — SQL-level, so `exec_core::construct`'s
+/// streaming sink (ADR-0006/F8: bounded memory, no exec-side buffering) never
+/// has to see or filter a duplicate itself. This is the SAME "DISTINCT over a
+/// projected subset" shape ADR-0034's R1 refutation forbids for SELECT
+/// (`s3b_join_projection_duplicates_survive` — projection creates LEGITIMATE
+/// duplicates a SELECT must keep) but CORRECT here precisely because
+/// CONSTRUCT's own output IS a set (§16.2), not a bag.
+///
+/// Conservative no-ops (leave the branch untouched, never wrong): a branch
+/// with its own pushed `order`/`limit`/`offset` — narrowing bindings could
+/// drop a column ORDER BY still needs, or change which solutions a LIMIT
+/// keeps once the collapse shrinks the count (SPARQL §15: order-then-slice
+/// happens over the FULL solution sequence, before this template-scoped
+/// collapse could apply). `path`/`agg` branches, mirroring `cascade::
+/// force_distinct_for_dup_safety`'s own skip set (a path closure already
+/// self-dedups; a GROUP BY's aggregate result columns are not template
+/// variables to narrow around).
+///
+/// Multi-branch CONSTRUCT: this is PER-BRANCH — it removes within-branch
+/// template-projected duplicates, but two DIFFERENT branches (e.g. two
+/// candidate maps, or a UNION arm) that instantiate the SAME triple are a
+/// cross-branch duplicate this pass does not see. A UNION-level dedup keyed on
+/// the CONSTRUCT template's own reconstruction (the D2 pooling/501 machinery,
+/// generalized from the mapping's templates to the template's) is
+/// unimplemented — no fixture in the current suite reaches it; flagged here
+/// rather than silently left unhandled.
+fn dedup_construct_template_projected_vars(branches: &mut [Branch], template: &[TriplePattern]) {
+    if template_has_blank_node(template) {
+        return;
+    }
+    let template_vars = template_variables(template);
+    if template_vars.is_empty() {
+        return;
+    }
+    for b in branches {
+        if b.path.is_some()
+            || b.agg.is_some()
+            || !b.order.is_empty()
+            || b.limit.is_some()
+            || b.offset != 0
+        {
+            continue;
+        }
+        let is_subset = template_vars
+            .iter()
+            .all(|v| b.bindings.contains_key(v.as_str()));
+        if !is_subset || template_vars.len() >= b.bindings.len() {
+            continue;
+        }
+        b.bindings
+            .retain(|var, _| template_vars.contains(var.as_str()));
+        b.distinct = true;
+    }
+}
+
+/// Every variable named anywhere in a CONSTRUCT template (subject/predicate/
+/// object of every triple pattern, recursing into an RDF-star quoted-triple
+/// term — ADR-0032 D2).
+fn template_variables(template: &[TriplePattern]) -> BTreeSet<String> {
+    fn collect(tp: &TermPattern, vars: &mut BTreeSet<String>) {
+        match tp {
+            TermPattern::Variable(v) => {
+                vars.insert(v.as_str().to_owned());
+            }
+            TermPattern::Triple(inner) => {
+                collect(&inner.subject, vars);
+                if let NamedNodePattern::Variable(v) = &inner.predicate {
+                    vars.insert(v.as_str().to_owned());
+                }
+                collect(&inner.object, vars);
+            }
+            _ => {}
+        }
+    }
+    let mut vars = BTreeSet::new();
+    for tp in template {
+        collect(&tp.subject, &mut vars);
+        if let NamedNodePattern::Variable(v) = &tp.predicate {
+            vars.insert(v.as_str().to_owned());
+        }
+        collect(&tp.object, &mut vars);
+    }
+    vars
+}
+
+/// Whether a CONSTRUCT template contains a blank node anywhere (subject/object
+/// of any triple pattern, recursing into an RDF-star quoted-triple term). The
+/// predicate position is never a blank node (`NamedNodePattern` — SPARQL
+/// grammar).
+fn template_has_blank_node(template: &[TriplePattern]) -> bool {
+    fn has(tp: &TermPattern) -> bool {
+        match tp {
+            TermPattern::BlankNode(_) => true,
+            TermPattern::Triple(inner) => has(&inner.subject) || has(&inner.object),
+            _ => false,
+        }
+    }
+    template
+        .iter()
+        .any(|tp| has(&tp.subject) || has(&tp.object))
 }
 
 #[cfg(test)]

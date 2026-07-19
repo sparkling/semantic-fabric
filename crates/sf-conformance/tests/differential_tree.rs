@@ -4127,10 +4127,21 @@ mod composition_sweep {
 /// FLAT oracle honestly DEFERS (its inherent agg-over-UNION 501 — the same
 /// synthetic-unbound limitation `count_over_bind_only_union_*` documents). The tree
 /// WAS a strict capability superset here (so commit 2015846 remains OBSOLETE —
-/// do NOT merge that stale pre-refactor code) — UNTIL ADR-0034: see the in-body
-/// comment for why both engines now honestly 501 on this shape.
+/// do NOT merge that stale pre-refactor code).
+///
+/// Between ADR-0034's landing (6bcacf9) and Run 4 Wave C0b Item 1, this briefly
+/// regressed to a pinned sound-501-on-both-engines: D1's then-branch-wide
+/// `Branch::distinct` flag forced the OPTIONAL right side's unkeyed `dept`/`tag`
+/// scans through the SubPlan mechanism, which tripped the pre-existing
+/// ADR-0023 M5 boundary (OPTIONAL anti-join over a SubPlan-carrying right
+/// side). Item 1 (`cascade::apply_dup_safety`'s per-scan `SELECT DISTINCT`
+/// wrap) rewrites `dept`/`tag`'s own `LogicalSource` in place instead of
+/// wrapping the whole branch, so the SubPlan/M5 collision is never reached —
+/// UN-PINNED back to this cell's original tree-superset shape, and now for a
+/// STRONGER reason than before: the dedup is real (Item 1 always wraps an
+/// unkeyed scan), not merely a fixture that happens to hold no duplicate rows.
 #[test]
-fn group_by_over_multibranch_optional_both_engines_sound_501_since_adr0034() {
+fn group_by_over_multibranch_optional_is_tree_superset_of_flat() {
     let q = format!(
         "{PFX} SELECT ?e (COUNT(?v) AS ?c) WHERE {{ ?e ex:name ?n \
          OPTIONAL {{ {{ ?e ex:dept ?v }} UNION {{ ?e ex:tag ?v }} }} }} GROUP BY ?e"
@@ -4145,22 +4156,9 @@ fn group_by_over_multibranch_optional_both_engines_sound_501_since_adr0034() {
          -- if this now succeeds, flat gained the capability and this test's premise \
          needs revisiting, not silently relaxing"
     );
-    // FORMERLY tree-answered (=_bag spareval; that made this a tree-superset
-    // cell). Since ADR-0034: the OPTIONAL right side's `dept`/`tag` branches
-    // sit on UNKEYED tables, so D1 must dedup them; the tree's dedup wrap
-    // routes through the SubPlan mechanism, whose pre-existing ADR-0023 M5
-    // boundary (OPTIONAL anti-join over a SubPlan-carrying right side) then
-    // refuses. Both engines now honestly 501 — flat for its inherent
-    // agg-over-UNION limitation (unchanged above), tree for M5-via-D1. Sound
-    // over complete: the OLD success was correct only because the fixture
-    // happens to hold no duplicate rows. Restoration path: the tagged
-    // bare-DISTINCT node ledgered in ADR-0034's implementation notes.
-    let r = tree(&maps, &parsed, &schema);
-    assert!(
-        matches!(r, Err(Error::Unsupported(_))),
-        "tree must refuse soundly (D1 dedup required on unkeyed dept/tag, M5 \
-         SubPlan boundary), got {r:?}"
-    );
+    let tp = tree(&maps, &parsed, &schema)
+        .expect("tree must handle GROUP BY over multi-branch OPTIONAL");
+    assert_vs_spareval(STRESS_TTL, &q, &tp, &conn);
 }
 
 /// Item 3a (ADR-0023 optimizer-residue): `MINUS` whose LEFT operand is a

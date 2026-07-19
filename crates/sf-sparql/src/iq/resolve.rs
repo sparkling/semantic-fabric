@@ -134,7 +134,11 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                 // `r5_iii_non_unique_self_join` regression this closes. `bridge_branch`
                 // below reads each branch's (possibly now `true`) `distinct` flag and
                 // wraps accordingly — never silently dropped.
-                crate::cascade::force_distinct_for_dup_safety(&mut branches, cx.unfolder.schema);
+                crate::cascade::force_distinct_for_dup_safety(
+                    &mut branches,
+                    cx.unfolder.schema,
+                    cx.unfolder.dialect,
+                );
             }
             // ADR-0034 D2: when this pattern's own candidate-map arms are not
             // provably disjoint (the SAME elision check the flat engine's

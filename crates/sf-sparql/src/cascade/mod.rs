@@ -1285,11 +1285,12 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
     }
 }
 
-// --- D1 (ADR-0034) — force-DISTINCT when duplicates are not provably impossible --
+// --- D1 (ADR-0034) — per-scan DISTINCT wrap when duplicates are not provably
+// impossible ----------------------------------------------------------------
 
-/// D1 (ADR-0034): force `Branch::distinct` on every branch whose joined tables are
-/// not provably duplicate-free ([`branch_needs_distinct_for_dup_safety`]) — the
-/// SPARQL §18.3 BGP set-semantics requirement (card[μ] = 1), independent of any
+/// D1 (ADR-0034; Run 4 Wave C0b Item 1): make every branch whose joined tables are
+/// not provably duplicate-free ([`scan_key_covered`]) duplicate-safe — the SPARQL
+/// §18.3 BGP set-semantics requirement (card[μ] = 1), independent of any
 /// user-requested DISTINCT and of how many branches the query has (a branch's own
 /// duplicate-safety does not depend on its siblings; D2, the CROSS-branch case, is
 /// handled separately at the pattern-relation boundary — `unfold::pool_pattern_
@@ -1304,63 +1305,223 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
 /// `agg` (dedup happens BELOW the GROUP BY — see [`dedup_before_aggregate`]).
 /// Does NOT skip a branch merely for carrying `subplan_joins`: a D2-pooled arm's
 /// OWN `core`/`opts` are empty (only its `bindings` reference the pooled derived
-/// table), so [`branch_needs_distinct_for_dup_safety`] already reads that as "no
-/// scans to duplicate" and leaves it alone — but a BGP can mix a pooled position
-/// (wrapped into `subplan_joins`, D2-elided because it was NOT provably disjoint)
-/// with an ORDINARY, D2-elided-because-disjoint sibling position that still reads
-/// its own unkeyed `core` table directly (e.g. two candidate maps whose reifier
-/// templates carry different literal prefixes — provably disjoint, so D2 leaves
-/// them as separate branches — while their SHARED description-pattern variable is
-/// NOT disjoint and DOES get pooled): once `unfold::join_branches`/`merge` folds
-/// both positions into one final branch, it carries BOTH an unkeyed `core` scan
-/// AND a `subplan_joins` entry, and D1 must still fire on the `core` half — an
+/// table), so [`apply_dup_safety`] already reads that as "no scans to duplicate"
+/// and leaves it alone — but a BGP can mix a pooled position (wrapped into
+/// `subplan_joins`, D2-elided because it was NOT provably disjoint) with an
+/// ORDINARY, D2-elided-because-disjoint sibling position that still reads its own
+/// unkeyed `core` table directly (e.g. two candidate maps whose reifier templates
+/// carry different literal prefixes — provably disjoint, so D2 leaves them as
+/// separate branches — while their SHARED description-pattern variable is NOT
+/// disjoint and DOES get pooled): once `unfold::join_branches`/`merge` folds both
+/// positions into one final branch, it carries BOTH an unkeyed `core` scan AND a
+/// `subplan_joins` entry, and D1 must still fire on the `core` half — an
 /// unconditional `!b.subplan_joins.is_empty()` skip here previously missed
 /// exactly that shape (`cross_source_with_duplicate_bag_multiplicity_diverges_
 /// from_oracle`: `?r ex:assertedBy ?src`'s per-source arms are disjoint on `?r`'s
 /// own template and stay unpooled, but each still reads its own `core` scan of an
 /// unkeyed source table).
-pub(crate) fn force_distinct_for_dup_safety(branches: &mut [Branch], schema: &[TableSchema]) {
+pub(crate) fn force_distinct_for_dup_safety(
+    branches: &mut [Branch],
+    schema: &[TableSchema],
+    dialect: sf_sql::Dialect,
+) {
     let schema_map = build_schema_map(schema);
     for b in branches {
         if b.distinct || b.path.is_some() || b.agg.is_some() {
             continue;
         }
-        if branch_needs_distinct_for_dup_safety(b, &schema_map) {
-            b.distinct = true;
-        }
+        apply_dup_safety(b, &schema_map, dialect);
     }
 }
 
-/// Returns `true` when `b`'s joined tables (`core` scans AND `OPTIONAL` right
-/// sides — SQL-joined into the SAME branch, so either can duplicate the branch's
-/// own output) are NOT all covered by a declared PK/UNIQUE key over `b`'s OWN
-/// bindings. Deliberately NOT `distinct_removal`'s `project`-narrowed proof: D1
-/// asks "can THIS BGP block itself produce duplicate rows", answered over its own
-/// full binding set regardless of what the OUTER query later projects away — using
-/// the outer projection here would be unsound (it would force DISTINCT merely
-/// because the outer SELECT dropped a key-covering variable, e.g. `SELECT ?age
-/// WHERE { ?p :hasAge ?age }` over a PK-keyed `?p` must NOT get a spurious
-/// DISTINCT just because `?p` itself isn't projected). An `rr:sqlQuery` view scan
-/// (no `TableSchema` entry to prove anything from) is conservatively treated as
-/// never covered — the same conservatism `distinct_removal`'s own scans apply.
-fn branch_needs_distinct_for_dup_safety(b: &Branch, schema: &SchemaMap) -> bool {
-    let scans: Vec<&Scan> = b
+/// Apply D1 to one branch: find every `core`/`opts` scan whose table is NOT
+/// covered by a declared PK/UNIQUE key over `b`'s OWN bindings
+/// ([`scan_key_covered`] — deliberately NOT `distinct_removal`'s
+/// `project`-narrowed proof: D1 asks "can THIS BGP block itself produce
+/// duplicate rows", answered over its own full binding set regardless of what
+/// the OUTER query later projects away), then make each uncovered scan
+/// duplicate-safe by one of two mechanisms:
+///
+/// * **Per-scan wrap (the common case, Item 1).** Rewrite the scan's
+///   `LogicalSource` in place to `SELECT DISTINCT <used cols> FROM <source>`
+///   ([`wrap_scan_distinct`]) — `<used cols>` is EVERY column
+///   [`alias_used_columns`] finds this branch reading from that alias, so the
+///   wrap can never orphan a JOIN/NULL-guard condition that still names it.
+///   `scan.alias` is unchanged (the ADR-0033 alias-preserving precedent), so
+///   every pre-existing binding/condition resolves against the wrapped derived
+///   table's identically-named output columns with zero rewriting elsewhere.
+///   Because the dedup is now baked into the OFFENDING scan's own FROM
+///   fragment rather than a branch-wide flag, it survives everything that used
+///   to defeat the flag: `unfold::merge`'s OR-fold (nothing to fold — the wrap
+///   travels with the scan through every later merge), the NPS guard (an NPS
+///   sibling's own protected bag is untouched — only the unkeyed scan's own
+///   source changed), and `cascade::run`'s later projection shrinking (the
+///   wrap dedups the scan's OWN full column set, never whatever the outer
+///   query later happens to project). This closes the two refutations a
+///   branch-wide flag could not express: `s3b_join_projection_duplicates_
+///   survive` (projection narrowing turned the flag into an illegal
+///   final-result dedup) and `s5_nps_bag_multiplicity_joined_with_unkeyed_
+///   dup_table` (the NPS guard dropped the flag rather than let it apply to
+///   just the sibling table).
+///
+/// * **Branch-level flag (the pre-Item-1 mechanism, kept as a fallback).**
+///   Used only when [`alias_used_columns`] is empty (nothing to select —
+///   pathological) or some binding reading the alias is NOT
+///   [`binding_is_injective`]: `SELECT DISTINCT <raw cols>` dedups RAW column
+///   tuples, which equals SPARQL term dedup only when every projected term's
+///   construction is injective (ADR-0025 C.3) — a non-injective template can
+///   render two DIFFERENT raw tuples to the SAME term, so a per-scan raw
+///   DISTINCT would UNDER-dedup exactly the case that needs it most. Falling
+///   back to `b.distinct = true` keeps the existing, already-sound behavior:
+///   `unfold::merge` still OR-folds it across the rest of the BGP (respecting
+///   the NPS guard), and `emit::emit_branch_with`'s own C.3 check refuses
+///   (sound 501) rather than emit a silently-wrong DISTINCT — exactly the
+///   outcome `s2a_noninjective_binding_does_not_cover_key_sound_501` and the
+///   W3C TC0005b flat-Ok/tree-C.3 asymmetry both pin today. A branch can wrap
+///   SOME scans and still fall back for others in the same BGP — the
+///   fallback's blanket "any non-injective binding ⇒ 501" is sound regardless
+///   of which alias tripped it, so wrapping the eligible scans first never
+///   costs correctness even when a sibling scan still needs the fallback.
+fn apply_dup_safety(b: &mut Branch, schema: &SchemaMap, dialect: sf_sql::Dialect) {
+    let uncovered: Vec<usize> = b
         .core
         .iter()
         .chain(b.opts.iter().map(|o| &o.scan))
+        .filter(|scan| !scan_key_covered(scan, schema, &b.bindings))
+        .map(|scan| scan.alias)
         .collect();
-    if scans.is_empty() {
-        return false; // nothing joined — no table to duplicate
+    let mut need_flag = false;
+    for alias in uncovered {
+        let cols = alias_used_columns(b, alias);
+        if cols.is_empty() || !alias_bindings_injective(b, alias) {
+            need_flag = true;
+            continue;
+        }
+        wrap_scan_distinct(b, alias, &cols, dialect);
     }
-    !scans.iter().all(|scan| {
-        let LogicalSource::Table(table) = &scan.source else {
-            return false;
-        };
-        let Some(ts) = schema_map_get(schema, table.as_str()) else {
-            return false;
-        };
-        table_key_covered_by_bindings(ts, scan.alias, &b.bindings)
+    if need_flag {
+        b.distinct = true;
+    }
+}
+
+/// Whether `scan`'s table is covered by a declared PK/UNIQUE key over
+/// `bindings` ([`table_key_covered_by_bindings`]). An `rr:sqlQuery` view scan
+/// (no `TableSchema` entry to prove anything from) is conservatively treated as
+/// never covered — the same conservatism `distinct_removal`'s own scans apply.
+fn scan_key_covered(
+    scan: &Scan,
+    schema: &SchemaMap,
+    bindings: &std::collections::BTreeMap<String, TermDef>,
+) -> bool {
+    let LogicalSource::Table(table) = &scan.source else {
+        return false;
+    };
+    let Some(ts) = schema_map_get(schema, table.as_str()) else {
+        return false;
+    };
+    table_key_covered_by_bindings(ts, scan.alias, bindings)
+}
+
+/// Every raw column `alias` contributes to `b`'s CURRENT shape: each binding's
+/// own columns ([`TermDef::columns`] — subject/predicate/object term-map
+/// slots, every column of a multi-column template) PLUS every column a
+/// `where_conds`/`opts`/`subplan_joins` condition mentions on `alias`
+/// ([`collect_cond_cols`] — a referencing-object-map's own `rr:joinCondition`
+/// equality, an R2RML §11 NULL guard, or a later-attached FILTER/OPTIONAL/
+/// SubPlan correlation). Mirrors [`Branch::projection`]'s own "not distinct"
+/// column set, scoped to one alias. Missing a column class here would break
+/// the wrap: the wrapped derived table would stop exposing a column a
+/// JOIN/NULL-guard still references outside it.
+///
+/// Deliberately does NOT special-case `NotExists`/`Exists`/`PathExists`
+/// (`collect_cond_cols` skips their own nested `conds` by design, per its own
+/// doc comment) — a MINUS/EXISTS correlation always names a variable that is
+/// ALSO one of THIS branch's own bindings (correlation requires a pre-existing
+/// shared variable), so the bindings loop below already covers whatever column
+/// it would have added. True regardless of WHEN a caller runs this: D1 decides
+/// at per-pattern time (`unfold::bgp` / `iq::resolve`'s `Intensional` arm),
+/// before EXISTS/MINUS/FILTER are ever attached to `where_conds` — a column a
+/// later-added correlation needs was necessarily already read by a binding
+/// that exists right now, so the wrap this builds from today's bindings stays
+/// valid however `where_conds` grows afterward.
+fn alias_used_columns(b: &Branch, alias: usize) -> Vec<Box<str>> {
+    let mut cols: Vec<Box<str>> = Vec::new();
+    let push = |c: &ColRef, cols: &mut Vec<Box<str>>| {
+        if c.alias == alias && !cols.contains(&c.column) {
+            cols.push(c.column.clone());
+        }
+    };
+    for def in b.bindings.values() {
+        for c in def.columns() {
+            push(&c, &mut cols);
+        }
+    }
+    for cond in &b.where_conds {
+        collect_cond_cols(cond, &mut |c| push(c, &mut cols));
+    }
+    for opt in &b.opts {
+        for cond in opt.on.iter().chain(opt.extra.iter()) {
+            collect_cond_cols(cond, &mut |c| push(c, &mut cols));
+        }
+    }
+    for sp in &b.subplan_joins {
+        for cond in &sp.on {
+            collect_cond_cols(cond, &mut |c| push(c, &mut cols));
+        }
+    }
+    cols
+}
+
+/// Whether every binding reading `alias`'s columns is [`binding_is_injective`]
+/// — the per-scan wrap's soundness precondition (see [`apply_dup_safety`]'s
+/// doc comment for why a non-injective binding disqualifies the wrap).
+fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
+    b.bindings.values().all(|def| match def {
+        TermDef::Derived { alias: a, .. } if *a == alias => binding_is_injective(def),
+        _ => true,
     })
+}
+
+/// Rewrite `alias`'s own scan (in `b.core` or `b.opts`) from its base source to
+/// `SELECT DISTINCT <cols> FROM <source>` — the ADR-0034 Item 1 per-scan D1
+/// wrap. `cols` must be [`alias_used_columns`]`(b, alias)`; `alias` is left
+/// unchanged (ADR-0033's alias-preserving precedent) so no other reference to
+/// `t{alias}.*` needs rewriting.
+///
+/// Every projected column is qualified against a fresh local alias
+/// (`sfs{alias}.<col>`), never emitted bare (`<col>`) — qualification here is
+/// load-bearing, not cosmetic. SQLite's historical "double-quoted string"
+/// fallback silently reinterprets a BARE double-quoted identifier that fails
+/// to resolve to a real column as a STRING LITERAL rather than raising "no
+/// such column", so `SELECT DISTINCT "IDs" FROM "Student"` over a table with
+/// no `IDs` column would silently succeed with the literal text `IDs` as the
+/// row's value instead of erroring. A qualified `alias."col"` reference has
+/// no such fallback (`table.string-literal` is not valid SQL in any dialect,
+/// so it can only parse as a column reference) — found via the W3C
+/// R2RMLTC0002c regression (a deliberately undefined `rr:column`, which the
+/// engine must reject, silently produced a bogus triple instead).
+fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: sf_sql::Dialect) {
+    let scan = b
+        .core
+        .iter_mut()
+        .chain(b.opts.iter_mut().map(|o| &mut o.scan))
+        .find(|s| s.alias == alias)
+        .expect("alias came from this branch's own core/opts scan");
+    let src_alias = format!("sfs{alias}");
+    let select_list = cols
+        .iter()
+        .map(|c| format!("{src_alias}.{}", dialect.quote_ident(c)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let from = match &scan.source {
+        LogicalSource::Table(t) => format!("{} {src_alias}", dialect.quote_ident(t)),
+        // A view (`rr:sqlQuery`) source is already a derived table; nest it
+        // under the same local alias — PostgreSQL/MySQL require every
+        // FROM-position subquery to be named (only SQLite tolerates a bare
+        // one).
+        LogicalSource::Query(q) => format!("({q}) {src_alias}"),
+    };
+    scan.source = LogicalSource::Query(format!("SELECT DISTINCT {select_list} FROM {from}"));
 }
 
 /// Whether some declared key of `ts` (the PK, or a `UNIQUE` constraint — ADR-0034
