@@ -103,6 +103,11 @@ where
         order: &plan.order,
         offset: plan.offset,
         limit: plan.limit,
+        // This is the plain streaming path (design §2: reconstruct -> DISTINCT ->
+        // ORDER/slice -> sink, ONE row in flight downstream) — never parallelize
+        // term-gen here, see `reconstruct_batch`'s `parallel_allowed` doc comment
+        // for the measured reason (ledger F8).
+        parallel_term_gen: false,
     };
     run_branches(&branches, ctx, b, sink).await
 }
@@ -119,6 +124,10 @@ struct PlanCtx<'a> {
     order: &'a [OrderKey],
     offset: usize,
     limit: Option<usize>,
+    /// Whether [`reconstruct_batch`] may dispatch a large-enough batch to rayon
+    /// (see its `parallel_allowed` doc comment, ledger F8) — `true` only for
+    /// [`rust_group_execute`]'s inner collection.
+    parallel_term_gen: bool,
 }
 
 /// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
@@ -185,16 +194,20 @@ where
             .open_branch(&e.sql, &e.params)
             .await
             .map_err(map_sql_err)?;
-        // Buffer -> parallel term-gen -> emit-in-order (ADR-0006 M4 wave-2 batch
+        // Buffer -> term-gen (parallel only when `ctx.parallel_term_gen`, see
+        // `reconstruct_batch`) -> emit-in-order (ADR-0006 M4 wave-2 batch
         // restructure): pull a bounded batch of raw rows off the cursor,
-        // reconstruct their bound terms (possibly in parallel, see
-        // `reconstruct_batch`), then run the SAME per-row DISTINCT / ORDER BY /
-        // OFFSET/LIMIT / sink logic sequentially over the batch, in the original
-        // row order — so this is behaviorally identical to the old one-row-at-a-
-        // time loop, just with term-gen's CPU work batched. `first_batch` ramps
-        // the very first fill down to `TERM_GEN_FIRST_BATCH_SIZE` so a branch
-        // with many rows still yields its first result quickly (the streaming
-        // invariant), then grows to the full `TERM_GEN_BATCH_SIZE` for throughput.
+        // reconstruct their bound terms, then run the SAME per-row DISTINCT /
+        // ORDER BY / OFFSET/LIMIT / sink logic sequentially over the batch, in the
+        // original row order — so this is behaviorally identical to the old
+        // one-row-at-a-time loop, just with term-gen's CPU work batched. The
+        // batch-and-reconstruct-as-a-unit SHAPE stays the same regardless of
+        // `parallel_term_gen` (ledger F8 measured this indirection alone costs
+        // ~nothing — see `reconstruct_batch`'s doc comment); only whether a big
+        // batch may fan out to rayon changes. `first_batch` ramps the very first
+        // fill down to `TERM_GEN_FIRST_BATCH_SIZE` so a branch with many rows
+        // still yields its first result quickly (the streaming invariant), then
+        // grows to the full `TERM_GEN_BATCH_SIZE` for throughput.
         let mut first_batch = true;
         'branch_rows: loop {
             let target = if first_batch {
@@ -228,7 +241,8 @@ where
             // (1-3-entry) per-row binding maps live at once — see
             // `TERM_GEN_BATCH_SIZE`'s doc comment. Kept anyway as unambiguously
             // correct hygiene, not as the memory fix.
-            let reconstructed = reconstruct_batch(branch, &raw_batch, &col_index);
+            let reconstructed =
+                reconstruct_batch(branch, &raw_batch, &col_index, ctx.parallel_term_gen);
             drop(raw_batch);
             for bindings in reconstructed {
                 let bindings = bindings?;
@@ -328,6 +342,13 @@ where
         order: &[],
         offset: 0,
         limit: None,
+        // Unlike the plain streaming path, this inner collection ALWAYS fully
+        // materializes every row into `inner_rows` below before grouping can even
+        // start — there is no streaming-to-a-live-sink downside to amortize a
+        // rayon dispatch against, and this is the shape (aggregate-heavy,
+        // `canonical_lexical` numeric formatting) that measurably benefits from
+        // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
+        parallel_term_gen: true,
     };
     let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
     run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
@@ -864,6 +885,25 @@ const TERM_GEN_FIRST_BATCH_SIZE: usize = 64;
 /// (the `micro_term_gen_batch` sweep found 2000 alone still a throughput wash,
 /// but the full 3000-row batch this gates comes out ahead — see that bench's
 /// own numbers for the batch-size-vs-dispatch-count tradeoff).
+///
+/// **Row count alone does not predict whether dispatch pays off (ledger F8).**
+/// This threshold only says a batch is BIG enough to amortize `par_chunks`'
+/// fixed per-call cost — it says nothing about whether each row's own
+/// reconstruction work is expensive enough to be worth amortizing in the first
+/// place. `sf-bench`'s streamed CONSTRUCT dump (`constant_memory_dump`) crosses
+/// this threshold at 10x/100x scale (some GTFS branches run tens of thousands
+/// of rows) yet REGRESSED 31-35% under dispatch: its rows are plain
+/// column/template copies (`Literal::new_simple_literal`, no numeric
+/// formatting), cheap enough that `par_chunks`' thread wake/join cost exceeds
+/// the compute saved. Toggle-isolated against the OTHER candidate cause (the
+/// batch-buffer indirection itself): forcing every batch sequential while
+/// LEAVING the buffering exactly as-is reproduced the pre-batch, zero-buffer
+/// baseline almost exactly (within ~2%), which rules the buffer out — the
+/// dispatch is the entire cost. See [`reconstruct_batch`]'s `parallel_allowed`
+/// parameter for the fix: only [`rust_group_execute`]'s inner collection (the
+/// `micro_distinct_agg` / `micro_group_avg_rust` shape this constant was
+/// tuned against — `AVG`/`SUM(DISTINCT)`/`COUNT(DISTINCT)` over
+/// `canonical_lexical`-formatted numeric literals) is allowed past this gate.
 const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 
 /// The floor on `par_chunks`' chunk size WITHIN one already-dispatched batch
@@ -875,10 +915,12 @@ const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
 
 /// Reconstruct every row of `batch` against `branch`, in ORIGINAL row order —
-/// [`run_branches`]'s buffer -> parallel-map -> emit-in-order step. Below
-/// [`TERM_GEN_MIN_PARALLEL_ROWS`] this is a plain sequential map (a fresh
-/// `par_chunks` dispatch's own overhead would dominate a batch this small — see
-/// its doc comment for the measured break-even). At or above it, `batch` is
+/// [`run_branches`]'s buffer -> maybe-parallel-map -> emit-in-order step. A
+/// plain sequential map when `!parallel_allowed` (ledger F8 — see
+/// [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the measured reason a
+/// caller may want this) or below [`TERM_GEN_MIN_PARALLEL_ROWS`] (a fresh
+/// `par_chunks` dispatch's own overhead would dominate a batch this small —
+/// see its doc comment for the measured break-even). Otherwise `batch` is
 /// split into `rayon::current_num_threads()`-many chunks (floored at
 /// [`TERM_GEN_MIN_CHUNK_ROWS`]) via `par_chunks`, and each chunk is
 /// reconstructed sequentially by ONE rayon task — chunks run in parallel, but no
@@ -893,11 +935,14 @@ const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
 /// those chunk-`Vec`s then reproduces the sequential per-row order with no extra
 /// bookkeeping — indexed chunks are the strict-order-preservation design this
 /// restructure requires (downstream DISTINCT/ORDER BY/OFFSET/LIMIT all assume
-/// original row order).
+/// original row order). This ordering guarantee holds regardless of
+/// `parallel_allowed` — the sequential branch is already in order by
+/// construction, so a caller never needs to know which branch ran.
 fn reconstruct_batch(
     branch: &Branch,
     batch: &[RawTuple],
     col_index: &ColIndex<'_>,
+    parallel_allowed: bool,
 ) -> Vec<Result<BTreeMap<String, Term>>> {
     let one_row = |t: &RawTuple| {
         let raw = RawRow {
@@ -907,7 +952,7 @@ fn reconstruct_batch(
         };
         reconstruct(branch, &raw)
     };
-    if batch.len() < TERM_GEN_MIN_PARALLEL_ROWS {
+    if !parallel_allowed || batch.len() < TERM_GEN_MIN_PARALLEL_ROWS {
         return batch.iter().map(one_row).collect();
     }
     use rayon::prelude::*;
@@ -2128,8 +2173,9 @@ mod triple_function_tests {
 mod batch_reconstruct_tests {
     //! `reconstruct_batch` must reproduce the exact per-row sequential
     //! [`reconstruct`] output, in the exact original row order, whether the
-    //! batch is small enough to stay sequential or large enough to fan out to
-    //! rayon (`TERM_GEN_MIN_PARALLEL_ROWS`) — the "safest is strict order
+    //! batch is small enough to stay sequential, large enough to fan out to
+    //! rayon (`TERM_GEN_MIN_PARALLEL_ROWS`), or large but `parallel_allowed` is
+    //! `false` (ledger F8's dump-path gate) — the "safest is strict order
     //! preservation via indexed chunks" design note on `reconstruct_batch`.
     use super::*;
     use sf_core::ir::TermSpec;
@@ -2197,16 +2243,22 @@ mod batch_reconstruct_tests {
                 })
                 .collect();
 
-            let mut batched: Vec<Option<Term>> = Vec::with_capacity(n);
-            for chunk in rows.chunks(TERM_GEN_BATCH_SIZE) {
-                for bindings in reconstruct_batch(&branch, chunk, &col_index) {
-                    batched.push(bindings.expect("batch reconstruct").get("v").cloned());
+            // Both gate states must match the reference — `parallel_allowed`
+            // only decides WHETHER a big batch may fan out, never the result.
+            for parallel_allowed in [true, false] {
+                let mut batched: Vec<Option<Term>> = Vec::with_capacity(n);
+                for chunk in rows.chunks(TERM_GEN_BATCH_SIZE) {
+                    for bindings in reconstruct_batch(&branch, chunk, &col_index, parallel_allowed)
+                    {
+                        batched.push(bindings.expect("batch reconstruct").get("v").cloned());
+                    }
                 }
+                assert_eq!(
+                    sequential, batched,
+                    "reconstruct_batch must match sequential reconstruct, in order, \
+                     at n={n}, parallel_allowed={parallel_allowed}"
+                );
             }
-            assert_eq!(
-                sequential, batched,
-                "reconstruct_batch must match sequential reconstruct, in order, at n={n}"
-            );
         }
     }
 }

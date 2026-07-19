@@ -205,13 +205,22 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
   <li>Ground quoted triples in <strong><code>VALUES</code></strong>, all five <strong><code>TRIPLE()/SUBJECT()/PREDICATE()/OBJECT()/isTRIPLE()</code></strong> functions, <strong><code>=</code>/<code>sameTerm</code></strong> over triple terms, and quoted terms in a <strong><code>CONSTRUCT</code> template</strong> (a real triple term comes out; an illegal position is silently dropped, per the SPARQL spec — not an error).</li>
   <li><strong>Native results</strong> — project a reified pattern's identity and you get the reifier's IRI; project a triple-term variable and you get a real triple term back, not a stand-in id.</li>
 </ul>
-<p>What's left is honest, and mostly not star-specific:</p>
+<ul>
+  <li><strong>Paths compose now too</strong> (2026-07-19): a quoted pattern at a property-path
+  endpoint — and path joins generally, star or not — answer on the default engine, including
+  OPTIONAL and <code>FILTER EXISTS</code> compositions.</li>
+  <li><strong>Mixed unions resolve at the top level</strong> (2026-07-19): a <code>SELECT</code>
+  whose union arms disagree on whether <code>?t</code> is a triple term — or a <code>VALUES</code>
+  column mixing both — returns each row realized per its own arm.</li>
+  <li><strong>Whole-triple-term equality</strong> (<code>?t1 = ?t2</code>) now resolves for
+  constant and same-shape template components (2026-07-19).</li>
+</ul>
+<p>What's left is honest, and short:</p>
 <ul>
   <li><strong>Predicate position</strong> — a quoted triple used as a predicate. Not an engine limit: RDF&nbsp;1.2 itself requires a predicate to be an IRI.</li>
   <li><strong>Subject-side nesting</strong> — a quoted triple whose own subject is another quoted triple. Also spec-impossible, not a scope choice; as a query pattern it matches nothing rather than erroring (see the matching law, §6).</li>
-  <li><strong>A quoted pattern directly on a property-path endpoint</strong> — inherited from a general engine boundary (<em>any</em> path joined with anything else 501s today, not just star ones).</li>
-  <li><strong>Mixing triple terms and plain values for one variable</strong> — across <code>UNION</code> arms, or within one <code>VALUES</code> column. A SPARQL variable can't be a triple term on one branch and a plain value on another.</li>
-  <li>One narrow case of <strong>whole-triple-term equality</strong> (<code>?t1 = ?t2</code>) where a component comes from an <code>rr:template</code> rather than a bare column — comparing the component directly (<code>OBJECT(?t1) = OBJECT(?t2)</code>) always works.</li>
+  <li><strong>Observing a mixed variable</strong> — a function, equality, or <code>CONSTRUCT</code> template over a variable that's a triple term on one union arm and a plain value on another still errors explicitly (the variable's shape must be uniform wherever it's <em>inspected</em>, not merely returned).</li>
+  <li>Whole-triple-term equality across <strong>genuinely mismatched template shapes</strong> — a sharpened, explicit error naming the reason; comparing components directly (<code>OBJECT(?t1) = OBJECT(?t2)</code>) always works.</li>
 </ul>
 <p>Everything else — subject/object position, asserted/non-asserted, variables or constants in any of s/p/o, patterns inside <code>FILTER EXISTS</code> — works, same as before.</p>
 
@@ -225,7 +234,7 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
 </main>
 <footer>
   <p>semantic-fabric — R2RML-star Guide &amp; Tutorial. For the normative details see the
-  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031 / ADR-0032.</p>
+  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031 / ADR-0032 / ADR-0033.</p>
 </footer>
 </body>
 </html>

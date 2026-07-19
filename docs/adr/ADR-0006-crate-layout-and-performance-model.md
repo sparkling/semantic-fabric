@@ -125,6 +125,31 @@ Results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw
   > half-ship) — this section's structural claims (pool separation, chunked
   > dispatch, order preservation, streaming-bounded first batch) all hold at
   > any batch size; only the specific constant is memory-bound today.
+  >
+  > **Dump-path regression + call-site gate (2026-07-19, ledger F8).** The
+  > chunked dispatch above measurably REGRESSED the streamed CONSTRUCT dump
+  > (`constant_memory_dump`: +31–35% at 10×/100× scale) while still winning on
+  > `micro_distinct_agg`/`micro_group_avg_rust`. Toggle-isolated on a quiet
+  > machine: forcing every batch sequential while leaving the buffer-then-
+  > reconstruct shape exactly as-is reproduced the pre-batch, zero-buffer
+  > baseline to within ~2% — the buffering indirection itself costs nothing
+  > measurable; the regression is 100% the `par_chunks` dispatch. The
+  > differentiator is per-row cost, not row count: the dump's rows are plain
+  > column/template copies (cheap `Literal::new_simple_literal`, no numeric
+  > formatting), so dispatch's fixed thread wake/join cost exceeds the compute
+  > saved even at 80k-row batches; `rust_group`'s aggregate inner collection
+  > (`AVG`/`SUM(DISTINCT)`/`COUNT(DISTINCT)` over `canonical_lexical`-formatted
+  > numeric literals — always fully materialized before grouping can start
+  > regardless) is the shape the constant was tuned against and still wins
+  > there, by a more modest ~5–8% toggle-isolated (not the full ~29%/~4% the
+  > original F6 landing measured against a stale pre-F6 baseline under
+  > different machine load). Fix: `reconstruct_batch` takes a `parallel_allowed`
+  > flag threaded through `PlanCtx`, `true` only for `rust_group_execute`'s
+  > inner collection — the plain streaming SELECT/CONSTRUCT/ASK path
+  > (`for_each_solution`'s direct `run_branches` call) always reconstructs
+  > sequentially now. `TERM_GEN_BATCH_SIZE`/`TERM_GEN_MIN_PARALLEL_ROWS` and the
+  > memory-bound reasoning above are unchanged — only WHO may cross the
+  > parallel gate changed, not the batch shape or its constants.
 * First-class source dialects: **PostgreSQL** (primary production), **SQLite** (embedded / W3C-suite CI); **MySQL** follows. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
 * Crate pins + 1.2 feature flags: ADR-0004 / ADR-0019. Toolchain pinned via `rust-toolchain.toml`.
 
