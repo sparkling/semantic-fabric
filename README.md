@@ -421,8 +421,12 @@ the query rewrite
 and the soundness-and-completeness pass making the extension sound and
 complete for RDF 1.2
 ([ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md))
-are implemented and test-gated — there is **no prior art** for RDF-star over live
-SQL rewriting ([ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
+are implemented and test-gated, with equivalence to a native RDF 1.2 evaluator
+mechanically verified over the decoded graph. Quoted patterns at a property-path
+endpoint — and path-joins generally — compose on the default engine
+([ADR-0033](docs/adr/ADR-0033-path-as-derived-table-join-composition.md)). There
+is **no prior art** for RDF-star over live SQL rewriting
+([ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
 
 - **[R2RML-star specification](https://sparkling.github.io/semantic-fabric/rdf-star/specification.html)**
   ([source](docs/rdf-star/specification.html)) — the normative extension spec
