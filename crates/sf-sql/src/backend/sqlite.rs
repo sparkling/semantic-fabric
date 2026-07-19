@@ -211,10 +211,27 @@ impl SqlBackend for SqliteOwnedBackend {
         Self: 's;
 
     async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-        // Lock inline and DROP the guard before returning — no `.await` is held
-        // while the `!Send` `MutexGuard` is live, so the future stays `Send`.
-        let guard = self.conn.lock().unwrap_or_else(|p| p.into_inner());
-        crate::stream::sqlite_column_names(&guard, probe_sql)
+        // Lock + prepare inside `spawn_blocking`, mirroring `open_branch` below
+        // (ADR-0024 §4.1) — NOT inline as this used to do. A `std::sync::Mutex`
+        // taken inline in an async fn blocks the tokio WORKER THREAD itself (no
+        // yield point), so `N` concurrent callers contending for one connection
+        // can wedge every worker thread simultaneously: a genuine deadlock once
+        // `N > worker_threads` (`sf-serve/tests/endpoint.rs`
+        // `sqlite_pool_concurrency_receipt` doc + `column_names_spawn_blocking_
+        // deadlock_regression`).
+        let conn = Arc::clone(&self.conn);
+        let probe_sql = probe_sql.to_owned();
+        let joined = tokio::task::spawn_blocking(move || {
+            let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
+            crate::stream::sqlite_column_names(&guard, &probe_sql)
+        })
+        .await;
+        match joined {
+            Ok(result) => result,
+            Err(e) => Err(Error::Introspection(format!(
+                "column_names spawn_blocking task join error: {e}"
+            ))),
+        }
     }
 
     async fn open_branch(

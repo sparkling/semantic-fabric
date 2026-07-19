@@ -692,22 +692,23 @@ fn unique_sqlite_path(tag: &str) -> std::path::PathBuf {
 /// unlike the PG receipts, this needs no external server.
 ///
 /// `worker_threads = 20` (> N), NOT this file's usual 8: `SqliteOwnedBackend::
-/// column_names` (`sf-sql/src/backend/sqlite.rs`) takes its `std::sync::Mutex`
-/// lock INLINE in an `async fn`, unlike its sibling `open_branch` which does the
-/// equivalent lock only inside a dedicated `spawn_blocking` thread. Under
-/// `pool_size=1` + high concurrency this can wedge every core worker thread
-/// simultaneously (each blocked entering `column_names` for a different
-/// request) while the one connection-holding request — parked on its own
-/// `spawn_blocking` thread — can never get its result channel drained, since
-/// no worker thread remains free to poll the draining task: a genuine,
-/// pre-existing deadlock, confirmed via `sample`(1) at `N=16, worker_threads=8`
-/// (hangs indefinitely) vs `N=8` (completes; provably safe since `N - 1 <
-/// worker_threads` bounds the worst case at one free worker). Out of this
-/// wave's file scope to fix (`sf-sql`, not `sf-serve`); tracked as a follow-up.
-/// Sizing this test's OWN runtime above `N` sidesteps it without masking it —
-/// the pool_size=1-vs-4 comparison below is unaffected by the worker count, and
-/// production's default (unbounded `Builder::new_multi_thread()`, no explicit
-/// `worker_threads`) remains exposed to it until fixed upstream.
+/// column_names` (`sf-sql/src/backend/sqlite.rs`) USED TO take its
+/// `std::sync::Mutex` lock INLINE in an `async fn`, unlike its sibling
+/// `open_branch` which does the equivalent lock only inside a dedicated
+/// `spawn_blocking` thread. Under `pool_size=1` + high concurrency this could
+/// wedge every core worker thread simultaneously (each blocked entering
+/// `column_names` for a different request) while the one connection-holding
+/// request — parked on its own `spawn_blocking` thread — could never get its
+/// result channel drained, since no worker thread remained free to poll the
+/// draining task: a genuine, pre-existing deadlock, confirmed via `sample`(1) at
+/// `N=16, worker_threads=8` (hung indefinitely) vs `N=8` (completed; provably
+/// safe since `N - 1 < worker_threads` bounds the worst case at one free
+/// worker). FIXED (F2d): `column_names` now locks inside `spawn_blocking` like
+/// `open_branch`, verified by the dedicated `column_names_spawn_blocking_
+/// deadlock_regression` test below. This test's `worker_threads = 20` sizing
+/// stays regardless — its purpose is the pool_size=1-vs-4 throughput
+/// comparison below, not the deadlock, and de-risking it against worker count
+/// costs nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 20)]
 async fn sqlite_pool_concurrency_receipt() {
     let path = unique_sqlite_path("pool_receipt");
@@ -781,6 +782,56 @@ async fn sqlite_pool_concurrency_receipt() {
     );
 
     let _ = std::fs::remove_file(&path);
+}
+
+/// F2d regression (P0 deadlock, RED-first): reproduces the mechanism documented
+/// on [`sqlite_pool_concurrency_receipt`] directly, at half that test's scale
+/// (`worker_threads = 4`, `N = 8` — the same 2x-oversubscription ratio
+/// empirically confirmed to hang at `worker_threads = 8`/`N = 16`). Every one of
+/// `N` concurrent SELECTs over a pool-of-1 SQLite backend calls `column_names`
+/// (the `run_branches` catalog probe, `sf-sparql/src/exec_core.rs`) before its
+/// `open_branch`, so a big enough result set gives the first winner's
+/// `spawn_blocking` cursor thread long enough to hold the connection `Mutex`
+/// while the other `N - 1` callers pile into `column_names`'s lock — wedging
+/// every worker thread if that lock is taken inline instead of inside its own
+/// `spawn_blocking`. Wrapped in a 30s `tokio::time::timeout` so a pre-fix
+/// regression is a clean test FAILURE, not a hung CI job: confirmed RED (times
+/// out) against the unfixed adapter, GREEN (completes in well under a second)
+/// against the fix in `sf-sql/src/backend/sqlite.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn column_names_spawn_blocking_deadlock_regression() {
+    const N: usize = 8;
+    const ROWS: usize = 20_000;
+    let cfg = Arc::new(big_sqlite_config(ROWS));
+
+    let run = async {
+        let mut handles = Vec::with_capacity(N);
+        for _ in 0..N {
+            let cfg = cfg.clone();
+            handles.push(tokio::spawn(async move {
+                send(
+                    cfg,
+                    post_query(
+                        "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                        "application/sparql-results+json",
+                    ),
+                )
+                .await
+            }));
+        }
+        for h in handles {
+            let (status, _ctype, body) = h.await.expect("request task join");
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), run)
+        .await
+        .expect(
+            "column_names deadlock regression: N=8 concurrent SELECTs over a \
+             pool-of-1 SQLite backend hung past 30s under worker_threads=4 — \
+             SqliteOwnedBackend::column_names is locking its Mutex inline again",
+        );
 }
 
 // --- Round-2 coverage: 6 previously-untested HTTP branches -----------------
