@@ -389,6 +389,28 @@ fn path_with_prelude(
     })
 }
 
+/// Render a path closure as a self-contained derived-table SQL string:
+/// `{with} SELECT sf_s, sf_o FROM t{cte_alias}` (ADR-0033). `cte_alias` is a
+/// FRESH alias for the closure's OWN internal CTE naming, distinct from
+/// `pc.alias` — the caller ([`crate::iq::lower::convert_path_branches`]) keeps
+/// `pc.alias` as the OUTER `Scan`'s alias, so every pre-existing
+/// `TermDef::Derived{alias: pc.alias, column: "sf_s"/"sf_o"}` binding keeps
+/// resolving unchanged against this derived table's identically-named output
+/// columns — zero cross-tree rewriting. Reuses [`path_with_prelude`] verbatim
+/// (only the closure's `alias` is rebased to `cte_alias` first).
+pub(crate) fn path_as_derived_table_sql(
+    pc: &PathClosure,
+    cte_alias: usize,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> Result<String> {
+    let mut inner = pc.clone();
+    inner.alias = cte_alias;
+    let with = path_with_prelude(&inner, dialect, catalog)?;
+    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
+    Ok(format!("{with} SELECT {sf_s}, {sf_o} FROM t{cte_alias}"))
+}
+
 fn emit_path_branch(
     b: &Branch,
     pc: &PathClosure,

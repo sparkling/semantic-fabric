@@ -282,6 +282,13 @@ tier-1 scope, recorded to prevent future conflation).
   created; test-locked explicitly. Follow-up: mirror the prefix check in
   `unfold::merge` (or reorder its guards) if flat/tree 501-parity on this
   cell is ever wanted.
+  **Both follow-ups closed (2026-07-19, ledger run)**: the prefix check now
+  runs in `unfold::merge` too (F1 — both engines prove the disjoint cell
+  empty), and `ADR-0033` lifted the general join-onto-path boundary itself on
+  the tree side — the star-at-path-endpoint cell is now *answerable* where it
+  genuinely correlates (test: a quoted triple's component variable feeding a
+  closure), while the disjoint-template cell stays proven-empty on both
+  engines.
 
 ## Consequences
 

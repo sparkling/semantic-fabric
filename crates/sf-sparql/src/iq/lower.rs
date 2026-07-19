@@ -61,7 +61,7 @@ use spargebra::algebra::Expression;
 
 use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{
-    AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, SqlCond,
+    AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan, SqlCond,
     SubPlanJoin, TermDef,
 };
 use crate::leftjoin::{
@@ -312,7 +312,13 @@ fn lower_node(
             // merge is a pure CROSS JOIN; the shared-var equalities ride `cond`.
             let mut acc = vec![Branch::empty()];
             for child in children {
-                let cbr = lower_node(child, dialect, decompose, next_alias, extra_keep)?;
+                let mut cbr = lower_node(child, dialect, decompose, next_alias, extra_keep)?;
+                // ADR-0033: convert any path-carrying branch to an ordinary derived-table
+                // Scan BEFORE `join_branches` (the flat `merge`'s unconditional path-join
+                // 501) ever sees it — safe unconditionally here, since NORMALIZE collapses
+                // 1-child joins, so a standalone path never reaches an `InnerJoin` with only
+                // itself as a child (it stays the fast top-level-`WITH` shape untouched).
+                convert_path_branches(&mut cbr, dialect, next_alias)?;
                 acc = join_branches(acc, cbr)?;
                 if acc.is_empty() {
                     break;
@@ -329,11 +335,26 @@ fn lower_node(
             // The LEFT operand inherits the enclosing `decompose` context (a left-nested
             // OPTIONAL is already opts-free-compatible: `left_join_branches` only requires
             // the RIGHT to be opts-free, so the left keeps the efficient path at top level).
-            let l = lower_node(*left, dialect, decompose, next_alias, extra_keep)?;
+            let mut l = lower_node(*left, dialect, decompose, next_alias, extra_keep)?;
+            // ADR-0033: convert a path-carrying LEFT operand to an ordinary derived-table
+            // Scan — without this, `build_left_join`'s `left.path.is_some()` guard 501s the
+            // moment an OPTIONAL's OWN preceding pattern is a property path.
+            convert_path_branches(&mut l, dialect, next_alias)?;
             // The RIGHT operand MUST lower to OPTS-FREE branches to be re-feedable into
             // `left_join_branches` (§5.3 nested-right closure): force any OPTIONAL inside
             // the right to its `(P⋈R)∪(P−R)` decomposition rather than the OptJoin form.
-            let r = lower_node(*right, dialect, true, next_alias, extra_keep)?;
+            let mut r = lower_node(*right, dialect, true, next_alias, extra_keep)?;
+            // ADR-0033: convert a path-carrying RIGHT operand too, BEFORE the
+            // `is_single_subplan_branch` check below — a bare-path right converts to a
+            // branch with exactly one `core` `Scan` (never a SubPlan), so it falls through
+            // to `left_join_branches`'s ordinary single-scan fast path (`build_left_join`),
+            // which reaches its R5 inner-FILTER-in-ON handling (`filter_cond`) instead of
+            // 501ing beforehand. That handling itself still only accepts a FILTER over a
+            // PLAIN-COLUMN-bound variable (`unify::var_col`, pre-existing v1 scope, unrelated
+            // to paths) — a filter directly on the path's OWN endpoint variable (always
+            // `TermMap::Template`-typed, an IRI) still 501s on that separate, generic ground;
+            // a filter on some OTHER plain-column var bound alongside the path is unaffected.
+            convert_path_branches(&mut r, dialect, next_alias)?;
             // The OPTIONAL ON-expression (R5 inner FILTER) is reconstructed to a single
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
@@ -442,6 +463,42 @@ fn lower_node(
                 .to_owned(),
         )),
     }
+}
+
+/// Convert every path-carrying branch (`b.path = Some(pc)`) into an ordinary
+/// scan-based branch (ADR-0033 join-onto-path composition): render the closure
+/// as a self-contained derived-table SQL string via
+/// [`crate::emit::path_as_derived_table_sql`] (a FRESH internal alias for the
+/// recursive CTE — never `pc.alias`) and push `Scan { alias: pc.alias, source:
+/// LogicalSource::Query(sql) }` onto `b.core`. The OUTER alias stays
+/// `pc.alias` — UNCHANGED — so every pre-existing binding/condition
+/// referencing `t{pc.alias}.sf_s` / `.sf_o` resolves against the derived
+/// table's identically-named output columns with ZERO cross-tree rewriting. A
+/// path-free branch passes through untouched. Catalog-blind
+/// (`ColumnCatalog::default()`) — LOWER has no live catalog yet, the same
+/// pre-existing limitation `lower_as_subplan` already carries for every other
+/// derived-table rendering at this stage (ADR-0033 risk 2).
+fn convert_path_branches(
+    branches: &mut [Branch],
+    dialect: sf_sql::Dialect,
+    next_alias: &mut usize,
+) -> Result<()> {
+    for b in branches.iter_mut() {
+        let Some(pc) = b.path.take() else { continue };
+        let cte_alias = *next_alias;
+        *next_alias += 1;
+        let sql = crate::emit::path_as_derived_table_sql(
+            &pc,
+            cte_alias,
+            dialect,
+            &crate::emit::ColumnCatalog::default(),
+        )?;
+        b.core.push(Scan {
+            alias: pc.alias,
+            source: sf_core::ir::LogicalSource::Query(sql),
+        });
+    }
+    Ok(())
 }
 
 /// Fold a `Construction` substitution into one branch's bindings (design §5

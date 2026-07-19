@@ -1155,15 +1155,25 @@ fn optional_anti_join_filter_nullable_determinant() {
 /// whenever `b.path.is_some()`, which renders ONLY the path's own CTE +
 /// projection — nothing about `b.core`/`b.opts`/other conditions). Adopting
 /// `right.path` would silently drop `left`'s own data instead of `right`'s —
-/// trading one silent-wrong-answer shape for another. Fixed with a sound 501
-/// in both `inner_join_one` and `not_exists_cond_for` (matching this file's
-/// own pre-existing convention for the analogous `right.subplan_joins`
-/// boundary a few lines above each) rather than attempting a real fix, which
-/// would need a genuinely new composition mechanism (e.g. wrapping the path's
-/// own rendering as an opaque SubPlan derived table) — out of scope for a
-/// crash-to-501 fix.
+/// trading one silent-wrong-answer shape for another. This used to be fixed
+/// with a sound 501 in both `inner_join_one` and `not_exists_cond_for`
+/// (matching this file's own pre-existing convention for the analogous
+/// `right.subplan_joins` boundary a few lines above each).
+///
+/// ADR-0033 LIFTS the boundary properly instead of merely 501ing it: at
+/// `IqNode::LeftJoin`'s right operand, BEFORE the `is_single_subplan_branch`
+/// check, a path-carrying branch converts to an ordinary branch whose `core`
+/// holds ONE `Scan` (the closure rendered as a self-contained derived-table
+/// SQL string) — so it now falls into `left_join_branches`'s single-scan fast
+/// path (`build_left_join`) exactly like any other single-scan OPTIONAL right
+/// side, instead of the `(P ⋈ R) ∪ (P − R)` decomposition that used to 501 it.
+/// The FLAT engine is genuinely UNCHANGED (`leftjoin.rs` shared
+/// infrastructure is out of ADR-0033's scope) and still 501s — an
+/// intentional tree-exceeds-flat divergence, so `diff()` cannot be used here
+/// (it requires flat/tree parity); verified instead against the independent
+/// `spareval` oracle.
 #[test]
-fn path_as_optional_right_operand_is_a_sound_501_not_a_crash() {
+fn path_as_optional_right_operand_now_answers_on_tree_flat_stays_501() {
     let q = format!("{PFX} SELECT ?s ?o WHERE {{ {{}} OPTIONAL {{ ?s ex:reaches+ ?o }} }}");
     let conn = sqlite::load(PE_SQL).expect("fixture loads");
     let schema = sqlite::introspect_all(&conn).expect("introspect");
@@ -1171,12 +1181,11 @@ fn path_as_optional_right_operand_is_a_sound_501_not_a_crash() {
     let parsed = parse(&q);
     assert!(
         matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
-        "expected an honest 501 on flat, not a crash or a silently wrong answer"
+        "expected an honest 501 on flat (unchanged — ADR-0033 is a tree-only lift)"
     );
-    assert!(
-        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
-        "expected an honest 501 on tree, not a crash or a silently wrong answer"
-    );
+    let tp = tree(&maps, &parsed, &schema)
+        .expect("tree must now answer this OPTIONAL-over-a-path (ADR-0033)");
+    assert_vs_spareval(PE_TTL, &q, &tp, &conn);
 }
 
 /// The SAME architectural gap found via a THIRD, independent entry point: a
@@ -1185,13 +1194,21 @@ fn path_as_optional_right_operand_is_a_sound_501_not_a_crash() {
 /// decomposition above — reachable whenever the OPTIONAL's right side is a
 /// plain single scan, regardless of what the left side is). `build_left_join`
 /// never touches `left.path` at all — it only ever ADDS an `OptJoin` onto
-/// whatever `left` already is — so a path-shaped `left` ends up with BOTH
-/// `path: Some(_)` AND a non-empty `opts`, the same unrepresentable combination
-/// as above, reached from the opposite side. Confirmed live: `no such column:
-/// t1.child` for `?s ex:reaches+ ?o OPTIONAL { ?o ex:reaches ?o2 }`. Fixed with
-/// the same sound-501 convention.
+/// whatever `left` already is — so a path-shaped `left` used to end up with
+/// BOTH `path: Some(_)` AND a non-empty `opts`, the same unrepresentable
+/// combination as above, reached from the opposite side. Confirmed live: `no
+/// such column: t1.child` for `?s ex:reaches+ ?o OPTIONAL { ?o ex:reaches
+/// ?o2 }`. This used to be fixed with the same sound-501 convention.
+///
+/// ADR-0033 LIFTS the boundary: at `IqNode::LeftJoin`'s LEFT operand, a
+/// path-carrying branch converts to an ordinary single-`core`-`Scan` branch
+/// BEFORE `build_left_join` ever sees it, so `left.path.is_some()` is false
+/// and the OptJoin attaches onto it exactly like any other left side. FLAT is
+/// unchanged (`leftjoin.rs`, out of scope) and still 501s — verified against
+/// the independent `spareval` oracle rather than `diff()` (which requires
+/// flat/tree parity, no longer true here by design).
 #[test]
-fn path_as_optional_left_via_single_scan_fast_path_is_a_sound_501() {
+fn path_as_optional_left_via_single_scan_fast_path_now_answers_on_tree_flat_stays_501() {
     let q = format!(
         "{PFX} SELECT ?s ?o ?o2 WHERE {{ ?s ex:reaches+ ?o OPTIONAL {{ ?o ex:reaches ?o2 }} }}"
     );
@@ -1201,12 +1218,11 @@ fn path_as_optional_left_via_single_scan_fast_path_is_a_sound_501() {
     let parsed = parse(&q);
     assert!(
         matches!(flat(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
-        "expected an honest 501 on flat, not a crash or a silently wrong answer"
+        "expected an honest 501 on flat (unchanged — ADR-0033 is a tree-only lift)"
     );
-    assert!(
-        matches!(tree(&maps, &parsed, &schema), Err(Error::Unsupported(_))),
-        "expected an honest 501 on tree, not a crash or a silently wrong answer"
-    );
+    let tp = tree(&maps, &parsed, &schema)
+        .expect("tree must now answer this OPTIONAL-over-a-path (ADR-0033)");
+    assert_vs_spareval(PE_TTL, &q, &tp, &conn);
 }
 
 // ============================================================================
@@ -3494,17 +3510,28 @@ fn item1d_r3_two_optionals_empty_left_subplan_correlates_on_prior_opt() {
     ));
 }
 
-/// Defect 3 (crash → sound 501). A property-path LEFT side of a subplan-OPTIONAL:
-/// `left_join_over_subplan` pushed a `SubPlanJoin` onto the path branch, producing a
-/// branch with BOTH `path: Some(_)` AND `subplan_joins` — a combination
-/// `emit_branch_with` routes to `emit_path_branch`, which renders ONLY the path's own
-/// recursive CTE and IGNORES `subplan_joins` entirely (`?c` referencing `t{sp}` then
-/// had no FROM entry → crash). `build_left_join` already guards the analogous
-/// path-left + plain-scan-right case (`path_as_optional_left_via_single_scan_fast_
-/// path_is_a_sound_501`); `left_join_over_subplan` now guards it too. Reverting the
-/// guard makes `tree()` return `Ok` and exec crashes.
+/// Defect 3 (crash → sound 501 → ADR-0033: correct answer). A property-path LEFT
+/// side of a subplan-OPTIONAL: `left_join_over_subplan` used to push a `SubPlanJoin`
+/// onto the path branch UNCONVERTED, producing a branch with BOTH `path: Some(_)`
+/// AND `subplan_joins` — a combination `emit_branch_with` routed to
+/// `emit_path_branch`, which renders ONLY the path's own recursive CTE and IGNORES
+/// `subplan_joins` entirely (`?c` referencing `t{sp}` then had no FROM entry →
+/// crash). `build_left_join` guarded the analogous path-left + plain-scan-right case
+/// (`path_as_optional_left_via_single_scan_fast_path_now_answers_on_tree_flat_
+/// stays_501`); `left_join_over_subplan` guarded this one the same way.
+///
+/// ADR-0033 converts the path-carrying LEFT to an ordinary single-`core`-`Scan`
+/// branch at `IqNode::LeftJoin`'s left operand, BEFORE `left_join_over_subplan` (or
+/// its own `l.path.is_some()` guard) ever sees it — so the guard no longer fires,
+/// and `left_join_over_subplan` pushes the `SubPlanJoin` onto an ordinary branch,
+/// exactly like a path-free left side. `render_from` already renders `core` Scans
+/// and `subplan_joins` generically (proven infrastructure, independently), so this
+/// combination now emits and executes correctly. Verified against the independent
+/// `spareval` oracle (flat, `leftjoin.rs`, is unrelated to a SubPlan-OPTIONAL's
+/// SQL-agg-pushdown routing and was never tested against this shape either way, so
+/// there is no flat/tree parity claim to preserve here).
 #[test]
-fn item1d_r3_path_left_with_subplan_optional_right_stays_sound_501() {
+fn item1d_r3_path_left_with_subplan_optional_right_now_answers_on_tree() {
     let conn = sqlite::load(PE_SQL).expect("fixture loads");
     let schema = sqlite::introspect_all(&conn).expect("introspect");
     let maps = sf_mapping::parse_r2rml(PE_R2RML).expect("R2RML parses");
@@ -3513,12 +3540,9 @@ fn item1d_r3_path_left_with_subplan_optional_right_stays_sound_501() {
          OPTIONAL {{ SELECT ?o (COUNT(?x) AS ?c) WHERE {{ ?x ex:reaches ?o }} GROUP BY ?o }} }}"
     );
     let q = parse(&query);
-    assert!(
-        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
-        "a property-path LEFT side of a subplan-OPTIONAL must be a SOUND 501 \
-         (emit_path_branch ignores subplan_joins → the subplan's derived table is never \
-         emitted, an invalid-SQL crash): `{query}`"
-    );
+    let tp = tree(&maps, &q, &schema)
+        .expect("tree must now answer this SubPlan-OPTIONAL over a path LEFT (ADR-0033)");
+    assert_vs_spareval(PE_TTL, &query, &tp, &conn);
 }
 
 /// Defect 4 (crash → correct). A subplan-OPTIONAL correlating on a variable bound by a

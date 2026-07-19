@@ -1063,7 +1063,17 @@ fn star_pattern_reused_inside_filter_exists_survives_without_extra_keep() {
 // so flat now ALSO proves this join empty instead of 501ing — both engines
 // AGREE (0 rows), verified through the strict `diff()` helper (flat/tree
 // row-bag parity), not the looser divergence-locking pattern this slot used
-// before the fix landed.
+// before the fix landed. UPDATE (ADR-0033): the general "no join onto any
+// path branch" boundary this empty-proof pre-empted is now LIFTED on the
+// tree side (a path-carrying branch converts to an ordinary derived-table
+// `Scan` at the two tree join sites) — but THIS query stays empty on BOTH
+// engines regardless, unaffected: after conversion, `unfold::merge`'s
+// disjointness pre-check simply no longer fires (its own `path.is_some()`
+// guard is gone), so the SAME `align_templates` proof now runs as part of
+// ORDINARY `unify()` instead — still `Unify::Empty`, same 0 rows, just
+// reached one call deeper. See the ANSWERABLE case right below, where the
+// join var is a PERSON (not a proposition-form id) — the templates are NOT
+// disjoint there, so the lift actually produces rows.
 // ============================================================================
 
 #[test]
@@ -1075,6 +1085,130 @@ fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
         "both engines must agree this join is PROVABLY EMPTY (ADR-0032 D6: the quoted \
          identity's proposition-form template and ex:knows's own subject template have \
          conflicting literal prefixes from the first character): got={got:#?}"
+    );
+}
+
+/// The ANSWERABLE D6 case ADR-0033 finally unlocks: the quoted triple's own
+/// SUBJECT COMPONENT (`?p`, a PERSON IRI — `http://ex.org/person/{person_id}`,
+/// the IDENTICAL domain `#Knows`'s own subject/object templates use) feeds the
+/// closure, not the reifier/proposition-form id — so the join genuinely
+/// correlates instead of being provably empty. `diff()` cannot be used (it
+/// requires flat/tree parity; flat still 501s, tree now answers — a genuine,
+/// intentional divergence, the SAME shape as `differential_paths.rs`'s
+/// flipped pin). `ex:knows` edges (from `friend_id`): (1,2) and (3,1) — row 2
+/// (Bob, friend_id NULL) contributes no edge. `ex:knows+` closure:
+/// {(1,2),(3,1),(3,2)}. Every census row IS an `#PersonAgeAssertion` (`?p`
+/// ranges over all 3 person ids), so joining with the closure keeps only
+/// p∈{1,3} (2 has no outgoing edge): (p=1,x=2), (p=3,x=1), (p=3,x=2) — 3
+/// rows. `?age` is cross-checked against the SAME engine's own
+/// `baseline_ages` rather than hand-typed (the module doc's established
+/// rationale — never hand-encode an `rr:column`-sourced literal's exact XSD
+/// lexical form).
+#[test]
+fn star_pattern_at_property_path_endpoint_tree_now_answers_flat_still_501s() {
+    // A DEDICATED fixture, not `CENSUS_R2RML`'s own `#Knows` (`friend_id`, which
+    // is NULLABLE — row 2 leaves it NULL): a PRE-EXISTING, unrelated gap in the
+    // path closure's one-hop relation (`emit::hop_sql`'s `HopExpr::Pred` case
+    // has no `IS NOT NULL` guard on the object column) lets that NULL flow into
+    // the base hop as a phantom `(2, NULL)` pair, which then TRANSITIVELY
+    // poisons every node that can reach it (`1→2→NULL`, `3→1→2→NULL`) —
+    // confirmed live via the raw emitted SQL and pre-existing on the
+    // standalone (non-joined) path path too (`emit_path_branch`, untouched by
+    // ADR-0033): unrelated to join composition, out of this task's scope, and
+    // reported separately rather than fixed here. `#KnowsClean` sidesteps it
+    // with a NOT NULL edge table, same {(1,2),(3,1)} shape as `#Knows`.
+    const KNOWS_CLEAN_SQL: &str = r#"
+CREATE TABLE census_row (
+    person_id INTEGER PRIMARY KEY,
+    age INTEGER NOT NULL,
+    friend_id INTEGER
+);
+INSERT INTO census_row VALUES (1, 30, 2);
+INSERT INTO census_row VALUES (2, 40, NULL);
+INSERT INTO census_row VALUES (3, 30, 1);
+CREATE TABLE knows_clean (a INTEGER NOT NULL, b INTEGER NOT NULL);
+INSERT INTO knows_clean VALUES (1, 2);
+INSERT INTO knows_clean VALUES (3, 1);
+"#;
+    const KNOWS_CLEAN_R2RML: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ex:  <http://example.com/> .
+
+<#PersonAge>
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#PersonAgeAssertion>
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAge> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:CensusRecord2026 ]
+    ] .
+
+<#KnowsClean>
+    rr:logicalTable [ rr:tableName "knows_clean" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{a}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:knowsClean ;
+        rr:objectMap [ rr:template "http://ex.org/person/{b}" ]
+    ] .
+"#;
+
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?x WHERE {{ ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+         ?p ex:knowsClean+ ?x }}"
+    );
+    let maps = sf_mapping::parse_r2rml(KNOWS_CLEAN_R2RML).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(&query)
+        .expect("query parses");
+
+    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
+    assert!(
+        matches!(flat, Err(Error::Unsupported(_))),
+        "expected 501 on the flat path (unchanged — ADR-0033 is a tree-only lift): {flat:?}"
+    );
+
+    let conn = sqlite::load(KNOWS_CLEAN_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("tree must now answer this join (ADR-0033)");
+    let got = run_select(&tree, &conn);
+
+    // `ex:knowsClean` = {(1,2),(3,1)}; closure `+` = {(1,2),(3,1),(3,2)}. Every
+    // census row IS a `#PersonAgeAssertion` (`?p` ranges over all 3 person
+    // ids), so joining with the closure keeps p in {1,3} (2 has no outgoing
+    // edge): (p=1,x=2), (p=3,x=1), (p=3,x=2) — 3 rows. `?age` is cross-checked
+    // against the SAME engine's own `baseline_ages` rather than hand-typed
+    // (the module doc's established rationale for an `rr:column`-sourced
+    // literal).
+    let ages = baseline_ages(KNOWS_CLEAN_SQL, KNOWS_CLEAN_R2RML);
+    let person = |id: i32| NamedNode::new_unchecked(format!("http://ex.org/person/{id}"));
+    let expected: Vec<BTreeMap<String, Term>> = [(1, 2), (3, 1), (3, 2)]
+        .into_iter()
+        .map(|(p_id, x_id)| {
+            row3(
+                "p",
+                Term::NamedNode(person(p_id)),
+                "age",
+                ages[&person(p_id)].clone(),
+                "x",
+                Term::NamedNode(person(x_id)),
+            )
+        })
+        .collect();
+    assert!(
+        oracle::solutions_bag_eq(&got, &expected),
+        "got={got:#?}\nexpected={expected:#?}"
     );
 }
 
