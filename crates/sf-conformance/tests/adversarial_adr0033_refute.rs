@@ -259,7 +259,10 @@ fn plan_level_limit_over_joined_path_returns_correct_subset() {
         RJ_TTL,
         "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { ?s ex:reaches+ ?o . ?o a ex:Thing }",
     );
-    assert_eq!(full, 4, "closure {{(1,2),(1,3),(1,4),(2,3)}}, all o typed ex:Thing");
+    assert_eq!(
+        full, 4,
+        "closure {{(1,2),(1,3),(1,4),(2,3)}}, all o typed ex:Thing"
+    );
 
     let conn = sqlite::load(RJ_SQL).expect("fixture loads");
     let maps = sf_mapping::parse_r2rml(RJ_R2RML).expect("R2RML parses");
@@ -272,7 +275,8 @@ fn plan_level_limit_over_joined_path_returns_correct_subset() {
     let q = parse(
         "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { ?s ex:reaches+ ?o . ?o a ex:Thing } LIMIT 2",
     );
-    let plan = tree(&maps, &q, &schema).expect("tree must answer a plan-level LIMIT over a joined path");
+    let plan =
+        tree(&maps, &q, &schema).expect("tree must answer a plan-level LIMIT over a joined path");
     let limited = oracle::engine_bag(&exec::select(&plan, &conn).expect("exec"));
     assert_eq!(
         limited.len(),
@@ -360,7 +364,10 @@ fn distinct_over_joined_path_actually_dedups() {
         RJ_TTL,
         "PREFIX ex: <http://ex/> SELECT ?s WHERE { ?s ex:reaches+ ?o . ?o a ex:Thing }",
     );
-    assert_eq!(non_distinct, 4, "s=1 (o in {{2,3,4}}) + s=2 (o=3) — 4 pre-dedup rows");
+    assert_eq!(
+        non_distinct, 4,
+        "s=1 (o in {{2,3,4}}) + s=2 (o=3) — 4 pre-dedup rows"
+    );
     let distinct = assert_differential(
         RJ_SQL,
         RJ_R2RML,
@@ -390,7 +397,11 @@ fn two_path_scans_get_distinct_aliases_structural_check() {
         "PREFIX ex: <http://ex/> SELECT ?a ?b ?c WHERE { ?a ex:reaches+ ?b . ?a ex:reaches+ ?c }",
     );
     let plan = tree(&maps, &q, &[]).expect("tree translates");
-    assert_eq!(plan.branches.len(), 1, "a plain multi-path inner join is one branch");
+    assert_eq!(
+        plan.branches.len(),
+        1,
+        "a plain multi-path inner join is one branch"
+    );
     let b: &Branch = &plan.branches[0];
     let query_scans: Vec<&Scan> = b
         .core
@@ -608,7 +619,10 @@ fn minus_body_with_joined_path_anti_join_correctness() {
         "PREFIX ex: <http://ex/> SELECT ?id ?name WHERE { \
          ?id ex:name ?name MINUS { ?id ex:mid ?m . ?m ex:next+ ?x } }",
     );
-    assert_eq!(n, 1, "only Bob survives — Ann's MINUS body has solutions via her mid+closure");
+    assert_eq!(
+        n, 1,
+        "only Bob survives — Ann's MINUS body has solutions via her mid+closure"
+    );
 }
 
 /// The SAME anti-join, via `FILTER NOT EXISTS` instead of `MINUS` — a
@@ -695,7 +709,9 @@ fn hand_derived_item1d_r3_path_left_with_subplan_optional_right() {
         let row = row.unwrap_or_else(|| {
             panic!("hand-derived pair (s={s},o={o}) missing from engine output: {got:#?}")
         });
-        let c = row.get("c").unwrap_or_else(|| panic!("row (s={s},o={o}) has no ?c: {row:#?}"));
+        let c = row
+            .get("c")
+            .unwrap_or_else(|| panic!("row (s={s},o={o}) has no ?c: {row:#?}"));
         let oxrdf::Term::Literal(lit) = c else {
             panic!("?c must be a literal, got {c:?}")
         };
@@ -716,23 +732,38 @@ fn hand_derived_item1d_r3_path_left_with_subplan_optional_right() {
 // If both agree (both 501 the same way, or both succeed identically), the
 // join lift changes nothing about GRAPH handling.
 //
-// CONFIRMED FINDING (out-of-charter, pre-existing, NOT introduced or fixed by
-// ADR-0033): BOTH translate `Ok` and BOTH silently IGNORE the `GRAPH <g>`
-// constraint entirely — the emitted plan queries the full `rj_edge` table
-// regardless of `<http://ex/g1>`, byte-identical to the SAME query with the
-// `GRAPH` wrapper removed. Root cause traced (not just observed): `build.rs`
-// threads `current_graph` into `Intensional.graph`/`UnresolvedPath.graph`,
-// but `iq/resolve.rs` (grepped directly) never reads either field when
-// compiling to `Extensional`/`Path` — the constraint is captured, then
-// dropped, for EVERY pattern kind (ordinary triples AND paths alike), a
-// mapping-level gap that predates and is orthogonal to join composition. The
-// join lift is confirmed UNCHANGED here: solo and joined both ignore GRAPH
-// the same way, so this is a pointer for a SEPARATE ticket, not an ADR-0033
-// regression.
+// UPDATE (F4a, root-caused precisely — supersedes the original finding
+// below): the original comment claimed `iq/resolve.rs` "never reads either
+// field ... for EVERY pattern kind" — checked directly, that is NOT what the
+// code does. `resolve.rs`'s `Intensional`/`UnresolvedPath` arms DO read
+// `graph` and thread it into `Unfolder::resolve_pattern`/`resolve_path`,
+// which correctly pin `current_graph`; ordinary (non-path) triples were
+// ALREADY graph-correct on both flat and tree (see
+// `plain_triple_pattern_inside_named_graph_already_filters_correctly` below —
+// a genuine pre-existing-correct regression lock, not a new fix). The REAL,
+// narrower bug: `path.rs`'s hop compilation (`resolve_pred_hop`/
+// `compile_nps`, shared verbatim by flat's `GraphPattern::Path` arm AND the
+// tree's `resolve_path`) never consulted `current_graph`/`graph_maps_match`
+// at all when picking candidate triples-maps/POMs — unlike `unfold.rs`'s
+// ordinary `atom`/`pattern_branches`, which always did. So a property path
+// specifically ignored GRAPH, identically on flat and tree (never a
+// tree-only regression), while a plain triple pattern never had this bug.
+// Fixed by threading the same `graph_maps_match` check into `resolve_pred_hop`
+// / `compile_nps` (`path.rs`). `RJ_R2RML`'s `<#Edge>` declares NO
+// `rr:graphMap` at all, so under the fix `GRAPH <g1> { ... }` has ZERO
+// graph-matching candidate mappings — `resolve_pred_hop` reports that the
+// SAME way it already reports "predicate not mapped at all" (a pre-existing,
+// unrelated 501, `path.rs`'s `found.ok_or_else`), rather than a graceful
+// empty result: a sound (never-wrong) outcome, consistent with that existing
+// convention, just not the most complete possible one (widening it to a
+// graceful empty is a separate, larger structural change, not attempted
+// here). See `path_plus_*` below (`GJ_R2RML`, which DOES declare a
+// `graphMap`) for the fix proof over a mapping that actually has
+// graph-scoped data to filter TO, not just away from.
 // ============================================================================
 
 #[test]
-fn path_inside_named_graph_joined_behaves_same_as_standalone() {
+fn path_inside_named_graph_joined_now_soundly_501s_instead_of_leaking_default_graph_data() {
     let maps = sf_mapping::parse_r2rml(RJ_R2RML).expect("R2RML parses");
     let solo = parse(
         "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } }",
@@ -741,43 +772,191 @@ fn path_inside_named_graph_joined_behaves_same_as_standalone() {
         "PREFIX ex: <http://ex/> SELECT ?s ?o ?t WHERE { \
          GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } . ?o ex:reaches ?t }",
     );
-    let joined_no_graph = parse(
-        "PREFIX ex: <http://ex/> SELECT ?s ?o ?t WHERE { ?s ex:reaches+ ?o . ?o ex:reaches ?t }",
-    );
     let solo_t = tree(&maps, &solo, &[]);
     let joined_t = tree(&maps, &joined, &[]);
     match (&solo_t, &joined_t) {
-        (Err(Error::Unsupported(_)), Err(Error::Unsupported(_))) => {
-            // A future GRAPH-support fix would land here — both refuse, so
-            // the join lift changed nothing about GRAPH handling.
-        }
-        (Ok(_), Ok(_)) => {
-            // The CONFIRMED current outcome: GRAPH is silently ignored
-            // engine-wide. Pin exact parity with the SAME query minus the
-            // GRAPH wrapper — proves the join composes IDENTICALLY whether or
-            // not a (currently-unenforced) GRAPH constraint is textually
-            // present, i.e. no NEW divergence from the join lift specifically.
-            let conn = sqlite::load(RJ_SQL).expect("fixture loads");
-            let schema = sqlite::introspect_all(&conn).expect("introspect");
-            let joined_plan = tree(&maps, &joined, &schema).expect("re-translate with schema");
-            let no_graph_plan =
-                tree(&maps, &joined_no_graph, &schema).expect("re-translate with schema");
-            let joined_bag = oracle::engine_bag(&exec::select(&joined_plan, &conn).expect("exec"));
-            let no_graph_bag =
-                oracle::engine_bag(&exec::select(&no_graph_plan, &conn).expect("exec"));
-            assert!(
-                oracle::solutions_bag_eq(&joined_bag, &no_graph_bag),
-                "GRAPH-wrapped joined-path answer must be byte-identical to the same query \
-                 with GRAPH removed (both currently ignore it) — a divergence here would mean \
-                 the join lift changed (not fixed) GRAPH handling:\n \
-                 graph-wrapped={joined_bag:#?}\n no-graph={no_graph_bag:#?}"
-            );
-        }
+        // FIXED behaviour: `<#Edge>` has no `rr:graphMap`, so it lives ONLY in the
+        // default graph (R2RML §7.4) — `GRAPH <http://ex/g1> { ... }` now finds ZERO
+        // graph-matching candidates and soundly 501s, on BOTH the solo and the joined
+        // (ADR-0033 derived-table) path, instead of silently querying the full
+        // default-graph-only table as if the GRAPH wrapper were not there (the OLD,
+        // confirmed-buggy behaviour this test used to pin).
+        (Err(Error::Unsupported(_)), Err(Error::Unsupported(_))) => {}
         (a, b) => panic!(
-            "solo vs joined GRAPH-path DISAGREE in kind — the join lift changed GRAPH \
-             behavior: solo={a:?}\n joined={b:?}"
+            "solo vs joined GRAPH-path outcome should both be a sound 501 (no graphMap \
+             matches <http://ex/g1> anywhere in RJ_R2RML) — got solo={a:?}\n joined={b:?}"
         ),
     }
+}
+
+// ============================================================================
+// Surface 7b (F4a) — the fix proof: a mapping with an explicit `rr:graphMap`
+// putting one triples-map's data in a NAMED graph, and a second, separate
+// triples-map with NO `rr:graphMap` (default graph). Property-path AND plain
+// triple-pattern forms; the constant-graph form (GRAPH <g1>, wrong iri) and
+// the default-graph (no GRAPH wrapper) form; standalone and joined. The
+// spareval oracle runs over a REAL multi-graph `Dataset` (N-Quads, not
+// Turtle) so it independently enforces named-graph scoping too.
+// ============================================================================
+
+const GJ_SQL: &str = r#"
+CREATE TABLE edge_g1 (parent INTEGER NOT NULL, child INTEGER NOT NULL);
+INSERT INTO edge_g1 VALUES (1, 2);
+INSERT INTO edge_g1 VALUES (2, 3);
+CREATE TABLE edge_default (parent INTEGER NOT NULL, child INTEGER NOT NULL);
+INSERT INTO edge_default VALUES (10, 20);
+"#;
+
+const GJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#EdgeG1>
+    rr:logicalTable [ rr:tableName "edge_g1" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{parent}" ; rr:graphMap [ rr:constant <http://ex/g1> ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:reaches ; rr:objectMap [ rr:template "http://ex/n/{child}" ] ] .
+<#EdgeDefault>
+    rr:logicalTable [ rr:tableName "edge_default" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{parent}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:reaches ; rr:objectMap [ rr:template "http://ex/n/{child}" ] ] .
+"#;
+
+/// N-Quads (not Turtle): `<#EdgeG1>`'s two triples live in the named graph
+/// `<http://ex/g1>`; `<#EdgeDefault>`'s one triple has no 4th term (default
+/// graph) — the spareval oracle enforces GRAPH scoping over this SAME shape.
+const GJ_NQ: &str = r#"
+<http://ex/n/1> <http://ex/reaches> <http://ex/n/2> <http://ex/g1> .
+<http://ex/n/2> <http://ex/reaches> <http://ex/n/3> <http://ex/g1> .
+<http://ex/n/10> <http://ex/reaches> <http://ex/n/20> .
+"#;
+
+fn gj_oracle_bag(query: &str) -> Vec<BTreeMap<String, oxrdf::Term>> {
+    let ds = sf_conformance::graph::parse_nquads(GJ_NQ).expect("N-Quads parses");
+    match oracle::evaluate(&ds, query).expect("oracle eval") {
+        OracleAnswer::Solutions(rows) => rows,
+        other => panic!("expected SELECT solutions, got {other:?}"),
+    }
+}
+
+fn gj_engine_bag(query: &str) -> Vec<BTreeMap<String, oxrdf::Term>> {
+    let conn = sqlite::load(GJ_SQL).expect("fixture loads");
+    let maps = sf_mapping::parse_r2rml(GJ_R2RML).expect("R2RML parses");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let q = parse(query);
+    let plan = tree(&maps, &q, &schema).expect("tree translates");
+    oracle::engine_bag(&exec::select(&plan, &conn).expect("exec"))
+}
+
+fn gj_assert(query: &str, expected_len: usize, msg: &str) {
+    let engine = gj_engine_bag(query);
+    let oracle = gj_oracle_bag(query);
+    assert!(
+        oracle::solutions_bag_eq(&engine, &oracle),
+        "engine vs oracle divergence on `{query}` ({msg}):\n engine={engine:#?}\n oracle={oracle:#?}"
+    );
+    assert_eq!(engine.len(), expected_len, "{msg}: {engine:#?}");
+}
+
+/// `GRAPH <g1> { ?s ex:reaches+ ?o }` must return ONLY g1's transitive
+/// closure: 1->2, 2->3, 1->3 (3 pairs) — never leaking `<#EdgeDefault>`'s
+/// (10,20). This is the RED case pre-fix (path.rs ignored `current_graph`).
+#[test]
+fn path_plus_inside_named_graph_returns_only_that_graphs_closure() {
+    gj_assert(
+        "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } }",
+        3,
+        "g1's closure only: (1,2) (2,3) (1,3)",
+    );
+}
+
+/// A property path inside `GRAPH <wrong-iri>` — the "wrong iri" half of the
+/// team-lead's ask. NEITHER `<#EdgeG1>` (graph=g1) NOR `<#EdgeDefault>`
+/// (graph=default) matches `<http://ex/nope>`, so `resolve_pred_hop` finds
+/// ZERO candidates — the same sound 501 as "predicate not mapped at all"
+/// (see the Surface-7 doc comment above), never the OLD bug's silent full-
+/// table leak.
+#[test]
+fn path_plus_inside_wrong_named_graph_is_a_sound_501_not_a_leak() {
+    let maps = sf_mapping::parse_r2rml(GJ_R2RML).expect("R2RML parses");
+    let q = parse(
+        "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { GRAPH <http://ex/nope> { ?s ex:reaches+ ?o } }",
+    );
+    let f = flat(&maps, &q, &[]);
+    let t = tree(&maps, &q, &[]);
+    assert!(
+        matches!(f, Err(Error::Unsupported(_))),
+        "flat: no mapping declares <http://ex/nope> → sound 501, got {f:?}"
+    );
+    assert!(
+        matches!(t, Err(Error::Unsupported(_))),
+        "tree: no mapping declares <http://ex/nope> → sound 501, got {t:?}"
+    );
+}
+
+/// The default graph (no GRAPH wrapper) must see ONLY `<#EdgeDefault>`'s data
+/// (10,20) — never g1's — proving the fix is symmetric (a path must not
+/// OVER-match the default graph with named-graph-only data either).
+#[test]
+fn path_plus_default_graph_excludes_named_graph_data() {
+    gj_assert(
+        "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { ?s ex:reaches+ ?o }",
+        1,
+        "default graph only: (10,20)",
+    );
+}
+
+/// Joined form (forces ADR-0033's `convert_path_branches` derived-table
+/// wrapping): the GRAPH constraint must survive the join composition, not
+/// just the standalone closure.
+#[test]
+fn path_plus_inside_named_graph_joined_with_plain_pattern_still_filters() {
+    // Closure over g1 (1->2, 2->3): (1,2) (2,3) (1,3). Joined on ?o against a
+    // PLAIN g1 edge `?o ex:reaches ?t`: only o=2 has an onward edge (2->3), so
+    // exactly one row survives: (s=1, o=2, t=3). If the GRAPH constraint leaked
+    // (pre-fix), `<#EdgeDefault>`'s unrelated (10,20) row could never join here
+    // (disjoint node domain) — so this test's signal is specifically about the
+    // CLOSURE shape surviving the join, not a leak count; the standalone tests
+    // above are what pin the leak directly.
+    gj_assert(
+        "PREFIX ex: <http://ex/> SELECT ?s ?o ?t WHERE { \
+         GRAPH <http://ex/g1> { ?s ex:reaches+ ?o . ?o ex:reaches ?t } }",
+        1,
+        "(1,2,3) — the only pair with an onward g1 edge",
+    );
+}
+
+/// The regression lock: an ORDINARY (non-path) triple pattern inside GRAPH
+/// was ALREADY correct before this fix (`unfold.rs`'s `atom`/`pattern_branches`
+/// always consulted `current_graph`/`graph_maps_match`) — this must keep
+/// passing unchanged, proving the path.rs fix did not need to touch (and did
+/// not accidentally regress) the already-correct non-path path.
+#[test]
+fn plain_triple_pattern_inside_named_graph_already_filters_correctly() {
+    gj_assert(
+        "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { GRAPH <http://ex/g1> { ?s ex:reaches ?o } }",
+        2,
+        "g1's 2 direct edges only: (1,2) (2,3)",
+    );
+}
+
+/// `GRAPH ?g` (variable graph name) stays a clean, PRE-EXISTING 501 on both
+/// flat and tree — deliberately NOT widened by this fix (team-lead: "do not
+/// widen scope"). Locks the CURRENT boundary so a future change that
+/// silently started accepting it (without real quad support) would be caught.
+#[test]
+fn variable_graph_name_over_a_path_stays_a_locked_501() {
+    let maps = sf_mapping::parse_r2rml(GJ_R2RML).expect("R2RML parses");
+    let q =
+        parse("PREFIX ex: <http://ex/> SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s ex:reaches+ ?o } }");
+    let f = flat(&maps, &q, &[]);
+    let t = tree(&maps, &q, &[]);
+    assert!(
+        matches!(f, Err(Error::Unsupported(_))),
+        "GRAPH ?g flat must stay 501: {f:?}"
+    );
+    assert!(
+        matches!(t, Err(Error::Unsupported(_))),
+        "GRAPH ?g tree must stay 501: {t:?}"
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -823,7 +1002,10 @@ fn filter_on_path_endpoint_hits_the_same_pre_existing_v1_boundary() {
     for (label, q) in [
         ("joined, subject-endpoint filter", &subj_filtered),
         ("joined, object-endpoint filter", &obj_filtered),
-        ("solo (unjoined), subject-endpoint filter", &solo_subj_filtered),
+        (
+            "solo (unjoined), subject-endpoint filter",
+            &solo_subj_filtered,
+        ),
     ] {
         let t = tree(&maps, q, &[]);
         assert!(
@@ -847,7 +1029,10 @@ fn filter_on_a_plain_column_var_bound_alongside_the_path_still_applies() {
         RJ_TTL,
         "PREFIX ex: <http://ex/> SELECT ?s ?o ?nm WHERE { ?s ex:reaches+ ?o . ?o ex:name ?nm }",
     );
-    assert_eq!(baseline, 1, "only (1,2,Bob) — o=3/4 from other closure pairs have no ex:name");
+    assert_eq!(
+        baseline, 1,
+        "only (1,2,Bob) — o=3/4 from other closure pairs have no ex:name"
+    );
 
     let filtered = assert_differential(
         RJ_SQL,

@@ -599,6 +599,16 @@ fn agg_expr_sql(a: &AggCol, dialect: Dialect, actuals: &HashMap<usize, Vec<Strin
 /// `!p` set-union the pairs. The result is a `SELECT …` body to be wrapped in
 /// `(…) alias` by the caller. Leaf base-column references are resolved against the
 /// live catalog (SQL:2008 identifier folding; see the module docs).
+///
+/// `HopExpr::Pred` is the ONLY arm that reads raw base columns directly, so it is
+/// the ONLY arm that needs a NULL guard: R2RML §11 generates no triple at all when
+/// a referenced column is NULL (matching what the non-path `atom()` triple-pattern
+/// emission already enforces via its `obj_null_guard`, `unfold.rs`) — without the
+/// guard, a NULL-valued subject or object column becomes a phantom one-hop pair
+/// that a recursive closure then chains through transitively, poisoning every node
+/// that can reach it. Every composite arm (`Inverse`/`Seq`/`Alt`/`Nps`) only ever
+/// recomposes an already-guarded inner `hop_sql`'s `sf_s`/`sf_o`, so the leaf guard
+/// alone makes every composite sound too — no separate guard needed there.
 fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
     let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
     match hop {
@@ -607,7 +617,10 @@ fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
             let cols = catalog.columns(&rel.source);
             let s = dialect.quote_ident(resolve_col(rel.subj_col.as_ref(), cols));
             let o = dialect.quote_ident(resolve_col(rel.obj_col.as_ref(), cols));
-            format!("SELECT h0.{s} AS {sf_s}, h0.{o} AS {sf_o} FROM {src} h0")
+            format!(
+                "SELECT h0.{s} AS {sf_s}, h0.{o} AS {sf_o} FROM {src} h0 \
+                 WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL"
+            )
         }
         HopExpr::Inverse(inner) => {
             let inner_sql = hop_sql(inner, dialect, catalog);
@@ -651,6 +664,16 @@ fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
 /// constant `sf_d` column for the recursive (`P*`) anchor. `unfold` only emits
 /// reflexive kinds over a single-predicate bare leaf, so a composite hop here is a
 /// programming error surfaced as 501.
+///
+/// Reads `subj_col`/`obj_col` directly (like `hop_sql`'s `HopExpr::Pred` leaf, but
+/// NOT through it), so it needs the identical NULL guard: a row where EITHER
+/// column is NULL generates no triple at all (R2RML §11), hence contributes
+/// NEITHER a subject-node NOR an object-node to this predicate's graph — without
+/// the guard, a NULL-valued column would seed a phantom `(NULL, NULL)` reflexive
+/// pair. Both `UNION` halves share the SAME row-level guard (not a per-column
+/// guard on just the column each half projects): a row failing the OTHER column's
+/// NULL check still generates no triple, so its own column is not a valid node
+/// either.
 fn reflexive_sql(
     hop: &HopExpr,
     dialect: Dialect,
@@ -675,7 +698,9 @@ fn reflexive_sql(
     };
     Ok(format!(
         "SELECT h0.{s} AS {sf_s}, h0.{s} AS {sf_o}{dcol} FROM {src} h0 \
-         UNION SELECT h0.{o} AS {sf_s}, h0.{o} AS {sf_o}{dcol} FROM {src} h0"
+         WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL \
+         UNION SELECT h0.{o} AS {sf_s}, h0.{o} AS {sf_o}{dcol} FROM {src} h0 \
+         WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL"
     ))
 }
 

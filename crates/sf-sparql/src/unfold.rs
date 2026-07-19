@@ -62,7 +62,7 @@ pub struct Unfolder<'a> {
     /// The named graph currently active inside a `GRAPH <g> { ... }` clause, or
     /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
     /// by the `GraphPattern::Graph` arm; all other arms inherit the current value.
-    current_graph: Option<NamedNode>,
+    pub(crate) current_graph: Option<NamedNode>,
 }
 
 impl<'a> Unfolder<'a> {
@@ -863,7 +863,10 @@ impl<'a> Unfolder<'a> {
 /// * `active = Some(g)` — GRAPH <g> clause:
 ///   accept only triples where a constant graph map equals `g`. Column/template
 ///   graph maps are treated as non-matching (conservative — never admits wrong rows).
-fn graph_maps_match(active: Option<&NamedNode>, graphs: &[sf_core::ir::TermMap]) -> bool {
+pub(crate) fn graph_maps_match(
+    active: Option<&NamedNode>,
+    graphs: &[sf_core::ir::TermMap],
+) -> bool {
     // R2RML §6.1: `rr:defaultGraph` is a legal constant graph map that explicitly
     // places triples in the default graph.  It is stored in the IR as a NamedNode
     // with this IRI; treat it the same as an absent graph map (i.e. default-graph).

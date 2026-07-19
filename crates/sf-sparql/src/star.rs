@@ -1446,32 +1446,41 @@ pub fn all_component_var_names(env: &StarEnv) -> HashSet<String> {
 /// UNSOUND here (an EMPIRICALLY CONFIRMED SQL-emission crash, not a
 /// hypothetical) and what the guard does instead.
 ///
-/// **Deeper, CONFIRMED-reachable gap (not closed by this recursion even with
-/// the guard passing, reported to the team lead as a new finding)**: when the
-/// composed variable itself CROSSES the SubPlan boundary — i.e. it is one of
-/// the inner sub-SELECT's own declared `vars` (so it participates in the
-/// outer query), but its component vars are NOT (they are synthetic, never
-/// user-selected) — the gap is NOT here at all. `iq::lower::lower_as_subplan`
-/// builds the outer branch's binding for that variable by remapping ONLY
-/// `vars` (the SPARQL-declared projected names) through the derived table's
+/// **Deeper cross-boundary gap — FIXED (F4a)**: when the composed variable
+/// itself CROSSES the SubPlan boundary — i.e. it is one of the inner
+/// sub-SELECT's own declared `vars` (so it participates in the outer query),
+/// but its component vars are NOT (they are synthetic, never user-selected)
+/// — the gap was NOT here at all. `iq::lower::lower_as_subplan` used to build
+/// the outer branch's binding for that variable by remapping ONLY `vars`
+/// (the SPARQL-declared projected names) through the derived table's
 /// columns; the component vars, though kept alive INSIDE the inner branch by
-/// `extra_keep`, are never among `vars` and so never reach the outer branch
-/// AT ALL — no raw SQL column carries them across, and no recursion run
-/// AFTER `lower_as_subplan` (which has already frozen the outer remap) can
-/// retroactively fix that. Empirically confirmed: `SELECT ?t ?friend WHERE {
-/// ?p ex:knows ?friend . { SELECT DISTINCT ?t WHERE { ?r rdf:reifies ?t } } }`
-/// against the `differential_star.rs` CENSUS fixture lowers to an outer
-/// branch whose `bindings["t"]` is still the RAW (pre-composition) template
-/// def. A real fix needs `lower_as_subplan` itself to be `StarEnv`-aware —
-/// build each `vars` entry's `ComposedTriple` from the ARM's own bindings
-/// (which DO have the components) before remapping, reusing
-/// `remap_termdef`'s already-present-but-currently-dead `TermDef::
-/// ComposedTriple` arm (its own doc comment already anticipates exactly
-/// this: "not reachable in practice... after SubPlan pooling has already
-/// run"). That means threading `&StarEnv` alongside `extra_keep` through the
+/// `extra_keep`, were never among `vars` and so never reached the outer
+/// branch AT ALL — no raw SQL column carried them across, and no recursion
+/// run AFTER `lower_as_subplan` (which had already frozen the outer remap)
+/// could retroactively fix that. Empirically confirmed (before the fix):
+/// `SELECT ?t ?friend WHERE { ?p ex:knows ?friend . { SELECT DISTINCT ?t
+/// WHERE { ?r rdf:reifies ?t } } }` against the `differential_star.rs`
+/// CENSUS fixture lowered to an outer branch whose `bindings["t"]` was still
+/// the RAW (pre-composition) template def — and, once the OUTER top-level
+/// `apply_composed_bindings` pass here ALSO (redundantly, unguarded)
+/// recomposed `?t` INSIDE the now-mutated inner SubPlan branch, the
+/// EARLIER-frozen outer positional references desynced from the
+/// (unrelatedly) changed derived-table shape, crashing at SQL execution with
+/// "no such column" — not merely a wrong answer.
+///
+/// Fixed by making `lower_as_subplan` itself `StarEnv`-aware: it now builds
+/// each `vars` entry's `ComposedTriple` from the ARM's own bindings (which DO
+/// have the components, in the SAME inner scope) BEFORE remapping, reusing
+/// `remap_termdef`'s `TermDef::ComposedTriple` arm (see its own doc comment)
+/// to remap subject/predicate/object each to their own derived-table
+/// position — the SAME single-pass `arm_projections` every other var already
+/// uses, so there is no later, out-of-sync mutation to desync from.
+/// `&StarEnv` is threaded alongside `extra_keep` through the
 /// `lower`/`lower_spine`/`lower_node`/`lower_aggregation`/`lower_as_subplan`
-/// chain — materially bigger than this recursion, out of this fix's scope;
-/// flagged for a follow-up decision rather than attempted silently.
+/// chain (`iq/lower.rs`). This function's own recursion into `subplan_joins`
+/// (above) and [`apply_composed_bindings_checked`]'s guard are UNCHANGED and
+/// stay in place as defense — they simply become no-ops for a variable
+/// `lower_as_subplan` already composed correctly.
 pub fn apply_composed_bindings(branches: &mut [Branch], env: &StarEnv) {
     for branch in branches {
         apply_to_one_branch(branch, env);
@@ -1596,7 +1605,7 @@ fn apply_to_one_branch(branch: &mut Branch, env: &StarEnv) {
 /// normal, branch-local absence; [`rewrite_union`]'s check only rejects a
 /// variable BOTH arms mention but disagree on — a variable only one arm
 /// binds at all is ordinary SPARQL UNION behavior).
-fn composed_term_def(
+pub(crate) fn composed_term_def(
     var: &Variable,
     env: &StarEnv,
     bindings: &BTreeMap<String, TermDef>,

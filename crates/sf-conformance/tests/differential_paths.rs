@@ -293,6 +293,116 @@ INSERT INTO qe VALUES (2, 1);
     assert!(n > 0, "the composite closure must return pairs");
 }
 
+// --- Nullable object-column fixture — R2RML §11: a NULL-valued referenced
+// column means NO triple is generated for that row at all (matching what the
+// non-path `atom()` triple-pattern emission already enforces via its
+// `obj_null_guard`, `unfold.rs`). Row 2's `friend_id` is NULL, so person 2
+// asserts NO `ex:knows` edge; only 1->2 and 3->1 are real. A missing NULL
+// guard in `hop_sql` lets the NULL leak into the hop relation as a phantom
+// `(2, NULL)` one-hop pair, which a recursive closure then chains through
+// transitively (`(1, NULL)` at depth 2, `(3, NULL)` at depth 3). `label` is a
+// NOT NULL column joined on the path's SUBJECT (`?p`) — never NULL — so the
+// joined test still forces ADR-0033's `convert_path_branches` derived-table
+// wrapping without the join itself masking the phantom (a join keyed on the
+// path's OBJECT would coincidentally filter NULL out via ordinary SQL
+// equi-join semantics, hiding the bug rather than proving it). `label` is
+// declared as a SEPARATE triples map (`NULLABLE_R2RML_JOINED`, not folded into
+// `<#Knows>`'s own POMs) so the base `NULLABLE_R2RML` mapping stays
+// single-predicate — `p?`'s reflexive enumeration requires that precondition
+// (`graph_is_single_predicate`) and must not 501 on an unrelated added POM. ---
+
+const NULLABLE_SQL: &str = r#"
+CREATE TABLE friend (id INTEGER NOT NULL, friend_id INTEGER, label TEXT NOT NULL);
+INSERT INTO friend VALUES (1, 2, 'Alice');
+INSERT INTO friend VALUES (2, NULL, 'Bob');
+INSERT INTO friend VALUES (3, 1, 'Carol');
+"#;
+
+const NULLABLE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Knows>
+    rr:logicalTable [ rr:tableName "friend" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:knows ; rr:objectMap [ rr:template "http://ex/n/{friend_id}" ] ] .
+"#;
+
+const NULLABLE_R2RML_JOINED: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Knows>
+    rr:logicalTable [ rr:tableName "friend" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:knows ; rr:objectMap [ rr:template "http://ex/n/{friend_id}" ] ] .
+<#Label>
+    rr:logicalTable [ rr:tableName "friend" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:label ; rr:objectMap [ rr:column "label" ] ] .
+"#;
+
+// Row 2's NULL `friend_id` drops that whole virtual triple (R2RML §11) — only
+// the two real edges exist.
+const NULLABLE_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:knows <http://ex/n/2> .
+<http://ex/n/3> ex:knows <http://ex/n/1> .
+"#;
+
+const NULLABLE_TTL_JOINED: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:knows <http://ex/n/2> .
+<http://ex/n/3> ex:knows <http://ex/n/1> .
+<http://ex/n/1> ex:label "Alice" .
+<http://ex/n/2> ex:label "Bob" .
+<http://ex/n/3> ex:label "Carol" .
+"#;
+
+/// `ex:knows+` transitive closure over a nullable object column, standalone.
+/// Correct answer: (1,2) (3,1) (3,1->2 transitively = 3,2) — 3 pairs. A
+/// missing `IS NOT NULL` guard in `hop_sql` phantom-chains through node 2's
+/// NULL row, adding spurious `(_, NULL)` pairs at increasing depth.
+#[test]
+fn transitive_closure_over_nullable_object_column_drops_the_null_row_standalone() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?p ?x WHERE { ?p ex:knows+ ?x }";
+    assert_eq!(
+        assert_differential(NULLABLE_SQL, NULLABLE_R2RML, NULLABLE_TTL, q),
+        3,
+        "(1,2) (3,1) (3,2) — no phantom (_, NULL) pairs"
+    );
+}
+
+/// The same nullable-hop closure JOINED with another pattern on the path's
+/// SUBJECT (forcing ADR-0033's `convert_path_branches` derived-table
+/// wrapping): each of the 3 correct `(p,x)` pairs joins with exactly one
+/// `(p,label)` row, so a phantom `(_, NULL)` pair surviving the join
+/// composition would inflate the count past 3.
+#[test]
+fn transitive_closure_over_nullable_object_column_drops_the_null_row_joined() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?p ?x ?l WHERE { ?p ex:knows+ ?x . ?p ex:label ?l }";
+    assert_eq!(
+        assert_differential(NULLABLE_SQL, NULLABLE_R2RML_JOINED, NULLABLE_TTL_JOINED, q),
+        3,
+        "(1,2,Alice) (3,1,Carol) (3,2,Carol) — no phantom rows"
+    );
+}
+
+/// `p?` ZeroOrOne's reflexive `(x,x)` enumeration reads the SAME raw columns
+/// directly (`reflexive_sql`, not `hop_sql`) — a separate emission path that
+/// needs the identical NULL guard. Without it, node 2's NULL `friend_id`
+/// still contributes a phantom `(NULL,NULL)` reflexive pair (`reflexive_sql`
+/// projects `friend_id` as BOTH `sf_s`/`sf_o` in its second `UNION` half,
+/// regardless of the row's OTHER column). Correct: the hop's 2 real edges (as
+/// pairs) + 3 reflexive pairs (one per real node 1/2/3) = 5.
+#[test]
+fn zero_or_one_path_over_nullable_object_column_has_no_phantom_reflexive_pair() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?p ?x WHERE { ?p ex:knows? ?x }";
+    assert_eq!(
+        assert_differential(NULLABLE_SQL, NULLABLE_R2RML, NULLABLE_TTL, q),
+        5,
+        "(1,2) (3,1) + reflexive (1,1) (2,2) (3,3) — no (NULL,NULL) phantom"
+    );
+}
+
 // --- Deferred shapes stay an explicit 501 (documented, never silently wrong). ---
 
 /// A shape-mismatch fixture: `ex:r`'s subject is in a DIFFERENT node domain

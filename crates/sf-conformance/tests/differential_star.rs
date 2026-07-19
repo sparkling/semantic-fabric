@@ -1107,16 +1107,19 @@ fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
 #[test]
 fn star_pattern_at_property_path_endpoint_tree_now_answers_flat_still_501s() {
     // A DEDICATED fixture, not `CENSUS_R2RML`'s own `#Knows` (`friend_id`, which
-    // is NULLABLE — row 2 leaves it NULL): a PRE-EXISTING, unrelated gap in the
-    // path closure's one-hop relation (`emit::hop_sql`'s `HopExpr::Pred` case
-    // has no `IS NOT NULL` guard on the object column) lets that NULL flow into
-    // the base hop as a phantom `(2, NULL)` pair, which then TRANSITIVELY
-    // poisons every node that can reach it (`1→2→NULL`, `3→1→2→NULL`) —
-    // confirmed live via the raw emitted SQL and pre-existing on the
-    // standalone (non-joined) path path too (`emit_path_branch`, untouched by
-    // ADR-0033): unrelated to join composition, out of this task's scope, and
-    // reported separately rather than fixed here. `#KnowsClean` sidesteps it
-    // with a NOT NULL edge table, same {(1,2),(3,1)} shape as `#Knows`.
+    // is NULLABLE — row 2 leaves it NULL): a PRE-EXISTING gap in the path
+    // closure's one-hop relation (`emit::hop_sql`'s `HopExpr::Pred` case had no
+    // `IS NOT NULL` guard on the object column) let that NULL flow into the base
+    // hop as a phantom `(2, NULL)` pair, which then TRANSITIVELY poisoned every
+    // node that can reach it (`1→2→NULL`, `3→1→2→NULL`) — unrelated to join
+    // composition (pre-existing on the standalone, non-joined path too,
+    // `emit_path_branch`, untouched by ADR-0033), so kept separate from THIS
+    // test's own D6 join-lift concern deliberately. FIXED (F4a): `hop_sql`'s
+    // `HopExpr::Pred` arm and `reflexive_sql` both now guard every
+    // column-valued endpoint (`differential_paths.rs`'s `*_nullable_object_
+    // column_*` tests). `#KnowsClean` is kept as its own NOT NULL fixture
+    // regardless — this test isolates the D6 join-lift question specifically,
+    // same {(1,2),(3,1)} shape as `#Knows`.
     const KNOWS_CLEAN_SQL: &str = r#"
 CREATE TABLE census_row (
     person_id INTEGER PRIMARY KEY,
@@ -1823,4 +1826,67 @@ fn construct_object_position_triple_term_oracle_agrees() {
     );
     let triples = assert_oracle_agrees_construct(CENSUS_SQL, CENSUS_R2RML, &query);
     assert_eq!(triples.len(), 3, "triples={triples:#?}");
+}
+
+// ============================================================================
+// F4a Bug 3 — ADR-0032 D3 cross-boundary gap (confirmed and designed by a
+// prior review pass; see `sf_sparql::star::apply_composed_bindings`'s own doc
+// comment for the full analysis this test proves). When a composed
+// (triple-term) variable is one of a SubPlan's declared `vars` but its
+// component vars (`s_var`/`p_var`/`o_var`) are NOT, `iq::lower::lower_as_subplan`
+// used to freeze the outer positional-column remap from the arm's RAW
+// (pre-composition) binding — projecting the internal
+// `urn:sf-star:pf:...`-shaped proposition-form identity `NamedNode` instead
+// of a native `Term::Triple`. This is TREE-ONLY (`lower_as_subplan` is
+// exclusively tree machinery — flat has no derived-table/positional-column
+// abstraction to lose the components across), so this test drives
+// `translate_with` (tree) directly rather than the shared `diff()` helper
+// (which requires flat/tree parity — not the property being tested here).
+// ============================================================================
+
+/// The team-lead's exact confirmed repro: `?t` is the SubPlan's own declared
+/// `vars` entry (`SELECT DISTINCT ?t`), cross-joined (no shared variable) with
+/// an outer `?p ex:knows ?friend` pattern, and projected. `ex:knows` edges
+/// (row 2's NULL `friend_id` excluded, R2RML §11 / Bug 1 above): (1,2) (3,1)
+/// — 2 rows. Distinct `?t` values: one native quoted triple per census row's
+/// `#PersonAgeAssertion` (3 rows, subjects differ even where ages repeat). No
+/// shared variable between the two sides ⇒ a plain cross product: 2 * 3 = 6
+/// rows, every one of which must carry a genuine `Term::Triple` for `?t`.
+#[test]
+fn composed_var_crossing_subplan_boundary_projects_as_native_triple_term() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t ?friend WHERE {{ \
+           ?p ex:knows ?friend . \
+           {{ SELECT DISTINCT ?t WHERE {{ ?r rdf:reifies ?t }} }} \
+         }}"
+    );
+    let maps = sf_mapping::parse_r2rml(CENSUS_R2RML).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(&query)
+        .expect("query parses");
+    let conn = sqlite::load(CENSUS_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("tree must answer this SubPlan-crossing composed var");
+    let got = run_select(&tree, &conn);
+
+    assert_eq!(
+        got.len(),
+        6,
+        "2 ex:knows edges * 3 distinct ?t values: got={got:#?}"
+    );
+    for row in &got {
+        assert!(
+            matches!(row.get("t"), Some(Term::Triple(_))),
+            "?t crossing the SubPlan boundary must reconstruct as a native Term::Triple, \
+             never the raw internal proposition-form identity IRI: row={row:#?}"
+        );
+    }
+
+    let oracle_rows = oracle_star_bag(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert!(
+        oracle::solutions_bag_eq(&got, &oracle_rows),
+        "engine vs decoded-graph oracle divergence:\n engine={got:#?}\n oracle={oracle_rows:#?}"
+    );
 }

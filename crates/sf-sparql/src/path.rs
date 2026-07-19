@@ -265,6 +265,17 @@ impl<'a> Unfolder<'a> {
                 ));
             }
             for pom in &tm.predicate_object_maps {
+                // Same graph filter as `resolve_pred_hop` (R2RML §4.6 POM-overrides-
+                // subject-map precedence): a POM outside the active GRAPH context
+                // must not contribute to the `!p` complement enumeration either.
+                let eff_graphs = if pom.graphs.is_empty() {
+                    &tm.subject.graphs
+                } else {
+                    &pom.graphs
+                };
+                if !crate::unfold::graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                    continue;
+                }
                 for pm in &pom.predicates {
                     let q = match pm {
                         TermMap::Constant(Term::NamedNode(q)) => q.as_str().to_owned(),
@@ -328,6 +339,21 @@ impl<'a> Unfolder<'a> {
         let mut found: Option<CompiledHop> = None;
         for tm in self.maps {
             for pom in &tm.predicate_object_maps {
+                // Effective graph: POM overrides subject map (R2RML §4.6) — mirrors
+                // `Unfolder::pattern_branches`'s identical check for ordinary triples
+                // (`unfold.rs`). A POM whose triples live in a graph other than the
+                // active `GRAPH <g>` (or the default graph) can never contribute a
+                // hop here — without this, a property path silently ignored GRAPH
+                // entirely (it is the ONLY hop-compilation entry point that read raw
+                // mapping data without consulting `current_graph`).
+                let eff_graphs = if pom.graphs.is_empty() {
+                    &tm.subject.graphs
+                } else {
+                    &pom.graphs
+                };
+                if !crate::unfold::graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                    continue;
+                }
                 let produces = pom.predicates.iter().any(|pm| {
                     matches!(pm, TermMap::Constant(Term::NamedNode(q)) if q.as_str() == pred_iri)
                 });
