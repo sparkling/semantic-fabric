@@ -2,15 +2,31 @@
 //! assertions (no DB, no mapping) — the SQL-level, cross-mapping behavior
 //! (reifies join matching real data, tree/flat parity, the locked boundaries)
 //! is covered by `sf-conformance/tests/differential_star.rs`.
-//! `use super::*` re-uses the parent module's rewrite functions (all
-//! private except the two `pub` entry points) plus its spargebra imports.
+//! Ledger F3 split `star.rs` into the `star/` tree this file now sits
+//! alongside — each sibling's `pub(super)`-visible items are glob-imported
+//! below (a per-module `use super::x::*;` in place of the old single
+//! `use super::*;`, which relied on everything living in one file); the
+//! spargebra AST types the rewrite functions themselves operate on are
+//! imported directly, matching what `star.rs`'s own top level used to bring
+//! into scope for this file via that glob.
 
-use super::*;
+use spargebra::algebra::{Expression, Function, GraphPattern};
+use spargebra::term::{
+    GroundTerm, GroundTriple, NamedNodePattern, TermPattern, TriplePattern, Variable,
+};
+
+use super::env::*;
+use super::expr::*;
+use super::top_level::*;
+use super::util::*;
+use super::walk::*;
+
 use oxrdf::{Literal, NamedNode as OxNamedNode};
 use spargebra::term::BlankNode;
 
-use crate::iq::{ColRef, SqlCond, SubPlanJoin};
-use crate::{Plan, PlanForm};
+use crate::iq::{Branch, ColRef, SqlCond, SubPlanJoin, TermDef};
+use crate::unfold::RDF_TYPE;
+use crate::{Error, Plan, PlanForm};
 use sf_core::ir::{TermMap, TermSpec};
 use sf_sql::Dialect;
 
