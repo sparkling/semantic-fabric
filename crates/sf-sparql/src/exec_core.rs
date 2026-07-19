@@ -20,7 +20,7 @@ use oxsdatatypes::Decimal;
 use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::{TermMap, TermType};
 use sf_core::{Literal, Row, Term, Triple};
-use sf_sql::{BranchStream, Dialect, SqlBackend};
+use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 use spargebra::algebra::{Expression, Function};
 
 use crate::emit::{self, ColumnCatalog};
@@ -185,46 +185,88 @@ where
             .open_branch(&e.sql, &e.params)
             .await
             .map_err(map_sql_err)?;
-        while let Some(t) = s.next_row().await.map_err(map_sql_err)? {
-            let raw = RawRow {
-                values: &t.values,
-                codes: &t.codes,
-                index: &col_index,
+        // Buffer -> parallel term-gen -> emit-in-order (ADR-0006 M4 wave-2 batch
+        // restructure): pull a bounded batch of raw rows off the cursor,
+        // reconstruct their bound terms (possibly in parallel, see
+        // `reconstruct_batch`), then run the SAME per-row DISTINCT / ORDER BY /
+        // OFFSET/LIMIT / sink logic sequentially over the batch, in the original
+        // row order — so this is behaviorally identical to the old one-row-at-a-
+        // time loop, just with term-gen's CPU work batched. `first_batch` ramps
+        // the very first fill down to `TERM_GEN_FIRST_BATCH_SIZE` so a branch
+        // with many rows still yields its first result quickly (the streaming
+        // invariant), then grows to the full `TERM_GEN_BATCH_SIZE` for throughput.
+        let mut first_batch = true;
+        'branch_rows: loop {
+            let target = if first_batch {
+                TERM_GEN_FIRST_BATCH_SIZE
+            } else {
+                TERM_GEN_BATCH_SIZE
             };
-            // Reconstruct first: DISTINCT needs the projected terms, and dedup must
-            // precede OFFSET/LIMIT (SPARQL order).
-            let bindings = reconstruct(branch, &raw)?;
-            if multi {
-                if let Some(vars) = &distinct_vars {
-                    let key: Vec<Option<Term>> =
-                        vars.iter().map(|v| bindings.get(v).cloned()).collect();
-                    if !seen_tuples.insert(key) {
-                        continue; // duplicate projected solution
-                    }
+            let mut raw_batch: Vec<RawTuple> = Vec::with_capacity(target);
+            while raw_batch.len() < target {
+                match s.next_row().await.map_err(map_sql_err)? {
+                    Some(t) => raw_batch.push(t),
+                    None => break,
                 }
             }
-            // ORDER BY (any branch count): defer slicing — buffer for the global
-            // type-aware sort after every row (OFFSET/LIMIT applied after the sort).
-            if ordered {
-                let bindings = inject_order_expr_keys(ctx.order, bindings);
-                buffer.push((bi, bindings));
-                continue;
+            if raw_batch.is_empty() {
+                break;
             }
-            // Streaming OFFSET/LIMIT only when SQL didn't apply them (a multi-branch
-            // bag-union; a single unordered branch sliced in SQL).
-            if multi {
-                if seen < ctx.offset {
-                    seen += 1;
+            let exhausted = raw_batch.len() < target;
+            first_batch = false;
+            // Reconstruct first: DISTINCT needs the projected terms, and dedup must
+            // precede OFFSET/LIMIT (SPARQL order). `raw_batch`'s raw SQL lexical
+            // values are dropped HERE, right after `reconstruct_batch` has consumed
+            // them — nothing downstream (DISTINCT/ORDER BY/OFFSET/LIMIT/sink) needs
+            // them again, only the reconstructed terms, so there is no reason to
+            // keep `raw_batch` alive for the whole sink loop below. NOTE (measured,
+            // not assumed): this does NOT move `sf-bench`'s constant-memory peak —
+            // profiling found the peak is reached DURING `reconstruct_batch`'s own
+            // construction (raw_batch and the growing reconstructed batch are both
+            // live then regardless), not after it returns, and is dominated by
+            // `BTreeMap<String, Term>`'s per-node overhead on the many small
+            // (1-3-entry) per-row binding maps live at once — see
+            // `TERM_GEN_BATCH_SIZE`'s doc comment. Kept anyway as unambiguously
+            // correct hygiene, not as the memory fix.
+            let reconstructed = reconstruct_batch(branch, &raw_batch, &col_index);
+            drop(raw_batch);
+            for bindings in reconstructed {
+                let bindings = bindings?;
+                if multi {
+                    if let Some(vars) = &distinct_vars {
+                        let key: Vec<Option<Term>> =
+                            vars.iter().map(|v| bindings.get(v).cloned()).collect();
+                        if !seen_tuples.insert(key) {
+                            continue; // duplicate projected solution
+                        }
+                    }
+                }
+                // ORDER BY (any branch count): defer slicing — buffer for the global
+                // type-aware sort after every row (OFFSET/LIMIT applied after the sort).
+                if ordered {
+                    let bindings = inject_order_expr_keys(ctx.order, bindings);
+                    buffer.push((bi, bindings));
                     continue;
                 }
-                if let Some(limit) = ctx.limit {
-                    if emitted >= limit {
-                        break;
+                // Streaming OFFSET/LIMIT only when SQL didn't apply them (a multi-branch
+                // bag-union; a single unordered branch sliced in SQL).
+                if multi {
+                    if seen < ctx.offset {
+                        seen += 1;
+                        continue;
+                    }
+                    if let Some(limit) = ctx.limit {
+                        if emitted >= limit {
+                            break 'branch_rows;
+                        }
                     }
                 }
+                emitted += 1;
+                sink(branch, &bindings).await?;
             }
-            emitted += 1;
-            sink(branch, &bindings).await?;
+            if exhausted {
+                break;
+            }
         }
     }
     // The buffered bag-union ORDER BY: stable-sort by the keys, then OFFSET/LIMIT.
@@ -757,6 +799,127 @@ pub(crate) fn reconstruct(branch: &Branch, raw: &RawRow<'_>) -> Result<BTreeMap<
         }
     }
     Ok(out)
+}
+
+/// [`run_branches`]'s steady-state term-gen batch size: the number of raw rows
+/// buffered off the cursor before [`reconstruct_batch`] runs (and, above
+/// [`TERM_GEN_MIN_PARALLEL_ROWS`], parallelizes) term generation and the batch is
+/// emitted downstream in order. Bounds the extra memory to O(batch), never
+/// O(result) (the bounded-memory invariant, ADR-0006): a batch buffer IS real
+/// memory, but a FIXED amount independent of source scale — `sf-bench`'s
+/// `engine_memory_is_batch_bounded_past_the_batch_size_threshold` confirms the
+/// peak plateaus (near-identical) once a single branch's row count exceeds
+/// this, at 20k vs 80k rows.
+///
+/// **Re-measured, twice, not the ADR's original "1000 rows/task" figure.**
+/// ADR-0006's M4 wave-2 note measured per-row rayon dispatch (~10ns/row, one
+/// task per row) ~2x SLOWER than inline, and a "1000 rows/task chunked
+/// dispatch" ~6x FASTER — but that number came from a ONE-SHOT `par_chunks`
+/// call over a whole dataset at once. This loop's streaming shape instead
+/// issues one FRESH `par_chunks` call PER BATCH (a cursor can't be buffered
+/// whole without breaking the streaming invariant below), and re-measuring at
+/// THAT granularity (`sf-bench`'s `micro_term_gen_batch`, ~100k synthetic
+/// `rr:template` rows) found 1000-row batches ~1.8x SLOWER than plain inline —
+/// the fixed per-call dispatch cost (thread wake/join) dominates a batch this
+/// small the same way it dominated a single row; throughput alone would want
+/// 10 000+ (a measured, comfortably-margined ~1.6-1.7x faster there). But a
+/// SECOND, independent constraint caps it much lower: each buffered-and-
+/// reconstructed row costs far more than its raw bytes (`BTreeMap<String,
+/// Term>`'s per-node overhead dominates for the 1-3-entry maps a typical
+/// branch binds, not the term data itself), so `sf-bench`'s own
+/// `constant_memory` peak-heap invariant test — which THIS same restructure
+/// must keep passing — measured the mem_ratio blowing well past its `4.0`
+/// tolerance at 5000 (5.44) and 10 000 (9.05), while 3000 stayed comfortably
+/// under it (~3.4, vs 3500's fragile ~3.9). 3000 is therefore a
+/// memory-constrained choice, not a throughput-optimal one — see
+/// [`reconstruct_batch`] for why a batch this size is still chunked FURTHER
+/// within each dispatch, not handed to rayon as a single task, and the ADR-0006
+/// correction note for the open question this leaves for a future wave (a
+/// leaner per-row binding representation would raise this ceiling).
+const TERM_GEN_BATCH_SIZE: usize = 3_000;
+
+/// The size of ONLY the first batch pulled from a branch's cursor (every batch
+/// after it uses the full [`TERM_GEN_BATCH_SIZE`]). Filling a full batch before
+/// the first `sink` call would make a branch with many rows hold up the
+/// caller's first streamed result — the streaming invariant (ADR-0006: "first
+/// result must not wait for the whole result set") bounds added latency by the
+/// batch size, so the first batch stays small regardless of how large the
+/// steady-state batch is. 64 keeps first-result latency in the same order of
+/// magnitude as the old per-row loop (measured in `sf-bench`'s `obda_latency`
+/// `first_result_µs`) — well under [`TERM_GEN_MIN_PARALLEL_ROWS`], so the first
+/// batch is always reconstructed sequentially (no dispatch overhead on the
+/// latency-critical path either).
+const TERM_GEN_FIRST_BATCH_SIZE: usize = 64;
+
+/// Below this many rows, [`reconstruct_batch`] reconstructs the WHOLE batch
+/// sequentially — no rayon dispatch at all. A separate, smaller concern from
+/// [`TERM_GEN_BATCH_SIZE`]: this is the floor on whether a batch is worth
+/// dispatching to the pool AT ALL (a fresh `par_chunks` call has a real, mostly
+/// fixed cost — thread wake/join — that a small batch's own work cannot repay);
+/// [`reconstruct_batch`]'s internal chunk size is a separate, much smaller floor
+/// governing fan-out WITHIN an already-dispatched batch. Always true of
+/// [`TERM_GEN_FIRST_BATCH_SIZE`] (64) and of a stream's final partial batch when
+/// it undershoots this. MUST stay at or below [`TERM_GEN_BATCH_SIZE`], or a
+/// full-size batch would never parallelize at all — 2000 sits just under it
+/// (the `micro_term_gen_batch` sweep found 2000 alone still a throughput wash,
+/// but the full 3000-row batch this gates comes out ahead — see that bench's
+/// own numbers for the batch-size-vs-dispatch-count tradeoff).
+const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
+
+/// The floor on `par_chunks`' chunk size WITHIN one already-dispatched batch
+/// (see [`TERM_GEN_MIN_PARALLEL_ROWS`] for the separate whole-batch gate). Once a
+/// batch is worth dispatching at all, a single `par_chunks` call's per-call
+/// overhead is already paid — so this floor only needs to keep individual
+/// chunks well above the measured-slower per-row granularity, not repeat
+/// [`TERM_GEN_MIN_PARALLEL_ROWS`]'s much larger bar.
+const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
+
+/// Reconstruct every row of `batch` against `branch`, in ORIGINAL row order —
+/// [`run_branches`]'s buffer -> parallel-map -> emit-in-order step. Below
+/// [`TERM_GEN_MIN_PARALLEL_ROWS`] this is a plain sequential map (a fresh
+/// `par_chunks` dispatch's own overhead would dominate a batch this small — see
+/// its doc comment for the measured break-even). At or above it, `batch` is
+/// split into `rayon::current_num_threads()`-many chunks (floored at
+/// [`TERM_GEN_MIN_CHUNK_ROWS`]) via `par_chunks`, and each chunk is
+/// reconstructed sequentially by ONE rayon task — chunks run in parallel, but no
+/// task is ever a single row (the measured-slower shape this restructure
+/// replaces). `rayon`'s own lazily-initialized global pool is used directly (no
+/// hand-rolled `ThreadPool`, never built per call) — separate from `tokio` by
+/// construction (ADR-0006 pool separation), since it is a wholly different set
+/// of OS threads.
+///
+/// Ordering: `par_chunks` is an `IndexedParallelIterator`, so mapping each chunk
+/// to its own `Vec` and collecting preserves chunk order exactly; flattening
+/// those chunk-`Vec`s then reproduces the sequential per-row order with no extra
+/// bookkeeping — indexed chunks are the strict-order-preservation design this
+/// restructure requires (downstream DISTINCT/ORDER BY/OFFSET/LIMIT all assume
+/// original row order).
+fn reconstruct_batch(
+    branch: &Branch,
+    batch: &[RawTuple],
+    col_index: &ColIndex<'_>,
+) -> Vec<Result<BTreeMap<String, Term>>> {
+    let one_row = |t: &RawTuple| {
+        let raw = RawRow {
+            values: &t.values,
+            codes: &t.codes,
+            index: col_index,
+        };
+        reconstruct(branch, &raw)
+    };
+    if batch.len() < TERM_GEN_MIN_PARALLEL_ROWS {
+        return batch.iter().map(one_row).collect();
+    }
+    use rayon::prelude::*;
+    let chunk_size =
+        (batch.len() / rayon::current_num_threads().max(1)).max(TERM_GEN_MIN_CHUNK_ROWS);
+    batch
+        .par_chunks(chunk_size)
+        .map(move |chunk| chunk.iter().map(one_row).collect::<Vec<_>>())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// SPARQL term order extended to a total order for sorting: blank node < IRI <
@@ -1956,5 +2119,207 @@ mod triple_function_tests {
             ],
         );
         assert_eq!(eval_expr(&illegal, &b), None);
+    }
+}
+
+// --- ADR-0006 M4 wave-2 batch restructure correctness gates ------------------
+
+#[cfg(test)]
+mod batch_reconstruct_tests {
+    //! `reconstruct_batch` must reproduce the exact per-row sequential
+    //! [`reconstruct`] output, in the exact original row order, whether the
+    //! batch is small enough to stay sequential or large enough to fan out to
+    //! rayon (`TERM_GEN_MIN_PARALLEL_ROWS`) — the "safest is strict order
+    //! preservation via indexed chunks" design note on `reconstruct_batch`.
+    use super::*;
+    use sf_core::ir::TermSpec;
+
+    /// A branch with ONE bound variable `?v`, read from column `"val"` of scan
+    /// alias 0 as a plain literal — real per-row reconstruction work (unlike
+    /// `TermDef::Const`, which never touches the row).
+    fn branch_with_val_binding() -> Branch {
+        let mut b = Branch::empty();
+        b.bindings.insert(
+            "v".to_owned(),
+            TermDef::Derived {
+                term_map: TermMap::Column("val".into(), TermSpec::plain_literal()),
+                alias: 0,
+            },
+        );
+        b
+    }
+
+    /// `n` raw rows, column `"val"` set to the row's index as text — each row
+    /// must reconstruct to a distinct term, so a reordering or drop is visible.
+    fn raw_rows(n: usize) -> Vec<RawTuple> {
+        (0..n)
+            .map(|i| RawTuple {
+                values: vec![Some(i.to_string())],
+                codes: vec![None],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn batched_reconstruction_matches_sequential_reference_in_order() {
+        let branch = branch_with_val_binding();
+        let schema = vec![ColRef::new(0, "val")];
+        let col_index = build_col_index(&schema);
+
+        // Spans: below TERM_GEN_MIN_PARALLEL_ROWS (the whole-batch sequential
+        // path), astride it (the smallest dispatch that goes parallel at all),
+        // exactly one full steady-state batch, and several batches' worth — what
+        // `run_branches` actually issues as consecutive `reconstruct_batch` calls
+        // for one long branch stream (mirrored below via
+        // `.chunks(TERM_GEN_BATCH_SIZE)`).
+        for n in [
+            1,
+            50,
+            TERM_GEN_MIN_CHUNK_ROWS,
+            TERM_GEN_MIN_PARALLEL_ROWS - 1,
+            TERM_GEN_MIN_PARALLEL_ROWS,
+            TERM_GEN_BATCH_SIZE,
+            2 * TERM_GEN_BATCH_SIZE + 137,
+        ] {
+            let rows = raw_rows(n);
+            let sequential: Vec<Option<Term>> = rows
+                .iter()
+                .map(|t| {
+                    let raw = RawRow {
+                        values: &t.values,
+                        codes: &t.codes,
+                        index: &col_index,
+                    };
+                    reconstruct(&branch, &raw)
+                        .expect("reference reconstruct")
+                        .get("v")
+                        .cloned()
+                })
+                .collect();
+
+            let mut batched: Vec<Option<Term>> = Vec::with_capacity(n);
+            for chunk in rows.chunks(TERM_GEN_BATCH_SIZE) {
+                for bindings in reconstruct_batch(&branch, chunk, &col_index) {
+                    batched.push(bindings.expect("batch reconstruct").get("v").cloned());
+                }
+            }
+            assert_eq!(
+                sequential, batched,
+                "reconstruct_batch must match sequential reconstruct, in order, at n={n}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod batch_loop_tests {
+    //! `run_branches`' buffer -> parallel-map -> emit-in-order loop (batch-fill,
+    //! the `first_batch` ramp, batch-exhaustion detection) end to end through
+    //! [`select`], over a stream spanning many batches — a plan-level mock
+    //! backend, not a real SQL source, so this is fast and deterministic.
+    use super::*;
+    use crate::iq::Scan;
+    use sf_core::ir::{LogicalSource, TermSpec};
+
+    struct MockBackend {
+        rows: Vec<RawTuple>,
+    }
+    struct MockStream {
+        iter: std::vec::IntoIter<RawTuple>,
+    }
+    impl BranchStream for MockStream {
+        async fn next_row(&mut self) -> sf_sql::Result<Option<RawTuple>> {
+            Ok(self.iter.next())
+        }
+    }
+    impl SqlBackend for MockBackend {
+        type Stream<'s>
+            = MockStream
+        where
+            Self: 's;
+        async fn column_names(&mut self, _probe: &str) -> sf_sql::Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+        async fn open_branch(
+            &mut self,
+            _sql: &str,
+            _params: &[String],
+        ) -> sf_sql::Result<MockStream> {
+            Ok(MockStream {
+                iter: std::mem::take(&mut self.rows).into_iter(),
+            })
+        }
+    }
+
+    /// ORDER BY over a stream spanning several `TERM_GEN_BATCH_SIZE` batches
+    /// (plus the small first-batch ramp): rows arrive in STRICTLY REVERSED value
+    /// order, so a correct result requires the plan-wide sort buffer
+    /// (`run_branches`' `buffer`) to have accumulated EVERY row across EVERY
+    /// batch-fill iteration — a bug that reset or truncated it per batch would
+    /// fail this, where a single-batch-sized fixture could not catch it.
+    #[test]
+    fn order_by_spans_multiple_batches_correctly() {
+        let n = 2 * TERM_GEN_BATCH_SIZE + 137;
+        let mut branch = Branch::single(Scan {
+            alias: 0,
+            source: LogicalSource::Table("t".to_owned()),
+        });
+        branch.bindings.insert(
+            "v".to_owned(),
+            TermDef::Derived {
+                term_map: TermMap::Column("val".into(), TermSpec::plain_literal()),
+                alias: 0,
+            },
+        );
+        let plan = Plan {
+            branches: vec![branch],
+            form: PlanForm::Select {
+                vars: vec!["v".to_owned()],
+            },
+            distinct: false,
+            limit: None,
+            offset: 0,
+            order: vec![OrderKey {
+                var: "v".to_owned(),
+                descending: false,
+                expr: None,
+            }],
+            rust_group: None,
+            dialect: Dialect::Sqlite,
+        };
+        // Reversed, zero-padded so lexical order (plain-literal comparison)
+        // matches numeric order: row k carries the value belonging at sorted
+        // position n-1-k.
+        let rows: Vec<RawTuple> = (0..n)
+            .map(|k| RawTuple {
+                values: vec![Some(format!("{:07}", n - 1 - k))],
+                codes: vec![None],
+            })
+            .collect();
+        let mut backend = MockBackend { rows };
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let sol = rt.block_on(select(&plan, &mut backend)).unwrap();
+
+        assert_eq!(
+            sol.rows.len(),
+            n,
+            "no row dropped/duplicated across batches"
+        );
+        let expected: Vec<String> = (0..n).map(|i| format!("{i:07}")).collect();
+        let actual: Vec<String> = sol
+            .rows
+            .iter()
+            .map(|row| match &row[0] {
+                Some(Term::Literal(l)) => l.value().to_owned(),
+                other => panic!("expected a literal, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "ORDER BY must span every batch, not just within one"
+        );
     }
 }

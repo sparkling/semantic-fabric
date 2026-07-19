@@ -310,3 +310,78 @@ fn engine_memory_is_bounded_mysql() {
 
     assert_bounded("mysql", &rows, &peaks, &firsts);
 }
+
+/// ADR-0006 M4 wave-2 batch restructure: the core O(batch) claim, isolated from
+/// the GTFS/wildcard-query test's branch-size complexity. ONE branch (one
+/// table, one `rr:template` IRI subject + one column-literal predicate) at two
+/// row counts, both comfortably past `sf-sparql::exec_core`'s private
+/// `TERM_GEN_BATCH_SIZE` (not importable here — 20k/80k rows are an order of
+/// magnitude past any value that const is tuned to). Once a branch's row count
+/// exceeds the batch size, engine peak heap is driven ENTIRELY by the batch
+/// buffer, never by how many MORE rows are still to come — so peak at 20k rows
+/// and peak at 80k rows (4x more data) must be (near-)identical, not merely
+/// "within a small ratio" (the GTFS test's looser `4.0` bound exists because
+/// ITS 26 branches don't all cross the batch-size threshold at the same scale
+/// factor — see `engine_memory_is_bounded_under_growing_source`'s own numbers
+/// for that confound; this test is the direct, unconfounded proof).
+#[test]
+fn engine_memory_is_batch_bounded_past_the_batch_size_threshold() {
+    let _guard = serialize_guard();
+    let mut peaks = Vec::new();
+    for &n in &[20_000i64, 80_000] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("single_branch.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ITEM (id INTEGER PRIMARY KEY, val TEXT);
+             PRAGMA synchronous=OFF; PRAGMA journal_mode=MEMORY;",
+        )
+        .unwrap();
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            let mut stmt = tx.prepare("INSERT INTO ITEM VALUES (?1,?2)").unwrap();
+            for i in 0..n {
+                stmt.execute(rusqlite::params![i, format!("v{i}")]).unwrap();
+            }
+            drop(stmt);
+            tx.commit().unwrap();
+        }
+        let maps = sf_mapping::parse_r2rml(
+            r#"
+            @prefix rr: <http://www.w3.org/ns/r2rml#> .
+            @prefix : <http://example.org/diag#> .
+            <#item> a rr:TriplesMap ;
+                rr:logicalTable [ rr:tableName "ITEM" ] ;
+                rr:subjectMap [ rr:template "http://example.org/diag/item/{id}" ] ;
+                rr:predicateObjectMap [ rr:predicate :val ;
+                    rr:objectMap [ rr:column "val" ] ] .
+            "#,
+        )
+        .unwrap();
+        let schemas = vec![sf_sql::introspect::introspect_sqlite(&conn, "ITEM").unwrap()];
+
+        let base = mem::reset_peak();
+        let plan = sf_sparql::parse_and_translate_with(
+            "CONSTRUCT { ?s <http://example.org/diag#val> ?v } WHERE { ?s <http://example.org/diag#val> ?v }",
+            &maps,
+            sf_sql::Dialect::Sqlite,
+            &sf_sparql::Tbox::default(),
+            &schemas,
+        )
+        .unwrap();
+        let mut count = 0u64;
+        sf_sparql::exec::construct(&plan, &conn, |_triple| count += 1).unwrap();
+        let peak = mem::window_peak(base);
+        assert_eq!(count, n as u64, "every generated row must reach the sink");
+        eprintln!("  [single_branch_batch_bound] n={n} peak_engine_B={peak}");
+        peaks.push(peak);
+    }
+    let (small, large) = (peaks[0], peaks[1]);
+    let ratio = large.max(small) as f64 / small.min(large).max(1) as f64;
+    assert!(
+        ratio <= 1.15,
+        "past the batch-size threshold, peak heap must be (near-)identical \
+         regardless of how many more rows remain — 4x more data (20k -> 80k \
+         rows) moved peak by {ratio:.3}x (peaks={peaks:?} bytes)"
+    );
+}
