@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-18
-updated: 2026-07-18
+updated: 2026-07-19
 tags: [rdf-star, rdf-1.2, sparql-1.2, soundness, completeness, native-reification, query-rewrite, mapping-model]
 supersedes: []
 depends-on:
@@ -42,6 +42,23 @@ uniform-composedness laws (union-mixed / VALUES-mixed → explicit 501s), the
 `var_col` template-bound-component equality residual, and the in-code deferred
 notes (subplan-joins recursion, EXISTS-only composed vars) — all carried in the
 follow-up ledger.
+
+**Update (2026-07-19, Run 4 Fix-1) — the D1 proposition-id construction was
+NOT injective as first implemented; fixed.** The A3 general-mapping oracle
+investigation showed `urn:sf-star:pf:` ids were built from predicate slug +
+raw column VALUES, dropping template literal prefixes and term kind — so two
+differently-templated quoted maps sharing a predicate could mint the SAME id
+for genuinely different triples (cross-source reifier mis-attribution, decoder
+rejection, and a flat/tree divergence — all reproduced, then fixed). The id is
+now the full rendered lexical form of each component (template segments
+spliced verbatim, constants percent-encoded, compile-time kind/datatype/lang
+tags), restoring §5 injective-`IT` co-identity BY CONSTRUCTION
+(`sf-mapping/src/r2rml/star/ids.rs`). The co-identity claim itself was
+re-verified against the oracle for general mappings (two sources, same shape:
+one proposition, two per-declaration reifiers). Same investigation surfaced a
+SEPARATE, star-amplified but engine-general set-semantics gap (duplicate rows
+/ cross-map same-triple over-multiplicity vs the oracle) — that is ADR-0034's
+charter, red-phase cells carried in `differential_star.rs` under `#[ignore]`.
 
 ## Context and Problem Statement
 
