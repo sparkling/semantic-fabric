@@ -10,7 +10,9 @@
 
 use std::collections::HashSet;
 
-use crate::iq::{Branch, CmpOp, OptJoin, SqlCond, TermDef};
+use sf_core::ir::Segment;
+
+use crate::iq::{Branch, CmpOp, ColRef, OptJoin, SqlCond, TermDef};
 use crate::unify::{filter_cond, unify, Unify};
 use crate::{Error, Result};
 
@@ -431,6 +433,33 @@ pub(crate) fn null_safe(c: SqlCond, left_nullable: bool) -> SqlCond {
             SqlCond::Cmp(col.clone(), CmpOp::Eq, val),
             SqlCond::IsNull(col),
         ]),
+        // template = template (Run 4 Wave B3's `SqlCond::TemplateEq` fallback,
+        // Run 4 B-repair FIX 1): R1's null-compatibility disjunct, generalized
+        // to a template's WHOLE column set. R2RML §11 (`sf_core::ir::Template::
+        // expand`): a template's constructed term is unbound the moment ANY ONE
+        // of its referenced columns is NULL — so EITHER side being unbound (any
+        // single column of that side NULL) must admit the row, the same
+        // "unbound is compatible with anything" rule the `ColEq`/`Cmp` arms
+        // above apply to their one column. Before this fix, `TemplateEq` fell
+        // through to the `other => other` catch-all below, silently dropping
+        // R1 whenever `left_nullable` — a left row whose ?v was legitimately
+        // UNBOUND (a prior OPTIONAL never matched) then failed to join a
+        // compatible right row instead of admitting it.
+        SqlCond::TemplateEq(sx, a1, sy, a2, encode) => {
+            let eq = SqlCond::TemplateEq(sx.clone(), a1, sy.clone(), a2, encode);
+            let mut disjuncts = vec![eq];
+            for seg in &sx {
+                if let Segment::Column(c) = seg {
+                    disjuncts.push(SqlCond::IsNull(ColRef::new(a1, c.clone())));
+                }
+            }
+            for seg in &sy {
+                if let Segment::Column(c) = seg {
+                    disjuncts.push(SqlCond::IsNull(ColRef::new(a2, c.clone())));
+                }
+            }
+            SqlCond::Or(disjuncts)
+        }
         other => other,
     }
 }

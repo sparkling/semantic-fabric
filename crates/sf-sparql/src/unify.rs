@@ -264,7 +264,18 @@ fn template_eq_or_unsupported(
         && lexical_eq_is_term_eq(spec1)
         && lexical_eq_is_term_eq(spec2)
     {
-        Unify::Sat(vec![SqlCond::TemplateEq(sx.to_vec(), a1, sy.to_vec(), a2)])
+        // Run 4 B-repair FIX 2: `term_type` is checked equal just above, so
+        // `spec1`/`spec2` are either BOTH `Iri` or BOTH `Literal` (the only two
+        // classes `lexical_eq_is_term_eq` admits) — one flag correctly covers
+        // both sides. Only an IRI template percent-encodes at expansion.
+        let encode_iri = spec1.term_type == TermType::Iri;
+        Unify::Sat(vec![SqlCond::TemplateEq(
+            sx.to_vec(),
+            a1,
+            sy.to_vec(),
+            a2,
+            encode_iri,
+        )])
     } else {
         Unify::Unsupported(why.to_owned())
     }

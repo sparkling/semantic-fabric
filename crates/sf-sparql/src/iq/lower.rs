@@ -1036,15 +1036,18 @@ fn def_reads_opt_alias(def: &TermDef, opt_aliases: &HashSet<usize>) -> bool {
     def.columns().iter().any(|c| opt_aliases.contains(&c.alias))
 }
 
-/// Whether a term def is PROVABLY `xsd:double`/`xsd:float` from its R2RML-declared
-/// type (a `TermMap::Column`/`TermMap::Template`'s `TermSpec.datatype`) — the AVG
-/// exact-decimal routing gate's negative condition (M3 fix 1): only a PROVEN double
-/// operand may safely stay off the `rust_group` path (SQLite/PostgreSQL's `AVG`
-/// already returns a float there, matching `rust_agg`'s existing double handling).
-/// Every other operand — an explicit `xsd:integer`/`xsd:decimal`, or (the common
-/// case) no explicit `rr:datatype` at all — must route to `rust_group` so
-/// `rust_agg`'s `oxsdatatypes::Decimal` accumulation applies.
-fn operand_is_double(def: &TermDef) -> bool {
+/// Whether a term def's declared `rr:datatype` is a PROVABLY exact-numeric XSD
+/// type — `xsd:integer` or `xsd:decimal` ONLY (the same narrow, no-derived-types
+/// granularity `exec_core::is_xsd_integer` uses at the runtime/`rust_agg` layer,
+/// and `try_sql_group_over_union`'s nested `agg_operand_is_exact_numeric` mirrors
+/// for the pooled-union path). `None` (no explicit `rr:datatype`) is
+/// conservatively NOT exact-numeric — the natural SQL-decltype fallback is
+/// unknowable here without live schema access. The single-branch SUM pushdown
+/// gate's positive condition (Run 4 B-repair FIX 4): only a PROVEN exact-numeric
+/// operand is safe to leave on SQL `SUM` (never `xsd:double`/`xsd:float`,
+/// NaN/Inf-capable, and never an unknown/non-numeric datatype whose lexical form
+/// SQL might coerce differently from XSD).
+fn operand_is_exact_numeric(def: &TermDef) -> bool {
     use sf_core::ir::TermMap;
     let spec = match def {
         TermDef::Derived {
@@ -1055,7 +1058,9 @@ fn operand_is_double(def: &TermDef) -> bool {
     };
     matches!(
         spec.datatype.as_ref().map(sf_core::NamedNode::as_str),
-        Some("http://www.w3.org/2001/XMLSchema#double" | "http://www.w3.org/2001/XMLSchema#float")
+        Some(
+            "http://www.w3.org/2001/XMLSchema#integer" | "http://www.w3.org/2001/XMLSchema#decimal"
+        )
     )
 }
 
@@ -1734,24 +1739,54 @@ fn lower_aggregation(
         // M3 fix 1: SQL's AVG always returns a lossy float (SQLite REAL / any
         // dialect's floating aggregation), even for an xsd:integer/xsd:decimal
         // operand — a precision loss `rust_agg`'s `oxsdatatypes::Decimal`
-        // accumulation avoids (exec_core.rs). Route AVG to the Rust group path
-        // whenever the operand is NOT PROVABLY xsd:double/xsd:float: an explicit
-        // non-double `rr:datatype`, or (the common case) no explicit `rr:datatype`
-        // at all, deferring to the natural SQL decltype — mirrors the C.6
-        // reasoning just above ("the mapping's own declared type is a sound,
-        // deterministic proxy", `try_sql_group_over_union`'s doc comment) rather
-        // than threading live schema/decltype access into this stage. SUM/MIN/MAX
-        // are unaffected (SUM doesn't divide; MIN/MAX don't accumulate at all).
-        let avg_needs_exact_decimal = aggs.iter().any(|d| {
-            d.kind == crate::iq::AggKind::Avg
+        // accumulation avoids (exec_core.rs). Originally routed AVG to the Rust
+        // group path only when the operand was NOT PROVABLY xsd:double/xsd:float
+        // (a provably-double operand was believed harmless to leave on SQL AVG,
+        // since xsd:double is f64-imprecise regardless of arithmetic engine).
+        //
+        // Run 4 B-repair (main-loop review): that double exemption was ITSELF
+        // unsound, one call site over from FIX 4's `try_sql_group_over_union`
+        // finding — SQLite's `AVG` CASTs an unparseable lexical form (e.g. a
+        // `'NaN'` xsd:double lexical) to `0.0` instead of propagating it,
+        // exactly the NaN-coercion bug FIX 4 closed for the multi-branch pooled
+        // path. There is NO operand type simultaneously safe for BOTH M3's
+        // precision concern (favors routing exact-numeric operands to
+        // `rust_group`) and this NaN-coercion concern (favors routing double
+        // operands to `rust_group` too) — the intersection is empty, so AVG now
+        // ALWAYS routes to `rust_group` in the single-branch path, regardless of
+        // operand type. `rust_agg`'s own AVG (exec_core.rs) already produces the
+        // correct `xsd:double` result type (and correct NaN propagation) for a
+        // double operand, so this loses no completeness the SQL path had that
+        // `rust_agg` cannot already match — only the (already lossy, now also
+        // unsound) SQL pushdown itself is removed. SUM is UNAFFECTED (it doesn't
+        // divide, so has no precision concern, and SQL SUM of a genuinely
+        // exact-numeric operand is exact — see `sum_operand_is_unsafe_for_sql`
+        // below for its OWN, narrower NaN-coercion gate); MIN/MAX don't
+        // accumulate at all.
+        let avg_present = aggs.iter().any(|d| d.kind == crate::iq::AggKind::Avg);
+
+        // Run 4 B-repair FIX 4 (single-branch SUM twin of the AVG gate just
+        // above, and of `try_sql_group_over_union`'s pooled-path gate): SQL SUM
+        // has NO precision concern for a genuinely exact-numeric operand
+        // (SQLite's SUM stays an exact INTEGER when every input is, only
+        // widening to REAL on overflow), so — UNLIKE AVG — SUM does not need an
+        // unconditional route-away. But it has the SAME NaN/non-numeric-lexical
+        // coercion exposure AVG had: SQLite's SUM ALSO casts an unparseable
+        // lexical form toward `0` instead of erroring. Route SUM to `rust_group`
+        // whenever its operand is NOT provably exact-numeric (`xsd:integer`/
+        // `xsd:decimal` — the same narrow criterion `agg_operand_is_exact_numeric`
+        // uses in `try_sql_group_over_union`), covering both the double case and
+        // the unknown/non-numeric-datatype case.
+        let sum_operand_is_unsafe_for_sql = aggs.iter().any(|d| {
+            d.kind == crate::iq::AggKind::Sum
                 && matches!(&d.arg, Some(AggArg::Var(v)) if inner.iter().any(|b| {
                     b.bindings
                         .get(v.as_ref())
-                        .is_some_and(|def| !operand_is_double(def))
+                        .is_some_and(|def| !operand_is_exact_numeric(def))
                 }))
         });
 
-        if nullable_operand || avg_needs_exact_decimal {
+        if nullable_operand || avg_present || sum_operand_is_unsafe_for_sql {
             spine.force_rust_group = true;
         }
     }
@@ -1962,6 +1997,22 @@ fn try_sql_group_over_union(
                 .count(),
         }
     }
+    /// Run 4 B-repair FIX 4: whether an AVG/SUM operand's declared `rr:datatype`
+    /// is a PROVABLY exact-numeric XSD type — `xsd:integer` or `xsd:decimal`
+    /// ONLY (the same narrow, no-derived-types granularity `exec_core::
+    /// is_xsd_integer` already uses at the runtime/`rust_agg` layer). `None`
+    /// (no explicit `rr:datatype`) is conservatively NOT exact-numeric — the
+    /// natural SQL-decltype fallback is unknowable here without live schema
+    /// access (mirrors this function's own `spec_eq` choice not to introspect).
+    fn agg_operand_is_exact_numeric(spec: &TermSpec) -> bool {
+        matches!(
+            spec.datatype.as_ref().map(sf_core::NamedNode::as_str),
+            Some(
+                "http://www.w3.org/2001/XMLSchema#integer"
+                    | "http://www.w3.org/2001/XMLSchema#decimal"
+            )
+        )
+    }
 
     // The needed variable set: every grouping key + every var-backed aggregate
     // argument (a non-variable aggregate argument, or `COUNT(DISTINCT *)`, bails —
@@ -2010,6 +2061,31 @@ fn try_sql_group_over_union(
         let i = sorted_vars.iter().position(|x| x == v)?;
         if col_count(&shapes[i]) != 1 {
             return None;
+        }
+    }
+    // Run 4 B-repair FIX 4 — the AVG/SUM pushdown numeric gate: pushing AVG/SUM
+    // to SQL lets the DBMS coerce the operand's stored TEXT numerically —
+    // SQLite's AVG/SUM cast an unparseable lexical form (e.g. a `'NaN'`
+    // xsd:double lexical, or any non-numeric-datatype string) toward `0`
+    // instead of erroring the WHOLE aggregate the way SPARQL §11 (and
+    // `rust_agg`'s own `nums.len() < vals.len()` gate, B1) require. Only a
+    // PROVABLY exact-numeric operand (`xsd:integer`/`xsd:decimal` — never
+    // `xsd:double`/`xsd:float`, NaN/Inf-capable, and never an unknown/
+    // non-numeric datatype) is safe to pool; anything else bails to
+    // `RustGroup`, already correct for every one of these shapes (B1 + this
+    // refute pass's own s5a/s5b/s5c/s5d locks).
+    for def in aggs {
+        if !matches!(def.kind, crate::iq::AggKind::Avg | crate::iq::AggKind::Sum) {
+            continue;
+        }
+        if let Some(AggArg::Var(v)) = &def.arg {
+            let i = sorted_vars.iter().position(|x| x.as_str() == v.as_ref())?;
+            let spec = match &shapes[i] {
+                KeyShape::Column(spec) | KeyShape::Template(_, spec) => spec,
+            };
+            if !agg_operand_is_exact_numeric(spec) {
+                return None;
+            }
         }
     }
 
@@ -2808,7 +2884,10 @@ mod tests {
     /// The pushdown counterpart of [`group_by_multi_branch_uses_rust_group`]: the SAME
     /// shape, but both arms declare the IDENTICAL `?o` `TermSpec` — concern #1's gate
     /// passes, so `try_sql_group_over_union` fires: ONE branch, no `RustGroup`, an
-    /// `Aggregation` carrying a `SubPlanJoin` that pools the two arms.
+    /// `Aggregation` carrying a `SubPlanJoin` that pools the two arms. `?o` (the SUM
+    /// operand) is `xsd:integer`-typed — Run 4 B-repair FIX 4's exact-numeric gate
+    /// (`agg_operand_is_exact_numeric`) requires this for AVG/SUM to pool at all; `?s`
+    /// (the grouping key, never an aggregate operand) is untouched, still plain.
     #[test]
     fn group_by_multi_branch_pushes_down_to_sql_when_compatible() {
         use crate::iq::node::{AggArg, AggDef, BindDef};
@@ -2816,15 +2895,23 @@ mod tests {
         use sf_core::ir::{LogicalSource, TermMap, TermSpec};
 
         let arm = |alias: usize| -> IqNode {
-            let col = |c: &str| {
+            let col = |c: &str, spec: TermSpec| {
                 BindDef::Resolved(TermDef::Derived {
-                    term_map: TermMap::Column(c.into(), TermSpec::plain_literal()),
+                    term_map: TermMap::Column(c.into(), spec),
                     alias,
                 })
             };
             let mut subst = BTreeMap::new();
-            subst.insert("s".into(), col("id"));
-            subst.insert("o".into(), col("v"));
+            subst.insert("s".into(), col("id", TermSpec::plain_literal()));
+            subst.insert(
+                "o".into(),
+                col(
+                    "v",
+                    TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(
+                        "http://www.w3.org/2001/XMLSchema#integer",
+                    )),
+                ),
+            );
             IqNode::Construction {
                 child: Box::new(IqNode::Extensional {
                     scan: Scan {
@@ -2884,7 +2971,10 @@ mod tests {
     /// ALSO pushes down, not just a bare `TermMap::Column` key. Proves the
     /// extension: `agg.keys[0].cols` carries BOTH raw columns (positionally
     /// contiguous on the pooled derived table), and the rebuilt outer binding is
-    /// a `TermMap::Template` (not silently downgraded to a `Column`).
+    /// a `TermMap::Template` (not silently downgraded to a `Column`). `?o` (the
+    /// SUM operand) is `xsd:integer`-typed — Run 4 B-repair FIX 4's exact-numeric
+    /// gate requires this for AVG/SUM to pool at all; the `?s` template key is
+    /// untouched (never an aggregate operand, so the gate does not apply to it).
     #[test]
     fn group_by_injective_template_key_pushes_down_to_sql() {
         use crate::iq::node::{AggArg, AggDef, BindDef};
@@ -2903,7 +2993,12 @@ mod tests {
             subst.insert(
                 "o".into(),
                 BindDef::Resolved(TermDef::Derived {
-                    term_map: TermMap::Column("v".into(), TermSpec::plain_literal()),
+                    term_map: TermMap::Column(
+                        "v".into(),
+                        TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(
+                            "http://www.w3.org/2001/XMLSchema#integer",
+                        )),
+                    ),
                     alias,
                 }),
             );

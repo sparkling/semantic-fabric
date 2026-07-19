@@ -818,7 +818,7 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
         // shared by every column in that side's template) and write the
         // (possibly rewritten) alias back; a self-join merge renames the WHOLE
         // alias uniformly, so every column agrees on the same new value.
-        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
             for seg in sx {
                 if let Segment::Column(c) = seg {
                     let mut cr = ColRef::new(*a1, c.clone());

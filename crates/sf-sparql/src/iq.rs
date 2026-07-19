@@ -338,7 +338,18 @@ pub enum SqlCond {
     /// equality (IRIs; plain, untagged, untyped-or-`xsd:string` literals) —
     /// see its own doc comment for the restriction and the NULL-propagation
     /// soundness argument.
-    TemplateEq(Vec<Segment>, usize, Vec<Segment>, usize),
+    ///
+    /// The trailing `bool` is Run 4 B-repair FIX 2: whether BOTH sides are an
+    /// IRI-kind template (`true`) — `align_templates`'s caller only ever
+    /// builds this when `spec1.term_type == spec2.term_type`, so one flag
+    /// covers both sides. R2RML/RFC 3987 template expansion percent-encodes
+    /// a column's value for an IRI term type only (`sf_core::ir::Template::
+    /// expand`'s `encode_iri` flag); a plain-literal template never encodes.
+    /// [`crate::emit::render_template_concat`] must mirror that PER SEGMENT,
+    /// or two differently-shaped templates whose column values disagree only
+    /// by an encodable character compare wrong in both directions (see its
+    /// doc comment).
+    TemplateEq(Vec<Segment>, usize, Vec<Segment>, usize, bool),
 }
 
 /// How a [`SqlCond::StrMatch`] matches (the near-free FTS baseline, ADR-0020 §2).
@@ -747,7 +758,7 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
         // checks (`joinelim.rs`'s `parent_referenced_only_via[_set]`) that consume
         // this walk MUST see them, or a parent scan a `TemplateEq` still needs
         // could be eliminated out from under it, leaving a dangling alias.
-        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
             for seg in sx {
                 if let Segment::Column(c) = seg {
                     f(&ColRef::new(*a1, c.clone()));

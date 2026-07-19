@@ -374,6 +374,17 @@ impl<'a> Unfolder<'a> {
         if t.branches.len() != 1 {
             return rust_group_plan(t, variables, aggregates);
         }
+        // Run 4 B-repair FIX 4 (flat-engine parity with `iq/lower.rs`'s
+        // single-branch AVG/SUM pushdown gate): pushing AVG/SUM to SQL lets
+        // the DBMS coerce the operand's stored TEXT numerically instead of
+        // erroring the whole aggregate on a non-numeric operand (SPARQL §11;
+        // `rust_agg`'s own `nums.len() < vals.len()` gate, B1, already gets
+        // this right). Route through the SAME Rust-group path a multi-branch
+        // inner already uses whenever an AVG/SUM operand is not PROVABLY
+        // exact-numeric.
+        if agg_needs_rust_group(&t.branches[0], aggregates) {
+            return rust_group_plan(t, variables, aggregates);
+        }
         let mut branch = t.branches.into_iter().next().unwrap();
         if branch.path.is_some() {
             return Err(Error::Unsupported(
@@ -1224,6 +1235,58 @@ pub(crate) fn single_column_of(def: &TermDef, var: &str) -> Result<ColRef> {
         "aggregate over ?{var} requires a single column-backed value (not a \
          constructed/multi-column term) → 501"
     )))
+}
+
+/// Run 4 B-repair FIX 4: whether ANY `AVG`/`SUM` aggregate's operand fails
+/// [`operand_is_exact_numeric`] against `branch`'s bindings — the signal
+/// [`Unfolder::group`]'s single-branch SQL-pushdown path uses to bail to
+/// [`rust_group_plan`] instead (mirrors `iq/lower.rs`'s identical tree-side
+/// gate). An aggregate whose argument is not a plain variable, or not bound
+/// in `branch`, is left alone here — `lower_aggregate`'s own existing checks
+/// (non-variable argument / unbound variable) already turn those into a
+/// sound 501 once this function declines to redirect them.
+fn agg_needs_rust_group(branch: &Branch, aggregates: &[(Variable, AggregateExpression)]) -> bool {
+    aggregates.iter().any(|(_, expr)| {
+        let AggregateExpression::FunctionCall {
+            name, expr: arg, ..
+        } = expr
+        else {
+            return false;
+        };
+        if !matches!(name, AggregateFunction::Sum | AggregateFunction::Avg) {
+            return false;
+        }
+        let Expression::Variable(v) = arg else {
+            return false;
+        };
+        match branch.bindings.get(v.as_str()) {
+            Some(def) => !operand_is_exact_numeric(def),
+            None => false,
+        }
+    })
+}
+
+/// Run 4 B-repair FIX 4: whether a term def's declared `rr:datatype` is a
+/// PROVABLY exact-numeric XSD type — `xsd:integer` or `xsd:decimal` ONLY,
+/// the same narrow (no-derived-types) granularity `exec_core::is_xsd_integer`
+/// already uses at the runtime/`rust_agg` layer, and `iq/lower.rs`'s
+/// `agg_operand_is_exact_numeric` mirrors on the tree side. `None` (no
+/// explicit `rr:datatype`) is conservatively NOT exact-numeric — the natural
+/// SQL-decltype fallback is unknowable here without live schema access.
+fn operand_is_exact_numeric(def: &TermDef) -> bool {
+    let spec = match def {
+        TermDef::Derived {
+            term_map: TermMap::Column(_, spec) | TermMap::Template(_, spec),
+            ..
+        } => spec,
+        _ => return false,
+    };
+    matches!(
+        spec.datatype.as_ref().map(NamedNode::as_str),
+        Some(
+            "http://www.w3.org/2001/XMLSchema#integer" | "http://www.w3.org/2001/XMLSchema#decimal"
+        )
+    )
 }
 
 /// A mapping term map → a [`TermDef`] at `alias` (constants need no alias).

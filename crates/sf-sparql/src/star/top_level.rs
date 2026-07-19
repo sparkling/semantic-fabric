@@ -336,8 +336,8 @@ pub(super) fn rewrite_union(
     })
 }
 
-/// For every variable BOTH `left`'s and `right`'s ORIGINAL (pre-rewrite)
-/// patterns mention (collected via [`collect_pattern_vars`]) that `env` holds
+/// For every variable EITHER `left`'s OR `right`'s ORIGINAL (pre-rewrite)
+/// pattern mentions (collected via [`collect_pattern_vars`]) that `env` holds
 /// [`super::env::ComposedInfo`] for, whether EACH arm's OWN rewritten output
 /// (`rw_left`/`rw_right`) actually binds that variable's `s_var` — the
 /// per-arm "does this arm actually compose it" signal both [`rewrite_union`]'s
@@ -346,6 +346,22 @@ pub(super) fn rewrite_union(
 /// (Run 4 Wave B2) so both share ONE definition of "agree". A variable `env`
 /// has no entry for at all is skipped — not composed anywhere, nothing to
 /// reconcile.
+///
+/// Run 4 B-repair FIX 3: this scans the UNION of the two arms' variable sets,
+/// not their intersection. A variable composed in ONE arm only (absent from
+/// the OTHER arm's pattern text entirely) is UNBOUND in that other arm — the
+/// SAME "one arm composes, the other doesn't" disagreement the shared-variable
+/// case already reports, just discovered a different way (absence rather than
+/// a disagreeing entry). The intersection missed it: `?t1`, composed only by
+/// `left`, is never in `left_vars ∩ right_vars` (it isn't IN `right_vars` at
+/// all), so `rewrite_filter_over_union`'s "all agree" fast path fired
+/// vacuously and resolved e.g. `isTRIPLE(?t1)` ONCE, statically true, applied
+/// to BOTH arms — wrongly keeping `right`'s rows too. Folding the absent arm
+/// in as `composes = false` (via `left_composes`/`right_composes`'s existing
+/// `collect_pattern_vars(rw_arm).contains(...)` check, which is naturally
+/// `false` when the arm never mentions the variable at all) lets the EXISTING
+/// per-arm env-fork machinery (in `rewrite_filter_over_union`) handle it
+/// exactly like any other disagreement, with no further change needed there.
 fn composed_agreement(
     left: &GraphPattern,
     right: &GraphPattern,
@@ -356,7 +372,7 @@ fn composed_agreement(
     let left_vars = collect_pattern_vars(left);
     let right_vars = collect_pattern_vars(right);
     left_vars
-        .intersection(&right_vars)
+        .union(&right_vars)
         .filter_map(|v| {
             let info = env.get(v)?;
             let left_composes = collect_pattern_vars(rw_left).contains(&info.s_var);

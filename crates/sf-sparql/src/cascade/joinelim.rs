@@ -332,7 +332,7 @@ fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
                 rewrite_parent_cond_multi(c, e);
             }
         }
-        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
             rewrite_parent_template_segments_multi(sx, a1, e);
             rewrite_parent_template_segments_multi(sy, a2, e);
         }
@@ -548,7 +548,7 @@ fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
                 rewrite_parent_cond(c, e);
             }
         }
-        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
             rewrite_parent_template_segments(sx, a1, e);
             rewrite_parent_template_segments(sy, a2, e);
         }
