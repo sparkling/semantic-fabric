@@ -55,6 +55,16 @@ struct ServeArgs {
     /// Max query length in bytes (ADR-0010).
     #[arg(long, default_value_t = 1 << 20)]
     max_query_len: usize,
+    /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
+    #[arg(long, default_value_t = 16)]
+    pg_pool_size: usize,
+    /// Max seconds to wait for a pooled PostgreSQL connection before shedding
+    /// `503` (ADR-0010 §C).
+    #[arg(long, default_value_t = 5)]
+    pg_pool_wait_secs: u64,
+    /// Read-only connection pool size for a file-backed SQLite source.
+    #[arg(long, default_value_t = 4)]
+    sqlite_pool_size: usize,
 }
 
 fn main() -> ExitCode {
@@ -75,6 +85,9 @@ fn serve(args: ServeArgs) -> ExitCode {
         bind: args.bind,
         timeout: Duration::from_secs(args.timeout_secs),
         max_query_len: args.max_query_len,
+        pg_pool_size: args.pg_pool_size,
+        pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
+        sqlite_pool_size: args.sqlite_pool_size,
     };
     match serve_blocking(opts) {
         Ok(()) => ExitCode::SUCCESS,
@@ -236,6 +249,9 @@ mod tests {
             bind: "127.0.0.1:0".to_owned(),
             timeout_secs: 1,
             max_query_len: 1024,
+            pg_pool_size: 16,
+            pg_pool_wait_secs: 5,
+            sqlite_pool_size: 4,
         };
         assert_eq!(serve(opts), ExitCode::FAILURE);
     }

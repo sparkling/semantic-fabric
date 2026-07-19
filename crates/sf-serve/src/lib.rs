@@ -52,12 +52,6 @@ pub use stream::RdfFormat;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
 
-/// The PG serve-lane pool's cap (ADR-0010 §C "small, hard-capped stream-lane
-/// connection pool") and how long a request waits for a free connection before
-/// being shed as `503` rather than queued indefinitely (M4 wave-2 finding 2).
-const PG_POOL_MAX_SIZE: usize = 16;
-const PG_POOL_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// A pooled PostgreSQL connection, re-derefed to `tokio_postgres::Client` in one
 /// hop. `deadpool_postgres::Object` derefs to its own `ClientWrapper` (adds
 /// statement caching), not directly to `Client` — `sf_sparql::exec_pg`'s generic
@@ -72,18 +66,69 @@ impl std::ops::Deref for PgConn {
     }
 }
 
+/// A small fixed pool of SQLite connections, dispatched round-robin. Serve is a
+/// READ-ONLY endpoint (query operation only), and SQLite allows many concurrent
+/// READERS against a file-backed database regardless of journal mode — so a
+/// file-backed source gets `pool_size` independent read-only connections instead
+/// of forcing every concurrent request through one shared connection (ADR-0010
+/// status-correction part 2: "SQLite remains a single `Mutex<Connection>` by
+/// choice ... an open refinement" — this closes that refinement). Each request
+/// takes exactly one member's mutex for its query's duration, so up to
+/// `pool_size` requests proceed concurrently instead of fully serialising.
+///
+/// `:memory:` sources stay a pool of one, read-write (see [`Backend::sqlite`] /
+/// `run::open_backend`): each `rusqlite::Connection::open(":memory:")` call
+/// creates an independent, private, empty database, so pooling `:memory:` the
+/// normal way would silently serve queries against the wrong (empty) database.
+#[derive(Clone)]
+pub struct SqlitePool {
+    conns: Arc<Vec<Arc<Mutex<rusqlite::Connection>>>>,
+    next: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SqlitePool {
+    /// A pool of one connection — the original single-`Mutex` shape, used for
+    /// `:memory:` sources and any caller that already owns one open connection.
+    fn one(conn: rusqlite::Connection) -> Self {
+        Self::new(vec![conn])
+    }
+
+    fn new(conns: Vec<rusqlite::Connection>) -> Self {
+        assert!(
+            !conns.is_empty(),
+            "SqlitePool needs at least one connection"
+        );
+        Self {
+            conns: Arc::new(conns.into_iter().map(|c| Arc::new(Mutex::new(c))).collect()),
+            next: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Round-robin the next pool member (wraps around). A pool of one (every
+    /// `:memory:` source, and any single-connection test fixture built via
+    /// [`Backend::sqlite`]) always returns that same connection, so callers see
+    /// identical behaviour to the pre-pool single-`Mutex` design.
+    pub fn pick(&self) -> Arc<Mutex<rusqlite::Connection>> {
+        let n = self.conns.len();
+        let i = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        self.conns[i].clone()
+    }
+}
+
 /// A live relational backend the endpoint queries (ADR-0006). SQLite is sync
 /// (`rusqlite::Connection`, not `Send` across awaits — held behind a `Mutex`); its
 /// blocking now lives entirely in the adapter's cap-1 `spawn_blocking` bridge
 /// (ADR-0024 §4.1 [`SqliteOwnedBackend`]), so the serve lane drives all three
-/// backends through the same async streamer. PostgreSQL is a bounded
-/// `deadpool_postgres::Pool` (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2
-/// finding 2) — was a single shared `Client` serialising every PG HTTP request;
-/// each request now draws a pooled connection for its lifetime, mirroring MySQL's
-/// existing `mysql_async::Pool`.
+/// backends through the same async streamer. A file-backed SQLite source is a
+/// small [`SqlitePool`] of read-only connections (SQLite read-concurrency,
+/// ADR-0010 status-correction part 2), round-robin dispatched per request.
+/// PostgreSQL is a bounded `deadpool_postgres::Pool` (ADR-0010 §C stream-lane
+/// pool, ADR-0027; M4 wave-2 finding 2) — was a single shared `Client`
+/// serialising every PG HTTP request; each request now draws a pooled connection
+/// for its lifetime, mirroring MySQL's existing `mysql_async::Pool`.
 #[derive(Clone)]
 pub enum Backend {
-    Sqlite(Arc<Mutex<rusqlite::Connection>>),
+    Sqlite(SqlitePool),
     Pg(deadpool_postgres::Pool),
     /// MySQL: a cloneable `mysql_async::Pool`; each streaming request draws a
     /// DEDICATED connection for the stream's lifetime, discarded/reset on early drop
@@ -92,9 +137,46 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// Wrap an open SQLite connection as a backend.
+    /// Wrap a single open SQLite connection as a backend (a pool of one — the
+    /// shape every `:memory:` source and most test fixtures want).
     pub fn sqlite(conn: rusqlite::Connection) -> Self {
-        Backend::Sqlite(Arc::new(Mutex::new(conn)))
+        Backend::Sqlite(SqlitePool::one(conn))
+    }
+
+    /// Open `pool_size` independent READ-ONLY connections to the SQLite file at
+    /// `path`, dispatched round-robin per request ([`SqlitePool`]). Never
+    /// touches journal mode or any other persistent setting on the file.
+    /// `:memory:` is special-cased to a single read-write connection regardless
+    /// of `pool_size` ([`SqlitePool`] doc). Returns the introspected schema
+    /// alongside the backend (introspected from one pool member — read-only
+    /// queries against `sqlite_master`/`PRAGMA table_info`, safe to share). Public
+    /// so callers (including tests) can build a multi-connection SQLite backend
+    /// the same way `run::open_backend` does, without going through the blocking
+    /// `serve` entry point — mirrors PG pools being fully caller-constructible via
+    /// public `deadpool_postgres` APIs.
+    pub fn sqlite_pool_from_path(
+        path: &str,
+        pool_size: usize,
+    ) -> Result<(Self, Vec<TableSchema>), String> {
+        if path == ":memory:" {
+            let conn =
+                rusqlite::Connection::open(path).map_err(|e| format!("open SQLite {path}: {e}"))?;
+            let schema = introspect_sqlite_all(&conn)?;
+            return Ok((Backend::sqlite(conn), schema));
+        }
+        let n = pool_size.max(1);
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+        let mut conns = Vec::with_capacity(n);
+        for _ in 0..n {
+            conns.push(
+                rusqlite::Connection::open_with_flags(path, flags)
+                    .map_err(|e| format!("open SQLite (read-only) {path}: {e}"))?,
+            );
+        }
+        let schema = introspect_sqlite_all(&conns[0])?;
+        Ok((Backend::Sqlite(SqlitePool::new(conns)), schema))
     }
 
     /// The SQL dialect this backend speaks (drives emission/introspection).
@@ -270,14 +352,17 @@ async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>)
     // thin concrete `exec_*::select_each_*` closure. SQLite's blocking now lives in
     // the adapter's cap-1 bridge (no sf-serve spawn_blocking special-case).
     let body = match cfg.backend.clone() {
-        Backend::Sqlite(conn) => stream::select_body_streaming(
-            move |sink| {
-                Box::pin(async move { exec::select_each_sqlite_owned(&plan, conn, sink).await })
-            },
-            fmt,
-            vars,
-            deadline,
-        ),
+        Backend::Sqlite(pool) => {
+            let conn = pool.pick();
+            stream::select_body_streaming(
+                move |sink| {
+                    Box::pin(async move { exec::select_each_sqlite_owned(&plan, conn, sink).await })
+                },
+                fmt,
+                vars,
+                deadline,
+            )
+        }
         Backend::Pg(pool) => {
             let conn = match acquire_pg(&pool).await {
                 Ok(c) => c,
@@ -313,11 +398,12 @@ async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>)
 async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) -> Response {
     let fmt = negotiate_results(accept);
     let value = match cfg.backend.clone() {
-        Backend::Sqlite(conn) => {
+        Backend::Sqlite(pool) => {
             // Uniform lane (ADR-0024 M5): SQLite ASK spawns the owned cap-1-bridge
             // backend onto the runtime like the MySQL arm — no `spawn_blocking`
             // special-case; the adapter owns SQLite's blocking. `tokio::spawn` checks
             // `Send` on the concrete owned-backend future directly (provable).
+            let conn = pool.pick();
             let run = tokio::spawn(async move { exec::ask_sqlite_owned(&plan, conn).await });
             match tokio::time::timeout(cfg.timeout, run).await {
                 Err(_) => {
@@ -383,13 +469,18 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
     let fmt = negotiate_rdf(accept);
     let deadline = Some(Instant::now() + cfg.timeout);
     let body = match cfg.backend.clone() {
-        Backend::Sqlite(conn) => stream::construct_body_streaming(
-            move |sink| {
-                Box::pin(async move { exec::construct_each_sqlite_owned(&plan, conn, sink).await })
-            },
-            fmt,
-            deadline,
-        ),
+        Backend::Sqlite(pool) => {
+            let conn = pool.pick();
+            stream::construct_body_streaming(
+                move |sink| {
+                    Box::pin(
+                        async move { exec::construct_each_sqlite_owned(&plan, conn, sink).await },
+                    )
+                },
+                fmt,
+                deadline,
+            )
+        }
         Backend::Pg(pool) => {
             let conn = match acquire_pg(&pool).await {
                 Ok(c) => c,
@@ -421,10 +512,10 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
 }
 
 /// Acquire a pooled PostgreSQL connection (ADR-0010 §C stream-lane pool, ADR-0027;
-/// M4 wave-2 finding 2). Pool exhaustion (no free connection within
-/// [`PG_POOL_WAIT_TIMEOUT`]) is shed as a fast, honest `503` + `Retry-After`
-/// rather than queued indefinitely or reported as a generic `500` — the ADR-0010
-/// "shed overflow" clause this pass implements.
+/// M4 wave-2 finding 2). Pool exhaustion (no free connection within the
+/// configured `--pg-pool-wait-secs`) is shed as a fast, honest `503` +
+/// `Retry-After` rather than queued indefinitely or reported as a generic `500`
+/// — the ADR-0010 "shed overflow" clause this pass implements.
 async fn acquire_pg(pool: &deadpool_postgres::Pool) -> Result<PgConn, Response> {
     pool.get().await.map(PgConn).map_err(|e| match e {
         PoolError::Timeout(_) => {
@@ -432,8 +523,13 @@ async fn acquire_pg(pool: &deadpool_postgres::Pool) -> Result<PgConn, Response> 
                 StatusCode::SERVICE_UNAVAILABLE,
                 "PostgreSQL connection pool exhausted, retry shortly (ADR-0010)",
             );
-            resp.headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            resp.headers_mut().insert(
+                header::RETRY_AFTER,
+                // Fixed at 1s rather than derived from pool pressure/wait-time —
+                // a pressure-aware value is future work (ADR-0010 status
+                // correction part 2's second open refinement).
+                HeaderValue::from_static("1"),
+            );
             resp
         }
         other => err_text(

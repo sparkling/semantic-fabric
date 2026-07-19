@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio_postgres::NoTls;
 
-use crate::{introspect_pg_all, introspect_sqlite_all, router, Backend, ServeConfig};
+use crate::{introspect_pg_all, router, Backend, ServeConfig};
 
 /// Options resolved from the `serve` CLI flags. The runner reads the mapping /
 /// ontology files itself so the CLI stays a thin argument parser.
@@ -24,6 +24,13 @@ pub struct ServeOptions {
     pub timeout: Duration,
     /// Max query length in bytes (ADR-0010).
     pub max_query_len: usize,
+    /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
+    pub pg_pool_size: usize,
+    /// Max wait for a pooled PostgreSQL connection before shedding `503` (ADR-0010 §C).
+    pub pg_pool_wait: Duration,
+    /// Read-only connection pool size for a file-backed SQLite source (ADR-0010
+    /// status-correction part 2).
+    pub sqlite_pool_size: usize,
 }
 
 /// Build the config + router and serve until the process is stopped. Returns a
@@ -50,7 +57,13 @@ async fn serve_async(opts: ServeOptions) -> Result<(), String> {
         None => sf_sparql::Tbox::default(),
     };
 
-    let (backend, schema) = open_backend(&opts.source).await?;
+    let (backend, schema) = open_backend(
+        &opts.source,
+        opts.pg_pool_size,
+        opts.pg_pool_wait,
+        opts.sqlite_pool_size,
+    )
+    .await?;
 
     let mut cfg = ServeConfig::new(backend, mapping, tbox, schema);
     cfg.timeout = opts.timeout;
@@ -68,12 +81,17 @@ async fn serve_async(opts: ServeOptions) -> Result<(), String> {
 }
 
 /// Open the backend named by `spec` and introspect its base-table schema.
-async fn open_backend(spec: &str) -> Result<(Backend, Vec<sf_sql::TableSchema>), String> {
+/// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
+/// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
+/// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
+async fn open_backend(
+    spec: &str,
+    pg_pool_size: usize,
+    pg_pool_wait: Duration,
+    sqlite_pool_size: usize,
+) -> Result<(Backend, Vec<sf_sql::TableSchema>), String> {
     if let Some(path) = spec.strip_prefix("sqlite:") {
-        let conn =
-            rusqlite::Connection::open(path).map_err(|e| format!("open SQLite {path}: {e}"))?;
-        let schema = introspect_sqlite_all(&conn)?;
-        Ok((Backend::sqlite(conn), schema))
+        Backend::sqlite_pool_from_path(path, sqlite_pool_size)
     } else if let Some(conninfo) = spec.strip_prefix("pg:") {
         // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
         // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
@@ -82,8 +100,8 @@ async fn open_backend(spec: &str) -> Result<(Backend, Vec<sf_sql::TableSchema>),
             .map_err(|e| format!("parse PG conninfo {conninfo:?}: {e}"))?;
         let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
         let pool = deadpool_postgres::Pool::builder(manager)
-            .max_size(crate::PG_POOL_MAX_SIZE)
-            .wait_timeout(Some(crate::PG_POOL_WAIT_TIMEOUT))
+            .max_size(pg_pool_size)
+            .wait_timeout(Some(pg_pool_wait))
             // The wait timeout needs an async runtime to enforce it (deadpool is
             // runtime-agnostic by default) — without this, `pool.get()` errors
             // `NoRuntimeSpecified` instead of ever honouring the timeout.
@@ -172,7 +190,7 @@ mod tests {
         seed_sqlite_db(&path);
         let spec = format!("sqlite:{}", path.display());
 
-        let result = open_backend(&spec).await;
+        let result = open_backend(&spec, 16, Duration::from_secs(5), 4).await;
 
         let (backend, schema) = result.expect("valid sqlite spec should open");
         assert!(matches!(backend, Backend::Sqlite(_)));
@@ -190,7 +208,7 @@ mod tests {
         seed_sqlite_db(&path);
         let spec = format!("sqlite:{}", path.display());
 
-        let (_backend, schema) = open_backend(&spec)
+        let (_backend, schema) = open_backend(&spec, 16, Duration::from_secs(5), 4)
             .await
             .expect("valid sqlite spec should open");
 
@@ -212,7 +230,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_error_when_spec_scheme_is_unsupported() {
-        let result = open_backend("redis://localhost:6379").await;
+        let result = open_backend("redis://localhost:6379", 16, Duration::from_secs(5), 4).await;
 
         let err = match result {
             Err(e) => e,
@@ -236,11 +254,51 @@ mod tests {
         let path = bogus_dir.join("db.sqlite");
         let spec = format!("sqlite:{}", path.display());
 
-        let result = open_backend(&spec).await;
+        let result = open_backend(&spec, 16, Duration::from_secs(5), 4).await;
 
         assert!(
             result.is_err(),
             "opening a sqlite path under a nonexistent directory should error"
+        );
+    }
+
+    /// F2b flag-plumbing receipt: `--pg-pool-size` must actually reach the pool
+    /// `open_backend` builds, not just get parsed and dropped. Deterministic
+    /// (no concurrency/timing) — asserts the built pool's own reported
+    /// `max_size` rather than exercising pool exhaustion, which
+    /// `pg_pool_exhaustion_sheds_503_with_retry_after` and
+    /// `pg_pool_concurrency_receipt` (`crates/sf-serve/tests/endpoint.rs`)
+    /// already cover. Gate-skips when no PostgreSQL is reachable on
+    /// localhost:5432, mirroring that file's `pg` module convention.
+    #[tokio::test]
+    async fn should_configure_pg_pool_size_when_opening_a_pg_backend() {
+        let conn_str = std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+            let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+            format!("host=localhost port=5432 user={user}")
+        });
+        let Ok((_client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+            eprintln!(
+                "SKIP should_configure_pg_pool_size_when_opening_a_pg_backend: \
+                 no PostgreSQL on localhost:5432"
+            );
+            return;
+        };
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let spec = format!("pg:{conn_str}");
+        let (backend, _schema) = open_backend(&spec, 3, Duration::from_secs(2), 4)
+            .await
+            .expect("reachable pg spec should open");
+
+        let Backend::Pg(pool) = backend else {
+            panic!("pg: spec should open a Backend::Pg");
+        };
+        assert_eq!(
+            pool.status().max_size,
+            3,
+            "pg_pool_size passed to open_backend should flow through to the pool's max_size"
         );
     }
 }

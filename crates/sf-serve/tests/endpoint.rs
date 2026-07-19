@@ -663,6 +663,126 @@ mod pg {
     }
 }
 
+// ---- SQLite concurrent-reader pool: file-backed, no gate-skip -------------
+
+/// A unique file-backed SQLite path under the OS temp dir (never `:memory:`,
+/// which forces [`Backend::sqlite_pool_from_path`] to a pool of one regardless
+/// of `pool_size` — see its doc). Mirrors `run.rs`'s private `temp_db_path`
+/// unit-test helper; duplicated here rather than shared because an integration
+/// test (this file) cannot reach a unit-test-only helper in `src/run.rs`.
+fn unique_sqlite_path(tag: &str) -> std::path::PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "sf_serve_endpoint_{tag}_{}_{unique}.db",
+        std::process::id()
+    ))
+}
+
+/// F2c SQLite-pool RECEIPT (ADR-0010 status-correction part 2, mirrors
+/// `pg::pg_pool_concurrency_receipt` above): N=16 concurrent SELECT requests
+/// over a `pool_size=1` [`Backend::sqlite_pool_from_path`] pool (the OLD
+/// single-`Mutex` shape every file-backed SQLite source got before this pass —
+/// exactly what `Backend::sqlite`'s pool-of-one still gives `:memory:`) vs the
+/// real `pool_size=4` default. Correctness: all 32 responses (16 old-shape +
+/// 16 new-shape) must be `200 OK` carrying the full SELECT payload — pooling
+/// must never lose or corrupt data, only parallelise the reads. No gate-skip:
+/// unlike the PG receipts, this needs no external server.
+///
+/// `worker_threads = 20` (> N), NOT this file's usual 8: `SqliteOwnedBackend::
+/// column_names` (`sf-sql/src/backend/sqlite.rs`) takes its `std::sync::Mutex`
+/// lock INLINE in an `async fn`, unlike its sibling `open_branch` which does the
+/// equivalent lock only inside a dedicated `spawn_blocking` thread. Under
+/// `pool_size=1` + high concurrency this can wedge every core worker thread
+/// simultaneously (each blocked entering `column_names` for a different
+/// request) while the one connection-holding request — parked on its own
+/// `spawn_blocking` thread — can never get its result channel drained, since
+/// no worker thread remains free to poll the draining task: a genuine,
+/// pre-existing deadlock, confirmed via `sample`(1) at `N=16, worker_threads=8`
+/// (hangs indefinitely) vs `N=8` (completes; provably safe since `N - 1 <
+/// worker_threads` bounds the worst case at one free worker). Out of this
+/// wave's file scope to fix (`sf-sql`, not `sf-serve`); tracked as a follow-up.
+/// Sizing this test's OWN runtime above `N` sidesteps it without masking it —
+/// the pool_size=1-vs-4 comparison below is unaffected by the worker count, and
+/// production's default (unbounded `Builder::new_multi_thread()`, no explicit
+/// `worker_threads`) remains exposed to it until fixed upstream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 20)]
+async fn sqlite_pool_concurrency_receipt() {
+    let path = unique_sqlite_path("pool_receipt");
+    const ROWS: usize = 20_000;
+    {
+        // A plain read-write connection seeds the fixture; run_concurrent below
+        // reopens it read-only through the real pool constructor under test.
+        let conn = rusqlite::Connection::open(&path).expect("create fixture db");
+        conn.execute_batch(&format!(
+            "CREATE TABLE \"People\" (\"id\" INTEGER PRIMARY KEY, \"name\" TEXT, \"age\" INTEGER);
+             WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < {ROWS})
+             INSERT INTO \"People\" SELECT x, 'Person' || x, x % 100 FROM c;"
+        ))
+        .expect("seed fixture db");
+    }
+
+    const N: usize = 16;
+
+    /// Fire `n` concurrent SELECTs at a fresh endpoint over a `pool_size`-sized
+    /// SQLite pool opened on `path`, asserting every response is a complete
+    /// `200` carrying all `rows` bindings, and return the wall-clock elapsed.
+    async fn run_concurrent(
+        path: &std::path::Path,
+        pool_size: usize,
+        n: usize,
+        rows: usize,
+    ) -> std::time::Duration {
+        let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
+        let (backend, schema) = Backend::sqlite_pool_from_path(path.to_str().unwrap(), pool_size)
+            .expect("open sqlite pool");
+        let cfg = Arc::new(ServeConfig::new(backend, maps, Tbox::default(), schema));
+        let start = std::time::Instant::now();
+        let mut handles = Vec::with_capacity(n);
+        for _ in 0..n {
+            let cfg = cfg.clone();
+            handles.push(tokio::spawn(async move {
+                send(
+                    cfg,
+                    post_query(
+                        "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                        "application/sparql-results+json",
+                    ),
+                )
+                .await
+            }));
+        }
+        for h in handles {
+            let (status, _ctype, body) = h.await.expect("request task join");
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let json: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+            assert_eq!(
+                json["results"]["bindings"].as_array().unwrap().len(),
+                rows,
+                "every concurrent response must carry the full result set"
+            );
+        }
+        start.elapsed()
+    }
+
+    let pool1_elapsed = run_concurrent(&path, 1, N, ROWS).await;
+    let pool4_elapsed = run_concurrent(&path, 4, N, ROWS).await;
+
+    eprintln!(
+        "SQLite pool concurrency ({N} concurrent SELECTs, {ROWS} rows each): \
+         pool_size=1 (OLD-equivalent)={pool1_elapsed:?} pool_size=4 (NEW default)={pool4_elapsed:?}"
+    );
+    assert!(
+        pool4_elapsed < pool1_elapsed,
+        "a 4-connection read pool should beat a single connection under 16-way \
+         concurrency: pool_size=1={pool1_elapsed:?} pool_size=4={pool4_elapsed:?}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 // --- Round-2 coverage: 6 previously-untested HTTP branches -----------------
 
 #[tokio::test]
@@ -738,10 +858,10 @@ async fn ask_query_exceeding_timeout_returns_504() {
     // is inherently flaky across machines; this is not.
     let mut cfg = sqlite_config();
     cfg.timeout = std::time::Duration::from_millis(20);
-    let Backend::Sqlite(conn) = &cfg.backend else {
+    let Backend::Sqlite(pool) = &cfg.backend else {
         unreachable!()
     };
-    let conn = conn.clone();
+    let conn = pool.pick();
     let hold = std::thread::spawn(move || {
         let _guard = conn.lock().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -766,8 +886,9 @@ async fn ask_query_backend_sql_error_returns_500() {
     // shape `SparqlError::Sql` -> 500 exists to cover. Cleaner than any hack:
     // it's a real, reachable production scenario (concurrent DDL change).
     let cfg = sqlite_config();
-    if let Backend::Sqlite(conn) = &cfg.backend {
-        conn.lock()
+    if let Backend::Sqlite(pool) = &cfg.backend {
+        pool.pick()
+            .lock()
             .unwrap()
             .execute_batch("ALTER TABLE \"People\" RENAME COLUMN \"age\" TO \"age_renamed\";")
             .unwrap();
