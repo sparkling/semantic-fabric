@@ -1864,10 +1864,20 @@ pub(crate) fn pool_rendered(
     for b in arms {
         let scan = &b.core[0];
         let local = format!("sfs{}", scan.alias);
+        // This arm's immediate source text — `crate::cascade::col_is_unquoted_
+        // alias`'s doc comment: when D1 already wrapped this scan (`wrap_scan_
+        // distinct`, PostgreSQL-only), it is THAT wrap's own `<expr> AS <alias>`
+        // output, so the SAME detection re-derives D1's own quoting decision one
+        // layer in (W3C R2RMLTC0011a: a single-arm width mismatch pooled AFTER
+        // D1 already folded one of the arm's columns to lowercase).
+        let inner_sql = match &scan.source {
+            LogicalSource::Table(_) => None,
+            LogicalSource::Query(q) => Some(q.as_str()),
+        };
         let Some(guards): Option<Vec<String>> = b
             .where_conds
             .iter()
-            .map(|c| render_null_guard(c, scan.alias, &local, dialect))
+            .map(|c| render_null_guard(c, scan.alias, &local, inner_sql, dialect))
             .collect()
         else {
             return Ok(None);
@@ -1885,7 +1895,14 @@ pub(crate) fn pool_rendered(
                 TermDef::Derived { term_map, .. } => {
                     let (expr, spec) = match term_map {
                         TermMap::Column(c, spec) => {
-                            (format!("{local}.{}", dialect.quote_ident(c)), spec.clone())
+                            let quoted = inner_sql
+                                .is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
+                            let col_ref = if quoted {
+                                format!("{local}.{}", dialect.quote_ident(c))
+                            } else {
+                                format!("{local}.{c}")
+                            };
+                            (col_ref, spec.clone())
                         }
                         TermMap::Template(t, spec) => {
                             let encode_iri = spec.term_type == TermType::Iri;
@@ -1893,6 +1910,7 @@ pub(crate) fn pool_rendered(
                                 t.segments(),
                                 &local,
                                 encode_iri,
+                                inner_sql,
                                 dialect,
                             )?;
                             (expr, spec.clone())
@@ -1978,22 +1996,32 @@ fn term_class(def: &TermDef) -> Option<TermClass> {
 /// Render `cond` as inline SQL text against local alias `local`, IFF it is a
 /// simple, parameter-free `col IS [NOT] NULL` guard on `alias`'s own scan —
 /// [`pool_rendered`]'s doc comment explains why this is the only condition
-/// shape it folds into the wrap. `None` for anything else.
+/// shape it folds into the wrap. `None` for anything else. `inner_sql` is the
+/// SAME immediate-source-text quoting signal [`render_template_inline`]'s own
+/// doc comment describes (`crate::cascade::col_is_unquoted_alias`) — a NULL
+/// guard on an unquoted view alias must reference it unquoted too, or the
+/// guard itself would name a column PostgreSQL folded away.
 fn render_null_guard(
     cond: &SqlCond,
     alias: usize,
     local: &str,
+    inner_sql: Option<&str>,
     dialect: sf_sql::Dialect,
 ) -> Option<String> {
+    let ident = |col: &str| {
+        if inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, col)) {
+            col.to_owned()
+        } else {
+            dialect.quote_ident(col)
+        }
+    };
     match cond {
-        SqlCond::IsNotNull(c) if c.alias == alias => Some(format!(
-            "{local}.{} IS NOT NULL",
-            dialect.quote_ident(&c.column)
-        )),
-        SqlCond::IsNull(c) if c.alias == alias => Some(format!(
-            "{local}.{} IS NULL",
-            dialect.quote_ident(&c.column)
-        )),
+        SqlCond::IsNotNull(c) if c.alias == alias => {
+            Some(format!("{local}.{} IS NOT NULL", ident(&c.column)))
+        }
+        SqlCond::IsNull(c) if c.alias == alias => {
+            Some(format!("{local}.{} IS NULL", ident(&c.column)))
+        }
         _ => None,
     }
 }

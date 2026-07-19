@@ -31,8 +31,8 @@ use sf_core::ir::{LogicalSource, TermMap};
 use sf_sql::Dialect;
 
 use crate::iq::{
-    AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey, PathClosure, PathKind,
-    SqlCond, StrMatchOp, TermDef,
+    collect_cond_cols, AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey,
+    PathClosure, PathKind, SqlCond, StrMatchOp, TermDef,
 };
 use crate::{Error, Result};
 
@@ -53,9 +53,76 @@ impl ColumnCatalog {
         self.by_source.insert(source_key(source), columns);
     }
 
+    /// Add `columns` to `source`'s entry, creating it if absent, keeping any names
+    /// already recorded — unlike [`insert`](Self::insert), which replaces. Two
+    /// different raw columns of the same source are folded one at a time
+    /// ([`synthetic_subplan_catalog`]), so a second call must not erase the first.
+    fn merge(&mut self, source: &LogicalSource, column: String) {
+        let entry = self.by_source.entry(source_key(source)).or_default();
+        if !entry.contains(&column) {
+            entry.push(column);
+        }
+    }
+
     fn columns(&self, source: &LogicalSource) -> Option<&[String]> {
         self.by_source.get(&source_key(source)).map(Vec::as_slice)
     }
+}
+
+/// A translate-time [`ColumnCatalog`] for SubPlan embedding ([`crate::Plan::emitted`]).
+/// nested derived-table SQL is built with no live DB connection in hand — unlike the
+/// top-level executor (`exec_core::run_branches`), which probes the connection per
+/// source before emitting (see the module docs) — so [`colref`]'s `actuals` lookup
+/// always misses there today and falls back to quoting every identifier exact-case.
+/// That is correct for a genuinely delimited column, but WRONG for a *regular*
+/// (bare) `rr:sqlQuery` output alias: PostgreSQL folds it to lowercase at
+/// declaration, so an exact-case-quoted reference to it does not exist (W3C
+/// R2RMLTC0014b — `SELECT (…) AS jobTypeURI` folds to `jobtypeuri`; a downstream
+/// `t5."jobTypeURI"` 42703s; confirmed live against PostgreSQL 17).
+///
+/// For every column each branch's own bindings/conditions actually reference (a
+/// typed walk over [`TermDef::columns`] / [`collect_cond_cols`] — never a text scan
+/// of the SQL itself, so there is no risk of matching inside a string literal or
+/// unrelated keyword), probe the owning scan's `rr:sqlQuery` text with
+/// [`crate::cascade::col_is_unquoted_alias`] — the SAME translate-time heuristic the
+/// D1 per-scan DISTINCT wrap and Mechanism B rendered-pooling fallback already use —
+/// and, when it names a bare alias, seed the catalog with its folded (lowercase)
+/// form. [`resolve_col`]'s existing exact/case-insensitive matching then resolves it
+/// correctly with no change to [`colref`] or any of its other callers. A
+/// `LogicalSource::Table` column has no declaring SQL text to probe and is left
+/// alone — the pre-existing, already-correct shape (SQLite is case-insensitive
+/// regardless; a live top-level catalog resolves it for PostgreSQL).
+pub(crate) fn synthetic_subplan_catalog(branches: &[Branch]) -> ColumnCatalog {
+    let mut catalog = ColumnCatalog::default();
+    for b in branches {
+        let sources: HashMap<usize, &LogicalSource> = b.alias_sources().into_iter().collect();
+        let mut cols: Vec<ColRef> = Vec::new();
+        for def in b.bindings.values() {
+            cols.extend(def.columns());
+        }
+        for cond in &b.where_conds {
+            collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+        }
+        for opt in &b.opts {
+            for cond in opt.on.iter().chain(opt.extra.iter()) {
+                collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+            }
+        }
+        for sp in &b.subplan_joins {
+            for cond in &sp.on {
+                collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+            }
+        }
+        for c in &cols {
+            let Some(LogicalSource::Query(sql)) = sources.get(&c.alias) else {
+                continue;
+            };
+            if crate::cascade::col_is_unquoted_alias(sql, &c.column) {
+                catalog.merge(sources[&c.alias], c.column.to_lowercase());
+            }
+        }
+    }
+    catalog
 }
 
 /// A collision-free key for a logical source (a table name can never equal an SQL
@@ -1210,6 +1277,7 @@ pub(crate) fn render_template_inline(
     segs: &[sf_core::ir::Segment],
     alias: &str,
     encode_iri: bool,
+    inner_sql: Option<&str>,
     dialect: Dialect,
 ) -> Result<String> {
     use sf_core::ir::Segment;
@@ -1218,7 +1286,21 @@ pub(crate) fn render_template_inline(
         parts.push(match seg {
             Segment::Literal(text) => sql_string_literal(text),
             Segment::Column(c) => {
-                let col = format!("{alias}.{}", dialect.quote_ident(c));
+                // `crate::cascade::col_is_unquoted_alias`'s doc comment: `inner_sql`
+                // is THIS column's immediate source text (the arm's own `scan.
+                // source`) — when D1 already wrapped that scan, it is `cascade::
+                // wrap_col_ref`'s own output (`<expr> AS <alias>`), so the same
+                // detection composes across the D1-wrap-then-D2-pool nesting W3C
+                // R2RMLTC0011a exercises (a single-arm width mismatch pooled AFTER
+                // D1 already folded one of the arm's columns to lowercase on
+                // PostgreSQL).
+                let quoted =
+                    inner_sql.is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
+                let col = if quoted {
+                    format!("{alias}.{}", dialect.quote_ident(c))
+                } else {
+                    format!("{alias}.{c}")
+                };
                 if encode_iri {
                     percent_encode_col(&col, dialect)?
                 } else {

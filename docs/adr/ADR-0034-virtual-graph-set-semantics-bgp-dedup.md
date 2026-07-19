@@ -104,11 +104,27 @@ identity. The flat/tree C.3 dump carve-out is RETIRED (proven dead after the
 fix). W3C construct conformance: 53→62/63 adjudicated (baseline met); every
 restored case verified by full oracle isomorphism, not just non-error.
 
-**Known residual (PG lane, next wave):** the D1 wrap and the new pooling
-render identifiers at translate time without live-catalog case-folding, and
-reference SQLite's synthetic `rowid` on Direct-Mapping no-PK tables —
-`w3c_pg_suite` (green at the run's base) currently fails on those
-interactions; tracked as the C0e repair.
+**Update (2026-07-20, C0e) — PG lane restored, `w3c_pg_suite` 1/1.** Three
+mechanisms, all in the wrap/pooling SQL builders: (1) the wrap now mirrors
+`colref`'s rowid→`ctid` translation (12 Direct-Mapping cases); (2) bare
+`rr:sqlQuery` aliases fold on PG — `col_is_unquoted_alias` (a precise
+byte-scan, not a name-shape heuristic: the broad version regressed 4 cases
+and was narrowed) drives quoting in the wrap and the rendered pooling, and a
+new `synthetic_subplan_catalog` seeds folded names into `Plan::emitted()`'s
+previously-EMPTY SubPlan catalog (a gap since ADR-0023 M5, exposed only now
+that D2 routes these shapes into SubPlans); (3) R2RMLTC0012e is a SOUND
+PG-only refusal (`group_has_unsafe_float_slot_mismatch`): pooling a
+float-family slot against text forces one UNION column type, and PG's
+`float8out` lexicalization (scientific notation, `-0.0`) provably diverges
+from the native read path's Rust formatting — a CAST would risk silent
+lexical drift, live-disproven rather than assumed. NOTE the honest
+accounting: main DID pass 0012e on PG (bag-union output, set-isomorphic
+W3C comparison), so this refusal is a real single-case completeness
+regression, taken deliberately over a wrong-answer risk; `R2RML_PG_BASELINE`
+57→56 with the rationale in the test file. Restoration path (ledgered):
+cross-branch SHARED seen-set term-dedup for standalone top-level groups —
+executing the group's arms as separate per-branch queries with one shared
+dedup set needs no SQL UNION at all, sidestepping the type-alignment wall.
 
 **Known completeness costs (sound 501s, pinned, with restoration paths):**
 (1) GROUP-BY-over-multibranch-OPTIONAL on unkeyed tables — D1's dedup wrap

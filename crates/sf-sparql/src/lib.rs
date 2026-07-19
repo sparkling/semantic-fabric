@@ -162,10 +162,19 @@ impl Plan {
     }
 
     /// Emit every prepared branch to parameterised dialect SQL (ADR-0007 step 6).
+    ///
+    /// Used only for SubPlan (nested derived-table) embedding (`emit::emit_subplan_sql`);
+    /// the top-level executor emits via `emit_branch_with` with its own live-probed
+    /// catalog instead (`exec_core::run_branches`), never through here. No live DB
+    /// connection is available at this point, so column-identifier case-folding is
+    /// resolved from a translate-time synthetic catalog — see
+    /// `emit::synthetic_subplan_catalog`'s doc comment (W3C R2RMLTC0014b).
     pub fn emitted(&self) -> Result<Vec<emit::EmittedBranch>> {
-        self.prepared_branches()
+        let branches = self.prepared_branches();
+        let catalog = emit::synthetic_subplan_catalog(&branches);
+        branches
             .iter()
-            .map(|b| emit::emit_branch(b, self.dialect))
+            .map(|b| emit::emit_branch_with(b, self.dialect, &catalog))
             .collect()
     }
 }

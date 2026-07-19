@@ -1539,6 +1539,78 @@ pub(crate) fn group_eligible_for_term_dedup(
     any_offender
 }
 
+/// Whether pooling `members` (a D2 group of ≥2 not-provably-disjoint arms,
+/// [`disjoint_groups`](crate::unfold::disjoint_groups)) positionally on
+/// PostgreSQL risks a `UNION` the engine cannot honor soundly: either a hard SQL
+/// type-resolver error, or — if papered over with a `CAST` to align the types — a
+/// silent lexical-drift wrong answer. Live-verified (PostgreSQL 17): a bare
+/// `float8::text` cast switches to scientific notation outside a plain-decimal
+/// magnitude range (`1e+20`, `1.7976931348623157e+308`) and drops the sign of
+/// negative zero, where Rust's `f64::to_string()` — what reconstruction actually
+/// reads for a NATIVELY-typed `float8` column, `sf_sql::backend::pg::pg_value`'s
+/// `Type::FLOAT8` arm — never does; casting through `numeric` first does not fix
+/// it either (loses trailing significant digits at extreme magnitudes,
+/// live-verified). No PostgreSQL expression was found that exactly reproduces
+/// Rust's shortest-round-trip plain-decimal formatting, so a floating-point slot
+/// mismatch cannot be aligned soundly in SQL — sound refuse (ADR-0025's own
+/// established "cannot pool soundly ⇒ 501" shape) rather than risk either
+/// failure mode (W3C R2RMLTC0012e: `IOUs.amount FLOAT` pools against
+/// `Lives.city VARCHAR` at the shared blank-node subject template's 3rd column
+/// slot). Integer/text/boolean mismatches are NOT flagged — their to-text
+/// conversions are exact and dialect-agnostic, so positional pooling already
+/// renders them correctly with no cast needed.
+///
+/// Only checks pairs of arms that project the SAME variable with the SAME
+/// column-count (`TermDef::columns().len()`) — a differing count is a width
+/// mismatch, a completely different code path (Mechanism B / `pool_rendered`),
+/// not this one. SQLite is dynamically typed (no such `UNION` error exists
+/// there), so this is a no-op for every other dialect.
+pub(crate) fn group_has_unsafe_float_slot_mismatch(
+    members: &[&Branch],
+    schema: &[TableSchema],
+    dialect: sf_sql::Dialect,
+) -> bool {
+    if dialect != sf_sql::Dialect::Postgres || members.len() < 2 {
+        return false;
+    }
+    let schema_map = build_schema_map(schema);
+    let col_type = |b: &Branch, c: &ColRef| -> Option<&str> {
+        let scan = b.core.iter().find(|s| s.alias == c.alias)?;
+        let LogicalSource::Table(t) = &scan.source else {
+            return None;
+        };
+        schema_map_get(&schema_map, t)?
+            .column(&c.column)
+            .map(|col| col.sql_type.as_str())
+    };
+    let is_float = |ty: &str| {
+        let ty = ty.to_ascii_lowercase();
+        ty == "real" || ty.contains("float") || ty.contains("double")
+    };
+    for (i, bi) in members.iter().enumerate() {
+        for bj in &members[i + 1..] {
+            for (var, def_i) in &bi.bindings {
+                let Some(def_j) = bj.bindings.get(var) else {
+                    continue;
+                };
+                let (cols_i, cols_j) = (def_i.columns(), def_j.columns());
+                if cols_i.len() != cols_j.len() {
+                    continue;
+                }
+                for (ci, cj) in cols_i.iter().zip(&cols_j) {
+                    let (Some(ti), Some(tj)) = (col_type(bi, ci), col_type(bj, cj)) else {
+                        continue;
+                    };
+                    if !ti.eq_ignore_ascii_case(tj) && (is_float(ti) || is_float(tj)) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Whether `scan`'s table is covered by a declared PK/UNIQUE key over
 /// `bindings` ([`table_key_covered_by_bindings`]). An `rr:sqlQuery` view scan
 /// (no `TableSchema` entry to prove anything from) is conservatively treated as
@@ -1643,9 +1715,17 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: 
         .find(|s| s.alias == alias)
         .expect("alias came from this branch's own core/opts scan");
     let src_alias = format!("sfs{alias}");
+    // The immediate SQL text this wrap is about to nest — an `rr:sqlQuery` view
+    // scans its OWN text for [`col_is_unquoted_alias`] below; a `Table` scan has
+    // no such text (there is nothing to be an unquoted ALIAS of — a base-table
+    // column reference is never itself an alias declaration).
+    let inner_sql = match &scan.source {
+        LogicalSource::Table(_) => None,
+        LogicalSource::Query(q) => Some(q.clone()),
+    };
     let select_list = cols
         .iter()
-        .map(|c| format!("{src_alias}.{}", dialect.quote_ident(c)))
+        .map(|c| wrap_col_ref(&src_alias, c, inner_sql.as_deref(), dialect))
         .collect::<Vec<_>>()
         .join(", ");
     let from = match &scan.source {
@@ -1657,6 +1737,136 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: 
         LogicalSource::Query(q) => format!("({q}) {src_alias}"),
     };
     scan.source = LogicalSource::Query(format!("SELECT DISTINCT {select_list} FROM {from}"));
+}
+
+/// Render one `<expr> AS <alias>` SELECT-list item for [`wrap_scan_distinct`].
+/// Mirrors `emit::colref`'s two dialect special-cases — that function isn't
+/// reachable here (no live `ColumnCatalog` exists yet at D1's translate-time
+/// call site, which is exactly the seam that broke on PostgreSQL: this wrap
+/// bakes `<src_alias>.<col>` directly into a NEW SQL string rather than
+/// routing through the catalog-aware emission path every OTHER column
+/// reference in the branch still gets) — so both fixes have to be re-applied
+/// here specifically, PostgreSQL-only, C0e repair. **Always emits an explicit
+/// `AS <alias>`, in the SAME quoted-or-unquoted form as the expression's own
+/// reference**, even where SQL's own "no explicit alias inherits the
+/// reference's name" rule would have produced the identical output column
+/// name anyway: a wrap can nest inside ANOTHER wrap (`iq::lower::
+/// pool_rendered`'s own D2 rendered-projection fallback, when a D1-wrapped
+/// arm also needs width-mismatch pooling — W3C R2RMLTC0011a) or be re-probed
+/// as a `LogicalSource::Query` by a live `ColumnCatalog` — either consumer
+/// re-derives this SAME quoting decision from THIS layer's own SQL text via
+/// [`col_is_unquoted_alias`], which only ever looks for an EXPLICIT `AS`
+/// clause; without one here, a nested consumer has no signal to detect that
+/// D1 already folded this column and would default back to the mapping's
+/// original, unfolded text.
+///
+/// * **`rowid` → `ctid`** (identical to `emit::colref`'s own special case):
+///   Direct Mapping's synthetic no-PK blank-node identifier reads the
+///   physical row id (`sf-mapping`'s `rowid` column). SQLite exposes that as
+///   the `rowid` pseudo-column; PostgreSQL has none — render the equivalent
+///   system tuple id `(sfsN.ctid)::text` (existential blank-node seed; only
+///   per-row uniqueness matters, ADR-0005). Confirmed live: every
+///   DirectMapping no-PK W3C case (DirectGraphTC0000/1/2/3/4/5/12/14/17/18/
+///   22/25) failed with "column sfsN.rowid does not exist" before this.
+/// * **A column that is itself an UNQUOTED alias in the immediate inner SQL
+///   stays unquoted.** An `rr:sqlQuery` view scan's OWN output column names
+///   come from whatever the mapping author wrote in the view's `SELECT … AS
+///   <alias>` — PostgreSQL case-folds an UNQUOTED alias DECLARATION to
+///   lowercase at view-definition time (`AS StudentId` → output column
+///   `studentid`); quoting the REFERENCE (`"StudentId"`, the literal
+///   mapping-authored text, `dialect.quote_ident`'s unconditional behavior)
+///   pins it to the UNFOLDED text, which the folded column can no longer
+///   match — confirmed live: every one of W3C R2RMLTC0002d/0003b/0009d/
+///   0011a/0014b/0014c/0014d is an unquoted view alias hitting exactly this.
+///   Deliberately narrower than "any regular-identifier-shaped name over a
+///   view source": an EARLIER version of this fix unquoted every such name
+///   unconditionally and REGRESSED four different, previously-passing cases
+///   (R2RMLTC0002d's OWN sibling columns `"ID"`/`"Name"` in the SAME view,
+///   each a bare, un-aliased, quoted PASS-THROUGH of a delimited base-table
+///   column — R2RML §5's `"ID"`/`"Name"` stay exact-case, so unquoting
+///   THOSE broke them). [`col_is_unquoted_alias`] checks for the SPECIFIC
+///   `AS <col>` (unquoted) text, not just `col`'s own shape, so a
+///   bare/quoted-alias reference correctly stays on the quoted path.
+/// * **A `Table` source's own columns, or a view-sourced column that is not
+///   itself an unquoted alias, keep the unconditional quoted rendering**:
+///   the W3C fixtures' base-table DDL is delimited (quoted, exact-case
+///   preserved, e.g. `CREATE TABLE "Student" ("ID" INTEGER, …)`), so quoting
+///   is the correct, matching reference for a `Table` scan; a bare or
+///   quoted-alias view column likewise preserves exact case in the view's
+///   own output, so quoting the reference is correct there too.
+fn wrap_col_ref(
+    src_alias: &str,
+    col: &str,
+    inner_sql: Option<&str>,
+    dialect: sf_sql::Dialect,
+) -> String {
+    if dialect == sf_sql::Dialect::Postgres && col == "rowid" {
+        // Aliased AS `ctid`, NOT `rowid`: `emit::colref`'s own rowid special
+        // case always emits a bare `t{alias}.ctid` for ANY `ColRef.column ==
+        // "rowid"`, regardless of what this wrap's own output is named — so
+        // the wrapped derived table must expose a column literally called
+        // `ctid` for that outer reference to resolve, or this wrap would
+        // silently orphan the very reference it exists to serve.
+        return format!("({src_alias}.ctid)::text AS ctid");
+    }
+    if inner_sql.is_some_and(|sql| col_is_unquoted_alias(sql, col)) {
+        return format!("{src_alias}.{col} AS {col}");
+    }
+    let quoted = dialect.quote_ident(col);
+    format!("{src_alias}.{quoted} AS {quoted}")
+}
+
+/// Whether `col` appears as an UNQUOTED SQL alias (`AS col` / `as col`,
+/// case-insensitive `AS` keyword, exact-case `col`, word-bounded on both
+/// sides — no partial match inside a longer identifier, e.g. `col = "ID"`
+/// must not match inside `AS Sport_ID`) anywhere in `sql`. [`wrap_col_ref`]'s
+/// signal that `col`'s output column was already case-folded at the point
+/// this `AS` clause was written, so a reference to it should fold the same
+/// way rather than pin to the exact-case source text. A bare, un-aliased
+/// reference or a QUOTED alias (`AS "col"`) does not match — both preserve
+/// `col`'s exact case in the source's own output, so quoting the reference
+/// stays correct for those. No `regex` dependency: a plain byte scan for the
+/// literal keyword is sufficient here (`sql` is a bounded mapping-authored
+/// string, never a hot loop).
+///
+/// `pub(crate)`: also reused by `iq::lower::pool_rendered` (Run 4 Wave C0d
+/// Mechanism B, W3C R2RMLTC0011a) against an arm's OWN `scan.source` text —
+/// which, when D1 already wrapped that scan, IS `wrap_col_ref`'s own output
+/// (`<expr> AS <alias>`, in the SAME quoted-or-unquoted form this function
+/// detects), so the identical check composes correctly whether the
+/// immediate source is the ORIGINAL mapping-authored `rr:sqlQuery` or an
+/// already-D1-wrapped derived table one layer in.
+pub(crate) fn col_is_unquoted_alias(sql: &str, col: &str) -> bool {
+    fn is_ident_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let bytes = sql.as_bytes();
+    let lower = sql.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("as") {
+        let as_start = from + rel;
+        let as_end = as_start + 2;
+        from = as_end;
+        let word_before_ok = as_start == 0 || !is_ident_byte(bytes[as_start - 1]);
+        let word_after_ok = as_end >= bytes.len() || !is_ident_byte(bytes[as_end]);
+        if !word_before_ok || !word_after_ok {
+            continue;
+        }
+        let mut i = as_end;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'"' {
+            continue; // a QUOTED alias — exact case preserved, not this rule's target
+        }
+        if sql[i..].starts_with(col) {
+            let after = i + col.len();
+            if after >= bytes.len() || !is_ident_byte(bytes[after]) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether some declared key of `ts` (the PK, or a `UNIQUE` constraint — ADR-0034

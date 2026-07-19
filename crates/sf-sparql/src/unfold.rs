@@ -493,7 +493,8 @@ impl<'a> Unfolder<'a> {
         let mut acc: Vec<Branch> = vec![Branch::empty()];
         for tp in patterns {
             let alts = self.pattern_branches(tp)?;
-            let mut alts = pool_pattern_relation(alts, tp, self.dialect, &mut self.next_alias)?;
+            let mut alts =
+                pool_pattern_relation(alts, tp, self.dialect, &mut self.next_alias, self.schema)?;
             crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema, self.dialect);
             acc = join_branches(acc, alts)?;
             if acc.is_empty() {
@@ -1487,6 +1488,7 @@ fn pool_pattern_relation(
     tp: &TriplePattern,
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
+    schema: &[sf_sql::TableSchema],
 ) -> Result<Vec<Branch>> {
     if arms.len() <= 1 || all_pairwise_disjoint(&arms) {
         return Ok(arms);
@@ -1512,6 +1514,19 @@ fn pool_pattern_relation(
             .iter()
             .map(|&i| arms[i].take().expect("each index visited once"))
             .collect();
+        // Mirrors `iq::resolve`'s identical gate — see `cascade::group_has_unsafe_
+        // float_slot_mismatch`'s doc comment (W3C R2RMLTC0012e) — so flat and tree
+        // agree on the SAME 501 (`differential_tree`'s "flat and tree must agree
+        // on Unsupported" invariant).
+        let member_refs: Vec<&Branch> = members.iter().collect();
+        if crate::cascade::group_has_unsafe_float_slot_mismatch(&member_refs, schema, dialect) {
+            return Err(Error::Unsupported(
+                "D2 pool: a floating-point column would positionally UNION against a \
+                 differently-typed sibling column on PostgreSQL → 501 (cannot be aligned \
+                 soundly in SQL without risking lexical drift — ADR-0025)"
+                    .to_owned(),
+            ));
+        }
         out.push(pool_group(members, &vars, dialect, next_alias)?);
     }
     Ok(out)

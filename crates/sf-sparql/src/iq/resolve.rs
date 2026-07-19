@@ -67,7 +67,7 @@ use crate::iq::node::{triple_pattern_vars, BindDef, IqCond, IqNode};
 use crate::iq::Branch;
 use crate::saturate::Tbox;
 use crate::unfold::{all_pairwise_disjoint, Unfolder};
-use crate::Result;
+use crate::{Error, Result};
 
 /// The resolution context (M3 design §3): the T-mappings, the T-Box, the SQL
 /// dialect, and a **monotone alias counter** shared across the whole tree.
@@ -210,6 +210,30 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                             branches[group[0]].take().expect("each index visited once"),
                         ));
                         continue;
+                    }
+                    // ADR-0025 (sound-pooling shape): a positional pool this group's arms
+                    // would otherwise need can hit PostgreSQL's own `UNION` type-resolver
+                    // (a raw SQL error) or, if aligned via a `CAST`, silently drift a
+                    // floating-point column's lexical form — see `cascade::group_has_
+                    // unsafe_float_slot_mismatch`'s doc comment for the live-verified
+                    // evidence (W3C R2RMLTC0012e). Checked BEFORE bridging (needs the
+                    // still-`Branch` members, not yet converted to `IqNode`).
+                    let member_refs: Vec<&Branch> = group
+                        .iter()
+                        .map(|&i| branches[i].as_ref().expect("not yet taken"))
+                        .collect();
+                    if crate::cascade::group_has_unsafe_float_slot_mismatch(
+                        &member_refs,
+                        cx.unfolder.schema,
+                        cx.unfolder.dialect,
+                    ) {
+                        return Err(Error::Unsupported(
+                            "D2 pool: a floating-point column would positionally UNION \
+                             against a differently-typed sibling column on PostgreSQL → 501 \
+                             (cannot be aligned soundly in SQL without risking lexical drift \
+                             — ADR-0025)"
+                                .to_owned(),
+                        ));
                     }
                     let arms: Vec<IqNode> = group
                         .iter()
