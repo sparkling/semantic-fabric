@@ -1112,3 +1112,90 @@ async fn pg_numeric_columns_readable_end_to_end() {
         .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
         .await;
 }
+
+/// PostgreSQL NUMERIC NaN/+Infinity/-Infinity refusal, end-to-end through the real
+/// R2RML pipeline (translate -> emit -> `select_pg` -> `pg_value`/`pg_xsd_code` ->
+/// `decode_pg_numeric` -> `exec_core::map_sql_err`) -- not just the raw wire-decode
+/// unit tests (see `sf_sql::backend::pg::tests::decode_pg_numeric_*_is_unsupported`)
+/// or the `pg_value`/`next_row`-level live test (`sf_sql::backend::pg::tests::
+/// pg_value_numeric_nan_and_infinity_surface_as_unsupported`) for those narrower
+/// layers. `xsd:decimal` has no NaN/Infinity representation, so refusing these
+/// three PG NUMERIC special values is CORRECT -- but it must surface as
+/// `sf_sparql::Error::Unsupported` (-> HTTP 501 via sf-serve's `status_for`), never
+/// a generic `Error::Sql` (-> HTTP 500): a 500 would misclassify a KNOWN, documented
+/// non-representable value as an unexpected internal failure. `map_sql_err` only
+/// pattern-matches the top-level `sf_sql::Error::Unsupported` variant, so this also
+/// guards the layer below (`pg_value`) staying honest about that variant, not just
+/// wrapping it as `Error::Postgres` through `tokio_postgres::Row::try_get`'s
+/// `FromSql`-failure re-wrap. Live-PG only; gracefully skips when no server is
+/// reachable.
+#[tokio::test]
+async fn pg_numeric_nonfinite_values_refused_as_unsupported() {
+    let base = base_conn();
+    let conn_str = format!("{base} dbname=postgres");
+    let Ok(admin) = connect(&conn_str).await else {
+        eprintln!(
+            "skipping pg_numeric_nonfinite_values_refused_as_unsupported: no live PostgreSQL reachable"
+        );
+        return;
+    };
+    let db = format!("sf_pgnan_e2e_{}", std::process::id());
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+    admin
+        .batch_execute(&format!("CREATE DATABASE {db}"))
+        .await
+        .expect("create test db");
+    let conn_str2 = format!("{base} dbname={db}");
+    let client = connect(&conn_str2).await.expect("connect to test db");
+    client
+        .batch_execute(
+            "CREATE TABLE bad_amt (id INTEGER PRIMARY KEY, p NUMERIC);
+             INSERT INTO bad_amt VALUES (1, 'NaN'), (2, 'Infinity'), (3, '-Infinity');",
+        )
+        .await
+        .expect("seed table");
+
+    let r2rml = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#A> rr:logicalTable [ rr:tableName "bad_amt" ] ;
+    rr:subjectMap [ rr:template "http://ex/a/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "p" ] ] .
+"#;
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let schema = introspect_all_pg(&client).await.expect("pg introspection");
+
+    // Each non-finite class in its own query, so a regression pinpoints exactly
+    // which sign value broke (mirrors decode_pg_numeric's own 3-way unit split).
+    for (id, class, needle) in [
+        (1, "NaN", "NaN"),
+        (2, "+Infinity", "+Infinity"),
+        (3, "-Infinity", "-Infinity"),
+    ] {
+        let q = format!("PREFIX ex: <http://ex/> SELECT ?p WHERE {{ <http://ex/a/{id}> ex:p ?p }}");
+        let tp = parse_and_translate_with(&q, &maps, Dialect::Postgres, &Tbox::default(), &schema)
+            .unwrap_or_else(|e| panic!("translate {class} query: {e}"));
+        let err = match exec_pg::select_pg(&tp, &client).await {
+            Ok(sol) => panic!(
+                "PG NUMERIC {class} must be refused, not decoded: {} row(s)",
+                sol.rows.len()
+            ),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, sf_sparql::Error::Unsupported(_)),
+            "PG NUMERIC {class} must classify as Error::Unsupported (-> HTTP 501), got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains(needle),
+            "PG NUMERIC {class} error message should name the value class, got: {msg}"
+        );
+    }
+
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+}
