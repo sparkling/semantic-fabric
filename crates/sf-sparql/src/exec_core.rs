@@ -1706,9 +1706,20 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             }
             // SPARQL §11.4: AVG of xsd:double values stays xsd:double (else decimal). See the
             // SUM promotion note above (C.6b) — mirrors the SQL path's `avg_result_code`.
+            //
+            // ADR-0025 C.10: both arms below gate on `nums.len() < vals.len()`, NOT
+            // `nums.is_empty()` — the same non-numeric-operand check `AggKind::Sum` already
+            // uses above. The `is_empty()` form only caught an ALL-non-numeric group; a group
+            // MIXING numeric and non-numeric operands (e.g. a UNION arm binding the same var
+            // to a plain string) had `numeric_term`/`decimal_term_value`'s `filter_map` quietly
+            // drop the non-numeric ones and average just the numeric-parseable SUBSET — a real
+            // `=_bag` wrong answer per SPARQL §11 (Avg via Sum: ANY non-numeric operand errors
+            // the whole aggregate, spareval-confirmed), previously tracked as a deliberate,
+            // separate residue (ADR-0025 progress log, 2026-07-18 addendum). SUM never had this
+            // gap; AVG's two branches independently repeat the mistake.
             if vals.iter().any(|t| is_xsd_double(t)) {
                 let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
-                if nums.is_empty() {
+                if nums.len() < vals.len() {
                     return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
                 }
                 let avg = nums.iter().sum::<f64>() / nums.len() as f64;
@@ -1720,13 +1731,10 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 // the old `nums.iter().sum::<f64>() / len`. A non-terminating quotient (e.g.
                 // 11/3) rendered as an f64 artifact ("3.6666666666666665") that diverged from
                 // the spareval oracle's own exact decimal AVG ("3.666666666666666666"): same
-                // `oxsdatatypes::Decimal` type on both sides ⇒ =_bag equality. Mirrors the
-                // f64 branch's "silently average just the numeric-parseable subset" quirk
-                // verbatim (a separate, pre-existing behaviour, out of scope here) — only the
-                // arithmetic TYPE changes.
+                // `oxsdatatypes::Decimal` type on both sides ⇒ =_bag equality.
                 let nums: Vec<Decimal> =
                     vals.iter().filter_map(|t| decimal_term_value(t)).collect();
-                if nums.is_empty() {
+                if nums.len() < vals.len() {
                     return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
                 }
                 let Some(sum) = nums

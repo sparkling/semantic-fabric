@@ -2,8 +2,10 @@
 //! functions (SUBJECT/PREDICATE/OBJECT/isTRIPLE/TRIPLE, [`rewrite_function_call`]),
 //! composed-aware `=`/`sameTerm` ([`rewrite_equality`]), and the general
 //! recursive `Expression` walker ([`rewrite_expr`]) that dispatches to both
-//! (plus [`super::walk::rewrite_pattern`] for `EXISTS`/`NOT EXISTS` bodies —
-//! the only `Expression` variant carrying a nested `GraphPattern`).
+//! (plus [`super::top_level::rewrite_top_level_pattern`] for `EXISTS`/`NOT
+//! EXISTS` bodies — the only `Expression` variant carrying a nested
+//! `GraphPattern`; Run 4 Wave B2 routes it through the boundary relaxation
+//! rather than plain `rewrite_pattern` — see that arm's own comment).
 //! [`error_marker_expr`]/[`bool_literal_expr`] are the two "resolve to a
 //! plain `Expression` FILTER/BIND already understand" leaves these rewrites
 //! bottom out in; see [`error_marker_expr`]'s own doc comment for why the
@@ -16,7 +18,6 @@ use crate::{Error, Result};
 
 use super::env::StarEnv;
 use super::util::{ERROR_MARKER_IRI, XSD_BOOLEAN};
-use super::walk::rewrite_pattern;
 
 /// Rule R5a: recurse through an expression tree looking for `EXISTS`/`NOT
 /// EXISTS` bodies (the only `Expression` variant carrying a `GraphPattern`) —
@@ -85,7 +86,19 @@ pub(super) fn rewrite_expr(
         UnaryPlus(a) => UnaryPlus(Box::new(rewrite_expr(a, n, env)?)),
         UnaryMinus(a) => UnaryMinus(Box::new(rewrite_expr(a, n, env)?)),
         Not(a) => Not(Box::new(rewrite_expr(a, n, env)?)),
-        Exists(gp) => Exists(Box::new(rewrite_pattern(gp, n, env)?)),
+        // Run 4 Wave B2: an EXISTS/NOT EXISTS body is the SAME kind of
+        // boundary `top_level::rewrite_top_level_pattern`'s doc comment
+        // argues a SELECT's own top-level pattern is (only a boolean escapes
+        // — the body's per-row shape, composed or not, is never observed
+        // outside it), so it gets the identical relaxation: a bare mixed
+        // Union/VALUES, or one wrapped directly in a FILTER, no longer
+        // forces a whole-query-uniform composed-ness answer. Anything else
+        // falls through to `rewrite_top_level_pattern`'s own catch-all,
+        // which is `rewrite_pattern` unchanged — behavior-preserving for
+        // every EXISTS body shape this wave does not touch.
+        Exists(gp) => Exists(Box::new(super::top_level::rewrite_top_level_pattern(
+            gp, n, env,
+        )?)),
         If(a, b, c) => If(
             Box::new(rewrite_expr(a, n, env)?),
             Box::new(rewrite_expr(b, n, env)?),

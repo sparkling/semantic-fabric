@@ -3,7 +3,7 @@
 //! `differential_paths.rs`'s structure (engine-vs-expected helpers + a
 //! fixture-per-shape layout) and reuses `differential_tree.rs`'s tree/flat
 //! parity idea (both translators must agree on row-bag AND on the 501 set)
-//! via this file's own `diff()`/`assert_locked_501` helpers — a separate
+//! via this file's own `diff()` helper — a separate
 //! integration-test binary cannot import another one's private items, so the
 //! pattern is replicated rather than shared code. Deliberately NOT
 //! `differential_tree.rs` itself, which a parallel work stream is appending
@@ -324,26 +324,6 @@ fn diff_construct(create: &str, r2rml: &str, query: &str) -> Vec<Triple> {
              flat={flat:?}\n tree={tree:?}"
         ),
     }
-}
-
-/// A locked boundary (unrelated to the star rewrite itself, or a still-
-/// out-of-scope Wave-2b construct — see each call site's own comment): both
-/// engines must 501 identically.
-fn assert_locked_501(r2rml: &str, query: &str) {
-    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
-    let q = SparqlParser::new()
-        .parse_query(query)
-        .expect("query parses");
-    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    assert!(
-        matches!(flat, Err(Error::Unsupported(_))),
-        "expected 501 on the flat path for `{query}`, got {flat:?}"
-    );
-    assert!(
-        matches!(tree, Err(Error::Unsupported(_))),
-        "expected 501 on the tree path for `{query}`, got {tree:?}"
-    );
 }
 
 /// The baseline (non-star) `?p ex:hasAge ?age` bindings, keyed by person IRI —
@@ -1448,9 +1428,11 @@ fn union_arms_disagreeing_on_composed_ness_resolves_at_the_top_level() {
     // 2's uniform-composed-ness law — the left arm composes `?t` (via
     // `rdf:reifies`, to the PROPOSITION); the right arm binds the SAME `?t`
     // as an ordinary, non-composing pattern variable (to the REIFIER, a
-    // DIFFERENT value — `#PersonAgeAssertion`'s own subject). Disagreement
-    // reached this way is STILL rejected in general (see the companion
-    // `_wrapped_in_a_filter_is_still_a_locked_501` test below) — but this
+    // DIFFERENT value — `#PersonAgeAssertion`'s own subject). A FILTER
+    // wrapping this same union now ALSO resolves, per arm (see the companion
+    // `_wrapped_in_a_filter_now_resolves_per_arm` test below; deeper
+    // nesting — under a JOIN, or a CONSTRUCT template — is still rejected,
+    // pinned in `differential_star_observers.rs`) — but this
     // EXACT query's union is the SELECT's own top-level pattern (nothing
     // else references `?t`), where `star::rewrite_top_level_pattern` proves
     // it observationally safe: each top-level `Plan` branch reconstructs
@@ -1486,16 +1468,21 @@ fn union_arms_disagreeing_on_composed_ness_resolves_at_the_top_level() {
 }
 
 #[test]
-fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked_501() {
-    // The IDENTICAL disagreement as the previous test, but wrapped in a
-    // FILTER referencing `?t` (`isTRIPLE`, a genuine sensitive consumer:
-    // `star::rewrite_and_check_composed` resolves it to ONE static boolean
-    // for the WHOLE query, which would be silently WRONG for whichever arm
-    // did not match it) — no longer the SELECT's bare top-level pattern, so
-    // `rewrite_top_level_pattern`'s allowlist does not match and this falls
-    // through to the ORIGINAL, unconditional uniform-composed-ness check —
-    // proves the relaxation is scoped exactly to "nothing else in the query
-    // can observe the disagreement", not "any top-level SELECT union".
+fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_now_resolves_per_arm() {
+    // FORMERLY a locked 501 (the F4b boundary pin): the IDENTICAL
+    // disagreement as the previous test, wrapped in a FILTER referencing
+    // `?t` (`isTRIPLE`, a genuinely sensitive consumer — the OLD
+    // `star::rewrite_and_check_composed` resolved it to ONE static boolean
+    // for the WHOLE query). Run 4 Wave B2's `rewrite_filter_over_union`
+    // now resolves the FILTER expression PER ARM, each against its own
+    // arm's composedness (mirroring `iq::normalize`'s later
+    // Filter-over-Union distribution, done before composedness collapses
+    // to one static answer): the composed arm's `isTRIPLE(?t)` is
+    // statically true — its 3 propositions survive — and the plain arm's
+    // is statically false — its 3 reifiers are dropped. Verified against
+    // the independent spareval oracle. Deeper nesting (under a JOIN, or a
+    // CONSTRUCT template) is still a locked 501, pinned in
+    // `differential_star_observers.rs`.
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?t WHERE {{ \
@@ -1505,7 +1492,16 @@ fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked
            FILTER(isTRIPLE(?t)) \
          }}"
     );
-    assert_locked_501(CENSUS_R2RML, &query);
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(
+        rows.len(),
+        3,
+        "only the composed arm's 3 propositions survive isTRIPLE: got={rows:#?}"
+    );
+    assert!(
+        rows.iter().all(|r| matches!(&r["t"], Term::Triple(_))),
+        "every surviving ?t is a native triple term: got={rows:#?}"
+    );
 }
 
 #[test]
@@ -1516,9 +1512,10 @@ fn values_mixed_triple_and_plain_cells_resolves_at_the_top_level() {
     // (`star::decompose_column`'s doc comment) — but at the SELECT's own top
     // level, `star::partition_values_by_triple_shape` row-partitions it into
     // TWO uniform VALUES blocks, unioned, reducing it to the (now-resolved)
-    // union-mixed case above. Disagreement reached any OTHER way is still
-    // rejected (see the companion `_wrapped_in_a_filter_is_still_a_locked_501`
-    // test below).
+    // union-mixed case above. A FILTER wrapping it now also resolves, per
+    // arm (see the companion `_wrapped_in_a_filter_now_resolves_per_arm`
+    // test below); deeper nesting is still rejected, pinned in
+    // `differential_star_observers.rs`.
     let query =
         format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} }}");
     let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
@@ -1541,18 +1538,36 @@ fn values_mixed_triple_and_plain_cells_resolves_at_the_top_level() {
 }
 
 #[test]
-fn values_mixed_triple_and_plain_cells_wrapped_in_a_filter_is_still_a_locked_501() {
-    // The IDENTICAL mixed VALUES column, but wrapped in a FILTER referencing
-    // `?t` — falls through to the ORIGINAL, unconditional
-    // `star::decompose_column` mixed-shape check (never reaches the
-    // top-level relaxation).
+fn values_mixed_triple_and_plain_cells_wrapped_in_a_filter_now_resolves_per_arm() {
+    // FORMERLY a locked 501 (the F4b boundary pin): the IDENTICAL mixed
+    // VALUES column, wrapped in a FILTER referencing `?t`.
+    // `star::partition_values_by_triple_shape` row-partitions the column
+    // into two uniform VALUES blocks (exactly as in the sibling top-level
+    // test above), and Run 4 Wave B2's per-arm FILTER resolution then
+    // evaluates `isTRIPLE(?t)` against EACH block's own shape: statically
+    // true for the ground-triple cell (kept), statically false for the
+    // plain-IRI cell (dropped). Verified against the spareval oracle.
     let query = format!(
         "{EX}SELECT ?t WHERE {{ \
            VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} \
            FILTER(isTRIPLE(?t)) \
          }}"
     );
-    assert_locked_501(CENSUS_R2RML, &query);
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the ground-triple cell survives isTRIPLE: got={rows:#?}"
+    );
+    let expected_triple = Triple::new(
+        NamedNode::new_unchecked("http://example.com/a"),
+        NamedNode::new_unchecked("http://example.com/hasAge"),
+        iri("http://example.com/b"),
+    );
+    assert!(
+        matches!(&rows[0]["t"], Term::Triple(t) if **t == expected_triple),
+        "the surviving cell is the ground triple term: got={rows:#?}"
+    );
 }
 
 #[test]

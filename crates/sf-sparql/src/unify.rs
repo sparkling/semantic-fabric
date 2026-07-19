@@ -8,7 +8,7 @@
 //! are disjoint (the seed the IRI-template-mismatch cascade pass formalises); and
 //! otherwise reports the case **unsupported** (deferred, never silently wrong).
 
-use sf_core::ir::{Segment, TermMap, TermType};
+use sf_core::ir::{Segment, TermMap, TermSpec, TermType};
 use sf_core::Term;
 
 use sf_sql::Dialect;
@@ -153,7 +153,9 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
             ColRef::new(a1, c1.clone()),
             ColRef::new(a2, c2.clone()),
         )]),
-        (TermMap::Template(x, _), TermMap::Template(y, _)) => align_templates(x, a1, y, a2),
+        (TermMap::Template(x, spec1), TermMap::Template(y, spec2)) => {
+            align_templates(x, spec1, a1, y, spec2, a2)
+        }
         _ => Unify::Unsupported("column vs template unification".to_owned()),
     }
 }
@@ -161,13 +163,17 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
 /// Two templates unify iff their segment kind-sequence matches (same fixed text
 /// at each literal position, a column slot at each column position). Aligned
 /// columns become pairwise raw-column equalities; a fixed-text mismatch proves
-/// disjointness; a kind/length mismatch is conservatively unsupported (never an
+/// disjointness; a kind/length mismatch falls to [`template_eq_or_unsupported`]
+/// (Run 4 Wave B3: a `SqlCond::TemplateEq` fallback for the term classes where
+/// that is sound, else the pre-existing conservative Unsupported — never an
 /// unsound prune) UNLESS the ADR-0032 D6 leading-literal-prefix check below
 /// already proved disjointness.
 fn align_templates(
     x: &sf_core::ir::Template,
+    spec1: &TermSpec,
     a1: usize,
     y: &sf_core::ir::Template,
+    spec2: &TermSpec,
     a2: usize,
 ) -> Unify {
     let (sx, sy) = (x.segments(), y.segments());
@@ -189,7 +195,15 @@ fn align_templates(
         return Unify::Empty;
     }
     if sx.len() != sy.len() {
-        return Unify::Unsupported("template length mismatch".to_owned());
+        return template_eq_or_unsupported(
+            sx,
+            spec1,
+            a1,
+            sy,
+            spec2,
+            a2,
+            "template length mismatch",
+        );
     }
     let mut eqs = Vec::new();
     for (p, q) in sx.iter().zip(sy.iter()) {
@@ -205,10 +219,92 @@ fn align_templates(
                     ColRef::new(a2, c2.clone()),
                 ));
             }
-            _ => return Unify::Unsupported("template shape mismatch".to_owned()),
+            _ => {
+                return template_eq_or_unsupported(
+                    sx,
+                    spec1,
+                    a1,
+                    sy,
+                    spec2,
+                    a2,
+                    "template shape mismatch",
+                )
+            }
         }
     }
     Unify::Sat(eqs)
+}
+
+/// Run 4 Wave B3 — the fallback [`align_templates`] falls to on a genuine
+/// shape mismatch (`why` names which: different segment count, or same count
+/// but a literal/column kind mismatch at some position): `Sat` with ONE
+/// [`SqlCond::TemplateEq`] rendering EACH template as a SQL string
+/// concatenation and comparing them with `=`, but ONLY when BOTH sides are a
+/// term class where that rendered-string equality IS RDF term equality (see
+/// [`lexical_eq_is_term_eq`]) AND the two sides agree on which class (an IRI
+/// can never equal a literal regardless of lexical form, so a class mismatch
+/// stays the ordinary Unsupported, not a silently-always-false condition —
+/// `unify_derived`'s `term_map_type` check already rules this out for the
+/// join-key caller, but `var_var_eq_beyond_column` calls this directly
+/// without that pre-check, so it is re-verified here). The original
+/// Unsupported(`why`) otherwise: a typed-literal / language-tagged / blank-
+/// node class, where the RENDERED STRING alone does not determine term
+/// equality (see `lexical_eq_is_term_eq`'s doc comment) — a sound-over-
+/// complete 501, never a wrong answer.
+fn template_eq_or_unsupported(
+    sx: &[Segment],
+    spec1: &TermSpec,
+    a1: usize,
+    sy: &[Segment],
+    spec2: &TermSpec,
+    a2: usize,
+    why: &str,
+) -> Unify {
+    if spec1.term_type == spec2.term_type
+        && lexical_eq_is_term_eq(spec1)
+        && lexical_eq_is_term_eq(spec2)
+    {
+        Unify::Sat(vec![SqlCond::TemplateEq(sx.to_vec(), a1, sy.to_vec(), a2)])
+    } else {
+        Unify::Unsupported(why.to_owned())
+    }
+}
+
+/// Whether a template-bound term map's [`TermSpec`] is a term class where SQL
+/// string/lexical equality on the FULLY RENDERED template text is EXACTLY RDF
+/// term equality — the restriction [`template_eq_or_unsupported`]'s
+/// `SqlCond::TemplateEq` fallback needs (Run 4 Wave B3):
+///
+/// * **IRIs** — RDF term equality for two `NamedNode`s IS lexical equality of
+///   their IRI string; no other axis exists.
+/// * **Plain literals** — no language tag, and no datatype (or the
+///   `xsd:string` datatype, its normalised-equal form — mirrors
+///   [`literal_key`]'s own "no datatype ⇒ xsd:string" default): term equality
+///   is again exactly lexical equality (SPARQL §17.4.1.7 simple/`xsd:string`
+///   literal equality IS lexical-form equality — no value space beyond the
+///   string itself).
+///
+/// Excluded (stays the pre-existing Unsupported): every OTHER typed literal —
+/// a datatype's VALUE space can equate two DIFFERENT lexical forms
+/// (`"01"^^xsd:integer` =_value= `"1"^^xsd:integer` but they are different
+/// STRINGS, so a SQL string `=` would wrongly refuse a pair the SPARQL oracle
+/// accepts) — a language-tagged literal (equality ALSO requires the tag to
+/// match, a second axis this string-only comparison does not check), and
+/// blank nodes (not attempted this wave; RDF term equality for a blank node
+/// is scoped to one query solution, a narrower question this lexical
+/// shortcut does not address).
+fn lexical_eq_is_term_eq(spec: &TermSpec) -> bool {
+    match spec.term_type {
+        TermType::Iri => true,
+        TermType::Literal => {
+            spec.language.is_none()
+                && spec
+                    .datatype
+                    .as_ref()
+                    .is_none_or(|dt| dt.as_str() == "http://www.w3.org/2001/XMLSchema#string")
+        }
+        TermType::BlankNode => false,
+    }
 }
 
 /// ADR-0032 D6 flat/tree 501-parity: whether two term definitions for the SAME
@@ -682,9 +778,10 @@ fn flip(op: CmpOp) -> CmpOp {
 ///   like a JOIN key already does: [`align_templates`] (reused verbatim,
 ///   the SAME function `unify_derived` calls) proves same-shape templates
 ///   pairwise-column-equal, a leading-literal-prefix conflict provably
-///   disjoint (constant false), or reports the remaining shape mismatches
-///   Unsupported — sound over complete, same as everywhere else in this
-///   file.
+///   disjoint (constant false), a genuine shape mismatch a `SqlCond::
+///   TemplateEq` rendered-concat comparison (Run 4 Wave B3, IRI/plain-string
+///   classes only), or reports the remaining shape mismatches Unsupported —
+///   sound over complete, same as everywhere else in this file.
 ///
 /// `Ok(None)` for every other shape (a bare column on either side, a
 /// `Coalesce`/`Concat`/`Agg`/`ComposedTriple`, or a constant/template
@@ -706,14 +803,14 @@ fn var_var_eq_beyond_column(
         })),
         (
             TermDef::Derived {
-                term_map: TermMap::Template(t1, _),
+                term_map: TermMap::Template(t1, spec1),
                 alias: a1,
             },
             TermDef::Derived {
-                term_map: TermMap::Template(t2, _),
+                term_map: TermMap::Template(t2, spec2),
                 alias: a2,
             },
-        ) => match align_templates(t1, *a1, t2, *a2) {
+        ) => match align_templates(t1, spec1, *a1, t2, spec2, *a2) {
             Unify::Sat(eqs) => Ok(Some(SqlCond::And(eqs))),
             Unify::Empty => Ok(Some(SqlCond::Or(vec![]))),
             Unify::Unsupported(why) => Err(format!(
@@ -1030,21 +1127,44 @@ mod tests {
     fn align_templates_conflicting_prefix_is_disjoint_even_with_different_lengths() {
         let x = Template::parse("http://ex.org/leaf/{id}").unwrap();
         let y = Template::parse("http://ex.org/person/{id}/{sub}").unwrap();
-        assert!(matches!(align_templates(&x, 0, &y, 1), Unify::Empty));
+        assert!(matches!(
+            align_templates(&x, &TermSpec::iri(), 0, &y, &TermSpec::iri(), 1),
+            Unify::Empty
+        ));
     }
 
-    /// Same leading literal prefix, but different overall length — the
-    /// prefix alone does NOT prove disjointness (the shorter template's own
-    /// text could still continue to match, just via a shape this lift does
-    /// not attempt to reason about further), so this stays the pre-existing
-    /// conservative Unsupported — never an unsound prune.
+    /// Same leading literal prefix, but different overall length, over a
+    /// TYPED-LITERAL class (Run 4 Wave B3's `TemplateEq` fallback excludes
+    /// it — `lexical_eq_is_term_eq`'s doc comment) — the prefix alone does
+    /// NOT prove disjointness, and the shape mismatch is NOT one of the
+    /// classes the fallback can soundly close, so this stays the
+    /// pre-existing conservative Unsupported — never an unsound prune.
+    /// Companion `..._now_resolves_via_template_eq_for_iri` below is the
+    /// IDENTICAL shape over the IRI class, which now DOES close.
     #[test]
-    fn align_templates_same_prefix_different_length_stays_unsupported() {
+    fn align_templates_same_prefix_different_length_stays_unsupported_for_typed_literal() {
+        let spec = TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
         let x = Template::parse("http://ex.org/person/{id}").unwrap();
         let y = Template::parse("http://ex.org/person/{id}/{sub}").unwrap();
         assert!(matches!(
-            align_templates(&x, 0, &y, 1),
+            align_templates(&x, &spec, 0, &y, &spec, 1),
             Unify::Unsupported(_)
+        ));
+    }
+
+    /// Run 4 Wave B3: the IDENTICAL same-prefix/different-length shape as
+    /// the typed-literal companion above, but over the IRI class — now
+    /// resolves to a `SqlCond::TemplateEq` (render-and-compare) instead of
+    /// Unsupported.
+    #[test]
+    fn align_templates_same_prefix_different_length_now_resolves_via_template_eq_for_iri() {
+        let x = Template::parse("http://ex.org/person/{id}").unwrap();
+        let y = Template::parse("http://ex.org/person/{id}/{sub}").unwrap();
+        assert!(matches!(
+            align_templates(&x, &TermSpec::iri(), 0, &y, &TermSpec::iri(), 1),
+            Unify::Sat(eqs) if matches!(eqs.as_slice(), [SqlCond::TemplateEq(..)])
         ));
     }
 
@@ -1056,7 +1176,7 @@ mod tests {
         let x = Template::parse("http://ex.org/person/{id}").unwrap();
         let y = Template::parse("http://ex.org/person/{pid}").unwrap();
         assert!(matches!(
-            align_templates(&x, 0, &y, 1),
+            align_templates(&x, &TermSpec::iri(), 0, &y, &TermSpec::iri(), 1),
             Unify::Sat(eqs) if eqs.len() == 1
         ));
     }
@@ -1144,18 +1264,59 @@ mod tests {
         ));
     }
 
-    /// A genuine template SHAPE mismatch (same prefix, different length)
-    /// stays Unsupported — the sharpened message names the template
-    /// mismatch specifically, not the generic "needs a plain column"
-    /// complaint `var_col` gives for every OTHER unsupported shape.
+    /// Run 4 Wave B3: a genuine template SHAPE mismatch (same prefix,
+    /// different length) over the IRI class — `template_binding` always
+    /// builds `TermSpec::iri()` — now resolves via the `SqlCond::TemplateEq`
+    /// fallback instead of erroring. Companion
+    /// `template_vs_template_shape_mismatch_stays_a_sharpened_501_for_typed_literal`
+    /// below is the IDENTICAL shape over a typed-literal class, which still
+    /// 501s with the SAME sharpened message this test used to assert.
     #[test]
-    fn template_vs_template_shape_mismatch_is_a_sharpened_501() {
+    fn template_vs_template_shape_mismatch_now_resolves_via_template_eq() {
         let mut b = template_binding("t1_s", "http://ex.org/person/{id}", 0);
         b.extend(template_binding(
             "t2_s",
             "http://ex.org/person/{id}/{sub}",
             1,
         ));
+        let cond = filter_cond(
+            &Expression::Equal(Box::new(var("t1_s")), Box::new(var("t2_s"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(
+            matches!(&cond, SqlCond::And(v)
+                if matches!(v.as_slice(), [SqlCond::TemplateEq(..)])),
+            "{cond:?}"
+        );
+    }
+
+    /// The SAME same-prefix/different-length shape mismatch as above, but
+    /// over a TYPED-LITERAL class — `lexical_eq_is_term_eq` excludes it (a
+    /// datatype's value space can equate two different lexical forms), so
+    /// this stays the pre-existing Unsupported, with the SAME sharpened
+    /// message the fix's predecessor test asserted for every shape mismatch.
+    #[test]
+    fn template_vs_template_shape_mismatch_stays_a_sharpened_501_for_typed_literal() {
+        let typed = |var: &str, template: &str, alias: usize| {
+            let mut m = BTreeMap::new();
+            m.insert(
+                var.to_owned(),
+                TermDef::Derived {
+                    term_map: TermMap::Template(
+                        Template::parse(template).unwrap(),
+                        TermSpec::typed_literal(sf_core::NamedNode::new_unchecked(
+                            "http://www.w3.org/2001/XMLSchema#integer",
+                        )),
+                    ),
+                    alias,
+                },
+            );
+            m
+        };
+        let mut b = typed("t1_s", "http://ex.org/person/{id}", 0);
+        b.extend(typed("t2_s", "http://ex.org/person/{id}/{sub}", 1));
         let err = filter_cond(
             &Expression::Equal(Box::new(var("t1_s")), Box::new(var("t2_s"))),
             &b,

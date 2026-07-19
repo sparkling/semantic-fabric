@@ -794,6 +794,28 @@ fn rewrite_cond_alias(cond: &mut SqlCond, fix: &impl Fn(&mut ColRef)) {
                 rewrite_cond_alias(c, fix);
             }
         }
+        // Run 4 Wave B3: apply `fix` to each side's alias via a throwaway `ColRef`
+        // per `Segment::Column` (there is no single owned `ColRef` to hand `fix`
+        // directly, unlike every other arm — the alias is stored once per side,
+        // shared by every column in that side's template) and write the
+        // (possibly rewritten) alias back; a self-join merge renames the WHOLE
+        // alias uniformly, so every column agrees on the same new value.
+        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+            for seg in sx {
+                if let Segment::Column(c) = seg {
+                    let mut cr = ColRef::new(*a1, c.clone());
+                    fix(&mut cr);
+                    *a1 = cr.alias;
+                }
+            }
+            for seg in sy {
+                if let Segment::Column(c) = seg {
+                    let mut cr = ColRef::new(*a2, c.clone());
+                    fix(&mut cr);
+                    *a2 = cr.alias;
+                }
+            }
+        }
     }
 }
 

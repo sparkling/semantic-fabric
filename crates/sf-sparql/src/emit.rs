@@ -1057,7 +1057,83 @@ fn render_cond(
                 pc.alias
             )
         }
+        // Run 4 Wave B3 — `unify::align_templates`'s shape-mismatch fallback:
+        // render each side as a SQL string concatenation and compare with
+        // `=`. See `render_template_concat`'s doc comment for the
+        // dialect-support boundary and the NULL-propagation soundness
+        // argument (why a NULL underlying column correctly excludes the row
+        // rather than needing special-casing here).
+        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+            let r1 = render_template_concat(sx, *a1, dialect, actuals, params, pidx)?;
+            let r2 = render_template_concat(sy, *a2, dialect, actuals, params, pidx)?;
+            format!("{r1} = {r2}")
+        }
     })
+}
+
+/// Render one template's segments as a dialect-appropriate SQL string
+/// concatenation — [`SqlCond::TemplateEq`]'s per-side rendering (Run 4 Wave
+/// B3). Every `Segment::Literal` is a bound parameter (ADR-0010 R1): the
+/// text is mapping-trusted, not query-supplied, but this still follows the
+/// blanket "values are bound parameters only" rule rather than hand-rolling
+/// SQL string-literal escaping. Every `Segment::Column` renders through the
+/// SAME [`colref`] every other `SqlCond` arm uses.
+///
+/// **NULL-propagation soundness.** On every dialect rendered below, `||`
+/// (Postgres/SQLite) and `CONCAT(...)` (MySQL) return SQL `NULL` if ANY
+/// operand is `NULL` — so `render(t1) = render(t2)` evaluates to UNKNOWN
+/// (never `TRUE`) whenever a referenced column is `NULL`, and a WHERE/JOIN
+/// condition that is UNKNOWN excludes the row, same as `FALSE`. This is NOT
+/// an approximation: `sf_core::term::generate_into`'s `TermMap::Template`
+/// arm (`Template::expand`, per R2RML §11) ALREADY treats "any referenced
+/// column is NULL" as "this variable is UNBOUND" for that row when
+/// RECONSTRUCTING the SAME template in Rust — `sf-core/term.rs`'s
+/// `null_in_template_yields_no_term` test locks this in. So a NULL-collapsed
+/// concatenation here excludes EXACTLY the rows whose SPARQL-level operand
+/// would have been unbound anyway (comparing against an unbound variable is
+/// a type error ⇒ the row is excluded from a FILTER, and an unbound shared
+/// variable cannot correlate a join either) — the SQL and RDF answers agree
+/// by construction, not by coincidence.
+///
+/// **Dialect support.** Only the three PRODUCTION-WIRED dialects
+/// (`sf_sql::Dialect`'s own grouping) are implemented: PostgreSQL/SQLite via
+/// ANSI `||`, MySQL via `CONCAT(...)` (`||` is boolean OR there by default,
+/// per MySQL's non-default `PIPES_AS_CONCAT` sql_mode). Every OTHER dialect
+/// returns `Unsupported` rather than guessing — e.g. SQL Server's own
+/// `CONCAT()` function treats `NULL` as an EMPTY STRING (breaking the
+/// soundness argument above outright), and `+`, SQL Server's NULL-safe
+/// concat operator, is unverified against this rendering; Oracle/DuckDB/etc.
+/// are ANSI-`||`-following by reputation but likewise unverified here —
+/// "sound over complete", the same bar `str_match`'s PostgreSQL-only `LIKE`
+/// pushdown already sets for an analogous dialect-behavior gap.
+fn render_template_concat(
+    segs: &[sf_core::ir::Segment],
+    alias: usize,
+    dialect: Dialect,
+    actuals: &HashMap<usize, Vec<String>>,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+) -> Result<String> {
+    use sf_core::ir::Segment;
+    let mut parts = Vec::with_capacity(segs.len());
+    for seg in segs {
+        parts.push(match seg {
+            Segment::Literal(text) => {
+                params.push(text.to_string());
+                *pidx += 1;
+                dialect.placeholder(*pidx)
+            }
+            Segment::Column(c) => colref(&ColRef::new(alias, c.clone()), dialect, actuals),
+        });
+    }
+    match dialect {
+        Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
+        Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
+        other => Err(Error::Unsupported(format!(
+            "template-shape-mismatch equality (SQL CONCAT fallback) is not implemented for \
+             {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
+        ))),
+    }
 }
 
 fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {

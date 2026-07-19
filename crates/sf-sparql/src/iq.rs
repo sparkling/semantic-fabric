@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use sf_core::datatype::XsdTypeCode;
-use sf_core::ir::{LogicalSource, TermMap, TermType};
+use sf_core::ir::{LogicalSource, Segment, TermMap, TermType};
 use sf_core::Term;
 use spargebra::algebra::Expression;
 
@@ -326,6 +326,19 @@ pub enum SqlCond {
         conds: Vec<SqlCond>,
         negated: bool,
     },
+    /// `render(t1) = render(t2)` — Run 4 Wave B3, the general fallback for two
+    /// template-bound term definitions [`crate::unify::align_templates`] can
+    /// neither align column-by-column (same segment kind-sequence) nor prove
+    /// disjoint (a leading-literal-prefix conflict). Each side is the
+    /// template's own segment list paired with its source alias (the SAME
+    /// `Segment`s `align_templates` reads); [`crate::emit`] renders each side
+    /// as a dialect-appropriate SQL string concatenation and compares the two
+    /// with `=`. `align_templates` only ever builds this for the term classes
+    /// where SQL lexical/string equality on the rendered form IS RDF term
+    /// equality (IRIs; plain, untagged, untyped-or-`xsd:string` literals) —
+    /// see its own doc comment for the restriction and the NULL-propagation
+    /// soundness argument.
+    TemplateEq(Vec<Segment>, usize, Vec<Segment>, usize),
 }
 
 /// How a [`SqlCond::StrMatch`] matches (the near-free FTS baseline, ADR-0020 §2).
@@ -706,6 +719,23 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
         // scans, and the outer correlation columns are already projected via the
         // outer bindings — nothing is added here.
         SqlCond::NotExists { .. } | SqlCond::Exists { .. } | SqlCond::PathExists { .. } => {}
+        // Run 4 Wave B3: every `Segment::Column` on EITHER side is a real column
+        // reference against that side's alias — the FK/PK elimination safety
+        // checks (`joinelim.rs`'s `parent_referenced_only_via[_set]`) that consume
+        // this walk MUST see them, or a parent scan a `TemplateEq` still needs
+        // could be eliminated out from under it, leaving a dangling alias.
+        SqlCond::TemplateEq(sx, a1, sy, a2) => {
+            for seg in sx {
+                if let Segment::Column(c) = seg {
+                    f(&ColRef::new(*a1, c.clone()));
+                }
+            }
+            for seg in sy {
+                if let Segment::Column(c) = seg {
+                    f(&ColRef::new(*a2, c.clone()));
+                }
+            }
+        }
     }
 }
 

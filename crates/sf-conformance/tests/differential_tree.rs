@@ -1469,6 +1469,39 @@ fn agg_over_union_sum_avg() {
     ));
 }
 
+// ADR-0025 C.10 (Run 4 Wave B1): AVG over a group MIXING numeric and non-numeric operands
+// must be UNBOUND for the whole group (SPARQL §11, Avg via Sum — ANY non-numeric operand
+// errors the aggregate; spareval-confirmed). `rust_agg`'s AVG previously averaged only the
+// numeric-PARSEABLE SUBSET, silently dropping the non-numeric operand instead of erroring —
+// a real `=_bag` wrong answer, tracked as a deliberate residue in the ADR-0025 progress log
+// (2026-07-18 addendum: "the pre-existing 'average the numeric-parseable subset' quirk").
+// SUM never had this gap (it already gated on `nums.len() < vals.len()`); this closes AVG
+// to the same check. `?v`'s cross-arm datatype mismatch (xsd:integer vs plain string) makes
+// `try_sql_group_over_union` bail (`shape_eq` false), so this is guaranteed to route through
+// `rust_group`/`rust_agg` — the exact code this fixes — not the SQL-pushdown sibling.
+#[test]
+fn agg_over_union_avg_mixed_type_group_is_unbound() {
+    // 11. AVG over a group mixing xsd:integer (ex:q1) and a plain string (ex:p1) bound to
+    // the SAME ?v: g1={10,20,"a","c"}, g2={30,"d"} — BOTH mixed ⇒ UNBOUND for every group.
+    // Pre-fix this wrongly averaged just the numeric subset (g1⇒15, g2⇒30).
+    agg_union(&format!(
+        "{PFX} SELECT ?g (AVG(?v) AS ?a) WHERE {{ ?x ex:grp ?g . \
+         {{ ?x ex:q1 ?v }} UNION {{ ?x ex:p1 ?v }} }} GROUP BY ?g"
+    ));
+}
+
+// Control for the C.10 fix: an ALL-NUMERIC union must still average — no over-refusal from
+// the tightened `nums.len() < vals.len()` gate. Also the first AVG-over-UNION differential
+// (agg_over_union_sum_avg above never had one): g1=(10+20+1+2)/4=8.25, g2=(30+3)/2=16.5 —
+// non-integral, so this exercises the exact-`Decimal` division path too (M3 fix 1 / C.9).
+#[test]
+fn agg_over_union_avg_all_numeric_group_still_averages() {
+    agg_union(&format!(
+        "{PFX} SELECT ?g (AVG(?v) AS ?a) WHERE {{ ?x ex:grp ?g . \
+         {{ ?x ex:q1 ?v }} UNION {{ ?x ex:q2 ?v }} }} GROUP BY ?g"
+    ));
+}
+
 /// A pooled arm's `Aggregation` branch: `Some((agg, subplan_arm_count))` when the
 /// SQL pushdown fired (`try_sql_group_over_union`), `None` when it fell back to
 /// `RustGroup`. Distinguishes the two `agg_over_union_is_lowered` closures the
@@ -5356,4 +5389,153 @@ fn leftjoin_hunt_nullable_left_var_shared_with_multibranch_right() {
     diff_p(&format!(
         "{PFX} SELECT ?n ?d ?x WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d }} OPTIONAL {{ {{ ?d ex:label ?x }} UNION {{ ?d ex:altlabel ?x }} }} }}"
     ));
+}
+
+// ============================================================================
+// Run 4 Wave B3 — template-shape-mismatch equality: `unify::align_templates`'
+// `SqlCond::TemplateEq` fallback (render each template as a dialect-specific
+// SQL string concatenation, compare with `=`) for the term classes where SQL
+// lexical equality on the rendered text IS RDF term equality (IRIs; plain
+// strings) — a genuine shape mismatch used to be an unconditional 501.
+//
+// Fixture Q: `person.hasA` is object-templated `http://ex/item/{code}`
+// (1 column); `extra.hasB` is object-templated `http://ex/{seg1}/{seg2}`
+// (2 columns, SAME leading literal prefix `http://ex/` as the first, so
+// `align_templates`'s disjointness proof does NOT fire either — a genuine
+// shape mismatch, not a disjoint one). Person 1's hasA/hasB coincide
+// (`http://ex/item/42` both ways); person 2's don't; person 3 has no `extra`
+// row at all (OPTIONAL NULL-pads `?b`'s underlying columns).
+// ============================================================================
+
+const Q_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, code TEXT NOT NULL);
+CREATE TABLE extra (pid INTEGER PRIMARY KEY, seg1 TEXT NOT NULL, seg2 TEXT NOT NULL);
+INSERT INTO person VALUES (1, '42'), (2, '99'), (3, '55');
+INSERT INTO extra VALUES (1, 'item', '42'), (2, 'item', '1');
+"#;
+
+const Q_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasA ;
+        rr:objectMap [ rr:template "http://ex/item/{code}" ]
+    ] .
+<#Extra>
+    rr:logicalTable [ rr:tableName "extra" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasB ;
+        rr:objectMap [ rr:template "http://ex/{seg1}/{seg2}" ]
+    ] .
+"#;
+
+const Q_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/p/1> ex:hasA <http://ex/item/42> ; ex:hasB <http://ex/item/42> .
+<http://ex/p/2> ex:hasA <http://ex/item/99> ; ex:hasB <http://ex/item/1> .
+<http://ex/p/3> ex:hasA <http://ex/item/55> .
+"#;
+
+// Same tables, mapped as `xsd:integer`-typed literals instead of IRIs (Q2) —
+// `lexical_eq_is_term_eq` excludes this class, so the IDENTICAL shape
+// mismatch stays a locked 501 (the honest residual).
+const Q2_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasA ;
+        rr:objectMap [ rr:template "{code}" ; rr:datatype xsd:integer ]
+    ] .
+<#Extra>
+    rr:logicalTable [ rr:tableName "extra" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasB ;
+        rr:objectMap [ rr:template "{seg1}{seg2}" ; rr:datatype xsd:integer ]
+    ] .
+"#;
+
+// `diff`'s `(Unsupported, Unsupported) => {}` arm is a silent no-op — it
+// would make a translate-time 501 indistinguishable from "nothing to assert"
+// for the two Run 4 Wave B3 tests below, where a regression back to 501 must
+// FAIL loudly, not silently pass alongside the row-bag check. Belt-and-
+// braces: assert translation itself succeeds, over fixture Q's own R2RML.
+fn assert_q_translates_ok(query: &str) {
+    let schema = sqlite::introspect_all(&sqlite::load(Q_SQL).unwrap()).unwrap();
+    let maps = sf_mapping::parse_r2rml(Q_R2RML).unwrap();
+    let q = parse(query);
+    assert!(
+        flat(&maps, &q, &schema).is_ok(),
+        "expected flat to translate `{query}`"
+    );
+    assert!(
+        tree(&maps, &q, &schema).is_ok(),
+        "expected tree to translate `{query}`"
+    );
+}
+
+// FORMERLY a locked 501: `?a` (1-column template) and `?b` (2-column
+// template, OPTIONAL) can neither align column-by-column (different segment
+// counts) nor prove disjoint (same leading literal prefix) — `unify`'s
+// fallback renders both as a SQL concat and compares. Person 1 survives
+// (equal); person 2 is excluded (unequal); person 3 is excluded (`?b`'s
+// underlying columns are SQL NULL after the LEFT JOIN — the rendered concat
+// is NULL, `=` is UNKNOWN, same exclusion as a genuinely unbound `?b` would
+// give — covers the NULL-column case in the SAME assertion).
+#[test]
+fn b3_filter_equality_across_differently_shaped_iri_templates() {
+    let query = format!(
+        "{PFX} SELECT ?p ?a ?b WHERE {{ \
+         ?p ex:hasA ?a . OPTIONAL {{ ?p ex:hasB ?b }} FILTER(?a = ?b) }}"
+    );
+    assert_q_translates_ok(&query);
+    diff(Q_SQL, Q_R2RML, Some(Q_TTL), &query);
+}
+
+// The SAME two differently-shaped templates, but the equality is now an
+// IMPLICIT JOIN correlation (`?item` shared as the object of two SEPARATE
+// triple patterns, each binding it via a DIFFERENT template) rather than an
+// explicit FILTER — routes through `unify::unify` → `unify_derived` →
+// `align_templates`, the OTHER caller `var_var_eq_beyond_column` (the
+// FILTER path above) shares the fallback with. Only person 1 ties the two
+// patterns together (`http://ex/item/42` both ways).
+#[test]
+fn b3_join_on_equality_across_differently_shaped_iri_templates() {
+    let query =
+        format!("{PFX} SELECT ?p1 ?p2 ?item WHERE {{ ?p1 ex:hasA ?item . ?p2 ex:hasB ?item }}");
+    assert_q_translates_ok(&query);
+    diff(Q_SQL, Q_R2RML, Some(Q_TTL), &query);
+}
+
+// The honest residual: the IDENTICAL shape mismatch as the two tests above,
+// but over `xsd:integer`-typed literals (Q2_R2RML) instead of IRIs —
+// `lexical_eq_is_term_eq` excludes any typed-literal class (a datatype's
+// VALUE space can equate two DIFFERENT lexical forms — e.g. `"01"` vs
+// `"1"` — so a SQL string `=` on the rendered text would not be sound), so
+// this stays an unconditional 501 on both engines.
+#[test]
+fn b3_typed_literal_shape_mismatch_equality_stays_a_locked_501() {
+    let conn = sqlite::load(Q_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(Q2_R2RML).unwrap();
+    let q = parse(&format!(
+        "{PFX} SELECT ?p ?a ?b WHERE {{ \
+         ?p ex:hasA ?a . OPTIONAL {{ ?p ex:hasB ?b }} FILTER(?a = ?b) }}"
+    ));
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "expected flat to 501"
+    );
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "expected tree to 501"
+    );
 }

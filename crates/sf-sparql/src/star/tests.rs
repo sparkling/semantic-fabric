@@ -859,15 +859,17 @@ fn top_level_union_disagreement_is_allowed_for_bare_projection() {
 }
 
 #[test]
-fn top_level_union_disagreement_wrapped_in_filter_still_unsupported() {
-    // The SAME disagreement, but reached through a FILTER wrapping the union
-    // (`isTRIPLE(?t)` — a genuine sensitive consumer, resolved statically by
-    // `env` and so unsound over a mixed union) — NOT one of
-    // `rewrite_top_level_pattern`'s allowed pass-through wrappers, so this
-    // falls straight through to the ordinary, unchanged
-    // `rewrite_pattern`/`rewrite_union(top_level: false)`: the original 501.
-    // Proves the relaxation is scoped to the EXACT top-level shape, not "any
-    // union with a disagreement reachable from a SELECT".
+fn top_level_union_disagreement_wrapped_in_filter_now_resolves_per_arm() {
+    // Run 4 Wave B2: the SAME disagreement, reached through a FILTER wrapping
+    // the union (`isTRIPLE(?t)` — a genuine sensitive consumer) — FORMERLY a
+    // locked 501 (see the differential-level companion
+    // `union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked_501`
+    // in `differential_star.rs`, which documented this EXACT boundary and
+    // now needs the same flip). `rewrite_filter_over_union` distributes the
+    // FILTER into each arm and resolves `isTRIPLE(?t)` per arm instead of
+    // once statically: `true` for the composing (left, reifies) arm, `false`
+    // for the non-composing (right) arm — never one static answer wrong for
+    // half the rows.
     let left = bgp_of(vec![TriplePattern {
         subject: var("r"),
         predicate: pred(RDF_REIFIES),
@@ -893,10 +895,38 @@ fn top_level_union_disagreement_wrapped_in_filter_still_unsupported() {
     };
     let mut n = 0;
     let mut env = StarEnv::new();
-    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
-    assert!(
-        matches!(result, Err(Error::Unsupported(_))),
-        "expected Unsupported, got {result:?}"
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must now succeed");
+    let GraphPattern::Project { inner, .. } = result else {
+        panic!("expected Project");
+    };
+    let GraphPattern::Union {
+        left: arm_left,
+        right: arm_right,
+    } = *inner
+    else {
+        panic!("expected the Filter to have been distributed into a Union: {inner:?}");
+    };
+    let GraphPattern::Filter {
+        expr: left_expr, ..
+    } = *arm_left
+    else {
+        panic!("expected the left arm to stay a Filter: {arm_left:?}");
+    };
+    let GraphPattern::Filter {
+        expr: right_expr, ..
+    } = *arm_right
+    else {
+        panic!("expected the right arm to stay a Filter: {arm_right:?}");
+    };
+    assert_eq!(
+        left_expr,
+        bool_literal_expr(true),
+        "the composing (reifies) arm's own isTRIPLE(?t) copy resolves true"
+    );
+    assert_eq!(
+        right_expr,
+        bool_literal_expr(false),
+        "the non-composing arm's own isTRIPLE(?t) copy resolves false"
     );
 }
 
@@ -938,10 +968,14 @@ fn top_level_mixed_values_column_is_allowed_for_bare_projection() {
 }
 
 #[test]
-fn top_level_mixed_values_wrapped_in_filter_still_unsupported() {
-    // The SAME mixed VALUES column, but reached through a FILTER — falls
-    // through to the ordinary, unchanged `rewrite_pattern`/`rewrite_values`/
-    // `decompose_column`: the original 501.
+fn top_level_mixed_values_wrapped_in_filter_now_resolves_per_arm() {
+    // Run 4 Wave B2: the SAME mixed VALUES column, reached through a FILTER —
+    // FORMERLY a locked 501 (see the differential-level companion
+    // `values_mixed_triple_and_plain_cells_wrapped_in_a_filter_is_still_a_locked_501`
+    // in `differential_star.rs`). `rewrite_top_level_pattern`'s `Filter` arm
+    // row-partitions the mixed VALUES exactly as its bare-VALUES sibling
+    // does, then `rewrite_filter_over_union` resolves `isTRIPLE(?t)` per arm:
+    // `true` for the triple-cell partition, `false` for the plain-cell one.
     let quoted = GroundTriple {
         subject: OxNamedNode::new_unchecked("http://example.com/a"),
         predicate: OxNamedNode::new_unchecked("http://example.com/hasAge"),
@@ -968,10 +1002,38 @@ fn top_level_mixed_values_wrapped_in_filter_still_unsupported() {
     };
     let mut n = 0;
     let mut env = StarEnv::new();
-    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
-    assert!(
-        matches!(result, Err(Error::Unsupported(_))),
-        "expected Unsupported, got {result:?}"
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must now succeed");
+    let GraphPattern::Project { inner, .. } = result else {
+        panic!("expected Project");
+    };
+    let GraphPattern::Union {
+        left: arm_left,
+        right: arm_right,
+    } = *inner
+    else {
+        panic!("expected the mixed VALUES to have been row-partitioned AND the Filter distributed into a Union: {inner:?}");
+    };
+    let GraphPattern::Filter {
+        expr: left_expr, ..
+    } = *arm_left
+    else {
+        panic!("expected the left arm to stay a Filter: {arm_left:?}");
+    };
+    let GraphPattern::Filter {
+        expr: right_expr, ..
+    } = *arm_right
+    else {
+        panic!("expected the right arm to stay a Filter: {arm_right:?}");
+    };
+    assert_eq!(
+        left_expr,
+        bool_literal_expr(true),
+        "the triple-cell partition's own isTRIPLE(?t) copy resolves true"
+    );
+    assert_eq!(
+        right_expr,
+        bool_literal_expr(false),
+        "the plain-cell partition's own isTRIPLE(?t) copy resolves false"
     );
 }
 
