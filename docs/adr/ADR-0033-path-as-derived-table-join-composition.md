@@ -37,6 +37,21 @@ constraints entirely (pre-existing, all pattern kinds) — both to the F4
 correctness wave; FILTER-on-path-endpoint remains the pre-existing generic
 template-var FILTER boundary, unchanged.
 
+**Update (2026-07-19, Run 4 A2) — no longer tree-only.** The flat engine now
+runs the SAME `convert_path_branches` pre-conversion at its own
+`GraphPattern::Join` arm (`unfold.rs`) before `join_branches` — one shared
+conversion, not a second implementation (`convert_path_branches` widened to
+`pub(crate)`). Every "tree-only lift" phrasing in this ADR is superseded on
+that point: joined-path shapes now answer on BOTH engines, restoring the flat
+engine as the `=_bag` oracle over these shapes (`differential_paths.rs::
+closure_joined_with_class_pattern_now_matches_oracle_on_both_engines`,
+`differential_star.rs::star_pattern_at_property_path_endpoint_now_answers_on_
+both_engines`, and the `!p` multiplicity fixture asserted on flat too — 4
+rows, dedup would halve it). Same wave: wrong-graph paths return graceful
+EMPTY instead of a sound 501 (`resolve_pred_hop` two-pass restructure +
+`empty_hop`'s statically-empty derived table, `path.rs`), lifting the
+adversarial suite's named-graph 501 pin to an oracle-checked 0-row answer.
+
 ## Context and Problem Statement
 
 Any `GraphPattern::Path` joined with anything 501s today — path-shape-agnostic,

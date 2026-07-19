@@ -509,7 +509,13 @@ fn lower_node(
 /// (`ColumnCatalog::default()`) — LOWER has no live catalog yet, the same
 /// pre-existing limitation `lower_as_subplan` already carries for every other
 /// derived-table rendering at this stage (ADR-0033 risk 2).
-fn convert_path_branches(
+///
+/// `pub(crate)`: also called by [`crate::unfold`]'s own `GraphPattern::Join`
+/// arm, the flat-engine mirror of this file's `IqNode::InnerJoin` arm — flat
+/// and tree share the same `join_branches`/`merge` machinery (see that
+/// function's doc comment), so the identical pre-conversion works unchanged
+/// on both engines; there is deliberately only one copy of it.
+pub(crate) fn convert_path_branches(
     branches: &mut [Branch],
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,

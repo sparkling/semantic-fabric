@@ -1064,9 +1064,11 @@ fn star_pattern_reused_inside_filter_exists_survives_without_extra_keep() {
 // AGREE (0 rows), verified through the strict `diff()` helper (flat/tree
 // row-bag parity), not the looser divergence-locking pattern this slot used
 // before the fix landed. UPDATE (ADR-0033): the general "no join onto any
-// path branch" boundary this empty-proof pre-empted is now LIFTED on the
-// tree side (a path-carrying branch converts to an ordinary derived-table
-// `Scan` at the two tree join sites) — but THIS query stays empty on BOTH
+// path branch" boundary this empty-proof pre-empted is now LIFTED on BOTH
+// engines (a path-carrying branch converts to an ordinary derived-table
+// `Scan` at the two tree join sites and, since Run 4 A2, at flat's own
+// `GraphPattern::Join` arm via the same conversion) — but THIS query stays
+// empty on BOTH
 // engines regardless, unaffected: after conversion, `unfold::merge`'s
 // disjointness pre-check simply no longer fires (its own `path.is_some()`
 // guard is gone), so the SAME `align_templates` proof now runs as part of
@@ -1092,10 +1094,11 @@ fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
 /// SUBJECT COMPONENT (`?p`, a PERSON IRI — `http://ex.org/person/{person_id}`,
 /// the IDENTICAL domain `#Knows`'s own subject/object templates use) feeds the
 /// closure, not the reifier/proposition-form id — so the join genuinely
-/// correlates instead of being provably empty. `diff()` cannot be used (it
-/// requires flat/tree parity; flat still 501s, tree now answers — a genuine,
-/// intentional divergence, the SAME shape as `differential_paths.rs`'s
-/// flipped pin). `ex:knows` edges (from `friend_id`): (1,2) and (3,1) — row 2
+/// correlates instead of being provably empty. Both engines now answer: the
+/// ADR-0033 conversion also runs at flat's own `GraphPattern::Join` arm (the
+/// same `convert_path_branches`, mirrored there in Run 4 A2), so `diff()`
+/// applies — strict flat/tree row-bag parity PLUS the hand-computed
+/// expectation below. `ex:knows` edges (from `friend_id`): (1,2) and (3,1) — row 2
 /// (Bob, friend_id NULL) contributes no edge. `ex:knows+` closure:
 /// {(1,2),(3,1),(3,2)}. Every census row IS an `#PersonAgeAssertion` (`?p`
 /// ranges over all 3 person ids), so joining with the closure keeps only
@@ -1105,7 +1108,7 @@ fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
 /// rationale — never hand-encode an `rr:column`-sourced literal's exact XSD
 /// lexical form).
 #[test]
-fn star_pattern_at_property_path_endpoint_tree_now_answers_flat_still_501s() {
+fn star_pattern_at_property_path_endpoint_now_answers_on_both_engines() {
     // A DEDICATED fixture, not `CENSUS_R2RML`'s own `#Knows` (`friend_id`, which
     // is NULLABLE — row 2 leaves it NULL): a PRE-EXISTING gap in the path
     // closure's one-hop relation (`emit::hop_sql`'s `HopExpr::Pred` case had no
@@ -1170,22 +1173,7 @@ INSERT INTO knows_clean VALUES (3, 1);
          SELECT ?p ?age ?x WHERE {{ ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
          ?p ex:knowsClean+ ?x }}"
     );
-    let maps = sf_mapping::parse_r2rml(KNOWS_CLEAN_R2RML).expect("R2RML parses");
-    let q = SparqlParser::new()
-        .parse_query(&query)
-        .expect("query parses");
-
-    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    assert!(
-        matches!(flat, Err(Error::Unsupported(_))),
-        "expected 501 on the flat path (unchanged — ADR-0033 is a tree-only lift): {flat:?}"
-    );
-
-    let conn = sqlite::load(KNOWS_CLEAN_SQL).expect("fixture loads");
-    let schema = sqlite::introspect_all(&conn).expect("introspect");
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
-        .expect("tree must now answer this join (ADR-0033)");
-    let got = run_select(&tree, &conn);
+    let got = diff(KNOWS_CLEAN_SQL, KNOWS_CLEAN_R2RML, &query);
 
     // `ex:knowsClean` = {(1,2),(3,1)}; closure `+` = {(1,2),(3,1),(3,2)}. Every
     // census row IS a `#PersonAgeAssertion` (`?p` ranges over all 3 person

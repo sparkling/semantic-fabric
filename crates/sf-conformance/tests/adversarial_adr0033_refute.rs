@@ -749,44 +749,56 @@ fn hand_derived_item1d_r3_path_left_with_subplan_optional_right() {
 // specifically ignored GRAPH, identically on flat and tree (never a
 // tree-only regression), while a plain triple pattern never had this bug.
 // Fixed by threading the same `graph_maps_match` check into `resolve_pred_hop`
-// / `compile_nps` (`path.rs`). `RJ_R2RML`'s `<#Edge>` declares NO
-// `rr:graphMap` at all, so under the fix `GRAPH <g1> { ... }` has ZERO
-// graph-matching candidate mappings — `resolve_pred_hop` reports that the
-// SAME way it already reports "predicate not mapped at all" (a pre-existing,
-// unrelated 501, `path.rs`'s `found.ok_or_else`), rather than a graceful
-// empty result: a sound (never-wrong) outcome, consistent with that existing
-// convention, just not the most complete possible one (widening it to a
-// graceful empty is a separate, larger structural change, not attempted
-// here). See `path_plus_*` below (`GJ_R2RML`, which DOES declare a
-// `graphMap`) for the fix proof over a mapping that actually has
-// graph-scoped data to filter TO, not just away from.
+// / `compile_nps` (`path.rs`).
+//
+// UPDATE 2 (wrong-graph → graceful-empty): `resolve_pred_hop` now runs a
+// SECOND, unscoped pass (`find_pred_hop(_, graph_scoped: false)`) when the
+// graph-scoped pass finds nothing, distinguishing "mapped, but not in THIS
+// graph" from "not mapped at all" — the former compiles to a statically-empty
+// hop (`empty_hop`) instead of a 501. `RJ_R2RML`'s `<#Edge>` declares NO
+// `rr:graphMap` at all, so it IS a wrong-graph (default-graph-only) candidate
+// for `GRAPH <http://ex/g1> { ... }`: it now compiles successfully and
+// returns EMPTY, on both the solo and the joined (ADR-0033 derived-table)
+// shape — superseding the "widening it to a graceful empty ... not attempted
+// here" this comment used to end on. See `path_plus_*` below (`GJ_R2RML`,
+// which DOES declare a `graphMap`) for the symmetric fix proof over a mapping
+// that actually has graph-scoped data to filter TO, not just away from.
 // ============================================================================
 
+/// FIXED behaviour: `<#Edge>` has no `rr:graphMap`, so it lives ONLY in the
+/// default graph (R2RML §7.4) — `GRAPH <http://ex/g1> { ... }` finds no
+/// graph-matching candidate but DOES find `<#Edge>` itself on the unscoped
+/// fallback pass, so it compiles to an empty relation rather than refusing.
+/// Solo: 0 rows (g1 has no `ex:reaches` edges at all — the graph simply has
+/// none, not "the query could not be understood"). Joined with the
+/// default-graph `?o ex:reaches ?t`: the empty left side makes the whole
+/// inner join empty too (0 rows) — never the OLD bug's silent full-table
+/// leak of the default-graph data. Both checked against the independent
+/// oracle (not merely "compiles"), matching this file's other GRAPH proofs.
 #[test]
-fn path_inside_named_graph_joined_now_soundly_501s_instead_of_leaking_default_graph_data() {
-    let maps = sf_mapping::parse_r2rml(RJ_R2RML).expect("R2RML parses");
-    let solo = parse(
-        "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } }",
-    );
-    let joined = parse(
-        "PREFIX ex: <http://ex/> SELECT ?s ?o ?t WHERE { \
-         GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } . ?o ex:reaches ?t }",
-    );
-    let solo_t = tree(&maps, &solo, &[]);
-    let joined_t = tree(&maps, &joined, &[]);
-    match (&solo_t, &joined_t) {
-        // FIXED behaviour: `<#Edge>` has no `rr:graphMap`, so it lives ONLY in the
-        // default graph (R2RML §7.4) — `GRAPH <http://ex/g1> { ... }` now finds ZERO
-        // graph-matching candidates and soundly 501s, on BOTH the solo and the joined
-        // (ADR-0033 derived-table) path, instead of silently querying the full
-        // default-graph-only table as if the GRAPH wrapper were not there (the OLD,
-        // confirmed-buggy behaviour this test used to pin).
-        (Err(Error::Unsupported(_)), Err(Error::Unsupported(_))) => {}
-        (a, b) => panic!(
-            "solo vs joined GRAPH-path outcome should both be a sound 501 (no graphMap \
-             matches <http://ex/g1> anywhere in RJ_R2RML) — got solo={a:?}\n joined={b:?}"
+fn path_inside_named_graph_joined_is_now_gracefully_empty_not_a_501_or_a_leak() {
+    assert_eq!(
+        assert_differential(
+            RJ_SQL,
+            RJ_R2RML,
+            RJ_TTL,
+            "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { \
+             GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } }",
         ),
-    }
+        0,
+        "no rr:graphMap anywhere in RJ_R2RML matches <http://ex/g1> — empty, not a leak"
+    );
+    assert_eq!(
+        assert_differential(
+            RJ_SQL,
+            RJ_R2RML,
+            RJ_TTL,
+            "PREFIX ex: <http://ex/> SELECT ?s ?o ?t WHERE { \
+             GRAPH <http://ex/g1> { ?s ex:reaches+ ?o } . ?o ex:reaches ?t }",
+        ),
+        0,
+        "empty left side (same reason) makes the join empty too"
+    );
 }
 
 // ============================================================================

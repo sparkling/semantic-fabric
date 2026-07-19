@@ -14,6 +14,7 @@ use spargebra::algebra::{
 };
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
+use crate::iq::lower::convert_path_branches;
 use crate::iq::{
     AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan,
     SqlCond, TermDef,
@@ -114,10 +115,18 @@ impl<'a> Unfolder<'a> {
             }
             GraphPattern::Bgp { patterns } => Ok(TransPattern::plain(self.bgp(patterns)?)),
             GraphPattern::Join { left, right } => {
-                let l = self.translate_pattern(left)?;
-                let r = self.translate_pattern(right)?;
+                let mut l = self.translate_pattern(left)?;
+                let mut r = self.translate_pattern(right)?;
                 reject_dropped_slice(&l)?;
                 reject_dropped_slice(&r)?;
+                // ADR-0033 mirror: convert any path-carrying branch to an ordinary
+                // derived-table Scan BEFORE `join_branches` (`merge`'s path-join guard)
+                // ever sees it — the identical conversion the tree `IqNode::InnerJoin`
+                // arm already applies (`iq/lower.rs`), reused verbatim so both engines
+                // share one conversion, not two. A path-free branch passes through
+                // untouched (the common case).
+                convert_path_branches(&mut l.branches, self.dialect, &mut self.next_alias)?;
+                convert_path_branches(&mut r.branches, self.dialect, &mut self.next_alias)?;
                 Ok(TransPattern::plain(join_branches(l.branches, r.branches)?))
             }
             GraphPattern::LeftJoin {

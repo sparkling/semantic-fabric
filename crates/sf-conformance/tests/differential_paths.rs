@@ -53,6 +53,32 @@ fn assert_differential(create: &str, r2rml: &str, ttl: &str, query: &str) -> usi
     engine.len()
 }
 
+/// Engine answer via the FLAT engine (`unfold::merge`) — used only where a
+/// fixture needs BOTH engines checked (flat and tree share `path.rs`'s hop
+/// resolution, so a fix there is expected to cover both, ADR-0023 M3/M5).
+fn engine_bag_flat(create: &str, r2rml: &str, query: &str) -> Vec<BTreeMap<String, oxrdf::Term>> {
+    let conn: Connection = sqlite::load(create).expect("fixture loads");
+    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
+    let schema = sqlite::introspect_all(&conn).expect("introspection");
+    let q = SparqlParser::new()
+        .parse_query(query)
+        .expect("query parses");
+    let plan = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("path translates (flat)");
+    oracle::engine_bag(&exec::select(&plan, &conn).expect("exec"))
+}
+
+/// The flat-engine differential (mirrors [`assert_differential`]).
+fn assert_differential_flat(create: &str, r2rml: &str, ttl: &str, query: &str) -> usize {
+    let engine = engine_bag_flat(create, r2rml, query);
+    let oracle = oracle_bag(ttl, query);
+    assert!(
+        oracle::solutions_bag_eq(&engine, &oracle),
+        "flat engine vs oracle divergence on `{query}`:\n engine={engine:#?}\n oracle={oracle:#?}"
+    );
+    engine.len()
+}
+
 /// A still-deferred shape must surface an explicit `Unsupported` (501), never a
 /// wrong/silent answer (translation only — no source needed).
 fn assert_deferred(r2rml: &str, query: &str) {
@@ -550,33 +576,24 @@ fn bare_sequence_joined_with_class_pattern_is_an_ordinary_bgp_not_a_path_join() 
 /// `GraphPattern::Path` node joined on its own subject endpoint — the general
 /// "no join onto any path branch" boundary
 /// (`unfold::merge`'s unconditional `left.path.is_some() ||
-/// right.path.is_some()` check on the flat side). ADR-0033 LIFTS this on the
-/// TREE side: at the two tree join sites (`iq/lower.rs`'s `InnerJoin`/
-/// `LeftJoin` arms) a path-carrying branch is converted, BEFORE
-/// `unfold::join_branches` ever sees it, into an ordinary branch whose `core`
-/// holds one `Scan` reading a self-contained derived-table SQL string (the
-/// closure's own `WITH [RECURSIVE] …`), with the OUTER scan alias kept
-/// IDENTICAL to the closure's own alias — so the join composes exactly like
-/// any other pattern and the tree engine now returns the CORRECT rows
-/// (verified against the independent `spareval` oracle, not merely "doesn't
-/// 501"). The FLAT engine is UNCHANGED — `unfold::merge`'s path guard still
-/// fires unconditionally there, so it still 501s. This is a genuine,
-/// INTENTIONAL tree-exceeds-flat divergence (ADR-0025 gap-3 precedent, and
-/// the SAME shape as the star-endpoint pin below), so this test's purpose
-/// inverts from "both engines 501 identically" to "documenting the lift":
-/// flat stays pinned to 501, tree is pinned to the oracle-checked answer.
+/// right.path.is_some()` check). ADR-0033 lifted this on the TREE side first:
+/// at the two tree join sites (`iq/lower.rs`'s `InnerJoin`/`LeftJoin` arms) a
+/// path-carrying branch is converted, BEFORE `unfold::join_branches` ever
+/// sees it, into an ordinary branch whose `core` holds one `Scan` reading a
+/// self-contained derived-table SQL string (the closure's own `WITH
+/// [RECURSIVE] …`), with the OUTER scan alias kept IDENTICAL to the closure's
+/// own alias — so the join composes exactly like any other pattern. The FLAT
+/// engine's own `GraphPattern::Join` arm (`unfold.rs`) now applies the
+/// IDENTICAL conversion (reusing `iq::lower::convert_path_branches` verbatim,
+/// not a second copy) before its own call to `join_branches` — so `merge`'s
+/// path guard is unreached from either engine's join site and BOTH now
+/// return the CORRECT rows (verified against the independent `spareval`
+/// oracle, not merely "doesn't 501"). This test's purpose has inverted twice:
+/// "both engines 501 identically" (pre-ADR-0033), then "tree lifts, flat
+/// stays pinned to 501" (ADR-0033, tree-only), now "both engines agree with
+/// the oracle" (flat-engine parity).
 #[test]
-fn closure_joined_with_class_pattern_flat_501s_tree_now_matches_oracle() {
-    let maps = sf_mapping::parse_r2rml(PJ_R2RML).expect("R2RML parses");
-    let q = SparqlParser::new()
-        .parse_query(PJ_PLUS_QUERY)
-        .expect("query parses");
-    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    assert!(
-        matches!(flat, Err(sf_sparql::Error::Unsupported(_))),
-        "expected 501 on the flat path (ADR-0033 is a tree-only lift): {flat:?}"
-    );
-
+fn closure_joined_with_class_pattern_now_matches_oracle_on_both_engines() {
     // `ex:q+` closure over `pj_q`'s (1,2),(2,3) is {(1,2),(1,3),(2,3)}; only
     // `n/1` carries `rdf:type ex:C` (`pj_cls`), so the join keeps exactly the
     // pairs rooted at 1: (1,2) and (1,3) — 2 rows.
@@ -591,8 +608,13 @@ fn closure_joined_with_class_pattern_flat_501s_tree_now_matches_oracle() {
     assert_eq!(
         assert_differential(PJ_SQL, PJ_R2RML, TTL, PJ_PLUS_QUERY),
         2,
-        "ex:q+ closure {{(1,2),(1,3),(2,3)}} filtered to id=n/1 (the only rdf:type ex:C \
+        "tree: ex:q+ closure {{(1,2),(1,3),(2,3)}} filtered to id=n/1 (the only rdf:type ex:C \
          subject) leaves (1,2) and (1,3) — 2 rows"
+    );
+    assert_eq!(
+        assert_differential_flat(PJ_SQL, PJ_R2RML, TTL, PJ_PLUS_QUERY),
+        2,
+        "flat: same query, same answer — the flat-engine parity this test now pins"
     );
 }
 
@@ -746,14 +768,25 @@ const MP_TTL: &str = r#"
 /// 2. Joined with `?y ex:q ?z`: y=2 (both (1,2) provenances) has 2 outgoing q
 /// edges (z=3,4) — 2×2 = 4 rows; y=3/y=4 have none. A wrongly-deduped `!p`
 /// (outer DISTINCT collapsing the two (1,2) provenances to one) would halve
-/// this to 2 — `solutions_bag_eq`'s multiplicity check catches it.
+/// this to 2 — `solutions_bag_eq`'s multiplicity check catches it. This is
+/// ADR-0033's own mandatory soundness fixture (a duplicate-multiplicity `!p`
+/// join checked against the spareval oracle's own bag counts, "not an
+/// optional" test per the ADR) — checked on BOTH engines now that the flat
+/// engine also composes joins onto paths: flat's `convert_path_branches`
+/// pre-conversion must preserve this multiplicity exactly like tree's does,
+/// not just "not 501".
 #[test]
 fn negated_property_set_multiplicity_joined_engine_matches_oracle_bag_counts() {
     let q = "PREFIX ex: <http://ex/> SELECT ?x ?y ?z WHERE { ?x !ex:nope ?y . ?y ex:q ?z }";
     assert_eq!(
         assert_differential(MP_SQL, MP_R2RML, MP_TTL, q),
         4,
-        "(1,2,3) x2 + (1,2,4) x2 — the p/q-provenance duplicate must survive the join"
+        "tree: (1,2,3) x2 + (1,2,4) x2 — the p/q-provenance duplicate must survive the join"
+    );
+    assert_eq!(
+        assert_differential_flat(MP_SQL, MP_R2RML, MP_TTL, q),
+        4,
+        "flat: same multiplicity — a wrongly-deduped !p would halve this to 2"
     );
 }
 
@@ -783,5 +816,73 @@ fn group_by_over_joined_path_engine_matches_oracle() {
         assert_differential(PJ_SQL, PJ_R2RML, TTL, q),
         1,
         "one group (id=n/1), count 2 (x in {{2,3}})"
+    );
+}
+
+// --- Wrong-graph property paths compile to an EMPTY relation, not a 501: the
+// predicate IS mapped, just not in the graph being queried. R2RML §7.4 graph
+// scoping is a MAPPING-level fact (a POM whose declared graph does not match
+// the active one contributes NO triples, regardless of its rows' content), so
+// the sound answer is 0 rows, not a refusal. `ex:reaches` is mapped via
+// `rr:graphMap <http://ex/g1>` on exactly ONE triples map — a single,
+// unambiguous candidate for `resolve_pred_hop`'s unscoped fallback pass to
+// build the empty hop's term maps/shapes from. No `ex:reaches` triples belong
+// to any OTHER graph, so both queries below see nothing — on both engines,
+// which share this hop resolution (`path.rs`). ---
+
+const WG_SQL: &str = r#"
+CREATE TABLE wg_edge (parent INTEGER NOT NULL, child INTEGER NOT NULL);
+INSERT INTO wg_edge VALUES (1, 2);
+INSERT INTO wg_edge VALUES (2, 3);
+"#;
+
+const WG_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Edge>
+    rr:logicalTable [ rr:tableName "wg_edge" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{parent}" ; rr:graphMap [ rr:constant <http://ex/g1> ] ] ;
+    rr:predicateObjectMap [ rr:predicate ex:reaches ; rr:objectMap [ rr:template "http://ex/n/{child}" ] ] .
+"#;
+
+const WG_TTL: &str = "";
+
+/// The bug this fixes: before, `resolve_pred_hop` could not distinguish
+/// "mapped, but not in THIS graph" from "not mapped at all" and refused with
+/// a 501. `ex:reaches` is mapped only in `g1`, so `GRAPH <http://ex/g2>` asks
+/// for a graph with zero matching edges — the sound answer is EMPTY, which
+/// the oracle (no `ex:reaches` triples in scope for `g2` either) agrees with.
+#[test]
+fn property_path_predicate_mapped_only_in_a_different_named_graph_is_empty_not_501() {
+    let q = "PREFIX ex: <http://ex/> \
+             SELECT ?s ?o WHERE { GRAPH <http://ex/g2> { ?s ex:reaches+ ?o } }";
+    assert_eq!(
+        assert_differential(WG_SQL, WG_R2RML, WG_TTL, q),
+        0,
+        "ex:reaches lives only in g1 — GRAPH <g2> has no matching edges"
+    );
+    assert_eq!(
+        assert_differential_flat(WG_SQL, WG_R2RML, WG_TTL, q),
+        0,
+        "same, flat engine (shares path.rs's resolve_pred_hop)"
+    );
+}
+
+/// The complementary direction: `ex:reaches` is mapped only in the NAMED
+/// graph `g1`, so the DEFAULT graph (no GRAPH wrapper at all) must ALSO see
+/// nothing — proving the fix is symmetric, not just "the named-graph side
+/// now works."
+#[test]
+fn property_path_predicate_mapped_only_in_a_named_graph_is_empty_in_the_default_graph() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?s ?o WHERE { ?s ex:reaches+ ?o }";
+    assert_eq!(
+        assert_differential(WG_SQL, WG_R2RML, WG_TTL, q),
+        0,
+        "ex:reaches lives only in g1 — the default graph has no matching edges"
+    );
+    assert_eq!(
+        assert_differential_flat(WG_SQL, WG_R2RML, WG_TTL, q),
+        0,
+        "same, flat engine"
     );
 }
