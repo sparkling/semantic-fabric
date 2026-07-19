@@ -421,7 +421,7 @@ pub fn translate_tree(
         let built = build::build_tree(pattern, None)?;
         let resolved = iq::resolve::resolve(built, &mut cx)?;
         let normalized = iq::normalize::normalize(resolved)?;
-        iq::lower::lower(normalized, dialect, &extra_keep)
+        iq::lower::lower(normalized, dialect, &extra_keep, &star_env)
     };
 
     let mut plan = match query {

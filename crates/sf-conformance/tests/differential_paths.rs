@@ -293,6 +293,116 @@ INSERT INTO qe VALUES (2, 1);
     assert!(n > 0, "the composite closure must return pairs");
 }
 
+// --- Nullable object-column fixture — R2RML §11: a NULL-valued referenced
+// column means NO triple is generated for that row at all (matching what the
+// non-path `atom()` triple-pattern emission already enforces via its
+// `obj_null_guard`, `unfold.rs`). Row 2's `friend_id` is NULL, so person 2
+// asserts NO `ex:knows` edge; only 1->2 and 3->1 are real. A missing NULL
+// guard in `hop_sql` lets the NULL leak into the hop relation as a phantom
+// `(2, NULL)` one-hop pair, which a recursive closure then chains through
+// transitively (`(1, NULL)` at depth 2, `(3, NULL)` at depth 3). `label` is a
+// NOT NULL column joined on the path's SUBJECT (`?p`) — never NULL — so the
+// joined test still forces ADR-0033's `convert_path_branches` derived-table
+// wrapping without the join itself masking the phantom (a join keyed on the
+// path's OBJECT would coincidentally filter NULL out via ordinary SQL
+// equi-join semantics, hiding the bug rather than proving it). `label` is
+// declared as a SEPARATE triples map (`NULLABLE_R2RML_JOINED`, not folded into
+// `<#Knows>`'s own POMs) so the base `NULLABLE_R2RML` mapping stays
+// single-predicate — `p?`'s reflexive enumeration requires that precondition
+// (`graph_is_single_predicate`) and must not 501 on an unrelated added POM. ---
+
+const NULLABLE_SQL: &str = r#"
+CREATE TABLE friend (id INTEGER NOT NULL, friend_id INTEGER, label TEXT NOT NULL);
+INSERT INTO friend VALUES (1, 2, 'Alice');
+INSERT INTO friend VALUES (2, NULL, 'Bob');
+INSERT INTO friend VALUES (3, 1, 'Carol');
+"#;
+
+const NULLABLE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Knows>
+    rr:logicalTable [ rr:tableName "friend" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:knows ; rr:objectMap [ rr:template "http://ex/n/{friend_id}" ] ] .
+"#;
+
+const NULLABLE_R2RML_JOINED: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Knows>
+    rr:logicalTable [ rr:tableName "friend" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:knows ; rr:objectMap [ rr:template "http://ex/n/{friend_id}" ] ] .
+<#Label>
+    rr:logicalTable [ rr:tableName "friend" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:label ; rr:objectMap [ rr:column "label" ] ] .
+"#;
+
+// Row 2's NULL `friend_id` drops that whole virtual triple (R2RML §11) — only
+// the two real edges exist.
+const NULLABLE_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:knows <http://ex/n/2> .
+<http://ex/n/3> ex:knows <http://ex/n/1> .
+"#;
+
+const NULLABLE_TTL_JOINED: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:knows <http://ex/n/2> .
+<http://ex/n/3> ex:knows <http://ex/n/1> .
+<http://ex/n/1> ex:label "Alice" .
+<http://ex/n/2> ex:label "Bob" .
+<http://ex/n/3> ex:label "Carol" .
+"#;
+
+/// `ex:knows+` transitive closure over a nullable object column, standalone.
+/// Correct answer: (1,2) (3,1) (3,1->2 transitively = 3,2) — 3 pairs. A
+/// missing `IS NOT NULL` guard in `hop_sql` phantom-chains through node 2's
+/// NULL row, adding spurious `(_, NULL)` pairs at increasing depth.
+#[test]
+fn transitive_closure_over_nullable_object_column_drops_the_null_row_standalone() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?p ?x WHERE { ?p ex:knows+ ?x }";
+    assert_eq!(
+        assert_differential(NULLABLE_SQL, NULLABLE_R2RML, NULLABLE_TTL, q),
+        3,
+        "(1,2) (3,1) (3,2) — no phantom (_, NULL) pairs"
+    );
+}
+
+/// The same nullable-hop closure JOINED with another pattern on the path's
+/// SUBJECT (forcing ADR-0033's `convert_path_branches` derived-table
+/// wrapping): each of the 3 correct `(p,x)` pairs joins with exactly one
+/// `(p,label)` row, so a phantom `(_, NULL)` pair surviving the join
+/// composition would inflate the count past 3.
+#[test]
+fn transitive_closure_over_nullable_object_column_drops_the_null_row_joined() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?p ?x ?l WHERE { ?p ex:knows+ ?x . ?p ex:label ?l }";
+    assert_eq!(
+        assert_differential(NULLABLE_SQL, NULLABLE_R2RML_JOINED, NULLABLE_TTL_JOINED, q),
+        3,
+        "(1,2,Alice) (3,1,Carol) (3,2,Carol) — no phantom rows"
+    );
+}
+
+/// `p?` ZeroOrOne's reflexive `(x,x)` enumeration reads the SAME raw columns
+/// directly (`reflexive_sql`, not `hop_sql`) — a separate emission path that
+/// needs the identical NULL guard. Without it, node 2's NULL `friend_id`
+/// still contributes a phantom `(NULL,NULL)` reflexive pair (`reflexive_sql`
+/// projects `friend_id` as BOTH `sf_s`/`sf_o` in its second `UNION` half,
+/// regardless of the row's OTHER column). Correct: the hop's 2 real edges (as
+/// pairs) + 3 reflexive pairs (one per real node 1/2/3) = 5.
+#[test]
+fn zero_or_one_path_over_nullable_object_column_has_no_phantom_reflexive_pair() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?p ?x WHERE { ?p ex:knows? ?x }";
+    assert_eq!(
+        assert_differential(NULLABLE_SQL, NULLABLE_R2RML, NULLABLE_TTL, q),
+        5,
+        "(1,2) (3,1) + reflexive (1,1) (2,2) (3,3) — no (NULL,NULL) phantom"
+    );
+}
+
 // --- Deferred shapes stay an explicit 501 (documented, never silently wrong). ---
 
 /// A shape-mismatch fixture: `ex:r`'s subject is in a DIFFERENT node domain
@@ -437,34 +547,241 @@ fn bare_sequence_joined_with_class_pattern_is_an_ordinary_bgp_not_a_path_join() 
 }
 
 /// The CLOSURE variant (`?id ex:q+ ?x . ?id rdf:type ex:C`) IS a genuine
-/// `GraphPattern::Path` node joined on its own subject endpoint — the actual
-/// general "no join onto any path branch" boundary
+/// `GraphPattern::Path` node joined on its own subject endpoint — the general
+/// "no join onto any path branch" boundary
 /// (`unfold::merge`'s unconditional `left.path.is_some() ||
-/// right.path.is_some()` check on the flat side). Unlike the STAR case this
-/// file's sibling pins (where the quoted identity's `urn:sf-star:pf:...`
-/// template and the path predicate's OWN domain template are literal-prefix
-/// DISJOINT by construction, letting `align_templates` prove the join
-/// provably empty and so escape the restriction on the TREE side only), HERE
-/// `rdf:type ex:C`'s subject template (`http://ex/n/{id}`, from `#Cls`) and
-/// `ex:q`'s own domain template (`http://ex/n/{qs}`, from `#Q`) are the
-/// IDENTICAL shape — not disjoint — so no such escape is available: the W2b
-/// lift changes NOTHING here, and both engines 501 IDENTICALLY, exactly as
-/// D6 originally framed this as a pre-existing, star-independent boundary.
+/// right.path.is_some()` check on the flat side). ADR-0033 LIFTS this on the
+/// TREE side: at the two tree join sites (`iq/lower.rs`'s `InnerJoin`/
+/// `LeftJoin` arms) a path-carrying branch is converted, BEFORE
+/// `unfold::join_branches` ever sees it, into an ordinary branch whose `core`
+/// holds one `Scan` reading a self-contained derived-table SQL string (the
+/// closure's own `WITH [RECURSIVE] …`), with the OUTER scan alias kept
+/// IDENTICAL to the closure's own alias — so the join composes exactly like
+/// any other pattern and the tree engine now returns the CORRECT rows
+/// (verified against the independent `spareval` oracle, not merely "doesn't
+/// 501"). The FLAT engine is UNCHANGED — `unfold::merge`'s path guard still
+/// fires unconditionally there, so it still 501s. This is a genuine,
+/// INTENTIONAL tree-exceeds-flat divergence (ADR-0025 gap-3 precedent, and
+/// the SAME shape as the star-endpoint pin below), so this test's purpose
+/// inverts from "both engines 501 identically" to "documenting the lift":
+/// flat stays pinned to 501, tree is pinned to the oracle-checked answer.
 #[test]
-fn closure_joined_with_class_pattern_hits_the_identical_general_boundary_on_both_engines() {
+fn closure_joined_with_class_pattern_flat_501s_tree_now_matches_oracle() {
     let maps = sf_mapping::parse_r2rml(PJ_R2RML).expect("R2RML parses");
     let q = SparqlParser::new()
         .parse_query(PJ_PLUS_QUERY)
         .expect("query parses");
     let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
     assert!(
         matches!(flat, Err(sf_sparql::Error::Unsupported(_))),
-        "expected 501 on the flat path: {flat:?}"
+        "expected 501 on the flat path (ADR-0033 is a tree-only lift): {flat:?}"
     );
-    assert!(
-        matches!(tree, Err(sf_sparql::Error::Unsupported(_))),
-        "expected 501 on the tree path TOO (no literal-prefix-disjointness escape available \
-         here — the class fact and the path's domain share the identical template): {tree:?}"
+
+    // `ex:q+` closure over `pj_q`'s (1,2),(2,3) is {(1,2),(1,3),(2,3)}; only
+    // `n/1` carries `rdf:type ex:C` (`pj_cls`), so the join keeps exactly the
+    // pairs rooted at 1: (1,2) and (1,3) — 2 rows.
+    const TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:q <http://ex/n/2> .
+<http://ex/n/2> ex:q <http://ex/n/3> .
+<http://ex/n/2> ex:r <http://ex/n/20> .
+<http://ex/n/3> ex:r <http://ex/n/30> .
+<http://ex/n/1> a ex:C .
+"#;
+    assert_eq!(
+        assert_differential(PJ_SQL, PJ_R2RML, TTL, PJ_PLUS_QUERY),
+        2,
+        "ex:q+ closure {{(1,2),(1,3),(2,3)}} filtered to id=n/1 (the only rdf:type ex:C \
+         subject) leaves (1,2) and (1,3) — 2 rows"
+    );
+}
+
+// --- ADR-0033 join-composition matrix: OPTIONAL on either side, two separate
+// paths joined on a shared var, and a path joined inside FILTER EXISTS. One
+// shared fixture: `ex:name` on {n/1="Ann", n/11="Zed"}, `ex:next` edges
+// n/1->n/10->n/11 — a chain whose CLOSURE (`ex:next+`) reaches {10,11} from 1
+// and {11} from 10, so every query below exercises BOTH a match and a
+// no-match branch. ---
+
+const OJ_SQL: &str = r#"
+CREATE TABLE oj_person (id INTEGER NOT NULL, name TEXT NOT NULL);
+CREATE TABLE oj_edge (a INTEGER NOT NULL, b INTEGER NOT NULL);
+INSERT INTO oj_person VALUES (1, 'Ann');
+INSERT INTO oj_person VALUES (11, 'Zed');
+INSERT INTO oj_edge VALUES (1, 10);
+INSERT INTO oj_edge VALUES (10, 11);
+"#;
+
+const OJ_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "oj_person" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+<#Edge>
+    rr:logicalTable [ rr:tableName "oj_edge" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{a}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:next ; rr:objectMap [ rr:template "http://ex/n/{b}" ] ] .
+"#;
+
+const OJ_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:name "Ann" .
+<http://ex/n/11> ex:name "Zed" .
+<http://ex/n/1> ex:next <http://ex/n/10> .
+<http://ex/n/10> ex:next <http://ex/n/11> .
+"#;
+
+/// OPTIONAL whose RIGHT side is a property-path closure (`build_left_join`'s
+/// single-scan fast path, ADR-0033 conversion applied to the right operand
+/// before the `is_single_subplan_branch` check). Ann (n/1) has a `next+`
+/// closure reaching {10,11} — 2 matching rows; Zed (n/11) has none — 1
+/// null-padded row. 3 rows total.
+#[test]
+fn optional_right_is_path_engine_matches_oracle() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?id ?name ?reached \
+             WHERE { ?id ex:name ?name OPTIONAL { ?id ex:next+ ?reached } }";
+    assert_eq!(
+        assert_differential(OJ_SQL, OJ_R2RML, OJ_TTL, q),
+        3,
+        "Ann reaches {{10,11}} (2 rows) + Zed unbound (1 row)"
+    );
+}
+
+/// OPTIONAL whose LEFT (preceding) side is a property-path closure
+/// (`build_left_join`'s `left.path.is_some()` guard, ADR-0033 conversion
+/// applied to the left operand). The `next+` closure is {(1,10),(1,11),
+/// (10,11)}; only reached-node 11 has an `ex:name` (Zed) — node 10 does not,
+/// so that row null-pads. 3 rows, 2 matched + 1 unmatched.
+#[test]
+fn optional_left_is_path_engine_matches_oracle() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?id ?reached ?name \
+             WHERE { ?id ex:next+ ?reached OPTIONAL { ?reached ex:name ?name } }";
+    assert_eq!(
+        assert_differential(OJ_SQL, OJ_R2RML, OJ_TTL, q),
+        3,
+        "(1,10,unbound) + (1,11,Zed) + (10,11,Zed)"
+    );
+}
+
+/// TWO SEPARATE property-path closures joined on a shared variable — each
+/// converts independently to its own derived-table `Scan` at the SAME
+/// `IqNode::InnerJoin`, so `unfold::merge` sees two ordinary scan-based
+/// branches and unifies them like any other join (zero special-casing).
+/// `next+` = {(1,10),(1,11),(10,11)}; joining `?a next+ ?b . ?b next+ ?c`
+/// keeps only `b` values that are ALSO a closure subject: b=10 has (10,11),
+/// b=11 has nothing — exactly 1 row: (1,10,11).
+#[test]
+fn two_separate_paths_joined_on_shared_var_engine_matches_oracle() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?a ?b ?c \
+             WHERE { ?a ex:next+ ?b . ?b ex:next+ ?c }";
+    assert_eq!(
+        assert_differential(OJ_SQL, OJ_R2RML, OJ_TTL, q),
+        1,
+        "only b=10 (reached from a=1) is itself a closure subject, reaching c=11"
+    );
+}
+
+/// A property-path closure JOINED with an ordinary pattern INSIDE a FILTER
+/// EXISTS body (`lower_iq_exists` reuses `lower_node`, so the SAME
+/// `IqNode::InnerJoin` conversion fires inside the correlated subquery;
+/// `SqlCond::Exists` CROSS-JOINs `r.core` generically, its first
+/// `Query`-sourced scan). Ann's `next+` closure reaches {10,11}; node 11 has
+/// an `ex:name` (Zed) — EXISTS holds for Ann. Zed's own closure (from n/11)
+/// is empty — EXISTS fails for Zed. 1 row.
+#[test]
+fn path_joined_with_pattern_inside_filter_exists_engine_matches_oracle() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?id ?name \
+             WHERE { ?id ex:name ?name \
+             FILTER EXISTS { ?id ex:next+ ?x . ?x ex:name ?otherName } }";
+    assert_eq!(
+        assert_differential(OJ_SQL, OJ_R2RML, OJ_TTL, q),
+        1,
+        "only Ann's closure reaches a NAMED node (Zed, via n/11)"
+    );
+}
+
+// --- ADR-0033 §Soundness: `!p` at PathKind::One is a BAG (UNION ALL, no outer
+// DISTINCT — one solution per matching triple, §18.2.2), joined against a
+// multi-row other side must reproduce that multiplicity exactly, not collapse
+// it. A dedicated fixture (no existing one has both a shared-predicate-pair
+// duplicate AND a multi-row join partner without changing the NPS complement
+// of an already-pinned fixture — `!p`'s complement is EVERY mapped predicate
+// in the WHOLE document, so a fixture reused across tests cannot safely grow
+// a third predicate without also widening what `!nope` negates elsewhere). ---
+
+const MP_SQL: &str = r#"
+CREATE TABLE mp_p (a INTEGER NOT NULL, b INTEGER NOT NULL);
+CREATE TABLE mp_q (a INTEGER NOT NULL, b INTEGER NOT NULL);
+INSERT INTO mp_p VALUES (1, 2);
+INSERT INTO mp_q VALUES (1, 2);
+INSERT INTO mp_q VALUES (2, 3);
+INSERT INTO mp_q VALUES (2, 4);
+"#;
+
+const MP_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#P>
+    rr:logicalTable [ rr:tableName "mp_p" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{a}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:template "http://ex/n/{b}" ] ] .
+<#Q>
+    rr:logicalTable [ rr:tableName "mp_q" ] ;
+    rr:subjectMap [ rr:template "http://ex/n/{a}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:q ; rr:objectMap [ rr:template "http://ex/n/{b}" ] ] .
+"#;
+
+const MP_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:p <http://ex/n/2> .
+<http://ex/n/1> ex:q <http://ex/n/2> .
+<http://ex/n/2> ex:q <http://ex/n/3> .
+<http://ex/n/2> ex:q <http://ex/n/4> .
+"#;
+
+/// `!ex:nope`'s complement is {p, q} (neither is negated). Bag: (1,2) via p,
+/// (1,2) via q, (2,3) via q, (2,4) via q — 4 solutions, (1,2) at multiplicity
+/// 2. Joined with `?y ex:q ?z`: y=2 (both (1,2) provenances) has 2 outgoing q
+/// edges (z=3,4) — 2×2 = 4 rows; y=3/y=4 have none. A wrongly-deduped `!p`
+/// (outer DISTINCT collapsing the two (1,2) provenances to one) would halve
+/// this to 2 — `solutions_bag_eq`'s multiplicity check catches it.
+#[test]
+fn negated_property_set_multiplicity_joined_engine_matches_oracle_bag_counts() {
+    let q = "PREFIX ex: <http://ex/> SELECT ?x ?y ?z WHERE { ?x !ex:nope ?y . ?y ex:q ?z }";
+    assert_eq!(
+        assert_differential(MP_SQL, MP_R2RML, MP_TTL, q),
+        4,
+        "(1,2,3) x2 + (1,2,4) x2 — the p/q-provenance duplicate must survive the join"
+    );
+}
+
+// --- ADR-0033 open question: GROUP BY over a JOINED path (as opposed to
+// `differential_tree.rs`'s `item7_group_by_over_property_path_now_tree_
+// superset_of_flat`, which groups a STANDALONE path via the UNRELATED
+// ADR-0025 Tier-2 gap 4 Rust-group routing — a standalone path never reaches
+// `convert_path_branches` at all, so that mechanism is untouched by this ADR).
+// This is the ordinary single-branch SQL `GROUP BY` path
+// (`emit::emit_agg_branch`), which renders `core`/`subplan_joins` generically
+// — the ADR flagged it as "expected to work but unverified." ---
+
+/// COUNT over `ex:q+` joined with the `rdf:type ex:C` class pattern, grouped
+/// by `?id`. `ex:q+` closure {(1,2),(1,3),(2,3)} filtered to id=n/1 (the only
+/// class member) leaves x∈{2,3} — one group, count 2.
+#[test]
+fn group_by_over_joined_path_engine_matches_oracle() {
+    let q = "PREFIX ex: <http://ex/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+             SELECT ?id (COUNT(?x) AS ?c) WHERE { ?id ex:q+ ?x . ?id rdf:type ex:C } GROUP BY ?id";
+    const TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/n/1> ex:q <http://ex/n/2> .
+<http://ex/n/2> ex:q <http://ex/n/3> .
+<http://ex/n/1> a ex:C .
+"#;
+    assert_eq!(
+        assert_differential(PJ_SQL, PJ_R2RML, TTL, q),
+        1,
+        "one group (id=n/1), count 2 (x in {{2,3}})"
     );
 }

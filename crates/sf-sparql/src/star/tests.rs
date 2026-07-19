@@ -2,12 +2,33 @@
 //! assertions (no DB, no mapping) — the SQL-level, cross-mapping behavior
 //! (reifies join matching real data, tree/flat parity, the locked boundaries)
 //! is covered by `sf-conformance/tests/differential_star.rs`.
-//! `use super::*` re-uses the parent module's rewrite functions (all
-//! private except the two `pub` entry points) plus its spargebra imports.
+//! Ledger F3 split `star.rs` into the `star/` tree this file now sits
+//! alongside — each sibling's `pub(super)`-visible items are glob-imported
+//! below (a per-module `use super::x::*;` in place of the old single
+//! `use super::*;`, which relied on everything living in one file); the
+//! spargebra AST types the rewrite functions themselves operate on are
+//! imported directly, matching what `star.rs`'s own top level used to bring
+//! into scope for this file via that glob.
 
-use super::*;
+use spargebra::algebra::{Expression, Function, GraphPattern};
+use spargebra::term::{
+    GroundTerm, GroundTriple, NamedNodePattern, TermPattern, TriplePattern, Variable,
+};
+
+use super::env::*;
+use super::expr::*;
+use super::top_level::*;
+use super::util::*;
+use super::walk::*;
+
 use oxrdf::{Literal, NamedNode as OxNamedNode};
 use spargebra::term::BlankNode;
+
+use crate::iq::{Branch, ColRef, SqlCond, SubPlanJoin, TermDef};
+use crate::unfold::RDF_TYPE;
+use crate::{Error, Plan, PlanForm};
+use sf_core::ir::{TermMap, TermSpec};
+use sf_sql::Dialect;
 
 fn var(s: &str) -> TermPattern {
     TermPattern::Variable(Variable::new_unchecked(s))
@@ -805,6 +826,170 @@ fn union_arms_disagreeing_on_composed_ness_is_unsupported() {
     );
 }
 
+// -- Ledger closeout, boundary A: the top-level-only relaxation of the
+// uniform-composed-ness law (`rewrite_top_level_pattern`) -------------------
+
+#[test]
+fn top_level_union_disagreement_is_allowed_for_bare_projection() {
+    // The IDENTICAL disagreement `union_arms_disagreeing_on_composed_ness_is_unsupported`
+    // rejects, above — but reached through `rewrite_top_level_pattern`
+    // (SELECT's own top-level entry point, `rewrite_query`) with nothing
+    // else in the query to reference ?t other than the projection: allowed.
+    let left = bgp_of(vec![TriplePattern {
+        subject: var("r"),
+        predicate: pred(RDF_REIFIES),
+        object: var("t"),
+    }]);
+    let right = bgp_of(vec![TriplePattern {
+        subject: var("t"),
+        predicate: pred("http://example.com/type"),
+        object: iri("http://example.com/Foo"),
+    }]);
+    let gp = GraphPattern::Project {
+        inner: Box::new(GraphPattern::Union {
+            left: Box::new(left),
+            right: Box::new(right),
+        }),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
+    assert!(result.is_ok(), "got {result:?}");
+}
+
+#[test]
+fn top_level_union_disagreement_wrapped_in_filter_still_unsupported() {
+    // The SAME disagreement, but reached through a FILTER wrapping the union
+    // (`isTRIPLE(?t)` — a genuine sensitive consumer, resolved statically by
+    // `env` and so unsound over a mixed union) — NOT one of
+    // `rewrite_top_level_pattern`'s allowed pass-through wrappers, so this
+    // falls straight through to the ordinary, unchanged
+    // `rewrite_pattern`/`rewrite_union(top_level: false)`: the original 501.
+    // Proves the relaxation is scoped to the EXACT top-level shape, not "any
+    // union with a disagreement reachable from a SELECT".
+    let left = bgp_of(vec![TriplePattern {
+        subject: var("r"),
+        predicate: pred(RDF_REIFIES),
+        object: var("t"),
+    }]);
+    let right = bgp_of(vec![TriplePattern {
+        subject: var("t"),
+        predicate: pred("http://example.com/type"),
+        object: iri("http://example.com/Foo"),
+    }]);
+    let gp = GraphPattern::Project {
+        inner: Box::new(GraphPattern::Filter {
+            expr: Expression::FunctionCall(
+                Function::IsTriple,
+                vec![Expression::Variable(Variable::new_unchecked("t"))],
+            ),
+            inner: Box::new(GraphPattern::Union {
+                left: Box::new(left),
+                right: Box::new(right),
+            }),
+        }),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
+    assert!(
+        matches!(result, Err(Error::Unsupported(_))),
+        "expected Unsupported, got {result:?}"
+    );
+}
+
+#[test]
+fn top_level_mixed_values_column_is_allowed_for_bare_projection() {
+    // The IDENTICAL mixed-column shape
+    // `values_mixed_triple_and_plain_cells_is_unsupported` rejects, above —
+    // but at the query's own top level: row-partitioned into a union of two
+    // uniform VALUES blocks (`partition_values_by_triple_shape`), reusing
+    // the SAME relaxation `rewrite_union` gives an ordinary top-level union.
+    let quoted = GroundTriple {
+        subject: OxNamedNode::new_unchecked("http://example.com/a"),
+        predicate: OxNamedNode::new_unchecked("http://example.com/hasAge"),
+        object: GroundTerm::Literal(Literal::new_simple_literal("30")),
+    };
+    let values = GraphPattern::Values {
+        variables: vec![Variable::new_unchecked("t")],
+        bindings: vec![
+            vec![Some(GroundTerm::Triple(Box::new(quoted)))],
+            vec![Some(GroundTerm::NamedNode(OxNamedNode::new_unchecked(
+                "http://example.com/plain",
+            )))],
+        ],
+    };
+    let gp = GraphPattern::Project {
+        inner: Box::new(values),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must succeed");
+    let GraphPattern::Project { inner, .. } = result else {
+        panic!("expected Project");
+    };
+    assert!(
+        matches!(*inner, GraphPattern::Union { .. }),
+        "expected the mixed VALUES to have been row-partitioned into a Union: {inner:?}"
+    );
+}
+
+#[test]
+fn top_level_mixed_values_wrapped_in_filter_still_unsupported() {
+    // The SAME mixed VALUES column, but reached through a FILTER — falls
+    // through to the ordinary, unchanged `rewrite_pattern`/`rewrite_values`/
+    // `decompose_column`: the original 501.
+    let quoted = GroundTriple {
+        subject: OxNamedNode::new_unchecked("http://example.com/a"),
+        predicate: OxNamedNode::new_unchecked("http://example.com/hasAge"),
+        object: GroundTerm::Literal(Literal::new_simple_literal("30")),
+    };
+    let values = GraphPattern::Values {
+        variables: vec![Variable::new_unchecked("t")],
+        bindings: vec![
+            vec![Some(GroundTerm::Triple(Box::new(quoted)))],
+            vec![Some(GroundTerm::NamedNode(OxNamedNode::new_unchecked(
+                "http://example.com/plain",
+            )))],
+        ],
+    };
+    let gp = GraphPattern::Project {
+        inner: Box::new(GraphPattern::Filter {
+            expr: Expression::FunctionCall(
+                Function::IsTriple,
+                vec![Expression::Variable(Variable::new_unchecked("t"))],
+            ),
+            inner: Box::new(values),
+        }),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
+    assert!(
+        matches!(result, Err(Error::Unsupported(_))),
+        "expected Unsupported, got {result:?}"
+    );
+}
+
+#[test]
+fn rewrite_query_select_routes_a_top_level_union_through_the_relaxation() {
+    // End-to-end through the PUBLIC entry point (`rewrite_query`), proving
+    // the `Query::Select` wiring — not just `rewrite_top_level_pattern`
+    // called directly, above.
+    let query_str = "PREFIX ex: <http://example.com/> \
+                      PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+                      SELECT ?t WHERE { { ?r rdf:reifies ?t } UNION { ?t ex:assertedBy ex:CensusRecord2026 } }";
+    let query = spargebra::SparqlParser::new()
+        .parse_query(query_str)
+        .expect("query parses");
+    let result = rewrite_query(&query);
+    assert!(result.is_ok(), "got {result:?}");
+}
+
 #[test]
 fn construct_template_substitutes_a_composed_variable_recursively() {
     let gp = bgp_of(vec![TriplePattern {
@@ -841,5 +1026,232 @@ fn construct_template_substitutes_a_composed_variable_recursively() {
             })),
         },
         "?t substitutes to an explicit TermPattern::Triple over its components"
+    );
+}
+
+/// Shared setup for the two `apply_composed_bindings`-into-`subplan_joins`
+/// tests below: a realistic `StarEnv` built the same way the rest of this
+/// file does — `?r rdf:reifies ?t` composes `?t` from 3 fresh component vars.
+fn reifies_env_and_info() -> (StarEnv, ComposedInfo) {
+    let gp = bgp_of(vec![TriplePattern {
+        subject: var("r"),
+        predicate: pred(RDF_REIFIES),
+        object: var("t"),
+    }]);
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    rewrite_pattern(&gp, &mut n, &mut env).expect("must succeed");
+    let info = env.get(&Variable::new_unchecked("t")).unwrap().clone();
+    (env, info)
+}
+
+/// Wrap `inner` as a pooled SubPlan join (ADR-0023 M5 shape) on a fresh,
+/// otherwise-empty outer branch that carries no direct binding for ?t or its
+/// components — only the pooled join. `plan_distinct` is the PLAN-level
+/// `SELECT DISTINCT` flag — NOT `inner.distinct` itself, which `iq::lower::
+/// lower_as_subplan` leaves at its default `false` for a single-branch
+/// SubPlan (only `Plan::prepared_branches`, called separately at both
+/// `lower_as_subplan`-time and final-emission-time, ever propagates it onto
+/// the branch) — exactly the gap `propagate_single_branch_distinct` closes.
+fn subplan_wrapping(inner: Branch, plan_distinct: bool) -> Branch {
+    let mut outer = Branch::empty();
+    outer.subplan_joins.push(SubPlanJoin {
+        alias: 9,
+        plan: Box::new(Plan {
+            branches: vec![inner],
+            form: PlanForm::Select {
+                vars: vec!["t".to_owned()],
+            },
+            distinct: plan_distinct,
+            limit: None,
+            offset: 0,
+            order: vec![],
+            rust_group: None,
+            dialect: Dialect::Sqlite,
+        }),
+        on: vec![],
+        left: false,
+    });
+    outer
+}
+
+/// ADR-0032 D3 item 2 follow-up: `apply_composed_bindings` recurses into a
+/// branch's `subplan_joins` (ADR-0023 M5 derived-table pooling) — but ONLY
+/// when doing so does not change that branch's `projection()` (see
+/// `apply_composed_bindings_checked`'s doc comment for why the guard exists:
+/// a naive, unguarded recursion was found to desync `iq::lower::
+/// lower_as_subplan`'s already-frozen outer column-position remap into a
+/// real SQL crash — not a hypothetical, an empirically confirmed one). This
+/// is the SAFE case: ?t's own raw pre-composition binding happens to read
+/// EXACTLY the same raw columns its 3 components do (the realistic shape —
+/// ADR-0029's synthetic id template is built FROM the quoted triple's own
+/// columns), so composing changes NOTHING about the column footprint and the
+/// guard accepts it. Driven directly on a hand-built `Branch` (no R2RML/
+/// translation) because reaching this shape end-to-end would require the
+/// composed variable's OWN identity to also stay entirely inside the
+/// SubPlan, which no current SPARQL rewrite shape produces (see
+/// `apply_composed_bindings`'s own doc comment for the CONFIRMED
+/// cross-boundary case this recursion does NOT close, guard or not).
+#[test]
+fn apply_composed_bindings_recurses_into_subplan_joins_when_column_footprint_is_unchanged() {
+    let (env, info) = reifies_env_and_info();
+
+    let column_def = |col: &str| TermDef::Derived {
+        term_map: TermMap::Column(col.into(), TermSpec::plain_literal()),
+        alias: 9,
+    };
+    let mut inner = Branch::empty();
+    inner
+        .bindings
+        .insert(info.s_var.as_str().to_owned(), column_def("s_col"));
+    inner.bindings.insert(
+        info.p_var.as_str().to_owned(),
+        TermDef::Const(sf_core::Term::NamedNode(sf_core::NamedNode::new_unchecked(
+            "http://example.com/hasAge",
+        ))),
+    );
+    inner
+        .bindings
+        .insert(info.o_var.as_str().to_owned(), column_def("o_col"));
+    // ?t's own raw identity template reads the SAME 2 columns as s_var/o_var
+    // — never a THIRD, separate column — the realistic shape.
+    inner.bindings.insert(
+        "t".to_owned(),
+        TermDef::Derived {
+            term_map: TermMap::Template(
+                sf_core::ir::Template::parse("urn:sf-star:pf:{s_col}:{o_col}").unwrap(),
+                TermSpec::iri(),
+            ),
+            alias: 9,
+        },
+    );
+
+    let mut branches = vec![subplan_wrapping(inner, false)];
+    apply_composed_bindings(&mut branches, &env);
+
+    let inner_bindings = &branches[0].subplan_joins[0].plan.branches[0].bindings;
+    assert!(
+        matches!(
+            inner_bindings.get("t"),
+            Some(TermDef::ComposedTriple { .. })
+        ),
+        "same column footprint ⇒ safe to compose ?t INSIDE the SubPlan's own \
+         branch: {:?}",
+        inner_bindings.get("t")
+    );
+}
+
+/// The UNSAFE case this same guard must decline: ?t's raw binding reads a
+/// column NONE of its components do (contrived here, but exactly the shape
+/// that crashed at real SQL execution before the guard existed — see
+/// `apply_composed_bindings_checked`'s doc comment for the full repro).
+/// Composing would DROP that column from `projection()` (nothing else
+/// references it) while `lower_as_subplan`'s already-frozen outer remap
+/// still expects it at its old position — so the guard must decline, leaving
+/// ?t's ORIGINAL raw binding in place (a harmless no-op, not a crash).
+#[test]
+fn apply_composed_bindings_declines_when_it_would_change_the_column_footprint() {
+    let (env, info) = reifies_env_and_info();
+
+    let column_def = |col: &str| TermDef::Derived {
+        term_map: TermMap::Column(col.into(), TermSpec::plain_literal()),
+        alias: 9,
+    };
+    let mut inner = Branch::empty();
+    inner
+        .bindings
+        .insert(info.s_var.as_str().to_owned(), column_def("s_col"));
+    inner.bindings.insert(
+        info.p_var.as_str().to_owned(),
+        TermDef::Const(sf_core::Term::NamedNode(sf_core::NamedNode::new_unchecked(
+            "http://example.com/hasAge",
+        ))),
+    );
+    inner
+        .bindings
+        .insert(info.o_var.as_str().to_owned(), column_def("o_col"));
+    // ?t's own raw identity reads a THIRD, separate column — none of its
+    // components need it, so composing would drop it from `projection()`.
+    inner
+        .bindings
+        .insert("t".to_owned(), column_def("t_raw_identity"));
+
+    let mut branches = vec![subplan_wrapping(inner, false)];
+    apply_composed_bindings(&mut branches, &env);
+
+    let inner_bindings = &branches[0].subplan_joins[0].plan.branches[0].bindings;
+    assert!(
+        matches!(inner_bindings.get("t"), Some(TermDef::Derived { .. })),
+        "changed column footprint ⇒ the guard must decline and keep ?t's \
+         ORIGINAL raw binding rather than corrupt an already-frozen outer \
+         position: {:?}",
+        inner_bindings.get("t")
+    );
+}
+
+/// Regression lock for `propagate_single_branch_distinct`: the SAME UNSAFE
+/// shape as `apply_composed_bindings_declines_when_it_would_change_the_
+/// column_footprint` above, but with `?t`'s dropped column ALSO referenced
+/// by a `where_conds` entry — under the branch's raw, un-propagated
+/// `distinct: false`, `Branch::projection`'s WHERE-condition contribution
+/// silently "backfills" that exact column back into the SAME list position
+/// whether or not `?t`'s own binding still needs it, so the naive `before ==
+/// after` check (comparing `projection()` WITHOUT propagating the SubPlan's
+/// `distinct: true` first) would have WRONGLY seen NO difference and
+/// accepted the composition — corrupting `iq::lower::lower_as_subplan`'s
+/// already-frozen outer positional remap exactly like the guard's headline
+/// crash repro. Propagating `distinct: true` onto the branch FIRST (mirroring
+/// what `lower_as_subplan`'s own `arm_projections` computation and the final
+/// SQL emission both do via `Plan::prepared_branches`) makes `projection()`
+/// skip WHERE-condition columns entirely, so the REAL difference (4 columns
+/// vs. 3) is caught and the guard correctly declines.
+#[test]
+fn apply_composed_bindings_declines_even_when_where_conds_would_mask_the_footprint_change_under_raw_distinct_false(
+) {
+    let (env, info) = reifies_env_and_info();
+
+    let column_def = |col: &str| TermDef::Derived {
+        term_map: TermMap::Column(col.into(), TermSpec::plain_literal()),
+        alias: 9,
+    };
+    let mut inner = Branch::empty();
+    inner
+        .bindings
+        .insert(info.s_var.as_str().to_owned(), column_def("s_col"));
+    inner.bindings.insert(
+        info.p_var.as_str().to_owned(),
+        TermDef::Const(sf_core::Term::NamedNode(sf_core::NamedNode::new_unchecked(
+            "http://example.com/hasAge",
+        ))),
+    );
+    inner
+        .bindings
+        .insert(info.o_var.as_str().to_owned(), column_def("o_col"));
+    // ?t's own raw identity reads a THIRD, separate column — same UNSAFE
+    // shape as the sibling test above.
+    inner
+        .bindings
+        .insert("t".to_owned(), column_def("t_raw_identity"));
+    // The masking ingredient: a WHERE condition ALSO references that same
+    // column (e.g. the identity-equality proof a real `rdf:reifies` rewrite
+    // would emit) — under `distinct: false` this backfills it into
+    // `projection()` regardless of whether `?t`'s own binding still needs
+    // it, hiding the footprint change from a check that forgot to propagate
+    // `distinct` first.
+    inner
+        .where_conds
+        .push(SqlCond::IsNotNull(ColRef::new(9, "t_raw_identity")));
+
+    // `Plan.distinct: true` (a real `SELECT DISTINCT` subquery) — the shape
+    // the guard's own doc comment cites as the actual crash repro.
+    let mut branches = vec![subplan_wrapping(inner, true)];
+    apply_composed_bindings(&mut branches, &env);
+
+    let inner_bindings = &branches[0].subplan_joins[0].plan.branches[0].bindings;
+    assert!(
+        matches!(inner_bindings.get("t"), Some(TermDef::Derived { .. })),
+        "the where_conds backfill must NOT mask the real (distinct-view) \
+         footprint change — the guard must still decline: {:?}",
+        inner_bindings.get("t")
     );
 }

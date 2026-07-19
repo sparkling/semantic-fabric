@@ -72,6 +72,84 @@ Results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw
   > (1000 rows/task) measured a genuine **~6× win** (~155µs), but it requires
   > restructuring `exec_core`'s per-row solution loop into a batch shape —
   > real, unscheduled follow-up work, recorded here rather than half-shipped.
+  >
+  > **Chunked dispatch implemented, correction to the correction (2026-07-19,
+  > M4 wave-2 continued).** `exec_core`'s `run_branches` loop is restructured
+  > into buffer → parallel-map → emit-in-order: a bounded batch of raw rows is
+  > pulled off the cursor (a small first batch, then a fixed steady-state
+  > size, so first-result latency stays bounded — the streaming invariant
+  > above), `rayon::par_chunks` reconstructs it (chunks sized off
+  > `current_num_threads()`, never one task per row — the shape that measured
+  > slower), and the batch is emitted downstream in original order (`par_chunks`
+  > is index-preserving, so this needs no extra bookkeeping). `rayon` returns to
+  > `sf-sparql/Cargo.toml`, using its own lazily-initialized global pool
+  > directly rather than a hand-rolled `ThreadPool` — still structurally
+  > separate from `tokio` (a wholly different set of OS threads), satisfying
+  > the pool-separation rule above without reintroducing `pool.rs`.
+  >
+  > The **~6× / 1000-rows-per-task** figure above does not hold at this
+  > restructure's actual granularity and was superseded by re-measurement, not
+  > assumed to transfer: that number came from a ONE-SHOT `par_chunks` call
+  > over a whole synthetic dataset at once, but a streaming cursor cannot be
+  > buffered whole (would break the invariant this section opens with), so
+  > `run_branches` issues one FRESH `par_chunks` call PER BATCH. Re-measured at
+  > that granularity (`sf-bench`'s `micro_term_gen_batch`, ~100k synthetic
+  > `rr:template` rows), 1000-row batches (100 dispatch calls) came out **~1.8×
+  > SLOWER** than plain inline — the fixed per-call cost (thread wake/join)
+  > dominates a batch that small the same way it dominated a single row. A
+  > sweep found the throughput break-even between 2000–5000 rows, and
+  > 10 000 measured a genuine, comfortable **~1.6–1.7× faster**.
+  >
+  > A **second, independent constraint** then capped the batch size far below
+  > that throughput optimum: `sf-bench`'s own `constant_memory` peak-heap
+  > invariant test (which this restructure must keep passing, not just the
+  > throughput bench) measured `mem_ratio` — its bounded-memory tolerance,
+  > `4.0` — blown well past at both candidate sizes (9.05 at 10 000 rows, 5.44
+  > at 5000), because a buffered, reconstructed row costs far more than its
+  > term data: `BTreeMap<String, Term>`'s per-node allocator overhead
+  > dominates for the small (1–3-entry) per-row binding maps a typical branch
+  > produces, multiplied by up to `TERM_GEN_BATCH_SIZE` of them alive at once.
+  > Memory *does* stay strictly O(batch), never O(result) — a dedicated
+  > single-branch test (`engine_memory_is_batch_bounded_past_the_batch_size_threshold`)
+  > proves the peak is byte-near-identical at 20k rows and at 80k rows once
+  > both exceed the batch size — but the size of that fixed O(batch) budget is
+  > itself large enough, at throughput-optimal batch sizes, to fail the
+  > existing GTFS-workload test's tolerance at ITS 1×/4×/16× scale factors
+  > (whose branches don't uniformly cross the batch-size threshold together).
+  > **`TERM_GEN_BATCH_SIZE = 3000`** is therefore the memory-constrained
+  > final value (mem_ratio ≈ 3.4–3.5, a real margin under the `4.0` gate), not
+  > the throughput-optimal one — it measures a modest but genuine **~1.10×
+  > faster** than inline, not the ~1.6–1.7× a bigger batch would give. Raising
+  > this ceiling needs a leaner per-row binding representation than
+  > `BTreeMap` (out of scope here; a real follow-up wave, not a footnote to
+  > half-ship) — this section's structural claims (pool separation, chunked
+  > dispatch, order preservation, streaming-bounded first batch) all hold at
+  > any batch size; only the specific constant is memory-bound today.
+  >
+  > **Dump-path regression + call-site gate (2026-07-19, ledger F8).** The
+  > chunked dispatch above measurably REGRESSED the streamed CONSTRUCT dump
+  > (`constant_memory_dump`: +31–35% at 10×/100× scale) while still winning on
+  > `micro_distinct_agg`/`micro_group_avg_rust`. Toggle-isolated on a quiet
+  > machine: forcing every batch sequential while leaving the buffer-then-
+  > reconstruct shape exactly as-is reproduced the pre-batch, zero-buffer
+  > baseline to within ~2% — the buffering indirection itself costs nothing
+  > measurable; the regression is 100% the `par_chunks` dispatch. The
+  > differentiator is per-row cost, not row count: the dump's rows are plain
+  > column/template copies (cheap `Literal::new_simple_literal`, no numeric
+  > formatting), so dispatch's fixed thread wake/join cost exceeds the compute
+  > saved even at 80k-row batches; `rust_group`'s aggregate inner collection
+  > (`AVG`/`SUM(DISTINCT)`/`COUNT(DISTINCT)` over `canonical_lexical`-formatted
+  > numeric literals — always fully materialized before grouping can start
+  > regardless) is the shape the constant was tuned against and still wins
+  > there, by a more modest ~5–8% toggle-isolated (not the full ~29%/~4% the
+  > original F6 landing measured against a stale pre-F6 baseline under
+  > different machine load). Fix: `reconstruct_batch` takes a `parallel_allowed`
+  > flag threaded through `PlanCtx`, `true` only for `rust_group_execute`'s
+  > inner collection — the plain streaming SELECT/CONSTRUCT/ASK path
+  > (`for_each_solution`'s direct `run_branches` call) always reconstructs
+  > sequentially now. `TERM_GEN_BATCH_SIZE`/`TERM_GEN_MIN_PARALLEL_ROWS` and the
+  > memory-bound reasoning above are unchanged — only WHO may cross the
+  > parallel gate changed, not the batch shape or its constants.
 * First-class source dialects: **PostgreSQL** (primary production), **SQLite** (embedded / W3C-suite CI); **MySQL** follows. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
 * Crate pins + 1.2 feature flags: ADR-0004 / ADR-0019. Toolchain pinned via `rust-toolchain.toml`.
 

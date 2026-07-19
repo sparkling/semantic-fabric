@@ -983,54 +983,236 @@ fn star_pattern_inside_filter_exists_matches_hand_computed_bindings() {
     assert_eq!(got.len(), 3);
 }
 
+/// ADR-0032 D3 item 2 — INVESTIGATED, no reachable bug: `iq::lower::
+/// lower_iq_exists` passes an empty `extra_keep` to its inner `lower_node`
+/// call (a documented, narrow suspected gap — a composed variable's
+/// component vars referenced ONLY inside a FILTER EXISTS/NOT EXISTS/MINUS
+/// body might not survive that inner lowering's own projection-restrict
+/// retain). This is the best near-miss shape found after genuinely trying 7
+/// distinct ones (see that function's own doc comment for the full list and
+/// the three structural reasons none of them reach it): `?t` is composed
+/// OUTSIDE (and projected), and the SAME `?t` is ALSO referenced via a
+/// SECOND, independent `rdf:reifies` occurrence INSIDE the FILTER EXISTS
+/// body — reusing the SAME component-variable names across occurrences
+/// (`reifies_bare_variable_env_lookup_reuses_component_vars_across_
+/// occurrences`, `star/tests.rs`). This survives WITHOUT `extra_keep`
+/// because the EXISTS body's own top-level scope has no explicit SPARQL
+/// SELECT list, so its default projection is every variable the body binds
+/// (broad, `output_vars()`) — the 3 component vars, each bound by a pattern
+/// DIRECTLY inside this same body, are already in that broad set regardless
+/// of `extra_keep`'s emptiness. Locks the CURRENT, CORRECT behavior — this
+/// is a regression guard, not a reachable-bug repro.
+#[test]
+fn star_pattern_reused_inside_filter_exists_survives_without_extra_keep() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ \
+           ?r rdf:reifies ?t . \
+           FILTER EXISTS {{ ?r2 rdf:reifies ?t . ?r2 ex:assertedBy ?src }} \
+         }}"
+    );
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    // Every row is asserted (CENSUS_R2RML's #PersonAgeAssertion), so EXISTS
+    // holds for every row — the same 3-row shape as this file's sibling
+    // `star_pattern_inside_filter_exists_matches_hand_computed_bindings`.
+    assert_eq!(got.len(), 3, "got={got:#?}");
+    let ages = baseline_ages(CENSUS_SQL, CENSUS_R2RML);
+    let mut expected: Vec<Term> = ages
+        .iter()
+        .map(|(p, age)| {
+            Term::Triple(Box::new(Triple::new(
+                p.clone(),
+                NamedNode::new_unchecked("http://example.com/hasAge"),
+                age.clone(),
+            )))
+        })
+        .collect();
+    let mut got_terms: Vec<Term> = got
+        .into_iter()
+        .map(|mut r| r.remove("t").unwrap())
+        .collect();
+    got_terms.sort_by_key(ToString::to_string);
+    expected.sort_by_key(ToString::to_string);
+    assert_eq!(
+        got_terms, expected,
+        "?t must still realize as a genuine native Term::Triple — got={got_terms:#?}\n\
+         expected={expected:#?}"
+    );
+}
+
 // ============================================================================
 // 10 — a star pattern at a property-path endpoint (rule R5b: the identity's 4
 // patterns joined alongside the Path node). Item 5's align_templates
-// literal-prefix lift has an UNANTICIPATED side effect HERE, reported to the
-// team lead as a NEW finding (not fixed this wave — `unfold.rs` is out of
-// this file's scope): the TREE path now proves this query PROVABLY EMPTY
-// (the quoted identity's proposition-form template, `urn:sf-star:pf:...`,
-// and `ex:knows`'s own subject template, `http://ex.org/person/...` read via
-// the path's canonical `sf_s` key column, have CONFLICTING literal prefixes
-// from the very first character — `ex:knows`'s domain is disjoint from a
-// proposition identity's range BY CONSTRUCTION, so `?pf ex:knows+ ?x` can
-// never match ANY row) BEFORE the PRE-EXISTING, unrelated "no join onto any
-// path branch" boundary is ever reached in ITS OWN pipeline. But the FLAT
-// path's `unfold::merge` checks `left.path.is_some() || right.path.is_some()`
-// UNCONDITIONALLY, as its very FIRST statement — before ever attempting
-// `unify()` — so it STILL 501s, unimproved. The two engines now DISAGREE
-// (tree: `Ok` with an empty plan; flat: `Err(Unsupported)`) — a genuine,
-// narrow flat/tree inconsistency THIS wave's align_templates change
-// surfaced, not created (the underlying "no path join" restriction is
-// pre-existing and unrelated to star). This test LOCKS the current,
-// understood-but-imperfect state (mirroring this file's established pattern
-// for documenting a boundary precisely) rather than papering over it via the
-// stricter `diff()` helper, which enforces agreement and would legitimately
-// (and unhelpfully, for THIS test's purpose) panic on it.
+// literal-prefix lift ORIGINALLY surfaced an unanticipated flat/tree
+// divergence HERE (reported to the team lead as a NEW finding): the TREE path
+// proves this query PROVABLY EMPTY (the quoted identity's proposition-form
+// template, `urn:sf-star:pf:...`, and `ex:knows`'s own subject template,
+// `http://ex.org/person/...` read via the path's canonical `sf_s` key column,
+// have CONFLICTING literal prefixes from the very first character —
+// `ex:knows`'s domain is disjoint from a proposition identity's range BY
+// CONSTRUCTION, so `?pf ex:knows+ ?x` can never match ANY row) BEFORE the
+// PRE-EXISTING, unrelated "no join onto any path branch" boundary is ever
+// reached in ITS OWN pipeline, while the FLAT path's `unfold::merge` checked
+// `left.path.is_some() || right.path.is_some()` UNCONDITIONALLY, as its very
+// FIRST statement — before ever attempting `unify()` — so it STILL 501'd,
+// unimproved. ADR-0032 D6's follow-up ("mirror the prefix check in
+// `unfold::merge`") CLOSES that divergence: `merge` now runs the SAME
+// leading-literal-prefix disjointness proof (`unify::templates_provably_
+// disjoint`, sharing `align_templates`'s exact mechanism, not duplicating it)
+// over the join-correlated bindings BEFORE its unconditional path-join 501,
+// so flat now ALSO proves this join empty instead of 501ing — both engines
+// AGREE (0 rows), verified through the strict `diff()` helper (flat/tree
+// row-bag parity), not the looser divergence-locking pattern this slot used
+// before the fix landed. UPDATE (ADR-0033): the general "no join onto any
+// path branch" boundary this empty-proof pre-empted is now LIFTED on the
+// tree side (a path-carrying branch converts to an ordinary derived-table
+// `Scan` at the two tree join sites) — but THIS query stays empty on BOTH
+// engines regardless, unaffected: after conversion, `unfold::merge`'s
+// disjointness pre-check simply no longer fires (its own `path.is_some()`
+// guard is gone), so the SAME `align_templates` proof now runs as part of
+// ORDINARY `unify()` instead — still `Unify::Empty`, same 0 rows, just
+// reached one call deeper. See the ANSWERABLE case right below, where the
+// join var is a PERSON (not a proposition-form id) — the templates are NOT
+// disjoint there, so the lift actually produces rows.
 // ============================================================================
 
 #[test]
-fn star_pattern_at_property_path_endpoint_flat_501s_tree_proves_empty_a_known_divergence() {
+fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
     let query = format!("{EX}SELECT ?age ?x WHERE {{ <<( ?p ex:hasAge ?age )>> ex:knows+ ?x }}");
-    let maps = sf_mapping::parse_r2rml(CENSUS_R2RML).expect("R2RML parses");
+    let got = diff(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert!(
+        got.is_empty(),
+        "both engines must agree this join is PROVABLY EMPTY (ADR-0032 D6: the quoted \
+         identity's proposition-form template and ex:knows's own subject template have \
+         conflicting literal prefixes from the first character): got={got:#?}"
+    );
+}
+
+/// The ANSWERABLE D6 case ADR-0033 finally unlocks: the quoted triple's own
+/// SUBJECT COMPONENT (`?p`, a PERSON IRI — `http://ex.org/person/{person_id}`,
+/// the IDENTICAL domain `#Knows`'s own subject/object templates use) feeds the
+/// closure, not the reifier/proposition-form id — so the join genuinely
+/// correlates instead of being provably empty. `diff()` cannot be used (it
+/// requires flat/tree parity; flat still 501s, tree now answers — a genuine,
+/// intentional divergence, the SAME shape as `differential_paths.rs`'s
+/// flipped pin). `ex:knows` edges (from `friend_id`): (1,2) and (3,1) — row 2
+/// (Bob, friend_id NULL) contributes no edge. `ex:knows+` closure:
+/// {(1,2),(3,1),(3,2)}. Every census row IS an `#PersonAgeAssertion` (`?p`
+/// ranges over all 3 person ids), so joining with the closure keeps only
+/// p∈{1,3} (2 has no outgoing edge): (p=1,x=2), (p=3,x=1), (p=3,x=2) — 3
+/// rows. `?age` is cross-checked against the SAME engine's own
+/// `baseline_ages` rather than hand-typed (the module doc's established
+/// rationale — never hand-encode an `rr:column`-sourced literal's exact XSD
+/// lexical form).
+#[test]
+fn star_pattern_at_property_path_endpoint_tree_now_answers_flat_still_501s() {
+    // A DEDICATED fixture, not `CENSUS_R2RML`'s own `#Knows` (`friend_id`, which
+    // is NULLABLE — row 2 leaves it NULL): a PRE-EXISTING gap in the path
+    // closure's one-hop relation (`emit::hop_sql`'s `HopExpr::Pred` case had no
+    // `IS NOT NULL` guard on the object column) let that NULL flow into the base
+    // hop as a phantom `(2, NULL)` pair, which then TRANSITIVELY poisoned every
+    // node that can reach it (`1→2→NULL`, `3→1→2→NULL`) — unrelated to join
+    // composition (pre-existing on the standalone, non-joined path too,
+    // `emit_path_branch`, untouched by ADR-0033), so kept separate from THIS
+    // test's own D6 join-lift concern deliberately. FIXED (F4a): `hop_sql`'s
+    // `HopExpr::Pred` arm and `reflexive_sql` both now guard every
+    // column-valued endpoint (`differential_paths.rs`'s `*_nullable_object_
+    // column_*` tests). `#KnowsClean` is kept as its own NOT NULL fixture
+    // regardless — this test isolates the D6 join-lift question specifically,
+    // same {(1,2),(3,1)} shape as `#Knows`.
+    const KNOWS_CLEAN_SQL: &str = r#"
+CREATE TABLE census_row (
+    person_id INTEGER PRIMARY KEY,
+    age INTEGER NOT NULL,
+    friend_id INTEGER
+);
+INSERT INTO census_row VALUES (1, 30, 2);
+INSERT INTO census_row VALUES (2, 40, NULL);
+INSERT INTO census_row VALUES (3, 30, 1);
+CREATE TABLE knows_clean (a INTEGER NOT NULL, b INTEGER NOT NULL);
+INSERT INTO knows_clean VALUES (1, 2);
+INSERT INTO knows_clean VALUES (3, 1);
+"#;
+    const KNOWS_CLEAN_R2RML: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ex:  <http://example.com/> .
+
+<#PersonAge>
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#PersonAgeAssertion>
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAge> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:CensusRecord2026 ]
+    ] .
+
+<#KnowsClean>
+    rr:logicalTable [ rr:tableName "knows_clean" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{a}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:knowsClean ;
+        rr:objectMap [ rr:template "http://ex.org/person/{b}" ]
+    ] .
+"#;
+
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?x WHERE {{ ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+         ?p ex:knowsClean+ ?x }}"
+    );
+    let maps = sf_mapping::parse_r2rml(KNOWS_CLEAN_R2RML).expect("R2RML parses");
     let q = SparqlParser::new()
         .parse_query(&query)
         .expect("query parses");
+
     let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
     assert!(
         matches!(flat, Err(Error::Unsupported(_))),
-        "flat must still 501 (unfold::merge's unconditional path-join check, unchanged): {flat:?}"
+        "expected 501 on the flat path (unchanged — ADR-0033 is a tree-only lift): {flat:?}"
     );
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    match &tree {
-        Ok(plan) => assert!(
-            plan.branches.is_empty(),
-            "tree must prove this provably empty (0 branches), got {tree:?}"
-        ),
-        Err(e) => {
-            panic!("tree was expected to prove this empty via align_templates, not 501: {e:?}")
-        }
-    }
+
+    let conn = sqlite::load(KNOWS_CLEAN_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("tree must now answer this join (ADR-0033)");
+    let got = run_select(&tree, &conn);
+
+    // `ex:knowsClean` = {(1,2),(3,1)}; closure `+` = {(1,2),(3,1),(3,2)}. Every
+    // census row IS a `#PersonAgeAssertion` (`?p` ranges over all 3 person
+    // ids), so joining with the closure keeps p in {1,3} (2 has no outgoing
+    // edge): (p=1,x=2), (p=3,x=1), (p=3,x=2) — 3 rows. `?age` is cross-checked
+    // against the SAME engine's own `baseline_ages` rather than hand-typed
+    // (the module doc's established rationale for an `rr:column`-sourced
+    // literal).
+    let ages = baseline_ages(KNOWS_CLEAN_SQL, KNOWS_CLEAN_R2RML);
+    let person = |id: i32| NamedNode::new_unchecked(format!("http://ex.org/person/{id}"));
+    let expected: Vec<BTreeMap<String, Term>> = [(1, 2), (3, 1), (3, 2)]
+        .into_iter()
+        .map(|(p_id, x_id)| {
+            row3(
+                "p",
+                Term::NamedNode(person(p_id)),
+                "age",
+                ages[&person(p_id)].clone(),
+                "x",
+                Term::NamedNode(person(x_id)),
+            )
+        })
+        .collect();
+    assert!(
+        oracle::solutions_bag_eq(&got, &expected),
+        "got={got:#?}\nexpected={expected:#?}"
+    );
 }
 
 // ============================================================================
@@ -1236,15 +1418,30 @@ fn equality_and_same_term_over_composed_variables() {
 }
 
 #[test]
-fn whole_composed_variable_equality_over_a_template_bound_component_is_a_sound_501() {
-    // The FULL `?t1 = ?t2` (both composed, component-wise conjunction —
+fn whole_composed_variable_equality_over_a_template_bound_component_now_resolves() {
+    // FORMERLY a locked 501 (ledger closeout, boundary B): the FULL `?t1 =
+    // ?t2` (both composed, component-wise conjunction —
     // `star::rewrite_equality`) recurses into comparing the SUBJECT
     // components directly (`http://ex.org/person/{person_id}`, an
-    // `rr:template`) — `unify::filter_cond`'s `var_col` only resolves a bare
-    // `rr:column` binding (pre-existing v1 scope, unrelated to star). Sound
-    // 501 (never a silent wrong answer), not the `equal.len()==3` a fully
-    // general implementation would give — documented explicitly rather than
-    // silently mis-asserted (see the previous test's doc comment).
+    // `rr:template`) AND the PREDICATE components (`ex:hasAge`, a CONSTANT —
+    // RDF 1.2 §3.1 predicates are always IRIs, and `sf-mapping`'s quoted-
+    // shape compiler bakes a quoted predicate in as a fixed constant, never a
+    // per-row column, `r2rml/star.rs`'s `quote_shape`). `unify::filter_cond`'s
+    // `var_col` only resolves a bare `rr:column` binding (pre-existing v1
+    // scope) — but `cmp`'s new `var_var_eq_beyond_column` (`unify.rs`)
+    // resolves both shapes directly: two SAME-SHAPE templates align
+    // pairwise-column-equal (`unify::align_templates`, reused verbatim from
+    // the ordinary join-key case), two equal constants resolve to the
+    // "always true" sentinel. The OBJECT component (`age`, a bare
+    // `rr:column`) already worked
+    // (`equality_and_same_term_over_composed_variables`). So the WHOLE `?t1 =
+    // ?t2` now resolves: `?t1` and `?t2` (as native triple terms) are equal
+    // IFF `rA`/`rB` reify the SAME person's `#PersonAge` proposition — exactly
+    // the diagonal of the 3x3 cartesian, one pair per `census_row` row —
+    // verified against the independent spareval oracle, not hand-counted
+    // (unlike `expected_equal` in the sibling test above, which is
+    // object-only equality and so also counts the spurious same-age-
+    // different-person pairs that FULL triple equality correctly excludes).
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?rA ?rB WHERE {{ \
@@ -1253,14 +1450,31 @@ fn whole_composed_variable_equality_over_a_template_bound_component_is_a_sound_5
            FILTER(?t1 = ?t2) \
          }}"
     );
-    assert_locked_501(CENSUS_R2RML_TWO_ASSERTIONS, &query);
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML_TWO_ASSERTIONS, &query);
+    assert_eq!(rows.len(), 3, "one (rA,rB) pair per person: got={rows:#?}");
 }
 
 #[test]
-fn union_arms_disagreeing_on_composed_ness_is_a_locked_501() {
-    // ADR-0032 D3 item 2's uniform-composed-ness law: the left arm composes
-    // `?t` (via `rdf:reifies`); the right arm binds the SAME `?t` as an
-    // ordinary, non-composing pattern variable — never allowed silently.
+fn union_arms_disagreeing_on_composed_ness_resolves_at_the_top_level() {
+    // FORMERLY a locked 501 (ledger closeout, boundary A): ADR-0032 D3 item
+    // 2's uniform-composed-ness law — the left arm composes `?t` (via
+    // `rdf:reifies`, to the PROPOSITION); the right arm binds the SAME `?t`
+    // as an ordinary, non-composing pattern variable (to the REIFIER, a
+    // DIFFERENT value — `#PersonAgeAssertion`'s own subject). Disagreement
+    // reached this way is STILL rejected in general (see the companion
+    // `_wrapped_in_a_filter_is_still_a_locked_501` test below) — but this
+    // EXACT query's union is the SELECT's own top-level pattern (nothing
+    // else references `?t`), where `star::rewrite_top_level_pattern` proves
+    // it observationally safe: each top-level `Plan` branch reconstructs
+    // independently (`exec_core::run_branches`, never a single SQL-level
+    // `UNION` requiring uniform column arity), so the left arm's `?t`
+    // realizes a native `Term::Triple` and the right arm's stays an ordinary
+    // `Term::NamedNode`, with nothing in the query ever needing ONE static
+    // answer about which. 6 rows total: the 3 propositions (same triples as
+    // `reifies_object_variable_projects_as_a_native_triple_term`) plus the 3
+    // reifiers (same IRIs `SELECT ?t WHERE {?t ex:assertedBy
+    // ex:CensusRecord2026}` would bind) — verified against the independent
+    // spareval oracle.
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?t WHERE {{ \
@@ -1269,17 +1483,87 @@ fn union_arms_disagreeing_on_composed_ness_is_a_locked_501() {
            {{ ?t ex:assertedBy ex:CensusRecord2026 }} \
          }}"
     );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 6, "got={rows:#?}");
+    let (triples, plain): (Vec<_>, Vec<_>) = rows
+        .iter()
+        .map(|r| &r["t"])
+        .partition(|t| matches!(t, Term::Triple(_)));
+    assert_eq!(triples.len(), 3, "the 3 propositions: got={rows:#?}");
+    assert_eq!(plain.len(), 3, "the 3 reifiers: got={rows:#?}");
+    assert!(
+        plain.iter().all(|t| matches!(t, Term::NamedNode(_))),
+        "a non-composed reifier is an ordinary IRI: got={rows:#?}"
+    );
+}
+
+#[test]
+fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked_501() {
+    // The IDENTICAL disagreement as the previous test, but wrapped in a
+    // FILTER referencing `?t` (`isTRIPLE`, a genuine sensitive consumer:
+    // `star::rewrite_and_check_composed` resolves it to ONE static boolean
+    // for the WHOLE query, which would be silently WRONG for whichever arm
+    // did not match it) — no longer the SELECT's bare top-level pattern, so
+    // `rewrite_top_level_pattern`'s allowlist does not match and this falls
+    // through to the ORIGINAL, unconditional uniform-composed-ness check —
+    // proves the relaxation is scoped exactly to "nothing else in the query
+    // can observe the disagreement", not "any top-level SELECT union".
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ \
+           {{ {{ ?r rdf:reifies ?t }} \
+           UNION \
+           {{ ?t ex:assertedBy ex:CensusRecord2026 }} }} \
+           FILTER(isTRIPLE(?t)) \
+         }}"
+    );
     assert_locked_501(CENSUS_R2RML, &query);
 }
 
 #[test]
-fn values_mixed_triple_and_plain_cells_is_a_locked_501() {
-    // A VALUES column mixing a ground triple-term cell with a plain-IRI cell
-    // for the SAME variable is a genuine shape ambiguity this transform
-    // cannot represent in one flat table (`star::decompose_column`'s doc
-    // comment) — explicit Unsupported, never a silent prune.
+fn values_mixed_triple_and_plain_cells_resolves_at_the_top_level() {
+    // FORMERLY a locked 501 (ledger closeout, boundary A): a VALUES column
+    // mixing a ground triple-term cell with a plain-IRI cell for the SAME
+    // variable is a genuine shape ambiguity ONE flat table cannot represent
+    // (`star::decompose_column`'s doc comment) — but at the SELECT's own top
+    // level, `star::partition_values_by_triple_shape` row-partitions it into
+    // TWO uniform VALUES blocks, unioned, reducing it to the (now-resolved)
+    // union-mixed case above. Disagreement reached any OTHER way is still
+    // rejected (see the companion `_wrapped_in_a_filter_is_still_a_locked_501`
+    // test below).
     let query =
         format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 2, "got={rows:#?}");
+    let expected_triple = Triple::new(
+        NamedNode::new_unchecked("http://example.com/a"),
+        NamedNode::new_unchecked("http://example.com/hasAge"),
+        iri("http://example.com/b"),
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(&r["t"], Term::Triple(t) if **t == expected_triple)),
+        "got={rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r["t"] == iri("http://example.com/plain")),
+        "got={rows:#?}"
+    );
+}
+
+#[test]
+fn values_mixed_triple_and_plain_cells_wrapped_in_a_filter_is_still_a_locked_501() {
+    // The IDENTICAL mixed VALUES column, but wrapped in a FILTER referencing
+    // `?t` — falls through to the ORIGINAL, unconditional
+    // `star::decompose_column` mixed-shape check (never reaches the
+    // top-level relaxation).
+    let query = format!(
+        "{EX}SELECT ?t WHERE {{ \
+           VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} \
+           FILTER(isTRIPLE(?t)) \
+         }}"
+    );
     assert_locked_501(CENSUS_R2RML, &query);
 }
 
@@ -1644,4 +1928,67 @@ fn construct_object_position_triple_term_oracle_agrees() {
     );
     let triples = assert_oracle_agrees_construct(CENSUS_SQL, CENSUS_R2RML, &query);
     assert_eq!(triples.len(), 3, "triples={triples:#?}");
+}
+
+// ============================================================================
+// F4a Bug 3 — ADR-0032 D3 cross-boundary gap (confirmed and designed by a
+// prior review pass; see `sf_sparql::star::apply_composed_bindings`'s own doc
+// comment for the full analysis this test proves). When a composed
+// (triple-term) variable is one of a SubPlan's declared `vars` but its
+// component vars (`s_var`/`p_var`/`o_var`) are NOT, `iq::lower::lower_as_subplan`
+// used to freeze the outer positional-column remap from the arm's RAW
+// (pre-composition) binding — projecting the internal
+// `urn:sf-star:pf:...`-shaped proposition-form identity `NamedNode` instead
+// of a native `Term::Triple`. This is TREE-ONLY (`lower_as_subplan` is
+// exclusively tree machinery — flat has no derived-table/positional-column
+// abstraction to lose the components across), so this test drives
+// `translate_with` (tree) directly rather than the shared `diff()` helper
+// (which requires flat/tree parity — not the property being tested here).
+// ============================================================================
+
+/// The team-lead's exact confirmed repro: `?t` is the SubPlan's own declared
+/// `vars` entry (`SELECT DISTINCT ?t`), cross-joined (no shared variable) with
+/// an outer `?p ex:knows ?friend` pattern, and projected. `ex:knows` edges
+/// (row 2's NULL `friend_id` excluded, R2RML §11 / Bug 1 above): (1,2) (3,1)
+/// — 2 rows. Distinct `?t` values: one native quoted triple per census row's
+/// `#PersonAgeAssertion` (3 rows, subjects differ even where ages repeat). No
+/// shared variable between the two sides ⇒ a plain cross product: 2 * 3 = 6
+/// rows, every one of which must carry a genuine `Term::Triple` for `?t`.
+#[test]
+fn composed_var_crossing_subplan_boundary_projects_as_native_triple_term() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t ?friend WHERE {{ \
+           ?p ex:knows ?friend . \
+           {{ SELECT DISTINCT ?t WHERE {{ ?r rdf:reifies ?t }} }} \
+         }}"
+    );
+    let maps = sf_mapping::parse_r2rml(CENSUS_R2RML).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(&query)
+        .expect("query parses");
+    let conn = sqlite::load(CENSUS_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspect");
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("tree must answer this SubPlan-crossing composed var");
+    let got = run_select(&tree, &conn);
+
+    assert_eq!(
+        got.len(),
+        6,
+        "2 ex:knows edges * 3 distinct ?t values: got={got:#?}"
+    );
+    for row in &got {
+        assert!(
+            matches!(row.get("t"), Some(Term::Triple(_))),
+            "?t crossing the SubPlan boundary must reconstruct as a native Term::Triple, \
+             never the raw internal proposition-form identity IRI: row={row:#?}"
+        );
+    }
+
+    let oracle_rows = oracle_star_bag(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert!(
+        oracle::solutions_bag_eq(&got, &oracle_rows),
+        "engine vs decoded-graph oracle divergence:\n engine={got:#?}\n oracle={oracle_rows:#?}"
+    );
 }

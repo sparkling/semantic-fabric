@@ -55,24 +55,41 @@ impl SqlBackend for DuckDbBackend {
         Self: 's;
 
     async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
-        let guard = self.conn.lock().unwrap_or_else(|p| p.into_inner());
-        let mut stmt = guard
-            .prepare(probe_sql)
-            .map_err(|e| Error::Marshal(format!("duckdb prepare: {e}")))?;
-        // Execute with no params to populate column metadata.
-        let rows = stmt
-            .query(params_from_iter(std::iter::empty::<String>()))
-            .map_err(|e| Error::Marshal(format!("duckdb query: {e}")))?;
-        let ncols = rows.as_ref().map(|s| s.column_count()).unwrap_or(0);
-        let names = (0..ncols)
-            .map(|i| {
-                rows.as_ref()
-                    .and_then(|s| s.column_name(i).ok())
-                    .map(|s| s.to_owned())
-                    .unwrap_or_else(|| format!("col{i}"))
-            })
-            .collect();
-        Ok(names)
+        // Lock + prepare inside `spawn_blocking`, mirroring `open_branch` below —
+        // NOT inline. Identical deadlock shape to the SQLite backend's fixed
+        // `column_names` (see `backend/sqlite.rs`): a `std::sync::Mutex` taken
+        // inline in an async fn blocks the tokio worker thread itself, so `N`
+        // concurrent callers over one shared connection wedge every worker once
+        // `N > worker_threads`.
+        let conn = Arc::clone(&self.conn);
+        let probe_sql = probe_sql.to_owned();
+        let joined = tokio::task::spawn_blocking(move || {
+            let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
+            let mut stmt = guard
+                .prepare(&probe_sql)
+                .map_err(|e| Error::Marshal(format!("duckdb prepare: {e}")))?;
+            // Execute with no params to populate column metadata.
+            let rows = stmt
+                .query(params_from_iter(std::iter::empty::<String>()))
+                .map_err(|e| Error::Marshal(format!("duckdb query: {e}")))?;
+            let ncols = rows.as_ref().map(|s| s.column_count()).unwrap_or(0);
+            let names = (0..ncols)
+                .map(|i| {
+                    rows.as_ref()
+                        .and_then(|s| s.column_name(i).ok())
+                        .map(|s| s.to_owned())
+                        .unwrap_or_else(|| format!("col{i}"))
+                })
+                .collect();
+            Ok(names)
+        })
+        .await;
+        match joined {
+            Ok(result) => result,
+            Err(e) => Err(Error::Introspection(format!(
+                "column_names spawn_blocking task join error: {e}"
+            ))),
+        }
     }
 
     async fn open_branch(

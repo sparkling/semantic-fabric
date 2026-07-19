@@ -345,7 +345,9 @@ cargo run -p sf-cli -- bench           # GTFS-Madrid OBDA: rewrites SPARQL → S
 **`serve` flags.** `--source sqlite:<path>` (path may be `:memory:`) or
 `pg:<conninfo>`; `--mapping <ttl>` (R2RML, required); `--ontology <ttl>` (optional
 tier-1 T-Box); `--bind host:port` (default `127.0.0.1:7878`); plus `--timeout-secs`
-and `--max-query-len` governance caps ([ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)).
+and `--max-query-len` governance caps, and `--pg-pool-size`/`--pg-pool-wait-secs`/
+`--sqlite-pool-size` connection-pool sizing
+([ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md) §C).
 The endpoint is `GET`/`POST /sparql` (SPARQL 1.2 Protocol), read-only (query only),
 content-negotiated via `Accept` (SPARQL Results JSON/XML/CSV/TSV for SELECT/ASK;
 Turtle/N-Triples/JSON-LD for CONSTRUCT).

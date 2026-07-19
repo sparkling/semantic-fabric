@@ -79,7 +79,7 @@
     <dt>This version</dt><dd><code>docs/rdf-star/specification.html</code></dd>
     <dt>Status</dt><dd>Project Specification — Implemented (semantic-fabric <code>feat/rdf-star</code>)</dd>
     <dt>Latest update</dt><dd>2026-07-18</dd>
-    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification)</dd>
+    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition)</dd>
     <dt>Editorial model</dt><dd>Structured after the W3C <em>R2RML: RDB to RDF Mapping Language</em> Recommendation</dd>
   </dl>
 </header>
@@ -434,8 +434,10 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   three components, joined against the basic-encoding patterns wherever the variable is also
   matched elsewhere; where the variable is only projected, the ground term is reprojected
   directly — including nested ground terms, decomposed recursively. Rows mixing a triple-term cell
-  and a plain-value cell for the <em>same</em> VALUES column are rejected (an explicit
-  <code>501</code>): one flat relational column cannot represent both shapes for one variable.
+  and a plain-value cell for the <em>same</em> VALUES column resolve at the top level of a
+  <code>SELECT</code> (the block row-partitions into a union, each row realizing per its own
+  shape — see §8.2); wherever the mixed variable is <em>observed</em> by a function, equality,
+  or template, the explicit <code>501</code> remains.
 </p>
 <p>
   The five SPARQL&nbsp;1.2 triple-term functions (§17.4.6) are implemented by
@@ -501,9 +503,9 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   <tr><th></th><th>Restriction</th><th>Rationale</th></tr>
   <tr><td><span class="rule-id">R4</span></td><td><strong>No predicate position.</strong> A quoted triple in predicate position is rejected at load time.</td><td>RDF&nbsp;1.2 Concepts §3.1: a predicate is always an IRI. Not an engine limitation — spec-impossible.</td></tr>
   <tr><td><span class="rule-id">R4</span></td><td><strong>No subject position in data.</strong> A quoted triple as a mapping's own quoted-triples-map subject is rejected at load time; as a <em>query pattern</em> it instead matches nothing (§7.3) — never an error.</td><td>RDF&nbsp;1.2 Concepts §3.1: a subject is an IRI or blank node. Spec-impossible, not a scope choice.</td></tr>
-  <tr><td>—</td><td><strong>Quoted pattern at a property-path endpoint.</strong> Joining a path-carrying branch with anything else is rejected.</td><td>An engine-general boundary — <em>any</em> path joined with anything else 501s today, star or not (ADR-0032 D6). A narrow tree-vs-flat divergence on this exact cell is test-locked.</td></tr>
-  <tr><td>—</td><td><strong>Uniform composed-ness.</strong> A <code>UNION</code>'s two arms disagreeing on whether a shared variable is a triple term, or a single <code>VALUES</code> column mixing triple-term and plain cells, are rejected.</td><td>One SPARQL variable cannot be "sometimes a triple term" depending on which arm or row produced it.</td></tr>
-  <tr><td>—</td><td><strong>Whole-composed-variable equality over a template-bound component.</strong> <code>?t1 = ?t2</code> where a component traces back to an <code>rr:template</code> (not a bare <code>rr:column</code>) is a sound, explicit <code>501</code>.</td><td>A pre-existing v1 scope limit in the underlying comparison machinery, inherited rather than introduced by star. Comparing the individual component directly (e.g. <code>OBJECT(?t1) = OBJECT(?t2)</code>) is unaffected.</td></tr>
+  <tr><td>—</td><td><strong>Quoted pattern at a property-path endpoint — LIFTED on the default engine (ADR-0033, 2026-07-19).</strong> Path branches now compile as alias-preserving derived tables and join ordinarily on the tree engine (the production default), star or not — including OPTIONAL on either side, EXISTS bodies, and GROUP BY over the join. The flat engine (the <code>=_bag</code> oracle path) retains the original restriction.</td><td>The lift is engine-general (any path join, not just star) and adversarially verified, incl. a duplicate-multiplicity <code>!p</code> bag fixture. Remaining: the flat-engine restriction, by design.</td></tr>
+  <tr><td>—</td><td><strong>Uniform composed-ness — partially lifted (2026-07-19).</strong> A <em>top-level</em> <code>SELECT</code> union whose arms disagree on whether a shared variable is a triple term — and a single mixed <code>VALUES</code> column, which row-partitions into one — now resolve, each row realizing per its own arm. The strict rejection remains wherever the variable is <em>observed</em> (a <code>FILTER</code>/function/equality/CONSTRUCT template over the mixed variable, or any nested composition).</td><td>Per-branch realization is safe by construction; only the statically-resolved consumers (the five functions, equality, templates) force uniformity — the 501 now fires exactly there, test-pinned on both sides of the boundary.</td></tr>
+  <tr><td>—</td><td><strong>Whole-composed-variable equality — lifted for aligned shapes (2026-07-19).</strong> <code>?t1 = ?t2</code> now resolves when components are constants or same-structure templates (pairwise column equality; provably-disjoint templates fold to false). The residual <code>501</code> is a genuine template <em>shape mismatch</em> the alignment machinery cannot resolve either way, with a sharpened error naming both variables and the reason.</td><td>Reuses the join machinery's own template alignment — no new comparison semantics. Component-wise comparison (e.g. <code>OBJECT(?t1) = OBJECT(?t2)</code>) is unaffected either way.</td></tr>
 </table>
 
 <h2 id="divergence"><span class="secno">9.</span>Divergence from RML-STAR</h2>

@@ -29,6 +29,10 @@ mysql_async = { version = "0.35", default-features = false, features = ["default
 # off the in-process heap so the constant-memory measurement is not confounded.
 criterion = "0.5"
 tempfile = "3"
+# term-gen batch-parallelism receipt (ADR-0006 M4 wave-2, micro_hotpaths.rs):
+# exercises the SAME `par_chunks` mechanism as sf-sparql's exec_core, so the
+# pin tracks it. Bench-only — the library side of sf-bench never touches rayon.
+rayon = "1.12"
 # PG + MySQL bench groups (obda_select_pg_1x; constant_memory PG/MySQL variants):
 # a multi-thread tokio runtime wraps the async criterion iteration, the PG/MySQL
 # fixture setup, and the streaming server-side-cursor memory measurement

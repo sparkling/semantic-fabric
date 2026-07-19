@@ -67,6 +67,14 @@ jobs:
             sleep 2
           done
           echo "::warning::SQL Server did not become reachable in time — differential_mssql will skip gracefully"
+      # Dependency vulnerability gate (F2 item 3, ADR-0010 closeout receipt):
+      # `cargo audit` reads .cargo/audit.toml's documented ignore-list (advisories
+      # confirmed unfixable without an upstream crate's own version bump) and fails
+      # the build on anything not on it — a real gate, not `|| true`.
+      - name: install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        run: cargo audit
       - name: rustfmt
         run: cargo fmt --all --check
       - name: clippy

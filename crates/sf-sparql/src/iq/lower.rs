@@ -61,12 +61,13 @@ use spargebra::algebra::Expression;
 
 use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{
-    AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, SqlCond,
+    AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan, SqlCond,
     SubPlanJoin, TermDef,
 };
 use crate::leftjoin::{
     def_is_nullable, inner_join_one, left_join_branches, not_exists_cond_for, null_safe,
 };
+use crate::star::{self, StarEnv};
 use crate::unfold::{group_key_columns, join_branches, single_column_of};
 use crate::unify::{bind_term_def, filter_cond, unify, Unify};
 use crate::{Error, Plan, PlanForm, Result};
@@ -120,10 +121,31 @@ fn max_alias_in_tree(node: &IqNode) -> usize {
 /// the projection seam's input. Empty (`&HashSet::new()`) for a query with no
 /// composed variables — a plain, unconditional no-op past the `.contains`
 /// checks below.
-pub fn lower(node: IqNode, dialect: sf_sql::Dialect, extra_keep: &HashSet<String>) -> Result<Plan> {
+/// `star_env` — the SAME whole-query [`StarEnv`] `extra_keep` was derived
+/// from, threaded alongside it for [`lower_as_subplan`]'s cross-boundary fix
+/// (ADR-0032 D3): a composed variable that is one of a SubPlan's declared
+/// `vars` but whose components are not gets its `TermDef::ComposedTriple`
+/// built from the ARM's own bindings (which DO have the components) BEFORE
+/// the derived-table positional remap freezes, instead of the later
+/// top-level `star::apply_composed_bindings` projection seam trying — too
+/// late — to re-derive it from components that never crossed the boundary.
+/// Empty (`&StarEnv::new()`) for a query with no composed variables.
+pub fn lower(
+    node: IqNode,
+    dialect: sf_sql::Dialect,
+    extra_keep: &HashSet<String>,
+    star_env: &StarEnv,
+) -> Result<Plan> {
     let mut next_alias = max_alias_in_tree(&node) + 1;
     let mut spine = Spine::default();
-    let branches = lower_spine(node, dialect, &mut spine, &mut next_alias, extra_keep)?;
+    let branches = lower_spine(
+        node,
+        dialect,
+        &mut spine,
+        &mut next_alias,
+        extra_keep,
+        star_env,
+    )?;
     let vars = spine
         .project
         .map(|p| p.iter().map(|v| v.to_string()).collect())
@@ -170,11 +192,12 @@ fn lower_spine(
     spine: &mut Spine,
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
+    star_env: &StarEnv,
 ) -> Result<Vec<Branch>> {
     match node {
         IqNode::Distinct { child } => {
             spine.distinct = true;
-            lower_spine(*child, dialect, spine, next_alias, extra_keep)
+            lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)
         }
         IqNode::Slice {
             child,
@@ -183,18 +206,18 @@ fn lower_spine(
         } => {
             spine.offset = offset;
             spine.limit = limit;
-            lower_spine(*child, dialect, spine, next_alias, extra_keep)
+            lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)
         }
         IqNode::OrderBy { child, keys } => {
             spine.order = keys;
-            lower_spine(*child, dialect, spine, next_alias, extra_keep)
+            lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)
         }
         IqNode::Aggregation {
             child,
             grouping,
             aggs,
         } => lower_aggregation(
-            *child, grouping, aggs, dialect, spine, next_alias, extra_keep,
+            *child, grouping, aggs, dialect, spine, next_alias, extra_keep, star_env,
         ),
         // A `Construction` over a spine node — the SELECT projection / a post-GROUP-BY
         // `(agg AS ?v)` Extend over an `Aggregation`/`Distinct`/`Slice`/`OrderBy`. Record
@@ -223,7 +246,8 @@ fn lower_spine(
                 matches!(d, BindDef::Expr(e)
                     if !matches!(e.as_ref(), Expression::Variable(_)) && is_arith_over_agg(e.as_ref()))
             });
-            let mut branches = lower_spine(*child, dialect, spine, next_alias, extra_keep)?;
+            let mut branches =
+                lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)?;
             // A MULTI-branch aggregation lowers to a `rust_group`: the aggregate outputs
             // are computed in Rust AFTER grouping, so they are NOT columns of the pre-group
             // union branches. The outer `Construction`'s `(agg AS ?v)` Extend must rewrite
@@ -248,7 +272,7 @@ fn lower_spine(
         // leaf): the projected scope is its output scope; fold it to branches.
         other => {
             spine.project.get_or_insert_with(|| other.output_vars());
-            lower_node(other, dialect, false, next_alias, extra_keep)
+            lower_node(other, dialect, false, next_alias, extra_keep, star_env)
         }
     }
 }
@@ -268,6 +292,7 @@ fn lower_node(
     decompose: bool,
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
+    star_env: &StarEnv,
 ) -> Result<Vec<Branch>> {
     match node {
         // ---- leaves --------------------------------------------------------------
@@ -312,7 +337,14 @@ fn lower_node(
             // merge is a pure CROSS JOIN; the shared-var equalities ride `cond`.
             let mut acc = vec![Branch::empty()];
             for child in children {
-                let cbr = lower_node(child, dialect, decompose, next_alias, extra_keep)?;
+                let mut cbr =
+                    lower_node(child, dialect, decompose, next_alias, extra_keep, star_env)?;
+                // ADR-0033: convert any path-carrying branch to an ordinary derived-table
+                // Scan BEFORE `join_branches` (the flat `merge`'s unconditional path-join
+                // 501) ever sees it — safe unconditionally here, since NORMALIZE collapses
+                // 1-child joins, so a standalone path never reaches an `InnerJoin` with only
+                // itself as a child (it stays the fast top-level-`WITH` shape untouched).
+                convert_path_branches(&mut cbr, dialect, next_alias)?;
                 acc = join_branches(acc, cbr)?;
                 if acc.is_empty() {
                     break;
@@ -329,11 +361,26 @@ fn lower_node(
             // The LEFT operand inherits the enclosing `decompose` context (a left-nested
             // OPTIONAL is already opts-free-compatible: `left_join_branches` only requires
             // the RIGHT to be opts-free, so the left keeps the efficient path at top level).
-            let l = lower_node(*left, dialect, decompose, next_alias, extra_keep)?;
+            let mut l = lower_node(*left, dialect, decompose, next_alias, extra_keep, star_env)?;
+            // ADR-0033: convert a path-carrying LEFT operand to an ordinary derived-table
+            // Scan — without this, `build_left_join`'s `left.path.is_some()` guard 501s the
+            // moment an OPTIONAL's OWN preceding pattern is a property path.
+            convert_path_branches(&mut l, dialect, next_alias)?;
             // The RIGHT operand MUST lower to OPTS-FREE branches to be re-feedable into
             // `left_join_branches` (§5.3 nested-right closure): force any OPTIONAL inside
             // the right to its `(P⋈R)∪(P−R)` decomposition rather than the OptJoin form.
-            let r = lower_node(*right, dialect, true, next_alias, extra_keep)?;
+            let mut r = lower_node(*right, dialect, true, next_alias, extra_keep, star_env)?;
+            // ADR-0033: convert a path-carrying RIGHT operand too, BEFORE the
+            // `is_single_subplan_branch` check below — a bare-path right converts to a
+            // branch with exactly one `core` `Scan` (never a SubPlan), so it falls through
+            // to `left_join_branches`'s ordinary single-scan fast path (`build_left_join`),
+            // which reaches its R5 inner-FILTER-in-ON handling (`filter_cond`) instead of
+            // 501ing beforehand. That handling itself still only accepts a FILTER over a
+            // PLAIN-COLUMN-bound variable (`unify::var_col`, pre-existing v1 scope, unrelated
+            // to paths) — a filter directly on the path's OWN endpoint variable (always
+            // `TermMap::Template`-typed, an IRI) still 501s on that separate, generic ground;
+            // a filter on some OTHER plain-column var bound alongside the path is unaffected.
+            convert_path_branches(&mut r, dialect, next_alias)?;
             // The OPTIONAL ON-expression (R5 inner FILTER) is reconstructed to a single
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
@@ -368,7 +415,8 @@ fn lower_node(
 
         // ---- selection: resolve each cond per resulting branch (R4) ---------------
         IqNode::Filter { child, cond } => {
-            let mut branches = lower_node(*child, dialect, decompose, next_alias, extra_keep)?;
+            let mut branches =
+                lower_node(*child, dialect, decompose, next_alias, extra_keep, star_env)?;
             for b in &mut branches {
                 apply_conds(&cond, b, dialect)?;
             }
@@ -379,7 +427,9 @@ fn lower_node(
         IqNode::Union { children, .. } => {
             let mut out = Vec::new();
             for c in children {
-                out.extend(lower_node(c, dialect, decompose, next_alias, extra_keep)?);
+                out.extend(lower_node(
+                    c, dialect, decompose, next_alias, extra_keep, star_env,
+                )?);
             }
             Ok(out)
         }
@@ -396,7 +446,7 @@ fn lower_node(
             // pattern, THEN FILTER — `unfold.rs:135-142`), so peel the leading FILTER(s)
             // and apply their conds per branch once the bindings are in place (R4).
             let (body, filters) = peel_filters(*child);
-            let branches = lower_node(body, dialect, decompose, next_alias, extra_keep)?;
+            let branches = lower_node(body, dialect, decompose, next_alias, extra_keep, star_env)?;
             let mut out = Vec::with_capacity(branches.len());
             for mut b in branches {
                 // A `fold_subst` shared-var unify may prove the branch unsatisfiable
@@ -430,7 +480,9 @@ fn lower_node(
         IqNode::Aggregation { .. }
         | IqNode::Distinct { .. }
         | IqNode::Slice { .. }
-        | IqNode::OrderBy { .. } => lower_as_subplan(node, dialect, next_alias, extra_keep),
+        | IqNode::OrderBy { .. } => {
+            lower_as_subplan(node, dialect, next_alias, extra_keep, star_env)
+        }
         IqNode::Intensional { .. } => Err(Error::Unsupported(
             "Intensional survived to LOWER — the RESOLVE invariant (ZERO Intensional) \
              was violated → 501"
@@ -442,6 +494,42 @@ fn lower_node(
                 .to_owned(),
         )),
     }
+}
+
+/// Convert every path-carrying branch (`b.path = Some(pc)`) into an ordinary
+/// scan-based branch (ADR-0033 join-onto-path composition): render the closure
+/// as a self-contained derived-table SQL string via
+/// [`crate::emit::path_as_derived_table_sql`] (a FRESH internal alias for the
+/// recursive CTE — never `pc.alias`) and push `Scan { alias: pc.alias, source:
+/// LogicalSource::Query(sql) }` onto `b.core`. The OUTER alias stays
+/// `pc.alias` — UNCHANGED — so every pre-existing binding/condition
+/// referencing `t{pc.alias}.sf_s` / `.sf_o` resolves against the derived
+/// table's identically-named output columns with ZERO cross-tree rewriting. A
+/// path-free branch passes through untouched. Catalog-blind
+/// (`ColumnCatalog::default()`) — LOWER has no live catalog yet, the same
+/// pre-existing limitation `lower_as_subplan` already carries for every other
+/// derived-table rendering at this stage (ADR-0033 risk 2).
+fn convert_path_branches(
+    branches: &mut [Branch],
+    dialect: sf_sql::Dialect,
+    next_alias: &mut usize,
+) -> Result<()> {
+    for b in branches.iter_mut() {
+        let Some(pc) = b.path.take() else { continue };
+        let cte_alias = *next_alias;
+        *next_alias += 1;
+        let sql = crate::emit::path_as_derived_table_sql(
+            &pc,
+            cte_alias,
+            dialect,
+            &crate::emit::ColumnCatalog::default(),
+        )?;
+        b.core.push(Scan {
+            alias: pc.alias,
+            source: sf_core::ir::LogicalSource::Query(sql),
+        });
+    }
+    Ok(())
 }
 
 /// Fold a `Construction` substitution into one branch's bindings (design §5
@@ -698,16 +786,57 @@ fn lower_iq_exists(
     is_minus: bool,
     dialect: sf_sql::Dialect,
 ) -> Result<SqlCond> {
-    // ADR-0032 D3 item 2: an EMPTY `extra_keep` here (not threaded further from
-    // `lower`/`lower_node`, unlike the main line) is a documented, narrow gap —
-    // a composed variable referenced ONLY inside a FILTER EXISTS/NOT EXISTS/MINUS
-    // body would not survive this inner lowering's own projection-restrict retain.
-    // `apply_conds`/`lower_iq_cond` (this function's only callers) are invoked
-    // from many more sites than the main lowering line, so threading the real set
-    // this deep was judged out of proportion to this wave's actual test matrix
-    // (no test exercises a composed variable inside an EXISTS body) — mirrors
-    // `apply_composed_bindings`'s own documented SubPlan-pooling gap.
-    let inner = lower_node(node.clone(), dialect, false, &mut 0, &HashSet::new())?;
+    // ADR-0032 D3 item 2 — INVESTIGATED, downgraded to defensive (not
+    // load-bearing): an EMPTY `extra_keep` here (not threaded from
+    // `lower`/`lower_node`, unlike the main line) was originally flagged as a
+    // gap — a composed variable's components referenced ONLY inside a FILTER
+    // EXISTS/NOT EXISTS/MINUS body might not survive this inner lowering's
+    // own projection-restrict retain. Genuinely tried to reach it (7 distinct
+    // shapes: a component reused via a second `rdf:reifies` occurrence
+    // inside EXISTS; a component-extracting FILTER `SUBJECT(?t)`; a
+    // `BIND(TRIPLE(...))` inside EXISTS; a nested sub-SELECT re-establishing
+    // the composed var, both a star and a plain-variable control; a bare
+    // outer-only FILTER, both a star and a plain-variable control) — NONE
+    // reach it, for three independent, structural reasons, confirmed by
+    // temporarily threading a deliberately over-wide `extra_keep` here and
+    // observing ZERO change in any of the 7 outcomes:
+    // (1) a component bound by a pattern DIRECTLY inside the EXISTS body's
+    //     own top-level scope is already covered by that scope's default,
+    //     IMPLICIT `project` (`output_vars()` — every variable the body
+    //     binds), which is broad regardless of `extra_keep`;
+    // (2) a NESTED sub-SELECT inside the body is an INDEPENDENT SPARQL
+    //     scope — a variable there that isn't in ITS OWN declared SELECT
+    //     list can never correlate with an outer-scope variable of the same
+    //     name (SPARQL 1.1 sub-SELECT scoping, not an engine limitation), so
+    //     there is nothing `extra_keep` could preserve a correlation FOR;
+    // (3) a whole-body modifier sub-SELECT (Aggregation/Distinct/Slice/
+    //     OrderBy as the ENTIRE EXISTS body) lowers to a branch whose
+    //     `subplan_joins` is non-empty, hitting the PRE-EXISTING, already-
+    //     sound 501 a few lines below (`!r.subplan_joins.is_empty()`)
+    //     BEFORE `extra_keep` would ever matter.
+    // The genuinely-reachable shape (1) is locked correct-today by
+    // `differential_star.rs`'s `star_pattern_reused_inside_filter_exists_
+    // survives_without_extra_keep`. Kept as `HashSet::new()` — threading the
+    // real set this deep (`apply_conds`/`lower_iq_cond` fan out to many more
+    // call sites than the main lowering line) is not warranted for a gap
+    // with no reachable failing shape; mirrors `star::apply_composed_
+    // bindings`'s own SubPlan-pooling doc comment, which similarly
+    // downgrades a suspected gap once actually investigated. `star_env` is
+    // ALSO passed empty here for the identical reason (3) above: a SubPlan
+    // crossing THIS boundary already hits the same pre-existing
+    // `!r.subplan_joins.is_empty()` 501 below before `lower_as_subplan`'s
+    // StarEnv-aware composition could ever run — and an EXISTS/NOT
+    // EXISTS/MINUS body never projects its OWN bindings as query output
+    // (only existence is tested), so there is no observable surface for a
+    // composed variable inside it to need `TermDef::ComposedTriple` at all.
+    let inner = lower_node(
+        node.clone(),
+        dialect,
+        false,
+        &mut 0,
+        &HashSet::new(),
+        &StarEnv::new(),
+    )?;
     // Name the actual operator this call is serving in any deferral message: this
     // function is shared by MINUS (`is_minus`), FILTER NOT EXISTS (`negated`
     // without `is_minus`), and FILTER EXISTS (neither).
@@ -1138,13 +1267,25 @@ fn fold_expr(
 /// parent branch. Each projected SPARQL variable `v` at position `i` in the inner plan is
 /// exposed as `t{sp_alias}.c{i}` — the outer branch's [`TermDef`] is the inner's remapped
 /// to reference `c{i}` on `sp_alias`.
+///
+/// ADR-0032 D3 cross-boundary fix: `v` may be a [`StarEnv`]-composed variable whose
+/// component vars (`s_var`/`p_var`/`o_var`) are bound in the arm but are NOT themselves
+/// among `vars` (the inner query's OWN declared SELECT list, e.g. `SELECT DISTINCT ?t`
+/// where `?t` composes from `?r rdf:reifies ?t`'s injected components) — once this
+/// function returns, those components never cross the boundary at all, so a LATER,
+/// top-level `star::apply_composed_bindings` pass can never retroactively recover them.
+/// `remap_and_compose` below therefore tries `star::composed_term_def` FIRST, against the
+/// arm's OWN bindings (which DO have the components, in the SAME inner scope) — reusing
+/// [`remap_termdef`]'s existing `TermDef::ComposedTriple` arm to remap subject/predicate/
+/// object each to their own position in `proj`, exactly like every other `TermDef` shape.
 fn lower_as_subplan(
     node: IqNode,
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
+    star_env: &StarEnv,
 ) -> Result<Vec<Branch>> {
-    let mut nested_plan = lower(node, dialect, extra_keep)?;
+    let mut nested_plan = lower(node, dialect, extra_keep, star_env)?;
     // ADR-0025 Tier-1 bug #2: a SubPlan used as a join input is emitted as a derived table
     // via `emit_subplan_sql` → `plan.emitted()`, which renders only per-branch SQL. A
     // plan-level SLICE (LIMIT/OFFSET) is applied by the Rust executor on the OUTER result,
@@ -1249,13 +1390,25 @@ fn lower_as_subplan(
             "SubPlan: multi-branch arms with differing projection widths → 501".to_owned(),
         ));
     }
+    // ADR-0032 D3 cross-boundary fix: `v`'s own arm binding, PREFERRING a freshly-built
+    // `TermDef::ComposedTriple` over the arm's OWN component bindings when `v` is a
+    // StarEnv-composed variable — built HERE, before the positional remap below erases
+    // the components' presence in this scope (see `lower_as_subplan`'s doc comment).
+    // Falls back to the arm's raw (pre-composition) binding when `v` is not composed, or
+    // its components are not (yet) available in this arm (e.g. a UNION arm that never
+    // reified this variable at all — an ordinary, branch-local absence).
+    let term_def_for = |v: &str, arm: &Branch| -> Option<TermDef> {
+        let var = spargebra::term::Variable::new_unchecked(v);
+        star::composed_term_def(&var, star_env, &arm.bindings)
+            .or_else(|| arm.bindings.get(v).cloned())
+    };
     let mut outer_bindings = std::collections::BTreeMap::new();
     for (i, v) in vars.iter().enumerate() {
         let mut agreed: Option<TermDef> = None;
         for (arm, proj) in prepared.iter().zip(&arm_projections) {
-            let remapped = match arm.bindings.get(v.as_str()) {
+            let remapped = match term_def_for(v, arm) {
                 Some(def) => {
-                    remap_termdef(def, proj, sp_alias).unwrap_or_else(|_| positional_col(i))
+                    remap_termdef(&def, proj, sp_alias).unwrap_or_else(|_| positional_col(i))
                 }
                 None => positional_col(i),
             };
@@ -1400,10 +1553,14 @@ fn remap_termdef(def: &TermDef, projection: &[ColRef], sp_alias: usize) -> Resul
                 fixed_type: *fixed_type,
             })
         }
-        // ADR-0032 D2: forced arm (new `TermDef` variant) — recurses like
-        // `Coalesce`/`Concat`. Not reachable in practice: a `ComposedTriple` binding
-        // is installed only by `lib.rs`'s env-composed projection override, after
-        // SubPlan pooling has already run.
+        // ADR-0032 D2/D3: forced arm (new `TermDef` variant) — recurses like
+        // `Coalesce`/`Concat`. Reached from two sites: `lib.rs`'s env-composed
+        // top-level projection override (AFTER SubPlan pooling, over a branch
+        // whose components stayed in the SAME scope — the ORIGINAL reason this
+        // arm exists), and (F4a) `lower_as_subplan`'s own cross-boundary fix
+        // above, which builds a `ComposedTriple` from the ARM's bindings and
+        // remaps it through EXACTLY this arm before the derived-table boundary
+        // ever erases the components' presence.
         TermDef::ComposedTriple {
             subject,
             predicate,
@@ -1476,6 +1633,11 @@ fn remap_term_map(
 /// a single-branch inner ⇒ a SQL `GROUP BY` on one [`Branch::agg`]; a multi-branch
 /// (UNION/VALUES) inner ⇒ a Rust-level [`Plan::rust_group`]. Same IR scope; only the
 /// strategy differs — exactly the flat [`crate::unfold::Unfolder::group`] dispatch.
+/// `dialect`/`next_alias`/`extra_keep`/`star_env` are the SAME threading-context
+/// parameters every sibling lowering function in this file carries (`lower_node`,
+/// `lower_spine`, `lower_as_subplan`) — bundling them into a context struct for this
+/// one function would ripple across all of them for no behavioral gain.
+#[allow(clippy::too_many_arguments)]
 fn lower_aggregation(
     child: IqNode,
     grouping: Vec<Var>,
@@ -1484,8 +1646,9 @@ fn lower_aggregation(
     spine: &mut Spine,
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
+    star_env: &StarEnv,
 ) -> Result<Vec<Branch>> {
-    let inner = lower_node(child, dialect, false, next_alias, extra_keep)?;
+    let inner = lower_node(child, dialect, false, next_alias, extra_keep, star_env)?;
     spine.project.get_or_insert_with(|| {
         let mut out = grouping.clone();
         for a in &aggs {
@@ -2280,7 +2443,13 @@ mod tests {
         let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         let normalized = crate::iq::normalize::normalize(resolved).unwrap();
-        lower(normalized, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap()
+        lower(
+            normalized,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap()
     }
 
     /// build → resolve → normalize → lower, returning the lower `Result` (for 501 cases).
@@ -2290,7 +2459,12 @@ mod tests {
         let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         let normalized = crate::iq::normalize::normalize(resolved).unwrap();
-        lower(normalized, sf_sql::Dialect::Sqlite, &HashSet::new())
+        lower(
+            normalized,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
     }
 
     fn has_col_eq(conds: &[SqlCond]) -> bool {
@@ -2540,7 +2714,13 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
+        let p = lower(
+            tree,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap();
         let rg = p.rust_group.expect("multi-branch inner ⇒ Plan.rust_group");
         assert_eq!(rg.keys, vec!["s".to_owned()]);
         assert_eq!(rg.aggs.len(), 1);
@@ -2603,7 +2783,13 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
+        let p = lower(
+            tree,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap();
         assert!(
             p.rust_group.is_none(),
             "compatible arms must push down, not fall back to RustGroup"
@@ -2679,7 +2865,13 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
+        let p = lower(
+            tree,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap();
         assert!(
             p.rust_group.is_none(),
             "an injective Template key must push down, not fall back to RustGroup"
@@ -2769,7 +2961,13 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
+        let p = lower(
+            tree,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap();
         assert!(
             p.rust_group.is_some(),
             "a non-injective Template key must fall back to RustGroup, never mis-pool"
@@ -2829,7 +3027,13 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
+        let p = lower(
+            tree,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap();
         assert!(
             p.rust_group.is_some(),
             "a multi-column Template aggregate ARGUMENT must fall back to RustGroup"
@@ -2895,7 +3099,13 @@ mod tests {
                 project: vec!["s".into(), "o".into()],
             }),
         };
-        let p = lower(tree, sf_sql::Dialect::Sqlite, &HashSet::new()).unwrap();
+        let p = lower(
+            tree,
+            sf_sql::Dialect::Sqlite,
+            &HashSet::new(),
+            &StarEnv::new(),
+        )
+        .unwrap();
         assert!(
             p.rust_group.is_some(),
             "a Coalesce grouping key must fall back to RustGroup, never mis-pool"
