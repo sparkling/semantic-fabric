@@ -102,6 +102,7 @@ fn ontop_fk_optimization_single_col() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     // A is the projected variable (TABLE1.col1 = TABLE2.col2 via FK join).
     b.bindings.insert("A".into(), col_binding(0, "col1"));
@@ -152,6 +153,7 @@ fn ontop_fk_non_opt_projected_non_pk_col() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
     // B is projected AND binds TABLE1.col2 — parent referenced via non-PK col.
@@ -188,6 +190,7 @@ fn ontop_fk_non_opt_extra_local_condition() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
 
@@ -225,6 +228,7 @@ fn ontop_fk_non_opt_post_join_filter_on_parent() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
     b.bindings.insert("D".into(), col_binding(1, "col1"));
@@ -263,6 +267,7 @@ fn ontop_fk_non_opt_parent_self_equality() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
 
@@ -313,6 +318,7 @@ fn ontop_fk_opt_multi_scan_partial_elimination() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
     // C and D are intermediate/not projected but exist
@@ -365,6 +371,7 @@ fn ontop_fk_opt_composite_key() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
 
@@ -415,6 +422,7 @@ fn ontop_fk_non_opt_composite_wrong_column_alignment() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
 
@@ -459,6 +467,7 @@ fn ontop_fk_non_opt_composite_parent_self_equality() {
         path: None,
         agg: None,
         subplan_joins: Vec::new(),
+        nps: false,
     };
     b.bindings.insert("A".into(), col_binding(0, "col1"));
 

@@ -14,15 +14,16 @@ use spargebra::algebra::{
 };
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
-use crate::iq::lower::convert_path_branches;
+use crate::iq::lower::{convert_path_branches, remap_termdef};
+use crate::iq::node::triple_pattern_vars;
 use crate::iq::{
     AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan,
-    SqlCond, TermDef,
+    SqlCond, SubPlanJoin, TermDef,
 };
 use crate::leftjoin::{def_is_nullable, left_join_branches, null_safe};
 use crate::saturate::Tbox;
 use crate::unify::{filter_cond, templates_provably_disjoint, unify, Unify};
-use crate::{Error, Result};
+use crate::{Error, Plan, PlanForm, Result};
 
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -64,16 +65,67 @@ pub struct Unfolder<'a> {
     /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
     /// by the `GraphPattern::Graph` arm; all other arms inherit the current value.
     pub(crate) current_graph: Option<NamedNode>,
+    /// The introspected source catalog (ADR-0034 D1): `bgp`/`pattern_branches`
+    /// consult this per pattern, BEFORE any later projection restriction can strip
+    /// a key-covering variable from a branch's bindings — see [`bgp`]'s own doc
+    /// comment for why D1 must run this early rather than in `cascade::run`. An
+    /// empty slice (no schema supplied) is a legitimate caller choice, not an
+    /// error — every table then reads as unproven, so D1 forces DISTINCT
+    /// everywhere it applies (sound, if conservative — unlike the OTHER cascade
+    /// passes, which are pure optimizations that no-op without schema, D1 is a
+    /// CORRECTNESS fix: "cannot prove duplicate-free" must mean "assume
+    /// duplicates possible", not "skip"). `pub(crate)`: also read directly by
+    /// `iq::resolve`'s `Intensional` arm, the tree engine's mirror of this same
+    /// per-pattern D1 check (`ResolveCx` wraps an `Unfolder` for exactly this
+    /// reason — see its own doc comment).
+    pub(crate) schema: &'a [sf_sql::TableSchema],
+    /// `true` while resolving a pattern that lives INSIDE a `FILTER EXISTS` /
+    /// `FILTER NOT EXISTS` / `MINUS` body (set/restored around that recursion by
+    /// `iq::resolve`'s `resolve_cond`, the tree engine's only caller — the flat
+    /// engine's own `lower_exists`/`minus_branches` never read this field). D1/D2
+    /// (ADR-0034) are skipped there: EXISTS/NOT EXISTS ask only "does at least one
+    /// solution exist" (SPARQL §18.4) and MINUS's anti-join asks only "does some
+    /// compatible solution exist" (§8.3) — BOTH existence questions, answered
+    /// identically whether the body's own evaluation contains 1 copy of a
+    /// solution or 100 duplicate copies of it, so a within-body dedup changes
+    /// nothing observable. Skipping it matters for the TREE engine specifically:
+    /// `iq::resolve`'s `Intensional` arm marks D1/D2 via `IqNode::Distinct`, which
+    /// `iq::lower` always routes through `lower_as_subplan`'s SubPlanJoin wrap —
+    /// and the EXISTS/NOT-EXISTS/MINUS body-lowering in `iq::lower::not_exists_
+    /// cond_for` has its own, PRE-EXISTING, unrelated sound-501 boundary for a
+    /// body branch that carries one (`!r.subplan_joins.is_empty()` — no
+    /// representation for a SubPlan alias inside a correlated `SqlCond::{Exists,
+    /// NotExists}`'s `scans`/`conds` yet). Since dedup is semantically moot here
+    /// anyway, the simplest sound fix is to never introduce the SubPlan in the
+    /// first place, rather than teach that boundary a new shape (differential_
+    /// paths.rs's `path_joined_with_pattern_inside_filter_exists_engine_matches_
+    /// oracle`, differential_star_observers.rs's `{exists,not_exists}_over_mixed_
+    /// union_no_longer_501s`, adversarial_adr0033_refute.rs's `{filter_not_
+    /// exists,minus}_body_with_joined_path_anti_join_correctness`, and
+    /// differential_tree.rs's `adr0025_tier2_gap1_{,inverse_}path_in_exists_
+    /// notexists_minus` all hit this boundary once D1 started firing on their
+    /// unkeyed fixture tables). OPTIONAL is NOT included — its right side is a
+    /// real LEFT JOIN whose multiplicities are part of the observable output, so
+    /// a duplicate row there is NOT moot (a separate, still-open gap: `group_by_
+    /// over_multibranch_optional_is_tree_superset_of_flat`).
+    pub(crate) in_existential: bool,
 }
 
 impl<'a> Unfolder<'a> {
-    pub fn new(maps: &'a [TriplesMap], tbox: &'a Tbox, dialect: sf_sql::Dialect) -> Self {
+    pub fn new(
+        maps: &'a [TriplesMap],
+        tbox: &'a Tbox,
+        dialect: sf_sql::Dialect,
+        schema: &'a [sf_sql::TableSchema],
+    ) -> Self {
         Self {
             maps,
             tbox,
             dialect,
             next_alias: 0,
             current_graph: None,
+            schema,
+            in_existential: false,
         }
     }
 
@@ -389,10 +441,44 @@ impl<'a> Unfolder<'a> {
 
     /// Translate a BGP: each pattern → its alternative branches, then the
     /// patterns are joined (product + shared-variable unification).
+    ///
+    /// ADR-0034 D2: each pattern's OWN candidate-map arms are deduped (pooled)
+    /// at THIS boundary — before they ever cross-product with a sibling
+    /// pattern's own arms — via [`pool_pattern_relation`]. Doing this per
+    /// pattern (not once over the whole BGP's final product) is what keeps a
+    /// pattern whose arms need pooling from re-exploding combinatorially once
+    /// joined with a sibling pattern that ALSO has its own ambiguity (each
+    /// collapses to ≤1 relation independently, so the product stays flat).
+    ///
+    /// ADR-0034 D1: EACH pattern's own arms are ALSO checked for within-branch
+    /// duplicate-row safety right here (`cascade::force_distinct_for_dup_safety`,
+    /// the same schema-driven proof `cascade::run` uses for its own, later,
+    /// defensive D1 pass), rather than deferred to `cascade::run` alone.
+    /// Deliberately NOT deferred: by the time `cascade::run` sees the fully-built
+    /// `Plan.branches`, the TREE engine (`iq::lower`) has ALREADY restricted every
+    /// leaf-CQ's bindings down to the outer query's own projected variables (its
+    /// `Construction`-arm `project` narrowing runs during LOWER, well before
+    /// `cascade::run` is ever called) — so a key-covering variable the outer
+    /// SELECT does not project (e.g. `SELECT ?o WHERE {?p :name ?o}`, ?p PK'd but
+    /// unprojected) is ALREADY gone, and `cascade::run`'s own D1 pass would see
+    /// only `?o` and wrongly conclude "not covered", forcing a spurious DISTINCT
+    /// that collapses legitimately-different `(?p,?o)` solutions sharing an `?o`
+    /// value (`differential_tree.rs`'s `r5_i_duplicate_union_arms`/`r5_iii_non_
+    /// unique_self_join` caught this: tree wrongly deduped a plain, non-DISTINCT
+    /// `?p ex:name ?o` down from 3 rows to 2 before it ever reached the outer
+    /// UNION/self-join). Checking HERE — using each pattern's own, complete,
+    /// not-yet-outer-restricted bindings, mirroring the flat engine's OWN
+    /// (already-correct) timing relative to `cascade::run`'s pass 7 — sidesteps
+    /// that asymmetry entirely: both engines now decide D1 from the SAME
+    /// un-narrowed variable set. `join_branches`/`merge` below preserve a `true`
+    /// `distinct` flag across the join (never clear one already set), so a
+    /// pattern found unsafe here stays flagged through the rest of the BGP.
     fn bgp(&mut self, patterns: &[TriplePattern]) -> Result<Vec<Branch>> {
         let mut acc: Vec<Branch> = vec![Branch::empty()];
         for tp in patterns {
             let alts = self.pattern_branches(tp)?;
+            let mut alts = pool_pattern_relation(alts, tp, self.dialect, &mut self.next_alias)?;
+            crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema);
             acc = join_branches(acc, alts)?;
             if acc.is_empty() {
                 break; // an empty product stays empty (all pruned)
@@ -1281,6 +1367,183 @@ fn reject_dropped_slice(t: &TransPattern) -> Result<()> {
     Ok(())
 }
 
+/// ADR-0034 D2 — dedup one triple pattern's OWN candidate-map arms (`tp`'s
+/// [`Unfolder::pattern_branches`] result: `rr:class` atoms and predicate-object-map
+/// atoms, both origins mixed). Two candidate maps can independently produce the
+/// identical triple (Context: "two candidate maps producing the identical triple
+/// still describe one triple"); SPARQL's BGP set semantics (§18.3) forbids the
+/// engine from counting that twice, but today's bag-union concatenation of `arms`
+/// does exactly that whenever more than one arm can match.
+///
+/// **Elision** (the common case, byte-identical to today): ≤1 arm, or every pair of
+/// arms is provably disjoint ([`arms_provably_disjoint`], ADR-0032 D6's existing
+/// leading-literal-prefix proof) — disjoint arms can never produce the same output
+/// tuple, so leaving them as separate bag-union branches is already set-correct.
+///
+/// **Pooling** (otherwise): the arms are folded into ONE outer [`Branch`] wrapping a
+/// `UNION`-deduped [`SubPlanJoin`] — the SAME mechanism [`crate::iq::lower::
+/// lower_as_subplan`] already established for ADR-0025 Tier-2 gap 2 (there: gated by
+/// an explicit nested SPARQL DISTINCT; here: gated by this D2 requirement instead),
+/// reusing its remap helpers verbatim so there is exactly one pooling implementation.
+/// Requires every projected term to be INJECTIVE ([`crate::cascade::binding_is_injective`]
+/// — a pooled `UNION`'s raw-column dedup equals SPARQL term-level dedup only then) and
+/// every arm to reconstruct each of `tp`'s variables to the SAME [`TermDef`] once
+/// remapped to the derived table's positional columns (compared via `Debug`, `TermDef`
+/// has no `PartialEq`) — either gap is a sound 501 ("not provably poolable"), never a
+/// silent wrong answer; the general fallback (dedup over each arm's fully-rendered
+/// lexical form, for arms whose reconstructions don't literally agree — the same
+/// lesson Run 4 Fix-1's `pf:` id repair relied on) is phase 2, not implemented here.
+///
+/// The TREE engine reaches the identical pooling decision + mechanism from
+/// `iq::resolve`'s `Intensional` arm, which mirrors this function's own elision check
+/// (via [`all_pairwise_disjoint`]) and, when pooling is needed, wraps the arms in an
+/// `IqNode::Distinct` so LOWER routes them through the SAME `lower_as_subplan` pooling
+/// gate — the shared branch-union seam sits one layer down (the pooling ALGORITHM
+/// itself), not in this function, since a raw `Vec<Branch>` produced here has no
+/// `IqNode` representation the tree's RESOLVE/NORMALIZE stages could bridge back into
+/// (see the module-level ADR-0034 note for why the two engines hook this at a
+/// different point in their own pipelines while sharing the pooling implementation).
+fn pool_pattern_relation(
+    arms: Vec<Branch>,
+    tp: &TriplePattern,
+    dialect: sf_sql::Dialect,
+    next_alias: &mut usize,
+) -> Result<Vec<Branch>> {
+    if arms.len() <= 1 || all_pairwise_disjoint(&arms) {
+        return Ok(arms);
+    }
+    let vars: Vec<String> = triple_pattern_vars(tp)
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
+    if vars.is_empty() {
+        // A fully-ground triple pattern (every position a constant): nothing to pool
+        // positionally. Left as today's (rare, existing) bag-union concatenation.
+        return Ok(arms);
+    }
+    for b in &arms {
+        for (k, def) in &b.bindings {
+            if vars.iter().any(|v| v == k) && !crate::cascade::binding_is_injective(def) {
+                return Err(Error::Unsupported(
+                    "ADR-0034 D2: pooling candidate-map arms over a non-injective \
+                     projected term (a multi-column template that maps distinct raw \
+                     tuples to the same RDF term) cannot be UNION-deduped soundly → 501"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    let mut narrowed = arms;
+    for b in &mut narrowed {
+        // Mirrors `lower_as_subplan`'s own narrowing: an arm may bind extra internal
+        // vars (e.g. a `rr:class` atom's own predicate/object constants ride through
+        // `bindings` too) that must not widen the pooled UNION's dedup key.
+        b.bindings.retain(|k, _| vars.iter().any(|v| v == k));
+        b.distinct = true;
+    }
+    let sp_alias = *next_alias;
+    let arm_projections: Vec<Vec<ColRef>> = narrowed
+        .iter()
+        .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
+        .collect::<Result<_>>()?;
+    if arm_projections
+        .iter()
+        .any(|p| p.len() != arm_projections[0].len())
+    {
+        return Err(Error::Unsupported(
+            "ADR-0034 D2: candidate-map arms with differing projection widths → 501".to_owned(),
+        ));
+    }
+    let positional_col = |i: usize| TermDef::Derived {
+        term_map: TermMap::Column(
+            format!("c{i}").into(),
+            sf_core::ir::TermSpec::plain_literal(),
+        ),
+        alias: sp_alias,
+    };
+    let mut outer_bindings = std::collections::BTreeMap::new();
+    for (i, v) in vars.iter().enumerate() {
+        let mut agreed: Option<TermDef> = None;
+        for (arm, proj) in narrowed.iter().zip(&arm_projections) {
+            let remapped = match arm.bindings.get(v) {
+                Some(def) => {
+                    remap_termdef(def, proj, sp_alias).unwrap_or_else(|_| positional_col(i))
+                }
+                None => positional_col(i),
+            };
+            match &agreed {
+                None => agreed = Some(remapped),
+                Some(prev) => {
+                    if format!("{prev:?}") != format!("{remapped:?}") {
+                        return Err(Error::Unsupported(format!(
+                            "ADR-0034 D2: candidate-map arms reconstruct ?{v} differently \
+                             → 501 (not provably poolable — cross-arm reconstruction is \
+                             not injective-compatible)"
+                        )));
+                    }
+                }
+            }
+        }
+        outer_bindings.insert(v.clone(), agreed.expect("at least one arm"));
+    }
+    *next_alias += 1;
+    let nested_plan = Plan {
+        branches: narrowed,
+        form: PlanForm::Select { vars },
+        distinct: true, // drives `emit_subplan_sql`'s UNION (not UNION ALL)
+        limit: None,
+        offset: 0,
+        order: Vec::new(),
+        rust_group: None,
+        dialect,
+    };
+    let mut outer = Branch::empty();
+    outer.subplan_joins.push(SubPlanJoin {
+        alias: sp_alias,
+        plan: Box::new(nested_plan),
+        on: Vec::new(),
+        left: false,
+    });
+    outer.bindings = outer_bindings;
+    Ok(vec![outer])
+}
+
+/// Whether every pair of `arms` is provably disjoint ([`arms_provably_disjoint`]) —
+/// [`pool_pattern_relation`]'s elision test, and (via [`crate::iq::resolve`]) the
+/// tree engine's identical check before it decides whether to route a pattern's arms
+/// through the `Distinct`-wrapped pooling path.
+pub(crate) fn all_pairwise_disjoint(arms: &[Branch]) -> bool {
+    for i in 0..arms.len() {
+        for j in (i + 1)..arms.len() {
+            if !arms_provably_disjoint(&arms[i], &arms[j]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Two arms are provably disjoint iff SOME variable they both bind has provably
+/// disjoint definitions ([`templates_provably_disjoint`], ADR-0032 D6): they can then
+/// never agree on that variable's value, so they can never produce the same output
+/// solution — UNION-vs-UNION-ALL is moot, concatenation is already set-correct.
+fn arms_provably_disjoint(a: &Branch, b: &Branch) -> bool {
+    a.bindings.iter().any(|(var, adef)| {
+        b.bindings.get(var).is_some_and(|bdef| {
+            // Two DIFFERENT constants (e.g. two arms' predicate position bound to
+            // distinct `rr:predicate` IRIs — the common "wildcard `?p`" shape,
+            // `resolve_arm_count_matches_flat_oracle`'s own regression) can never
+            // agree on that variable's value — the simplest, most common
+            // disjointness proof, and one `templates_provably_disjoint` does NOT
+            // cover (it only ever compares two Template-bound defs).
+            match (adef, bdef) {
+                (TermDef::Const(x), TermDef::Const(y)) => x != y,
+                _ => templates_provably_disjoint(adef, bdef),
+            }
+        })
+    })
+}
+
 pub fn join_branches(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>> {
     let mut out = Vec::new();
     for l in &left {
@@ -1397,5 +1660,22 @@ fn merge(mut left: Branch, right: &Branch) -> Result<Option<Branch>> {
     // The flat path never sets `subplan_joins`, so this is a no-op on the flat path.
     left.subplan_joins
         .extend(right.subplan_joins.iter().cloned());
+    // ADR-0034 D1: a `distinct` a sibling pattern's own arm already needed (`bgp`'s
+    // per-pattern `force_distinct_for_dup_safety` call) must survive the merge —
+    // `SELECT DISTINCT` over the FULLY joined output-determining columns still
+    // collapses whichever side contributed the duplication (D1's own "join-then-
+    // distinct = dedup-then-join" soundness argument), so OR-ing is sound; simply
+    // overwriting from `left` alone (the previous behavior) silently dropped a
+    // `right`-only duplicate-row requirement. EXCEPT when either side carries an
+    // NPS closure's own protected bag multiplicity (`Branch::nps`'s own doc
+    // comment) — that "join-then-distinct" argument assumes ALL of the merged
+    // branch's duplication is genuine physical/schema-level row duplication (safe
+    // to collapse); NPS's `!p` is a documented exception with its OWN legitimate
+    // multiplicity that must survive, so an unrelated sibling's D1 flag must NOT
+    // reach across the merge and force a DISTINCT over it.
+    if !left.nps && !right.nps {
+        left.distinct = left.distinct || right.distinct;
+    }
+    left.nps = left.nps || right.nps;
     Ok(Some(left))
 }

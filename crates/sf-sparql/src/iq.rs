@@ -578,6 +578,28 @@ pub struct Branch {
     /// Always `Vec::new()` for flat-path branches; only populated by the tree path's
     /// `lower_as_subplan` (ADR-0023 M5 Wave 2: closes §5.4 nested-modifier 501 sites).
     pub subplan_joins: Vec<SubPlanJoin>,
+    /// `true` once this branch has absorbed an NPS (negated property set, `!p`)
+    /// closure's own `UNION ALL` bag — set by `iq::lower::convert_path_branches`
+    /// when `path.hop` is `HopExpr::Nps`, and OR-preserved through every later
+    /// `unfold::merge` (never cleared). NPS is the ONE path kind with its own
+    /// documented, LEGITIMATE bag multiplicity that survives `=_bag` on purpose
+    /// (`iq.rs`'s own `HopExpr::Nps` doc: "a triple connected by two complement
+    /// predicates therefore yields two solutions") — every OTHER path kind
+    /// already self-dedups via its closure's own `SELECT DISTINCT sf_s, sf_o`,
+    /// so this flag is never needed there. ADR-0034's D1 sets `Branch::distinct`
+    /// per PATTERN, before that pattern is known to end up merged alongside an
+    /// unrelated NPS closure — `merge` ORs `distinct` forward so a genuinely
+    /// unkeyed sibling table's own duplicate-row need survives the join
+    /// (`cross_source_with_duplicate_bag_multiplicity_diverges_from_oracle`),
+    /// but blindly OR-ing `distinct` INTO an `nps` branch would apply that
+    /// `SELECT DISTINCT` over NPS's own protected columns too, silently
+    /// collapsing two DIFFERENT underlying triples (different predicates, both
+    /// outside the negated set) that legitimately produce the same output
+    /// values — found via `differential_paths.rs`'s `negated_property_set_
+    /// multiplicity_joined_engine_matches_oracle_bag_counts` once `merge`
+    /// started OR-ing at all. `merge` checks this flag and skips the OR (in
+    /// EITHER direction) whenever it is set on either side.
+    pub nps: bool,
 }
 
 impl Branch {
@@ -595,6 +617,7 @@ impl Branch {
             path: None,
             agg: None,
             subplan_joins: Vec::new(),
+            nps: false,
         }
     }
 

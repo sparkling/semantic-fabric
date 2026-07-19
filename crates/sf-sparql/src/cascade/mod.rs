@@ -221,6 +221,24 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
             distinct_removal(&mut out[0], &schema_map, ctx.project);
         }
     }
+    // D1 (ADR-0034) does NOT run here. It runs much earlier, per pattern —
+    // `unfold::bgp` and `iq::resolve`'s `Intensional` arm both call
+    // `force_distinct_for_dup_safety` on a pattern's own just-resolved arms,
+    // BEFORE either engine's own later projection-narrowing has any chance to
+    // strip a key-covering variable a branch's bindings still needed to prove
+    // safety. Running it AGAIN here, on the fully-assembled `out`, would be not
+    // merely redundant but actively WRONG for the tree engine specifically:
+    // `iq::lower`'s Construction-arm `project` restriction has, by this point,
+    // already narrowed every branch down to the OUTER query's projected
+    // variables — so a check here would see only `?o` for `SELECT ?o WHERE
+    // {?p :name ?o}` and wrongly conclude "not covered" (found via
+    // `differential_tree.rs`'s `r5_i_duplicate_union_arms` / `r5_iii_non_
+    // unique_self_join`: this pass, run here, collapsed legitimately-different
+    // `(?p,?o)` solutions sharing an `?o` value down to one before they ever
+    // reached the outer UNION/self-join). `join_branches`/`merge` (flat) and
+    // `bridge_branch` (tree) both carry a pattern's own `distinct` decision
+    // forward through the rest of translation, so by the time `out` reaches
+    // here every branch's flag is already final.
     // Projection shrinking: drop bindings not in the project list (pass 7).
     if let Some(project) = ctx.project {
         for b in &mut out {
@@ -1265,6 +1283,304 @@ fn distinct_removal(b: &mut Branch, schema: &SchemaMap, project: Option<&[String
             b.distinct = false;
         }
     }
+}
+
+// --- D1 (ADR-0034) — force-DISTINCT when duplicates are not provably impossible --
+
+/// D1 (ADR-0034): force `Branch::distinct` on every branch whose joined tables are
+/// not provably duplicate-free ([`branch_needs_distinct_for_dup_safety`]) — the
+/// SPARQL §18.3 BGP set-semantics requirement (card[μ] = 1), independent of any
+/// user-requested DISTINCT and of how many branches the query has (a branch's own
+/// duplicate-safety does not depend on its siblings; D2, the CROSS-branch case, is
+/// handled separately at the pattern-relation boundary — `unfold::pool_pattern_
+/// relation` / `iq::resolve`'s `Intensional` arm — before branches ever reach here).
+/// MUST run before projection shrinking (pass 7 in [`run`]) so the check sees each
+/// branch's FULL binding set, not the outer SELECT's — dropping `?p` from the
+/// projection of `SELECT ?age WHERE { ?p :hasAge ?age }` must never retroactively
+/// make the BGP itself look duplicate-laden (that apparent duplication is a
+/// legitimate consequence of projection, ADR-0034: "never the final result").
+/// Never touches a branch already `distinct` (whatever set it stays); skips `path`
+/// (a closure already self-dedups via its own `SELECT DISTINCT sf_s, sf_o`) and
+/// `agg` (dedup happens BELOW the GROUP BY — see [`dedup_before_aggregate`]).
+/// Does NOT skip a branch merely for carrying `subplan_joins`: a D2-pooled arm's
+/// OWN `core`/`opts` are empty (only its `bindings` reference the pooled derived
+/// table), so [`branch_needs_distinct_for_dup_safety`] already reads that as "no
+/// scans to duplicate" and leaves it alone — but a BGP can mix a pooled position
+/// (wrapped into `subplan_joins`, D2-elided because it was NOT provably disjoint)
+/// with an ORDINARY, D2-elided-because-disjoint sibling position that still reads
+/// its own unkeyed `core` table directly (e.g. two candidate maps whose reifier
+/// templates carry different literal prefixes — provably disjoint, so D2 leaves
+/// them as separate branches — while their SHARED description-pattern variable is
+/// NOT disjoint and DOES get pooled): once `unfold::join_branches`/`merge` folds
+/// both positions into one final branch, it carries BOTH an unkeyed `core` scan
+/// AND a `subplan_joins` entry, and D1 must still fire on the `core` half — an
+/// unconditional `!b.subplan_joins.is_empty()` skip here previously missed
+/// exactly that shape (`cross_source_with_duplicate_bag_multiplicity_diverges_
+/// from_oracle`: `?r ex:assertedBy ?src`'s per-source arms are disjoint on `?r`'s
+/// own template and stay unpooled, but each still reads its own `core` scan of an
+/// unkeyed source table).
+pub(crate) fn force_distinct_for_dup_safety(branches: &mut [Branch], schema: &[TableSchema]) {
+    let schema_map = build_schema_map(schema);
+    for b in branches {
+        if b.distinct || b.path.is_some() || b.agg.is_some() {
+            continue;
+        }
+        if branch_needs_distinct_for_dup_safety(b, &schema_map) {
+            b.distinct = true;
+        }
+    }
+}
+
+/// Returns `true` when `b`'s joined tables (`core` scans AND `OPTIONAL` right
+/// sides — SQL-joined into the SAME branch, so either can duplicate the branch's
+/// own output) are NOT all covered by a declared PK/UNIQUE key over `b`'s OWN
+/// bindings. Deliberately NOT `distinct_removal`'s `project`-narrowed proof: D1
+/// asks "can THIS BGP block itself produce duplicate rows", answered over its own
+/// full binding set regardless of what the OUTER query later projects away — using
+/// the outer projection here would be unsound (it would force DISTINCT merely
+/// because the outer SELECT dropped a key-covering variable, e.g. `SELECT ?age
+/// WHERE { ?p :hasAge ?age }` over a PK-keyed `?p` must NOT get a spurious
+/// DISTINCT just because `?p` itself isn't projected). An `rr:sqlQuery` view scan
+/// (no `TableSchema` entry to prove anything from) is conservatively treated as
+/// never covered — the same conservatism `distinct_removal`'s own scans apply.
+fn branch_needs_distinct_for_dup_safety(b: &Branch, schema: &SchemaMap) -> bool {
+    let scans: Vec<&Scan> = b
+        .core
+        .iter()
+        .chain(b.opts.iter().map(|o| &o.scan))
+        .collect();
+    if scans.is_empty() {
+        return false; // nothing joined — no table to duplicate
+    }
+    !scans.iter().all(|scan| {
+        let LogicalSource::Table(table) = &scan.source else {
+            return false;
+        };
+        let Some(ts) = schema_map_get(schema, table.as_str()) else {
+            return false;
+        };
+        table_key_covered_by_bindings(ts, scan.alias, &b.bindings)
+    })
+}
+
+/// Whether some declared key of `ts` (the PK, or a `UNIQUE` constraint — ADR-0034
+/// D1 says "PK/UNIQUE"; `distinct_removal` above only ever needs the PK, a
+/// narrower question since a mapping's subject template is conventionally
+/// PK-templated) is covered by the bindings on `alias`: every column of the key
+/// must be NOT NULL (a nullable key permits several NULL rows a UNIQUE
+/// constraint does not distinguish — mirrors `key_is_non_null`'s use in passes
+/// 2/2a/6) and appear as a `Column`/template `Segment::Column` slot read by SOME
+/// individually-injective binding on this alias (a superset is fine, whether
+/// within one binding's own template or spread across several — the same
+/// permissiveness `distinct_removal`'s own composite-PK proof already allows
+/// for the single-binding case).
+///
+/// The union is taken across ALL of `alias`'s injective bindings, not just one:
+/// a composite key can be split across separate output variables — e.g.
+/// `<#Mid>`'s subject reads `person_id` (binds `?id`), its object reads `mid`
+/// (binds `?m`), and `om_mid`'s own PK is the PAIR `(person_id, mid)`; neither
+/// binding alone covers it, but together they do. This is sound by the same
+/// argument as the single-binding case, composed: if two rows agree on every
+/// bound variable's output, then for EACH injective binding they must agree on
+/// that binding's own read columns (injectivity's contrapositive), hence on the
+/// union of every injective binding's columns — and if that union covers a
+/// declared key, the table's own PK/UNIQUE constraint forces the two rows to be
+/// the same physical row (`table_key_covered_by_bindings`'s test coverage:
+/// `om_mid`-shaped composite-key-split-across-variables fixture, ADR-0034/C0
+/// follow-up).
+fn table_key_covered_by_bindings(
+    ts: &TableSchema,
+    alias: usize,
+    bindings: &std::collections::BTreeMap<String, TermDef>,
+) -> bool {
+    let keys: Vec<&[String]> = std::iter::once(ts.primary_key.as_slice())
+        .chain(ts.unique.iter().map(Vec::as_slice))
+        .filter(|k| !k.is_empty() && k.iter().all(|c| key_is_non_null(ts, c)))
+        .collect();
+    if keys.is_empty() {
+        return false;
+    }
+    let covered: Vec<&str> = bindings
+        .values()
+        .filter(|def| binding_is_injective(def))
+        .filter_map(|def| match def {
+            TermDef::Derived { term_map, alias: a } if *a == alias => Some(term_map),
+            _ => None,
+        })
+        .flat_map(|term_map| -> Vec<&str> {
+            match term_map {
+                TermMap::Column(c, _) => vec![c.as_ref()],
+                TermMap::Template(t, _) => t
+                    .segments()
+                    .iter()
+                    .filter_map(|s| match s {
+                        Segment::Column(c) => Some(c.as_ref()),
+                        Segment::Literal(_) => None,
+                    })
+                    .collect(),
+                TermMap::Constant(_) => Vec::new(),
+            }
+        })
+        .collect();
+    keys.iter()
+        .any(|key| key.iter().all(|k| covered.contains(&k.as_str())))
+}
+
+/// D1 (ADR-0034) for a GROUP BY + aggregates branch — "dedup lands below GROUP
+/// BY" (the ADR's own Interactions commitment): unlike an ordinary branch (which
+/// just gets `Branch::distinct = true` rendered as a flat `SELECT DISTINCT`), a
+/// `SELECT DISTINCT <agg-exprs> ... GROUP BY` would dedupe the GROUPED RESULT —
+/// the wrong level, since COUNT/SUM/etc must see already-deduped pre-aggregation
+/// rows. Called SEPARATELY from `run` (by `lib.rs`, once after each translation
+/// path's own `run` call) because it needs `dialect` to emit the wrapped inner
+/// SELECT, which `run`/[`CascadeCtx`] do not carry — extending their signature
+/// was not worth the blast radius (`CascadeCtx` has ~60 existing construction
+/// sites, mostly in unit tests with no `Dialect` to hand, and `Dialect` has no
+/// `Default` impl to fall back on).
+pub(crate) fn dedup_before_aggregate(branches: &mut [Branch], dialect: sf_sql::Dialect) {
+    for b in branches {
+        wrap_aggregate_input_if_needed(b, dialect);
+    }
+}
+
+/// Wrap `b`'s `core`/`opts`/`where_conds` into a `SELECT DISTINCT` [`crate::iq::
+/// SubPlanJoin`] BEFORE its `Aggregation` groups over them, when `b.distinct` is
+/// already `true`. Trusts the flag rather than re-deriving it from `b`'s CURRENT
+/// bindings/schema: `b.distinct` was decided per pattern, BEFORE `unfold`'s
+/// `group`/`iq::lower`'s aggregation lowering replaced this branch's bindings
+/// with just the grouping keys + aggregate result names (`Aggregation`'s own doc
+/// comment: "the inner pattern's other variables are not projected by the
+/// group") — by the time THIS function runs, the very variable (e.g. a PK-
+/// templated `?s`, grouped away in favor of `?g`) that proved the branch
+/// duplicate-free is long gone from `b.bindings`, so re-checking here (as an
+/// earlier version of this function did, via `branch_needs_distinct_for_dup_
+/// safety`) would wrongly conclude "not covered" and wrap even a PK-clean inner
+/// pattern (`differential_tree.rs`'s `single_branch_group_by_self_join_
+/// collapses_to_one_scan` caught this — the SAME "outer restriction strips the
+/// key-covering variable before D1 can see it" class of bug the per-pattern
+/// `unfold::bgp` / `iq::resolve` timing fix already closed for the ordinary
+/// case, recurring here for GROUP BY's OWN narrowing). Clears `b.distinct` after
+/// wrapping — the dedup now happens INSIDE the derived table, so the outer
+/// `GROUP BY` must not ALSO render a (wrong-level) `DISTINCT`. Rewrites
+/// `agg.keys[].cols` / `agg.aggs[].arg` to the derived table's positional
+/// columns — reuses the SAME `SubPlanJoin` + `emit_sp` machinery `emit_agg_
+/// branch`'s existing "SQL agg-over-UNION pushdown" FROM-clause rendering
+/// already handles (`crate::emit`), so no `emit.rs` change is needed here. A
+/// no-op when `b` carries no `Aggregation`, is not `distinct`, or has nothing to
+/// dedup on (`COUNT(*)` with no GROUP BY key and no aggregate argument — no
+/// columns to distinguish rows by, so no wrapping is possible or needed; the
+/// flag is left set in that last case since nothing removed the duplication it
+/// flagged).
+fn wrap_aggregate_input_if_needed(b: &mut Branch, dialect: sf_sql::Dialect) {
+    if b.agg.is_none() || !b.distinct {
+        return;
+    }
+    let agg = b.agg.as_ref().expect("checked Some above");
+    let mut cols: Vec<ColRef> = Vec::new();
+    for key in &agg.keys {
+        for c in &key.cols {
+            if !cols.contains(c) {
+                cols.push(c.clone());
+            }
+        }
+    }
+    for a in &agg.aggs {
+        if let Some(arg) = &a.arg {
+            if !cols.contains(arg) {
+                cols.push(arg.clone());
+            }
+        }
+    }
+    if cols.is_empty() {
+        return;
+    }
+    // The dedup moves INSIDE the wrapped SubPlan below — the outer branch's own
+    // GROUP BY must not also carry a (wrong-level) DISTINCT now.
+    b.distinct = false;
+    // A fresh alias unique within THIS branch — each branch emits its own
+    // independent SQL statement, so alias uniqueness need not span branches.
+    let sp_alias = 1 + b
+        .core
+        .iter()
+        .map(|s| s.alias)
+        .chain(b.opts.iter().map(|o| o.scan.alias))
+        .chain(b.subplan_joins.iter().map(|sp| sp.alias))
+        .max()
+        .unwrap_or(0);
+    let mut inner = Branch::empty();
+    inner.core = std::mem::take(&mut b.core);
+    inner.opts = std::mem::take(&mut b.opts);
+    inner.where_conds = std::mem::take(&mut b.where_conds);
+    inner.distinct = true;
+    for (i, c) in cols.iter().enumerate() {
+        inner.bindings.insert(
+            format!("k{i:04}"),
+            TermDef::Derived {
+                term_map: TermMap::Column(c.column.clone(), sf_core::ir::TermSpec::plain_literal()),
+                alias: c.alias,
+            },
+        );
+    }
+    let nested_plan = crate::Plan {
+        branches: vec![inner],
+        form: crate::PlanForm::Select {
+            vars: (0..cols.len()).map(|i| format!("k{i:04}")).collect(),
+        },
+        // A single arm — nothing to POOL, just its own SELECT DISTINCT — but this
+        // Plan-level flag must still be `true`: `Plan::emitted`/`prepared_branches`
+        // ALWAYS overwrites a sole branch's `distinct` with the PLAN's own flag
+        // (`branches.len() == 1 ⇒ b.distinct = self.distinct`), so setting only
+        // `inner.distinct` above and leaving this `false` silently clobbered it
+        // back to `false` at emission — a real, caught bug (the inner SubPlan's
+        // own SQL never got its DISTINCT at all: `differential_tree.rs`'s
+        // `adr0034_d1_count_aggregate_dedups_below_group_by`).
+        distinct: true,
+        limit: None,
+        offset: 0,
+        order: Vec::new(),
+        rust_group: None,
+        dialect,
+    };
+    let rewrite = |c: &mut ColRef| {
+        if let Some(pos) = cols.iter().position(|x| x == c) {
+            *c = ColRef::new(sp_alias, format!("c{pos}"));
+        }
+    };
+    if let Some(agg) = &mut b.agg {
+        for key in &mut agg.keys {
+            for c in &mut key.cols {
+                rewrite(c);
+            }
+        }
+        for a in &mut agg.aggs {
+            if let Some(arg) = &mut a.arg {
+                rewrite(arg);
+            }
+        }
+    }
+    // `agg.keys`/`agg.aggs` are the GROUP BY/aggregate-expression SQL's own raw
+    // column refs (rewritten above) — but `b.bindings` separately carries the
+    // RECONSTRUCTION `TermDef` for each grouping-key variable (e.g. `?x`), built
+    // from the SAME raw columns, that `exec::reconstruct` reads to rebuild the
+    // term. Missing this left `?x` pointing at an alias `core`/`opts` no longer
+    // have (now moved into the wrapped SubPlan) — `?x` silently vanished from
+    // every result row (a real, caught bug: `differential_tree.rs`'s own
+    // `adr0034_d1_count_aggregate_dedups_below_group_by`). An aggregate RESULT
+    // binding (`TermDef::Agg`) is left untouched — it reads `b.agg`'s own output
+    // column, unrelated to the wrapped inner SELECT.
+    for def in b.bindings.values_mut() {
+        if matches!(def, TermDef::Derived { .. }) {
+            if let Ok(remapped) = crate::iq::lower::remap_termdef(def, &cols, sp_alias) {
+                *def = remapped;
+            }
+        }
+    }
+    b.subplan_joins.push(crate::iq::SubPlanJoin {
+        alias: sp_alias,
+        plan: Box::new(nested_plan),
+        on: Vec::new(),
+        left: false,
+    });
 }
 
 // --- 2a-ext. nullable-unique inner self-join elimination ------------------

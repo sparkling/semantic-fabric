@@ -61,8 +61,8 @@ use spargebra::algebra::Expression;
 
 use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{
-    AggCol, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan, SqlCond,
-    SubPlanJoin, TermDef,
+    AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, OrderKey, RustAgg, RustGroup, Scan,
+    SqlCond, SubPlanJoin, TermDef,
 };
 use crate::leftjoin::{
     def_is_nullable, inner_join_one, left_join_branches, not_exists_cond_for, null_safe,
@@ -477,6 +477,21 @@ fn lower_node(
         // branch. Each projected variable maps to the derived table's positional column
         // `c{i}` (the `emit_branch` naming convention), so the parent reconstruction
         // reads `t{alias}.c{i}` correctly.
+        //
+        // ADR-0034 note: `iq::resolve`'s `Intensional` arm also wraps a per-pattern D1
+        // marker in a bare `IqNode::Distinct` (see `bridge_branch`'s doc comment), which
+        // reaches here identically to a real nested `SELECT DISTINCT` subquery — a fast
+        // path that skipped the SubPlan wrap for the (structurally indistinguishable
+        // from here) single-branch case was tried and reverted: it broke the `item1d_*`
+        // sound-501 regression tests, which specifically need a REAL nested DISTINCT
+        // subquery to keep producing a SubPlan so their own boundary check still fires.
+        // Correctly telling the two apart needs a marker `iq::node::IqNode` does not
+        // carry today (out of scope here) — so every per-pattern D1 flag still costs a
+        // SubPlanJoin wrap, which a couple of unrelated, narrower 501 boundaries
+        // (OPTIONAL-decomposition / MINUS-body lowering not yet accepting a SubPlan in
+        // those positions) do not tolerate — a known, scoped gap (2 "tree exceeds flat"
+        // tests lose that extra capability and now soundly 501 instead of answering;
+        // never a wrong answer).
         IqNode::Aggregation { .. }
         | IqNode::Distinct { .. }
         | IqNode::Slice { .. }
@@ -522,6 +537,11 @@ pub(crate) fn convert_path_branches(
 ) -> Result<()> {
     for b in branches.iter_mut() {
         let Some(pc) = b.path.take() else { continue };
+        // ADR-0034: mark NPS's own protected bag multiplicity BEFORE it is
+        // erased into an ordinary scan — see `Branch::nps`'s doc comment.
+        if matches!(pc.hop, HopExpr::Nps(_)) {
+            b.nps = true;
+        }
         let cte_alias = *next_alias;
         *next_alias += 1;
         let sql = crate::emit::path_as_derived_table_sql(
@@ -1370,7 +1390,21 @@ fn lower_as_subplan(
         .iter()
         .map(|b| crate::emit::emit_branch(b, dialect).map(|e| e.projection))
         .collect::<std::result::Result<_, _>>()
-        .map_err(|e| Error::Sql(format!("SubPlan inner emit for remapping: {e}")))?;
+        .map_err(|e| match e {
+            // ADR-0034: a sound, intentional 501 from the inner `emit_branch` (e.g. its
+            // own ADR-0025 C.3 non-injective-DISTINCT gate, reachable here once a
+            // narrowed arm's `distinct = true` templated binding turns out
+            // non-injective) must stay `Unsupported`, not get relabelled `Sql` — the
+            // flat engine's mirror of this same gate (`unfold::pool_pattern_relation`)
+            // already reports `Unsupported`, and `differential_tree.rs`'s own "flat and
+            // tree must agree on Unsupported" 501-set check requires the SAME variant
+            // on both sides (`w3c_rdb2rdf_dump_flat_eq_tree`, W3C R2RMLTC0005b, caught
+            // the mismatch). A GENUINE SQL-emission failure keeps its `Sql` wrapping.
+            Error::Unsupported(msg) => {
+                Error::Unsupported(format!("SubPlan inner emit for remapping: {msg}"))
+            }
+            other => Error::Sql(format!("SubPlan inner emit for remapping: {other}")),
+        })?;
     // A positional-column fallback binding (`c{i}` of the derived table) — used when a var
     // cannot be term-remapped, or is absent from an arm's bindings (exposed positionally).
     let positional_col = |i: usize| TermDef::Derived {
@@ -1506,7 +1540,13 @@ fn left_join_as_subplan(
 /// Remap a [`ColRef`] from the inner scan space to the SubPlan's positional column space.
 /// Looks up `c` in `projection` (the inner branch's [`Branch::projection()`] output) and
 /// returns `ColRef(sp_alias, "c{pos}")`.
-fn remap_colref(c: &ColRef, projection: &[ColRef], sp_alias: usize) -> Result<ColRef> {
+///
+/// `pub(crate)`: also reused by [`crate::unfold::pool_pattern_relation`] (ADR-0034 D2's
+/// flat-engine mirror of this file's multi-branch pooling — see that function's doc
+/// comment) via [`remap_termdef`], so there is deliberately only one copy of the remap
+/// logic, exactly like [`convert_path_branches`]'s existing one-implementation-two-engines
+/// shape.
+pub(crate) fn remap_colref(c: &ColRef, projection: &[ColRef], sp_alias: usize) -> Result<ColRef> {
     let pos = projection.iter().position(|p| p == c).ok_or_else(|| {
         Error::Unsupported(format!(
             "SubPlan remap: ColRef {:?} not in inner projection → 501",
@@ -1518,7 +1558,14 @@ fn remap_colref(c: &ColRef, projection: &[ColRef], sp_alias: usize) -> Result<Co
 
 /// Remap a [`TermDef`] from the inner scan space to the SubPlan's positional column space.
 /// All [`ColRef`]s are replaced with `ColRef(sp_alias, "c{pos}")` via [`remap_colref`].
-fn remap_termdef(def: &TermDef, projection: &[ColRef], sp_alias: usize) -> Result<TermDef> {
+///
+/// `pub(crate)`: see [`remap_colref`]'s doc comment — reused verbatim by
+/// [`crate::unfold::pool_pattern_relation`].
+pub(crate) fn remap_termdef(
+    def: &TermDef,
+    projection: &[ColRef],
+    sp_alias: usize,
+) -> Result<TermDef> {
     match def {
         TermDef::Const(t) => Ok(TermDef::Const(t.clone())),
         TermDef::Derived {
@@ -2435,6 +2482,19 @@ mod tests {
         vec![emp, dept]
     }
 
+    /// `emp`/`dept`'s schema, PK-keyed on `id` (matching `mapping()`'s own
+    /// `{id}`-templated subjects) — ADR-0034 D1 forces `SELECT DISTINCT` on any
+    /// unkeyed scan, so these structural, shape-focused tests must supply a
+    /// schema proving `mapping()`'s tables ARE keyed, or every arm here would
+    /// grow an extra `Distinct` wrapper unrelated to what each test examines.
+    fn keyed_schema() -> Vec<sf_sql::TableSchema> {
+        let mut emp = sf_sql::TableSchema::new("emp");
+        emp.primary_key = vec!["id".to_owned()];
+        let mut dept = sf_sql::TableSchema::new("dept");
+        dept.primary_key = vec!["id".to_owned()];
+        vec![emp, dept]
+    }
+
     fn pattern(q: &str) -> GraphPattern {
         match spargebra::SparqlParser::new().parse_query(q).unwrap() {
             spargebra::Query::Select { pattern, .. } => pattern,
@@ -2446,7 +2506,8 @@ mod tests {
     fn plan(q: &str) -> Plan {
         let maps = mapping();
         let tbox = Tbox::new();
-        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         let normalized = crate::iq::normalize::normalize(resolved).unwrap();
         lower(
@@ -2462,7 +2523,8 @@ mod tests {
     fn try_plan(q: &str) -> Result<Plan> {
         let maps = mapping();
         let tbox = Tbox::new();
-        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         let normalized = crate::iq::normalize::normalize(resolved).unwrap();
         lower(

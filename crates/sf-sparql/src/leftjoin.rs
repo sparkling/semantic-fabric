@@ -196,6 +196,7 @@ pub(crate) fn inner_join_one(
         path: left.path.clone(),
         agg: left.agg.clone(),
         subplan_joins,
+        nps: left.nps,
     }))
 }
 
@@ -463,19 +464,23 @@ pub(crate) fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bo
     }
 }
 
-/// The sound-501 message for a shared-variable correlation that reads a LEFT-JOINed
-/// SubPlan's derived-table alias (see [`shared_reads_left_subplan`]).
+/// The sound-501 message for a shared-variable correlation that reads one of `left`'s
+/// SubPlan derived-table aliases, LEFT- or INNER-joined alike (see
+/// [`shared_reads_left_subplan`]).
 pub(crate) const SHARED_LEFT_SUBPLAN_501: &str =
-    "OPTIONAL/MINUS decomposition correlating on a variable bound by a LEFT-JOINed \
-     SubPlan derived table (its ON/anti-join would reference a table emitted to its \
-     right) is not yet supported → 501 (ADR-0023 Item 1d boundary)";
+    "OPTIONAL/MINUS decomposition correlating on a variable bound by a SubPlan derived \
+     table on the preserved side (its ON/anti-join would reference a table emitted to \
+     its right) is not yet supported → 501 (ADR-0023 Item 1d boundary)";
 
-/// Whether any shared variable's LEFT (preserved) binding reads a LEFT-JOINed SubPlan's
-/// derived-table alias (`left.subplan_joins` with `left == true`).
+/// Whether any shared variable's LEFT (preserved) binding reads ANY of `left`'s SubPlan
+/// derived-table aliases — INNER-joined (ADR-0034 D1's own per-pattern wrap; `left ==
+/// false`) as well as LEFT-joined (`left == true`, the case this function/constant's own
+/// naming originally targeted).
 ///
 /// Such a correlation cannot be lowered soundly by the flat LEFT-JOIN / anti-join
-/// builders in this module: the SubPlan is emitted as a derived table AFTER `opts` in
-/// the FROM clause ([`crate::emit`] `render_from`), so an `OptJoin.on` referencing it is
+/// builders in this module: EITHER kind of SubPlan is emitted as a derived table AFTER
+/// `opts` in the FROM clause ([`crate::emit`] `render_from` — the ordering does not
+/// distinguish `on`/`left`), so an `OptJoin.on` referencing it is
 /// an "ON clause references a table to its right" SQL error — a CRASH at execution, not
 /// a wrong answer, reproduced by an adversarial review of `e7cb7e6` (ADR-0023 Item 1d) —
 /// and the `(P − R)` anti-join half of the decomposition cannot faithfully carry it
@@ -491,12 +496,7 @@ pub(crate) const SHARED_LEFT_SUBPLAN_501: &str =
 /// earlier one). Only a plain-scan / multi-scan right side routed through these builders
 /// hits the FROM-ordering wall.
 fn shared_reads_left_subplan(left: &Branch, right: &Branch) -> bool {
-    let sp_aliases: HashSet<usize> = left
-        .subplan_joins
-        .iter()
-        .filter(|s| s.left)
-        .map(|s| s.alias)
-        .collect();
+    let sp_aliases: HashSet<usize> = left.subplan_joins.iter().map(|s| s.alias).collect();
     if sp_aliases.is_empty() {
         return false;
     }

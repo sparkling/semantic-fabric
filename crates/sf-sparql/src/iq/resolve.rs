@@ -66,7 +66,7 @@ use sf_core::ir::TriplesMap;
 use crate::iq::node::{triple_pattern_vars, BindDef, IqCond, IqNode};
 use crate::iq::Branch;
 use crate::saturate::Tbox;
-use crate::unfold::Unfolder;
+use crate::unfold::{all_pairwise_disjoint, Unfolder};
 use crate::Result;
 
 /// The resolution context (M3 design §3): the T-mappings, the T-Box, the SQL
@@ -83,12 +83,19 @@ pub struct ResolveCx<'a> {
 }
 
 impl<'a> ResolveCx<'a> {
-    /// A fresh resolution context over the given mappings, T-Box, and dialect (the
-    /// same `(maps, tbox, dialect)` the flat [`Unfolder::new`] takes). The alias
-    /// counter starts at zero and advances monotonically across the whole tree.
-    pub fn new(maps: &'a [TriplesMap], tbox: &'a Tbox, dialect: sf_sql::Dialect) -> Self {
+    /// A fresh resolution context over the given mappings, T-Box, dialect, and
+    /// source schema (the same `(maps, tbox, dialect, schema)` the flat
+    /// [`Unfolder::new`] takes — `schema` feeds ADR-0034 D1, see its doc comment
+    /// on [`Unfolder`]). The alias counter starts at zero and advances
+    /// monotonically across the whole tree.
+    pub fn new(
+        maps: &'a [TriplesMap],
+        tbox: &'a Tbox,
+        dialect: sf_sql::Dialect,
+        schema: &'a [sf_sql::TableSchema],
+    ) -> Self {
         Self {
-            unfolder: Unfolder::new(maps, tbox, dialect),
+            unfolder: Unfolder::new(maps, tbox, dialect, schema),
         }
     }
 }
@@ -108,7 +115,92 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
         // ---- the one resolving case ---------------------------------------------
         IqNode::Intensional { pattern, graph } => {
             let vars = triple_pattern_vars(&pattern);
-            let branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
+            let mut branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
+            // ADR-0034 D1/D2 are both skipped inside a FILTER EXISTS / FILTER NOT
+            // EXISTS / MINUS body — see `Unfolder::in_existential`'s own doc comment
+            // for the SPARQL semantics that make this sound (an existence / anti-join
+            // check is unaffected by within-body duplicate rows or duplicate-map
+            // triples) and for why it also sidesteps a real, unrelated SubPlan-in-
+            // correlated-subquery 501 boundary this would otherwise trip.
+            if !cx.unfolder.in_existential {
+                // ADR-0034 D1: checked HERE, on this pattern's own just-resolved arms —
+                // their bindings are still the pattern's own complete variable set, not
+                // yet narrowed by anything downstream. `iq::lower`'s own Construction-arm
+                // `project` restriction (which runs during LOWER, well before
+                // `cascade::run`'s later, defensive D1 pass ever sees the branch) can
+                // strip a key-covering variable the outer query does not project — see
+                // `unfold::bgp`'s identical note (the flat engine's mirror of this same
+                // per-pattern timing fix) for the `r5_i_duplicate_union_arms` /
+                // `r5_iii_non_unique_self_join` regression this closes. `bridge_branch`
+                // below reads each branch's (possibly now `true`) `distinct` flag and
+                // wraps accordingly — never silently dropped.
+                crate::cascade::force_distinct_for_dup_safety(&mut branches, cx.unfolder.schema);
+            }
+            // ADR-0034 D2: when this pattern's own candidate-map arms are not
+            // provably disjoint (the SAME elision check the flat engine's
+            // `unfold::pool_pattern_relation` applies), they must be deduped, not
+            // bag-concatenated. `IqNode` has no representation for a pre-pooled
+            // `Branch` (RESOLVE/NORMALIZE never see anything but algebra nodes), so
+            // instead of pooling here directly, wrap the arms in `IqNode::Distinct`
+            // — the tree's established "must become its own derived table" modifier
+            // boundary (`iq::lower::lower_node`'s `Aggregation|Distinct|Slice|
+            // OrderBy => lower_as_subplan` arm) — which routes them through THAT
+            // function's existing multi-branch pooling (ADR-0025 Tier-2 gap 2:
+            // narrow-to-vars, injectivity gate, cross-arm reconstruction-agreement
+            // gate, `UNION`-vs-`UNION ALL` via `emit_subplan_sql`) unmodified. This
+            // reuses the identical pooling algorithm the flat engine's own
+            // `pool_pattern_relation` runs (via the shared `remap_termdef`/
+            // `remap_colref` helpers), so the two engines stay `=_bag`-identical by
+            // construction — the elision check is duplicated (one boolean test),
+            // the pooling mechanism is not.
+            //
+            // Wrapped in a condition-free `IqNode::Filter` around the `Distinct`:
+            // `iq::lower::lower_spine` special-cases a `Distinct`/`Aggregation`/
+            // `Slice`/`OrderBy` node it reaches DIRECTLY (or immediately under a
+            // `Construction` whose OWN child is exactly one of those four shapes)
+            // as the outer query-modifier SPINE — peeling it straight into
+            // `Plan::distinct` instead of routing it through `lower_node`'s
+            // `lower_as_subplan` arm. That peeling is correct for a REAL top-level
+            // SPARQL DISTINCT, but this `Distinct` is an internal D2 pooling
+            // marker, not a user modifier — when this single triple pattern
+            // happens to BE the entire WHERE clause (no sibling pattern to force
+            // an enclosing `InnerJoin`, the only other thing that routes a child
+            // through `lower_node` instead of `lower_spine`), the bare `Distinct`
+            // reaches the spine directly and gets silently un-pooled (found via
+            // `differential_tree.rs`'s `r5_ii_overlapping_maps_same_predicate`'s
+            // CONSTRUCT-form assertion — flat/tree diverged: flat deduped via
+            // `unfold::pool_pattern_relation`, tree did not). Two earlier attempts
+            // at this fix failed: a plain `Construction` wrapper still has the
+            // `Distinct` as its DIRECT child, so the SAME guard matches; a
+            // one-child condition-free `InnerJoin` wrapper is torn back down to
+            // its bare child by `iq::normalize`'s OWN InnerJoin-identity pruning
+            // (`children.len() == 1 && cond.is_empty()`) before LOWER ever sees
+            // it. `Filter` has no such identity-unwrap for an unrecognized child
+            // shape (`normalize_filter`'s `other => Filter{child, cond}` arm keeps
+            // the wrapper), and `lower_spine` never special-cases `Filter` at all
+            // — it always falls to the "other" arm, which delegates the whole
+            // subtree to `lower_node`, whose own `Filter` arm then calls
+            // `lower_node` on `child` again, reaching the `Distinct =>
+            // lower_as_subplan` arm correctly regardless of tree position. An
+            // empty `cond` is a true no-op (`apply_conds` over zero conditions),
+            // so this adds no semantic content — the identical pooling outcome as
+            // the already-working nested case, just reached uniformly instead of
+            // by position.
+            if !cx.unfolder.in_existential
+                && branches.len() >= 2
+                && !all_pairwise_disjoint(&branches)
+            {
+                let arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
+                return Ok(IqNode::Filter {
+                    child: Box::new(IqNode::Distinct {
+                        child: Box::new(IqNode::Union {
+                            children: arms,
+                            project: vars,
+                        }),
+                    }),
+                    cond: Vec::new(),
+                });
+            }
             let mut arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
             Ok(match arms.len() {
                 0 => IqNode::Empty { vars },
@@ -226,12 +318,25 @@ fn resolve_cond(cond: IqCond, cx: &mut ResolveCx) -> Result<IqCond> {
         IqCond::And(cs) => Ok(IqCond::And(resolve_conds(cs, cx)?)),
         IqCond::Or(cs) => Ok(IqCond::Or(resolve_conds(cs, cx)?)),
         IqCond::Not(c) => Ok(IqCond::Not(Box::new(resolve_cond(*c, cx)?))),
-        IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(resolve(*n, cx)?))),
+        IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(resolve_existential(*n, cx)?))),
         IqCond::NotExists { inner, is_minus } => Ok(IqCond::NotExists {
-            inner: Box::new(resolve(*inner, cx)?),
+            inner: Box::new(resolve_existential(*inner, cx)?),
             is_minus,
         }),
     }
+}
+
+/// [`resolve`] a `FILTER EXISTS` / `FILTER NOT EXISTS` / `MINUS` body: sets
+/// [`Unfolder::in_existential`] for the duration of the recursion (restoring the
+/// PREVIOUS value afterward — an EXISTS nested inside another EXISTS/MINUS body
+/// stays `in_existential`, never wrongly reset to `false` on the way back out),
+/// so the `Intensional` arm skips ADR-0034 D1/D2 for every pattern inside — see
+/// the field's own doc comment on [`Unfolder`] for why that is sound here.
+fn resolve_existential(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
+    let saved = std::mem::replace(&mut cx.unfolder.in_existential, true);
+    let out = resolve(node, cx);
+    cx.unfolder.in_existential = saved;
+    out
 }
 
 /// Bridge one resolved flat [`Branch`] to an [`IqNode`] arm (module docs; M3 design
@@ -246,12 +351,24 @@ fn resolve_cond(cond: IqCond, cx: &mut ResolveCx) -> Result<IqCond> {
 /// (the `?s PATH ?s` self-unify [`SqlCond::ColEq`] from `bind`) wrapping it in a `Filter`.
 /// Either way the body sits under the same `Construction(bindings)`, so an outer
 /// `InnerJoin`/`LeftJoin`/`Filter` composes over the path arm exactly as over a triple arm.
+///
+/// ADR-0034 D1: a `true` `branch.distinct` (set by `cascade::force_distinct_for_dup_
+/// safety`, called per pattern in the `Intensional` arm below, BEFORE this bridge runs)
+/// wraps the resulting `Construction` in `IqNode::Distinct` — the flag would otherwise
+/// be silently dropped here (the old `..` rest pattern discarded it, same class of bug
+/// M3's own doc comment above already fixed once for `path`). A single-arm `Distinct`
+/// reaching the query's own spine directly is fine (`Plan::prepared_branches` pushes it
+/// into that one branch's SQL); as one arm of several inside a `Union`, it always
+/// reaches `iq::lower::lower_node`'s `Distinct => lower_as_subplan` arm (a `Union`'s
+/// children are never processed via `lower_spine`'s peeling) — either way the SAME
+/// mechanism ADR-0034 D2 already relies on for pooling.
 fn bridge_branch(branch: Branch) -> IqNode {
     let Branch {
         core,
         bindings,
         where_conds,
         path,
+        distinct,
         ..
     } = branch;
 
@@ -305,10 +422,17 @@ fn bridge_branch(branch: Branch) -> IqNode {
         .map(|(v, td)| (v.into(), BindDef::Resolved(td)))
         .collect();
 
-    IqNode::Construction {
+    let construction = IqNode::Construction {
         child: Box::new(child),
         subst,
         project,
+    };
+    if distinct {
+        IqNode::Distinct {
+            child: Box::new(construction),
+        }
+    } else {
+        construction
     }
 }
 
@@ -387,6 +511,19 @@ mod tests {
         vec![emp, dept]
     }
 
+    /// `emp`/`dept`'s schema, PK-keyed on `id` (matching `mapping()`'s own
+    /// `{id}`-templated subjects) — ADR-0034 D1 forces `SELECT DISTINCT` on any
+    /// unkeyed scan, so these structural, shape-focused tests must supply a
+    /// schema proving `mapping()`'s tables ARE keyed, or every arm here would
+    /// grow an extra `Distinct` wrapper unrelated to what each test examines.
+    fn keyed_schema() -> Vec<sf_sql::TableSchema> {
+        let mut emp = sf_sql::TableSchema::new("emp");
+        emp.primary_key = vec!["id".to_owned()];
+        let mut dept = sf_sql::TableSchema::new("dept");
+        dept.primary_key = vec!["id".to_owned()];
+        vec![emp, dept]
+    }
+
     fn pattern(q: &str) -> GraphPattern {
         match spargebra::SparqlParser::new().parse_query(q).unwrap() {
             spargebra::Query::Select { pattern, .. } => pattern,
@@ -447,7 +584,8 @@ mod tests {
             other => panic!("expected Project, got {other:?}"),
         };
         let tbox = Tbox::new();
-        let mut u = Unfolder::new(maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut u = Unfolder::new(maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         u.resolve_pattern(&tp, None).unwrap().len()
     }
 
@@ -455,7 +593,8 @@ mod tests {
     /// arms of the `Union` (≥2), or 1 for a bare arm, or 0 for `Empty`.
     fn resolved_arm_count(q: &str, maps: &[TriplesMap]) -> usize {
         let tbox = Tbox::new();
-        let mut cx = ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut cx = ResolveCx::new(maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         let tree = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         // Strip the outer Project Construction the parser wraps `SELECT *` in.
         let inner = match tree {
@@ -500,7 +639,8 @@ mod tests {
     fn ref_object_map_resolves_to_two_scan_inner_join() {
         let maps = mapping();
         let tbox = Tbox::new();
-        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         let q = "SELECT * WHERE { ?s <http://ex/dept> ?d }";
         let tree = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         // Project Construction → the single arm Construction → InnerJoin of 2 scans.
@@ -541,7 +681,8 @@ mod tests {
             "SELECT * WHERE { ?s <http://ex/name> ?n FILTER EXISTS { ?s <http://ex/dept> ?d } }",
             "SELECT * WHERE { ?s <http://ex/name> ?n MINUS { ?s <http://ex/dept> ?d } }",
         ] {
-            let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
+            let schema = keyed_schema();
+            let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
             let tree = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
             assert!(
                 !has_intensional(&tree),
@@ -556,7 +697,8 @@ mod tests {
     fn filter_and_bind_survive_resolve_untouched() {
         let maps = mapping();
         let tbox = Tbox::new();
-        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         // FILTER(?n > "5") stays an IqCond::Expr; BIND(?b := ?n) stays a BindDef::Expr.
         let q = "SELECT * WHERE { ?s <http://ex/name> ?n . BIND(?n AS ?b) FILTER(?n > \"5\") }";
         let tree = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();

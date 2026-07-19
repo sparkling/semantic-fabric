@@ -523,13 +523,18 @@ fn zero_or_one_reflexive_pairs_join_correctly_with_self_predicate() {
 // surface 4.
 // ============================================================================
 
+// The composite PRIMARY KEYs below are load-bearing since ADR-0034: D1's
+// key-coverage elision keeps these cells on the plain translation they pin
+// (unkeyed tables would force a dedup SubPlan into the nested-OPTIONAL
+// correlation and hit the ADR-0023 Item 1d boundary — that unkeyed shape is
+// pinned in `differential_paths.rs`).
 const OM_SQL: &str = r#"
 CREATE TABLE om_person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 INSERT INTO om_person VALUES (1, 'Ann');
 INSERT INTO om_person VALUES (2, 'Bob');
-CREATE TABLE om_mid (person_id INTEGER NOT NULL, mid INTEGER NOT NULL);
+CREATE TABLE om_mid (person_id INTEGER NOT NULL, mid INTEGER NOT NULL, PRIMARY KEY (person_id, mid));
 INSERT INTO om_mid VALUES (1, 10);
-CREATE TABLE om_edge (a INTEGER NOT NULL, b INTEGER NOT NULL);
+CREATE TABLE om_edge (a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY (a, b));
 INSERT INTO om_edge VALUES (10, 20);
 INSERT INTO om_edge VALUES (20, 30);
 "#;

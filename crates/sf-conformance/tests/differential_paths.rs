@@ -625,9 +625,17 @@ fn closure_joined_with_class_pattern_now_matches_oracle_on_both_engines() {
 // and {11} from 10, so every query below exercises BOTH a match and a
 // no-match branch. ---
 
+// `oj_person`'s PRIMARY KEY is load-bearing since ADR-0034: it lets D1's
+// key-coverage elision skip the dedup wrap, keeping these cells on the plain
+// path-composition translation they exist to pin. (`oj_edge`'s PK is data
+// faithfulness only — path closures resolve via `IqNode::Path`, which never
+// reaches the D1 check; traced during the C0 follow-up.) The UNKEYED variant
+// of the OPTIONAL-right shape routes through D1's SubPlan and hits the
+// pre-existing ADR-0023 Item 1d boundary — pinned separately
+// (`optional_right_is_path_over_unkeyed_table_is_an_adr0034_sound_501`).
 const OJ_SQL: &str = r#"
-CREATE TABLE oj_person (id INTEGER NOT NULL, name TEXT NOT NULL);
-CREATE TABLE oj_edge (a INTEGER NOT NULL, b INTEGER NOT NULL);
+CREATE TABLE oj_person (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE oj_edge (a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY (a, b));
 INSERT INTO oj_person VALUES (1, 'Ann');
 INSERT INTO oj_person VALUES (11, 'Zed');
 INSERT INTO oj_edge VALUES (1, 10);
@@ -668,6 +676,37 @@ fn optional_right_is_path_engine_matches_oracle() {
         assert_differential(OJ_SQL, OJ_R2RML, OJ_TTL, q),
         3,
         "Ann reaches {{10,11}} (2 rows) + Zed unbound (1 row)"
+    );
+}
+
+/// The UNKEYED counterpart of `optional_right_is_path_engine_matches_oracle`:
+/// without a declared key, ADR-0034 D1 must assume duplicate rows are possible
+/// and wraps the path branch's dedup in a SubPlan — which, on the preserved
+/// side of an OPTIONAL, hits the pre-existing ADR-0023 Item 1d correlation
+/// boundary. The sound answer is an explicit 501 (dedup is REQUIRED for
+/// set-semantics correctness here and the tree cannot yet express a bare
+/// DISTINCT outside the SubPlan mechanism) — never a wrong/duplicate-inflated
+/// answer. Restoration path: the tagged bare-DISTINCT node ledgered in
+/// ADR-0034's implementation notes.
+#[test]
+fn optional_right_is_path_over_unkeyed_table_is_an_adr0034_sound_501() {
+    const UNKEYED_SQL: &str = r#"
+CREATE TABLE oj_person (id INTEGER NOT NULL, name TEXT NOT NULL);
+CREATE TABLE oj_edge (a INTEGER NOT NULL, b INTEGER NOT NULL);
+INSERT INTO oj_person VALUES (1, 'Ann');
+INSERT INTO oj_edge VALUES (1, 10);
+"#;
+    let q = "PREFIX ex: <http://ex/> SELECT ?id ?name ?reached \
+             WHERE { ?id ex:name ?name OPTIONAL { ?id ex:next+ ?reached } }";
+    let conn: Connection = sqlite::load(UNKEYED_SQL).expect("fixture loads");
+    let maps = sf_mapping::parse_r2rml(OJ_R2RML).expect("R2RML parses");
+    let schema = sqlite::introspect_all(&conn).expect("introspection");
+    let parsed = SparqlParser::new().parse_query(q).expect("query parses");
+    let r = translate_with(&parsed, &maps, Dialect::Sqlite, &Tbox::default(), &schema);
+    assert!(
+        matches!(r, Err(sf_sparql::Error::Unsupported(_))),
+        "unkeyed OPTIONAL-right-path must refuse soundly (D1 dedup required, \
+         Item 1d boundary), got {r:?}"
     );
 }
 

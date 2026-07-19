@@ -261,7 +261,7 @@ fn translate_inner_flat(
         let expanded = saturate::saturate_maps(maps, tbox);
         (expanded, &empty_tbox)
     };
-    let mut uf = unfold::Unfolder::new(&saturated_maps, uf_tbox, dialect);
+    let mut uf = unfold::Unfolder::new(&saturated_maps, uf_tbox, dialect, schema);
     let (trans, form) = match query {
         Query::Select { pattern, .. } => {
             let t = uf.translate_pattern(pattern)?;
@@ -347,21 +347,40 @@ fn translate_inner_flat(
         PlanForm::Select { vars } => Some(star::expand_projection_for_cascade(vars, &star_env)),
         _ => None,
     };
-    let (mut branches, distinct) = if optimize {
+    let mut branches = if optimize {
         let ctx = cascade::CascadeCtx {
             distinct: trans.distinct,
             project: project_vars.as_deref(),
         };
-        let out = cascade::run(trans.branches, schema, &ctx);
-        // The single-branch DISTINCT decision is recorded on the branch by pass (6).
-        let distinct = if out.len() == 1 {
-            out[0].distinct
-        } else {
-            trans.distinct
-        };
-        (out, distinct)
+        cascade::run(trans.branches, schema, &ctx)
     } else {
-        (trans.branches, trans.distinct)
+        // `cascade::run` is skipped here by design — this is the NoREC unoptimized
+        // baseline (ADR-0007: "none of the order-sensitive cascade rewrites"). D1
+        // (ADR-0034) needs no extra call here: `unfold::bgp` already applies it per
+        // pattern, unconditionally (both this path and the optimized one share the
+        // SAME `Unfolder::translate_pattern`/`bgp` unfold), so `trans.branches`
+        // already carries its correct `distinct` decisions.
+        trans.branches
+    };
+    // ADR-0034: dedup below GROUP BY — a correctness fix applied regardless of
+    // `optimize`, same as the D1 handling above; this one trusts each branch's
+    // own `distinct` flag rather than needing `schema` again (see `cascade::
+    // dedup_before_aggregate`'s doc comment).
+    cascade::dedup_before_aggregate(&mut branches, dialect);
+    // The single-branch DISTINCT decision is recorded on the branch by pass (6)
+    // — computed HERE, AFTER `dedup_before_aggregate`, which can itself just have
+    // CHANGED that same branch's `distinct` (clearing it once the dedup moved
+    // inside a wrapped SubPlan). Reading it any earlier would capture a now-stale
+    // value that `Plan::prepared_branches` (`branches.len() == 1 ⇒ b.distinct =
+    // self.distinct`) would then blindly write back onto the branch at emission,
+    // silently UNDOING the wrap's own fix (a real, caught bug: a GROUP BY's outer
+    // SQL kept a spurious `SELECT DISTINCT` over the grouped result — the wrong
+    // level — while the correctly-deduped inner SubPlan's own `DISTINCT` was
+    // simultaneously overwritten away too, since both read the same stale flag).
+    let distinct = if branches.len() == 1 {
+        branches[0].distinct
+    } else {
+        trans.distinct
     };
     // ADR-0032 D3 item 2 — the projection seam, applied LAST (every real
     // join/filter unification is already done; `unify::unify` never sees a
@@ -412,7 +431,7 @@ pub fn translate_tree(
     // identical note in `translate_inner_flat`.
     let (query, star_env) = star::rewrite_query(query)?;
     let query = &query;
-    let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect);
+    let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect, schema);
     let extra_keep = star::all_component_var_names(&star_env);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
@@ -514,10 +533,6 @@ pub fn translate_tree(
         project: project_vars.as_deref(),
     };
     plan.branches = cascade::run(plan.branches, schema, &ctx);
-    // The single-branch DISTINCT decision is recorded on the branch by pass (6).
-    if plan.branches.len() == 1 {
-        plan.distinct = plan.branches[0].distinct;
-    }
     // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
     // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
     // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
@@ -528,6 +543,20 @@ pub fn translate_tree(
     // NAME, so they must never be shrunk away).
     for b in &mut plan.branches {
         cascade_subplans(b, schema);
+    }
+    // ADR-0034: dedup below GROUP BY (see the identical note in
+    // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
+    // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
+    // applies it per pattern, before this tree's own aggregation lowering
+    // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
+    cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+    // The single-branch DISTINCT decision is recorded on the branch by pass (6)
+    // — read HERE, AFTER `dedup_before_aggregate`, not before it: see the
+    // identical note in `translate_inner_flat` for why reading it any earlier
+    // captures a stale value `Plan::prepared_branches` would blindly write back
+    // onto the branch at emission, undoing the wrap's own fix.
+    if plan.branches.len() == 1 {
+        plan.distinct = plan.branches[0].distinct;
     }
     // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
     // identical note in `translate_inner_flat`).

@@ -2236,20 +2236,23 @@ fn cross_source_same_actual_triple_composed_term_is_structurally_identical() {
     );
 }
 
-/// The SEPARATE, real problem the two tests above deliberately dedup around:
-/// the RAW engine bag for this exact query and fixture is 34 rows, not 4 —
-/// measured breakdown: person 1's two (semantically CORRECT) combos each
-/// appear **16 times** (32 total), while persons 2/3 (no cross-source
-/// overlap, so no colliding candidate row) appear exactly once each. The
-/// decoded-graph oracle (a real `oxrdf::Dataset`, which is a SET — duplicate
-/// quads collapse) correctly returns 4. Root cause: see this section's own
-/// header comment — every one of the 4 basic-encoding description patterns
-/// independently re-picks between `desc(#PersonAge2020)` and
-/// `desc(#PersonAge2021)` for person 1's shared `?pf` value (both genuinely
-/// produce it), and nothing constrains all 4 (plus the `rdf:reifies` and
-/// `ex:assertedBy` patterns) to agree on ONE candidate's row identity.
+/// **FIXED by ADR-0034/C0** (virtual-graph set semantics, BGP-level D1/D2
+/// dedup — `crates/sf-sparql/src/unfold.rs`'s `bgp()`/`pool_pattern_relation`
+/// and `iq/resolve.rs`'s `Intensional` arm). The SEPARATE, real problem the
+/// two tests above deliberately dedup around: pre-fix, the RAW engine bag for
+/// this exact query and fixture was 34 rows, not 4 — measured breakdown:
+/// person 1's two (semantically CORRECT) combos each appeared **16 times**
+/// (32 total), while persons 2/3 (no cross-source overlap, so no colliding
+/// candidate row) appeared exactly once each. The decoded-graph oracle (a
+/// real `oxrdf::Dataset`, which is a SET — duplicate quads collapse)
+/// correctly returns 4. Root cause: see this section's own header comment —
+/// every one of the 4 basic-encoding description patterns independently
+/// re-picked between `desc(#PersonAge2020)` and `desc(#PersonAge2021)` for
+/// person 1's shared `?pf` value (both genuinely produce it), and nothing
+/// constrained all 4 (plus the `rdf:reifies` and `ex:assertedBy` patterns) to
+/// agree on ONE candidate's row identity — D2's per-pattern-relation UNION
+/// dedup now does.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn cross_source_same_actual_triple_bag_multiplicity_diverges_from_oracle() {
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
@@ -2262,11 +2265,11 @@ fn cross_source_same_actual_triple_bag_multiplicity_diverges_from_oracle() {
 }
 
 /// The bare reifies-sugar surface form (`<<?p ex:hasAge ?age>>`, no
-/// parentheses) over the SAME fixture — confirms the bag-multiplicity finding
-/// is not an artifact of the parenthesized `<<( )>>` TripleTerm spelling
-/// specifically.
+/// parentheses) over the SAME fixture — confirmed the bag-multiplicity
+/// finding above was not an artifact of the parenthesized `<<( )>>`
+/// TripleTerm spelling specifically. **FIXED by ADR-0034/C0** alongside the
+/// parenthesized form, by the same D2 cross-branch dedup.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn cross_source_bare_reifies_sugar_bag_multiplicity_diverges_from_oracle() {
     let query =
         format!("{EX}SELECT ?p ?age ?src WHERE {{ <<?p ex:hasAge ?age>> ex:assertedBy ?src }}");
@@ -2461,33 +2464,37 @@ INSERT INTO census_row VALUES (3, 30, 1);
 /// Root-cause isolation, run FIRST: is bag-multiplicity from a literal
 /// duplicate row a star-rewrite artifact, or does it already exist in
 /// ORDINARY (non-star) BGP matching? A plain `?p ex:hasAge ?age` pattern (no
-/// star machinery at all) is the control — **measured 4 rows, not 3**: even
-/// ordinary R2RML row-to-triple mapping does not deduplicate a literal
-/// duplicate source row into one triple under set-based RDF semantics. This
-/// is the SAME general "not star-specific" mechanism the RDF-star ledger's
-/// item 6 flagged and deferred; the star-specific cells below show the
-/// SAME root cause amplified by the extra shared-variable join positions a
-/// star rewrite introduces (66 rows for the analogous star query, not 4).
+/// star machinery at all) is the control — pre-fix, **measured 4 rows, not
+/// 3**: even ordinary R2RML row-to-triple mapping did not deduplicate a
+/// literal duplicate source row into one triple under set-based RDF
+/// semantics. This was the SAME general "not star-specific" mechanism the
+/// RDF-star ledger's item 6 flagged and deferred; the star-specific cells
+/// below showed the SAME root cause amplified by the extra shared-variable
+/// join positions a star rewrite introduces (66 rows for the analogous star
+/// query, not 4). **FIXED by ADR-0034/C0**: D1's schema-driven `SELECT
+/// DISTINCT` now applies to this table's own unkeyed scan (`census_row` has
+/// no declared PK/UNIQUE on `person_id`), collapsing the literal duplicate
+/// row before it ever reaches the join.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn duplicate_source_row_plain_pattern_baseline_bag_multiplicity() {
     let query = format!("{EX}SELECT ?p ?age WHERE {{ ?p ex:hasAge ?age }}");
     assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query);
 }
 
 /// The star reifies/TripleTerm-pattern form over the SAME duplicated-row
-/// fixture — **measured 66 engine rows vs 3 correct** (a real
+/// fixture — pre-fix, **measured 66 engine rows vs 3 correct** (a real
 /// `differential_star`-visible divergence; `diff()` inside `assert_oracle_
-/// agrees` confirms flat and tree AGREE with each other on the wrong 66, so
-/// this is a bug shared by both translators' common candidate-unification
+/// agrees` confirmed flat and tree AGREED with each other on the wrong 66, so
+/// this was a bug shared by both translators' common candidate-unification
 /// machinery, exactly the blind spot this file's own module doc names: "a
 /// bug shared by both translators... would sail through undetected" by the
-/// flat/tree differential alone — only the independent oracle catches it).
+/// flat/tree differential alone — only the independent oracle caught it).
 /// 66 = 64 (person 1: all 6 shared-variable positions — `rdf:reifies`, the 4
-/// description predicates, `ex:assertedBy` — independently re-pick between
+/// description predicates, `ex:assertedBy` — independently re-picked between
 /// person 1's 2 duplicate candidate rows, 2^6) + 1 (person 2) + 1 (person 3).
+/// **FIXED by ADR-0034/C0**: D1 dedups `census_row`'s own unkeyed scan at
+/// each of the 6 shared-variable positions before the candidates can combine.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn duplicate_source_row_reifies_triple_term_pattern_bag_multiplicity() {
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
@@ -2501,41 +2508,44 @@ fn duplicate_source_row_reifies_triple_term_pattern_bag_multiplicity() {
 
 /// Object-position TripleTerm match (`#Quote`'s own shape, `CENSUS_R2RML_
 /// OBJECT`, reused unchanged — it maps the SAME `census_row` table) —
-/// measured 34 engine rows vs 3 correct, confirming the mechanism is not
-/// specific to the reifies/subject-position surface form.
+/// pre-fix, measured 34 engine rows vs 3 correct, confirming the mechanism
+/// was not specific to the reifies/subject-position surface form. **FIXED by
+/// ADR-0034/C0** by the same D1 per-pattern dedup.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn duplicate_source_row_object_position_triple_term_bag_multiplicity() {
     let query =
         format!("{EX}SELECT ?q ?p ?age WHERE {{ ?q ex:hasQuote <<( ?p ex:hasAge ?age )>> }}");
     assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML_OBJECT, &query);
 }
 
-/// Annotation-sugar surface form (`s p o {| ... |}`) — measured 130 engine
-/// rows vs 3 correct, the WORST-observed multiplier: annotation sugar
+/// Annotation-sugar surface form (`s p o {| ... |}`) — pre-fix, measured 130
+/// engine rows vs 3 correct, the WORST-observed multiplier: annotation sugar
 /// desugars to three conjuncts (the plain triple, a fresh reifier, and the
-/// annotation's own POM), so it carries even MORE shared-variable positions
-/// than the bare reifies form for the SAME duplicate candidate set to
-/// combine across.
+/// annotation's own POM), so it carried even MORE shared-variable positions
+/// than the bare reifies form for the SAME duplicate candidate set to combine
+/// across. **FIXED by ADR-0034/C0**: D1 dedups the shared `census_row` scan
+/// at all three conjuncts' join positions.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn duplicate_source_row_annotation_sugar_bag_multiplicity() {
     let query =
         format!("{EX}SELECT ?p ?age ?src WHERE {{ ?p ex:hasAge ?age {{| ex:assertedBy ?src |}} }}");
     assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query);
 }
 
-/// CONSTRUCT round-trip — measured 4 engine triples vs 3 correct. Notably the
-/// SMALLEST divergence of this group: this CONSTRUCT's WHERE clause
-/// (`?p ex:hasAge ?age`) is the PLAIN pattern, not a star pattern (the
-/// quoting is only in the TEMPLATE) — so it inherits exactly the baseline's
+/// CONSTRUCT round-trip — pre-fix, measured 4 engine triples vs 3 correct.
+/// Notably the SMALLEST divergence of this group: this CONSTRUCT's WHERE
+/// clause (`?p ex:hasAge ?age`) is the PLAIN pattern, not a star pattern (the
+/// quoting is only in the TEMPLATE) — so it inherited exactly the baseline's
 /// own 4-vs-3 gap, not the star-amplified one, and — unlike every SELECT cell
 /// above — the produced `Vec<Triple>` is compared directly (this file's
 /// `diff_construct`/`assert_oracle_agrees_construct` doc comments both note
 /// multiplicity IS preserved, "though this suite's cases don't happen to
-/// produce duplicates" — this is now the first case that does).
+/// produce duplicates" — this was the first case that did). **FIXED by
+/// ADR-0034/C0**: D1's dedup of the WHERE clause's own plain-pattern branch
+/// runs below CONSTRUCT's own template expansion, so the fix applies here
+/// too even though the duplication enters through the WHERE side, not the
+/// template.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn duplicate_source_row_construct_round_trip_bag_multiplicity() {
     let query = format!(
         "{EX}CONSTRUCT {{ ?p ex:hasQuote <<( ?p ex:hasAge ?age )>> }} \
@@ -2556,13 +2566,14 @@ fn duplicate_source_row_construct_round_trip_bag_multiplicity() {
 
 /// One nested shape (depth 2, `STAR_NESTED_DEPTH2_R2RML` reused unchanged —
 /// `#Leaf`/`#Mid`/`#Outer` all map `census_row`, so the duplicate row feeds
-/// the LEAF quote too) — measured 514 engine rows vs 3 correct, the WORST of
-/// this group by far: nesting doubles the number of shared-variable
+/// the LEAF quote too) — pre-fix, measured 514 engine rows vs 3 correct, the
+/// WORST of this group by far: nesting doubled the number of shared-variable
 /// description-predicate positions (4 for `#Mid`'s own shape, 4 more for the
-/// nested `#Leaf`), so the SAME 2-candidate-row collision combines across
-/// far more join positions.
+/// nested `#Leaf`), so the SAME 2-candidate-row collision combined across far
+/// more join positions. **FIXED by ADR-0034/C0**: D1 dedups `census_row`'s
+/// scan at each of the 8 shared-variable positions independently, so the
+/// collision can no longer compound across nesting depth.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn duplicate_source_row_nested_shape_bag_multiplicity() {
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
@@ -2669,15 +2680,17 @@ fn cross_source_with_duplicate_reifier_identity_stays_correct() {
     );
 }
 
-/// The two mechanisms' multiplicities COMPOUND: measured 405 engine rows vs
-/// 2 correct — far worse than either (a)'s 34 or (b)'s 66 alone, consistent
-/// with this section's header comment ("nothing constrains all [join
-/// positions] to agree on ONE candidate's row identity"): here BOTH sources
-/// contribute a colliding candidate (the cross-source co-identity itself, by
-/// design) AND source A alone contributes a second, independent duplicate-row
-/// collision on top.
+/// The two mechanisms' multiplicities used to COMPOUND: pre-fix, measured 405
+/// engine rows vs 2 correct — far worse than either (a)'s 34 or (b)'s 66
+/// alone, consistent with this section's header comment ("nothing constrains
+/// all [join positions] to agree on ONE candidate's row identity"): here BOTH
+/// sources contributed a colliding candidate (the cross-source co-identity
+/// itself, by design) AND source A alone contributed a second, independent
+/// duplicate-row collision on top. **FIXED by ADR-0034/C0**: D1 (source A's
+/// own unkeyed duplicate row) and D2 (the cross-source co-identity join)
+/// both apply at their own pattern-relation level, and compound correctly in
+/// the fix direction too — collapsing to exactly 2.
 #[test]
-#[ignore = "ADR-0034 red phase (virtual-graph set semantics) — un-ignored by Run 4 Wave C0"]
 fn cross_source_with_duplicate_bag_multiplicity_diverges_from_oracle() {
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \

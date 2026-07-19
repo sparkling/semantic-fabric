@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-19
 updated: 2026-07-19
 tags: [set-semantics, bgp-dedup, duplicate-rows, soundness, union-dedup, key-elision]
@@ -14,13 +14,58 @@ implements: []
 
 # Virtual-graph set semantics: BGP-level dedup for duplicate rows and cross-map same-triple emission
 
-## Status note (2026-07-19)
+## Implementation status (2026-07-19, same day — accepted, implemented, Run 4 C0)
 
-Proposed, scheduled as Run 4 Wave C0. The red phase already exists: 9 intentional
-failing cells in `differential_star.rs` (A3's oracle investigation,
-`duplicate_source_row_*` ×6, `cross_source_*_bag_multiplicity_*` ×3), measured
-engine-vs-oracle divergences from 4v3 (plain baseline) to 514v3 (nested star) and
-405v2 (cross-product case).
+All 9 red-phase cells green against the spareval oracle: 34→4, 4→3, 66→3, 34→3,
+130→3, 514→3, 4→3 (CONSTRUCT), 405→2, plus the bare-reifies twin. New general
+locks: plain-pattern duplicate-row `=_bag` + COUNT-below-GROUP-BY (dedup lands
+under aggregation), PK-covered elision (no DISTINCT in emitted SQL), disjoint
+arms stay unpooled (no UNION), and the D2 non-injective+non-disjoint sound-501
+pin. Gates: `differential_star` 65/0, `differential_tree` 178/0,
+`differential_paths` 23/0, `adversarial_adr0033_refute` 24/0, observers 6/0.
+
+**Where it lives:** D1 proof `cascade::branch_needs_distinct_for_dup_safety` /
+`table_key_covered_by_bindings`; flat hook `unfold::bgp` + tree hook
+`iq/resolve.rs` `Intensional` arm (both BEFORE joining/projection narrowing —
+timing is load-bearing); aggregate wrap `cascade::dedup_before_aggregate` (the
+below-GROUP-BY commitment); D2 pooling `unfold::pool_pattern_relation` (flat) /
+`Filter{Distinct{Union}}` bridge (tree — the `Filter` wrapper dodges
+`lower_spine`/`normalize` unwrapping), both funneling into the pre-existing
+UNION-dedup + injectivity gates.
+
+**Review-hardened during landing:** (1) composite-key coverage now unions the
+columns of every *individually-injective* binding on the alias (two rows
+agreeing on all injective outputs must agree on each binding's read columns —
+contrapositive — hence on the union; union covers a declared key ⇒ same
+physical row). The single-binding-covers-key original missed `om_mid`-shaped
+keys split across two variables. (2) `(Const,Const)` case added to arm
+disjointness. (3) A `leftjoin` guard widened: D1's INNER-joined SubPlans now
+take the same shared-reads check as LEFT-joined ones (converted a malformed-SQL
+crash into a sound 501).
+
+**Scope guards:** EXISTS/NOT-EXISTS/MINUS bodies are exempt (existence and
+anti-join questions are duplicate-insensitive — §18.4/§8.3); NPS hops keep
+§18.2.2 bag semantics via `Branch.nps` (D1's flag never ORs across an
+NPS-carrying merge). Path closures never reach D1 at all (they resolve via
+`IqNode::Path`; their relations are set-semantic by construction). If D1 is
+ever re-applied post-`convert_path_branches`, the correct per-scan
+set-semantics formula is `!b.nps` at the conversion point — worked out, not
+shipped (no reachable call site today).
+
+**Known completeness costs (sound 501s, pinned, with restoration paths):**
+(1) GROUP-BY-over-multibranch-OPTIONAL on unkeyed tables — D1's dedup wrap
+routes through the SubPlan mechanism and hits the ADR-0023 M5 boundary; both
+engines now honestly refuse (`differential_tree` pin). Restoration: a tagged
+bare-DISTINCT `IqNode` distinct from the SubPlan mechanism (a lightweight fast
+path was built, fixed 6 shapes but broke 8 `item1d_*` sound-501s relying on
+SubPlan wrapping — net loss, reverted; the tag is the right fix). (2) W3C
+TC0005b dump: a NON-injective blank-node template (`{fname}_{lname}`) on an
+unkeyed table — tree surfaces ADR-0025 C.3 at translate time, flat answers
+lazily (correct on collision-free data); pinned as a documented Ok/Err
+asymmetry. Restoration: term-level rust-side dedup for non-injective
+templates. (3) The unkeyed OPTIONAL-right-path variant is pinned as a sound
+501 (`differential_paths`); the keyed forms of all these shapes work — the
+path-suite fixtures gained their semantically-faithful PKs.
 
 ## Context and Problem Statement
 

@@ -1246,6 +1246,19 @@ mod tests {
         vec![emp, dept]
     }
 
+    /// `emp`/`dept`'s schema, PK-keyed on `id` (matching `mapping()`'s own
+    /// `{id}`-templated subjects) — ADR-0034 D1 forces `SELECT DISTINCT` on any
+    /// unkeyed scan, so these structural, shape-focused tests must supply a
+    /// schema proving `mapping()`'s tables ARE keyed, or every arm here would
+    /// grow an extra `Distinct` wrapper unrelated to what each test examines.
+    fn keyed_schema() -> Vec<sf_sql::TableSchema> {
+        let mut emp = sf_sql::TableSchema::new("emp");
+        emp.primary_key = vec!["id".to_owned()];
+        let mut dept = sf_sql::TableSchema::new("dept");
+        dept.primary_key = vec!["id".to_owned()];
+        vec![emp, dept]
+    }
+
     fn pattern(q: &str) -> GraphPattern {
         match spargebra::SparqlParser::new().parse_query(q).unwrap() {
             spargebra::Query::Select { pattern, .. } => pattern,
@@ -1257,7 +1270,8 @@ mod tests {
     fn norm(q: &str) -> IqNode {
         let maps = mapping();
         let tbox = Tbox::new();
-        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite);
+        let schema = keyed_schema();
+        let mut cx = ResolveCx::new(&maps, &tbox, sf_sql::Dialect::Sqlite, &schema);
         let resolved = resolve(build_tree(&pattern(q), None).unwrap(), &mut cx).unwrap();
         normalize(resolved).unwrap()
     }
