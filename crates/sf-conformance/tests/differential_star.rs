@@ -1418,15 +1418,30 @@ fn equality_and_same_term_over_composed_variables() {
 }
 
 #[test]
-fn whole_composed_variable_equality_over_a_template_bound_component_is_a_sound_501() {
-    // The FULL `?t1 = ?t2` (both composed, component-wise conjunction —
+fn whole_composed_variable_equality_over_a_template_bound_component_now_resolves() {
+    // FORMERLY a locked 501 (ledger closeout, boundary B): the FULL `?t1 =
+    // ?t2` (both composed, component-wise conjunction —
     // `star::rewrite_equality`) recurses into comparing the SUBJECT
     // components directly (`http://ex.org/person/{person_id}`, an
-    // `rr:template`) — `unify::filter_cond`'s `var_col` only resolves a bare
-    // `rr:column` binding (pre-existing v1 scope, unrelated to star). Sound
-    // 501 (never a silent wrong answer), not the `equal.len()==3` a fully
-    // general implementation would give — documented explicitly rather than
-    // silently mis-asserted (see the previous test's doc comment).
+    // `rr:template`) AND the PREDICATE components (`ex:hasAge`, a CONSTANT —
+    // RDF 1.2 §3.1 predicates are always IRIs, and `sf-mapping`'s quoted-
+    // shape compiler bakes a quoted predicate in as a fixed constant, never a
+    // per-row column, `r2rml/star.rs`'s `quote_shape`). `unify::filter_cond`'s
+    // `var_col` only resolves a bare `rr:column` binding (pre-existing v1
+    // scope) — but `cmp`'s new `var_var_eq_beyond_column` (`unify.rs`)
+    // resolves both shapes directly: two SAME-SHAPE templates align
+    // pairwise-column-equal (`unify::align_templates`, reused verbatim from
+    // the ordinary join-key case), two equal constants resolve to the
+    // "always true" sentinel. The OBJECT component (`age`, a bare
+    // `rr:column`) already worked
+    // (`equality_and_same_term_over_composed_variables`). So the WHOLE `?t1 =
+    // ?t2` now resolves: `?t1` and `?t2` (as native triple terms) are equal
+    // IFF `rA`/`rB` reify the SAME person's `#PersonAge` proposition — exactly
+    // the diagonal of the 3x3 cartesian, one pair per `census_row` row —
+    // verified against the independent spareval oracle, not hand-counted
+    // (unlike `expected_equal` in the sibling test above, which is
+    // object-only equality and so also counts the spurious same-age-
+    // different-person pairs that FULL triple equality correctly excludes).
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?rA ?rB WHERE {{ \
@@ -1435,14 +1450,31 @@ fn whole_composed_variable_equality_over_a_template_bound_component_is_a_sound_5
            FILTER(?t1 = ?t2) \
          }}"
     );
-    assert_locked_501(CENSUS_R2RML_TWO_ASSERTIONS, &query);
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML_TWO_ASSERTIONS, &query);
+    assert_eq!(rows.len(), 3, "one (rA,rB) pair per person: got={rows:#?}");
 }
 
 #[test]
-fn union_arms_disagreeing_on_composed_ness_is_a_locked_501() {
-    // ADR-0032 D3 item 2's uniform-composed-ness law: the left arm composes
-    // `?t` (via `rdf:reifies`); the right arm binds the SAME `?t` as an
-    // ordinary, non-composing pattern variable — never allowed silently.
+fn union_arms_disagreeing_on_composed_ness_resolves_at_the_top_level() {
+    // FORMERLY a locked 501 (ledger closeout, boundary A): ADR-0032 D3 item
+    // 2's uniform-composed-ness law — the left arm composes `?t` (via
+    // `rdf:reifies`, to the PROPOSITION); the right arm binds the SAME `?t`
+    // as an ordinary, non-composing pattern variable (to the REIFIER, a
+    // DIFFERENT value — `#PersonAgeAssertion`'s own subject). Disagreement
+    // reached this way is STILL rejected in general (see the companion
+    // `_wrapped_in_a_filter_is_still_a_locked_501` test below) — but this
+    // EXACT query's union is the SELECT's own top-level pattern (nothing
+    // else references `?t`), where `star::rewrite_top_level_pattern` proves
+    // it observationally safe: each top-level `Plan` branch reconstructs
+    // independently (`exec_core::run_branches`, never a single SQL-level
+    // `UNION` requiring uniform column arity), so the left arm's `?t`
+    // realizes a native `Term::Triple` and the right arm's stays an ordinary
+    // `Term::NamedNode`, with nothing in the query ever needing ONE static
+    // answer about which. 6 rows total: the 3 propositions (same triples as
+    // `reifies_object_variable_projects_as_a_native_triple_term`) plus the 3
+    // reifiers (same IRIs `SELECT ?t WHERE {?t ex:assertedBy
+    // ex:CensusRecord2026}` would bind) — verified against the independent
+    // spareval oracle.
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?t WHERE {{ \
@@ -1451,17 +1483,87 @@ fn union_arms_disagreeing_on_composed_ness_is_a_locked_501() {
            {{ ?t ex:assertedBy ex:CensusRecord2026 }} \
          }}"
     );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 6, "got={rows:#?}");
+    let (triples, plain): (Vec<_>, Vec<_>) = rows
+        .iter()
+        .map(|r| &r["t"])
+        .partition(|t| matches!(t, Term::Triple(_)));
+    assert_eq!(triples.len(), 3, "the 3 propositions: got={rows:#?}");
+    assert_eq!(plain.len(), 3, "the 3 reifiers: got={rows:#?}");
+    assert!(
+        plain.iter().all(|t| matches!(t, Term::NamedNode(_))),
+        "a non-composed reifier is an ordinary IRI: got={rows:#?}"
+    );
+}
+
+#[test]
+fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked_501() {
+    // The IDENTICAL disagreement as the previous test, but wrapped in a
+    // FILTER referencing `?t` (`isTRIPLE`, a genuine sensitive consumer:
+    // `star::rewrite_and_check_composed` resolves it to ONE static boolean
+    // for the WHOLE query, which would be silently WRONG for whichever arm
+    // did not match it) — no longer the SELECT's bare top-level pattern, so
+    // `rewrite_top_level_pattern`'s allowlist does not match and this falls
+    // through to the ORIGINAL, unconditional uniform-composed-ness check —
+    // proves the relaxation is scoped exactly to "nothing else in the query
+    // can observe the disagreement", not "any top-level SELECT union".
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?t WHERE {{ \
+           {{ {{ ?r rdf:reifies ?t }} \
+           UNION \
+           {{ ?t ex:assertedBy ex:CensusRecord2026 }} }} \
+           FILTER(isTRIPLE(?t)) \
+         }}"
+    );
     assert_locked_501(CENSUS_R2RML, &query);
 }
 
 #[test]
-fn values_mixed_triple_and_plain_cells_is_a_locked_501() {
-    // A VALUES column mixing a ground triple-term cell with a plain-IRI cell
-    // for the SAME variable is a genuine shape ambiguity this transform
-    // cannot represent in one flat table (`star::decompose_column`'s doc
-    // comment) — explicit Unsupported, never a silent prune.
+fn values_mixed_triple_and_plain_cells_resolves_at_the_top_level() {
+    // FORMERLY a locked 501 (ledger closeout, boundary A): a VALUES column
+    // mixing a ground triple-term cell with a plain-IRI cell for the SAME
+    // variable is a genuine shape ambiguity ONE flat table cannot represent
+    // (`star::decompose_column`'s doc comment) — but at the SELECT's own top
+    // level, `star::partition_values_by_triple_shape` row-partitions it into
+    // TWO uniform VALUES blocks, unioned, reducing it to the (now-resolved)
+    // union-mixed case above. Disagreement reached any OTHER way is still
+    // rejected (see the companion `_wrapped_in_a_filter_is_still_a_locked_501`
+    // test below).
     let query =
         format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(rows.len(), 2, "got={rows:#?}");
+    let expected_triple = Triple::new(
+        NamedNode::new_unchecked("http://example.com/a"),
+        NamedNode::new_unchecked("http://example.com/hasAge"),
+        iri("http://example.com/b"),
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(&r["t"], Term::Triple(t) if **t == expected_triple)),
+        "got={rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r["t"] == iri("http://example.com/plain")),
+        "got={rows:#?}"
+    );
+}
+
+#[test]
+fn values_mixed_triple_and_plain_cells_wrapped_in_a_filter_is_still_a_locked_501() {
+    // The IDENTICAL mixed VALUES column, but wrapped in a FILTER referencing
+    // `?t` — falls through to the ORIGINAL, unconditional
+    // `star::decompose_column` mixed-shape check (never reaches the
+    // top-level relaxation).
+    let query = format!(
+        "{EX}SELECT ?t WHERE {{ \
+           VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} \
+           FILTER(isTRIPLE(?t)) \
+         }}"
+    );
     assert_locked_501(CENSUS_R2RML, &query);
 }
 

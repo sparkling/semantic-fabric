@@ -810,6 +810,170 @@ fn union_arms_disagreeing_on_composed_ness_is_unsupported() {
     );
 }
 
+// -- Ledger closeout, boundary A: the top-level-only relaxation of the
+// uniform-composed-ness law (`rewrite_top_level_pattern`) -------------------
+
+#[test]
+fn top_level_union_disagreement_is_allowed_for_bare_projection() {
+    // The IDENTICAL disagreement `union_arms_disagreeing_on_composed_ness_is_unsupported`
+    // rejects, above — but reached through `rewrite_top_level_pattern`
+    // (SELECT's own top-level entry point, `rewrite_query`) with nothing
+    // else in the query to reference ?t other than the projection: allowed.
+    let left = bgp_of(vec![TriplePattern {
+        subject: var("r"),
+        predicate: pred(RDF_REIFIES),
+        object: var("t"),
+    }]);
+    let right = bgp_of(vec![TriplePattern {
+        subject: var("t"),
+        predicate: pred("http://example.com/type"),
+        object: iri("http://example.com/Foo"),
+    }]);
+    let gp = GraphPattern::Project {
+        inner: Box::new(GraphPattern::Union {
+            left: Box::new(left),
+            right: Box::new(right),
+        }),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
+    assert!(result.is_ok(), "got {result:?}");
+}
+
+#[test]
+fn top_level_union_disagreement_wrapped_in_filter_still_unsupported() {
+    // The SAME disagreement, but reached through a FILTER wrapping the union
+    // (`isTRIPLE(?t)` — a genuine sensitive consumer, resolved statically by
+    // `env` and so unsound over a mixed union) — NOT one of
+    // `rewrite_top_level_pattern`'s allowed pass-through wrappers, so this
+    // falls straight through to the ordinary, unchanged
+    // `rewrite_pattern`/`rewrite_union(top_level: false)`: the original 501.
+    // Proves the relaxation is scoped to the EXACT top-level shape, not "any
+    // union with a disagreement reachable from a SELECT".
+    let left = bgp_of(vec![TriplePattern {
+        subject: var("r"),
+        predicate: pred(RDF_REIFIES),
+        object: var("t"),
+    }]);
+    let right = bgp_of(vec![TriplePattern {
+        subject: var("t"),
+        predicate: pred("http://example.com/type"),
+        object: iri("http://example.com/Foo"),
+    }]);
+    let gp = GraphPattern::Project {
+        inner: Box::new(GraphPattern::Filter {
+            expr: Expression::FunctionCall(
+                Function::IsTriple,
+                vec![Expression::Variable(Variable::new_unchecked("t"))],
+            ),
+            inner: Box::new(GraphPattern::Union {
+                left: Box::new(left),
+                right: Box::new(right),
+            }),
+        }),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
+    assert!(
+        matches!(result, Err(Error::Unsupported(_))),
+        "expected Unsupported, got {result:?}"
+    );
+}
+
+#[test]
+fn top_level_mixed_values_column_is_allowed_for_bare_projection() {
+    // The IDENTICAL mixed-column shape
+    // `values_mixed_triple_and_plain_cells_is_unsupported` rejects, above —
+    // but at the query's own top level: row-partitioned into a union of two
+    // uniform VALUES blocks (`partition_values_by_triple_shape`), reusing
+    // the SAME relaxation `rewrite_union` gives an ordinary top-level union.
+    let quoted = GroundTriple {
+        subject: OxNamedNode::new_unchecked("http://example.com/a"),
+        predicate: OxNamedNode::new_unchecked("http://example.com/hasAge"),
+        object: GroundTerm::Literal(Literal::new_simple_literal("30")),
+    };
+    let values = GraphPattern::Values {
+        variables: vec![Variable::new_unchecked("t")],
+        bindings: vec![
+            vec![Some(GroundTerm::Triple(Box::new(quoted)))],
+            vec![Some(GroundTerm::NamedNode(OxNamedNode::new_unchecked(
+                "http://example.com/plain",
+            )))],
+        ],
+    };
+    let gp = GraphPattern::Project {
+        inner: Box::new(values),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env).expect("must succeed");
+    let GraphPattern::Project { inner, .. } = result else {
+        panic!("expected Project");
+    };
+    assert!(
+        matches!(*inner, GraphPattern::Union { .. }),
+        "expected the mixed VALUES to have been row-partitioned into a Union: {inner:?}"
+    );
+}
+
+#[test]
+fn top_level_mixed_values_wrapped_in_filter_still_unsupported() {
+    // The SAME mixed VALUES column, but reached through a FILTER — falls
+    // through to the ordinary, unchanged `rewrite_pattern`/`rewrite_values`/
+    // `decompose_column`: the original 501.
+    let quoted = GroundTriple {
+        subject: OxNamedNode::new_unchecked("http://example.com/a"),
+        predicate: OxNamedNode::new_unchecked("http://example.com/hasAge"),
+        object: GroundTerm::Literal(Literal::new_simple_literal("30")),
+    };
+    let values = GraphPattern::Values {
+        variables: vec![Variable::new_unchecked("t")],
+        bindings: vec![
+            vec![Some(GroundTerm::Triple(Box::new(quoted)))],
+            vec![Some(GroundTerm::NamedNode(OxNamedNode::new_unchecked(
+                "http://example.com/plain",
+            )))],
+        ],
+    };
+    let gp = GraphPattern::Project {
+        inner: Box::new(GraphPattern::Filter {
+            expr: Expression::FunctionCall(
+                Function::IsTriple,
+                vec![Expression::Variable(Variable::new_unchecked("t"))],
+            ),
+            inner: Box::new(values),
+        }),
+        variables: vec![Variable::new_unchecked("t")],
+    };
+    let mut n = 0;
+    let mut env = StarEnv::new();
+    let result = rewrite_top_level_pattern(&gp, &mut n, &mut env);
+    assert!(
+        matches!(result, Err(Error::Unsupported(_))),
+        "expected Unsupported, got {result:?}"
+    );
+}
+
+#[test]
+fn rewrite_query_select_routes_a_top_level_union_through_the_relaxation() {
+    // End-to-end through the PUBLIC entry point (`rewrite_query`), proving
+    // the `Query::Select` wiring — not just `rewrite_top_level_pattern`
+    // called directly, above.
+    let query_str = "PREFIX ex: <http://example.com/> \
+                      PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+                      SELECT ?t WHERE { { ?r rdf:reifies ?t } UNION { ?t ex:assertedBy ex:CensusRecord2026 } }";
+    let query = spargebra::SparqlParser::new()
+        .parse_query(query_str)
+        .expect("query parses");
+    let result = rewrite_query(&query);
+    assert!(result.is_ok(), "got {result:?}");
+}
+
 #[test]
 fn construct_template_substitutes_a_composed_variable_recursively() {
     let gp = bgp_of(vec![TriplePattern {

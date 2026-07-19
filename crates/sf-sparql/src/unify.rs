@@ -632,6 +632,9 @@ fn cmp(
                     "{op:?} between two variables needs a constant operand in v1"
                 ));
             }
+            if let Some(cond) = var_var_eq_beyond_column(v1, v2, bindings)? {
+                return Ok(cond);
+            }
             let c1 = var_col(v1, bindings)?;
             let c2 = var_col(v2, bindings)?;
             Ok(SqlCond::ColEq(c1, c2))
@@ -655,6 +658,72 @@ fn flip(op: CmpOp) -> CmpOp {
         CmpOp::Gt => CmpOp::Lt,
         CmpOp::Ge => CmpOp::Le,
         other => other,
+    }
+}
+
+/// ADR-0032 D3 item 4's component-wise equality recursion
+/// (`star::rewrite_equality`) compares two composed variables' components
+/// directly (e.g. `?t1_s = ?t2_s`) — `var_col` (below) only resolves a bare
+/// `rr:column` binding, a pre-existing v1 scope limit
+/// (`differential_star.rs`'s `equality_and_same_term_over_composed_variables`
+/// doc comment). Two of the shapes a component binding can ALSO take are
+/// resolvable without that restriction, so `cmp`'s variable-vs-variable arm
+/// consults this FIRST:
+///
+/// * **Both constant** — RDF 1.2 §3.1 predicates are always IRIs, and
+///   `sf-mapping`'s quoted-shape compiler bakes a quoted predicate in as a
+///   fixed constant, never a per-row column (`r2rml/star.rs`'s `quote_shape`:
+///   "the predicate must be compile-time known ... never as a per-row
+///   column") — so this is the shape EVERY composed-variable equality's
+///   PREDICATE component reaches, not a rare case. Resolved statically, no
+///   SQL at all.
+/// * **Both template-bound** — e.g. two composed variables' SUBJECT
+///   component, an `rr:template`-mapped `rr:subjectMap`. Unifies exactly
+///   like a JOIN key already does: [`align_templates`] (reused verbatim,
+///   the SAME function `unify_derived` calls) proves same-shape templates
+///   pairwise-column-equal, a leading-literal-prefix conflict provably
+///   disjoint (constant false), or reports the remaining shape mismatches
+///   Unsupported — sound over complete, same as everywhere else in this
+///   file.
+///
+/// `Ok(None)` for every other shape (a bare column on either side, a
+/// `Coalesce`/`Concat`/`Agg`/`ComposedTriple`, or a constant/template
+/// MIXED with something else) — falls through to the ordinary `var_col`
+/// path below, unchanged.
+fn var_var_eq_beyond_column(
+    v1: &Variable,
+    v2: &Variable,
+    bindings: &BTreeMap<String, TermDef>,
+) -> Result<Option<SqlCond>, String> {
+    let (Some(d1), Some(d2)) = (bindings.get(v1.as_str()), bindings.get(v2.as_str())) else {
+        return Ok(None);
+    };
+    match (d1, d2) {
+        (TermDef::Const(a), TermDef::Const(b)) => Ok(Some(if a == b {
+            SqlCond::And(vec![])
+        } else {
+            SqlCond::Or(vec![])
+        })),
+        (
+            TermDef::Derived {
+                term_map: TermMap::Template(t1, _),
+                alias: a1,
+            },
+            TermDef::Derived {
+                term_map: TermMap::Template(t2, _),
+                alias: a2,
+            },
+        ) => match align_templates(t1, *a1, t2, *a2) {
+            Unify::Sat(eqs) => Ok(Some(SqlCond::And(eqs))),
+            Unify::Empty => Ok(Some(SqlCond::Or(vec![]))),
+            Unify::Unsupported(why) => Err(format!(
+                "FILTER equality on ?{}/?{}: template-bound components with a shape v1 cannot \
+                 align ({why})",
+                v1.as_str(),
+                v2.as_str()
+            )),
+        },
+        _ => Ok(None),
     }
 }
 
@@ -693,6 +762,24 @@ mod tests {
             TermDef::Derived {
                 term_map: TermMap::Column(col.into(), TermSpec::plain_literal()),
                 alias: 0,
+            },
+        );
+        m
+    }
+
+    fn const_binding(var: &str, term: Term) -> BTreeMap<String, TermDef> {
+        let mut m = BTreeMap::new();
+        m.insert(var.to_owned(), TermDef::Const(term));
+        m
+    }
+
+    fn template_binding(var: &str, template: &str, alias: usize) -> BTreeMap<String, TermDef> {
+        let mut m = BTreeMap::new();
+        m.insert(
+            var.to_owned(),
+            TermDef::Derived {
+                term_map: TermMap::Template(Template::parse(template).unwrap(), TermSpec::iri()),
+                alias,
             },
         );
         m
@@ -972,5 +1059,127 @@ mod tests {
             align_templates(&x, 0, &y, 1),
             Unify::Sat(eqs) if eqs.len() == 1
         ));
+    }
+
+    // -- var_var_eq_beyond_column: composed-variable equality beyond a bare
+    // column binding (ledger closeout boundary B) ---------------------------
+
+    /// ADR-0032 D3 item 4: two composed variables' PREDICATE components are
+    /// ALWAYS both `TermDef::Const` (RDF 1.2 §3.1: a quoted predicate is
+    /// baked in as a fixed constant, never a per-row column —
+    /// `r2rml/star.rs`'s `quote_shape` doc comment) — equal constants
+    /// resolve to the "always true" sentinel, unequal ones to "always
+    /// false", neither ever reaching `var_col`.
+    #[test]
+    fn const_vs_const_equality_resolves_to_true_false_sentinels() {
+        let iri = |s: &str| Term::NamedNode(sf_core::NamedNode::new_unchecked(s));
+        let mut equal = const_binding("t1_p", iri("http://example.com/hasAge"));
+        equal.extend(const_binding("t2_p", iri("http://example.com/hasAge")));
+        assert!(matches!(
+            filter_cond(
+                &Expression::Equal(Box::new(var("t1_p")), Box::new(var("t2_p"))),
+                &equal,
+                Dialect::Sqlite,
+            ),
+            Ok(SqlCond::And(v)) if v.is_empty()
+        ));
+
+        let mut unequal = const_binding("t1_p", iri("http://example.com/hasAge"));
+        unequal.extend(const_binding("t2_p", iri("http://example.com/hasName")));
+        assert!(matches!(
+            filter_cond(
+                &Expression::Equal(Box::new(var("t1_p")), Box::new(var("t2_p"))),
+                &unequal,
+                Dialect::Sqlite,
+            ),
+            Ok(SqlCond::Or(v)) if v.is_empty()
+        ));
+    }
+
+    /// Two SAME-SHAPE template-bound components (e.g. two composed
+    /// variables' SUBJECT, an `rr:template`-mapped `rr:subjectMap`) align
+    /// pairwise-column-equal — reusing `align_templates` verbatim (the SAME
+    /// function `unify_derived`'s join-key case calls), never reaching
+    /// `var_col`.
+    #[test]
+    fn template_vs_template_same_shape_equality_lowers_to_col_eq() {
+        let mut b = template_binding("t1_s", "http://ex.org/person/{person_id}", 0);
+        b.extend(template_binding(
+            "t2_s",
+            "http://ex.org/person/{person_id}",
+            1,
+        ));
+        let cond = filter_cond(
+            &Expression::Equal(Box::new(var("t1_s")), Box::new(var("t2_s"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap();
+        assert!(
+            matches!(&cond, SqlCond::And(v)
+                if matches!(v.as_slice(), [SqlCond::ColEq(a, b)] if a.alias == 0 && b.alias == 1)),
+            "{cond:?}"
+        );
+    }
+
+    /// Two template-bound components with CONFLICTING leading literal
+    /// prefixes are provably disjoint — constant false, reusing
+    /// `align_templates`'s own disjointness proof inline (no separate
+    /// `templates_provably_disjoint` call needed).
+    #[test]
+    fn template_vs_template_disjoint_prefix_equality_is_constant_false() {
+        let mut b = template_binding("t1_s", "http://ex.org/leaf/{id}", 0);
+        b.extend(template_binding(
+            "t2_s",
+            "http://ex.org/person/{id}/{sub}",
+            1,
+        ));
+        assert!(matches!(
+            filter_cond(
+                &Expression::Equal(Box::new(var("t1_s")), Box::new(var("t2_s"))),
+                &b,
+                Dialect::Sqlite,
+            ),
+            Ok(SqlCond::Or(v)) if v.is_empty()
+        ));
+    }
+
+    /// A genuine template SHAPE mismatch (same prefix, different length)
+    /// stays Unsupported — the sharpened message names the template
+    /// mismatch specifically, not the generic "needs a plain column"
+    /// complaint `var_col` gives for every OTHER unsupported shape.
+    #[test]
+    fn template_vs_template_shape_mismatch_is_a_sharpened_501() {
+        let mut b = template_binding("t1_s", "http://ex.org/person/{id}", 0);
+        b.extend(template_binding(
+            "t2_s",
+            "http://ex.org/person/{id}/{sub}",
+            1,
+        ));
+        let err = filter_cond(
+            &Expression::Equal(Box::new(var("t1_s")), Box::new(var("t2_s"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap_err();
+        assert!(err.contains("template-bound components"), "{err}");
+    }
+
+    /// A MIXED shape (one side template-bound, the other a bare column or a
+    /// constant) is NOT intercepted by `var_var_eq_beyond_column` — it falls
+    /// through to `var_col`, which still 501s exactly as before this ledger
+    /// closeout (out of the bounded subset: "everything else keeps the
+    /// 501").
+    #[test]
+    fn template_vs_column_equality_still_falls_through_to_var_col() {
+        let mut b = template_binding("t1_s", "http://ex.org/person/{id}", 0);
+        b.extend(col_binding("plain", "some_col"));
+        let err = filter_cond(
+            &Expression::Equal(Box::new(var("t1_s")), Box::new(var("plain"))),
+            &b,
+            Dialect::Sqlite,
+        )
+        .unwrap_err();
+        assert!(err.contains("needs a plain column binding"), "{err}");
     }
 }
