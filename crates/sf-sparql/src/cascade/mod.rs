@@ -1539,6 +1539,30 @@ pub(crate) fn group_eligible_for_term_dedup(
     any_offender
 }
 
+/// Run 5 C0e restoration — prepare a [`group_eligible_for_term_dedup`] group's
+/// members for [`crate::exec_core::run_branches`]'s cross-branch SHARED seen-set
+/// path instead of [`crate::unfold::pool_group`]'s SQL `UNION` pooling: narrow
+/// each member's bindings down to the pattern's own projected vars (`keep`) — an
+/// arm may bind extra internal-only vars that must not widen the dedup key,
+/// mirroring `pool_group`'s identical narrowing — and force `distinct` so
+/// [`eligible_for_term_dedup`] recognizes each member once it executes
+/// standalone (every member needs `distinct = true` regardless of whether ITS
+/// OWN binding is the offender — `group_eligible_for_term_dedup`'s own doc
+/// comment: "the group-wide term-dedup this licenses covers it regardless once
+/// SOME sibling arm is an offender", and the caller shares one seen-set across
+/// every member by [`crate::iq::Scan::alias`], not by which member offends).
+/// Pure mutation — callers still owe `group_eligible_for_term_dedup`'s own
+/// eligibility check.
+pub(crate) fn narrow_group_for_shared_term_dedup(
+    members: &mut [Branch],
+    keep: &std::collections::HashSet<String>,
+) {
+    for b in members {
+        b.bindings.retain(|k, _| keep.contains(k.as_str()));
+        b.distinct = true;
+    }
+}
+
 /// Whether pooling `members` (a D2 group of ≥2 not-provably-disjoint arms,
 /// [`disjoint_groups`](crate::unfold::disjoint_groups)) positionally on
 /// PostgreSQL risks a `UNION` the engine cannot honor soundly: either a hard SQL
@@ -2046,6 +2070,11 @@ fn wrap_aggregate_input_if_needed(b: &mut Branch, dialect: sf_sql::Dialect) {
         order: Vec::new(),
         rust_group: None,
         dialect,
+        // This nested SubPlan executes wholly in SQL — the Run 5 C0e shared-
+        // seen-set mechanism never applies to it (see `Plan::dedup_groups`'s
+        // doc comment).
+        dedup_groups: std::collections::HashMap::new(),
+        construct_drops_some_branch_var: false,
     };
     let rewrite = |c: &mut ColRef| {
         if let Some(pos) = cols.iter().position(|x| x == c) {

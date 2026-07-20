@@ -110,6 +110,7 @@ where
         // term-gen here, see `reconstruct_batch`'s `parallel_allowed` doc comment
         // for the measured reason (ledger F8).
         parallel_term_gen: false,
+        dedup_groups: &plan.dedup_groups,
     };
     run_branches(&branches, ctx, b, sink).await
 }
@@ -130,6 +131,37 @@ struct PlanCtx<'a> {
     /// (see its `parallel_allowed` doc comment, ledger F8) — `true` only for
     /// [`rust_group_execute`]'s inner collection.
     parallel_term_gen: bool,
+    /// ADR-0034 C0e restoration — [`Plan::dedup_groups`] verbatim: a branch's own
+    /// representative scan/opt/subplan alias → shared term-dedup-set id. See
+    /// [`run_branches`]'s own doc comment for how this replaces a fresh
+    /// per-branch seen-set with one shared across every same-id branch.
+    dedup_groups: &'a std::collections::HashMap<usize, usize>,
+}
+
+/// The scan/opt alias to look up in [`PlanCtx::dedup_groups`] for `branch`'s
+/// own shared dedup-group id, if any (ADR-0034 C0e restoration). A standalone
+/// group member tagged `distinct = true` (`unfold::pool_pattern_relation` /
+/// `iq::resolve`'s Intensional arm) that lands as a `Union` child on the TREE
+/// engine is never the query's own top-level spine, so `iq::lower::
+/// lower_as_subplan` wraps it in a `SubPlanJoin` regardless — the SAME
+/// wrapping a lone `eligible_for_term_dedup` branch already gets there (e.g.
+/// W3C TC0005b). `branch.core`/`.opts` end up empty (`Branch::alias_sources`
+/// finds nothing), but the scan whose alias was registered survives
+/// unchanged, just nested one level down inside the SubPlan's own inner
+/// `Plan` — `lower_as_subplan` mints a FRESH alias for the `SubPlanJoin`
+/// itself, never for the scan it wraps. The flat engine never wraps anything
+/// (`alias_sources` alone always finds it there), so this only recurses on
+/// tree output.
+fn dedup_group_alias(branch: &Branch) -> Option<usize> {
+    if let Some((alias, _)) = branch.alias_sources().into_iter().next() {
+        return Some(alias);
+    }
+    let inner = branch.subplan_joins.first()?.plan.branches.first()?;
+    inner
+        .alias_sources()
+        .into_iter()
+        .next()
+        .map(|(alias, _)| alias)
 }
 
 /// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
@@ -178,6 +210,14 @@ where
     };
     let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
         std::collections::HashSet::new();
+    // ADR-0034 C0e restoration: one seen-set PER shared dedup-group id, keyed by
+    // `ctx.dedup_groups`' values — declared OUTSIDE the branch loop below (unlike
+    // the per-branch `own_term_seen` further down) so every branch tagged with
+    // the SAME group id contributes to and checks against the SAME set, giving
+    // the cross-branch dedup `unfold::pool_group`'s SQL `UNION` used to provide,
+    // without ever emitting one.
+    let mut group_seen: std::collections::HashMap<usize, std::collections::HashSet<Vec<Term>>> =
+        std::collections::HashMap::new();
     let mut seen = 0usize; // solutions observed (for offset)
     let mut emitted = 0usize; // solutions passed downstream (for limit)
                               // ORDER BY is applied HERE for every plan, never in SQL (a SQL ORDER BY inherits
@@ -191,13 +231,21 @@ where
         // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
         // scope rule): `e.sql` above omitted DISTINCT even though `branch.distinct` is
         // set, because `emit_branch_with` deferred to this dedup instead of refusing.
-        // `term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is shared
-        // across branches and keys on the OUTER projected vars) — a different scope and
-        // question: this collapses duplicates WITHIN this one branch's own relation, on
-        // its FULL reconstructed solution tuple (every bound variable), independent of
-        // whatever the outer query later projects or whether it asked for DISTINCT at all.
-        let term_dedup = crate::cascade::eligible_for_term_dedup(branch);
-        let mut term_seen: std::collections::HashSet<Vec<Term>> = std::collections::HashSet::new();
+        // `own_term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is
+        // shared across branches and keys on the OUTER projected vars) — a different
+        // scope and question: this collapses duplicates WITHIN this one branch's own
+        // relation, on its FULL reconstructed solution tuple (every bound variable),
+        // independent of whatever the outer query later projects or whether it asked
+        // for DISTINCT at all. `group_id` (ADR-0034 C0e restoration), when set, means
+        // this branch is one member of a D2 standalone group sharing `group_seen`'s
+        // entry instead — a DIFFERENT branch, tagged with the SAME id, may already
+        // have inserted the key this branch's own row reconstructs to (the cross-
+        // branch same-triple case a fresh-per-branch set could never catch).
+        let group_id: Option<usize> =
+            dedup_group_alias(branch).and_then(|alias| ctx.dedup_groups.get(&alias).copied());
+        let term_dedup = group_id.is_some() || crate::cascade::eligible_for_term_dedup(branch);
+        let mut own_term_seen: std::collections::HashSet<Vec<Term>> =
+            std::collections::HashSet::new();
         // The column schema is fixed for this branch's whole row stream, so index
         // it ONCE here rather than per row (ADR-0024/M4 perf — `RawRow::code_for`/
         // `AliasRow::value` used to `schema.iter().position(...)` on every lookup).
@@ -285,8 +333,14 @@ where
                         .into_iter()
                         .map(|(_, v)| v.clone())
                         .collect();
-                    if !term_seen.insert(key) {
-                        continue; // duplicate reconstructed solution (ADR-0034 D1 term dedup)
+                    let inserted = match group_id {
+                        Some(gid) => group_seen.entry(gid).or_default().insert(key),
+                        None => own_term_seen.insert(key),
+                    };
+                    if !inserted {
+                        // duplicate reconstructed solution (ADR-0034 D1 term dedup,
+                        // shared cross-branch when `group_id` is set — C0e restoration)
+                        continue;
                     }
                 }
                 // ORDER BY (any branch count): defer slicing — buffer for the global
@@ -383,6 +437,7 @@ where
         // `canonical_lexical` numeric formatting) that measurably benefits from
         // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
         parallel_term_gen: true,
+        dedup_groups: &plan.dedup_groups,
     };
     let mut inner_rows: Vec<Bindings> = Vec::new();
     run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
@@ -469,6 +524,42 @@ where
     .await
 }
 
+/// ADR-0034 item 3 (Run 5) — whether `lib.rs`'s per-branch template-projection
+/// dedup (`dedup_construct_template_projected_vars`) cannot see far enough to
+/// answer §16.2's "CONSTRUCT output is a SET" on its own: MULTIPLE branches
+/// exist (that pass pushes a SQL-level `DISTINCT` into ONE branch's own
+/// `SELECT` — it can never see a SIBLING branch, e.g. a UNION arm over a
+/// DIFFERENT triple pattern, instantiating the identical triple) AND
+/// `plan.construct_drops_some_branch_var` — captured by that SAME pass, from
+/// each branch's ORIGINAL bindings, before its own narrowing loop overwrites
+/// them to match the template exactly (a narrowed branch is afterward
+/// indistinguishable from one that never bound anything extra, so this CANNOT
+/// be recomputed here from `plan.branches` alone — found the hard way: an
+/// earlier version of this function recomputed it from the post-narrowing
+/// bindings and both never fired, per the `s7b`-shaped case, and — the more
+/// dangerous direction — a naive `branches.len() > 1` shortcut with no drop
+/// check at all over-fired on an ordinary multi-TriplesMap `?s ?p ?o` dump,
+/// where the template keeps every var every branch binds: `sf-bench`'s
+/// `engine_memory_is_bounded_under_growing_source`/`_pg` measured that
+/// regression to LINEAR memory growth, `mem_ratio` 13.72x at 16x scale,
+/// before it could land). "Nothing dropped anywhere" is safe regardless of
+/// branch count: when the template keeps every bound variable, two branches
+/// instantiating the identical triple is exactly two branches producing the
+/// identical WHERE solution — D2's own cross-branch mechanism (`unfold::
+/// pool_pattern_relation` / `iq::resolve`'s Intensional arm: provable
+/// disjointness, SQL pooling, or the C0e shared seen-set) already resolves
+/// that BEFORE the template ever sees it, which is why BRANCH COUNT ALONE
+/// must never be the gate either. `false` is the fast path and MUST stay
+/// untouched — it is the unbounded `?s ?p ?o`-shaped dump case ADR-0006's
+/// constant-memory invariant exists for. Where `true`, [`construct`]/
+/// [`construct_each_async`] dedup the PRODUCED triples with a Rust-side
+/// `HashSet` — bounded by DISTINCT OUTPUT triples, not total input rows, the
+/// same documented trade `cascade::eligible_for_term_dedup`'s single-branch
+/// term dedup already makes.
+pub(crate) fn construct_may_need_cross_branch_dedup(plan: &Plan) -> bool {
+    plan.branches.len() > 1 && plan.construct_drops_some_branch_var
+}
+
 /// Stream a CONSTRUCT's per-solution triples into an ASYNC sink (bounded by the
 /// template size — never the whole graph). The PostgreSQL/MySQL serve-lane form of
 /// [`construct`], written once over the shared core.
@@ -487,11 +578,16 @@ where
             ))
         }
     };
+    let mut seen: Option<std::collections::HashSet<Triple>> =
+        construct_may_need_cross_branch_dedup(plan).then(std::collections::HashSet::new);
     for_each_solution(plan, b, |_branch, bindings| {
-        let triples: Vec<Triple> = template
+        let mut triples: Vec<Triple> = template
             .iter()
             .filter_map(|tp| instantiate(tp, bindings))
             .collect();
+        if let Some(seen) = &mut seen {
+            triples.retain(|t| seen.insert(t.clone()));
+        }
         sink(triples)
     })
     .await
@@ -523,10 +619,17 @@ where
             ))
         }
     };
+    let mut seen: Option<std::collections::HashSet<Triple>> =
+        construct_may_need_cross_branch_dedup(plan).then(std::collections::HashSet::new);
     let mut count = 0u64;
     for_each_solution(plan, b, |_branch, bindings| {
         for tp in &template {
             if let Some(triple) = instantiate(tp, bindings) {
+                if let Some(seen) = &mut seen {
+                    if !seen.insert(triple.clone()) {
+                        continue;
+                    }
+                }
                 count += 1;
                 sink(triple);
             }
@@ -568,6 +671,8 @@ where
         order: Vec::new(),
         rust_group: None,
         dialect,
+        dedup_groups: std::collections::HashMap::new(),
+        construct_drops_some_branch_var: false,
     };
     for_each_solution(&plan, b, |branch, bindings| {
         let quad = (|| {
@@ -2136,6 +2241,8 @@ mod probe_backend {
             order: Vec::new(),
             rust_group: None,
             dialect: Dialect::Sqlite,
+            dedup_groups: std::collections::HashMap::new(),
+            construct_drops_some_branch_var: false,
         };
         rt.block_on(async move {
             let backend = MockBackend { rows: Vec::new() };
@@ -2547,6 +2654,8 @@ mod batch_loop_tests {
             }],
             rust_group: None,
             dialect: Dialect::Sqlite,
+            dedup_groups: std::collections::HashMap::new(),
+            construct_drops_some_branch_var: false,
         };
         // Reversed, zero-padded so lexical order (plain-literal comparison)
         // matches numeric order: row k carries the value belonging at sorted

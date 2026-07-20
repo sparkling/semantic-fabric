@@ -138,6 +138,25 @@ pub struct Plan {
     /// and computes `aggs` in Rust before streaming the grouped results.
     pub rust_group: Option<iq::RustGroup>,
     pub dialect: Dialect,
+    /// ADR-0034 C0e restoration: a D2 standalone group's shared term-dedup-set
+    /// id, keyed by each member branch's own representative scan/opt/subplan
+    /// alias — `exec_core::run_branches` shares ONE seen-set across every
+    /// `branches` entry whose alias maps to the SAME id here, instead of a
+    /// fresh per-branch set (see `unfold::Unfolder`'s `dedup_groups` field doc
+    /// comment for why the marker lives here, keyed by alias, rather than as a
+    /// field on `Branch` itself). Empty for the overwhelming common case (no D2
+    /// group needed this path).
+    pub(crate) dedup_groups: std::collections::HashMap<usize, usize>,
+    /// ADR-0034 item 3 (Run 5): `true` when SOME `PlanForm::Construct` branch's
+    /// ORIGINAL (pre-narrowing) bindings bound a variable the CONSTRUCT
+    /// template does not use — captured by `dedup_construct_template_
+    /// projected_vars` (lib.rs) at the ONE point that information exists,
+    /// before its own narrowing pass overwrites `Branch::bindings` to match
+    /// the template exactly (`exec_core::construct_may_need_cross_branch_
+    /// dedup`'s doc comment has the full reasoning for why this can't be
+    /// recomputed later from `branches` alone). Always `false` for a
+    /// non-`Construct` plan.
+    pub(crate) construct_drops_some_branch_var: bool,
 }
 
 impl Plan {
@@ -382,9 +401,11 @@ fn translate_inner_flat(
     // branch's `distinct`, and reading the flag any earlier would capture a
     // stale `false` that `Plan::prepared_branches` would blindly write back at
     // emission, silently undoing the fix.
-    if let PlanForm::Construct { template } = &form {
-        dedup_construct_template_projected_vars(&mut branches, template);
-    }
+    let construct_drops_some_branch_var = if let PlanForm::Construct { template } = &form {
+        dedup_construct_template_projected_vars(&mut branches, template)
+    } else {
+        false
+    };
     // The single-branch DISTINCT decision is recorded on the branch by pass (6)
     // — computed HERE, AFTER `dedup_before_aggregate`, which can itself just have
     // CHANGED that same branch's `distinct` (clearing it once the dedup moved
@@ -413,6 +434,8 @@ fn translate_inner_flat(
         order: trans.order,
         rust_group: trans.rust_group,
         dialect,
+        dedup_groups: uf.dedup_groups().clone(),
+        construct_drops_some_branch_var,
     })
 }
 
@@ -571,7 +594,8 @@ pub fn translate_tree(
     // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
     // `translate_inner_flat`): MUST run before the `distinct` capture below.
     if let PlanForm::Construct { template } = &plan.form {
-        dedup_construct_template_projected_vars(&mut plan.branches, template);
+        plan.construct_drops_some_branch_var =
+            dedup_construct_template_projected_vars(&mut plan.branches, template);
     }
     // The single-branch DISTINCT decision is recorded on the branch by pass (6)
     // — read HERE, AFTER `dedup_before_aggregate`, not before it: see the
@@ -584,6 +608,9 @@ pub fn translate_tree(
     // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
     // identical note in `translate_inner_flat`).
     star::apply_composed_bindings(&mut plan.branches, &star_env);
+    // ADR-0034 C0e restoration — see `Plan::dedup_groups`'s own doc comment;
+    // the identical pull the flat core does from `uf.dedup_groups()`.
+    plan.dedup_groups = cx.dedup_groups().clone();
     Ok(plan)
 }
 
@@ -777,19 +804,32 @@ fn visible_vars(branches: &[Branch]) -> Vec<String> {
 /// Multi-branch CONSTRUCT: this is PER-BRANCH — it removes within-branch
 /// template-projected duplicates, but two DIFFERENT branches (e.g. two
 /// candidate maps, or a UNION arm) that instantiate the SAME triple are a
-/// cross-branch duplicate this pass does not see. A UNION-level dedup keyed on
-/// the CONSTRUCT template's own reconstruction (the D2 pooling/501 machinery,
-/// generalized from the mapping's templates to the template's) is
-/// unimplemented — no fixture in the current suite reaches it; flagged here
-/// rather than silently left unhandled.
-fn dedup_construct_template_projected_vars(branches: &mut [Branch], template: &[TriplePattern]) {
+/// cross-branch duplicate this pass does not see. Run 5 item 3 closes that
+/// residual differently — not by generalizing this SQL-level mechanism across
+/// branches (there is no single SQL statement to push a `UNION`-level DISTINCT
+/// into once branches are separate `SELECT`s), but by a Rust-side shared
+/// seen-set over the PRODUCED triples themselves, downstream of this pass. The
+/// `bool` this function returns is that mechanism's OWN trigger — see
+/// `exec_core::construct_may_need_cross_branch_dedup`'s doc comment for why it
+/// must be read HERE, from each branch's bindings BEFORE the narrowing loop
+/// below overwrites them to match the template exactly (afterward, a narrowed
+/// branch is indistinguishable from one that never bound anything extra).
+fn dedup_construct_template_projected_vars(
+    branches: &mut [Branch],
+    template: &[TriplePattern],
+) -> bool {
     if template_has_blank_node(template) {
-        return;
+        return false;
     }
     let template_vars = template_variables(template);
     if template_vars.is_empty() {
-        return;
+        return false;
     }
+    let drops_some_var = branches.iter().any(|b| {
+        b.bindings
+            .keys()
+            .any(|k| !template_vars.contains(k.as_str()))
+    });
     for b in branches {
         if b.path.is_some()
             || b.agg.is_some()
@@ -809,6 +849,7 @@ fn dedup_construct_template_projected_vars(branches: &mut [Branch], template: &[
             .retain(|var, _| template_vars.contains(var.as_str()));
         b.distinct = true;
     }
+    drops_some_var
 }
 
 /// Every variable named anywhere in a CONSTRUCT template (subject/predicate/

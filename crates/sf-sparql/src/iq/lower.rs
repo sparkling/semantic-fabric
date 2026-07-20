@@ -159,6 +159,14 @@ pub fn lower(
         order: spine.order,
         rust_group: spine.rust_group,
         dialect,
+        // `translate_tree` (lib.rs) overwrites this with the resolve-stage
+        // `ResolveCx`'s accumulated map right after `lower` returns — see
+        // `Plan::dedup_groups`'s own doc comment (ADR-0034 C0e restoration).
+        dedup_groups: std::collections::HashMap::new(),
+        // `translate_tree` overwrites this too, once it knows the form is
+        // `PlanForm::Construct` (set on `plan` AFTER `lower` returns) — see
+        // `Plan::construct_drops_some_branch_var`'s own doc comment.
+        construct_drops_some_branch_var: false,
     })
 }
 
@@ -2529,6 +2537,11 @@ fn try_sql_group_over_union(
         order: Vec::new(),
         rust_group: None,
         dialect,
+        // This nested SubPlan executes wholly in SQL — the Run 5 C0e shared-
+        // seen-set mechanism never applies to it (see `Plan::dedup_groups`'s doc
+        // comment; `unfold::pool_group`'s own `nested_plan` mirrors this).
+        dedup_groups: std::collections::HashMap::new(),
+        construct_drops_some_branch_var: false,
     };
 
     let mut outer = Branch::empty();

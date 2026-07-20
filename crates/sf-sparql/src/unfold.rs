@@ -66,6 +66,16 @@ pub struct Unfolder<'a> {
     /// `pub(crate)`.
     pub(crate) dialect: sf_sql::Dialect,
     next_alias: usize,
+    /// ADR-0034 C0e restoration — a D2 standalone group's shared dedup-set id,
+    /// keyed by each member branch's OWN representative scan/opt/subplan alias
+    /// (stable across the flat `merge`/tree bridge-lower round trip, unlike a
+    /// hypothetical field on `Branch` itself — see `pool_pattern_relation`'s /
+    /// `iq::resolve`'s Intensional-arm doc comments for why the marker lives
+    /// here, keyed by alias, rather than on `Branch`). Pulled into the final
+    /// [`crate::Plan::dedup_groups`] by [`Unfolder::dedup_groups`] (flat) or
+    /// [`crate::iq::resolve::ResolveCx::dedup_groups`] (tree) once translation
+    /// finishes; [`crate::exec_core::run_branches`] is the only reader.
+    dedup_groups: std::collections::HashMap<usize, usize>,
     /// The named graph currently active inside a `GRAPH <g> { ... }` clause, or
     /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
     /// by the `GraphPattern::Graph` arm; all other arms inherit the current value.
@@ -128,6 +138,7 @@ impl<'a> Unfolder<'a> {
             tbox,
             dialect,
             next_alias: 0,
+            dedup_groups: std::collections::HashMap::new(),
             current_graph: None,
             schema,
             in_existential: false,
@@ -138,6 +149,22 @@ impl<'a> Unfolder<'a> {
         let a = self.next_alias;
         self.next_alias += 1;
         a
+    }
+
+    /// Tag `alias` (a group member's own representative scan/opt/subplan alias)
+    /// as sharing dedup-set `group` — see `dedup_groups`' own doc comment. The
+    /// tree engine's `iq::resolve` is the one cross-module caller (it cannot
+    /// reach the private field directly); the flat engine's `pool_pattern_
+    /// relation` takes `&mut self.dedup_groups` directly instead (same module).
+    pub(crate) fn tag_dedup_group(&mut self, alias: usize, group: usize) {
+        self.dedup_groups.insert(alias, group);
+    }
+
+    /// The accumulated alias → shared-dedup-group-id map, pulled into the final
+    /// [`crate::Plan::dedup_groups`] once translation finishes (see
+    /// `dedup_groups`' own field doc comment).
+    pub(crate) fn dedup_groups(&self) -> &std::collections::HashMap<usize, usize> {
+        &self.dedup_groups
     }
 
     fn map_by_id(&self, id: &str) -> Option<&'a TriplesMap> {
@@ -493,8 +520,14 @@ impl<'a> Unfolder<'a> {
         let mut acc: Vec<Branch> = vec![Branch::empty()];
         for tp in patterns {
             let alts = self.pattern_branches(tp)?;
-            let mut alts =
-                pool_pattern_relation(alts, tp, self.dialect, &mut self.next_alias, self.schema)?;
+            let mut alts = pool_pattern_relation(
+                alts,
+                tp,
+                self.dialect,
+                &mut self.next_alias,
+                self.schema,
+                &mut self.dedup_groups,
+            )?;
             crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema, self.dialect);
             acc = join_branches(acc, alts)?;
             if acc.is_empty() {
@@ -1483,12 +1516,23 @@ fn reject_dropped_slice(t: &TransPattern) -> Result<()> {
 /// bridge back into (see the module-level ADR-0034 note for why the two engines
 /// hook this at a different point in their own pipelines while sharing the
 /// pooling implementation).
+///
+/// **Run 5 C0e restoration**: a group `cascade::group_has_unsafe_float_slot_
+/// mismatch` would otherwise sound-501 (PG only) is NOT pooled at all when it is
+/// ALSO `cascade::group_eligible_for_term_dedup` (every member standalone, an
+/// offending non-injective binding present) — its members stay separate
+/// bag-union branches (`run_branches` already executes each on its own), tagged
+/// via `dedup_groups` to share ONE Rust-side seen-set instead of a SQL `UNION`,
+/// sidestepping the type-alignment wall entirely (W3C R2RMLTC0012e). Every OTHER
+/// group (non-standalone, or no term-dedup-safe offender) is unaffected: the
+/// float-mismatch refusal and `pool_group` SQL pooling below are unchanged.
 fn pool_pattern_relation(
     arms: Vec<Branch>,
     tp: &TriplePattern,
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
     schema: &[sf_sql::TableSchema],
+    dedup_groups: &mut std::collections::HashMap<usize, usize>,
 ) -> Result<Vec<Branch>> {
     if arms.len() <= 1 || all_pairwise_disjoint(&arms) {
         return Ok(arms);
@@ -1510,7 +1554,7 @@ fn pool_pattern_relation(
             out.push(arms[group[0]].take().expect("each index visited once"));
             continue;
         }
-        let members: Vec<Branch> = group
+        let mut members: Vec<Branch> = group
             .iter()
             .map(|&i| arms[i].take().expect("each index visited once"))
             .collect();
@@ -1520,6 +1564,19 @@ fn pool_pattern_relation(
         // on Unsupported" invariant).
         let member_refs: Vec<&Branch> = members.iter().collect();
         if crate::cascade::group_has_unsafe_float_slot_mismatch(&member_refs, schema, dialect) {
+            let keep: std::collections::HashSet<String> = vars.iter().cloned().collect();
+            if crate::cascade::group_eligible_for_term_dedup(&members, &keep) {
+                crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
+                let gid = *next_alias;
+                *next_alias += 1;
+                for b in &members {
+                    if let Some((alias, _)) = b.alias_sources().into_iter().next() {
+                        dedup_groups.insert(alias, gid);
+                    }
+                }
+                out.extend(members);
+                continue;
+            }
             return Err(Error::Unsupported(
                 "D2 pool: a floating-point column would positionally UNION against a \
                  differently-typed sibling column on PostgreSQL → 501 (cannot be aligned \
@@ -1663,6 +1720,13 @@ fn pool_group(
         order: Vec::new(),
         rust_group: None,
         dialect,
+        // This nested SubPlan executes wholly in SQL (`emit_subplan_sql`) — the
+        // Run 5 C0e shared-seen-set mechanism never applies to it (that path
+        // exists PRECISELY to avoid a nested Plan like this one).
+        dedup_groups: std::collections::HashMap::new(),
+        // Not a `PlanForm::Construct` plan — item 3's cross-branch CONSTRUCT
+        // triple dedup never applies to this SQL-pooled SELECT sub-plan.
+        construct_drops_some_branch_var: false,
     };
     let mut outer = Branch::empty();
     outer.subplan_joins.push(SubPlanJoin {
@@ -1752,18 +1816,23 @@ pub(crate) fn disjoint_groups(arms: &[Branch]) -> Vec<Vec<usize>> {
 /// arms' predicate position bound to distinct `rr:predicate` IRIs, the "wildcard
 /// `?p`" shape); two templates with conflicting leading literal prefixes
 /// ([`templates_provably_disjoint`], ADR-0032 D6); or two non-constant term maps
-/// whose declared term type or (for a literal) language tag differs
-/// ([`term_specs_disjoint`]), which can never produce equal RDF terms regardless
-/// of the underlying column value (e.g. two `rr:column` object maps on the
-/// identical column but `rr:language "en"` vs `"es"`, W3C R2RMLTC0015a: same
-/// column, same subject template, yet never the same solution tuple). Datatype is
-/// deliberately NOT compared here even though it is equally a term-shape
-/// mismatch in principle (`"5"` vs `"5"^^xsd:integer` are as disjoint as `"x"@en`
-/// vs `"x"@es`) — `adversarial_adr0034_refute.rs`'s
-/// `s1_object_datatype_mismatch_sound_501` pins a datatype mismatch as a case
+/// whose declared term type, (for a literal) language tag, or (for a literal)
+/// datatype differs ([`term_specs_disjoint`]), which can never produce equal RDF
+/// terms regardless of the underlying column value (e.g. two `rr:column` object
+/// maps on the identical column but `rr:language "en"` vs `"es"`, W3C
+/// R2RMLTC0015a: same column, same subject template, yet never the same solution
+/// tuple; or `rr:datatype xsd:integer` vs no `rr:datatype` at all — `"5"` and
+/// `"5"^^xsd:integer` are as disjoint as `"x"@en` vs `"x"@es`). Datatype was
+/// deliberately excluded through Run 5 Wave W3 — `adversarial_adr0034_refute.rs`'s
+/// `s1_object_datatype_mismatch_sound_501` pinned a datatype mismatch as a case
 /// that must still route through the pooling mechanism's reconstruction-
-/// agreement gate and sound-501 there, not be elided upfront; widening this
-/// proof to datatype would swallow that pin.
+/// agreement gate and sound-501 there; that pin is now rewritten
+/// (`s1_object_datatype_mismatch_disjoint_bag_union`) to assert the widened,
+/// correct behavior instead — a provably disjoint pair skips pooling entirely
+/// and answers as a plain bag union — and the agreement gate itself stays
+/// exercised by `s1_different_shape_raw_collision_sound_501` /
+/// `s1_different_shape_same_term_sound_501` (subject-template SHAPE mismatches,
+/// which stay NOT provably disjoint either way).
 fn arms_provably_disjoint(a: &Branch, b: &Branch) -> bool {
     a.bindings.iter().any(|(var, adef)| {
         b.bindings.get(var).is_some_and(|bdef| {
@@ -1782,12 +1851,17 @@ fn arms_provably_disjoint(a: &Branch, b: &Branch) -> bool {
 }
 
 /// Whether `a`/`b` are both a `rr:column`/`rr:template` term map whose declared
-/// term type, or — for two literals — language tag, differs. R2RML §6.2/§7 fixes
-/// this per term map, independent of any row's column value, so two terms of
-/// differing shape can never be RDF-term-equal no matter what the source data
-/// holds: a `Literal` never equals an `Iri`/`BlankNode`, and `"x"@en` never
-/// equals `"x"@es`. Deliberately narrower than it could be — see
-/// [`arms_provably_disjoint`]'s doc comment for why datatype is excluded.
+/// term type, or — for two literals — language tag or datatype, differs. R2RML
+/// §6.2/§7 fixes this per term map, independent of any row's column value, so
+/// two terms of differing shape can never be RDF-term-equal no matter what the
+/// source data holds: a `Literal` never equals an `Iri`/`BlankNode`, `"x"@en`
+/// never equals `"x"@es`, and (Run 5 Wave W3) `"5"` never equals
+/// `"5"^^xsd:integer`. Datatype comparison goes through
+/// [`normalized_datatype`], which defaults an absent `rr:datatype` to
+/// `xsd:string` — the same "no datatype ⇒ xsd:string" default `literal_key`/
+/// `lexical_eq_is_term_eq` (`crate::unify`) already apply, so a plain literal
+/// and an explicit `"…"^^xsd:string` count as the SAME term class here too,
+/// never disjoint.
 fn term_specs_disjoint(a: &TermDef, b: &TermDef) -> bool {
     let (TermDef::Derived { term_map: tmx, .. }, TermDef::Derived { term_map: tmy, .. }) = (a, b)
     else {
@@ -1797,7 +1871,18 @@ fn term_specs_disjoint(a: &TermDef, b: &TermDef) -> bool {
         return false;
     };
     sx.term_type != sy.term_type
-        || (sx.term_type == sf_core::ir::TermType::Literal && sx.language != sy.language)
+        || (sx.term_type == sf_core::ir::TermType::Literal
+            && (sx.language != sy.language || normalized_datatype(sx) != normalized_datatype(sy)))
+}
+
+/// A literal [`sf_core::ir::TermSpec`]'s declared datatype, defaulting an
+/// absent `rr:datatype` to `xsd:string` (R2RML's own default for an untyped
+/// column/template literal) — see [`term_specs_disjoint`]'s doc comment for the
+/// established equivalence this mirrors.
+fn normalized_datatype(spec: &sf_core::ir::TermSpec) -> &str {
+    spec.datatype
+        .as_ref()
+        .map_or("http://www.w3.org/2001/XMLSchema#string", |dt| dt.as_str())
 }
 
 /// The [`sf_core::ir::TermSpec`] a `rr:column`/`rr:template` term map declares —

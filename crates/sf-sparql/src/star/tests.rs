@@ -1130,6 +1130,8 @@ fn subplan_wrapping(inner: Branch, plan_distinct: bool) -> Branch {
             order: vec![],
             rust_group: None,
             dialect: Dialect::Sqlite,
+            dedup_groups: std::collections::HashMap::new(),
+            construct_drops_some_branch_var: false,
         }),
         on: vec![],
         left: false,
