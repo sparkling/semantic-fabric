@@ -115,17 +115,20 @@ copy in between.**
   [ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)).
 - **Standards-grounded correctness** — W3C RDB2RDF conformance (81/82 SQLite,
   80/81 PostgreSQL; one documented cross-dialect deviation, shared by both
-  dialects) over an ISWC-2018-based, provably-correct rewrite
+  dialects) over a peer-reviewed base translation (ISWC 2018) whose
+  implementation is verified by a differential oracle against a native evaluator
   ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
   [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
 - **Two real backends, both executing today** — SQLite **and** PostgreSQL both
   run the OBDA path end to end via a dialect-correct SQL layer; PostgreSQL is no
   longer emit-only ([ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md),
   [ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
-- **Built-in query-time provenance/lineage and a security edge** — named-graph
-  lineage plus source RLS / rewriter ABAC / data-sensitivity authZ
-  ([ADR-0017](docs/adr/ADR-0017-provenance-lineage.md),
-  [ADR-0018](docs/adr/ADR-0018-security-edge.md)).
+- **RDF-star over live SQL — no known prior art** — statements *about*
+  statements (provenance, certainty, annotations) queryable in native RDF 1.2
+  reification form directly over the relational source, sound and complete
+  against a native-evaluator oracle
+  ([§9](#9-status--limitations); [ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md),
+  [ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
 
 ## 5. How it works — and why the HOW is part of why it's amazing
 
@@ -197,12 +200,14 @@ data ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
 > **The honest head-to-head lives in [COMPARISON.md](COMPARISON.md)** — a fair,
 > same-backend race: semantic-fabric and Ontop both as warm HTTP SPARQL endpoints
 > over the **same** PostgreSQL, timed by the same client. In short: **sf is faster
-> on 9 of 10 (query × scale) cells** including the heavy 3-way join, at full answer
-> parity, **but Ontop wins the OPTIONAL query (Q5) at 10×** where sf's left-join
-> plan scales poorly; sf is far leaner (12.8 MiB binary vs a JVM stack, ~0.15 s vs
-> ~1.7 s cold start, ~12 vs ~300 MiB serving RSS) with a **byte-constant engine
-> heap (129 358 B)** as data grows. No blanket speed-win claim — read it for the
-> caveats.
+> on all 14 (query × scale) cells** of the Q1–Q7 race (the one @10× GROUP BY cell
+> is a tie within measurement noise), including the heavy 3-way join, at full
+> answer parity. One earlier loss is kept on the record: Q5 (OPTIONAL) at 10× was
+> a real Ontop win on the pre-optimization binary, fixed by a self-left-join
+> elimination (`deb3a68`). sf is far leaner (12.8 MiB binary vs a JVM stack,
+> ~0.15 s vs ~1.7 s cold start, ~12 vs ~300 MiB serving RSS) with a
+> **byte-constant engine heap (129 358 B)** as data grows. This is a small
+> localhost dataset — no blanket speed-win claim; read it for the caveats.
 
 > **Honesty contract.** semantic-fabric's load-bearing result is the **constant
 > engine memory under growing source data** invariant — a property of the
@@ -230,8 +235,8 @@ file-backed SQLite DB, off the engine heap):
 
 | Scale | Triples | Peak engine heap | Bytes / triple |
 |---|---|---|---|
-| 1x | 5 200 | **129 358 B** | 24.877 |
-| 10x | 51 880 | **129 358 B** | 2.493 |
+| 1x | 5 200 | **129 358 B** | 24.88 |
+| 10x | 51 880 | **129 358 B** | 2.49 |
 | 100x | 518 680 | **129 358 B** | 0.249 |
 
 The engine peak heap is **byte-identical (129 358 B) across a 100× growth in
@@ -256,7 +261,7 @@ criterion medians @1x, in-process (SQLite):
 |---|---|---|
 | Q1 routes BGP | single-table BGP | 29.35 µs |
 | Q2 route → agency join | 2-way join | 37.83 µs |
-| Q3 stop_time → trip → route join | 3-way join | 738.17 µs |
+| Q3 stop_time → trip → route join | 3-way join | 738.2 µs |
 | Q4 route FILTER | pushed-down FILTER | 26.69 µs |
 | Q5 trip OPTIONAL headsign | NULL-safe left join | 96.35 µs |
 
@@ -274,18 +279,22 @@ grows linearly with the result (the non-materialising path):
 Now that `serve` and the PostgreSQL executor both ship, the comparison is
 like-for-like: semantic-fabric and **Ontop 5.5.0** both run as **warm HTTP SPARQL
 endpoints over the same PostgreSQL 17.7**, timed by the same `curl` client over the
-same five queries, at full answer parity. Selected medians (ms):
+same seven queries, at full answer parity. Selected medians (ms):
 
 | Query | sf @1x | Ontop @1x | sf @10x | Ontop @10x |
 |---|---|---|---|---|
-| Q1 routes BGP | **0.60** | 2.41 | **0.71** | 2.90 |
-| Q3 stop_time → trip → route (3-way join) | **1.76** | 12.57 | **9.01** | 56.08 |
-| Q5 trip OPTIONAL | **0.81** | 1.84 | 8.72 | **2.93** |
+| Q1 routes BGP | **1.02** | 2.41 | **1.19** | 3.08 |
+| Q3 stop_time → trip → route (3-way join) | **2.69** | 12.87 | **9.27** | 48.07 |
+| Q5 trip OPTIONAL | **1.46** | 2.68 | **1.33** | 3.89 |
+| Q6 GROUP BY | **1.60** | 2.22 | 1.70 | 1.82 |
 
-semantic-fabric is faster on **9 of 10 (query × scale) cells** including the heavy
-3-way join Q3 — **but Ontop wins Q5 (OPTIONAL) at 10×** (sf's left-join plan grows
-~10× from 1x→10x while Ontop's barely moves; reported, not hidden). On footprint sf
-is a **12.8 MiB single binary** (vs a JVM + 171 jars), **0.15 s cold start** (vs
+semantic-fabric is faster on **all 14 (query × scale) cells** of the Q1–Q7 race —
+Q6 at 10× (1.70 vs 1.82 ms) is a tie within measurement noise — including the
+heavy 3-way join Q3 at 5.2×. **One loss was real and stays on the record:** Q5
+(OPTIONAL) at 10× measured 8.72 ms on the pre-optimization binary, a clear Ontop
+win at the time; the self-left-join elimination (commit `deb3a68`) collapsed the
+plan to a single scan, and it now measures 1.33 ms. On footprint sf is a
+**12.8 MiB single binary** (vs a JVM + 171 jars), **0.15 s cold start** (vs
 ~1.7 s), **~12 MiB serving RSS** (vs ~300 MiB). This is a small, simple-query,
 localhost dataset — **not a blanket speed-win claim**. Full tables, the materialiser
 (Morph-KGC) axis, methodology, and caveats are in **[COMPARISON.md](COMPARISON.md)**.
@@ -401,6 +410,24 @@ end-to-end over SQL (R2RML-star extension — see the subsection below).
 | Named-graph querying | **`GRAPH <g>` and the variable form `GRAPH ?g` both work** — `GRAPH ?g` enumerates the mapping's declared graph maps per branch (constant, template, or column) and binds `?g` through the same unification that joins any shared variable; a star annotation declared inside a named graph composes with it directly. One pinned residual: a property path under `GRAPH ?g` refuses (`501`) once the mapping declares any non-constant (template/column) graph map anywhere, not only on the path's own predicate ([ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md)) |
 | W3C RDB2RDF conformance | **81/82 (SQLite), 80/81 (PostgreSQL)** — **not 100%** — with one documented standards deviation, `R2RMLTC0002f`, shared by both dialects ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md), [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)) |
 | Out of scope | Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, FNML ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md), [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)) |
+
+**Reading the conformance figures.** Each figure is R2RML + Direct Mapping:
+SQLite 62/63 + 19/19 = **81/82**; PostgreSQL 57/58 + 23/23 = **80/81**. The
+denominators differ because a fixture the source database cannot load is
+*skipped* and never counted — SQLite cannot load the 5 table-level-constraint
+DDL scenarios (D021–D025; they load and **pass** on PostgreSQL), and PostgreSQL
+cannot load the 6 `VARBINARY` D016 fixtures (which load on SQLite). The single
+non-pass in both figures is the same case, `R2RMLTC0002f` — an *unreviewed
+negative* test expecting a mapping to be **rejected** when a regular identifier
+`{Name}` references a column created as delimited `"Name"`. The honest
+per-dialect status: under SQLite's (and MySQL's) case-insensitive identifier
+semantics, *accepting* that reference is the correct behaviour for the database
+— Ontop fails this same test on MySQL for the same reason — so there it is a
+documented deviation ([ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)).
+On PostgreSQL, whose unquoted identifiers case-fold and genuinely do not match,
+rejecting is achievable — Ontop passes it there alongside the
+structurally-identical positive cases — so on PostgreSQL this is a small **open
+parity item**, tracked as such, not an impossibility.
 
 Features outside the v1 surface return 501 / are skipped — they are not silently
 wrong, but they are not done.
@@ -522,7 +549,12 @@ k8s, health/readiness probes), horizontal scale (multi-node, read replicas,
 sharding), lifecycle (mapping hot-reload, source-schema-drift detection), and
 result caching. These are operational/deployment dimensions that do not gate the
 engine build and are only actionable against a concrete deployment target; each
-graduates to its own ADR when it becomes so. Tracked, not forgotten.
+graduates to its own ADR when it becomes so. Tracked, not forgotten. Three
+further accepted ADRs are **design-complete but not yet implemented** — nothing
+from them ships in today's binary: observability
+([ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md)), query-time
+provenance/lineage ([ADR-0017](docs/adr/ADR-0017-provenance-lineage.md)), and
+the security edge ([ADR-0018](docs/adr/ADR-0018-security-edge.md)).
 
 **Hard out-of-scope lines** ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
 Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, and FNML are outside
@@ -593,8 +625,8 @@ inline; this is the canonical index.
 | ADR | Decision |
 |---|---|
 | [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md) | Security & resource governance (injection-safety, `P+` DoS limits) |
-| [ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md) | Observability (`tracing` + `metrics`/Prometheus) + configuration model |
-| [ADR-0018](docs/adr/ADR-0018-security-edge.md) | Security edge — source RLS + rewriter ABAC + data-sensitivity authZ |
+| [ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md) | Observability (`tracing` + `metrics`/Prometheus) + configuration model — *accepted design, not yet wired* |
+| [ADR-0018](docs/adr/ADR-0018-security-edge.md) | Security edge — source RLS + rewriter ABAC + data-sensitivity authZ — *accepted design, not yet implemented* |
 
 **Quality & process**
 
@@ -606,7 +638,7 @@ inline; this is the canonical index.
 
 | ADR | Decision |
 |---|---|
-| [ADR-0017](docs/adr/ADR-0017-provenance-lineage.md) | Provenance & lineage — query-time named graphs + PROV-O |
+| [ADR-0017](docs/adr/ADR-0017-provenance-lineage.md) | Provenance & lineage — query-time named graphs + PROV-O — *accepted design, not yet implemented* |
 
 **Readiness & roadmap**
 
