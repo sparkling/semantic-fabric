@@ -435,21 +435,26 @@ fn s3d2_templateeq_percent_encoding_false_negative_pipe() {
 // `CROSS_KIND_R2RML` exactly — so this JOIN cell now depends on the guard
 // (belt-and-braces with Cell D, not a replacement for it).
 //
-// Used ONLY by the JOIN-form test below, deliberately NOT by the FILTER-form
-// test just above it (which keeps its OWN, differently-shaped fixture): the
-// JOIN form resolves cross-kind disjointness via `unify_derived`'s
-// `term_map_type` pre-check (sound for same-shape templates too), but the
-// FILTER form's `?a = ?b` resolves via `unify::cmp` -> `align_templates`,
-// whose "same segment shape ⇒ pairwise-column-equal" fast path
-// (`unify.rs::align_templates`, the `sx.len() == sy.len()` loop) does NOT
-// check `spec.term_type` at all before emitting `SqlCond::ColEq` — discovered
-// live while writing this repair: pointing the FILTER test at THIS same-shape
-// fixture made it wrongly TRANSLATE (a raw column-vs-column equality) instead
-// of the expected 501. That is a genuine, pre-existing soundness gap
-// (same-shape cross-kind templates are not provably disjoint in
-// `align_templates`), orthogonal to the over-determination repair this
-// comment is about and out of THIS pass's scope to fix — reported separately,
-// not silently absorbed by loosening either test.
+// Used by the JOIN-form test below AND (Run 5 W6) its same-shape FILTER-form
+// companion `s3a_cross_kind_filter_eq_same_shape_is_empty` — deliberately NOT
+// by `s3a_cross_kind_filter_eq_stays_locked_501` just above, which keeps its
+// OWN, differently-shaped fixture. The JOIN form resolves cross-kind
+// disjointness via `unify_derived`'s `term_map_type` pre-check (sound for
+// same-shape templates too), but the FILTER form's `?a = ?b` resolves via
+// `unify::cmp` -> `align_templates`, whose "same segment shape ⇒
+// pairwise-column-equal" fast path (`unify.rs::align_templates`, the
+// `sx.len() == sy.len()` loop) used to NOT check `spec.term_type` at all
+// before emitting `SqlCond::ColEq` — discovered live while writing the W5b
+// repair: pointing the FILTER test at THIS same-shape fixture made it
+// wrongly TRANSLATE (a raw column-vs-column equality) instead of the correct
+// empty answer. That was a genuine, pre-existing soundness gap (same-shape
+// cross-kind templates were not provably disjoint in `align_templates`),
+// orthogonal to the over-determination repair this comment is about, reported
+// separately rather than silently absorbed by loosening either test — and now
+// FIXED (Run 5 W6): `align_templates` itself proves a same-shape, cross-KIND
+// (or cross-normalised-literal) pair disjoint before ever reaching the
+// column-equality loop, so BOTH callers (this join path AND the FILTER path)
+// get the correct `Unify::Empty`.
 const S3A_SQL: &str = r#"
 CREATE TABLE t4 (id INTEGER PRIMARY KEY, v TEXT NOT NULL);
 INSERT INTO t4 VALUES (1, 'X');
@@ -492,18 +497,47 @@ const S3A_FILTER_R2RML: &str = r#"
 /// plain-literal template must NEVER match them via a wrong `TemplateEq` —
 /// `template_eq_or_unsupported`'s `spec1.term_type == spec2.term_type` guard
 /// keeps this a sound `Unsupported` (501), never a rendered-string equality
-/// between two different-kind terms. (Enhancement note in the final report: a
-/// provably-unequal `Unify::Empty` would be sound AND complete here, so this
-/// could return an empty answer instead of 501 — a completeness improvement,
-/// not a correctness bug.) Uses its OWN fixture (`S3A_FILTER_R2RML`), NOT
-/// `S3A_R2RML` — see that constant's doc comment: a SAME-shape pair here
-/// would hit `align_templates`'s unrelated same-shape fast path instead,
-/// which has no term_type check of its own (a separate, reported finding).
+/// between two different-kind terms. This SHAPE mismatch stays 501 even after
+/// the Run 5 W6 fix below (only the SAME-shape path was ever missing its
+/// term_type check) — the "Enhancement note" this doc comment used to flag (a
+/// provably-unequal `Unify::Empty` would be sound AND complete, so a
+/// SAME-shape cross-kind pair could answer empty instead of 501) is now
+/// realized by `s3a_cross_kind_filter_eq_same_shape_is_empty` below, over
+/// `S3A_R2RML`'s same-shape fixture. Uses its OWN fixture
+/// (`S3A_FILTER_R2RML`), NOT `S3A_R2RML` — see that constant's doc comment
+/// for why sharing it would exercise a different `align_templates` path than
+/// this shape-mismatch test means to lock.
 #[test]
 fn s3a_cross_kind_filter_eq_stays_locked_501() {
     let query =
         format!("{EX}SELECT ?p WHERE {{ ?p ex:iriv ?a . ?p ex:litv ?b . FILTER(?a = ?b) }}");
     assert_locked_501(S3A_FILTER_R2RML, &query);
+}
+
+/// LOCK (Run 5 W6 fix): the FILTER-form companion over the SAME-SHAPE fixture
+/// (`S3A_R2RML`, the join cell's own fixture below) instead of
+/// `S3A_FILTER_R2RML`'s differently-shaped one. `?a`/`?b` are both a
+/// single-column `http://ex.org/v/{v}` template over the SAME column, one
+/// side IRI-typed, the other `rr:termType rr:Literal`, so `align_templates`
+/// takes its same-shape pairwise-column-equality path (the `sx.len() ==
+/// sy.len()` loop), never reaching `template_eq_or_unsupported`. Before the
+/// fix, that loop never consulted `spec.term_type` and emitted a plain
+/// `ColEq` on the shared `v` column, wrongly MATCHING an IRI against a
+/// same-lexical-text Literal (SPARQL term equality: never — an IRI and a
+/// Literal are never `sameTerm` regardless of lexical form). Now
+/// `align_templates` proves this disjoint (`Unify::Empty`) up front — the
+/// FILTER becomes constant-false, an empty answer, agreeing with the oracle
+/// (which treats `?a = ?b` between an IRI and a Literal as a type error,
+/// excluding the row).
+#[test]
+fn s3a_cross_kind_filter_eq_same_shape_is_empty() {
+    let query =
+        format!("{EX}SELECT ?p WHERE {{ ?p ex:iriv ?a . ?p ex:litv ?b . FILTER(?a = ?b) }}");
+    let rows = assert_oracle_agrees(S3A_SQL, S3A_R2RML, &query);
+    assert!(
+        rows.is_empty(),
+        "IRI != literal even with identical lexical text and template shape: {rows:#?}"
+    );
 }
 
 /// LOCK companion: the shared-variable JOIN form of the same cross-kind pair —

@@ -569,22 +569,30 @@ const BNODE_GATE_R2RML: &str = r#"
 /// gate, look like a duplicate under `dedup_construct_template_projected_
 /// vars`'s narrowing (both solutions agree on the kept var `?a`=30) and
 /// wrongly collapse to ONE triple. This locks that the gate correctly stays
-/// OFF for a blank-node-carrying template: 2 solutions in, 2 triples out, on
-/// both engines — neither narrows/dedups them away.
+/// OFF for a blank-node-carrying template: 2 solutions in, 2 bnode
+/// instantiations out (4 triples: 2 template triples x 2 solutions), on both
+/// engines — neither narrows/dedups them away.
 ///
-/// NOT locked here (a separate, deeper finding surfaced while writing this
-/// cell, reported rather than silently absorbed): SPARQL 1.1 §16.2 ALSO
-/// requires each solution's instantiation of a template blank node to be a
-/// FRESH, DISTINCT node ("blank nodes created from the same label in
-/// different solutions will be different") — `exec_core::instantiate_term`'s
-/// `TermPattern::BlankNode(b) => Some(Term::BlankNode(b.clone()))` clones the
-/// SAME parsed-AST blank node for every solution, so the two triples below
-/// actually share ONE bnode identity today, not two. That is a genuine,
-/// pre-existing §16.2 nonconformance, orthogonal to the projection-dedup gate
-/// this cell exists to lock, and out of THIS task's scope to fix.
+/// ALSO locks the SPARQL §16.2 fix (Run 5 W6): each solution's instantiation
+/// of a template blank node must be a FRESH, DISTINCT node ("blank nodes
+/// created from the same label in different solutions will be different"),
+/// while the SAME label used across a SINGLE solution's multiple template
+/// triples (this fixture's template repeats `_:x` in a second triple) must
+/// resolve to the SAME node. `exec_core::instantiate_term`'s
+/// `TermPattern::BlankNode(b) => Some(Term::BlankNode(b.clone()))` used to
+/// clone the SAME parsed-AST blank node for every solution — a genuine,
+/// pre-existing §16.2 nonconformance previously reported here rather than
+/// fixed (see git blame for the earlier revision of this doc comment) — now
+/// fixed by per-solution freshening (a monotonic counter scoped to the whole
+/// CONSTRUCT execution). Checked against the independent `spareval` oracle's
+/// OWN CONSTRUCT evaluation by blank-node-aware graph ISOMORPHISM
+/// (`graph::isomorphic` — the SAME comparator the W3C runner uses), never by
+/// exact label text, which is an unspecified implementation detail on both
+/// sides.
 #[test]
 fn construct_template_blank_node_subject_is_not_merged_by_projection_dedup() {
-    let query = format!("{EX}CONSTRUCT {{ _:x ex:hasAge ?a }} WHERE {{ ?p ex:age ?a }}");
+    let query =
+        format!("{EX}CONSTRUCT {{ _:x ex:hasAge ?a . _:x a ex:Person }} WHERE {{ ?p ex:age ?a }}");
     let maps = sf_mapping::parse_r2rml(BNODE_GATE_R2RML).expect("R2RML parses");
     let conn = sqlite::load(BNODE_GATE_SQL).expect("fixture loads");
     let schema = sqlite::introspect_all(&conn).expect("introspection");
@@ -602,20 +610,26 @@ fn construct_template_blank_node_subject_is_not_merged_by_projection_dedup() {
     );
     assert_eq!(
         tt.len(),
-        2,
-        "one triple per WHERE solution (2 people, same age) — a fresh bnode per \
-         solution must NOT be merged by the template-projection dedup that drops \
-         ?p: {tt:#?}"
+        4,
+        "2 template triples x 2 WHERE solutions (2 people, same age) — a fresh \
+         bnode per solution must NOT be merged by the template-projection dedup \
+         that drops ?p: {tt:#?}"
     );
-    assert_eq!(
-        tt[0].predicate.as_str(),
-        "http://example.com/hasAge",
-        "unexpected predicate: {tt:#?}"
-    );
-    assert_eq!(
-        tt[0].object, tt[1].object,
-        "both triples share the same object (age=30) — this is EXACTLY why the \
-         projection-dedup would have wrongly merged them without the bnode gate: {tt:#?}"
+
+    // §16.2 freshness, checked against the independent spareval oracle by
+    // blank-node-aware isomorphism (never exact label text).
+    let quads = exec::dump_quads(&maps, &conn, Dialect::Sqlite).expect("materialize");
+    let materialized = graph::quads_to_dataset(&quads);
+    let oracle_graph = match oracle::evaluate(&materialized, &query).expect("oracle eval") {
+        OracleAnswer::Graph(g) => *g,
+        other => panic!("expected Graph, got {other:?}"),
+    };
+    let engine_graph = graph::triples_to_dataset(&tt);
+    assert!(
+        graph::isomorphic(&engine_graph, &oracle_graph),
+        "engine CONSTRUCT output must be isomorphic to the oracle's — 2 DISTINCT \
+         fresh bnodes, each anchoring its OWN hasAge+type pair, not 1 bnode shared \
+         across both solutions:\n engine={tt:#?}\n oracle={oracle_graph:?}"
     );
 }
 
