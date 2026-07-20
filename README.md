@@ -465,6 +465,74 @@ RDF-star over live SQL rewriting
   ([source](docs/rdf-star/guide.html)) — a hands-on walkthrough: why quote a
   triple, the mental model, and worked mapping + query examples.
 
+### What is deferred or excluded — and the reasoning
+
+Some capabilities are deliberately not here. None of them are silent gaps: the
+engine's governing rule is **`=_bag`-absolute** ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)) —
+where it cannot answer *soundly*, it returns an honest `501`/`Error::Unsupported`
+rather than risk a wrong answer. That rule is what makes the items below safe to
+defer: they cost you an answered query, never a wrong one. Each is a
+living-plan ADR with an explicit trigger and effort estimate, not a forgotten
+corner.
+
+**Full Ontop feature/optimizer parity — deferred, by tier**
+([ADR-0021](docs/adr/ADR-0021-ontop-parity-program.md) program,
+[ADR-0025](docs/adr/ADR-0025-ontop-parity-residue-closure.md) residue). The
+parity that affects *answers* is done — the operator-tree IR is complete (M0–M8)
+and the differential oracle is green. What remains splits two ways:
+
+- *Architecturally-blocked capabilities* (~5, each currently a sound `501`): e.g.
+  a property path inside `EXISTS`/`NOT EXISTS`/`MINUS`, or a multi-branch `UNION`
+  sub-plan used as a join/`OPTIONAL` input. Each needs a real architectural
+  change — for instance, a recursive-CTE path can't be referenced from today's
+  `EXISTS`, so it needs a CTE-aware condition type — and each is a
+  milestone-sized effort. They stay `501` because a *rushed* fix risks turning a
+  sound refusal into a wrong answer, which [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)
+  forbids outright.
+- *Cosmetic SQL-shape differences* (same answers, different SQL text): **closed
+  as won't-do-with-cause.** They reduce entirely to two foundational designs —
+  a query `Plan` is a bag-union of independent `Branch` SELECTs
+  ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)) and RDF
+  term construction is lifted *out* of SQL into Rust
+  ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)). Matching
+  Ontop's collapsed SQL text would mean re-architecting for zero `=_bag` or
+  performance benefit, since the database re-optimizes the query either way.
+
+**OWL 2 QL tier-2 entailment (reasoning over anonymous individuals) — excluded,
+evidence-gated** ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)). Tier-1
+hierarchy entailment *is* live and folded into the rewrite: subclass/subproperty
+saturation, `owl:inverseOf`, `owl:SymmetricProperty`, and transitives served as
+recursive-CTE property paths. Tier-2 adds only *answering over anonymous
+individuals* (a `C ⊑ ∃R.D` axiom queried through an existential join variable —
+tree-witness answering). It is excluded because at **depth-0** — a T-Box with no
+right-hand-side existential — tier-1 is *provably complete*, and the platform's
+OWL-as-documentation policy makes the generated T-Box depth-0 by construction, so
+tier-2 would add nothing. It is also rare in OBDA over relatively-complete
+operational data, causes exponential rewriting blow-up at depth ≥ 2, and a full
+tree-witness rewriter would re-tread 15 years of Ontop and drag a reasoner back
+into the serving path (against the no-JVM-serving charter). The gate: if the
+offline Ontop oracle ever shows a real query missing answers, the rewriter grows
+to depth-1 (still virtual, polynomial), never a hand-rolled full rewriter.
+
+**Production hardening — acknowledged-deferred**
+([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)). Reliability
+(retries, circuit-breakers, failover), deployment-edge security (TLS, secrets
+management, rate-limiting, audit-log transport), packaging (container / systemd /
+k8s, health/readiness probes), horizontal scale (multi-node, read replicas,
+sharding), lifecycle (mapping hot-reload, source-schema-drift detection), and
+result caching. These are operational/deployment dimensions that do not gate the
+engine build and are only actionable against a concrete deployment target; each
+graduates to its own ADR when it becomes so. Tracked, not forgotten.
+
+**Hard out-of-scope lines** ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
+Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, and FNML are outside
+a virtualisation-only-over-relational charter — they are non-relational or
+cross-endpoint by nature, not a deferral within scope.
+
+> These are the positions as of the current ADR corpus; the ADRs are living
+> plans and move as reality does. If one describes a world that no longer
+> matches the code, that is a bug in the plan — raise it.
+
 ## 10. Architecture / workspace
 
 Eight crates ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)
@@ -485,9 +553,11 @@ substrate):
 
 ## 11. Decision records
 
-The full ADR corpus — 18 records (0001–0008, 0010–0015, 0017–0020; **0009 folded
-into 0004, 0016 deleted**). Each prior section cites its ADRs inline; this is the
-canonical index.
+The full ADR corpus — 32 records (0001–0035; **0009 folded into 0004; 0013 and
+0016 never issued**), of which two are `proposed` ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)
+production-hardening backlog, [ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md)
+dev-process tooling) and the rest `accepted`. Each prior section cites its ADRs
+inline; this is the canonical index.
 
 **Charter & scope**
 
@@ -542,9 +612,39 @@ canonical index.
 
 | ADR | Decision |
 |---|---|
-| [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md) | Production-hardening backlog (acknowledged-deferred) |
+| [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md) | Production-hardening backlog (acknowledged-deferred) — *proposed* |
 | [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) | RDF 1.2 / SPARQL 1.2 / SHACL readiness — Rust stack in place of a JVM (G8: own the 1.2 Protocol endpoint — realised in `sf-serve`) |
 | [ADR-0020](docs/adr/ADR-0020-outstanding-sota-optimisations.md) | Outstanding SOTA optimisations — research register & dispositions |
+
+**Ontop parity, IR & executor**
+
+| ADR | Decision |
+|---|---|
+| [ADR-0021](docs/adr/ADR-0021-ontop-parity-program.md) | Ontop-parity program — reach Ontop 5.5.0 parity within charter (tier-2 entailment excluded) |
+| [ADR-0022](docs/adr/ADR-0022-ws-g-ontop-optimizer-test-port.md) | Port Ontop's IQ-optimizer test suite as the Rust oracle |
+| [ADR-0023](docs/adr/ADR-0023-query-ir-architecture-flat-ucq-vs-iq-tree.md) | Native operator-tree IR with substitution-lifting normalization (production default since M8) |
+| [ADR-0024](docs/adr/ADR-0024-executor-backend-abstraction.md) | Unify per-database execution behind a `Backend` abstraction (dialect SQL + thin driver adapters) |
+| [ADR-0025](docs/adr/ADR-0025-ontop-parity-residue-closure.md) | Parity-residue closure — cataloged outstanding work and documented deferral decisions |
+| [ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) | Full-corpus audit: ADR status, Ontop parity, ecosystem gaps, SPARQL 1.2 coverage |
+
+**RDF-star (R2RML-star extension)**
+
+| ADR | Decision |
+|---|---|
+| [ADR-0029](docs/adr/ADR-0029-rdf-star-mapping-extension-rml-star-vocabulary-basic-encoding.md) | RDF-star mapping: reuse RML-STAR vocabulary, compile to the plain-RDF basic encoding |
+| [ADR-0031](docs/adr/ADR-0031-rdf-star-query-rewrite-quoted-triple-patterns-basic-encoding.md) | RDF-star query: algebra-level desugar of quoted-triple patterns onto the basic encoding |
+| [ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md) | RDF 1.2 soundness & completeness: native reification at every visible surface, encoding only under SQL |
+| [ADR-0033](docs/adr/ADR-0033-path-as-derived-table-join-composition.md) | Join-onto-path composition: path branches as alias-preserving derived tables |
+| [ADR-0034](docs/adr/ADR-0034-virtual-graph-set-semantics-bgp-dedup.md) | Virtual-graph set semantics: BGP-level dedup for duplicate rows and cross-map same-triple emission |
+| [ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md) | Variable-graph querying: `GRAPH ?g` over the R2RML-declared named-graph structure |
+
+**Development process** (tooling around the repo, never the engine runtime)
+
+| ADR | Decision |
+|---|---|
+| [ADR-0026](docs/adr/ADR-0026-agentic-qe-fleet-adoption.md) | Adopting the `agentic-qe` fleet for coverage-gap analysis |
+| [ADR-0027](docs/adr/ADR-0027-qe-fleet-load-test-plan.md) | QE-fleet load testing for `sf-serve` — a concurrency axis ADR-0005 doesn't cover |
+| [ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md) | MetaHarness / Darwin-mode dev-process tooling — *proposed* |
 
 ## 12. Research grounding / prior art
 
