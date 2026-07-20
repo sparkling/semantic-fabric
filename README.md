@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/sparkling/semantic-fabric/actions/workflows/ci.yml/badge.svg)](https://github.com/sparkling/semantic-fabric/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#13-contributing--license)
-[![W3C RDB2RDF](https://img.shields.io/badge/W3C%20RDB2RDF-81%2F82%20SQLite%20%C2%B7%2079%2F80%20PostgreSQL-success.svg)](#9-status--limitations)
+[![W3C RDB2RDF](https://img.shields.io/badge/W3C%20RDB2RDF-81%2F82%20SQLite%20%C2%B7%2080%2F81%20PostgreSQL-success.svg)](#9-status--limitations)
 [![Rust 1.96](https://img.shields.io/badge/rust-1.96.0-orange.svg)](rust-toolchain.toml)
 
 semantic-fabric is a **Rust-native, virtualisation-only OBDA engine**: it answers
@@ -114,8 +114,8 @@ copy in between.**
   ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md),
   [ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)).
 - **Standards-grounded correctness** — W3C RDB2RDF conformance (81/82 SQLite,
-  79/80 PostgreSQL; one documented cross-dialect deviation plus one PG-only sound
-  refusal) over an ISWC-2018-based, provably-correct rewrite
+  80/81 PostgreSQL; one documented cross-dialect deviation, shared by both
+  dialects) over an ISWC-2018-based, provably-correct rewrite
   ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
   [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
 - **Two real backends, both executing today** — SQLite **and** PostgreSQL both
@@ -298,7 +298,7 @@ tables, not timings, and explicitly declines to rank engines):
 
 | Engine | Runtime | Virtual? | Mapping→SQL approach | Backends | Maturity |
 |---|---|---|---|---|---|
-| **semantic-fabric** | **Rust (no JVM, single binary)** | **Yes (virtualisation-only, never materialises)** | SPARQL 1.2 → SQL over R2RML | SQLite, PostgreSQL (both execute) | early/public; `serve` HTTP endpoint live; full property-path expressions (with documented 501 residuals); W3C 81/82 SQLite, 79/80 PG (1 deviation + 1 PG-only sound refusal) |
+| **semantic-fabric** | **Rust (no JVM, single binary)** | **Yes (virtualisation-only, never materialises)** | SPARQL 1.2 → SQL over R2RML | SQLite, PostgreSQL (both execute) | early/public; `serve` HTTP endpoint live; full property-path expressions (with documented 501 residuals); W3C 81/82 SQLite, 80/81 PG (1 shared deviation) |
 | [Ontop](https://github.com/ontop/ontop) | Java/JVM | Yes (core) | SPARQL→datalog→optimised SQL, R2RML/.obda | Many RDBMS | Mature, maintained, reference |
 | [Morph-RDB](https://github.com/oeg-upm/morph-rdb) | JVM (Scala/Java) | Yes (+materialise) | SPARQL→SQL, R2RML | JDBC RDBMS | Unmaintained since 2019 (v3.12.5) |
 | [Squerall](https://github.com/EIS-Bonn/Squerall) | JVM (Scala/Spark+Presto) | Yes | Data-lake OBDA, distributed | CSV/Parquet/Mongo/Cassandra/JDBC | Research (SANSA) |
@@ -386,10 +386,10 @@ no copy, no materialisation.
 content-negotiated, governed) over **both** SQLite and PostgreSQL — both backends
 execute the OBDA path; SPARQL 1.2 → SQL over R2RML + Direct Mapping; full
 property-path expressions (`^p`, `p/q`, `p|q`, `p?`, `!p`, composite `+`/`*`);
-conformance and bench end-to-end; named-graph output; R2RML §10 datatype
-canonicalisation; constant-memory streaming; **RDF-star quoted triples in
-native RDF 1.2 reification form** end-to-end over SQL (R2RML-star extension —
-see the subsection below).
+conformance and bench end-to-end; named-graph output and querying, including
+variable `GRAPH ?g`; R2RML §10 datatype canonicalisation; constant-memory
+streaming; **RDF-star quoted triples in native RDF 1.2 reification form**
+end-to-end over SQL (R2RML-star extension — see the subsection below).
 
 **Limitations — stated plainly so the numbers are not over-read:**
 
@@ -398,7 +398,8 @@ see the subsection below).
 | `serve` HTTP endpoint | **Built and working** — a SPARQL 1.2 Protocol query endpoint (`GET`/`POST /sparql`), read-only, streamed, content-negotiated, with ADR-0010 governance (timeout, query-length cap, cancel-on-drop) ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8, [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[0011](docs/adr/ADR-0011-observability-and-configuration.md)) |
 | Backend executor | **SQLite *and* PostgreSQL both execute** the OBDA path end to end (PostgreSQL is no longer emit-only) ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)) |
 | Property paths | **Full expressions** — inverse `^p`, sequence `p/q`, alternative `p|q`, `p?`, negated property set `!p`, and composite `+`/`*`. Honest 501 residuals (never silently wrong): a **bound endpoint** (v1 = `?s PATH ?o`), a **nested closure inside a composite**, **shape-mismatched composites** (`P+`/`P*` whose subject/object node shapes differ across heterogeneous term domains), and **`p?`/`P*` reflexive** over a multi-predicate or composite graph ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md), [ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)) |
-| W3C RDB2RDF conformance | **81/82 (SQLite), 79/80 (PostgreSQL)** — **not 100%** — with one documented standards deviation, `R2RMLTC0002f`, shared by both dialects, plus one PG-only sound refusal, `R2RMLTC0012e` (a float/text `UNION` type-slot mismatch PostgreSQL cannot align without risking silent lexical drift) ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md), [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md), [ADR-0034](docs/adr/ADR-0034-virtual-graph-set-semantics-bgp-dedup.md)) |
+| Named-graph querying | **`GRAPH <g>` and the variable form `GRAPH ?g` both work** — `GRAPH ?g` enumerates the mapping's declared graph maps per branch (constant, template, or column) and binds `?g` through the same unification that joins any shared variable; a star annotation declared inside a named graph composes with it directly. One pinned residual: a property path under `GRAPH ?g` refuses (`501`) once the mapping declares any non-constant (template/column) graph map anywhere, not only on the path's own predicate ([ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md)) |
+| W3C RDB2RDF conformance | **81/82 (SQLite), 80/81 (PostgreSQL)** — **not 100%** — with one documented standards deviation, `R2RMLTC0002f`, shared by both dialects ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md), [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)) |
 | Out of scope | Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, FNML ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md), [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)) |
 
 Features outside the v1 surface return 501 / are skipped — they are not silently
@@ -432,12 +433,28 @@ compose on **both** query engines
 virtual graph is also a **set**, not a bag: duplicate source rows and two maps
 emitting the same triple dedup at the BGP level, elided to zero SQL cost for
 well-keyed, disjointly-templated mappings — the common case
-([ADR-0034](docs/adr/ADR-0034-virtual-graph-set-semantics-bgp-dedup.md)). All of
-this runs under a differential-oracle and adversarial-refute test apparatus —
-`differential_star`, `differential_tree`, `differential_paths`, plus three
-dedicated adversarial-refute suites (ADR-0033, ADR-0034, and general
-SPARQL-star correctness) — spanning several hundred cases with zero open
-failures. There is **no prior art** for RDF-star over live SQL rewriting
+([ADR-0034](docs/adr/ADR-0034-virtual-graph-set-semantics-bgp-dedup.md)).
+**Named-graph querying, including the variable form `GRAPH ?g`, now works**:
+a variable graph enumerates the mapping's declared graph maps per branch and
+binds `?g` through the same unification that joins any shared variable, and a
+star annotation declared inside a named graph composes with it directly — the
+one pinned residual is a property path under `GRAPH ?g` once the mapping
+declares any non-constant graph map anywhere
+([ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md)). All of this runs
+under a differential-oracle and adversarial-refute test apparatus —
+`differential_star`, `differential_tree`, `differential_paths`,
+`differential_graphs`, plus four dedicated adversarial-refute suites
+(ADR-0033, ADR-0034, general SPARQL-star correctness, and a test-soundness
+audit that mutation-tests the suite itself) — spanning 355 cases with zero
+open failures. This same apparatus also caught and closed four further
+correctness gaps: same-shape cross-kind template equality (an IRI template
+compared against a Literal template, say) now resolves provably empty
+instead of a wrong match; `CONSTRUCT` template blank nodes are freshened per
+solution per SPARQL §16.2, where they used to be shared across rows;
+`CONSTRUCT` now dedups a same-triple emission across candidate maps, not
+only within one; and datatype-mismatched candidate arms are recognized as
+disjoint, so they no longer pool through `UNION`. There is **no prior art** for
+RDF-star over live SQL rewriting
 ([ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
 
 - **[R2RML-star specification](https://sparkling.github.io/semantic-fabric/rdf-star/specification.html)**

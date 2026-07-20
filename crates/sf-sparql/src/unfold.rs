@@ -27,6 +27,12 @@ use crate::{Error, Plan, PlanForm, Result};
 
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
+/// R2RML §6.1: `rr:defaultGraph` is a legal constant graph map that explicitly places
+/// triples in the default graph — stored in the IR as a `NamedNode` with this IRI;
+/// [`graph_maps_match`] and [`declared_constant_graphs`] both treat it as the absent-
+/// graph-map case (never a real named graph to match or enumerate).
+const RR_DEFAULT_GRAPH: &str = "http://www.w3.org/ns/r2rml#defaultGraph";
+
 /// The translation of one graph pattern: a bag union of [`Branch`]es plus the
 /// solution modifiers peeled from the algebra.
 pub struct TransPattern {
@@ -66,10 +72,38 @@ pub struct Unfolder<'a> {
     /// `pub(crate)`.
     pub(crate) dialect: sf_sql::Dialect,
     next_alias: usize,
+    /// ADR-0034 C0e restoration — a D2 standalone group's shared dedup-set id,
+    /// keyed by each member branch's OWN representative scan/opt/subplan alias
+    /// (stable across the flat `merge`/tree bridge-lower round trip, unlike a
+    /// hypothetical field on `Branch` itself — see `pool_pattern_relation`'s /
+    /// `iq::resolve`'s Intensional-arm doc comments for why the marker lives
+    /// here, keyed by alias, rather than on `Branch`). Pulled into the final
+    /// [`crate::Plan::dedup_groups`] by [`Unfolder::dedup_groups`] (flat) or
+    /// [`crate::iq::resolve::ResolveCx::dedup_groups`] (tree) once translation
+    /// finishes; [`crate::exec_core::run_branches`] is the only reader.
+    dedup_groups: std::collections::HashMap<usize, usize>,
     /// The named graph currently active inside a `GRAPH <g> { ... }` clause, or
     /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
     /// by the `GraphPattern::Graph` arm; all other arms inherit the current value.
+    /// Mutually exclusive with `current_graph_var` — exactly one of the two, or
+    /// neither, is `Some` at a time (see that field's own doc comment).
     pub(crate) current_graph: Option<NamedNode>,
+    /// ADR-0035: the variable name active inside a `GRAPH ?v { ... }` clause, or
+    /// `None` outside one. Set/restored by the `GraphPattern::Graph` arm's `Variable`
+    /// case (mirroring `current_graph`'s own save/restore for the constant case —
+    /// entering EITHER case clears the other, so nested `GRAPH <c> { … }` inside a
+    /// `GRAPH ?v { … }` body correctly reverts to filtering for its own subtree,
+    /// SPARQL's normal inner-pin-wins scoping). When set, [`Unfolder::pattern_
+    /// branches`]/[`Unfolder::class_atoms`] switch from FILTERING candidates by a
+    /// pinned graph to ENUMERATING one branch per effective graph map, each gaining a
+    /// binding for this variable (constant → `TermDef::Const`, template/column → an
+    /// ordinary `Derived` binding; no graph map ⇒ default graph ⇒ excluded, SPARQL
+    /// §13.3 named-graphs-only) — see [`Unfolder::atom`]'s `graph_binding` parameter.
+    /// A property-path pattern cannot enumerate per-branch (one `PathClosure` needs
+    /// one pinned graph); it instead compiles as a union over [`declared_constant_
+    /// graphs`], one `GRAPH <g_i>` arm per declared constant graph (see
+    /// [`Unfolder::path_branches_for_graph_var`] in `path.rs`).
+    pub(crate) current_graph_var: Option<Box<str>>,
     /// The introspected source catalog (ADR-0034 D1): `bgp`/`pattern_branches`
     /// consult this per pattern, BEFORE any later projection restriction can strip
     /// a key-covering variable from a branch's bindings — see [`bgp`]'s own doc
@@ -128,7 +162,9 @@ impl<'a> Unfolder<'a> {
             tbox,
             dialect,
             next_alias: 0,
+            dedup_groups: std::collections::HashMap::new(),
             current_graph: None,
+            current_graph_var: None,
             schema,
             in_existential: false,
         }
@@ -138,6 +174,22 @@ impl<'a> Unfolder<'a> {
         let a = self.next_alias;
         self.next_alias += 1;
         a
+    }
+
+    /// Tag `alias` (a group member's own representative scan/opt/subplan alias)
+    /// as sharing dedup-set `group` — see `dedup_groups`' own doc comment. The
+    /// tree engine's `iq::resolve` is the one cross-module caller (it cannot
+    /// reach the private field directly); the flat engine's `pool_pattern_
+    /// relation` takes `&mut self.dedup_groups` directly instead (same module).
+    pub(crate) fn tag_dedup_group(&mut self, alias: usize, group: usize) {
+        self.dedup_groups.insert(alias, group);
+    }
+
+    /// The accumulated alias → shared-dedup-group-id map, pulled into the final
+    /// [`crate::Plan::dedup_groups`] once translation finishes (see
+    /// `dedup_groups`' own field doc comment).
+    pub(crate) fn dedup_groups(&self) -> &std::collections::HashMap<usize, usize> {
+        &self.dedup_groups
     }
 
     fn map_by_id(&self, id: &str) -> Option<&'a TriplesMap> {
@@ -221,13 +273,21 @@ impl<'a> Unfolder<'a> {
                 l.branches.extend(r.branches);
                 Ok(TransPattern::plain(l.branches))
             }
+            // A property-path closure needs ONE pinned graph per compiled CTE, so a
+            // variable graph (ADR-0035 item 3) cannot enumerate per-branch the way an
+            // ordinary triple pattern does — it instead unions over the mapping's
+            // declared constant named graphs (`path_branches_for_graph_var`, `path.rs`).
             GraphPattern::Path {
                 subject,
                 path,
                 object,
-            } => Ok(TransPattern::plain(vec![
-                self.path_branch(subject, path, object)?
-            ])),
+            } => {
+                let branches = match self.current_graph_var.clone() {
+                    Some(v) => self.path_branches_for_graph_var(subject, path, object, &v)?,
+                    None => vec![self.path_branch(subject, path, object)?],
+                };
+                Ok(TransPattern::plain(branches))
+            }
             // BIND(expr AS ?v) — translate the inner pattern, then add ?v computed
             // from `expr` to every branch's output bindings. BIND adds an output
             // column only; it never changes row multiplicity (=_bag preserved). An
@@ -335,23 +395,28 @@ impl<'a> Unfolder<'a> {
                 variables,
                 aggregates,
             } => self.group(inner, variables, aggregates),
-            // GRAPH <g> { P } — translate P restricted to triples in named graph g.
-            // v1: constant graph IRI only (`NamedNodePattern::NamedNode`); a variable
-            // graph name requires runtime IRI lookup → 501 (never silently wrong).
-            // The `current_graph` context is saved, set to g, translated, restored so
-            // nested GRAPH clauses work correctly.
-            GraphPattern::Graph { name, inner } => match name {
-                NamedNodePattern::NamedNode(g) => {
-                    let saved = self.current_graph.take();
-                    self.current_graph = Some(g.clone());
-                    let result = self.translate_pattern(inner);
-                    self.current_graph = saved;
-                    result
+            // GRAPH <g> { P } / GRAPH ?g { P } (ADR-0035) — translate P restricted to a
+            // pinned named graph, or (a variable) ENUMERATING per-branch over each
+            // candidate's effective graph map (`pattern_branches`/`class_atoms`/`atom`;
+            // a property-path inner instead unions over the declared constant graphs,
+            // `path_branches_for_graph_var`). Both cases save/clear BOTH `current_graph`/
+            // `current_graph_var` before setting exactly one, so a nested GRAPH clause of
+            // either shape correctly re-pins for its own subtree (SPARQL's ordinary
+            // inner-wins scoping) instead of inheriting the outer enumeration mode.
+            GraphPattern::Graph { name, inner } => {
+                let saved_g = self.current_graph.take();
+                let saved_v = self.current_graph_var.take();
+                match name {
+                    NamedNodePattern::NamedNode(g) => self.current_graph = Some(g.clone()),
+                    NamedNodePattern::Variable(v) => {
+                        self.current_graph_var = Some(v.as_str().into())
+                    }
                 }
-                NamedNodePattern::Variable(_) => Err(Error::Unsupported(
-                    "GRAPH ?var (variable graph name) is deferred → 501 (v1)".to_owned(),
-                )),
-            },
+                let result = self.translate_pattern(inner);
+                self.current_graph = saved_g;
+                self.current_graph_var = saved_v;
+                result
+            }
             // Deferred → 501 (documented, never silent): LATERAL, SERVICE
             // (ADR-0007 §v1 SPARQL coverage; ADR-0008 tier-2).
             other => Err(Error::Unsupported(format!(
@@ -493,8 +558,14 @@ impl<'a> Unfolder<'a> {
         let mut acc: Vec<Branch> = vec![Branch::empty()];
         for tp in patterns {
             let alts = self.pattern_branches(tp)?;
-            let mut alts =
-                pool_pattern_relation(alts, tp, self.dialect, &mut self.next_alias, self.schema)?;
+            let mut alts = pool_pattern_relation(
+                alts,
+                tp,
+                self.dialect,
+                &mut self.next_alias,
+                self.schema,
+                &mut self.dedup_groups,
+            )?;
             crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema, self.dialect);
             acc = join_branches(acc, alts)?;
             if acc.is_empty() {
@@ -516,42 +587,77 @@ impl<'a> Unfolder<'a> {
     pub(crate) fn resolve_pattern(
         &mut self,
         tp: &TriplePattern,
-        graph: Option<&NamedNode>,
+        graph: Option<&NamedNodePattern>,
     ) -> Result<Vec<Branch>> {
-        let saved = self.current_graph.take();
-        self.current_graph = graph.cloned();
+        let saved_g = self.current_graph.take();
+        let saved_v = self.current_graph_var.take();
+        match graph {
+            None => {}
+            Some(NamedNodePattern::NamedNode(g)) => self.current_graph = Some(g.clone()),
+            Some(NamedNodePattern::Variable(v)) => self.current_graph_var = Some(v.as_str().into()),
+        }
         let out = self.pattern_branches(tp);
-        self.current_graph = saved;
+        self.current_graph = saved_g;
+        self.current_graph_var = saved_v;
         out
     }
 
     /// Resolve one property-path pattern `?s PATH ?o` **at a given active graph** to its
-    /// flat [`PathClosure`](crate::iq::PathClosure) branch (ADR-0023 M5 Wave 1). This is
-    /// the entry point the tree-path [`crate::iq::resolve`] drives per
-    /// [`crate::iq::node::IqNode::UnresolvedPath`]: it pins the `current_graph` exactly as
-    /// the flat `GRAPH <g> { ?s PATH ?o }` path does (saved/restored around the call) and
+    /// flat [`PathClosure`](crate::iq::PathClosure) branch(es) (ADR-0023 M5 Wave 1;
+    /// ADR-0035 for the variable-graph case). This is the entry point the tree-path
+    /// [`crate::iq::resolve`] drives per [`crate::iq::node::IqNode::UnresolvedPath`].
+    ///
+    /// `graph = None` / `Some(NamedNode(g))` pins `current_graph` exactly as the flat
+    /// `GRAPH <g> { ?s PATH ?o }` path does (saved/restored around the call) and
     /// delegates to the **unchanged** [`Self::path_branch`] oracle — so the compiled hop
     /// relation, recursion bound, node-shape soundness checks, and reflexive-enumeration
-    /// 501s are byte-identical to the flat translation (the `=_bag` argument). The
-    /// resulting [`Branch`] carries `path = Some(closure)` + the subject/object bindings
-    /// (+ a `?s PATH ?s` self-unify `ColEq` in `where_conds`), bridged to an
-    /// [`IqNode::Path`] by [`crate::iq::resolve::bridge_branch`].
+    /// 501s are byte-identical to the flat translation (the `=_bag` argument) — returned
+    /// as the single-element `Vec` [`Self::path_branch`] always was, one branch.
+    /// `graph = Some(Variable(v))` delegates to [`Self::path_branches_for_graph_var`]
+    /// (`path.rs`) instead: a `PathClosure` needs ONE pinned graph, so a variable graph
+    /// compiles as a union over the mapping's declared constant named graphs, `v` bound
+    /// to each in turn (ADR-0035 item 3) — zero, one, or several branches.
+    ///
+    /// Either way, each resulting [`Branch`] carries `path = Some(closure)` + the
+    /// subject/object bindings (+ a `?s PATH ?s` self-unify `ColEq` in `where_conds`, and
+    /// (variable-graph case) a `v` binding), bridged to an [`IqNode::Path`] by
+    /// [`crate::iq::resolve::bridge_branch`] — one per branch, unioned if more than one.
     pub(crate) fn resolve_path(
         &mut self,
         subject: &TermPattern,
         path: &PropertyPathExpression,
         object: &TermPattern,
-        graph: Option<&NamedNode>,
-    ) -> Result<Branch> {
-        let saved = self.current_graph.take();
-        self.current_graph = graph.cloned();
-        let out = self.path_branch(subject, path, object);
-        self.current_graph = saved;
+        graph: Option<&NamedNodePattern>,
+    ) -> Result<Vec<Branch>> {
+        let saved_g = self.current_graph.take();
+        let saved_v = self.current_graph_var.take();
+        match graph {
+            None => {}
+            Some(NamedNodePattern::NamedNode(g)) => self.current_graph = Some(g.clone()),
+            Some(NamedNodePattern::Variable(v)) => self.current_graph_var = Some(v.as_str().into()),
+        }
+        let out = match self.current_graph_var.clone() {
+            Some(v) => self.path_branches_for_graph_var(subject, path, object, &v),
+            None => self.path_branch(subject, path, object).map(|b| vec![b]),
+        };
+        self.current_graph = saved_g;
+        self.current_graph_var = saved_v;
         out
     }
 
     /// All atom alternatives for one triple pattern (a bag union over the
     /// matching triples-maps / predicate-object maps / `rr:class` entries).
+    ///
+    /// ADR-0035 (`current_graph_var` set, `GRAPH ?v { … }`): instead of the ordinary
+    /// FILTER-by-`current_graph` test below, each candidate contributes one branch
+    /// PER effective graph map (`gm_attempts`) — a constant graph map binds `v` to a
+    /// `Const`, a template/column one to an ordinary `Derived` binding (the SAME
+    /// mechanism `def_of` already builds subject/object bindings with); an EMPTY
+    /// graph-map set (no `rr:graphMap` ⇒ default graph) contributes ZERO attempts —
+    /// excluded, never falling back to the default graph (SPARQL §13.3: `GRAPH ?v`
+    /// ranges over named graphs only). `rr:class` atoms inherit the subject map's
+    /// graph maps exactly as the filtering path already does (R2RML: no POM-level
+    /// override exists for a class atom).
     pub(crate) fn pattern_branches(&mut self, tp: &TriplePattern) -> Result<Vec<Branch>> {
         let mut out = Vec::new();
         // Predicate match set (direct + sub-properties + inverse/symmetric).
@@ -560,14 +666,25 @@ impl<'a> Unfolder<'a> {
             NamedNodePattern::Variable(_) => None,
         };
         let want_type = pred_iri.as_deref() == Some(RDF_TYPE);
+        let graph_var = self.current_graph_var.clone();
 
         for tm in self.maps {
             // rr:class → rdf:type atoms (when predicate is rdf:type or a variable).
             // rr:class triples inherit the subject map's graph.
             if want_type || pred_iri.is_none() {
-                // Skip if the subject map's graph doesn't match the active GRAPH clause.
-                if graph_maps_match(self.current_graph.as_ref(), &tm.subject.graphs) {
-                    self.class_atoms(tp, tm, &mut out)?;
+                match &graph_var {
+                    Some(v) => {
+                        for gm in &tm.subject.graphs {
+                            self.class_atoms(tp, tm, Some((v.as_ref(), gm)), &mut out)?;
+                        }
+                        // empty tm.subject.graphs ⇒ default graph ⇒ no attempts (excluded).
+                    }
+                    // Skip if the subject map's graph doesn't match the active GRAPH clause.
+                    None => {
+                        if graph_maps_match(self.current_graph.as_ref(), &tm.subject.graphs) {
+                            self.class_atoms(tp, tm, None, &mut out)?;
+                        }
+                    }
                 }
             }
             for pom in &tm.predicate_object_maps {
@@ -577,13 +694,26 @@ impl<'a> Unfolder<'a> {
                 } else {
                     &pom.graphs
                 };
-                if !graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
-                    continue;
-                }
-                for pm in &pom.predicates {
-                    for om in &pom.objects {
-                        if let Some(b) = self.atom(tp, tm, pm, om, pred_iri.as_deref())? {
-                            out.push(b);
+                // One graph-binding attempt per call below: `None` (filter mode, ≤1 call
+                // total, unchanged from before this ADR) or one `Some((v, gm))` per
+                // effective graph map (enumeration mode — zero when `eff_graphs` is empty).
+                let gm_attempts: Vec<Option<(&str, &TermMap)>> = match &graph_var {
+                    Some(v) => eff_graphs.iter().map(|gm| Some((v.as_ref(), gm))).collect(),
+                    None => {
+                        if !graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                            continue;
+                        }
+                        vec![None]
+                    }
+                };
+                for attempt in gm_attempts {
+                    for pm in &pom.predicates {
+                        for om in &pom.objects {
+                            if let Some(b) =
+                                self.atom(tp, tm, pm, om, pred_iri.as_deref(), attempt)?
+                            {
+                                out.push(b);
+                            }
                         }
                     }
                 }
@@ -593,6 +723,13 @@ impl<'a> Unfolder<'a> {
     }
 
     /// Build one predicate-object atom branch, or `None` if it cannot match.
+    ///
+    /// `graph_binding` is ADR-0035's enumeration-mode payload: `Some((var, gm))` binds
+    /// `var` to `gm` (the POM's effective graph map) evaluated at this atom's OWN alias
+    /// — sound because a graph map is itself a [`TermMap`] read off the same source row
+    /// as the subject/object (R2RML §4.6), so `def_of(gm, alias)` builds exactly the
+    /// same shape of binding `def_of` already builds for the subject/object positions.
+    /// `None` is the ordinary (filtering / no-GRAPH) case, unchanged.
     fn atom(
         &mut self,
         tp: &TriplePattern,
@@ -600,6 +737,7 @@ impl<'a> Unfolder<'a> {
         pm: &TermMap,
         om: &ObjectMap,
         pred_iri: Option<&str>,
+        graph_binding: Option<(&str, &TermMap)>,
     ) -> Result<Option<Branch>> {
         // Fast-reject path (ADR-0013 Path-B): for a concrete query predicate against
         // a constant-predicate POM, check matchability *before* allocating an alias or
@@ -618,6 +756,15 @@ impl<'a> Unfolder<'a> {
             alias,
             source: tm.source.clone(),
         });
+
+        // ADR-0035 GRAPH ?v enumeration: bind the graph variable to this candidate's
+        // effective graph map before anything else (an early, if rare, prune point —
+        // e.g. `GRAPH ?s { ?s :p ?o }` reusing the subject var as the graph var).
+        if let Some((var, gm)) = graph_binding {
+            if !bind(&mut branch, var, def_of(gm, alias))? {
+                return Ok(None);
+            }
+        }
 
         // Predicate position.
         let (pred_def, swap) = self.predicate_match(tm, pm, alias, pred_iri)?;
@@ -694,10 +841,14 @@ impl<'a> Unfolder<'a> {
 
     /// `rr:class` → `rdf:type` atoms (subject a `:C`), with class-query
     /// saturation: a query for `:C` matches mapped classes in `saturate_class`.
+    ///
+    /// `graph_binding` is ADR-0035's enumeration-mode payload — see [`Self::atom`]'s
+    /// identical parameter for the mechanism; `None` is the ordinary case, unchanged.
     fn class_atoms(
         &mut self,
         tp: &TriplePattern,
         tm: &TriplesMap,
+        graph_binding: Option<(&str, &TermMap)>,
         out: &mut Vec<Branch>,
     ) -> Result<()> {
         // The object position selects which classes match.
@@ -717,6 +868,11 @@ impl<'a> Unfolder<'a> {
                 alias,
                 source: tm.source.clone(),
             });
+            if let Some((var, gm)) = graph_binding {
+                if !bind(&mut branch, var, def_of(gm, alias))? {
+                    continue;
+                }
+            }
             let subj_def = def_of(&tm.subject.term, alias);
             // predicate is rdf:type (matched); bind object var to the class IRI.
             if let TermPattern::Variable(ov) = &tp.object {
@@ -979,11 +1135,6 @@ pub(crate) fn graph_maps_match(
     active: Option<&NamedNode>,
     graphs: &[sf_core::ir::TermMap],
 ) -> bool {
-    // R2RML §6.1: `rr:defaultGraph` is a legal constant graph map that explicitly
-    // places triples in the default graph.  It is stored in the IR as a NamedNode
-    // with this IRI; treat it the same as an absent graph map (i.e. default-graph).
-    const RR_DEFAULT_GRAPH: &str = "http://www.w3.org/ns/r2rml#defaultGraph";
-
     match active {
         None => {
             // Default-graph query: include triples that have no rr:graph declaration
@@ -1006,6 +1157,58 @@ pub(crate) fn graph_maps_match(
             })
         }
     }
+}
+
+/// ADR-0035 item 3: every DISTINCT constant named-graph IRI declared anywhere in the
+/// mapping (a subject map's or predicate-object map's `rr:graphMap`/`rr:graph`) — the
+/// finite enumeration `GRAPH ?v { …PATH… }` compiles to (see `path.rs`'s
+/// `path_branches_for_graph_var`): a `PathClosure` needs ONE pinned graph per
+/// compiled CTE, so unlike an ordinary triple pattern's per-branch fan-out, a path
+/// under a variable graph unions over this finite set instead — template/column
+/// graph maps are not statically enumerable, so they are simply absent from it (the
+/// residual pinned 501 lives in the caller, for a path under one of those). Excludes
+/// `rr:defaultGraph` (never a real named graph — [`graph_maps_match`]'s own
+/// exclusion). Deterministic first-seen order.
+pub(crate) fn declared_constant_graphs(maps: &[TriplesMap]) -> Vec<NamedNode> {
+    let mut out: Vec<NamedNode> = Vec::new();
+    let mut push = |gm: &TermMap| {
+        if let TermMap::Constant(Term::NamedNode(n)) = gm {
+            if n.as_str() != RR_DEFAULT_GRAPH && !out.iter().any(|g| g == n) {
+                out.push(n.clone());
+            }
+        }
+    };
+    for tm in maps {
+        for g in &tm.subject.graphs {
+            push(g);
+        }
+        for pom in &tm.predicate_object_maps {
+            for g in &pom.graphs {
+                push(g);
+            }
+        }
+    }
+    out
+}
+
+/// ADR-0035 item 3 / boundary "paths under non-constant graph maps → 501": whether
+/// ANY subject-map or predicate-object-map graph declaration anywhere in the mapping
+/// is a template/column (non-constant) `rr:graphMap` — the trigger `path_branches_
+/// for_graph_var` (`path.rs`) uses to refuse rather than enumerate. Mapping-wide
+/// (not scoped to the path's own predicate): the true named-graph set for SOME
+/// predicate is then row-dependent, so it is unsound to answer over the constant
+/// subset alone. When this is `false`, [`declared_constant_graphs`] is the COMPLETE
+/// enumeration (possibly empty — a mapping with no named graphs at all is a sound
+/// empty result, not a 501).
+pub(crate) fn has_non_constant_graph_map(maps: &[TriplesMap]) -> bool {
+    let non_const = |gms: &[TermMap]| gms.iter().any(|gm| !matches!(gm, TermMap::Constant(_)));
+    maps.iter().any(|tm| {
+        non_const(&tm.subject.graphs)
+            || tm
+                .predicate_object_maps
+                .iter()
+                .any(|pom| non_const(&pom.graphs))
+    })
 }
 
 enum PredMatch {
@@ -1483,12 +1686,23 @@ fn reject_dropped_slice(t: &TransPattern) -> Result<()> {
 /// bridge back into (see the module-level ADR-0034 note for why the two engines
 /// hook this at a different point in their own pipelines while sharing the
 /// pooling implementation).
+///
+/// **Run 5 C0e restoration**: a group `cascade::group_has_unsafe_float_slot_
+/// mismatch` would otherwise sound-501 (PG only) is NOT pooled at all when it is
+/// ALSO `cascade::group_eligible_for_term_dedup` (every member standalone, an
+/// offending non-injective binding present) — its members stay separate
+/// bag-union branches (`run_branches` already executes each on its own), tagged
+/// via `dedup_groups` to share ONE Rust-side seen-set instead of a SQL `UNION`,
+/// sidestepping the type-alignment wall entirely (W3C R2RMLTC0012e). Every OTHER
+/// group (non-standalone, or no term-dedup-safe offender) is unaffected: the
+/// float-mismatch refusal and `pool_group` SQL pooling below are unchanged.
 fn pool_pattern_relation(
     arms: Vec<Branch>,
     tp: &TriplePattern,
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
     schema: &[sf_sql::TableSchema],
+    dedup_groups: &mut std::collections::HashMap<usize, usize>,
 ) -> Result<Vec<Branch>> {
     if arms.len() <= 1 || all_pairwise_disjoint(&arms) {
         return Ok(arms);
@@ -1510,7 +1724,7 @@ fn pool_pattern_relation(
             out.push(arms[group[0]].take().expect("each index visited once"));
             continue;
         }
-        let members: Vec<Branch> = group
+        let mut members: Vec<Branch> = group
             .iter()
             .map(|&i| arms[i].take().expect("each index visited once"))
             .collect();
@@ -1520,6 +1734,19 @@ fn pool_pattern_relation(
         // on Unsupported" invariant).
         let member_refs: Vec<&Branch> = members.iter().collect();
         if crate::cascade::group_has_unsafe_float_slot_mismatch(&member_refs, schema, dialect) {
+            let keep: std::collections::HashSet<String> = vars.iter().cloned().collect();
+            if crate::cascade::group_eligible_for_term_dedup(&members, &keep) {
+                crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
+                let gid = *next_alias;
+                *next_alias += 1;
+                for b in &members {
+                    if let Some((alias, _)) = b.alias_sources().into_iter().next() {
+                        dedup_groups.insert(alias, gid);
+                    }
+                }
+                out.extend(members);
+                continue;
+            }
             return Err(Error::Unsupported(
                 "D2 pool: a floating-point column would positionally UNION against a \
                  differently-typed sibling column on PostgreSQL → 501 (cannot be aligned \
@@ -1663,6 +1890,13 @@ fn pool_group(
         order: Vec::new(),
         rust_group: None,
         dialect,
+        // This nested SubPlan executes wholly in SQL (`emit_subplan_sql`) — the
+        // Run 5 C0e shared-seen-set mechanism never applies to it (that path
+        // exists PRECISELY to avoid a nested Plan like this one).
+        dedup_groups: std::collections::HashMap::new(),
+        // Not a `PlanForm::Construct` plan — item 3's cross-branch CONSTRUCT
+        // triple dedup never applies to this SQL-pooled SELECT sub-plan.
+        construct_drops_some_branch_var: false,
     };
     let mut outer = Branch::empty();
     outer.subplan_joins.push(SubPlanJoin {
@@ -1752,18 +1986,23 @@ pub(crate) fn disjoint_groups(arms: &[Branch]) -> Vec<Vec<usize>> {
 /// arms' predicate position bound to distinct `rr:predicate` IRIs, the "wildcard
 /// `?p`" shape); two templates with conflicting leading literal prefixes
 /// ([`templates_provably_disjoint`], ADR-0032 D6); or two non-constant term maps
-/// whose declared term type or (for a literal) language tag differs
-/// ([`term_specs_disjoint`]), which can never produce equal RDF terms regardless
-/// of the underlying column value (e.g. two `rr:column` object maps on the
-/// identical column but `rr:language "en"` vs `"es"`, W3C R2RMLTC0015a: same
-/// column, same subject template, yet never the same solution tuple). Datatype is
-/// deliberately NOT compared here even though it is equally a term-shape
-/// mismatch in principle (`"5"` vs `"5"^^xsd:integer` are as disjoint as `"x"@en`
-/// vs `"x"@es`) — `adversarial_adr0034_refute.rs`'s
-/// `s1_object_datatype_mismatch_sound_501` pins a datatype mismatch as a case
+/// whose declared term type, (for a literal) language tag, or (for a literal)
+/// datatype differs ([`term_specs_disjoint`]), which can never produce equal RDF
+/// terms regardless of the underlying column value (e.g. two `rr:column` object
+/// maps on the identical column but `rr:language "en"` vs `"es"`, W3C
+/// R2RMLTC0015a: same column, same subject template, yet never the same solution
+/// tuple; or `rr:datatype xsd:integer` vs no `rr:datatype` at all — `"5"` and
+/// `"5"^^xsd:integer` are as disjoint as `"x"@en` vs `"x"@es`). Datatype was
+/// deliberately excluded through Run 5 Wave W3 — `adversarial_adr0034_refute.rs`'s
+/// `s1_object_datatype_mismatch_sound_501` pinned a datatype mismatch as a case
 /// that must still route through the pooling mechanism's reconstruction-
-/// agreement gate and sound-501 there, not be elided upfront; widening this
-/// proof to datatype would swallow that pin.
+/// agreement gate and sound-501 there; that pin is now rewritten
+/// (`s1_object_datatype_mismatch_disjoint_bag_union`) to assert the widened,
+/// correct behavior instead — a provably disjoint pair skips pooling entirely
+/// and answers as a plain bag union — and the agreement gate itself stays
+/// exercised by `s1_different_shape_raw_collision_sound_501` /
+/// `s1_different_shape_same_term_sound_501` (subject-template SHAPE mismatches,
+/// which stay NOT provably disjoint either way).
 fn arms_provably_disjoint(a: &Branch, b: &Branch) -> bool {
     a.bindings.iter().any(|(var, adef)| {
         b.bindings.get(var).is_some_and(|bdef| {
@@ -1782,12 +2021,17 @@ fn arms_provably_disjoint(a: &Branch, b: &Branch) -> bool {
 }
 
 /// Whether `a`/`b` are both a `rr:column`/`rr:template` term map whose declared
-/// term type, or — for two literals — language tag, differs. R2RML §6.2/§7 fixes
-/// this per term map, independent of any row's column value, so two terms of
-/// differing shape can never be RDF-term-equal no matter what the source data
-/// holds: a `Literal` never equals an `Iri`/`BlankNode`, and `"x"@en` never
-/// equals `"x"@es`. Deliberately narrower than it could be — see
-/// [`arms_provably_disjoint`]'s doc comment for why datatype is excluded.
+/// term type, or — for two literals — language tag or datatype, differs. R2RML
+/// §6.2/§7 fixes this per term map, independent of any row's column value, so
+/// two terms of differing shape can never be RDF-term-equal no matter what the
+/// source data holds: a `Literal` never equals an `Iri`/`BlankNode`, `"x"@en`
+/// never equals `"x"@es`, and (Run 5 Wave W3) `"5"` never equals
+/// `"5"^^xsd:integer`. Datatype comparison goes through
+/// [`normalized_datatype`], which defaults an absent `rr:datatype` to
+/// `xsd:string` — the same "no datatype ⇒ xsd:string" default `literal_key`/
+/// `lexical_eq_is_term_eq` (`crate::unify`) already apply, so a plain literal
+/// and an explicit `"…"^^xsd:string` count as the SAME term class here too,
+/// never disjoint.
 fn term_specs_disjoint(a: &TermDef, b: &TermDef) -> bool {
     let (TermDef::Derived { term_map: tmx, .. }, TermDef::Derived { term_map: tmy, .. }) = (a, b)
     else {
@@ -1797,7 +2041,18 @@ fn term_specs_disjoint(a: &TermDef, b: &TermDef) -> bool {
         return false;
     };
     sx.term_type != sy.term_type
-        || (sx.term_type == sf_core::ir::TermType::Literal && sx.language != sy.language)
+        || (sx.term_type == sf_core::ir::TermType::Literal
+            && (sx.language != sy.language || normalized_datatype(sx) != normalized_datatype(sy)))
+}
+
+/// A literal [`sf_core::ir::TermSpec`]'s declared datatype, defaulting an
+/// absent `rr:datatype` to `xsd:string` (R2RML's own default for an untyped
+/// column/template literal) — see [`term_specs_disjoint`]'s doc comment for the
+/// established equivalence this mirrors.
+fn normalized_datatype(spec: &sf_core::ir::TermSpec) -> &str {
+    spec.datatype
+        .as_ref()
+        .map_or("http://www.w3.org/2001/XMLSchema#string", |dt| dt.as_str())
 }
 
 /// The [`sf_core::ir::TermSpec`] a `rr:column`/`rr:template` term map declares —

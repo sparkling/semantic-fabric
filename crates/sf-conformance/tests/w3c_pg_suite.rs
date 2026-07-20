@@ -17,14 +17,14 @@ fn cases_dir() -> PathBuf {
 }
 
 // Measured non-regression baselines (live PostgreSQL). Bumped only upward; a drop
-// is a regression to fix, never a silent lowering. As of this wave: R2RML 56/57
-// adjudicated, Direct Mapping 23/23, 7 skips (6 D016 SQL-datatypes fixtures using
-// `VARBINARY`/`X'…'`, which PostgreSQL cannot load — a per-DBMS fork would be
-// needed, ADR-0015 — plus R2RMLTC0012e, below). The 8 cases SQLite cannot clear
-// now pass on PostgreSQL: the 3 CHAR(n) cases (R2RMLTC0018a, DirectGraphTC0017,
-// DirectGraphTC0018) via PostgreSQL's native space-padding, and the 5 table-level-
-// constraint DDL scenarios (D021–D025, both R2RML and Direct Mapping) which load
-// fine on PostgreSQL. SQL identifier case-folding (resolve each column reference
+// is a regression to fix, never a silent lowering. As of this wave: R2RML 57/58
+// adjudicated, Direct Mapping 23/23, 6 skips (the D016 SQL-datatypes fixtures
+// using `VARBINARY`/`X'…'`, which PostgreSQL cannot load — a per-DBMS fork would
+// be needed, ADR-0015). The 8 cases SQLite cannot clear now pass on PostgreSQL:
+// the 3 CHAR(n) cases (R2RMLTC0018a, DirectGraphTC0017, DirectGraphTC0018) via
+// PostgreSQL's native space-padding, and the 5 table-level-constraint DDL
+// scenarios (D021–D025, both R2RML and Direct Mapping) which load fine on
+// PostgreSQL. SQL identifier case-folding (resolve each column reference
 // against the source's introspected columns — exact then ASCII-case-insensitive,
 // and a translate-time fallback for SubPlan-embedded derived tables, which carry
 // no live catalog — `emit::synthetic_subplan_catalog`) cleared 8 regular-
@@ -32,19 +32,19 @@ fn cases_dir() -> PathBuf {
 // `ctid` Direct Mapping translation). R2RMLTC0002f stays an honest fail: its
 // `{ID}/{Name}` template references resolve exactly to the delimited DDL columns,
 // so it cannot be rejected without breaking the structurally-identical positive
-// case R2RMLTC0018a (D018) — left documented. R2RMLTC0012e is now a sound
-// translate-time skip, not a failure: its D2-pooled blank-node subject template
-// positionally UNIONs `IOUs.amount` (`FLOAT`) against `Lives.city` (`VARCHAR`) at
-// the same column slot — a hard PostgreSQL `UNION` type-resolver error if pooled
-// as-is, and unsafe to paper over with a `CAST` (live-verified lexical drift: PG's
-// own `float8`-to-text formatting uses scientific notation outside a plain-decimal
-// magnitude range, where reconstruction's native `f64::to_string()` reading never
-// does — no PostgreSQL expression was found that reproduces it exactly). Refused
-// soundly by `cascade::group_has_unsafe_float_slot_mismatch` rather than risk a
-// silent wrong answer; main never passed this on PG either, so the skip is not a
-// regression (ADR-0025 "cannot pool soundly ⇒ 501" shape, dialect-scoped since
-// SQLite's dynamic typing has no such `UNION` error to refuse in the first place).
-const R2RML_PG_BASELINE: usize = 56;
+// case R2RMLTC0018a (D018) — left documented. R2RMLTC0012e — its D2-pooled
+// blank-node subject template positionally UNIONs `IOUs.amount` (`FLOAT`)
+// against `Lives.city` (`VARCHAR`) at the same column slot, a hard PostgreSQL
+// `UNION` type-resolver error if pooled as-is and unsafe to paper over with a
+// `CAST` (live-verified lexical drift: PG's own `float8`-to-text formatting uses
+// scientific notation outside a plain-decimal magnitude range, where
+// reconstruction's native `f64::to_string()` reading never does) — is RESTORED
+// (Run 5 C0e): `cascade::group_has_unsafe_float_slot_mismatch` still refuses the
+// `UNION`, but the group is ALSO a STANDALONE D2 group (`cascade::group_
+// eligible_for_term_dedup`), so `unfold::pool_pattern_relation` / `iq::resolve`
+// route it through a cross-branch SHARED Rust-side seen-set instead of SQL
+// pooling — no `UNION` ever emitted, so the type-resolver wall never applies.
+const R2RML_PG_BASELINE: usize = 57;
 const DM_PG_BASELINE: usize = 23;
 
 #[test]

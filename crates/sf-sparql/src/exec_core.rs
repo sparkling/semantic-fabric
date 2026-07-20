@@ -106,10 +106,12 @@ where
         offset: plan.offset,
         limit: plan.limit,
         // This is the plain streaming path (design §2: reconstruct -> DISTINCT ->
-        // ORDER/slice -> sink, ONE row in flight downstream) — never parallelize
-        // term-gen here, see `reconstruct_batch`'s `parallel_allowed` doc comment
-        // for the measured reason (ledger F8).
-        parallel_term_gen: false,
+        // ORDER/slice -> sink, ONE row in flight downstream) — parallel term-gen
+        // is now allowed here too, see `reconstruct_batch`'s `parallel_allowed`
+        // doc comment and [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the
+        // measured reason (ledger F8, un-gated on an idle-machine re-measurement).
+        parallel_term_gen: true,
+        dedup_groups: &plan.dedup_groups,
     };
     run_branches(&branches, ctx, b, sink).await
 }
@@ -130,6 +132,37 @@ struct PlanCtx<'a> {
     /// (see its `parallel_allowed` doc comment, ledger F8) — `true` only for
     /// [`rust_group_execute`]'s inner collection.
     parallel_term_gen: bool,
+    /// ADR-0034 C0e restoration — [`Plan::dedup_groups`] verbatim: a branch's own
+    /// representative scan/opt/subplan alias → shared term-dedup-set id. See
+    /// [`run_branches`]'s own doc comment for how this replaces a fresh
+    /// per-branch seen-set with one shared across every same-id branch.
+    dedup_groups: &'a std::collections::HashMap<usize, usize>,
+}
+
+/// The scan/opt alias to look up in [`PlanCtx::dedup_groups`] for `branch`'s
+/// own shared dedup-group id, if any (ADR-0034 C0e restoration). A standalone
+/// group member tagged `distinct = true` (`unfold::pool_pattern_relation` /
+/// `iq::resolve`'s Intensional arm) that lands as a `Union` child on the TREE
+/// engine is never the query's own top-level spine, so `iq::lower::
+/// lower_as_subplan` wraps it in a `SubPlanJoin` regardless — the SAME
+/// wrapping a lone `eligible_for_term_dedup` branch already gets there (e.g.
+/// W3C TC0005b). `branch.core`/`.opts` end up empty (`Branch::alias_sources`
+/// finds nothing), but the scan whose alias was registered survives
+/// unchanged, just nested one level down inside the SubPlan's own inner
+/// `Plan` — `lower_as_subplan` mints a FRESH alias for the `SubPlanJoin`
+/// itself, never for the scan it wraps. The flat engine never wraps anything
+/// (`alias_sources` alone always finds it there), so this only recurses on
+/// tree output.
+fn dedup_group_alias(branch: &Branch) -> Option<usize> {
+    if let Some((alias, _)) = branch.alias_sources().into_iter().next() {
+        return Some(alias);
+    }
+    let inner = branch.subplan_joins.first()?.plan.branches.first()?;
+    inner
+        .alias_sources()
+        .into_iter()
+        .next()
+        .map(|(alias, _)| alias)
 }
 
 /// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
@@ -178,6 +211,14 @@ where
     };
     let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
         std::collections::HashSet::new();
+    // ADR-0034 C0e restoration: one seen-set PER shared dedup-group id, keyed by
+    // `ctx.dedup_groups`' values — declared OUTSIDE the branch loop below (unlike
+    // the per-branch `own_term_seen` further down) so every branch tagged with
+    // the SAME group id contributes to and checks against the SAME set, giving
+    // the cross-branch dedup `unfold::pool_group`'s SQL `UNION` used to provide,
+    // without ever emitting one.
+    let mut group_seen: std::collections::HashMap<usize, std::collections::HashSet<Vec<Term>>> =
+        std::collections::HashMap::new();
     let mut seen = 0usize; // solutions observed (for offset)
     let mut emitted = 0usize; // solutions passed downstream (for limit)
                               // ORDER BY is applied HERE for every plan, never in SQL (a SQL ORDER BY inherits
@@ -191,13 +232,21 @@ where
         // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
         // scope rule): `e.sql` above omitted DISTINCT even though `branch.distinct` is
         // set, because `emit_branch_with` deferred to this dedup instead of refusing.
-        // `term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is shared
-        // across branches and keys on the OUTER projected vars) — a different scope and
-        // question: this collapses duplicates WITHIN this one branch's own relation, on
-        // its FULL reconstructed solution tuple (every bound variable), independent of
-        // whatever the outer query later projects or whether it asked for DISTINCT at all.
-        let term_dedup = crate::cascade::eligible_for_term_dedup(branch);
-        let mut term_seen: std::collections::HashSet<Vec<Term>> = std::collections::HashSet::new();
+        // `own_term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is
+        // shared across branches and keys on the OUTER projected vars) — a different
+        // scope and question: this collapses duplicates WITHIN this one branch's own
+        // relation, on its FULL reconstructed solution tuple (every bound variable),
+        // independent of whatever the outer query later projects or whether it asked
+        // for DISTINCT at all. `group_id` (ADR-0034 C0e restoration), when set, means
+        // this branch is one member of a D2 standalone group sharing `group_seen`'s
+        // entry instead — a DIFFERENT branch, tagged with the SAME id, may already
+        // have inserted the key this branch's own row reconstructs to (the cross-
+        // branch same-triple case a fresh-per-branch set could never catch).
+        let group_id: Option<usize> =
+            dedup_group_alias(branch).and_then(|alias| ctx.dedup_groups.get(&alias).copied());
+        let term_dedup = group_id.is_some() || crate::cascade::eligible_for_term_dedup(branch);
+        let mut own_term_seen: std::collections::HashSet<Vec<Term>> =
+            std::collections::HashSet::new();
         // The column schema is fixed for this branch's whole row stream, so index
         // it ONCE here rather than per row (ADR-0024/M4 perf — `RawRow::code_for`/
         // `AliasRow::value` used to `schema.iter().position(...)` on every lookup).
@@ -285,8 +334,14 @@ where
                         .into_iter()
                         .map(|(_, v)| v.clone())
                         .collect();
-                    if !term_seen.insert(key) {
-                        continue; // duplicate reconstructed solution (ADR-0034 D1 term dedup)
+                    let inserted = match group_id {
+                        Some(gid) => group_seen.entry(gid).or_default().insert(key),
+                        None => own_term_seen.insert(key),
+                    };
+                    if !inserted {
+                        // duplicate reconstructed solution (ADR-0034 D1 term dedup,
+                        // shared cross-branch when `group_id` is set — C0e restoration)
+                        continue;
                     }
                 }
                 // ORDER BY (any branch count): defer slicing — buffer for the global
@@ -383,6 +438,7 @@ where
         // `canonical_lexical` numeric formatting) that measurably benefits from
         // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
         parallel_term_gen: true,
+        dedup_groups: &plan.dedup_groups,
     };
     let mut inner_rows: Vec<Bindings> = Vec::new();
     run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
@@ -469,6 +525,42 @@ where
     .await
 }
 
+/// ADR-0034 item 3 (Run 5) — whether `lib.rs`'s per-branch template-projection
+/// dedup (`dedup_construct_template_projected_vars`) cannot see far enough to
+/// answer §16.2's "CONSTRUCT output is a SET" on its own: MULTIPLE branches
+/// exist (that pass pushes a SQL-level `DISTINCT` into ONE branch's own
+/// `SELECT` — it can never see a SIBLING branch, e.g. a UNION arm over a
+/// DIFFERENT triple pattern, instantiating the identical triple) AND
+/// `plan.construct_drops_some_branch_var` — captured by that SAME pass, from
+/// each branch's ORIGINAL bindings, before its own narrowing loop overwrites
+/// them to match the template exactly (a narrowed branch is afterward
+/// indistinguishable from one that never bound anything extra, so this CANNOT
+/// be recomputed here from `plan.branches` alone — found the hard way: an
+/// earlier version of this function recomputed it from the post-narrowing
+/// bindings and both never fired, per the `s7b`-shaped case, and — the more
+/// dangerous direction — a naive `branches.len() > 1` shortcut with no drop
+/// check at all over-fired on an ordinary multi-TriplesMap `?s ?p ?o` dump,
+/// where the template keeps every var every branch binds: `sf-bench`'s
+/// `engine_memory_is_bounded_under_growing_source`/`_pg` measured that
+/// regression to LINEAR memory growth, `mem_ratio` 13.72x at 16x scale,
+/// before it could land). "Nothing dropped anywhere" is safe regardless of
+/// branch count: when the template keeps every bound variable, two branches
+/// instantiating the identical triple is exactly two branches producing the
+/// identical WHERE solution — D2's own cross-branch mechanism (`unfold::
+/// pool_pattern_relation` / `iq::resolve`'s Intensional arm: provable
+/// disjointness, SQL pooling, or the C0e shared seen-set) already resolves
+/// that BEFORE the template ever sees it, which is why BRANCH COUNT ALONE
+/// must never be the gate either. `false` is the fast path and MUST stay
+/// untouched — it is the unbounded `?s ?p ?o`-shaped dump case ADR-0006's
+/// constant-memory invariant exists for. Where `true`, [`construct`]/
+/// [`construct_each_async`] dedup the PRODUCED triples with a Rust-side
+/// `HashSet` — bounded by DISTINCT OUTPUT triples, not total input rows, the
+/// same documented trade `cascade::eligible_for_term_dedup`'s single-branch
+/// term dedup already makes.
+pub(crate) fn construct_may_need_cross_branch_dedup(plan: &Plan) -> bool {
+    plan.branches.len() > 1 && plan.construct_drops_some_branch_var
+}
+
 /// Stream a CONSTRUCT's per-solution triples into an ASYNC sink (bounded by the
 /// template size — never the whole graph). The PostgreSQL/MySQL serve-lane form of
 /// [`construct`], written once over the shared core.
@@ -487,11 +579,24 @@ where
             ))
         }
     };
+    let mut seen: Option<std::collections::HashSet<Triple>> =
+        construct_may_need_cross_branch_dedup(plan).then(std::collections::HashSet::new);
+    // Run 5 W6 fix: one id per SOLUTION (not per triple) — every triple
+    // pattern instantiated below for the SAME `bindings` shares this SAME id,
+    // so a template blank node label repeated across the template's triples
+    // stays one identity within a solution, while the NEXT solution advances
+    // it, freshening (`instantiate_term`'s `TermPattern::BlankNode` arm).
+    let mut solution_id: u64 = 0;
     for_each_solution(plan, b, |_branch, bindings| {
-        let triples: Vec<Triple> = template
+        let sid = solution_id;
+        solution_id += 1;
+        let mut triples: Vec<Triple> = template
             .iter()
-            .filter_map(|tp| instantiate(tp, bindings))
+            .filter_map(|tp| instantiate(tp, bindings, sid))
             .collect();
+        if let Some(seen) = &mut seen {
+            triples.retain(|t| seen.insert(t.clone()));
+        }
         sink(triples)
     })
     .await
@@ -523,10 +628,23 @@ where
             ))
         }
     };
+    let mut seen: Option<std::collections::HashSet<Triple>> =
+        construct_may_need_cross_branch_dedup(plan).then(std::collections::HashSet::new);
     let mut count = 0u64;
+    // Run 5 W6 fix: see the matching comment in `construct_each_async` — one
+    // id per SOLUTION, shared by every triple pattern instantiated below for
+    // that SAME solution.
+    let mut solution_id: u64 = 0;
     for_each_solution(plan, b, |_branch, bindings| {
+        let sid = solution_id;
+        solution_id += 1;
         for tp in &template {
-            if let Some(triple) = instantiate(tp, bindings) {
+            if let Some(triple) = instantiate(tp, bindings, sid) {
+                if let Some(seen) = &mut seen {
+                    if !seen.insert(triple.clone()) {
+                        continue;
+                    }
+                }
                 count += 1;
                 sink(triple);
             }
@@ -568,6 +686,8 @@ where
         order: Vec::new(),
         rust_group: None,
         dialect,
+        dedup_groups: std::collections::HashMap::new(),
+        construct_drops_some_branch_var: false,
     };
     for_each_solution(&plan, b, |branch, bindings| {
         let quad = (|| {
@@ -1086,10 +1206,28 @@ const TERM_GEN_FIRST_BATCH_SIZE: usize = 64;
 /// this very testing), and `par_chunks`' win margin is inherently sensitive
 /// to core contention in a way a quiet/dedicated re-run could easily
 /// overturn — a hot path this wide (every CONSTRUCT dump and streaming
-/// SELECT) deserves cleaner verification before its default flips. Left as
-/// a concrete, evidenced follow-up: re-run `obda_construct_dump` (not
-/// `constant_memory_dump`, per the confound above) on an idle machine before
-/// deciding whether to un-gate.
+/// SELECT) deserved cleaner verification before its default flipped.
+///
+/// **FINAL VERDICT (2026-07-20, Run 5 W1) — un-gated.** The idle-machine
+/// re-run happened under a noise-floor-first protocol (load 3.92 on 18
+/// cores, zero competing cargo/rustc/criterion processes; two prior
+/// attempts correctly ABORTED under swarm load rather than repeat the
+/// contamination). Measured floor from back-to-back unchanged runs:
+/// ~0.47% at 1x / ~2.42% at 10x — the first post-build pair was discarded
+/// for a one-time cold-start swing (`first_result_µs` 1616 → 190), the
+/// same first-result-vs-steady-state distinction drawn elsewhere in this
+/// file. Against a warm baseline (medians): `full_dump_10x` **−9.15% /
+/// −9.95%** across two flip replicates (both p < 0.05, agreeing within
+/// 0.8pp), clearing the decision bar of max(5%, 2×floor) = 5%;
+/// `full_dump_1x` stayed within noise in both replicates (+0.60% n.s. /
+/// −1.73% criterion-noise) — 1x can still cross this gate (5200 triples ⇒
+/// one 4000-row batch), so in-noise was the requirement, not untouched.
+/// Both constant-memory invariant tests pass in the flipped
+/// configuration. `for_each_solution` therefore now sets
+/// `parallel_term_gen: true` for the plain streaming path; this constant
+/// and `TERM_GEN_BATCH_SIZE` are unchanged — only WHO may cross the gate
+/// changed, completing the F6→F8→C1 arc (the C1-era loaded-box "7-9%
+/// faster" signal was real).
 const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 
 /// The floor on `par_chunks`' chunk size WITHIN one already-dispatched batch
@@ -1632,17 +1770,23 @@ pub struct Solutions {
 /// variable is unbound or the triple would be ill-formed (SPARQL §16.2: an
 /// ill-formed instantiation is silently dropped, never an error). `pub(crate)`
 /// so the PostgreSQL executor instantiates CONSTRUCT templates identically.
+/// `solution_id` is a monotonic counter identifying the CURRENT solution
+/// within this one CONSTRUCT execution — see [`instantiate_term`]'s
+/// `TermPattern::BlankNode` arm for why it must be threaded all the way
+/// through: every triple pattern instantiated for the SAME solution is called
+/// with the SAME `solution_id`.
 pub(crate) fn instantiate(
     tp: &spargebra::term::TriplePattern,
     bindings: &Bindings,
+    solution_id: u64,
 ) -> Option<Triple> {
     use spargebra::term::NamedNodePattern;
-    let subject = instantiate_term(&tp.subject, bindings)?;
+    let subject = instantiate_term(&tp.subject, bindings, solution_id)?;
     let predicate = match &tp.predicate {
         NamedNodePattern::NamedNode(n) => Term::NamedNode(n.clone()),
         NamedNodePattern::Variable(v) => bindings.get(v.as_str()).cloned()?,
     };
-    let object = instantiate_term(&tp.object, bindings)?;
+    let object = instantiate_term(&tp.object, bindings, solution_id)?;
     Triple::from_terms(subject, predicate, object).ok()
 }
 
@@ -1654,22 +1798,40 @@ pub(crate) fn instantiate(
 /// whose fallibility naturally enforces RDF 1.2 §3.1 position legality — an
 /// illegal-position nested triple silently drops (§16.2), never errors. A
 /// standalone (non-closure) function so it can recurse into itself.
-fn instantiate_term(p: &spargebra::term::TermPattern, bindings: &Bindings) -> Option<Term> {
+///
+/// `TermPattern::BlankNode` (Run 5 W6 fix): SPARQL §16.2 requires a template
+/// blank node to denote a FRESH node per solution ("blank nodes created from
+/// the same label in different solutions will be different") while the SAME
+/// label used across MULTIPLE triples of the SAME solution's instantiation
+/// must resolve to the SAME node ("blank nodes... within a single copy of the
+/// template shall not be split") — this arm used to clone the parsed-AST
+/// label verbatim (`Some(Term::BlankNode(b.clone()))`), so every solution
+/// shared ONE identity, never freshened. Now it derives a fresh label from
+/// the AST label plus `solution_id`: deterministic (so repeated triples of
+/// ONE solution's instantiation agree) and distinct across solutions (the
+/// caller advances `solution_id` once per solution, never once per triple).
+fn instantiate_term(
+    p: &spargebra::term::TermPattern,
+    bindings: &Bindings,
+    solution_id: u64,
+) -> Option<Term> {
     use spargebra::term::TermPattern;
     match p {
         TermPattern::Variable(v) => bindings.get(v.as_str()).cloned(),
         TermPattern::NamedNode(n) => Some(Term::NamedNode(n.clone())),
         TermPattern::Literal(l) => Some(Term::Literal(l.clone())),
-        TermPattern::BlankNode(b) => Some(Term::BlankNode(b.clone())),
+        TermPattern::BlankNode(b) => Some(Term::BlankNode(sf_core::BlankNode::new_unchecked(
+            format!("{}_{solution_id}", b.as_str()),
+        ))),
         TermPattern::Triple(inner) => {
-            let s = instantiate_term(&inner.subject, bindings)?;
+            let s = instantiate_term(&inner.subject, bindings, solution_id)?;
             let p = match &inner.predicate {
                 spargebra::term::NamedNodePattern::NamedNode(n) => Term::NamedNode(n.clone()),
                 spargebra::term::NamedNodePattern::Variable(v) => {
                     bindings.get(v.as_str()).cloned()?
                 }
             };
-            let o = instantiate_term(&inner.object, bindings)?;
+            let o = instantiate_term(&inner.object, bindings, solution_id)?;
             Triple::from_terms(s, p, o).ok().map(Term::from)
         }
     }
@@ -2136,6 +2298,8 @@ mod probe_backend {
             order: Vec::new(),
             rust_group: None,
             dialect: Dialect::Sqlite,
+            dedup_groups: std::collections::HashMap::new(),
+            construct_drops_some_branch_var: false,
         };
         rt.block_on(async move {
             let backend = MockBackend { rows: Vec::new() };
@@ -2547,6 +2711,8 @@ mod batch_loop_tests {
             }],
             rust_group: None,
             dialect: Dialect::Sqlite,
+            dedup_groups: std::collections::HashMap::new(),
+            construct_drops_some_branch_var: false,
         };
         // Reversed, zero-padded so lexical order (plain-literal comparison)
         // matches numeric order: row k carries the value belonging at sorted
@@ -2581,6 +2747,87 @@ mod batch_loop_tests {
         assert_eq!(
             actual, expected,
             "ORDER BY must span every batch, not just within one"
+        );
+    }
+}
+
+// --- W5b: canonical_pairs / Bindings::insert unit locks ---------------------
+
+#[cfg(test)]
+mod bindings_tests {
+    //! `canonical_pairs` and `Bindings::insert` unit-level locks (Run 5 W5b).
+    //! The W5 test-soundness audit found NO e2e/differential fixture can force
+    //! either property to matter: every `Bindings` the production pipeline
+    //! builds arrives via [`reconstruct`]/[`intern_bindings`], which iterate
+    //! `Branch::bindings` (a `BTreeMap<String, TermDef>`) — ALREADY
+    //! alphabetical — so a row's insertion order coincides with
+    //! `canonical_pairs`'s sorted order on every real input today; the sort is
+    //! a no-op an integration/differential test cannot distinguish from
+    //! "absent". Likewise, no query shape re-binds an already-bound variable
+    //! on the SAME `Bindings` end to end (each var is written once, by
+    //! exactly one branch column), so `insert`'s replace-on-existing-key arm
+    //! (`BTreeMap::insert`-compatible, the Wave C1 refactor's own compatibility
+    //! contract) never actually fires through a real query. Both are locked
+    //! directly at unit level instead of relying on an e2e fixture that cannot
+    //! see them.
+    use super::*;
+
+    fn lit(s: &str) -> Term {
+        Term::Literal(Literal::new_simple_literal(s))
+    }
+
+    #[test]
+    fn canonical_pairs_is_independent_of_insertion_order() {
+        // The SAME three (var, term) pairs, inserted in two DIFFERENT
+        // non-alphabetical orders — `canonical_pairs` must sort both down to
+        // the IDENTICAL var-name-order output.
+        let mut forward = Bindings::new();
+        forward.insert(Arc::from("b"), lit("2"));
+        forward.insert(Arc::from("c"), lit("3"));
+        forward.insert(Arc::from("a"), lit("1"));
+
+        let mut reverse = Bindings::new();
+        reverse.insert(Arc::from("c"), lit("3"));
+        reverse.insert(Arc::from("a"), lit("1"));
+        reverse.insert(Arc::from("b"), lit("2"));
+
+        assert_eq!(
+            canonical_pairs(&forward),
+            canonical_pairs(&reverse),
+            "canonical_pairs must be independent of the ORDER the pairs were \
+             inserted in — a dedup/COUNT(DISTINCT *) key built from it must \
+             treat these as the SAME solution regardless of which branch/order \
+             bound them"
+        );
+        assert_eq!(
+            canonical_pairs(&forward),
+            vec![("a", &lit("1")), ("b", &lit("2")), ("c", &lit("3"))],
+            "canonical order is var-NAME-sorted, not insertion order — pins the \
+             actual sort key, not just \"some\" order-independence"
+        );
+    }
+
+    #[test]
+    fn insert_on_an_existing_key_replaces_not_appends() {
+        let mut b = Bindings::new();
+        b.insert(Arc::from("v"), lit("old"));
+        assert_eq!(b.iter().count(), 1);
+        assert_eq!(b.get("v"), Some(&lit("old")));
+
+        // Re-insert the SAME key with a DIFFERENT term — `BTreeMap::insert`'s
+        // contract (Wave C1's promised compatibility, see `insert`'s own doc
+        // comment): the slot is OVERWRITTEN, never appended as a second entry
+        // for the same var.
+        b.insert(Arc::from("v"), lit("new"));
+        assert_eq!(
+            b.iter().count(),
+            1,
+            "re-inserting an existing key must NOT grow the binding count"
+        );
+        assert_eq!(
+            b.get("v"),
+            Some(&lit("new")),
+            "re-inserting an existing key must overwrite the old value"
         );
     }
 }

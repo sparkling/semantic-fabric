@@ -79,7 +79,7 @@
     <dt>This version</dt><dd><code>docs/rdf-star/specification.html</code></dd>
     <dt>Status</dt><dd>Project Specification — Implemented, merged to <code>main</code></dd>
     <dt>Latest update</dt><dd>2026-07-20</dd>
-    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition), ADR-0034 (set semantics, BGP-level dedup)</dd>
+    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition), ADR-0034 (set semantics, BGP-level dedup), ADR-0035 (variable-graph querying)</dd>
     <dt>Editorial model</dt><dd>Structured after the W3C <em>R2RML: RDB to RDF Mapping Language</em> Recommendation</dd>
   </dl>
 </header>
@@ -147,6 +147,7 @@
         <li><a href="#equality-order">Equality and ORDER BY</a></li>
         <li><a href="#native-results">Native results</a></li>
         <li><a href="#set-semantics">Set semantics: BGP-level deduplication</a></li>
+        <li><a href="#named-graphs">Named graphs: <code>GRAPH ?g</code></a></li>
       </ol>
     </li>
     <li><a href="#scope">Scope and Restrictions</a></li>
@@ -360,7 +361,11 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   which case it is that inner quote's own <code>pfid</code>. These triples are always keyed on the
   <strong>proposition</strong> id, never the reifier id: a reifier reifies the proposition, it does
   not have its own description. No new SQL construction is introduced beyond ordinary
-  predicate-object maps.
+  predicate-object maps. When the declaring star map sits under an <code>rr:graphMap</code> —
+  subject or object position alike — this standalone triples map's own subject map inherits the
+  <strong>same effective graphs</strong> as the quoting map, so the four triples land in the
+  identical named graph as the quote itself, not the default graph (§<a
+  href="#named-graphs">7.8</a>).
 </p>
 
 <h3 id="reifies-triple"><span class="secno">5.3</span>The <code>rdf:reifies</code> triple</h3>
@@ -521,10 +526,11 @@ pfid  rdf:propositionFormObject     o .</code></pre>
     common shape — needs no wrap at all: the key-coverage proof elides it, so the emitted SQL is
     byte-identical to before.</li>
   <li><strong>Cross-map (two maps, one triple).</strong> Where two candidate maps' arms are not
-    provably template-disjoint, they pool through <code>UNION</code> (set) instead of
-    <code>UNION ALL</code> (bag). Provably disjoint arms — different fixed template prefixes, the
-    normal case for two genuinely different shapes — already cannot emit the same triple, so
-    <code>UNION ALL</code> stays set-correct and no pooling is introduced.</li>
+    provably disjoint, they pool through <code>UNION</code> (set) instead of <code>UNION ALL</code>
+    (bag). Provably disjoint arms — different fixed template prefixes (the normal case for two
+    genuinely different shapes), a mismatched term kind or language tag, or a mismatched literal
+    datatype (2026-07-20) — already cannot emit the same triple, so <code>UNION ALL</code> stays
+    set-correct and no pooling is introduced.</li>
 </ul>
 <p>
   Where an arm's own template is not <strong>injective</strong> — a <code>Literal</code> or
@@ -543,7 +549,46 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   <code>CONSTRUCT</code> output is a set under the same reading (§16.2): instantiating the same
   triple from two different result rows emits it once, not twice — applied at the SQL level
   whenever the template's variables are a strict subset of the pattern's own and the template is
-  blank-node-free.
+  blank-node-free. This extends across branches too: two different candidate maps instantiating
+  the identical triple from different solutions still emit it once, via a dedup set carried across
+  solutions at execution time, not only the single-branch SQL-level case above.
+</p>
+
+<h3 id="named-graphs"><span class="secno">7.8</span>Named graphs: <code>GRAPH ?g</code></h3>
+<p>
+  <span class="rule-id">R7</span> A constant-graph pattern, <code>GRAPH &lt;g&gt; { P }</code>,
+  already answers under ordinary R2RML: a triple lands in named graph <code>g</code> iff its
+  predicate-object map's effective graph (its own <code>rr:graphMap</code>s, else the subject
+  map's; none ⇒ default graph, R2RML §4.6) produces <code>g</code>. The <strong>variable</strong>
+  form, <code>GRAPH ?g { P }</code>, is answered by <strong>per-branch graph enumeration</strong>:
+  each candidate predicate-object map contributes one translation branch per effective graph map
+  it declares — a constant graph map becomes a bound term for <code>?g</code>, a template or
+  column graph map becomes an ordinary derived binding — and a map with <strong>no</strong> graph
+  map at all is excluded from the branch set entirely, since SPARQL §13.3 ranges
+  <code>GRAPH ?g</code> over named graphs only, never the default graph. No quad store and no
+  dataset materialization are needed: <code>?g</code> is just an ordinary variable with per-branch
+  definitions, so two patterns sharing one <code>?g</code> inside a <code>GRAPH ?g</code> block
+  join on the same graph for free, through the same unification machinery that already joins any
+  shared variable — projection of <code>?g</code>, <code>FILTER(?g = …)</code>, and
+  <code>VALUES ?g</code> come along the same way.
+</p>
+<p>
+  <strong>Star annotations inside named graphs.</strong> The standalone description triples map
+  carrying the four basic-encoding triples (§5.2) is compiled once and shared by every reference
+  to a given quoted shape (§4.1). Its own predicate-object maps inherit the
+  <strong>quoting map's effective graphs</strong> (§5.2): a star map declared under an
+  <code>rr:graphMap</code> — subject or object position, symmetrically — produces a description
+  map whose triples live in that same named graph, so
+  <code>GRAPH ?g { &lt;&lt; s p o &gt;&gt; ex:p ?v }</code> binds <code>?g</code> and answers
+  exactly as an equivalent non-star pattern would.
+</p>
+<p>
+  <strong>Property paths</strong> under <code>GRAPH ?g</code> compile as a union over the
+  mapping's declared <strong>constant</strong> named graphs — one <code>GRAPH &lt;g<sub>i</sub>&gt;</code>
+  arm per declared constant graph (each already answerable on its own, §8.1), with
+  <code>?g = g<sub>i</sub></code> bound per arm. A path under a graph map that is a
+  <strong>template or column</strong> is a pinned <code>501</code>: the graph set is row-dependent,
+  not enumerable at translate time — see §8.2.
 </p>
 
 <h2 id="scope"><span class="secno">8.</span>Scope and Restrictions</h2>
@@ -563,8 +608,9 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   <tr><td><code>VALUES</code> with ground triple terms</td><td>Decomposed and reprojected, including nested ground terms and multiple rows (§7.4).</td></tr>
   <tr><td><code>TRIPLE()</code> / <code>SUBJECT()</code> / <code>PREDICATE()</code> / <code>OBJECT()</code> / <code>isTRIPLE()</code></td><td>All five, with SPARQL §17.4.6 error semantics observably enforced (§7.4).</td></tr>
   <tr><td><code>=</code> / <code>sameTerm</code> on triple terms</td><td>Component-wise, per §17.4.2.2 (§7.5) — with one residual, see §8.2.</td></tr>
-  <tr><td><code>CONSTRUCT</code> producing triple-term objects</td><td>Real instantiation; illegal positions silently dropped per SPARQL §16.2, not an error (§7.6).</td></tr>
+  <tr><td><code>CONSTRUCT</code> producing triple-term objects</td><td>Real instantiation; illegal positions silently dropped per SPARQL §16.2, not an error (§7.6). Template blank nodes are freshened per solution under the same §16.2 (2026-07-20): two solutions instantiating one template blank-node label now produce two distinct blank nodes, never a shared identity across rows.</td></tr>
   <tr><td>Native results</td><td>A projected reification variable binds a real triple term at every surface — SELECT JSON/XML/CSV, Turtle CONSTRUCT (§7.6).</td></tr>
+  <tr><td>Named graphs, including <code>GRAPH ?g</code></td><td>Constant graphs already worked; the variable form now enumerates per-branch, and composes with star annotations declared inside a named graph (ADR-0035, §7.8).</td></tr>
   <tr><td><code>AVG()</code>/<code>SUM()</code> over a quoted-triple component</td><td>Spec-correct SPARQL §18.5.1 error semantics: a group containing a non-numeric operand now leaves the aggregate <strong>unbound</strong> rather than silently miscomputing; an <code>xsd:double</code> <code>NaN</code> operand propagates <code>NaN</code> through the aggregate, matching the oracle.</td></tr>
   <tr><td>PostgreSQL <code>NUMERIC</code> NaN / ±Infinity</td><td>A quoted triple's <code>NUMERIC</code>-typed component holding <code>NaN</code> or an infinite value on PostgreSQL now classifies as a clean, documented <code>501</code> — previously misrouted to an internal server error.</td></tr>
 </table>
@@ -577,6 +623,8 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   <tr><td>—</td><td><strong>Quoted pattern at a property-path endpoint — LIFTED on both engines (ADR-0033, 2026-07-19).</strong> Path branches now compile as alias-preserving derived tables and join ordinarily — including OPTIONAL on either side, EXISTS bodies, and GROUP BY over the join — on the tree engine (the production default) <em>and</em> the flat engine (the <code>=_bag</code> oracle path), which now runs the identical conversion. A path whose predicate is mapped only in a different named graph than the one queried — star endpoint or not — now compiles to a graceful, oracle-checked <strong>empty</strong> result instead of a 501; a predicate unmapped anywhere, or an otherwise uncompilable shape, still refuses.</td><td>The join lift is engine-general (any path join, not just star) and adversarially verified, incl. a duplicate-multiplicity <code>!p</code> bag fixture; the flat engine is restored as the <code>=_bag</code> oracle over these shapes. The wrong-graph fix shares one two-pass predicate-resolution rewrite across both engines.</td></tr>
   <tr><td>—</td><td><strong>Uniform composed-ness — the FILTER carve-out (2026-07-19).</strong> A <code>FILTER</code> over a mixed-composedness union or <code>VALUES</code> partition, sitting at the <code>SELECT</code> top level or inside an <code>EXISTS</code>/<code>NOT EXISTS</code> body, now resolves <strong>per arm</strong> — each arm's own static shape decides its own rows — instead of collapsing to one answer for the whole union. Bare projection of a mixed variable already resolved per-arm (unchanged). Still refused: a <code>CONSTRUCT</code> template consuming the mixed variable, and a mixed union/<code>VALUES</code> nested under a further join.</td><td>The FILTER case mirrors the rewrite's existing Filter-over-Union distribution; <code>EXISTS</code>/<code>NOT EXISTS</code> route through the same top-level rewrite. A <code>CONSTRUCT</code> template has no per-row arm to realize into and stays refused; nesting under a further join is outside the boundary the fix reaches.</td></tr>
   <tr><td>—</td><td><strong>Whole-composed-variable equality — shape-mismatch residual mostly closed (2026-07-19).</strong> <code>?t1 = ?t2</code> already resolved same-structure templates and constants (pairwise column equality). Genuinely <em>differently</em>-shaped templates now resolve too, for IRI and plain/<code>xsd:string</code> components, by comparing each side's fully-rendered form as a dialect-correct SQL <code>CONCAT</code> — on PostgreSQL, SQLite and MySQL. The residual <code>501</code> narrows to typed-literal, language-tagged, and blank-node component classes, and to any other SQL dialect.</td><td>A second, purely boolean-condition SQL rendering (<code>SqlCond::TemplateEq</code>) alongside the alignment-based path above — never SELECTed or reconstructed from, so term-construction lifting is untouched (ADR-0007). Restricted to term classes where lexical equality <em>is</em> term equality, and to dialects whose NULL-propagation through string concatenation matches R2RML §11 term-absence.</td></tr>
+  <tr><td>—</td><td><strong>Same-shape, cross-kind template equality — closed (2026-07-20).</strong> The same-structure fast path above (pairwise column equality) used to compare two templates of the <em>same</em> shape without checking term kind, so <code>FILTER(?a = ?b)</code> between a same-shape IRI template and a Literal template — or two Literal templates with different language tag or datatype — could wrongly answer non-empty. Same-shape, cross-kind or cross-datatype pairs now resolve to the provably-empty match they always were, for both the <code>FILTER</code>/<code>=</code> path and the JOIN path that already guarded this case upstream.</td><td>The check now lives inside the shared alignment routine, so every caller gets it once: same kind and same normalized datatype/language ⇒ column equality; anything else ⇒ statically empty — sound <em>and</em> complete, since cross-kind or cross-datatype terms are never <code>sameTerm</code>.</td></tr>
+  <tr><td>—</td><td><strong>Path under a variable named graph, mapping-wide non-constant guard (ADR-0035, 2026-07-20).</strong> A property-path pattern inside <code>GRAPH ?g { … }</code> compiles as a union over the mapping's declared <em>constant</em> named graphs (§7.8) — sound and complete whenever every graph map in the mapping is constant. The moment the mapping declares even <strong>one</strong> template- or column-valued graph map <em>anywhere</em> — not necessarily on the path's own predicate — the path refuses.</td><td>The graph set of a template/column graph map is row-dependent, not enumerable at translate time, so a per-predicate union isn't available for it; the guard is conservative and mapping-wide rather than narrowed to the predicates the path actually touches. Narrowing this to per-predicate relevance is a recorded, not-yet-implemented refinement.</td></tr>
 </table>
 
 <h2 id="divergence"><span class="secno">9.</span>Divergence from RML-STAR</h2>
@@ -715,7 +763,7 @@ SELECT ?r ?t WHERE {
   <li><a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> — the (non-normative) basic encoding / basic decoding this specification's internal wire format is modeled on (§9).</li>
   <li><a href="https://www.w3.org/TR/sparql12-query/">SPARQL 1.2 Query</a> — §15.1 (ORDER BY), §16.2 (CONSTRUCT instantiation), §17.4.6 (triple-term functions and their error semantics), §18.1.3 (subject-position triple patterns never match), §18.3 (basic graph pattern set semantics, §7.7), §18.5.1 (AVG/SUM aggregate error semantics, §8.1).</li>
   <li>RML-STAR Draft CG Report — <code>kg-construct/rml-star</code>.</li>
-  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition), ADR-0034 (virtual-graph set semantics, BGP-level dedup).</li>
+  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition), ADR-0034 (virtual-graph set semantics, BGP-level dedup), ADR-0035 (variable-graph querying).</li>
 </ul>
 
 </main>

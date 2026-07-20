@@ -63,7 +63,9 @@ use std::collections::BTreeMap;
 
 use sf_core::ir::TriplesMap;
 
-use crate::iq::node::{triple_pattern_vars, BindDef, IqCond, IqNode};
+use crate::iq::node::{
+    graph_pattern_var, path_pattern_vars, triple_pattern_vars, BindDef, IqCond, IqNode,
+};
 use crate::iq::Branch;
 use crate::saturate::Tbox;
 use crate::unfold::{all_pairwise_disjoint, Unfolder};
@@ -98,6 +100,14 @@ impl<'a> ResolveCx<'a> {
             unfolder: Unfolder::new(maps, tbox, dialect, schema),
         }
     }
+
+    /// The accumulated D2 shared-dedup-group map (ADR-0034 C0e restoration) —
+    /// pulled into the final [`crate::Plan::dedup_groups`] by `translate_tree`
+    /// once resolution finishes. Delegates to [`Unfolder::dedup_groups`] (the
+    /// field itself is private to `unfold`).
+    pub(crate) fn dedup_groups(&self) -> &std::collections::HashMap<usize, usize> {
+        self.unfolder.dedup_groups()
+    }
 }
 
 /// Resolve a whole tree (M3 design §3): walk `node` and replace every
@@ -114,7 +124,16 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
     match node {
         // ---- the one resolving case ---------------------------------------------
         IqNode::Intensional { pattern, graph } => {
-            let vars = triple_pattern_vars(&pattern);
+            // ADR-0035: a `GRAPH ?v` context contributes `v` to this leaf's own scope,
+            // exactly as `IqNode::output_vars` already computes for the UNRESOLVED leaf
+            // (`graph_pattern_var`) — needed here too since RESOLVE builds the arms'
+            // `Empty`/`Union` wrapper directly, not via a later `output_vars()` call.
+            let mut vars = triple_pattern_vars(&pattern);
+            if let Some(v) = graph_pattern_var(graph.as_ref()) {
+                if !vars.contains(&v) {
+                    vars.push(v);
+                }
+            }
             let mut branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
             // ADR-0034 D1/D2 are both skipped inside a FILTER EXISTS / FILTER NOT
             // EXISTS / MINUS body — see `Unfolder::in_existential`'s own doc comment
@@ -211,22 +230,45 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                         ));
                         continue;
                     }
+                    let mut members: Vec<Branch> = group
+                        .iter()
+                        .map(|&i| branches[i].take().expect("each index visited once"))
+                        .collect();
                     // ADR-0025 (sound-pooling shape): a positional pool this group's arms
                     // would otherwise need can hit PostgreSQL's own `UNION` type-resolver
                     // (a raw SQL error) or, if aligned via a `CAST`, silently drift a
                     // floating-point column's lexical form — see `cascade::group_has_
                     // unsafe_float_slot_mismatch`'s doc comment for the live-verified
-                    // evidence (W3C R2RMLTC0012e). Checked BEFORE bridging (needs the
-                    // still-`Branch` members, not yet converted to `IqNode`).
-                    let member_refs: Vec<&Branch> = group
-                        .iter()
-                        .map(|&i| branches[i].as_ref().expect("not yet taken"))
-                        .collect();
+                    // evidence (W3C R2RMLTC0012e).
+                    let member_refs: Vec<&Branch> = members.iter().collect();
                     if crate::cascade::group_has_unsafe_float_slot_mismatch(
                         &member_refs,
                         cx.unfolder.schema,
                         cx.unfolder.dialect,
                     ) {
+                        // Run 5 C0e restoration (mirrors `unfold::pool_pattern_relation`'s
+                        // identical gate verbatim): when this group is ALSO
+                        // `group_eligible_for_term_dedup` (every member standalone, an
+                        // offending non-injective binding present), skip SQL pooling
+                        // entirely instead of refusing — bridge each member SEPARATELY
+                        // (exactly the `group.len() == 1` arm above, just for N members),
+                        // tagged via `cx.unfolder`'s `dedup_groups` so `run_branches`
+                        // shares ONE Rust-side term-dedup seen-set across them instead of
+                        // a `Filter{Distinct{Union}}` SQL pool — no `UNION`, so the PG
+                        // float-vs-text type-alignment wall never applies.
+                        let keep: std::collections::HashSet<String> =
+                            vars.iter().map(|v| v.to_string()).collect();
+                        if crate::cascade::group_eligible_for_term_dedup(&members, &keep) {
+                            crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
+                            let gid = cx.unfolder.alias();
+                            for b in &members {
+                                if let Some((alias, _)) = b.alias_sources().into_iter().next() {
+                                    cx.unfolder.tag_dedup_group(alias, gid);
+                                }
+                            }
+                            children.extend(members.into_iter().map(bridge_branch));
+                            continue;
+                        }
                         return Err(Error::Unsupported(
                             "D2 pool: a floating-point column would positionally UNION \
                              against a differently-typed sibling column on PostgreSQL → 501 \
@@ -235,12 +277,7 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                                 .to_owned(),
                         ));
                     }
-                    let arms: Vec<IqNode> = group
-                        .iter()
-                        .map(|&i| {
-                            bridge_branch(branches[i].take().expect("each index visited once"))
-                        })
-                        .collect();
+                    let arms: Vec<IqNode> = members.into_iter().map(bridge_branch).collect();
                     children.push(IqNode::Filter {
                         child: Box::new(IqNode::Distinct {
                             child: Box::new(IqNode::Union {
@@ -270,14 +307,17 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             })
         }
 
-        // ---- the property-path resolving case (M5 Wave 1) -----------------------
+        // ---- the property-path resolving case (M5 Wave 1; ADR-0035 for GRAPH ?v) --
         // Reuse the flat `path_branch` VERBATIM via `resolve_path` (pinning the
         // constant active graph exactly as the flat `GRAPH <g> { ?s PATH ?o }` path
-        // does), then bridge the single resulting `Branch` (which carries a
-        // `path = Some(PathClosure)`) to an `IqNode::Path` UNDER its `Construction`
-        // bindings via the SAME `bridge_branch` the triple case uses. A path pattern
-        // is one bag alternative (the flat `GraphPattern::Path` arm yields exactly
-        // `vec![path_branch(...)]`), so there is never a `Union` wrapper here. ZERO
+        // does; a *variable* graph instead unions over the mapping's declared constant
+        // named graphs — `Unfolder::path_branches_for_graph_var`, `path.rs`), then
+        // bridge each resulting `Branch` (carrying `path = Some(PathClosure)`) to an
+        // `IqNode::Path` UNDER its `Construction` bindings via the SAME `bridge_branch`
+        // the triple case uses — the identical 0/1/N arm-count bridging `Intensional`
+        // above already applies (`resolve_path` returns `Vec<Branch>` uniformly now: a
+        // constant/no-GRAPH path is always exactly one arm, matching the old
+        // single-`Branch` contract; `GRAPH ?v` may be several, or none). ZERO
         // `UnresolvedPath` survives — `bridge_branch` produces no `UnresolvedPath`.
         IqNode::UnresolvedPath {
             subject,
@@ -285,10 +325,19 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             object,
             graph,
         } => {
-            let branch = cx
+            let vars = path_pattern_vars(&subject, &object, graph.as_ref());
+            let branches = cx
                 .unfolder
                 .resolve_path(&subject, &path, &object, graph.as_ref())?;
-            Ok(bridge_branch(branch))
+            let mut arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
+            Ok(match arms.len() {
+                0 => IqNode::Empty { vars },
+                1 => arms.pop().expect("len checked == 1"),
+                _ => IqNode::Union {
+                    children: arms,
+                    project: vars,
+                },
+            })
         }
 
         // ---- recurse into children, structure unchanged -------------------------

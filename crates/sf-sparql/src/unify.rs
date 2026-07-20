@@ -161,13 +161,17 @@ fn unify_derived(t1: &TermMap, a1: usize, t2: &TermMap, a2: usize) -> Unify {
 }
 
 /// Two templates unify iff their segment kind-sequence matches (same fixed text
-/// at each literal position, a column slot at each column position). Aligned
-/// columns become pairwise raw-column equalities; a fixed-text mismatch proves
-/// disjointness; a kind/length mismatch falls to [`template_eq_or_unsupported`]
-/// (Run 4 Wave B3: a `SqlCond::TemplateEq` fallback for the term classes where
-/// that is sound, else the pre-existing conservative Unsupported — never an
-/// unsound prune) UNLESS the ADR-0032 D6 leading-literal-prefix check below
-/// already proved disjointness.
+/// at each literal position, a column slot at each column position) AND their
+/// declared term kind/literal-normalisation agrees (Run 5 W6 fix, below): a
+/// same-SHAPE IRI template can never unify with a same-shape Literal or
+/// BlankNode template, and two same-shape Literal templates additionally need
+/// the same language/normalised-datatype — a shape match alone is NOT a term-
+/// equality proof. Aligned columns become pairwise raw-column equalities; a
+/// fixed-text mismatch proves disjointness; a kind/length mismatch falls to
+/// [`template_eq_or_unsupported`] (Run 4 Wave B3: a `SqlCond::TemplateEq`
+/// fallback for the term classes where that is sound, else the pre-existing
+/// conservative Unsupported — never an unsound prune) UNLESS the ADR-0032 D6
+/// leading-literal-prefix check below already proved disjointness.
 fn align_templates(
     x: &sf_core::ir::Template,
     spec1: &TermSpec,
@@ -204,6 +208,26 @@ fn align_templates(
             a2,
             "template length mismatch",
         );
+    }
+    // Run 5 W6 fix: a matching segment SHAPE only ever proves the two
+    // templates render the SAME TEXT for equal column values — it says
+    // nothing about whether equal text means equal RDF TERMS. An IRI, a
+    // Literal, and a BlankNode template can render identical text and still
+    // be provably UNEQUAL terms (an IRI is never `sameTerm` as a Literal,
+    // etc.), and two Literal templates need matching language/datatype too
+    // (`"x"@en` != `"x"@es`, `"5"` != `"5"^^xsd:integer`). `unify_derived`
+    // (this function's join-key caller) already proves exactly this BEFORE
+    // ever calling `align_templates`, via its own `term_map_type`/
+    // `literal_key` guards above — but `var_var_eq_beyond_column` (the
+    // FILTER `?a = ?b` path) calls `align_templates` directly, bypassing
+    // those guards entirely. So the same classification is mirrored here,
+    // reusing `literal_key`'s own spec-level core (`literal_key_of_spec`) —
+    // never a third normalisation.
+    if spec1.term_type != spec2.term_type {
+        return Unify::Empty;
+    }
+    if literal_key_of_spec(spec1) != literal_key_of_spec(spec2) {
+        return Unify::Empty;
     }
     let mut eqs = Vec::new();
     for (p, q) in sx.iter().zip(sy.iter()) {
@@ -442,6 +466,13 @@ fn literal_key(tm: &TermMap) -> Option<(&str, Option<&str>)> {
         TermMap::Column(_, s) | TermMap::Template(_, s) => s,
         TermMap::Constant(_) => return None,
     };
+    literal_key_of_spec(spec)
+}
+
+/// [`literal_key`]'s spec-level core, reused directly by [`align_templates`]
+/// (Run 5 W6 fix) — that caller already holds each side's `&TermSpec`, with
+/// no `TermMap` to unwrap.
+fn literal_key_of_spec(spec: &TermSpec) -> Option<(&str, Option<&str>)> {
     if spec.term_type != TermType::Literal {
         return None;
     }

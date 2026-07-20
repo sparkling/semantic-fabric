@@ -955,24 +955,23 @@ fn plain_triple_pattern_inside_named_graph_already_filters_correctly() {
     );
 }
 
-/// `GRAPH ?g` (variable graph name) stays a clean, PRE-EXISTING 501 on both
-/// flat and tree — deliberately NOT widened by this fix (team-lead: "do not
-/// widen scope"). Locks the CURRENT boundary so a future change that
-/// silently started accepting it (without real quad support) would be caught.
+/// ADR-0035 supersedes the former locked 501 pinned here: `GRAPH ?g` over a
+/// property path now compiles as a union over the mapping's declared CONSTANT
+/// named graphs (`declared_constant_graphs`/`path_branches_for_graph_var`,
+/// `sf-sparql/src/path.rs`) — `GJ_R2RML` declares exactly one
+/// (`<http://ex/g1>`, on `<#EdgeG1>`), so `GRAPH ?g { ?s ex:reaches+ ?o }`
+/// answers identically to the pinned `<http://ex/g1>` form
+/// (`path_plus_inside_named_graph_returns_only_that_graphs_closure` above),
+/// with `?g` bound to it on every row — not a leak of `<#EdgeDefault>`'s
+/// graph-less data (SPARQL §13.3: `GRAPH ?g` ranges over named graphs only,
+/// so the default-graph triples-map is correctly excluded from the
+/// enumeration, exactly as it is from the constant-graph form).
 #[test]
-fn variable_graph_name_over_a_path_stays_a_locked_501() {
-    let maps = sf_mapping::parse_r2rml(GJ_R2RML).expect("R2RML parses");
-    let q =
-        parse("PREFIX ex: <http://ex/> SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s ex:reaches+ ?o } }");
-    let f = flat(&maps, &q, &[]);
-    let t = tree(&maps, &q, &[]);
-    assert!(
-        matches!(f, Err(Error::Unsupported(_))),
-        "GRAPH ?g flat must stay 501: {f:?}"
-    );
-    assert!(
-        matches!(t, Err(Error::Unsupported(_))),
-        "GRAPH ?g tree must stay 501: {t:?}"
+fn variable_graph_name_over_a_path_now_enumerates_declared_constant_graphs() {
+    gj_assert(
+        "PREFIX ex: <http://ex/> SELECT ?g ?s ?o WHERE { GRAPH ?g { ?s ex:reaches+ ?o } }",
+        3,
+        "g1's closure only, ?g bound to <http://ex/g1> on every row (ADR-0035)",
     );
 }
 

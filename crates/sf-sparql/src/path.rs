@@ -174,6 +174,60 @@ impl<'a> Unfolder<'a> {
         }
     }
 
+    /// ADR-0035 item 3: `GRAPH ?v { …PATH… }` — a [`PathClosure`] needs ONE pinned
+    /// graph per compiled CTE, so a variable graph cannot fan out per-branch the way
+    /// an ordinary triple pattern does ([`Unfolder::pattern_branches`]/[`Unfolder::
+    /// atom`]). Instead this compiles as a union over [`crate::unfold::declared_
+    /// constant_graphs`]: one [`Self::path_branch`] call per declared constant graph
+    /// `g_i` (`current_graph = Some(g_i)`, reusing the SAME single-graph closure
+    /// compiler verbatim — "each already works post-Run-4"), with `v` bound to
+    /// `Const(g_i)` on the resulting branch. A `g_i` this path's own predicate(s)
+    /// never actually use still compiles fine — [`Self::resolve_pred_hop`]'s own
+    /// graph-scoped/graceful-empty search just yields a provably empty relation for
+    /// it — so over-enumerating every declared constant graph is sound (never
+    /// silently drops a valid graph) even though some arms turn out empty.
+    ///
+    /// Boundary (ADR-0035, "paths under non-constant graph maps → 501"): when
+    /// [`crate::unfold::has_non_constant_graph_map`] finds a template/column
+    /// `rr:graphMap` ANYWHERE in the mapping, the true named-graph set for some
+    /// predicate is row-dependent (not statically enumerable), so this refuses
+    /// outright rather than answering over the constant subset alone (unsound —
+    /// could silently omit rows for that predicate). Otherwise `declared_constant_
+    /// graphs` IS the complete enumeration, and an empty result from it is a sound
+    /// empty answer (a mapping with no named graphs at all), never a 501.
+    pub(crate) fn path_branches_for_graph_var(
+        &mut self,
+        subject: &TermPattern,
+        path: &PropertyPathExpression,
+        object: &TermPattern,
+        var: &str,
+    ) -> Result<Vec<Branch>> {
+        if crate::unfold::has_non_constant_graph_map(self.maps) {
+            return Err(Error::Unsupported(
+                "GRAPH ?v { …PATH… } over a mapping declaring a template/column \
+                 rr:graphMap is deferred → 501 (a PathClosure needs one pinned graph per \
+                 compiled CTE; that graph set is row-dependent, not statically enumerable \
+                 — ADR-0035)"
+                    .to_owned(),
+            ));
+        }
+        let graphs = crate::unfold::declared_constant_graphs(self.maps);
+        let mut out = Vec::with_capacity(graphs.len());
+        for g in graphs {
+            let saved_g = self.current_graph.take();
+            let saved_v = self.current_graph_var.take();
+            self.current_graph = Some(g.clone());
+            let branch = self.path_branch(subject, path, object);
+            self.current_graph = saved_g;
+            self.current_graph_var = saved_v;
+            let mut branch = branch?;
+            if bind(&mut branch, var, TermDef::Const(Term::NamedNode(g)))? {
+                out.push(branch);
+            }
+        }
+        Ok(out)
+    }
+
     /// Compile a (closure-free) path sub-expression into a [`CompiledHop`].
     fn compile_path(&self, path: &PropertyPathExpression) -> Result<CompiledHop> {
         use PropertyPathExpression as P;

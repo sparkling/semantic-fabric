@@ -2701,3 +2701,92 @@ fn cross_source_with_duplicate_bag_multiplicity_diverges_from_oracle() {
     );
     assert_oracle_agrees(CROSS_SOURCE_ONE_DUP_SQL, CROSS_SOURCE_ONE_DUP_R2RML, &query);
 }
+
+// ============================================================================
+// ADR-0035 test contract item 5 — star annotation under a named graph.
+//
+// `CENSUS_GRAPH_R2RML` is `CENSUS_R2RML` (above) with ONE addition: the
+// reifier map (`<#PersonAgeAssertion>`'s subjectMap, the star map's OWN
+// carrier) gains `rr:graphMap [ rr:constant <http://example.com/g1> ]`. This
+// exercises the `sf-mapping` fix (`r2rml/star.rs::quote_shape`'s description
+// TriplesMap inheriting the outer star map's effective graphs, instead of the
+// hardcoded `Vec::new()` that put every description map in the default graph
+// regardless of the star map's own declared graph): `?r rdf:reifies ?pf`
+// and `?r ex:assertedBy ?src` (both riding the OUTER `<#PersonAgeAssertion>`
+// triples-map, whose own `graphs` field is what changed) already inherited
+// g1 correctly via the ordinary POM-overrides-subject runtime fallback
+// (`unfold.rs::pattern_branches`'s `eff_graphs`) even before this fix — the
+// bug was ISOLATED to the STANDALONE description map's own 4 basic-encoding
+// POMs (`rdf:type`, `propositionForm{Subject,Predicate,Object}`), which the
+// `<<?p ex:hasAge ?age>>` bare-syntax desugaring also matches INSIDE the
+// `GRAPH ?g { … }` wrapper (`sf-sparql/src/star.rs`'s query-rewrite passes
+// the GRAPH context through untouched, `star/walk.rs`) — pre-fix, those
+// specific sub-patterns found nothing under `GRAPH <g1>` (default-graph-only),
+// so the whole join went empty even though the reifies/assertedBy half would
+// have matched; this is exactly the observable divergence `assert_oracle_
+// agrees` below catches (engine 0 rows vs oracle's independently-decoded 3,
+// pre-fix — verified live by temporarily reverting the one-line fix, see the
+// implementation report).
+// ============================================================================
+
+const CENSUS_GRAPH_R2RML: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ex:  <http://example.com/> .
+
+<#PersonAge>
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#PersonAgeAssertion>
+    rr:logicalTable [ rr:tableName "census_row" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAge> ] ;
+        rr:graphMap [ rr:constant <http://example.com/g1> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:CensusRecord2026 ]
+    ] .
+"#;
+
+/// The core contract-item-5 proof: `GRAPH ?g { << ?p ex:hasAge ?age >> ex:assertedBy
+/// ?src }` binds `?g` to the star map's declared graph and answers — the SAME 3 rows
+/// as the graph-less `bare_syntax_reifies_elision_oracle_agrees`, now inside `GRAPH
+/// ?g`, cross-checked against the independent decoded-graph `spareval` oracle (so a
+/// bug in EITHER the engine's translation or the mapping compiler's graph inheritance
+/// would show up as a real divergence, not a vacuous empty-vs-empty match — see the
+/// section doc comment above).
+#[test]
+fn star_annotation_under_named_graph_binds_and_answers_oracle_agrees() {
+    let query = format!(
+        "{EX}SELECT ?g ?p ?age ?src WHERE {{ GRAPH ?g {{ <<?p ex:hasAge ?age>> ex:assertedBy ?src }} }}"
+    );
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_GRAPH_R2RML, &query);
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+    let g1 = iri("http://example.com/g1");
+    assert!(
+        rows.iter().all(|r| r["g"] == g1),
+        "every row's ?g must be the star map's own declared graph: rows={rows:#?}"
+    );
+}
+
+/// The symmetric negative: once the star map declares `rr:graphMap`, its data is
+/// NO LONGER visible in the DEFAULT graph (R2RML §7.4 / SPARQL §13.1 — a graph
+/// declaration is not additive) — proving the fix is graph-SCOPED, not merely "the
+/// description map became visible everywhere".
+#[test]
+fn star_annotation_under_named_graph_no_longer_visible_in_default_graph() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ <<?p ex:hasAge ?age>> ex:assertedBy ?src }}");
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_GRAPH_R2RML, &query);
+    assert!(
+        rows.is_empty(),
+        "PersonAgeAssertion's data now lives entirely in <http://example.com/g1>, not the \
+         default graph: rows={rows:#?}"
+    );
+}

@@ -275,17 +275,31 @@ CREATE TABLE s1q (id TEXT NOT NULL, v TEXT NOT NULL);
 INSERT INTO s1q VALUES ('1', '5');
 "#;
 
-/// Object-position spec mismatch: SAME subject template (arms NOT disjoint),
-/// same raw object lexical `'5'`, but arm A's object is a plain literal and arm
-/// B's is `xsd:integer` — `"5"` and `"5"^^xsd:integer` are DIFFERENT RDF terms.
-/// A raw-column UNION would dedup them; the reconstruction-agreement gate must
-/// see the differing `TermSpec` and sound-501.
+/// Object-position spec mismatch: SAME subject template (arms NOT disjoint on
+/// `?s` alone), same raw object lexical `'5'`, but arm A's object is a plain
+/// literal and arm B's is `xsd:integer` — `"5"` and `"5"^^xsd:integer` are
+/// DIFFERENT RDF terms. HISTORY: this fixture was originally pinned as
+/// `s1_object_datatype_mismatch_sound_501`, asserting the reconstruction-
+/// agreement gate refused (datatype was deliberately excluded from
+/// `unfold::term_specs_disjoint`'s disjointness proof at the time). Run 5 Wave
+/// W3 widened that proof to also compare literal datatype (normalizing an
+/// absent `rr:datatype` to `xsd:string`, so `?o`'s two `TermSpec`s are now
+/// PROVABLY disjoint on their own — no raw-column collision to reconstruct, no
+/// pooling, no gate, no 501: each arm just contributes its own row to a plain
+/// bag union. The reconstruction-agreement gate this pin used to lock is still
+/// exercised by `s1_different_shape_raw_collision_sound_501` /
+/// `s1_different_shape_same_term_sound_501` above (a subject-template SHAPE
+/// mismatch that stays NOT provably disjoint either way), so gate coverage is
+/// not lost by this rewrite.
 #[test]
-fn s1_object_datatype_mismatch_sound_501() {
+fn s1_object_datatype_mismatch_disjoint_bag_union() {
     let q = format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:p ?o }}");
-    let (f, t) = translate_both(S1_DTYPE_SQL, S1_DTYPE_R2RML, &q);
-    assert!(is_sound_501(&f), "flat must sound-501, got {f:?}");
-    assert!(is_sound_501(&t), "tree must sound-501, got {t:?}");
+    let rows = assert_oracle_agrees(S1_DTYPE_SQL, S1_DTYPE_R2RML, &q);
+    assert_eq!(
+        rows.len(),
+        2,
+        "one row per disjoint arm (no cross-arm pollution): {rows:#?}"
+    );
 }
 
 const S1_DTYPE_R2RML: &str = r#"
@@ -302,6 +316,59 @@ const S1_DTYPE_R2RML: &str = r#"
     rr:predicateObjectMap [ rr:predicate ex:p ;
         rr:objectMap [ rr:column "v" ; rr:datatype xsd:integer ] ] .
 "#;
+
+const S1_DTYPE_DUP_SQL: &str = r#"
+CREATE TABLE s1dup_a (id TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO s1dup_a VALUES ('1', '5');
+INSERT INTO s1dup_a VALUES ('1', '5');
+CREATE TABLE s1dup_b (id TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO s1dup_b VALUES ('1', '5');
+INSERT INTO s1dup_b VALUES ('1', '5');
+"#;
+
+const S1_DTYPE_DUP_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<#A>
+    rr:logicalTable [ rr:tableName "s1dup_a" ] ;
+    rr:subjectMap [ rr:template "http://ex/s/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
+<#B>
+    rr:logicalTable [ rr:tableName "s1dup_b" ] ;
+    rr:subjectMap [ rr:template "http://ex/s/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ;
+        rr:objectMap [ rr:column "v" ; rr:datatype xsd:integer ] ] .
+"#;
+
+/// Same disjoint-datatype shape as
+/// [`s1_object_datatype_mismatch_disjoint_bag_union`], but each source table
+/// ALSO carries a literal duplicate row (unkeyed, no PK/UNIQUE) — proving the
+/// D2 pooling elision this wave adds and D1's OWN pre-existing per-arm dedup
+/// compose correctly. The elision must skip ONLY the now-unneeded CROSS-arm
+/// reconstruction-agreement gate; it must NOT skip the WITHIN-arm D1 dedup
+/// those duplicate rows still require. A conflated elision would double-count
+/// and return 4 rows; the correct answer is 2 (one D1-deduped solution per
+/// disjoint arm).
+#[test]
+fn s1_object_datatype_mismatch_elision_does_not_skip_d1_dedup() {
+    let q = format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:p ?o }}");
+    let (f, t) = translate_both(S1_DTYPE_DUP_SQL, S1_DTYPE_DUP_R2RML, &q);
+    for (label, r) in [("flat", &f), ("tree", &t)] {
+        let plan = r.as_ref().expect("translates");
+        assert_eq!(
+            plan.branches.len(),
+            2,
+            "{label}: datatype-disjoint arms must stay unpooled (2 branches), not merged into 1"
+        );
+    }
+    let rows = assert_oracle_agrees(S1_DTYPE_DUP_SQL, S1_DTYPE_DUP_R2RML, &q);
+    assert_eq!(
+        rows.len(),
+        2,
+        "one D1-deduped row per datatype-disjoint arm (pooling avoided, D1 preserved): {rows:#?}"
+    );
+}
 
 // ############################################################################
 // S2 — the union-composite-key coverage proof
@@ -859,5 +926,260 @@ INSERT INTO s6c VALUES ('2', '50');
         engine.len(),
         oracle_graph.len(),
         "control bag==set (D1 suffices)"
+    );
+}
+
+// ############################################################################
+// S7 — Run 5 W2: ADR-0034 C0e restoration (D2 standalone-group shared
+// cross-branch seen-set) and CONSTRUCT cross-branch same-triple dedup (§16.2)
+// ############################################################################
+//
+// S7a needs a LIVE PostgreSQL connection: `cascade::group_has_unsafe_float_
+// slot_mismatch` (the mechanism under test) is a Postgres-only refusal —
+// SQLite's dynamic typing has no such `UNION` type-resolver error to refuse in
+// the first place, so this fixture would reach `unfold::pool_group`'s
+// PRE-EXISTING SQL-pooling path on SQLite regardless of whether the Run 5 fix
+// exists, proving nothing new about it. Gracefully skips when no server is
+// reachable (mirrors `differential_pg_sqlite.rs`'s own connection helpers,
+// duplicated here rather than imported — separate test binary, no `pub`
+// cross-file surface).
+
+use sf_sparql::exec_pg;
+use sf_sql::introspect::introspect_postgres;
+use tokio_postgres::{Client, NoTls};
+
+/// Base connection params (host/port/user, no dbname): `SF_PG_URL` if set,
+/// else a local trust-auth default keyed on `$USER`.
+fn s7_base_conn() -> String {
+    std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+        format!("host=localhost port=5432 user={user}")
+    })
+}
+
+/// Connect and spawn the driver task, returning the live client.
+async fn s7_connect(conn_str: &str) -> Result<Client, String> {
+    let (client, connection) = tokio_postgres::connect(conn_str, NoTls)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    Ok(client)
+}
+
+const S7_FLOAT_SQL: &str = r#"
+CREATE TABLE s7fa (fn TEXT NOT NULL, amt FLOAT);
+INSERT INTO s7fa VALUES ('Bob', 99);
+CREATE TABLE s7fb (fn TEXT NOT NULL, city TEXT);
+INSERT INTO s7fb VALUES ('Bob', '99');
+"#;
+
+const S7_FLOAT_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+<#A>
+    rr:logicalTable [ rr:tableName "s7fa" ] ;
+    rr:subjectMap [ rr:template "{fn}_{amt}" ; rr:termType rr:BlankNode ] ;
+    rr:predicateObjectMap [ rr:predicate rdf:type ; rr:object ex:Thing ] .
+<#B>
+    rr:logicalTable [ rr:tableName "s7fb" ] ;
+    rr:subjectMap [ rr:template "{fn}_{city}" ; rr:termType rr:BlankNode ] ;
+    rr:predicateObjectMap [ rr:predicate rdf:type ; rr:object ex:Thing ] .
+"#;
+
+/// Run 5 C0e restoration, live-PG: two candidate maps for `?s a ex:Thing`
+/// share a 2-column BlankNode subject template (`{fn}_{amt}` / `{fn}_{city}`,
+/// mirroring W3C R2RMLTC0012e's IOUs/Lives shape) whose 2nd slot is FLOAT on
+/// one side and TEXT on the other — `cascade::group_has_unsafe_float_slot_
+/// mismatch` refused this UNCONDITIONALLY before Run 5 (main never passed it
+/// on PG either). `amt=99` / `city='99'` are chosen so BOTH arms construct the
+/// IDENTICAL blank node label ("Bob_99" — Rust's `f64::to_string()` renders
+/// `99.0` as `"99"`, no decimal point, no scientific notation): this is the
+/// MEANINGFUL part of the test, not just "doesn't 501" — without a correctly
+/// SHARED cross-branch seen-set, the engine returns `?s` TWICE (one per
+/// source table, each its own separate branch); with it, ONCE (the two rows
+/// are the identical solution). Both flat and tree engines are checked (the
+/// restoration is implemented once each, in `unfold::pool_pattern_relation`
+/// and `iq::resolve`'s `Intensional` arm respectively).
+#[test]
+fn s7a_pg_float_text_group_shares_dedup_set_across_branches() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async move {
+        let base = s7_base_conn();
+        let admin = match s7_connect(&format!("{base} dbname=postgres")).await {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!(
+                    "skipping s7a_pg_float_text_group_shares_dedup_set_across_branches: \
+                     no live PostgreSQL reachable"
+                );
+                return;
+            }
+        };
+        let db = format!("sf_adr0034_s7_{}", std::process::id());
+        let _ = admin
+            .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+            .await;
+        admin
+            .batch_execute(&format!("CREATE DATABASE {db}"))
+            .await
+            .expect("create test db");
+        let client = s7_connect(&format!("{base} dbname={db}"))
+            .await
+            .expect("connect to test db");
+        client
+            .batch_execute(S7_FLOAT_SQL)
+            .await
+            .expect("seed fixture");
+
+        let maps = sf_mapping::parse_r2rml(S7_FLOAT_R2RML).expect("R2RML parses");
+        let table_rows = client
+            .query(
+                "SELECT table_name FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
+                 ORDER BY table_name",
+                &[],
+            )
+            .await
+            .expect("list tables");
+        let mut schema = Vec::with_capacity(table_rows.len());
+        for r in table_rows {
+            let name: String = r.get(0);
+            schema.push(
+                introspect_postgres(&client, &name)
+                    .await
+                    .expect("introspect"),
+            );
+        }
+
+        let q = format!("{PFX} SELECT ?s WHERE {{ ?s a ex:Thing }}");
+        let parsed = parse(&q);
+
+        for (label, plan) in [
+            (
+                "flat",
+                translate_with_flat(&parsed, &maps, Dialect::Postgres, &Tbox::default(), &schema),
+            ),
+            (
+                "tree",
+                translate_with(&parsed, &maps, Dialect::Postgres, &Tbox::default(), &schema),
+            ),
+        ] {
+            let plan = plan.unwrap_or_else(|e| {
+                panic!(
+                    "{label}: Run 5 C0e restoration must translate (no more \
+                     float-slot-mismatch 501), got: {e}"
+                )
+            });
+            let sol = exec_pg::select_pg(&plan, &client)
+                .await
+                .unwrap_or_else(|e| panic!("{label}: select_pg: {e}"));
+            assert_eq!(
+                sol.rows.len(),
+                1,
+                "{label}: the two candidate-map arms construct the IDENTICAL blank \
+                 node (fn_amt=\"Bob_99\" == fn_city=\"Bob_99\") — a correctly SHARED \
+                 cross-branch seen-set must collapse them to ONE row, not two: {:#?}",
+                sol.rows
+            );
+            let s = sol.rows[0][0].as_ref().expect("?s bound");
+            assert!(
+                matches!(s, Term::BlankNode(_)),
+                "{label}: ?s must be a blank node, got {s:?}"
+            );
+        }
+
+        let _ = admin
+            .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+            .await;
+    });
+}
+
+const S7_CONSTRUCT_SQL: &str = r#"
+CREATE TABLE s7ca (id TEXT NOT NULL, x TEXT NOT NULL);
+INSERT INTO s7ca VALUES ('1', 'foo');
+CREATE TABLE s7cb (id TEXT NOT NULL, y TEXT NOT NULL);
+INSERT INTO s7cb VALUES ('1', 'bar');
+"#;
+
+const S7_CONSTRUCT_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#A>
+    rr:logicalTable [ rr:tableName "s7ca" ] ;
+    rr:subjectMap [ rr:template "http://ex/s/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:x ; rr:objectMap [ rr:column "x" ] ] .
+<#B>
+    rr:logicalTable [ rr:tableName "s7cb" ] ;
+    rr:subjectMap [ rr:template "http://ex/s/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:y ; rr:objectMap [ rr:column "y" ] ] .
+"#;
+
+/// Run 5 item 3 — CONSTRUCT cross-branch same-triple dedup (§16.2; `lib.rs`'s
+/// `dedup_construct_template_projected_vars` doc comment flags this exact
+/// residual: "two DIFFERENT branches ... that instantiate the SAME triple are
+/// a cross-branch duplicate this pass does not see"). `?s ex:x ?x` and
+/// `?s ex:y ?y` are DIFFERENT triple patterns (a real SPARQL UNION, not a D2
+/// candidate-map ambiguity) — id=1 exists in BOTH source tables, so the WHERE
+/// clause yields 2 DIFFERENT solutions `(s,x=foo)` / `(s,y=bar)`, each
+/// individually correct and non-duplicate at the WHERE level (D1/D2 have
+/// nothing to dedup there). The CONSTRUCT template drops BOTH `?x` and `?y`,
+/// instantiating `<http://ex/s/1> a ex:Thing` from EACH branch — the SAME
+/// triple twice. §16.2's SET semantics says once.
+#[test]
+fn s7b_construct_cross_branch_union_arms_same_triple_dedups() {
+    let q = format!(
+        "{PFX} CONSTRUCT {{ ?s a ex:Thing }} WHERE {{ {{ ?s ex:x ?x }} UNION {{ ?s ex:y ?y }} }}"
+    );
+    let engine = construct_bag(S7_CONSTRUCT_SQL, S7_CONSTRUCT_R2RML, &q);
+    let oracle_graph = oracle_construct(S7_CONSTRUCT_SQL, S7_CONSTRUCT_R2RML, &q);
+    let engine_graph = graph::triples_to_dataset(&engine);
+    assert!(
+        graph::isomorphic(&engine_graph, &oracle_graph),
+        "CONSTRUCT set divergence:\n engine set={engine_graph:?}\n oracle={oracle_graph:?}"
+    );
+    assert_eq!(
+        engine.len(),
+        1,
+        "§16.2: two DIFFERENT branches instantiating the identical triple must \
+         collapse to ONE — cross-branch dedup, not just the per-branch C0b pass: \
+         {engine:#?}"
+    );
+    assert_eq!(
+        engine.len(),
+        oracle_graph.len(),
+        "engine bag must equal the oracle SET's cardinality"
+    );
+}
+
+/// Positive control: the SAME cross-branch shape, but the template KEEPS `?x`
+/// (dropping only `?y`) — the `?s ex:y ?y` branch leaves `?x` UNBOUND, so
+/// `instantiate` drops its triple entirely (SPARQL §16.2: every template var
+/// must be bound); only the `?s ex:x ?x` branch ever instantiates a
+/// well-formed triple, and there is nothing to collapse. Confirms the new
+/// cross-branch pass does not over-fire when there is no actual duplicate.
+#[test]
+fn s7c_construct_cross_branch_control_no_duplicate_to_remove() {
+    let q = format!(
+        "{PFX} CONSTRUCT {{ ?s ex:x ?x }} WHERE {{ {{ ?s ex:x ?x }} UNION {{ ?s ex:y ?y }} }}"
+    );
+    let engine = construct_bag(S7_CONSTRUCT_SQL, S7_CONSTRUCT_R2RML, &q);
+    let oracle_graph = oracle_construct(S7_CONSTRUCT_SQL, S7_CONSTRUCT_R2RML, &q);
+    let engine_graph = graph::triples_to_dataset(&engine);
+    assert!(
+        graph::isomorphic(&engine_graph, &oracle_graph),
+        "control CONSTRUCT set divergence"
+    );
+    assert_eq!(
+        engine.len(),
+        1,
+        "only the `?s ex:x ?x` branch's solution instantiates a well-formed \
+         triple (the `?s ex:y ?y` branch leaves ?x unbound, dropped by \
+         `instantiate`): {engine:#?}"
     );
 }

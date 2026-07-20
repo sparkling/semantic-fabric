@@ -425,21 +425,69 @@ fn s3d2_templateeq_percent_encoding_false_negative_pipe() {
 
 // --- 3(a) cross-KIND — the LOCK -------------------------------------------
 
+// W5b repair: previously `va`/`vb1`/`vb2` fed DIFFERENTLY-shaped templates
+// (`{va}` vs `{vb1}/{vb2}`) rendering DIFFERENT text ("X" vs "X/Y"), so
+// `s3a_cross_kind_shared_join_is_empty` below was empty even with BOTH
+// cross-kind guards (unify.rs:137 and :263) removed — an OVER-DETERMINED
+// lock (verified empirically in the W5 run; see `adversarial_testaudit.rs`'s
+// Cell D, added to close the gap this left). Fixed to the SAME single-column,
+// same-shape template on both sides — mirrors Cell D's `CROSS_KIND_SQL`/
+// `CROSS_KIND_R2RML` exactly — so this JOIN cell now depends on the guard
+// (belt-and-braces with Cell D, not a replacement for it).
+//
+// Used by the JOIN-form test below AND (Run 5 W6) its same-shape FILTER-form
+// companion `s3a_cross_kind_filter_eq_same_shape_is_empty` — deliberately NOT
+// by `s3a_cross_kind_filter_eq_stays_locked_501` just above, which keeps its
+// OWN, differently-shaped fixture. The JOIN form resolves cross-kind
+// disjointness via `unify_derived`'s `term_map_type` pre-check (sound for
+// same-shape templates too), but the FILTER form's `?a = ?b` resolves via
+// `unify::cmp` -> `align_templates`, whose "same segment shape ⇒
+// pairwise-column-equal" fast path (`unify.rs::align_templates`, the
+// `sx.len() == sy.len()` loop) used to NOT check `spec.term_type` at all
+// before emitting `SqlCond::ColEq` — discovered live while writing the W5b
+// repair: pointing the FILTER test at THIS same-shape fixture made it
+// wrongly TRANSLATE (a raw column-vs-column equality) instead of the correct
+// empty answer. That was a genuine, pre-existing soundness gap (same-shape
+// cross-kind templates were not provably disjoint in `align_templates`),
+// orthogonal to the over-determination repair this comment is about, reported
+// separately rather than silently absorbed by loosening either test — and now
+// FIXED (Run 5 W6): `align_templates` itself proves a same-shape, cross-KIND
+// (or cross-normalised-literal) pair disjoint before ever reaching the
+// column-equality loop, so BOTH callers (this join path AND the FILTER path)
+// get the correct `Unify::Empty`.
 const S3A_SQL: &str = r#"
-CREATE TABLE t4 (id INTEGER PRIMARY KEY, va TEXT NOT NULL, vb1 TEXT NOT NULL, vb2 TEXT NOT NULL);
-INSERT INTO t4 VALUES (1, 'X', 'X', 'Y');
+CREATE TABLE t4 (id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+INSERT INTO t4 VALUES (1, 'X');
 "#;
 // `ex:iriv` binds an IRI-typed object template; `ex:litv` binds a PLAIN-LITERAL
-// object template (rr:termType rr:Literal) of a DIFFERENT shape. An IRI can
-// never equal a plain literal (SPARQL term equality), regardless of lexical
-// text.
+// object template (rr:termType rr:Literal) over the IDENTICAL template shape
+// and column, so both render the SAME lexical text `http://ex.org/v/X`. An
+// IRI can never equal a plain literal (SPARQL term equality), regardless of
+// lexical text.
 const S3A_R2RML: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
 @prefix ex: <http://example.com/> .
 <#Iri> rr:logicalTable [ rr:tableName "t4" ] ;
     rr:subjectMap [ rr:template "http://ex.org/p/{id}" ] ;
-    rr:predicateObjectMap [ rr:predicate ex:iriv ; rr:objectMap [ rr:template "http://ex.org/v/{va}" ] ] .
+    rr:predicateObjectMap [ rr:predicate ex:iriv ; rr:objectMap [ rr:template "http://ex.org/v/{v}" ] ] .
 <#Lit> rr:logicalTable [ rr:tableName "t4" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/p/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:litv ;
+        rr:objectMap [ rr:template "http://ex.org/v/{v}" ; rr:termType rr:Literal ] ] .
+"#;
+
+// The FILTER test's OWN fixture — differently-shaped templates (`{va}` vs
+// `{vb1}/{vb2}`, the ORIGINAL pre-W5b s3a shape). Kept separate from
+// `S3A_R2RML` above deliberately; see that constant's doc comment for why
+// sharing it would trip an unrelated `align_templates` gap instead of
+// exercising the (sound) `template_eq_or_unsupported` path this test locks.
+const S3A_FILTER_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#Iri> rr:logicalTable [ rr:tableName "t4f" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/p/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:iriv ; rr:objectMap [ rr:template "http://ex.org/v/{va}" ] ] .
+<#Lit> rr:logicalTable [ rr:tableName "t4f" ] ;
     rr:subjectMap [ rr:template "http://ex.org/p/{id}" ] ;
     rr:predicateObjectMap [ rr:predicate ex:litv ;
         rr:objectMap [ rr:template "http://ex.org/v/{vb1}/{vb2}" ; rr:termType rr:Literal ] ] .
@@ -449,21 +497,57 @@ const S3A_R2RML: &str = r#"
 /// plain-literal template must NEVER match them via a wrong `TemplateEq` —
 /// `template_eq_or_unsupported`'s `spec1.term_type == spec2.term_type` guard
 /// keeps this a sound `Unsupported` (501), never a rendered-string equality
-/// between two different-kind terms. (Enhancement note in the final report: a
-/// provably-unequal `Unify::Empty` would be sound AND complete here, so this
-/// could return an empty answer instead of 501 — a completeness improvement,
-/// not a correctness bug.)
+/// between two different-kind terms. This SHAPE mismatch stays 501 even after
+/// the Run 5 W6 fix below (only the SAME-shape path was ever missing its
+/// term_type check) — the "Enhancement note" this doc comment used to flag (a
+/// provably-unequal `Unify::Empty` would be sound AND complete, so a
+/// SAME-shape cross-kind pair could answer empty instead of 501) is now
+/// realized by `s3a_cross_kind_filter_eq_same_shape_is_empty` below, over
+/// `S3A_R2RML`'s same-shape fixture. Uses its OWN fixture
+/// (`S3A_FILTER_R2RML`), NOT `S3A_R2RML` — see that constant's doc comment
+/// for why sharing it would exercise a different `align_templates` path than
+/// this shape-mismatch test means to lock.
 #[test]
 fn s3a_cross_kind_filter_eq_stays_locked_501() {
     let query =
         format!("{EX}SELECT ?p WHERE {{ ?p ex:iriv ?a . ?p ex:litv ?b . FILTER(?a = ?b) }}");
-    assert_locked_501(S3A_R2RML, &query);
+    assert_locked_501(S3A_FILTER_R2RML, &query);
+}
+
+/// LOCK (Run 5 W6 fix): the FILTER-form companion over the SAME-SHAPE fixture
+/// (`S3A_R2RML`, the join cell's own fixture below) instead of
+/// `S3A_FILTER_R2RML`'s differently-shaped one. `?a`/`?b` are both a
+/// single-column `http://ex.org/v/{v}` template over the SAME column, one
+/// side IRI-typed, the other `rr:termType rr:Literal`, so `align_templates`
+/// takes its same-shape pairwise-column-equality path (the `sx.len() ==
+/// sy.len()` loop), never reaching `template_eq_or_unsupported`. Before the
+/// fix, that loop never consulted `spec.term_type` and emitted a plain
+/// `ColEq` on the shared `v` column, wrongly MATCHING an IRI against a
+/// same-lexical-text Literal (SPARQL term equality: never — an IRI and a
+/// Literal are never `sameTerm` regardless of lexical form). Now
+/// `align_templates` proves this disjoint (`Unify::Empty`) up front — the
+/// FILTER becomes constant-false, an empty answer, agreeing with the oracle
+/// (which treats `?a = ?b` between an IRI and a Literal as a type error,
+/// excluding the row).
+#[test]
+fn s3a_cross_kind_filter_eq_same_shape_is_empty() {
+    let query =
+        format!("{EX}SELECT ?p WHERE {{ ?p ex:iriv ?a . ?p ex:litv ?b . FILTER(?a = ?b) }}");
+    let rows = assert_oracle_agrees(S3A_SQL, S3A_R2RML, &query);
+    assert!(
+        rows.is_empty(),
+        "IRI != literal even with identical lexical text and template shape: {rows:#?}"
+    );
 }
 
 /// LOCK companion: the shared-variable JOIN form of the same cross-kind pair —
 /// `unify_derived`'s `term_map_type` pre-check proves IRI vs Literal disjoint
 /// (`Unify::Empty`), so the engine returns an empty bag, matching the oracle
-/// (the two objects are never the same term). Both engines translate and agree.
+/// (the two objects are never the same term). Both engines translate and
+/// agree. The fixture's IRI and Literal templates render the IDENTICAL
+/// lexical text (W5b repair, see the fixture's own doc comment above), so
+/// this emptiness depends SOLELY on the cross-kind guard, not on the two
+/// sides happening to render different strings.
 #[test]
 fn s3a_cross_kind_shared_join_is_empty() {
     let query = format!("{EX}SELECT ?p WHERE {{ ?p ex:iriv ?v . ?p ex:litv ?v }}");
@@ -552,6 +636,42 @@ fn s3c_pg_templateeq_emission_is_wellformed() {
 }
 
 // --- 3(e) live PostgreSQL differential — ADDED post-review -----------------
+//
+// W5b hermeticity repair: the original version connected with NO `dbname=`,
+// landing on whatever database happens to default-resolve for `$USER` (often
+// a database SHARED with other live-PG suites), then reused the bare table
+// name `t3` there with no isolation. Two concurrent PG differentials racing
+// `DROP TABLE IF EXISTS t3` / `CREATE TABLE t3` on the SAME database hit a
+// genuine PostgreSQL race — both `CREATE TABLE t3` calls can interleave past
+// each other's `DROP`, and the loser's implicit `pg_type` row for the
+// table's row type collides on `pg_type_typname_nsp_index` (duplicate key).
+// Fixed by mirroring `differential_pg_sqlite.rs`'s own convention exactly:
+// probe the maintenance `postgres` database first (absence ⇒ graceful skip,
+// unchanged), then create a PER-PROCESS throwaway database (`sf_s3e_<pid>`)
+// so `t3` lives in a database no other test can ever see.
+
+/// Base connection params (host/port/user, **no** dbname): `SF_PG_URL` if set,
+/// else a local trust-auth default keyed on `$USER` (duplicated from
+/// `differential_pg_sqlite.rs` / `sf_conformance::pg` per this file's own
+/// copied-helper convention — a Cargo integration test is its own crate, no
+/// `pub` cross-file surface to import).
+fn base_conn() -> String {
+    std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+        format!("host=localhost port=5432 user={user}")
+    })
+}
+
+/// Connect and spawn the driver task, returning the live client.
+async fn connect(conn_str: &str) -> Result<tokio_postgres::Client, String> {
+    let (client, connection) = tokio_postgres::connect(conn_str, tokio_postgres::NoTls)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    Ok(client)
+}
 
 /// Live-PG companion to s3b: the SAME percent-encoding false-positive
 /// repro, executed end to end against a REAL PostgreSQL server — not just
@@ -560,30 +680,37 @@ fn s3c_pg_templateeq_emission_is_wellformed() {
 /// `percent_encode_col_postgres`'s `unnest(string_to_array(...))  WITH
 /// ORDINALITY` encoder. Gracefully skips when no PostgreSQL server is
 /// reachable (mirrors `differential_pg_sqlite.rs`'s own `SF_PG_URL`
-/// graceful-skip convention, so CI stays green without a live server; a
-/// live server WAS reachable and this test WAS run green during this fix's
-/// own development).
+/// graceful-skip convention, so CI stays green without a live server), and
+/// runs in a per-process throwaway database so concurrent PG suites can
+/// never collide with it (see the hermeticity repair note above).
 #[tokio::test]
 async fn s3e_live_pg_templateeq_percent_encoding_false_positive() {
-    use tokio_postgres::NoTls;
-    let conn_str = std::env::var("SF_PG_URL").unwrap_or_else(|_| {
-        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
-        format!("host=localhost port=5432 user={user}")
-    });
-    let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
-        eprintln!("no PostgreSQL server reachable — skipping s3e live PG differential");
-        return;
+    let base = base_conn();
+    // Probe via the maintenance database; absence ⇒ graceful skip (mirrors
+    // `differential_pg_sqlite.rs::select_and_ask_agree_across_sqlite_and_pg`).
+    let admin = match connect(&format!("{base} dbname=postgres")).await {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("no PostgreSQL server reachable — skipping s3e live PG differential");
+            return;
+        }
     };
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-
-    // Same table name/shape/data as S3B_SQL (SQLite), on a SEPARATE live PG
-    // database — no naming collision risk, so S3B_R2RML is reused unchanged.
-    client
-        .batch_execute("DROP TABLE IF EXISTS t3")
+    let dbname = format!("sf_s3e_{}", std::process::id());
+    admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
         .await
-        .expect("drop");
+        .expect("drop pre-existing throwaway db");
+    admin
+        .batch_execute(&format!("CREATE DATABASE {dbname}"))
+        .await
+        .expect("create throwaway db");
+
+    let client = connect(&format!("{base} dbname={dbname}"))
+        .await
+        .expect("connect work db");
+
+    // Same table name/shape/data as S3B_SQL (SQLite) — safe to reuse verbatim
+    // now that `t3` lives in a database no other test can ever see.
     client
         .batch_execute(
             "CREATE TABLE t3 (id INTEGER PRIMARY KEY, va TEXT NOT NULL, \
@@ -617,6 +744,11 @@ async fn s3e_live_pg_templateeq_percent_encoding_false_positive() {
         engine.is_empty(),
         "the two IRIs differ by encoding, live PG must agree: {engine:#?}"
     );
+
+    drop(client);
+    let _ = admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .await;
 }
 
 // ============================================================================
