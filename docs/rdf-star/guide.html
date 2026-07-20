@@ -84,9 +84,10 @@
     <li><a href="#asserted">4. Asserted vs. non-asserted</a></li>
     <li><a href="#object">5. Quoting in object position</a></li>
     <li><a href="#querying">6. Querying: the matching law</a></li>
-    <li><a href="#dedup">7. Duplicates don't leak through</a></li>
-    <li><a href="#limits">8. What works now, and what still doesn't</a></li>
-    <li><a href="#faq">9. FAQ</a></li>
+    <li><a href="#graphs">7. Querying inside a named graph</a></li>
+    <li><a href="#dedup">8. Duplicates don't leak through</a></li>
+    <li><a href="#limits">9. What works now, and what still doesn't</a></li>
+    <li><a href="#faq">10. FAQ</a></li>
   </ul>
 </div>
 
@@ -199,13 +200,30 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
 </div>
 <div class="warn"><span class="lbl">The v1 behavior this replaces</span> v1 treated both spellings as the same thing and let bare syntax match a quoted-triple <em>object</em> too — a real unsoundness (SPARQL 1.2 draws the ReifiedTriple/TripleTerm distinction precisely so this doesn't happen). If you have queries written against v1, audit any bare <code>&lt;&lt; … &gt;&gt;</code> pattern matched against an object-position quote — it now returns empty; switch it to the parenthesized form.</div>
 
-<h2 id="dedup"><span class="n">7.</span>Duplicates don't leak through</h2>
+<h2 id="graphs"><span class="n">7.</span>Querying inside a named graph: <code>GRAPH ?g</code></h2>
+<p>If your mapping puts triples into named graphs — a constant <code>rr:graphMap</code>, one per source table, say — you can ask <code>GRAPH ?g { … }</code> and get back <em>which</em> graph each answer came from, not just the answer itself:</p>
+<pre><code>PREFIX ex: &lt;http://example.com/&gt;
+SELECT ?g ?person ?age WHERE {
+  GRAPH ?g { ?person ex:hasAge ?age }
+}</code></pre>
+<p><code>?g</code> binds, per row, to the declared graph that triple actually lives in — no quad store, no extra materialization; the engine enumerates the mapping's declared graphs at translate time and joins ordinarily. Two patterns sharing one <code>?g</code> inside the same block only match when they land in the <strong>same</strong> graph, for free — it's just an ordinary shared-variable join.</p>
+<p>This composes with quoting, too — a star annotation can live inside a named graph, and querying it is completely unremarkable:</p>
+<pre><code>PREFIX ex: &lt;http://example.com/&gt;
+SELECT ?g ?person ?age ?src WHERE {
+  GRAPH ?g {
+    &lt;&lt; ?person ex:hasAge ?age &gt;&gt; ex:assertedBy ?src .
+  }
+}</code></pre>
+<p>The quoted pattern's basic-encoding join (§3) happens <em>inside</em> the graph pin exactly like an ordinary triple pattern would — the description triples that make the quote answerable are compiled into the same named graph as the quote itself, so this just works, with no extra authoring step.</p>
+<div class="tip"><span class="lbl">One boundary to know</span> Property paths (<code>ex:p+</code>, <code>ex:p/ex:q</code>, …) inside <code>GRAPH ?g</code> work when every graph map in your <em>entire</em> mapping is a constant IRI. The moment any triples map anywhere uses a <em>template</em> or <em>column</em> graph map, a path under <code>GRAPH ?g</code> returns a <code>501</code> instead of an answer — the graph a row lands in isn't knowable until the query runs, and path translation needs it upfront. Ordinary (non-path) patterns under <code>GRAPH ?g</code> are unaffected, and a fixed <code>GRAPH &lt;g&gt;</code> (not a variable) is unaffected too.</div>
+
+<h2 id="dedup"><span class="n">8.</span>Duplicates don't leak through</h2>
 <p>Your source table almost certainly isn't perfectly deduplicated, and a mapping can end up quoting the same fact twice. Neither should show up as extra rows in a SPARQL-star answer: R2RML's own output is a <strong>graph</strong> — a <em>set</em> — so a duplicate source row, or two star maps that happen to quote the identical triple, counts once.</p>
 <p>semantic-fabric enforces this at query time, at essentially zero cost for the common case. A mapping whose subject is templated on a primary key — the normal shape — needs no extra work at all: the engine proves duplicates are impossible from the key alone and emits the same SQL it always did. Only a mapping that <em>can</em> actually produce duplicates pays for the dedup that guarantees a correct answer.</p>
 <div class="tip"><span class="lbl">One thing to watch</span> A non-injective <strong>IRI</strong> template — one where two different rows can render the exact same IRI — still returns a <code>501</code> rather than silently deduping. Add a separator between your template's column references and it becomes injective (and dedup-safe) again. Plain-literal and blank-node templates don't have this restriction; they dedup automatically.</div>
-<p><code>CONSTRUCT</code> follows the same rule: instantiating the same triple from two different rows emits it once, not twice.</p>
+<p><code>CONSTRUCT</code> follows the same rule: instantiating the same triple from two different rows emits it once, not twice — and so does instantiating it from two <em>different</em> candidate maps that happen to produce the identical triple, not only two rows of the same map.</p>
 
-<h2 id="limits"><span class="n">8.</span>What works now, and what still doesn't</h2>
+<h2 id="limits"><span class="n">9.</span>What works now, and what still doesn't</h2>
 <p>As of ADR-0032, almost everything v1 declared a boundary is implemented:</p>
 <ul>
   <li><strong>Nesting</strong> (object side, any depth — §5), <strong>cross-source quoting</strong> (§5), and <strong>author-controlled reifiers</strong> via <code>rml:reifierMap</code>.</li>
@@ -226,7 +244,14 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
   erroring.</li>
   <li><strong>Whole-triple-term equality</strong> (<code>?t1 = ?t2</code>) resolves for constant
   and same-shape template components, and now for <strong>differently</strong>-shaped IRI and
-  plain-string templates too (2026-07-19).</li>
+  plain-string templates too (2026-07-19); a same-shape pair of <strong>different kinds</strong>
+  (an IRI template compared against a Literal template, say) now correctly resolves empty too,
+  instead of a wrong match (2026-07-20).</li>
+  <li><strong>Named graphs, including the variable form</strong> (2026-07-20):
+  <code>GRAPH ?g { … }</code> now works — see §7 — and composes directly with star annotations
+  declared inside a named graph. Property paths under <code>GRAPH ?g</code> still refuse
+  (<code>501</code>) once the mapping has any non-constant graph map anywhere, even if the path's
+  own predicate never uses one.</li>
 </ul>
 <p>What's left is honest, and short:</p>
 <ul>
@@ -237,7 +262,7 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
 </ul>
 <p>Everything else — subject/object position, asserted/non-asserted, variables or constants in any of s/p/o, patterns inside <code>FILTER EXISTS</code> — works, same as before.</p>
 
-<h2 id="faq"><span class="n">9.</span>FAQ</h2>
+<h2 id="faq"><span class="n">10.</span>FAQ</h2>
 <details><summary>Is this real RDF-star, or a workaround?</summary><p>Yes, and now at every surface you touch: what you write, what you query, and what comes back. Underneath, semantic-fabric still uses the W3C RDF 1.2 <em>basic encoding</em> (plain triples) as its own internal wire format, because a virtualizing SQL engine has nothing to store a triple term in at the row level — but it decodes back to native RDF&nbsp;1.2 at the query boundary, so a result set is indistinguishable from a native RDF-star store's own answer. The <a href="specification.html#divergence">specification §9</a> documents exactly what (narrower) divergence remains, entirely below the SQL line.</p></details>
 <details><summary>Does anything get materialized?</summary><p>No. Both the mapping and the query compile to plain triples / SQL over your live tables. No copy of the data is made.</p></details>
 <details><summary>What does the identity look like if I select it?</summary><p>Depends what you project. A reified pattern's identity (<code>?r</code> in <code>?r rdf:reifies &lt;&lt;(…)&gt;&gt;</code>) is a plain <code>urn:sf-star:r:…</code> IRI, deterministic per declaring star map and row. A triple-term variable (<code>?t</code> in <code>?r rdf:reifies ?t</code>, or anywhere a <code>&lt;&lt;( … )&gt;&gt;</code> pattern binds one) is a <strong>real native triple term</strong> — not a stand-in — so <code>isTRIPLE(?t)</code> now genuinely returns <code>true</code>.</p></details>
@@ -247,7 +272,7 @@ http://ex.org/person/2087  | 29   | .../CensusRecord2026</code></pre></div>
 </main>
 <footer>
   <p>semantic-fabric — R2RML-star Guide &amp; Tutorial. For the normative details see the
-  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031 / ADR-0032 / ADR-0033 / ADR-0034.</p>
+  <a href="specification.html">R2RML-star specification</a>. Governing decisions: ADR-0028 / ADR-0029 / ADR-0031 / ADR-0032 / ADR-0033 / ADR-0034 / ADR-0035.</p>
 </footer>
 </body>
 </html>
