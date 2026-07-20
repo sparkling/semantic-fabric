@@ -78,8 +78,8 @@
   <dl class="docmeta">
     <dt>This version</dt><dd><code>docs/rdf-star/specification.html</code></dd>
     <dt>Status</dt><dd>Project Specification — Implemented, merged to <code>main</code></dd>
-    <dt>Latest update</dt><dd>2026-07-19</dd>
-    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition)</dd>
+    <dt>Latest update</dt><dd>2026-07-20</dd>
+    <dt>Governing decisions</dt><dd>ADR-0028 (research), ADR-0029 (mapping), ADR-0031 (query), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition), ADR-0034 (set semantics, BGP-level dedup)</dd>
     <dt>Editorial model</dt><dd>Structured after the W3C <em>R2RML: RDB to RDF Mapping Language</em> Recommendation</dd>
   </dl>
 </header>
@@ -146,6 +146,7 @@
         <li><a href="#functions-values">Nesting, VALUES, and the five functions</a></li>
         <li><a href="#equality-order">Equality and ORDER BY</a></li>
         <li><a href="#native-results">Native results</a></li>
+        <li><a href="#set-semantics">Set semantics: BGP-level deduplication</a></li>
       </ol>
     </li>
     <li><a href="#scope">Scope and Restrictions</a></li>
@@ -301,26 +302,49 @@
 </p>
 <table>
   <tr><th>Family</th><th>Template shape</th><th>Keyed on</th><th>Stands in for</th></tr>
-  <tr><td><strong>Proposition id</strong></td><td><code>urn:sf-star:pf:&lt;predicate-slug&gt;|{s-cols…}|{o-cols…}|</code></td><td>The quoted (s,p,o) <em>shape</em></td><td>The triple term itself</td></tr>
+  <tr><td><strong>Proposition id</strong></td><td><code>urn:sf-star:pf:&lt;predicate-slug&gt;|&lt;subject-component&gt;|&lt;object-component&gt;|</code></td><td>The quoted (s,p,o) <em>shape</em>, over each component's full rendered form</td><td>The triple term itself</td></tr>
   <tr><td><strong>Reifier id</strong></td><td><code>urn:sf-star:r:&lt;declaring-map-slug&gt;|{cols…}|</code></td><td>The declaring star map, plus the same columns as the proposition id it reifies</td><td>One reifier of that proposition</td></tr>
 </table>
 <p>
   A proposition id is a <strong>pure function of the quoted shape</strong>: every reference to the
   same (s,p,o) shape — from anywhere in the mapping, subject position or object position — expands
-  to the identical identifier for the identical row, realizing Semantics §5's injective co-identity
-  mapping <code>IT(s,p,o)</code> structurally rather than by convention. A reifier id is instead
-  keyed on <strong>which star map declared it</strong>: two different subject-position star maps
-  quoting the same shape mint two <em>distinct</em> reifiers of the <em>one</em> (deduplicated)
-  proposition — Concepts §1.5's "there can be multiple, distinct reifiers related to the same
-  abstract proposition." Both families use structural determinism, not a run-time hash: the same
-  row always expands to the same string, so identifiers are backend-portable and reproducible
-  across independent runs.
+  to the identical identifier for the identical row. Each of the subject and object components is
+  the term's <strong>full rendered lexical form</strong>, not merely its referenced columns:
+</p>
+<ul>
+  <li>a compile-time <strong>term-kind tag</strong> — <code>I</code> (IRI), <code>B</code> (blank
+    node), <code>L</code> (plain literal), <code>L^^&lt;datatype&gt;</code>, or
+    <code>L@&lt;language&gt;</code> — folded in as fixed text ahead of the component, since a term
+    map's kind, datatype and language never vary per row;</li>
+  <li>an <code>rr:template</code> term's <strong>entire segment list</strong> — literal prefixes and
+    suffixes as well as columns — spliced in verbatim, exactly as template expansion renders the
+    real term elsewhere in the same mapping, so two templates over the same column(s) with different
+    fixed text can never collide; an <code>rr:column</code> term contributes only its own per-row
+    value, since there is no prefix or suffix to lose;</li>
+  <li>an <code>rr:constant</code> term's own canonical form, percent-encoded directly into the id —
+    it is never expanded anywhere else, so nothing else fixes its representation;</li>
+  <li>every per-row column value, percent-encoded exactly as template expansion always
+    percent-encodes an IRI segment (R2RML §7.3's <code>iunreserved</code> set) — <code>|</code>
+    itself falls outside that set, so a <code>|</code> surviving into the finished id is always one
+    of the id's own delimiters, never smuggled-in column content.</li>
+</ul>
+<p>
+  This makes the proposition id an <strong>injective</strong> function of the quoted (s,p,o) shape,
+  realizing Semantics §5's co-identity mapping <code>IT(s,p,o)</code> structurally: id-equality now
+  implies decoded-triple-equality, so two differently-templated star maps that share a predicate and
+  happen to produce the same raw column values can no longer mint the same id for genuinely
+  different triples. A reifier id is instead keyed on <strong>which star map declared it</strong>:
+  two different subject-position star maps quoting the same shape mint two <em>distinct</em>
+  reifiers of the <em>one</em> (deduplicated) proposition — Concepts §1.5's "there can be multiple,
+  distinct reifiers related to the same abstract proposition." Both families use structural
+  determinism, not a run-time hash: the same row always expands to the same string, so identifiers
+  are backend-portable and reproducible across independent runs.
 </p>
 <p>
   <strong>Nesting.</strong> When a quoted triple's own object is itself a quoted triple (§4.2), the
-  outer proposition id splices the inner one's own template segments in verbatim, rather than
-  flattening to bare column names — so two different inner shapes that happen to reuse the same
-  leaf column names still cannot collide, at any nesting depth.
+  inner quote's own proposition id is itself an <code>rr:template</code> term to the outer one — so
+  the same splice-in-verbatim rule above embeds the inner shape's entire identity into the outer id,
+  rather than flattening to bare column names, at any nesting depth.
 </p>
 
 <h3 id="four-triples"><span class="secno">5.2</span>The four basic-encoding triples</h3>
@@ -477,6 +501,51 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   SPARQL §16.2 — not an error.
 </p>
 
+<h3 id="set-semantics"><span class="secno">7.7</span>Set semantics: BGP-level deduplication</h3>
+<p>
+  <span class="rule-id">R6</span> R2RML's own output model is a <strong>graph</strong> — a
+  <em>set</em> of triples — and SPARQL §18.3 evaluates a basic graph pattern against that set: a
+  duplicate source row, or two candidate maps emitting the identical triple, must not inflate the
+  answer. This is engine-general, not star-specific (ADR-0034) — the mechanism dedups at the
+  <strong>BGP-block boundary</strong>, below <code>GROUP BY</code>, before projection or
+  <code>UNION</code> can introduce their own legitimate duplicates. It is documented here because it
+  is exactly what already makes the four basic-encoding triples (§5.2) shared, not duplicated,
+  across every reference to the same quoted shape, and because star's extra shared-variable join
+  positions are where it is most easily triggered.
+</p>
+<p>Two mechanisms, elided to zero SQL cost in the common case:</p>
+<ul>
+  <li><strong>Within-branch (duplicate source rows).</strong> A branch whose joined tables are not
+    all covered by a declared primary/unique key gets a <code>SELECT DISTINCT</code> wrap over its
+    full read set. A well-keyed mapping — subjects templated on a primary key, the overwhelmingly
+    common shape — needs no wrap at all: the key-coverage proof elides it, so the emitted SQL is
+    byte-identical to before.</li>
+  <li><strong>Cross-map (two maps, one triple).</strong> Where two candidate maps' arms are not
+    provably template-disjoint, they pool through <code>UNION</code> (set) instead of
+    <code>UNION ALL</code> (bag). Provably disjoint arms — different fixed template prefixes, the
+    normal case for two genuinely different shapes — already cannot emit the same triple, so
+    <code>UNION ALL</code> stays set-correct and no pooling is introduced.</li>
+</ul>
+<p>
+  Where an arm's own template is not <strong>injective</strong> — a <code>Literal</code> or
+  <code>BlankNode</code> template that can render the same value from different rows — SQL
+  <code>DISTINCT</code> cannot be trusted to equal term-level dedup, so an unkeyed, non-joined
+  (standalone) relation instead dedups in Rust, on the fully reconstructed solution tuple. This does
+  <strong>not</strong> extend to non-injective <strong>IRI</strong> templates, which stay a
+  <code>501</code> refusal: unlike a literal or blank node, an IRI template can always be made
+  injective by adding a separator between its column references, so the refusal is an addressable
+  mapping-design issue, not an engine limitation. One further, PostgreSQL-only <code>501</code>
+  remains: pooling a float-typed component against a differently-typed one in the same
+  <code>UNION</code> risks silent lexical drift in PostgreSQL's own float-to-text formatting, so it
+  is refused rather than risked.
+</p>
+<p>
+  <code>CONSTRUCT</code> output is a set under the same reading (§16.2): instantiating the same
+  triple from two different result rows emits it once, not twice — applied at the SQL level
+  whenever the template's variables are a strict subset of the pattern's own and the template is
+  blank-node-free.
+</p>
+
 <h2 id="scope"><span class="secno">8.</span>Scope and Restrictions</h2>
 <p>
   Nearly every boundary v1 declared a <code>501</code>-class error is now implemented and
@@ -496,6 +565,8 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   <tr><td><code>=</code> / <code>sameTerm</code> on triple terms</td><td>Component-wise, per §17.4.2.2 (§7.5) — with one residual, see §8.2.</td></tr>
   <tr><td><code>CONSTRUCT</code> producing triple-term objects</td><td>Real instantiation; illegal positions silently dropped per SPARQL §16.2, not an error (§7.6).</td></tr>
   <tr><td>Native results</td><td>A projected reification variable binds a real triple term at every surface — SELECT JSON/XML/CSV, Turtle CONSTRUCT (§7.6).</td></tr>
+  <tr><td><code>AVG()</code>/<code>SUM()</code> over a quoted-triple component</td><td>Spec-correct SPARQL §18.5.1 error semantics: a group containing a non-numeric operand now leaves the aggregate <strong>unbound</strong> rather than silently miscomputing; an <code>xsd:double</code> <code>NaN</code> operand propagates <code>NaN</code> through the aggregate, matching the oracle.</td></tr>
+  <tr><td>PostgreSQL <code>NUMERIC</code> NaN / ±Infinity</td><td>A quoted triple's <code>NUMERIC</code>-typed component holding <code>NaN</code> or an infinite value on PostgreSQL now classifies as a clean, documented <code>501</code> — previously misrouted to an internal server error.</td></tr>
 </table>
 
 <h3><span class="secno">8.2</span>Remaining boundaries</h3>
@@ -503,9 +574,9 @@ pfid  rdf:propositionFormObject     o .</code></pre>
   <tr><th></th><th>Restriction</th><th>Rationale</th></tr>
   <tr><td><span class="rule-id">R4</span></td><td><strong>No predicate position.</strong> A quoted triple in predicate position is rejected at load time.</td><td>RDF&nbsp;1.2 Concepts §3.1: a predicate is always an IRI. Not an engine limitation — spec-impossible.</td></tr>
   <tr><td><span class="rule-id">R4</span></td><td><strong>No subject position in data.</strong> A quoted triple as a mapping's own quoted-triples-map subject is rejected at load time; as a <em>query pattern</em> it instead matches nothing (§7.3) — never an error.</td><td>RDF&nbsp;1.2 Concepts §3.1: a subject is an IRI or blank node. Spec-impossible, not a scope choice.</td></tr>
-  <tr><td>—</td><td><strong>Quoted pattern at a property-path endpoint — LIFTED on the default engine (ADR-0033, 2026-07-19).</strong> Path branches now compile as alias-preserving derived tables and join ordinarily on the tree engine (the production default), star or not — including OPTIONAL on either side, EXISTS bodies, and GROUP BY over the join. The flat engine (the <code>=_bag</code> oracle path) retains the original restriction.</td><td>The lift is engine-general (any path join, not just star) and adversarially verified, incl. a duplicate-multiplicity <code>!p</code> bag fixture. Remaining: the flat-engine restriction, by design.</td></tr>
-  <tr><td>—</td><td><strong>Uniform composed-ness — partially lifted (2026-07-19).</strong> A <em>top-level</em> <code>SELECT</code> union whose arms disagree on whether a shared variable is a triple term — and a single mixed <code>VALUES</code> column, which row-partitions into one — now resolve, each row realizing per its own arm. The strict rejection remains wherever the variable is <em>observed</em> (a <code>FILTER</code>/function/equality/CONSTRUCT template over the mixed variable, or any nested composition).</td><td>Per-branch realization is safe by construction; only the statically-resolved consumers (the five functions, equality, templates) force uniformity — the 501 now fires exactly there, test-pinned on both sides of the boundary.</td></tr>
-  <tr><td>—</td><td><strong>Whole-composed-variable equality — lifted for aligned shapes (2026-07-19).</strong> <code>?t1 = ?t2</code> now resolves when components are constants or same-structure templates (pairwise column equality; provably-disjoint templates fold to false). The residual <code>501</code> is a genuine template <em>shape mismatch</em> the alignment machinery cannot resolve either way, with a sharpened error naming both variables and the reason.</td><td>Reuses the join machinery's own template alignment — no new comparison semantics. Component-wise comparison (e.g. <code>OBJECT(?t1) = OBJECT(?t2)</code>) is unaffected either way.</td></tr>
+  <tr><td>—</td><td><strong>Quoted pattern at a property-path endpoint — LIFTED on both engines (ADR-0033, 2026-07-19).</strong> Path branches now compile as alias-preserving derived tables and join ordinarily — including OPTIONAL on either side, EXISTS bodies, and GROUP BY over the join — on the tree engine (the production default) <em>and</em> the flat engine (the <code>=_bag</code> oracle path), which now runs the identical conversion. A path whose predicate is mapped only in a different named graph than the one queried — star endpoint or not — now compiles to a graceful, oracle-checked <strong>empty</strong> result instead of a 501; a predicate unmapped anywhere, or an otherwise uncompilable shape, still refuses.</td><td>The join lift is engine-general (any path join, not just star) and adversarially verified, incl. a duplicate-multiplicity <code>!p</code> bag fixture; the flat engine is restored as the <code>=_bag</code> oracle over these shapes. The wrong-graph fix shares one two-pass predicate-resolution rewrite across both engines.</td></tr>
+  <tr><td>—</td><td><strong>Uniform composed-ness — the FILTER carve-out (2026-07-19).</strong> A <code>FILTER</code> over a mixed-composedness union or <code>VALUES</code> partition, sitting at the <code>SELECT</code> top level or inside an <code>EXISTS</code>/<code>NOT EXISTS</code> body, now resolves <strong>per arm</strong> — each arm's own static shape decides its own rows — instead of collapsing to one answer for the whole union. Bare projection of a mixed variable already resolved per-arm (unchanged). Still refused: a <code>CONSTRUCT</code> template consuming the mixed variable, and a mixed union/<code>VALUES</code> nested under a further join.</td><td>The FILTER case mirrors the rewrite's existing Filter-over-Union distribution; <code>EXISTS</code>/<code>NOT EXISTS</code> route through the same top-level rewrite. A <code>CONSTRUCT</code> template has no per-row arm to realize into and stays refused; nesting under a further join is outside the boundary the fix reaches.</td></tr>
+  <tr><td>—</td><td><strong>Whole-composed-variable equality — shape-mismatch residual mostly closed (2026-07-19).</strong> <code>?t1 = ?t2</code> already resolved same-structure templates and constants (pairwise column equality). Genuinely <em>differently</em>-shaped templates now resolve too, for IRI and plain/<code>xsd:string</code> components, by comparing each side's fully-rendered form as a dialect-correct SQL <code>CONCAT</code> — on PostgreSQL, SQLite and MySQL. The residual <code>501</code> narrows to typed-literal, language-tagged, and blank-node component classes, and to any other SQL dialect.</td><td>A second, purely boolean-condition SQL rendering (<code>SqlCond::TemplateEq</code>) alongside the alignment-based path above — never SELECTed or reconstructed from, so term-construction lifting is untouched (ADR-0007). Restricted to term classes where lexical equality <em>is</em> term equality, and to dialects whose NULL-propagation through string concatenation matches R2RML §11 term-absence.</td></tr>
 </table>
 
 <h2 id="divergence"><span class="secno">9.</span>Divergence from RML-STAR</h2>
@@ -578,15 +649,19 @@ pfid  rdf:propositionFormObject     o .</code></pre>
     ] .</code></pre></div>
 <p>
   This is byte-for-byte the same mapping v1 authors wrote (§4.1). What changed is what it compiles
-  to. For person 1042's row, the <strong>proposition id</strong> is a pure function of
-  <code>ex:hasAge</code>'s IRI and the two quoted columns (§5.1):
+  to. For person 1042's row, the <strong>proposition id</strong> is the fully-rendered form of each
+  quoted component (§5.1): an <code>I</code>-tagged subject with its template's literal prefix
+  spliced in verbatim, then an <code>L</code>-tagged object — plain, since this mapping's object map
+  carries no explicit <code>rr:datatype</code> for the compiler to fold in as a tag, even though the
+  underlying column is SQL-integer:
 </p>
-<pre><code>urn:sf-star:pf:http_example_com_hasAge|1042|34|</code></pre>
+<pre><code>urn:sf-star:pf:http_example_com_hasAge|I|http://ex.org/person/1042|L|34|</code></pre>
 <p>
   and the <strong>reifier id</strong> is keyed on the declaring map, <code>#PersonAgeAssertion</code>
   (its slug prefix — abbreviated <code>…</code> below — depends on how the mapping document's base
   IRI resolves that fragment; what matters is that it is deterministic and distinct per declaring
-  map):
+  map), over the same two raw columns — the reifier id's own construction is unchanged from v1
+  (§5.1):
 </p>
 <pre><code>urn:sf-star:r:…_PersonAgeAssertion|1042|34|</code></pre>
 <p>The outer triples map's subject <em>is</em> that reifier id — not the proposition id — linked to it by the injected <code>rdf:reifies</code> triple (§5.3).</p>
@@ -638,9 +713,9 @@ SELECT ?r ?t WHERE {
   <li><a href="https://www.w3.org/TR/rdf12-concepts/">RDF 1.2 Concepts and Abstract Syntax</a> — triple terms and reification, §3.1 (triple-term positions), §1.5 (reification).</li>
   <li><a href="https://www.w3.org/TR/rdf12-semantics/">RDF 1.2 Semantics</a> — §5, the injective co-identity mapping <code>IT(s,p,o)</code> this specification's proposition identifiers realize structurally.</li>
   <li><a href="https://www.w3.org/TR/rdf12-interop/">RDF 1.2 Interoperability</a> — the (non-normative) basic encoding / basic decoding this specification's internal wire format is modeled on (§9).</li>
-  <li><a href="https://www.w3.org/TR/sparql12-query/">SPARQL 1.2 Query</a> — §15.1 (ORDER BY), §16.2 (CONSTRUCT instantiation), §17.4.6 (triple-term functions and their error semantics), §18.1.3 (subject-position triple patterns never match).</li>
+  <li><a href="https://www.w3.org/TR/sparql12-query/">SPARQL 1.2 Query</a> — §15.1 (ORDER BY), §16.2 (CONSTRUCT instantiation), §17.4.6 (triple-term functions and their error semantics), §18.1.3 (subject-position triple patterns never match), §18.3 (basic graph pattern set semantics, §7.7), §18.5.1 (AVG/SUM aggregate error semantics, §8.1).</li>
   <li>RML-STAR Draft CG Report — <code>kg-construct/rml-star</code>.</li>
-  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition).</li>
+  <li>semantic-fabric ADR-0028 (research), ADR-0029 (mapping compiler), ADR-0031 (query rewrite), ADR-0032 (soundness &amp; completeness, native reification), ADR-0033 (path-join composition), ADR-0034 (virtual-graph set semantics, BGP-level dedup).</li>
 </ul>
 
 </main>
