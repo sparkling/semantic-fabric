@@ -29,10 +29,14 @@ fn cases_dir() -> PathBuf {
 // and a translate-time fallback for SubPlan-embedded derived tables, which carry
 // no live catalog — `emit::synthetic_subplan_catalog`) cleared 8 regular-
 // identifier shortfalls (R2RMLTC0002d/0003b/0009d/0011a/0014b/c/d and the rowid→
-// `ctid` Direct Mapping translation). R2RMLTC0002f stays an honest fail: its
-// `{ID}/{Name}` template references resolve exactly to the delimited DDL columns,
-// so it cannot be rejected without breaking the structurally-identical positive
-// case R2RMLTC0018a (D018) — left documented. R2RMLTC0012e — its D2-pooled
+// `ctid` Direct Mapping translation). R2RMLTC0002f stays an honest fail — but
+// NOT because rejection is impossible here (corrected 2026-07-20): on PG the
+// unquoted `{Name}` case-folds to `name` and genuinely does not match the
+// delimited `"Name"`, and Ontop v4.1.0 passes 0002f alongside the
+// structurally-identical positives R2RMLTC0002a/0018a on PG (rml.io R2RML
+// implementation report). Our resolver's case-insensitive fallback erases the
+// distinction; a delimited-aware PG resolver is an OPEN PARITY ITEM (README §9,
+// ADR-0015). Until it exists, 0002f is a documented deviation, not a gate red. R2RMLTC0012e — its D2-pooled
 // blank-node subject template positionally UNIONs `IOUs.amount` (`FLOAT`)
 // against `Lives.city` (`VARCHAR`) at the same column slot, a hard PostgreSQL
 // `UNION` type-resolver error if pooled as-is and unsafe to paper over with a

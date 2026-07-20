@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-07-20
 tags: [datatype, dialect, r2rml-section-10, canonicalization, oxsdatatypes, sqlite-affinity, correctness]
 supersedes: []
 depends-on:
@@ -43,10 +44,28 @@ R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) ide
 
 **Decision: resolve every mapping column identifier against the *live introspected schema* — exact match first (preserves a genuinely delimited/case-exact column), then a unique ASCII-case-insensitive match — rather than implement strict SQL:2008 delimited-vs-regular rejection.** Rationale:
 * **Provenance is unrecoverable by a virtualiser.** SQL:2008 comparison needs the delimited-vs-regular status of the *actual column*. We learn columns by introspection (`information_schema` / `PRAGMA`), which returns bare name strings; SQLite (case-insensitive, no delimitation record) erases the distinction entirely, and PG only partially exposes it. Strict rejection would risk false-rejecting valid mappings.
-* **The suite itself is predominantly lenient.** The W3C cases that exercise this pattern as **positive** cases (`R2RMLTC0002a`, `R2RMLTC0018a` / D018 — `rr:column "Name"` / `{Name}` against a delimited `"Name"`) *expect success*. Implementing strict rejection would fail those positives to satisfy the single **negative** case `R2RMLTC0002f` — a **net conformance loss**. Both the positive and negative cases here are W3C `test:reviewStatus test:unreviewed`.
+* **The suite itself is predominantly lenient.** The W3C cases that exercise this pattern as **positive** cases (`R2RMLTC0002a`, `R2RMLTC0018a` / D018 — `rr:column "Name"` / `{Name}` against a delimited `"Name"`) *expect success*. On a dialect whose identifiers are case-insensitive or whose catalog erases delimited-vs-regular provenance (SQLite; MySQL semantics), implementing strict rejection would fail those positives to satisfy the single **negative** case `R2RMLTC0002f` — a **net conformance loss**. Both the positive and negative cases here are W3C `test:reviewStatus test:unreviewed`. *(Corrected 2026-07-20: this trade-off argument is per-dialect, not universal — see the correction below.)*
 * **Consistent with production OBDA.** Reference engines resolve against the catalog rather than re-deriving SQL identifier folding.
 
 **Consequence — one documented deviation:** `R2RMLTC0002f` (a negative test expecting rejection) is not rejected by the engine. It is recorded in `sf_conformance::EXPECTED_DEVIATIONS`, reported truthfully as `earl:failed`, and **excluded from the regression gate** (`Report::unexpected_failures`) — so it cannot mask a real future regression while also not being a perpetual red bar. Revisit if a future need requires strict identifier validation (it would be a distinct, opt-in mapping-validation pass, not the resolution path).
+
+> **Correction (2026-07-20) — the rejection-is-impossible argument is per-dialect,
+> not universal.** This ADR originally implied strict `0002f` rejection would
+> break the positive twins on any backend. Verified against the maintained
+> [R2RML implementation report](https://rml.io/r2rml-implementation-report)
+> (Ontop v4.1.0, tested 2021-03-11): **Ontop passes `R2RMLTC0002f` alongside
+> `R2RMLTC0002a` and `R2RMLTC0018a` on PostgreSQL** — and fails `0002f` on
+> MySQL, exactly like this engine. The honest split: **SQLite/MySQL semantics**
+> — identifiers case-insensitive (SQLite regardless of quoting), no
+> delimited-vs-regular provenance; accepting is *correct for the database* and
+> the net-conformance-loss argument stands. **PostgreSQL** — unquoted
+> identifiers case-fold, so `{Name}` genuinely does not match a delimited
+> `"Name"`; rejection is achievable without breaking the positives, and our
+> case-insensitive fallback erasing that distinction is a **resolver-design
+> choice**. Closing it (a delimited-aware PG resolver) is an **open parity
+> item** (README §9), deliberately not yet built; until then `0002f` remains a
+> documented deviation on both dialects. The `EXPECTED_DEVIATIONS` rationale
+> and both W3C suite headers carry this same correction.
 
 ### Consequences
 

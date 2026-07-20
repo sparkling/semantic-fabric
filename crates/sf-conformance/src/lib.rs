@@ -66,14 +66,21 @@ pub struct CaseResult {
 pub const EXPECTED_DEVIATIONS: &[(&str, &str)] = &[(
     "R2RMLTC0002f",
     "negative test: a regular identifier {Name} referencing the delimited, \
-     mixed-case column \"Name\". Per R2RML §5 (SQL:2008 comparison) the reference \
-     is non-conforming, so a strict processor rejects it. semantic-fabric resolves \
-     identifiers against the live introspected schema (exact, then unique \
-     case-insensitive) because introspection erases delimited-vs-regular \
-     provenance (SQLite especially). Strict rejection would also fail the suite's \
-     own positive cases built on the same pattern (R2RMLTC0002a, R2RMLTC0018a / \
-     D018) — a net conformance loss for one test:unreviewed negative case. \
-     Decision: lenient resolution; 0002f is a documented deviation (ADR-0015).",
+     mixed-case column \"Name\" — expected to be rejected per R2RML §5 \
+     (SQL:2008 comparison). semantic-fabric resolves identifiers against the \
+     live introspected schema (exact, then unique case-insensitive) and \
+     accepts it on both suite dialects. The honest status is per-dialect \
+     (ADR-0015, corrected 2026-07-20): on SQLite accepting is CORRECT for the \
+     database — identifiers are case-insensitive regardless of quoting and \
+     introspection preserves no delimited-vs-regular provenance, so strict \
+     rejection there would also break the positive twins built on the same \
+     pattern (R2RMLTC0002a, R2RMLTC0018a / D018). On PostgreSQL, whose \
+     unquoted identifiers case-fold and genuinely do not match, rejection IS \
+     achievable without breaking those twins — Ontop v4.1.0 passes 0002f \
+     alongside both on PG (rml.io R2RML implementation report, verified \
+     2026-07-20) — so on PG this is an OPEN PARITY ITEM (a delimited-aware \
+     resolver), not an impossibility. Until that resolver exists, 0002f is a \
+     documented deviation on both dialects.",
 )];
 
 /// The rationale for an expected deviation, if `id` is one.

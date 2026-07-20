@@ -77,13 +77,17 @@ fn w3c_rdb2rdf_construct_conformance() {
 // cases (R2RMLTC0006a/0007b/0007e/0007f/0008a/0009b) PASS via the mapping-IR quad
 // dump (ADR-0005). The 63rd R2RML case, R2RMLTC0002f, is a documented standards
 // deviation (`sf_conformance::EXPECTED_DEVIATIONS`, ADR-0015 §Identifier
-// resolution): per R2RML §5 (SQL:2008 comparison) the regular identifier {Name}
-// does not match the delimited mixed-case column "Name", so a strict processor
-// rejects the mapping — but the suite's own positive cases (R2RMLTC0002a,
-// R2RMLTC0018a/D018) rely on lenient matching of that very pattern, and our
-// virtualiser cannot recover delimited-vs-regular provenance from introspection
-// (SQLite especially). We adopt lenient resolution; 0002f stays earl:failed but is
-// excluded from the gate above as a documented deviation. Both 0002f and D018 are
+// resolution, corrected 2026-07-20): per R2RML §5 (SQL:2008 comparison) the
+// regular identifier {Name} does not match the delimited mixed-case column
+// "Name", so a strict processor rejects the mapping. On SQLite, accepting is
+// the CORRECT behaviour for the database — SQLite identifiers are
+// case-insensitive regardless of quoting and introspection preserves no
+// delimited-vs-regular provenance, so strict rejection HERE would also break
+// the positive cases (R2RMLTC0002a, R2RMLTC0018a/D018) that rely on the same
+// pattern. (That impossibility argument is SQLite/MySQL-specific: on
+// PostgreSQL rejection is achievable — see w3c_pg_suite.rs — where it is an
+// open parity item instead.) 0002f stays earl:failed but is excluded from the
+// gate above as a documented deviation. Both 0002f and D018 are
 // test:unreviewed.
 const R2RML_BASELINE: usize = 62;
 const DM_BASELINE: usize = 19;
