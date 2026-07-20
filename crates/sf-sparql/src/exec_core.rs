@@ -106,10 +106,11 @@ where
         offset: plan.offset,
         limit: plan.limit,
         // This is the plain streaming path (design §2: reconstruct -> DISTINCT ->
-        // ORDER/slice -> sink, ONE row in flight downstream) — never parallelize
-        // term-gen here, see `reconstruct_batch`'s `parallel_allowed` doc comment
-        // for the measured reason (ledger F8).
-        parallel_term_gen: false,
+        // ORDER/slice -> sink, ONE row in flight downstream) — parallel term-gen
+        // is now allowed here too, see `reconstruct_batch`'s `parallel_allowed`
+        // doc comment and [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the
+        // measured reason (ledger F8, un-gated on an idle-machine re-measurement).
+        parallel_term_gen: true,
         dedup_groups: &plan.dedup_groups,
     };
     run_branches(&branches, ctx, b, sink).await
@@ -1205,10 +1206,28 @@ const TERM_GEN_FIRST_BATCH_SIZE: usize = 64;
 /// this very testing), and `par_chunks`' win margin is inherently sensitive
 /// to core contention in a way a quiet/dedicated re-run could easily
 /// overturn — a hot path this wide (every CONSTRUCT dump and streaming
-/// SELECT) deserves cleaner verification before its default flips. Left as
-/// a concrete, evidenced follow-up: re-run `obda_construct_dump` (not
-/// `constant_memory_dump`, per the confound above) on an idle machine before
-/// deciding whether to un-gate.
+/// SELECT) deserved cleaner verification before its default flipped.
+///
+/// **FINAL VERDICT (2026-07-20, Run 5 W1) — un-gated.** The idle-machine
+/// re-run happened under a noise-floor-first protocol (load 3.92 on 18
+/// cores, zero competing cargo/rustc/criterion processes; two prior
+/// attempts correctly ABORTED under swarm load rather than repeat the
+/// contamination). Measured floor from back-to-back unchanged runs:
+/// ~0.47% at 1x / ~2.42% at 10x — the first post-build pair was discarded
+/// for a one-time cold-start swing (`first_result_µs` 1616 → 190), the
+/// same first-result-vs-steady-state distinction drawn elsewhere in this
+/// file. Against a warm baseline (medians): `full_dump_10x` **−9.15% /
+/// −9.95%** across two flip replicates (both p < 0.05, agreeing within
+/// 0.8pp), clearing the decision bar of max(5%, 2×floor) = 5%;
+/// `full_dump_1x` stayed within noise in both replicates (+0.60% n.s. /
+/// −1.73% criterion-noise) — 1x can still cross this gate (5200 triples ⇒
+/// one 4000-row batch), so in-noise was the requirement, not untouched.
+/// Both constant-memory invariant tests pass in the flipped
+/// configuration. `for_each_solution` therefore now sets
+/// `parallel_term_gen: true` for the plain streaming path; this constant
+/// and `TERM_GEN_BATCH_SIZE` are unchanged — only WHO may cross the gate
+/// changed, completing the F6→F8→C1 arc (the C1-era loaded-box "7-9%
+/// faster" signal was real).
 const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 
 /// The floor on `par_chunks`' chunk size WITHIN one already-dispatched batch

@@ -170,7 +170,16 @@ Results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw
   > showed dispatch now WINNING ~7–9% at 10× (p<0.05, two replicates) on a
   > loaded machine. Not shipped from that measurement session; the follow-up
   > (re-run `obda_construct_dump` on an idle machine, flip the gate if it
-  > holds) is recorded in `TERM_GEN_MIN_PARALLEL_ROWS`'s doc comment.
+  > holds) was recorded in `TERM_GEN_MIN_PARALLEL_ROWS`'s doc comment.
+  >
+  > **Un-gated (2026-07-20, Run 5 W1) — the arc closes.** The idle-machine
+  > re-run (noise-floor-first protocol; floor 0.47%/2.42%; two prior
+  > correctly-aborted attempts under swarm load) confirmed the C1 signal:
+  > `full_dump_10x` **−9.15%/−9.95%** across two replicates (p<0.05,
+  > clearing max(5%, 2×floor)), `full_dump_1x` within noise, constant-memory
+  > invariants green flipped. The plain streaming path now dispatches
+  > (`parallel_term_gen: true`); constants unchanged. Full verdict in the
+  > gate's own doc comment.
 * First-class source dialects: **PostgreSQL** (primary production), **SQLite** (embedded / W3C-suite CI); **MySQL** follows. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
 * Crate pins + 1.2 feature flags: ADR-0004 / ADR-0019. Toolchain pinned via `rust-toolchain.toml`.
 
