@@ -63,7 +63,9 @@ use std::collections::BTreeMap;
 
 use sf_core::ir::TriplesMap;
 
-use crate::iq::node::{triple_pattern_vars, BindDef, IqCond, IqNode};
+use crate::iq::node::{
+    graph_pattern_var, path_pattern_vars, triple_pattern_vars, BindDef, IqCond, IqNode,
+};
 use crate::iq::Branch;
 use crate::saturate::Tbox;
 use crate::unfold::{all_pairwise_disjoint, Unfolder};
@@ -122,7 +124,16 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
     match node {
         // ---- the one resolving case ---------------------------------------------
         IqNode::Intensional { pattern, graph } => {
-            let vars = triple_pattern_vars(&pattern);
+            // ADR-0035: a `GRAPH ?v` context contributes `v` to this leaf's own scope,
+            // exactly as `IqNode::output_vars` already computes for the UNRESOLVED leaf
+            // (`graph_pattern_var`) — needed here too since RESOLVE builds the arms'
+            // `Empty`/`Union` wrapper directly, not via a later `output_vars()` call.
+            let mut vars = triple_pattern_vars(&pattern);
+            if let Some(v) = graph_pattern_var(graph.as_ref()) {
+                if !vars.contains(&v) {
+                    vars.push(v);
+                }
+            }
             let mut branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
             // ADR-0034 D1/D2 are both skipped inside a FILTER EXISTS / FILTER NOT
             // EXISTS / MINUS body — see `Unfolder::in_existential`'s own doc comment
@@ -296,14 +307,17 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             })
         }
 
-        // ---- the property-path resolving case (M5 Wave 1) -----------------------
+        // ---- the property-path resolving case (M5 Wave 1; ADR-0035 for GRAPH ?v) --
         // Reuse the flat `path_branch` VERBATIM via `resolve_path` (pinning the
         // constant active graph exactly as the flat `GRAPH <g> { ?s PATH ?o }` path
-        // does), then bridge the single resulting `Branch` (which carries a
-        // `path = Some(PathClosure)`) to an `IqNode::Path` UNDER its `Construction`
-        // bindings via the SAME `bridge_branch` the triple case uses. A path pattern
-        // is one bag alternative (the flat `GraphPattern::Path` arm yields exactly
-        // `vec![path_branch(...)]`), so there is never a `Union` wrapper here. ZERO
+        // does; a *variable* graph instead unions over the mapping's declared constant
+        // named graphs — `Unfolder::path_branches_for_graph_var`, `path.rs`), then
+        // bridge each resulting `Branch` (carrying `path = Some(PathClosure)`) to an
+        // `IqNode::Path` UNDER its `Construction` bindings via the SAME `bridge_branch`
+        // the triple case uses — the identical 0/1/N arm-count bridging `Intensional`
+        // above already applies (`resolve_path` returns `Vec<Branch>` uniformly now: a
+        // constant/no-GRAPH path is always exactly one arm, matching the old
+        // single-`Branch` contract; `GRAPH ?v` may be several, or none). ZERO
         // `UnresolvedPath` survives — `bridge_branch` produces no `UnresolvedPath`.
         IqNode::UnresolvedPath {
             subject,
@@ -311,10 +325,19 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             object,
             graph,
         } => {
-            let branch = cx
+            let vars = path_pattern_vars(&subject, &object, graph.as_ref());
+            let branches = cx
                 .unfolder
                 .resolve_path(&subject, &path, &object, graph.as_ref())?;
-            Ok(bridge_branch(branch))
+            let mut arms: Vec<IqNode> = branches.into_iter().map(bridge_branch).collect();
+            Ok(match arms.len() {
+                0 => IqNode::Empty { vars },
+                1 => arms.pop().expect("len checked == 1"),
+                _ => IqNode::Union {
+                    children: arms,
+                    project: vars,
+                },
+            })
         }
 
         // ---- recurse into children, structure unchanged -------------------------

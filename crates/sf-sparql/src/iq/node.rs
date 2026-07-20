@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use sf_core::datatype::XsdTypeCode;
-use sf_core::{NamedNode, Term};
+use sf_core::Term;
 use spargebra::algebra::{Expression, PropertyPathExpression};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
@@ -137,11 +137,13 @@ pub enum IqNode {
     /// `IntensionalDataNode`: an unresolved triple/quad pattern. **MUST NOT survive
     /// unfolding** — it is replaced against the T-mappings (into
     /// `Extensional`/`Construction`/`Union` subtrees) before normalization and
-    /// lowering. `graph` is the resolved *constant* active graph (a variable graph is a
-    /// 501 at build time — design §2 `Graph` arm / §5.2 item 6).
+    /// lowering. `graph` is the active `GRAPH` context: `None` (default graph), a
+    /// pinned constant (`GRAPH <g>`), or (ADR-0035) a variable (`GRAPH ?g`) — RESOLVE
+    /// enumerates the latter per candidate's effective graph map, binding the
+    /// variable (design §2 `Graph` arm, superseding §5.2 item 6's former 501).
     Intensional {
         pattern: TriplePattern,
-        graph: Option<NamedNode>,
+        graph: Option<NamedNodePattern>,
     },
     /// `UnresolvedPathNode`: a SPARQL property-path pattern `?s PATH ?o` (any closure
     /// `P+`/`P*`/`p?`, sequence `p/q`, alternative `p|q`, inverse `^p`, or negated
@@ -151,13 +153,16 @@ pub enum IqNode {
     /// hop relation reads the triples-maps), so it cannot be compiled context-free at
     /// BUILD — RESOLVE reuses the flat [`Unfolder::path_branch`](crate::unfold) VERBATIM
     /// to turn it into an [`IqNode::Path`] closure (design §5.2 item 3). `graph` is the
-    /// resolved *constant* active graph (a variable graph is already a build-time 501);
-    /// the length-1 fixed-predicate path (≡ one triple) stays an `Intensional`, not this.
+    /// active `GRAPH` context, same three-way shape as [`IqNode::Intensional::graph`];
+    /// a *variable* graph (ADR-0035) compiles to a union over the mapping's declared
+    /// constant named graphs (a closure needs one pinned graph — see
+    /// [`Unfolder::resolve_path`](crate::unfold::Unfolder::resolve_path)). The length-1
+    /// fixed-predicate path (≡ one triple) stays an `Intensional`, not this.
     UnresolvedPath {
         subject: TermPattern,
         path: PropertyPathExpression,
         object: TermPattern,
-        graph: Option<NamedNode>,
+        graph: Option<NamedNodePattern>,
     },
     /// `EmptyNode`: ∅ over a declared variable set. Union identity, InnerJoin absorbing
     /// (design §4.13). Carries `vars` so a parent projection stays well-formed when the
@@ -286,9 +291,11 @@ impl IqNode {
     ///   node owns its scope, closing the agg-over-UNION binding bug, design §4.14).
     /// * `Values`/`Empty` — the declared `vars`; `True` — none (the empty tuple).
     /// * `Intensional` — the variables in the triple pattern's subject/predicate/
-    ///   object positions (the `graph` here is a resolved *constant*, never a var).
+    ///   object positions, plus `graph`'s variable when it is a `GRAPH ?g` context
+    ///   (ADR-0035) rather than `None`/a pinned constant.
     /// * `UnresolvedPath` — the variables in the path pattern's subject/object
-    ///   positions (a property path has no predicate variable; `graph` is a constant).
+    ///   positions (a property path has no predicate variable), plus `graph`'s
+    ///   variable under the same ADR-0035 rule as `Intensional`.
     /// * `Extensional` — its `bind` keys (the variables the resolved relation reads).
     /// * `Path` — empty: a [`PathClosure`](super::PathClosure) is keyed by the
     ///   canonical `sf_s`/`sf_o` raw columns and carries **no** SPARQL variable
@@ -323,19 +330,19 @@ impl IqNode {
             }
             IqNode::Values { vars, .. } | IqNode::Empty { vars } => vars.clone(),
             IqNode::Extensional { bind, .. } => bind.keys().cloned().collect(),
-            IqNode::Intensional { pattern, .. } => triple_pattern_vars(pattern),
-            IqNode::UnresolvedPath {
-                subject, object, ..
-            } => {
-                let mut out = Vec::new();
-                if let TermPattern::Variable(v) = subject {
-                    push_unique(&mut out, v.as_str().into());
-                }
-                if let TermPattern::Variable(v) = object {
-                    push_unique(&mut out, v.as_str().into());
+            IqNode::Intensional { pattern, graph } => {
+                let mut out = triple_pattern_vars(pattern);
+                if let Some(v) = graph_pattern_var(graph.as_ref()) {
+                    push_unique(&mut out, v);
                 }
                 out
             }
+            IqNode::UnresolvedPath {
+                subject,
+                object,
+                graph,
+                ..
+            } => path_pattern_vars(subject, object, graph.as_ref()),
             IqNode::True | IqNode::Path { .. } => Vec::new(),
         }
     }
@@ -355,6 +362,17 @@ fn push_unique_all(out: &mut Vec<Var>, vs: Vec<Var>) {
     }
 }
 
+/// The variable name of a `GRAPH ?g` context (ADR-0035), or `None` for the default
+/// graph / a pinned constant `GRAPH <g>`. Shared by [`IqNode::output_vars`] and
+/// [`crate::iq::resolve`]'s own `Intensional`/`UnresolvedPath` scope computation, so
+/// both agree on exactly when a leaf's `graph` contributes a bound variable.
+pub(crate) fn graph_pattern_var(graph: Option<&NamedNodePattern>) -> Option<Var> {
+    match graph {
+        Some(NamedNodePattern::Variable(v)) => Some(v.as_str().into()),
+        _ => None,
+    }
+}
+
 /// The variables a triple pattern binds, in subject→predicate→object order
 /// (de-duplicated, so a repeated variable such as `?x ?x ?x` is listed once).
 pub(crate) fn triple_pattern_vars(tp: &TriplePattern) -> Vec<Var> {
@@ -367,6 +385,30 @@ pub(crate) fn triple_pattern_vars(tp: &TriplePattern) -> Vec<Var> {
     }
     if let TermPattern::Variable(v) = &tp.object {
         push_unique(&mut out, v.as_str().into());
+    }
+    out
+}
+
+/// The variables a property-path pattern's subject/object positions bind, plus
+/// `graph`'s variable under a `GRAPH ?g` context (ADR-0035) — [`triple_pattern_vars`]'s
+/// path-pattern counterpart, de-duplicated the same way (e.g. `GRAPH ?s { ?s p+ ?s }`
+/// lists `?s` once). Shared by [`IqNode::output_vars`]'s `UnresolvedPath` arm and
+/// [`crate::iq::resolve`]'s own `UnresolvedPath` scope computation (post-resolution,
+/// once the leaf itself is gone and its 0/1/N resolved arms need the same `vars`).
+pub(crate) fn path_pattern_vars(
+    subject: &TermPattern,
+    object: &TermPattern,
+    graph: Option<&NamedNodePattern>,
+) -> Vec<Var> {
+    let mut out = Vec::new();
+    if let TermPattern::Variable(v) = subject {
+        push_unique(&mut out, v.as_str().into());
+    }
+    if let TermPattern::Variable(v) = object {
+        push_unique(&mut out, v.as_str().into());
+    }
+    if let Some(v) = graph_pattern_var(graph) {
+        push_unique(&mut out, v);
     }
     out
 }

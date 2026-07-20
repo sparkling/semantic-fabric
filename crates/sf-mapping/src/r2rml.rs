@@ -177,7 +177,8 @@ fn parse_triples_map(
     let mut star_assertions = subject_star;
     let mut standalone_maps = subject_standalone;
     for pom in &pom_nodes {
-        let (pom_ir, pom_standalone, pom_stars) = parse_predicate_object_map(g, pom, &source)?;
+        let (pom_ir, pom_standalone, pom_stars) =
+            parse_predicate_object_map(g, pom, &source, &subject.graphs)?;
         predicate_object_maps.push(pom_ir);
         standalone_maps.extend(pom_standalone);
         star_assertions.extend(pom_stars);
@@ -274,8 +275,19 @@ fn parse_subject_map(
         if let Some(star_map) = g.object(&node, RML_STAR_MAP) {
             let star_node = as_resource(star_map)?;
             let outer_tm_id = node_id(tm);
-            let expansion =
-                star::expand_star_map_subject(g, &star_node, &outer_tm_id, outer_source)?;
+            // ADR-0035: this carrier's own effective graphs must be known BEFORE
+            // expansion so the description map can inherit them — `parse_graph_maps`
+            // runs again below, at `carrier` (== `node` on this branch), for the
+            // returned `SubjectMap` itself; a harmless small duplicate parse, not a
+            // behavior change.
+            let carrier_graphs = parse_graph_maps(g, &node)?;
+            let expansion = star::expand_star_map_subject(
+                g,
+                &star_node,
+                &outer_tm_id,
+                outer_source,
+                &carrier_graphs,
+            )?;
             injected_poms = vec![expansion.reifies_pom];
             standalone_maps = expansion.description_maps;
             star_assertions = expansion.assertions;
@@ -314,14 +326,21 @@ fn parse_subject_map(
 ///
 /// `outer_source` is the enclosing triples map's own logical source —
 /// needed for the D4 cross-source check an object-position `rml:starMap`
-/// requires (see [`parse_object_map`]). Returns any standalone description
-/// triples maps alongside the ordinary [`PredicateObjectMap`], plus every
-/// `rml:starMap` assertion bookkeeping entry encountered among this
-/// predicate-object map's objects.
+/// requires (see [`parse_object_map`]). `subject_graphs` (ADR-0035) is that
+/// same enclosing triples map's OWN subject-map graphs, needed only as the
+/// R2RML §4.6 fallback when THIS predicate-object map declares no `rr:graphMap`
+/// of its own — threaded down to an object-position `rml:starMap`'s
+/// description map (see [`parse_object_map`]); it plays no other role here
+/// (this map's own returned `graphs` field is exactly what R2RML always
+/// computed, never widened by the fallback). Returns any standalone
+/// description triples maps alongside the ordinary [`PredicateObjectMap`],
+/// plus every `rml:starMap` assertion bookkeeping entry encountered among
+/// this predicate-object map's objects.
 fn parse_predicate_object_map(
     g: &Graph,
     node: &NamedOrBlankNode,
     outer_source: &LogicalSource,
+    subject_graphs: &[TermMap],
 ) -> Result<(PredicateObjectMap, Vec<TriplesMap>, Vec<StarAssertion>)> {
     let pm_nodes: Vec<NamedOrBlankNode> = g
         .objects(node, RR_PREDICATE_MAP)
@@ -343,6 +362,18 @@ fn parse_predicate_object_map(
         predicates.push(TermMap::Constant(constant.clone()));
     }
 
+    // ADR-0035: this POM's own effective graphs (POM overrides subject map, R2RML
+    // §4.6), computed BEFORE the object-map loop so an object-position `rml:starMap`
+    // can thread it down to its description map ([`parse_object_map`]). This map's
+    // own `graphs` field (returned below) stays exactly `parse_graph_maps`' result —
+    // `eff_graphs` is only ever an INPUT to the star expansion, never widens it.
+    let graphs = parse_graph_maps(g, node)?;
+    let eff_graphs: &[TermMap] = if graphs.is_empty() {
+        subject_graphs
+    } else {
+        &graphs
+    };
+
     let om_nodes: Vec<NamedOrBlankNode> = g
         .objects(node, RR_OBJECT_MAP)
         .map(as_resource)
@@ -351,7 +382,7 @@ fn parse_predicate_object_map(
     let mut standalone_maps = Vec::new();
     let mut star_assertions = Vec::new();
     for om in &om_nodes {
-        let (object, om_standalone, om_star) = parse_object_map(g, om, outer_source)?;
+        let (object, om_standalone, om_star) = parse_object_map(g, om, outer_source, eff_graphs)?;
         objects.push(object);
         standalone_maps.extend(om_standalone);
         star_assertions.extend(om_star);
@@ -360,7 +391,6 @@ fn parse_predicate_object_map(
         objects.push(ObjectMap::Term(TermMap::Constant(constant.clone())));
     }
 
-    let graphs = parse_graph_maps(g, node)?;
     Ok((
         PredicateObjectMap {
             predicates,
@@ -390,14 +420,19 @@ fn parse_predicate_object_map(
 /// never matches a bare `quoted_id`, so that filter is always a no-op for
 /// it; the description carrier is unconditional, exactly like the
 /// subject-position `rdf:reifies` POM).
+///
+/// `graphs` (ADR-0035) is the enclosing predicate-object map's EFFECTIVE
+/// graphs ([`parse_predicate_object_map`]'s `eff_graphs`), threaded down to
+/// [`star::expand_star_map_object`] so the description map inherits them.
 fn parse_object_map(
     g: &Graph,
     node: &NamedOrBlankNode,
     outer_source: &LogicalSource,
+    graphs: &[TermMap],
 ) -> Result<(ObjectMap, Vec<TriplesMap>, Vec<StarAssertion>)> {
     if let Some(star_map) = g.object(node, RML_STAR_MAP) {
         let star_node = as_resource(star_map)?;
-        let expansion = star::expand_star_map_object(g, &star_node, outer_source)?;
+        let expansion = star::expand_star_map_object(g, &star_node, outer_source, graphs)?;
         return Ok((
             expansion.object,
             expansion.description_maps,

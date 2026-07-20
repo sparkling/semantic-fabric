@@ -40,14 +40,18 @@
 //! ## Arm mapping (design-lock §2)
 //!
 //! Each [`GraphPattern`] arm builds exactly one subtree; the table in the design-lock
-//! §2 is the contract. The `current_graph` recursion parameter is the resolved
-//! constant active graph (`GRAPH <g> { … }`), pushed onto every `Intensional` leaf;
-//! a variable graph name is a build-time 501 (design §5.2 item 6, out of charter).
+//! §2 is the contract. The `current_graph` recursion parameter is the active `GRAPH`
+//! context (`None` = default graph), pushed onto every `Intensional`/`UnresolvedPath`
+//! leaf: a constant `GRAPH <g> { … }` or a variable `GRAPH ?g { … }` (ADR-0035,
+//! superseding design §5.2 item 6's former build-time 501) both thread through
+//! identically here — BUILD is context-free, so which of the two it is only matters
+//! to RESOLVE (`crate::iq::resolve`), which enumerates the variable case per
+//! candidate's effective graph map.
 
 use std::collections::BTreeMap;
 
 use sf_core::datatype::XsdTypeCode;
-use sf_core::{NamedNode, Term};
+use sf_core::Term;
 use spargebra::algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, OrderExpression,
     PropertyPathExpression,
@@ -60,13 +64,14 @@ use crate::unfold::ground_term_to_term;
 use crate::{Error, Result};
 
 /// Build the operator-tree ([`IqNode`]) for a `spargebra` graph pattern (ADR-0023
-/// M2, design-lock §2). `current_graph` is the resolved constant active graph (the
-/// `GRAPH <g> { … }` context, `None` for the default graph); it is pushed onto every
-/// [`IqNode::Intensional`] leaf the recursion produces.
+/// M2, design-lock §2). `current_graph` is the active `GRAPH` context (`None` for the
+/// default graph; `Some(NamedNode(g))`/`Some(Variable(v))` for `GRAPH <g>`/`GRAPH ?v`
+/// — ADR-0035); it is pushed onto every [`IqNode::Intensional`]/[`IqNode::
+/// UnresolvedPath`] leaf the recursion produces.
 ///
 /// Every deferred construct surfaces as [`Error::Unsupported`] (→ HTTP 501), never a
 /// silent miscompile (see the module docs for the three context-free 501 classes).
-pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Result<IqNode> {
+pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNodePattern>) -> Result<IqNode> {
     match gp {
         // ---- leaves / BGP --------------------------------------------------------
         // 0 triples → True (the empty tuple, InnerJoin identity); 1 triple → a single
@@ -177,16 +182,13 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Resul
             }],
         }),
 
-        // ---- GRAPH <g> { P } -----------------------------------------------------
-        // A constant graph IRI recurses with `current_graph = Some(g)`, pushing g onto
-        // the inner Intensional leaves. A variable graph name is quad querying, out of
-        // charter → 501 at build (design §5.2 item 6).
-        GraphPattern::Graph { name, inner } => match name {
-            NamedNodePattern::NamedNode(g) => build_tree(inner, Some(g)),
-            NamedNodePattern::Variable(_) => Err(Error::Unsupported(
-                "variable graph (quad querying out of charter)".to_owned(),
-            )),
-        },
+        // ---- GRAPH <g> { P } / GRAPH ?g { P } -------------------------------------
+        // Either a constant graph IRI or a variable (ADR-0035) recurses with
+        // `current_graph = Some(name)`, pushing it onto the inner Intensional /
+        // UnresolvedPath leaves verbatim — BUILD is context-free (no mapping access),
+        // so it cannot itself decide how a variable graph resolves; that is entirely
+        // RESOLVE's job (`crate::iq::resolve`, per-candidate graph-map enumeration).
+        GraphPattern::Graph { name, inner } => build_tree(inner, Some(name)),
 
         // ---- BIND(expr AS ?v) → Construction (design §2 Extend arm) --------------
         // A Construction over the inner subtree adding `?v := lower(expr)`; the
@@ -295,7 +297,7 @@ pub fn build_tree(gp: &GraphPattern, current_graph: Option<&NamedNode>) -> Resul
 /// One unresolved triple-pattern leaf at the current active graph (design §2 Bgp
 /// arm): the pattern is cloned verbatim and resolution against the T-mappings is
 /// deferred to a later milestone (never resolved to `Extensional` here).
-fn intensional(tp: &TriplePattern, current_graph: Option<&NamedNode>) -> IqNode {
+fn intensional(tp: &TriplePattern, current_graph: Option<&NamedNodePattern>) -> IqNode {
     IqNode::Intensional {
         pattern: tp.clone(),
         graph: current_graph.cloned(),
@@ -313,7 +315,7 @@ fn intensional(tp: &TriplePattern, current_graph: Option<&NamedNode>) -> IqNode 
 /// expression the flat model would itself 501 propagates the same 501.
 fn lower_filter_to_iqconds(
     expr: &Expression,
-    current_graph: Option<&NamedNode>,
+    current_graph: Option<&NamedNodePattern>,
 ) -> Result<Vec<IqCond>> {
     let mut out = Vec::new();
     collect_conjuncts(expr, current_graph, &mut out)?;
@@ -323,7 +325,7 @@ fn lower_filter_to_iqconds(
 /// Flatten a top-level `&&` chain into independent conjuncts, lowering each.
 fn collect_conjuncts(
     expr: &Expression,
-    current_graph: Option<&NamedNode>,
+    current_graph: Option<&NamedNodePattern>,
     out: &mut Vec<IqCond>,
 ) -> Result<()> {
     match expr {
@@ -339,7 +341,7 @@ fn collect_conjuncts(
 }
 
 /// Lower a single (non-top-level-`&&`) FILTER expression to one [`IqCond`].
-fn lower_iqcond(expr: &Expression, current_graph: Option<&NamedNode>) -> Result<IqCond> {
+fn lower_iqcond(expr: &Expression, current_graph: Option<&NamedNodePattern>) -> Result<IqCond> {
     match expr {
         Expression::Exists(p) => Ok(IqCond::Exists(Box::new(build_tree(p, current_graph)?))),
         Expression::Not(inner) => match inner.as_ref() {
@@ -477,6 +479,7 @@ fn order_keys(expression: &[OrderExpression]) -> Vec<OrderKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sf_core::NamedNode;
     use spargebra::algebra::GraphPattern;
     use spargebra::term::{GroundTerm, Literal, TermPattern};
 
@@ -694,14 +697,27 @@ mod tests {
         };
         assert!(matches!(
             child.as_ref(),
-            IqNode::Intensional { graph: Some(g), .. } if g.as_str() == "http://g/"
+            IqNode::Intensional { graph: Some(NamedNodePattern::NamedNode(g)), .. }
+                if g.as_str() == "http://g/"
         ));
     }
 
+    /// ADR-0035: a variable graph name is no longer a build-time 501 — it pushes onto
+    /// the leaf exactly like a constant (§5.2 item 6 superseded); RESOLVE decides how
+    /// it enumerates, not BUILD (which has no mapping access to do so anyway).
     #[test]
-    fn variable_graph_is_501() {
-        let r = build_tree(&pattern("SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }"), None);
-        assert!(matches!(r, Err(Error::Unsupported(_))), "{r:?}");
+    fn variable_graph_pushes_onto_intensional_leaf() {
+        let t = build_tree(&pattern("SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }"), None).unwrap();
+        let IqNode::Construction { child, .. } = &t else {
+            panic!("expected Project, got {t:?}");
+        };
+        assert!(matches!(
+            child.as_ref(),
+            IqNode::Intensional { graph: Some(NamedNodePattern::Variable(v)), .. }
+                if v.as_str() == "g"
+        ));
+        // `?g` is part of the leaf's own output scope, alongside ?s/?p/?o.
+        assert_eq!(child.output_vars(), vec_var(&["s", "p", "o", "g"]));
     }
 
     #[test]

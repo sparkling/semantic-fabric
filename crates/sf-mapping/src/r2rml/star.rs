@@ -85,14 +85,22 @@ pub(super) struct ObjectExpansion {
 /// Expand a subject-position `rml:starMap` (ADR-0032 D1). `outer_tm_id` is
 /// the enclosing triples map's own id (the reifier id's declaring-map key);
 /// `outer_source` is its logical source (the D4 cross-source baseline).
+/// `graphs` is ADR-0035's addition: the star-map carrier's own effective
+/// `rr:graphMap`s, inherited by the quoted shape's description map (see
+/// [`quote_shape`]) — the injected `rdf:reifies` POM below does NOT need it
+/// explicitly: its own `graphs` stays empty, correctly falling back to the
+/// OUTER triples map's `tm.subject.graphs` at query time (R2RML §4.6 POM-
+/// overrides-subject, `sf-sparql/src/unfold.rs`'s `eff_graphs`) — the same
+/// value `graphs` already came from, since it IS a sibling POM on that map.
 pub(super) fn expand_star_map_subject(
     g: &Graph,
     star_node: &NamedOrBlankNode,
     outer_tm_id: &str,
     outer_source: &LogicalSource,
+    graphs: &[TermMap],
 ) -> Result<SubjectExpansion> {
     let quoted_node = quoted_triples_map_node(g, star_node)?;
-    let shape = quote_shape(g, &quoted_node)?;
+    let shape = quote_shape(g, &quoted_node, graphs)?;
     let reifies_object = crossing_reference(g, star_node, &shape, outer_source)?;
     let reifier = reifier_term(g, star_node, outer_tm_id, &shape)?;
 
@@ -120,10 +128,16 @@ pub(super) fn expand_star_map_subject(
 
 /// Expand an object-position `rml:starMap` (ADR-0029 shape, ADR-0032 D1
 /// naming). No reifier is minted here — `rml:reifierMap` is rejected.
+/// `graphs` is ADR-0035's addition: the enclosing predicate-object map's
+/// EFFECTIVE graphs (its own `rr:graphMap` else the outer triples map's
+/// subject-map graphs, R2RML §4.6 — computed by the caller,
+/// `r2rml.rs::parse_predicate_object_map`), inherited by the quoted shape's
+/// description map (see [`quote_shape`]).
 pub(super) fn expand_star_map_object(
     g: &Graph,
     star_node: &NamedOrBlankNode,
     outer_source: &LogicalSource,
+    graphs: &[TermMap],
 ) -> Result<ObjectExpansion> {
     if g.object(star_node, RML_REIFIER_MAP).is_some() {
         return Err(Error::Mapping(format!(
@@ -132,7 +146,7 @@ pub(super) fn expand_star_map_object(
         )));
     }
     let quoted_node = quoted_triples_map_node(g, star_node)?;
-    let shape = quote_shape(g, &quoted_node)?;
+    let shape = quote_shape(g, &quoted_node, graphs)?;
     let object = crossing_reference(g, star_node, &shape, outer_source)?;
 
     let mut assertions = shape.nested_assertions;
@@ -169,7 +183,18 @@ struct QuotedShape {
 /// (R2RML §6), exactly as v1 did — cross-source-ness of any nested quote is
 /// resolved against *this* level's own `quoted_source`, not the top-level
 /// caller's, matching D4's "outer map" being the immediately enclosing quote.
-fn quote_shape(g: &Graph, quoted_node: &NamedOrBlankNode) -> Result<QuotedShape> {
+///
+/// `graphs` (ADR-0035) is the effective graphs of the star map that (directly
+/// or, for a nested nested nested quote, transitively) quotes this shape — the
+/// SAME value threads unchanged through every nesting level, since every
+/// description map minted along the way describes a fragment of the ONE
+/// outer annotated proposition, which lives in exactly one graph context (a
+/// nested `rml:starMap` has no `rr:graphMap` of its own to override it with).
+fn quote_shape(
+    g: &Graph,
+    quoted_node: &NamedOrBlankNode,
+    graphs: &[TermMap],
+) -> Result<QuotedShape> {
     let quoted_id = node_id(quoted_node);
     let quoted_source = parse_logical_source(g, quoted_node)?;
 
@@ -267,7 +292,7 @@ fn quote_shape(g: &Graph, quoted_node: &NamedOrBlankNode) -> Result<QuotedShape>
             if let Some(inner_star) = g.object(om_node, RML_STAR_MAP) {
                 let inner_star_node = as_resource(inner_star)?;
                 let inner_quoted_node = quoted_triples_map_node(g, &inner_star_node)?;
-                let inner_shape = quote_shape(g, &inner_quoted_node)?;
+                let inner_shape = quote_shape(g, &inner_quoted_node, graphs)?;
                 let inner_pom_value =
                     crossing_reference(g, &inner_star_node, &inner_shape, &quoted_source)?;
                 let mut assertions = inner_shape.nested_assertions;
@@ -314,7 +339,12 @@ fn quote_shape(g: &Graph, quoted_node: &NamedOrBlankNode) -> Result<QuotedShape>
         subject: SubjectMap {
             term: TermMap::Template(pfid.clone(), TermSpec::iri()),
             classes: Vec::new(),
-            graphs: Vec::new(),
+            // ADR-0035: inherit the quoting star map's own effective graphs — this
+            // standalone TriplesMap is otherwise unrelated (by id) to that outer map,
+            // so nothing else makes its 4 basic-encoding POMs (whose own `graphs` stay
+            // empty, falling back to THIS field at query time — R2RML §4.6) visible
+            // under a `GRAPH ?v`/`GRAPH <g>` clause the way an ordinary POM would be.
+            graphs: graphs.to_vec(),
         },
         predicate_object_maps: description_poms,
     });

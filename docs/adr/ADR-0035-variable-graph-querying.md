@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-20
 updated: 2026-07-20
 tags: [graph-queries, named-graphs, quad-semantics, sparql-dataset, unfold, rdf-star]
@@ -13,11 +13,33 @@ implements: []
 
 # Variable-graph querying: `GRAPH ?g` over the R2RML-declared named-graph structure
 
-## Status note (2026-07-20)
+## Implementation status (2026-07-20, same day — accepted, implemented)
 
-Proposed under the Run-5 loop ("ledger must be empty — nothing deferred"). This
-was the last ledger item deferred as "its own charter"; this ADR is that
-charter plus the design, sized for implementation in the same loop.
+All 8 contract cells green on both engines vs the spareval oracle
+(`differential_graphs.rs` + 2 star-under-named-graph cells in
+`differential_star.rs`, star suite 65→67). Corrections to this design made
+during landing, with evidence: (1) **the oracle needed NO extension** — §"if
+the oracle is graph-blind" was wrong; `oracle::evaluate` already runs
+spareval over an `oxrdf::Dataset`, `parse_nquads` already existed, and
+`star_decode` already preserves graph names — zero oracle lines changed.
+(2) **the sf-mapping inheritance fix is one field**, not a broad rework: the
+injected `rdf:reifies` POM already inherited via the ordinary
+POM-falls-back-to-subject-graphs rule; only the STANDALONE description
+TriplesMap's `SubjectMap.graphs` was orphaned (fixed by threading the star
+map's effective graphs through `quote_shape`, subject AND object positions
+symmetrically) — proven by a genuine two-path differential (engine red /
+oracle right with the one line reverted). (3) Tree parity rode on widening
+`Intensional`/`UnresolvedPath.graph` to `NamedNodePattern` and
+`resolve_path` to `Vec<Branch>` — `iq/lower`, `cascade`, and `exec_core`
+needed zero changes (nothing downstream pattern-matches those nodes).
+(4) Nested GRAPH re-pins correctly by construction (symmetric
+save/clear/restore on both arm kinds) — implemented, not separately
+contract-tested. Conservative boundary as designed: paths under a variable
+graph refuse mapping-wide when ANY non-constant graph map exists (pinned);
+narrowing that to per-predicate relevance is a possible future refinement,
+recorded here, not owed. The old `adversarial_adr0033_refute` pin that
+locked the pre-ADR 501 flipped to pin the positive behavior — its own
+comment predicted exactly this flip.
 
 ## Context and Problem Statement
 
