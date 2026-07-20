@@ -150,6 +150,27 @@ Results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw
   > sequentially now. `TERM_GEN_BATCH_SIZE`/`TERM_GEN_MIN_PARALLEL_ROWS` and the
   > memory-bound reasoning above are unchanged — only WHO may cross the
   > parallel gate changed, not the batch shape or its constants.
+  >
+  > **The leaner representation landed (2026-07-20, Run 4 C1).** The
+  > "follow-up wave" the batch-size paragraph ledgers is done: the per-row
+  > `BTreeMap<String, Term>` is now `Bindings(Vec<(Arc<str>, Term)>)` —
+  > linear-scan lookups (branches bind 1–3 vars), var names interned once per
+  > branch and `Arc`-cloned per row (the `String`-key clone is gone). Two
+  > whole-row consumers relied on `BTreeMap`'s alphabetical iteration and now
+  > canonicalize explicitly (`canonical_pairs`, sort-by-name): the ADR-0034
+  > term-dedup key and `COUNT(DISTINCT *)`. Re-measured: the memory ceiling
+  > moved — **`TERM_GEN_BATCH_SIZE = 4000`** (mem_ratio 3.69 under the 4.0
+  > gate; 4500 fails at 4.01; 3000 under the new representation is 3.0 vs the
+  > old ~3.4) — and the representation alone is worth **−15–19% on the dump**
+  > and **−28–33% on the `rust_group` paths** (criterion medians, shared box,
+  > noise floor −2.6%). The F8 call-site gate is KEPT: forcing streaming-path
+  > dispatch on still regressed the allocator-instrumented dump bench
+  > (+17–19%), but that signal is an artifact of the tracking allocator's
+  > atomics contending under `par_chunks` — the UNINSTRUMENTED dump bench
+  > showed dispatch now WINNING ~7–9% at 10× (p<0.05, two replicates) on a
+  > loaded machine. Not shipped from that measurement session; the follow-up
+  > (re-run `obda_construct_dump` on an idle machine, flip the gate if it
+  > holds) is recorded in `TERM_GEN_MIN_PARALLEL_ROWS`'s doc comment.
 * First-class source dialects: **PostgreSQL** (primary production), **SQLite** (embedded / W3C-suite CI); **MySQL** follows. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
 * Crate pins + 1.2 feature flags: ADR-0004 / ADR-0019. Toolchain pinned via `rust-toolchain.toml`.
 

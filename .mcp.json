@@ -1,5 +1,17 @@
 {
   "mcpServers": {
+    "agentic-qe": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "agentic-qe@latest",
+        "mcp"
+      ],
+      "env": {
+        "npm_config_update_notifier": "false"
+      },
+      "optional": true
+    },
     "ruv-swarm": {
       "command": "npx",
       "args": [
@@ -26,6 +38,16 @@
       },
       "optional": true,
       "requiresAuth": true
+    },
+    "semantic-fabric-harness": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/henrik/source/hm/semantic-fabric/semantic-fabric-harness/bin/cli.js",
+        "mcp",
+        "start"
+      ],
+      "env": {}
     }
   }
 }

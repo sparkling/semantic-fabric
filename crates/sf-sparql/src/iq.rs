@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use sf_core::datatype::XsdTypeCode;
-use sf_core::ir::{LogicalSource, TermMap, TermType};
+use sf_core::ir::{LogicalSource, Segment, TermMap, TermType};
 use sf_core::Term;
 use spargebra::algebra::Expression;
 
@@ -326,6 +326,30 @@ pub enum SqlCond {
         conds: Vec<SqlCond>,
         negated: bool,
     },
+    /// `render(t1) = render(t2)` — Run 4 Wave B3, the general fallback for two
+    /// template-bound term definitions [`crate::unify::align_templates`] can
+    /// neither align column-by-column (same segment kind-sequence) nor prove
+    /// disjoint (a leading-literal-prefix conflict). Each side is the
+    /// template's own segment list paired with its source alias (the SAME
+    /// `Segment`s `align_templates` reads); [`crate::emit`] renders each side
+    /// as a dialect-appropriate SQL string concatenation and compares the two
+    /// with `=`. `align_templates` only ever builds this for the term classes
+    /// where SQL lexical/string equality on the rendered form IS RDF term
+    /// equality (IRIs; plain, untagged, untyped-or-`xsd:string` literals) —
+    /// see its own doc comment for the restriction and the NULL-propagation
+    /// soundness argument.
+    ///
+    /// The trailing `bool` is Run 4 B-repair FIX 2: whether BOTH sides are an
+    /// IRI-kind template (`true`) — `align_templates`'s caller only ever
+    /// builds this when `spec1.term_type == spec2.term_type`, so one flag
+    /// covers both sides. R2RML/RFC 3987 template expansion percent-encodes
+    /// a column's value for an IRI term type only (`sf_core::ir::Template::
+    /// expand`'s `encode_iri` flag); a plain-literal template never encodes.
+    /// [`crate::emit::render_template_concat`] must mirror that PER SEGMENT,
+    /// or two differently-shaped templates whose column values disagree only
+    /// by an encodable character compare wrong in both directions (see its
+    /// doc comment).
+    TemplateEq(Vec<Segment>, usize, Vec<Segment>, usize, bool),
 }
 
 /// How a [`SqlCond::StrMatch`] matches (the near-free FTS baseline, ADR-0020 §2).
@@ -565,6 +589,28 @@ pub struct Branch {
     /// Always `Vec::new()` for flat-path branches; only populated by the tree path's
     /// `lower_as_subplan` (ADR-0023 M5 Wave 2: closes §5.4 nested-modifier 501 sites).
     pub subplan_joins: Vec<SubPlanJoin>,
+    /// `true` once this branch has absorbed an NPS (negated property set, `!p`)
+    /// closure's own `UNION ALL` bag — set by `iq::lower::convert_path_branches`
+    /// when `path.hop` is `HopExpr::Nps`, and OR-preserved through every later
+    /// `unfold::merge` (never cleared). NPS is the ONE path kind with its own
+    /// documented, LEGITIMATE bag multiplicity that survives `=_bag` on purpose
+    /// (`iq.rs`'s own `HopExpr::Nps` doc: "a triple connected by two complement
+    /// predicates therefore yields two solutions") — every OTHER path kind
+    /// already self-dedups via its closure's own `SELECT DISTINCT sf_s, sf_o`,
+    /// so this flag is never needed there. ADR-0034's D1 sets `Branch::distinct`
+    /// per PATTERN, before that pattern is known to end up merged alongside an
+    /// unrelated NPS closure — `merge` ORs `distinct` forward so a genuinely
+    /// unkeyed sibling table's own duplicate-row need survives the join
+    /// (`cross_source_with_duplicate_bag_multiplicity_diverges_from_oracle`),
+    /// but blindly OR-ing `distinct` INTO an `nps` branch would apply that
+    /// `SELECT DISTINCT` over NPS's own protected columns too, silently
+    /// collapsing two DIFFERENT underlying triples (different predicates, both
+    /// outside the negated set) that legitimately produce the same output
+    /// values — found via `differential_paths.rs`'s `negated_property_set_
+    /// multiplicity_joined_engine_matches_oracle_bag_counts` once `merge`
+    /// started OR-ing at all. `merge` checks this flag and skips the OR (in
+    /// EITHER direction) whenever it is set on either side.
+    pub nps: bool,
 }
 
 impl Branch {
@@ -582,6 +628,7 @@ impl Branch {
             path: None,
             agg: None,
             subplan_joins: Vec::new(),
+            nps: false,
         }
     }
 
@@ -706,6 +753,23 @@ pub fn collect_cond_cols(cond: &SqlCond, f: &mut impl FnMut(&ColRef)) {
         // scans, and the outer correlation columns are already projected via the
         // outer bindings — nothing is added here.
         SqlCond::NotExists { .. } | SqlCond::Exists { .. } | SqlCond::PathExists { .. } => {}
+        // Run 4 Wave B3: every `Segment::Column` on EITHER side is a real column
+        // reference against that side's alias — the FK/PK elimination safety
+        // checks (`joinelim.rs`'s `parent_referenced_only_via[_set]`) that consume
+        // this walk MUST see them, or a parent scan a `TemplateEq` still needs
+        // could be eliminated out from under it, leaving a dangling alias.
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
+            for seg in sx {
+                if let Segment::Column(c) = seg {
+                    f(&ColRef::new(*a1, c.clone()));
+                }
+            }
+            for seg in sy {
+                if let Segment::Column(c) = seg {
+                    f(&ColRef::new(*a2, c.clone()));
+                }
+            }
+        }
     }
 }
 

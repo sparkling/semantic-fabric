@@ -3,7 +3,7 @@
 //! `differential_paths.rs`'s structure (engine-vs-expected helpers + a
 //! fixture-per-shape layout) and reuses `differential_tree.rs`'s tree/flat
 //! parity idea (both translators must agree on row-bag AND on the 501 set)
-//! via this file's own `diff()`/`assert_locked_501` helpers — a separate
+//! via this file's own `diff()` helper — a separate
 //! integration-test binary cannot import another one's private items, so the
 //! pattern is replicated rather than shared code. Deliberately NOT
 //! `differential_tree.rs` itself, which a parallel work stream is appending
@@ -324,26 +324,6 @@ fn diff_construct(create: &str, r2rml: &str, query: &str) -> Vec<Triple> {
              flat={flat:?}\n tree={tree:?}"
         ),
     }
-}
-
-/// A locked boundary (unrelated to the star rewrite itself, or a still-
-/// out-of-scope Wave-2b construct — see each call site's own comment): both
-/// engines must 501 identically.
-fn assert_locked_501(r2rml: &str, query: &str) {
-    let maps = sf_mapping::parse_r2rml(r2rml).expect("R2RML parses");
-    let q = SparqlParser::new()
-        .parse_query(query)
-        .expect("query parses");
-    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    assert!(
-        matches!(flat, Err(Error::Unsupported(_))),
-        "expected 501 on the flat path for `{query}`, got {flat:?}"
-    );
-    assert!(
-        matches!(tree, Err(Error::Unsupported(_))),
-        "expected 501 on the tree path for `{query}`, got {tree:?}"
-    );
 }
 
 /// The baseline (non-star) `?p ex:hasAge ?age` bindings, keyed by person IRI —
@@ -1064,9 +1044,11 @@ fn star_pattern_reused_inside_filter_exists_survives_without_extra_keep() {
 // AGREE (0 rows), verified through the strict `diff()` helper (flat/tree
 // row-bag parity), not the looser divergence-locking pattern this slot used
 // before the fix landed. UPDATE (ADR-0033): the general "no join onto any
-// path branch" boundary this empty-proof pre-empted is now LIFTED on the
-// tree side (a path-carrying branch converts to an ordinary derived-table
-// `Scan` at the two tree join sites) — but THIS query stays empty on BOTH
+// path branch" boundary this empty-proof pre-empted is now LIFTED on BOTH
+// engines (a path-carrying branch converts to an ordinary derived-table
+// `Scan` at the two tree join sites and, since Run 4 A2, at flat's own
+// `GraphPattern::Join` arm via the same conversion) — but THIS query stays
+// empty on BOTH
 // engines regardless, unaffected: after conversion, `unfold::merge`'s
 // disjointness pre-check simply no longer fires (its own `path.is_some()`
 // guard is gone), so the SAME `align_templates` proof now runs as part of
@@ -1092,10 +1074,11 @@ fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
 /// SUBJECT COMPONENT (`?p`, a PERSON IRI — `http://ex.org/person/{person_id}`,
 /// the IDENTICAL domain `#Knows`'s own subject/object templates use) feeds the
 /// closure, not the reifier/proposition-form id — so the join genuinely
-/// correlates instead of being provably empty. `diff()` cannot be used (it
-/// requires flat/tree parity; flat still 501s, tree now answers — a genuine,
-/// intentional divergence, the SAME shape as `differential_paths.rs`'s
-/// flipped pin). `ex:knows` edges (from `friend_id`): (1,2) and (3,1) — row 2
+/// correlates instead of being provably empty. Both engines now answer: the
+/// ADR-0033 conversion also runs at flat's own `GraphPattern::Join` arm (the
+/// same `convert_path_branches`, mirrored there in Run 4 A2), so `diff()`
+/// applies — strict flat/tree row-bag parity PLUS the hand-computed
+/// expectation below. `ex:knows` edges (from `friend_id`): (1,2) and (3,1) — row 2
 /// (Bob, friend_id NULL) contributes no edge. `ex:knows+` closure:
 /// {(1,2),(3,1),(3,2)}. Every census row IS an `#PersonAgeAssertion` (`?p`
 /// ranges over all 3 person ids), so joining with the closure keeps only
@@ -1105,7 +1088,7 @@ fn star_pattern_at_property_path_endpoint_flat_and_tree_both_prove_it_empty() {
 /// rationale — never hand-encode an `rr:column`-sourced literal's exact XSD
 /// lexical form).
 #[test]
-fn star_pattern_at_property_path_endpoint_tree_now_answers_flat_still_501s() {
+fn star_pattern_at_property_path_endpoint_now_answers_on_both_engines() {
     // A DEDICATED fixture, not `CENSUS_R2RML`'s own `#Knows` (`friend_id`, which
     // is NULLABLE — row 2 leaves it NULL): a PRE-EXISTING gap in the path
     // closure's one-hop relation (`emit::hop_sql`'s `HopExpr::Pred` case had no
@@ -1170,22 +1153,7 @@ INSERT INTO knows_clean VALUES (3, 1);
          SELECT ?p ?age ?x WHERE {{ ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
          ?p ex:knowsClean+ ?x }}"
     );
-    let maps = sf_mapping::parse_r2rml(KNOWS_CLEAN_R2RML).expect("R2RML parses");
-    let q = SparqlParser::new()
-        .parse_query(&query)
-        .expect("query parses");
-
-    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &[]);
-    assert!(
-        matches!(flat, Err(Error::Unsupported(_))),
-        "expected 501 on the flat path (unchanged — ADR-0033 is a tree-only lift): {flat:?}"
-    );
-
-    let conn = sqlite::load(KNOWS_CLEAN_SQL).expect("fixture loads");
-    let schema = sqlite::introspect_all(&conn).expect("introspect");
-    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
-        .expect("tree must now answer this join (ADR-0033)");
-    let got = run_select(&tree, &conn);
+    let got = diff(KNOWS_CLEAN_SQL, KNOWS_CLEAN_R2RML, &query);
 
     // `ex:knowsClean` = {(1,2),(3,1)}; closure `+` = {(1,2),(3,1),(3,2)}. Every
     // census row IS a `#PersonAgeAssertion` (`?p` ranges over all 3 person
@@ -1460,9 +1428,11 @@ fn union_arms_disagreeing_on_composed_ness_resolves_at_the_top_level() {
     // 2's uniform-composed-ness law — the left arm composes `?t` (via
     // `rdf:reifies`, to the PROPOSITION); the right arm binds the SAME `?t`
     // as an ordinary, non-composing pattern variable (to the REIFIER, a
-    // DIFFERENT value — `#PersonAgeAssertion`'s own subject). Disagreement
-    // reached this way is STILL rejected in general (see the companion
-    // `_wrapped_in_a_filter_is_still_a_locked_501` test below) — but this
+    // DIFFERENT value — `#PersonAgeAssertion`'s own subject). A FILTER
+    // wrapping this same union now ALSO resolves, per arm (see the companion
+    // `_wrapped_in_a_filter_now_resolves_per_arm` test below; deeper
+    // nesting — under a JOIN, or a CONSTRUCT template — is still rejected,
+    // pinned in `differential_star_observers.rs`) — but this
     // EXACT query's union is the SELECT's own top-level pattern (nothing
     // else references `?t`), where `star::rewrite_top_level_pattern` proves
     // it observationally safe: each top-level `Plan` branch reconstructs
@@ -1498,16 +1468,21 @@ fn union_arms_disagreeing_on_composed_ness_resolves_at_the_top_level() {
 }
 
 #[test]
-fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked_501() {
-    // The IDENTICAL disagreement as the previous test, but wrapped in a
-    // FILTER referencing `?t` (`isTRIPLE`, a genuine sensitive consumer:
-    // `star::rewrite_and_check_composed` resolves it to ONE static boolean
-    // for the WHOLE query, which would be silently WRONG for whichever arm
-    // did not match it) — no longer the SELECT's bare top-level pattern, so
-    // `rewrite_top_level_pattern`'s allowlist does not match and this falls
-    // through to the ORIGINAL, unconditional uniform-composed-ness check —
-    // proves the relaxation is scoped exactly to "nothing else in the query
-    // can observe the disagreement", not "any top-level SELECT union".
+fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_now_resolves_per_arm() {
+    // FORMERLY a locked 501 (the F4b boundary pin): the IDENTICAL
+    // disagreement as the previous test, wrapped in a FILTER referencing
+    // `?t` (`isTRIPLE`, a genuinely sensitive consumer — the OLD
+    // `star::rewrite_and_check_composed` resolved it to ONE static boolean
+    // for the WHOLE query). Run 4 Wave B2's `rewrite_filter_over_union`
+    // now resolves the FILTER expression PER ARM, each against its own
+    // arm's composedness (mirroring `iq::normalize`'s later
+    // Filter-over-Union distribution, done before composedness collapses
+    // to one static answer): the composed arm's `isTRIPLE(?t)` is
+    // statically true — its 3 propositions survive — and the plain arm's
+    // is statically false — its 3 reifiers are dropped. Verified against
+    // the independent spareval oracle. Deeper nesting (under a JOIN, or a
+    // CONSTRUCT template) is still a locked 501, pinned in
+    // `differential_star_observers.rs`.
     let query = format!(
         "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
          SELECT ?t WHERE {{ \
@@ -1517,7 +1492,16 @@ fn union_arms_disagreeing_on_composed_ness_wrapped_in_a_filter_is_still_a_locked
            FILTER(isTRIPLE(?t)) \
          }}"
     );
-    assert_locked_501(CENSUS_R2RML, &query);
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(
+        rows.len(),
+        3,
+        "only the composed arm's 3 propositions survive isTRIPLE: got={rows:#?}"
+    );
+    assert!(
+        rows.iter().all(|r| matches!(&r["t"], Term::Triple(_))),
+        "every surviving ?t is a native triple term: got={rows:#?}"
+    );
 }
 
 #[test]
@@ -1528,9 +1512,10 @@ fn values_mixed_triple_and_plain_cells_resolves_at_the_top_level() {
     // (`star::decompose_column`'s doc comment) — but at the SELECT's own top
     // level, `star::partition_values_by_triple_shape` row-partitions it into
     // TWO uniform VALUES blocks, unioned, reducing it to the (now-resolved)
-    // union-mixed case above. Disagreement reached any OTHER way is still
-    // rejected (see the companion `_wrapped_in_a_filter_is_still_a_locked_501`
-    // test below).
+    // union-mixed case above. A FILTER wrapping it now also resolves, per
+    // arm (see the companion `_wrapped_in_a_filter_now_resolves_per_arm`
+    // test below); deeper nesting is still rejected, pinned in
+    // `differential_star_observers.rs`.
     let query =
         format!("{EX}SELECT ?t WHERE {{ VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} }}");
     let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
@@ -1553,18 +1538,36 @@ fn values_mixed_triple_and_plain_cells_resolves_at_the_top_level() {
 }
 
 #[test]
-fn values_mixed_triple_and_plain_cells_wrapped_in_a_filter_is_still_a_locked_501() {
-    // The IDENTICAL mixed VALUES column, but wrapped in a FILTER referencing
-    // `?t` — falls through to the ORIGINAL, unconditional
-    // `star::decompose_column` mixed-shape check (never reaches the
-    // top-level relaxation).
+fn values_mixed_triple_and_plain_cells_wrapped_in_a_filter_now_resolves_per_arm() {
+    // FORMERLY a locked 501 (the F4b boundary pin): the IDENTICAL mixed
+    // VALUES column, wrapped in a FILTER referencing `?t`.
+    // `star::partition_values_by_triple_shape` row-partitions the column
+    // into two uniform VALUES blocks (exactly as in the sibling top-level
+    // test above), and Run 4 Wave B2's per-arm FILTER resolution then
+    // evaluates `isTRIPLE(?t)` against EACH block's own shape: statically
+    // true for the ground-triple cell (kept), statically false for the
+    // plain-IRI cell (dropped). Verified against the spareval oracle.
     let query = format!(
         "{EX}SELECT ?t WHERE {{ \
            VALUES ?t {{ <<( ex:a ex:hasAge ex:b )>> ex:plain }} \
            FILTER(isTRIPLE(?t)) \
          }}"
     );
-    assert_locked_501(CENSUS_R2RML, &query);
+    let rows = assert_oracle_agrees(CENSUS_SQL, CENSUS_R2RML, &query);
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the ground-triple cell survives isTRIPLE: got={rows:#?}"
+    );
+    let expected_triple = Triple::new(
+        NamedNode::new_unchecked("http://example.com/a"),
+        NamedNode::new_unchecked("http://example.com/hasAge"),
+        iri("http://example.com/b"),
+    );
+    assert!(
+        matches!(&rows[0]["t"], Term::Triple(t) if **t == expected_triple),
+        "the surviving cell is the ground triple term: got={rows:#?}"
+    );
 }
 
 #[test]
@@ -1991,4 +1994,710 @@ fn composed_var_crossing_subplan_boundary_projects_as_native_triple_term() {
         oracle::solutions_bag_eq(&got, &oracle_rows),
         "engine vs decoded-graph oracle divergence:\n engine={got:#?}\n oracle={oracle_rows:#?}"
     );
+}
+
+// ============================================================================
+// Wave A3 (Run 4) — co-identification, GENERAL mappings (the RDF-star ledger's
+// open item 6, and the general-mapping half of the oracle Wave 3 never tried:
+// every fixture above quotes a shape from exactly ONE logical source, with
+// zero duplicate rows). Two independent questions, both answered here with
+// hard evidence, NOT hypothesized:
+//
+// (a) Two INDEPENDENT triples maps, on DIFFERENT logical sources, quoting
+//     "the same shape": `cross_source_same_actual_triple_*` (below) confirms
+//     co-identity's CORRECTNESS claim holds — genuinely the same real triple,
+//     asserted from two unrelated tables, collapses to ONE proposition,
+//     realized as the identical `Term::Triple`. `cross_source_colliding_
+//     shape_*` originally found a SEPARATE, sharper problem one layer down:
+//     `ids::proposition_template` (`sf-mapping/src/r2rml/star/ids.rs`) built
+//     a proposition id from the predicate slug plus each term map's
+//     referenced COLUMN VALUES only, so a quoted map's OWN subject-template
+//     literal prefix (e.g. `http://ex.org/person/`) never reached the id at
+//     all — "the same shape" as implemented meant "same predicate + same
+//     column ARITY", not "the same triple", so two UNRELATED quoted maps
+//     over unrelated entities could mint the IDENTICAL proposition id
+//     whenever a row from each happened to carry equal column values, and
+//     the query engine genuinely cross-attributed data between them (not
+//     just an oracle-decode technicality). **Run 4 Fix-1 closes this**:
+//     `ids::push_term` (same file) now folds each component's FULL rendered
+//     lexical form into the id — a template's own literal segments spliced
+//     in verbatim alongside its columns, an `rr:constant`'s value rendered
+//     and percent-encoded in, and a fixed term-kind/datatype/language tag —
+//     so id-equality implies decoded-triple-equality by construction (RDF
+//     1.2 Semantics §5's injective `IT`). `cross_source_colliding_shape_*`
+//     (below) now confirms the fix instead: the decoder no longer finds an
+//     ambiguous `PropositionForm` node, and the engine no longer
+//     cross-attributes a reifier to the wrong source's triple.
+// (b) A single source with a literal duplicate row feeding one quoted shape:
+//     `duplicate_source_row_*` measures a large, real bag-multiplicity gap
+//     between the engine's SQL-joined answer and the decoded (set-based)
+//     native graph, confirms it is NOT star-specific (the plain-pattern
+//     baseline already shows it, smaller), and shows the star rewrite's
+//     extra shared-variable join positions (the 4 basic-encoding predicates,
+//     doubled again by nesting) amplify it multiplicatively. UNCHANGED by
+//     Fix-1 — a separate bug in `sf-sparql`'s unification, not the mapping
+//     layer's id construction, being designed separately (see below).
+// (c) The cross-product (`cross_source_with_duplicate_*`): co-identity's
+//     correctness (a) survives being layered on top of a duplicate row (b)
+//     unchanged — but the two mechanisms' multiplicities COMPOUND. Also
+//     unchanged by Fix-1.
+//
+// Root cause of (b)/(c)'s multiplicity (Fix-1 does NOT touch this — a
+// separate, `sf-sparql`-side bug, deliberately left red here): a star-
+// rewritten BGP's shared `?pf`/`?r` variables are matched by the GENERAL
+// "overlapping candidate triples maps" unification (`sf-sparql`'s
+// `unify`/`unfold`) the SAME way any two ordinary, independently-asserting
+// triples maps would be — but nothing in that unification tracks "these N
+// pattern positions must all resolve through the SAME physical source row";
+// it only requires the shared variable's SQL VALUE to agree at each position
+// independently. When exactly one candidate row's value matches, this is
+// unobservable. When TWO OR MORE rows (duplicate physical rows) produce the
+// identical shared value, every one of the (4, or more with nesting/
+// reifies/assertedBy) description-predicate positions independently
+// re-picks among them, so the combinations multiply. Before Fix-1, (a)'s id
+// collision manufactured this SAME trigger condition too (two UNRELATED
+// rows sharing one non-injective `?pf` value, exactly like a duplicate row
+// would) — which is why the pre-fix (a) cells additionally bound genuinely
+// WRONG data, not just duplicate correct rows: their candidates' OTHER
+// (non-shared) components actually differed. Fix-1 closes that pathway by
+// making `?pf` injective; (b)/(c)'s own direct pathway (a genuine duplicate
+// physical row within one source) is untouched and remains open.
+// ============================================================================
+
+// --- (a) POSITIVE: co-identity's own correctness claim, across sources -----
+
+const CROSS_SOURCE_SQL: &str = r#"
+CREATE TABLE people_2020 (person_id INTEGER PRIMARY KEY, age INTEGER NOT NULL);
+INSERT INTO people_2020 VALUES (1, 30);
+INSERT INTO people_2020 VALUES (2, 40);
+
+CREATE TABLE people_2021 (person_id INTEGER PRIMARY KEY, age INTEGER NOT NULL);
+INSERT INTO people_2021 VALUES (1, 30);
+INSERT INTO people_2021 VALUES (3, 25);
+"#;
+
+/// `#PersonAge2020`/`#PersonAge2021`: two INDEPENDENT quoted triples maps,
+/// each its own logical source, sharing the identical subject template,
+/// predicate, and object column — genuinely the same shape. Person 1 (age
+/// 30) appears in BOTH sources: the SAME real triple
+/// `<<http://ex.org/person/1 ex:hasAge 30>>`, asserted twice from two
+/// unrelated tables. Persons 2 (2020-only, age 40) and 3 (2021-only, age 25)
+/// are the negative control — no cross-source overlap in the DATA, so no
+/// cross-source multiplicity for them either.
+const CROSS_SOURCE_R2RML: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ex:  <http://example.com/> .
+
+<#PersonAge2020>
+    rr:logicalTable [ rr:tableName "people_2020" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#AssertFrom2020>
+    rr:logicalTable [ rr:tableName "people_2020" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAge2020> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:Src2020 ]
+    ] .
+
+<#PersonAge2021>
+    rr:logicalTable [ rr:tableName "people_2021" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#AssertFrom2021>
+    rr:logicalTable [ rr:tableName "people_2021" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAge2021> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:Src2021 ]
+    ] .
+"#;
+
+/// Co-identity's CORRECTNESS claim, verified: the DISTINCT (deduplicated)
+/// solution set is exactly the 4 semantically-right rows — person 1
+/// co-identifies to ONE proposition with TWO per-declaration reifiers (the
+/// general-mapping generalization of `reifier_multiplicity_two_star_maps_
+/// same_shape_yield_distinct_reifiers`, which only ever tries this within a
+/// SINGLE source); persons 2/3 each keep exactly their own single reifier,
+/// with NO spurious cross-identification. Deduplicated deliberately — see
+/// `cross_source_same_actual_triple_bag_multiplicity_diverges_from_oracle`
+/// immediately below for the SEPARATE finding that the RAW (non-dedup'd) bag
+/// is wrong (measured 34 rows, not 4).
+#[test]
+fn cross_source_same_actual_triple_coidentifies_correctly() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?r ?src WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+           ?r ex:assertedBy ?src \
+         }}"
+    );
+    let got = diff(CROSS_SOURCE_SQL, CROSS_SOURCE_R2RML, &query);
+    let mut distinct: Vec<&BTreeMap<String, Term>> = Vec::new();
+    for row in &got {
+        if !distinct.contains(&row) {
+            distinct.push(row);
+        }
+    }
+    assert_eq!(distinct.len(), 4, "distinct combos={distinct:#?}");
+
+    let mut by_person: BTreeMap<NamedNode, Vec<&&BTreeMap<String, Term>>> = BTreeMap::new();
+    for row in &distinct {
+        let p = match &row["p"] {
+            Term::NamedNode(n) => n.clone(),
+            other => panic!("?p must be an IRI, got {other:?}"),
+        };
+        by_person.entry(p).or_default().push(row);
+    }
+    assert_eq!(by_person.len(), 3, "3 distinct persons: {by_person:#?}");
+    let person1 = NamedNode::new_unchecked("http://ex.org/person/1");
+    let p1_rows = &by_person[&person1];
+    assert_eq!(
+        p1_rows.len(),
+        2,
+        "person 1 (age 30 in BOTH sources) must co-identify to ONE proposition with TWO \
+         per-declaration reifiers: {p1_rows:#?}"
+    );
+    assert_ne!(
+        p1_rows[0]["r"], p1_rows[1]["r"],
+        "the two reifiers sharing person 1's cross-source proposition must be distinct IRIs"
+    );
+    let src_2020 = iri("http://example.com/Src2020");
+    let src_2021 = iri("http://example.com/Src2021");
+    assert!(
+        p1_rows.iter().any(|r| r["src"] == src_2020)
+            && p1_rows.iter().any(|r| r["src"] == src_2021),
+        "person 1 must have exactly one reifier from EACH source: {p1_rows:#?}"
+    );
+    let person2 = NamedNode::new_unchecked("http://ex.org/person/2");
+    assert_eq!(
+        by_person[&person2].len(),
+        1,
+        "person 2 (2020-only) must NOT spuriously cross-identify: {:#?}",
+        by_person[&person2]
+    );
+    let person3 = NamedNode::new_unchecked("http://ex.org/person/3");
+    assert_eq!(
+        by_person[&person3].len(),
+        1,
+        "person 3 (2021-only) must NOT spuriously cross-identify: {:#?}",
+        by_person[&person3]
+    );
+}
+
+/// The sharpest direct proof of co-identity: person 1's two reifiers (one per
+/// source) must bind `?t` to the exact SAME native `Term::Triple` value, not
+/// merely "the SQL join happened to correlate them". `?age`'s exact literal
+/// form comes from `baseline_ages` (this file's established rule: never
+/// hand-type an `rr:column`-sourced XSD lexical form).
+#[test]
+fn cross_source_same_actual_triple_composed_term_is_structurally_identical() {
+    let ages = baseline_ages(CROSS_SOURCE_SQL, CROSS_SOURCE_R2RML);
+    let age30 = ages
+        .get(&NamedNode::new_unchecked("http://ex.org/person/1"))
+        .expect("person 1 has a baseline age")
+        .clone();
+    let expected_t = Term::Triple(Box::new(Triple::new(
+        NamedNode::new_unchecked("http://ex.org/person/1"),
+        NamedNode::new_unchecked("http://example.com/hasAge"),
+        age30,
+    )));
+
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?r ?src ?t WHERE {{ ?r rdf:reifies ?t . ?r ex:assertedBy ?src }}"
+    );
+    let got = diff(CROSS_SOURCE_SQL, CROSS_SOURCE_R2RML, &query);
+    let src_2020 = iri("http://example.com/Src2020");
+    let src_2021 = iri("http://example.com/Src2021");
+    assert!(
+        got.iter()
+            .any(|r| r["src"] == src_2020 && r["t"] == expected_t),
+        "2020's person-1 reifier must bind ?t to the expected triple: got={got:#?}"
+    );
+    assert!(
+        got.iter()
+            .any(|r| r["src"] == src_2021 && r["t"] == expected_t),
+        "2021's person-1 reifier must bind ?t to the IDENTICAL expected triple (co-identity): \
+         got={got:#?}"
+    );
+}
+
+/// **FIXED by ADR-0034/C0** (virtual-graph set semantics, BGP-level D1/D2
+/// dedup — `crates/sf-sparql/src/unfold.rs`'s `bgp()`/`pool_pattern_relation`
+/// and `iq/resolve.rs`'s `Intensional` arm). The SEPARATE, real problem the
+/// two tests above deliberately dedup around: pre-fix, the RAW engine bag for
+/// this exact query and fixture was 34 rows, not 4 — measured breakdown:
+/// person 1's two (semantically CORRECT) combos each appeared **16 times**
+/// (32 total), while persons 2/3 (no cross-source overlap, so no colliding
+/// candidate row) appeared exactly once each. The decoded-graph oracle (a
+/// real `oxrdf::Dataset`, which is a SET — duplicate quads collapse)
+/// correctly returns 4. Root cause: see this section's own header comment —
+/// every one of the 4 basic-encoding description patterns independently
+/// re-picked between `desc(#PersonAge2020)` and `desc(#PersonAge2021)` for
+/// person 1's shared `?pf` value (both genuinely produce it), and nothing
+/// constrained all 4 (plus the `rdf:reifies` and `ex:assertedBy` patterns) to
+/// agree on ONE candidate's row identity — D2's per-pattern-relation UNION
+/// dedup now does.
+#[test]
+fn cross_source_same_actual_triple_bag_multiplicity_diverges_from_oracle() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?r ?src WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+           ?r ex:assertedBy ?src \
+         }}"
+    );
+    assert_oracle_agrees(CROSS_SOURCE_SQL, CROSS_SOURCE_R2RML, &query);
+}
+
+/// The bare reifies-sugar surface form (`<<?p ex:hasAge ?age>>`, no
+/// parentheses) over the SAME fixture — confirmed the bag-multiplicity
+/// finding above was not an artifact of the parenthesized `<<( )>>`
+/// TripleTerm spelling specifically. **FIXED by ADR-0034/C0** alongside the
+/// parenthesized form, by the same D2 cross-branch dedup.
+#[test]
+fn cross_source_bare_reifies_sugar_bag_multiplicity_diverges_from_oracle() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ <<?p ex:hasAge ?age>> ex:assertedBy ?src }}");
+    assert_oracle_agrees(CROSS_SOURCE_SQL, CROSS_SOURCE_R2RML, &query);
+}
+
+// --- (a) ADVERSARIAL: superficial shape collision, genuinely different -----
+// --- triples (this WAS a real bug, confirmed both at decode time and at ---
+// --- ordinary query time — FIXED by Run 4 Fix-1, see the two tests below) -
+
+const COLLIDING_SHAPE_SQL: &str = r#"
+CREATE TABLE people (person_id INTEGER PRIMARY KEY, age INTEGER NOT NULL);
+INSERT INTO people VALUES (1, 30);
+
+CREATE TABLE widgets (widget_id INTEGER PRIMARY KEY, weight INTEGER NOT NULL);
+INSERT INTO widgets VALUES (1, 30);
+"#;
+
+/// `#Person`/`#Widget`: two UNRELATED quoted triples maps (different logical
+/// sources, different subject-template NAMESPACES: `.../person/{person_id}`
+/// vs `.../widget/{widget_id}`) that merely happen to share a predicate
+/// (`ex:hasValue` — ordinary predicate reuse across classes, e.g. exactly how
+/// `rdfs:label` or a generic `ex:hasValue` gets reused in real ontologies)
+/// and column ARITY (one subject column, one plain object column), with row
+/// values that ALSO coincide (1, 30 for both) — chosen specifically so that,
+/// pre-Fix-1, the two maps' proposition ids collided
+/// (`urn:sf-star:pf:ex_hasValue|1|30|` for BOTH — predicate slug plus raw
+/// column VALUES only) despite denoting GENUINELY DIFFERENT triples:
+/// `<<http://ex.org/person/1 ex:hasValue 30>>` vs
+/// `<<http://ex.org/widget/1 ex:hasValue 30>>`. Post-fix, `ids::push_term`'s
+/// full-lexical-form treatment keeps the two subject templates' own literal
+/// prefixes (`.../person/` vs `.../widget/`) in the id — the actual ids are
+/// now `urn:sf-star:pf:http_example_com_hasValue|I|http://ex.org/person/1|L|30|`
+/// and `.../widget/1|L|30|` — so they no longer collide; see the two tests
+/// below.
+const COLLIDING_SHAPE_R2RML: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ex:  <http://example.com/> .
+
+<#Person>
+    rr:logicalTable [ rr:tableName "people" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasValue ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#PersonAssertion>
+    rr:logicalTable [ rr:tableName "people" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#Person> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:PersonSrc ]
+    ] .
+
+<#Widget>
+    rr:logicalTable [ rr:tableName "widgets" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/widget/{widget_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasValue ;
+        rr:objectMap [ rr:column "weight" ]
+    ] .
+
+<#WidgetAssertion>
+    rr:logicalTable [ rr:tableName "widgets" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#Widget> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:WidgetSrc ]
+    ] .
+"#;
+
+/// **FIXED by Run 4 Fix-1** (`ids::push_term`, `sf-mapping/src/r2rml/star/
+/// ids.rs`) — previously a **CONFIRMED BUG** (not merely theoretical —
+/// reproduced): materializing this mapping's full graph and decoding it
+/// (`sf_conformance::star_decode`, the same decoder every oracle cell in
+/// this file relies on) used to fail. The dumped graph literally contained
+/// `<urn:sf-star:pf:...hasValue|1|30|> rdf:propositionFormSubject
+/// <http://ex.org/widget/1>` AND `... rdf:propositionFormSubject
+/// <http://ex.org/person/1>` on the SAME pfid node (one triple from each
+/// quoted map's own standalone description map, `sf-mapping/src/r2rml/
+/// star.rs`'s `quote_shape` — each keyed on ITS OWN `quoted_id`, never
+/// deduplicated against the OTHER map, since nothing compared pfid VALUES
+/// across declarations). `decode_proposition_forms`'s `one_component` check
+/// correctly rejected this ("2 rdf:propositionFormSubject components,
+/// expected exactly one") — proving the decode contract (ADR-0032 D2,
+/// "report an error if it cannot unambiguously determine s, p, or o") was
+/// violated by an entirely ordinary mapping shape (two classes reusing one
+/// predicate), not an adversarially malformed one: R2 ("the two [id]
+/// families never collide") did not hold as implemented.
+///
+/// Now that `ids::push_term` folds each component's FULL rendered lexical
+/// form into the id (see `COLLIDING_SHAPE_R2RML`'s own doc comment for the
+/// two new, distinct ids), this decodes cleanly into TWO separate
+/// `PropositionForm` nodes, restoring R2 for this previously-colliding shape.
+#[test]
+fn cross_source_colliding_shape_decode_finds_no_ambiguous_proposition_form_node() {
+    let conn = sqlite::load(COLLIDING_SHAPE_SQL).expect("fixture loads");
+    let maps = sf_mapping::parse_r2rml(COLLIDING_SHAPE_R2RML).expect("R2RML parses");
+    let quads = exec::dump_quads(&maps, &conn, Dialect::Sqlite).expect("materialize");
+    let encoded = graph::quads_to_dataset(&quads);
+    let decoded = decode_proposition_forms(&encoded);
+    assert!(
+        decoded.is_ok(),
+        "two UNRELATED quoted shapes sharing a predicate + column arity must mint DISTINCT \
+         urn:sf-star:pf: ids for GENUINELY DIFFERENT triples (RDF 1.2 Semantics §5's injective \
+         IT) — an ambiguous PropositionForm node means they collided again: {decoded:?}"
+    );
+}
+
+/// **FIXED by Run 4 Fix-1** — previously a **CONFIRMED BUG**, reproduced
+/// through ORDINARY querying (not just the oracle's decode step above):
+/// `?r`'s own id family never collided (it is keyed on the DECLARING map,
+/// `sf-mapping/src/r2rml/star/ids.rs`'s `reifier_template`, unchanged by
+/// Fix-1), so this query anchors on `?r` first. Every row where `?src =
+/// ex:PersonSrc` must reify the PERSON triple; every row where `?src =
+/// ex:WidgetSrc` must reify the WIDGET triple — pre-fix this failed on BOTH
+/// flat AND tree (which additionally DISAGREED with each other here: 64 rows
+/// flat vs 32 rows tree — a symptom of the SAME non-injective `?pf` value
+/// feeding both translators' shared candidate-unification machinery, not an
+/// independent flat/tree bug of its own): `PersonAssertion`'s own reifier
+/// (`src = PersonSrc`) used to bind `?s` to `http://ex.org/widget/1` — i.e.
+/// person 1's own reifier was reported as reifying WIDGET's triple, one it
+/// had nothing to do with. Genuine cross-source data corruption reaching the
+/// engine's real query answers, not merely an oracle-construction
+/// technicality.
+///
+/// Now that `?pf` is injective (see the decode-level companion above), flat
+/// and tree agree (2 rows each) and both attribute correctly, so this uses
+/// `diff()` like the rest of the file rather than the old manual per-engine
+/// check this test used while the two translators disagreed.
+#[test]
+fn cross_source_colliding_shape_engine_attributes_reifiers_to_the_correct_source() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?r ?src ?s ?v WHERE {{ \
+           ?r rdf:reifies ?t . ?r ex:assertedBy ?src . \
+           BIND(SUBJECT(?t) AS ?s) . BIND(OBJECT(?t) AS ?v) \
+         }}"
+    );
+    let person = iri("http://ex.org/person/1");
+    let widget = iri("http://ex.org/widget/1");
+    let person_src = iri("http://example.com/PersonSrc");
+    let widget_src = iri("http://example.com/WidgetSrc");
+    let got = diff(COLLIDING_SHAPE_SQL, COLLIDING_SHAPE_R2RML, &query);
+    assert_eq!(got.len(), 2, "one reifier per source: got={got:#?}");
+    for row in &got {
+        if row["src"] == person_src {
+            assert_eq!(
+                row["s"], person,
+                "a PersonSrc-asserted reifier must reify the PERSON triple, not the widget's: \
+                 row={row:#?}"
+            );
+        } else if row["src"] == widget_src {
+            assert_eq!(
+                row["s"], widget,
+                "a WidgetSrc-asserted reifier must reify the WIDGET triple, not the person's: \
+                 row={row:#?}"
+            );
+        } else {
+            panic!("unexpected src: {row:#?}");
+        }
+    }
+}
+
+// --- (b) Literal duplicate row in ONE source: bag multiplicity ------------
+
+/// `census_row`'s own shape (matches `CENSUS_SQL`/`CENSUS_R2RML` exactly, so
+/// `CENSUS_R2RML` and `CENSUS_R2RML_OBJECT`/`STAR_NESTED_DEPTH2_R2RML` are all
+/// reused unchanged below), but person 1's row is LITERALLY duplicated — the
+/// SAME triples map, the SAME underlying fact, asserted twice by two
+/// physically distinct rows (not two different maps, unlike (a) above).
+/// `person_id` deliberately has no `PRIMARY KEY`/uniqueness constraint, so
+/// SQLite accepts the exact duplicate.
+const CENSUS_SQL_DUPLICATE_ROW: &str = r#"
+CREATE TABLE census_row (
+    person_id INTEGER,
+    age INTEGER NOT NULL,
+    friend_id INTEGER
+);
+INSERT INTO census_row VALUES (1, 30, 2);
+INSERT INTO census_row VALUES (1, 30, 2);
+INSERT INTO census_row VALUES (2, 40, NULL);
+INSERT INTO census_row VALUES (3, 30, 1);
+"#;
+
+/// Root-cause isolation, run FIRST: is bag-multiplicity from a literal
+/// duplicate row a star-rewrite artifact, or does it already exist in
+/// ORDINARY (non-star) BGP matching? A plain `?p ex:hasAge ?age` pattern (no
+/// star machinery at all) is the control — pre-fix, **measured 4 rows, not
+/// 3**: even ordinary R2RML row-to-triple mapping did not deduplicate a
+/// literal duplicate source row into one triple under set-based RDF
+/// semantics. This was the SAME general "not star-specific" mechanism the
+/// RDF-star ledger's item 6 flagged and deferred; the star-specific cells
+/// below showed the SAME root cause amplified by the extra shared-variable
+/// join positions a star rewrite introduces (66 rows for the analogous star
+/// query, not 4). **FIXED by ADR-0034/C0**: D1's schema-driven `SELECT
+/// DISTINCT` now applies to this table's own unkeyed scan (`census_row` has
+/// no declared PK/UNIQUE on `person_id`), collapsing the literal duplicate
+/// row before it ever reaches the join.
+#[test]
+fn duplicate_source_row_plain_pattern_baseline_bag_multiplicity() {
+    let query = format!("{EX}SELECT ?p ?age WHERE {{ ?p ex:hasAge ?age }}");
+    assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query);
+}
+
+/// The star reifies/TripleTerm-pattern form over the SAME duplicated-row
+/// fixture — pre-fix, **measured 66 engine rows vs 3 correct** (a real
+/// `differential_star`-visible divergence; `diff()` inside `assert_oracle_
+/// agrees` confirmed flat and tree AGREED with each other on the wrong 66, so
+/// this was a bug shared by both translators' common candidate-unification
+/// machinery, exactly the blind spot this file's own module doc names: "a
+/// bug shared by both translators... would sail through undetected" by the
+/// flat/tree differential alone — only the independent oracle caught it).
+/// 66 = 64 (person 1: all 6 shared-variable positions — `rdf:reifies`, the 4
+/// description predicates, `ex:assertedBy` — independently re-picked between
+/// person 1's 2 duplicate candidate rows, 2^6) + 1 (person 2) + 1 (person 3).
+/// **FIXED by ADR-0034/C0**: D1 dedups `census_row`'s own unkeyed scan at
+/// each of the 6 shared-variable positions before the candidates can combine.
+#[test]
+fn duplicate_source_row_reifies_triple_term_pattern_bag_multiplicity() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?r ?src WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+           ?r ex:assertedBy ?src \
+         }}"
+    );
+    assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query);
+}
+
+/// Object-position TripleTerm match (`#Quote`'s own shape, `CENSUS_R2RML_
+/// OBJECT`, reused unchanged — it maps the SAME `census_row` table) —
+/// pre-fix, measured 34 engine rows vs 3 correct, confirming the mechanism
+/// was not specific to the reifies/subject-position surface form. **FIXED by
+/// ADR-0034/C0** by the same D1 per-pattern dedup.
+#[test]
+fn duplicate_source_row_object_position_triple_term_bag_multiplicity() {
+    let query =
+        format!("{EX}SELECT ?q ?p ?age WHERE {{ ?q ex:hasQuote <<( ?p ex:hasAge ?age )>> }}");
+    assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML_OBJECT, &query);
+}
+
+/// Annotation-sugar surface form (`s p o {| ... |}`) — pre-fix, measured 130
+/// engine rows vs 3 correct, the WORST-observed multiplier: annotation sugar
+/// desugars to three conjuncts (the plain triple, a fresh reifier, and the
+/// annotation's own POM), so it carried even MORE shared-variable positions
+/// than the bare reifies form for the SAME duplicate candidate set to combine
+/// across. **FIXED by ADR-0034/C0**: D1 dedups the shared `census_row` scan
+/// at all three conjuncts' join positions.
+#[test]
+fn duplicate_source_row_annotation_sugar_bag_multiplicity() {
+    let query =
+        format!("{EX}SELECT ?p ?age ?src WHERE {{ ?p ex:hasAge ?age {{| ex:assertedBy ?src |}} }}");
+    assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query);
+}
+
+/// CONSTRUCT round-trip — pre-fix, measured 4 engine triples vs 3 correct.
+/// Notably the SMALLEST divergence of this group: this CONSTRUCT's WHERE
+/// clause (`?p ex:hasAge ?age`) is the PLAIN pattern, not a star pattern (the
+/// quoting is only in the TEMPLATE) — so it inherited exactly the baseline's
+/// own 4-vs-3 gap, not the star-amplified one, and — unlike every SELECT cell
+/// above — the produced `Vec<Triple>` is compared directly (this file's
+/// `diff_construct`/`assert_oracle_agrees_construct` doc comments both note
+/// multiplicity IS preserved, "though this suite's cases don't happen to
+/// produce duplicates" — this was the first case that did). **FIXED by
+/// ADR-0034/C0**: D1's dedup of the WHERE clause's own plain-pattern branch
+/// runs below CONSTRUCT's own template expansion, so the fix applies here
+/// too even though the duplication enters through the WHERE side, not the
+/// template.
+#[test]
+fn duplicate_source_row_construct_round_trip_bag_multiplicity() {
+    let query = format!(
+        "{EX}CONSTRUCT {{ ?p ex:hasQuote <<( ?p ex:hasAge ?age )>> }} \
+         WHERE {{ ?p ex:hasAge ?age }}"
+    );
+    let engine = diff_construct(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query);
+    let oracle_graph = match oracle_star(CENSUS_SQL_DUPLICATE_ROW, CENSUS_R2RML, &query) {
+        OracleAnswer::Graph(g) => *g,
+        other => panic!("expected Graph, got {other:?}"),
+    };
+    assert_eq!(
+        engine.len(),
+        oracle_graph.len(),
+        "engine triples={engine:#?}\noracle graph len={}",
+        oracle_graph.len()
+    );
+}
+
+/// One nested shape (depth 2, `STAR_NESTED_DEPTH2_R2RML` reused unchanged —
+/// `#Leaf`/`#Mid`/`#Outer` all map `census_row`, so the duplicate row feeds
+/// the LEAF quote too) — pre-fix, measured 514 engine rows vs 3 correct, the
+/// WORST of this group by far: nesting doubled the number of shared-variable
+/// description-predicate positions (4 for `#Mid`'s own shape, 4 more for the
+/// nested `#Leaf`), so the SAME 2-candidate-row collision combined across far
+/// more join positions. **FIXED by ADR-0034/C0**: D1 dedups `census_row`'s
+/// scan at each of the 8 shared-variable positions independently, so the
+/// collision can no longer compound across nesting depth.
+#[test]
+fn duplicate_source_row_nested_shape_bag_multiplicity() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?r ?p ?leaf ?score WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge <<( ?leaf ex:hasScore ?score )>> )>> \
+         }}"
+    );
+    assert_oracle_agrees(CENSUS_SQL_DUPLICATE_ROW, STAR_NESTED_DEPTH2_R2RML, &query);
+}
+
+// --- (c) Cross-product: co-identity across sources, one source dup'd ------
+
+const CROSS_SOURCE_ONE_DUP_SQL: &str = r#"
+CREATE TABLE people_a (person_id INTEGER, age INTEGER NOT NULL);
+INSERT INTO people_a VALUES (1, 30);
+INSERT INTO people_a VALUES (1, 30);
+
+CREATE TABLE people_b (person_id INTEGER, age INTEGER NOT NULL);
+INSERT INTO people_b VALUES (1, 30);
+"#;
+
+/// (a)'s positive cross-source shape (`#PersonAgeA`/`#PersonAgeB`, identical
+/// template/predicate/column, genuinely the same real triple) layered with
+/// (b)'s literal duplicate row — source A's own row for person 1 is ALSO
+/// physically duplicated.
+const CROSS_SOURCE_ONE_DUP_R2RML: &str = r#"
+@prefix rr:  <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix ex:  <http://example.com/> .
+
+<#PersonAgeA>
+    rr:logicalTable [ rr:tableName "people_a" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#AssertFromA>
+    rr:logicalTable [ rr:tableName "people_a" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAgeA> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:SrcFromA ]
+    ] .
+
+<#PersonAgeB>
+    rr:logicalTable [ rr:tableName "people_b" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{person_id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasAge ;
+        rr:objectMap [ rr:column "age" ]
+    ] .
+
+<#AssertFromB>
+    rr:logicalTable [ rr:tableName "people_b" ] ;
+    rr:subjectMap [
+        rml:starMap [ rml:quotedTriplesMap <#PersonAgeB> ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:assertedBy ;
+        rr:objectMap [ rr:constant ex:SrcFromB ]
+    ] .
+"#;
+
+/// Co-identity's correctness claim STILL holds with a duplicate layered in:
+/// the reifier id is likewise a pure function of `(outer_tm_id, row values)`,
+/// so source A's two duplicate rows collapse to the SAME reifier id — the
+/// DISTINCT (deduplicated) solution set is exactly 2 rows (one reifier per
+/// source, both reifying the identical co-identified proposition), not 3.
+#[test]
+fn cross_source_with_duplicate_reifier_identity_stays_correct() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?r ?src WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+           ?r ex:assertedBy ?src \
+         }}"
+    );
+    let got = diff(CROSS_SOURCE_ONE_DUP_SQL, CROSS_SOURCE_ONE_DUP_R2RML, &query);
+    let mut distinct: Vec<&BTreeMap<String, Term>> = Vec::new();
+    for row in &got {
+        if !distinct.contains(&row) {
+            distinct.push(row);
+        }
+    }
+    assert_eq!(
+        distinct.len(),
+        2,
+        "co-identification must still collapse to exactly 2 DISTINCT reifiers (one per \
+         source) despite source A's internal row duplication: distinct combos={distinct:#?}"
+    );
+    assert_ne!(
+        distinct[0]["r"], distinct[1]["r"],
+        "distinct combos={distinct:#?}"
+    );
+    let src_a = iri("http://example.com/SrcFromA");
+    let src_b = iri("http://example.com/SrcFromB");
+    assert!(
+        distinct.iter().any(|r| r["src"] == src_a) && distinct.iter().any(|r| r["src"] == src_b),
+        "distinct combos={distinct:#?}"
+    );
+}
+
+/// The two mechanisms' multiplicities used to COMPOUND: pre-fix, measured 405
+/// engine rows vs 2 correct — far worse than either (a)'s 34 or (b)'s 66
+/// alone, consistent with this section's header comment ("nothing constrains
+/// all [join positions] to agree on ONE candidate's row identity"): here BOTH
+/// sources contributed a colliding candidate (the cross-source co-identity
+/// itself, by design) AND source A alone contributed a second, independent
+/// duplicate-row collision on top. **FIXED by ADR-0034/C0**: D1 (source A's
+/// own unkeyed duplicate row) and D2 (the cross-source co-identity join)
+/// both apply at their own pattern-relation level, and compound correctly in
+/// the fix direction too — collapsing to exactly 2.
+#[test]
+fn cross_source_with_duplicate_bag_multiplicity_diverges_from_oracle() {
+    let query = format!(
+        "{EX}PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+         SELECT ?p ?age ?r ?src WHERE {{ \
+           ?r rdf:reifies <<( ?p ex:hasAge ?age )>> . \
+           ?r ex:assertedBy ?src \
+         }}"
+    );
+    assert_oracle_agrees(CROSS_SOURCE_ONE_DUP_SQL, CROSS_SOURCE_ONE_DUP_R2RML, &query);
 }

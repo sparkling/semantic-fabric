@@ -11,6 +11,7 @@
 //! back to `sf_sparql::Error::Unsupported` (501 skip), keeping the pre-M3
 //! conformance classification byte-identical.
 
+use std::error::Error as _;
 use std::ops::Deref;
 
 use sf_core::datatype::{self, XsdTypeCode};
@@ -287,9 +288,27 @@ fn pg_value(row: &PgRow, idx: usize, ty: &Type) -> Result<Option<String>> {
         // via `PgNumeric`'s `FromSql` (`decode_pg_numeric`) — `postgres-types` has no
         // decimal `FromSql` route at all, so this match previously fell to the `_ =>`
         // hard-501 below on ANY NUMERIC column. NaN/±Infinity have no `xsd:decimal`
-        // representation, so `decode_pg_numeric` — and therefore this `?` — surfaces
-        // them as `Error::Unsupported` (a sound 501, never a wrong answer).
-        Type::NUMERIC => row.try_get::<_, Option<PgNumeric>>(idx)?.map(|n| n.0),
+        // representation, so `decode_pg_numeric` returns `Error::Unsupported` for
+        // them — but `tokio_postgres::Row::try_get` re-wraps ANY `FromSql` failure as
+        // its own `Kind::FromSql` error (`tokio_postgres::Error::from_sql`), so a bare
+        // `?` here would flatten straight to the generic `#[from] tokio_postgres::Error`
+        // conversion (`Error::Postgres`, the `_ =>` fallthrough of this match's `Err`
+        // arm below), silently demoting a sound 501 refusal to a 500. The ORIGINAL
+        // `decode_pg_numeric` error survives one more `.source()` hop down
+        // (`tokio_postgres::Error`'s `cause`, confirmed against `postgres-types`'
+        // `Option<T>::from_sql`, which passes a `Some`-case error through unchanged) —
+        // recover it before falling back.
+        Type::NUMERIC => match row.try_get::<_, Option<PgNumeric>>(idx) {
+            Ok(v) => v.map(|n| n.0),
+            Err(e) => {
+                if let Some(Error::Unsupported(m)) =
+                    e.source().and_then(|s| s.downcast_ref::<Error>())
+                {
+                    return Err(Error::Unsupported(m.clone()));
+                }
+                return Err(Error::from(e));
+            }
+        },
         Type::BYTEA => row.try_get::<_, Option<Vec<u8>>>(idx)?.map(|b| {
             let mut out = std::string::String::new();
             datatype::hex_binary_upper(&b, &mut out);
@@ -466,6 +485,78 @@ mod tests {
             drop(stream);
             drop(client2);
             let _ = client.batch_execute(&format!("DROP DATABASE IF EXISTS {db}")).await;
+        });
+    }
+
+    /// PG NUMERIC NaN/±Infinity refusal, through the REAL `pg_value`/`next_row`
+    /// path (not just `decode_pg_numeric` in isolation — see the `decode_pg_numeric_
+    /// *_is_unsupported` tests below for that unit-level coverage). This is the
+    /// layer that actually carried the classification bug: `tokio_postgres::Row::
+    /// try_get`'s `FromSql`-failure wrapping demoted `decode_pg_numeric`'s sound
+    /// `Error::Unsupported` to a generic `Error::Postgres` once routed through a
+    /// bare `?`, so `next_row` — and downstream, `exec_core::map_sql_err` — would
+    /// classify a NaN/±Infinity NUMERIC column as a 500, not the intended 501.
+    /// Live-PG only; gracefully skips when no server is reachable.
+    #[test]
+    fn pg_value_numeric_nan_and_infinity_surface_as_unsupported() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let conn_str = format!("{} dbname=postgres", base_conn());
+            let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+                eprintln!("skipping pg_value_numeric_nan_and_infinity_surface_as_unsupported: no live PostgreSQL reachable");
+                return;
+            };
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            let db = format!("sf_sql_pgnan_test_{}", std::process::id());
+            let _ = client
+                .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+                .await;
+            client
+                .batch_execute(&format!("CREATE DATABASE {db}"))
+                .await
+                .expect("create test db");
+            let conn_str2 = format!("{} dbname={db}", base_conn());
+            let (client2, connection2) = tokio_postgres::connect(&conn_str2, NoTls)
+                .await
+                .expect("connect to test db");
+            tokio::spawn(async move {
+                let _ = connection2.await;
+            });
+            client2
+                .batch_execute(
+                    "CREATE TABLE t (id INTEGER, p NUMERIC);
+                     INSERT INTO t VALUES (1, 'NaN'), (2, 'Infinity'), (3, '-Infinity');",
+                )
+                .await
+                .expect("seed table");
+
+            // Each non-finite class gets its own query, so a regression pinpoints
+            // exactly which sign value broke (mirrors decode_pg_numeric's own 3-way
+            // unit split below).
+            for (id, class) in [(1, "NaN"), (2, "+Infinity"), (3, "-Infinity")] {
+                let mut backend = PgBackend::new(&client2);
+                let mut stream = backend
+                    .open_branch(&format!("SELECT p FROM t WHERE id = {id}"), &[])
+                    .await
+                    .expect("open_branch");
+                match stream.next_row().await {
+                    Ok(_) => panic!("PG NUMERIC {class} must be refused, not decoded"),
+                    Err(err) => assert!(
+                        matches!(err, Error::Unsupported(_)),
+                        "PG NUMERIC {class} must classify as Error::Unsupported (-> 501), got {err:?}"
+                    ),
+                }
+            }
+
+            drop(client2);
+            let _ = client
+                .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
+                .await;
         });
     }
 

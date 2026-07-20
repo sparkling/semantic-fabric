@@ -223,7 +223,7 @@ fn bench_group_avg_rust(c: &mut Criterion) {
 /// overhead (or its absence) actually shows up in the wall-clock.
 const TERM_GEN_N: usize = 100_000;
 
-const TERM_GEN_BATCH_SIZE: usize = 3_000;
+const TERM_GEN_BATCH_SIZE: usize = 4_000;
 const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
 

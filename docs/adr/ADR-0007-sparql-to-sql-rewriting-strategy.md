@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-07-19
 tags: [obda, virtualization, sparql-to-sql, rewriting, intermediate-query, optional, null-semantics, optimizer-cascade, correctness, term-construction-lifting, plan-cache, cost-driven]
 supersedes: []
 depends-on:
@@ -92,3 +93,17 @@ Verified by the layered strategy in ADR-0012 — the native in-memory Oxigraph o
 * **Architecture:** ADR-0003. **Substrate:** ADR-0004. **Execution substrate:** ADR-0006. **Scope:** ADR-0002. **Reasoning:** ADR-0008. **Governance (injection-safety, recursion bounds, streaming):** ADR-0010. **Test strategy:** ADR-0012.
 * **Research:** `docs/research/` — `cascade-correctness` (Xiao/Kontchakov ISWC-2018, Chebotko, Pérez, cascade order + invariants), `ontop`, `foundations-benchmarks`.
 * **Cost-driven design (baked in here):** term-construction lifting + the plan cache are the rewriter-side half; the term-gen allocation discipline + cross-source semi-join cost are the ADR-0006 half. Both promoted from the ADR-0020 research register.
+
+**Update (2026-07-19, Run 4 Wave B3) — a second condition-only exception to
+term-construction lifting.** The lifting invariant ("the SELECT projects raw
+key columns; RDF terms are built during reconstruction") is unchanged, but the
+WHERE clause now has a second place where term-LEXICAL text is computed in SQL
+(the first being `StrMatch`'s LIKE/regex pushdown): `SqlCond::TemplateEq`
+renders two differently-shaped templates as dialect-correct CONCAT expressions
+and compares them, resolving template-shape-mismatch equality (`unify.rs`,
+`emit.rs::render_template_concat`). Boolean-condition-only — never SELECTed,
+never reconstructed from — so the lifting economics are untouched. Restricted
+to term classes where lexical equality IS term equality (IRIs, plain/
+`xsd:string` literals) and to dialects whose NULL-propagation through concat
+matches R2RML §11 term-absence (`||` on PG/SQLite, `CONCAT` on MySQL; every
+other dialect stays a sound 501).

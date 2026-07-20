@@ -13,8 +13,8 @@
 //! defer} else {streaming OFFSET/LIMIT} → after the loop: sort THEN slice.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Arc;
 
 use oxsdatatypes::Decimal;
 use sf_core::datatype::{self, XsdTypeCode};
@@ -65,16 +65,18 @@ pub(crate) fn block_on<F: Future>(fut: F) -> F::Output {
 /// Evaluate ORDER BY expression keys (e.g. `STRLEN(?n)`) and inject each result as a
 /// synthetic binding so `order_cmp` finds it (design §2 — the extraction of the old
 /// SQLite-only `exec.rs` injection, now backend-uniform).
-fn inject_order_expr_keys(
-    order: &[OrderKey],
-    bindings: BTreeMap<String, Term>,
-) -> BTreeMap<String, Term> {
+fn inject_order_expr_keys(order: &[OrderKey], bindings: Bindings) -> Bindings {
     if order.iter().any(|k| k.expr.is_some()) {
         let mut b = bindings;
         for key in order {
             if let Some(expr) = &key.expr {
                 if let Some(val) = eval_expr(expr, &b) {
-                    b.insert(key.var.clone(), val);
+                    // Not pre-interned like `intern_bindings` below (Run 4 Wave
+                    // C1): an expression-based ORDER BY key is rare and this
+                    // fires O(order.len()) times per row, nowhere near the
+                    // O(branch.bindings.len())-per-row volume that makes
+                    // `reconstruct`'s interning worth it.
+                    b.insert(Arc::from(key.var.as_str()), val);
                 }
             }
         }
@@ -89,7 +91,7 @@ fn inject_order_expr_keys(
 async fn for_each_solution<B, F, Fut>(plan: &Plan, b: &mut B, sink: F) -> Result<()>
 where
     B: SqlBackend,
-    F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
+    F: FnMut(&Branch, &Bindings) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     if let Some(rg) = &plan.rust_group {
@@ -147,7 +149,7 @@ async fn run_branches<B, F, Fut>(
 ) -> Result<()>
 where
     B: SqlBackend,
-    F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
+    F: FnMut(&Branch, &Bindings) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     // Catalog: one probe per distinct source; SWALLOW column_names errors (design
@@ -182,13 +184,28 @@ where
                               // the column's collation/affinity). Buffer, stable-sort via the type-aware
                               // order_cmp, then OFFSET/LIMIT (SPARQL §15: order, then slice).
     let ordered = !ctx.order.is_empty();
-    let mut buffer: Vec<(usize, BTreeMap<String, Term>)> = Vec::new();
+    let mut buffer: Vec<(usize, Bindings)> = Vec::new();
     for (bi, branch) in branches.iter().enumerate() {
         let e = emit::emit_branch_with(branch, ctx.dialect, &catalog)?;
+        // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path — see `cascade::
+        // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
+        // scope rule): `e.sql` above omitted DISTINCT even though `branch.distinct` is
+        // set, because `emit_branch_with` deferred to this dedup instead of refusing.
+        // `term_seen` is fresh PER BRANCH (unlike `seen_tuples` above, which is shared
+        // across branches and keys on the OUTER projected vars) — a different scope and
+        // question: this collapses duplicates WITHIN this one branch's own relation, on
+        // its FULL reconstructed solution tuple (every bound variable), independent of
+        // whatever the outer query later projects or whether it asked for DISTINCT at all.
+        let term_dedup = crate::cascade::eligible_for_term_dedup(branch);
+        let mut term_seen: std::collections::HashSet<Vec<Term>> = std::collections::HashSet::new();
         // The column schema is fixed for this branch's whole row stream, so index
         // it ONCE here rather than per row (ADR-0024/M4 perf — `RawRow::code_for`/
         // `AliasRow::value` used to `schema.iter().position(...)` on every lookup).
         let col_index = build_col_index(&e.projection);
+        // `branch.bindings`' variable names, interned ONCE here for the whole
+        // branch stream — see `intern_bindings`'s doc comment (Run 4 Wave C1,
+        // the same "once per branch, not per row" idiom as `col_index` above).
+        let interned = intern_bindings(branch);
         // The ONLY bind site: `e.params` bound as N positional params by the adapter.
         let mut s = b
             .open_branch(&e.sql, &e.params)
@@ -236,13 +253,16 @@ where
             // not assumed): this does NOT move `sf-bench`'s constant-memory peak —
             // profiling found the peak is reached DURING `reconstruct_batch`'s own
             // construction (raw_batch and the growing reconstructed batch are both
-            // live then regardless), not after it returns, and is dominated by
-            // `BTreeMap<String, Term>`'s per-node overhead on the many small
-            // (1-3-entry) per-row binding maps live at once — see
-            // `TERM_GEN_BATCH_SIZE`'s doc comment. Kept anyway as unambiguously
+            // live then regardless), not after it returns. Run 4 Wave C1 replaced
+            // the per-row binding map itself (`Bindings`, this file — see its doc
+            // comment) for exactly this reason: the many small (1-3-entry) per-row
+            // maps live at once were previously `BTreeMap<String, Term>`, whose
+            // per-node allocation dominated this peak — see `TERM_GEN_BATCH_SIZE`'s
+            // doc comment for the re-tuned batch size the leaner representation
+            // affords. Dropping `raw_batch` here is kept anyway as unambiguously
             // correct hygiene, not as the memory fix.
             let reconstructed =
-                reconstruct_batch(branch, &raw_batch, &col_index, ctx.parallel_term_gen);
+                reconstruct_batch(&interned, &raw_batch, &col_index, ctx.parallel_term_gen);
             drop(raw_batch);
             for bindings in reconstructed {
                 let bindings = bindings?;
@@ -253,6 +273,20 @@ where
                         if !seen_tuples.insert(key) {
                             continue; // duplicate projected solution
                         }
+                    }
+                }
+                if term_dedup {
+                    // Run 4 Wave C1: `Bindings` preserves INSERTION order, not
+                    // the old `BTreeMap`'s alphabetical-by-var-name order —
+                    // canonicalize via `canonical_pairs` so two equal solutions
+                    // whose vars got bound in a different sequence still hash
+                    // the same (see `Bindings`'s doc comment).
+                    let key: Vec<Term> = canonical_pairs(&bindings)
+                        .into_iter()
+                        .map(|(_, v)| v.clone())
+                        .collect();
+                    if !term_seen.insert(key) {
+                        continue; // duplicate reconstructed solution (ADR-0034 D1 term dedup)
                     }
                 }
                 // ORDER BY (any branch count): defer slicing — buffer for the global
@@ -320,7 +354,7 @@ async fn rust_group_execute<B, F, Fut>(
 ) -> Result<()>
 where
     B: SqlBackend,
-    F: FnMut(&Branch, &BTreeMap<String, Term>) -> Fut,
+    F: FnMut(&Branch, &Bindings) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     // The inner collection's "prepared branches" — `Plan::prepared_branches`'s
@@ -350,7 +384,7 @@ where
         // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
         parallel_term_gen: true,
     };
-    let mut inner_rows: Vec<BTreeMap<String, Term>> = Vec::new();
+    let mut inner_rows: Vec<Bindings> = Vec::new();
     run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
         inner_rows.push(bindings.clone());
         std::future::ready(Ok(()))
@@ -810,13 +844,116 @@ fn avg_result_code(operand: XsdTypeCode) -> XsdTypeCode {
     }
 }
 
-/// Reconstruct all bound variables of `branch` for one raw row. `pub(crate)` so
-/// the PostgreSQL executor reuses the identical reconstruction (ADR-0003 R3).
-pub(crate) fn reconstruct(branch: &Branch, raw: &RawRow<'_>) -> Result<BTreeMap<String, Term>> {
-    let mut out = BTreeMap::new();
-    for (var, def) in &branch.bindings {
+/// One reconstructed SPARQL solution row's bound-variable -> term mapping
+/// (Run 4 Wave C1, replacing the former `BTreeMap<String, Term>`): a small
+/// linear-scan `Vec`, not a tree. `sf-bench`'s `constant_memory` peak-heap
+/// profiling (see [`TERM_GEN_BATCH_SIZE`]'s doc comment) found `BTreeMap`'s
+/// per-node allocation overhead — not the term data itself — dominated peak
+/// heap in the buffered-batch window, because a typical branch binds only a
+/// handful (1-3) of variables per row: far below where a tree's O(log n)
+/// lookup would ever beat a linear scan (the same reasoning [`ColIndex`]
+/// documents for a branch's column schema). Var names are `Arc<str>`, not
+/// `String`: every row [`reconstruct`] builds for one branch's stream shares
+/// that branch's SAME interned handles ([`intern_bindings`]), so a per-row
+/// insert clones an `Arc` (refcount bump) instead of allocating a fresh
+/// `String`.
+///
+/// Preserves INSERTION order, NOT the old `BTreeMap`'s alphabetical-by-key
+/// order. [`Bindings::get`]/[`contains_key`](Bindings::contains_key) (keyed
+/// lookup) are unaffected by this, but a site that needs a canonical,
+/// order-independent view of the WHOLE row — hashing it or structurally
+/// comparing it, as opposed to looking up one named variable — must go
+/// through [`canonical_pairs`] first, or two equal solutions whose vars
+/// happened to get bound/inserted in a different sequence would compare
+/// unequal. The `derive`d [`PartialEq`] below is therefore ALSO
+/// insertion-order sensitive (structural, element-by-element) — fine for the
+/// one place this file compares `Bindings` values directly
+/// (`order_sort_key_tests`, where both sides are clones of the same original
+/// rows, never rebuilt), but not a substitute for [`canonical_pairs`]
+/// anywhere a value could have been built along a different path.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Bindings(Vec<(Arc<str>, Term)>);
+
+impl Bindings {
+    fn new() -> Self {
+        Bindings(Vec::new())
+    }
+
+    /// The term bound to `var`, if any.
+    fn get(&self, var: &str) -> Option<&Term> {
+        self.0.iter().find(|(k, _)| &**k == var).map(|(_, v)| v)
+    }
+
+    fn contains_key(&self, var: &str) -> bool {
+        self.0.iter().any(|(k, _)| &**k == var)
+    }
+
+    /// `BTreeMap::insert`'s replace-on-existing-key semantics: overwrite
+    /// `var`'s slot if already bound, else append a new one.
+    fn insert(&mut self, var: Arc<str>, term: Term) {
+        match self.0.iter_mut().find(|(k, _)| *k == var) {
+            Some(slot) => slot.1 = term,
+            None => self.0.push((var, term)),
+        }
+    }
+
+    /// Append `(var, term)` WITHOUT checking for an existing key — sound only
+    /// when the caller already guarantees `var` is not yet bound. Prefer
+    /// [`Bindings::insert`] anywhere that isn't true; [`reconstruct`] is the
+    /// one caller that can (its `interned` source is unique-by-construction,
+    /// see [`intern_bindings`]).
+    fn push(&mut self, var: Arc<str>, term: Term) {
+        self.0.push((var, term));
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&str, &Term)> {
+        self.0.iter().map(|(k, v)| (&**k, v))
+    }
+}
+
+/// [`Bindings`]'s pairs in CANONICAL (var-name-sorted) order — see
+/// [`Bindings`]'s doc comment for why any whole-row hash/structural-equality
+/// site needs this instead of raw [`Bindings::iter`] order. The two sites
+/// that hash a FULL solution row rather than looking up one named variable:
+/// `run_branches`' ADR-0034 D1 term-dedup key, and `rust_agg`'s
+/// `COUNT(DISTINCT *)` key.
+fn canonical_pairs(b: &Bindings) -> Vec<(&str, &Term)> {
+    let mut pairs: Vec<(&str, &Term)> = b.iter().collect();
+    pairs.sort_unstable_by_key(|&(k, _)| k);
+    pairs
+}
+
+/// [`Branch::bindings`]'s variable names, pre-interned as [`Arc<str>`] and
+/// paired with their [`TermDef`] — built ONCE per branch (`run_branches`,
+/// mirroring [`build_col_index`]'s "once per branch, not per row" idiom, see
+/// its doc comment). Every row [`reconstruct`] builds for this branch then
+/// clones an already-allocated `Arc` (a refcount bump) into its [`Bindings`]
+/// instead of allocating a fresh `String` per variable per row (Run 4 Wave
+/// C1 — the ADR-0006 correction note's "leaner per-row binding
+/// representation"). Does NOT touch [`Branch::bindings`] itself, which stays
+/// a `BTreeMap<String, TermDef>` — its alphabetical iteration order is
+/// load-bearing elsewhere (`iq::lower`'s positional `c{i}` alias assignment).
+type InternedBindings<'a> = Vec<(Arc<str>, &'a TermDef)>;
+
+fn intern_bindings(branch: &Branch) -> InternedBindings<'_> {
+    branch
+        .bindings
+        .iter()
+        .map(|(var, def)| (Arc::from(var.as_str()), def))
+        .collect()
+}
+
+/// Reconstruct all bound variables of one raw row from `interned` — a
+/// branch's [`intern_bindings`] output, built ONCE per branch (see its doc
+/// comment). `pub(crate)` so the PostgreSQL executor reuses the identical
+/// reconstruction (ADR-0003 R3).
+pub(crate) fn reconstruct(interned: &InternedBindings<'_>, raw: &RawRow<'_>) -> Result<Bindings> {
+    let mut out = Bindings::new();
+    for (var, def) in interned {
         if let Some(term) = build_term(def, raw)? {
-            out.insert(var.clone(), term);
+            // `push`, not `insert`: `interned` comes from a `BTreeMap` (unique
+            // keys), so `var` can never already be bound in `out`.
+            out.push(var.clone(), term);
         }
     }
     Ok(out)
@@ -845,19 +982,41 @@ pub(crate) fn reconstruct(branch: &Branch, raw: &RawRow<'_>) -> Result<BTreeMap<
 /// small the same way it dominated a single row; throughput alone would want
 /// 10 000+ (a measured, comfortably-margined ~1.6-1.7x faster there). But a
 /// SECOND, independent constraint caps it much lower: each buffered-and-
-/// reconstructed row costs far more than its raw bytes (`BTreeMap<String,
-/// Term>`'s per-node overhead dominates for the 1-3-entry maps a typical
-/// branch binds, not the term data itself), so `sf-bench`'s own
+/// reconstructed row costs far more than its raw bytes, so `sf-bench`'s own
 /// `constant_memory` peak-heap invariant test — which THIS same restructure
-/// must keep passing — measured the mem_ratio blowing well past its `4.0`
-/// tolerance at 5000 (5.44) and 10 000 (9.05), while 3000 stayed comfortably
-/// under it (~3.4, vs 3500's fragile ~3.9). 3000 is therefore a
-/// memory-constrained choice, not a throughput-optimal one — see
-/// [`reconstruct_batch`] for why a batch this size is still chunked FURTHER
-/// within each dispatch, not handed to rayon as a single task, and the ADR-0006
-/// correction note for the open question this leaves for a future wave (a
-/// leaner per-row binding representation would raise this ceiling).
-const TERM_GEN_BATCH_SIZE: usize = 3_000;
+/// must keep passing — is what actually picks the value. Originally (pre-C1,
+/// see below) this was a `BTreeMap<String, Term>`'s per-node allocation
+/// overhead on the 1-3-entry maps a typical branch binds, which measured the
+/// mem_ratio blowing well past the test's `4.0` tolerance at 5000 (5.44) and
+/// 10 000 (9.05), while 3000 stayed comfortably under it (~3.4, vs 3500's
+/// fragile ~3.9). See [`reconstruct_batch`] for why a batch this size is
+/// still chunked FURTHER within each dispatch, not handed to rayon as a
+/// single task.
+///
+/// **Re-tuned again, Run 4 Wave C1**, once [`Bindings`] (this file's own doc
+/// comment) replaced that `BTreeMap` with a leaner `Vec<(Arc<str>, Term)>` —
+/// exactly the "a leaner per-row binding representation would raise this
+/// ceiling" open question the ADR-0006 correction note above used to leave
+/// for a future wave. Re-running the SAME `engine_memory_is_bounded_under_
+/// growing_source` sweep at successive batch sizes, with `Bindings` in
+/// place, measured: 3000 → mem_ratio 3.0 (down from `BTreeMap`'s ~3.4 at the
+/// SAME batch size — the leaner representation alone lowers the ratio), 3500
+/// → 3.35, 4000 → 3.69, 4500 → 4.01 (just past tolerance), 5000 → 4.31
+/// (fails, vs `BTreeMap`'s 5.44 at the same size — lower, but still over).
+/// The ceiling rose, as predicted, but not without bound: 4000 is the new
+/// memory-constrained choice, picked with the same margin-below-the-
+/// fragile-edge judgment that rejected 3500 over 3000 originally (4500's
+/// 4.01 is exactly that kind of fragile-close call).
+/// `engine_memory_is_batch_bounded_past_the_batch_size_threshold` (the
+/// 20k-vs-80k-rows plateau proof) stays exactly 1.0x at 4000. End-to-end
+/// throughput corroborates the choice — `sf-bench`'s `obda_construct_dump`
+/// (CONSTRUCT-dump wall-clock) improved ~15% (1x) / ~19% (10x), and the
+/// `rust_group`-routed `micro_distinct_agg`/`micro_group_avg_rust` improved
+/// ~33%/~30% — all measured with BOTH this batch bump and the `Bindings`
+/// swap together (not decomposed further); only the mem_ratio comparison
+/// above isolates the representation's OWN contribution (3.4 → 3.0 at the
+/// unchanged batch=3000).
+const TERM_GEN_BATCH_SIZE: usize = 4_000;
 
 /// The size of ONLY the first batch pulled from a branch's cursor (every batch
 /// after it uses the full [`TERM_GEN_BATCH_SIZE`]). Filling a full batch before
@@ -904,6 +1063,33 @@ const TERM_GEN_FIRST_BATCH_SIZE: usize = 64;
 /// `micro_distinct_agg` / `micro_group_avg_rust` shape this constant was
 /// tuned against — `AVG`/`SUM(DISTINCT)`/`COUNT(DISTINCT)` over
 /// `canonical_lexical`-formatted numeric literals) is allowed past this gate.
+///
+/// **Re-tested, Run 4 Wave C1, once [`Bindings`] made per-row reconstruction
+/// leaner — inconclusive, gate KEPT.** The hypothesis: a cheaper per-row
+/// build might shift the win/lose line for the dump path too. Re-running
+/// `constant_memory_dump` itself with the plain streaming path's gate
+/// temporarily forced `true` still regressed (+16.6%/+18.7% at 10x/100x,
+/// same direction as the original 31-35% figure above) — but that bench
+/// installs `sf-bench::mem::Tracking` as a global allocator (`mem.rs`) to
+/// track peak BYTES via two process-wide atomics every alloc/dealloc
+/// touches; under multi-threaded `par_chunks` dispatch those atomics see
+/// real cross-core contention that a single-threaded run never does, which
+/// is a property of THAT bench's own instrumentation, not of
+/// `reconstruct_batch`. Re-running the SAME forced-`true` experiment on
+/// `sf-bench`'s OTHER, uninstrumented CONSTRUCT-dump bench
+/// (`obda_latency`'s `obda_construct_dump`, plain `System` allocator) gave
+/// the OPPOSITE signal: no significant change at 1x (p > 0.05, both
+/// replicates), but dispatch ~7-9% FASTER at 10x across two independent
+/// same-session replicates (p < 0.05 both times). The gate stays `false`
+/// here anyway: both readings came from one heavily-loaded shared 18-core
+/// dev machine mid-swarm-session (`uptime` load average swung 11 → 5 during
+/// this very testing), and `par_chunks`' win margin is inherently sensitive
+/// to core contention in a way a quiet/dedicated re-run could easily
+/// overturn — a hot path this wide (every CONSTRUCT dump and streaming
+/// SELECT) deserves cleaner verification before its default flips. Left as
+/// a concrete, evidenced follow-up: re-run `obda_construct_dump` (not
+/// `constant_memory_dump`, per the confound above) on an idle machine before
+/// deciding whether to un-gate.
 const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 
 /// The floor on `par_chunks`' chunk size WITHIN one already-dispatched batch
@@ -914,7 +1100,7 @@ const TERM_GEN_MIN_PARALLEL_ROWS: usize = 2_000;
 /// [`TERM_GEN_MIN_PARALLEL_ROWS`]'s much larger bar.
 const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
 
-/// Reconstruct every row of `batch` against `branch`, in ORIGINAL row order —
+/// Reconstruct every row of `batch` against `interned`'s bindings, in ORIGINAL row order —
 /// [`run_branches`]'s buffer -> maybe-parallel-map -> emit-in-order step. A
 /// plain sequential map when `!parallel_allowed` (ledger F8 — see
 /// [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the measured reason a
@@ -939,18 +1125,18 @@ const TERM_GEN_MIN_CHUNK_ROWS: usize = 128;
 /// `parallel_allowed` — the sequential branch is already in order by
 /// construction, so a caller never needs to know which branch ran.
 fn reconstruct_batch(
-    branch: &Branch,
+    interned: &InternedBindings<'_>,
     batch: &[RawTuple],
     col_index: &ColIndex<'_>,
     parallel_allowed: bool,
-) -> Vec<Result<BTreeMap<String, Term>>> {
+) -> Vec<Result<Bindings>> {
     let one_row = |t: &RawTuple| {
         let raw = RawRow {
             values: &t.values,
             codes: &t.codes,
             index: col_index,
         };
-        reconstruct(branch, &raw)
+        reconstruct(interned, &raw)
     };
     if !parallel_allowed || batch.len() < TERM_GEN_MIN_PARALLEL_ROWS {
         return batch.iter().map(one_row).collect();
@@ -1066,7 +1252,7 @@ fn cmp_sort_key(a: &TermSortKey, b: &TermSortKey) -> Ordering {
 /// in `order`, `None` for an unbound one — see [`order_cmp_precomputed`].
 fn precompute_order_keys<'a>(
     order: &[OrderKey],
-    bindings: &'a BTreeMap<String, Term>,
+    bindings: &'a Bindings,
 ) -> Vec<Option<TermSortKey<'a>>> {
     order
         .iter()
@@ -1176,7 +1362,7 @@ fn numeric_value(l: &Literal) -> Option<f64> {
 // first/last per direction — sound but never silently wrong.
 
 /// Evaluate a SPARQL expression to an RDF term, or `None` if indeterminate.
-pub(crate) fn eval_expr(expr: &Expression, b: &BTreeMap<String, Term>) -> Option<Term> {
+pub(crate) fn eval_expr(expr: &Expression, b: &Bindings) -> Option<Term> {
     match expr {
         Expression::Variable(v) => b.get(v.as_str()).cloned(),
         Expression::NamedNode(n) => Some(Term::NamedNode(n.clone())),
@@ -1253,7 +1439,7 @@ pub(crate) fn eval_expr(expr: &Expression, b: &BTreeMap<String, Term>) -> Option
     }
 }
 
-fn eval_bool(expr: &Expression, b: &BTreeMap<String, Term>) -> Option<bool> {
+fn eval_bool(expr: &Expression, b: &Bindings) -> Option<bool> {
     match eval_expr(expr, b)? {
         Term::Literal(l) => {
             const XSD_BOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
@@ -1302,7 +1488,7 @@ fn cmp_option(a: Option<&Term>, b: Option<&Term>) -> Option<Ordering> {
     Some(cmp_term(a?, b?))
 }
 
-fn eval_function(func: &Function, args: &[Expression], b: &BTreeMap<String, Term>) -> Option<Term> {
+fn eval_function(func: &Function, args: &[Expression], b: &Bindings) -> Option<Term> {
     fn str_val(t: &Term) -> Option<String> {
         match t {
             Term::Literal(l) => Some(l.value().to_owned()),
@@ -1448,7 +1634,7 @@ pub struct Solutions {
 /// so the PostgreSQL executor instantiates CONSTRUCT templates identically.
 pub(crate) fn instantiate(
     tp: &spargebra::term::TriplePattern,
-    bindings: &BTreeMap<String, Term>,
+    bindings: &Bindings,
 ) -> Option<Triple> {
     use spargebra::term::NamedNodePattern;
     let subject = instantiate_term(&tp.subject, bindings)?;
@@ -1468,10 +1654,7 @@ pub(crate) fn instantiate(
 /// whose fallibility naturally enforces RDF 1.2 §3.1 position legality — an
 /// illegal-position nested triple silently drops (§16.2), never errors. A
 /// standalone (non-closure) function so it can recurse into itself.
-fn instantiate_term(
-    p: &spargebra::term::TermPattern,
-    bindings: &BTreeMap<String, Term>,
-) -> Option<Term> {
+fn instantiate_term(p: &spargebra::term::TermPattern, bindings: &Bindings) -> Option<Term> {
     use spargebra::term::TermPattern;
     match p {
         TermPattern::Variable(v) => bindings.get(v.as_str()).cloned(),
@@ -1508,12 +1691,12 @@ fn instantiate_term(
 pub(crate) fn rust_group_result_rows(
     plan: &Plan,
     rg: &RustGroup,
-    inner_rows: Vec<BTreeMap<String, Term>>,
-) -> Result<Vec<BTreeMap<String, Term>>> {
+    inner_rows: Vec<Bindings>,
+) -> Result<Vec<Bindings>> {
     // Group by the key variable values, preserving insertion order for stable output.
     // Use a Vec for ordering + a HashMap for O(1) group lookup.
     type GroupKey = Vec<Option<Term>>;
-    type GroupRows = Vec<BTreeMap<String, Term>>;
+    type GroupRows = Vec<Bindings>;
     #[allow(clippy::type_complexity)]
     let mut groups: Vec<(GroupKey, GroupRows)> = Vec::new();
     let mut key_index: std::collections::HashMap<Vec<Option<Term>>, usize> =
@@ -1536,27 +1719,44 @@ pub(crate) fn rust_group_result_rows(
         groups.push((vec![], vec![]));
     }
 
+    // Every result row below binds the SAME `rg.keys`/agg `out_var`s/post-expr
+    // `out_var`s, once per GROUP — interned ONCE here, not per group (Run 4
+    // Wave C1, the same "once per row stream" idiom `intern_bindings` uses
+    // for a branch's own vars): a shared `Arc<str>` clone beats a fresh
+    // `String` allocation per group.
+    let key_names: Vec<Arc<str>> = rg.keys.iter().map(|k| Arc::from(k.as_str())).collect();
+    let agg_names: Vec<Arc<str>> = rg
+        .aggs
+        .iter()
+        .map(|a| Arc::from(a.out_var.as_str()))
+        .collect();
+    let post_names: Vec<Arc<str>> = rg
+        .post_exprs
+        .iter()
+        .map(|(v, _)| Arc::from(v.as_str()))
+        .collect();
+
     // Materialise the result row (key vars + aggregates) for every group.
-    let mut result_rows: Vec<BTreeMap<String, Term>> = Vec::with_capacity(groups.len());
+    let mut result_rows: Vec<Bindings> = Vec::with_capacity(groups.len());
     for (key_vals, group_rows) in &groups {
-        let mut result = BTreeMap::new();
-        for (k, val) in rg.keys.iter().zip(key_vals.iter()) {
+        let mut result = Bindings::new();
+        for (name, val) in key_names.iter().zip(key_vals.iter()) {
             if let Some(t) = val {
-                result.insert(k.clone(), t.clone());
+                result.insert(name.clone(), t.clone());
             }
         }
-        for agg_spec in &rg.aggs {
+        for (agg_spec, name) in rg.aggs.iter().zip(&agg_names) {
             if let Some(t) = rust_agg(agg_spec, group_rows)? {
-                result.insert(agg_spec.out_var.clone(), t);
+                result.insert(name.clone(), t);
             }
         }
         // ADR-0025 Tier-2 gap 5: post-GROUP-BY expressions over the aggregate outputs
         // (e.g. `COUNT(?x) * 2`). Evaluate each over the row's now-materialised aggregate +
         // group-key bindings via the shared `eval_expr`; an unbound reference yields no
         // binding (SPARQL: the value is unbound), never a wrong answer.
-        for (out_var, expr) in &rg.post_exprs {
+        for ((_, expr), name) in rg.post_exprs.iter().zip(&post_names) {
             if let Some(t) = eval_expr(expr, &result) {
-                result.insert(out_var.clone(), t);
+                result.insert(name.clone(), t);
             }
         }
         result_rows.push(result);
@@ -1576,8 +1776,7 @@ pub(crate) fn rust_group_result_rows(
         let mut idx: Vec<usize> = (0..result_rows.len()).collect();
         idx.sort_by(|&i, &j| order_cmp_precomputed(&plan.order, &keys[i], &keys[j]));
         drop(keys);
-        let mut slots: Vec<Option<BTreeMap<String, Term>>> =
-            result_rows.into_iter().map(Some).collect();
+        let mut slots: Vec<Option<Bindings>> = result_rows.into_iter().map(Some).collect();
         result_rows = idx
             .into_iter()
             .map(|i| {
@@ -1597,26 +1796,25 @@ pub(crate) fn rust_group_result_rows(
 
 /// Compute one aggregate over a group of solutions. Returns `None` for
 /// UNBOUND (AVG/MIN/MAX over an empty multiset — SPARQL §11).
-fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Term>> {
+fn rust_agg(agg: &RustAgg, rows: &[Bindings]) -> Result<Option<Term>> {
     match agg.kind {
         AggKind::Count => {
             let count = match &agg.arg_var {
                 // COUNT(DISTINCT *) — count DISTINCT whole solutions in the group. A row's
-                // canonical key is its (var, term) pairs; `BTreeMap` iterates in sorted key
-                // order, so the key is order-independent. `oxrdf::Term` derives `Hash`/`Eq`
-                // (already relied on elsewhere in this file, e.g. `seen_tuples` above), and
-                // N-Triples serialisation is injective, so a `&Term`-keyed dedup set yields
-                // the IDENTICAL classes a `Term::to_string()`-keyed one would — without the
-                // per-value allocation (ADR-0025 Tier-2 gap 3; ADR-0024/M4 perf).
+                // canonical key is its (var, term) pairs via `canonical_pairs` (Run 4 Wave C1:
+                // `Bindings` preserves insertion order, not the old `BTreeMap`'s sorted-key
+                // order, so the key must be canonicalized explicitly — see its doc comment;
+                // `BTreeMap` used to give this order-independence for free). `oxrdf::Term`
+                // derives `Hash`/`Eq` (already relied on elsewhere in this file, e.g.
+                // `seen_tuples` above), and N-Triples serialisation is injective, so a
+                // `&Term`-keyed dedup set yields the IDENTICAL classes a `Term::to_string()`-
+                // keyed one would — without the per-value allocation (ADR-0025 Tier-2 gap 3;
+                // ADR-0024/M4 perf).
                 None if agg.distinct => {
                     let mut seen: std::collections::HashSet<Vec<(&str, &Term)>> =
                         std::collections::HashSet::new();
                     rows.iter()
-                        .filter(|r| {
-                            let key: Vec<(&str, &Term)> =
-                                r.iter().map(|(k, v)| (k.as_str(), v)).collect();
-                            seen.insert(key)
-                        })
+                        .filter(|r| seen.insert(canonical_pairs(r)))
                         .count()
                 }
                 None => rows.len(), // COUNT(*)
@@ -1706,9 +1904,20 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
             }
             // SPARQL §11.4: AVG of xsd:double values stays xsd:double (else decimal). See the
             // SUM promotion note above (C.6b) — mirrors the SQL path's `avg_result_code`.
+            //
+            // ADR-0025 C.10: both arms below gate on `nums.len() < vals.len()`, NOT
+            // `nums.is_empty()` — the same non-numeric-operand check `AggKind::Sum` already
+            // uses above. The `is_empty()` form only caught an ALL-non-numeric group; a group
+            // MIXING numeric and non-numeric operands (e.g. a UNION arm binding the same var
+            // to a plain string) had `numeric_term`/`decimal_term_value`'s `filter_map` quietly
+            // drop the non-numeric ones and average just the numeric-parseable SUBSET — a real
+            // `=_bag` wrong answer per SPARQL §11 (Avg via Sum: ANY non-numeric operand errors
+            // the whole aggregate, spareval-confirmed), previously tracked as a deliberate,
+            // separate residue (ADR-0025 progress log, 2026-07-18 addendum). SUM never had this
+            // gap; AVG's two branches independently repeat the mistake.
             if vals.iter().any(|t| is_xsd_double(t)) {
                 let nums: Vec<f64> = vals.iter().filter_map(|t| numeric_term(t)).collect();
-                if nums.is_empty() {
+                if nums.len() < vals.len() {
                     return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
                 }
                 let avg = nums.iter().sum::<f64>() / nums.len() as f64;
@@ -1720,13 +1929,10 @@ fn rust_agg(agg: &RustAgg, rows: &[BTreeMap<String, Term>]) -> Result<Option<Ter
                 // the old `nums.iter().sum::<f64>() / len`. A non-terminating quotient (e.g.
                 // 11/3) rendered as an f64 artifact ("3.6666666666666665") that diverged from
                 // the spareval oracle's own exact decimal AVG ("3.666666666666666666"): same
-                // `oxsdatatypes::Decimal` type on both sides ⇒ =_bag equality. Mirrors the
-                // f64 branch's "silently average just the numeric-parseable subset" quirk
-                // verbatim (a separate, pre-existing behaviour, out of scope here) — only the
-                // arithmetic TYPE changes.
+                // `oxsdatatypes::Decimal` type on both sides ⇒ =_bag equality.
                 let nums: Vec<Decimal> =
                     vals.iter().filter_map(|t| decimal_term_value(t)).collect();
-                if nums.is_empty() {
+                if nums.len() < vals.len() {
                     return Ok(None); // non-numeric operand ⇒ UNBOUND (type error, §11)
                 }
                 let Some(sum) = nums
@@ -2022,17 +2228,17 @@ mod order_sort_key_tests {
             descending: false,
             expr: None,
         }];
-        let mut rows: Vec<BTreeMap<String, Term>> = mixed_terms()
+        let mut rows: Vec<Bindings> = mixed_terms()
             .into_iter()
             .map(|t| {
-                let mut m = BTreeMap::new();
-                m.insert("v".to_owned(), t);
+                let mut m = Bindings::new();
+                m.insert(Arc::from("v"), t);
                 m
             })
             .collect();
-        rows.push(BTreeMap::new()); // UNBOUND — no "v" key
+        rows.push(Bindings::new()); // UNBOUND — no "v" key
 
-        let reference_cmp = |a: &BTreeMap<String, Term>, b: &BTreeMap<String, Term>| {
+        let reference_cmp = |a: &Bindings, b: &Bindings| {
             for key in &order {
                 let ord = match (a.get(&key.var), b.get(&key.var)) {
                     (None, None) => Ordering::Equal,
@@ -2055,8 +2261,7 @@ mod order_sort_key_tests {
             .collect();
         let mut idx: Vec<usize> = (0..rows.len()).collect();
         idx.sort_by(|&i, &j| order_cmp_precomputed(&order, &keys[i], &keys[j]));
-        let via_precomputed: Vec<BTreeMap<String, Term>> =
-            idx.into_iter().map(|i| rows[i].clone()).collect();
+        let via_precomputed: Vec<Bindings> = idx.into_iter().map(|i| rows[i].clone()).collect();
 
         assert_eq!(via_reference, via_precomputed);
     }
@@ -2086,8 +2291,10 @@ mod triple_function_tests {
             o,
         )))
     }
-    fn bindings_with(var: &str, t: Term) -> BTreeMap<String, Term> {
-        BTreeMap::from([(var.to_owned(), t)])
+    fn bindings_with(var: &str, t: Term) -> Bindings {
+        let mut b = Bindings::new();
+        b.insert(Arc::from(var), t);
+        b
     }
     fn call(f: Function, var: &str) -> Expression {
         Expression::FunctionCall(f, vec![Expression::Variable(Variable::new(var).unwrap())])
@@ -2142,7 +2349,7 @@ mod triple_function_tests {
                 Expression::NamedNode(NamedNode::new_unchecked("http://ex/o")),
             ],
         );
-        let b = BTreeMap::new();
+        let b = Bindings::new();
         assert_eq!(
             eval_expr(&e, &b),
             Some(triple_term(
@@ -2211,6 +2418,7 @@ mod batch_reconstruct_tests {
         let branch = branch_with_val_binding();
         let schema = vec![ColRef::new(0, "val")];
         let col_index = build_col_index(&schema);
+        let interned = intern_bindings(&branch);
 
         // Spans: below TERM_GEN_MIN_PARALLEL_ROWS (the whole-batch sequential
         // path), astride it (the smallest dispatch that goes parallel at all),
@@ -2236,7 +2444,7 @@ mod batch_reconstruct_tests {
                         codes: &t.codes,
                         index: &col_index,
                     };
-                    reconstruct(&branch, &raw)
+                    reconstruct(&interned, &raw)
                         .expect("reference reconstruct")
                         .get("v")
                         .cloned()
@@ -2248,7 +2456,8 @@ mod batch_reconstruct_tests {
             for parallel_allowed in [true, false] {
                 let mut batched: Vec<Option<Term>> = Vec::with_capacity(n);
                 for chunk in rows.chunks(TERM_GEN_BATCH_SIZE) {
-                    for bindings in reconstruct_batch(&branch, chunk, &col_index, parallel_allowed)
+                    for bindings in
+                        reconstruct_batch(&interned, chunk, &col_index, parallel_allowed)
                     {
                         batched.push(bindings.expect("batch reconstruct").get("v").cloned());
                     }

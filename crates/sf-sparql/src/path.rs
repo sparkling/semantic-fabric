@@ -30,7 +30,7 @@
 //!   or multi-mapping or multi-column predicate, and a non-constant/`rr:class`
 //!   predicate under `!p` — all stay explicit 501s (never silently wrong).
 
-use sf_core::ir::{ObjectMap, Segment, Template, TermMap, TermSpec};
+use sf_core::ir::{LogicalSource, ObjectMap, Segment, Template, TermMap, TermSpec};
 use sf_core::Term;
 use spargebra::algebra::PropertyPathExpression;
 use spargebra::term::{NamedNode, TermPattern};
@@ -335,24 +335,57 @@ impl<'a> Unfolder<'a> {
     /// Resolve a single predicate IRI to its one-hop leaf: exactly one producing
     /// triples-map, a direct constant predicate, single-column subject and `Term`
     /// object term maps; else 501.
+    ///
+    /// Runs [`Self::find_pred_hop`] twice. The first, graph-scoped pass mirrors
+    /// `Unfolder::pattern_branches`'s identical check for ordinary triples
+    /// (`unfold.rs`): a predicate-object map whose triples live in a graph other
+    /// than the active `GRAPH <g>` (or the default graph) contributes no hop.
+    /// Unlike ordinary triples, though, "no graph-matching candidate" is not by
+    /// itself grounds for a 501 — R2RML §7.4 graph scoping is a MAPPING-level
+    /// fact (a wrong-graph POM's rows are never visible under a mismatched
+    /// GRAPH, regardless of their content), so the sound answer is an EMPTY
+    /// relation, not a refusal. The second, unscoped pass answers exactly the
+    /// question that decides between the two: is `pred_iri` mapped ANYWHERE? If
+    /// so, its real term maps/shapes are kept (sound to reuse — they describe
+    /// how this predicate's terms are built when it IS visible, which composite
+    /// shape-matching needs regardless of whether any row ever flows through)
+    /// and only the relation itself is swapped for a statically-empty derived
+    /// table ([`empty_hop`]). Only when even the unscoped pass finds nothing —
+    /// or finds only an uncompilable shape (an ambiguous or refObjectMap-joined
+    /// candidate is still, and always, a 501) — does `pred_iri` genuinely fail
+    /// to compile.
     fn resolve_pred_hop(&self, pred_iri: &str) -> Result<CompiledHop> {
+        if let Some(hop) = self.find_pred_hop(pred_iri, true)? {
+            return Ok(hop);
+        }
+        if let Some(hop) = self.find_pred_hop(pred_iri, false)? {
+            return Ok(empty_hop(hop));
+        }
+        Err(Error::Unsupported(format!(
+            "property path predicate {pred_iri} is not mapped → 501"
+        )))
+    }
+
+    /// The search loop behind [`Self::resolve_pred_hop`]. `graph_scoped = true`
+    /// restricts to predicate-object maps whose effective graph matches
+    /// `current_graph` (R2RML §4.6 POM-overrides-subject-map precedence) — the
+    /// real-relation case. `false` searches the WHOLE mapping regardless of
+    /// graph; `resolve_pred_hop` calls it that way ONLY as the empty-hop shape
+    /// source once the scoped pass finds nothing, never to admit real rows from
+    /// the wrong graph.
+    fn find_pred_hop(&self, pred_iri: &str, graph_scoped: bool) -> Result<Option<CompiledHop>> {
         let mut found: Option<CompiledHop> = None;
         for tm in self.maps {
             for pom in &tm.predicate_object_maps {
-                // Effective graph: POM overrides subject map (R2RML §4.6) — mirrors
-                // `Unfolder::pattern_branches`'s identical check for ordinary triples
-                // (`unfold.rs`). A POM whose triples live in a graph other than the
-                // active `GRAPH <g>` (or the default graph) can never contribute a
-                // hop here — without this, a property path silently ignored GRAPH
-                // entirely (it is the ONLY hop-compilation entry point that read raw
-                // mapping data without consulting `current_graph`).
-                let eff_graphs = if pom.graphs.is_empty() {
-                    &tm.subject.graphs
-                } else {
-                    &pom.graphs
-                };
-                if !crate::unfold::graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
-                    continue;
+                if graph_scoped {
+                    let eff_graphs = if pom.graphs.is_empty() {
+                        &tm.subject.graphs
+                    } else {
+                        &pom.graphs
+                    };
+                    if !crate::unfold::graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                        continue;
+                    }
                 }
                 let produces = pom.predicates.iter().any(|pm| {
                     matches!(pm, TermMap::Constant(Term::NamedNode(q)) if q.as_str() == pred_iri)
@@ -392,11 +425,25 @@ impl<'a> Unfolder<'a> {
                 }
             }
         }
-        found.ok_or_else(|| {
-            Error::Unsupported(format!(
-                "property path predicate {pred_iri} is not mapped → 501"
-            ))
-        })
+        Ok(found)
+    }
+}
+
+/// Convert a real, well-typed [`CompiledHop`] into one that provably yields
+/// ZERO rows — reusing its term maps/shapes verbatim (still-sound reconstruction
+/// specs; composite shape-matching needs them regardless of whether any row
+/// ever flows through this hop) and swapping only the relation for a synthetic
+/// empty derived table, the same statically-empty-derived-table idiom
+/// `emit::emit_subplan_sql` uses for an empty SubPlan (`SELECT 1 AS __sf_empty
+/// WHERE 1 = 0`).
+fn empty_hop(hop: CompiledHop) -> CompiledHop {
+    CompiledHop {
+        expr: HopExpr::Pred(HopRelation {
+            source: LogicalSource::Query("SELECT 1 AS s, 1 AS o WHERE 1 = 0".to_owned()),
+            subj_col: "s".into(),
+            obj_col: "o".into(),
+        }),
+        ..hop
     }
 }
 

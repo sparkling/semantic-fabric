@@ -285,6 +285,30 @@ fn rewrite_parent_colref_multi(c: &mut ColRef, e: &MultiFkElim) {
     }
 }
 
+/// [`rewrite_parent_colref_multi`]'s analog for a [`SqlCond::TemplateEq`]
+/// side — see [`rewrite_parent_template_segments`]'s doc comment for why the
+/// alias (stored once per side, not per column) moves unconditionally once
+/// ANY rewrite in `e.rewrites` applies to this alias.
+fn rewrite_parent_template_segments_multi(
+    segs: &mut [Segment],
+    alias: &mut usize,
+    e: &MultiFkElim,
+) {
+    if *alias != e.parent_alias {
+        return;
+    }
+    for seg in segs.iter_mut() {
+        if let Segment::Column(col) = seg {
+            if let Some((_, child_col)) =
+                e.rewrites.iter().find(|(parent_col, _)| parent_col == col)
+            {
+                *col = child_col.clone();
+            }
+        }
+    }
+    *alias = e.child_alias;
+}
+
 fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
     match cond {
         SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
@@ -307,6 +331,10 @@ fn rewrite_parent_cond_multi(cond: &mut SqlCond, e: &MultiFkElim) {
             for c in conds {
                 rewrite_parent_cond_multi(c, e);
             }
+        }
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
+            rewrite_parent_template_segments_multi(sx, a1, e);
+            rewrite_parent_template_segments_multi(sy, a2, e);
         }
     }
 }
@@ -473,6 +501,27 @@ fn rewrite_parent_colref(c: &mut ColRef, e: &FkElim) {
     }
 }
 
+/// [`rewrite_parent_colref`]'s analog for a [`SqlCond::TemplateEq`] side: the
+/// alias is stored once for the WHOLE segment list, not per column, so this
+/// rewrites every `Segment::Column` matching `e.parent_col` and then moves the
+/// alias — safe because `parent_referenced_only_via` (the pre-check gating
+/// `FkElim` candidates) already refused this elimination if the parent alias
+/// were referenced via ANY other column, so every `Segment::Column` at this
+/// alias is guaranteed to be `e.parent_col`.
+fn rewrite_parent_template_segments(segs: &mut [Segment], alias: &mut usize, e: &FkElim) {
+    if *alias != e.parent_alias {
+        return;
+    }
+    for seg in segs.iter_mut() {
+        if let Segment::Column(col) = seg {
+            if *col == e.parent_col {
+                *col = e.child_col.clone();
+            }
+        }
+    }
+    *alias = e.child_alias;
+}
+
 fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
     match cond {
         SqlCond::ColEq(a, b) | SqlCond::NullSafeEq(a, b) => {
@@ -498,6 +547,10 @@ fn rewrite_parent_cond(cond: &mut SqlCond, e: &FkElim) {
             for c in conds {
                 rewrite_parent_cond(c, e);
             }
+        }
+        SqlCond::TemplateEq(sx, a1, sy, a2, _) => {
+            rewrite_parent_template_segments(sx, a1, e);
+            rewrite_parent_template_segments(sy, a2, e);
         }
     }
 }

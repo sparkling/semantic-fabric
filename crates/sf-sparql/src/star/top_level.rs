@@ -8,8 +8,17 @@
 //! check itself — shared by this relaxed top-level entry (`top_level: true`,
 //! skips the check) and [`super::walk::rewrite_pattern`]'s ordinary,
 //! unconditional `Union` arm (`top_level: false`).
+//!
+//! Run 4 Wave B2 widens the boundary from "bare Union/Values" to "a single
+//! static consumer (FILTER's function-call/equality machinery) DIRECTLY
+//! wrapping one" — [`rewrite_filter_over_union`] — reusing the SAME
+//! per-arm-composes signal [`composed_agreement`] factors out of
+//! [`rewrite_union`]'s own check. `rewrite_top_level_pattern` is also now
+//! called from [`super::expr::rewrite_expr`]'s `Exists` arm: an EXISTS/NOT
+//! EXISTS body is the SAME kind of boundary (only a boolean escapes), so it
+//! gets the identical relaxation.
 
-use spargebra::algebra::GraphPattern;
+use spargebra::algebra::{Expression, GraphPattern};
 use spargebra::term::{GroundTerm, Variable};
 use spargebra::Query;
 
@@ -17,6 +26,7 @@ use crate::{Error, Result};
 
 use super::collect_vars::collect_pattern_vars;
 use super::env::StarEnv;
+use super::expr::rewrite_expr;
 use super::walk::rewrite_pattern;
 
 /// Rewrite a whole query's WHERE pattern (rules R1-R7 plus the ADR-0032 D3
@@ -86,7 +96,9 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
 }
 
 /// **Ledger closeout, boundary A** — a narrow, provably-sound relaxation of
-/// the uniform-composed-ness law for a SELECT query's OWN top-level pattern.
+/// the uniform-composed-ness law for a SELECT query's OWN top-level pattern
+/// (Run 4 Wave B2: and for an EXISTS/NOT EXISTS body — see
+/// `super::expr::rewrite_expr`'s `Exists` arm — the same kind of boundary).
 /// [`rewrite_union`]'s disagreement check (and `super::decompose::decompose_column`'s
 /// mixed-VALUES-column check) exist because [`StarEnv`] is a WHOLE-QUERY map: a
 /// variable's composed-ness, once resolved, is looked up STATICALLY (one
@@ -104,30 +116,47 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
 /// hadn't already collapsed it to one static answer BEFORE `iq::normalize`
 /// ever runs).
 ///
-/// This function closes exactly the case where NONE of those three
-/// consumers can possibly exist: when the query's ENTIRE pattern, modulo
-/// pass-through `SLICE`/`DISTINCT`/`REDUCED`/`PROJECT` wrappers (the only
-/// wrappers a plain `SELECT ... WHERE { ... }` — no `FILTER`, `BIND`,
-/// further join, `GROUP BY`, or `ORDER BY`-with-an-expression — produces),
-/// is a bare `Union` or a single mixed-shape VALUES column. Reconstruction
-/// is per-[`crate::iq::Branch`] and branch-local
-/// (`super::env::apply_composed_bindings`'s `None`-on-absence doc comment;
-/// each top-level `Plan` branch executes as its OWN SQL statement and is
-/// reconstructed independently — `exec_core::run_branches`, never a single
-/// SQL-level `UNION` requiring uniform column arity across arms), so a
-/// disagreeing/mixed variable that is ONLY ever projected (never touched by
-/// a sensitive consumer, because there is nothing else in the query to do
-/// the touching) is safe.
+/// This function closes the case where NONE of those three consumers can
+/// possibly exist: when the query's ENTIRE pattern, modulo pass-through
+/// `SLICE`/`DISTINCT`/`REDUCED`/`PROJECT` wrappers, is a bare `Union` or a
+/// single mixed-shape VALUES column. Reconstruction is per-[`crate::iq::Branch`]
+/// and branch-local (`super::env::apply_composed_bindings`'s `None`-on-absence
+/// doc comment; each top-level `Plan` branch executes as its OWN SQL
+/// statement and is reconstructed independently — `exec_core::run_branches`,
+/// never a single SQL-level `UNION` requiring uniform column arity across
+/// arms), so a disagreeing/mixed variable that is ONLY ever projected (never
+/// touched by a sensitive consumer, because there is nothing else in the
+/// query to do the touching) is safe.
 ///
-/// A `Union`/mixed-VALUES reached ANY OTHER way — nested under a
-/// `FILTER`/`BIND`/further join/`GROUP BY`/`ORDER BY`-expression/CONSTRUCT
-/// template, or as a NESTED arm inside a larger `Union` spine (a documented,
+/// **Run 4 Wave B2** widens this to ONE MORE shape: a `FILTER` DIRECTLY
+/// wrapping the `Union`/mixed-VALUES (`rewrite_filter_over_union`, below).
+/// The first of the three static consumers CAN exist here — but instead of
+/// resolving it once against one whole-query answer, it is resolved TWICE,
+/// once per arm, each seeing ONLY that arm's own local composed-ness (a
+/// FORK of `env` with the OTHER arm's disagreeing entries stripped) — the
+/// exact per-arm answer `iq/normalize.rs`'s later, structurally-identical
+/// `Filter(Union) ⇒ Union(Filter,Filter)` distribution would make available
+/// downstream anyway, just resolved here, BEFORE composed-ness collapses to
+/// one static answer, instead of too late to matter. Still sound by the
+/// SAME argument: this is still reached ONLY at a boundary (SELECT's own
+/// top-level pattern, or an EXISTS/NOT EXISTS body) beyond which nothing
+/// else in the query observes the union's per-row shape.
+///
+/// A `Union`/mixed-VALUES reached ANY OTHER way — nested under `BIND`/a
+/// further join/`GROUP BY`/`ORDER BY`-expression/CONSTRUCT template, wrapped
+/// in a FILTER that is itself nested (not the pattern's own top-level node),
+/// or as a NESTED arm inside a larger `Union` spine (a documented,
 /// not-yet-attempted generalization — only the OUTERMOST `Union` pair gets
 /// this relaxation) — falls through to the ordinary, UNCHANGED
 /// `rewrite_pattern` / `rewrite_union(top_level: false)` /
-/// `super::decompose::rewrite_values`, the original 501.
-/// `CONSTRUCT`/`DESCRIBE`/`ASK` never call this function at all (see
-/// [`rewrite_query`]'s own doc comment).
+/// `super::decompose::rewrite_values`, the original 501. CONSTRUCT's own
+/// template substitution (`super::env::substitute_construct_template`) is a
+/// whole-`Plan` static rewrite with no per-`Branch` counterpart to fork —
+/// genuinely the "single consumer cross-branch uniformity" case neither this
+/// function nor `rewrite_filter_over_union` can express, so `CONSTRUCT`
+/// (for its OWN top-level pattern — an EXISTS body nested inside one still
+/// gets the relaxation, same as anywhere else) never calls this function at
+/// all (see [`rewrite_query`]'s own doc comment); `DESCRIBE`/`ASK` likewise.
 pub(super) fn rewrite_top_level_pattern(
     gp: &GraphPattern,
     n: &mut usize,
@@ -175,6 +204,30 @@ pub(super) fn rewrite_top_level_pattern(
             };
             rewrite_union(&left, &right, n, env, true)
         }
+        // Run 4 Wave B2: a FILTER directly wrapping the union/mixed-VALUES —
+        // see `rewrite_filter_over_union`'s doc comment for the per-arm
+        // resolution this needs beyond the bare-Union/Values cases above.
+        GraphPattern::Filter { expr, inner } => match inner.as_ref() {
+            GraphPattern::Union { left, right } => {
+                rewrite_filter_over_union(expr, left, right, n, env)
+            }
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } if is_single_column_mixed_values(variables, bindings) => {
+                let (triple_rows, plain_rows) = partition_values_by_triple_shape(bindings);
+                let left = GraphPattern::Values {
+                    variables: variables.clone(),
+                    bindings: triple_rows,
+                };
+                let right = GraphPattern::Values {
+                    variables: variables.clone(),
+                    bindings: plain_rows,
+                };
+                rewrite_filter_over_union(expr, &left, &right, n, env)
+            }
+            _ => rewrite_pattern(gp, n, env),
+        },
         other => rewrite_pattern(other, n, env),
     }
 }
@@ -263,15 +316,9 @@ pub(super) fn rewrite_union(
     let rw_right = rewrite_pattern(right, n, env)?;
 
     if !top_level {
-        let left_vars = collect_pattern_vars(left);
-        let right_vars = collect_pattern_vars(right);
-        let shared = left_vars.intersection(&right_vars);
-        for v in shared {
-            let Some(info) = env.get(v).cloned() else {
-                continue; // not composed anywhere ⇒ nothing to reconcile
-            };
-            let left_composes = collect_pattern_vars(&rw_left).contains(&info.s_var);
-            let right_composes = collect_pattern_vars(&rw_right).contains(&info.s_var);
+        for (v, left_composes, right_composes) in
+            composed_agreement(left, right, &rw_left, &rw_right, env)
+        {
             if left_composes != right_composes {
                 return Err(Error::Unsupported(format!(
                     "UNION arms disagree on whether ?{} is a triple term (composed by one arm, \
@@ -286,5 +333,125 @@ pub(super) fn rewrite_union(
     Ok(GraphPattern::Union {
         left: Box::new(rw_left),
         right: Box::new(rw_right),
+    })
+}
+
+/// For every variable EITHER `left`'s OR `right`'s ORIGINAL (pre-rewrite)
+/// pattern mentions (collected via [`collect_pattern_vars`]) that `env` holds
+/// [`super::env::ComposedInfo`] for, whether EACH arm's OWN rewritten output
+/// (`rw_left`/`rw_right`) actually binds that variable's `s_var` — the
+/// per-arm "does this arm actually compose it" signal both [`rewrite_union`]'s
+/// strict check and [`rewrite_filter_over_union`]'s per-arm `expr`
+/// resolution need. Factored out of `rewrite_union`'s own former inline loop
+/// (Run 4 Wave B2) so both share ONE definition of "agree". A variable `env`
+/// has no entry for at all is skipped — not composed anywhere, nothing to
+/// reconcile.
+///
+/// Run 4 B-repair FIX 3: this scans the UNION of the two arms' variable sets,
+/// not their intersection. A variable composed in ONE arm only (absent from
+/// the OTHER arm's pattern text entirely) is UNBOUND in that other arm — the
+/// SAME "one arm composes, the other doesn't" disagreement the shared-variable
+/// case already reports, just discovered a different way (absence rather than
+/// a disagreeing entry). The intersection missed it: `?t1`, composed only by
+/// `left`, is never in `left_vars ∩ right_vars` (it isn't IN `right_vars` at
+/// all), so `rewrite_filter_over_union`'s "all agree" fast path fired
+/// vacuously and resolved e.g. `isTRIPLE(?t1)` ONCE, statically true, applied
+/// to BOTH arms — wrongly keeping `right`'s rows too. Folding the absent arm
+/// in as `composes = false` (via `left_composes`/`right_composes`'s existing
+/// `collect_pattern_vars(rw_arm).contains(...)` check, which is naturally
+/// `false` when the arm never mentions the variable at all) lets the EXISTING
+/// per-arm env-fork machinery (in `rewrite_filter_over_union`) handle it
+/// exactly like any other disagreement, with no further change needed there.
+fn composed_agreement(
+    left: &GraphPattern,
+    right: &GraphPattern,
+    rw_left: &GraphPattern,
+    rw_right: &GraphPattern,
+    env: &StarEnv,
+) -> Vec<(Variable, bool, bool)> {
+    let left_vars = collect_pattern_vars(left);
+    let right_vars = collect_pattern_vars(right);
+    left_vars
+        .union(&right_vars)
+        .filter_map(|v| {
+            let info = env.get(v)?;
+            let left_composes = collect_pattern_vars(rw_left).contains(&info.s_var);
+            let right_composes = collect_pattern_vars(rw_right).contains(&info.s_var);
+            Some((v.clone(), left_composes, right_composes))
+        })
+        .collect()
+}
+
+/// **Run 4 Wave B2** — the static-consumer analog of the bare-Union/mixed-
+/// VALUES top-level relaxation above: a `FILTER` DIRECTLY wrapping a `Union`
+/// (or a mixed-VALUES already split into one by [`rewrite_top_level_pattern`]'s
+/// `Filter` arm). When every variable both arms mention AGREES (including
+/// "both arms independently compose the SAME var", which the ordinary
+/// sequential left-then-right rewrite below already makes share ONE set of
+/// component vars via env's lookup-before-mint), this is byte-for-byte what
+/// the ordinary `rewrite_pattern`/`rewrite_union(top_level: false)` path
+/// already produces for this shape (`expr` resolved once, `Filter` stays on
+/// top of the `Union`) — reached here only because this file intercepts the
+/// SHAPE before falling through to `rewrite_top_level_pattern`'s catch-all,
+/// not because the answer differs.
+///
+/// On a genuine DISAGREEMENT — the shape that used to be an unconditional
+/// 501 — `expr` is instead resolved TWICE: once per arm, each against a
+/// clone of `env` with the OTHER arm's disagreeing entries removed, so e.g.
+/// `isTRIPLE(?t)` resolves the constant `true` in the composing arm's own
+/// copy and `false` in the other's (never one static answer wrong for half
+/// the rows), and the `Filter` is distributed into each arm —
+/// `Union{Filter{expr_L,L}, Filter{expr_R,R}}` — the SAME structural shape
+/// `iq/normalize.rs`'s later `Filter(Union) ⇒ Union(Filter,Filter)`
+/// distribution (design §4.16) produces, just built here, BEFORE
+/// composed-ness has collapsed to one static answer, so each per-arm copy
+/// can be resolved correctly in the first place. `env` is left holding the
+/// ordinary (unfiltered) union of both arms' mints for the caller — safe by
+/// the same branch-local-absence reasoning [`rewrite_top_level_pattern`]'s
+/// doc comment gives for the bare-Union case; the temporary per-arm clones
+/// here are local to resolving `expr` only.
+fn rewrite_filter_over_union(
+    expr: &Expression,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    n: &mut usize,
+    env: &mut StarEnv,
+) -> Result<GraphPattern> {
+    let rw_left = rewrite_pattern(left, n, env)?;
+    let rw_right = rewrite_pattern(right, n, env)?;
+    let agreement = composed_agreement(left, right, &rw_left, &rw_right, env);
+
+    if agreement.iter().all(|(_, l, r)| l == r) {
+        return Ok(GraphPattern::Filter {
+            expr: rewrite_expr(expr, n, env)?,
+            inner: Box::new(GraphPattern::Union {
+                left: Box::new(rw_left),
+                right: Box::new(rw_right),
+            }),
+        });
+    }
+
+    let mut env_left = env.clone();
+    let mut env_right = env.clone();
+    for (v, left_composes, right_composes) in &agreement {
+        if !left_composes {
+            env_left.remove(v);
+        }
+        if !right_composes {
+            env_right.remove(v);
+        }
+    }
+    let expr_left = rewrite_expr(expr, n, &mut env_left)?;
+    let expr_right = rewrite_expr(expr, n, &mut env_right)?;
+
+    Ok(GraphPattern::Union {
+        left: Box::new(GraphPattern::Filter {
+            expr: expr_left,
+            inner: Box::new(rw_left),
+        }),
+        right: Box::new(GraphPattern::Filter {
+            expr: expr_right,
+            inner: Box::new(rw_right),
+        }),
     })
 }

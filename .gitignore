@@ -30,7 +30,9 @@
 .claude/settings.json.before-stop-fix-*
 .claude-flow/
 .swarm/
+.agentic-qe/
 .metaharness/
+semantic-fabric-harness/
 agentdb.rvf
 *.rvf
 *.rvf.lock

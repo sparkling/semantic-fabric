@@ -28,6 +28,9 @@ const os = require('os');
 // Configuration
 const CONFIG = {
   maxAgents: 15,
+  // Header identity defaults to project/repository name. Set `author` to
+  // retain the previous `git config user.name` display (#2682).
+  identityMode: (process.env.RUFLO_STATUSLINE_IDENTITY || 'project').toLowerCase(),
   // Session-cost display. Claude Code's cost.total_cost_usd is a client-side
   // estimate that "may differ from your actual bill" and reads as misleading on
   // subscription plans, where token usage is not billed per dollar. These let
@@ -210,7 +213,9 @@ function getStatuslineData() {
   // 60s TTL (#2337 — don't re-spawn the CLI on every rapid re-render) AND the
   // tighter promo-rotation clock (this fix — don't let a still-fresh 60s
   // cache silently freeze the promo/insight row across multiple 20s slots).
-  if (cache.fresh && cache.promoFresh) return overlayMemoPromo(cache.data);
+  if (cache.fresh && cache.promoFresh) {
+    return applyLocalOverlays(overlayMemoPromo(cache.data));
+  }
 
   // #2337: prefer an already-installed CLI bin via direct `node` invocation —
   // no npx, no registry round-trip, no @latest re-resolve per render. Try
@@ -417,7 +422,7 @@ function buildLocalFallback() {
   return applyLocalOverlays({
     user: { name: 'user', gitBranch: '', modelName: 'Claude Code' },
     v3Progress: { domainsCompleted: 0, totalDomains: 5, dddProgress: 0, patternsLearned: 0, sessionsCompleted: 0 },
-    security: { status: 'NONE', cvesFixed: 0, totalCves: 0 },
+    security: { status: 'NONE', findings: 0, cvesFixed: 0, totalCves: 0 },
     swarm: { activeAgents: 0, maxAgents: CONFIG.maxAgents, coordinationActive: false },
     system: { memoryMB: memMB, contextPct: 0, intelligencePct: 0, subAgents: 0 },
     lastUpdated: new Date().toISOString(),
@@ -476,11 +481,13 @@ function readJSON(filePath) {
 
 function getGitInfo() {
   const result = {
-    name: 'user', gitBranch: '', modified: 0, untracked: 0,
+    name: path.basename(CWD) || 'project', gitBranch: '', modified: 0, untracked: 0,
     staged: 0, ahead: 0, behind: 0,
   };
 
   const script = [
+    'git rev-parse --show-toplevel 2>/dev/null || pwd',
+    'echo "---SEP---"',
     'git config user.name 2>/dev/null || echo user',
     'echo "---SEP---"',
     'git branch --show-current 2>/dev/null',
@@ -494,12 +501,14 @@ function getGitInfo() {
   if (!raw) return result;
 
   const parts = raw.split('---SEP---').map(function(s) { return s.trim(); });
-  if (parts.length >= 4) {
-    result.name = parts[0] || 'user';
-    result.gitBranch = parts[1] || '';
+  if (parts.length >= 5) {
+    const projectName = path.basename(parts[0] || CWD) || path.basename(CWD) || 'project';
+    const authorName = parts[1] || 'user';
+    result.name = CONFIG.identityMode === 'author' ? authorName : projectName;
+    result.gitBranch = parts[2] || '';
 
-    if (parts[2]) {
-      for (const line of parts[2].split('\n')) {
+    if (parts[3]) {
+      for (const line of parts[3].split('\n')) {
         if (!line || line.length < 2) continue;
         const x = line[0], y = line[1];
         if (x === '?' && y === '?') { result.untracked++; continue; }
@@ -508,7 +517,7 @@ function getGitInfo() {
       }
     }
 
-    const ab = (parts[3] || '0 0').split(/\s+/);
+    const ab = (parts[4] || '0 0').split(/\s+/);
     result.ahead = parseInt(ab[0]) || 0;
     result.behind = parseInt(ab[1]) || 0;
   }
@@ -722,8 +731,7 @@ function generateStatusline() {
   const intelligencePct = system.intelligencePct || 0;
   const memoryMB = system.memoryMB || 0;
   const subAgents = system.subAgents || 0;
-  const cvesFixed = security.cvesFixed || 0;
-  const totalCves = security.totalCves || 0;
+  const findings = Math.max(0, security.findings || 0);
   const secStatus = security.status || 'NONE';
   const adrCount = adrs.count || 0;
   const adrImpl = adrs.implemented || 0;
@@ -778,8 +786,7 @@ function generateStatusline() {
   const hooksColor = hooksEnabled > 0 ? c.brightGreen : c.dim;
   const intellColor = intelligencePct >= 80 ? c.brightGreen : intelligencePct >= 40 ? c.brightYellow : c.dim;
   const swarmInd = coordinationActive ? c.brightGreen + '◉' + c.reset + ' ' : c.dim + '○' + c.reset + ' ';
-  const cvesClean = totalCves === 0 || cvesFixed === totalCves;
-  const healthAllGreen = (secStatus === 'CLEAN' || secStatus === 'NONE') && cvesClean;
+  const healthAllGreen = (secStatus === 'CLEAN' || secStatus === 'NONE') && findings === 0;
   const opsParts = [];
   opsParts.push(c.cyan + 'Swarm ' + swarmInd + agentsColor + activeAgents + c.reset + '/' + c.brightWhite + maxAgents + c.reset);
   if (subAgents > 0) opsParts.push(c.brightPurple + '👥 ' + subAgents + c.reset);
@@ -792,11 +799,11 @@ function generateStatusline() {
   } else {
     if (secStatus === 'PENDING') opsParts.push(c.brightYellow + '🛡 scan pending' + c.reset);
     else if (secStatus === 'IN_PROGRESS') opsParts.push(c.brightYellow + '🛡 scanning…' + c.reset);
+    else if (secStatus === 'ISSUES') opsParts.push(c.brightRed + '🛡 findings' + c.reset);
     else if (secStatus === 'STALE') opsParts.push(c.brightYellow + '🛡 scan stale' + c.reset);
     else if (secStatus !== 'NONE' && secStatus !== 'CLEAN') opsParts.push(c.brightRed + '🛡 ' + secStatus.toLowerCase() + c.reset);
-    if (totalCves > 0 && cvesFixed < totalCves) {
-      const unfixed = totalCves - cvesFixed;
-      opsParts.push(c.brightRed + '⚠ ' + unfixed + ' CVE' + (unfixed === 1 ? '' : 's') + c.reset);
+    if (findings > 0) {
+      opsParts.push(c.brightRed + '⚠ ' + findings + ' finding' + (findings === 1 ? '' : 's') + c.reset);
     }
   }
   lines.push(opsParts.join('  ' + c.dim + '·' + c.reset + '  '));

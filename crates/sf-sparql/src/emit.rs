@@ -31,8 +31,8 @@ use sf_core::ir::{LogicalSource, TermMap};
 use sf_sql::Dialect;
 
 use crate::iq::{
-    AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey, PathClosure, PathKind,
-    SqlCond, StrMatchOp, TermDef,
+    collect_cond_cols, AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey,
+    PathClosure, PathKind, SqlCond, StrMatchOp, TermDef,
 };
 use crate::{Error, Result};
 
@@ -53,9 +53,76 @@ impl ColumnCatalog {
         self.by_source.insert(source_key(source), columns);
     }
 
+    /// Add `columns` to `source`'s entry, creating it if absent, keeping any names
+    /// already recorded — unlike [`insert`](Self::insert), which replaces. Two
+    /// different raw columns of the same source are folded one at a time
+    /// ([`synthetic_subplan_catalog`]), so a second call must not erase the first.
+    fn merge(&mut self, source: &LogicalSource, column: String) {
+        let entry = self.by_source.entry(source_key(source)).or_default();
+        if !entry.contains(&column) {
+            entry.push(column);
+        }
+    }
+
     fn columns(&self, source: &LogicalSource) -> Option<&[String]> {
         self.by_source.get(&source_key(source)).map(Vec::as_slice)
     }
+}
+
+/// A translate-time [`ColumnCatalog`] for SubPlan embedding ([`crate::Plan::emitted`]).
+/// nested derived-table SQL is built with no live DB connection in hand — unlike the
+/// top-level executor (`exec_core::run_branches`), which probes the connection per
+/// source before emitting (see the module docs) — so [`colref`]'s `actuals` lookup
+/// always misses there today and falls back to quoting every identifier exact-case.
+/// That is correct for a genuinely delimited column, but WRONG for a *regular*
+/// (bare) `rr:sqlQuery` output alias: PostgreSQL folds it to lowercase at
+/// declaration, so an exact-case-quoted reference to it does not exist (W3C
+/// R2RMLTC0014b — `SELECT (…) AS jobTypeURI` folds to `jobtypeuri`; a downstream
+/// `t5."jobTypeURI"` 42703s; confirmed live against PostgreSQL 17).
+///
+/// For every column each branch's own bindings/conditions actually reference (a
+/// typed walk over [`TermDef::columns`] / [`collect_cond_cols`] — never a text scan
+/// of the SQL itself, so there is no risk of matching inside a string literal or
+/// unrelated keyword), probe the owning scan's `rr:sqlQuery` text with
+/// [`crate::cascade::col_is_unquoted_alias`] — the SAME translate-time heuristic the
+/// D1 per-scan DISTINCT wrap and Mechanism B rendered-pooling fallback already use —
+/// and, when it names a bare alias, seed the catalog with its folded (lowercase)
+/// form. [`resolve_col`]'s existing exact/case-insensitive matching then resolves it
+/// correctly with no change to [`colref`] or any of its other callers. A
+/// `LogicalSource::Table` column has no declaring SQL text to probe and is left
+/// alone — the pre-existing, already-correct shape (SQLite is case-insensitive
+/// regardless; a live top-level catalog resolves it for PostgreSQL).
+pub(crate) fn synthetic_subplan_catalog(branches: &[Branch]) -> ColumnCatalog {
+    let mut catalog = ColumnCatalog::default();
+    for b in branches {
+        let sources: HashMap<usize, &LogicalSource> = b.alias_sources().into_iter().collect();
+        let mut cols: Vec<ColRef> = Vec::new();
+        for def in b.bindings.values() {
+            cols.extend(def.columns());
+        }
+        for cond in &b.where_conds {
+            collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+        }
+        for opt in &b.opts {
+            for cond in opt.on.iter().chain(opt.extra.iter()) {
+                collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+            }
+        }
+        for sp in &b.subplan_joins {
+            for cond in &sp.on {
+                collect_cond_cols(cond, &mut |c| cols.push(c.clone()));
+            }
+        }
+        for c in &cols {
+            let Some(LogicalSource::Query(sql)) = sources.get(&c.alias) else {
+                continue;
+            };
+            if crate::cascade::col_is_unquoted_alias(sql, &c.column) {
+                catalog.merge(sources[&c.alias], c.column.to_lowercase());
+            }
+        }
+    }
+    catalog
 }
 
 /// A collision-free key for a logical source (a table name can never equal an SQL
@@ -143,8 +210,15 @@ pub fn emit_branch_with(
     // (dedup on the RECONSTRUCTED term) only when every projected term is INJECTIVE in its
     // raw columns. A non-injective template (distinct raw tuples → the same RDF term, e.g.
     // `http://ex/{a}{b}` over `(1,23)`/`(12,3)`) would survive SQL DISTINCT as duplicates
-    // SPARQL must collapse — a silent wrong answer. Sound 501. Injective templates pass.
-    if b.distinct {
+    // SPARQL must collapse — a silent wrong answer. Sound 501 — UNLESS `b` also qualifies
+    // for Run 4 Wave C0d's term-level dedup ([`crate::cascade::eligible_for_term_dedup`]):
+    // a branch whose relation stands alone in its plan slot answers instead of refusing —
+    // `term_dedup` below suppresses the SQL `DISTINCT` this function would otherwise emit,
+    // leaving the raw, duplicate-bearing rows for `exec_core::run_branches` to dedup AFTER
+    // reconstruction, on the actual term values. Injective templates need neither path —
+    // SQL DISTINCT already implements SPARQL DISTINCT for them.
+    let term_dedup = crate::cascade::eligible_for_term_dedup(b);
+    if b.distinct && !term_dedup {
         for def in b.bindings.values() {
             if !crate::cascade::binding_is_injective(def) {
                 return Err(Error::Unsupported(
@@ -200,7 +274,14 @@ pub fn emit_branch_with(
             .join(", ")
     };
 
-    let distinct = if b.distinct { "DISTINCT " } else { "" };
+    // `term_dedup` skips SQL DISTINCT even though `b.distinct` is set (see the C.3 gate
+    // above) — its raw, non-injective duplicates are collapsed downstream, by TERM, not
+    // by raw-column SQL DISTINCT (which would be the unsound operation C.3 refuses).
+    let distinct = if b.distinct && !term_dedup {
+        "DISTINCT "
+    } else {
+        ""
+    };
     let mut skeleton = match from {
         Some(f) => format!("SELECT {distinct}{select_list} FROM {f}"),
         None => format!("SELECT {distinct}{select_list}"),
@@ -1057,7 +1138,396 @@ fn render_cond(
                 pc.alias
             )
         }
+        // Run 4 Wave B3 — `unify::align_templates`'s shape-mismatch fallback:
+        // render each side as a SQL string concatenation and compare with
+        // `=`. See `render_template_concat`'s doc comment for the
+        // dialect-support boundary and the NULL-propagation soundness
+        // argument (why a NULL underlying column correctly excludes the row
+        // rather than needing special-casing here).
+        SqlCond::TemplateEq(sx, a1, sy, a2, encode_iri) => {
+            let r1 = render_template_concat(sx, *a1, *encode_iri, dialect, actuals, params, pidx)?;
+            let r2 = render_template_concat(sy, *a2, *encode_iri, dialect, actuals, params, pidx)?;
+            format!("{r1} = {r2}")
+        }
     })
+}
+
+/// Render one template's segments as a dialect-appropriate SQL string
+/// concatenation — [`SqlCond::TemplateEq`]'s per-side rendering (Run 4 Wave
+/// B3). Every `Segment::Literal` is a bound parameter (ADR-0010 R1): the
+/// text is mapping-trusted, not query-supplied, but this still follows the
+/// blanket "values are bound parameters only" rule rather than hand-rolling
+/// SQL string-literal escaping. Every `Segment::Column` renders through the
+/// SAME [`colref`] every other `SqlCond` arm uses, additionally wrapped in
+/// [`percent_encode_col`] when `encode_iri` (below).
+///
+/// **Percent-encoding soundness (Run 4 B-repair FIX 2).** `sf_core::ir::
+/// Template::expand`'s `encode_iri` flag percent-encodes EVERY column value
+/// — never a template's own literal segments — when (and only when) the
+/// template constructs an IRI (R2RML §7.3 / RFC 3987); a plain-literal
+/// template's expansion is raw, unencoded column text. Before this fix,
+/// EVERY `Segment::Column` rendered here as a bare `colref`, regardless of
+/// kind — sound for two templates whose column values happen to carry no
+/// IRI-encodable character, but wrong in general: a single-column template
+/// `http://ex.org/v/{va}` with `va = "X/Y"` expands (RDF) to
+/// `http://ex.org/v/X%2FY` (the `/` encoded), while a two-column template
+/// `http://ex.org/v/{vb1}/{vb2}` with `vb1="X", vb2="Y"` expands to
+/// `http://ex.org/v/X/Y` (the `/` a literal template character) — DIFFERENT
+/// IRIs, yet the old raw-concat rendering compared them EQUAL (false
+/// positive), and conversely could compare two RDF-equal IRIs unequal.
+/// `encode_iri` is one flag for BOTH sides ([`SqlCond::TemplateEq`]'s own
+/// doc comment: `align_templates`'s caller only ever builds this variant
+/// when both sides share one `TermType`), so each `Segment::Column` here is
+/// consistently encoded, or consistently left raw, matching whichever
+/// `Template::expand` itself would do for that same template.
+///
+/// **NULL-propagation soundness.** On every dialect rendered below, `||`
+/// (Postgres/SQLite) and `CONCAT(...)` (MySQL) return SQL `NULL` if ANY
+/// operand is `NULL` — so `render(t1) = render(t2)` evaluates to UNKNOWN
+/// (never `TRUE`) whenever a referenced column is `NULL`, and a WHERE/JOIN
+/// condition that is UNKNOWN excludes the row, same as `FALSE`. This is NOT
+/// an approximation: `sf_core::term::generate_into`'s `TermMap::Template`
+/// arm (`Template::expand`, per R2RML §11) ALREADY treats "any referenced
+/// column is NULL" as "this variable is UNBOUND" for that row when
+/// RECONSTRUCTING the SAME template in Rust — `sf-core/term.rs`'s
+/// `null_in_template_yields_no_term` test locks this in. So a NULL-collapsed
+/// concatenation here excludes EXACTLY the rows whose SPARQL-level operand
+/// would have been unbound anyway (comparing against an unbound variable is
+/// a type error ⇒ the row is excluded from a FILTER, and an unbound shared
+/// variable cannot correlate a join either) — the SQL and RDF answers agree
+/// by construction, not by coincidence. [`percent_encode_col`]'s own three
+/// per-dialect implementations preserve this EXPLICITLY (a `CASE WHEN col IS
+/// NULL THEN NULL ELSE …` wrapper, not incidental `NULL`-propagation through
+/// some other operator) — see its own doc comment for why an explicit
+/// wrapper is required rather than assumed.
+///
+/// **Dialect support.** Only the three PRODUCTION-WIRED dialects
+/// (`sf_sql::Dialect`'s own grouping) are implemented: PostgreSQL/SQLite via
+/// ANSI `||`, MySQL via `CONCAT(...)` (`||` is boolean OR there by default,
+/// per MySQL's non-default `PIPES_AS_CONCAT` sql_mode). Every OTHER dialect
+/// returns `Unsupported` rather than guessing — e.g. SQL Server's own
+/// `CONCAT()` function treats `NULL` as an EMPTY STRING (breaking the
+/// soundness argument above outright), and `+`, SQL Server's NULL-safe
+/// concat operator, is unverified against this rendering; Oracle/DuckDB/etc.
+/// are ANSI-`||`-following by reputation but likewise unverified here —
+/// "sound over complete", the same bar `str_match`'s PostgreSQL-only `LIKE`
+/// pushdown already sets for an analogous dialect-behavior gap.
+fn render_template_concat(
+    segs: &[sf_core::ir::Segment],
+    alias: usize,
+    encode_iri: bool,
+    dialect: Dialect,
+    actuals: &HashMap<usize, Vec<String>>,
+    params: &mut Vec<String>,
+    pidx: &mut usize,
+) -> Result<String> {
+    use sf_core::ir::Segment;
+    let mut parts = Vec::with_capacity(segs.len());
+    for seg in segs {
+        parts.push(match seg {
+            Segment::Literal(text) => {
+                params.push(text.to_string());
+                *pidx += 1;
+                dialect.placeholder(*pidx)
+            }
+            Segment::Column(c) => {
+                let col = colref(&ColRef::new(alias, c.clone()), dialect, actuals);
+                if encode_iri {
+                    percent_encode_col(&col, dialect)?
+                } else {
+                    col
+                }
+            }
+        });
+    }
+    match dialect {
+        Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
+        Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
+        other => Err(Error::Unsupported(format!(
+            "template-shape-mismatch equality (SQL CONCAT fallback) is not implemented for \
+             {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
+        ))),
+    }
+}
+
+/// Render one template's segments as a dialect-appropriate SQL string
+/// concatenation with every LITERAL segment INLINED (no bound parameter) — Run 4
+/// Wave C0d Mechanism B's building block (`iq::lower::pool_rendered`'s own doc
+/// comment has the full mechanism), called at TRANSLATE time from `unfold::
+/// pool_group` / `iq::lower::lower_as_subplan`, before any live per-statement
+/// param-binding context exists. [`render_template_concat`] (the FILTER/WHERE
+/// use case) binds each literal as a parameter instead — sound there because it
+/// renders into ONE branch's own emission, where `pidx`/`params` are threaded
+/// end to end; here the rendered expression becomes a SELECT-list column of ONE
+/// arm inside a multi-arm `UNION`, and `emit_subplan_sql` does not renumber a
+/// later arm's own placeholders against an earlier arm's (only SQLite's
+/// unnumbered `?` tolerates that; PostgreSQL's `$N` would collide). Inlining
+/// sidesteps the question rather than depending on a fix outside this
+/// mechanism's scope. A template's literal segments are MAPPING-TRUSTED TEXT
+/// (parsed from the R2RML document, never SPARQL-query-supplied) — inlining as a
+/// properly `''`-escaped SQL string literal is the SAME "trusted mapping text is
+/// inlined, not parameterised" precedent [`Dialect::quote_ident`] already sets
+/// for identifiers (ADR-0010 R2), not a departure from it. `alias` is a bare
+/// local alias STRING (e.g. `"sfs3"`, matching [`crate::cascade::
+/// wrap_scan_distinct`]'s own naming) rather than a numbered scan alias: this
+/// runs before a live [`ColumnCatalog`] exists, so there is no case-fold
+/// resolution to thread through [`colref`]. Reuses [`percent_encode_col`]
+/// verbatim for IRI-kind columns — no second encoder.
+pub(crate) fn render_template_inline(
+    segs: &[sf_core::ir::Segment],
+    alias: &str,
+    encode_iri: bool,
+    inner_sql: Option<&str>,
+    dialect: Dialect,
+) -> Result<String> {
+    use sf_core::ir::Segment;
+    let mut parts = Vec::with_capacity(segs.len());
+    for seg in segs {
+        parts.push(match seg {
+            Segment::Literal(text) => sql_string_literal(text),
+            Segment::Column(c) => {
+                // `crate::cascade::col_is_unquoted_alias`'s doc comment: `inner_sql`
+                // is THIS column's immediate source text (the arm's own `scan.
+                // source`) — when D1 already wrapped that scan, it is `cascade::
+                // wrap_col_ref`'s own output (`<expr> AS <alias>`), so the same
+                // detection composes across the D1-wrap-then-D2-pool nesting W3C
+                // R2RMLTC0011a exercises (a single-arm width mismatch pooled AFTER
+                // D1 already folded one of the arm's columns to lowercase on
+                // PostgreSQL).
+                let quoted =
+                    inner_sql.is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
+                let col = if quoted {
+                    format!("{alias}.{}", dialect.quote_ident(c))
+                } else {
+                    format!("{alias}.{c}")
+                };
+                if encode_iri {
+                    percent_encode_col(&col, dialect)?
+                } else {
+                    col
+                }
+            }
+        });
+    }
+    match dialect {
+        Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
+        Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
+        other => Err(Error::Unsupported(format!(
+            "ADR-0034 D2 rendered-projection pooling (SQL CONCAT fallback) is not implemented \
+             for {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
+        ))),
+    }
+}
+
+/// A SQL single-quoted string literal for mapping-trusted text `text` — ANSI
+/// `''`-doubling, the one escaping rule SQLite/PostgreSQL/MySQL all share for a
+/// single-quoted string (unlike percent-encoding, no per-dialect split applies
+/// here). [`render_template_inline`]'s only caller.
+fn sql_string_literal(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// Percent-encode `col_sql`'s runtime value EXACTLY the way `sf_core::ir::
+/// Template::expand`'s `encode_iri` arm does (`percent_encode_iri`, same
+/// file): RFC 3987 *iunreserved* = `ALPHA / DIGIT / "-" / "." / "_" / "~"`
+/// passes through; every OTHER byte (the FULL 0x00-0x7F complement, all 62
+/// bytes, including every ASCII control byte) becomes `%XX` (uppercase
+/// hex); non-ASCII passes through unchanged.
+///
+/// **History: why this is not a flat `REPLACE` chain.** An earlier version
+/// nested one `REPLACE` call per encodable byte — `REPLACE` being ANSI-
+/// portable, the obvious building block. That fails for two INDEPENDENT
+/// reasons, both found empirically against [`Dialect::emit_via_ast`] (the
+/// `sqlparser` AST round-trip every emitted statement goes through):
+/// 1. **SQLite** has a hard recursion-depth ceiling (`sqlparser`'s
+///    `DEFAULT_REMAINING_DEPTH`) — a flat chain over the full 62-byte set
+///    (deeper than the empirically measured ~41-44-level ceiling inside a
+///    realistic WHERE clause) errors "recursion limit exceeded" outright.
+/// 2. **PostgreSQL** is far worse: not a lower ceiling but EXPONENTIAL
+///    parse time in nesting depth, well before any hard limit fires
+///    (measured: depth 8 ≈ 14ms, depth 12 ≈ 99ms, depth 20 ≈ over 16
+///    SECONDS) — general to nested-function-call parsing in `sqlparser`'s
+///    PG dialect (reproduced with a single-argument `UPPER(...)` chain, not
+///    just `REPLACE`), so no flat chain wide enough for full coverage is
+///    viable there at any practical depth.
+///
+/// **The fix: per-character SQL, not per-character SQL TEXT NESTING.** Each
+/// dialect gets its OWN O(1)-parse-depth encoder — a single `WITH RECURSIVE`
+/// (or, for PostgreSQL, `unnest(...) WITH ORDINALITY`) that iterates the
+/// STRING'S OWN characters/bytes as ROWS, classifies each with one `CASE`,
+/// and reassembles via an ORDER-preserving aggregate (`group_concat`/
+/// `string_agg`/`GROUP_CONCAT`, all `... ORDER BY ...` — SQLite 3.44+, this
+/// project's bundled 3.46.0 confirmed; PostgreSQL and MySQL support it
+/// natively). Parse depth is CONSTANT regardless of the encode-set size or
+/// the runtime string length — confirmed fast (single-digit milliseconds)
+/// against the SAME realistic OR-IS-NULL-wrapped, multi-column WHERE clause
+/// that broke the flat-chain design, for all three dialects.
+///
+/// **Byte- vs. character-oriented, per dialect — not interchangeable.**
+/// SQLite's/MySQL's plain `LENGTH()`/`SUBSTRING()` on a TEXT argument are
+/// NOT reliable byte-accurate iterators (SQLite's is character-counting and
+/// silently truncates at an embedded NUL, exactly like a C string; MySQL's
+/// `LENGTH()` is byte-oriented but its plain `SUBSTRING()` is CHARACTER-
+/// oriented — an internally inconsistent pairing that walks past a
+/// multi-byte character's true end) — both confirmed by direct, deliberate
+/// probing before this design was settled on, both fixed by an explicit
+/// `CAST(... AS BLOB)` (SQLite) / `CAST(... AS BINARY)` (MySQL) so every
+/// function in the chain is consistently byte-oriented; a non-ASCII
+/// multi-byte character is then walked and reassembled ONE RAW BYTE AT A
+/// TIME (every continuation/lead byte is ≥ 0x80, so "byte ≥ 0x80 passes
+/// through unchanged" correctly reconstructs it without ever needing to
+/// understand UTF-8 structure) — confirmed an ISOLATED intermediate byte
+/// cast is not independently valid UTF-8, but the FINAL reassembled result
+/// is. PostgreSQL's `text` is different on both counts: it cannot contain a
+/// NUL byte at all (the server rejects it outright — confirmed live,
+/// `ERROR: invalid byte sequence for encoding "UTF8": 0x00` — so there is
+/// no NUL case to handle), and `string_to_array(text, NULL)` natively splits
+/// by CHARACTER (not byte), which is the natural, already-decoded unit
+/// there — `ascii(ch)` gives the correct code point for classification
+/// (including non-ASCII), so no BLOB-equivalent cast is needed.
+///
+/// **NULL-propagation, correctly this time.** `sf_core::term::generate_into`
+/// treats "any referenced column is NULL" as "this variable is UNBOUND" for
+/// that row (`null_in_template_yields_no_term`, sf-core), so a NULL column
+/// must render as SQL NULL — but the natural per-character aggregate
+/// (`group_concat`/`string_agg`/`GROUP_CONCAT`) returns NULL over ZERO
+/// input rows REGARDLESS of why there were zero rows: a genuinely NULL
+/// column (nothing to iterate) and a genuinely EMPTY, non-NULL string
+/// (also nothing to iterate, but should encode to `""`, not NULL) are
+/// otherwise indistinguishable through the aggregate alone — confirmed by
+/// direct probing: an early version without the NULL-vs-empty split below
+/// wrongly rendered EACH of "NULL" and "empty string" as if the OTHER,
+/// AND wrongly emitted a bare stray `%` for the empty-string case (the
+/// iterator's own "at least one row" base case still fired past the end of
+/// a zero-length string). Every implementation below is therefore the SAME
+/// three-part shape: `CASE WHEN col IS NULL THEN NULL ELSE COALESCE(
+/// <per-character aggregate>, '') END` — the outer CASE separates "no
+/// value" from "empty value" (COALESCE alone cannot), and COALESCE only
+/// then normalizes the (now unambiguous) zero-character case to `''`.
+///
+/// Every literal in these templates (hex-range bounds, the `-._~` char
+/// list, dialect keywords) is a fixed SQL-syntax constant under this
+/// module's own control, not query- or mapping-supplied data — inlining
+/// them is the "fixed engine constant… part of the trusted skeleton" rule
+/// this file's `LIKE ESCAPE '\'` rendering already uses (`render_cond`'s
+/// `StrMatch` arm), not a departure from ADR-0010 R1 (which governs values
+/// that originate from the SPARQL query or the mapping, neither of which
+/// this function ever touches — the ONLY runtime input is the column
+/// reference itself, already-resolved SQL text, not a bound value).
+fn percent_encode_col(col_sql: &str, dialect: Dialect) -> Result<String> {
+    Ok(match dialect {
+        Dialect::Sqlite => percent_encode_col_sqlite(col_sql),
+        Dialect::MySql => percent_encode_col_mysql(col_sql),
+        Dialect::Postgres => percent_encode_col_postgres(col_sql),
+        other => {
+            return Err(Error::Unsupported(format!(
+                "IRI-template percent-encoding is not implemented for {other:?} → 501 \
+                 (never a silently wrong un-encoded comparison)"
+            )))
+        }
+    })
+}
+
+/// SQLite: `CAST(... AS BLOB)` throughout (byte-oriented `LENGTH`/`substr`,
+/// sidestepping TEXT-mode `LENGTH`'s NUL-terminated character counting —
+/// see [`percent_encode_col`]'s doc comment). `hex()`, not `unicode()`, for
+/// byte classification (`unicode()` reinterprets an isolated non-ASCII byte
+/// as a UTF-8 decode attempt and returns the U+FFFD replacement code point
+/// for an invalid standalone continuation/lead byte — confirmed live;
+/// `hex()` returns the raw byte unconditionally). `group_concat(...ORDER BY
+/// n)` needs SQLite ≥ 3.44 (this project's bundled `libsqlite3-sys` ships
+/// 3.46.0, confirmed live).
+fn percent_encode_col_sqlite(col: &str) -> String {
+    format!(
+        "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
+WITH RECURSIVE seq(n) AS (\
+SELECT 1 WHERE LENGTH(CAST({col} AS BLOB)) > 0 \
+UNION ALL \
+SELECT n + 1 FROM seq WHERE n < LENGTH(CAST({col} AS BLOB))\
+) \
+SELECT group_concat(\
+CASE \
+WHEN hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '30' AND '39' \
+OR hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '41' AND '5A' \
+OR hex(substr(CAST({col} AS BLOB), n, 1)) BETWEEN '61' AND '7A' \
+OR hex(substr(CAST({col} AS BLOB), n, 1)) IN ('2D', '2E', '5F', '7E') \
+OR hex(substr(CAST({col} AS BLOB), n, 1)) >= '80' \
+THEN CAST(substr(CAST({col} AS BLOB), n, 1) AS TEXT) \
+ELSE '%' || hex(substr(CAST({col} AS BLOB), n, 1)) \
+END, '' ORDER BY n\
+) FROM seq\
+), '') END)"
+    )
+}
+
+/// MySQL: `CAST(... AS BINARY)` throughout — MySQL's `LENGTH()` is
+/// byte-oriented but its plain `SUBSTRING()` is CHARACTER-oriented (a
+/// confirmed-live, internally inconsistent pairing this cast reconciles,
+/// mirroring the SQLite BLOB cast for the identical class of unit
+/// mismatch); the pass-through branch and the `%XX` branch are BOTH kept as
+/// `BINARY` inside `GROUP_CONCAT` so the aggregate never implicitly
+/// re-interprets an in-flight (possibly standalone-invalid) byte as text,
+/// and the FINAL aggregated result is converted back to `utf8mb4` once, at
+/// the very end (mirrors the SQLite per-byte-cast pattern: only the fully
+/// reassembled result needs to be valid UTF-8, confirmed live). The
+/// `SET_VAR` optimizer hint raises two session limits for THIS query only
+/// (no separate `SET SESSION` statement, so no change to connection
+/// setup elsewhere in the codebase): `group_concat_max_len` (MySQL's
+/// default of 1024 bytes SILENTLY truncates a longer `GROUP_CONCAT` result
+/// with no error — confirmed live — which is exactly the unsound-truncation
+/// class this whole fix exists to close, so it cannot be left at the
+/// default) and `cte_max_recursion_depth` (default 1000; exceeding it is a
+/// query ERROR, not a silent truncation — sound but incomplete for a very
+/// long column value — raised anyway for headroom, confirmed live up to a
+/// 2000-character input).
+fn percent_encode_col_mysql(col: &str) -> String {
+    format!(
+        "(WITH RECURSIVE seq AS (\
+SELECT 1 AS n WHERE LENGTH(CAST({col} AS BINARY)) > 0 \
+UNION ALL \
+SELECT n + 1 FROM seq WHERE n < LENGTH(CAST({col} AS BINARY))\
+) \
+SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
+SELECT /*+ SET_VAR(group_concat_max_len = 1000000) SET_VAR(cte_max_recursion_depth = 100000) */ \
+CONVERT(CAST(GROUP_CONCAT(\
+CASE \
+WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '30' AND '39' \
+OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '41' AND '5A' \
+OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '61' AND '7A' \
+OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) IN ('2D', '2E', '5F', '7E') \
+OR HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) >= '80' \
+THEN SUBSTRING(CAST({col} AS BINARY), n, 1) \
+ELSE CAST(CONCAT('%', HEX(SUBSTRING(CAST({col} AS BINARY), n, 1))) AS BINARY) \
+END ORDER BY n SEPARATOR ''\
+) AS BINARY) USING utf8mb4)\
+FROM seq\
+), '') END)"
+    )
+}
+
+/// PostgreSQL: character-oriented (`string_to_array(text, NULL)` natively
+/// splits by character — the correct unit for `text`, which is always
+/// well-formed and cannot carry an embedded NUL at all, confirmed live).
+/// `ascii(ch)` gives the numeric code point for classification (correct
+/// for non-ASCII too, unlike a collation-dependent text comparison against
+/// `chr(128)` would be). `unnest(...) WITH ORDINALITY` supplies the
+/// position `string_agg(... ORDER BY ord)` reassembles by.
+fn percent_encode_col_postgres(col: &str) -> String {
+    format!(
+        "(SELECT CASE WHEN {col}::text IS NULL THEN NULL ELSE COALESCE((\
+SELECT string_agg(\
+CASE \
+WHEN ascii(ch) BETWEEN 48 AND 57 \
+OR ascii(ch) BETWEEN 65 AND 90 \
+OR ascii(ch) BETWEEN 97 AND 122 \
+OR ch IN ('-', '.', '_', '~') \
+OR ascii(ch) >= 128 \
+THEN ch \
+ELSE '%' || UPPER(LPAD(TO_HEX(ascii(ch)), 2, '0')) \
+END, '' ORDER BY ord\
+) FROM unnest(string_to_array({col}::text, NULL)) WITH ORDINALITY AS t(ch, ord)\
+), '') END)"
+    )
 }
 
 fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {
@@ -1174,5 +1644,96 @@ mod tests {
             e.sql
         );
         assert_eq!(e.params, vec!["^a.*".to_owned()]);
+    }
+
+    /// Rust-side reimplementation of `sf_core::ir`'s private `percent_encode_iri`,
+    /// for comparison ONLY (that function isn't `pub`) — verified byte-identical
+    /// to it via `sf-core`'s own `expand_writes_through_and_percent_encodes_iris`
+    /// test's fixtures, reproduced inline below.
+    fn reference_encode(value: &str) -> String {
+        let mut out = String::new();
+        for ch in value.chars() {
+            if ch.is_ascii() {
+                let byte = ch as u8;
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                    out.push(ch);
+                } else {
+                    out.push_str(&format!("%{byte:02X}"));
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    /// Every dialect's [`percent_encode_col`] must reconstruct EXACTLY what
+    /// `sf_core::ir::percent_encode_iri` computes, across the full encodable
+    /// byte range (every printable ASCII special AND every control byte,
+    /// 0x00-0x1F/0x7F) plus the edge cases design-time probing against a
+    /// live SQLite connection found real bugs in: an embedded NUL byte
+    /// (SQLite's TEXT-mode `LENGTH` is NUL-terminated and silently
+    /// truncates — closed by `CAST(... AS BLOB)`, see
+    /// [`percent_encode_col_sqlite`]'s doc comment), an empty-but-non-NULL
+    /// string (a naive recursive-CTE base case still fired once past the
+    /// end, wrongly emitting a bare `%`), a genuinely NULL column (the
+    /// aggregate collapses an empty AND a NULL input to the same result
+    /// unless explicitly distinguished), and a multi-byte UTF-8 (CJK)
+    /// character (each of its individual bytes is standalone-invalid UTF-8,
+    /// exercising the byte-level reassembly path). SQLite only here (no
+    /// live-server dependency for a routine `cargo test` run) — PostgreSQL
+    /// and MySQL were validated the identical way against live servers
+    /// during this fix's development; see [`percent_encode_col_postgres`]/
+    /// [`percent_encode_col_mysql`]'s own doc comments for the
+    /// dialect-specific bugs their first drafts had (a PG NULL/empty
+    /// conflation; a MySQL `LENGTH`-vs-`SUBSTRING` byte/character unit
+    /// mismatch; a MySQL `group_concat_max_len`/`cte_max_recursion_depth`
+    /// silent-truncation exposure).
+    #[test]
+    fn percent_encode_col_sqlite_matches_reference_iri_encoding() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE t (v TEXT)", []).unwrap();
+
+        let mut cases: Vec<Option<String>> = vec![
+            Some("a b/c".to_owned()),
+            Some("A-z.0_9~".to_owned()),
+            Some("".to_owned()),
+            None,
+            Some("X/Y".to_owned()),
+            Some("你好/世界".to_owned()), // non-ASCII must pass through raw
+            Some("tab\ttab".to_owned()),  // control byte 0x09
+            Some("nul\u{0}nul".to_owned()), // embedded NUL, 0x00
+        ];
+        for b in 0x20u8..=0x7e {
+            cases.push(Some((b as char).to_string())); // every printable ASCII byte
+        }
+        for b in 0..=0x1fu8 {
+            cases.push(Some((b as char).to_string())); // every control byte
+        }
+        cases.push(Some((0x7fu8 as char).to_string()));
+
+        let sql = percent_encode_col("t.v", Dialect::Sqlite).expect("SQLite is supported");
+        let query = format!("SELECT {sql} FROM t");
+        let mut mismatches = Vec::new();
+        for v in &cases {
+            conn.execute("DELETE FROM t", []).unwrap();
+            conn.execute("INSERT INTO t (v) VALUES (?1)", [v]).unwrap();
+            let got: Option<String> = conn.query_row(&query, [], |r| r.get(0)).unwrap();
+            let want = v.as_deref().map(reference_encode);
+            if got != want {
+                mismatches.push(format!("input={v:?} got={got:?} want={want:?}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
+    /// A dialect this module does not implement encoding for (Oracle, picked
+    /// arbitrarily) declines soundly rather than guessing.
+    #[test]
+    fn percent_encode_col_unsupported_dialect_is_501() {
+        assert!(matches!(
+            percent_encode_col("t.v", Dialect::Oracle),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

@@ -301,4 +301,110 @@ mod tests {
             assert!(eof.is_none());
         });
     }
+
+    /// P0 deadlock regression (2e78f3f fixed `column_names` on both the SQLite and
+    /// DuckDB twins; the SQLite twin got a live concurrency receipt
+    /// (`sf-serve/tests/endpoint.rs::column_names_spawn_blocking_deadlock_regression`)
+    /// but the DuckDB twin never did — this is that receipt. `sf-serve` has no
+    /// DuckDB `Backend` variant, so this drives `DuckDbBackend` directly (the
+    /// `SqlBackend` trait) rather than through the HTTP endpoint.
+    ///
+    /// Deterministic choreography, not a timing race: a naive "spawn N identical
+    /// tasks and hope they collide" version does NOT reliably reproduce this on an
+    /// under-loaded, many-core machine — every contender starts by racing for an
+    /// INITIALLY FREE lock, and the OS's wake-one-waiter fairness lets them cycle
+    /// through `column_names` in quick succession *before* any of them reaches
+    /// `open_branch`'s long hold, so the run just serializes instead of wedging
+    /// (empirically confirmed while building this test). The real bug needs the
+    /// lock ALREADY held by a streaming cursor when the contenders arrive, so this
+    /// test forces that ordering explicitly: get exactly one row through
+    /// `open_branch` first — the `Mutex` guard spans open_branch's WHOLE
+    /// `spawn_blocking` closure, so once a row is observed, the connection lock is
+    /// provably held until the entire cursor is drained — THEN spawn `N_CONTENDERS
+    /// >= worker_threads` fresh callers of `column_names` against that
+    /// already-held lock, and only then resume draining.
+    ///
+    /// Pre-fix failure shape (mirrors the SQLite RED evidence exactly, same
+    /// mechanism, different driver): if `column_names`'s `Mutex` lock is ever
+    /// taken INLINE again (not inside its own `spawn_blocking`), each contender's
+    /// lock attempt blocks ITS OWN tokio worker thread outright — once enough
+    /// contenders pile on to saturate every worker thread, nothing remains free to
+    /// poll the mpsc receiver that would let the cursor's `blocking_send` drain
+    /// and release the lock: total starvation, not even tokio's own timer can
+    /// schedule (the SQLite regression was force-killed at 90s, zero output;
+    /// confirmed here by locally reintroducing the inline-lock pattern and
+    /// observing the identical hang-past-timeout shape, then reverting). Wrapped
+    /// in a 30s `tokio::time::timeout` so a regression is a clean test FAILURE in
+    /// the common case — though a TRUE total wedge can starve the timer too, same
+    /// as the SQLite precedent, in which case the test process itself must be
+    /// externally killed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn column_names_concurrent_deadlock_regression() {
+        const N_CONTENDERS: usize = 4; // >= worker_threads: enough to wedge every one
+        const ROWS: usize = 20_000;
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE emp (id INTEGER, name VARCHAR);
+             INSERT INTO emp SELECT range, 'Person' || range FROM range({ROWS});"
+        ))
+        .unwrap();
+        let shared = Arc::new(Mutex::new(conn));
+
+        let run = async {
+            let mut backend = DuckDbBackend::new(Arc::clone(&shared));
+            backend
+                .column_names("SELECT id, name FROM emp LIMIT 0")
+                .await
+                .expect("winner column_names");
+            let mut stream = backend
+                .open_branch("SELECT id, name FROM emp ORDER BY id", &[])
+                .await
+                .expect("winner open_branch");
+            // Proves the spawn_blocking cursor has started and is now holding the
+            // connection Mutex for the rest of its (long) drain.
+            let row1 = stream.next_row().await.expect("winner row 1");
+            assert!(row1.is_some(), "expected at least one row");
+
+            let mut handles = Vec::with_capacity(N_CONTENDERS);
+            for _ in 0..N_CONTENDERS {
+                let shared = Arc::clone(&shared);
+                handles.push(tokio::spawn(async move {
+                    let mut backend = DuckDbBackend::new(shared);
+                    let cols = backend
+                        .column_names("SELECT id, name FROM emp LIMIT 0")
+                        .await
+                        .expect("contender column_names");
+                    assert_eq!(cols, vec!["id", "name"]);
+                }));
+            }
+            // A genuine yield (not just an immediately-ready poll) so the
+            // contenders are guaranteed a chance to start and block on the
+            // already-held lock BEFORE draining resumes — removing any
+            // dependence on tokio's cooperative-yield timing.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            // The call that must hang in the pre-fix world: no worker thread
+            // remains free to poll it once the contenders above have wedged
+            // every one of them.
+            let mut n = 1usize;
+            while stream.next_row().await.expect("winner next_row").is_some() {
+                n += 1;
+            }
+            assert_eq!(n, ROWS);
+
+            for h in handles {
+                h.await.expect("contender task join");
+            }
+        };
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), run)
+            .await
+            .expect(
+                "column_names deadlock regression: contenders piling onto column_names \
+                 while a cursor holds the connection Mutex mid-stream hung past 30s under \
+                 worker_threads=4 — DuckDbBackend::column_names is locking its Mutex \
+                 inline again",
+            );
+    }
 }

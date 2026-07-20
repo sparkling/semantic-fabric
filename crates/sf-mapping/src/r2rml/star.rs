@@ -252,56 +252,47 @@ fn quote_shape(g: &Graph, quoted_node: &NamedOrBlankNode) -> Result<QuotedShape>
     }
 
     // The object is either an ordinary term, or itself a nested star map
-    // (D1 item 5: recurse bottom-up) — `object_for_id`/`object_is_nested`
-    // feed the outer pfid's splice-vs-flatten choice (`ids::proposition_template`);
+    // (D1 item 5: recurse bottom-up) — `object_for_id` feeds
+    // `ids::proposition_template` directly (nested or not, it is already a
+    // `TermMap`, so no separate splice-vs-flatten choice is needed);
     // `object_pom_value` is what the propositionFormObject POM actually
     // carries (inline term, or a D4 cross-source Ref).
-    let (
-        object_for_id,
-        object_is_nested,
-        object_pom_value,
-        mut description_maps,
-        nested_assertions,
-    ) = if let Some(om_node) = om_nodes.first() {
-        if g.object(om_node, RR_PARENT_TRIPLES_MAP).is_some() {
-            return Err(Error::Mapping(format!(
+    let (object_for_id, _, object_pom_value, mut description_maps, nested_assertions) =
+        if let Some(om_node) = om_nodes.first() {
+            if g.object(om_node, RR_PARENT_TRIPLES_MAP).is_some() {
+                return Err(Error::Mapping(format!(
                     "quoted triples map {quoted_id}'s object is a referencing object map (rr:parentTriplesMap), not supported for RDF-star quoting"
                 )));
-        }
-        if let Some(inner_star) = g.object(om_node, RML_STAR_MAP) {
-            let inner_star_node = as_resource(inner_star)?;
-            let inner_quoted_node = quoted_triples_map_node(g, &inner_star_node)?;
-            let inner_shape = quote_shape(g, &inner_quoted_node)?;
-            let inner_pom_value =
-                crossing_reference(g, &inner_star_node, &inner_shape, &quoted_source)?;
-            let mut assertions = inner_shape.nested_assertions;
-            assertions.push(StarAssertion {
-                quoted_id: inner_shape.quoted_id.clone(),
-                asserted: is_asserted(g, &inner_star_node),
-            });
-            let inner_term = TermMap::Template(inner_shape.pfid.clone(), TermSpec::iri());
-            (
-                inner_term,
-                true,
-                inner_pom_value,
-                inner_shape.description_maps,
-                assertions,
-            )
+            }
+            if let Some(inner_star) = g.object(om_node, RML_STAR_MAP) {
+                let inner_star_node = as_resource(inner_star)?;
+                let inner_quoted_node = quoted_triples_map_node(g, &inner_star_node)?;
+                let inner_shape = quote_shape(g, &inner_quoted_node)?;
+                let inner_pom_value =
+                    crossing_reference(g, &inner_star_node, &inner_shape, &quoted_source)?;
+                let mut assertions = inner_shape.nested_assertions;
+                assertions.push(StarAssertion {
+                    quoted_id: inner_shape.quoted_id.clone(),
+                    asserted: is_asserted(g, &inner_star_node),
+                });
+                let inner_term = TermMap::Template(inner_shape.pfid.clone(), TermSpec::iri());
+                (
+                    inner_term,
+                    true,
+                    inner_pom_value,
+                    inner_shape.description_maps,
+                    assertions,
+                )
+            } else {
+                let t = parse_term_map(g, om_node, Position::Object)?;
+                (t.clone(), false, ObjectMap::Term(t), Vec::new(), Vec::new())
+            }
         } else {
-            let t = parse_term_map(g, om_node, Position::Object)?;
+            let t = TermMap::Constant(object_constants[0].clone());
             (t.clone(), false, ObjectMap::Term(t), Vec::new(), Vec::new())
-        }
-    } else {
-        let t = TermMap::Constant(object_constants[0].clone());
-        (t.clone(), false, ObjectMap::Term(t), Vec::new(), Vec::new())
-    };
+        };
 
-    let pfid = ids::proposition_template(
-        &predicate_iri,
-        &subject_term,
-        &object_for_id,
-        object_is_nested,
-    )?;
+    let pfid = ids::proposition_template(&predicate_iri, &subject_term, &object_for_id)?;
 
     let description_poms = vec![
         proposition_form_pom(

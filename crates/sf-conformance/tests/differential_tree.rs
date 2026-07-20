@@ -1469,6 +1469,39 @@ fn agg_over_union_sum_avg() {
     ));
 }
 
+// ADR-0025 C.10 (Run 4 Wave B1): AVG over a group MIXING numeric and non-numeric operands
+// must be UNBOUND for the whole group (SPARQL §11, Avg via Sum — ANY non-numeric operand
+// errors the aggregate; spareval-confirmed). `rust_agg`'s AVG previously averaged only the
+// numeric-PARSEABLE SUBSET, silently dropping the non-numeric operand instead of erroring —
+// a real `=_bag` wrong answer, tracked as a deliberate residue in the ADR-0025 progress log
+// (2026-07-18 addendum: "the pre-existing 'average the numeric-parseable subset' quirk").
+// SUM never had this gap (it already gated on `nums.len() < vals.len()`); this closes AVG
+// to the same check. `?v`'s cross-arm datatype mismatch (xsd:integer vs plain string) makes
+// `try_sql_group_over_union` bail (`shape_eq` false), so this is guaranteed to route through
+// `rust_group`/`rust_agg` — the exact code this fixes — not the SQL-pushdown sibling.
+#[test]
+fn agg_over_union_avg_mixed_type_group_is_unbound() {
+    // 11. AVG over a group mixing xsd:integer (ex:q1) and a plain string (ex:p1) bound to
+    // the SAME ?v: g1={10,20,"a","c"}, g2={30,"d"} — BOTH mixed ⇒ UNBOUND for every group.
+    // Pre-fix this wrongly averaged just the numeric subset (g1⇒15, g2⇒30).
+    agg_union(&format!(
+        "{PFX} SELECT ?g (AVG(?v) AS ?a) WHERE {{ ?x ex:grp ?g . \
+         {{ ?x ex:q1 ?v }} UNION {{ ?x ex:p1 ?v }} }} GROUP BY ?g"
+    ));
+}
+
+// Control for the C.10 fix: an ALL-NUMERIC union must still average — no over-refusal from
+// the tightened `nums.len() < vals.len()` gate. Also the first AVG-over-UNION differential
+// (agg_over_union_sum_avg above never had one): g1=(10+20+1+2)/4=8.25, g2=(30+3)/2=16.5 —
+// non-integral, so this exercises the exact-`Decimal` division path too (M3 fix 1 / C.9).
+#[test]
+fn agg_over_union_avg_all_numeric_group_still_averages() {
+    agg_union(&format!(
+        "{PFX} SELECT ?g (AVG(?v) AS ?a) WHERE {{ ?x ex:grp ?g . \
+         {{ ?x ex:q1 ?v }} UNION {{ ?x ex:q2 ?v }} }} GROUP BY ?g"
+    ));
+}
+
 /// A pooled arm's `Aggregation` branch: `Some((agg, subplan_arm_count))` when the
 /// SQL pushdown fired (`try_sql_group_over_union`), `None` when it fell back to
 /// `RustGroup`. Distinguishes the two `agg_over_union_is_lowered` closures the
@@ -4082,13 +4115,20 @@ mod composition_sweep {
 /// already handles it CORRECTLY (=_bag the independent spareval oracle), while the
 /// FLAT oracle honestly DEFERS (its inherent agg-over-UNION 501 — the same
 /// synthetic-unbound limitation `count_over_bind_only_union_*` documents). The tree
-/// is thus a strict capability SUPERSET here, not a wrong answer — so commit
-/// 2015846 is OBSOLETE (do NOT merge that stale pre-refactor code). Gated vs
-/// spareval directly (not `diff`, whose "both must 501" rule would misread
-/// tree-exceeds-flat as a mismatch), mirroring `agg_union`.
+/// WAS a strict capability superset here (so commit 2015846 remains OBSOLETE —
+/// do NOT merge that stale pre-refactor code).
 ///
-/// emp1: dept d10 + tags {x,y} ⇒ COUNT(?v)=3; emp2: dept d10, no tag ⇒ 1;
-/// emp3: dept d20 + tag z ⇒ 2.
+/// Between ADR-0034's landing (6bcacf9) and Run 4 Wave C0b Item 1, this briefly
+/// regressed to a pinned sound-501-on-both-engines: D1's then-branch-wide
+/// `Branch::distinct` flag forced the OPTIONAL right side's unkeyed `dept`/`tag`
+/// scans through the SubPlan mechanism, which tripped the pre-existing
+/// ADR-0023 M5 boundary (OPTIONAL anti-join over a SubPlan-carrying right
+/// side). Item 1 (`cascade::apply_dup_safety`'s per-scan `SELECT DISTINCT`
+/// wrap) rewrites `dept`/`tag`'s own `LogicalSource` in place instead of
+/// wrapping the whole branch, so the SubPlan/M5 collision is never reached —
+/// UN-PINNED back to this cell's original tree-superset shape, and now for a
+/// STRONGER reason than before: the dedup is real (Item 1 always wraps an
+/// unkeyed scan), not merely a fixture that happens to hold no duplicate rows.
 #[test]
 fn group_by_over_multibranch_optional_is_tree_superset_of_flat() {
     let q = format!(
@@ -5356,4 +5396,389 @@ fn leftjoin_hunt_nullable_left_var_shared_with_multibranch_right() {
     diff_p(&format!(
         "{PFX} SELECT ?n ?d ?x WHERE {{ ?p ex:name ?n OPTIONAL {{ ?p ex:dept ?d }} OPTIONAL {{ {{ ?d ex:label ?x }} UNION {{ ?d ex:altlabel ?x }} }} }}"
     ));
+}
+
+// ============================================================================
+// Run 4 Wave B3 — template-shape-mismatch equality: `unify::align_templates`'
+// `SqlCond::TemplateEq` fallback (render each template as a dialect-specific
+// SQL string concatenation, compare with `=`) for the term classes where SQL
+// lexical equality on the rendered text IS RDF term equality (IRIs; plain
+// strings) — a genuine shape mismatch used to be an unconditional 501.
+//
+// Fixture Q: `person.hasA` is object-templated `http://ex/item/{code}`
+// (1 column); `extra.hasB` is object-templated `http://ex/{seg1}/{seg2}`
+// (2 columns, SAME leading literal prefix `http://ex/` as the first, so
+// `align_templates`'s disjointness proof does NOT fire either — a genuine
+// shape mismatch, not a disjoint one). Person 1's hasA/hasB coincide
+// (`http://ex/item/42` both ways); person 2's don't; person 3 has no `extra`
+// row at all (OPTIONAL NULL-pads `?b`'s underlying columns).
+// ============================================================================
+
+const Q_SQL: &str = r#"
+CREATE TABLE person (id INTEGER PRIMARY KEY, code TEXT NOT NULL);
+CREATE TABLE extra (pid INTEGER PRIMARY KEY, seg1 TEXT NOT NULL, seg2 TEXT NOT NULL);
+INSERT INTO person VALUES (1, '42'), (2, '99'), (3, '55');
+INSERT INTO extra VALUES (1, 'item', '42'), (2, 'item', '1');
+"#;
+
+const Q_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasA ;
+        rr:objectMap [ rr:template "http://ex/item/{code}" ]
+    ] .
+<#Extra>
+    rr:logicalTable [ rr:tableName "extra" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasB ;
+        rr:objectMap [ rr:template "http://ex/{seg1}/{seg2}" ]
+    ] .
+"#;
+
+const Q_TTL: &str = r#"
+@prefix ex: <http://ex/> .
+<http://ex/p/1> ex:hasA <http://ex/item/42> ; ex:hasB <http://ex/item/42> .
+<http://ex/p/2> ex:hasA <http://ex/item/99> ; ex:hasB <http://ex/item/1> .
+<http://ex/p/3> ex:hasA <http://ex/item/55> .
+"#;
+
+// Same tables, mapped as `xsd:integer`-typed literals instead of IRIs (Q2) —
+// `lexical_eq_is_term_eq` excludes this class, so the IDENTICAL shape
+// mismatch stays a locked 501 (the honest residual).
+const Q2_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "person" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{id}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasA ;
+        rr:objectMap [ rr:template "{code}" ; rr:datatype xsd:integer ]
+    ] .
+<#Extra>
+    rr:logicalTable [ rr:tableName "extra" ] ;
+    rr:subjectMap [ rr:template "http://ex/p/{pid}" ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:hasB ;
+        rr:objectMap [ rr:template "{seg1}{seg2}" ; rr:datatype xsd:integer ]
+    ] .
+"#;
+
+// `diff`'s `(Unsupported, Unsupported) => {}` arm is a silent no-op — it
+// would make a translate-time 501 indistinguishable from "nothing to assert"
+// for the two Run 4 Wave B3 tests below, where a regression back to 501 must
+// FAIL loudly, not silently pass alongside the row-bag check. Belt-and-
+// braces: assert translation itself succeeds, over fixture Q's own R2RML.
+fn assert_q_translates_ok(query: &str) {
+    let schema = sqlite::introspect_all(&sqlite::load(Q_SQL).unwrap()).unwrap();
+    let maps = sf_mapping::parse_r2rml(Q_R2RML).unwrap();
+    let q = parse(query);
+    assert!(
+        flat(&maps, &q, &schema).is_ok(),
+        "expected flat to translate `{query}`"
+    );
+    assert!(
+        tree(&maps, &q, &schema).is_ok(),
+        "expected tree to translate `{query}`"
+    );
+}
+
+// FORMERLY a locked 501: `?a` (1-column template) and `?b` (2-column
+// template, OPTIONAL) can neither align column-by-column (different segment
+// counts) nor prove disjoint (same leading literal prefix) — `unify`'s
+// fallback renders both as a SQL concat and compares. Person 1 survives
+// (equal); person 2 is excluded (unequal); person 3 is excluded (`?b`'s
+// underlying columns are SQL NULL after the LEFT JOIN — the rendered concat
+// is NULL, `=` is UNKNOWN, same exclusion as a genuinely unbound `?b` would
+// give — covers the NULL-column case in the SAME assertion).
+#[test]
+fn b3_filter_equality_across_differently_shaped_iri_templates() {
+    let query = format!(
+        "{PFX} SELECT ?p ?a ?b WHERE {{ \
+         ?p ex:hasA ?a . OPTIONAL {{ ?p ex:hasB ?b }} FILTER(?a = ?b) }}"
+    );
+    assert_q_translates_ok(&query);
+    diff(Q_SQL, Q_R2RML, Some(Q_TTL), &query);
+}
+
+// The SAME two differently-shaped templates, but the equality is now an
+// IMPLICIT JOIN correlation (`?item` shared as the object of two SEPARATE
+// triple patterns, each binding it via a DIFFERENT template) rather than an
+// explicit FILTER — routes through `unify::unify` → `unify_derived` →
+// `align_templates`, the OTHER caller `var_var_eq_beyond_column` (the
+// FILTER path above) shares the fallback with. Only person 1 ties the two
+// patterns together (`http://ex/item/42` both ways).
+#[test]
+fn b3_join_on_equality_across_differently_shaped_iri_templates() {
+    let query =
+        format!("{PFX} SELECT ?p1 ?p2 ?item WHERE {{ ?p1 ex:hasA ?item . ?p2 ex:hasB ?item }}");
+    assert_q_translates_ok(&query);
+    diff(Q_SQL, Q_R2RML, Some(Q_TTL), &query);
+}
+
+// The honest residual: the IDENTICAL shape mismatch as the two tests above,
+// but over `xsd:integer`-typed literals (Q2_R2RML) instead of IRIs —
+// `lexical_eq_is_term_eq` excludes any typed-literal class (a datatype's
+// VALUE space can equate two DIFFERENT lexical forms — e.g. `"01"` vs
+// `"1"` — so a SQL string `=` on the rendered text would not be sound), so
+// this stays an unconditional 501 on both engines.
+#[test]
+fn b3_typed_literal_shape_mismatch_equality_stays_a_locked_501() {
+    let conn = sqlite::load(Q_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(Q2_R2RML).unwrap();
+    let q = parse(&format!(
+        "{PFX} SELECT ?p ?a ?b WHERE {{ \
+         ?p ex:hasA ?a . OPTIONAL {{ ?p ex:hasB ?b }} FILTER(?a = ?b) }}"
+    ));
+    assert!(
+        matches!(flat(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "expected flat to 501"
+    );
+    assert!(
+        matches!(tree(&maps, &q, &schema), Err(Error::Unsupported(_))),
+        "expected tree to 501"
+    );
+}
+
+// ============================================================================
+// ADR-0034 Wave C0 — virtual-graph set semantics (BGP-level dedup). The 9
+// star-specific red cells this ADR fixes live in `differential_star.rs`
+// (`duplicate_source_row_*` / `cross_source_*`, all star/RDF-star shapes);
+// these lock the SAME D1/D2 mechanism generally (plain, non-star patterns)
+// off the tree/flat `=_bag` oracle this file's own module doc names as its
+// gate, plus the elision SQL-shape proofs and the D2 phase-1 501 boundary.
+// ============================================================================
+
+const D1_DUP_SQL: &str = r#"
+CREATE TABLE d1_edge (x TEXT NOT NULL, y TEXT NOT NULL);
+INSERT INTO d1_edge VALUES ('1', 'a');
+INSERT INTO d1_edge VALUES ('1', 'a');
+INSERT INTO d1_edge VALUES ('2', 'b');
+"#;
+
+/// `x` has no declared PK/UNIQUE — deliberately, so nothing but D1 proves
+/// person 1's literal duplicate row collapses.
+const D1_DUP_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#D1>
+    rr:logicalTable [ rr:tableName "d1_edge" ] ;
+    rr:subjectMap [ rr:template "http://ex/x/{x}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "y" ] ] .
+"#;
+
+/// D1 (ADR-0034), general (non-star) lock: a PLAIN triple pattern — no star,
+/// no quoting, no candidate-map ambiguity — over a physically-duplicated,
+/// unkeyed source row must dedup to 2 solutions (x=1/y=a once, x=2/y=b once),
+/// not 3 raw rows. `diff` is the file's own flat/tree `=_bag` gate; the
+/// explicit count assertion below additionally pins the CORRECT (deduped)
+/// answer, not just flat-tree agreement on a possibly-still-wrong one.
+#[test]
+fn adr0034_d1_plain_pattern_duplicate_row_dedups_generally() {
+    let q = format!("{PFX} SELECT ?x ?y WHERE {{ ?x ex:p ?y }}");
+    diff(D1_DUP_SQL, D1_DUP_R2RML, None, &q);
+    let conn = sqlite::load(D1_DUP_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(D1_DUP_R2RML).unwrap();
+    let tp = tree(&maps, &parse(&q), &schema).expect("tree translates");
+    let got = oracle::engine_bag(&exec::select(&tp, &conn).expect("select exec"));
+    assert_eq!(
+        got.len(),
+        2,
+        "the literal duplicate (x=1,y=a) row must collapse to ONE solution: {got:#?}"
+    );
+}
+
+/// D1 (ADR-0034) below GROUP BY (the ADR's own Interactions commitment):
+/// `COUNT(?y)` over the SAME physically-duplicated source must count 2
+/// DISTINCT (x,y) pairs for the x=1 group, never the 2 RAW rows — proving
+/// dedup lands BELOW the aggregation, not after it. A `SELECT DISTINCT
+/// COUNT(...) ... GROUP BY` would dedupe the GROUPED RESULT instead (the
+/// wrong level) and would NOT change this group's own count (there is only
+/// one (x=1,c=2) result row either way — the bug this pins is in the COUNT
+/// VALUE itself, not the row count).
+#[test]
+fn adr0034_d1_count_aggregate_dedups_below_group_by() {
+    let conn = sqlite::load(D1_DUP_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(D1_DUP_R2RML).unwrap();
+    let q = parse(&format!(
+        "{PFX} SELECT ?x (COUNT(?y) AS ?c) WHERE {{ ?x ex:p ?y }} GROUP BY ?x"
+    ));
+    let tp = tree(&maps, &q, &schema).expect("tree translates");
+    let fp = flat(&maps, &q, &schema).expect("flat translates");
+    for (label, plan) in [("tree", &tp), ("flat", &fp)] {
+        let got = oracle::engine_bag(&exec::select(plan, &conn).expect("select exec"));
+        let x1 = got
+            .iter()
+            .find(|r| format!("{:?}", r["x"]).contains("x/1"))
+            .unwrap_or_else(|| panic!("{label}: missing the x=1 group: {got:#?}"));
+        let c = format!("{:?}", x1["c"]);
+        assert!(
+            c.contains("\"1\""),
+            "{label}: COUNT(?y) for x=1 must be 1 (deduped), not 2 (raw duplicate \
+             rows counted twice): c={c}, full row={x1:#?}"
+        );
+    }
+}
+
+/// ADR-0034 elision, SQL-shape proof: a PK-covered fixture (`STRESS_SQL`'s
+/// `emp.id`, `STRESS_R2RML`'s `{id}`-templated subject) must emit NO new
+/// `DISTINCT` — D1's elision proof (`cascade::table_key_covered_by_bindings`)
+/// must recognize the declared key and skip the branch entirely, keeping the
+/// SQL shape byte-identical to pre-ADR-0034. Asserted on the EMITTED SQL text
+/// itself (`Plan::emitted()`), not just the answer, per the ADR's own "any
+/// pre-existing cell whose SQL shape changes... means the elision is too
+/// weak" bar.
+#[test]
+fn adr0034_elision_pk_covered_fixture_emits_no_distinct() {
+    let conn = sqlite::load(STRESS_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(STRESS_R2RML).unwrap();
+    let q = parse(&format!("{PFX} SELECT ?p ?o WHERE {{ ?p ex:name ?o }}"));
+    let check = |label: &str, plan: Plan| {
+        for e in plan.emitted().expect("emits") {
+            assert!(
+                !e.sql.to_uppercase().contains("DISTINCT"),
+                "{label}: a PK-covered scan must not grow an ADR-0034 DISTINCT: {}",
+                e.sql
+            );
+        }
+    };
+    check("tree", tree(&maps, &q, &schema).expect("tree translates"));
+    check("flat", flat(&maps, &q, &schema).expect("flat translates"));
+}
+
+const DISJOINT_SQL: &str = r#"
+CREATE TABLE dj_person (id INTEGER NOT NULL, val TEXT NOT NULL);
+INSERT INTO dj_person VALUES (1, 'X');
+CREATE TABLE dj_widget (id INTEGER NOT NULL, val TEXT NOT NULL);
+INSERT INTO dj_widget VALUES (1, 'X');
+"#;
+
+/// Two UNRELATED triples maps (different subject-template NAMESPACES —
+/// `.../person/` vs `.../widget/`) sharing a predicate AND, deliberately,
+/// identical row VALUES (both `(1, 'X')`) — chosen so the arms would collide
+/// on everything EXCEPT the provably-disjoint literal prefix, the narrowest
+/// possible margin for the elision proof (`unify::templates_provably_
+/// disjoint`'s leading-literal-prefix check) to still succeed on.
+const DISJOINT_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#Person>
+    rr:logicalTable [ rr:tableName "dj_person" ] ;
+    rr:subjectMap [ rr:template "http://ex/person/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:val ; rr:objectMap [ rr:column "val" ] ] .
+<#Widget>
+    rr:logicalTable [ rr:tableName "dj_widget" ] ;
+    rr:subjectMap [ rr:template "http://ex/widget/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:val ; rr:objectMap [ rr:column "val" ] ] .
+"#;
+
+/// ADR-0034 elision, SQL-shape proof (D2 half): two candidate-map arms whose
+/// subject templates are PROVABLY DISJOINT (conflicting literal prefixes) must
+/// stay UNPOOLED — no `SubPlanJoin`/`UNION`, each arm keeps its own,
+/// independent SQL statement (the bounded-memory bag-union streaming `iq.rs`'s
+/// own module doc calls "the equivalent of a SQL `UNION ALL`"), exactly as
+/// before ADR-0034. Asserted structurally (branch/emitted-statement count) AND
+/// on the SQL text (neither arm's own text contains `UNION`), since a
+/// provably-disjoint pair can never produce the same output tuple and so has
+/// nothing D2 needs to deduplicate.
+#[test]
+fn adr0034_elision_disjoint_arms_stay_unpooled() {
+    let conn = sqlite::load(DISJOINT_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(DISJOINT_R2RML).unwrap();
+    let q = parse(&format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:val ?o }}"));
+    let check = |label: &str, plan: Plan| {
+        assert_eq!(
+            plan.branches.len(),
+            2,
+            "{label}: disjoint arms must stay as 2 separate branches, not pooled into 1"
+        );
+        let emitted = plan.emitted().expect("emits");
+        assert_eq!(emitted.len(), 2, "{label}: 2 independent SQL statements");
+        for e in &emitted {
+            assert!(
+                !e.sql.to_uppercase().contains("UNION"),
+                "{label}: a provably-disjoint arm's OWN statement must not itself \
+                 contain a UNION (no pooling was needed): {}",
+                e.sql
+            );
+        }
+    };
+    check("tree", tree(&maps, &q, &schema).expect("tree translates"));
+    check("flat", flat(&maps, &q, &schema).expect("flat translates"));
+    // The two arms still jointly behave as a bag union: person 1 and widget 1
+    // both surface (their shared `val='X'` does NOT collapse them — different
+    // subjects, never the same output tuple).
+    let tp = tree(&maps, &q, &schema).unwrap();
+    let got = oracle::engine_bag(&exec::select(&tp, &conn).expect("select exec"));
+    assert_eq!(got.len(), 2, "person 1 and widget 1 both survive: {got:#?}");
+}
+
+const D2_COLLIDE_SQL: &str = r#"
+CREATE TABLE d2a (a TEXT NOT NULL, b TEXT NOT NULL, val TEXT NOT NULL);
+INSERT INTO d2a VALUES ('1', '23', 'X');
+CREATE TABLE d2b (a TEXT NOT NULL, b TEXT NOT NULL, val TEXT NOT NULL);
+INSERT INTO d2b VALUES ('9', '9', 'Y');
+"#;
+
+/// Two candidate maps for the SAME predicate, over DIFFERENT tables, whose
+/// subject template is the SAME adjacent-column shape
+/// (`differential_tree.rs`'s own `C3_R2RML`'s `http://ex/{a}{b}` — no
+/// separator between `{a}` and `{b}`, so NON-injective per ADR-0025 C.3) —
+/// neither arm's template conflicts on its leading literal prefix (both are
+/// `"http://ex/"` verbatim), so `unify::templates_provably_disjoint` cannot
+/// prove them disjoint, and D2 must attempt pooling.
+const D2_COLLIDE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#A>
+    rr:logicalTable [ rr:tableName "d2a" ] ;
+    rr:subjectMap [ rr:template "http://ex/{a}{b}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:val ; rr:objectMap [ rr:column "val" ] ] .
+<#B>
+    rr:logicalTable [ rr:tableName "d2b" ] ;
+    rr:subjectMap [ rr:template "http://ex/{a}{b}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:val ; rr:objectMap [ rr:column "val" ] ] .
+"#;
+
+/// D2 (ADR-0034) phase-1 boundary, pinned: candidate-map arms that are
+/// NEITHER provably disjoint NOR provably poolable (their shared, projected
+/// `?s` is bound by a non-injective template — pooling's `UNION` would dedup
+/// RAW columns, which does not equal SPARQL dedup on the reconstructed term
+/// for a non-injective binding, ADR-0025 C.3) must sound-501, on BOTH
+/// engines — never silently pick one arm, never emit an unsound `UNION`. The
+/// general rendered-term-expression fallback that WOULD resolve this
+/// (dedup over each arm's fully-rendered lexical form) is explicitly phase 2,
+/// not implemented here (ADR-0034's own Decision section).
+#[test]
+fn adr0034_d2_non_injective_non_disjoint_arms_sound_501() {
+    let conn = sqlite::load(D2_COLLIDE_SQL).unwrap();
+    let schema = sqlite::introspect_all(&conn).unwrap();
+    let maps = sf_mapping::parse_r2rml(D2_COLLIDE_R2RML).unwrap();
+    let q = parse(&format!("{PFX} SELECT ?s ?o WHERE {{ ?s ex:val ?o }}"));
+    let tp = tree(&maps, &q, &schema);
+    let fp = flat(&maps, &q, &schema);
+    // Either translation itself refuses, or it translates but emission does
+    // (mirroring `adr0025_c3_distinct_over_noninjective_template_sound_501`'s
+    // own two-stage shape) — either way, both engines must agree it is
+    // unsupported, never diverge into a silent wrong answer on one side.
+    let sound_501 = |r: sf_sparql::Result<Plan>| -> bool {
+        match r {
+            Err(Error::Unsupported(_)) => true,
+            Ok(p) => p.emitted().is_err(),
+            Err(_) => false,
+        }
+    };
+    assert!(sound_501(tp), "tree must sound-501 (translate or emit)");
+    assert!(sound_501(fp), "flat must sound-501 (translate or emit)");
 }
