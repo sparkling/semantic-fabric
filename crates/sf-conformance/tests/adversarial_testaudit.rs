@@ -391,15 +391,19 @@ fn flat_501s_aggregate_projection_while_tree_value_matches_oracle() {
 
 // ============================================================================
 // D — cross-kind disjointness OVER-DETERMINATION. `s3a_cross_kind_shared_join_
-// is_empty` (adversarial_run4b_refute.rs:468) is meant to lock "an IRI object
-// can never equal a Literal object", but its fixture's IRI/Literal templates
-// render DIFFERENT strings (.../X vs .../X/Y), so the join is empty even with
-// BOTH cross-kind guards (unify.rs:137 and :263) removed — verified empirically
-// in the W5 run. This fixture makes iriv and litv render the IDENTICAL lexical
-// text (same template shape, same column), so emptiness depends SOLELY on the
-// kind guard: a real translation is forced, so removing :137 (which drops to a
-// :263 501) reds it, and removing both (a spurious TemplateEq match) reds it —
-// neither of which the s3a JOIN cell catches.
+// is_empty` (adversarial_run4b_refute.rs) was meant to lock "an IRI object
+// can never equal a Literal object", but its ORIGINAL fixture's IRI/Literal
+// templates rendered DIFFERENT strings (.../X vs .../X/Y), so the join was
+// empty even with BOTH cross-kind guards (unify.rs:137 and :263) removed —
+// verified empirically in the W5 run. This fixture makes iriv and litv render
+// the IDENTICAL lexical text (same template shape, same column), so emptiness
+// depends SOLELY on the kind guard: a real translation is forced, so removing
+// :137 (which drops to a :263 501) reds it, and removing both (a spurious
+// TemplateEq match) reds it — neither of which the s3a JOIN cell caught at
+// the time. W5b repair: `s3a_cross_kind_shared_join_is_empty`'s own fixture
+// has SINCE been fixed to the same same-rendered shape (belt-and-braces, not
+// a replacement for this cell) — both cells now independently depend on the
+// guard.
 // ============================================================================
 
 #[test]
@@ -412,4 +416,455 @@ fn cross_kind_same_rendered_string_join_is_empty_only_via_the_kind_guard() {
          SAME lexical text are never sameTerm, so the shared-?v join is empty — via a REAL \
          translation, not a masked 501: flat={fa:#?} tree={ta:#?}"
     );
+}
+
+// ============================================================================
+// E — MySQL `group_concat_max_len` truncation (live MySQL, W5b). The IRI
+// percent-encoder's `percent_encode_col_mysql` (emit.rs) raises
+// `group_concat_max_len` via a `/*+ SET_VAR(...) */` hint specifically
+// because MySQL's GROUP_CONCAT defaults to SILENTLY TRUNCATING at 1024 bytes
+// with no error — reached whenever a `TemplateEq` comparison needs to
+// percent-encode a column value in SQL (Run 4 B-repair FIX 2). No existing
+// test drives this hint over a value long enough to actually HIT the
+// 1024-byte default: this fixture's rendered IRIs cross it. Live-gated on
+// SF_MYSQL_URL (graceful skip; mirrors `differential_pg_sqlite.rs`'s own
+// convention).
+// ============================================================================
+
+const GCML_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#L> rr:logicalTable [ rr:tableName "tgcml" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/p/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:leftv ; rr:objectMap [ rr:template "http://ex.org/v/{va}" ] ] .
+<#R> rr:logicalTable [ rr:tableName "tgcml" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/p/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:rightv ; rr:objectMap [ rr:template "http://ex.org/v/{vb1}({vb2}" ] ] .
+"#;
+
+/// Base MySQL URL: `SF_MYSQL_URL` if set, else the `mysql_e2e` default —
+/// duplicated from `differential_pg_sqlite.rs` per this file's own
+/// copied-helper convention (no `pub` cross-file surface to import).
+fn mysql_url() -> String {
+    std::env::var("SF_MYSQL_URL")
+        .unwrap_or_else(|_| "mysql://root:sftest@127.0.0.1:13306/sftest".to_owned())
+}
+
+/// Probe; `None` ⇒ graceful skip.
+async fn try_connect_mysql() -> Option<mysql_async::Conn> {
+    let opts = mysql_async::Opts::from_url(&mysql_url()).ok()?;
+    mysql_async::Conn::new(opts).await.ok()
+}
+
+/// LOCK: `va` is 400 repetitions of `/` (every byte percent-encodes to
+/// `%2F`, 3 bytes each ⇒ 1200 encoded bytes); `vb1`/`vb2` split the SAME 400
+/// raw slashes as 395+5 across the right template's OWN `(` literal
+/// separator (scales `adversarial_run4b_refute.rs`'s `s3d1` false-positive
+/// shape past MySQL's `group_concat_max_len` DEFAULT of 1024 bytes): the two
+/// encoded IRIs are IDENTICAL for their first 1201 bytes (395 shared `%2F`
+/// groups after the common prefix) — past 1024 — and diverge ONLY at byte
+/// 1201 onward (`%2F` vs `(`+`%2F`). Without the `SET_VAR(group_concat_max_
+/// len=...)` hint, MySQL's default GROUP_CONCAT truncation at 1024 bytes
+/// would cut BOTH sides down to their (identical) common prefix, wrongly
+/// reporting them EQUAL; with the hint, the full, genuinely-DIFFERENT values
+/// compare correctly and the shared-variable join is empty. The SQLite-side
+/// sanity assertion (oracle) runs unconditionally — independent of live
+/// MySQL — so a fixture-design mistake is caught even without a server.
+#[tokio::test]
+async fn mysql_group_concat_max_len_hint_prevents_1024_byte_truncation() {
+    let va = "/".repeat(400);
+    let vb1 = "/".repeat(395);
+    let vb2 = "/".repeat(5);
+    let sqlite_create = format!(
+        "CREATE TABLE tgcml (id INTEGER PRIMARY KEY, va TEXT NOT NULL, vb1 TEXT NOT NULL, vb2 TEXT NOT NULL);\n\
+         INSERT INTO tgcml VALUES (1, '{va}', '{vb1}', '{vb2}');"
+    );
+    let query = format!("{EX}SELECT ?p WHERE {{ ?p ex:leftv ?v . ?p ex:rightv ?v }}");
+    let oracle_rows = oracle_bag(&sqlite_create, GCML_R2RML, &query);
+    assert!(
+        oracle_rows.is_empty(),
+        "sanity: the two 400-slash values genuinely differ past byte 1024, the \
+         SQLite/materialized oracle must be empty regardless of live MySQL: {oracle_rows:#?}"
+    );
+
+    let Some(mut conn) = try_connect_mysql().await else {
+        eprintln!("no MySQL server reachable — skipping group_concat_max_len cell");
+        return;
+    };
+    use mysql_async::prelude::Queryable;
+
+    let db = format!("sf_gcml_{}", std::process::id());
+    conn.query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+        .await
+        .expect("drop pre-existing throwaway db");
+    conn.query_drop(format!("CREATE DATABASE {db}"))
+        .await
+        .expect("create throwaway db");
+    conn.query_drop(format!("USE {db}"))
+        .await
+        .expect("use throwaway db");
+    conn.query_drop(
+        "CREATE TABLE tgcml (id INTEGER PRIMARY KEY, va TEXT NOT NULL, vb1 TEXT NOT NULL, vb2 TEXT NOT NULL)",
+    )
+    .await
+    .expect("create table");
+    conn.query_drop(format!(
+        "INSERT INTO tgcml VALUES (1, '{va}', '{vb1}', '{vb2}')"
+    ))
+    .await
+    .expect("insert long values");
+
+    let maps = sf_mapping::parse_r2rml(GCML_R2RML).expect("R2RML parses");
+    let q = SparqlParser::new()
+        .parse_query(&query)
+        .expect("query parses");
+    let plan = translate_with(&q, &maps, Dialect::MySql, &Tbox::default(), &[])
+        .expect("MySQL translate must succeed");
+    let solutions = sf_sparql::exec_mysql::select_mysql(&plan, &mut conn)
+        .await
+        .expect("MySQL execution");
+    let engine = oracle::engine_bag(&solutions);
+    assert!(
+        engine.is_empty(),
+        "MySQL group_concat_max_len default truncation would wrongly MATCH these two \
+         >1024-byte encoded IRIs at their shared prefix; the SET_VAR hint must keep them \
+         correctly UNEQUAL: {engine:#?}"
+    );
+
+    let _ = conn
+        .query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+        .await;
+}
+
+// ============================================================================
+// F — CONSTRUCT template blank-node gate (§16.2 fresh-bnode-per-solution).
+// `dedup_construct_template_projected_vars` (lib.rs, ADR-0034 Item 2) must
+// SKIP its own template-projection dedup whenever the CONSTRUCT template
+// carries a blank node (`template_has_blank_node` guard) — a template bnode
+// label denotes a FRESH blank node PER SOLUTION (§16.2), so two solutions
+// that agree on every OTHER template variable are still meant to mint TWO
+// distinct blank nodes, never merge into one triple. No existing template
+// anywhere in the suite carries a blank node AND drops a WHERE variable, so
+// this specific gate has never been exercised.
+// ============================================================================
+
+const BNODE_GATE_SQL: &str = r#"
+CREATE TABLE tbn (id INTEGER PRIMARY KEY, a INTEGER NOT NULL);
+INSERT INTO tbn VALUES (1, 30);
+INSERT INTO tbn VALUES (2, 30);
+"#;
+
+const BNODE_GATE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#T>
+    rr:logicalTable [ rr:tableName "tbn" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/person/{id}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:age ; rr:objectMap [ rr:column "a" ] ] .
+"#;
+
+/// LOCK: two DIFFERENT people (subjects `person/1`/`person/2`) share the SAME
+/// age (30) — the WHERE BGP `?p ex:age ?a` yields 2 distinct solutions, but a
+/// template that DROPS `?p` and keeps only `?a` would, WITHOUT the bnode
+/// gate, look like a duplicate under `dedup_construct_template_projected_
+/// vars`'s narrowing (both solutions agree on the kept var `?a`=30) and
+/// wrongly collapse to ONE triple. This locks that the gate correctly stays
+/// OFF for a blank-node-carrying template: 2 solutions in, 2 triples out, on
+/// both engines — neither narrows/dedups them away.
+///
+/// NOT locked here (a separate, deeper finding surfaced while writing this
+/// cell, reported rather than silently absorbed): SPARQL 1.1 §16.2 ALSO
+/// requires each solution's instantiation of a template blank node to be a
+/// FRESH, DISTINCT node ("blank nodes created from the same label in
+/// different solutions will be different") — `exec_core::instantiate_term`'s
+/// `TermPattern::BlankNode(b) => Some(Term::BlankNode(b.clone()))` clones the
+/// SAME parsed-AST blank node for every solution, so the two triples below
+/// actually share ONE bnode identity today, not two. That is a genuine,
+/// pre-existing §16.2 nonconformance, orthogonal to the projection-dedup gate
+/// this cell exists to lock, and out of THIS task's scope to fix.
+#[test]
+fn construct_template_blank_node_subject_is_not_merged_by_projection_dedup() {
+    let query = format!("{EX}CONSTRUCT {{ _:x ex:hasAge ?a }} WHERE {{ ?p ex:age ?a }}");
+    let maps = sf_mapping::parse_r2rml(BNODE_GATE_R2RML).expect("R2RML parses");
+    let conn = sqlite::load(BNODE_GATE_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspection");
+    let q = parse(&query);
+    let flat = translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("flat translates");
+    let tree = translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema)
+        .expect("tree translates");
+    let ft = exec::construct_triples(&flat, &conn).expect("flat construct");
+    let tt = exec::construct_triples(&tree, &conn).expect("tree construct");
+    assert_eq!(
+        ft.len(),
+        tt.len(),
+        "flat vs tree triple-count divergence: flat={ft:#?} tree={tt:#?}"
+    );
+    assert_eq!(
+        tt.len(),
+        2,
+        "one triple per WHERE solution (2 people, same age) — a fresh bnode per \
+         solution must NOT be merged by the template-projection dedup that drops \
+         ?p: {tt:#?}"
+    );
+    assert_eq!(
+        tt[0].predicate.as_str(),
+        "http://example.com/hasAge",
+        "unexpected predicate: {tt:#?}"
+    );
+    assert_eq!(
+        tt[0].object, tt[1].object,
+        "both triples share the same object (age=30) — this is EXACTLY why the \
+         projection-dedup would have wrongly merged them without the bnode gate: {tt:#?}"
+    );
+}
+
+// ============================================================================
+// G — `pool_rendered` POSITIVE differential (D2 Mechanism B, width
+// mismatch). `iq::lower::pool_rendered` is the D2 pooling FALLBACK for
+// candidate-map arms whose positional (raw-column) projections have
+// DIFFERING WIDTHS (W3C R2RMLTC0011a: subject templates with 3 vs 2 column
+// slots) — every existing reference to it is a doc comment or an
+// emission-shape check; no cell runs it to a SUCCESSFUL, value-correct
+// answer against the oracle. This fixture forces the width mismatch (3-slot
+// vs 2-slot subject templates sharing a leading-literal prefix, so they are
+// NOT provably disjoint and must pool) AND exercises percent-encoding
+// inside the rendered projection (`Bloggs Jr` -> `Bloggs%20Jr`), so a
+// successful, correctly-encoded answer is the closable half `pool_rendered`'s
+// own doc comment describes.
+// ============================================================================
+
+const POOL_RENDERED_SQL: &str = r#"
+CREATE TABLE pra (id INTEGER PRIMARY KEY, first TEXT NOT NULL, last TEXT NOT NULL);
+INSERT INTO pra VALUES (1, 'Jo', 'Bloggs Jr');
+CREATE TABLE prb (id INTEGER PRIMARY KEY, descr TEXT NOT NULL);
+INSERT INTO prb VALUES (2, 'X');
+"#;
+
+const POOL_RENDERED_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#A>
+    rr:logicalTable [ rr:tableName "pra" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/s/{id}/{first};{last}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:constant ex:Marker ] ] .
+<#B>
+    rr:logicalTable [ rr:tableName "prb" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/s/{id}/{descr}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:constant ex:Marker ] ] .
+"#;
+
+/// LOCK (positive control): two candidate maps for `?s ex:p ex:Marker` whose
+/// subject templates have DIFFERENT column-slot counts (3 vs 2) — not
+/// provably disjoint (identical leading literal prefix `http://ex.org/s/`),
+/// so the D2 pooling machinery must combine them; the positional-width
+/// mismatch forces `pool_rendered`'s rendered-projection fallback. Both
+/// engines must translate AND answer correctly: the two arms' rendered
+/// subjects (one requiring percent-encoding of an embedded space), matching
+/// the materialized-graph oracle exactly.
+#[test]
+fn pool_rendered_width_mismatch_answers_correctly_with_percent_encoding() {
+    let query = format!("{EX}SELECT ?s WHERE {{ ?s ex:p ex:Marker }}");
+    let (flat, tree) = translate_both(POOL_RENDERED_SQL, POOL_RENDERED_R2RML, &query);
+    let fp = flat.expect("flat must translate the width-mismatch pool (pool_rendered fallback)");
+    let tp = tree.expect("tree must translate the width-mismatch pool (pool_rendered fallback)");
+    // Confirm `pool_rendered`'s OWN rendered-projection shape actually fired
+    // (not some other pooling path): its per-var output aliases are `rv{i}`.
+    let tree_sql: String = tp
+        .emitted()
+        .expect("tree emits")
+        .into_iter()
+        .map(|e| e.sql)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        tree_sql.contains("AS rv0"),
+        "expected pool_rendered's own `rv{{i}}` rendered-projection aliasing to fire \
+         for the width-mismatched arms: {tree_sql}"
+    );
+
+    let conn = sqlite::load(POOL_RENDERED_SQL).expect("fixture loads");
+    let fa = run_select(&fp, &conn);
+    let ta = run_select(&tp, &conn);
+    assert!(
+        oracle::solutions_bag_eq(&fa, &ta),
+        "flat vs tree divergence: flat={fa:#?} tree={ta:#?}"
+    );
+    let oracle_rows = oracle_bag(POOL_RENDERED_SQL, POOL_RENDERED_R2RML, &query);
+    assert!(
+        oracle::solutions_bag_eq(&ta, &oracle_rows),
+        "engine vs oracle divergence on the width-mismatch pool:\n \
+         engine={ta:#?}\n oracle={oracle_rows:#?}"
+    );
+    assert_eq!(
+        ta.len(),
+        2,
+        "one row per (non-disjoint) candidate arm: {ta:#?}"
+    );
+    let subjects: std::collections::BTreeSet<String> =
+        ta.iter().map(|r| r["s"].to_string()).collect();
+    assert!(
+        subjects.contains("<http://ex.org/s/1/Jo;Bloggs%20Jr>"),
+        "3-slot arm's subject must be percent-encoded via the rendered projection: {ta:#?}"
+    );
+    assert!(
+        subjects.contains("<http://ex.org/s/2/X>"),
+        "2-slot arm's subject: {ta:#?}"
+    );
+}
+
+// ============================================================================
+// H — D2 maximal-group partition TRANSITIVITY (`unfold::disjoint_groups`'
+// union-find). Three candidate arms for ONE pattern: A-B share a leading
+// subject-template prefix (not provably disjoint), B-C ALSO share one, but
+// A-C's OWN prefixes conflict (provably disjoint) — a chain, not a clique.
+// The union-find must pool ALL THREE as ONE group (transitive closure
+// through B), not leave any pair unpooled just because A and C themselves
+// are disjoint: the fixture's actual row data makes A's row and B's first
+// row the SAME triple, and B's second row and C's row the SAME triple, so a
+// partition that drops either bridging edge double-counts one collision. No
+// existing cell has 3+ arms; every `disjoint_groups`/`pool_group` cell
+// elsewhere is 2 arms. C's subject template also has an extra column slot
+// (forcing `pool_rendered`'s width-mismatch fallback for the whole group),
+// so this is deliberately a DIFFERENT trigger shape from Cell G above (both
+// paths must handle 3-arm transitivity correctly).
+// ============================================================================
+
+const D2_TRANS_SQL: &str = r#"
+CREATE TABLE d2ta (id INTEGER PRIMARY KEY, k TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO d2ta VALUES (1, '1', 'X');
+CREATE TABLE d2tb (id INTEGER PRIMARY KEY, k TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO d2tb VALUES (1, 'a1', 'X');
+INSERT INTO d2tb VALUES (2, 'b1-Z', 'Y');
+CREATE TABLE d2tc (id INTEGER PRIMARY KEY, k1 TEXT NOT NULL, k2 TEXT NOT NULL, v TEXT NOT NULL);
+INSERT INTO d2tc VALUES (1, '1', 'Z', 'Y');
+"#;
+
+const D2_TRANS_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#A>
+    rr:logicalTable [ rr:tableName "d2ta" ] ;
+    rr:subjectMap [ rr:template "http://example.com/aa{k}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
+<#B>
+    rr:logicalTable [ rr:tableName "d2tb" ] ;
+    rr:subjectMap [ rr:template "http://example.com/a{k}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
+<#C>
+    rr:logicalTable [ rr:tableName "d2tc" ] ;
+    rr:subjectMap [ rr:template "http://example.com/ab{k1}-{k2}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "v" ] ] .
+"#;
+
+/// LOCK: A's subject template (`aa{k}`) and C's (`ab{k1}-{k2}`) have
+/// CONFLICTING leading literal prefixes (`aa` vs `ab`) — provably disjoint on
+/// their own. B's (`a{k}`) is a PREFIX of both, so A-B and B-C are each NOT
+/// provably disjoint — a chain, A~B~C, not a clique. Row data: A's one row
+/// and B's first row render the IDENTICAL triple
+/// (`http://example.com/aa1`, ex:p, "X"); B's second row and C's one row
+/// render the IDENTICAL triple (`http://example.com/ab1-Z`, ex:p, "Y"). The
+/// union-find must pool all three as ONE group (transitivity through B),
+/// deduping BOTH collisions; a partition that drops either bridging edge
+/// leaves one collision un-deduped (3 rows instead of 2).
+#[test]
+fn d2_three_arm_chain_pools_transitively_through_the_bridging_arm() {
+    let query = format!("{EX}SELECT ?s ?o WHERE {{ ?s ex:p ?o }}");
+    let (fa, ta) = require_translate_then_rows(D2_TRANS_SQL, D2_TRANS_R2RML, &query);
+    assert!(
+        oracle::solutions_bag_eq(&fa, &ta),
+        "flat vs tree divergence: flat={fa:#?} tree={ta:#?}"
+    );
+    let oracle_rows = oracle_bag(D2_TRANS_SQL, D2_TRANS_R2RML, &query);
+    assert!(
+        oracle::solutions_bag_eq(&ta, &oracle_rows),
+        "engine vs oracle divergence on the 3-arm chain:\n \
+         engine={ta:#?}\n oracle={oracle_rows:#?}"
+    );
+    assert_eq!(
+        ta.len(),
+        2,
+        "exactly 2 distinct triples: A/B's shared (aa1,\"X\") and B/C's shared \
+         (ab1-Z,\"Y\") each deduped ONCE — a broken (non-transitive) partition \
+         would leave one collision un-deduped and return 3: {ta:#?}"
+    );
+}
+
+// ============================================================================
+// I — R2RMLTC0002c rejection shape: `wrap_scan_distinct`'s alias-qualified
+// quoting defense. A `rr:column` referencing an UNDEFINED column must be
+// REJECTED (a SQL execution error), never silently succeed by falling back
+// to a bogus STRING LITERAL — the exact regression `cascade::mod::
+// wrap_col_ref`'s own doc comment names (a deliberately undefined
+// `rr:column`, found via the REAL W3C R2RMLTC0002c case, "silently produced
+// a bogus triple instead"). The defense is alias-QUALIFYING every projected
+// column reference in the D1 per-scan DISTINCT wrap (`sfsN.col`, not bare
+// `col`): SQLite's own "double-quoted string" misfeature falls back to a
+// STRING LITERAL only for a BARE, unqualified double-quoted token that fails
+// to resolve — a QUALIFIED `alias.col` reference cannot parse any other way,
+// so a genuinely missing column is a hard error. Mutation-verified: the
+// SLOW, full `w3c_suite.rs` conformance run DOES already catch a regression
+// here (via the real R2RMLTC0002c fixture), but no cell in THIS fast
+// adversarial suite drives an undefined `rr:column` through the per-scan
+// wrap — this fixture is a minimal, hermetic repro of the identical shape
+// for fast-iteration defense-in-depth.
+// ============================================================================
+
+const TC0002C_SQL: &str = r#"
+CREATE TABLE tc0002c (a TEXT NOT NULL, b TEXT NOT NULL);
+INSERT INTO tc0002c VALUES ('1', 'X');
+"#;
+
+const TC0002C_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#T>
+    rr:logicalTable [ rr:tableName "tc0002c" ] ;
+    rr:subjectMap [ rr:template "http://ex.org/s/{a}" ] ;
+    rr:predicateObjectMap [ rr:predicate ex:p ; rr:objectMap [ rr:column "nonexistent" ] ] .
+"#;
+
+/// LOCK: `tc0002c` has NO declared PK/UNIQUE, so D1's per-scan wrap
+/// (`wrap_scan_distinct`) engages — both bindings (the subject template and
+/// the object column) are individually injective, so this takes the
+/// per-scan-wrap path, not the branch-level-flag fallback. The
+/// `rr:objectMap`'s `rr:column "nonexistent"` names a column that does NOT
+/// exist in the table (only `a`/`b` do) — R2RML mapping parse doesn't
+/// validate column existence against a live schema, so this reaches SQL
+/// execution, which MUST reject it (a hard error), never silently succeed
+/// with the column's OWN NAME as a bogus literal value.
+#[test]
+fn tc0002c_undefined_column_is_rejected_not_a_bogus_literal() {
+    let conn = sqlite::load(TC0002C_SQL).expect("fixture loads");
+    let schema = sqlite::introspect_all(&conn).expect("introspection");
+    let maps = sf_mapping::parse_r2rml(TC0002C_R2RML).expect("R2RML parses");
+    let query = format!("{EX}SELECT ?s ?o WHERE {{ ?s ex:p ?o }}");
+    let q = parse(&query);
+    for (label, plan) in [
+        (
+            "flat",
+            translate_with_flat(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema),
+        ),
+        (
+            "tree",
+            translate_with(&q, &maps, Dialect::Sqlite, &Tbox::default(), &schema),
+        ),
+    ] {
+        let plan = plan.unwrap_or_else(|e| {
+            panic!(
+                "{label} must translate (a real column-existence check belongs at exec \
+                 time, not translate time): {e:?}"
+            )
+        });
+        match exec::select(&plan, &conn) {
+            Err(_) => {} // expected: a real "no such column" execution error
+            Ok(sols) => panic!(
+                "{label}: an undefined rr:column must be REJECTED at exec time, never \
+                 silently succeed with the column's own name as a bogus literal value \
+                 (W3C R2RMLTC0002c); got {} row(s): {:?}",
+                sols.rows.len(),
+                sols.rows
+            ),
+        }
+    }
 }
