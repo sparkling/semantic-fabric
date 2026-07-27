@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Issue #6 — Adversarial implementation review</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f6f2e9;
+      --ink: #20231f;
+      --muted: #686c63;
+      --line: #c8c2b5;
+      --panel: #fffdf7;
+      --good: #276749;
+      --good-bg: #e8f3ec;
+      --warn: #8a5a13;
+      --warn-bg: #fff2d6;
+      --bad: #9b2c2c;
+      --bad-bg: #fae8e6;
+      --blue: #275d78;
+      --blue-bg: #e7f1f5;
+      --code: #282c2a;
+      --code-ink: #f4f1e8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #171a18;
+        --ink: #ece9df;
+        --muted: #a9ada4;
+        --line: #454a45;
+        --panel: #202421;
+        --good: #9fd4b4;
+        --good-bg: #203c2d;
+        --warn: #f0ca86;
+        --warn-bg: #44351d;
+        --bad: #f1aaa5;
+        --bad-bg: #482927;
+        --blue: #9bc7dc;
+        --blue-bg: #203642;
+        --code: #101210;
+        --code-ink: #f4f1e8;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.58 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 54px 0 80px; }
+    header { max-width: 920px; }
+    .eyebrow {
+      color: var(--muted);
+      font-size: .76rem;
+      font-weight: 750;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif; line-height: 1.12; }
+    h1 { margin: 12px 0 14px; font-size: clamp(2.2rem, 6vw, 4.6rem); letter-spacing: -.045em; }
+    h2 { margin: 0 0 16px; font-size: clamp(1.55rem, 3vw, 2.25rem); letter-spacing: -.02em; }
+    h3 { margin: 0 0 8px; font-size: 1.16rem; }
+    p { margin: 0 0 1em; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    .lede { max-width: 74ch; color: var(--muted); font-size: 1.12rem; }
+    .decision {
+      display: grid;
+      grid-template-columns: minmax(240px, .72fr) minmax(320px, 1.6fr);
+      margin: 34px 0 50px;
+      border-top: 3px solid var(--bad);
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .verdict { padding: 28px; background: var(--bad-bg); }
+    .verdict strong { display: block; color: var(--bad); font-size: 1.65rem; line-height: 1.1; }
+    .verdict span { display: block; margin-top: 9px; color: var(--muted); }
+    .decision-copy { padding: 28px 32px; }
+    .decision-copy p:last-child { margin-bottom: 0; }
+    .tag {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      color: var(--muted);
+      font-size: .72rem;
+      font-weight: 750;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    section { margin-top: 56px; }
+    .section-intro { max-width: 76ch; color: var(--muted); }
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      overflow: hidden;
+      margin-top: 24px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .compare article { padding: 28px; }
+    .compare article + article { border-left: 1px solid var(--line); }
+    .compare .pro { border-top: 5px solid var(--good); }
+    .compare .con { border-top: 5px solid var(--bad); }
+    ul { margin: 14px 0 0; padding-left: 1.2em; }
+    li { margin: 0 0 11px; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 28px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .metrics div { min-height: 96px; padding: 16px; }
+    .metrics div + div { border-left: 1px solid var(--line); }
+    .metrics dt { color: var(--muted); font-size: .72rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+    .metrics dd { margin: 5px 0 0; font: 700 1.15rem/1.25 ui-serif, Georgia, serif; }
+    .findings { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 24px; }
+    .finding {
+      position: relative;
+      padding: 24px 24px 20px 62px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .finding::before {
+      position: absolute;
+      top: 22px;
+      left: 20px;
+      width: 27px;
+      height: 27px;
+      border-radius: 50%;
+      background: var(--bad-bg);
+      color: var(--bad);
+      content: attr(data-n);
+      font-weight: 800;
+      line-height: 27px;
+      text-align: center;
+    }
+    .finding p { color: var(--muted); font-size: .94rem; }
+    .finding p:last-child { margin-bottom: 0; }
+    code {
+      padding: .08em .3em;
+      border-radius: 3px;
+      background: color-mix(in srgb, var(--line) 24%, transparent);
+      font: .88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .callout {
+      margin-top: 22px;
+      padding: 20px 24px;
+      border-left: 5px solid var(--warn);
+      background: var(--warn-bg);
+    }
+    .callout p:last-child { margin-bottom: 0; }
+    .table-wrap { overflow-x: auto; margin-top: 24px; border: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); min-width: 820px; }
+    th, td { padding: 15px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:first-child { width: 19%; font-weight: 700; }
+    td:nth-child(2) { width: 16%; }
+    .yes, .partial, .no, .defer { font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+    .yes { color: var(--good); }
+    .partial, .defer { color: var(--warn); }
+    .no { color: var(--bad); }
+    .route {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: 28px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .step { min-height: 250px; padding: 23px; }
+    .step + .step { border-left: 1px solid var(--line); }
+    .step .num { color: var(--blue); font: 750 2rem/1 ui-serif, Georgia, serif; }
+    .step p { color: var(--muted); font-size: .92rem; }
+    .step .gate { margin-top: 16px; color: var(--ink); font-weight: 700; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 24px; }
+    .box { padding: 24px; border: 1px solid var(--line); background: var(--panel); }
+    .box.go { border-top: 5px solid var(--good); }
+    .box.stop { border-top: 5px solid var(--bad); }
+    .evidence {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-top: 24px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      background: var(--blue-bg);
+    }
+    .evidence p { margin-bottom: .55em; font-size: .92rem; }
+    footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: .86rem; }
+    @media (max-width: 820px) {
+      main { padding-top: 32px; }
+      .decision, .compare, .findings, .two-col, .evidence { grid-template-columns: 1fr; }
+      .compare article + article { border-left: 0; border-top: 1px solid var(--line); }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .metrics div:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
+      .metrics div:nth-child(4) { border-top: 1px solid var(--line); }
+      .route { grid-template-columns: 1fr; }
+      .step { min-height: auto; }
+      .step + .step { border-left: 0; border-top: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Architecture decision · 27 July 2026</div>
+    <h1>Issue #6 under hostile review</h1>
+    <p class="lede">
+      An adversarial assessment of the proposed semantic-fabric ↔ Oxigraph Nova
+      integration, tested against both repositories’ current code rather than the
+      issue’s stated API shapes.
+    </p>
+  </header>
+
+  <div class="decision">
+    <div class="verdict">
+      <span class="tag">Decision</span>
+      <strong>No-go as written</strong>
+      <span>Conditional go for a consumer-led, two-seam pilot.</span>
+    </div>
+    <div class="decision-copy">
+      <p>
+        Do not implement issue #6 as a bundle, expose raw planner internals, make
+        <code>SqlBackend</code> object-safe, or publish the existing generic
+        <code>block_on</code>. The collaboration is promising, but its proposed
+        seams contain correctness and runtime traps.
+      </p>
+      <p>
+        Ask Nova to prove one SQLite materialization vertical slice first. In
+        parallel, accept only generally useful upstream changes: a fallible quad
+        sink and, if the slice demonstrates the need, a redacting
+        <code>SourceSpec</code> parser. Design live virtualization separately
+        around an opaque quad-pattern API.
+      </p>
+    </div>
+  </div>
+
+  <section>
+    <h2>The honest balance</h2>
+    <p class="section-intro">
+      The proposal identifies real reuse opportunities and offers downstream
+      implementation capacity. Its risk comes from treating convenient internal
+      seams as stable integration contracts before the consumer has built a
+      working vertical slice.
+    </p>
+    <div class="compare">
+      <article class="pro">
+        <h3>Why say yes</h3>
+        <ul>
+          <li>Places semantic-fabric’s mapping and SQL engine behind a second, materially different product surface.</li>
+          <li>Creates a credible native + virtual graph story without duplicating R2RML, SQL dialect, datatype, and term-generation logic.</li>
+          <li>Nova volunteers ownership of its adapter, federation, CLI/server wiring, and upstream seam PRs.</li>
+          <li>A fallible streaming sink and a safe source-spec parser are useful beyond Nova.</li>
+          <li>Both projects already share the same Oxigraph RDF/SPARQL crate versions, reducing type-conversion friction.</li>
+          <li>Materialization can validate the partnership before committing to live query integration.</li>
+        </ul>
+      </article>
+      <article class="con">
+        <h3>Why say no</h3>
+        <ul>
+          <li>The proposed sync/object-safe boundary conflicts with semantic-fabric’s async, mutable, cursor-borrowing execution model.</li>
+          <li>The requested raw <code>Branch</code> exposure drops hidden correctness metadata and bypasses planner invariants.</li>
+          <li>A fallible push sink alone does not bridge Nova’s synchronous pull-based <code>bulk_load_boxed</code>.</li>
+          <li>Graph selectors are absent from the suggested triple-pattern API; applying <code>limit = 1</code> before graph filtering can return false negatives.</li>
+          <li>The source-string opener freezes server policy, can leak credentials in errors, and currently hard-codes PostgreSQL <code>NoTls</code>.</li>
+          <li>Nova main does not yet contain the described <code>FederatedDataset</code> or R2RML adapter; neither repository has a release or tag, and semantic-fabric crates remain version <code>0.0.0</code>.</li>
+        </ul>
+      </article>
+    </div>
+    <dl class="metrics">
+      <div><dt>Strategic upside</dt><dd>Medium–high</dd></div>
+      <div><dt>Fit as proposed</dt><dd>Low</dd></div>
+      <div><dt>Pilot reversibility</dt><dd>High</dd></div>
+      <div><dt>Live-query risk</dt><dd>High</dd></div>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Six ways the current plan breaks</h2>
+    <div class="findings">
+      <article class="finding" data-n="1">
+        <h3>The “runtime-free bridge” is not generic</h3>
+        <p>
+          <code>exec_core::block_on</code> polls with a no-op waker in a tight loop.
+          Its own comment limits it to always-ready futures. PostgreSQL, MySQL, and
+          the owned SQLite channel adapter may return <code>Pending</code>; publishing
+          this as a generic sync wrapper risks an infinite busy-spin.
+        </p>
+      </article>
+      <article class="finding" data-n="2">
+        <h3><code>Vec&lt;Branch&gt;</code> is not a complete plan</h3>
+        <p>
+          ADR-0034 added <code>dedup_groups</code> and
+          <code>construct_drops_some_branch_var</code>. These values are captured
+          during translation and cannot always be reconstructed from finished
+          branches. Raw pattern branches also bypass D2 pooling/dedup. A constructor
+          that fills “common defaults” can create a compiling, executable,
+          wrong-answer plan.
+        </p>
+      </article>
+      <article class="finding" data-n="3">
+        <h3>The graph dimension disappears</h3>
+        <p>
+          Nova’s contract has five graph selectors. The proposed input is only a
+          spargebra <code>TriplePattern</code>. semantic-fabric’s unfolding behavior
+          depends on an internal graph context; a fresh unfolder defaults to the
+          default graph. Post-filtering is not enough when <code>limit = 1</code>
+          is pushed before that filter.
+        </p>
+      </article>
+      <article class="finding" data-n="4">
+        <h3>Type erasure is framed at the wrong layer</h3>
+        <p>
+          Nova can box a concrete <code>R2rmlDataset&lt;B&gt;</code> as
+          <code>Box&lt;dyn Dataset&gt;</code>; <code>SqlBackend</code> itself need
+          not become object-safe. The hard problem is safely turning an async
+          borrowed cursor into a lazy sync iterator—not choosing between a dyn
+          backend and a generic federator.
+        </p>
+      </article>
+      <article class="finding" data-n="5">
+        <h3>Push-to-pull needs a bounded bridge</h3>
+        <p>
+          semantic-fabric pushes quads asynchronously into a callback. Nova bulk
+          loading synchronously pulls from an iterator. Clean cancellation and
+          sink-error propagation require a bounded channel, an owning worker, and
+          join/error semantics. A fallible callback is useful, but insufficient by
+          itself.
+        </p>
+      </article>
+      <article class="finding" data-n="6">
+        <h3>The public opener would expose policy and secrets</h3>
+        <p>
+          Current errors interpolate the full PostgreSQL conninfo or unrecognized
+          source string, potentially including passwords. The helper also chooses
+          pool behavior and <code>NoTls</code>. Parsing may belong in
+          <code>sf-sql</code>; opening belongs in a caller-controlled integration
+          layer with redaction and configurable TLS.
+        </p>
+      </article>
+    </div>
+    <div class="callout">
+      <strong>Adversarial bottom line:</strong>
+      the issue’s strongest claim is “the internals already do almost everything.”
+      That is also its most dangerous assumption. The remaining gaps sit exactly
+      at ownership, scheduling, graph semantics, cancellation, and correctness
+      metadata boundaries—the expensive boundaries.
+    </div>
+  </section>
+
+  <section>
+    <h2>Item-by-item disposition</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Issue item</th><th>Decision</th><th>Recommended treatment</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1 · <code>SqlBackend</code> sync/dyn</td>
+            <td><span class="no">Do not implement</span></td>
+            <td>Keep static dispatch. Prototype a Nova-owned worker that owns a concrete backend/runtime and returns a bounded receiving iterator. Type-erase at <code>Dataset</code>, not <code>SqlBackend</code>.</td>
+          </tr>
+          <tr>
+            <td>2 · Public <code>pattern_branches</code></td>
+            <td><span class="no">Reject the API shape</span></td>
+            <td>Design a high-level, opaque quad-pattern compile/execute API that owns hidden plan metadata and represents graph selection explicitly. Never let downstream code construct <code>Plan</code> from raw branches.</td>
+          </tr>
+          <tr>
+            <td>3 · Sync / fallible sink / graph override</td>
+            <td><span class="partial">Partial yes</span></td>
+            <td>Add a fallible quad-streaming form. Keep sync wrappers backend-specific or caller-owned. Let Nova replace <code>quad.graph_name</code> in its adapter; graph override is consumer policy, not a missing engine primitive.</td>
+          </tr>
+          <tr>
+            <td>4 · Public source opener</td>
+            <td><span class="partial">Parser only, gated</span></td>
+            <td>Consider a redacting <code>SourceSpec::parse</code>. Keep pool creation, TLS, credentials, filesystem authorization, and introspection policy out of the parser and under the embedding application’s control.</td>
+          </tr>
+          <tr>
+            <td>5 · Conformance fixtures</td>
+            <td><span class="defer">Defer upstream split</span></td>
+            <td>Nova should initially vendor the W3C fixtures with provenance and license notice. Extract a light testkit/data crate only after another real consumer appears or publication work begins.</td>
+          </tr>
+          <tr>
+            <td>6 · Mixed planning hooks</td>
+            <td><span class="defer">Defer</span></td>
+            <td>No v1 work. Require a measured mixed-query workload and stable pattern API first.</td>
+          </tr>
+          <tr>
+            <td>7 · Write-back</td>
+            <td><span class="no">Out of scope</span></td>
+            <td>Keep it an explicit non-goal.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>A safer route to “yes”</h2>
+    <p class="section-intro">
+      Make Nova prove the integration from the consumer side, and upstream only
+      seams whose value survives if Nova stops tomorrow.
+    </p>
+    <div class="route">
+      <article class="step">
+        <div class="num">0</div>
+        <h3>Pin and spike</h3>
+        <p>Nova pins both repositories by commit and builds SQLite materialization through a bounded worker/channel adapter. Temporary patch APIs may live on a branch.</p>
+        <p class="gate">Gate: end-to-end materialize into one Nova engine, including injected source and storage errors.</p>
+      </article>
+      <article class="step">
+        <div class="num">1</div>
+        <h3>Upstream generic seams</h3>
+        <p>Land a fallible quad sink. Add a source-spec parser only if the spike demonstrates real reuse, with redacted errors and no TLS/pool policy.</p>
+        <p class="gate">Gate: semantic-fabric’s full tests and constant-memory/cancellation checks remain green.</p>
+      </article>
+      <article class="step">
+        <div class="num">2</div>
+        <h3>Design live patterns</h3>
+        <p>Specify an opaque quad-pattern API covering default, named, any-named, union, and union-of graph behavior; preserve all plan metadata internally.</p>
+        <p class="gate">Gate: graph, duplicate, NULL, and fully-bound existence tests agree with an independent RDF oracle.</p>
+      </article>
+      <article class="step">
+        <div class="num">3</div>
+        <h3>Add backends, then optimize</h3>
+        <p>Prove PostgreSQL/MySQL concurrency, cancellation, and TLS configuration. Only then consider fixture extraction or mixed-query pushdown.</p>
+        <p class="gate">Gate: repeatable benchmarks show the nested-loop virtual path is operationally acceptable.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Decision gates</h2>
+    <div class="two-col">
+      <article class="box go">
+        <h3>Proceed when</h3>
+        <ul>
+          <li>Nova provides a working consumer branch, not only upstream API requests.</li>
+          <li>The bridge is bounded, cancellable, and propagates both producer and storage errors.</li>
+          <li>Graph filtering happens before existence limits, with all selectors tested.</li>
+          <li>No downstream code can instantiate incomplete semantic-fabric plans.</li>
+          <li>Credentials are redacted and PostgreSQL TLS is configurable.</li>
+        </ul>
+      </article>
+      <article class="box stop">
+        <h3>Stop when</h3>
+        <ul>
+          <li>The sync adapter requires generic busy-polling or blocks a Tokio worker.</li>
+          <li>A single mutex serializes all live virtual queries with no bounded queue policy.</li>
+          <li>The only route forward is exposing raw <code>Branch</code>/<code>Plan</code> internals.</li>
+          <li>Graph correctness is deferred behind a “filter later” shortcut.</li>
+          <li>Upstream maintenance cost arrives before a Nova vertical slice does.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Evidence reviewed</h2>
+    <div class="evidence">
+      <div>
+        <h3>semantic-fabric</h3>
+        <p>Commit <code>0cc2188d</code>, 20 July 2026.</p>
+        <p><a href="https://github.com/sparkling/semantic-fabric/blob/0cc2188d06595fec9e0fe55112f0390f5e37da78/crates/sf-sql/src/backend.rs#L8-L12">Static-dispatch contract</a></p>
+        <p><a href="https://github.com/sparkling/semantic-fabric/blob/0cc2188d06595fec9e0fe55112f0390f5e37da78/crates/sf-sparql/src/exec_core.rs#L50-L63">Always-ready <code>block_on</code></a></p>
+        <p><a href="https://github.com/sparkling/semantic-fabric/blob/0cc2188d06595fec9e0fe55112f0390f5e37da78/crates/sf-sparql/src/lib.rs#L126-L159">Hidden Plan correctness metadata</a></p>
+        <p><a href="https://github.com/sparkling/semantic-fabric/blob/0cc2188d06595fec9e0fe55112f0390f5e37da78/crates/sf-serve/src/run.rs#L87-L132">Current source opener and errors</a></p>
+      </div>
+      <div>
+        <h3>Oxigraph Nova</h3>
+        <p>Commit <code>b37c347a</code>, 27 July 2026.</p>
+        <p><a href="https://github.com/eljeffeg/oxigraph-nova/blob/b37c347aeaef6b15e8388c90b0ea31887d4ce5f5/crates/core/nova-query/src/dataset.rs#L294-L333">Synchronous Dataset contract</a></p>
+        <p><a href="https://github.com/eljeffeg/oxigraph-nova/blob/b37c347aeaef6b15e8388c90b0ea31887d4ce5f5/crates/core/nova-query/src/dataset.rs#L58-L93">Five graph selectors</a></p>
+        <p><a href="https://github.com/eljeffeg/oxigraph-nova/blob/b37c347aeaef6b15e8388c90b0ea31887d4ce5f5/crates/core/nova-core/src/engine.rs#L83-L123">Pull-based bulk-load interface</a></p>
+        <p><a href="https://github.com/sparkling/semantic-fabric/issues/6">Issue #6 proposal</a> · no comments or implementation PRs at review time.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Scope: read-only architectural review. No source code, issue state, or remote
+    repository was modified. Cross-project and repository-local Ruflo pattern
+    searches returned no prior applicable memory.
+  </footer>
+</main>
+</body>
+</html>
