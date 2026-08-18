@@ -49,7 +49,7 @@ pub enum Dialect {
     Redshift,
 
     // --- native-driver dialects (ADR-0024 M8) ---------------------------------
-    /// DuckDB — embedded OLAP; `$n` placeholders, `"`-quoted idents.
+    /// DuckDB — embedded OLAP; `?` placeholders, `"`-quoted idents.
     DuckDb,
     /// Microsoft SQL Server — TDS protocol; `@Pn` placeholders, `"`-quoted idents.
     SqlServer,
@@ -122,7 +122,7 @@ impl Dialect {
     ///
     /// | Style   | Dialects                                    |
     /// |---------|---------------------------------------------|
-    /// | `$n`    | Postgres, Redshift, DuckDb                  |
+    /// | `$n`    | Postgres, Redshift                          |
     /// | `@Pn`   | SqlServer                                   |
     /// | `:n`    | Oracle                                      |
     /// | `?`     | everything else (positional)                |
@@ -130,7 +130,7 @@ impl Dialect {
     /// The placeholder is the *only* way a value enters generated SQL (ADR-0010 R1).
     pub fn placeholder(self, index: usize) -> String {
         match self {
-            Dialect::Postgres | Dialect::Redshift | Dialect::DuckDb => format!("${index}"),
+            Dialect::Postgres | Dialect::Redshift => format!("${index}"),
             Dialect::SqlServer => format!("@P{index}"),
             Dialect::Oracle => format!(":{index}"),
             _ => "?".to_owned(),
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(Dialect::Postgres.placeholder(1), "$1");
         assert_eq!(Dialect::Postgres.placeholder(7), "$7");
         assert_eq!(Dialect::Redshift.placeholder(3), "$3");
-        assert_eq!(Dialect::DuckDb.placeholder(2), "$2");
+        assert_eq!(Dialect::DuckDb.placeholder(2), "?");
         assert_eq!(Dialect::SqlServer.placeholder(1), "@P1");
         assert_eq!(Dialect::Oracle.placeholder(2), ":2");
         assert_eq!(Dialect::Sqlite.placeholder(1), "?");
