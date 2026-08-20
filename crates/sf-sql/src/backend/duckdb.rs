@@ -1,11 +1,15 @@
 //! DuckDB `SqlBackend` adapter (ADR-0024 M8).
 //!
-//! DuckDB's Rust binding (`duckdb` crate, `bundled` feature) mirrors `rusqlite`:
-//! a synchronous `Connection` + `Statement` + `Rows` cursor. The `Connection` is
-//! `Send` but not `Sync`, so the same cap-1 channel bridge pattern used by
-//! `SqliteOwnedBackend` (ADR-0024 §4.1) is applied here, giving a
-//! `Send + 'static` stream suitable for `tokio::spawn`.
-//! One row in flight across the channel → bounded memory (ADR-0010 §C).
+//! DuckDB's Rust binding (`duckdb` crate, `bundled` feature) exposes a distinct
+//! streaming Arrow cursor. `Statement::query()` is not that cursor: it executes
+//! through `duckdb_execute_prepared` and may materialize the complete result
+//! before its `Rows` wrapper yields the first row. `open_branch` therefore uses
+//! `Statement::stream_arrow()` (`duckdb_execute_prepared_streaming`) and decodes
+//! one bounded DuckDB vector at a time. The `Connection` is `Send` but not
+//! `Sync`, so the same cap-1 channel bridge used by `SqliteOwnedBackend`
+//! (ADR-0024 §4.1) gives a `Send + 'static` stream suitable for `tokio::spawn`.
+//! One DuckDB vector plus one row in flight across the channel keeps memory
+//! independent of total result cardinality (ADR-0010 §C).
 //! Dropping a stream interrupts its connection and schedules the blocking worker
 //! for completion, so cancellation does not leave an unbounded DuckDB query
 //! detached from its caller.
@@ -13,10 +17,15 @@
 //! Verification tier: live-parity (DuckDB is embedded; no external instance
 //! required). Enabled via `--features duckdb-backend`.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
-use duckdb::params_from_iter;
 use duckdb::Connection;
+use duckdb::arrow::array::{self, Array, ArrayRef, DictionaryArray, FixedSizeBinaryArray};
+use duckdb::arrow::datatypes::{DataType, TimeUnit, UInt8Type, UInt16Type, UInt32Type};
+use duckdb::core::LogicalTypeId;
+use duckdb::params_from_iter;
+use duckdb::types::{Decimal, EnumType, ValueRef};
 use sf_core::datatype::XsdTypeCode;
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
@@ -177,7 +186,12 @@ impl SqlBackend for DuckDbBackend {
         // concurrent callers over one shared connection wedge every worker once
         // `N > worker_threads`.
         let conn = Arc::clone(&self.conn);
-        let probe_sql = probe_sql.to_owned();
+        // `Dialect::probe_sql` passes an `rr:sqlQuery` through verbatim.  Calling
+        // DuckDB's non-streaming `Statement::query` on that text materializes the
+        // complete result merely to discover its column names.  Keep metadata
+        // discovery independent of source cardinality just like `open_branch`'s
+        // logical-type probe below.
+        let probe_sql = streaming_metadata_sql(probe_sql);
         let joined = tokio::task::spawn_blocking(move || {
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             let mut stmt = guard
@@ -238,6 +252,44 @@ impl SqlBackend for DuckDbBackend {
             let _running = DuckDbWorkerRunning {
                 state: Arc::clone(&worker_state),
             };
+            // duckdb-rs exposes exact logical result types only after a
+            // statement has executed.  Arrow's physical schema alone cannot
+            // distinguish HUGEINT, UHUGEINT, and DECIMAL(38, 0), so execute a
+            // zero-row wrapper first.  DuckDB plans this query but LIMIT 0
+            // prevents it from consuming the source result; the real query
+            // below still uses the genuinely streaming execution API.
+            let metadata_sql = streaming_metadata_sql(&sql);
+            let mut metadata_stmt = match guard.prepare(&metadata_sql) {
+                Ok(stmt) => stmt,
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(Error::Marshal(format!(
+                        "duckdb metadata prepare: {error}"
+                    ))));
+                    return;
+                }
+            };
+            let metadata_rows = match metadata_stmt.query(params_from_iter(params.iter())) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(Error::Marshal(format!(
+                        "duckdb metadata query: {error}"
+                    ))));
+                    return;
+                }
+            };
+            let Some(metadata) = metadata_rows.as_ref() else {
+                let _ = tx.blocking_send(Err(Error::Marshal(
+                    "DuckDB metadata query did not expose a result schema".to_owned(),
+                )));
+                return;
+            };
+            let ncols = metadata.column_count();
+            let logical_types = (0..ncols)
+                .map(|index| metadata.column_logical_type(index).id())
+                .collect::<Vec<_>>();
+            drop(metadata_rows);
+            drop(metadata_stmt);
+
             let mut stmt = match guard.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
@@ -245,70 +297,54 @@ impl SqlBackend for DuckDbBackend {
                     return;
                 }
             };
-            let mut rows = match stmt.query(params_from_iter(params.iter())) {
-                Ok(r) => r,
+            let mut batches = match stmt.stream_arrow(params_from_iter(params.iter())) {
+                Ok(batches) => batches,
                 Err(e) => {
                     let _ = tx.blocking_send(Err(Error::Marshal(format!("duckdb query: {e}"))));
                     return;
                 }
             };
-            // Column count is available from the statement once the result is ready.
-            let ncols = rows.as_ref().map(|s| s.column_count()).unwrap_or(0);
-            let timestamp_with_timezone = rows
-                .as_ref()
-                .map(|statement| {
-                    (0..ncols)
-                        .map(|index| {
-                            statement.column_logical_type(index).id()
-                                == duckdb::core::LogicalTypeId::TimestampTZ
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            loop {
-                match rows.next() {
-                    Ok(Some(row)) => {
+            // ArrowStream::next currently reports a late DuckDB fetch error by
+            // panicking. Keep that implementation detail inside the blocking
+            // worker and surface it as the same hard stream failure as other
+            // marshalling errors.
+            let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<()> {
+                for batch in &mut batches {
+                    if batch.num_columns() != ncols {
+                        return Err(Error::Marshal(format!(
+                            "DuckDB streaming batch has {} columns, expected {ncols}",
+                            batch.num_columns()
+                        )));
+                    }
+                    for row in 0..batch.num_rows() {
                         let mut values = Vec::with_capacity(ncols);
                         let mut codes: Vec<Option<XsdTypeCode>> = Vec::with_capacity(ncols);
-                        let mut ok = true;
-                        for i in 0..ncols {
-                            match row.get_ref(i) {
-                                Ok(v) => match duck_value(
-                                    v,
-                                    timestamp_with_timezone.get(i).copied().unwrap_or(false),
-                                    max_value_bytes,
-                                ) {
-                                    Ok((text, code)) => {
-                                        values.push(text);
-                                        codes.push(code);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.blocking_send(Err(e));
-                                        ok = false;
-                                        break;
-                                    }
-                                },
-                                Err(e) => {
-                                    let _ = tx.blocking_send(Err(Error::Marshal(format!(
-                                        "duckdb col {i}: {e}"
-                                    ))));
-                                    ok = false;
-                                    break;
-                                }
-                            }
+                        for (i, &logical_type) in logical_types.iter().enumerate() {
+                            let value = duck_arrow_value_ref(batch.column(i), row, logical_type)?;
+                            let (text, code) = duck_value(
+                                value,
+                                logical_type == LogicalTypeId::TimestampTZ,
+                                max_value_bytes,
+                            )?;
+                            values.push(text);
+                            codes.push(code);
                         }
-                        if ok && tx.blocking_send(Ok(RawTuple { values, codes })).is_err() {
-                            break;
-                        }
-                        if !ok {
-                            break;
+                        if tx.blocking_send(Ok(RawTuple { values, codes })).is_err() {
+                            return Ok(());
                         }
                     }
-                    Ok(None) => break,
-                    Err(e) => {
-                        let _ = tx.blocking_send(Err(Error::Marshal(format!("duckdb row: {e}"))));
-                        break;
-                    }
+                }
+                Ok(())
+            }));
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    let _ = tx.blocking_send(Err(error));
+                }
+                Err(_) => {
+                    let _ = tx.blocking_send(Err(Error::Marshal(
+                        "DuckDB streaming fetch panicked".to_owned(),
+                    )));
                 }
             }
         });
@@ -321,6 +357,274 @@ impl SqlBackend for DuckDbBackend {
     }
 }
 
+fn streaming_metadata_sql(sql: &str) -> String {
+    let sql = sql.trim();
+    let sql = sql.strip_suffix(';').map(str::trim_end).unwrap_or(sql);
+    format!("SELECT * FROM ({sql}) AS __nova_stream_schema LIMIT 0")
+}
+
+/// Reconstruct the scalar [`ValueRef`] carried by one Arrow result vector.
+///
+/// This mirrors duckdb-rs' row decoder but is used with its genuinely
+/// streaming Arrow result. DuckDB logical metadata disambiguates the shared
+/// `Decimal128(38, 0)` carrier used by HUGEINT, UHUGEINT, and DECIMAL.
+fn duck_arrow_value_ref<'a>(
+    column: &'a ArrayRef,
+    row: usize,
+    logical_type: LogicalTypeId,
+) -> Result<ValueRef<'a>> {
+    if column.is_null(row) {
+        return Ok(ValueRef::Null);
+    }
+    let value = match column.data_type() {
+        DataType::Utf8 => ValueRef::from(
+            column
+                .as_any()
+                .downcast_ref::<array::StringArray>()
+                .expect("DuckDB Utf8 vector has StringArray storage")
+                .value(row),
+        ),
+        DataType::LargeUtf8 => ValueRef::from(
+            column
+                .as_any()
+                .downcast_ref::<array::LargeStringArray>()
+                .expect("DuckDB LargeUtf8 vector has LargeStringArray storage")
+                .value(row),
+        ),
+        DataType::Binary => ValueRef::Blob(
+            column
+                .as_any()
+                .downcast_ref::<array::BinaryArray>()
+                .expect("DuckDB Binary vector has BinaryArray storage")
+                .value(row),
+        ),
+        DataType::LargeBinary => ValueRef::Blob(
+            column
+                .as_any()
+                .downcast_ref::<array::LargeBinaryArray>()
+                .expect("DuckDB LargeBinary vector has LargeBinaryArray storage")
+                .value(row),
+        ),
+        DataType::FixedSizeBinary(_) => ValueRef::Blob(
+            column
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("DuckDB fixed binary vector has FixedSizeBinaryArray storage")
+                .value(row),
+        ),
+        DataType::Boolean => ValueRef::Boolean(
+            column
+                .as_any()
+                .downcast_ref::<array::BooleanArray>()
+                .expect("DuckDB Boolean vector has BooleanArray storage")
+                .value(row),
+        ),
+        DataType::Int8 => ValueRef::TinyInt(
+            column
+                .as_any()
+                .downcast_ref::<array::Int8Array>()
+                .expect("DuckDB Int8 vector has Int8Array storage")
+                .value(row),
+        ),
+        DataType::Int16 => ValueRef::SmallInt(
+            column
+                .as_any()
+                .downcast_ref::<array::Int16Array>()
+                .expect("DuckDB Int16 vector has Int16Array storage")
+                .value(row),
+        ),
+        DataType::Int32 => ValueRef::Int(
+            column
+                .as_any()
+                .downcast_ref::<array::Int32Array>()
+                .expect("DuckDB Int32 vector has Int32Array storage")
+                .value(row),
+        ),
+        DataType::Int64 => ValueRef::BigInt(
+            column
+                .as_any()
+                .downcast_ref::<array::Int64Array>()
+                .expect("DuckDB Int64 vector has Int64Array storage")
+                .value(row),
+        ),
+        DataType::UInt8 => ValueRef::UTinyInt(
+            column
+                .as_any()
+                .downcast_ref::<array::UInt8Array>()
+                .expect("DuckDB UInt8 vector has UInt8Array storage")
+                .value(row),
+        ),
+        DataType::UInt16 => ValueRef::USmallInt(
+            column
+                .as_any()
+                .downcast_ref::<array::UInt16Array>()
+                .expect("DuckDB UInt16 vector has UInt16Array storage")
+                .value(row),
+        ),
+        DataType::UInt32 => ValueRef::UInt(
+            column
+                .as_any()
+                .downcast_ref::<array::UInt32Array>()
+                .expect("DuckDB UInt32 vector has UInt32Array storage")
+                .value(row),
+        ),
+        DataType::UInt64 => ValueRef::UBigInt(
+            column
+                .as_any()
+                .downcast_ref::<array::UInt64Array>()
+                .expect("DuckDB UInt64 vector has UInt64Array storage")
+                .value(row),
+        ),
+        DataType::Float32 => ValueRef::Float(
+            column
+                .as_any()
+                .downcast_ref::<array::Float32Array>()
+                .expect("DuckDB Float32 vector has Float32Array storage")
+                .value(row),
+        ),
+        DataType::Float64 => ValueRef::Double(
+            column
+                .as_any()
+                .downcast_ref::<array::Float64Array>()
+                .expect("DuckDB Float64 vector has Float64Array storage")
+                .value(row),
+        ),
+        DataType::Decimal32(width, scale) => decimal_value_ref(
+            *width,
+            *scale,
+            i128::from(
+                column
+                    .as_any()
+                    .downcast_ref::<array::Decimal32Array>()
+                    .expect("DuckDB Decimal32 vector has Decimal32Array storage")
+                    .value(row),
+            ),
+        )?,
+        DataType::Decimal64(width, scale) => decimal_value_ref(
+            *width,
+            *scale,
+            i128::from(
+                column
+                    .as_any()
+                    .downcast_ref::<array::Decimal64Array>()
+                    .expect("DuckDB Decimal64 vector has Decimal64Array storage")
+                    .value(row),
+            ),
+        )?,
+        DataType::Decimal128(width, scale) => {
+            let raw = column
+                .as_any()
+                .downcast_ref::<array::Decimal128Array>()
+                .expect("DuckDB Decimal128 vector has Decimal128Array storage")
+                .value(row);
+            if *width == Decimal::MAX_WIDTH && *scale == 0 {
+                match logical_type {
+                    LogicalTypeId::UHugeint => ValueRef::UHugeInt(raw as u128),
+                    LogicalTypeId::Decimal => decimal_value_ref(*width, *scale, raw)?,
+                    _ => ValueRef::HugeInt(raw),
+                }
+            } else {
+                decimal_value_ref(*width, *scale, raw)?
+            }
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => ValueRef::Timestamp(
+            duckdb::types::TimeUnit::Second,
+            column
+                .as_any()
+                .downcast_ref::<array::TimestampSecondArray>()
+                .expect("DuckDB second timestamp vector has matching storage")
+                .value(row),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => ValueRef::Timestamp(
+            duckdb::types::TimeUnit::Millisecond,
+            column
+                .as_any()
+                .downcast_ref::<array::TimestampMillisecondArray>()
+                .expect("DuckDB millisecond timestamp vector has matching storage")
+                .value(row),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => ValueRef::Timestamp(
+            duckdb::types::TimeUnit::Microsecond,
+            column
+                .as_any()
+                .downcast_ref::<array::TimestampMicrosecondArray>()
+                .expect("DuckDB microsecond timestamp vector has matching storage")
+                .value(row),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => ValueRef::Timestamp(
+            duckdb::types::TimeUnit::Nanosecond,
+            column
+                .as_any()
+                .downcast_ref::<array::TimestampNanosecondArray>()
+                .expect("DuckDB nanosecond timestamp vector has matching storage")
+                .value(row),
+        ),
+        DataType::Date32 => ValueRef::Date32(
+            column
+                .as_any()
+                .downcast_ref::<array::Date32Array>()
+                .expect("DuckDB Date32 vector has Date32Array storage")
+                .value(row),
+        ),
+        DataType::Time64(TimeUnit::Microsecond) => ValueRef::Time64(
+            duckdb::types::TimeUnit::Microsecond,
+            column
+                .as_any()
+                .downcast_ref::<array::Time64MicrosecondArray>()
+                .expect("DuckDB time vector has Time64MicrosecondArray storage")
+                .value(row),
+        ),
+        DataType::Dictionary(key_type, _) => ValueRef::Enum(
+            match key_type.as_ref() {
+                DataType::UInt8 => EnumType::UInt8(
+                    column
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<UInt8Type>>()
+                        .expect("DuckDB UInt8 enum has matching dictionary storage"),
+                ),
+                DataType::UInt16 => EnumType::UInt16(
+                    column
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<UInt16Type>>()
+                        .expect("DuckDB UInt16 enum has matching dictionary storage"),
+                ),
+                DataType::UInt32 => EnumType::UInt32(
+                    column
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<UInt32Type>>()
+                        .expect("DuckDB UInt32 enum has matching dictionary storage"),
+                ),
+                other => {
+                    return Err(Error::Unsupported(format!(
+                        "DuckDB enum key type {other:?} not supported"
+                    )));
+                }
+            },
+            row,
+        ),
+        other => {
+            return Err(Error::Unsupported(format!(
+                "DuckDB value type {other:?} not supported"
+            )));
+        }
+    };
+    Ok(match (logical_type, value) {
+        (LogicalTypeId::Geometry, ValueRef::Blob(bytes)) => ValueRef::Geometry(bytes),
+        (_, value) => value,
+    })
+}
+
+fn decimal_value_ref(width: u8, scale: i8, value: i128) -> Result<ValueRef<'static>> {
+    let scale = u8::try_from(scale).map_err(|_| {
+        Error::Marshal(format!(
+            "DuckDB decimal has unsupported negative scale {scale}"
+        ))
+    })?;
+    let decimal = Decimal::new(width, scale, value)
+        .map_err(|error| Error::Marshal(format!("invalid DuckDB decimal value: {error}")))?;
+    Ok(ValueRef::Decimal(decimal))
+}
+
 /// Map a DuckDB [`duckdb::types::ValueRef`] to a lexical string + XSD type code.
 ///
 /// SQL scalar types with an R2RML §10 natural mapping are converted to their
@@ -331,8 +635,8 @@ fn duck_value(
     timestamp_with_timezone: bool,
     max_value_bytes: Option<usize>,
 ) -> Result<(Option<String>, Option<XsdTypeCode>)> {
-    use duckdb::types::ValueRef;
     use XsdTypeCode as X;
+    use duckdb::types::ValueRef;
     match v {
         ValueRef::Null => Ok((None, None)),
         ValueRef::Boolean(b) => Ok((Some(b.to_string()), Some(X::Boolean))),
@@ -370,10 +674,9 @@ fn duck_value(
         }
         ValueRef::Timestamp(unit, value) => {
             let (seconds, nanos) = split_time_unit(unit, value);
-            let timestamp = chrono::DateTime::from_timestamp(seconds, nanos)
-                .ok_or_else(|| {
-                    Error::Marshal(format!("DuckDB timestamp out of range: {value} {unit:?}"))
-                })?;
+            let timestamp = chrono::DateTime::from_timestamp(seconds, nanos).ok_or_else(|| {
+                Error::Marshal(format!("DuckDB timestamp out of range: {value} {unit:?}"))
+            })?;
             let lexical = if timestamp_with_timezone {
                 timestamp.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
             } else {
@@ -388,9 +691,10 @@ fn duck_value(
             Ok((Some(s.to_owned()), Some(X::String)))
         }
         ValueRef::Blob(b) => {
-            let encoded_len = b.len().checked_mul(2).ok_or_else(|| {
-                Error::Marshal("DuckDB blob lexical size overflow".to_owned())
-            })?;
+            let encoded_len = b
+                .len()
+                .checked_mul(2)
+                .ok_or_else(|| Error::Marshal("DuckDB blob lexical size overflow".to_owned()))?;
             ensure_value_size("blob", encoded_len, max_value_bytes)?;
             let mut out = String::new();
             sf_core::datatype::hex_binary_upper(b, &mut out);
@@ -490,6 +794,31 @@ mod tests {
         });
     }
 
+    /// `rr:sqlQuery` metadata probes arrive without a row limit.  Discovering
+    /// their schema must not execute the result-producing expressions: the dump
+    /// executor calls this before it opens the real streaming branch, and a
+    /// cardinality-sized probe defeats streaming before the first quad exists.
+    #[test]
+    fn duckdb_column_names_uses_a_zero_row_probe() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let conn = duckdb::Connection::open_in_memory().unwrap();
+            let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn)));
+
+            let cols = backend
+                .column_names(
+                    "SELECT i, CASE WHEN i >= 0 THEN error('metadata query consumed a row') END AS boom FROM range(100000000) AS values(i)",
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(cols, vec!["i", "boom"]);
+        });
+    }
+
     /// Verify that `open_branch` with parameters binds correctly.
     #[test]
     fn duckdb_backend_parameter_binding() {
@@ -581,12 +910,10 @@ mod tests {
             .unwrap();
         assert!(first_stream.next_row().await.unwrap().is_some());
 
-        let second = tokio::spawn(async move {
-            second_backend
-                .open_branch("SELECT 1", &[])
-                .await
-                .map(drop)
-        });
+        let second =
+            tokio::spawn(
+                async move { second_backend.open_branch("SELECT 1", &[]).await.map(drop) },
+            );
         tokio::time::timeout(std::time::Duration::from_secs(1), second)
             .await
             .expect("open_branch must not synchronously wait for the shared connection")
@@ -598,15 +925,16 @@ mod tests {
     #[tokio::test]
     async fn configured_value_limit_rejects_before_copying_text() {
         let conn = duckdb::Connection::open_in_memory().unwrap();
-        let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn)))
-            .with_max_value_bytes(4);
+        let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn))).with_max_value_bytes(4);
         let mut stream = backend.open_branch("SELECT 'hello'", &[]).await.unwrap();
         let error = match stream.next_row().await {
             Err(error) => error,
             Ok(_) => panic!("oversized DuckDB text should be rejected"),
         };
         assert!(
-            error.to_string().contains("exceeding the configured per-value limit"),
+            error
+                .to_string()
+                .contains("exceeding the configured per-value limit"),
             "{error}"
         );
     }
