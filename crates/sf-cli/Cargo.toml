@@ -6,6 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 description = "semantic-fabric command-line interface — the single binary (ADR-0006)"
 
+[features]
+# The shipped CLI exposes all four production source backends by default. Library
+# consumers can still avoid DuckDB's bundled native build with `--no-default-features`.
+default = ["duckdb-backend"]
+duckdb-backend = ["sf-serve/duckdb-backend"]
+
 [[bin]]
 name = "semantic-fabric"
 path = "src/main.rs"

@@ -15,6 +15,8 @@
 //! max-query-length cap, and cancel-on-client-drop. Error → status mapping:
 //! parse → 400, unsupported feature → 501, execution → 500, success → 200.
 
+#[cfg(feature = "duckdb-backend")]
+mod duckdb_source;
 pub mod ontology;
 pub mod run;
 pub mod stream;
@@ -33,6 +35,8 @@ use axum::Router;
 use deadpool_postgres::PoolError;
 
 use sf_core::ir::TriplesMap;
+#[cfg(feature = "duckdb-backend")]
+use sf_sparql::exec_duckdb;
 use sf_sparql::{
     exec, exec_mysql, exec_pg, Epoch, Error as SparqlError, Plan, PlanCache, PlanForm, Tbox,
 };
@@ -45,6 +49,8 @@ use sparesults::QueryResultsFormat;
 /// by `⟨T, M⟩` (never by data), so it cannot go stale vs a live source.
 const PLAN_CACHE_CAP: usize = 64;
 
+#[cfg(feature = "duckdb-backend")]
+pub use duckdb_source::DuckDbPool;
 pub use ontology::tbox_from_turtle;
 pub use stream::RdfFormat;
 
@@ -134,6 +140,10 @@ pub enum Backend {
     /// DEDICATED connection for the stream's lifetime, discarded/reset on early drop
     /// (ADR-0024 §4.2 — mirrors PG cancel-on-drop).
     Mysql(mysql_async::Pool),
+    /// Embedded DuckDB: fixed, fail-fast pool over existing read-only database
+    /// files. Excess requests are shed instead of queueing blocking workers.
+    #[cfg(feature = "duckdb-backend")]
+    DuckDb(DuckDbPool),
 }
 
 impl Backend {
@@ -141,6 +151,25 @@ impl Backend {
     /// shape every `:memory:` source and most test fixtures want).
     pub fn sqlite(conn: rusqlite::Connection) -> Self {
         Backend::Sqlite(SqlitePool::one(conn))
+    }
+
+    /// Wrap a caller-owned DuckDB connection as a single-connection backend.
+    /// The caller controls that connection's configuration; CLI serving uses
+    /// [`Self::duckdb_pool_from_path`] and its restricted read-only defaults.
+    #[cfg(feature = "duckdb-backend")]
+    pub fn duckdb(conn: duckdb::Connection) -> Self {
+        Backend::DuckDb(DuckDbPool::one(conn))
+    }
+
+    /// Open an existing DuckDB file as a restricted, fixed-size serve pool and
+    /// return its introspected base-table schema.
+    #[cfg(feature = "duckdb-backend")]
+    pub fn duckdb_pool_from_path(
+        path: &str,
+        pool_size: usize,
+    ) -> Result<(Self, Vec<TableSchema>), String> {
+        let (pool, schema) = DuckDbPool::open(path, pool_size)?;
+        Ok((Backend::DuckDb(pool), schema))
     }
 
     /// Open `pool_size` independent READ-ONLY connections to the SQLite file at
@@ -185,6 +214,8 @@ impl Backend {
             Backend::Sqlite(_) => Dialect::Sqlite,
             Backend::Pg(_) => Dialect::Postgres,
             Backend::Mysql(_) => Dialect::MySql,
+            #[cfg(feature = "duckdb-backend")]
+            Backend::DuckDb(_) => Dialect::DuckDb,
         }
     }
 }
@@ -391,6 +422,25 @@ async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>)
             vars,
             deadline,
         ),
+        #[cfg(feature = "duckdb-backend")]
+        Backend::DuckDb(pool) => {
+            let Ok(lease) = pool.try_acquire() else {
+                return duckdb_pool_exhausted();
+            };
+            let conn = lease.connection();
+            stream::select_body_streaming(
+                move |sink| {
+                    Box::pin(async move {
+                        let result = exec_duckdb::select_each_duckdb(&plan, conn, sink).await;
+                        drop(lease);
+                        result
+                    })
+                },
+                fmt,
+                vars,
+                deadline,
+            )
+        }
     };
     ok_stream(fmt.media_type(), body)
 }
@@ -453,6 +503,26 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 Ok(Ok(r)) => r,
             }
         }
+        #[cfg(feature = "duckdb-backend")]
+        Backend::DuckDb(pool) => {
+            let Ok(lease) = pool.try_acquire() else {
+                return duckdb_pool_exhausted();
+            };
+            let conn = lease.connection();
+            let mut run = tokio::spawn(async move { exec_duckdb::ask_duckdb(&plan, conn).await });
+            let result = match tokio::time::timeout(cfg.timeout, &mut run).await {
+                Err(_) => {
+                    run.abort();
+                    let _ = run.await;
+                    drop(lease);
+                    return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)");
+                }
+                Ok(Err(error)) => Err(SparqlError::Sql(format!("exec task: {error}"))),
+                Ok(Ok(result)) => result,
+            };
+            drop(lease);
+            result
+        }
     };
     match value {
         Ok(b) => match stream::serialize_boolean(b, fmt) {
@@ -507,6 +577,24 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
             fmt,
             deadline,
         ),
+        #[cfg(feature = "duckdb-backend")]
+        Backend::DuckDb(pool) => {
+            let Ok(lease) = pool.try_acquire() else {
+                return duckdb_pool_exhausted();
+            };
+            let conn = lease.connection();
+            stream::construct_body_streaming(
+                move |sink| {
+                    Box::pin(async move {
+                        let result = exec_duckdb::construct_each_duckdb(&plan, conn, sink).await;
+                        drop(lease);
+                        result
+                    })
+                },
+                fmt,
+                deadline,
+            )
+        }
     };
     ok_stream(fmt.media_type(), body)
 }
@@ -537,6 +625,18 @@ async fn acquire_pg(pool: &deadpool_postgres::Pool) -> Result<PgConn, Response> 
             format!("PostgreSQL pool: {other}"),
         ),
     })
+}
+
+#[cfg(feature = "duckdb-backend")]
+fn duckdb_pool_exhausted() -> Response {
+    let mut response = err_text(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "DuckDB connection pool exhausted, retry shortly (ADR-0010)",
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }
 
 /// Map a rewriter error to an HTTP status (ADR-0010 §error handling).

@@ -41,6 +41,7 @@ mod tests;
 pub struct DuckDbBackend {
     conn: Arc<Mutex<Connection>>,
     max_value_bytes: Option<usize>,
+    max_row_bytes: Option<usize>,
 }
 
 impl DuckDbBackend {
@@ -49,6 +50,7 @@ impl DuckDbBackend {
         Self {
             conn,
             max_value_bytes: None,
+            max_row_bytes: None,
         }
     }
 
@@ -56,6 +58,13 @@ impl DuckDbBackend {
     /// would exceed `max_value_bytes`.
     pub fn with_max_value_bytes(mut self, max_value_bytes: usize) -> Self {
         self.max_value_bytes = Some(max_value_bytes);
+        self
+    }
+
+    /// Reject a decoded row once the sum of its non-NULL lexical values would
+    /// exceed `max_row_bytes`.
+    pub fn with_max_row_bytes(mut self, max_row_bytes: usize) -> Self {
+        self.max_row_bytes = Some(max_row_bytes);
         self
     }
 }
@@ -184,6 +193,19 @@ impl SqlBackend for DuckDbBackend {
         Self: 's;
 
     async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>> {
+        let statements = crate::Dialect::DuckDb.parse(probe_sql).map_err(|error| {
+            Error::Unsupported(format!("invalid DuckDB metadata probe: {error}"))
+        })?;
+        if statements.len() != 1
+            || !matches!(
+                statements.first(),
+                Some(sqlparser::ast::Statement::Query(_))
+            )
+        {
+            return Err(Error::Unsupported(
+                "DuckDB metadata probes must contain exactly one read-only query".to_owned(),
+            ));
+        }
         // Lock + prepare inside `spawn_blocking`, mirroring `open_branch` below —
         // NOT inline. Identical deadlock shape to the SQLite backend's fixed
         // `column_names` (see `backend/sqlite.rs`): a `std::sync::Mutex` taken
@@ -234,6 +256,7 @@ impl SqlBackend for DuckDbBackend {
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
         let conn = Arc::clone(&self.conn);
         let max_value_bytes = self.max_value_bytes;
+        let max_row_bytes = self.max_row_bytes;
         let state = Arc::new(Mutex::new(DuckDbWorkerState::default()));
         let worker_state = Arc::clone(&state);
         let sql = sql.to_owned();
@@ -324,6 +347,7 @@ impl SqlBackend for DuckDbBackend {
                     for row in 0..batch.num_rows() {
                         let mut values = Vec::with_capacity(ncols);
                         let mut codes: Vec<Option<XsdTypeCode>> = Vec::with_capacity(ncols);
+                        let mut row_bytes = 0usize;
                         for (i, &logical_type) in logical_types.iter().enumerate() {
                             let value = duck_arrow_value_ref(batch.column(i), row, logical_type)?;
                             let (text, code) = duck_value(
@@ -331,6 +355,17 @@ impl SqlBackend for DuckDbBackend {
                                 logical_type == LogicalTypeId::TimestampTZ,
                                 max_value_bytes,
                             )?;
+                            row_bytes = row_bytes
+                                .checked_add(text.as_ref().map_or(0, String::len))
+                                .ok_or_else(|| {
+                                    Error::Marshal("DuckDB row lexical size overflow".to_owned())
+                                })?;
+                            if max_row_bytes.is_some_and(|maximum| row_bytes > maximum) {
+                                return Err(Error::Marshal(format!(
+                                    "DuckDB row requires {row_bytes} lexical bytes, exceeding the configured per-row limit of {} bytes",
+                                    max_row_bytes.expect("maximum checked above")
+                                )));
+                            }
                             values.push(text);
                             codes.push(code);
                         }

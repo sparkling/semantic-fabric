@@ -12,7 +12,8 @@ use crate::{introspect_pg_all, router, Backend, ServeConfig};
 /// Options resolved from the `serve` CLI flags. The runner reads the mapping /
 /// ontology files itself so the CLI stays a thin argument parser.
 pub struct ServeOptions {
-    /// `sqlite:<path>` (path may be `:memory:`), `pg:<conninfo>`, or `mysql://<url>`.
+    /// `sqlite:<path>`, `pg:<conninfo>`, `mysql://<url>`, or (when built with
+    /// `duckdb-backend`) `duckdb:<existing-path>`.
     pub source: String,
     /// Path to the R2RML mapping document (Turtle).
     pub mapping_path: String,
@@ -31,6 +32,9 @@ pub struct ServeOptions {
     /// Read-only connection pool size for a file-backed SQLite source (ADR-0010
     /// status-correction part 2).
     pub sqlite_pool_size: usize,
+    /// Fixed DuckDB serve-pool size. DuckDB is internally parallel, so the CLI
+    /// defaults this to one (maximum: 8).
+    pub duckdb_pool_size: usize,
 }
 
 /// Build the config + router and serve until the process is stopped. Returns a
@@ -62,6 +66,7 @@ async fn serve_async(opts: ServeOptions) -> Result<(), String> {
         opts.pg_pool_size,
         opts.pg_pool_wait,
         opts.sqlite_pool_size,
+        opts.duckdb_pool_size,
     )
     .await?;
 
@@ -83,12 +88,14 @@ async fn serve_async(opts: ServeOptions) -> Result<(), String> {
 /// Open the backend named by `spec` and introspect its base-table schema.
 /// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
 /// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
-/// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
+/// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]);
+/// `duckdb_pool_size` sizes the feature-gated DuckDB pool.
 async fn open_backend(
     spec: &str,
     pg_pool_size: usize,
     pg_pool_wait: Duration,
     sqlite_pool_size: usize,
+    duckdb_pool_size: usize,
 ) -> Result<(Backend, Vec<sf_sql::TableSchema>), String> {
     if let Some(path) = spec.strip_prefix("sqlite:") {
         Backend::sqlite_pool_from_path(path, sqlite_pool_size)
@@ -125,9 +132,27 @@ async fn open_backend(
         let schema = introspect_mysql_all(&mut conn).await?;
         drop(conn);
         Ok((Backend::Mysql(pool), schema))
+    } else if let Some(path) = spec.strip_prefix("duckdb:") {
+        #[cfg(feature = "duckdb-backend")]
+        {
+            let path = path.to_owned();
+            tokio::task::spawn_blocking(move || {
+                Backend::duckdb_pool_from_path(&path, duckdb_pool_size)
+            })
+            .await
+            .map_err(|e| format!("open DuckDB task join error: {e}"))?
+        }
+        #[cfg(not(feature = "duckdb-backend"))]
+        {
+            let _ = (path, duckdb_pool_size);
+            Err(
+                "DuckDB source support is not enabled; rebuild with the `duckdb-backend` feature"
+                    .to_owned(),
+            )
+        }
     } else {
         Err(format!(
-            "unrecognised --source {spec:?}: expected sqlite:<path>, pg:<conninfo>, or mysql://<url>"
+            "unrecognised --source {spec:?}: expected sqlite:<path>, pg:<conninfo>, mysql://<url>, or duckdb:<existing-path>"
         ))
     }
 }
@@ -190,7 +215,7 @@ mod tests {
         seed_sqlite_db(&path);
         let spec = format!("sqlite:{}", path.display());
 
-        let result = open_backend(&spec, 16, Duration::from_secs(5), 4).await;
+        let result = open_backend(&spec, 16, Duration::from_secs(5), 4, 1).await;
 
         let (backend, schema) = result.expect("valid sqlite spec should open");
         assert!(matches!(backend, Backend::Sqlite(_)));
@@ -208,7 +233,7 @@ mod tests {
         seed_sqlite_db(&path);
         let spec = format!("sqlite:{}", path.display());
 
-        let (_backend, schema) = open_backend(&spec, 16, Duration::from_secs(5), 4)
+        let (_backend, schema) = open_backend(&spec, 16, Duration::from_secs(5), 4, 1)
             .await
             .expect("valid sqlite spec should open");
 
@@ -230,7 +255,8 @@ mod tests {
 
     #[tokio::test]
     async fn should_reject_unadmitted_source_families_before_connector_construction() {
-        const ADMITTED_SOURCE_FORMS: &str = "sqlite:<path>, pg:<conninfo>, or mysql://<url>";
+        const ADMITTED_SOURCE_FORMS: &str =
+            "sqlite:<path>, pg:<conninfo>, mysql://<url>, or duckdb:<existing-path>";
         let rejected = [
             ("Trino", "trino://query.invalid"),
             ("Presto", "presto://query.invalid"),
@@ -239,7 +265,6 @@ mod tests {
             ("Snowflake", "snowflake://account.invalid"),
             ("BigQuery", "bigquery://project.invalid"),
             ("Databricks", "databricks://workspace.invalid"),
-            ("DuckDB", "duckdb:/tmp/source.duckdb"),
             ("SAP HANA", "hana://database.invalid"),
             ("MonetDB", "monetdb://database.invalid"),
             ("ODBC", "odbc:Driver=Unadmitted"),
@@ -254,7 +279,7 @@ mod tests {
         ];
 
         for (family, spec) in rejected {
-            let result = open_backend(spec, 16, Duration::from_secs(5), 4).await;
+            let result = open_backend(spec, 16, Duration::from_secs(5), 4, 1).await;
             let err = match result {
                 Err(err) => err,
                 Ok(_) => panic!("{family} source {spec:?} must not be admitted"),
@@ -279,7 +304,7 @@ mod tests {
         let path = bogus_dir.join("db.sqlite");
         let spec = format!("sqlite:{}", path.display());
 
-        let result = open_backend(&spec, 16, Duration::from_secs(5), 4).await;
+        let result = open_backend(&spec, 16, Duration::from_secs(5), 4, 1).await;
 
         assert!(
             result.is_err(),
@@ -313,7 +338,7 @@ mod tests {
         });
 
         let spec = format!("pg:{conn_str}");
-        let (backend, _schema) = open_backend(&spec, 3, Duration::from_secs(2), 4)
+        let (backend, _schema) = open_backend(&spec, 3, Duration::from_secs(2), 4, 1)
             .await
             .expect("reachable pg spec should open");
 
@@ -325,5 +350,62 @@ mod tests {
             3,
             "pg_pool_size passed to open_backend should flow through to the pool's max_size"
         );
+    }
+
+    #[cfg(feature = "duckdb-backend")]
+    #[tokio::test]
+    async fn should_open_and_introspect_existing_duckdb_file() {
+        let path = temp_db_path("duckdb_valid").with_extension("duckdb");
+        {
+            let conn = duckdb::Connection::open(&path).expect("create DuckDB fixture");
+            conn.execute_batch(
+                "CREATE TABLE widgets(id INTEGER PRIMARY KEY, name VARCHAR NOT NULL); \
+                 INSERT INTO widgets VALUES (1, 'sprocket');",
+            )
+            .expect("seed DuckDB fixture");
+        }
+        let spec = format!("duckdb:{}", path.display());
+
+        let (backend, schema) = open_backend(&spec, 16, Duration::from_secs(5), 4, 2)
+            .await
+            .expect("open DuckDB source");
+        assert!(matches!(backend, Backend::DuckDb(_)));
+        assert_eq!(backend.dialect(), sf_sql::Dialect::DuckDb);
+        let widgets = schema.iter().find(|table| table.name == "widgets").unwrap();
+        assert_eq!(widgets.primary_key, ["id"]);
+        assert_eq!(widgets.columns.len(), 2);
+
+        drop(backend);
+        std::fs::remove_file(path).expect("remove DuckDB fixture");
+    }
+
+    #[cfg(feature = "duckdb-backend")]
+    #[tokio::test]
+    async fn should_reject_missing_duckdb_file_without_creating_it() {
+        let path = temp_db_path("duckdb_missing").with_extension("duckdb");
+        let spec = format!("duckdb:{}", path.display());
+
+        let error = open_backend(&spec, 16, Duration::from_secs(5), 4, 1)
+            .await
+            .err()
+            .expect("missing DuckDB source must fail");
+        assert!(error.contains("resolve DuckDB source"), "{error}");
+        assert!(!path.exists());
+    }
+
+    #[cfg(not(feature = "duckdb-backend"))]
+    #[tokio::test]
+    async fn should_explain_how_to_enable_duckdb_source_support() {
+        let error = open_backend(
+            "duckdb:/tmp/source.duckdb",
+            16,
+            Duration::from_secs(5),
+            4,
+            1,
+        )
+        .await
+        .err()
+        .expect("feature-disabled DuckDB must fail");
+        assert!(error.contains("`duckdb-backend` feature"), "{error}");
     }
 }

@@ -11,10 +11,11 @@
 //! chunk once it fills — backpressure flows straight back to the server-side cursor
 //! (PG `query_raw`, SQLite cap-1 bridge, MySQL packet-bounded `exec_iter`).
 //!
-//! A slow/aborted client (receiver dropped) makes the next send fail → the producer
-//! stops (cancel-on-drop, ADR-0010 §C), and a passed deadline aborts at the next
-//! chunk/row (the request timeout). ASK is a single boolean — bounded by
-//! construction — and is serialised whole via [`collected_body`].
+//! A slow/aborted client and the absolute request deadline are raced against the
+//! entire driver future, including work before its first row. Losing either race
+//! drops the driver immediately, triggering backend cancellation. ASK is a single
+//! boolean — bounded by construction — and is serialised whole via
+//! [`collected_body`].
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -182,9 +183,7 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            drive(sink)
-                .await
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            drive_until_closed_or_deadline(drive(sink), &tx, deadline).await?;
             let writer = writer
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -233,9 +232,7 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            drive(sink)
-                .await
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            drive_until_closed_or_deadline(drive(sink), &tx, deadline).await?;
             let ser = sink_ser
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -250,6 +247,31 @@ where
         }
     });
     Body::from_stream(ReceiverStream::new(rx))
+}
+
+async fn drive_until_closed_or_deadline(
+    drive: BoxedResult,
+    tx: &Sender<Result<Bytes, io::Error>>,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
+    let client_closed = tx.closed();
+    match deadline {
+        Some(deadline) => {
+            tokio::select! {
+                result = drive => result.map_err(|e| io::Error::other(e.to_string())),
+                () = client_closed => Err(io::Error::new(io::ErrorKind::BrokenPipe, "HTTP response body dropped")),
+                () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "request timeout (ADR-0010)"))
+                }
+            }
+        }
+        None => {
+            tokio::select! {
+                result = drive => result.map_err(|e| io::Error::other(e.to_string())),
+                () = client_closed => Err(io::Error::new(io::ErrorKind::BrokenPipe, "HTTP response body dropped")),
+            }
+        }
+    }
 }
 
 /// One solution row's bound `(variable, term)` pairs in projection order (unbound
