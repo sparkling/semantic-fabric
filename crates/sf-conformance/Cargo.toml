@@ -19,7 +19,7 @@ sf-sparql.workspace = true
 oxrdf.workspace = true
 oxttl.workspace = true
 # In-memory SQLite fixture per W3C case (matches the sf-sparql execution wave).
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled"] }
 thiserror.workspace = true
 # Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway schema per
 # case loaded over a real server, executed via the PgRowStream cursor. Skips

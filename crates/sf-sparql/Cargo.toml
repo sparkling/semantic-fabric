@@ -21,7 +21,7 @@ oxjsonld.workspace = true      # JSON-LD 1.2 output for CONSTRUCT/DESCRIBE (ADR-
 thiserror.workspace = true
 rayon = "1.12"                  # chunked term-gen batch parallelism, exec_core (ADR-0006 rayon/tokio pool separation, M4 wave-2 batch restructure)
 quick_cache = "0.7"             # PlanCache production drop-in (ADR-0007 cache.rs doc comment): approximately-LRU, never a wholesale clear
-rusqlite = { version = "0.32", features = ["bundled"] } # SQLite execution of emitted SQL (this-wave target)
+rusqlite = { workspace = true, features = ["bundled"] } # SQLite execution of emitted SQL (this-wave target)
 tokio-postgres = "0.7"         # PostgreSQL execution of emitted SQL via PgRowStream/query_raw (ADR-0010 §C)
 bytes = "1"                    # BytesMut, for the ToSql wrapper that binds lexical params to the placeholder's inferred PG type
 mysql_async = { version = "0.36.2", default-features = false, features = ["default-rustls"] } # MySQL execution (WS-D)

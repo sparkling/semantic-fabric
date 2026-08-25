@@ -13,7 +13,7 @@ sf-mapping.workspace = true
 sf-sparql.workspace = true
 # File-backed SQLite source (ADR-0006): the source DB does the set-work on disk,
 # so engine memory is separable from source data. Same pin as sf-sparql/exec.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled"] }
 # Live-PostgreSQL OBDA path (ADR-0006): run a query over a real PG server via the
 # async exec_pg::select_pg cursor — what enables serve-over-PG and the fair
 # Ontop-vs-sf latency benchmark. Async-only (tokio-postgres); the SQLite path
