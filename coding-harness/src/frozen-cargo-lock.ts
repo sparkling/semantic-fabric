@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { constants, existsSync, lstatSync, realpathSync, readdirSync } from 'node:fs';
 import { chmod, copyFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -10,11 +9,14 @@ import {
   type StructuredCommand,
 } from './contracts.js';
 import { runGitCommand } from './git-process.js';
+import {
+  assertGitMaterializationSafe,
+  assertRawIndexMatchesWorkingTree,
+} from './git-materialization.js';
 import type { OfflineProcessIsolator } from './network.js';
 import { runStructuredProcess, type ProcessResult } from './process.js';
 import { digestValue, type GitIdentity } from './receipts.js';
 import { resolveWorkspacePath, sha256File } from './workspace.js';
-
 const CARGO_LOCK = 'Cargo.lock' as const;
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
 const MAX_SNAPSHOT_ENTRIES = 100_000;
@@ -121,7 +123,6 @@ export async function prepareFrozenCargoLock(
   const source = await verifiedIdentity(repositoryRoot, input.source, 'SOURCE', input.signal);
   await assertSourceCompatibility(repositoryRoot, baseline, source, input.signal);
   const execution = validateExecutionInput(input);
-
   let scratchIdentity: DirectoryIdentity | null = null;
   try {
     assertSameDirectory(
@@ -138,6 +139,8 @@ export async function prepareFrozenCargoLock(
     await mkdir(targetRoot, { mode: 0o700 });
     await mkdir(frozenRoot, { mode: 0o700 });
     const indexPath = join(scratchRoot, 'baseline.index');
+    await assertGitMaterializationSafe({ repositoryRoot,
+      commits: [baseline.commit, source.commit], signal: input.signal });
     await gitChecked(
       repositoryRoot,
       ['read-tree', baseline.commit],
@@ -150,13 +153,16 @@ export async function prepareFrozenCargoLock(
       input.signal,
       { GIT_INDEX_FILE: indexPath },
     );
+    await assertRawIndexMatchesWorkingTree({ workspaceRoot, repositoryRoot,
+      environment: { GIT_INDEX_FILE: indexPath }, signal: input.signal });
+    await assertGitMaterializationSafe({ repositoryRoot,
+      commits: [baseline.commit, source.commit], signal: input.signal });
     assertOwnedScratch(scratchRoot, scratchIdentity, scratchParent, parentIdentity);
     validateSnapshot(workspaceRoot);
     resolveWorkspacePath(workspaceRoot, 'Cargo.toml', {
       requireRegularFile: true,
       rejectHardlinks: true,
     });
-
     const environment = {
       ...execution.environment,
       CARGO_NET_OFFLINE: 'true',
@@ -174,7 +180,6 @@ export async function prepareFrozenCargoLock(
       || generatedDigest !== sha256File(generatedLock)) {
       throw new Error('HARNESS_FROZEN_LOCK_CHANGED_DURING_METADATA');
     }
-
     const sourcePath = join(frozenRoot, CARGO_LOCK);
     await copyFile(generatedLock, sourcePath, constants.COPYFILE_EXCL);
     await chmod(sourcePath, 0o444);
@@ -215,7 +220,6 @@ class FrozenCargoLockLease implements PreparedFrozenCargoLock {
     Object.freeze(this.baseline);
     Object.freeze(this.source);
   }
-
   assertStable(): void {
     if (this.#disposed) throw new Error('HARNESS_FROZEN_LOCK_DISPOSED');
     assertOwnedScratch(
@@ -228,7 +232,6 @@ class FrozenCargoLockLease implements PreparedFrozenCargoLock {
       throw new Error('HARNESS_FROZEN_LOCK_DIGEST_CHANGED');
     }
   }
-
   async cleanup(): Promise<void> {
     if (this.#disposed) return;
     assertOwnedScratch(
@@ -241,7 +244,6 @@ class FrozenCargoLockLease implements PreparedFrozenCargoLock {
     this.#disposed = true;
   }
 }
-
 async function executeCargo(
   input: FrozenCargoLockPreparationInput,
   workspaceRoot: string,
@@ -275,7 +277,6 @@ async function executeCargo(
   if (!normallyCompleted(evidence.result)) throw new Error(`HARNESS_FROZEN_LOCK_${stage}_FAILED`);
   return evidence.result;
 }
-
 function validateExecutionInput(input: FrozenCargoLockPreparationInput): Readonly<{
   environment: Readonly<Record<string, string>>;
 }> {
@@ -302,7 +303,6 @@ function validateExecutionInput(input: FrozenCargoLockPreparationInput): Readonl
   }
   return Object.freeze({ environment: Object.freeze(environment) });
 }
-
 async function verifiedIdentity(
   repositoryRoot: string,
   declared: GitIdentity,
@@ -323,7 +323,6 @@ async function verifiedIdentity(
   if (tree !== declared.tree) throw new Error(`HARNESS_FROZEN_LOCK_${label}_TREE_MISMATCH`);
   return Object.freeze({ commit, tree });
 }
-
 async function assertSourceCompatibility(
   repositoryRoot: string,
   baseline: GitIdentity,
@@ -343,7 +342,6 @@ async function assertSourceCompatibility(
   ], { signal });
   if (manifests.exitCode !== 0) throw new Error('HARNESS_FROZEN_LOCK_SOURCE_MANIFEST_MISMATCH');
 }
-
 async function gitChecked(
   cwd: string,
   args: readonly string[],
@@ -354,7 +352,6 @@ async function gitChecked(
   if (result.exitCode !== 0) throw new Error(result.stderr || `HARNESS_FROZEN_LOCK_GIT_FAILED:${args[0]}`);
   return result;
 }
-
 function validateSnapshot(root: string): void {
   const pending = [root];
   let entries = 0;
@@ -374,7 +371,6 @@ function validateSnapshot(root: string): void {
     }
   }
 }
-
 function validateLockfile(workspaceRoot: string): string {
   let path: string;
   try {
@@ -389,7 +385,6 @@ function validateLockfile(workspaceRoot: string): string {
   if (stat.size < 1 || stat.size > MAX_LOCK_BYTES) throw new Error('HARNESS_FROZEN_LOCK_SIZE_INVALID');
   return path;
 }
-
 function validateImmutableLock(path: string): string {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
@@ -399,7 +394,6 @@ function validateImmutableLock(path: string): string {
   }
   return sha256File(path);
 }
-
 function assertMetadata(stdout: string, workspaceRoot: string, targetRoot: string): void {
   let value: unknown;
   try { value = JSON.parse(stdout); } catch { throw new Error('HARNESS_FROZEN_LOCK_METADATA_INVALID'); }
@@ -412,37 +406,31 @@ function assertMetadata(stdout: string, workspaceRoot: string, targetRoot: strin
     throw new Error('HARNESS_FROZEN_LOCK_METADATA_BINDING_MISMATCH');
   }
 }
-
 function normallyCompleted(result: ProcessResult): boolean {
   return result?.success === true && result.exitCode === 0 && result.signal === null
     && result.timedOut === false && result.cancelled === false
     && result.outputLimitExceeded === false && result.spawnError === null
     && typeof result.stdout === 'string' && typeof result.stderr === 'string';
 }
-
 function assertOfflineNetwork(value: FrozenCargoLockExecution['network']): void {
   if (value?.mode !== 'offline' || !Array.isArray(value.allowedOrigins)
     || value.allowedOrigins.length !== 0) {
     throw new Error('HARNESS_FROZEN_LOCK_NETWORK_MISMATCH');
   }
 }
-
 function assertIdentityShape(value: GitIdentity, label: string): void {
   if (value === null || typeof value !== 'object'
     || !GIT_OBJECT.test(value.commit) || !GIT_OBJECT.test(value.tree)) {
     throw new TypeError(`HARNESS_FROZEN_LOCK_${label.toUpperCase()}_IDENTITY_INVALID`);
   }
 }
-
 function fileIdentity(path: string): Readonly<{ dev: number; ino: number }> {
   const stat = lstatSync(path);
   return Object.freeze({ dev: stat.dev, ino: stat.ino });
 }
-
 function sameFile(left: Readonly<{ dev: number; ino: number }>, right: Readonly<{ dev: number; ino: number }>): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
-
 function assertOwnedScratch(
   scratchRoot: string,
   scratchIdentity: DirectoryIdentity,
@@ -460,7 +448,6 @@ function assertOwnedScratch(
     'HARNESS_FROZEN_LOCK_SCRATCH_CHANGED',
   );
 }
-
 function privateDirectoryIdentity(path: string, error: string): DirectoryIdentity {
   const canonical = canonicalDirectory(path, error);
   const stat = lstatSync(canonical);
@@ -468,29 +455,24 @@ function privateDirectoryIdentity(path: string, error: string): DirectoryIdentit
   if ((stat.mode & 0o077) !== 0 || (uid !== undefined && stat.uid !== uid)) throw new Error(error);
   return Object.freeze({ dev: stat.dev, ino: stat.ino });
 }
-
 function canonicalDirectory(value: string, error: string): string {
   const path = normalizedAbsolute(value, error);
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync(path) !== path) throw new Error(error);
   return path;
 }
-
 function normalizedAbsolute(value: string, label: string): string {
   if (!isAbsolute(value) || resolve(value) !== value || value.includes('\0')) {
     throw new TypeError(`${label} must be an absolute normalized path`);
   }
   return value;
 }
-
 function assertAbsent(path: string, error: string): void {
   if (existsSync(path)) throw new Error(error);
 }
-
 function assertSameDirectory(left: DirectoryIdentity, right: DirectoryIdentity, error: string): void {
   if (left.dev !== right.dev || left.ino !== right.ino) throw new Error(error);
 }
-
 function pathsOverlap(left: string, right: string): boolean {
   const delta = relative(left, right);
   const inverse = relative(right, left);

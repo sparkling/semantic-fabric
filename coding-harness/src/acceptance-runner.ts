@@ -69,6 +69,9 @@ export class Issue8AcceptanceRunner {
     build: CandidateBuild,
     signal?: AbortSignal,
   ): Promise<AcceptanceGateEvidence> {
+    if (build.candidate.tree !== this.#options.task.sourceFix.tree) {
+      throw new Error('HARNESS_ISSUE_8_CANDIDATE_SOURCE_FIX_MISMATCH');
+    }
     const root = this.#options.worktrees.verifierRoot('independent');
     const outputRoot = this.#options.worktrees.outputRoot('independent');
     const commands: CommandEvidence[] = [];

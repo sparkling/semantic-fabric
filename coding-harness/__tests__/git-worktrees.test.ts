@@ -261,6 +261,10 @@ describe('isolated Git candidate and evaluator worktrees', () => {
 
     await worktrees.installFrozenOverlay(source, 'Cargo.lock', digest);
     worktrees.verifyFrozenOverlay('Cargo.lock', digest);
+    await worktrees.assertCandidateSourceStable();
+    for (const stage of ['public', 'independent', 'regression'] as const) {
+      await worktrees.assertVerifierSourceStable(stage);
+    }
     for (const laneRoot of [
       prepared.evaluatorRoot,
       prepared.candidateRoot,

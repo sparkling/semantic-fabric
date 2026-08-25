@@ -62,6 +62,7 @@ describe('issue #8 acceptance gates', () => {
     });
     const task = {
       taskId: 'gate_task_0001',
+      sourceFix: { commit, tree },
       tools: ['cargo'],
       redBaseline: {
         commands: [{ commandId: 'red-baseline', command: command(['--offline', 'test', '--locked']) }],
@@ -88,6 +89,11 @@ describe('issue #8 acceptance gates', () => {
     });
 
     const red = await runner.redBaseline(prepared);
+    await expect(runner.mutations({
+      candidate: { commit, tree: '0'.repeat(40) },
+      commands: [buildEvidence('0'.repeat(40), 2)],
+      artifactDigests: {},
+    })).rejects.toThrow('HARNESS_ISSUE_8_CANDIDATE_SOURCE_FIX_MISMATCH');
     const mutation = await runner.mutations({
       candidate: { commit, tree },
       commands: [buildEvidence(tree, 2)],

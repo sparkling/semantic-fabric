@@ -35,7 +35,7 @@ function git(cwd: string, args: string[]): string {
   return result.stdout.trim();
 }
 
-function repository(): { root: string; commit: string; patch: string } {
+function repository(): { root: string; commit: string; sourceTree: string; patch: string } {
   const root = mkdtempSync(join(tmpdir(), 'coding-harness-operations-repo-'));
   roots.push(root);
   mkdirSync(join(root, 'src'));
@@ -49,8 +49,10 @@ function repository(): { root: string; commit: string; patch: string } {
   const commit = git(root, ['rev-parse', 'HEAD']);
   writeFileSync(join(root, 'src/file.txt'), 'after\n');
   const patch = `${git(root, ['diff', '--binary', '--', 'src/file.txt'])}\n`;
+  git(root, ['add', '--', 'src/file.txt']);
+  const sourceTree = git(root, ['write-tree']);
   git(root, ['reset', '--hard', '--quiet', 'HEAD']);
-  return { root, commit, patch };
+  return { root, commit, sourceTree, patch };
 }
 
 function command(mode: 'artifact' | 'success'): StructuredCommand {
@@ -88,7 +90,7 @@ function context(
     runId: 'run-operations-0001',
     taskId: 'task-operations-0001',
     authority: 'development-only-no-promotion',
-    identities: { baseline, evaluator: baseline },
+    identities: { controller: baseline, baseline, evaluator: baseline },
     protectedInputs: { 'protected.txt': protectedDigest },
     route: {
       snapshotDigest: 'b'.repeat(64),
@@ -106,6 +108,7 @@ function context(
       },
     ],
     toolVersions: { git: 'test', node: process.version },
+    requiredQeProfiles: ['lcov-gap', 'sast'],
     rufloEvidence: {
       schemaVersion: 1,
       source: 'ruflo-coordination-ledger',
@@ -166,6 +169,7 @@ describe('repository operations integration', () => {
       config,
       baselineCommit: fixture.commit,
       evaluatorCommit: fixture.commit,
+      expectedCandidate: { commit: fixture.commit, tree: fixture.sourceTree },
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: 'task-operations-0001',
@@ -185,19 +189,15 @@ describe('repository operations integration', () => {
       model,
       offlineIsolator,
       offlineEnvironment: { PATH: process.env.PATH, HOME: '/home/harness' },
-      agenticQeEvidence: async (candidateBuild) => [{
-        schemaVersion: 1,
-        source: 'agentic-qe-local-profile',
-        profile: 'quality-contract',
-        taskId: 'task-operations-0001',
-        runId: 'run-operations-0001',
+      agenticQeEvidence: async (candidateBuild) => ['lcov-gap', 'sast'].map((profile) => ({
+        schemaVersion: 1, source: 'agentic-qe-local-profile', profile,
+        taskId: 'task-operations-0001', runId: 'run-operations-0001',
         candidateTree: candidateBuild.candidate.tree,
-        commandDigest: digestValue('qe-command'),
-        outputDigest: digestValue('qe-output'),
-        providerVariablesStripped: true,
-        authoritative: false,
+        commandDigest: digestValue(`qe-command-${profile}`),
+        outputDigest: digestValue(`qe-output-${profile}`),
+        providerVariablesStripped: true, authoritative: false,
         capturedAt: '2026-08-25T12:00:30.000Z',
-      }],
+      })),
       preflightEvidence: async (prepared) => ({
         passed: true,
         reasons: [],
@@ -237,8 +237,8 @@ describe('repository operations integration', () => {
       spawnErrorDigest: null,
     });
     expect(Object.keys(result.receipt.verifierDigests).sort()).toEqual([
-      'attempt-0:independent', 'attempt-0:public', 'attempt-0:regression',
-      'mutation', 'red-baseline',
+      'attempt-0:independent', 'attempt-0:mutation', 'attempt-0:public',
+      'attempt-0:regression', 'red-baseline',
     ]);
     expect(result.receipt.protectedInputs['protected.txt']).toMatch(/^[a-f0-9]{64}$/);
     expect(transaction.receipts.verify()).toEqual({ ok: true });
@@ -288,6 +288,7 @@ describe('repository operations integration', () => {
       config,
       baselineCommit: fixture.commit,
       evaluatorCommit: fixture.commit,
+      expectedCandidate: { commit: fixture.commit, tree: fixture.sourceTree },
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: 'task-composite-0001',
@@ -324,6 +325,77 @@ describe('repository operations integration', () => {
     writeFileSync(join(prePrepared.evaluatorRoot, 'protected.txt'), 'mutated evaluator\n');
     expect((await operations.verifyProtectedInputs()).reasons.join(' ')).toContain('protected.txt');
     await operations.cleanup();
+  });
+
+  it('rejects Agentic-QE evidence that mutates the independent verifier source', async () => {
+    const fixture = repository();
+    const parent = mkdtempSync(join(tmpdir(), 'coding-harness-qe-mutation-'));
+    roots.push(parent);
+    const worktrees = new GitWorktreeSet({
+      repositoryRoot: fixture.root,
+      runRoot: join(parent, 'run'),
+    });
+    const config = createTestConfig();
+    const buildCommand = command('artifact');
+    const verifyCommand = command('success');
+    const model: RepositoryModelController = {
+      architecture: async () => { throw new Error('not used'); },
+      implement: async () => { throw new Error('not used'); },
+      repair: async () => { throw new Error('not used'); },
+      review: async () => { throw new Error('not used'); },
+      recoveryEvidence: () => ({ retryCount: 0, breakerState: 'closed', events: [] }),
+    };
+    const operations = new RepositoryCandidateOperations({
+      worktrees,
+      config,
+      baselineCommit: fixture.commit,
+      evaluatorCommit: fixture.commit,
+      expectedCandidate: { commit: fixture.commit, tree: fixture.sourceTree },
+      taskForWorkspace: (candidateRoot) => parseTaskContract({
+        schemaVersion: 1,
+        taskId: 'task-qe-mutation-0001',
+        runId: 'run-qe-mutation-0001',
+        workspaceRoot: candidateRoot,
+        readablePaths: [],
+        mutablePaths: ['src/file.txt', 'build.out'],
+        protectedPaths: ['protected.txt'],
+        tools: ['node', 'apply_patch', 'git'],
+        commands: [buildCommand, verifyCommand],
+        network: { mode: 'offline', allowedOrigins: [] },
+        authority: 'development-only-no-promotion',
+      }, config),
+      buildCommands: [buildCommand],
+      verifierCommands: {
+        public: [verifyCommand], independent: [verifyCommand], regression: [verifyCommand],
+      },
+      artifactPaths: ['build.out'],
+      model,
+      offlineIsolator,
+      offlineEnvironment: { PATH: process.env.PATH, HOME: '/home/harness' },
+      agenticQeEvidence: async () => {
+        writeFileSync(
+          join(worktrees.verifierRoot('independent'), 'src/file.txt'),
+          'tampered by QE\n',
+        );
+        return [];
+      },
+      preflightEvidence: async () => ({ passed: true, reasons: [], commands: [], digests: {} }),
+      mutationEvidence: async () => ({ passed: true, reasons: [], commands: [], digests: {} }),
+    });
+    try {
+      await operations.prepare();
+      await operations.resetCandidate();
+      const admission = await operations.admitAndApply({
+        payload: fixture.patch,
+        authorInvocationId: 'author-qe-mutation',
+      });
+      const candidateBuild = await operations.build(admission, 0);
+      await expect(operations.agenticQeEvidence(candidateBuild)).rejects.toThrow(
+        'HARNESS_VERIFIER_SOURCE_MUTATED:independent',
+      );
+    } finally {
+      await operations.cleanup();
+    }
   });
 });
 

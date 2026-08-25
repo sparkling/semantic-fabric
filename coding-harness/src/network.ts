@@ -13,6 +13,10 @@ import {
 import { assertNativeSubscriptionEnvironment } from './models/environment.js';
 import type { NativeAuthentication, NativeHost } from './models/types.js';
 import { createSystemOfflineIsolator } from './sandbox.js';
+import {
+  parseWritableFileOverlays,
+  type WritableFileOverlay,
+} from './writable-overlays.js';
 
 export {
   createSystemOfflineIsolator,
@@ -26,6 +30,7 @@ export interface BoundaryCommand {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
   readonly writablePaths: readonly string[];
+  readonly writableOverlays?: readonly WritableFileOverlay[];
 }
 
 export interface OfflineIsolationResult {
@@ -308,7 +313,11 @@ function parseRegistryPin(value: unknown): RegistryPinResult {
 
 export function parseBoundaryCommand(value: unknown, label: string): BoundaryCommand {
   const input = asRecord(value, label);
-  assertExactKeys(input, ['executable', 'args', 'cwd', 'env', 'writablePaths'], label);
+  const hasOverlays = Object.hasOwn(input, 'writableOverlays');
+  assertExactKeys(input, [
+    'executable', 'args', 'cwd', 'env', 'writablePaths',
+    ...(hasOverlays ? ['writableOverlays'] : []),
+  ], label);
   const executable = byteString(input.executable, `${label}.executable`, false);
   if (!Array.isArray(input.args)) throw new TypeError(`${label}.args must be an array`);
   const args = input.args.map((entry, index) => byteString(entry, `${label}.args[${index}]`, true));
@@ -325,12 +334,16 @@ export function parseBoundaryCommand(value: unknown, label: string): BoundaryCom
   if (new Set(writablePaths).size !== writablePaths.length) {
     throw new TypeError(`${label}.writablePaths must not contain duplicates`);
   }
+  const overlays = hasOverlays
+    ? parseWritableFileOverlays(input.writableOverlays, `${label}.writableOverlays`)
+    : undefined;
   return deepFreeze({
     executable,
     args,
     cwd,
     env: parseEnvironment(input.env, `${label}.env`),
     writablePaths,
+    ...(overlays === undefined ? {} : { writableOverlays: overlays }),
   });
 }
 
@@ -430,6 +443,8 @@ export function assertBoundaryCommandBinding(
     throw new Error(error);
   }
   if (JSON.stringify(source.writablePaths) !== JSON.stringify(bounded.writablePaths)) throw new Error(error);
+  if (JSON.stringify(source.writableOverlays ?? [])
+    !== JSON.stringify(bounded.writableOverlays ?? [])) throw new Error(error);
   if (sameLaunch(source, bounded)) {
     if (wrapperRequired) throw new Error(error);
     return;

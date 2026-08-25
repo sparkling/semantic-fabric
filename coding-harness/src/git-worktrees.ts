@@ -4,6 +4,10 @@ import { constants, existsSync, lstatSync, readFileSync, realpathSync } from 'no
 import { chmod, copyFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { normalizeWorkspacePath } from './contracts.js';
+import {
+  assertGitMaterializationSafe,
+  assertRawIndexMatchesWorkingTree,
+} from './git-materialization.js';
 import { gitAbortError, runGitCommand, type GitCommandResult } from './git-process.js';
 import type { GitIdentity } from './receipts.js';
 export interface PreparedWorktrees {
@@ -14,7 +18,6 @@ export interface PreparedWorktrees {
   evaluatorRoot: string;
   verifierRoots: Readonly<Record<VerifierWorkspace, string>>;
 }
-
 export interface AppliedPatch {
   candidate: GitIdentity;
   patchDigest: string;
@@ -27,7 +30,6 @@ export type ExecutionLane = 'evaluator' | 'candidate' | VerifierWorkspace;
 const VERIFIER_WORKSPACES = Object.freeze([
   'public', 'independent', 'regression'] as const satisfies readonly VerifierWorkspace[]);
 type DirectoryIdentity = Readonly<{ dev: bigint; ino: bigint }>;
-
 export class GitWorktreeSet {
   readonly #repositoryRoot: string;
   readonly #repositoryIdentity: DirectoryIdentity;
@@ -39,6 +41,7 @@ export class GitWorktreeSet {
   readonly #verifierRoots: Readonly<Record<VerifierWorkspace, string>>;
   readonly #outputRoots: Readonly<Record<ExecutionLane, string>>;
   readonly #registered = new Set<string>();
+  readonly #installedOverlayPaths = new Set<string>();
   #baseline: GitIdentity | null = null;
   #evaluator: GitIdentity | null = null;
   #preparation: PreparedWorktrees | null = null;
@@ -69,7 +72,6 @@ export class GitWorktreeSet {
       regression: resolve(this.#runRoot, 'outputs', 'regression'),
     });
   }
-
   async prepare(
     baselineCommit: string,
     evaluatorCommit: string,
@@ -88,6 +90,7 @@ export class GitWorktreeSet {
     assertAbsent(this.#runRoot);
     await this.#assertCommit(baselineCommit, signal);
     await this.#assertCommit(evaluatorCommit, signal);
+    await this.#assertMaterializationSafe([baselineCommit, evaluatorCommit], signal);
     await mkdir(this.#runRoot, { mode: 0o700 });
     try {
       this.#runRootIdentity = directoryIdentity(this.#runRoot, 'HARNESS_WORKTREE_ROOT_NOT_PRIVATE', 'private');
@@ -107,6 +110,7 @@ export class GitWorktreeSet {
       await this.#assertClean(this.#candidateRoot);
       await this.#assertClean(this.#evaluatorRoot);
       for (const stage of VERIFIER_WORKSPACES) await this.#assertClean(this.#verifierRoots[stage]);
+      await this.#assertMaterializationSafe([baselineCommit, evaluatorCommit], signal);
       this.#preparation = Object.freeze({
         baseline: this.#baseline,
         evaluator: this.#evaluator,
@@ -170,6 +174,7 @@ export class GitWorktreeSet {
   }
   async resetCandidate(signal?: AbortSignal): Promise<void> {
     this.#assertPrepared();
+    await this.#assertMaterializationSafe([this.#evaluator!.commit], signal);
     for (const root of this.#overlayRoots()) {
       this.#assertOwnedRunRoot();
       this.#assertControlledPath(root);
@@ -177,6 +182,7 @@ export class GitWorktreeSet {
       await this.#git(root, ['clean', '-fdx', '--'], undefined, signal);
       await this.#assertClean(root, signal);
     }
+    await this.#assertMaterializationSafe([this.#evaluator!.commit], signal);
     for (const lane of ['candidate', ...VERIFIER_WORKSPACES] as const) {
       const output = this.#outputRoots[lane];
       this.#assertOwnedRunRoot();
@@ -224,7 +230,7 @@ export class GitWorktreeSet {
     this.#assertPrepared();
     await this.#assertSourceStable(
       this.#candidateRoot,
-      allowedUntrackedPaths,
+      [...allowedUntrackedPaths, ...this.#installedOverlayPaths],
       'HARNESS_CANDIDATE_SOURCE_MUTATED_AFTER_ADMISSION',
       signal,
     );
@@ -233,7 +239,7 @@ export class GitWorktreeSet {
     this.#assertPrepared();
     await this.#assertSourceStable(
       this.#verifierRoots[stage],
-      [],
+      [...this.#installedOverlayPaths],
       `HARNESS_VERIFIER_SOURCE_MUTATED:${stage}`,
       signal,
     );
@@ -263,6 +269,7 @@ export class GitWorktreeSet {
       validateFrozenFile(target, digest, 'HARNESS_FROZEN_OVERLAY_DIGEST_MISMATCH');
       await chmod(target, 0o444);
     }
+    this.#installedOverlayPaths.add(relativePath);
   }
   verifyFrozenOverlay(workspacePath: string, digest: string): void {
     this.#assertPrepared();
@@ -295,6 +302,7 @@ export class GitWorktreeSet {
       throw new AggregateError(failures, 'HARNESS_WORKTREE_CLEANUP_FAILED');
     }
     this.#registered.clear();
+    this.#installedOverlayPaths.clear();
     this.#preparation = null;
     this.#baseline = null;
     this.#evaluator = null;
@@ -331,6 +339,11 @@ export class GitWorktreeSet {
     )).stdout);
     const allowed = new Set(allowedUntrackedPaths);
     if (untracked.some((path) => !allowed.has(path))) throw new Error(error);
+    try {
+      await assertRawIndexMatchesWorkingTree({ workspaceRoot: root, signal });
+    } catch {
+      throw new Error(error);
+    }
   }
   async #applyChecked(
     root: string,
@@ -349,16 +362,14 @@ export class GitWorktreeSet {
     if (JSON.stringify(changed) !== JSON.stringify([...admittedPaths].sort())) {
       throw new Error('HARNESS_PATCH_ADMISSION_CHANGED');
     }
+    await assertRawIndexMatchesWorkingTree({ workspaceRoot: root, signal });
   }
-
   #mutableRoots(): readonly string[] {
     return [this.#candidateRoot, ...VERIFIER_WORKSPACES.map((stage) => this.#verifierRoots[stage])];
   }
-
   #overlayRoots(): readonly string[] {
     return [this.#evaluatorRoot, ...this.#mutableRoots()];
   }
-
   async #identityForCommit(commit: string, signal?: AbortSignal): Promise<GitIdentity> {
     const resolvedCommit = (await this.#git(this.#repositoryRoot, ['rev-parse', '--verify', `${commit}^{commit}`], undefined, signal)).stdout.trim();
     const tree = (await this.#git(this.#repositoryRoot, ['rev-parse', '--verify', `${commit}^{tree}`], undefined, signal)).stdout.trim();
@@ -366,7 +377,6 @@ export class GitWorktreeSet {
     assertGitObject(tree, 'resolved tree');
     return Object.freeze({ commit: resolvedCommit, tree });
   }
-
   async #identityAt(cwd: string, indexTree: boolean, signal?: AbortSignal): Promise<GitIdentity> {
     const commit = (await this.#git(cwd, ['rev-parse', '--verify', 'HEAD'], undefined, signal)).stdout.trim();
     const tree = (await this.#git(cwd, indexTree ? ['write-tree'] : ['rev-parse', '--verify', 'HEAD^{tree}'], undefined, signal)).stdout.trim();
@@ -374,53 +384,49 @@ export class GitWorktreeSet {
     assertGitObject(tree, 'worktree tree');
     return Object.freeze({ commit, tree });
   }
-
   async #assertCommit(commit: string, signal?: AbortSignal): Promise<void> {
     await this.#git(this.#repositoryRoot, ['cat-file', '-e', `${commit}^{commit}`], undefined, signal);
+  }
+  async #assertMaterializationSafe(commits: readonly string[], signal?: AbortSignal): Promise<void> {
+    await assertGitMaterializationSafe({ repositoryRoot: this.#repositoryRoot, commits, signal });
   }
   async #assertClean(cwd: string, signal?: AbortSignal): Promise<void> {
     const status = await this.#git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], undefined, signal);
     if (status.stdout !== '') throw new Error('HARNESS_WORKTREE_NOT_CLEAN');
+    await assertRawIndexMatchesWorkingTree({ workspaceRoot: cwd, signal });
   }
-
   #assertPrepared(): void {
     if (this.#preparation === null || this.#baseline === null || this.#evaluator === null) {
       throw new Error('HARNESS_WORKTREES_NOT_PREPARED');
     }
     this.#assertOwnedRunRoot();
   }
-
   #assertTrustedParent(): void {
     const current = directoryIdentity(this.#runParent, 'HARNESS_WORKTREE_PARENT_CHANGED', 'trusted');
     if (!sameDirectory(current, this.#parentIdentity)) throw new Error('HARNESS_WORKTREE_PARENT_CHANGED');
   }
-
   #assertRepositoryRoot(): void {
     const current = directoryIdentity(this.#repositoryRoot, 'HARNESS_REPOSITORY_ROOT_CHANGED');
     if (!sameDirectory(current, this.#repositoryIdentity)) throw new Error('HARNESS_REPOSITORY_ROOT_CHANGED');
   }
-
   #assertOwnedRunRoot(): void {
     if (this.#runRootIdentity === null) throw new Error('HARNESS_WORKTREE_ROOT_OWNERSHIP_UNPROVEN');
     this.#assertTrustedParent();
     const current = directoryIdentity(this.#runRoot, 'HARNESS_WORKTREE_ROOT_OWNERSHIP_CHANGED', 'private');
     if (!sameDirectory(current, this.#runRootIdentity)) throw new Error('HARNESS_WORKTREE_ROOT_OWNERSHIP_CHANGED');
   }
-
   #assertControlledPath(path: string): void {
     const child = relative(this.#runRoot, path);
     if (child === '' || child.startsWith(`..${sep}`) || child === '..' || isAbsolute(child)) {
       throw new Error('HARNESS_WORKTREE_PATH_UNCONTROLLED');
     }
   }
-
   async #registeredWorktreePaths(): Promise<Set<string>> {
     const result = await this.#git(this.#repositoryRoot, ['worktree', 'list', '--porcelain']);
     return new Set(result.stdout.split('\n')
       .filter((line) => line.startsWith('worktree '))
       .map((line) => line.slice('worktree '.length)));
   }
-
   async #git(cwd: string, args: string[], stdin?: string, signal?: AbortSignal): Promise<GitCommandResult> {
     this.#assertRepositoryRoot();
     const result = await runGitCommand(cwd, args, { stdin, signal });
@@ -428,22 +434,18 @@ export class GitWorktreeSet {
     return result;
   }
 }
-
 function assertActive(signal?: AbortSignal): void {
   if (signal?.aborted === true) throw gitAbortError();
 }
-
 function validateFrozenFile(path: string, digest: string, error: string, requireReadOnly = false): void {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1
     || realpathSync(path) !== path || fileDigest(path) !== digest
     || (requireReadOnly && (stat.mode & 0o222) !== 0)) throw new Error(error);
 }
-
 function fileDigest(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
-
 function parseNumstat(value: string): string[] {
   const paths: string[] = [];
   for (const record of value.split('\0').filter(Boolean)) {
@@ -453,17 +455,14 @@ function parseNumstat(value: string): string[] {
   }
   return [...new Set(paths)].sort();
 }
-
 function parseNullPaths(value: string): string[] {
   return [...new Set(value.split('\0').filter(Boolean).map((path) =>
     normalizeWorkspacePath(path, 'changed path')))].sort();
 }
-
 function normalizedAbsolute(value: string, label: string): string {
   if (!isAbsolute(value) || resolve(value) !== value || value.includes('\0')) throw new TypeError(`${label} must be an absolute normalized path`);
   return value;
 }
-
 function assertAbsent(path: string): void {
   try {
     lstatSync(path);
@@ -473,7 +472,6 @@ function assertAbsent(path: string): void {
   }
   throw new Error('HARNESS_WORKTREE_ROOT_NOT_ABSENT');
 }
-
 function directoryIdentity(path: string, error: string, mode?: 'private' | 'trusted'): DirectoryIdentity {
   const stat = lstatSync(path, { bigint: true });
   const uid = process.getuid?.();
@@ -483,17 +481,13 @@ function directoryIdentity(path: string, error: string, mode?: 'private' | 'trus
     || (mode !== undefined && uid !== undefined && stat.uid !== BigInt(uid))) throw new Error(error);
   return Object.freeze({ dev: stat.dev, ino: stat.ino });
 }
-
 function sameDirectory(left: DirectoryIdentity, right: DirectoryIdentity): boolean { return left.dev === right.dev && left.ino === right.ino; }
-
 function pathsOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}${sep}`) || right.startsWith(`${left}${sep}`);
 }
-
 function assertGitObject(value: string, label: string): void {
   if (!GIT_OBJECT.test(value)) throw new TypeError(`${label} is not a Git object ID`);
 }
-
 function sameIdentity(left: GitIdentity, right: GitIdentity): boolean {
   return left.commit === right.commit && left.tree === right.tree;
 }

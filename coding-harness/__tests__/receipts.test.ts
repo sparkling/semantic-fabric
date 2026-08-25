@@ -9,7 +9,7 @@ const timestamp = '2026-08-25T00:00:00.000Z';
 
 function draft(step = 'build') {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId: 'run-0001',
     taskId: 'task-0001',
     step,
@@ -17,6 +17,7 @@ function draft(step = 'build') {
     authority: 'development-only-no-promotion',
     issuedAt: timestamp,
     identities: {
+      controller: { commit: gitCommit, tree: gitTree },
       baseline: { commit: gitCommit, tree: gitTree },
       evaluator: { commit: gitCommit, tree: gitTree },
       candidate: { commit: gitCommit, tree: gitTree },
@@ -98,7 +99,7 @@ function passDraft() {
     { ...command, stage: 'mutation', candidateTree, exitCode: 101 },
   ];
   value.verifierDigests = {
-    'red-baseline': digestValue('red'), mutation: digestValue('mutation'),
+    'red-baseline': digestValue('red'), 'attempt-0:mutation': digestValue('mutation'),
     'attempt-0:public': digestValue('public'),
     'attempt-0:independent': digestValue('independent'),
     'attempt-0:regression': digestValue('regression'),
@@ -152,6 +153,11 @@ describe('strict receipt schema', () => {
 });
 
 describe('receipt chain', () => {
+  it('rejects legacy v1 chains after the evidence-shape version bump', () => {
+    expect(() => ReceiptChain.import(JSON.stringify({ schemaVersion: 1, receipts: [] })))
+      .toThrow(/schemaVersion 2/);
+  });
+
   it('chains canonical receipts and round-trips verified evidence', () => {
     const chain = new ReceiptChain();
     const first = chain.append(draft('build'));

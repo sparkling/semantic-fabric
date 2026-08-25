@@ -132,6 +132,8 @@ function gitEnvironment(extra?: Readonly<Record<string, string>>): NodeJS.Proces
     LC_ALL: 'C',
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_NO_REPLACE_OBJECTS: '1',
+    GIT_NO_LAZY_FETCH: '1',
     GIT_ATTR_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
     GIT_ASKPASS: process.platform === 'win32' ? 'cmd.exe /c exit 1' : '/bin/false',

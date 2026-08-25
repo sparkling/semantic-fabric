@@ -87,7 +87,7 @@ export async function materializeEvaluatorCommit(input: Readonly<{
     };
     const commit = (await gitChecked(
       repositoryRoot,
-      ['commit-tree', tree, '-p', input.baselineCommit],
+      ['commit-tree', '--no-gpg-sign', tree, '-p', input.baselineCommit],
       input.signal,
       `Frozen evaluator for ${input.taskId}\n`,
       commitEnvironment,

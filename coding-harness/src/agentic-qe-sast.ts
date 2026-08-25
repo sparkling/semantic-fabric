@@ -28,6 +28,10 @@ import {
 } from './agentic-qe-sast-response.js';
 import { parseAgenticQeEvidence, type AgenticQeEvidence } from './evidence.js';
 import { runGitCommand, type GitCommandResult } from './git-process.js';
+import {
+  assertGitMaterializationSafe,
+  assertRawIndexMatchesWorkingTree,
+} from './git-materialization.js';
 import { digestValue } from './receipts.js';
 
 export { AGENTIC_QE_SAST_TOOL } from './agentic-qe-sast-response.js';
@@ -153,9 +157,16 @@ export class AgenticQeSastEvidenceAdapter {
     let commandDigest: string | undefined;
     const failures: unknown[] = [];
     try {
+      await assertGitMaterializationSafe({ repositoryRoot: input.candidateRoot, signal });
       await gitChecked(input.candidateRoot, [
         'checkout-index', '--all', `--prefix=${snapshotRoot}${sep}`,
       ], signal);
+      await assertRawIndexMatchesWorkingTree({
+        workspaceRoot: snapshotRoot,
+        repositoryRoot: input.candidateRoot,
+        signal,
+      });
+      await assertGitMaterializationSafe({ repositoryRoot: input.candidateRoot, signal });
       snapshot = captureSnapshot(snapshotRoot);
       await assertCandidateRoot(
         input.candidateRoot,

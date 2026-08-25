@@ -31,6 +31,7 @@ export interface RustOfflineProfileOptions {
   readonly bwrapExecutable: string;
   readonly resourceBoundary: NativeResourceBoundary;
   readonly resourceLimits: NativeResourceLimits;
+  readonly assertClosureStable?: () => void;
 }
 
 export interface RustOfflineProfile {
@@ -83,20 +84,48 @@ export function createRustOfflineProfile(options: RustOfflineProfileOptions): Ru
     CARGO_NET_OFFLINE: 'true',
     CARGO_INCREMENTAL: '0',
   });
-  const isolator = createSystemOfflineIsolator({
+  let isolator: OfflineProcessIsolator = createSystemOfflineIsolator({
       writableRoot: options.writableRoot,
       readOnlyMounts: mounts,
       executablePath: options.bwrapExecutable,
       resourceBoundary: options.resourceBoundary,
       resourceLimits: options.resourceLimits,
     });
+  if (cargoExtension !== null) isolator = extensionStableIsolator(isolator, cargoExtension);
+  if (options.assertClosureStable !== undefined) {
+    if (typeof options.assertClosureStable !== 'function') {
+      throw new TypeError('HARNESS_RUST_CLOSURE_ASSERTION_INVALID');
+    }
+    options.assertClosureStable();
+    isolator = closureStableIsolator(isolator, options.assertClosureStable);
+  }
   return Object.freeze({
-    isolator: cargoExtension === null
-      ? isolator
-      : extensionStableIsolator(isolator, cargoExtension),
+    isolator,
     cargoExecutable: '/toolchain/bin/cargo',
     environment,
     readOnlyMounts: Object.freeze(mounts),
+  });
+}
+
+function closureStableIsolator(
+  isolator: OfflineProcessIsolator,
+  assertClosureStable: () => void,
+): OfflineProcessIsolator {
+  return Object.freeze({
+    assertStable() {
+      assertClosureStable();
+      isolator.assertStable();
+      assertClosureStable();
+    },
+    isolate(command: BoundaryCommand) {
+      assertClosureStable();
+      const isolated = isolator.isolate(command);
+      assertClosureStable();
+      return isolated;
+    },
+    launchEnvironment(environment: Readonly<Record<string, string>>) {
+      return isolator.launchEnvironment?.(environment) ?? environment;
+    },
   });
 }
 

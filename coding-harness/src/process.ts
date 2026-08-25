@@ -7,9 +7,11 @@ import type { HarnessConfig, StructuredCommand } from './contracts.js';
 import { isForbiddenEnvironmentName, parseStructuredCommand } from './contracts.js';
 import {
   isolateOfflineCandidateCommand,
+  type BoundaryCommand,
   type OfflineProcessIsolator,
 } from './network.js';
 import { resolveWorkspacePath } from './workspace.js';
+import type { WritableFileOverlay } from './writable-overlays.js';
 
 export interface ProcessContext {
   workspaceRoot: string;
@@ -23,6 +25,7 @@ export interface ProcessContext {
         kind: 'offline-candidate';
         isolator: OfflineProcessIsolator;
         writablePaths: readonly string[];
+        writableOverlays?: readonly WritableFileOverlay[];
       };
 }
 
@@ -88,13 +91,13 @@ export async function runStructuredProcess(
       stage: 'candidate-execution',
       deterministic: true,
       allowedOrigins: [],
-      command: {
+      command: boundaryCommand({
         executable: command.executable,
         args: command.argv,
         cwd,
-        env,
+        env: definedEnvironment(env),
         writablePaths: context.boundary.writablePaths,
-      },
+      }, context.boundary.writableOverlays),
     }, context.boundary.isolator).command;
   if (context.boundary.kind === 'offline-candidate') context.boundary.isolator.assertStable();
   const launchEnvironment = context.boundary.kind === 'offline-candidate'
@@ -172,6 +175,13 @@ export async function runStructuredProcess(
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
       context.signal?.removeEventListener('abort', abort);
+      if (context.boundary?.kind === 'offline-candidate') {
+        try {
+          context.boundary.isolator.assertStable();
+        } catch (error) {
+          spawnError ??= errorMessage(error);
+        }
+      }
       resolveResult(finishedResult({
         started,
         startedAt,
@@ -186,6 +196,15 @@ export async function runStructuredProcess(
       }));
     });
   });
+}
+
+function boundaryCommand(
+  command: BoundaryCommand,
+  overlays: readonly WritableFileOverlay[] | undefined,
+): BoundaryCommand {
+  return overlays === undefined || overlays.length === 0
+    ? command
+    : { ...command, writableOverlays: overlays };
 }
 
 function definedEnvironment(

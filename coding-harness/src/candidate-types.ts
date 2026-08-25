@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import type { DEVELOPMENT_AUTHORITY } from './contracts.js';
-import type { NativeInvocationExpectation } from './evidence.js';
+import type { AgenticQeProfile, NativeInvocationExpectation } from './evidence.js';
 import type { NativeHost } from './models/types.js';
 import type { GateDecision } from './policy.js';
 import type {
@@ -18,11 +18,12 @@ export interface CandidateTransactionContext {
   runId: string;
   taskId: string;
   authority: typeof DEVELOPMENT_AUTHORITY;
-  identities: Pick<ReceiptDraft['identities'], 'baseline' | 'evaluator'>;
+  identities: Pick<ReceiptDraft['identities'], 'controller' | 'baseline' | 'evaluator'>;
   protectedInputs: Record<string, string>;
   route: ReceiptDraft['route'];
   hosts: HostEvidence[];
   toolVersions: Record<string, string>;
+  requiredQeProfiles: AgenticQeProfile[];
   rufloEvidence: unknown;
 }
 
@@ -62,6 +63,7 @@ export interface VerifierEvidence {
   passed: boolean;
   digest: string;
   reasons: string[];
+  generatedOutputDigests?: Readonly<Record<string, string>>;
 }
 
 export interface CandidateReview {
@@ -86,6 +88,7 @@ export interface CandidateOperations {
   ): Promise<PatchSubmission>;
   resetCandidate(signal?: AbortSignal): Promise<void>;
   admitAndApply(patch: PatchSubmission, signal?: AbortSignal): Promise<PatchAdmission>;
+  validateAdmission(admission: PatchAdmission, signal?: AbortSignal): Promise<readonly string[]>;
   build(admission: PatchAdmission, attempt: number, signal?: AbortSignal): Promise<CandidateBuild>;
   verify(stage: VerifierStage, build: CandidateBuild, signal?: AbortSignal): Promise<VerifierEvidence>;
   review(host: NativeHost, build: CandidateBuild, signal?: AbortSignal): Promise<CandidateReview>;

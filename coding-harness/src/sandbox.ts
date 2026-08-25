@@ -14,6 +14,7 @@ import {
   type NativeResourceBoundary,
   type NativeResourceLimits,
 } from './resource-boundary.js';
+import type { WritableFileOverlay } from './writable-overlays.js';
 
 export interface ReadOnlyMount {
   readonly source: string;
@@ -80,6 +81,9 @@ function systemIsolator(
       }
       const commandMount = Object.freeze({ source: cwd, destination: cwd });
       const visibleMounts = [...mounts, commandMount];
+      const overlays = validateWritableOverlays(
+        command.writableOverlays ?? [], writableRoot, cwd, writable,
+      );
       assertVisible(command.executable, visibleMounts, 'HARNESS_OFFLINE_EXECUTABLE_NOT_MOUNTED');
       const directories = parentDirectories([
         '/dev', '/proc', '/tmp', '/run', '/home/harness',
@@ -92,6 +96,7 @@ function systemIsolator(
         '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/run',
         ...visibleMounts.flatMap(({ source, destination }) => ['--ro-bind', source, destination]),
         ...writable.flatMap((path) => ['--bind', path, path]),
+        ...overlays.flatMap(({ source, destination }) => ['--bind', source, destination]),
         ...Object.entries(command.env).flatMap(([name, value]) => ['--setenv', name, value]),
         '--chdir', command.cwd, '--',
       ];
@@ -107,6 +112,35 @@ function systemIsolator(
         command: bounded.command,
       });
     },
+  });
+}
+
+function validateWritableOverlays(
+  overlays: readonly WritableFileOverlay[],
+  writableRoot: string,
+  cwd: string,
+  writablePaths: readonly string[],
+): readonly WritableFileOverlay[] {
+  const sources = new Set<string>();
+  const destinations = new Set<string>();
+  return overlays.map(({ source: sourceValue, destination: destinationValue }) => {
+    const source = validateExistingPath(sourceValue, 'HARNESS_OFFLINE_OVERLAY_SOURCE_INVALID');
+    const destination = validateExistingPath(
+      destinationValue,
+      'HARNESS_OFFLINE_OVERLAY_DESTINATION_INVALID',
+    );
+    const sourceStat = lstatSync(source);
+    const destinationStat = lstatSync(destination);
+    if (!sourceStat.isFile() || sourceStat.nlink !== 1 || !destinationStat.isFile()
+      || destinationStat.nlink !== 1 || source === destination
+      || !contains(writableRoot, source) || !contains(cwd, destination)
+      || !writablePaths.some((path) => contains(path, source))
+      || sources.has(source) || destinations.has(destination)) {
+      throw new Error('HARNESS_OFFLINE_WRITABLE_OVERLAY_INVALID');
+    }
+    sources.add(source);
+    destinations.add(destination);
+    return Object.freeze({ source, destination });
   });
 }
 

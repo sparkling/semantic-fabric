@@ -6,10 +6,18 @@ import {
   digestValue,
   ReceiptChain,
   type CommandEvidence,
-  type GitIdentity,
 } from './receipts.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
+import {
+  assertDualHostArchitecture,
+  assertNonEmptyRecord,
+  assertProtectedInputSet,
+  assertRequiredQeProfiles,
+  assertSameIdentity,
+  prefixArtifacts,
+  runtimeTrustUnavailable,
+} from './candidate-gates.js';
 import { runAbortableCohort } from './parallel.js';
 import {
   bindExternalEvidence,
@@ -84,6 +92,9 @@ export class CandidateTransaction {
     }
     assertNonEmptyRecord(input.context.protectedInputs, 'HARNESS_PROTECTED_INPUTS_REQUIRED');
     assertNonEmptyRecord(input.context.toolVersions, 'HARNESS_TOOL_VERSIONS_REQUIRED');
+    if (input.context.requiredQeProfiles.length === 0) {
+      throw new Error('HARNESS_REQUIRED_QE_PROFILES_INVALID');
+    }
     this.#context = input.context;
     this.#operations = input.operations;
     this.#maxRepairs = input.maxRepairs;
@@ -171,6 +182,14 @@ export class CandidateTransaction {
         if (evidence.admission.candidate.tree === evidence.prepared.evaluator.tree) {
           throw new Error('HARNESS_CANDIDATE_TREE_UNCHANGED');
         }
+        const admissionFailures = await this.#operations.validateAdmission(
+          evidence.admission,
+          this.#signal,
+        );
+        if (admissionFailures.length > 0) {
+          patch = await this.#repairOrFail(patch, admissionFailures, evidence);
+          continue;
+        }
         let build: CandidateBuild;
         try {
           build = await this.#operations.build(
@@ -196,6 +215,11 @@ export class CandidateTransaction {
           if (verifier.stage !== requestedStage) throw new Error('HARNESS_VERIFIER_STAGE_MISMATCH');
           assertSameIdentity(verifier.candidate, build.candidate, 'HARNESS_STALE_VERIFIER_IDENTITY');
           evidence.verifiers[`${artifactPrefix}${verifier.stage}`] = verifier.digest;
+          for (const [name, digest] of Object.entries(verifier.generatedOutputDigests ?? {})) {
+            const key = `${artifactPrefix}${verifier.stage}:generated:${name}`;
+            if (key in evidence.verifiers) throw new Error('HARNESS_VERIFIER_DIGEST_COLLISION');
+            evidence.verifiers[key] = digest;
+          }
         }
         const verifierFailures = verifiers.filter(({ passed }) => !passed)
           .flatMap(({ stage, reasons }) => reasons.length === 0
@@ -237,6 +261,15 @@ export class CandidateTransaction {
           continue;
         }
 
+        const external = bindExternalEvidence({
+          taskId: this.#context.taskId,
+          runId: this.#context.runId,
+          candidateTree: build.candidate.tree,
+          ruflo: this.#ruflo,
+          qe: await this.#operations.agenticQeEvidence(build, this.#signal),
+        });
+        assertRequiredQeProfiles(external.qe, this.#context.requiredQeProfiles);
+        evidence.coordination.agenticQeEvidenceDigests = [...external.qeDigests];
         const [protectedInputs, mutableOutputs] = await runAbortableCohort([
           async (cohortSignal) => await this.#operations.verifyProtectedInputs(cohortSignal),
           async (cohortSignal) => await this.#operations.auditMutableOutputs(cohortSignal),
@@ -247,15 +280,14 @@ export class CandidateTransaction {
         if (!mutableOutputs.allow) {
           throw new Error(`HARNESS_MUTABLE_OUTPUT_GATE:${mutableOutputs.reasons.join('; ')}`);
         }
-        const external = bindExternalEvidence({
-          taskId: this.#context.taskId,
-          runId: this.#context.runId,
-          candidateTree: build.candidate.tree,
-          ruflo: this.#ruflo,
-          qe: await this.#operations.agenticQeEvidence(build, this.#signal),
-        });
-        if (external.qe.length === 0) throw new Error('HARNESS_AGENTIC_QE_EVIDENCE_REQUIRED');
-        evidence.coordination.agenticQeEvidenceDigests = [...external.qeDigests];
+        const finalAdmissionFailures = await this.#operations.validateAdmission(
+          evidence.admission,
+          this.#signal,
+        );
+        if (finalAdmissionFailures.length > 0) {
+          patch = await this.#repairOrFail(patch, finalAdmissionFailures, evidence);
+          continue;
+        }
         if (evidence.admission === null
           || createHash('sha256').update(patch.payload, 'utf8').digest('hex')
             !== evidence.admission.patchDigest) {
@@ -375,8 +407,9 @@ export class CandidateTransaction {
       }
     }
     for (const [name, digest] of Object.entries(gate.digests)) {
-      if (name in evidence.verifiers) throw new Error('HARNESS_ACCEPTANCE_DIGEST_COLLISION');
-      evidence.verifiers[name] = digest;
+      const key = stage === 'mutation' ? `attempt-${attempt}:${name}` : name;
+      if (key in evidence.verifiers) throw new Error('HARNESS_ACCEPTANCE_DIGEST_COLLISION');
+      evidence.verifiers[key] = digest;
     }
     evidence.commands.push(...gate.commands);
     if (!gate.passed) {
@@ -395,7 +428,7 @@ export class CandidateTransaction {
   ): CandidateTransactionResult {
     const cancelled = status === 'cancelled';
     const receipt = this.receipts.append({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: this.#context.runId,
       taskId: this.#context.taskId,
       step: 'candidate-transaction',
@@ -403,6 +436,7 @@ export class CandidateTransaction {
       authority: DEVELOPMENT_AUTHORITY,
       issuedAt: this.#now(),
       identities: {
+        controller: this.#context.identities.controller,
         baseline: evidence.prepared.baseline,
         evaluator: evidence.prepared.evaluator,
         candidate: evidence.admission?.candidate ?? evidence.prepared.candidate,
@@ -444,51 +478,5 @@ export class CandidateTransaction {
     return this.#signal?.aborted === true
       || error instanceof NativeCancellationError
       || (error instanceof Error && error.name === 'AbortError');
-  }
-}
-
-function runtimeTrustUnavailable(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.includes('HARNESS_NATIVE_TRUSTED_RUNTIME_UNAVAILABLE');
-}
-
-function prefixArtifacts(
-  artifacts: Readonly<Record<string, string>>,
-  repairCount: number,
-): Record<string, string> {
-  return Object.fromEntries(Object.entries(artifacts).map(([name, digest]) => [
-    `attempt-${repairCount}:${name}`,
-    digest,
-  ]));
-}
-
-function assertSameIdentity(left: GitIdentity, right: GitIdentity, message: string): void {
-  if (left.commit !== right.commit || left.tree !== right.tree) throw new Error(message);
-}
-
-function assertNonEmptyRecord(value: Readonly<Record<string, string>>, error: string): void {
-  if (Object.keys(value).length === 0) throw new Error(error);
-}
-
-function assertProtectedInputSet(
-  prepared: Readonly<Record<string, string>>,
-  expected: Readonly<Record<string, string>>,
-): void {
-  assertNonEmptyRecord(prepared, 'HARNESS_PROTECTED_INPUTS_REQUIRED');
-  const actualPaths = Object.keys(prepared).sort();
-  const expectedPaths = Object.keys(expected).sort();
-  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)
-    || actualPaths.some((path) => prepared[path] !== expected[path])) {
-    throw new Error('HARNESS_PROTECTED_INPUT_SET_MISMATCH');
-  }
-}
-
-function assertDualHostArchitecture(architecture: ArchitectureEvidence): void {
-  const hosts = new Set(architecture.invocations.map(({ host }) => host));
-  const ids = architecture.invocations.map(({ invocationId }) => invocationId);
-  if (architecture.invocations.length < 2
-    || hosts.size !== 2 || !hosts.has('codex') || !hosts.has('claude-code')
-    || new Set(ids).size !== ids.length) {
-    throw new Error('HARNESS_NATIVE_DUAL_HOST_ARCHITECTURE_REQUIRED');
   }
 }

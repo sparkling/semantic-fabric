@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { closeSync, existsSync, openSync } from 'node:fs';
-import type { StructuredCommand, TaskContract, HarnessConfig } from './contracts.js';
+import type { StructuredCommand, TaskContract } from './contracts.js';
 import {
   DEVELOPMENT_AUTHORITY,
   normalizeWorkspacePath,
@@ -21,7 +21,6 @@ import {
   type VerifierStage,
 } from './candidate.js';
 import { GitWorktreeSet } from './git-worktrees.js';
-import type { OfflineProcessIsolator } from './network.js';
 import {
   DEFAULT_PROTECTED_INPUT_BOUNDARY,
   HarnessPolicy,
@@ -29,71 +28,24 @@ import {
   auditMutableOutputs,
   listTrackedPaths,
   type GateDecision,
-  type ProtectedInputBoundary,
 } from './policy.js';
-import { runStructuredProcess } from './process.js';
 import { digestValue } from './receipts.js';
 import { resolveWorkspacePath, sha256File } from './workspace.js';
-import type { NativeHost } from './models/types.js';
 import type { NativeInvocationExpectation } from './evidence.js';
 import { NativeRuntimeLedger } from './native-runtime-ledger.js';
-import type { HostEvidence } from './receipts.js';
+import type { NativeHost } from './models/types.js';
 import {
-  commandEvidence,
   commandPassed,
-  type UnboundCommandEvidence,
 } from './repository-command-evidence.js';
-
-export interface RepositoryModelController {
-  architecture(signal?: AbortSignal): Promise<ArchitectureEvidence>;
-  implement(architecture: ArchitectureEvidence, signal?: AbortSignal): Promise<PatchSubmission>;
-  repair(
-    patch: PatchSubmission,
-    reasons: readonly string[],
-    repairAttempt: number,
-    signal?: AbortSignal,
-  ): Promise<PatchSubmission>;
-  review(host: NativeHost, build: CandidateBuild, signal?: AbortSignal): Promise<CandidateReview>;
-  recoveryEvidence(): Readonly<{
-    retryCount: number;
-    breakerState: 'closed' | 'open' | 'half-open';
-    events: readonly unknown[];
-  }>;
-}
-
-export interface RepositoryOperationsOptions {
-  worktrees: GitWorktreeSet;
-  config: HarnessConfig;
-  baselineCommit: string;
-  evaluatorCommit: string;
-  taskForWorkspace: (candidateRoot: string) => TaskContract;
-  buildCommands: readonly StructuredCommand[];
-  verifierCommands: Readonly<Record<VerifierStage, readonly StructuredCommand[]>>;
-  artifactPaths: readonly string[];
-  model: RepositoryModelController;
-  offlineIsolator: OfflineProcessIsolator;
-  offlineEnvironment: Readonly<Record<string, string | undefined>>;
-  protectedInputBoundary?: ProtectedInputBoundary;
-  frozenLockfile?: Readonly<{ sourcePath: string; workspacePath: string; digest: string }>;
-  agenticQeEvidence: (
-    build: CandidateBuild,
-    signal?: AbortSignal,
-  ) => Promise<readonly unknown[]>;
-  nativeRuntime?: Readonly<{
-    ledger: NativeRuntimeLedger;
-    taskId: string;
-    runId: string;
-    hosts: readonly HostEvidence[];
-  }>;
-  preflightEvidence: (
-    prepared: PreparedCandidate,
-    signal?: AbortSignal,
-  ) => Promise<AcceptanceGateEvidence>;
-  mutationEvidence: (
-    build: CandidateBuild,
-    signal?: AbortSignal,
-  ) => Promise<AcceptanceGateEvidence>;
-}
+import type {
+  RepositoryOperationsOptions,
+  VerifierGeneratedOutputSpec,
+} from './repository-options.js';
+export type {
+  RepositoryModelController,
+  RepositoryOperationsOptions,
+} from './repository-options.js';
+import { runRepositoryCommandBatch } from './repository-command-runner.js';
 
 export class RepositoryCandidateOperations implements CandidateOperations {
   readonly #options: RepositoryOperationsOptions;
@@ -101,6 +53,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   #policy: HarnessPolicy | null = null;
   #protectedInputs: Readonly<Record<string, string>> | null = null;
   #trackedAtStart: readonly string[] | null = null;
+  #cleanupPromise: Promise<void> | null = null;
 
   constructor(options: RepositoryOperationsOptions) {
     if (options.buildCommands.length === 0) throw new TypeError('HARNESS_BUILD_COMMANDS_REQUIRED');
@@ -126,6 +79,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async prepare(signal?: AbortSignal): Promise<PreparedCandidate> {
+    this.#assertExternalState();
     const prepared = await this.#options.worktrees.prepare(
       this.#options.baselineCommit,
       this.#options.evaluatorCommit,
@@ -155,6 +109,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
       protectedInputs[this.#options.frozenLockfile.workspacePath] =
         this.#options.frozenLockfile.digest;
     }
+    this.#assertExternalState();
     return Object.freeze({ ...prepared, protectedInputs });
   }
 
@@ -193,6 +148,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async admitAndApply(patch: PatchSubmission, signal?: AbortSignal): Promise<PatchAdmission> {
+    this.#assertExternalState();
     const task = this.#requireTask();
     for (const path of task.mutablePaths) {
       const decision = this.#requirePolicy().evaluate({
@@ -215,7 +171,25 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     }
     const outputs = await this.auditMutableOutputs();
     if (!outputs.allow) throw new Error(`HARNESS_MUTABLE_OUTPUT_GATE:${outputs.reasons.join('; ')}`);
+    this.#assertExternalState();
     return admission;
+  }
+
+  async validateAdmission(
+    admission: PatchAdmission,
+    signal?: AbortSignal,
+  ): Promise<readonly string[]> {
+    this.#assertExternalState();
+    const current = await this.#options.worktrees.candidateIdentity(signal);
+    const reasons: string[] = [];
+    if (current.commit !== admission.candidate.commit || current.tree !== admission.candidate.tree) {
+      reasons.push('HARNESS_ADMISSION_WORKTREE_IDENTITY_MISMATCH');
+    }
+    if (admission.candidate.tree !== this.#options.expectedCandidate.tree) {
+      reasons.push('HARNESS_CANDIDATE_SOURCE_FIX_MISMATCH');
+    }
+    this.#assertExternalState();
+    return Object.freeze(reasons);
   }
 
   async build(
@@ -225,7 +199,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   ): Promise<CandidateBuild> {
     const artifactPaths = this.#prepareArtifactFiles();
     const outputRoot = this.#options.worktrees.outputRoot('candidate');
-    const commands = await this.#runCommands(
+    const { commands } = await this.#runCommands(
       this.#options.buildCommands,
       this.#requireTask().workspaceRoot,
       [...artifactPaths, outputRoot],
@@ -267,24 +241,28 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     if (before.commit !== build.candidate.commit || before.tree !== build.candidate.tree) {
       throw new Error(`HARNESS_STALE_VERIFIER_IDENTITY:${stage}`);
     }
-    const commands = await this.#runCommands(
+    const batch = await this.#runCommands(
       this.#options.verifierCommands[stage],
       verifierRoot,
       [outputRoot],
       outputRoot,
       signal,
+      this.#options.verifierGeneratedOutputs?.[stage],
+      build.candidate.tree,
     );
     this.#verifyFrozenLockfile();
     await this.#options.worktrees.assertVerifierSourceStable(stage, signal);
     const candidate = await this.#options.worktrees.verifierIdentity(stage, signal);
+    const { commands, generatedOutputDigests } = batch;
     const passed = commands.every(commandPassed);
     return Object.freeze({
       stage,
       candidate,
       passed,
-      digest: digestValue({ stage, candidate, commands }),
+      digest: digestValue({ stage, candidate, commands, generatedOutputDigests }),
       reasons: passed ? [] : commands.filter((command) => !commandPassed(command))
         .map(({ tool, exitCode }) => `${tool} exited ${String(exitCode)}`),
+      generatedOutputDigests,
     });
   }
 
@@ -306,10 +284,20 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     signal?: AbortSignal,
   ): Promise<readonly unknown[]> {
     this.#assertBuildArtifacts(build);
+    const verifierBefore = await this.#options.worktrees.verifierIdentity('independent', signal);
+    if (verifierBefore.commit !== build.candidate.commit
+      || verifierBefore.tree !== build.candidate.tree) {
+      throw new Error('HARNESS_AGENTIC_QE_VERIFIER_IDENTITY_MISMATCH');
+    }
     const evidence = await this.#options.agenticQeEvidence(build, signal);
     this.#assertBuildArtifacts(build);
     this.#verifyFrozenLockfile();
     await this.#options.worktrees.assertCandidateSourceStable(this.#options.artifactPaths, signal);
+    await this.#options.worktrees.assertVerifierSourceStable('independent', signal);
+    const verifierAfter = await this.#options.worktrees.verifierIdentity('independent', signal);
+    if (verifierAfter.commit !== verifierBefore.commit || verifierAfter.tree !== verifierBefore.tree) {
+      throw new Error('HARNESS_AGENTIC_QE_VERIFIER_IDENTITY_MISMATCH');
+    }
     return evidence;
   }
 
@@ -328,7 +316,13 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async cleanup(): Promise<void> {
-    await this.#options.worktrees.dispose();
+    if (this.#cleanupPromise === null) this.#cleanupPromise = this.#cleanupAll();
+    try {
+      await this.#cleanupPromise;
+    } catch (error) {
+      this.#cleanupPromise = null;
+      throw error;
+    }
   }
 
   runtimeEvidence(expectations: readonly NativeInvocationExpectation[]) {
@@ -351,6 +345,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async verifyProtectedInputs(): Promise<GateDecision> {
+    this.#assertExternalState();
     assertProtectedInputSnapshot(this.#requireTask(), this.#protectedInputs ?? {});
     return await (this.#options.protectedInputBoundary ?? DEFAULT_PROTECTED_INPUT_BOUNDARY).verify(
       this.#requireTask(),
@@ -360,6 +355,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async auditMutableOutputs(): Promise<GateDecision> {
+    this.#assertExternalState();
     return auditMutableOutputs(
       this.#requireTask(),
       this.#options.config,
@@ -373,8 +369,9 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     writablePaths: readonly string[],
     outputRoot: string,
     signal?: AbortSignal,
-  ): Promise<UnboundCommandEvidence[]> {
-    const evidence: UnboundCommandEvidence[] = [];
+    generatedOutputs?: readonly VerifierGeneratedOutputSpec[],
+    candidateTree?: string,
+  ) {
     for (const command of commands) {
       const decision = this.#requirePolicy().evaluate({
         kind: 'execute',
@@ -384,34 +381,15 @@ export class RepositoryCandidateOperations implements CandidateOperations {
         authority: DEVELOPMENT_AUTHORITY,
       });
       if (!decision.allow) throw new Error(`HARNESS_COMMAND_POLICY_GATE:${decision.reasons.join('; ')}`);
-      const executed = command.tool === 'cargo' || command.tool === 'rustc'
-        ? {
-            ...command,
-            env: {
-              ...command.env,
-              HOME: '/home/harness',
-              CARGO_HOME: '/cargo-home',
-              CARGO_NET_OFFLINE: 'true',
-              CARGO_INCREMENTAL: '0',
-              CARGO_TARGET_DIR: outputRoot,
-            },
-          }
-        : command;
-      const result = await runStructuredProcess(executed, {
-        workspaceRoot,
-        config: this.#options.config,
-        declaredTools: this.#requireTask().tools,
-        sourceEnvironment: this.#options.offlineEnvironment,
-        signal,
-        boundary: {
-          kind: 'offline-candidate',
-          isolator: this.#options.offlineIsolator,
-          writablePaths,
-        },
-      });
-      evidence.push(commandEvidence(executed, result));
     }
-    return evidence;
+    return await runRepositoryCommandBatch({
+      commands, workspaceRoot, controlledRoot: this.#options.worktrees.controlledRoot(),
+      writablePaths, outputRoot, config: this.#options.config,
+      declaredTools: this.#requireTask().tools,
+      offlineIsolator: this.#options.offlineIsolator,
+      offlineEnvironment: this.#options.offlineEnvironment,
+      trackedPaths: this.#trackedAtStart ?? [], generatedOutputs, candidateTree, signal,
+    });
   }
 
   #assertCommandsDeclared(task: TaskContract): void {
@@ -470,6 +448,24 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     const lockfile = this.#options.frozenLockfile;
     if (lockfile === undefined) return;
     this.#options.worktrees.verifyFrozenOverlay(lockfile.workspacePath, lockfile.digest);
+  }
+
+  #assertExternalState(): void {
+    this.#options.assertExternalState?.();
+  }
+
+  async #cleanupAll(): Promise<void> {
+    const outcomes = await Promise.allSettled([
+      this.#options.worktrees.dispose(),
+      ...(this.#options.cleanupCallbacks ?? []).map(async (cleanup) => await cleanup()),
+    ]);
+    const failures = outcomes.filter((outcome) => outcome.status === 'rejected');
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((outcome) => (outcome as PromiseRejectedResult).reason),
+        'HARNESS_REPOSITORY_RESOURCE_CLEANUP_FAILED',
+      );
+    }
   }
 
   #hasRustCommands(options: RepositoryOperationsOptions): boolean {
