@@ -263,16 +263,24 @@ function boundedOutput(value: string, limit: number): string {
 }
 
 function parseClaudeEnvelope(raw: string): unknown {
-  const envelope = parseJson(raw, 'Claude structured output');
-  if (!isRecord(envelope)) return envelope;
-  if ('structured_output' in envelope) return envelope.structured_output;
-  if ('structuredOutput' in envelope) return envelope.structuredOutput;
-  if ('result' in envelope) {
-    return typeof envelope.result === 'string'
-      ? parseJson(envelope.result, 'Claude result')
-      : envelope.result;
+  let envelope: unknown;
+  try {
+    envelope = parseJson(raw, 'Claude structured output');
+  } catch (error) {
+    throw new Error('HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID', { cause: error });
   }
-  return envelope;
+  if (!isRecord(envelope)
+    || envelope.type !== 'result'
+    || envelope.subtype !== 'success'
+    || envelope.is_error !== false) {
+    throw new Error('HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID');
+  }
+  if (!Object.hasOwn(envelope, 'structured_output')
+    || envelope.structured_output === null
+    || envelope.structured_output === undefined) {
+    throw new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING');
+  }
+  return envelope.structured_output;
 }
 
 function parseJson(raw: string, label: string): unknown {

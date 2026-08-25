@@ -93,6 +93,10 @@ describe('trusted issue #8 bootstrap', () => {
     }))).toBe('HARNESS_NATIVE_HOST_TIMEOUT');
     expect(safeReason(new Error('HARNESS_NATIVE_PATCH_INVALID:untrusted detail')))
       .toBe('HARNESS_NATIVE_PATCH_INVALID');
+    expect(safeReason(new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING:untrusted detail')))
+      .toBe('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING');
+    expect(safeReason(new Error('HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID:untrusted detail')))
+      .toBe('HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID');
     expect(safeReason(new AggregateError([new Error('generic')],
       'HARNESS_BOOTSTRAP_CLEANUP_FAILED'))).toBe('HARNESS_BOOTSTRAP_CLEANUP_FAILED');
     expect(safeReason(nested)).toBe('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');

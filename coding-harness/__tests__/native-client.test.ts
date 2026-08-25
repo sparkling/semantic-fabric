@@ -196,6 +196,8 @@ describe('native adapter structured client', () => {
     const workspaceRoot = root('coding-harness-native-workspace-');
     const runner = new FakeRunner(() => ok(JSON.stringify({
       type: 'result',
+      subtype: 'success',
+      is_error: false,
       structured_output: { accepted: false, reasons: ['invariant mismatch'] },
     })));
     const adapter = new ClaudeCodeSubscriptionAdapter({
@@ -219,6 +221,85 @@ describe('native adapter structured client', () => {
     expect(invocation.output).toEqual({ accepted: false, reasons: ['invariant mismatch'] });
     expect(invocation.invocationId).toMatch(/^native-run:/);
     expect(invocation.outputDigest).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('rejects a Claude error envelope even if it carries structured output', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const runner = new FakeRunner(() => ok(JSON.stringify({
+      type: 'result',
+      subtype: 'error_max_turns',
+      is_error: true,
+      structured_output: { accepted: true, reasons: [] },
+    })));
+    const adapter = new ClaudeCodeSubscriptionAdapter({
+      executable: '/tools/claude',
+      runner,
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter,
+      evidenceRoot,
+      workspaceRoot,
+      timeoutMs: 1_000,
+    });
+
+    await expect(client.invoke({
+      candidate: { host: 'claude-code', model: 'claude-sonnet-5' },
+      operation: 'review',
+      prompt: 'review the patch',
+    })).rejects.toThrow('HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID');
+  });
+
+  it('rejects a Claude success envelope that withholds structured output', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const runner = new FakeRunner(() => ok(JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: '{"patch":"untrusted free-text fallback"}',
+    })));
+    const adapter = new ClaudeCodeSubscriptionAdapter({
+      executable: '/tools/claude',
+      runner,
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter,
+      evidenceRoot,
+      workspaceRoot,
+      timeoutMs: 1_000,
+    });
+
+    await expect(client.invoke({
+      candidate: { host: 'claude-code', model: 'claude-sonnet-5' },
+      operation: 'implementation',
+      prompt: 'return a patch',
+    })).rejects.toThrow('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING');
+  });
+
+  it('classifies malformed Claude envelope JSON without exposing it', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const runner = new FakeRunner(() => ok('untrusted malformed response'));
+    const adapter = new ClaudeCodeSubscriptionAdapter({
+      executable: '/tools/claude',
+      runner,
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter,
+      evidenceRoot,
+      workspaceRoot,
+      timeoutMs: 1_000,
+    });
+
+    await expect(client.invoke({
+      candidate: { host: 'claude-code', model: 'claude-sonnet-5' },
+      operation: 'implementation',
+      prompt: 'return a patch',
+    })).rejects.toThrow('HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID');
   });
 
   it('rejects evidence directories that are visible to other users', () => {
