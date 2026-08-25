@@ -181,6 +181,8 @@ async function executeIssue8(
       bwrapExecutable: ISSUE_8_SYSTEM_PATHS.bwrap,
       resourceBoundary: new SystemdResourceBoundary({
         executablePath: ISSUE_8_SYSTEM_PATHS.systemdRun,
+        systemctlPath: ISSUE_8_SYSTEM_PATHS.systemctl,
+        terminationGraceMs: SECURE_HARNESS_CONFIG.limits.terminationGraceMs,
         sourceEnvironment: process.env,
       }),
       resourceLimits: ISSUE_8_RUST_LIMITS,
@@ -214,6 +216,7 @@ async function executeIssue8(
           node: ISSUE_8_SYSTEM_PATHS.node,
           bwrap: ISSUE_8_SYSTEM_PATHS.bwrap,
           systemdRun: ISSUE_8_SYSTEM_PATHS.systemdRun,
+          systemctl: ISSUE_8_SYSTEM_PATHS.systemctl,
           proxyLauncher,
         },
         credentials: {

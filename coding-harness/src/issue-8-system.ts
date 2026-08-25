@@ -29,6 +29,7 @@ export const ISSUE_8_SYSTEM_PATHS = Object.freeze({
   claudeCredential: '/home/claude/.claude/.credentials.json',
   bwrap: '/usr/bin/bwrap',
   systemdRun: '/usr/bin/systemd-run',
+  systemctl: '/usr/bin/systemctl',
   agenticQeRoot: '/home/claude/.npm-global/lib/node_modules/agentic-qe',
   agenticQeMcp: '/home/claude/.npm-global/lib/node_modules/agentic-qe/dist/mcp/bundle.js',
 });
@@ -41,6 +42,7 @@ const EXPECTED_EXECUTABLES = Object.freeze({
   claude: '3473601ea695d5bf769c5b202844d4cb4fbf723ae995450fcb6973204775c84a',
   bwrap: '52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712',
   systemdRun: 'dbc8b988a849d5c9d7ef2de7068a6f107021bc6c11e0d7864c73f373eef726a7',
+  systemctl: 'e0d3d0e9444da1b2b58c792c3f5028b69f049b77d5ca17b3ec0d09f89117225b',
   agenticQeMcp: 'eba7e52a3c86cd57203fb7f1cc079fb627491bee2b566bbb14c8ac4acdcaaa9b',
 });
 

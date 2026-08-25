@@ -17,7 +17,7 @@ import {
 } from '../src/repository-operations.js';
 import type { ProtectedInputBoundary } from '../src/policy.js';
 import { digestValue, type CommandEvidence } from '../src/receipts.js';
-import { createTestConfig } from './helpers.js';
+import { createTestConfig, TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
 const processFixture = join(
@@ -71,9 +71,11 @@ function command(mode: 'artifact' | 'success'): StructuredCommand {
 
 const offlineIsolator: OfflineProcessIsolator = {
   assertStable() {},
+  async terminateAndVerify() {},
   isolate: (source) => ({
     enforcement: 'os-network-namespace',
     mechanism: 'test-no-network',
+    resourceScope: TEST_RESOURCE_SCOPE,
     command: {
       ...source,
       executable: '/usr/bin/env',

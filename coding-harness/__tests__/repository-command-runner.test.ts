@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { StructuredCommand } from '../src/contracts.js';
 import type { OfflineProcessIsolator } from '../src/network.js';
 import { runRepositoryCommandBatch } from '../src/repository-command-runner.js';
-import { createTestConfig } from './helpers.js';
+import { createTestConfig, TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
 const fixtureScript = join(
@@ -84,6 +84,7 @@ function command(label: string): StructuredCommand {
 function generatingIsolator(): OfflineProcessIsolator {
   return {
     assertStable() {},
+    async terminateAndVerify() {},
     isolate(source) {
       for (const overlay of source.writableOverlays ?? []) {
         writeFileSync(overlay.source, validEarl(source.args.at(-1) ?? 'unknown'));
@@ -94,13 +95,14 @@ function generatingIsolator(): OfflineProcessIsolator {
 }
 
 function passthroughIsolator(): OfflineProcessIsolator {
-  return { assertStable() {}, isolate: wrapped };
+  return { assertStable() {}, async terminateAndVerify() {}, isolate: wrapped };
 }
 
 function wrapped(source: Parameters<OfflineProcessIsolator['isolate']>[0]) {
   return {
     enforcement: 'os-network-namespace',
     mechanism: 'test-no-network',
+    resourceScope: TEST_RESOURCE_SCOPE,
     command: {
       ...source,
       executable: '/usr/bin/env',

@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { StructuredCommand } from '../src/contracts.js';
+import type { OfflineProcessIsolator } from '../src/network.js';
 import { runStructuredProcess, sanitizeEnvironment } from '../src/process.js';
-import { createTestConfig } from './helpers.js';
+import { createTestConfig, TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const temporaryRoots: string[] = [];
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/process-fixture.mjs');
@@ -106,4 +107,49 @@ describe('structured process runner', () => {
     expect(result.cancelled).toBe(true);
     expect(result.durationMs).toBeLessThan(1_000);
   });
+
+  it('does not resolve an offline timeout before its exact resource scope is released', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const terminateAndVerify = vi.fn()
+      .mockImplementationOnce(async () => await gate)
+      .mockResolvedValue(undefined);
+    const isolator: OfflineProcessIsolator = {
+      assertStable() {},
+      terminateAndVerify,
+      isolate: (source) => ({
+        enforcement: 'os-network-namespace',
+        mechanism: 'test-offline-scope',
+        resourceScope: TEST_RESOURCE_SCOPE,
+        command: {
+          ...source,
+          executable: '/usr/bin/env',
+          args: [source.executable, ...source.args],
+        },
+      }),
+    };
+    const pending = runStructuredProcess(command('wait', { timeoutMs: 50 }), {
+      workspaceRoot: workspace(),
+      config: createTestConfig(),
+      declaredTools: ['node'],
+      boundary: { kind: 'offline-candidate', isolator, writablePaths: [] },
+    });
+    await waitFor(() => terminateAndVerify.mock.calls.length === 1);
+    let finished = false;
+    void pending.then(() => { finished = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(finished).toBe(false);
+    release();
+    expect((await pending).timedOut).toBe(true);
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
+    expect(terminateAndVerify).toHaveBeenCalledWith(TEST_RESOURCE_SCOPE);
+  });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('condition was not observed');
+}

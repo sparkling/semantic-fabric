@@ -26,6 +26,8 @@ import {
 } from './native-filesystem.js';
 import {
   isolateNativeResources,
+  limitsForProcessDeadline,
+  terminateNativeResourceScope,
   type NativeResourceBoundary,
   type NativeResourceIsolationResult,
   type NativeResourceLimits,
@@ -49,12 +51,10 @@ import {
   type NativeExecutionEvidence,
   type OriginCompletion,
 } from './native-process-contracts.js';
-
 export type {
   NativeExecutableEvidence,
   NativeExecutionEvidence,
 } from './native-process-contracts.js';
-
 export interface NativeRunnerOptions {
   config: HarnessConfig;
   executables: Readonly<Record<NativeHost, string>>;
@@ -70,9 +70,7 @@ export interface NativeRunnerOptions {
   maxOutputBytes?: number;
   terminationGraceMs?: number;
 }
-
 type NativeChild = ChildProcessByStdio<Writable, Readable, Readable>;
-
 const MAX_STDIN_BYTES = 1_000_000;
 const HOST_NETWORK = Object.freeze({
   codex: Object.freeze({
@@ -86,7 +84,6 @@ const HOST_NETWORK = Object.freeze({
     knownOrigins: Object.freeze(['https://api.anthropic.com', 'https://claude.ai']),
   }),
 } as const);
-
 export class BoundedNativeProcessRunner implements NativeProcessRunner {
   readonly #config: HarnessConfig;
   readonly #executables: Readonly<Record<NativeHost, string>>;
@@ -106,7 +103,6 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
   readonly #resourceEvidence: NativeResourceIsolationResult[] = [];
   readonly #executionEvidence = new Map<string, NativeExecutionEvidence>();
   readonly #executableEvidence: Readonly<Record<NativeHost, NativeExecutableEvidence>>;
-
   constructor(options: NativeRunnerOptions) {
     this.#config = options.config;
     const codex = validateExecutable(options.executables.codex, 'codex');
@@ -158,7 +154,6 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       'terminationGraceMs',
     );
   }
-
   async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
     const executionId = `native-run:${randomUUID()}`;
     this.#validateRequest(request);
@@ -190,7 +185,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       }, this.#filesystemBoundary);
       resources = isolateNativeResources(
         filesystem.command,
-        this.#resourceLimits,
+        limitsForProcessDeadline(this.#resourceLimits, request.timeoutMs),
         this.#resourceBoundary,
       );
     } catch (error) {
@@ -219,8 +214,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         completion,
       );
     }
-
-    const result = await new Promise<NativeProcessResult>((resolveResult) => {
+    const result = await new Promise<NativeProcessResult>((resolveResult, rejectResult) => {
       let child: NativeChild;
       try {
         child = spawn(resources.command.executable, [...resources.command.args], {
@@ -237,7 +231,6 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         resolveResult(spawnFailure(executionId, error));
         return;
       }
-
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let capturedBytes = 0;
@@ -246,10 +239,13 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       let cancelled = false;
       let outputLimitExceeded = false;
       let spawnError: string | undefined;
+      let terminationPromise: Promise<boolean> | undefined;
       let killTimer: NodeJS.Timeout | undefined;
       let settled = false;
-
       const terminate = () => {
+        if (terminationPromise !== undefined) return;
+        terminationPromise = terminateNativeResourceScope(this.#resourceBoundary, resources)
+          .then(() => true, () => false);
         signalProcessGroup(child, 'SIGTERM');
         killTimer ??= setTimeout(
           () => signalProcessGroup(child, 'SIGKILL'),
@@ -279,7 +275,6 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         // EPIPE is reflected by process failure or cancellation evidence.
       });
       child.stdin.end(request.stdin ?? '');
-
       const timeout = setTimeout(() => {
         timedOut = true;
         terminate();
@@ -290,13 +285,22 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         terminate();
       };
       request.signal?.addEventListener('abort', abort, { once: true });
-
-      child.on('close', (exitCode) => {
+      child.on('close', async (exitCode) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
         if (killTimer) clearTimeout(killTimer);
         request.signal?.removeEventListener('abort', abort);
+        if (terminationPromise !== undefined) {
+          let failed = !(await terminationPromise);
+          try {
+            await terminateNativeResourceScope(this.#resourceBoundary, resources);
+          } catch { failed = true; }
+          if (failed) {
+            rejectResult(new Error('HARNESS_NATIVE_RESOURCE_TERMINATION_FAILED'));
+            return;
+          }
+        }
         resolveResult(Object.freeze({
           executionId,
           exitCode,
@@ -330,7 +334,6 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
   networkEvidence(): readonly NativeModelProcessGrant[] {
     return Object.freeze([...this.#networkEvidence]);
   }
-
   filesystemEvidence(): readonly NativeFilesystemIsolationResult[] {
     return Object.freeze([...this.#filesystemEvidence]);
   }
@@ -338,13 +341,11 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
   resourceEvidence(): readonly NativeResourceIsolationResult[] {
     return Object.freeze([...this.#resourceEvidence]);
   }
-
   executionEvidence(executionId: string): NativeExecutionEvidence {
     const evidence = this.#executionEvidence.get(executionId);
     if (evidence === undefined) throw new Error('HARNESS_NATIVE_EXECUTION_EVIDENCE_UNKNOWN');
     return evidence;
   }
-
   allExecutionEvidence(): readonly NativeExecutionEvidence[] {
     return Object.freeze([...this.#executionEvidence.values()]);
   }
@@ -354,7 +355,6 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       && this.#filesystemBoundary instanceof SystemNativeFilesystemBoundary
       && this.#resourceBoundary instanceof SystemdResourceBoundary;
   }
-
   executableEvidence(): Readonly<Record<NativeHost, NativeExecutableEvidence>> {
     return this.#executableEvidence;
   }

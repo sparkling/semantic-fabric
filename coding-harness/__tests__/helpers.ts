@@ -17,14 +17,20 @@ export const TEST_RESOURCE_LIMITS: NativeResourceLimits = Object.freeze({
   openFiles: 256,
 });
 
+export const TEST_RESOURCE_SCOPE = Object.freeze({
+  unit: 'semantic-fabric-harness-00000000-0000-4000-8000-000000000000.service',
+});
+
 export const fakeResourceBoundary: NativeResourceBoundary = Object.freeze({
   assertStable() {},
+  async terminateAndVerify() {},
   wrap(command, limits) {
     return {
       enforcement: 'systemd-cgroup-v2',
       mechanism: 'systemd-transient-service',
       limits,
       limitsDigest: createHash('sha256').update(JSON.stringify(limits)).digest('hex'),
+      scope: TEST_RESOURCE_SCOPE,
       command: {
         ...command,
         executable: '/usr/bin/env',

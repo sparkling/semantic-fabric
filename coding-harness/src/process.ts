@@ -83,8 +83,8 @@ export async function runStructuredProcess(
 
   const env = sanitizeEnvironment(context.sourceEnvironment ?? process.env, command.env, context.config);
   if (context.boundary === undefined) throw new Error('HARNESS_PROCESS_BOUNDARY_REQUIRED');
-  const launch = context.boundary.kind === 'trusted-control-plane'
-    ? { executable: command.executable, args: command.argv, cwd, env }
+  const isolation = context.boundary.kind === 'trusted-control-plane'
+    ? null
     : isolateOfflineCandidateCommand({
       mode: 'offline',
       channel: 'candidate-command',
@@ -98,13 +98,15 @@ export async function runStructuredProcess(
         env: definedEnvironment(env),
         writablePaths: context.boundary.writablePaths,
       }, context.boundary.writableOverlays),
-    }, context.boundary.isolator).command;
+    }, context.boundary.isolator);
+  const launch = isolation?.command
+    ?? { executable: command.executable, args: command.argv, cwd, env };
   if (context.boundary.kind === 'offline-candidate') context.boundary.isolator.assertStable();
   const launchEnvironment = context.boundary.kind === 'offline-candidate'
     ? (context.boundary.isolator.launchEnvironment?.(definedEnvironment(launch.env))
       ?? definedEnvironment(launch.env))
     : launch.env;
-  return new Promise((resolveResult) => {
+  return new Promise((resolveResult, rejectResult) => {
     let child: StructuredChild;
     try {
       child = spawn(launch.executable, [...launch.args], {
@@ -127,10 +129,18 @@ export async function runStructuredProcess(
     let cancelled = false;
     let outputLimitExceeded = false;
     let spawnError: string | null = null;
+    let terminationPromise: Promise<boolean> | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     let settled = false;
 
     const terminate = () => {
+      if (isolation !== null) {
+        if (terminationPromise !== undefined) return;
+        const requested = context.boundary.kind === 'offline-candidate'
+          ? context.boundary.isolator.terminateAndVerify(isolation.resourceScope)
+          : Promise.reject(new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_REQUIRED'));
+        terminationPromise = requested.then(() => true, () => false);
+      }
       signalProcessGroup(child, 'SIGTERM');
       killTimer ??= setTimeout(
         () => signalProcessGroup(child, 'SIGKILL'),
@@ -169,12 +179,22 @@ export async function runStructuredProcess(
     };
     context.signal?.addEventListener('abort', abort, { once: true });
 
-    child.on('close', (exitCode, signal) => {
+    child.on('close', async (exitCode, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
       context.signal?.removeEventListener('abort', abort);
+      if (terminationPromise !== undefined && context.boundary.kind === 'offline-candidate') {
+        let failed = !(await terminationPromise);
+        try {
+          await context.boundary.isolator.terminateAndVerify(isolation!.resourceScope);
+        } catch { failed = true; }
+        if (failed) {
+          rejectResult(new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_FAILED'));
+          return;
+        }
+      }
       if (context.boundary?.kind === 'offline-candidate') {
         try {
           context.boundary.isolator.assertStable();

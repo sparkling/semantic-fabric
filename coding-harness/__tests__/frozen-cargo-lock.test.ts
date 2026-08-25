@@ -26,6 +26,7 @@ import {
 import type { OfflineProcessIsolator } from '../src/network.js';
 import type { ProcessResult } from '../src/process.js';
 import type { GitIdentity } from '../src/receipts.js';
+import { TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -35,9 +36,11 @@ afterEach(() => {
 
 const offlineIsolator: OfflineProcessIsolator = Object.freeze({
   assertStable() {},
+  async terminateAndVerify() {},
   isolate: (command) => ({
     enforcement: 'os-network-namespace',
     mechanism: 'test-offline-boundary',
+    resourceScope: TEST_RESOURCE_SCOPE,
     command: {
       ...command,
       executable: '/usr/bin/env',

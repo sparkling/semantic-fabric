@@ -18,7 +18,7 @@ import type {
   OfflineProcessIsolator,
   RegistryOriginPinningBoundary,
 } from '../src/network.js';
-import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
+import { fakeResourceBoundary, TEST_RESOURCE_LIMITS, TEST_RESOURCE_SCOPE } from './helpers.js';
 import { bwrapAvailable } from './native-test-prerequisites.js';
 
 const candidateCommand: BoundaryCommand = Object.freeze({
@@ -40,10 +40,12 @@ const offlineRequest = Object.freeze({
 
 const fakeOfflineIsolator: OfflineProcessIsolator = Object.freeze({
   assertStable() {},
+  async terminateAndVerify() {},
   isolate(command: BoundaryCommand) {
     return {
       enforcement: 'os-network-namespace',
       mechanism: 'test-netns',
+      resourceScope: TEST_RESOURCE_SCOPE,
       command: {
         ...command,
         executable: '/test/offline-sandbox',
@@ -154,9 +156,11 @@ describe('offline candidate process boundary', () => {
     )).toThrow('must be an empty array');
     expect(() => isolateOfflineCandidateCommand(offlineRequest, {
       assertStable() {},
+      async terminateAndVerify() {},
       isolate: (command) => ({
         enforcement: 'os-network-namespace',
         mechanism: 'claimed-netns',
+        resourceScope: TEST_RESOURCE_SCOPE,
         command,
       }),
     })).toThrow('HARNESS_OFFLINE_ISOLATOR_DID_NOT_WRAP_COMMAND');

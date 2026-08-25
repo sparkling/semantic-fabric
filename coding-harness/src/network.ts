@@ -12,6 +12,7 @@ import {
 } from './contracts.js';
 import { assertNativeSubscriptionEnvironment } from './models/environment.js';
 import type { NativeAuthentication, NativeHost } from './models/types.js';
+import type { NativeResourceScope } from './resource-boundary.js';
 import { createSystemOfflineIsolator } from './sandbox.js';
 import {
   parseWritableFileOverlays,
@@ -36,12 +37,14 @@ export interface BoundaryCommand {
 export interface OfflineIsolationResult {
   readonly enforcement: 'os-network-namespace';
   readonly mechanism: string;
+  readonly resourceScope: NativeResourceScope;
   readonly command: BoundaryCommand;
 }
 
 export interface OfflineProcessIsolator {
   isolate(command: BoundaryCommand): unknown;
   assertStable(): void;
+  terminateAndVerify(scope: NativeResourceScope): Promise<void>;
   launchEnvironment?(environment: Readonly<Record<string, string>>): Readonly<Record<string, string>>;
 }
 
@@ -136,6 +139,9 @@ export function isolateOfflineCandidateCommand(
   assertNoRouteEnvironment(command.env, 'offline candidate request.command.env');
 
   if (isolator === undefined) throw new Error('HARNESS_OFFLINE_ISOLATOR_REQUIRED');
+  if (typeof isolator.terminateAndVerify !== 'function') {
+    throw new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_REQUIRED');
+  }
   isolator.assertStable();
   const isolated = parseOfflineIsolation(isolator.isolate(command));
   isolator.assertStable();
@@ -287,14 +293,27 @@ export function isolateDependencyResolution(
 
 function parseOfflineIsolation(value: unknown): OfflineIsolationResult {
   const input = asRecord(value, 'offline isolation result');
-  assertExactKeys(input, ['enforcement', 'mechanism', 'command'], 'offline isolation result');
+  assertExactKeys(
+    input, ['enforcement', 'mechanism', 'resourceScope', 'command'], 'offline isolation result',
+  );
   if (input.enforcement !== 'os-network-namespace') throw new Error('HARNESS_OFFLINE_ISOLATION_EVIDENCE_INVALID');
   const mechanism = parseMechanism(input.mechanism, 'offline isolation result.mechanism');
   return {
     enforcement: 'os-network-namespace',
     mechanism,
+    resourceScope: parseResourceScope(input.resourceScope),
     command: parseBoundaryCommand(input.command, 'offline isolation result.command'),
   };
+}
+
+function parseResourceScope(value: unknown): NativeResourceScope {
+  const input = asRecord(value, 'offline isolation result.resourceScope');
+  assertExactKeys(input, ['unit'], 'offline isolation result.resourceScope');
+  if (typeof input.unit !== 'string'
+    || !/^semantic-fabric-harness-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.service$/.test(input.unit)) {
+    throw new Error('HARNESS_OFFLINE_RESOURCE_SCOPE_INVALID');
+  }
+  return deepFreeze({ unit: input.unit });
 }
 
 function parseRegistryPin(value: unknown): RegistryPinResult {

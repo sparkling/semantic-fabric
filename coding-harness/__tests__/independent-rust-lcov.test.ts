@@ -19,13 +19,16 @@ import {
   IndependentRustLcovGenerator,
 } from '../src/independent-rust-lcov.js';
 import type { OfflineProcessIsolator } from '../src/network.js';
+import { TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
 const isolator: OfflineProcessIsolator = Object.freeze({
   assertStable() {},
+  async terminateAndVerify() {},
   isolate: (command) => ({
     enforcement: 'os-network-namespace',
     mechanism: 'test-offline-wrapper',
+    resourceScope: TEST_RESOURCE_SCOPE,
     command: {
       ...command,
       executable: '/usr/bin/env',

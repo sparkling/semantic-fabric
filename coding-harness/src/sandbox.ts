@@ -13,6 +13,7 @@ import {
   isolateNativeResources,
   type NativeResourceBoundary,
   type NativeResourceLimits,
+  type NativeResourceScope,
 } from './resource-boundary.js';
 import type { WritableFileOverlay } from './writable-overlays.js';
 
@@ -43,6 +44,9 @@ export function createSystemOfflineIsolator(
   if (options.resourceBoundary === undefined) {
     throw new Error('HARNESS_OFFLINE_RESOURCE_BOUNDARY_REQUIRED');
   }
+  if (typeof options.resourceBoundary.terminateAndVerify !== 'function') {
+    throw new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_REQUIRED');
+  }
   return systemIsolator(
     executable,
     writableRoot,
@@ -68,6 +72,9 @@ function systemIsolator(
         throw new Error('HARNESS_OFFLINE_OS_SANDBOX_CHANGED');
       }
       resourceBoundary.assertStable();
+    },
+    async terminateAndVerify(scope: NativeResourceScope) {
+      await resourceBoundary.terminateAndVerify!(scope);
     },
     isolate(command: BoundaryCommand): OfflineIsolationResult {
       if (validateExecutable(executable.path).digest !== executable.digest) {
@@ -109,6 +116,7 @@ function systemIsolator(
       return deepFreeze({
         enforcement: 'os-network-namespace',
         mechanism: 'systemd-cgroup-v2-bwrap',
+        resourceScope: bounded.scope,
         command: bounded.command,
       });
     },

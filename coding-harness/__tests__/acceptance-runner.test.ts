@@ -11,6 +11,7 @@ import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { GitWorktreeSet } from '../src/git-worktrees.js';
 import type { OfflineProcessIsolator } from '../src/network.js';
 import { digestValue, type CommandEvidence } from '../src/receipts.js';
+import { TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
 const redTests = [
@@ -32,9 +33,11 @@ function git(cwd: string, args: string[]): string {
 
 const isolator: OfflineProcessIsolator = {
   assertStable() {},
+  async terminateAndVerify() {},
   isolate: (command) => ({
     enforcement: 'os-network-namespace',
     mechanism: 'test-no-network',
+    resourceScope: TEST_RESOURCE_SCOPE,
     command: { ...command, executable: '/usr/bin/env', args: [command.executable, ...command.args] },
   }),
 };

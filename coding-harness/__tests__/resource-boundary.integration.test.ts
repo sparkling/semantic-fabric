@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -39,6 +39,7 @@ describe.runIf(systemdUserAvailable())('systemd cgroup v2 resource boundary', ()
       writablePaths: [],
     }, limits, boundary);
     expect(isolated.command.args).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^--unit=semantic-fabric-harness-[0-9a-f-]{36}\.service$/),
       `--property=MemoryMax=${limits.memoryBytes}`,
       '--property=MemorySwapMax=0',
       `--property=TasksMax=${limits.processCount}`,
@@ -46,6 +47,11 @@ describe.runIf(systemdUserAvailable())('systemd cgroup v2 resource boundary', ()
       `--property=LimitFSIZE=${limits.fileBytes}`,
       `--property=LimitNOFILE=${limits.openFiles}`,
       '--property=KillMode=control-group',
+      '--property=ExitType=cgroup',
+      '--property=KillSignal=SIGTERM',
+      '--property=FinalKillSignal=SIGKILL',
+      '--property=SendSIGKILL=yes',
+      '--property=TimeoutStopSec=100ms',
     ]));
     const result = spawnSync(isolated.command.executable, [...isolated.command.args], {
       cwd: root,
@@ -78,11 +84,55 @@ describe.runIf(systemdUserAvailable())('systemd cgroup v2 resource boundary', ()
     expect(result.status).not.toBe(0);
     expect(statSync(output).size).toBeLessThanOrEqual(limits.fileBytes);
   });
+
+  it('waits for a TERM-ignoring descendant to leave the exact cgroup', async () => {
+    const root = privateRoot();
+    const mainPidFile = join(root, 'main.pid');
+    const childPidFile = join(root, 'child.pid');
+    const boundary = systemBoundary();
+    const isolated = isolateNativeResources({
+      executable: '/usr/bin/sh',
+      args: ['-c', [
+        'trap "" TERM',
+        `printf '%s' "$$" > '${mainPidFile}'`,
+        `/usr/bin/setsid /usr/bin/sh -c 'trap "" TERM; printf "%s" "$$" > "${childPidFile}"; while :; do /usr/bin/sleep 1; done' &`,
+        `while test ! -s '${childPidFile}'; do /usr/bin/sleep 0.01; done`,
+        'wait',
+      ].join('\n')],
+      cwd: root,
+      env: {},
+      writablePaths: [mainPidFile, childPidFile],
+    }, { ...limits, processCount: 16, runtimeSeconds: 30 }, boundary);
+    const child = spawn(isolated.command.executable, [...isolated.command.args], {
+      cwd: root,
+      env: { ...boundary.launchEnvironment(isolated.command.env) },
+      stdio: 'ignore',
+    });
+    try {
+      await waitForActiveUnit(isolated.scope.unit);
+      await waitForFile(mainPidFile);
+      await waitForFile(childPidFile);
+      const pids = [mainPidFile, childPidFile].map((path) => readFileSync(path, 'utf8').trim());
+      const started = Date.now();
+      await boundary.terminateAndVerify(isolated.scope);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(50);
+      await waitForClose(child);
+      expect(pids.every((pid) => !existsSync(`/proc/${pid}`))).toBe(true);
+      await boundary.terminateAndVerify(isolated.scope);
+    } finally {
+      if (child.exitCode === null) {
+        try { await boundary.terminateAndVerify(isolated.scope); } catch { /* test cleanup */ }
+        child.kill('SIGKILL');
+      }
+    }
+  });
 });
 
 function systemBoundary(): SystemdResourceBoundary {
   return new SystemdResourceBoundary({
     executablePath: '/usr/bin/systemd-run',
+    systemctlPath: '/usr/bin/systemctl',
+    terminationGraceMs: 100,
     sourceEnvironment: process.env,
   });
 }
@@ -91,4 +141,35 @@ function privateRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'coding-harness-resources-'));
   roots.push(root);
   return root;
+}
+
+async function waitForActiveUnit(unit: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const status = spawnSync('/usr/bin/systemctl', [
+      '--user', 'show', '--property=ActiveState', '--value', '--', unit,
+    ], { encoding: 'utf8' });
+    if (status.status === 0 && status.stdout.trim() === 'active') return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`transient unit did not become active: ${unit}`);
+}
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(path) && statSync(path).size > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`process evidence did not appear: ${path}`);
+}
+
+async function waitForClose(child: ReturnType<typeof spawn>): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) return child.exitCode;
+  return await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('transient service did not stop')), 5_000);
+    timeout.unref();
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
 }

@@ -46,6 +46,7 @@ export interface NativeRuntimeExecutablePaths {
   readonly node: string;
   readonly bwrap: string;
   readonly systemdRun: string;
+  readonly systemctl: string;
   readonly proxyLauncher: string;
 }
 
@@ -159,6 +160,8 @@ export function createTrustedNativeRuntime(
     });
     const resources = new SystemdResourceBoundary({
       executablePath: canonicalFile(options.executables.systemdRun, 'SYSTEMD_RUN'),
+      systemctlPath: canonicalFile(options.executables.systemctl, 'SYSTEMCTL'),
+      terminationGraceMs: options.config.limits.terminationGraceMs,
       sourceEnvironment: options.controllerEnvironment ?? process.env,
     });
     const forbidden = options.forbiddenRoots ?? unique([

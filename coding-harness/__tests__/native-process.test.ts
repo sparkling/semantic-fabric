@@ -4,14 +4,15 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { BoundedNativeProcessRunner } from '../src/native-process.js';
 import type { NativeProcessRequest } from '../src/models/types.js';
 import type { NativeModelOriginPinningBoundary } from '../src/network.js';
 import type { NativeModelFilesystemBoundary } from '../src/native-filesystem.js';
 import { digestValue } from '../src/receipts.js';
-import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
+import type { NativeResourceBoundary } from '../src/resource-boundary.js';
+import { fakeResourceBoundary, TEST_RESOURCE_LIMITS, TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/native-process-fixture.mjs');
@@ -93,6 +94,7 @@ function runner(
   allowedWriteRoots: readonly string[] = [root],
   forbiddenRoots: readonly string[] = [workspace()],
   maskedWorkspacePaths: readonly string[] = [],
+  resourceBoundary: NativeResourceBoundary = fakeResourceBoundary,
 ): BoundedNativeProcessRunner {
   return new BoundedNativeProcessRunner({
     config: SECURE_HARNESS_CONFIG,
@@ -103,7 +105,7 @@ function runner(
     forbiddenRoots,
     egressBoundary,
     filesystemBoundary,
-    resourceBoundary: fakeResourceBoundary,
+    resourceBoundary,
     resourceLimits: TEST_RESOURCE_LIMITS,
     maskedWorkspacePaths,
     maxOutputBytes,
@@ -191,8 +193,10 @@ describe('bounded native subscription process bridge', () => {
 
   it('terminates the process group on timeout and cancellation', async () => {
     const root = workspace();
-    const timed = await runner(root).run(request(root, 'wait', { timeoutMs: 50, stdin: undefined }));
+    const bridge = runner(root);
+    const timed = await bridge.run(request(root, 'wait', { timeoutMs: 50, stdin: undefined }));
     expect(timed.timedOut).toBe(true);
+    expect(bridge.resourceEvidence()[0]?.limits.runtimeSeconds).toBe(1);
 
     const controller = new AbortController();
     const pending = runner(root).run(request(root, 'wait', {
@@ -202,6 +206,40 @@ describe('bounded native subscription process bridge', () => {
     setTimeout(() => controller.abort(), 50);
     const cancelled = await pending;
     expect(cancelled.cancelled).toBe(true);
+  });
+
+  it('awaits exact scope release and rejects unverifiable termination', async () => {
+    const root = workspace();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const terminateAndVerify = vi.fn()
+      .mockImplementationOnce(async () => await gate)
+      .mockResolvedValue(undefined);
+    const boundary = { ...fakeResourceBoundary, terminateAndVerify };
+    const bridge = runner(root, 10_000, [root], [root], [workspace()], [], boundary);
+    const pending = bridge.run(request(root, 'wait', { timeoutMs: 50, stdin: undefined }));
+    await waitFor(() => terminateAndVerify.mock.calls.length === 1);
+    let finished = false;
+    void pending.then(() => { finished = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(finished).toBe(false);
+    release();
+    expect((await pending).timedOut).toBe(true);
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
+    expect(terminateAndVerify).toHaveBeenCalledWith(TEST_RESOURCE_SCOPE);
+
+    const rejectedBoundary = {
+      ...fakeResourceBoundary,
+      terminateAndVerify: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        throw new Error('unverifiable scope');
+      },
+    };
+    const rejected = runner(root, 10_000, [root], [root], [workspace()], [], rejectedBoundary);
+    await expect(rejected.run(request(root, 'wait', {
+      timeoutMs: 50, stdin: undefined,
+    }))).rejects.toThrow('HARNESS_NATIVE_RESOURCE_TERMINATION_FAILED');
+    expect(rejected.allExecutionEvidence()).toEqual([]);
   });
 
   it('fails closed for executable substitution and forbidden transport variables', async () => {
@@ -257,3 +295,11 @@ describe('bounded native subscription process bridge', () => {
     })).toThrow('HARNESS_NATIVE_EXECUTABLE_UNTRUSTED:codex');
   });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('condition was not observed');
+}

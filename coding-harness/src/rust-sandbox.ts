@@ -13,7 +13,11 @@ import {
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { StructuredCommand } from './contracts.js';
-import type { NativeResourceBoundary, NativeResourceLimits } from './resource-boundary.js';
+import type {
+  NativeResourceBoundary,
+  NativeResourceLimits,
+  NativeResourceScope,
+} from './resource-boundary.js';
 import {
   createSystemOfflineIsolator,
   type BoundaryCommand,
@@ -123,6 +127,9 @@ function closureStableIsolator(
       assertClosureStable();
       return isolated;
     },
+    async terminateAndVerify(scope: NativeResourceScope) {
+      await isolator.terminateAndVerify(scope);
+    },
     launchEnvironment(environment: Readonly<Record<string, string>>) {
       return isolator.launchEnvironment?.(environment) ?? environment;
     },
@@ -185,6 +192,9 @@ function extensionStableIsolator(
     isolate(command: BoundaryCommand) {
       assertExtension();
       return isolator.isolate(command);
+    },
+    async terminateAndVerify(scope: NativeResourceScope) {
+      await isolator.terminateAndVerify(scope);
     },
     launchEnvironment(environment: Readonly<Record<string, string>>) {
       return isolator.launchEnvironment?.(environment) ?? environment;

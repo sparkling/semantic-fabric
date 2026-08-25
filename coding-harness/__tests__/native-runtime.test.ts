@@ -142,6 +142,7 @@ function createFixture() {
       node: realpathSync(process.execPath),
       bwrap: realpathSync('/bin/true'),
       systemdRun: realpathSync('/bin/true'),
+      systemctl: realpathSync('/bin/true'),
       proxyLauncher: launcher,
     },
   };
