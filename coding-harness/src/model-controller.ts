@@ -292,42 +292,52 @@ function formatModelContext(
 }
 
 function parseArchitecture(value: unknown): { proposal: unknown; confidence: number } {
-  const input = asRecord(value, 'architecture response');
-  assertExactKeys(input, ['proposal', 'confidence'], 'architecture response');
-  if (!Number.isFinite(input.confidence) || (input.confidence as number) < 0 || (input.confidence as number) > 1) {
-    throw new TypeError('architecture response.confidence must be between 0 and 1');
-  }
-  return {
-    proposal: input.proposal,
-    confidence: input.confidence as number,
-  };
+  return parseNativeResponse('HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID', () => {
+    const input = asRecord(value, 'architecture response');
+    assertExactKeys(input, ['proposal', 'confidence'], 'architecture response');
+    if (!Number.isFinite(input.confidence)
+      || (input.confidence as number) < 0 || (input.confidence as number) > 1) {
+      throw new TypeError('architecture response.confidence must be between 0 and 1');
+    }
+    return { proposal: input.proposal, confidence: input.confidence as number };
+  });
 }
 
 function parsePatch(value: unknown, invocationId: string): PatchSubmission {
-  const input = asRecord(value, 'patch response');
-  assertExactKeys(input, ['patch'], 'patch response');
-  const payload = asNonEmptyString(input.patch, 'patch response.patch');
-  if (Buffer.byteLength(payload, 'utf8') > 10_000_000 || !payload.startsWith('diff --git ')) {
-    throw new Error('HARNESS_NATIVE_PATCH_INVALID');
-  }
-  return deepFreeze({
-    payload,
-    authorInvocationId: asNonEmptyString(invocationId, 'native invocation ID'),
+  return parseNativeResponse('HARNESS_NATIVE_PATCH_RESPONSE_INVALID', () => {
+    const input = asRecord(value, 'patch response');
+    assertExactKeys(input, ['patch'], 'patch response');
+    const payload = asNonEmptyString(input.patch, 'patch response.patch');
+    if (Buffer.byteLength(payload, 'utf8') > 10_000_000 || !payload.startsWith('diff --git ')) {
+      throw new Error('HARNESS_NATIVE_PATCH_INVALID');
+    }
+    return deepFreeze({
+      payload,
+      authorInvocationId: asNonEmptyString(invocationId, 'native invocation ID'),
+    });
   });
 }
 
 function parseReview(value: unknown): { accepted: boolean; reasons: string[] } {
-  const input = asRecord(value, 'review response');
-  assertExactKeys(input, ['accepted', 'reasons'], 'review response');
-  if (typeof input.accepted !== 'boolean' || !Array.isArray(input.reasons)) {
-    throw new TypeError('review response is invalid');
+  return parseNativeResponse('HARNESS_NATIVE_REVIEW_RESPONSE_INVALID', () => {
+    const input = asRecord(value, 'review response');
+    assertExactKeys(input, ['accepted', 'reasons'], 'review response');
+    if (typeof input.accepted !== 'boolean' || !Array.isArray(input.reasons)) {
+      throw new TypeError('review response is invalid');
+    }
+    const reasons = input.reasons.map((reason, index) =>
+      asNonEmptyString(reason, `review response.reasons[${index}]`));
+    if (input.accepted && reasons.length > 0) throw new Error('HARNESS_NATIVE_REVIEW_CONTRADICTORY');
+    if (!input.accepted && reasons.length === 0) throw new Error('HARNESS_NATIVE_REVIEW_REASON_REQUIRED');
+    return { accepted: input.accepted, reasons };
+  });
+}
+
+function parseNativeResponse<T>(code: string, parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof Error && /^HARNESS_[A-Z0-9_]+/.test(error.message)) throw error;
+    throw new Error(code, { cause: error });
   }
-  const reasons = input.reasons.map((reason, index) =>
-    asNonEmptyString(reason, `review response.reasons[${index}]`));
-  if (input.accepted && reasons.length > 0) throw new Error('HARNESS_NATIVE_REVIEW_CONTRADICTORY');
-  if (!input.accepted && reasons.length === 0) throw new Error('HARNESS_NATIVE_REVIEW_REASON_REQUIRED');
-  return {
-    accepted: input.accepted,
-    reasons,
-  };
 }

@@ -57,6 +57,14 @@ describe('patched candidate transaction', () => {
     expect(finalizeIssue8ProgrammeOutcome({
       transactionStatus: result.status, transactionReason: result.reason, envelope,
     })).toEqual({ status: 'pass', reason: null });
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: 'fail',
+      transactionReason: 'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID:untrusted detail',
+      envelope,
+    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID' });
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: 'fail', transactionReason: 'untrusted detail', envelope,
+    })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
     const tampered = JSON.parse(JSON.stringify(envelope));
     tampered.programmeAcceptance.score = 99;
     expect(() => parseIssue8ProgrammeEnvelope(JSON.stringify(tampered)))

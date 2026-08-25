@@ -67,6 +67,7 @@ const contextProvider: ModelContextProvider = {
 function controller(
   events: string[],
   prompts: Array<{ operation: string; prompt: string }> = [],
+  override?: (input: { candidate: NativeModelCandidate; operation: string }) => unknown,
 ): NativeRepositoryModelController {
   const pool = new PersistentRoutedAgentPool({
     runId: 'run-model-controller',
@@ -89,7 +90,9 @@ function controller(
     events.push(`${input.operation}:${input.candidate.host}`);
     prompts.push({ operation: input.operation, prompt: input.prompt });
     let output: unknown;
-    if (input.operation === 'architecture') {
+    if (override !== undefined) {
+      output = override(input);
+    } else if (input.operation === 'architecture') {
       output = {
         proposal: { host: input.candidate.host, invariant: 'checked-bind' },
         confidence: input.candidate.host === 'codex' ? 0.9 : 0.8,
@@ -187,6 +190,14 @@ describe('native repository model controller', () => {
 
     await expect(rejecting.review('codex', build)).rejects.toThrow(
       'HARNESS_NATIVE_REVIEW_REASON_REQUIRED',
+    );
+  });
+
+  it('labels malformed architecture output without exposing response data', async () => {
+    const target = controller([], [], () => ({ proposal: { secret: 'do-not-expose' } }));
+
+    await expect(target.architecture()).rejects.toThrow(
+      'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID',
     );
   });
 

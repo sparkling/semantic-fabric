@@ -71,12 +71,12 @@ try {
   }
   await cleanupPrivateState();
   const sealed = await outcome.seal();
-  const sealedDigests = [sealed.receiptDigest, sealed.programmeAcceptanceDigest, sealed.envelopeDigest];
+  const sealedDigests = [sealed.receiptDigest, sealed.programmeAcceptanceDigest, sealed.envelopeDigest]; const reasonValid = sealed.status === 'pass' ? outcome.reason === null : typeof outcome.reason === 'string' && /^HARNESS_[A-Z0-9_]+$/.test(outcome.reason);
   if (sealed.status !== outcome.status || !['pass', 'fail', 'gated', 'cancelled'].includes(sealed.status)
-    || !sealedDigests.every((digest) => DIGEST.test(digest))) {
+    || !reasonValid || !sealedDigests.every((digest) => DIGEST.test(digest))) {
     throw new Error('HARNESS_BOOTSTRAP_SEALED_OUTCOME_INVALID');
   }
-  process.stdout.write(`${JSON.stringify({ status: sealed.status, receiptDigest: sealed.receiptDigest,
+  process.stdout.write(`${JSON.stringify({ status: sealed.status, reason: outcome.reason, receiptDigest: sealed.receiptDigest,
     programmeAcceptanceDigest: sealed.programmeAcceptanceDigest,
     envelopeDigest: sealed.envelopeDigest })}\n`);
   process.exitCode = sealed.status === 'pass' ? 0 : 1;

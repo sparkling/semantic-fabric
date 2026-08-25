@@ -115,14 +115,21 @@ export function finalizeIssue8ProgrammeOutcome(input: Readonly<{
   transactionReason: string | null;
   envelope: Issue8ProgrammeEnvelope;
 }>): Readonly<{ status: ReceiptStatus; reason: string | null }> {
-  if (input.transactionStatus === 'pass'
-    && input.envelope.programmeAcceptance.status !== 'ACCEPTED') {
+  if (input.transactionStatus === 'pass') {
+    if (input.transactionReason !== null) {
+      throw new Error('HARNESS_ISSUE_8_PASS_REASON_INVALID');
+    }
+    if (input.envelope.programmeAcceptance.status === 'ACCEPTED') {
+      return deepFreeze({ status: 'pass', reason: null });
+    }
     return deepFreeze({
       status: 'gated',
       reason: 'HARNESS_ISSUE_8_PROGRAMME_ACCEPTANCE_REJECTED',
     });
   }
-  return deepFreeze({ status: input.transactionStatus, reason: input.transactionReason });
+  const reason = input.transactionReason?.match(/^HARNESS_[A-Z0-9_]+/)?.[0]
+    ?? 'HARNESS_ISSUE_8_TRANSACTION_FAILED';
+  return deepFreeze({ status: input.transactionStatus, reason });
 }
 
 function assembleEnvelope(
