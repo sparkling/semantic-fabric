@@ -325,8 +325,16 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     }
   }
 
-  runtimeEvidence(expectations: readonly NativeInvocationExpectation[]) {
+  recoveryEvidence() {
     const recovery = this.#options.model.recoveryEvidence();
+    return Object.freeze({
+      retryCount: recovery.retryCount,
+      breakerState: recovery.breakerState,
+      recoveryEvents: Object.freeze([...recovery.events]),
+    });
+  }
+
+  runtimeEvidence(expectations: readonly NativeInvocationExpectation[]) {
     if (this.#options.nativeRuntime === undefined) {
       throw new Error('HARNESS_NATIVE_TRUSTED_RUNTIME_UNAVAILABLE');
     }
@@ -337,10 +345,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
       expectations,
     });
     return Object.freeze({
-      retryCount: recovery.retryCount,
-      breakerState: recovery.breakerState,
       nativeEvidence,
-      recoveryEvents: Object.freeze([...recovery.events]),
     });
   }
 

@@ -315,11 +315,12 @@ export class CandidateTransaction {
     let status = requestedStatus;
     let reason = requestedReason;
     try {
-      const runtime = this.#operations.runtimeEvidence(evidence.nativeInvocations);
+      const recovery = this.#operations.recoveryEvidence();
       evidence.runtime = {
-        retryCount: runtime.retryCount,
-        breakerState: runtime.breakerState,
+        retryCount: recovery.retryCount,
+        breakerState: recovery.breakerState,
       };
+      const runtime = this.#operations.runtimeEvidence(evidence.nativeInvocations);
       if (requestedStatus === 'pass') {
         const native = bindNativeRuntimeEvidence({
           value: runtime.nativeEvidence,

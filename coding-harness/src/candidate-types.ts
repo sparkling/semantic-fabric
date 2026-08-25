@@ -96,14 +96,18 @@ export interface CandidateOperations {
   auditMutableOutputs(signal?: AbortSignal): Promise<GateDecision>;
   agenticQeEvidence(build: CandidateBuild, signal?: AbortSignal): Promise<readonly unknown[]>;
   mutationEvidence(build: CandidateBuild, signal?: AbortSignal): Promise<AcceptanceGateEvidence>;
+  recoveryEvidence(): CandidateRecoveryEvidence;
   runtimeEvidence(expectations: readonly NativeInvocationExpectation[]): CandidateRuntimeEvidence;
   cleanup(): Promise<void>;
 }
 
 export interface CandidateRuntimeEvidence {
+  readonly nativeEvidence: unknown;
+}
+
+export interface CandidateRecoveryEvidence {
   readonly retryCount: number;
   readonly breakerState: 'closed' | 'open' | 'half-open';
-  readonly nativeEvidence: unknown;
   readonly recoveryEvents: readonly unknown[];
 }
 
@@ -133,6 +137,6 @@ export interface CandidateEvidenceState {
   patchDigests: string[];
   coordination: ReceiptDraft['coordination'];
   repairCount: number;
-  runtime: Pick<CandidateRuntimeEvidence, 'retryCount' | 'breakerState'>;
+  runtime: Pick<CandidateRecoveryEvidence, 'retryCount' | 'breakerState'>;
   nativeInvocations: NativeInvocationExpectation[];
 }

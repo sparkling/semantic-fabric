@@ -253,11 +253,13 @@ export function operations(events: string[]): CandidateOperations {
       }],
       digests: { mutation: digest('c') },
     })),
-    runtimeEvidence: vi.fn((expectations: readonly NativeInvocationExpectation[]) => ({
+    recoveryEvidence: vi.fn(() => ({
       retryCount: 0,
       breakerState: 'closed',
-      nativeEvidence: nativeProof(expectations),
       recoveryEvents: [],
+    })),
+    runtimeEvidence: vi.fn((expectations: readonly NativeInvocationExpectation[]) => ({
+      nativeEvidence: nativeProof(expectations),
     })),
     cleanup: vi.fn(async () => {
       events.push('cleanup');

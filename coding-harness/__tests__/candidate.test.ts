@@ -375,17 +375,18 @@ describe('patched candidate transaction', () => {
 
   it('does not count recovery events as native execution evidence', async () => {
     const target = operations([]);
-    target.runtimeEvidence = vi.fn(() => ({
+    target.recoveryEvidence = vi.fn(() => ({
       retryCount: 2,
       breakerState: 'closed',
-      nativeEvidence: {},
       recoveryEvents: [{ outcome: 'transient-retry' }, { outcome: 'success' }],
     }));
+    target.runtimeEvidence = vi.fn(() => ({ nativeEvidence: {} }));
     const result = await new CandidateTransaction({
       context, operations: target, maxRepairs: 1,
     }).execute();
     expect(result.status).toBe('fail');
     expect(result.reason).toContain('HARNESS_RUNTIME_EVIDENCE_FAILED');
+    expect(result.receipt.recovery.retryCount).toBe(2);
   });
 
   it('turns cleanup failure into a terminal failed receipt', async () => {
