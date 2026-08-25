@@ -162,6 +162,7 @@ describe('native subscription adapters', () => {
       ]),
     );
     expect(codexRequest?.args.join(' ')).toContain('model_provider="openai"');
+    expect(codexRequest?.args.join(' ')).toContain('model_reasoning_effort="low"');
     expect(claudeRequest?.args).toEqual(
       expect.arrayContaining([
         '-p',

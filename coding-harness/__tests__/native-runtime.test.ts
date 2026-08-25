@@ -15,6 +15,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ISSUE_8_MODEL_TIMEOUT_MS } from '../src/issue-8-native-session.js';
+import { ISSUE_8_NATIVE_LIMITS } from '../src/issue-8-system.js';
 import { createTrustedNativeRuntime } from '../src/native-runtime.js';
 import { TEST_RESOURCE_LIMITS, createTestConfig } from './helpers.js';
 
@@ -25,6 +27,13 @@ afterEach(() => {
 });
 
 describe('trusted native runtime composition', () => {
+  it('nests the issue model deadline inside the systemd runtime boundary', () => {
+    expect(ISSUE_8_MODEL_TIMEOUT_MS).toBe(300_000);
+    expect(ISSUE_8_MODEL_TIMEOUT_MS).toBeLessThan(
+      ISSUE_8_NATIVE_LIMITS.runtimeSeconds * 1_000,
+    );
+  });
+
   it('copies only credential capabilities into a private disposable runtime', () => {
     const fixture = createFixture();
     const runtime = createTrustedNativeRuntime({

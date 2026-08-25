@@ -11,6 +11,8 @@ import {
 } from './native-runtime.js';
 import type { NativeResourceLimits } from './resource-boundary.js';
 
+export const ISSUE_8_MODEL_TIMEOUT_MS = 300_000;
+
 export interface Issue8NativeSessionOptions {
   readonly config: HarnessConfig;
   readonly controllerRoot: string;
@@ -27,6 +29,9 @@ export interface Issue8NativeSessionOptions {
 export async function createIssue8NativeSession(
   options: Issue8NativeSessionOptions,
 ): Promise<Issue8NativeSession> {
+  if (ISSUE_8_MODEL_TIMEOUT_MS >= options.resourceLimits.runtimeSeconds * 1_000) {
+    throw new Error('HARNESS_ISSUE_8_MODEL_TIMEOUT_NOT_NESTED');
+  }
   const runRoot = preparedRunRoot(options.prepared);
   const runtime = createTrustedNativeRuntime({
     config: options.config,
@@ -36,6 +41,7 @@ export async function createIssue8NativeSession(
     executables: options.executables,
     credentials: options.credentials,
     resourceLimits: options.resourceLimits,
+    timeoutMs: ISSUE_8_MODEL_TIMEOUT_MS,
     maskedWorkspacePaths: options.evaluatorPaths,
     forbiddenMountRoots: [
       homedir(), options.controllerRoot, runRoot, options.runtimeParent,

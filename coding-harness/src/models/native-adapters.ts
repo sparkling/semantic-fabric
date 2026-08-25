@@ -35,6 +35,7 @@ const MAX_SCHEMA_BYTES = 64_000;
 
 const CODEX_FIXED_CONFIG = Object.freeze([
   'model_provider="openai"',
+  'model_reasoning_effort="low"',
   'approval_policy="never"',
   'project_doc_max_bytes=0',
   'project_doc_fallback_filenames=[]',
