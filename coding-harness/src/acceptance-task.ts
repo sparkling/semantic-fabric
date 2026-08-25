@@ -14,6 +14,10 @@ import {
   parseStructuredCommand,
   pathsOverlap,
 } from './contracts.js';
+import {
+  bindRustOfflineCommand,
+  type RustOfflineProfile,
+} from './rust-sandbox.js';
 
 const GIT_OBJECT_ID = /^[a-f0-9]{40}$/;
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,128}$/;
@@ -148,6 +152,34 @@ export function parseAcceptanceTask(value: unknown, config: HarnessConfig): Acce
     policy,
     evolutionEligible: false,
   });
+}
+
+export function bindAcceptanceTaskToRustProfile(
+  parsedTask: AcceptanceTask,
+  profile: RustOfflineProfile,
+): AcceptanceTask {
+  const boundTask = structuredClone(parsedTask);
+  const bindCommand = (command: StructuredCommand): StructuredCommand => {
+    const bound = bindRustOfflineCommand(command, profile);
+    return { ...bound, argv: [...bound.argv], env: { ...bound.env } };
+  };
+  const bindNamedCommands = (commands: NamedAcceptanceCommand[]): NamedAcceptanceCommand[] =>
+    commands.map((entry) => ({
+      ...entry,
+      command: bindCommand(entry.command),
+    }));
+
+  boundTask.redBaseline.commands = bindNamedCommands(boundTask.redBaseline.commands);
+  boundTask.commands.build = bindNamedCommands(boundTask.commands.build);
+  boundTask.commands.public = bindNamedCommands(boundTask.commands.public);
+  boundTask.commands.independent = bindNamedCommands(boundTask.commands.independent);
+  boundTask.commands.regression = bindNamedCommands(boundTask.commands.regression);
+  boundTask.commands.mutation = boundTask.commands.mutation.map((entry) => ({
+    ...entry,
+    command: bindCommand(entry.command),
+  }));
+
+  return deepFreeze(boundTask);
 }
 
 function parseGitIdentity(value: unknown, label: string): GitObjectIdentity {

@@ -4,8 +4,14 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseAcceptanceTask } from '../src/acceptance-task.js';
+import {
+  bindAcceptanceTaskToRustProfile,
+  parseAcceptanceTask,
+  type AcceptanceTask,
+} from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
+import type { StructuredCommand } from '../src/contracts.js';
+import type { RustOfflineProfile } from '../src/rust-sandbox.js';
 
 function taskInput(): Record<string, unknown> {
   return JSON.parse(readFileSync(
@@ -19,6 +25,39 @@ function cloneTask(): Record<string, any> {
 }
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+
+const rustProfile: RustOfflineProfile = Object.freeze({
+  cargoExecutable: '/toolchain/bin/cargo',
+  environment: Object.freeze({
+    PATH: '/toolchain/bin:/usr/bin',
+    HOME: '/home/harness',
+    CARGO_HOME: '/cargo-home',
+    CARGO_NET_OFFLINE: 'true',
+    CARGO_INCREMENTAL: '0',
+  }),
+  readOnlyMounts: Object.freeze([]),
+  isolator: Object.freeze({
+    isolate() {},
+    assertStable() {},
+  }),
+});
+
+function acceptanceCommands(task: AcceptanceTask): Array<[string, StructuredCommand]> {
+  return [
+    ...task.redBaseline.commands.map(({ commandId, command }) => [`red:${commandId}`, command] as const),
+    ...task.commands.build.map(({ commandId, command }) => [`build:${commandId}`, command] as const),
+    ...task.commands.public.map(({ commandId, command }) => [`public:${commandId}`, command] as const),
+    ...task.commands.independent.map(({ commandId, command }) => [`independent:${commandId}`, command] as const),
+    ...task.commands.regression.map(({ commandId, command }) => [`regression:${commandId}`, command] as const),
+    ...task.commands.mutation.map(({ mutationId, command }) => [`mutation:${mutationId}`, command] as const),
+  ];
+}
+
+function visitObjects(value: unknown, visit: (object: object) => void): void {
+  if (value === null || typeof value !== 'object') return;
+  visit(value);
+  for (const child of Object.values(value)) visitObjects(child, visit);
+}
 
 describe('issue #8 acceptance task', () => {
   it('parses the canonical shell-free task and freezes every nested value', () => {
@@ -73,6 +112,37 @@ describe('issue #8 acceptance task', () => {
       : argv.includes('--locked'))).toBe(true);
     expect(Object.isFrozen(task)).toBe(true);
     expect(Object.isFrozen(task.commands.mutation[0].command.argv)).toBe(true);
+  });
+
+  it('deep-clones, binds, and freezes every acceptance command for the Rust profile', () => {
+    const parsedTask = parseAcceptanceTask(taskInput(), SECURE_HARNESS_CONFIG);
+    const parsedSnapshot = structuredClone(parsedTask);
+    const parsedObjects = new Set<object>();
+    visitObjects(parsedTask, (object) => parsedObjects.add(object));
+
+    const boundTask = bindAcceptanceTaskToRustProfile(parsedTask, rustProfile);
+    const parsedCommands = acceptanceCommands(parsedTask);
+    const boundCommands = acceptanceCommands(boundTask);
+
+    expect(boundCommands.map(([label]) => label)).toEqual(parsedCommands.map(([label]) => label));
+    expect(boundCommands).toHaveLength(13);
+    for (let index = 0; index < parsedCommands.length; index += 1) {
+      const original = parsedCommands[index][1];
+      const bound = boundCommands[index][1];
+      expect(bound.tool).toBe('cargo');
+      expect(bound.executable).toBe('/toolchain/bin/cargo');
+      expect(bound.argv).toEqual(original.argv);
+      expect(bound.argv).not.toBe(original.argv);
+      expect(bound.env).toEqual({ ...original.env, ...rustProfile.environment });
+      expect(bound.env).not.toBe(original.env);
+    }
+
+    visitObjects(boundTask, (object) => {
+      expect(parsedObjects.has(object)).toBe(false);
+      expect(Object.isFrozen(object)).toBe(true);
+    });
+    expect(parsedTask).toEqual(parsedSnapshot);
+    expect(acceptanceCommands(parsedTask).every(([, command]) => command.executable === 'cargo')).toBe(true);
   });
 
   it('rejects shell command strings and metacharacters in argv', () => {
