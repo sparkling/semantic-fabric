@@ -79,6 +79,37 @@ function draft(step = 'build') {
   };
 }
 
+function passDraft() {
+  const value = draft('candidate-transaction');
+  const candidateTree = 'c'.repeat(40);
+  value.status = 'pass';
+  value.identities.candidate = { commit: 'd'.repeat(40), tree: candidateTree };
+  value.hosts = [
+    value.hosts[0],
+    {
+      host: 'claude-code', model: 'claude-native', role: 'reviewer', clientVersion: '1.0.0',
+      authClass: 'native-anthropic-subscription', subscriptionCostUsd: 0,
+    },
+  ];
+  const command = value.commands[0];
+  value.commands = [
+    { ...command, stage: 'red-baseline', candidateTree: gitTree, exitCode: 101 },
+    { ...command, stage: 'build', candidateTree, exitCode: 0 },
+    { ...command, stage: 'mutation', candidateTree, exitCode: 101 },
+  ];
+  value.verifierDigests = {
+    'red-baseline': digestValue('red'), mutation: digestValue('mutation'),
+    'attempt-0:public': digestValue('public'),
+    'attempt-0:independent': digestValue('independent'),
+    'attempt-0:regression': digestValue('regression'),
+  };
+  value.reviewDigests = [digestValue('codex-review'), digestValue('claude-review')];
+  value.coordination.nativeEvidenceDigests = ['host-a', 'host-b', 'invoke-a', 'invoke-b']
+    .map(digestValue);
+  value.coordination.nativeRuntimeEvidenceDigest = digestValue('native-runtime');
+  return value;
+}
+
 describe('strict receipt schema', () => {
   it('requires fixed development-only authority and rejects unknown fields', () => {
     expect(() => parseReceiptDraft({ ...draft(), authority: 'publish' })).toThrow(/promotion authority/);
@@ -89,6 +120,24 @@ describe('strict receipt schema', () => {
     expect(() => parseReceiptDraft({ ...draft(), status: 'pass' })).toThrow(
       'HARNESS_PASS_RECEIPT_EVIDENCE_INCOMPLETE',
     );
+  });
+
+  it('rejects contradictory or duplicated pass evidence', () => {
+    expect(parseReceiptDraft(passDraft()).status).toBe('pass');
+    for (const invalid of [
+      { recovery: { ...passDraft().recovery, cancelled: true } },
+      { recovery: { ...passDraft().recovery, breakerState: 'open' } },
+      { patchDigests: [...passDraft().patchDigests, digestValue('extra-patch')] },
+      { reviewDigests: Array(2).fill(digestValue('same-review')) },
+      { coordination: {
+        ...passDraft().coordination,
+        nativeEvidenceDigests: Array(4).fill(digestValue('same-native')),
+      } },
+    ]) {
+      expect(() => parseReceiptDraft({ ...passDraft(), ...invalid })).toThrow(
+        'HARNESS_PASS_RECEIPT_EVIDENCE_INCOMPLETE',
+      );
+    }
   });
 
   it('binds native host authentication and rejects indirect gateways', () => {

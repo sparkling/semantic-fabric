@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GitWorktreeSet } from '../src/git-worktrees.js';
+import { runGitCommand } from '../src/git-process.js';
 
 const roots: string[] = [];
 
@@ -42,6 +43,14 @@ function repository(): { root: string; commit: string; patch: string } {
 }
 
 describe('isolated Git candidate and evaluator worktrees', () => {
+  it('contains stdin EPIPE when Git exits before consuming a large payload', async () => {
+    const fixture = repository();
+    const result = await runGitCommand(fixture.root, ['--version'], {
+      stdin: 'x'.repeat(10_000_000),
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
   it('rejects a symlinked repository root at construction', () => {
     const fixture = repository();
     const top = mkdtempSync(join(tmpdir(), 'coding-harness-repository-link-'));

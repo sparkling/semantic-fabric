@@ -99,6 +99,9 @@ export function runGitCommand(
         exitCode,
       });
     }));
+    child.stdin.on('error', () => {
+      // Early Git exit is represented by exit status; EPIPE must not crash the controller.
+    });
     child.stdin.end(options.stdin);
 
     function settle(action: () => void): void {

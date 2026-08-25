@@ -390,7 +390,8 @@ function assertPassReceipt(receipt: ReceiptDraft): void {
     || hosts.size !== 2 || !hosts.has('codex') || !hosts.has('claude-code')
     || receipt.identities.candidate.tree === receipt.identities.evaluator.tree
     || receipt.admittedPaths.length === 0 || receipt.patchDigest === null
-    || receipt.patchDigests.length < 1 || receipt.patchDigests.at(-1) !== receipt.patchDigest
+    || receipt.patchDigests.length !== receipt.recovery.repairCount + 1
+    || receipt.patchDigests.at(-1) !== receipt.patchDigest
     || stages.size !== 3 || red.length === 0 || build.length === 0 || mutation.length === 0
     || red.some((command) => command.attempt !== 0
       || command.candidateTree !== receipt.identities.evaluator.tree
@@ -406,8 +407,12 @@ function assertPassReceipt(receipt: ReceiptDraft): void {
     || !('red-baseline' in receipt.verifierDigests)
     || !Object.keys(receipt.verifierDigests).some((key) => key.startsWith('mutation'))
     || receipt.critiqueDigests.length === 0 || receipt.reviewDigests.length !== 2
+    || new Set(receipt.reviewDigests).size !== receipt.reviewDigests.length
+    || receipt.recovery.cancelled || receipt.recovery.breakerState !== 'closed'
     || receipt.coordination.agenticQeEvidenceDigests.length === 0
     || receipt.coordination.nativeEvidenceDigests.length < 4
+    || new Set(receipt.coordination.nativeEvidenceDigests).size
+      !== receipt.coordination.nativeEvidenceDigests.length
     || receipt.coordination.nativeRuntimeEvidenceDigest === null) {
     throw new Error('HARNESS_PASS_RECEIPT_EVIDENCE_INCOMPLETE');
   }
