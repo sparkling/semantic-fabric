@@ -17,7 +17,10 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { HarnessConfig } from './contracts.js';
 import { NativeAdapterStructuredClient } from './native-client.js';
-import { UnixSocketOriginPinningBoundary } from './native-egress.js';
+import {
+  NATIVE_EGRESS_SOCKET_PATH_LIMIT,
+  UnixSocketOriginPinningBoundary,
+} from './native-egress.js';
 import { BoundedNativeProcessRunner } from './native-process.js';
 import { NativeRuntimeLedger } from './native-runtime-ledger.js';
 import {
@@ -34,6 +37,8 @@ import type { NativeHost } from './models/types.js';
 import type { HostEvidence } from './receipts.js';
 
 const MAX_CREDENTIAL_BYTES = 10 * 1024 * 1024;
+const RUNTIME_PREFIX = 'r-';
+const BROKER_DIRECTORY = 'b';
 
 export interface NativeRuntimeExecutablePaths {
   readonly codex: string;
@@ -86,10 +91,11 @@ export function createTrustedNativeRuntime(
   if (options.allowedWorkspaceRoots.length === 0) {
     throw new Error('HARNESS_NATIVE_WORKSPACE_ROOTS_REQUIRED');
   }
-  const runtimeRoot = mkdtempSync(join(parent, 'native-runtime-'));
+  assertBrokerSocketBudget(parent);
+  const runtimeRoot = mkdtempSync(join(parent, RUNTIME_PREFIX));
   let cleaned = false;
   try {
-    const brokerRoot = createPrivateDirectory(runtimeRoot, 'broker');
+    const brokerRoot = createPrivateDirectory(runtimeRoot, BROKER_DIRECTORY);
     const evidenceRoot = createPrivateDirectory(runtimeRoot, 'evidence');
     const authRoot = createPrivateDirectory(runtimeRoot, 'auth');
     const codexAuthRoot = createPrivateDirectory(authRoot, 'codex');
@@ -301,6 +307,15 @@ function createPrivateDirectory(parent: string, name: string): string {
   const path = join(parent, name);
   mkdirSync(path, { mode: 0o700 });
   return path;
+}
+
+function assertBrokerSocketBudget(parent: string): void {
+  const projected = join(
+    parent, `${RUNTIME_PREFIX}${'x'.repeat(6)}`, BROKER_DIRECTORY, '0'.repeat(16), 'p.sock',
+  );
+  if (Buffer.byteLength(projected) > NATIVE_EGRESS_SOCKET_PATH_LIMIT) {
+    throw new Error('HARNESS_NATIVE_EGRESS_SOCKET_PATH_TOO_LONG');
+  }
 }
 
 function privateDirectory(path: string, label: string): string {

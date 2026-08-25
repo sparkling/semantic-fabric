@@ -290,7 +290,7 @@ async function prepareScratchLayout(scratch: string) {
     worktrees: join(scratch, 'worktrees'),
     evaluator: join(scratch, 'evaluator'),
     frozen: join(scratch, 'frozen'),
-    native: join(scratch, 'native'),
+    native: join(scratch, 'n'),
     sast: join(scratch, 'sast'),
     repository: join(scratch, 'repository.git'),
     gitTemplate: join(scratch, 'git-template'),
@@ -374,7 +374,7 @@ async function prepareResultsRoot(repositoryRoot: string): Promise<string> {
 async function createScratchRoot(): Promise<string> {
   await mkdir(SCRATCH_PARENT, { recursive: true, mode: 0o700 });
   const parent = privateDirectory(SCRATCH_PARENT, 'SCRATCH_PARENT');
-  const root = await mkdtemp(join(parent, 'semantic-fabric-issue8-'));
+  const root = await mkdtemp(join(parent, 'i8-'));
   chmodSync(root, 0o700);
   return privateDirectory(root, 'SCRATCH_ROOT');
 }

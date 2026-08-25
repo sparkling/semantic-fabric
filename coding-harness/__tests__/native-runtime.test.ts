@@ -86,6 +86,26 @@ describe('trusted native runtime composition', () => {
     })).toThrow('HARNESS_NATIVE_COMMON_MOUNT_OUTSIDE_ALLOWLIST');
     expect(listRuntimeChildren(fixture.runtimeParent)).toEqual([]);
   });
+
+  it('reserves a bounded Unix socket path under a realistic runtime parent', () => {
+    const fixture = createFixture();
+    const runtimeParent = join(fixture.runtimeParent, 'p'.repeat(18));
+    mkdirSync(runtimeParent, { mode: 0o700 });
+    const runtime = createTrustedNativeRuntime({
+      config: createTestConfig(),
+      runtimeParent,
+      allowedWorkspaceRoots: [fixture.workspace],
+      workspaceRoot: fixture.workspace,
+      executables: fixture.executables,
+      credentials: fixture.credentials,
+      resourceLimits: TEST_RESOURCE_LIMITS,
+      controllerEnvironment: controllerEnvironment(),
+    });
+
+    const projected = join(runtime.runtimeRoot, 'b', '0'.repeat(16), 'p.sock');
+    expect(Buffer.byteLength(projected)).toBeLessThanOrEqual(100);
+    runtime.cleanup();
+  });
 });
 
 function createFixture() {

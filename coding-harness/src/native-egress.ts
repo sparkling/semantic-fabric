@@ -56,6 +56,7 @@ export interface DnsAddress {
 }
 
 export type DnsResolver = (hostname: string) => Promise<readonly DnsAddress[]>;
+export const NATIVE_EGRESS_SOCKET_PATH_LIMIT = 100;
 
 const IPV4_NON_PUBLIC = addressBlockList([
   ['0.0.0.0', 8],
@@ -134,7 +135,7 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
     const directory = join(this.#brokerRoot, sessionId);
     mkdirSync(directory, { mode: 0o700 });
     const socketPath = join(directory, 'p.sock');
-    if (Buffer.byteLength(socketPath) > 100) {
+    if (Buffer.byteLength(socketPath) > NATIVE_EGRESS_SOCKET_PATH_LIMIT) {
       rmSync(directory, { recursive: true, force: true });
       throw new Error('HARNESS_NATIVE_EGRESS_SOCKET_PATH_TOO_LONG');
     }
