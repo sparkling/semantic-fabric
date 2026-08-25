@@ -30,6 +30,7 @@ describe('captured upstream configuration diagnostics', () => {
     });
     expect(result.get('repository')?.every(({ rawDigest, invocationId }) =>
       /^[a-f0-9]{64}$/.test(rawDigest) && /^[a-f0-9]{64}$/.test(invocationId))).toBe(true);
+    expect(result.get('repository')?.every(({ verdict }) => verdict === 'inconclusive')).toBe(true);
   });
 
   it('rejects degraded, target-mismatched, or caller-field diagnostic evidence', () => {
@@ -46,6 +47,15 @@ describe('captured upstream configuration diagnostics', () => {
       rawOutput: mismatch[0]!.rawOutput.replace(repositoryRoot, '/tmp/not-the-repository'),
     };
     expect(() => derive(mismatch)).toThrow();
+  });
+
+  it('never relabels a caller-supplied clean capture as snapshot-bound proof', () => {
+    const result = derive(captures());
+
+    expect(result.get('repository')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tool: 'mcp-scan', verdict: 'inconclusive' }),
+      expect.objectContaining({ tool: 'threat-model', verdict: 'inconclusive' }),
+    ]));
   });
 });
 

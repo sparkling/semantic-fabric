@@ -84,9 +84,13 @@ function deriveDiagnostic(
   const mcpEnabled = capture.tool === 'mcp-scan'
     ? boolean(data.mcpEnabled, 'mcpEnabled')
     : boolean(data.mcpInUse, 'mcpInUse');
-  const verdict = capture.tool === 'threat-model'
+  const reportedVerdict = capture.tool === 'threat-model'
     ? threatVerdict(data.verdict)
     : worstSeverity === 'medium' || worstSeverity === 'high' ? 'findings' : 'clean';
+  // A caller-supplied capture can preserve a negative finding, but it cannot
+  // attest that a clean tool result ran against this snapshot. Only the
+  // trusted in-process diagnostic runner may mint a clean verdict.
+  const verdict = reportedVerdict === 'clean' ? 'inconclusive' : reportedVerdict;
   const rawDigest = digest(capture.rawOutput);
   return deepFreeze({
     target: capture.target,
