@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-25
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -81,13 +82,26 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > `Retry-After` is a fixed `1`, not pressure-derived — both recorded as open
 > refinements, not gaps in the clause.
 
+> **Status correction, part 3 (2026-08-25, issues #6 and #7).** Four adapter
+> families currently substitute values into SQL text with quote doubling
+> rather than binding them: REST, MonetDB, HANA, and ODBC. None conforms to R1.
+> The REST family additionally collects complete result pages before returning
+> a `BranchStream`, so it does not conform to R5; a one-row stream interface
+> alone proves neither bounded first-result latency nor bounded memory. The
+> supported `sf-serve` surface remains SQLite, PostgreSQL, and MySQL. Any other
+> adapter may join that surface only after provider-native parameter transport,
+> bounded streaming, lifecycle/error handling, cancellation, and direct
+> conformance evidence exist. Issue #6's optional fallible/early-exit quad sink
+> is an API refinement and does not change this ADR's accepted status.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
 
 ## Rules
-* **R1** — user values are bound parameters, never concatenated.
+* **R1** — user values are bound parameters, never concatenated or textually interpolated, even with escaping.
 * **R2** — SQL identifiers derive only from the mapping IR (the reachability floor; authorization is ADR-0018).
 * **R3** — every recursive CTE carries a depth limit + cycle detection.
 * **R4** — every generated query is governed (statement timeout, result cap, cost pre-check, admission control).
-* **R5** — results stream with bounded memory **and** DB-bounded lifetime (`transaction_timeout`, stream-lane pool, cancel-on-drop).
+* **R5** — `open_branch` returns without first collecting the complete result, and results stream with bounded memory **and** DB-bounded lifetime (`transaction_timeout`, stream-lane pool, cancel-on-drop).
+* **R6** — an adapter that fails R1 or R5 is excluded from `sf-serve`; an admission test locks the supported serving set until the adapter passes those rules.

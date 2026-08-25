@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-07-01
+updated: 2026-08-25
 ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
@@ -88,11 +89,24 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > the full account and fix. Closed with 8 new unit tests plus a live
 > DATE/DATETIME2/SMALLDATETIME round-trip test against a real SQL Server
 > container (`differential_mssql.rs`). The MonetDB adapter's own per-backend
-> surface (MAPI/TCP framing) and the REST-family adapters (Snowflake/Athena/
-> Databricks/Trino) gained equivalent adapter-conformance coverage in the same
+> surface (MAPI/TCP framing) and the REST-family adapters (Snowflake, BigQuery,
+> Athena, Databricks, and Trino) gained equivalent adapter-conformance coverage in the same
 > pass — a mocked local MAPI server for MonetDB, `wiremock`-mocked HTTP servers
 > for the REST family — closing what had been zero adapter-level test coverage
-> for four of the eight backend adapters this ADR's abstraction covers.
+> for five of the fifteen backend implementations across eleven adapter modules.
+
+> **Implementation reconciliation (2026-08-25, issues #7 and #10).** The
+> native `SqlBackend` abstraction remains accepted, but the REST-family
+> adapters are trait-shaped prototypes rather than production backends. Their
+> mocked happy-path fixtures do not prove provider API identity, asynchronous
+> state transitions, paging/chunk retrieval, provider-native binding,
+> cancellation, or bounded-memory delivery. In particular, the adapter named
+> Athena implements a Presto-style `/v1/statement` protocol rather than the AWS
+> Athena API, while the BigQuery, Databricks, and Snowflake paths parse only simplified
+> immediate responses. None is exposed by `sf-serve`. Issue #7 therefore
+> requires a separate production-cloud-backend decision, governed by this ADR
+> and ADR-0010, rather than weaker invariants or a renamed prototype. Issue #10
+> is dependency hygiene and does not supersede this architecture.
 
 ## More Information
 

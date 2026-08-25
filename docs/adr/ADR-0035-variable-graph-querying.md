@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-20
-updated: 2026-07-20
+updated: 2026-08-25
 tags: [graph-queries, named-graphs, quad-semantics, sparql-dataset, unfold, rdf-star]
 supersedes: []
 depends-on:
@@ -11,119 +11,127 @@ depends-on:
 implements: []
 ---
 
-# Variable-graph querying: `GRAPH ?g` over the R2RML-declared named-graph structure
+# Variable-graph querying over R2RML graph sets
 
-## Implementation status (2026-07-20, same day — accepted, implemented)
+## Implementation status
 
-All 8 contract cells green on both engines vs the spareval oracle
-(`differential_graphs.rs` + 2 star-under-named-graph cells in
-`differential_star.rs`, star suite 65→67). Corrections to this design made
-during landing, with evidence: (1) **the oracle needed NO extension** — §"if
-the oracle is graph-blind" was wrong; `oracle::evaluate` already runs
-spareval over an `oxrdf::Dataset`, `parse_nquads` already existed, and
-`star_decode` already preserves graph names — zero oracle lines changed.
-(2) **the sf-mapping inheritance fix is one field**, not a broad rework: the
-injected `rdf:reifies` POM already inherited via the ordinary
-POM-falls-back-to-subject-graphs rule; only the STANDALONE description
-TriplesMap's `SubjectMap.graphs` was orphaned (fixed by threading the star
-map's effective graphs through `quote_shape`, subject AND object positions
-symmetrically) — proven by a genuine two-path differential (engine red /
-oracle right with the one line reverted). (3) Tree parity rode on widening
-`Intensional`/`UnresolvedPath.graph` to `NamedNodePattern` and
-`resolve_path` to `Vec<Branch>` — `iq/lower`, `cascade`, and `exec_core`
-needed zero changes (nothing downstream pattern-matches those nodes).
-(4) Nested GRAPH re-pins correctly by construction (symmetric
-save/clear/restore on both arm kinds) — implemented, not separately
-contract-tested. Conservative boundary as designed: paths under a variable
-graph refuse mapping-wide when ANY non-constant graph map exists (pinned);
-narrowing that to per-predicate relevance is a possible future refinement,
-recorded here, not owed. The old `adversarial_adr0033_refute` pin that
-locked the pre-ADR 501 flipped to pin the positive behavior — its own
-comment predicted exactly this flip.
+**Accepted; implementation correction required.** The original eight contract
+cells were green on both engines against the spareval oracle on 2026-07-20.
+They established the `GRAPH ?g` architecture, but did not exercise the R2RML
+subject-map plus predicate-object-map graph union or all incompatible binding
+paths. Issues #8 and #9 therefore invalidate the historical "implemented"
+claim without reversing the decision.
 
-## Context and Problem Statement
+Corrective work must cover ordinary BGP unfolding, property paths, RDF-star,
+flat/tree parity, and the materialized-dataset oracle before this decision can
+again be called fully implemented.
 
-`GRAPH <g> { P }` works (the `current_graph` mechanism: `unfold.rs`'s
-`GraphPattern::Graph` arm pins the graph, `graph_maps_match` filters candidate
-POMs by their effective graph, R2RML §4.6 POM-overrides-subject precedence,
-and — since Run 4 A2 — property paths honor it with graceful-empty). But
-`GRAPH ?g { P }` — the variable form — is a sound 501: the `Graph` arm's
-`name` match has no `Variable` case.
+## Context and problem statement
 
-SPARQL §13.3: `GRAPH ?g` ranges over the dataset's **named graphs** (never the
-default graph), binding `?g` to each named graph's name and evaluating `P`
-inside it. Under R2RML, the named-graph structure is **statically declared in
-the mapping**: a triple lands in named graph `g` iff its POM's effective graph
-maps (POM's own `rr:graphMap`s, else the subject map's; empty ⇒ default graph)
-produce `g`. Graph maps are `TermMap`s — constants in almost every real
-mapping, templates occasionally, columns rarely.
+SPARQL `GRAPH ?g` ranges over named graphs in the active dataset, never the
+default graph, and binds `?g` to each matching graph name. R2RML declares the
+dataset graph structure through graph maps on both a subject map and its
+predicate-object maps.
+
+The original implementation treated a predicate-object map's graph maps as an
+override of its subject map's graph maps. That is incorrect. Each generated
+triple is placed in every graph in the **distinct union** of both graph-map
+sets. An empty union places it in the default graph; `rr:defaultGraph` is an
+explicit default-graph member. The materializer already follows this rule, but
+ordinary unfolding and property paths do not, creating query/materialization
+disagreement.
+
+The same area also exposes a separate binding invariant: an incompatible
+subject, predicate, object, class, or graph binding must prune its branch.
+Ignoring a failed bind can leak impossible solutions, especially when one
+variable is reused across positions.
 
 ## Decision
 
-Implement `GRAPH ?g` as **per-branch graph enumeration + an ordinary variable
-binding** — no quad-store, no dataset materialization, no new engine concept:
+1. **One canonical graph-set function.** Query unfolding, property paths,
+   RDF-star description-map inheritance, and quad materialization use the same
+   normalized, duplicate-free union of `SubjectMap.graphs` and
+   `PredicateObjectMap.graphs`.
+2. **Dataset matching follows union membership.**
+   - A default BGP accepts a triple when the union is empty or contains
+     `rr:defaultGraph`.
+   - `GRAPH <g>` accepts it when the union contains `g`.
+   - `GRAPH ?g` emits one branch per distinct named-graph member and never
+     binds `rr:defaultGraph`.
+3. **Dynamic graph maps stay sound.** A pinned constant graph against a
+   template or column graph map must add a runtime equality constraint or
+   return an honest `Unsupported`; silently returning no rows is not sound.
+   Variable-graph paths over a row-dependent graph set retain the same rule.
+4. **Graph variables are ordinary correlated bindings.** Projection,
+   filtering, `VALUES`, joins, and nested `GRAPH` reuse the existing unifier.
+   Every bind operation in ordinary triple and `rr:class` unfolding must check
+   its result and prune incompatible branches.
+5. **Paths use identical graph semantics.** Constant filtering and variable
+   enumeration for property paths operate over the normalized union, not an
+   override approximation.
+6. **RDF-star preserves the complete graph set.** Description maps inherit the
+   normalized union in both quoted-subject and quoted-object positions.
+7. **Set semantics are unchanged.** `?g` is part of the solution tuple;
+   duplicate graph declarations normalize to one destination and one solution.
 
-1. **The `Graph { name: Variable(v), inner }` arm** translates `inner` in a new
-   mode: instead of filtering candidates by a pinned `current_graph`, each
-   candidate POM contributes one branch **per effective graph map** (fan-out
-   over `Vec<TermMap>`; the common case is 0 or 1), and each branch gains a
-   binding for `v`:
-   - constant graph map → `TermDef::Const(NamedNode)` — the dominant case;
-   - template graph map → an ordinary `Derived` template binding;
-   - column graph map → a `Derived` column binding (IRI-typed);
-   - **no graph map ⇒ the POM's triples live in the default graph ⇒ that
-     candidate is EXCLUDED** (§13.3: named graphs only).
-2. **Same-graph correlation is free.** Two patterns inside one `GRAPH ?g`
-   block share `v`, so the existing unification machinery (`unify`,
-   `align_templates`, the Const/Const disjointness case, TemplateEq where
-   shapes mismatch) enforces same-graph joining exactly as it enforces any
-   shared-variable join. Projection of `?g`, `FILTER(?g = …)`, `VALUES ?g`,
-   and joins on `?g` OUTSIDE the block all come along for free — `?g` is just
-   a variable with per-branch definitions.
-3. **Property paths under `GRAPH ?g`**: hop resolution needs ONE pinned graph
-   per compiled closure. Since constant graph maps are statically enumerable,
-   compile `GRAPH ?g { …path… }` as the **union over the mapping's declared
-   constant named graphs** — one `GRAPH <g_i>` instance per declared constant
-   graph (each already works post-Run-4), with `?g = Const(g_i)` per arm.
-   Residual (sound 501, pinned): paths under a **template/column** graph map —
-   the graph set is row-dependent, not enumerable at translate time.
-4. **RDF-star inside named graphs**: the encoding's description maps must
-   carry the SAME effective graph as the star map that quotes them —
-   `sf-mapping` today emits description POMs with no graph maps (default
-   graph), which is WRONG the moment a star map sits under `rr:graphMap`.
-   Fix in the mapping compiler: description-map POMs inherit the quoted/outer
-   map's effective graphs; `star_decode` and the oracle then see the
-   annotation in the right graph. (Today this is unobservable — star + named
-   graphs has no coverage — the differential cells land with this ADR.)
-5. **Set semantics (ADR-0034) interaction**: `?g` participates in the
-   solution tuple, so D1/D2 dedup keys and elision proofs extend unchanged
-   (the graph binding is one more output-determining column; a POM with
-   multiple graph maps multiplies branches, not rows-within-a-branch).
+## Consequences
 
-## Boundaries (each pinned, with cause)
+- Good: direct query results and materialized-quad results share one semantic
+  rule and can serve as differential oracles for each other.
+- Good: subject and POM graph declarations compose as R2RML requires, including
+  mixed default/named placement and RDF-star descriptions.
+- Good: one checked binding invariant prevents a family of repeated-variable
+  wrong-result bugs rather than patching one subject call site.
+- Cost: graph handling crosses `sf-mapping` and `sf-sparql`; issue #9 needs one
+  semantic owner and sequential integration with issue #8 where both touch
+  unfolding.
+- Neutral: the virtual graph architecture remains push-down based; no quad store
+  or dataset materialization is introduced into the runtime path.
 
-- Paths under non-constant graph maps → 501 (row-dependent graph set).
-- `GRAPH ?g` + `rr:sqlQuery` sources with no introspectable schema behave as
-  elsewhere (no special interaction).
-- Nested `GRAPH` (a `GRAPH` inside a `GRAPH ?g` body) follows SPARQL scoping:
-  the inner pin wins for its subtree; the outer `?g` still binds from the
-  inner pattern's graphs only if compatible (inner constant ≠ a candidate's
-  graph ⇒ branch pruned — falls out of unification with `?g`'s Const).
+## Corrective test contract
 
-## Test contract
+All applicable cells run through flat and tree plans, SQLite and PostgreSQL,
+`=_bag`, and the spareval/materialized-quad oracle:
 
-Differential cells vs the spareval oracle (which evaluates the decoded
-DATASET — verify `oracle::evaluate` builds named graphs from the fixture; if
-today's fixtures/decoder are graph-blind, extend them first — that is part of
-"tests sound and complete", not an excuse):
-1. `GRAPH ?g { ?s ?p ?o }` over a mapping with 2 constant named graphs + a
-   default-graph POM: only the named-graph triples, `?g` bound correctly.
-2. Same-graph join correlation: two patterns, one `?g` — rows only where both
-   triples share a graph; cross-graph combinations excluded.
-3. Template graph map: `?g` from a rendered template; equality with a
-   constant `?g` from another branch (exercises Const/Template unification).
-4. `GRAPH ?g` + path over constant graphs (the enumeration union).
-5. Star annotation under a named graph: reifier + description in the star
-   map's graph; `GRAPH ?g { << … >> ex:p ?v }` binds `?g` and answers.
-6. Pinned 501: path under a template graph map.
-7. Both engines, `=_bag`, throughout; W3C suites untouched.
+1. Two constant named graphs plus a default-only map: `GRAPH ?g` returns only
+   named-graph triples and binds each graph correctly.
+2. Two patterns sharing one graph variable correlate within the same graph;
+   cross-graph combinations are absent.
+3. Distinct subject and POM named graphs make the triple visible in both.
+4. The same graph declared at both levels yields one solution, not a duplicate.
+5. Subject `rr:defaultGraph` plus a POM named graph is visible in default and
+   named evaluation, while `GRAPH ?g` binds only the named graph.
+6. Constant `GRAPH <g>` and property paths match either half of the union.
+7. Constant, template, and column graph-map cases either answer correctly or
+   return the documented `Unsupported`; none silently return a false empty.
+8. RDF-star description maps in subject and object position inherit every
+   member of the complete union.
+9. Removing or negating either half of the union/default-sentinel logic is
+   killed by mutation-lite checks.
+10. Incompatible constants and repeated variables across S/P/O/GRAPH,
+    including `?x ?x ?o`, `?x ?p ?p`, and
+    `GRAPH ?s { ?s :p ?o }`, prune their branches.
+11. `rr:class` atoms and inverse-predicate subject/object swaps obey the same
+    checked-bind invariant, with no increase in unsupported queries.
+
+The W3C RDB2RDF suites remain green after the targeted graph, path, star, and
+binding-prune suites.
+
+## Historical landing note
+
+The 2026-07-20 implementation correctly established variable-graph branch
+enumeration, widened path graph patterns, preserved nested-`GRAPH` scoping, and
+threaded graph context into standalone RDF-star description maps. Those facts
+remain useful history. The former POM-falls-back-to-subject assumption and the
+"all eight cells prove implementation" conclusion are withdrawn.
+
+## Rules
+
+- **R1** — effective triple placement is the distinct subject-map/POM graph
+  union; POM graph maps never override subject graph maps.
+- **R2** — `rr:defaultGraph` is never emitted as a `GRAPH ?g` binding.
+- **R3** — dynamic graph matching is constrained at runtime or rejected
+  explicitly, never approximated as empty.
+- **R4** — every incompatible S/P/O/class/GRAPH bind prunes its branch.
+- **R5** — flat, tree, path, RDF-star, and materialization semantics stay in
+  differential agreement.
