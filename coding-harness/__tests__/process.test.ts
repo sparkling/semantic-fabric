@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,13 @@ const temporaryRoots: string[] = [];
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/process-fixture.mjs');
 
 afterEach(() => {
-  for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of temporaryRoots.splice(0)) {
+    const pidPath = join(root, 'holder.pid');
+    if (existsSync(pidPath)) {
+      try { killHolder(pidPath); } catch { /* exited or invalid */ }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function workspace(): string {
@@ -144,6 +150,98 @@ describe('structured process runner', () => {
     expect(terminateAndVerify).toHaveBeenCalledTimes(2);
     expect(terminateAndVerify).toHaveBeenCalledWith(TEST_RESOURCE_SCOPE);
   });
+
+  it('rechecks a late offline scope on exit before inherited pipes close', async () => {
+    const root = workspace();
+    const pidPath = join(root, 'holder.pid');
+    const terminateAndVerify = vi.fn().mockImplementation(async () => {
+      if (terminateAndVerify.mock.calls.length === 2) {
+        killHolder(pidPath);
+      }
+    });
+    const isolator: OfflineProcessIsolator = {
+      assertStable() {},
+      terminateAndVerify,
+      isolate: (source) => ({
+        enforcement: 'os-network-namespace',
+        mechanism: 'test-offline-scope',
+        resourceScope: TEST_RESOURCE_SCOPE,
+        command: { ...source, executable: '/usr/bin/env', args: [source.executable, ...source.args] },
+      }),
+    };
+    const controller = new AbortController();
+    const pending = runStructuredProcess(command('wait-with-held-stdout', {
+      argv: [fixture, 'wait-with-held-stdout', pidPath],
+    }), {
+      workspaceRoot: root,
+      config: createTestConfig(),
+      declaredTools: ['node'],
+      signal: controller.signal,
+      boundary: { kind: 'offline-candidate', isolator, writablePaths: [] },
+    });
+    await waitFor(() => existsSync(pidPath));
+    const stopped = Date.now();
+    controller.abort();
+    const result = await pending;
+
+    expect(result.cancelled).toBe(true);
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
+    expect(Date.now() - stopped).toBeLessThan(1_000);
+  });
+
+  it('rejects an offline result when exact scope release cannot be verified', async () => {
+    const isolator: OfflineProcessIsolator = {
+      assertStable() {},
+      async terminateAndVerify() { throw new Error('unverifiable scope'); },
+      isolate: (source) => ({
+        enforcement: 'os-network-namespace',
+        mechanism: 'test-offline-scope',
+        resourceScope: TEST_RESOURCE_SCOPE,
+        command: { ...source, executable: '/usr/bin/env', args: [source.executable, ...source.args] },
+      }),
+    };
+    await expect(runStructuredProcess(command('wait', { timeoutMs: 50 }), {
+      workspaceRoot: workspace(),
+      config: createTestConfig(),
+      declaredTools: ['node'],
+      boundary: { kind: 'offline-candidate', isolator, writablePaths: [] },
+    })).rejects.toThrow('HARNESS_OFFLINE_RESOURCE_TERMINATION_FAILED');
+  });
+
+  it('rejects a held-pipe offline escape without waiting for close', async () => {
+    const root = workspace();
+    const pidPath = join(root, 'holder.pid');
+    const terminateAndVerify = vi.fn().mockImplementation(() => {
+      throw new Error('unverifiable scope');
+    });
+    const isolator: OfflineProcessIsolator = {
+      assertStable() {},
+      terminateAndVerify,
+      isolate: (source) => ({
+        enforcement: 'os-network-namespace',
+        mechanism: 'test-offline-scope',
+        resourceScope: TEST_RESOURCE_SCOPE,
+        command: { ...source, executable: '/usr/bin/env', args: [source.executable, ...source.args] },
+      }),
+    };
+    const controller = new AbortController();
+    const pending = runStructuredProcess(command('wait-with-held-stdout', {
+      argv: [fixture, 'wait-with-held-stdout', pidPath],
+    }), {
+      workspaceRoot: root,
+      config: createTestConfig(),
+      declaredTools: ['node'],
+      signal: controller.signal,
+      boundary: { kind: 'offline-candidate', isolator, writablePaths: [] },
+    });
+    await waitFor(() => existsSync(pidPath));
+    const stopped = Date.now();
+    controller.abort();
+    await expect(pending).rejects.toThrow('HARNESS_OFFLINE_RESOURCE_TERMINATION_FAILED');
+
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
+    expect(Date.now() - stopped).toBeLessThan(1_000);
+  });
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -152,4 +250,17 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('condition was not observed');
+}
+
+function killHolder(pidPath: string): number {
+  const value = readFileSync(pidPath, 'utf8');
+  if (!/^[1-9][0-9]*$/.test(value)) throw new Error('invalid holder PID');
+  const pid = Number(value);
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error('invalid holder PID');
+  const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+  if (!command.includes(fixture) || !command.includes('hold-stdout')) {
+    throw new Error('unexpected holder process');
+  }
+  process.kill(pid, 'SIGKILL');
+  return pid;
 }

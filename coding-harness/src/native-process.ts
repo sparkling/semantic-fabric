@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-import { spawn } from 'node:child_process';
-import type { ChildProcessByStdio } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Readable, Writable } from 'node:stream';
 import { normalizeWorkspacePath, type HarnessConfig } from './contracts.js';
 import {
   isolateNativeFirstPartyModelTraffic,
@@ -27,11 +24,11 @@ import {
 import {
   isolateNativeResources,
   limitsForProcessDeadline,
-  terminateNativeResourceScope,
   type NativeResourceBoundary,
   type NativeResourceIsolationResult,
   type NativeResourceLimits,
 } from './resource-boundary.js';
+import { executeNativeProcess } from './native-process-execution.js';
 import { UnixSocketOriginPinningBoundary } from './native-egress.js';
 import { SystemNativeFilesystemBoundary } from './native-system-filesystem.js';
 import { SystemdResourceBoundary } from './resource-boundary.js';
@@ -39,10 +36,7 @@ import {
   assertCapabilityPath,
   cancelledResult,
   digestValue,
-  errorMessage,
   pathsOverlap,
-  signalProcessGroup,
-  spawnFailure,
   validateBoundaryPaths,
   validateDirectory,
   validateExecutable,
@@ -70,7 +64,6 @@ export interface NativeRunnerOptions {
   maxOutputBytes?: number;
   terminationGraceMs?: number;
 }
-type NativeChild = ChildProcessByStdio<Writable, Readable, Readable>;
 const MAX_STDIN_BYTES = 1_000_000;
 const HOST_NETWORK = Object.freeze({
   codex: Object.freeze({
@@ -133,7 +126,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       throw new Error('HARNESS_NATIVE_FILESYSTEM_BOUNDARY_REQUIRED');
     }
     this.#resourceBoundary = options.resourceBoundary;
-    if (this.#resourceBoundary === undefined) {
+    if (typeof this.#resourceBoundary?.terminateAndVerify !== 'function') {
       throw new Error('HARNESS_NATIVE_RESOURCE_BOUNDARY_REQUIRED');
     }
     this.#resourceLimits = options.resourceLimits;
@@ -214,107 +207,27 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         completion,
       );
     }
-    const result = await new Promise<NativeProcessResult>((resolveResult, rejectResult) => {
-      let child: NativeChild;
+    let result: NativeProcessResult;
+    try {
+      result = await executeNativeProcess({
+        executionId,
+        request,
+        resources,
+        boundary: this.#resourceBoundary,
+        maxOutputBytes: this.#maxOutputBytes,
+        terminationGraceMs: this.#terminationGraceMs,
+      });
+    } catch (error) {
       try {
-        child = spawn(resources.command.executable, [...resources.command.args], {
-          cwd: resources.command.cwd,
-          env: {
-            ...(this.#resourceBoundary.launchEnvironment?.(resources.command.env)
-              ?? resources.command.env),
-          },
-          shell: false,
-          detached: process.platform !== 'win32',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch (error) {
-        resolveResult(spawnFailure(executionId, error));
-        return;
-      }
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      let capturedBytes = 0;
-      let observedBytes = 0;
-      let timedOut = false;
-      let cancelled = false;
-      let outputLimitExceeded = false;
-      let spawnError: string | undefined;
-      let terminationPromise: Promise<boolean> | undefined;
-      let killTimer: NodeJS.Timeout | undefined;
-      let settled = false;
-      const terminate = () => {
-        if (terminationPromise !== undefined) return;
-        terminationPromise = terminateNativeResourceScope(this.#resourceBoundary, resources)
-          .then(() => true, () => false);
-        signalProcessGroup(child, 'SIGTERM');
-        killTimer ??= setTimeout(
-          () => signalProcessGroup(child, 'SIGKILL'),
-          this.#terminationGraceMs,
+        await this.#completeNetwork(network.command);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'HARNESS_NATIVE_EXECUTION_AND_CLEANUP_FAILED',
         );
-        killTimer.unref();
-      };
-      const capture = (target: Buffer[], chunk: Buffer) => {
-        observedBytes += chunk.length;
-        const room = Math.max(0, this.#maxOutputBytes - capturedBytes);
-        if (room > 0) {
-          const kept = chunk.subarray(0, room);
-          target.push(kept);
-          capturedBytes += kept.length;
-        }
-        if (observedBytes > this.#maxOutputBytes && !outputLimitExceeded) {
-          outputLimitExceeded = true;
-          terminate();
-        }
-      };
-      child.stdout.on('data', (chunk: Buffer) => capture(stdout, chunk));
-      child.stderr.on('data', (chunk: Buffer) => capture(stderr, chunk));
-      child.on('error', (error) => {
-        spawnError = errorMessage(error);
-      });
-      child.stdin.on('error', () => {
-        // EPIPE is reflected by process failure or cancellation evidence.
-      });
-      child.stdin.end(request.stdin ?? '');
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        terminate();
-      }, request.timeoutMs);
-      timeout.unref();
-      const abort = () => {
-        cancelled = true;
-        terminate();
-      };
-      request.signal?.addEventListener('abort', abort, { once: true });
-      child.on('close', async (exitCode) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        if (killTimer) clearTimeout(killTimer);
-        request.signal?.removeEventListener('abort', abort);
-        if (terminationPromise !== undefined) {
-          let failed = !(await terminationPromise);
-          try {
-            await terminateNativeResourceScope(this.#resourceBoundary, resources);
-          } catch { failed = true; }
-          if (failed) {
-            rejectResult(new Error('HARNESS_NATIVE_RESOURCE_TERMINATION_FAILED'));
-            return;
-          }
-        }
-        resolveResult(Object.freeze({
-          executionId,
-          exitCode,
-          stdout: Buffer.concat(stdout).toString('utf8'),
-          stderr: Buffer.concat(stderr).toString('utf8'),
-          timedOut,
-          cancelled,
-          outputLimitExceeded,
-          ...(spawnError === undefined ? {} : { spawnError }),
-          stdoutDigest: digestValue(Buffer.concat(stdout)),
-          stderrDigest: digestValue(Buffer.concat(stderr)),
-        }));
-      });
-    });
+      }
+      throw error;
+    }
     const completion = await this.#completeNetwork(network.command);
     if (request.purpose === 'model-invocation'
       && (completion.allowedConnections < 1 || completion.deniedConnections !== 0)) {

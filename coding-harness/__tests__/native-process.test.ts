@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +26,13 @@ const roots: string[] = [];
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/native-process-fixture.mjs');
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    const pidPath = join(root, 'holder.pid');
+    if (existsSync(pidPath)) {
+      try { killHolder(pidPath); } catch { /* exited or invalid */ }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function workspace(): string {
@@ -95,6 +109,7 @@ function runner(
   forbiddenRoots: readonly string[] = [workspace()],
   maskedWorkspacePaths: readonly string[] = [],
   resourceBoundary: NativeResourceBoundary = fakeResourceBoundary,
+  networkBoundary: NativeModelOriginPinningBoundary = egressBoundary,
 ): BoundedNativeProcessRunner {
   return new BoundedNativeProcessRunner({
     config: SECURE_HARNESS_CONFIG,
@@ -103,7 +118,7 @@ function runner(
     allowedReadRoots,
     allowedWriteRoots,
     forbiddenRoots,
-    egressBoundary,
+    egressBoundary: networkBoundary,
     filesystemBoundary,
     resourceBoundary,
     resourceLimits: TEST_RESOURCE_LIMITS,
@@ -144,10 +159,14 @@ describe('bounded native subscription process bridge', () => {
 
   it('enforces the combined output ceiling', async () => {
     const root = workspace();
-    const result = await runner(root, 128).run(request(root, 'output', { stdin: undefined }));
+    const terminateAndVerify = vi.fn().mockResolvedValue(undefined);
+    const result = await runner(root, 128, [root], [root], [workspace()], [], {
+      ...fakeResourceBoundary, terminateAndVerify,
+    }).run(request(root, 'output', { stdin: undefined }));
     expect(result.exitCode).not.toBe(0);
     expect(result.outputLimitExceeded).toBe(true);
     expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(128);
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
   });
 
   it('binds an exact workspace root and separate evidence-file capabilities', async () => {
@@ -193,19 +212,88 @@ describe('bounded native subscription process bridge', () => {
 
   it('terminates the process group on timeout and cancellation', async () => {
     const root = workspace();
-    const bridge = runner(root);
+    const timedTermination = vi.fn().mockResolvedValue(undefined);
+    const bridge = runner(root, 10_000, [root], [root], [workspace()], [], {
+      ...fakeResourceBoundary, terminateAndVerify: timedTermination,
+    });
     const timed = await bridge.run(request(root, 'wait', { timeoutMs: 50, stdin: undefined }));
     expect(timed.timedOut).toBe(true);
+    expect(timedTermination).toHaveBeenCalledTimes(2);
     expect(bridge.resourceEvidence()[0]?.limits.runtimeSeconds).toBe(1);
 
     const controller = new AbortController();
-    const pending = runner(root).run(request(root, 'wait', {
+    const cancelledTermination = vi.fn().mockResolvedValue(undefined);
+    const pending = runner(root, 10_000, [root], [root], [workspace()], [], {
+      ...fakeResourceBoundary, terminateAndVerify: cancelledTermination,
+    }).run(request(root, 'wait', {
       signal: controller.signal,
       stdin: undefined,
     }));
     setTimeout(() => controller.abort(), 50);
     const cancelled = await pending;
     expect(cancelled.cancelled).toBe(true);
+    expect(cancelledTermination).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechecks a late scope on direct exit before inherited pipes close', async () => {
+    const root = workspace();
+    const pidPath = join(root, 'holder.pid');
+    let holderPid: number | undefined;
+    const terminateAndVerify = vi.fn().mockImplementation(async () => {
+      if (terminateAndVerify.mock.calls.length !== 2) return;
+      holderPid = killHolder(pidPath);
+    });
+    const bridge = runner(root, 10_000, [root], [root], [workspace()], [], {
+      ...fakeResourceBoundary, terminateAndVerify,
+    });
+    const controller = new AbortController();
+    const pending = bridge.run(request(root, 'wait-with-held-stdout', {
+      args: [fixture, 'wait-with-held-stdout', pidPath],
+      signal: controller.signal,
+      stdin: undefined,
+    }));
+    await waitFor(() => existsSync(pidPath));
+    const stopped = Date.now();
+    controller.abort();
+    const result = await pending;
+
+    expect(result.cancelled).toBe(true);
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
+    expect(holderPid).toBeTypeOf('number');
+    expect(Date.now() - stopped).toBeLessThan(1_000);
+  });
+
+  it('rejects a held-pipe escape and revokes egress without waiting for close', async () => {
+    const root = workspace();
+    const pidPath = join(root, 'holder.pid');
+    const terminateAndVerify = vi.fn().mockImplementation(() => {
+      throw new Error('unverifiable scope');
+    });
+    const complete = vi.fn(() => ({
+      allowedConnections: 1,
+      deniedConnections: 0,
+      connectDigest: digestValue('revoked-connect'),
+    }));
+    const bridge = runner(
+      root, 10_000, [root], [root], [workspace()], [],
+      { ...fakeResourceBoundary, terminateAndVerify },
+      { ...egressBoundary, complete },
+    );
+    const controller = new AbortController();
+    const pending = bridge.run(request(root, 'wait-with-held-stdout', {
+      args: [fixture, 'wait-with-held-stdout', pidPath],
+      signal: controller.signal,
+      stdin: undefined,
+    }));
+    await waitFor(() => existsSync(pidPath));
+    const stopped = Date.now();
+    controller.abort();
+    await expect(pending).rejects.toThrow('HARNESS_NATIVE_RESOURCE_TERMINATION_FAILED');
+
+    expect(terminateAndVerify).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(bridge.allExecutionEvidence()).toEqual([]);
+    expect(Date.now() - stopped).toBeLessThan(1_000);
   });
 
   it('awaits exact scope release and rejects unverifiable termination', async () => {
@@ -235,11 +323,28 @@ describe('bounded native subscription process bridge', () => {
         throw new Error('unverifiable scope');
       },
     };
-    const rejected = runner(root, 10_000, [root], [root], [workspace()], [], rejectedBoundary);
+    const complete = vi.fn(() => ({
+      allowedConnections: 1,
+      deniedConnections: 0,
+      connectDigest: digestValue('failed-connect'),
+    }));
+    const rejected = runner(
+      root, 10_000, [root], [root], [workspace()], [], rejectedBoundary,
+      { ...egressBoundary, complete },
+    );
     await expect(rejected.run(request(root, 'wait', {
       timeoutMs: 50, stdin: undefined,
     }))).rejects.toThrow('HARNESS_NATIVE_RESOURCE_TERMINATION_FAILED');
+    expect(complete).toHaveBeenCalledTimes(1);
     expect(rejected.allExecutionEvidence()).toEqual([]);
+  });
+
+  it('requires exact resource termination capability', () => {
+    const root = workspace();
+    const { terminateAndVerify: _omitted, ...incomplete } = fakeResourceBoundary;
+    expect(() => runner(
+      root, 10_000, [root], [root], [workspace()], [], incomplete as never,
+    )).toThrow('HARNESS_NATIVE_RESOURCE_BOUNDARY_REQUIRED');
   });
 
   it('fails closed for executable substitution and forbidden transport variables', async () => {
@@ -302,4 +407,17 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('condition was not observed');
+}
+
+function killHolder(pidPath: string): number {
+  const value = readFileSync(pidPath, 'utf8');
+  if (!/^[1-9][0-9]*$/.test(value)) throw new Error('invalid holder PID');
+  const pid = Number(value);
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error('invalid holder PID');
+  const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+  if (!command.includes(fixture) || !command.includes('hold-stdout')) {
+    throw new Error('unexpected holder process');
+  }
+  process.kill(pid, 'SIGKILL');
+  return pid;
 }

@@ -39,7 +39,7 @@ export interface NativeResourceScope { readonly unit: string }
 export interface NativeResourceBoundary {
   wrap(command: BoundaryCommand, limits: NativeResourceLimits): unknown;
   assertStable(): void;
-  terminateAndVerify?(scope: NativeResourceScope): Promise<void>;
+  terminateAndVerify(scope: NativeResourceScope): Promise<void>;
   launchEnvironment?(environment: Readonly<Record<string, string>>): Readonly<Record<string, string>>;
 }
 
@@ -172,7 +172,9 @@ export function isolateNativeResources(
   rawLimits: NativeResourceLimits,
   boundary?: NativeResourceBoundary,
 ): NativeResourceIsolationResult {
-  if (boundary === undefined) throw new Error('HARNESS_NATIVE_RESOURCE_BOUNDARY_REQUIRED');
+  if (typeof boundary?.terminateAndVerify !== 'function') {
+    throw new Error('HARNESS_NATIVE_RESOURCE_BOUNDARY_REQUIRED');
+  }
   boundary.assertStable();
   const expected = validateResourceLimits(rawLimits);
   const input = boundary.wrap(command, expected) as Partial<NativeResourceIsolationResult>;
@@ -224,7 +226,6 @@ export function terminateNativeResourceScope(
   boundary: NativeResourceBoundary,
   isolation: NativeResourceIsolationResult,
 ): Promise<void> {
-  if (boundary.terminateAndVerify === undefined) return Promise.resolve();
   return boundary.terminateAndVerify(isolation.scope);
 }
 

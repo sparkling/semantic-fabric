@@ -74,7 +74,7 @@ function systemIsolator(
       resourceBoundary.assertStable();
     },
     async terminateAndVerify(scope: NativeResourceScope) {
-      await resourceBoundary.terminateAndVerify!(scope);
+      await resourceBoundary.terminateAndVerify(scope);
     },
     isolate(command: BoundaryCommand): OfflineIsolationResult {
       if (validateExecutable(executable.path).digest !== executable.digest) {

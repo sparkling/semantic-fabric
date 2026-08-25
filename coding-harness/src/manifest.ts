@@ -27,7 +27,7 @@ export interface HarnessManifest {
   protectedPaths: string[];
   acceptanceTasks: string[];
   diagnostics: {
-    programmeAcceptanceScore: 98;
+    programmeAcceptanceThreshold: 98;
     upstreamScores: 'diagnostic-only';
     blindSurfaceOutcome: 'INCONCLUSIVE';
   };
@@ -77,12 +77,12 @@ export function parseHarnessManifest(value: unknown, config: HarnessConfig): Har
   const diagnostics = asRecord(input.diagnostics, 'harness manifest.diagnostics');
   assertExactKeys(
     diagnostics,
-    ['programmeAcceptanceScore', 'upstreamScores', 'blindSurfaceOutcome'],
+    ['programmeAcceptanceThreshold', 'upstreamScores', 'blindSurfaceOutcome'],
     'harness manifest.diagnostics',
   );
   if (asInteger(
-    diagnostics.programmeAcceptanceScore,
-    'harness manifest.diagnostics.programmeAcceptanceScore',
+    diagnostics.programmeAcceptanceThreshold,
+    'harness manifest.diagnostics.programmeAcceptanceThreshold',
   ) !== 98
     || diagnostics.upstreamScores !== 'diagnostic-only'
     || diagnostics.blindSurfaceOutcome !== 'INCONCLUSIVE') {
@@ -114,7 +114,7 @@ export function parseHarnessManifest(value: unknown, config: HarnessConfig): Har
     protectedPaths,
     acceptanceTasks,
     diagnostics: {
-      programmeAcceptanceScore: 98,
+      programmeAcceptanceThreshold: 98,
       upstreamScores: 'diagnostic-only',
       blindSurfaceOutcome: 'INCONCLUSIVE',
     },

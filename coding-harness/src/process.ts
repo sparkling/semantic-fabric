@@ -106,6 +106,9 @@ export async function runStructuredProcess(
     ? (context.boundary.isolator.launchEnvironment?.(definedEnvironment(launch.env))
       ?? definedEnvironment(launch.env))
     : launch.env;
+  const offlineBoundary = context.boundary.kind === 'offline-candidate'
+    ? context.boundary
+    : null;
   return new Promise((resolveResult, rejectResult) => {
     let child: StructuredChild;
     try {
@@ -130,16 +133,53 @@ export async function runStructuredProcess(
     let outputLimitExceeded = false;
     let spawnError: string | null = null;
     let terminationPromise: Promise<boolean> | undefined;
+    let releasePromise: Promise<boolean> | undefined;
     let killTimer: NodeJS.Timeout | undefined;
+    let timeout: NodeJS.Timeout | undefined;
     let settled = false;
 
+    const clearController = () => {
+      if (timeout) clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      context.signal?.removeEventListener('abort', abort);
+    };
+    const failTermination = () => {
+      if (settled) return;
+      settled = true;
+      clearController();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      rejectResult(new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_FAILED'));
+    };
+    const verifyReleased = (): Promise<boolean> | undefined => {
+      if (terminationPromise === undefined || offlineBoundary === null) {
+        return undefined;
+      }
+      releasePromise ??= terminationPromise.then(async (initiallyReleased) => {
+        try {
+          await offlineBoundary.isolator.terminateAndVerify(isolation!.resourceScope);
+          return initiallyReleased;
+        } catch {
+          return false;
+        }
+      });
+      return releasePromise;
+    };
+    const observeRelease = () => {
+      const release = verifyReleased();
+      if (release !== undefined) void release.then((released) => {
+        if (!released) failTermination();
+      });
+    };
     const terminate = () => {
       if (isolation !== null) {
         if (terminationPromise !== undefined) return;
-        const requested = context.boundary.kind === 'offline-candidate'
-          ? context.boundary.isolator.terminateAndVerify(isolation.resourceScope)
+        const requested = offlineBoundary !== null
+          ? Promise.resolve().then(() =>
+            offlineBoundary.isolator.terminateAndVerify(isolation.resourceScope))
           : Promise.reject(new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_REQUIRED'));
         terminationPromise = requested.then(() => true, () => false);
+        if (child.exitCode !== null || child.signalCode !== null) observeRelease();
       }
       signalProcessGroup(child, 'SIGTERM');
       killTimer ??= setTimeout(
@@ -167,7 +207,7 @@ export async function runStructuredProcess(
       spawnError = errorMessage(error);
     });
 
-    const timeout = setTimeout(() => {
+    timeout = setTimeout(() => {
       timedOut = true;
       terminate();
     }, command.timeoutMs);
@@ -178,26 +218,22 @@ export async function runStructuredProcess(
       terminate();
     };
     context.signal?.addEventListener('abort', abort, { once: true });
+    child.on('exit', observeRelease);
 
     child.on('close', async (exitCode, signal) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (killTimer) clearTimeout(killTimer);
-      context.signal?.removeEventListener('abort', abort);
-      if (terminationPromise !== undefined && context.boundary.kind === 'offline-candidate') {
-        let failed = !(await terminationPromise);
-        try {
-          await context.boundary.isolator.terminateAndVerify(isolation!.resourceScope);
-        } catch { failed = true; }
-        if (failed) {
-          rejectResult(new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_FAILED'));
+      clearController();
+      if (terminationPromise !== undefined && offlineBoundary !== null) {
+        if (!(await verifyReleased())) {
+          failTermination();
           return;
         }
       }
-      if (context.boundary?.kind === 'offline-candidate') {
+      if (settled) return;
+      settled = true;
+      if (offlineBoundary !== null) {
         try {
-          context.boundary.isolator.assertStable();
+          offlineBoundary.isolator.assertStable();
         } catch (error) {
           spawnError ??= errorMessage(error);
         }
