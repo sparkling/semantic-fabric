@@ -47,6 +47,7 @@ describe('patched candidate transaction', () => {
       'review:codex', 'review:claude-code', 'qe', 'protected', 'audit', 'validate', 'cleanup',
     ]);
     expect(result.receipt.status).toBe('pass');
+    expect(result.receipt.failureCode).toBeNull();
     expect(result.receipt.recovery.repairCount).toBe(1);
     expect(transaction.receipts.verify()).toEqual({ ok: true });
     const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
@@ -57,44 +58,6 @@ describe('patched candidate transaction', () => {
     expect(finalizeIssue8ProgrammeOutcome({
       transactionStatus: result.status, transactionReason: result.reason, envelope,
     })).toEqual({ status: 'pass', reason: null });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: 'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID:untrusted detail',
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail', transactionReason: 'untrusted detail', envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: 'HARNESS_MODEL_SECRET:must-not-escape',
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: `HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`,
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: 'HARNESS_NATIVE_HOST_FAILED:claude-code private detail',
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_HOST_FAILED' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: 'HARNESS_NATIVE_PATCH_INVALID:untrusted detail',
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_PATCH_INVALID' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: 'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING:untrusted detail',
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING' });
-    expect(finalizeIssue8ProgrammeOutcome({
-      transactionStatus: 'fail',
-      transactionReason: 'HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID:untrusted detail',
-      envelope,
-    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID' });
     const tampered = JSON.parse(JSON.stringify(envelope));
     tampered.programmeAcceptance.score = 99;
     expect(() => parseIssue8ProgrammeEnvelope(JSON.stringify(tampered)))
@@ -122,6 +85,34 @@ describe('patched candidate transaction', () => {
     });
     expect(() => createIssue8ProgrammeEnvelope(result.receipt, `${diagnosticBlob} `))
       .toThrow('HARNESS_ISSUE_8_PROGRAMME_DIAGNOSTIC_BLOB_MISMATCH');
+  });
+
+  it('persists and cross-checks only the sanitized primary transaction failure code', async () => {
+    for (const [failure, expected] of [
+      [new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING:private output'),
+        'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING'],
+      [new Error('HARNESS_MODEL_SECRET:must-not-escape'), 'HARNESS_TRANSACTION_FAILED'],
+      [new Error(`HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`),
+        'HARNESS_TRANSACTION_FAILED'],
+    ] as const) {
+      const target = operations([]);
+      target.implement = vi.fn(async () => { throw failure; });
+      const result = await new CandidateTransaction({
+        context, operations: target, maxRepairs: 0,
+        now: () => '2026-08-25T12:02:00.000Z',
+      }).execute();
+      const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
+
+      expect(result.receipt.failureCode).toBe(expected);
+      expect(finalizeIssue8ProgrammeOutcome({
+        transactionStatus: result.status, transactionReason: result.reason, envelope,
+      })).toEqual({ status: 'fail', reason: expected });
+      expect(() => finalizeIssue8ProgrammeOutcome({
+        transactionStatus: result.status,
+        transactionReason: 'HARNESS_CLEANUP_FAILED:conflicting code',
+        envelope,
+      })).toThrow('HARNESS_ISSUE_8_FAILURE_CODE_MISMATCH');
+    }
   });
 
   it('routes an exact-source admission mismatch through the bounded repair loop', async () => {
@@ -232,6 +223,7 @@ describe('patched candidate transaction', () => {
     expect(result.finalPatch).toBeNull();
     expect(result.reason).toMatch(/STALE_BUILD_IDENTITY/);
     expect(result.receipt.status).toBe('fail');
+    expect(result.receipt.failureCode).toBe('HARNESS_TRANSACTION_FAILED');
     expect(createIssue8ProgrammeEnvelope(
       result.receipt, diagnosticBlob,
     ).programmeAcceptance.status)
@@ -254,6 +246,7 @@ describe('patched candidate transaction', () => {
     expect(result.status).toBe('cancelled');
     expect(result.finalPatch).toBeNull();
     expect(result.receipt.status).toBe('cancelled');
+    expect(result.receipt.failureCode).toBe('HARNESS_NATIVE_INVOCATION_CANCELLED');
     expect(result.receipt.recovery.cancelled).toBe(true);
   });
 
@@ -401,6 +394,7 @@ describe('patched candidate transaction', () => {
     }).execute();
     expect(result.status).toBe('fail');
     expect(result.reason).toContain('HARNESS_RUNTIME_EVIDENCE_FAILED');
+    expect(result.receipt.failureCode).toBe('HARNESS_RUNTIME_EVIDENCE_FAILED');
     expect(result.receipt.recovery.retryCount).toBe(2);
   });
 
@@ -415,6 +409,7 @@ describe('patched candidate transaction', () => {
     expect(result.status).toBe('fail');
     expect(result.finalPatch).toBeNull();
     expect(result.reason).toContain('HARNESS_CLEANUP_FAILED:resource lease remained active');
+    expect(result.receipt.failureCode).toBe('HARNESS_CLEANUP_FAILED');
   });
 
   it('preserves failed build evidence and repairs from the compiler failure', async () => {

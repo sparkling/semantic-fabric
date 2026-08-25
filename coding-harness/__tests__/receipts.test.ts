@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
+import { failureCodeForError } from '../src/failure-code.js';
 import { ReceiptChain, digestValue, parseReceiptDraft } from '../src/receipts.js';
 
 const gitCommit = 'a'.repeat(40);
@@ -9,11 +10,12 @@ const timestamp = '2026-08-25T00:00:00.000Z';
 
 function draft(step = 'build') {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId: 'run-0001',
     taskId: 'task-0001',
     step,
     status: 'fail',
+    failureCode: 'HARNESS_TRANSACTION_FAILED' as string | null,
     authority: 'development-only-no-promotion',
     issuedAt: timestamp,
     identities: {
@@ -84,6 +86,7 @@ function passDraft() {
   const value = draft('candidate-transaction');
   const candidateTree = 'c'.repeat(40);
   value.status = 'pass';
+  value.failureCode = null;
   value.identities.candidate = { commit: 'd'.repeat(40), tree: candidateTree };
   value.hosts = [
     value.hosts[0],
@@ -117,8 +120,36 @@ describe('strict receipt schema', () => {
     expect(() => parseReceiptDraft({ ...draft(), extra: true })).toThrow(/invalid keys/);
   });
 
+  it('binds a finite code-only failure taxonomy to receipt status', () => {
+    expect(() => parseReceiptDraft({ ...draft(), failureCode: null })).toThrow(
+      /failureCode must identify a failed transaction/,
+    );
+    expect(() => parseReceiptDraft({ ...passDraft(), failureCode: 'HARNESS_CLEANUP_FAILED' }))
+      .toThrow(/passing receipt cannot have a failureCode/);
+    expect(() => parseReceiptDraft({ ...draft(), failureCode: 'HARNESS_MODEL_SECRET' }))
+      .toThrow(/failureCode is invalid/);
+    expect(() => parseReceiptDraft({
+      ...draft(), failureCode: 'HARNESS_NATIVE_HOST_FAILED:private detail',
+    })).toThrow(/failureCode is invalid/);
+  });
+
+  it('extracts only bounded allowlisted codes from an Error graph', () => {
+    expect(failureCodeForError(new Error('opaque', {
+      cause: new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING:private detail'),
+    }))).toBe('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING');
+    expect(failureCodeForError(new AggregateError([
+      new Error('HARNESS_CLEANUP_FAILED:private detail'),
+    ], 'opaque'))).toBe('HARNESS_CLEANUP_FAILED');
+    expect(failureCodeForError(new Error('HARNESS_MODEL_SECRET:private detail')))
+      .toBe('HARNESS_TRANSACTION_FAILED');
+    expect(failureCodeForError({ message: 'HARNESS_NATIVE_HOST_FAILED' }))
+      .toBe('HARNESS_TRANSACTION_FAILED');
+    expect(failureCodeForError(new Error(`HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`)))
+      .toBe('HARNESS_TRANSACTION_FAILED');
+  });
+
   it('rejects a structurally hashed pass without candidate transaction evidence', () => {
-    expect(() => parseReceiptDraft({ ...draft(), status: 'pass' })).toThrow(
+    expect(() => parseReceiptDraft({ ...draft(), status: 'pass', failureCode: null })).toThrow(
       'HARNESS_PASS_RECEIPT_EVIDENCE_INCOMPLETE',
     );
   });
@@ -155,7 +186,7 @@ describe('strict receipt schema', () => {
 describe('receipt chain', () => {
   it('rejects legacy v1 chains after the evidence-shape version bump', () => {
     expect(() => ReceiptChain.import(JSON.stringify({ schemaVersion: 1, receipts: [] })))
-      .toThrow(/schemaVersion 2/);
+      .toThrow(/schemaVersion 3/);
   });
 
   it('chains canonical receipts and round-trips verified evidence', () => {
@@ -175,7 +206,7 @@ describe('receipt chain', () => {
     const chain = new ReceiptChain();
     chain.append(draft());
     const exported = JSON.parse(chain.export());
-    exported.receipts[0].status = 'gated';
+    exported.receipts[0].failureCode = 'HARNESS_CLEANUP_FAILED';
     expect(() => ReceiptChain.import(JSON.stringify(exported))).toThrow(/digest does not match body/);
   });
 

@@ -430,7 +430,8 @@ export class GitWorktreeSet {
   async #git(cwd: string, args: string[], stdin?: string, signal?: AbortSignal): Promise<GitCommandResult> {
     this.#assertRepositoryRoot();
     const result = await runGitCommand(cwd, args, { stdin, signal });
-    if (result.exitCode !== 0) throw new Error(`HARNESS_GIT_COMMAND_FAILED:${args[0]}`);
+    if (result.exitCode !== 0) throw new Error(args[0] === 'apply'
+      ? 'HARNESS_PATCH_ADMISSION_INVALID' : `HARNESS_GIT_COMMAND_FAILED:${args[0]}`);
     return result;
   }
 }

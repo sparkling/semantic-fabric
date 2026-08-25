@@ -7,6 +7,7 @@ import {
   ReceiptChain,
   type CommandEvidence,
 } from './receipts.js';
+import { failureCodeForError, type ReceiptFailureCode } from './failure-code.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
 import {
@@ -293,13 +294,14 @@ export class CandidateTransaction {
             !== evidence.admission.patchDigest) {
           throw new Error('HARNESS_FINAL_PATCH_DIGEST_MISMATCH');
         }
-        return await this.#finish('pass', null, evidence, patch.payload);
+        return await this.#finish('pass', null, null, evidence, patch.payload);
       }
     } catch (error) {
       const cancelled = this.#isCancellation(error);
       return await this.#finish(
         cancelled ? 'cancelled' : 'fail',
         error instanceof Error ? error.message : String(error),
+        cancelled ? 'HARNESS_NATIVE_INVOCATION_CANCELLED' : failureCodeForError(error),
         evidence,
         null,
       );
@@ -309,11 +311,13 @@ export class CandidateTransaction {
   async #finish(
     requestedStatus: CandidateTransactionResult['status'],
     requestedReason: string | null,
+    requestedFailureCode: ReceiptFailureCode | null,
     evidence: CandidateEvidenceState,
     finalPatch: string | null,
   ): Promise<CandidateTransactionResult> {
     let status = requestedStatus;
     let reason = requestedReason;
+    let failureCode = requestedFailureCode;
     try {
       const recovery = this.#operations.recoveryEvidence();
       evidence.runtime = {
@@ -339,6 +343,7 @@ export class CandidateTransaction {
       const runtimeReason = `HARNESS_RUNTIME_EVIDENCE_FAILED:${error instanceof Error ? error.message : String(error)}`;
       status = runtimeTrustUnavailable(error) ? 'gated' : 'fail';
       reason = reason === null ? runtimeReason : `${reason}; ${runtimeReason}`;
+      failureCode ??= 'HARNESS_RUNTIME_EVIDENCE_FAILED';
     }
     try {
       await this.#operations.cleanup();
@@ -346,8 +351,9 @@ export class CandidateTransaction {
       const cleanupReason = `HARNESS_CLEANUP_FAILED:${error instanceof Error ? error.message : String(error)}`;
       status = 'fail';
       reason = reason === null ? cleanupReason : `${reason}; ${cleanupReason}`;
+      failureCode ??= 'HARNESS_CLEANUP_FAILED';
     }
-    return this.#finalize(status, reason, evidence, status === 'pass' ? finalPatch : null);
+    return this.#finalize(status, reason, failureCode, evidence, status === 'pass' ? finalPatch : null);
   }
 
   async #repairOrFail(
@@ -424,16 +430,18 @@ export class CandidateTransaction {
   #finalize(
     status: CandidateTransactionResult['status'],
     reason: string | null,
+    failureCode: ReceiptFailureCode | null,
     evidence: CandidateEvidenceState,
     finalPatch: string | null,
   ): CandidateTransactionResult {
     const cancelled = status === 'cancelled';
     const receipt = this.receipts.append({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId: this.#context.runId,
       taskId: this.#context.taskId,
       step: 'candidate-transaction',
       status,
+      failureCode,
       authority: DEVELOPMENT_AUTHORITY,
       issuedAt: this.#now(),
       identities: {

@@ -30,6 +30,7 @@ import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
 } from './models/native-adapters.js';
+import { TransientNativeHostError } from './models/recovery.js';
 import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 
 type NativeAdapter = CodexSubscriptionAdapter | ClaudeCodeSubscriptionAdapter;
@@ -128,7 +129,7 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
     }
     const output = this.#adapter.host === 'claude-code'
       ? parseClaudeEnvelope(raw)
-      : parseJson(raw, 'Codex structured output');
+      : parseCodexEnvelope(raw);
     const outputDigest = createHash('sha256').update(raw, 'utf8').digest('hex');
     this.#runtimeLedger?.recordInvocation({
       invocationId: executionId,
@@ -224,7 +225,10 @@ function readEvidenceFile(path: string, limit: number): string {
   const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const size = fstatSync(descriptor).size;
-    if (size < 1 || size > limit) throw new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_INVALID');
+    if (size < 1) {
+      throw new TransientNativeHostError('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING');
+    }
+    if (size > limit) throw new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_INVALID');
     const buffer = Buffer.allocUnsafe(size);
     let offset = 0;
     while (offset < size) {
@@ -281,6 +285,17 @@ function parseClaudeEnvelope(raw: string): unknown {
     throw new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING');
   }
   return envelope.structured_output;
+}
+
+function parseCodexEnvelope(raw: string): unknown {
+  try {
+    return parseJson(raw, 'Codex structured output');
+  } catch (error) {
+    throw new TransientNativeHostError(
+      'HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID',
+      { cause: error },
+    );
+  }
 }
 
 function parseJson(raw: string, label: string): unknown {

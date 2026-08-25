@@ -66,6 +66,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/effective-config-filesystem.ts',
     'coding-harness/src/effective-config-git.ts',
     'coding-harness/src/evaluator.ts',
+    'coding-harness/src/failure-code.ts',
     'coding-harness/src/frozen-cargo-lock.ts',
     'coding-harness/src/frozen-cargo-metadata.ts',
     'coding-harness/src/git-materialization.ts',

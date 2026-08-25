@@ -20,6 +20,10 @@ import {
   type ProgrammeDimensionId,
 } from './programme-acceptance.js';
 import {
+  RECEIPT_FAILURE_CODES,
+  failureCodeForReason,
+} from './failure-code.js';
+import {
   ReceiptChain,
   digestValue,
   type Receipt,
@@ -53,35 +57,15 @@ const REQUIRED_TOOL_EVIDENCE = Object.freeze([
   'systemctl',
   'agenticQeMcp',
 ]);
-export const ISSUE_8_SAFE_TRANSACTION_REASON_CODES = Object.freeze([
-  'HARNESS_ACCEPTANCE_GATE_FAILED',
-  'HARNESS_CLEANUP_FAILED',
-  'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID',
-  'HARNESS_NATIVE_CIRCUIT_OPEN',
-  'HARNESS_NATIVE_HOST_FAILED',
-  'HARNESS_NATIVE_HOST_TIMEOUT',
-  'HARNESS_NATIVE_INVOCATION_CANCELLED',
-  'HARNESS_NATIVE_ORIGIN_POLICY_DENIED',
-  'HARNESS_NATIVE_ORIGIN_UNUSED',
-  'HARNESS_NATIVE_PATCH_INVALID',
-  'HARNESS_NATIVE_PATCH_RESPONSE_INVALID',
-  'HARNESS_NATIVE_RETRY_BUDGET_EXHAUSTED',
-  'HARNESS_NATIVE_REVIEW_RESPONSE_INVALID',
-  'HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID',
-  'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING',
-  'HARNESS_REPAIR_BUDGET_EXHAUSTED',
-  'HARNESS_RUNTIME_EVIDENCE_FAILED',
-]);
-const ISSUE_8_SAFE_TRANSACTION_REASON_CODE_SET = new Set(ISSUE_8_SAFE_TRANSACTION_REASON_CODES);
-const MAX_SAFE_REASON_BYTES = 4_096;
+export const ISSUE_8_SAFE_TRANSACTION_REASON_CODES = RECEIPT_FAILURE_CODES;
 
 interface ReceiptChainDocument {
-  schemaVersion: 2;
+  schemaVersion: 3;
   receipts: readonly Receipt[];
 }
 
 export interface Issue8ProgrammeEnvelope {
-  schemaVersion: 3;
+  schemaVersion: 4;
   authority: typeof DEVELOPMENT_AUTHORITY;
   receiptChain: ReceiptChainDocument;
   diagnosticBlob: string;
@@ -95,7 +79,7 @@ export function createIssue8ProgrammeEnvelope(
   receipt: Receipt,
   diagnosticBlob: string,
 ): Issue8ProgrammeEnvelope {
-  const chain = verifyOneReceipt({ schemaVersion: 2, receipts: [receipt] });
+  const chain = verifyOneReceipt({ schemaVersion: 3, receipts: [receipt] });
   return assembleEnvelope(chain, diagnosticBlob);
 }
 
@@ -117,7 +101,7 @@ export function parseIssue8ProgrammeEnvelope(serialized: string): Issue8Programm
     'diagnosticBlobDigest', 'programmeAcceptance', 'programmeAcceptanceDigest',
     'envelopeDigest',
   ], 'issue #8 programme envelope');
-  if (input.schemaVersion !== 3 || input.authority !== DEVELOPMENT_AUTHORITY) {
+  if (input.schemaVersion !== 4 || input.authority !== DEVELOPMENT_AUTHORITY) {
     throw new TypeError('issue #8 programme envelope identity is invalid');
   }
   const chain = verifyOneReceipt(input.receiptChain);
@@ -136,6 +120,10 @@ export function finalizeIssue8ProgrammeOutcome(input: Readonly<{
   transactionReason: string | null;
   envelope: Issue8ProgrammeEnvelope;
 }>): Readonly<{ status: ReceiptStatus; reason: string | null }> {
+  const receipt = input.envelope.receiptChain.receipts[0];
+  if (receipt === undefined || receipt.status !== input.transactionStatus) {
+    throw new Error('HARNESS_ISSUE_8_TRANSACTION_STATUS_MISMATCH');
+  }
   if (input.transactionStatus === 'pass') {
     if (input.transactionReason !== null) {
       throw new Error('HARNESS_ISSUE_8_PASS_REASON_INVALID');
@@ -148,15 +136,9 @@ export function finalizeIssue8ProgrammeOutcome(input: Readonly<{
       reason: 'HARNESS_ISSUE_8_PROGRAMME_ACCEPTANCE_REJECTED',
     });
   }
-  const reason = safeTransactionReason(input.transactionReason)
-    ?? 'HARNESS_ISSUE_8_TRANSACTION_FAILED';
+  const reason = failureCodeForReason(input.transactionReason);
+  if (receipt.failureCode !== reason) throw new Error('HARNESS_ISSUE_8_FAILURE_CODE_MISMATCH');
   return deepFreeze({ status: input.transactionStatus, reason });
-}
-
-function safeTransactionReason(value: string | null): string | null {
-  if (value === null || Buffer.byteLength(value, 'utf8') > MAX_SAFE_REASON_BYTES) return null;
-  const code = /^(HARNESS_[A-Z0-9_]+)(?=[^A-Z0-9_]|$)/.exec(value)?.[1];
-  return code !== undefined && ISSUE_8_SAFE_TRANSACTION_REASON_CODE_SET.has(code) ? code : null;
 }
 
 function assembleEnvelope(
@@ -178,7 +160,7 @@ function assembleEnvelope(
   const programmeAcceptance = scoreIssue8Receipt(receipt, diagnosticEvidence);
   const programmeAcceptanceDigest = digestValue(programmeAcceptance);
   const body = {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     authority: DEVELOPMENT_AUTHORITY,
     receiptChain,
     diagnosticBlob,

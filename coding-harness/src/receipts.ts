@@ -13,6 +13,7 @@ import {
   deepFreeze,
   normalizeWorkspacePath,
 } from './contracts.js';
+import { parseReceiptFailureCode, type ReceiptFailureCode } from './failure-code.js';
 
 export type ReceiptStatus = 'pass' | 'fail' | 'gated' | 'cancelled';
 
@@ -50,11 +51,12 @@ export interface CommandEvidence {
 }
 
 export interface ReceiptDraft {
-  schemaVersion: 2;
+  schemaVersion: 3;
   runId: string;
   taskId: string;
   step: string;
   status: ReceiptStatus;
+  failureCode: ReceiptFailureCode | null;
   authority: typeof DEVELOPMENT_AUTHORITY;
   issuedAt: string;
   identities: {
@@ -106,7 +108,7 @@ export type ChainVerification = { ok: true } | { ok: false; brokenAt: number; re
 
 const GENESIS_DIGEST = '0'.repeat(64);
 const DRAFT_KEYS = [
-  'schemaVersion', 'runId', 'taskId', 'step', 'status', 'authority', 'issuedAt', 'identities',
+  'schemaVersion', 'runId', 'taskId', 'step', 'status', 'failureCode', 'authority', 'issuedAt', 'identities',
   'protectedInputs', 'route', 'hosts', 'admittedPaths', 'patchDigest', 'patchDigests', 'toolVersions', 'commands',
   'artifactDigests', 'verifierDigests', 'critiqueDigests', 'reviewDigests', 'recovery', 'coordination',
 ] as const;
@@ -153,7 +155,7 @@ export class ReceiptChain {
   }
 
   export(): string {
-    return canonical({ schemaVersion: 2, receipts: this.#receipts });
+    return canonical({ schemaVersion: 3, receipts: this.#receipts });
   }
 
   static import(serialized: string): ReceiptChain {
@@ -165,8 +167,8 @@ export class ReceiptChain {
     }
     const input = asRecord(value, 'receipt chain');
     assertExactKeys(input, ['schemaVersion', 'receipts'], 'receipt chain');
-    if (input.schemaVersion !== 2 || !Array.isArray(input.receipts)) {
-      throw new TypeError('receipt chain must use schemaVersion 2 and contain receipts');
+    if (input.schemaVersion !== 3 || !Array.isArray(input.receipts)) {
+      throw new TypeError('receipt chain must use schemaVersion 3 and contain receipts');
     }
     const chain = new ReceiptChain();
     for (const entry of input.receipts) chain.#receipts.push(parseReceipt(entry));
@@ -185,7 +187,7 @@ export function digestValue(value: unknown): string {
 export function parseReceiptDraft(value: unknown): ReceiptDraft {
   const input = asRecord(value, 'receipt');
   assertExactKeys(input, DRAFT_KEYS, 'receipt');
-  if (input.schemaVersion !== 2) throw new TypeError('receipt.schemaVersion must be 2');
+  if (input.schemaVersion !== 3) throw new TypeError('receipt.schemaVersion must be 3');
   if (input.authority !== DEVELOPMENT_AUTHORITY) throw new TypeError('receipt cannot grant promotion authority');
   const status = parseStatus(input.status);
   const issuedAt = parseIsoTimestamp(input.issuedAt, 'receipt.issuedAt');
@@ -217,11 +219,12 @@ export function parseReceiptDraft(value: unknown): ReceiptDraft {
   const coordination = parseCoordination(input.coordination);
 
   const draft: ReceiptDraft = deepFreeze({
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId: asNonEmptyString(input.runId, 'receipt.runId'),
     taskId: asNonEmptyString(input.taskId, 'receipt.taskId'),
     step: asNonEmptyString(input.step, 'receipt.step'),
     status,
+    failureCode: parseReceiptFailureCode(input.failureCode, status),
     authority: DEVELOPMENT_AUTHORITY,
     issuedAt,
     identities,

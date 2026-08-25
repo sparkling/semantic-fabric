@@ -18,6 +18,7 @@ import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
 } from '../src/models/native-adapters.js';
+import { TransientNativeHostError } from '../src/models/recovery.js';
 import type {
   NativeProcessRequest,
   NativeProcessResult,
@@ -189,6 +190,56 @@ describe('native adapter structured client', () => {
     for (const directory of readdirSync(evidenceRoot)) {
       expect(statSync(join(evidenceRoot, directory)).mode & 0o077).toBe(0);
     }
+  });
+
+  it('classifies an empty Codex last-message file as missing structured output', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const adapter = new CodexSubscriptionAdapter({
+      executable: '/tools/codex',
+      runner: new FakeRunner(() => ok('')),
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+      evidenceRoot,
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter, evidenceRoot, workspaceRoot, timeoutMs: 1_000,
+    });
+
+    await expect(client.invoke({
+      candidate: { host: 'codex', model: 'gpt-5.6' },
+      operation: 'implementation',
+      prompt: 'return a patch',
+    })).rejects.toMatchObject({
+      name: TransientNativeHostError.name,
+      message: 'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING',
+    });
+  });
+
+  it('classifies malformed Codex last-message JSON as an invalid envelope', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const adapter = new CodexSubscriptionAdapter({
+      executable: '/tools/codex',
+      runner: new FakeRunner((request) => {
+        const outputIndex = request.args.indexOf('--output-last-message');
+        writeFileSync(request.args[outputIndex + 1], 'untrusted malformed response');
+        return ok('');
+      }),
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+      evidenceRoot,
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter, evidenceRoot, workspaceRoot, timeoutMs: 1_000,
+    });
+
+    await expect(client.invoke({
+      candidate: { host: 'codex', model: 'gpt-5.6' },
+      operation: 'implementation',
+      prompt: 'return a patch',
+    })).rejects.toMatchObject({
+      name: TransientNativeHostError.name,
+      message: 'HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID',
+    });
   });
 
   it('extracts Claude structured output while retaining the raw envelope digest', async () => {

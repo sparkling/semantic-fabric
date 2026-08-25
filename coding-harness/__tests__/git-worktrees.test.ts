@@ -246,6 +246,31 @@ describe('isolated Git candidate and evaluator worktrees', () => {
     await worktrees.dispose();
   });
 
+  it('attributes a non-applicable patch to admission', async () => {
+    const fixture = repository();
+    const runRoot = join(mkdtempSync(join(tmpdir(), 'coding-harness-run-parent-')), 'run');
+    roots.push(runRoot.slice(0, -4));
+    const worktrees = new GitWorktreeSet({ repositoryRoot: fixture.root, runRoot });
+    await worktrees.prepare(fixture.commit, fixture.commit);
+    const patch = [
+      'diff --git a/src/file.txt b/src/file.txt',
+      '--- a/src/file.txt',
+      '+++ b/src/file.txt',
+      '@@ -1 +1 @@',
+      '-not the current content',
+      '+after',
+      '',
+    ].join('\n');
+
+    await expect(worktrees.admitAndApply(patch, ['src/file.txt'])).rejects.toThrow(
+      /PATCH_ADMISSION_INVALID/,
+    );
+    expect((await worktrees.candidateIdentity()).tree).toBe(
+      (await worktrees.baselineIdentity()).tree,
+    );
+    await worktrees.dispose();
+  });
+
   it('installs and re-establishes a read-only lock overlay in every lane', async () => {
     const fixture = repository();
     const parent = mkdtempSync(join(tmpdir(), 'coding-harness-overlay-parent-'));
