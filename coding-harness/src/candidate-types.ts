@@ -13,6 +13,7 @@ import type {
 } from './receipts.js';
 
 export type VerifierStage = 'public' | 'independent' | 'regression';
+export type CandidateRepairPhase = 'pre-admission' | 'post-admission';
 
 export interface CandidateTransactionContext {
   runId: string;
@@ -84,6 +85,7 @@ export interface CandidateOperations {
     patch: PatchSubmission,
     reasons: readonly string[],
     repairAttempt: number,
+    phase: CandidateRepairPhase,
     signal?: AbortSignal,
   ): Promise<PatchSubmission>;
   resetCandidate(signal?: AbortSignal): Promise<void>;

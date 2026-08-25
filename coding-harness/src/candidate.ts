@@ -7,7 +7,7 @@ import {
   ReceiptChain,
   type CommandEvidence,
 } from './receipts.js';
-import { failureCodeForError, type ReceiptFailureCode } from './failure-code.js';
+import { failureCodeForError, repairablePatchFailureForError, type ReceiptFailureCode } from './failure-code.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
 import {
@@ -174,12 +174,20 @@ export class CandidateTransaction {
         operation: 'implementation',
         candidateTree: prepared.evaluator.tree,
       });
-
       while (true) {
         this.#assertActive();
+        evidence.admission = null;
         await this.#operations.resetCandidate(this.#signal);
-        evidence.admission = await this.#operations.admitAndApply(patch, this.#signal);
-        evidence.patchDigests.push(evidence.admission.patchDigest);
+        evidence.patchDigests.push(createHash('sha256').update(patch.payload, 'utf8').digest('hex'));
+        try {
+          evidence.admission = await this.#operations.admitAndApply(patch, this.#signal);
+        } catch (error) {
+          const code = repairablePatchFailureForError(error);
+          if (code === null) throw error;
+          await this.#operations.resetCandidate(this.#signal);
+          patch = await this.#repairOrFail(patch, [code], evidence, 'pre-admission');
+          continue;
+        }
         if (evidence.admission.candidate.tree === evidence.prepared.evaluator.tree) {
           throw new Error('HARNESS_CANDIDATE_TREE_UNCHANGED');
         }
@@ -188,7 +196,7 @@ export class CandidateTransaction {
           this.#signal,
         );
         if (admissionFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, admissionFailures, evidence);
+          patch = await this.#repairOrFail(patch, admissionFailures, evidence, 'post-admission');
           continue;
         }
         let build: CandidateBuild;
@@ -201,7 +209,7 @@ export class CandidateTransaction {
         } catch (error) {
           if (!(error instanceof CandidateBuildFailure)) throw error;
           this.#recordBuild(error.build, evidence.admission, evidence);
-          patch = await this.#repairOrFail(patch, error.reasons, evidence);
+          patch = await this.#repairOrFail(patch, error.reasons, evidence, 'post-admission');
           continue;
         }
         this.#recordBuild(build, evidence.admission, evidence);
@@ -227,7 +235,7 @@ export class CandidateTransaction {
             ? [`${stage}: HARNESS_VERIFIER_REJECTED_WITHOUT_REASON`]
             : reasons.map((reason) => `${stage}: ${reason}`));
         if (verifierFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, verifierFailures, evidence);
+          patch = await this.#repairOrFail(patch, verifierFailures, evidence, 'post-admission');
           continue;
         }
 
@@ -258,7 +266,7 @@ export class CandidateTransaction {
             ? [`${host}: HARNESS_REVIEW_REJECTED_WITHOUT_REASON`]
             : reasons.map((reason) => `${host}: ${reason}`));
         if (reviewFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, reviewFailures, evidence);
+          patch = await this.#repairOrFail(patch, reviewFailures, evidence, 'post-admission');
           continue;
         }
 
@@ -286,7 +294,7 @@ export class CandidateTransaction {
           this.#signal,
         );
         if (finalAdmissionFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, finalAdmissionFailures, evidence);
+          patch = await this.#repairOrFail(patch, finalAdmissionFailures, evidence, 'post-admission');
           continue;
         }
         if (evidence.admission === null
@@ -359,17 +367,17 @@ export class CandidateTransaction {
   async #repairOrFail(
     patch: PatchSubmission,
     reasons: readonly string[],
-    evidence: CandidateEvidenceState,
+    evidence: CandidateEvidenceState, phase: 'pre-admission' | 'post-admission',
   ): Promise<PatchSubmission> {
+    this.#assertActive();
     if (evidence.repairCount >= this.#maxRepairs) {
       throw new Error(`HARNESS_REPAIR_BUDGET_EXHAUSTED:${reasons.join('; ')}`);
     }
     evidence.repairCount += 1;
-    this.#assertActive();
     const repaired = await this.#operations.repair(
       patch,
       reasons,
-      evidence.repairCount,
+      evidence.repairCount, phase,
       this.#signal,
     );
     evidence.nativeInvocations.push({

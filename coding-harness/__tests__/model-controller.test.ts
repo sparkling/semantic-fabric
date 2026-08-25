@@ -237,7 +237,7 @@ describe('native repository model controller', () => {
     const target = controller(events, prompts);
     const architecture = await target.architecture();
     const patch = await target.implement(architecture);
-    await target.repair(patch, ['independent verifier failed'], 1);
+    await target.repair(patch, ['HARNESS_PATCH_EMPTY'], 1, 'post-admission');
     await target.review('codex', {
       candidate: { commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
       commands: [],
@@ -280,5 +280,38 @@ describe('native repository model controller', () => {
       expect(prompt).toContain(ADMITTED_DIFF.trim());
     }
     for (const { prompt } of prompts) expect(prompt).not.toContain(SEALED_EVALUATOR_FIXTURE);
+  });
+
+  it('repairs a pre-admission patch from declared source only', async () => {
+    const prompts: Array<{ operation: string; prompt: string }> = [];
+    const target = controller([], prompts);
+    const architecture = await target.architecture();
+    const patch = await target.implement(architecture);
+
+    await target.repair(patch, ['HARNESS_PATCH_ADMISSION_INVALID'], 1, 'pre-admission');
+
+    const prompt = prompts.find(({ operation }) => operation === 'repair')?.prompt ?? '';
+    expect(prompt).toContain(DECLARED_SOURCE.trim());
+    expect(prompt).not.toContain(ADMITTED_SOURCE.trim());
+    expect(prompt).not.toContain(ADMITTED_DIFF.trim());
+    expect(prompt).toContain('previous diff was not admitted');
+  });
+
+  it('rejects invalid pre-admission authority before invoking a repair model', async () => {
+    const prompts: Array<{ operation: string; prompt: string }> = [];
+    const target = controller([], prompts);
+    const architecture = await target.architecture();
+    const patch = await target.implement(architecture);
+
+    await expect(target.repair(
+      patch, ['HARNESS_PATCH_ADMISSION_INVALID'], 1, 'invalid' as never,
+    )).rejects.toThrow('HARNESS_REPAIR_PHASE_INVALID');
+    await expect(target.repair(
+      patch, ['HARNESS_PATCH_APPLICATION_FAILED'], 1, 'pre-admission',
+    )).rejects.toThrow('HARNESS_PRE_ADMISSION_REPAIR_REASON_INVALID');
+    await expect(target.repair(
+      patch, ['HARNESS_PATCH_ADMISSION_INVALID', 'extra'], 1, 'pre-admission',
+    )).rejects.toThrow('HARNESS_PRE_ADMISSION_REPAIR_REASON_INVALID');
+    expect(prompts.filter(({ operation }) => operation === 'repair')).toEqual([]);
   });
 });

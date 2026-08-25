@@ -9,6 +9,7 @@ import {
   assertRawIndexMatchesWorkingTree,
 } from './git-materialization.js';
 import { gitAbortError, runGitCommand, type GitCommandResult } from './git-process.js';
+import { gitApplyFailureCode } from './failure-code.js';
 import type { GitIdentity } from './receipts.js';
 export interface PreparedWorktrees {
   baseline: GitIdentity;
@@ -431,7 +432,8 @@ export class GitWorktreeSet {
     this.#assertRepositoryRoot();
     const result = await runGitCommand(cwd, args, { stdin, signal });
     if (result.exitCode !== 0) throw new Error(args[0] === 'apply'
-      ? 'HARNESS_PATCH_ADMISSION_INVALID' : `HARNESS_GIT_COMMAND_FAILED:${args[0]}`);
+      ? gitApplyFailureCode(args, result.exitCode) ?? 'HARNESS_GIT_COMMAND_FAILED:apply'
+      : `HARNESS_GIT_COMMAND_FAILED:${args[0]}`);
     return result;
   }
 }

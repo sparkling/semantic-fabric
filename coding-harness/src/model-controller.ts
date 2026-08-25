@@ -10,6 +10,7 @@ import {
 import type {
   ArchitectureEvidence,
   CandidateBuild,
+  CandidateRepairPhase,
   CandidateReview,
   PatchSubmission,
 } from './candidate.js';
@@ -31,6 +32,7 @@ import type {
 import type { NativeHost } from './models/types.js';
 import { runAbortableCohort } from './parallel.js';
 import { digestValue } from './receipts.js';
+import { isRepairablePatchFailure } from './failure-code.js';
 import type { RepositoryModelController } from './repository-operations.js';
 
 export type ModelOperation = 'architecture' | 'implementation' | 'repair' | 'review';
@@ -158,15 +160,28 @@ export class NativeRepositoryModelController implements RepositoryModelControlle
     patch: PatchSubmission,
     reasons: readonly string[],
     repairAttempt: number,
+    phase: CandidateRepairPhase,
     signal?: AbortSignal,
   ): Promise<PatchSubmission> {
-    const context = await this.#options.contextProvider.admittedSource(signal);
+    if (phase !== 'pre-admission' && phase !== 'post-admission') {
+      throw new Error('HARNESS_REPAIR_PHASE_INVALID');
+    }
+    if (phase === 'pre-admission'
+      && (reasons.length !== 1 || !isRepairablePatchFailure(reasons[0] ?? ''))) {
+      throw new Error('HARNESS_PRE_ADMISSION_REPAIR_REASON_INVALID');
+    }
+    const preAdmission = phase === 'pre-admission';
+    const context = preAdmission
+      ? await this.#options.contextProvider.declaredSource(signal)
+      : await this.#options.contextProvider.admittedSource(signal);
     const candidate = this.#selected('repair');
     const invocation = await this.#invoke(
       candidate,
       'repair',
       this.#prompt([
-        'Repair the unified diff and preserve all passing behavior.',
+        preAdmission
+          ? 'The previous diff was not admitted; rebuild it from the exact declared source.'
+          : 'Repair the unified diff and preserve all passing behavior.',
         'Return the complete replacement diff in the patch field; it must begin exactly with',
         '"diff --git " and contain no Markdown fences or apply-patch markers.',
       ].join(' '), context, {

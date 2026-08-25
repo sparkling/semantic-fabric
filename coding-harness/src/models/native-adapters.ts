@@ -39,7 +39,6 @@ const CODEX_ESSENTIAL_TRAFFIC_CONFIG = Object.freeze([
 
 const CODEX_FIXED_CONFIG = Object.freeze([
   'model_provider="openai"',
-  'model_reasoning_effort="low"',
   'approval_policy="never"',
   ...CODEX_ESSENTIAL_TRAFFIC_CONFIG,
   'project_doc_max_bytes=0',
@@ -200,6 +199,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       '--color',
       'never',
       ...CODEX_FIXED_CONFIG.flatMap((value) => ['-c', value]),
+      '-c', request.operation === 'implementation' || request.operation === 'repair'
+        ? 'model_reasoning_effort="high"' : 'model_reasoning_effort="low"',
       '-',
     ];
     return this.#processRequest(

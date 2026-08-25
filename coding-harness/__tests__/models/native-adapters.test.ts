@@ -191,6 +191,23 @@ describe('native subscription adapters', () => {
     expect(claudeRequest?.signal).toBe(controller.signal);
     expect(codexRequest?.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
     expect(claudeRequest?.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1');
+    for (const [operation, effort] of [
+      ['architecture', 'low'], ['implementation', 'high'], ['repair', 'high'], ['review', 'low'],
+    ] as const) {
+      const request = codex.buildInvocation({
+        cwd: root,
+        model: 'gpt-5.6-sol',
+        prompt: `${operation} the admitted change`,
+        schema: { type: 'object' },
+        schemaPath,
+        outputPath,
+        workspaceAccess: 'read',
+        timeoutMs: 1_000,
+        operation,
+      });
+      expect(request.args.filter((value) => value.startsWith('model_reasoning_effort=')))
+        .toEqual([`model_reasoning_effort="${effort}"`]);
+    }
     expect(() => codex.buildInvocation({
       cwd: root,
       model: 'gpt-5.6-sol',

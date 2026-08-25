@@ -6,6 +6,7 @@ import type {
   ArchitectureEvidence,
   CandidateBuild,
   CandidateReview,
+  CandidateRepairPhase,
   PatchSubmission,
   PreparedCandidate,
   VerifierStage,
@@ -24,6 +25,7 @@ export interface RepositoryModelController {
     patch: PatchSubmission,
     reasons: readonly string[],
     repairAttempt: number,
+    phase: CandidateRepairPhase,
     signal?: AbortSignal,
   ): Promise<PatchSubmission>;
   review(host: NativeHost, build: CandidateBuild, signal?: AbortSignal): Promise<CandidateReview>;

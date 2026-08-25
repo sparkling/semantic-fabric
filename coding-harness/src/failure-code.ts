@@ -18,6 +18,7 @@ export const RECEIPT_FAILURE_CODES = Object.freeze([
   'HARNESS_NATIVE_STRUCTURED_OUTPUT_INVALID',
   'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING',
   'HARNESS_PATCH_ADMISSION_INVALID',
+  'HARNESS_PATCH_APPLICATION_FAILED',
   'HARNESS_PATCH_EMPTY',
   'HARNESS_PATCH_INVALID',
   'HARNESS_PATCH_PATH_NOT_DECLARED',
@@ -31,6 +32,13 @@ export type ReceiptFailureCode = typeof RECEIPT_FAILURE_CODES[number];
 type ReceiptStatus = 'pass' | 'fail' | 'gated' | 'cancelled';
 
 const CODE_SET = new Set<string>(RECEIPT_FAILURE_CODES);
+const REPAIRABLE_PATCH_FAILURE_CODE_SET = new Set<ReceiptFailureCode>([
+  'HARNESS_PATCH_ADMISSION_INVALID',
+  'HARNESS_PATCH_EMPTY',
+  'HARNESS_PATCH_INVALID',
+  'HARNESS_PATCH_PATH_NOT_DECLARED',
+  'HARNESS_PATCH_TOO_LARGE',
+]);
 const GENERIC: ReceiptFailureCode = 'HARNESS_TRANSACTION_FAILED';
 const MAX_REASON_BYTES = 4_096;
 const MAX_ERROR_NODES = 64;
@@ -57,6 +65,27 @@ export function failureCodeForError(error: unknown): ReceiptFailureCode {
 
 export function failureCodeForReason(reason: string | null): ReceiptFailureCode {
   return codeFromReason(reason) ?? GENERIC;
+}
+
+export function isRepairablePatchFailure(value: string): value is ReceiptFailureCode {
+  return REPAIRABLE_PATCH_FAILURE_CODE_SET.has(value as ReceiptFailureCode);
+}
+
+export function repairablePatchFailureForError(error: unknown): ReceiptFailureCode | null {
+  if (!(error instanceof Error) || error instanceof AggregateError || Object.hasOwn(error, 'cause')) {
+    return null;
+  }
+  const code = codeFromReason(safeMessage(error));
+  return code !== null && isRepairablePatchFailure(code) ? code : null;
+}
+
+export function gitApplyFailureCode(
+  args: readonly string[], exitCode: number | null,
+): ReceiptFailureCode | null {
+  if (args[0] !== 'apply') throw new TypeError('git apply arguments required');
+  if (exitCode === null || exitCode <= 0) return null;
+  return args.includes('--check') || args.includes('--numstat')
+    ? 'HARNESS_PATCH_ADMISSION_INVALID' : 'HARNESS_PATCH_APPLICATION_FAILED';
 }
 
 export function parseReceiptFailureCode(

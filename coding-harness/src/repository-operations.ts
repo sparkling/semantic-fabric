@@ -12,6 +12,7 @@ import {
   type AcceptanceGateEvidence,
   type ArchitectureEvidence,
   type CandidateBuild,
+  type CandidateRepairPhase,
   type CandidateOperations,
   type CandidateReview,
   type PatchAdmission,
@@ -137,9 +138,10 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     patch: PatchSubmission,
     reasons: readonly string[],
     repairAttempt: number,
+    phase: CandidateRepairPhase,
     signal?: AbortSignal,
   ): Promise<PatchSubmission> {
-    return await this.#options.model.repair(patch, reasons, repairAttempt, signal);
+    return await this.#options.model.repair(patch, reasons, repairAttempt, phase, signal);
   }
 
   async resetCandidate(signal?: AbortSignal): Promise<void> {

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { failureCodeForError } from '../src/failure-code.js';
+import {
+  failureCodeForError,
+  gitApplyFailureCode,
+  isRepairablePatchFailure,
+} from '../src/failure-code.js';
 import { ReceiptChain, digestValue, parseReceiptDraft } from '../src/receipts.js';
 
 const gitCommit = 'a'.repeat(40);
@@ -146,6 +150,37 @@ describe('strict receipt schema', () => {
       .toBe('HARNESS_TRANSACTION_FAILED');
     expect(failureCodeForError(new Error(`HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`)))
       .toBe('HARNESS_TRANSACTION_FAILED');
+  });
+
+  it('separates model-correctable admission failures from terminal application failures', () => {
+    for (const code of [
+      'HARNESS_PATCH_ADMISSION_INVALID',
+      'HARNESS_PATCH_EMPTY',
+      'HARNESS_PATCH_INVALID',
+      'HARNESS_PATCH_PATH_NOT_DECLARED',
+      'HARNESS_PATCH_TOO_LARGE',
+    ]) expect(isRepairablePatchFailure(code)).toBe(true);
+    for (const code of [
+      'HARNESS_PATCH_APPLICATION_FAILED',
+      'HARNESS_PATCH_ADMISSION_CHANGED',
+      'HARNESS_PATCH_TREE_UNCHANGED',
+      'HARNESS_PATCH_POLICY_GATE',
+      'HARNESS_GIT_COMMAND_TIMEOUT',
+      'HARNESS_GIT_COMMAND_CANCELLED',
+      'HARNESS_NATIVE_PATCH_INVALID',
+      'HARNESS_NATIVE_PATCH_RESPONSE_INVALID',
+      'HARNESS_CLEANUP_FAILED',
+      'HARNESS_NATIVE_HOST_TIMEOUT',
+      'HARNESS_NATIVE_INVOCATION_CANCELLED',
+    ]) expect(isRepairablePatchFailure(code)).toBe(false);
+    expect(gitApplyFailureCode(['apply', '--numstat'], 1)).toBe('HARNESS_PATCH_ADMISSION_INVALID');
+    expect(gitApplyFailureCode(['apply', '--check', '--index'], 1)).toBe(
+      'HARNESS_PATCH_ADMISSION_INVALID',
+    );
+    expect(gitApplyFailureCode(['apply', '--index'], 1)).toBe('HARNESS_PATCH_APPLICATION_FAILED');
+    expect(gitApplyFailureCode(['apply', '--check'], null)).toBeNull();
+    expect(gitApplyFailureCode(['apply', '--check'], 0)).toBeNull();
+    expect(() => gitApplyFailureCode(['status'], 1)).toThrow('git apply arguments required');
   });
 
   it('rejects a structurally hashed pass without candidate transaction evidence', () => {

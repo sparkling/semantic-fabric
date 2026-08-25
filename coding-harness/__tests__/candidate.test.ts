@@ -142,8 +142,12 @@ describe('patched candidate transaction', () => {
       expect.anything(),
       ['HARNESS_CANDIDATE_SOURCE_FIX_MISMATCH'],
       1,
+      'post-admission',
       undefined,
     );
+    const native = vi.mocked(target.runtimeEvidence).mock.calls[0]?.[0] ?? [];
+    expect(native.find(({ operation }) => operation === 'repair')?.candidateTree)
+      .toBe(identity('3').tree);
   });
 
   it('prefixes mutation evidence when a final admission check triggers repair', async () => {
