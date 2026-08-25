@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-25
 updated: 2026-08-25
 tags: [correctness, open-issues, r2rml, dependencies, cloud-backends, api]
@@ -13,6 +13,22 @@ implements: []
 ---
 
 # Correctness-first remediation of open issues #6–#10
+
+## Implementation status
+
+**Accepted and partially executed.** The serialized correctness lane landed #8
+as `10dedd4` and #9 as `5218874`; the parallel dependency lane landed #10 as
+`5b8415c` without absorbing PR #12. Commit `9d709dd` locks `sf-serve` admission
+to SQLite, PostgreSQL, and MySQL while provider work remains deferred. Issue #6
+remains intentionally unchanged because no consumer-red Nova reproducer was
+available.
+
+Locked/offline workspace format, clippy, build, tests, and W3C conformance pass
+with one adjudicated documented deviation and no unexpected failure.
+The broader programme is not complete: `cargo audit` retains the unignored
+`RUSTSEC-2026-0235` baseline, provider-specific #7 evaluators are not built,
+and #6 still requires consumer evidence. No issue state or external branch was
+changed by this execution.
 
 ## Context and problem statement
 

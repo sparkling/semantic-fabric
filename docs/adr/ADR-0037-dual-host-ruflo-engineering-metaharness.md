@@ -241,11 +241,27 @@ a Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture, not yet implemented. The Ruflo MetaHarness score tool on
-2026-08-25 scored the repository 71 and tracked `coding-harness` 67; the tracked
-harness genome was `needs-work`, and OIA/MCP security diagnostics were blind to
-the configured surface. These are baselines on that tool's 0–100 scale, not
-acceptance evidence or evolution fitness.
+Accepted architecture; framework implemented, programme acceptance gated.
+Commits `19fe67a`, `0db187a`, `51d238e`, `f55f2a4`, and `8d63970` establish the
+private supply chain, execution contracts, native dual-host routing, patched-
+candidate verifier transaction, and fail-closed process limits. The harness
+builds and passes 113 tests across 22 files. It has no publication or evolution
+path, and all source files remain under 500 lines.
+
+This is not an accepted issue-#8 MetaHarness run. The package validates injected
+filesystem/origin evidence but does not bundle the trusted broker, and
+`RepositoryCandidateOperations` does not yet assemble runner, preflight, and
+structured-output records into invocation-correlated native evidence. Resource
+quotas are also absent. The dirty root `.mcp.json` and untracked
+`coding-harness/.claude/` command surfaces remain outside the committed harness
+and block programme acceptance.
+
+Ruflo diagnostics still score the repository 71 and tracked harness 67; the
+harness genome is `needs-work`. OIA/threat/MCP scans that report no MCP surface
+are inconclusive against the inspected configuration. Until those hard gates
+pass and the score is at least 98, real execution must emit a gated outcome,
+Darwin/GEPA stays disabled, and no receipt may be described as semantic
+acceptance.
 
 ## Consequences
 

@@ -15,16 +15,19 @@ implements: []
 
 ## Implementation status
 
-**Accepted; implementation correction required.** The original eight contract
-cells were green on both engines against the spareval oracle on 2026-07-20.
-They established the `GRAPH ?g` architecture, but did not exercise the R2RML
-subject-map plus predicate-object-map graph union or all incompatible binding
-paths. Issues #8 and #9 therefore invalidate the historical "implemented"
-claim without reversing the decision.
+**Accepted; corrective implementation landed, full acceptance evidence
+partial.** Commit `10dedd4` makes incompatible ordinary and `rr:class` binds
+prune their branches. Commit `5218874` introduces a normalized distinct
+subject-map/POM graph union and threads it through mapping, ordinary unfolding,
+paths, RDF-star, dump/materialization, and execution.
 
-Corrective work must cover ordinary BGP unfolding, property paths, RDF-star,
-flat/tree parity, and the materialized-dataset oracle before this decision can
-again be called fully implemented.
+Eight graph-union and three RDF-star regression cases pass with the targeted
+flat/tree/oracle suites; the locked/offline workspace and W3C gates also pass
+with one adjudicated documented deviation and no unexpected failure.
+The decision is not marked fully implemented because the planned live
+PostgreSQL matrix, mutation-lite receipt, and accepted dual-host MetaHarness
+transaction were not completed. Those are evidence gaps, not a reversal of the
+landed semantic correction.
 
 ## Context and problem statement
 

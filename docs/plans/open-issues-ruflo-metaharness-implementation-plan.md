@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: executed-gated
 date: 2026-08-25
+updated: 2026-08-25
 owners: [integration-owner, query-semantics, dependency-governance, harness-control-plane]
 decisions: [ADR-0010, ADR-0024, ADR-0035, ADR-0036, ADR-0037]
 ---
@@ -15,8 +16,45 @@ Deliver the wrong-result fixes in issues #8 and #9, the dependency unblock in
 ADR-0037, prove it on #8, and accept it only when every hard gate passes and its
 non-degraded MetaHarness score is at least 98.
 
-This plan changes no issue state, branch, product code, harness code, or external
-publication by itself.
+The plan itself grants no issue-state, push, merge, release, or publication
+authority. The user separately authorized its local execution.
+
+## Execution outcome (2026-08-25)
+
+The product and framework slices were executed and committed locally. The
+programme is deliberately **gated**, not accepted: direct product verification
+passes, but ADR-0037's trusted native-runtime and diagnostic gates do not.
+
+| Scope | Outcome | Evidence |
+|---|---|---|
+| #8 checked binds | implemented | `10dedd4`; exact red/green target plus flat/tree/oracle and workspace gates |
+| #9 graph union | implemented | `5218874`; graph, path, RDF-star, materialization, and conformance gates |
+| #10 SQLite link | implemented with advisory baseline | `5b8415c`; one `rusqlite 0.40.2` workspace version; `RUSTSEC-2026-0235` remains unignored |
+| #7 serving admission | locked, providers deferred | `9d709dd`; only SQLite, PostgreSQL, and MySQL are admitted |
+| #6 materialization API | deferred | no consumer-red Nova reproducer, so no speculative API was added |
+| Harness framework | implemented but not programme-accepted | `19fe67a`, `0db187a`, `51d238e`, `f55f2a4`, `8d63970` |
+
+Final direct gates passed: locked/offline workspace format, clippy with warnings
+denied, all-target build, workspace tests, and W3C conformance (82 adjudicated,
+zero unexpected failures, one documented deviation). The harness builds and
+passes 113 tests across 22 files.
+
+The remaining hard gates are concrete:
+
+- no trusted production filesystem/origin/auth broker is bundled, and native
+  runtime evidence is not yet assembled from runner records and correlated to
+  each model invocation ID;
+- CPU, memory, PID, and disk quotas are absent;
+- the effective untracked `coding-harness/.claude/` state and dirty root
+  `.mcp.json` include unapproved/unpinned command surfaces and were preserved as
+  user state rather than treated as acceptance inputs;
+- OIA/threat/MCP diagnostics are inconclusive because they report no MCP
+  surface despite the actual configuration;
+- repository/harness scores remain 71/67, below the required 98, and the real
+  dual-host #8 transaction was therefore not run or promoted.
+
+Darwin/GEPA and AVO remain ineligible. No issue was closed, no PR was merged,
+and nothing was pushed, published, deployed, or promoted.
 
 ## Frozen planning baseline
 
