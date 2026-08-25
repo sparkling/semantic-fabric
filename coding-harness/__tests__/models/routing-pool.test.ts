@@ -158,4 +158,23 @@ describe('persistent quality-first routed pool', () => {
     expect(() => pool.select('review')).toThrow('HARNESS_ROUTING_SNAPSHOT_FROZEN:review');
     expect(() => pool.freeze(['architecture'])).toThrow('HARNESS_ROUTING_SNAPSHOT_ALREADY_FROZEN');
   });
+
+  it('enforces native-host capability boundaries before quality selection', () => {
+    const specializedCandidates: NativeModelCandidate[] = candidates.map((candidate) =>
+      candidate.host === 'claude-code'
+        ? { ...candidate, handles: ['architecture', 'review'] }
+        : candidate,
+    );
+    const pool = new PersistentRoutedAgentPool({
+      runId: 'run-capabilities',
+      task,
+      candidates: specializedCandidates,
+      history: new VerifiedRoutingHistory(),
+      embedder,
+    });
+
+    expect(pool.select('implementation').host).toBe('codex');
+    expect(pool.select('repair').host).toBe('codex');
+    expect(pool.select('architecture').host).toBe('claude-code');
+  });
 });

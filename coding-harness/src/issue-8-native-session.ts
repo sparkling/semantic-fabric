@@ -64,7 +64,7 @@ export async function createIssue8NativeSession(
       id: 'claude-native-subscription',
       host: 'claude-code' as const,
       model: options.models.claude,
-      handles: ['architecture', 'implementation', 'repair', 'review'],
+      handles: ['architecture', 'review'],
       run: unavailablePoolExecution,
     }];
     return Object.freeze({

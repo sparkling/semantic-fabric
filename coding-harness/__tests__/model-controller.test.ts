@@ -27,7 +27,7 @@ const candidates: readonly NativeModelCandidate[] = [
     id: 'claude-native',
     host: 'claude-code',
     model: 'claude-sonnet-5',
-    handles: ['architecture', 'implementation', 'repair', 'review'],
+    handles: ['architecture', 'review'],
     run: async () => ({ output: {}, quality: 1, confidence: 1, risk: 0, costUsd: 0, latencyMs: 1 }),
   },
 ];
@@ -147,6 +147,9 @@ describe('native repository model controller', () => {
     expect(events.filter((event) => event.startsWith('architecture:')).sort()).toEqual([
       'architecture:claude-code', 'architecture:codex',
     ]);
+    expect(events.filter((event) => event.startsWith('implementation:'))).toEqual([
+      'implementation:codex',
+    ]);
     expect(patch.payload).toMatch(/^diff --git /);
     expect(reviews.map(({ host }) => host)).toEqual(['codex', 'claude-code']);
     expect(reviews.every(({ candidate }) => candidate.tree === build.candidate.tree)).toBe(true);
@@ -265,6 +268,7 @@ describe('native repository model controller', () => {
     }
     const repairPrompts = prompts.filter(({ operation }) => operation === 'repair');
     expect(repairPrompts).toHaveLength(1);
+    expect(events.filter((event) => event.startsWith('repair:'))).toEqual(['repair:codex']);
     for (const { prompt } of repairPrompts) {
       expect(prompt).toContain(ADMITTED_SOURCE.trim());
       expect(prompt).toContain(ADMITTED_DIFF.trim());
