@@ -69,7 +69,7 @@ export function createRustOfflineProfile(options: RustOfflineProfileOptions): Ru
   if (existsSync('/usr/lib64')) {
     mounts.push(mount('/usr/lib64', '/usr/lib64'), mount('/usr/lib64', '/lib64'));
   }
-  for (const kind of ['cache', 'index', 'src'] as const) {
+  for (const kind of ['cache', 'index'] as const) {
     mounts.push(mount(
       join(registryRoot, kind, options.registryKey),
       `/cargo-home/registry/${kind}/${options.registryKey}`,

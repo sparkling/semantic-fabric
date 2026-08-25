@@ -12,6 +12,7 @@ import {
 import { runGitCommand } from './git-process.js';
 import { runIssue8Transaction, type Issue8DriverResult } from './issue-8-driver.js';
 import { createIssue8NativeSession } from './issue-8-native-session.js';
+import { prepareIssue8RustRuntimeFactory } from './issue-8-rust-runtime.js';
 import {
   createIssue8ProgrammeEnvelope,
   finalizeIssue8ProgrammeOutcome,
@@ -24,14 +25,12 @@ import {
 } from './metaharness-diagnostics.js';
 import {
   ISSUE_8_NATIVE_LIMITS,
-  ISSUE_8_RUST_LIMITS,
+  ISSUE_8_FROZEN_LOCK_DIGEST,
   ISSUE_8_SYSTEM_PATHS,
+  ISSUE_8_TARGET_TRIPLE,
   attestIssue8SystemTools,
   prepareCargoExtension,
 } from './issue-8-system.js';
-import { SystemdResourceBoundary } from './resource-boundary.js';
-import { prepareIssue8RustClosure } from './rust-closure.js';
-import { createRustOfflineProfile } from './rust-sandbox.js';
 
 const ISSUE_8_TASK_ID = 'bprune_8_20260825';
 const MODELS = Object.freeze({ codex: 'gpt-5.6-sol', claude: 'claude-sonnet-4-6' });
@@ -160,13 +159,9 @@ async function executeIssue8(
     paths.gitTemplate,
     invocation.controllerCommit,
   );
-  const rustClosure = prepareIssue8RustClosure({
-    scratchRoot: scratch,
-    toolchainSource: ISSUE_8_SYSTEM_PATHS.toolchain,
-    registrySource: ISSUE_8_SYSTEM_PATHS.registry,
-  });
-  const systemTools = { ...attestIssue8SystemTools(), ...rustClosure.evidence };
   const cargoExtensionRoot = prepareCargoExtension(scratch);
+  const rust = prepareIssue8RustRuntimeFactory({ scratchRoot: scratch, cargoExtensionRoot });
+  const systemTools = { ...attestIssue8SystemTools(), ...rust.bootstrapEvidence };
   const qe = createIssue8QeCollector({
     taskId: ISSUE_8_TASK_ID,
     runId: invocation.runId,
@@ -198,23 +193,10 @@ async function executeIssue8(
       rufloConsensus: invocation.consensusId,
       agenticQe: '3.13.10#sast-only-flat-v1+lcov-gap',
     },
-    createRustProfile: (controlledRoot) => createRustOfflineProfile({
-      writableRoot: assertControlledRoot(scratch, controlledRoot),
-      cargoExecutable: rustClosure.cargoExecutable,
-      toolchainRoot: rustClosure.toolchainRoot,
-      registryRoot: rustClosure.registryRoot,
-      registryKey: ISSUE_8_SYSTEM_PATHS.registryKey,
-      cargoExtensionRoot,
-      bwrapExecutable: ISSUE_8_SYSTEM_PATHS.bwrap,
-      resourceBoundary: new SystemdResourceBoundary({
-        executablePath: ISSUE_8_SYSTEM_PATHS.systemdRun,
-        systemctlPath: ISSUE_8_SYSTEM_PATHS.systemctl,
-        terminationGraceMs: SECURE_HARNESS_CONFIG.limits.terminationGraceMs,
-        sourceEnvironment: process.env,
-      }),
-      resourceLimits: ISSUE_8_RUST_LIMITS,
-      assertClosureStable: rustClosure.assertStable,
-    }),
+    createBootstrapRustProfile: (controlledRoot) =>
+      rust.createBootstrapProfile(assertControlledRoot(scratch, controlledRoot)),
+    createLockedRustRuntime: (controlledRoot, lockfile, packages) =>
+      rust.createLockedRuntime(assertControlledRoot(scratch, controlledRoot), lockfile, packages),
     prepareFrozenLockfile: async ({ task, rustProfile }) => await prepareFrozenCargoLock({
       repositoryRoot: transactionRepository,
       scratchRoot: paths.frozen,
@@ -223,6 +205,8 @@ async function executeIssue8(
       cargoExecutable: rustProfile.cargoExecutable,
       cargoEnvironment: rustProfile.environment,
       config: SECURE_HARNESS_CONFIG,
+      expectedDigest: ISSUE_8_FROZEN_LOCK_DIGEST,
+      targetTriple: ISSUE_8_TARGET_TRIPLE,
       executor: createStructuredFrozenCargoLockExecutor({
         config: SECURE_HARNESS_CONFIG,
         offlineIsolator: rustProfile.isolator,

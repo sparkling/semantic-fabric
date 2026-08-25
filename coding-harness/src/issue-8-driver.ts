@@ -11,6 +11,7 @@ import { SECURE_HARNESS_CONFIG } from './config.js';
 import { attestIssue8Controller, type ControllerAttestation } from './controller-attestation.js';
 import { DEVELOPMENT_AUTHORITY, parseTaskContract } from './contracts.js';
 import { materializeEvaluatorCommit, type EvaluatorIdentity } from './evaluator.js';
+import type { FrozenRegistryPackage } from './frozen-cargo-metadata.js';
 import { GitProtectedInputBoundary } from './git-protected-boundary.js';
 import { runGitCommand } from './git-process.js';
 import { assertGitMaterializationSafe } from './git-materialization.js';
@@ -38,6 +39,7 @@ export interface Issue8FrozenLockLease {
     readonly workspacePath: 'Cargo.lock';
     readonly digest: string;
   }>;
+  readonly registryPackages: readonly FrozenRegistryPackage[];
   assertStable(): void;
   cleanup(): Promise<void>;
 }
@@ -60,7 +62,12 @@ export interface Issue8DriverOptions {
   readonly runId: string;
   readonly models: Readonly<{ codex: string; claude: string }>;
   readonly toolVersions: Readonly<Record<string, string>>;
-  readonly createRustProfile: (writableRoot: string) => RustOfflineProfile;
+  readonly createBootstrapRustProfile: (writableRoot: string) => RustOfflineProfile;
+  readonly createLockedRustRuntime: (
+    writableRoot: string,
+    lockfile: Issue8FrozenLockLease['lockfile'],
+    packages: readonly FrozenRegistryPackage[],
+  ) => Readonly<{ profile: RustOfflineProfile; toolVersions: Readonly<Record<string, string>> }>;
   readonly prepareFrozenLockfile: (input: Readonly<{
     task: AcceptanceTask;
     evaluator: EvaluatorIdentity;
@@ -156,16 +163,21 @@ export async function runIssue8Transaction(
       evaluator.commit,
       options.signal,
     );
-    const rustProfile = options.createRustProfile(worktrees.controlledRoot());
-    const task = bindAcceptanceTaskToRustProfile(unboundTask, rustProfile);
+    const bootstrapRustProfile = options.createBootstrapRustProfile(worktrees.controlledRoot());
+    const bootstrapTask = bindAcceptanceTaskToRustProfile(unboundTask, bootstrapRustProfile);
     frozen = await options.prepareFrozenLockfile({
-      task,
+      task: bootstrapTask,
       evaluator,
       prepared,
-      rustProfile,
+      rustProfile: bootstrapRustProfile,
     });
     frozen.assertStable();
     const frozenLockfile = frozen.lockfile;
+    const rustRuntime = options.createLockedRustRuntime(
+      worktrees.controlledRoot(), frozenLockfile, frozen.registryPackages,
+    );
+    const rustProfile = rustRuntime.profile;
+    const task = bindAcceptanceTaskToRustProfile(unboundTask, rustProfile);
     await worktrees.installFrozenOverlay(
       frozenLockfile.sourcePath,
       frozenLockfile.workspacePath,
@@ -320,6 +332,7 @@ export async function runIssue8Transaction(
         hosts: [...native.hosts],
         toolVersions: {
           ...options.toolVersions,
+          ...rustRuntime.toolVersions,
           controllerExecutionDigest: controller.executionDigest,
           controllerBuildManifestDigest: controller.buildManifestBlobDigest,
           controllerRuntimeTreeDigest: controller.build.runtimeTreeDigest,

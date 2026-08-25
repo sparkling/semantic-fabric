@@ -34,6 +34,12 @@ export const ISSUE_8_SYSTEM_PATHS = Object.freeze({
   agenticQeMcp: '/home/claude/.npm-global/lib/node_modules/agentic-qe/dist/mcp/bundle.js',
 });
 
+export const ISSUE_8_FROZEN_LOCK_DIGEST =
+  '72916782d4d8fb87b613f61debe2107c160e083ef4969c89c23c7596df5b637d';
+export const ISSUE_8_TARGET_TRIPLE = 'x86_64-unknown-linux-gnu';
+export const ISSUE_8_LOCKED_REGISTRY_CONTENT_DIGEST =
+  '1bb717af28554b8cbb83ff1a219bbbd294ccee98691191bc9f65dc431106e908';
+
 const EXPECTED_EXECUTABLES = Object.freeze({
   cargo: 'f30f9fd1b1d0b8fd10dc33219eb4cd4bec3543f40e434ac71f5a03fd0359063f',
   cargoLlvmCov: 'c59831d34b46a3e3a3dc5b357fa12f75eb0af3172f8e9e81a6fc1412cdbcaa1a',

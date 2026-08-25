@@ -24,7 +24,7 @@ afterEach(() => {
 describe(
   'pinned Rust sandbox profile',
   () => {
-    it('maps a trusted toolchain, cache triplet, and sealed coverage extension', () => {
+    it('maps a trusted toolchain, locked registry inputs, and sealed coverage extension', () => {
       const rustup = spawnSync('rustup', ['which', 'cargo'], { encoding: 'utf8' });
       expect(rustup.status, rustup.stderr).toBe(0);
       const cargo = realpathSync(rustup.stdout.trim());
@@ -37,7 +37,7 @@ describe(
       writeFileSync(coverageExecutable, '#!/bin/sh\nexit 0\n');
       chmodSync(coverageExecutable, 0o500);
       roots.push(registryRoot, writableRoot, extensionRoot);
-      for (const kind of ['cache', 'index', 'src']) {
+      for (const kind of ['cache', 'index']) {
         mkdirSync(join(registryRoot, kind, registryKey), { recursive: true });
       }
       const profile = createRustOfflineProfile({
@@ -64,7 +64,9 @@ describe(
       expect(command.executable).toBe('/toolchain/bin/cargo');
       expect(command.env.CARGO_HOME).toBe('/cargo-home');
       expect(profile.readOnlyMounts.filter(({ destination }) =>
-        destination.startsWith('/cargo-home/registry/'))).toHaveLength(3);
+        destination.startsWith('/cargo-home/registry/'))).toHaveLength(2);
+      expect(profile.readOnlyMounts.some(({ destination }) =>
+        destination.includes('/registry/src/'))).toBe(false);
       expect(profile.readOnlyMounts).toContainEqual({
         source: extensionRoot,
         destination: '/cargo-home/bin',

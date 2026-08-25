@@ -23,6 +23,7 @@ import {
   type FrozenCargoLockExecution,
   type FrozenCargoLockExecutor,
 } from '../src/frozen-cargo-lock.js';
+import { parseFrozenCargoMetadata } from '../src/frozen-cargo-metadata.js';
 import type { OfflineProcessIsolator } from '../src/network.js';
 import type { ProcessResult } from '../src/process.js';
 import type { GitIdentity } from '../src/receipts.js';
@@ -50,6 +51,19 @@ const offlineIsolator: OfflineProcessIsolator = Object.freeze({
 });
 
 describe('historical frozen Cargo lock preparation', () => {
+  it('rejects duplicate resolve-node identities in Cargo metadata', () => {
+    const metadata = JSON.stringify({
+      workspace_root: '/workspace',
+      target_directory: '/target',
+      packages: [],
+      workspace_members: [],
+      resolve: { nodes: [{ id: 'duplicate' }, { id: 'duplicate' }] },
+    });
+
+    expect(() => parseFrozenCargoMetadata(metadata, '/workspace', '/target'))
+      .toThrow('HARNESS_FROZEN_LOCK_METADATA_NODE_INVALID');
+  });
+
   for (const kind of ['structured-offline', 'native-offline'] as const) {
     it(`prepares and validates a baseline lock through ${kind}`, async () => {
       const fixture = repository();
@@ -80,6 +94,8 @@ describe('historical frozen Cargo lock preparation', () => {
       expect(lease.lockfile.workspacePath).toBe('Cargo.lock');
       expect(lease.lockfile.digest).toMatch(/^[a-f0-9]{64}$/);
       expect(Object.isFrozen(lease.lockfile)).toBe(true);
+      expect(lease.registryPackages).toEqual([]);
+      expect(Object.isFrozen(lease.registryPackages)).toBe(true);
       expect(lstatSync(lease.lockfile.sourcePath).mode & 0o222).toBe(0);
       expect(readFileSync(lease.lockfile.sourcePath, 'utf8')).toContain('version = 4');
       expect(lease.baseline).toEqual(fixture.baseline);
@@ -173,16 +189,40 @@ describe('historical frozen Cargo lock preparation', () => {
           return attested(request, successfulResult(''));
         }
         expect(request.command.argv).toEqual([
-          'metadata', '--locked', '--offline', '--format-version', '1',
+          'metadata', '--locked', '--offline', '--filter-platform',
+          'x86_64-unknown-linux-gnu', '--format-version', '1',
         ]);
         return attested(request, failedResult());
       },
     };
 
     await expect(prepareFrozenCargoLock(
-      preparationInput(fixture, join(parent, 'lease'), executor),
+      {
+        ...preparationInput(fixture, join(parent, 'lease'), executor),
+        targetTriple: 'x86_64-unknown-linux-gnu',
+      },
     )).rejects.toThrow(/METADATA_FAILED/);
     expect(existsSync(join(parent, 'lease'))).toBe(false);
+  });
+
+  it('rejects an unexpected generated lock before running metadata', async () => {
+    const fixture = repository();
+    const parent = privateRoot('coding-harness-frozen-lock-digest-');
+    const stages: string[] = [];
+    const executor: FrozenCargoLockExecutor = {
+      kind: 'native-offline',
+      execute: async (request) => {
+        stages.push(request.command.argv[0] ?? 'missing');
+        writeFileSync(join(request.workspaceRoot, 'Cargo.lock'), 'version = 4\n');
+        return attested(request, successfulResult(''));
+      },
+    };
+
+    await expect(prepareFrozenCargoLock({
+      ...preparationInput(fixture, join(parent, 'lease'), executor),
+      expectedDigest: '0'.repeat(64),
+    })).rejects.toThrow(/DIGEST_MISMATCH/);
+    expect(stages).toEqual(['generate-lockfile']);
   });
 
   it('detects mutation of the immutable returned lock', async () => {

@@ -16,11 +16,14 @@ import {
   type BigIntStats,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { FrozenRegistryPackage } from './frozen-cargo-metadata.js';
+import {
+  prepareLockedRustRegistryClosure,
+  type LockedRustRegistryClosure,
+} from './rust-registry-closure.js';
 
 const TOOLCHAIN_CONTENT_DIGEST =
   '81cc515ef94bae07d2451ff3701ce6e6eee7878327dc8088ebac773f1570f7c4';
-const REGISTRY_CONTENT_DIGEST =
-  'e65dfcb12783828dad04db2dc69e6e979cdecbe1a4228617fd7a473d43d7c28e';
 const REGISTRY_KEY = 'index.crates.io-1949cf8c6b5b557f';
 const MAX_FILE_BYTES = 1_000_000_000;
 const MAX_TOOLCHAIN_ENTRIES = 70_000;
@@ -34,7 +37,16 @@ export interface Issue8RustClosure {
   readonly cargoExecutable: string;
   readonly evidence: Readonly<Record<string, string>>;
   assertStable(): void;
+  lock(input: Issue8RustLockInput): LockedRustRegistryClosure;
 }
+
+export type Issue8RustLockInput = Readonly<{
+  lockfilePath: string;
+  lockfileDigest: string;
+  packages: readonly FrozenRegistryPackage[];
+  targetTriple: string;
+  expectedContentDigest: string;
+}>;
 
 interface TreeSource {
   readonly source: string;
@@ -76,10 +88,8 @@ export function prepareIssue8RustClosure(input: Readonly<{
   const registry = copyTrees([
     { source: registryDirectory(sourceRegistry, 'cache'), prefix: `cache/${REGISTRY_KEY}` },
     { source: registryDirectory(sourceRegistry, 'index'), prefix: `index/${REGISTRY_KEY}` },
-    { source: registryDirectory(sourceRegistry, 'src'), prefix: `src/${REGISTRY_KEY}` },
   ], registryRoot, MAX_REGISTRY_ENTRIES, MAX_REGISTRY_BYTES);
-  if (toolchain.contentDigest !== TOOLCHAIN_CONTENT_DIGEST
-    || registry.contentDigest !== REGISTRY_CONTENT_DIGEST) {
+  if (toolchain.contentDigest !== TOOLCHAIN_CONTENT_DIGEST) {
     throw new Error('HARNESS_RUST_CLOSURE_CONTENT_MISMATCH');
   }
   hardenTree(toolchainRoot);
@@ -101,10 +111,28 @@ export function prepareIssue8RustClosure(input: Readonly<{
     cargoExecutable: join(toolchainRoot, 'bin', 'cargo'),
     evidence: Object.freeze({
       rustToolchainClosure: `${TOOLCHAIN_CONTENT_DIGEST}:${String(toolchain.entries)}:${String(toolchain.bytes)}`,
-      rustRegistryClosure: `${REGISTRY_CONTENT_DIGEST}:${String(registry.entries)}:${String(registry.bytes)}`,
-      rustClosureMetadata: metadataDigest,
+      rustRegistryBootstrapSnapshot: `${registry.contentDigest}:${String(registry.entries)}:${String(registry.bytes)}`,
+      rustBootstrapClosureMetadata: metadataDigest,
     }),
     assertStable,
+    lock(input: Issue8RustLockInput) {
+      assertStable();
+      const locked = prepareLockedRustRegistryClosure({
+        snapshotRegistryRoot: registryRoot,
+        destinationRoot: join(closureRoot, 'locked-registry'),
+        registryKey: REGISTRY_KEY,
+        ...input,
+      });
+      assertStable();
+      return Object.freeze({
+        ...locked,
+        assertStable() {
+          assertStable();
+          locked.assertStable();
+          assertStable();
+        },
+      });
+    },
   });
 }
 
@@ -250,7 +278,7 @@ function metadataEntry(
   ].join('\0'), 'utf8');
 }
 
-function registryDirectory(root: string, kind: 'cache' | 'index' | 'src'): string {
+function registryDirectory(root: string, kind: 'cache' | 'index'): string {
   return canonicalDirectory(
     join(root, kind, REGISTRY_KEY),
     `HARNESS_RUST_CLOSURE_REGISTRY_${kind.toUpperCase()}_INVALID`,

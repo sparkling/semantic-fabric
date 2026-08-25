@@ -13,6 +13,10 @@ import {
   assertGitMaterializationSafe,
   assertRawIndexMatchesWorkingTree,
 } from './git-materialization.js';
+import {
+  parseFrozenCargoMetadata,
+  type FrozenRegistryPackage,
+} from './frozen-cargo-metadata.js';
 import type { OfflineProcessIsolator } from './network.js';
 import { runStructuredProcess, type ProcessResult } from './process.js';
 import { digestValue, type GitIdentity } from './receipts.js';
@@ -47,6 +51,7 @@ export interface FrozenCargoLockFile {
 }
 export interface PreparedFrozenCargoLock {
   readonly lockfile: FrozenCargoLockFile;
+  readonly registryPackages: readonly FrozenRegistryPackage[];
   readonly baseline: GitIdentity;
   readonly source: GitIdentity;
   assertStable(): void;
@@ -63,6 +68,8 @@ export interface FrozenCargoLockPreparationInput {
   readonly executor: FrozenCargoLockExecutor;
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
+  readonly expectedDigest?: string;
+  readonly targetTriple?: string;
   readonly signal?: AbortSignal;
 }
 export function createStructuredFrozenCargoLockExecutor(options: Readonly<{
@@ -173,9 +180,20 @@ export async function prepareFrozenCargoLock(
     const generatedLock = validateLockfile(workspaceRoot);
     const generatedIdentity = fileIdentity(generatedLock);
     const generatedDigest = sha256File(generatedLock);
+    if (input.expectedDigest !== undefined && generatedDigest !== input.expectedDigest) {
+      throw new Error('HARNESS_FROZEN_LOCK_DIGEST_MISMATCH');
+    }
+    const metadataArguments = ['metadata', '--locked', '--offline'];
+    if (input.targetTriple !== undefined) {
+      if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{2,127}$/.test(input.targetTriple)) {
+        throw new Error('HARNESS_FROZEN_LOCK_TARGET_INVALID');
+      }
+      metadataArguments.push('--filter-platform', input.targetTriple);
+    }
+    metadataArguments.push('--format-version', '1');
     const metadata = await executeCargo(input, workspaceRoot, [workspaceRoot, targetRoot], environment,
-      ['metadata', '--locked', '--offline', '--format-version', '1'], 'METADATA');
-    assertMetadata(metadata.stdout, workspaceRoot, targetRoot);
+      metadataArguments, 'METADATA');
+    const registryPackages = parseFrozenCargoMetadata(metadata.stdout, workspaceRoot, targetRoot);
     if (!sameFile(generatedIdentity, fileIdentity(generatedLock))
       || generatedDigest !== sha256File(generatedLock)) {
       throw new Error('HARNESS_FROZEN_LOCK_CHANGED_DURING_METADATA');
@@ -187,6 +205,7 @@ export async function prepareFrozenCargoLock(
     assertOwnedScratch(scratchRoot, scratchIdentity, scratchParent, parentIdentity);
     return new FrozenCargoLockLease(
       Object.freeze({ sourcePath, workspacePath: CARGO_LOCK, digest }),
+      registryPackages,
       baseline,
       source,
       scratchRoot,
@@ -209,6 +228,7 @@ class FrozenCargoLockLease implements PreparedFrozenCargoLock {
   #disposed = false;
   constructor(
     readonly lockfile: FrozenCargoLockFile,
+    readonly registryPackages: readonly FrozenRegistryPackage[],
     readonly baseline: GitIdentity,
     readonly source: GitIdentity,
     private readonly scratchRoot: string,
@@ -217,6 +237,7 @@ class FrozenCargoLockLease implements PreparedFrozenCargoLock {
     private readonly parentIdentity: DirectoryIdentity,
   ) {
     Object.freeze(this.lockfile);
+    Object.freeze(this.registryPackages);
     Object.freeze(this.baseline);
     Object.freeze(this.source);
   }
@@ -393,18 +414,6 @@ function validateImmutableLock(path: string): string {
     throw new Error('HARNESS_FROZEN_LOCK_IMMUTABILITY_INVALID');
   }
   return sha256File(path);
-}
-function assertMetadata(stdout: string, workspaceRoot: string, targetRoot: string): void {
-  let value: unknown;
-  try { value = JSON.parse(stdout); } catch { throw new Error('HARNESS_FROZEN_LOCK_METADATA_INVALID'); }
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('HARNESS_FROZEN_LOCK_METADATA_INVALID');
-  }
-  const metadata = value as Record<string, unknown>;
-  if (metadata.workspace_root !== workspaceRoot || metadata.target_directory !== targetRoot
-    || !Array.isArray(metadata.packages) || !Array.isArray(metadata.workspace_members)) {
-    throw new Error('HARNESS_FROZEN_LOCK_METADATA_BINDING_MISMATCH');
-  }
 }
 function normallyCompleted(result: ProcessResult): boolean {
   return result?.success === true && result.exitCode === 0 && result.signal === null
