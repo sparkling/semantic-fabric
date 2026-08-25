@@ -41,6 +41,8 @@ export interface AgenticQeLcovArtifact {
   readonly path: string;
   readonly sha256: string;
   readonly provenance: 'independent-direct-coverage';
+  readonly coverageCommandDigest: string;
+  readonly generatorVersion: 'cargo-llvm-cov 0.8.7';
 }
 
 export interface AgenticQeLcovGapInput {
@@ -71,6 +73,8 @@ export interface ProviderFreeAgenticQeMcpRequest {
     runId: string;
     candidateTree: string;
     lcovSha256: string;
+    coverageCommandDigest: string;
+    generatorVersion: 'cargo-llvm-cov 0.8.7';
   }>;
   readonly runtime: Readonly<{
     network: 'offline';
@@ -177,6 +181,8 @@ export class AgenticQeLcovGapEvidenceAdapter {
         runId: input.runId,
         candidateTree: input.candidateTree,
         lcovSha256: lcov.sha256,
+        coverageCommandDigest: input.lcov.coverageCommandDigest,
+        generatorVersion: input.lcov.generatorVersion,
       },
       runtime: {
         network: 'offline',
@@ -251,12 +257,24 @@ function parseInput(input: AgenticQeLcovGapInput): AgenticQeLcovGapInput {
   if (!SHA256_PATTERN.test(input.lcov.sha256)) {
     throw new TypeError('HARNESS_AGENTIC_QE_LCOV_DIGEST_INVALID');
   }
+  if (!SHA256_PATTERN.test(input.lcov.coverageCommandDigest)) {
+    throw new TypeError('HARNESS_AGENTIC_QE_COVERAGE_COMMAND_DIGEST_INVALID');
+  }
+  if (input.lcov.generatorVersion !== 'cargo-llvm-cov 0.8.7') {
+    throw new TypeError('HARNESS_AGENTIC_QE_COVERAGE_GENERATOR_INVALID');
+  }
   return deepFreeze({
     taskId,
     runId,
     candidateTree: input.candidateTree,
     candidateRoot,
-    lcov: { path, sha256: input.lcov.sha256, provenance: 'independent-direct-coverage' },
+    lcov: {
+      path,
+      sha256: input.lcov.sha256,
+      provenance: 'independent-direct-coverage',
+      coverageCommandDigest: input.lcov.coverageCommandDigest,
+      generatorVersion: input.lcov.generatorVersion,
+    },
   });
 }
 

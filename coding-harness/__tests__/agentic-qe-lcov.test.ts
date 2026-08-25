@@ -64,6 +64,8 @@ describe('Agentic-QE real-LCOV evidence adapter', () => {
         runId: RUN_ID,
         candidateTree: fixture.candidateTree,
         lcovSha256: fixture.input.lcov.sha256,
+        coverageCommandDigest: 'c'.repeat(64),
+        generatorVersion: 'cargo-llvm-cov 0.8.7',
       },
       runtime: {
         network: 'offline',
@@ -172,6 +174,25 @@ describe('Agentic-QE real-LCOV evidence adapter', () => {
       'HARNESS_AGENTIC_QE_LCOV_PROVENANCE_INVALID',
     );
   });
+
+  it.each([
+    [
+      { coverageCommandDigest: 'not-a-digest' },
+      'HARNESS_AGENTIC_QE_COVERAGE_COMMAND_DIGEST_INVALID',
+    ],
+    [
+      { generatorVersion: 'cargo-llvm-cov 0.8.6' },
+      'HARNESS_AGENTIC_QE_COVERAGE_GENERATOR_INVALID',
+    ],
+  ])('rejects untrusted direct-coverage bindings', async (override, error) => {
+    const fixture = await repositoryFixture();
+    const input = {
+      ...fixture.input,
+      lcov: { ...fixture.input.lcov, ...override },
+    } as AgenticQeLcovGapInput;
+
+    await expect(adapter(async () => successfulResponse()).capture(input)).rejects.toThrow(error);
+  });
 });
 
 function adapter(
@@ -256,6 +277,8 @@ async function repositoryFixture(): Promise<Fixture> {
         path: lcovPath,
         sha256: sha256(lcov),
         provenance: 'independent-direct-coverage',
+        coverageCommandDigest: 'c'.repeat(64),
+        generatorVersion: 'cargo-llvm-cov 0.8.7',
       },
     },
   };

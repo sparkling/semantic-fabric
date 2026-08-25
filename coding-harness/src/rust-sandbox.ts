@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: MIT
 
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  accessSync,
+  constants,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { StructuredCommand } from './contracts.js';
 import type { NativeResourceBoundary, NativeResourceLimits } from './resource-boundary.js';
 import {
   createSystemOfflineIsolator,
+  type BoundaryCommand,
   type OfflineProcessIsolator,
   type ReadOnlyMount,
 } from './network.js';
@@ -16,6 +27,7 @@ export interface RustOfflineProfileOptions {
   readonly toolchainRoot: string;
   readonly registryRoot: string;
   readonly registryKey: string;
+  readonly cargoExtensionRoot?: string;
   readonly bwrapExecutable: string;
   readonly resourceBoundary: NativeResourceBoundary;
   readonly resourceLimits: NativeResourceLimits;
@@ -58,24 +70,96 @@ export function createRustOfflineProfile(options: RustOfflineProfileOptions): Ru
       `/cargo-home/registry/${kind}/${options.registryKey}`,
     ));
   }
+  const cargoExtension = options.cargoExtensionRoot === undefined
+    ? null
+    : validateCargoExtensionRoot(options.cargoExtensionRoot);
+  if (cargoExtension !== null) mounts.push(mount(cargoExtension.root, '/cargo-home/bin'));
   const environment = Object.freeze({
-    PATH: '/toolchain/bin:/usr/bin',
+    PATH: options.cargoExtensionRoot === undefined
+      ? '/toolchain/bin:/usr/bin'
+      : '/cargo-home/bin:/toolchain/bin:/usr/bin',
     HOME: '/home/harness',
     CARGO_HOME: '/cargo-home',
     CARGO_NET_OFFLINE: 'true',
     CARGO_INCREMENTAL: '0',
   });
-  return Object.freeze({
-    isolator: createSystemOfflineIsolator({
+  const isolator = createSystemOfflineIsolator({
       writableRoot: options.writableRoot,
       readOnlyMounts: mounts,
       executablePath: options.bwrapExecutable,
       resourceBoundary: options.resourceBoundary,
       resourceLimits: options.resourceLimits,
-    }),
+    });
+  return Object.freeze({
+    isolator: cargoExtension === null
+      ? isolator
+      : extensionStableIsolator(isolator, cargoExtension),
     cargoExecutable: '/toolchain/bin/cargo',
     environment,
     readOnlyMounts: Object.freeze(mounts),
+  });
+}
+
+interface CargoExtensionIdentity {
+  readonly root: string;
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+  readonly digest: string;
+}
+
+function validateCargoExtensionRoot(rootValue: string): CargoExtensionIdentity {
+  const root = canonicalDirectory(
+    rootValue,
+    'HARNESS_RUST_CARGO_EXTENSION_ROOT_INVALID',
+  );
+  const rootStat = lstatSync(root);
+  const uid = process.getuid?.() ?? rootStat.uid;
+  if (rootStat.uid !== uid || (rootStat.mode & 0o077) !== 0
+    || readdirSync(root).join('\0') !== 'cargo-llvm-cov') {
+    throw new Error('HARNESS_RUST_CARGO_EXTENSION_ROOT_INVALID');
+  }
+  const path = canonicalFile(
+    join(root, 'cargo-llvm-cov'),
+    'HARNESS_RUST_CARGO_EXTENSION_INVALID',
+  );
+  const stat = lstatSync(path);
+  accessSync(path, constants.X_OK);
+  if (stat.uid !== uid || stat.nlink !== 1 || (stat.mode & 0o222) !== 0) {
+    throw new Error('HARNESS_RUST_CARGO_EXTENSION_INVALID');
+  }
+  return Object.freeze({
+    root,
+    path,
+    dev: stat.dev,
+    ino: stat.ino,
+    digest: createHash('sha256').update(readFileSync(path)).digest('hex'),
+  });
+}
+
+function extensionStableIsolator(
+  isolator: OfflineProcessIsolator,
+  expected: CargoExtensionIdentity,
+): OfflineProcessIsolator {
+  const assertExtension = () => {
+    const current = validateCargoExtensionRoot(expected.root);
+    if (current.path !== expected.path || current.dev !== expected.dev
+      || current.ino !== expected.ino || current.digest !== expected.digest) {
+      throw new Error('HARNESS_RUST_CARGO_EXTENSION_CHANGED');
+    }
+  };
+  return Object.freeze({
+    assertStable() {
+      isolator.assertStable();
+      assertExtension();
+    },
+    isolate(command: BoundaryCommand) {
+      assertExtension();
+      return isolator.isolate(command);
+    },
+    launchEnvironment(environment: Readonly<Record<string, string>>) {
+      return isolator.launchEnvironment?.(environment) ?? environment;
+    },
   });
 }
 

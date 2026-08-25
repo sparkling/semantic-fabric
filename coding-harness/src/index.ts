@@ -3,6 +3,7 @@
 export * from './acceptance-task.js';
 export * from './acceptance-runner.js';
 export * from './agentic-qe-lcov.js';
+export * from './agentic-qe-mcp-runner.js';
 export * from './candidate.js';
 export * from './config.js';
 export * from './contracts.js';
@@ -14,6 +15,7 @@ export * from './evaluator.js';
 export * from './frozen-cargo-lock.js';
 export * from './git-process.js';
 export * from './git-worktrees.js';
+export * from './independent-rust-lcov.js';
 export * from './kernel.js';
 export * from './manifest.js';
 export * from './model-context.js';
