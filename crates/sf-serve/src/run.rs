@@ -229,17 +229,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_error_when_spec_scheme_is_unsupported() {
-        let result = open_backend("redis://localhost:6379", 16, Duration::from_secs(5), 4).await;
+    async fn should_reject_unadmitted_source_families_before_connector_construction() {
+        const ADMITTED_SOURCE_FORMS: &str = "sqlite:<path>, pg:<conninfo>, or mysql://<url>";
+        let rejected = [
+            ("Trino", "trino://query.invalid"),
+            ("Presto", "presto://query.invalid"),
+            ("PrestoDB", "prestodb://query.invalid"),
+            ("AWS Athena", "athena://query.invalid"),
+            ("Snowflake", "snowflake://account.invalid"),
+            ("BigQuery", "bigquery://project.invalid"),
+            ("Databricks", "databricks://workspace.invalid"),
+            ("DuckDB", "duckdb:/tmp/source.duckdb"),
+            ("SAP HANA", "hana://database.invalid"),
+            ("MonetDB", "monetdb://database.invalid"),
+            ("ODBC", "odbc:Driver=Unadmitted"),
+            ("Oracle", "oracle://database.invalid"),
+            ("Redshift", "redshift://cluster.invalid"),
+            ("SQL Server", "sqlserver://database.invalid"),
+            ("SQL Server alias", "mssql://database.invalid"),
+            ("Redis", "redis://cache.invalid"),
+            ("generic REST", "rest:https://api.invalid/query"),
+            ("generic HTTP", "http://api.invalid/query"),
+            ("generic HTTPS", "https://api.invalid/query"),
+        ];
 
-        let err = match result {
-            Err(e) => e,
-            Ok(_) => panic!("unrecognised scheme should error, not open"),
-        };
-        assert!(
-            err.contains("unrecognised --source"),
-            "error should name the problem, got: {err}"
-        );
+        for (family, spec) in rejected {
+            let result = open_backend(spec, 16, Duration::from_secs(5), 4).await;
+            let err = match result {
+                Err(err) => err,
+                Ok(_) => panic!("{family} source {spec:?} must not be admitted"),
+            };
+            assert_eq!(
+                err,
+                format!("unrecognised --source {spec:?}: expected {ADMITTED_SOURCE_FORMS}"),
+                "{family} source {spec:?} should be rejected at source admission"
+            );
+        }
     }
 
     #[tokio::test]
