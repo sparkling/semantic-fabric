@@ -178,7 +178,11 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       }, this.#filesystemBoundary);
       resources = isolateNativeResources(
         filesystem.command,
-        limitsForProcessDeadline(this.#resourceLimits, request.timeoutMs),
+        limitsForProcessDeadline(
+          this.#resourceLimits,
+          request.timeoutMs,
+          this.#terminationGraceMs,
+        ),
         this.#resourceBoundary,
       );
     } catch (error) {

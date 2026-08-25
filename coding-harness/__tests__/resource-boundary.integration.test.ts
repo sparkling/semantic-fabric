@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   isolateNativeResources,
+  limitsForProcessDeadline,
   SystemdResourceBoundary,
   type NativeResourceLimits,
 } from '../src/resource-boundary.js';
@@ -25,6 +26,21 @@ const limits: NativeResourceLimits = Object.freeze({
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('native process deadline resource limits', () => {
+  it('reserves cgroup cleanup headroom inside the declared hard ceiling', () => {
+    const bounded = limitsForProcessDeadline({
+      ...limits,
+      cpuTimeSeconds: 7_200,
+      runtimeSeconds: 1_800,
+    }, 1_200_000, 500);
+
+    expect(bounded.runtimeSeconds).toBe(1_201);
+    expect(bounded.runtimeSeconds).toBeLessThan(1_800);
+    expect(() => limitsForProcessDeadline(limits, 5_000, 1_000))
+      .toThrow('HARNESS_NATIVE_RESOURCE_DEADLINE_NOT_NESTED');
+  });
 });
 
 describe.runIf(systemdUserAvailable())('systemd cgroup v2 resource boundary', () => {

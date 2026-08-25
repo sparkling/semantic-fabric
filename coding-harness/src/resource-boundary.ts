@@ -211,10 +211,20 @@ export function isolateNativeResources(
 }
 
 export function limitsForProcessDeadline(
-  limits: NativeResourceLimits,
+  rawLimits: NativeResourceLimits,
   timeoutMs: number,
+  terminationGraceMs: number,
 ): NativeResourceLimits {
-  const runtimeSeconds = Math.min(limits.runtimeSeconds, Math.max(1, Math.ceil(timeoutMs / 1_000)));
+  const limits = validateResourceLimits(rawLimits);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1
+    || !Number.isSafeInteger(terminationGraceMs) || terminationGraceMs < 1
+    || !Number.isSafeInteger(timeoutMs + terminationGraceMs)) {
+    throw new TypeError('process deadline must be a positive safe integer');
+  }
+  const runtimeSeconds = Math.max(1, Math.ceil((timeoutMs + terminationGraceMs) / 1_000));
+  if (runtimeSeconds > limits.runtimeSeconds) {
+    throw new Error('HARNESS_NATIVE_RESOURCE_DEADLINE_NOT_NESTED');
+  }
   return validateResourceLimits({
     ...limits,
     runtimeSeconds,

@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe('trusted native runtime composition', () => {
   it('nests the issue model deadline inside the systemd runtime boundary', () => {
-    expect(ISSUE_8_MODEL_TIMEOUT_MS).toBe(600_000);
+    expect(ISSUE_8_MODEL_TIMEOUT_MS).toBe(1_200_000);
     expect(ISSUE_8_MODEL_TIMEOUT_MS).toBeLessThan(
       ISSUE_8_NATIVE_LIMITS.runtimeSeconds * 1_000,
     );

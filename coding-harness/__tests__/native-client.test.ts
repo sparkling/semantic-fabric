@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -48,6 +56,66 @@ class FakeRunner implements NativeProcessRunner {
 }
 
 describe('native adapter structured client', () => {
+  it('bounds native architecture proposals to the verifier-compatible object shape', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    let schema: Record<string, unknown> | undefined;
+    const runner = new FakeRunner((request) => {
+      const schemaIndex = request.args.indexOf('--output-schema');
+      const outputIndex = request.args.indexOf('--output-last-message');
+      schema = JSON.parse(readFileSync(request.args[schemaIndex + 1], 'utf8')) as Record<string, unknown>;
+      writeFileSync(request.args[outputIndex + 1], JSON.stringify({
+        proposal: {
+          summary: 'Preserve checked binding semantics.',
+          invariants: ['False bindings prune the branch.'],
+          steps: ['Check every bind result.'],
+        },
+        confidence: 1,
+      }));
+      return ok('');
+    });
+    const adapter = new CodexSubscriptionAdapter({
+      executable: '/tools/codex',
+      runner,
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+      evidenceRoot,
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter,
+      evidenceRoot,
+      workspaceRoot,
+      timeoutMs: 1_000,
+    });
+
+    await client.invoke({
+      candidate: { host: 'codex', model: 'gpt-5.6' },
+      operation: 'architecture',
+      prompt: 'return a bounded architecture',
+    });
+
+    expect(schema).toMatchObject({
+      properties: {
+        proposal: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['summary', 'invariants', 'steps'],
+          properties: {
+            summary: { maxLength: 2_000 },
+            invariants: { maxItems: 8, items: { maxLength: 400 } },
+            steps: { maxItems: 8, items: { maxLength: 400 } },
+          },
+        },
+      },
+    });
+    const maximallyEscapedProposal = {
+      summary: '\0'.repeat(2_000),
+      invariants: Array.from({ length: 8 }, () => '\0'.repeat(400)),
+      steps: Array.from({ length: 8 }, () => '\0'.repeat(400)),
+    };
+    expect(Buffer.byteLength(JSON.stringify(maximallyEscapedProposal), 'utf8'))
+      .toBeLessThanOrEqual(64_000);
+  });
+
   it('assigns Codex invocation identity outside model-controlled JSON', async () => {
     const evidenceRoot = root('coding-harness-native-evidence-');
     const workspaceRoot = root('coding-harness-native-workspace-');

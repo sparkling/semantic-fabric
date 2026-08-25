@@ -146,7 +146,26 @@ function responseSchema(operation: ModelOperation): Readonly<Record<string, unkn
     return deepFreeze({
       ...common,
       properties: {
-        proposal: {},
+        proposal: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            summary: { type: 'string', minLength: 1, maxLength: 2_000 },
+            invariants: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 8,
+              items: { type: 'string', minLength: 1, maxLength: 400 },
+            },
+            steps: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 8,
+              items: { type: 'string', minLength: 1, maxLength: 400 },
+            },
+          },
+          required: ['summary', 'invariants', 'steps'],
+        },
         confidence: { type: 'number', minimum: 0, maximum: 1 },
       },
       required: ['proposal', 'confidence'],

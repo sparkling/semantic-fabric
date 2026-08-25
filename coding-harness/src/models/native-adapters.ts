@@ -4,10 +4,7 @@ import {
   assertNativeSubscriptionEnvironment,
   buildNativeSubscriptionEnvironment,
 } from './environment.js';
-import {
-  NativeCancellationError,
-  TransientNativeHostError,
-} from './recovery.js';
+import { NativeCancellationError } from './recovery.js';
 import type {
   ClaudeInvocationRequest,
   CodexInvocationRequest,
@@ -428,7 +425,8 @@ async function invokeChecked(
     throw new NativeCancellationError();
   }
   if (result.timedOut) {
-    throw new TransientNativeHostError(
+    throw new NativeHostInvocationError(
+      request.host,
       `HARNESS_NATIVE_HOST_TIMEOUT:${request.host}`,
     );
   }
