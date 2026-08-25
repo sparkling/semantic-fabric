@@ -7,6 +7,73 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  coding-harness:
+    name: coding harness · node ${{ matrix.node }} · build · test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '20.0.0'
+            native_required: '0'
+          - node: '24'
+            native_required: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: coding-harness/package-lock.json
+      - name: install native isolation prerequisites
+        if: matrix.native_required == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap dbus-user-session
+          runtime_uid="$(id -u)"
+          runtime_user="$(id -un)"
+          sudo loginctl enable-linger "$runtime_user"
+          sudo systemctl start "user-runtime-dir@${runtime_uid}.service"
+          sudo systemctl start "user@${runtime_uid}.service"
+          runtime_dir="/run/user/${runtime_uid}"
+          for attempt in $(seq 1 20); do
+            if [ -S "${runtime_dir}/bus" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test -S "${runtime_dir}/bus"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=${runtime_dir}/bus" >> "$GITHUB_ENV"
+      - name: preflight native isolation capabilities
+        if: matrix.native_required == '1'
+        run: |
+          bwrap_args=(--unshare-net)
+          for source in /usr /usr/lib /usr/lib64; do
+            if [ ! -e "$source" ]; then
+              continue
+            fi
+            destination="$source"
+            if [ "$source" = /usr/lib ]; then
+              destination=/lib
+            elif [ "$source" = /usr/lib64 ]; then
+              destination=/lib64
+            fi
+            bwrap_args+=(--ro-bind "$source" "$destination")
+          done
+          /usr/bin/bwrap "${bwrap_args[@]}" -- /usr/bin/true
+          /usr/bin/systemd-run \
+            --user --quiet --wait --collect --pipe --service-type=exec \
+            -- /usr/bin/true
+      - name: install pinned harness dependencies
+        run: npm --prefix coding-harness ci --ignore-scripts
+      - name: build canonical coding harness
+        run: npm --prefix coding-harness run build
+      - name: test canonical coding harness
+        env:
+          HARNESS_REQUIRE_NATIVE_INTEGRATION: ${{ matrix.native_required }}
+        run: npm --prefix coding-harness test
+
   build:
     name: fmt · clippy · build · test
     runs-on: ubuntu-latest
@@ -123,7 +190,7 @@ jobs:
     # a manual, verified version bump only.
     continue-on-error: true
     env:
-      METAHARNESS_PIN: metaharness@~0.3.0
+      METAHARNESS_PIN: metaharness@0.3.0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

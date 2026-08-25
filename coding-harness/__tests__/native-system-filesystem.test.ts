@@ -2,6 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -64,8 +65,10 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
         commonRuntimeMounts: [
           { source: '/usr/lib', destination: '/usr/lib' },
           { source: '/usr/lib', destination: '/lib' },
-          { source: '/usr/lib64', destination: '/usr/lib64' },
-          { source: '/usr/lib64', destination: '/lib64' },
+          ...(existsSync('/usr/lib64') ? [
+            { source: '/usr/lib64', destination: '/usr/lib64' },
+            { source: '/usr/lib64', destination: '/lib64' },
+          ] : []),
           { source: node, destination: node },
           { source: launcher, destination: launcher },
           { source: probe, destination: probe },

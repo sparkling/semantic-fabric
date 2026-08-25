@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRustOfflineProfile, bindRustOfflineCommand } from '../src/rust-sandbox.js';
 import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
-import { bwrapAvailable } from './native-test-prerequisites.js';
 
 const roots: string[] = [];
 
@@ -15,7 +14,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe.runIf(bwrapAvailable())(
+describe(
   'pinned Rust sandbox profile',
   () => {
     it('maps a trusted toolchain and only the exact crates.io cache triplet', () => {
@@ -23,12 +22,15 @@ describe.runIf(bwrapAvailable())(
       expect(rustup.status, rustup.stderr).toBe(0);
       const cargo = realpathSync(rustup.stdout.trim());
       const toolchain = realpathSync(dirname(dirname(cargo)));
-      const registryRoot = realpathSync(join(process.env.HOME ?? '', '.cargo/registry'));
       const registryKey = 'index.crates.io-1949cf8c6b5b557f';
+      const registryRoot = mkdtempSync(join(tmpdir(), 'coding-harness-registry-'));
       const writableRoot = mkdtempSync(join(tmpdir(), 'coding-harness-rust-profile-'));
-      roots.push(writableRoot);
+      roots.push(registryRoot, writableRoot);
+      for (const kind of ['cache', 'index', 'src']) {
+        mkdirSync(join(registryRoot, kind, registryKey), { recursive: true });
+      }
       const profile = createRustOfflineProfile({
-        bwrapExecutable: '/usr/bin/bwrap',
+        bwrapExecutable: realpathSync('/usr/bin/true'),
         writableRoot,
         cargoExecutable: cargo,
         toolchainRoot: toolchain,

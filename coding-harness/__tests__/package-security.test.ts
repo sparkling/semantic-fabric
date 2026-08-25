@@ -44,6 +44,7 @@ describe('private package boundary', () => {
     expect(packageJson.dependencies).toEqual(expectedRuntime);
     expect(packageJson.dependencies).not.toHaveProperty('@metaharness/kernel');
     expect(packageJson.devDependencies).not.toHaveProperty('@metaharness/darwin');
+    expect(packageJson.devDependencies).toMatchObject({ vite: '6.4.3', vitest: '3.2.7' });
     for (const version of Object.values({
       ...(packageJson.dependencies as object),
       ...(packageJson.devDependencies as object),

@@ -7,6 +7,7 @@ let cachedBwrap: boolean | undefined;
 let cachedSystemd: boolean | undefined;
 
 export function bwrapAvailable(): boolean {
+  if (process.env.HARNESS_REQUIRE_NATIVE_INTEGRATION === '0') return false;
   if (cachedBwrap !== undefined) return requireCapability(cachedBwrap, 'BWRAP');
   if (process.platform !== 'linux' || !existsSync('/usr/bin/bwrap')) {
     cachedBwrap = false;
@@ -26,6 +27,7 @@ export function bwrapAvailable(): boolean {
 }
 
 export function systemdUserAvailable(): boolean {
+  if (process.env.HARNESS_REQUIRE_NATIVE_INTEGRATION === '0') return false;
   if (cachedSystemd !== undefined) return requireCapability(cachedSystemd, 'SYSTEMD_USER');
   if (process.platform !== 'linux'
     || !existsSync('/usr/bin/systemd-run')
