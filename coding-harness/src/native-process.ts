@@ -407,7 +407,9 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         configurationMaskDigest: filesystem.configurationMaskDigest,
         hostFileConfidentiality: filesystem.hostFileConfidentiality,
         emptyPrivateHome: filesystem.emptyPrivateHome,
+        privateEphemeralHome: filesystem.privateEphemeralHome,
         hostRootMounted: filesystem.hostRootMounted,
+        hostCredentialPathMounted: filesystem.hostCredentialPathMounted,
         gitMetadataMasked: filesystem.maskedPaths.includes(resolve(request.cwd, '.git')),
       }),
       resources: Object.freeze({

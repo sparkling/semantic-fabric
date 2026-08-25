@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -22,7 +21,6 @@ export interface NativeRuntimeMount {
   readonly source: string;
   readonly destination: string;
 }
-
 export interface NativeHostFilesystemProfile {
   readonly authenticationMounts: readonly NativeRuntimeMount[];
   readonly runtimeMounts: readonly NativeRuntimeMount[];
@@ -32,7 +30,9 @@ export interface NativeHostFilesystemProfile {
 export interface SystemNativeFilesystemBoundaryOptions {
   readonly bwrapExecutable: string;
   readonly brokerRoot: string;
-  readonly commonRuntimeMounts: readonly NativeRuntimeMount[];
+  readonly allowedRuntimeFiles: readonly string[];
+  readonly authenticationSourceRoot: string;
+  readonly forbiddenMountRoots: readonly string[];
   readonly hosts: Readonly<Record<NativeHost, NativeHostFilesystemProfile>>;
 }
 
@@ -40,10 +40,11 @@ interface StableMount extends NativeRuntimeMount {
   readonly identity: string;
   readonly mutable: boolean;
 }
-
 export class SystemNativeFilesystemBoundary implements NativeModelFilesystemBoundary {
   readonly #bwrap: FileIdentity;
   readonly #brokerRoot: string;
+  readonly #authenticationSourceRoot: string;
+  readonly #forbiddenMountRoots: readonly string[];
   readonly #common: readonly StableMount[];
   readonly #hosts: Readonly<Record<NativeHost, {
     readonly authentication: readonly StableMount[];
@@ -55,11 +56,37 @@ export class SystemNativeFilesystemBoundary implements NativeModelFilesystemBoun
     if (process.platform !== 'linux') throw new Error('HARNESS_NATIVE_FILESYSTEM_OS_UNAVAILABLE');
     this.#bwrap = validateExecutable(options.bwrapExecutable, 'BWRAP');
     this.#brokerRoot = privateDirectory(options.brokerRoot, 'BROKER_ROOT');
-    this.#common = validateMounts(options.commonRuntimeMounts, false, 'COMMON');
-    this.#hosts = Object.freeze({
-      codex: profile(options.hosts.codex, 'codex'),
-      'claude-code': profile(options.hosts['claude-code'], 'claude-code'),
+    this.#authenticationSourceRoot = privateDirectory(
+      options.authenticationSourceRoot,
+      'AUTHENTICATION_SOURCE_ROOT',
+    );
+    this.#forbiddenMountRoots = validateForbiddenRoots(options.forbiddenMountRoots);
+    const allowedRuntimeFiles = validateRuntimeFiles(options.allowedRuntimeFiles);
+    this.#common = validateMounts(systemNativeRuntimeLibraryMounts(), false, 'COMMON', {
+      allowedRuntimeFiles,
+      authenticationSourceRoot: this.#authenticationSourceRoot,
+      forbiddenMountRoots: this.#forbiddenMountRoots,
+      kind: 'common',
     });
+    this.#hosts = Object.freeze({
+      codex: profile(options.hosts.codex, 'codex', {
+        allowedRuntimeFiles,
+        authenticationSourceRoot: this.#authenticationSourceRoot,
+        forbiddenMountRoots: this.#forbiddenMountRoots,
+      }),
+      'claude-code': profile(options.hosts['claude-code'], 'claude-code', {
+        allowedRuntimeFiles,
+        authenticationSourceRoot: this.#authenticationSourceRoot,
+        forbiddenMountRoots: this.#forbiddenMountRoots,
+      }),
+    });
+    assertMountTopology([
+      ...this.#common,
+      ...Object.values(this.#hosts).flatMap(({ runtime, authentication }) => [
+        ...runtime,
+        ...authentication,
+      ]),
+    ]);
   }
 
   isolate(
@@ -69,8 +96,10 @@ export class SystemNativeFilesystemBoundary implements NativeModelFilesystemBoun
     this.assertStable();
     const selected = this.#hosts[policy.host];
     const workspace = canonicalDirectory(policy.workspaceRoot, 'WORKSPACE');
+    if (workspace === '/') throw new Error('HARNESS_NATIVE_WORKSPACE_ROOT_BROAD');
     const brokerSession = validateBrokerSession(command, this.#brokerRoot);
     const requestedReadOnly = policy.readOnlyRoots.map((path) => existingPath(path, 'READ_ONLY'));
+    if (requestedReadOnly.includes('/')) throw new Error('HARNESS_NATIVE_READ_ONLY_ROOT_BROAD');
     const writable = policy.writablePaths.map((path) => writableFile(path));
     const masked = policy.maskedPaths.map((path) => mask(path, workspace));
     const runtime = [...this.#common, ...selected.runtime, ...selected.authentication];
@@ -119,7 +148,16 @@ export class SystemNativeFilesystemBoundary implements NativeModelFilesystemBoun
       mechanism: 'bwrap-private-root-unshared-net',
       mountManifestDigest: digest(mountManifest),
       configurationMaskDigest: digest(mountManifest.masked),
-      ...policy,
+      host: policy.host,
+      workspaceRoot: policy.workspaceRoot,
+      readOnlyRoots: policy.readOnlyRoots,
+      writablePaths: policy.writablePaths,
+      maskedPaths: policy.maskedPaths,
+      hostFileConfidentiality: true,
+      emptyPrivateHome: true,
+      privateEphemeralHome: true,
+      hostRootMounted: false,
+      hostCredentialPathMounted: false,
       command: {
         ...command,
         executable: this.#bwrap.path,
@@ -146,15 +184,31 @@ export class SystemNativeFilesystemBoundary implements NativeModelFilesystemBoun
     }
   }
 }
-
-function profile(value: NativeHostFilesystemProfile, host: NativeHost) {
+interface MountValidationContext {
+  readonly allowedRuntimeFiles: ReadonlySet<string>;
+  readonly authenticationSourceRoot: string;
+  readonly forbiddenMountRoots: readonly string[];
+}
+function profile(
+  value: NativeHostFilesystemProfile,
+  host: NativeHost,
+  context: MountValidationContext,
+) {
   if (value === undefined) throw new Error(`HARNESS_NATIVE_FILESYSTEM_PROFILE_REQUIRED:${host}`);
-  const authentication = validateMounts(value.authenticationMounts, true, `${host}:AUTH`);
-  if (authentication.length === 0
-    || authentication.some(({ destination }) => !contains('/home/harness', destination))) {
+  const authentication = validateMounts(value.authenticationMounts, true, `${host}:AUTH`, {
+    ...context,
+    kind: 'authentication',
+  });
+  const expectedCredential = host === 'codex'
+    ? '/home/harness/.codex/auth.json'
+    : '/home/harness/.claude/.credentials.json';
+  if (authentication.length !== 1 || authentication[0]?.destination !== expectedCredential) {
     throw new Error(`HARNESS_NATIVE_AUTH_MOUNT_INVALID:${host}`);
   }
-  const runtime = validateMounts(value.runtimeMounts, false, `${host}:RUNTIME`);
+  const runtime = validateMounts(value.runtimeMounts, false, `${host}:RUNTIME`, {
+    ...context,
+    kind: 'runtime-file',
+  });
   const environment = Object.freeze({ ...value.privateEnvironment });
   const expectedConfig = host === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR';
   if (environment.HOME !== '/home/harness'
@@ -164,7 +218,6 @@ function profile(value: NativeHostFilesystemProfile, host: NativeHost) {
   }
   return Object.freeze({ authentication, runtime, environment });
 }
-
 function validateBrokerSession(command: BoundaryCommand, brokerRoot: string): string {
   if (command.args[1] !== '--broker-socket' || command.args[3] !== '--') {
     throw new Error('HARNESS_NATIVE_BROKER_COMMAND_INVALID');
@@ -188,6 +241,9 @@ function validateMounts(
   values: readonly NativeRuntimeMount[],
   mutable: boolean,
   label: string,
+  context: MountValidationContext & Readonly<{
+    kind: 'common' | 'runtime-file' | 'authentication';
+  }>,
 ): StableMount[] {
   const destinations = new Set<string>();
   return values.map((entry, index) => {
@@ -197,6 +253,7 @@ function validateMounts(
     if (destination === '/' || destinations.has(destination)) {
       throw new Error(`HARNESS_NATIVE_${label}_MOUNT_INVALID`);
     }
+    assertMountScope(source, destination, label, context);
     destinations.add(destination);
     return Object.freeze({
       source,
@@ -205,6 +262,100 @@ function validateMounts(
       identity: mountIdentity(source, mutable),
     });
   });
+}
+
+const SYSTEM_LIBRARY_MOUNTS = Object.freeze([
+  Object.freeze({ source: '/usr/lib', destination: '/usr/lib' }),
+  Object.freeze({ source: '/usr/lib', destination: '/lib' }),
+  Object.freeze({ source: '/usr/lib64', destination: '/usr/lib64' }),
+  Object.freeze({ source: '/usr/lib64', destination: '/lib64' }),
+] as const);
+
+export function systemNativeRuntimeLibraryMounts(): readonly NativeRuntimeMount[] {
+  return Object.freeze(SYSTEM_LIBRARY_MOUNTS
+    .filter(({ source }) => existsSync(source))
+    .map(({ source, destination }) => Object.freeze({ source, destination })));
+}
+
+function assertMountScope(
+  source: string,
+  destination: string,
+  label: string,
+  context: MountValidationContext & Readonly<{
+    kind: 'common' | 'runtime-file' | 'authentication';
+  }>,
+): void {
+  const stat = lstatSync(source);
+  if (context.kind === 'common') {
+    const allowed = SYSTEM_LIBRARY_MOUNTS.some((entry) =>
+      entry.source === source && entry.destination === destination);
+    if (!allowed || !stat.isDirectory()
+      || overlapsAny(source, context.forbiddenMountRoots)
+      || overlapsAny(destination, context.forbiddenMountRoots)) {
+      throw new Error(`HARNESS_NATIVE_${label}_MOUNT_OUTSIDE_ALLOWLIST`);
+    }
+    return;
+  }
+  if (context.kind === 'runtime-file') {
+    if (!stat.isFile() || source !== destination || !context.allowedRuntimeFiles.has(source)) {
+      throw new Error(`HARNESS_NATIVE_${label}_MOUNT_OUTSIDE_ALLOWLIST`);
+    }
+    return;
+  }
+  if (!stat.isFile() || source === context.authenticationSourceRoot
+    || !contains(context.authenticationSourceRoot, source)) {
+    throw new Error(`HARNESS_NATIVE_${label}_MOUNT_OUTSIDE_ALLOWLIST`);
+  }
+}
+
+function validateRuntimeFiles(values: readonly string[]): ReadonlySet<string> {
+  if (values.length === 0) throw new Error('HARNESS_NATIVE_RUNTIME_FILES_REQUIRED');
+  const output = new Set(values.map((path, index) => {
+    const value = existingPath(path, `RUNTIME_FILES[${index}]`);
+    if (!lstatSync(value).isFile()) throw new Error('HARNESS_NATIVE_RUNTIME_FILE_INVALID');
+    mountIdentity(value, false);
+    return value;
+  }));
+  if (output.size !== values.length) throw new Error('HARNESS_NATIVE_RUNTIME_FILE_DUPLICATE');
+  return output;
+}
+
+function validateForbiddenRoots(values: readonly string[]): readonly string[] {
+  if (values.length === 0) throw new Error('HARNESS_NATIVE_FORBIDDEN_MOUNT_ROOTS_REQUIRED');
+  const roots = values.map((path, index) => {
+    const value = existingPath(path, `FORBIDDEN_MOUNT_ROOTS[${index}]`);
+    if (!lstatSync(value).isDirectory() || value === '/') {
+      throw new Error('HARNESS_NATIVE_FORBIDDEN_MOUNT_ROOT_INVALID');
+    }
+    return value;
+  });
+  return Object.freeze([...new Set(roots)]);
+}
+
+function overlapsAny(path: string, roots: readonly string[]): boolean {
+  return roots.some((root) => contains(root, path) || contains(path, root));
+}
+
+function assertMountTopology(mounts: readonly StableMount[]): void {
+  const unique = new Map<string, StableMount>();
+  for (const mount of mounts) {
+    const previous = unique.get(mount.destination);
+    if (previous !== undefined && previous.source !== mount.source) {
+      throw new Error('HARNESS_NATIVE_MOUNT_DESTINATION_COLLISION');
+    }
+    unique.set(mount.destination, mount);
+  }
+  const entries = [...unique.values()];
+  for (let left = 0; left < entries.length; left += 1) {
+    for (let right = left + 1; right < entries.length; right += 1) {
+      const first = entries[left] as StableMount;
+      const second = entries[right] as StableMount;
+      if (contains(first.destination, second.destination)
+        || contains(second.destination, first.destination)) {
+        throw new Error('HARNESS_NATIVE_MOUNT_DESTINATION_OVERLAP');
+      }
+    }
+  }
 }
 
 function mountIdentity(path: string, mutable: boolean): string {

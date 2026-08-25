@@ -13,6 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { HarnessConfig } from './contracts.js';
 import { NativeAdapterStructuredClient } from './native-client.js';
@@ -50,10 +51,10 @@ export interface NativeRuntimeFactoryOptions {
   readonly workspaceRoot: string | (() => string);
   readonly executables: NativeRuntimeExecutablePaths;
   readonly credentials: Readonly<Record<NativeHost, string>>;
-  readonly commonRuntimeMounts: readonly NativeRuntimeMount[];
   readonly resourceLimits: NativeResourceLimits;
   readonly maskedWorkspacePaths?: readonly string[];
   readonly forbiddenRoots?: readonly string[];
+  readonly forbiddenMountRoots?: readonly string[];
   readonly controllerEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly timeoutMs?: number;
 }
@@ -97,6 +98,12 @@ export function createTrustedNativeRuntime(
     const claudeAuth = join(claudeAuthRoot, '.credentials.json');
     copyCredential(options.credentials.codex, codexAuth, 'CODEX');
     copyCredential(options.credentials['claude-code'], claudeAuth, 'CLAUDE');
+    const runtimeFiles = unique([
+      options.executables.codex,
+      options.executables.claude,
+      options.executables.node,
+      options.executables.proxyLauncher,
+    ]).map((path, index) => canonicalFile(path, `RUNTIME_FILE_${index}`));
 
     const egress = new UnixSocketOriginPinningBoundary({
       brokerRoot,
@@ -106,15 +113,22 @@ export function createTrustedNativeRuntime(
     const filesystem = new SystemNativeFilesystemBoundary({
       bwrapExecutable: canonicalFile(options.executables.bwrap, 'BWRAP'),
       brokerRoot,
-      commonRuntimeMounts: [
-        ...options.commonRuntimeMounts,
-        samePathMount(options.executables.node),
-        samePathMount(options.executables.proxyLauncher),
-      ],
+      allowedRuntimeFiles: runtimeFiles,
+      authenticationSourceRoot: authRoot,
+      forbiddenMountRoots: unique([
+        homedir(), runtimeRoot,
+        dirname(options.credentials.codex),
+        dirname(options.credentials['claude-code']),
+        ...(options.forbiddenMountRoots ?? []),
+      ]),
       hosts: {
         codex: {
           authenticationMounts: [{ source: codexAuth, destination: '/home/harness/.codex/auth.json' }],
-          runtimeMounts: [samePathMount(options.executables.codex)],
+          runtimeMounts: [
+            samePathMount(options.executables.codex),
+            samePathMount(options.executables.node),
+            samePathMount(options.executables.proxyLauncher),
+          ],
           privateEnvironment: {
             HOME: '/home/harness',
             CODEX_HOME: '/home/harness/.codex',
@@ -125,7 +139,11 @@ export function createTrustedNativeRuntime(
             source: claudeAuth,
             destination: '/home/harness/.claude/.credentials.json',
           }],
-          runtimeMounts: [samePathMount(options.executables.claude)],
+          runtimeMounts: [
+            samePathMount(options.executables.claude),
+            samePathMount(options.executables.node),
+            samePathMount(options.executables.proxyLauncher),
+          ],
           privateEnvironment: {
             HOME: '/home/harness',
             CLAUDE_CONFIG_DIR: '/home/harness/.claude',

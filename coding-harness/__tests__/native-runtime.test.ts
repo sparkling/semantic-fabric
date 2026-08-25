@@ -34,7 +34,6 @@ describe('trusted native runtime composition', () => {
       workspaceRoot: fixture.workspace,
       executables: fixture.executables,
       credentials: fixture.credentials,
-      commonRuntimeMounts: [],
       resourceLimits: TEST_RESOURCE_LIMITS,
       controllerEnvironment: controllerEnvironment(),
     });
@@ -66,10 +65,25 @@ describe('trusted native runtime composition', () => {
       workspaceRoot: fixture.workspace,
       executables: fixture.executables,
       credentials: fixture.credentials,
-      commonRuntimeMounts: [],
       resourceLimits: TEST_RESOURCE_LIMITS,
       controllerEnvironment: controllerEnvironment(),
     })).toThrow('HARNESS_NATIVE_CODEX_CREDENTIAL_INVALID');
+    expect(listRuntimeChildren(fixture.runtimeParent)).toEqual([]);
+  });
+
+  it('rejects a forbidden root that overlaps the closed system-library set', () => {
+    const fixture = createFixture();
+    expect(() => createTrustedNativeRuntime({
+      config: createTestConfig(),
+      runtimeParent: fixture.runtimeParent,
+      allowedWorkspaceRoots: [fixture.workspace],
+      workspaceRoot: fixture.workspace,
+      executables: fixture.executables,
+      credentials: fixture.credentials,
+      resourceLimits: TEST_RESOURCE_LIMITS,
+      forbiddenMountRoots: ['/usr'],
+      controllerEnvironment: controllerEnvironment(),
+    })).toThrow('HARNESS_NATIVE_COMMON_MOUNT_OUTSIDE_ALLOWLIST');
     expect(listRuntimeChildren(fixture.runtimeParent)).toEqual([]);
   });
 });

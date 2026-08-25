@@ -40,7 +40,8 @@ export interface NativeExecutionEvidence {
     enforcement: 'os-filesystem-namespace'; mechanism: string;
     workspaceRootDigest: string; mountManifestDigest: string;
     configurationMaskDigest: string; hostFileConfidentiality: true;
-    emptyPrivateHome: true; hostRootMounted: false; gitMetadataMasked: boolean;
+    emptyPrivateHome: true; privateEphemeralHome: true; hostRootMounted: false;
+    hostCredentialPathMounted: false; gitMetadataMasked: boolean;
   }>;
   readonly resources: Readonly<{
     enforcement: 'systemd-cgroup-v2'; mechanism: 'systemd-transient-service';

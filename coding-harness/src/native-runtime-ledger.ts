@@ -24,6 +24,7 @@ interface HostRecord {
   readonly executablePath: string;
   readonly executableDigest: string;
   readonly preflightDigest: string;
+  readonly hostCredentialPathMounted: false;
 }
 
 export class NativeRuntimeLedger {
@@ -50,7 +51,8 @@ export class NativeRuntimeLedger {
         || entry.model !== evidence.requestedModel
         || entry.operation !== null
         || entry.exitCode !== 0
-        || entry.network.deniedConnections !== 0)) {
+        || entry.network.deniedConnections !== 0
+        || !confidentialFilesystem(entry.filesystem))) {
       throw new Error('HARNESS_NATIVE_PREFLIGHT_EXECUTION_MISMATCH');
     }
     const executable = executions[0].executable;
@@ -63,6 +65,7 @@ export class NativeRuntimeLedger {
       executablePath: executable.path,
       executableDigest: executable.digest,
       preflightDigest: digest(executions),
+      hostCredentialPathMounted: executions[0].filesystem.hostCredentialPathMounted,
     }));
   }
 
@@ -82,7 +85,8 @@ export class NativeRuntimeLedger {
       || execution.exitCode !== 0
       || execution.network.allowedConnections < 1
       || execution.network.deniedConnections !== 0
-      || execution.filesystem.gitMetadataMasked !== true) {
+      || execution.filesystem.gitMetadataMasked !== true
+      || !confidentialFilesystem(execution.filesystem)) {
       throw new Error('HARNESS_NATIVE_INVOCATION_EXECUTION_MISMATCH');
     }
     this.#invocations.set(input.invocationId, deepFreeze({ ...input }));
@@ -116,7 +120,7 @@ export class NativeRuntimeLedger {
         executableDigest: actual.executableDigest,
         preflightDigest: actual.preflightDigest,
         credentialCapability: 'invocation-private-copy' as const,
-        hostCredentialPathMounted: false as const,
+        hostCredentialPathMounted: actual.hostCredentialPathMounted,
       });
     });
     const expectationIds = input.expectations.map(({ invocationId }) => invocationId);
@@ -179,12 +183,12 @@ function invocationEvidence(
       mountManifestDigest: execution.filesystem.mountManifestDigest,
       configurationMaskDigest: execution.filesystem.configurationMaskDigest,
       outputChannelDigest: recorded.outputDigest,
-      hostFileConfidentiality: true,
-      emptyPrivateHome: true,
-      privateEphemeralHome: true,
-      hostRootMounted: false,
-      hostCredentialPathMounted: false,
-      gitMetadataMasked: true,
+      hostFileConfidentiality: execution.filesystem.hostFileConfidentiality,
+      emptyPrivateHome: execution.filesystem.emptyPrivateHome,
+      privateEphemeralHome: execution.filesystem.privateEphemeralHome,
+      hostRootMounted: execution.filesystem.hostRootMounted,
+      hostCredentialPathMounted: execution.filesystem.hostCredentialPathMounted,
+      gitMetadataMasked: execution.filesystem.gitMetadataMasked as true,
     },
     resources: {
       enforcement: execution.resources.enforcement,
@@ -192,6 +196,16 @@ function invocationEvidence(
       limitsDigest: execution.resources.limitsDigest,
     },
   });
+}
+
+function confidentialFilesystem(
+  value: NativeExecutionEvidence['filesystem'],
+): value is NativeExecutionEvidence['filesystem'] {
+  return value.hostFileConfidentiality === true
+    && value.emptyPrivateHome === true
+    && value.privateEphemeralHome === true
+    && value.hostRootMounted === false
+    && value.hostCredentialPathMounted === false;
 }
 
 function digest(value: unknown): string {

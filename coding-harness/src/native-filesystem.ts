@@ -32,6 +32,8 @@ export interface NativeFilesystemIsolationResult extends NativeFilesystemPolicy 
   readonly mechanism: string;
   readonly mountManifestDigest: string;
   readonly configurationMaskDigest: string;
+  readonly privateEphemeralHome: true;
+  readonly hostCredentialPathMounted: false;
   readonly command: BoundaryCommand;
 }
 
@@ -42,7 +44,7 @@ export interface NativeModelFilesystemBoundary {
 const RESULT_KEYS = [
   'enforcement', 'mechanism', 'mountManifestDigest', 'configurationMaskDigest', 'host', 'workspaceRoot',
   'readOnlyRoots', 'writablePaths', 'hostFileConfidentiality', 'emptyPrivateHome',
-  'hostRootMounted', 'maskedPaths', 'command',
+  'privateEphemeralHome', 'hostRootMounted', 'hostCredentialPathMounted', 'maskedPaths', 'command',
 ] as const;
 const MECHANISM = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -59,6 +61,8 @@ export function isolateNativeModelFilesystem(
     || input.workspaceRoot !== policy.workspaceRoot
     || input.hostFileConfidentiality !== true
     || input.emptyPrivateHome !== true
+    || input.privateEphemeralHome !== true
+    || input.hostCredentialPathMounted !== false
     || input.hostRootMounted !== false) {
     throw new Error('HARNESS_NATIVE_FILESYSTEM_BOUNDARY_INVALID');
   }
@@ -111,7 +115,9 @@ export function isolateNativeModelFilesystem(
     maskedPaths,
     hostFileConfidentiality: true,
     emptyPrivateHome: true,
+    privateEphemeralHome: true,
     hostRootMounted: false,
+    hostCredentialPathMounted: false,
     command: bounded,
   });
 }

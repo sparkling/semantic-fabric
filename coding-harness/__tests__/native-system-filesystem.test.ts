@@ -2,7 +2,6 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -16,7 +15,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { isolateNativeModelFilesystem } from '../src/native-filesystem.js';
-import { SystemNativeFilesystemBoundary } from '../src/native-system-filesystem.js';
+import {
+  SystemNativeFilesystemBoundary,
+  systemNativeRuntimeLibraryMounts,
+} from '../src/native-system-filesystem.js';
 import type { BoundaryCommand } from '../src/network.js';
 import { bwrapAvailable } from './native-test-prerequisites.js';
 
@@ -25,6 +27,68 @@ const roots: string[] = [];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('system native filesystem mount validation', () => {
+  it('exposes only the closed system-library mount set', () => {
+    expect(systemNativeRuntimeLibraryMounts()).toEqual([
+      { source: '/usr/lib', destination: '/usr/lib' },
+      { source: '/usr/lib', destination: '/lib' },
+      { source: '/usr/lib64', destination: '/usr/lib64' },
+      { source: '/usr/lib64', destination: '/lib64' },
+    ]);
+    expect(Object.isFrozen(systemNativeRuntimeLibraryMounts())).toBe(true);
+  });
+
+  it('rejects arbitrary directory and relocated runtime-file mounts', () => {
+    const fixture = validationFixture();
+    expect(() => new SystemNativeFilesystemBoundary({
+      ...fixture.options,
+      hosts: {
+        ...fixture.options.hosts,
+        codex: {
+          ...fixture.options.hosts.codex,
+          runtimeMounts: [{
+            source: fixture.controllerRoot,
+            destination: fixture.controllerRoot,
+          }],
+        },
+      },
+    })).toThrow('HARNESS_NATIVE_codex:RUNTIME_MOUNT_OUTSIDE_ALLOWLIST');
+    expect(() => new SystemNativeFilesystemBoundary({
+      ...fixture.options,
+      hosts: {
+        ...fixture.options.hosts,
+        codex: {
+          ...fixture.options.hosts.codex,
+          runtimeMounts: [{ source: fixture.runtimeFile, destination: '/home/harness/runtime' }],
+        },
+      },
+    })).toThrow('HARNESS_NATIVE_codex:RUNTIME_MOUNT_OUTSIDE_ALLOWLIST');
+    expect(() => new SystemNativeFilesystemBoundary({
+      ...fixture.options,
+      forbiddenMountRoots: [fixture.controllerRoot, '/usr'],
+    })).toThrow('HARNESS_NATIVE_COMMON_MOUNT_OUTSIDE_ALLOWLIST');
+  });
+
+  it('rejects a host credential mounted instead of its private copied capability', () => {
+    const fixture = validationFixture();
+    const hostCredential = join(fixture.controllerRoot, 'host-auth.json');
+    writeFileSync(hostCredential, 'host secret\n', { mode: 0o600 });
+    expect(() => new SystemNativeFilesystemBoundary({
+      ...fixture.options,
+      hosts: {
+        ...fixture.options.hosts,
+        codex: {
+          ...fixture.options.hosts.codex,
+          authenticationMounts: [{
+            source: hostCredential,
+            destination: '/home/harness/.codex/auth.json',
+          }],
+        },
+      },
+    })).toThrow('HARNESS_NATIVE_codex:AUTH_MOUNT_OUTSIDE_ALLOWLIST');
+  });
 });
 
 describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
@@ -62,24 +126,17 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
       const boundary = new SystemNativeFilesystemBoundary({
         bwrapExecutable: realpathSync('/usr/bin/bwrap'),
         brokerRoot,
-        commonRuntimeMounts: [
-          { source: '/usr/lib', destination: '/usr/lib' },
-          { source: '/usr/lib', destination: '/lib' },
-          ...(existsSync('/usr/lib64') ? [
-            { source: '/usr/lib64', destination: '/usr/lib64' },
-            { source: '/usr/lib64', destination: '/lib64' },
-          ] : []),
-          { source: node, destination: node },
-          { source: launcher, destination: launcher },
-          { source: probe, destination: probe },
-        ],
+        allowedRuntimeFiles: [node, launcher, probe],
+        authenticationSourceRoot: root,
+        forbiddenMountRoots: [credentialRoot],
         hosts: {
           codex: {
             authenticationMounts: [{
               source: copiedCredential,
               destination: '/home/harness/.codex/auth.json',
             }],
-            runtimeMounts: [{ source: node, destination: node }],
+            runtimeMounts: [node, launcher, probe]
+              .map((path) => ({ source: path, destination: path })),
             privateEnvironment: {
               HOME: '/home/harness', CODEX_HOME: '/home/harness/.codex',
             },
@@ -89,7 +146,8 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
               source: copiedCredential,
               destination: '/home/harness/.claude/.credentials.json',
             }],
-            runtimeMounts: [{ source: node, destination: node }],
+            runtimeMounts: [node, launcher, probe]
+              .map((path) => ({ source: path, destination: path })),
             privateEnvironment: {
               HOME: '/home/harness', CLAUDE_CONFIG_DIR: '/home/harness/.claude',
             },
@@ -137,6 +195,13 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
       });
       expect(isolated.mountManifestDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(isolated.configurationMaskDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(isolated).toMatchObject({
+        hostFileConfidentiality: true,
+        emptyPrivateHome: true,
+        privateEphemeralHome: true,
+        hostRootMounted: false,
+        hostCredentialPathMounted: false,
+      });
     } finally {
       await new Promise<void>((closed) => server.close(() => closed()));
     }
@@ -147,6 +212,48 @@ function privateRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'coding-harness-filesystem-'));
   roots.push(root);
   return root;
+}
+
+function validationFixture() {
+  const root = privateRoot();
+  const brokerRoot = join(root, 'broker');
+  const authenticationSourceRoot = join(root, 'auth');
+  const controllerRoot = join(root, 'controller');
+  mkdirSync(brokerRoot, { mode: 0o700 });
+  mkdirSync(authenticationSourceRoot, { mode: 0o700 });
+  mkdirSync(controllerRoot, { mode: 0o700 });
+  const runtimeFile = join(root, 'runtime.mjs');
+  const codexAuth = join(authenticationSourceRoot, 'codex.json');
+  const claudeAuth = join(authenticationSourceRoot, 'claude.json');
+  writeFileSync(runtimeFile, 'export {};\n', { mode: 0o600 });
+  writeFileSync(codexAuth, 'codex\n', { mode: 0o600 });
+  writeFileSync(claudeAuth, 'claude\n', { mode: 0o600 });
+  const options = {
+    bwrapExecutable: realpathSync('/bin/true'),
+    brokerRoot,
+    allowedRuntimeFiles: [runtimeFile],
+    authenticationSourceRoot,
+    forbiddenMountRoots: [controllerRoot],
+    hosts: {
+      codex: {
+        authenticationMounts: [{
+          source: codexAuth, destination: '/home/harness/.codex/auth.json',
+        }],
+        runtimeMounts: [{ source: runtimeFile, destination: runtimeFile }],
+        privateEnvironment: { HOME: '/home/harness', CODEX_HOME: '/home/harness/.codex' },
+      },
+      'claude-code': {
+        authenticationMounts: [{
+          source: claudeAuth, destination: '/home/harness/.claude/.credentials.json',
+        }],
+        runtimeMounts: [{ source: runtimeFile, destination: runtimeFile }],
+        privateEnvironment: {
+          HOME: '/home/harness', CLAUDE_CONFIG_DIR: '/home/harness/.claude',
+        },
+      },
+    },
+  } as const;
+  return { controllerRoot, options, runtimeFile };
 }
 
 function filesystemProbe(): string {

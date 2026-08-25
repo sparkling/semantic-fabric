@@ -76,6 +76,8 @@ const filesystemBoundary: NativeModelFilesystemBoundary = {
     mountManifestDigest: digestValue(policy),
     configurationMaskDigest: digestValue(policy.maskedPaths),
     ...policy,
+    privateEphemeralHome: true,
+    hostCredentialPathMounted: false,
     command: {
       ...command,
       executable: '/usr/bin/env',
@@ -127,6 +129,13 @@ describe('bounded native subscription process bridge', () => {
     expect(bridge.filesystemEvidence()[0]).toMatchObject({
       enforcement: 'os-filesystem-namespace',
       hostFileConfidentiality: true,
+    });
+    expect(bridge.executionEvidence(result.executionId).filesystem).toMatchObject({
+      hostFileConfidentiality: true,
+      emptyPrivateHome: true,
+      privateEphemeralHome: true,
+      hostRootMounted: false,
+      hostCredentialPathMounted: false,
     });
     expect(bridge.executableEvidence().codex.digest).toMatch(/^[a-f0-9]{64}$/);
   });
