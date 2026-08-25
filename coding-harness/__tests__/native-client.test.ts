@@ -56,22 +56,31 @@ class FakeRunner implements NativeProcessRunner {
 }
 
 describe('native adapter structured client', () => {
-  it('bounds native architecture proposals to the verifier-compatible object shape', async () => {
+  it('bounds native structured responses to verifier-compatible shapes', async () => {
     const evidenceRoot = root('coding-harness-native-evidence-');
     const workspaceRoot = root('coding-harness-native-workspace-');
-    let schema: Record<string, unknown> | undefined;
+    const schemas: Record<string, unknown>[] = [];
     const runner = new FakeRunner((request) => {
       const schemaIndex = request.args.indexOf('--output-schema');
       const outputIndex = request.args.indexOf('--output-last-message');
-      schema = JSON.parse(readFileSync(request.args[schemaIndex + 1], 'utf8')) as Record<string, unknown>;
-      writeFileSync(request.args[outputIndex + 1], JSON.stringify({
-        proposal: {
-          summary: 'Preserve checked binding semantics.',
-          invariants: ['False bindings prune the branch.'],
-          steps: ['Check every bind result.'],
-        },
-        confidence: 1,
-      }));
+      const schema = JSON.parse(
+        readFileSync(request.args[schemaIndex + 1], 'utf8'),
+      ) as Record<string, unknown>;
+      schemas.push(schema);
+      const properties = schema.properties as Record<string, unknown>;
+      const output = 'patch' in properties
+        ? { patch: validPatch() }
+        : 'accepted' in properties
+          ? { accepted: true, reasons: [] }
+          : {
+              proposal: {
+                summary: 'Preserve checked binding semantics.',
+                invariants: ['False bindings prune the branch.'],
+                steps: ['Check every bind result.'],
+              },
+              confidence: 1,
+            };
+      writeFileSync(request.args[outputIndex + 1], JSON.stringify(output));
       return ok('');
     });
     const adapter = new CodexSubscriptionAdapter({
@@ -92,8 +101,18 @@ describe('native adapter structured client', () => {
       operation: 'architecture',
       prompt: 'return a bounded architecture',
     });
+    await client.invoke({
+      candidate: { host: 'codex', model: 'gpt-5.6' },
+      operation: 'implementation',
+      prompt: 'return a bounded patch',
+    });
+    await client.invoke({
+      candidate: { host: 'codex', model: 'gpt-5.6' },
+      operation: 'review',
+      prompt: 'return a bounded review',
+    });
 
-    expect(schema).toMatchObject({
+    expect(schemas[0]).toMatchObject({
       properties: {
         proposal: {
           type: 'object',
@@ -114,6 +133,14 @@ describe('native adapter structured client', () => {
     };
     expect(Buffer.byteLength(JSON.stringify(maximallyEscapedProposal), 'utf8'))
       .toBeLessThanOrEqual(64_000);
+    expect(schemas[1]).toMatchObject({
+      properties: { patch: { maxLength: 256_000 } },
+    });
+    expect(schemas[2]).toMatchObject({
+      properties: {
+        reasons: { maxItems: 8, items: { maxLength: 1_000 } },
+      },
+    });
   });
 
   it('assigns Codex invocation identity outside model-controlled JSON', async () => {

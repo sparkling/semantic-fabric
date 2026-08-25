@@ -2,7 +2,10 @@
 
 import { VerifierRegistry, predicateVerifier } from '@metaharness/harness';
 import { describe, expect, it } from 'vitest';
-import { NativeRepositoryModelController } from '../src/model-controller.js';
+import {
+  NATIVE_PATCH_MAX_BYTES,
+  NativeRepositoryModelController,
+} from '../src/model-controller.js';
 import type { ModelContextProvider } from '../src/model-context.js';
 import { NativeInvocationRecovery } from '../src/models/recovery.js';
 import {
@@ -191,6 +194,30 @@ describe('native repository model controller', () => {
     await expect(rejecting.review('codex', build)).rejects.toThrow(
       'HARNESS_NATIVE_REVIEW_REASON_REQUIRED',
     );
+  });
+
+  it('rejects a native review outside the bounded reason contract', async () => {
+    const target = controller([], [], (input) => input.operation === 'review'
+      ? { accepted: false, reasons: ['x'.repeat(1_001)] }
+      : { proposal: {}, confidence: 1 });
+
+    await expect(target.review('codex', {
+      candidate: { commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
+      commands: [],
+      artifactDigests: { 'build.out': digestValue('artifact') },
+    })).rejects.toThrow('HARNESS_NATIVE_REVIEW_LIMIT_EXCEEDED');
+  });
+
+  it('rejects a native patch outside the bounded byte contract', async () => {
+    const target = controller([], [], (input) => input.operation === 'implementation'
+      ? { patch: `diff --git a/src/a.rs b/src/a.rs\n${'x'.repeat(NATIVE_PATCH_MAX_BYTES)}` }
+      : { proposal: {}, confidence: 1 });
+
+    await expect(target.implement({
+      value: {},
+      critiqueDigests: [],
+      invocations: [],
+    })).rejects.toThrow('HARNESS_NATIVE_PATCH_INVALID');
   });
 
   it('labels malformed architecture output without exposing response data', async () => {

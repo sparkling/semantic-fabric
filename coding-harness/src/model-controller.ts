@@ -35,6 +35,11 @@ import type { RepositoryModelController } from './repository-operations.js';
 
 export type ModelOperation = 'architecture' | 'implementation' | 'repair' | 'review';
 
+export const NATIVE_PATCH_MAX_CHARS = 256_000;
+export const NATIVE_PATCH_MAX_BYTES = 1_000_000;
+export const NATIVE_REVIEW_MAX_REASONS = 8;
+export const NATIVE_REVIEW_REASON_MAX_CHARS = 1_000;
+
 export interface NativeStructuredClient {
   invoke(input: Readonly<{
     candidate: NativeModelCandidate;
@@ -308,7 +313,8 @@ function parsePatch(value: unknown, invocationId: string): PatchSubmission {
     const input = asRecord(value, 'patch response');
     assertExactKeys(input, ['patch'], 'patch response');
     const payload = asNonEmptyString(input.patch, 'patch response.patch');
-    if (Buffer.byteLength(payload, 'utf8') > 10_000_000 || !payload.startsWith('diff --git ')) {
+    if (Buffer.byteLength(payload, 'utf8') > NATIVE_PATCH_MAX_BYTES
+      || !payload.startsWith('diff --git ')) {
       throw new Error('HARNESS_NATIVE_PATCH_INVALID');
     }
     return deepFreeze({
@@ -325,8 +331,16 @@ function parseReview(value: unknown): { accepted: boolean; reasons: string[] } {
     if (typeof input.accepted !== 'boolean' || !Array.isArray(input.reasons)) {
       throw new TypeError('review response is invalid');
     }
-    const reasons = input.reasons.map((reason, index) =>
-      asNonEmptyString(reason, `review response.reasons[${index}]`));
+    if (input.reasons.length > NATIVE_REVIEW_MAX_REASONS) {
+      throw new Error('HARNESS_NATIVE_REVIEW_LIMIT_EXCEEDED');
+    }
+    const reasons = input.reasons.map((reason, index) => {
+      const parsed = asNonEmptyString(reason, `review response.reasons[${index}]`);
+      if (Array.from(parsed).length > NATIVE_REVIEW_REASON_MAX_CHARS) {
+        throw new Error('HARNESS_NATIVE_REVIEW_LIMIT_EXCEEDED');
+      }
+      return parsed;
+    });
     if (input.accepted && reasons.length > 0) throw new Error('HARNESS_NATIVE_REVIEW_CONTRADICTORY');
     if (!input.accepted && reasons.length === 0) throw new Error('HARNESS_NATIVE_REVIEW_REASON_REQUIRED');
     return { accepted: input.accepted, reasons };

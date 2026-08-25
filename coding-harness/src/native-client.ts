@@ -22,6 +22,11 @@ import type {
   NativeStructuredInvocation,
 } from './model-controller.js';
 import {
+  NATIVE_PATCH_MAX_CHARS,
+  NATIVE_REVIEW_MAX_REASONS,
+  NATIVE_REVIEW_REASON_MAX_CHARS,
+} from './model-controller.js';
+import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
 } from './models/native-adapters.js';
@@ -174,7 +179,9 @@ function responseSchema(operation: ModelOperation): Readonly<Record<string, unkn
   if (operation === 'implementation' || operation === 'repair') {
     return deepFreeze({
       ...common,
-      properties: { patch: { type: 'string', minLength: 1, maxLength: 10_000_000 } },
+      properties: {
+        patch: { type: 'string', minLength: 1, maxLength: NATIVE_PATCH_MAX_CHARS },
+      },
       required: ['patch'],
     });
   }
@@ -184,8 +191,10 @@ function responseSchema(operation: ModelOperation): Readonly<Record<string, unkn
       accepted: { type: 'boolean' },
       reasons: {
         type: 'array',
-        maxItems: 100,
-        items: { type: 'string', minLength: 1, maxLength: 10_000 },
+        maxItems: NATIVE_REVIEW_MAX_REASONS,
+        items: {
+          type: 'string', minLength: 1, maxLength: NATIVE_REVIEW_REASON_MAX_CHARS,
+        },
       },
     },
     required: ['accepted', 'reasons'],
