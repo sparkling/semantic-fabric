@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+import { once } from 'node:events';
 import {
   mkdtempSync,
   readdirSync,
@@ -8,16 +9,25 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createConnection } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  digestOriginBrokerEvents,
+  originBrokerTimeoutIsPolicyDenial,
   pinnedTcpConnectionOptions,
   resolvePublicDnsHost,
   selectPublicDnsAddress,
+  summarizeOriginBrokerEvents,
   UnixSocketOriginPinningBoundary,
   type DnsAddress,
 } from '../src/native-egress.js';
 import type { BoundaryCommand } from '../src/network.js';
+
+const { lookup } = vi.hoisted(() => ({
+  lookup: vi.fn(async () => [{ address: '1.1.1.1', family: 4 }]),
+}));
+vi.mock('node:dns/promises', () => ({ lookup }));
 
 const roots: string[] = [];
 
@@ -26,6 +36,70 @@ afterEach(() => {
 });
 
 describe('native exact-origin egress resolution', () => {
+  it('separates policy denials from allowed-origin transport failures', () => {
+    const admitted = { attemptId: 1, target: 'api.openai.com|4|1.1.1.1' } as const;
+    expect(summarizeOriginBrokerEvents([
+      { ...admitted, outcome: 'origin-admitted' },
+      { ...admitted, outcome: 'transport-connected' },
+      { ...admitted, outcome: 'transport-error' },
+      { attemptId: 2, target: 'chatgpt.com|4|1.0.0.1', outcome: 'transport-connected' },
+    ])).toEqual({
+      allowedConnections: 2,
+      deniedConnections: 0,
+      transportErrors: 1,
+      boundaryErrors: 0,
+    });
+    expect(summarizeOriginBrokerEvents([
+      { attemptId: 1, target: 'forbidden.example', outcome: 'policy-denied' },
+      { ...admitted, outcome: 'transport-error' },
+      { attemptId: 2, target: 'broker', outcome: 'boundary-error' },
+    ])).toEqual({
+      allowedConnections: 0,
+      deniedConnections: 1,
+      transportErrors: 1,
+      boundaryErrors: 1,
+    });
+    expect(originBrokerTimeoutIsPolicyDenial(0)).toBe(false);
+    expect(originBrokerTimeoutIsPolicyDenial(1)).toBe(true);
+
+    const connectedThenFailed = [
+      { ...admitted, outcome: 'transport-connected' as const },
+      { ...admitted, outcome: 'transport-error' as const },
+      { attemptId: 2, target: admitted.target, outcome: 'origin-admitted' as const },
+    ];
+    const separateFailure = [
+      { ...admitted, outcome: 'transport-connected' as const },
+      { attemptId: 2, target: admitted.target, outcome: 'origin-admitted' as const },
+      { attemptId: 2, target: admitted.target, outcome: 'transport-error' as const },
+    ];
+    expect(digestOriginBrokerEvents(connectedThenFailed))
+      .not.toBe(digestOriginBrokerEvents(separateFailure));
+  });
+
+  it('records a partial CONNECT closed before timeout as a policy denial', async () => {
+    const brokerRoot = privateRoot('coding-harness-egress-partial-');
+    const launcher = join(brokerRoot, 'launcher.mjs');
+    writeFileSync(launcher, 'export {};\n', { mode: 0o600 });
+    const boundary = new UnixSocketOriginPinningBoundary({
+      brokerRoot,
+      nodeExecutable: realpathSync(process.execPath),
+      launcherPath: launcher,
+      connectionTimeoutMs: 1_000,
+    });
+    const grant = await boundary.pin(command(brokerRoot), ['https://api.openai.com']);
+    const socketPath = grant.command.args[2];
+    expect(socketPath).toBeTypeOf('string');
+    const client = createConnection(socketPath as string);
+    await once(client, 'connect');
+    client.end('CONN');
+    await once(client, 'close');
+    await new Promise((resolveTurn) => setImmediate(resolveTurn));
+
+    const completion = await boundary.complete(grant.command);
+    expect(completion.allowedConnections).toBe(0);
+    expect(completion.deniedConnections).toBe(1);
+  });
+
   it('selects a stable public address and produces a numeric TCP target', () => {
     const selected = selectPublicDnsAddress('api.openai.com', [
       { address: '2606:4700:4700::1111', family: 6 },

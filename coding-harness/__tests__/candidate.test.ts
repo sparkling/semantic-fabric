@@ -65,6 +65,21 @@ describe('patched candidate transaction', () => {
     expect(finalizeIssue8ProgrammeOutcome({
       transactionStatus: 'fail', transactionReason: 'untrusted detail', envelope,
     })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: 'fail',
+      transactionReason: 'HARNESS_MODEL_SECRET:must-not-escape',
+      envelope,
+    })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: 'fail',
+      transactionReason: `HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`,
+      envelope,
+    })).toEqual({ status: 'fail', reason: 'HARNESS_ISSUE_8_TRANSACTION_FAILED' });
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: 'fail',
+      transactionReason: 'HARNESS_NATIVE_HOST_FAILED:claude-code private detail',
+      envelope,
+    })).toEqual({ status: 'fail', reason: 'HARNESS_NATIVE_HOST_FAILED' });
     const tampered = JSON.parse(JSON.stringify(envelope));
     tampered.programmeAcceptance.score = 99;
     expect(() => parseIssue8ProgrammeEnvelope(JSON.stringify(tampered)))

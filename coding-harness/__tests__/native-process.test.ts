@@ -361,6 +361,63 @@ describe('bounded native subscription process bridge', () => {
     );
   });
 
+  it('distinguishes policy denials, unused boundaries, and failed host transport', async () => {
+    const root = workspace();
+    const boundary = (allowedConnections: number, deniedConnections: number) => ({
+      ...egressBoundary,
+      complete: () => ({
+        allowedConnections,
+        deniedConnections,
+        connectDigest: digestValue({ allowedConnections, deniedConnections }),
+      }),
+    });
+    await expect(runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(1, 1),
+    ).run(request(root, 'stdin'))).rejects.toThrow('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
+    await expect(runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(0, 1),
+    ).run(request(root, 'invalid-mode'))).rejects.toThrow('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
+    await expect(runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(0, 1),
+    ).run(request(root, 'wait', {
+      timeoutMs: 25,
+      stdin: undefined,
+    }))).rejects.toThrow('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
+    await expect(runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(0, 1),
+    ).run(request(root, 'stdin', {
+      purpose: 'version-preflight',
+      operation: undefined,
+    }))).rejects.toThrow('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(0, 1),
+    ).run(request(root, 'stdin', {
+      signal: aborted.signal,
+    }))).rejects.toThrow('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
+    await expect(runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(0, 0),
+    ).run(request(root, 'stdin'))).rejects.toThrow('HARNESS_NATIVE_ORIGIN_UNUSED');
+
+    const failed = runner(
+      root, 10_000, [root], [root], [workspace()], [], fakeResourceBoundary,
+      boundary(0, 0),
+    );
+    const result = await failed.run(request(root, 'invalid-mode'));
+    expect(result.exitCode).toBe(2);
+    expect(failed.executionEvidence(result.executionId).network).toMatchObject({
+      allowedConnections: 0,
+      deniedConnections: 0,
+    });
+  }, 15_000);
+
   it('requires a real origin-pinning wrapper', () => {
     const root = workspace();
     expect(() => new BoundedNativeProcessRunner({

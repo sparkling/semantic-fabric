@@ -21,11 +21,23 @@ import {
 } from 'node:net';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { deepFreeze, normalizePublicHttpsOrigin } from './contracts.js';
+import {
+  digestOriginBrokerEvents,
+  originBrokerTimeoutIsPolicyDenial,
+  summarizeOriginBrokerEvents,
+  type OriginBrokerEvent,
+  type OriginBrokerOutcome,
+} from './native-egress-audit.js';
 import type {
   BoundaryCommand,
   NativeModelOriginPinningBoundary,
   RegistryPinResult,
 } from './network.js';
+export {
+  digestOriginBrokerEvents,
+  originBrokerTimeoutIsPolicyDenial,
+  summarizeOriginBrokerEvents,
+} from './native-egress-audit.js';
 
 export interface UnixOriginBoundaryOptions {
   readonly brokerRoot: string;
@@ -45,9 +57,8 @@ interface Session {
   readonly directory: string;
   readonly server: Server;
   readonly sockets: Set<Socket>;
-  readonly requested: string[];
-  allowed: number;
-  denied: number;
+  readonly events: OriginBrokerEvent[];
+  nextAttemptId: number;
 }
 
 export interface DnsAddress {
@@ -143,17 +154,19 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
     const session: Session = {
       directory,
       sockets,
-      requested: [],
-      allowed: 0,
-      denied: 0,
+      events: [],
+      nextAttemptId: 1,
       server: createServer((socket) => {
         sockets.add(socket);
         socket.once('close', () => sockets.delete(socket));
-        this.#handleClient(session, socket, allowedHosts);
+        const attemptId = session.nextAttemptId;
+        session.nextAttemptId += 1;
+        this.#handleClient(session, socket, allowedHosts, attemptId);
       }),
     };
     session.server.on('error', () => {
-      session.denied += 1;
+      recordOriginBrokerEvent(session, session.nextAttemptId, 'broker', 'boundary-error');
+      session.nextAttemptId += 1;
     });
     await listenUnix(session.server, socketPath);
     chmodSync(socketPath, 0o600);
@@ -184,10 +197,12 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
     this.#sessions.delete(key);
     await closeSession(session);
     this.assertStable();
+    const summary = summarizeOriginBrokerEvents(session.events);
+    if (summary.boundaryErrors !== 0) throw new Error('HARNESS_NATIVE_EGRESS_BROKER_FAILED');
     return deepFreeze({
-      allowedConnections: session.allowed,
-      deniedConnections: session.denied,
-      connectDigest: digest([...session.requested].sort()),
+      allowedConnections: summary.allowedConnections,
+      deniedConnections: summary.deniedConnections,
+      connectDigest: digestOriginBrokerEvents(session.events),
     });
   }
 
@@ -203,13 +218,30 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
     session: Session,
     client: Socket,
     allowedHosts: ReadonlyMap<string, DnsAddress>,
+    attemptId: number,
   ): void {
-    client.setTimeout(this.#connectionTimeoutMs, () => client.destroy());
     let buffered = Buffer.alloc(0);
+    let policyDenied = false;
+    let admissionDecided = false;
+    const deny = (target: string) => {
+      if (policyDenied) return;
+      policyDenied = true;
+      admissionDecided = true;
+      recordOriginBrokerEvent(session, attemptId, target, 'policy-denied');
+    };
+    const denyPartial = () => {
+      if (!admissionDecided && originBrokerTimeoutIsPolicyDenial(buffered.length)) deny('partial');
+    };
+    client.setTimeout(this.#connectionTimeoutMs, () => {
+      denyPartial();
+      client.destroy();
+    });
+    client.once('close', denyPartial);
+    client.on('error', denyPartial);
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
       if (buffered.length > this.#maxHeaderBytes) {
-        session.denied += 1;
+        deny('invalid');
         client.destroy();
         return;
       }
@@ -220,27 +252,39 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
       const tail = buffered.subarray(end + 4);
       const target = parseConnectTarget(header);
       const pinned = target === null ? undefined : allowedHosts.get(target.host);
-      session.requested.push(target === null
+      const binding = target === null
         ? 'invalid'
-        : pinned === undefined ? target.host : `${target.host}|${pinned.family}|${pinned.address}`);
+        : pinned === undefined ? target.host : `${target.host}|${pinned.family}|${pinned.address}`;
       if (target === null || pinned === undefined) {
-        session.denied += 1;
+        deny(binding);
         client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         return;
       }
+      admissionDecided = true;
+      client.setTimeout(0);
+      recordOriginBrokerEvent(session, attemptId, binding, 'origin-admitted');
       // The broker opens a numeric TCP target, so DNS cannot be rebound after
       // admission. TLS remains end-to-end: the client still sends the original
       // hostname in its CONNECT request and subsequent SNI-bearing handshake.
       const remote = createConnection(pinnedTcpConnectionOptions(pinned));
       session.sockets.add(remote);
-      remote.setTimeout(this.#connectionTimeoutMs, () => remote.destroy());
+      let transportFailed = false;
+      const recordTransportFailure = () => {
+        if (transportFailed) return;
+        transportFailed = true;
+        recordOriginBrokerEvent(session, attemptId, binding, 'transport-error');
+      };
+      remote.setTimeout(this.#connectionTimeoutMs, () => {
+        recordTransportFailure();
+        remote.destroy();
+      });
       remote.once('close', () => session.sockets.delete(remote));
       remote.once('error', () => {
-        session.denied += 1;
+        recordTransportFailure();
         client.destroy();
       });
       remote.once('connect', () => {
-        session.allowed += 1;
+        recordOriginBrokerEvent(session, attemptId, binding, 'transport-connected');
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         if (tail.length > 0) remote.write(tail);
         client.pipe(remote);
@@ -249,6 +293,12 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
     };
     client.on('data', onData);
   }
+}
+
+function recordOriginBrokerEvent(
+  session: Session, attemptId: number, target: string, outcome: OriginBrokerOutcome,
+): void {
+  session.events.push(Object.freeze({ attemptId, target, outcome }));
 }
 
 export async function resolvePublicDnsHost(

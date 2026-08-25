@@ -197,6 +197,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
     this.#resourceEvidence.push(resources);
     if (request.signal?.aborted === true) {
       const completion = await this.#completeNetwork(network.command);
+      assertOriginPolicy(completion);
       return this.#record(
         executionId,
         request,
@@ -229,9 +230,10 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       throw error;
     }
     const completion = await this.#completeNetwork(network.command);
-    if (request.purpose === 'model-invocation'
-      && (completion.allowedConnections < 1 || completion.deniedConnections !== 0)) {
-      throw new Error('HARNESS_NATIVE_ORIGIN_ENFORCEMENT_FAILED');
+    assertOriginPolicy(completion);
+    if (request.purpose === 'model-invocation' && completion.allowedConnections < 1
+      && nativeProcessSucceeded(result)) {
+      throw new Error('HARNESS_NATIVE_ORIGIN_UNUSED');
     }
     return this.#record(
       executionId,
@@ -408,5 +410,16 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       && Buffer.byteLength(request.stdin, 'utf8') > MAX_STDIN_BYTES) {
       throw new Error('HARNESS_NATIVE_STDIN_TOO_LARGE');
     }
+  }
+}
+
+function nativeProcessSucceeded(result: NativeProcessResult): boolean {
+  return result.exitCode === 0 && !result.timedOut && result.cancelled !== true
+    && result.outputLimitExceeded !== true && result.spawnError === undefined;
+}
+
+function assertOriginPolicy(completion: OriginCompletion): void {
+  if (completion.deniedConnections !== 0) {
+    throw new Error('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
   }
 }

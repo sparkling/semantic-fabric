@@ -53,6 +53,24 @@ const REQUIRED_TOOL_EVIDENCE = Object.freeze([
   'systemctl',
   'agenticQeMcp',
 ]);
+export const ISSUE_8_SAFE_TRANSACTION_REASON_CODES = Object.freeze([
+  'HARNESS_ACCEPTANCE_GATE_FAILED',
+  'HARNESS_CLEANUP_FAILED',
+  'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID',
+  'HARNESS_NATIVE_CIRCUIT_OPEN',
+  'HARNESS_NATIVE_HOST_FAILED',
+  'HARNESS_NATIVE_HOST_TIMEOUT',
+  'HARNESS_NATIVE_INVOCATION_CANCELLED',
+  'HARNESS_NATIVE_ORIGIN_POLICY_DENIED',
+  'HARNESS_NATIVE_ORIGIN_UNUSED',
+  'HARNESS_NATIVE_PATCH_RESPONSE_INVALID',
+  'HARNESS_NATIVE_RETRY_BUDGET_EXHAUSTED',
+  'HARNESS_NATIVE_REVIEW_RESPONSE_INVALID',
+  'HARNESS_REPAIR_BUDGET_EXHAUSTED',
+  'HARNESS_RUNTIME_EVIDENCE_FAILED',
+]);
+const ISSUE_8_SAFE_TRANSACTION_REASON_CODE_SET = new Set(ISSUE_8_SAFE_TRANSACTION_REASON_CODES);
+const MAX_SAFE_REASON_BYTES = 4_096;
 
 interface ReceiptChainDocument {
   schemaVersion: 2;
@@ -127,9 +145,15 @@ export function finalizeIssue8ProgrammeOutcome(input: Readonly<{
       reason: 'HARNESS_ISSUE_8_PROGRAMME_ACCEPTANCE_REJECTED',
     });
   }
-  const reason = input.transactionReason?.match(/^HARNESS_[A-Z0-9_]+/)?.[0]
+  const reason = safeTransactionReason(input.transactionReason)
     ?? 'HARNESS_ISSUE_8_TRANSACTION_FAILED';
   return deepFreeze({ status: input.transactionStatus, reason });
+}
+
+function safeTransactionReason(value: string | null): string | null {
+  if (value === null || Buffer.byteLength(value, 'utf8') > MAX_SAFE_REASON_BYTES) return null;
+  const code = /^(HARNESS_[A-Z0-9_]+)(?=[^A-Z0-9_]|$)/.exec(value)?.[1];
+  return code !== undefined && ISSUE_8_SAFE_TRANSACTION_REASON_CODE_SET.has(code) ? code : null;
 }
 
 function assembleEnvelope(

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ISSUE_8_SAFE_TRANSACTION_REASON_CODES } from '../src/issue-8-programme-envelope.js';
 
 const GIT = '/usr/bin/git';
 const NODE = '/usr/bin/node';
@@ -72,35 +73,44 @@ describe('trusted issue #8 bootstrap', () => {
 
   it('extracts only the primary bounded harness code from nested errors', () => {
     const safeReason = trustedSafeReason();
-    const caused = new Error('generic', { cause: new Error('HARNESS_CAUSE_CODE secret') });
+    const caused = new Error('generic', {
+      cause: new Error('HARNESS_NATIVE_HOST_FAILED:secret'),
+    });
     const aggregate = new AggregateError([
-      new Error('HARNESS_PRIMARY_CODE secret'),
-      new Error('HARNESS_CLEANUP_CODE secret'),
-    ], 'HARNESS_WRAPPER_CODE');
+      new Error('HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID secret'),
+      new Error('HARNESS_CLEANUP_FAILED secret'),
+    ], 'HARNESS_BOOTSTRAP_CLEANUP_FAILED');
     const nested = new AggregateError([
-      new Error('generic', { cause: new Error('HARNESS_NESTED_CODE') }),
+      new Error('generic', { cause: new Error('HARNESS_NATIVE_ORIGIN_POLICY_DENIED') }),
     ], 'generic');
 
-    expect(safeReason(new Error('secret HARNESS_DIRECT_CODE trailing'))).toBe('HARNESS_DIRECT_CODE');
-    expect(safeReason(caused)).toBe('HARNESS_CAUSE_CODE');
-    expect(safeReason(aggregate)).toBe('HARNESS_PRIMARY_CODE');
-    expect(safeReason(new Error('HARNESS_OUTER_CODE', {
-      cause: new Error('HARNESS_INNER_CODE'),
-    }))).toBe('HARNESS_OUTER_CODE');
+    expect(safeReason(new Error('secret HARNESS_NATIVE_HOST_FAILED trailing'))).toBeNull();
+    expect(safeReason(new Error('HARNESS_MODEL_SECRET trailing'))).toBeNull();
+    expect(safeReason(caused)).toBe('HARNESS_NATIVE_HOST_FAILED');
+    expect(safeReason(aggregate)).toBe('HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID');
+    expect(safeReason(new Error('HARNESS_NATIVE_HOST_TIMEOUT:untrusted detail', {
+      cause: new Error('HARNESS_CLEANUP_FAILED'),
+    }))).toBe('HARNESS_NATIVE_HOST_TIMEOUT');
     expect(safeReason(new AggregateError([new Error('generic')],
-      'HARNESS_AGGREGATE_FALLBACK'))).toBe('HARNESS_AGGREGATE_FALLBACK');
-    expect(safeReason(nested)).toBe('HARNESS_NESTED_CODE');
+      'HARNESS_BOOTSTRAP_CLEANUP_FAILED'))).toBe('HARNESS_BOOTSTRAP_CLEANUP_FAILED');
+    expect(safeReason(nested)).toBe('HARNESS_NATIVE_ORIGIN_POLICY_DENIED');
     expect(safeReason({ message: 'HARNESS_FAKE_CODE' })).toBeNull();
+    expect(safeReason(new Error(`HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`))).toBeNull();
 
     const cyclic = new Error('generic');
     Object.defineProperty(cyclic, 'cause', { value: cyclic });
     expect(safeReason(cyclic)).toBeNull();
-    let chain = new Error('HARNESS_TOO_DEEP');
+    let chain = new Error('HARNESS_NATIVE_HOST_FAILED');
     for (let index = 0; index < 64; index += 1) chain = new Error('generic', { cause: chain });
     expect(safeReason(chain)).toBeNull();
     const hostile = new Error('generic');
     Object.defineProperty(hostile, 'message', { get: () => { throw new Error('secret'); } });
     expect(safeReason(hostile)).toBeNull();
+
+    const launcher = readFileSync(new URL('../scripts/launch-issue-8.mjs', import.meta.url), 'utf8');
+    for (const code of ISSUE_8_SAFE_TRANSACTION_REASON_CODES) {
+      expect(launcher).toContain(`'${code}'`);
+    }
   });
 });
 

@@ -9,6 +9,7 @@ import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
   NativeAuthPreflightError,
+  NativeHostInvocationError,
   preflightNativeSubscriptions,
 } from '../../src/models/native-adapters.js';
 import type {
@@ -223,5 +224,36 @@ describe('native subscription adapters', () => {
         cwd: '/repo', requestedModel: 'claude-opus-4-1',
       })).rejects.toBeInstanceOf(NativeAuthPreflightError);
     }
+  });
+
+  it('classifies a failed bounded invocation as a native host failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'coding-harness-adapter-'));
+    roots.push(root);
+    const schemaPath = join(root, 'response.schema.json');
+    const outputPath = join(root, 'response.json');
+    writeFileSync(schemaPath, JSON.stringify({ type: 'object' }));
+    const runner = new FakeRunner(() => ({ ...ok(''), exitCode: 2 }));
+    const codex = new CodexSubscriptionAdapter({
+      executable: '/tools/codex',
+      runner,
+      sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+      evidenceRoot: root,
+    });
+
+    await expect(codex.invoke({
+      cwd: root,
+      model: 'gpt-5.6-sol',
+      prompt: 'review this patch',
+      schema: { type: 'object' },
+      schemaPath,
+      outputPath,
+      workspaceAccess: 'read',
+      timeoutMs: 1_000,
+      operation: 'review',
+    })).rejects.toMatchObject({
+      name: NativeHostInvocationError.name,
+      message: 'HARNESS_NATIVE_HOST_FAILED:codex',
+      host: 'codex',
+    });
   });
 });
