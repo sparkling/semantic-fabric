@@ -202,4 +202,16 @@ describe('native subscription adapters', () => {
       adapter.preflight({ cwd: '/repo', requestedModel: 'claude-opus-4-1' }),
     ).rejects.toBeInstanceOf(NativeAuthPreflightError);
   });
+
+  it('rejects successful exit codes that breached a native process hard limit', async () => {
+    for (const failure of [{ outputLimitExceeded: true }, { spawnError: 'late spawn fault' }]) {
+      const runner = new FakeRunner(() => ({ ...ok('claude-code 4.5.6'), ...failure }));
+      const adapter = new ClaudeCodeSubscriptionAdapter({
+        executable: '/tools/claude', runner, sourceEnvironment: { HOME: '/home/tester' },
+      });
+      await expect(adapter.preflight({
+        cwd: '/repo', requestedModel: 'claude-opus-4-1',
+      })).rejects.toBeInstanceOf(NativeAuthPreflightError);
+    }
+  });
 });

@@ -481,12 +481,12 @@ function captureVersion(
 }
 
 function processSucceeded(result: NativeProcessResult): boolean {
-  return result.exitCode === 0 && !result.timedOut && result.cancelled !== true;
+  return result.exitCode === 0 && !result.timedOut && result.cancelled !== true
+    && result.outputLimitExceeded !== true && result.spawnError === undefined;
 }
 function signalAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
-
 function parseRecord(text: string): Record<string, unknown> | null {
   try {
     const value = JSON.parse(text) as unknown;
