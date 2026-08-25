@@ -430,7 +430,7 @@ export class GitWorktreeSet {
   async #git(cwd: string, args: string[], stdin?: string, signal?: AbortSignal): Promise<GitCommandResult> {
     this.#assertRepositoryRoot();
     const result = await runGitCommand(cwd, args, { stdin, signal });
-    if (result.exitCode !== 0) throw new Error(result.stderr || `git ${args[0]} failed`);
+    if (result.exitCode !== 0) throw new Error(`HARNESS_GIT_COMMAND_FAILED:${args[0]}`);
     return result;
   }
 }

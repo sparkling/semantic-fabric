@@ -91,6 +91,27 @@ describe('historical frozen Cargo lock preparation', () => {
     });
   }
 
+  it('materializes a frozen lock from the private bare transaction repository', async () => {
+    const fixture = repository();
+    const parent = privateRoot('coding-harness-frozen-lock-bare-');
+    const bare = join(parent, 'repository.git');
+    git(fixture.root, ['clone', '--quiet', '--bare', '--no-hardlinks', '--local', '--', fixture.root, bare]);
+    const cargo = cargoExecutable();
+    const lease = await prepareFrozenCargoLock({
+      ...preparationInput({ ...fixture, root: bare }, join(parent, 'lease'),
+        createStructuredFrozenCargoLockExecutor({
+          config: SECURE_HARNESS_CONFIG,
+          offlineIsolator,
+          sourceEnvironment: { PATH: process.env.PATH },
+        })),
+      cargoExecutable: cargo,
+      cargoEnvironment: cargoEnvironment(parent, cargo),
+    });
+
+    expect(readFileSync(lease.lockfile.sourcePath, 'utf8')).toContain('version = 4');
+    await lease.cleanup();
+  });
+
   it('fails before execution when declared identities or scratch paths do not match', async () => {
     const fixture = repository();
     const parent = privateRoot('coding-harness-frozen-lock-identity-');

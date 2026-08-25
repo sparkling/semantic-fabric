@@ -231,7 +231,7 @@ export async function listTrackedPaths(task: TaskContract, config: HarnessConfig
     },
   );
   if (result.exitCode !== 0) {
-    throw new Error(`cannot enumerate tracked paths: ${result.stderr || `git exited ${String(result.exitCode)}`}`);
+    throw new Error('HARNESS_POLICY_TRACKED_PATH_ENUMERATION_FAILED');
   }
   return deepFreeze([...new Set(result.stdout.split('\0').filter(Boolean))].sort());
 }

@@ -149,7 +149,7 @@ export async function prepareFrozenCargoLock(
     );
     await gitChecked(
       repositoryRoot,
-      ['checkout-index', '--all', '--force', `--prefix=${workspaceRoot}${sep}`],
+      [`--work-tree=${workspaceRoot}`, 'checkout-index', '--all', '--force', `--prefix=${workspaceRoot}${sep}`],
       input.signal,
       { GIT_INDEX_FILE: indexPath },
     );
@@ -349,7 +349,7 @@ async function gitChecked(
   environment?: Readonly<Record<string, string>>,
 ) {
   const result = await runGitCommand(cwd, args, { signal, environment });
-  if (result.exitCode !== 0) throw new Error(result.stderr || `HARNESS_FROZEN_LOCK_GIT_FAILED:${args[0]}`);
+  if (result.exitCode !== 0) throw new Error(`HARNESS_FROZEN_LOCK_GIT_FAILED:${args[0]}`);
   return result;
 }
 function validateSnapshot(root: string): void {

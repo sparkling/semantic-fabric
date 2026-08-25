@@ -57,8 +57,9 @@ export async function trustedControllerMain(
   if (bootstrap.controllerCommit !== invocation.controllerCommit) {
     throw new Error('HARNESS_ISSUE_8_BOOTSTRAP_COMMIT_MISMATCH');
   }
-  const resultsRoot = await prepareResultsRoot(invocation.repositoryRoot);
-  const receiptPath = join(resultsRoot, `${invocation.runId}.json`);
+  const receiptPath = join(
+    invocation.repositoryRoot, 'coding-harness', '.metaharness', 'runs', `${invocation.runId}.json`,
+  );
   assertAbsent(receiptPath, 'HARNESS_ISSUE_8_RECEIPT_EXISTS');
   const scratch = await createScratchRoot();
   let result: Issue8DriverResult | undefined;
@@ -96,6 +97,8 @@ export async function trustedControllerMain(
     reason: result.transaction.reason,
     async seal() {
       if (sealed) throw new Error('HARNESS_ISSUE_8_OUTCOME_ALREADY_SEALED');
+      await prepareResultsRoot(invocation.repositoryRoot);
+      assertAbsent(receiptPath, 'HARNESS_ISSUE_8_RECEIPT_EXISTS');
       await writeFile(receiptPath, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
       sealed = true;
       return Object.freeze({

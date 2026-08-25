@@ -166,7 +166,7 @@ async function gitChecked(
   environment?: Readonly<Record<string, string>>,
 ) {
   const result = await runGitCommand(cwd, args, { signal, stdin, environment });
-  if (result.exitCode !== 0) throw new Error(result.stderr || `git ${args[0]} failed`);
+  if (result.exitCode !== 0) throw new Error(`HARNESS_EVALUATOR_GIT_FAILED:${args[0]}`);
   return result;
 }
 

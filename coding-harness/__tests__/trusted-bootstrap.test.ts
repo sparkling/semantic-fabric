@@ -64,10 +64,51 @@ describe('trusted issue #8 bootstrap', () => {
     process.umask(previousUmask);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('HARNESS_BOOTSTRAP_GIT_BLOB_FAILED');
+    expect(result.stderr).toBe(
+      '{"status":"error","reason":"HARNESS_BOOTSTRAP_GIT_BLOB_FAILED"}\n',
+    );
     expect(existsSync(fixture.store)).toBe(false);
   });
+
+  it('extracts only the primary bounded harness code from nested errors', () => {
+    const safeReason = trustedSafeReason();
+    const caused = new Error('generic', { cause: new Error('HARNESS_CAUSE_CODE secret') });
+    const aggregate = new AggregateError([
+      new Error('HARNESS_PRIMARY_CODE secret'),
+      new Error('HARNESS_CLEANUP_CODE secret'),
+    ], 'HARNESS_WRAPPER_CODE');
+    const nested = new AggregateError([
+      new Error('generic', { cause: new Error('HARNESS_NESTED_CODE') }),
+    ], 'generic');
+
+    expect(safeReason(new Error('secret HARNESS_DIRECT_CODE trailing'))).toBe('HARNESS_DIRECT_CODE');
+    expect(safeReason(caused)).toBe('HARNESS_CAUSE_CODE');
+    expect(safeReason(aggregate)).toBe('HARNESS_PRIMARY_CODE');
+    expect(safeReason(new Error('HARNESS_OUTER_CODE', {
+      cause: new Error('HARNESS_INNER_CODE'),
+    }))).toBe('HARNESS_OUTER_CODE');
+    expect(safeReason(new AggregateError([new Error('generic')],
+      'HARNESS_AGGREGATE_FALLBACK'))).toBe('HARNESS_AGGREGATE_FALLBACK');
+    expect(safeReason(nested)).toBe('HARNESS_NESTED_CODE');
+    expect(safeReason({ message: 'HARNESS_FAKE_CODE' })).toBeNull();
+
+    const cyclic = new Error('generic');
+    Object.defineProperty(cyclic, 'cause', { value: cyclic });
+    expect(safeReason(cyclic)).toBeNull();
+    let chain = new Error('HARNESS_TOO_DEEP');
+    for (let index = 0; index < 64; index += 1) chain = new Error('generic', { cause: chain });
+    expect(safeReason(chain)).toBeNull();
+    const hostile = new Error('generic');
+    Object.defineProperty(hostile, 'message', { get: () => { throw new Error('secret'); } });
+    expect(safeReason(hostile)).toBeNull();
+  });
 });
+
+function trustedSafeReason(): (error: unknown) => string | null {
+  const source = readFileSync(new URL('../scripts/launch-issue-8.mjs', import.meta.url), 'utf8');
+  const declaration = source.slice(source.lastIndexOf('function safeReason(error) {'));
+  return Function(`${declaration}; return safeReason;`)() as (error: unknown) => string | null;
+}
 
 function controllerStore(): Readonly<{
   source: string;

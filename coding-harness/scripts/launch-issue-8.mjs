@@ -86,8 +86,7 @@ try {
   } catch (cleanupError) {
     error = new AggregateError([error, cleanupError], 'HARNESS_BOOTSTRAP_CLEANUP_FAILED');
   }
-  process.stderr.write(`${JSON.stringify({ status: 'error', reason: safeReason(error) })}\n`);
-  process.exitCode = 1;
+  process.stderr.write(`${JSON.stringify({ status: 'error', reason: safeReason(error) ?? 'HARNESS_BOOTSTRAP_FAILED' })}\n`); process.exitCode = 1;
 }
 async function cleanupRuntime() {
   if (privateRuntime === null) return;
@@ -494,6 +493,7 @@ function writeAll(descriptor, buffer, length, position) {
   }
 }
 function safeReason(error) {
-  const message = error instanceof Error ? error.message : '';
-  return message.match(/HARNESS_[A-Z0-9_]+/)?.[0] ?? 'HARNESS_BOOTSTRAP_FAILED';
+  const seen = new Set(); let count = 0;
+  const visit = (value) => { if (!(value instanceof Error) || seen.has(value) || count++ >= 64) return null; seen.add(value); const own = value.message.match(/HARNESS_[A-Z0-9_]+/)?.[0] ?? null; if (!(value instanceof AggregateError) && own !== null) return own; for (const nested of value instanceof AggregateError ? [...value.errors, value.cause] : [value.cause]) { const found = visit(nested); if (found !== null) return found; } return own; };
+  try { return visit(error); } catch { return null; }
 }
