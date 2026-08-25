@@ -278,18 +278,28 @@ programme transaction pending. The incremental harness commits through
 transaction, exact-origin broker, mount namespace, copied credential
 capabilities, systemd cgroup-v2 quotas, bounded retry/cancellation, provider-free
 QE/SAST, protected governance inputs, and digest-chained receipts. The harness
-builds and passes 276 tests across 44 files. It has no publication or evolution
+builds and passes 298 tests across 45 files. It has no publication or evolution
 path, and all harness source files remain under 500 lines.
 
-Development runs 03–05 emitted failure receipts while exposing and then closing
-native runtime containment defects; none is acceptance evidence. The next run is
-the first eligible issue-#8 transaction on the reconciled protected snapshot.
+Development runs 03–16 emitted failure receipts while exposing and then closing
+native runtime containment, optional-egress, long-lived-tunnel, response-bound,
+and shared Cargo-registry drift defects; none is acceptance evidence. Run 16
+proved the frozen dependency closure but its first Codex architecture invocation
+exhausted one terminal 20-minute deadline. That behavior contradicted this ADR's
+accepted one-retry rule for classified transient process failures. The runtime
+now classifies a complete native deadline exhaustion as transient and permits
+exactly one fresh same-host retry, with two 10-minute attempts preserving the
+same 20-minute worst-case lane budget. The next run remains the first eligible
+issue-#8 acceptance transaction on the reconciled protected snapshot.
 Dirty user-owned `.mcp.json` and untracked `coding-harness/.claude/` state remain
 unstaged and are masked from model sessions; diagnostics that cannot inspect
 their effective surfaces remain `INCONCLUSIVE`, not clean and not a substitute
 for direct controls.
 
-Upstream MetaHarness diagnostics classify the repository/harness at 71/67 and
+Its dependency-scoped Rust closure pins the historical lock, target package
+set, verified crate archives, and minimized exact sparse-index records while
+excluding the mutable shared registry source tree. Upstream MetaHarness
+diagnostics classify the repository/harness at 71/67 and
 the genome as `needs-work`; those values are non-authoritative for the reasons in
 section 8. Darwin/GEPA stays disabled. No receipt may be described as semantic
 acceptance until the real dual-host transaction, every hard gate, and the

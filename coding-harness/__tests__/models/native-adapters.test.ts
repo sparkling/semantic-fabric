@@ -10,6 +10,7 @@ import {
   CodexSubscriptionAdapter,
   NativeAuthPreflightError,
   NativeHostInvocationError,
+  TransientNativeHostInvocationError,
   preflightNativeSubscriptions,
 } from '../../src/models/native-adapters.js';
 import type {
@@ -270,7 +271,7 @@ describe('native subscription adapters', () => {
     });
   });
 
-  it('treats full deadline exhaustion as a terminal native host failure', async () => {
+  it('classifies full deadline exhaustion for the bounded same-host retry', async () => {
     const root = mkdtempSync(join(tmpdir(), 'coding-harness-adapter-'));
     roots.push(root);
     const schemaPath = join(root, 'response.schema.json');
@@ -295,7 +296,7 @@ describe('native subscription adapters', () => {
       timeoutMs: 1_000,
       operation: 'review',
     })).rejects.toMatchObject({
-      name: NativeHostInvocationError.name,
+      name: TransientNativeHostInvocationError.name,
       message: 'HARNESS_NATIVE_HOST_TIMEOUT:codex',
       host: 'codex',
     });

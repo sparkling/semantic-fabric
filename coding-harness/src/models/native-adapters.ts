@@ -4,7 +4,10 @@ import {
   assertNativeSubscriptionEnvironment,
   buildNativeSubscriptionEnvironment,
 } from './environment.js';
-import { NativeCancellationError } from './recovery.js';
+import {
+  NativeCancellationError,
+  TransientNativeHostError,
+} from './recovery.js';
 import type {
   ClaudeInvocationRequest,
   CodexInvocationRequest,
@@ -88,6 +91,16 @@ export class NativeHostInvocationError extends Error {
   constructor(host: 'codex' | 'claude-code', message: string) {
     super(message);
     this.name = 'NativeHostInvocationError';
+    this.host = host;
+  }
+}
+
+export class TransientNativeHostInvocationError extends TransientNativeHostError {
+  readonly host: 'codex' | 'claude-code';
+
+  constructor(host: 'codex' | 'claude-code', message: string) {
+    super(message);
+    this.name = 'TransientNativeHostInvocationError';
     this.host = host;
   }
 }
@@ -425,7 +438,7 @@ async function invokeChecked(
     throw new NativeCancellationError();
   }
   if (result.timedOut) {
-    throw new NativeHostInvocationError(
+    throw new TransientNativeHostInvocationError(
       request.host,
       `HARNESS_NATIVE_HOST_TIMEOUT:${request.host}`,
     );

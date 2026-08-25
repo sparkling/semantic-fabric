@@ -23,7 +23,12 @@ authority. The user separately authorized its local execution.
 
 The product and framework slices were executed and committed locally. Direct
 product verification passes, the trusted native runtime is implemented, and the
-programme is awaiting its final dual-host issue-#8 transaction.
+programme is awaiting its final dual-host issue-#8 transaction. Run 16 passed
+the frozen dependency-closure stage, then failed closed when its first Codex
+architecture call exhausted a terminal 20-minute deadline. Native subscription
+health remained available. Deadline exhaustion is now a classified transient
+process failure with exactly one fresh same-host retry; two 10-minute attempts
+preserve the previous 20-minute worst-case lane budget.
 
 | Scope | Outcome | Evidence |
 |---|---|---|
@@ -32,12 +37,12 @@ programme is awaiting its final dual-host issue-#8 transaction.
 | #10 SQLite link | implemented with advisory baseline | `5b8415c`; one `rusqlite 0.40.2` workspace version; `RUSTSEC-2026-0235` remains unignored |
 | #7 serving admission | locked, providers deferred | `9d709dd`; only SQLite, PostgreSQL, and MySQL are admitted |
 | #6 materialization API | deferred | no consumer-red Nova reproducer, so no speculative API was added |
-| Harness framework | implemented; final transaction pending | incremental harness commits through `947253d` |
+| Harness framework | implemented; final transaction pending | incremental harness commits through `936f738`; bounded timeout-retry reconciliation in progress |
 
 Final direct gates passed: locked/offline workspace format, clippy with warnings
 denied, all-target build, workspace tests, and W3C conformance (82 adjudicated,
 zero unexpected failures, one documented deviation). The harness builds and
-passes 276 tests across 44 files.
+passes 298 tests across 45 files before the timeout-retry reconciliation.
 
 The final transaction starts from a packed private controller commit and uses
 native ChatGPT and Claude subscriptions, a loopback CONNECT endpoint backed by
