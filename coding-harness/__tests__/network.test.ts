@@ -67,7 +67,8 @@ function nativeRequest(host: 'codex' | 'claude-code'): Record<string, unknown> {
       : ['https://api.anthropic.com', 'https://claude.ai'],
     environment: codex
       ? { PATH: '/usr/bin', CODEX_HOME: '/home/test/.codex' }
-      : { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/home/test/.claude' },
+      : { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/home/test/.claude',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
     transport: {
       client: host,
       provider: codex ? 'openai' : 'anthropic',

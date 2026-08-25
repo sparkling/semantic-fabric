@@ -24,7 +24,18 @@ const COMMON_ALLOWLIST = Object.freeze([
 
 export const NATIVE_SUBSCRIPTION_ENV_ALLOWLIST = Object.freeze({
   codex: Object.freeze([...COMMON_ALLOWLIST, 'CODEX_HOME']),
-  'claude-code': Object.freeze([...COMMON_ALLOWLIST, 'CLAUDE_CONFIG_DIR']),
+  'claude-code': Object.freeze([
+    ...COMMON_ALLOWLIST,
+    'CLAUDE_CONFIG_DIR',
+    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+  ]),
+} as const);
+
+const NATIVE_MANAGED_ENVIRONMENT = Object.freeze({
+  codex: Object.freeze({}),
+  'claude-code': Object.freeze({
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  }),
 } as const);
 
 export function buildNativeSubscriptionEnvironment(
@@ -36,6 +47,7 @@ export function buildNativeSubscriptionEnvironment(
     const value = source[name];
     if (value !== undefined && value.length > 0) environment[name] = value;
   }
+  Object.assign(environment, NATIVE_MANAGED_ENVIRONMENT[host]);
   assertNativeSubscriptionEnvironment(host, environment);
   return Object.freeze(environment);
 }
@@ -52,6 +64,10 @@ export function assertNativeSubscriptionEnvironment(
     if (typeof value !== 'string' || value.includes('\0')) {
       throw new Error(`HARNESS_NATIVE_ENVIRONMENT_INVALID:${name}`);
     }
+  }
+  if (host === 'claude-code'
+    && environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC !== '1') {
+    throw new Error('HARNESS_NATIVE_ESSENTIAL_TRAFFIC_REQUIRED:claude-code');
   }
 }
 

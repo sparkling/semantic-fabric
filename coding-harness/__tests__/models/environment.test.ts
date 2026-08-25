@@ -21,6 +21,7 @@ describe('native subscription environment', () => {
     HTTPS_PROXY: 'http://proxy.invalid',
     ALL_PROXY: 'socks://proxy.invalid',
     NO_PROXY: '*',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '0',
   } as const;
 
   it('copies only the Codex allow-list and strips keys, base URLs, and proxies', () => {
@@ -43,7 +44,18 @@ describe('native subscription environment', () => {
       HOME: '/home/tester',
       PATH: '/usr/bin',
       LANG: 'C.UTF-8',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     });
+  });
+
+  it('requires the harness-managed Claude essential-traffic control', () => {
+    expect(() => assertNativeSubscriptionEnvironment('claude-code', {
+      HOME: '/home/tester',
+    })).toThrow('HARNESS_NATIVE_ESSENTIAL_TRAFFIC_REQUIRED:claude-code');
+    expect(() => assertNativeSubscriptionEnvironment('claude-code', {
+      HOME: '/home/tester',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '0',
+    })).toThrow('HARNESS_NATIVE_ESSENTIAL_TRAFFIC_REQUIRED:claude-code');
   });
 
   it('fails closed if a caller constructs a non-allow-listed environment', () => {

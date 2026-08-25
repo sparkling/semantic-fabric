@@ -104,6 +104,9 @@ describe('native subscription adapters', () => {
       expect(request.env.OPENAI_API_KEY).toBeUndefined();
       expect(request.env.ANTHROPIC_BASE_URL).toBeUndefined();
       expect(request.env.HTTPS_PROXY).toBeUndefined();
+      expect(request.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe(
+        request.host === 'claude-code' ? '1' : undefined,
+      );
     }
   });
 
@@ -177,6 +180,8 @@ describe('native subscription adapters', () => {
     expect(claudeRequest?.args).not.toContain('WebSearch');
     expect(codexRequest?.signal).toBe(controller.signal);
     expect(claudeRequest?.signal).toBe(controller.signal);
+    expect(codexRequest?.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
+    expect(claudeRequest?.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1');
     expect(() => codex.buildInvocation({
       cwd: root,
       model: 'gpt-5.6-sol',
