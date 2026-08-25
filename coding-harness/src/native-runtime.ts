@@ -52,6 +52,7 @@ export interface NativeRuntimeFactoryOptions {
   readonly credentials: Readonly<Record<NativeHost, string>>;
   readonly commonRuntimeMounts: readonly NativeRuntimeMount[];
   readonly resourceLimits: NativeResourceLimits;
+  readonly maskedWorkspacePaths?: readonly string[];
   readonly forbiddenRoots?: readonly string[];
   readonly controllerEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly timeoutMs?: number;
@@ -154,6 +155,7 @@ export function createTrustedNativeRuntime(
       filesystemBoundary: filesystem,
       resourceBoundary: resources,
       resourceLimits: options.resourceLimits,
+      maskedWorkspacePaths: options.maskedWorkspacePaths,
     });
     const ledger = new NativeRuntimeLedger(runner);
     const sourceEnvironment = Object.freeze({});

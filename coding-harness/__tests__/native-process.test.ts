@@ -90,6 +90,7 @@ function runner(
   allowedReadRoots: readonly string[] = [root],
   allowedWriteRoots: readonly string[] = [root],
   forbiddenRoots: readonly string[] = [workspace()],
+  maskedWorkspacePaths: readonly string[] = [],
 ): BoundedNativeProcessRunner {
   return new BoundedNativeProcessRunner({
     config: SECURE_HARNESS_CONFIG,
@@ -102,6 +103,7 @@ function runner(
     filesystemBoundary,
     resourceBoundary: fakeResourceBoundary,
     resourceLimits: TEST_RESOURCE_LIMITS,
+    maskedWorkspacePaths,
     maxOutputBytes,
     terminationGraceMs: 25,
   });
@@ -153,6 +155,29 @@ describe('bounded native subscription process bridge', () => {
 
     expect(result.exitCode).toBe(0);
     expect(bridge.filesystemEvidence()[0].maskedPaths).toEqual([join(root, '.git')]);
+  });
+
+  it('adds required evaluator paths to every workspace mask', async () => {
+    const root = workspace();
+    mkdirSync(join(root, 'sealed'), { recursive: true });
+    writeFileSync(join(root, 'sealed/evaluator.rs'), 'oracle law\n');
+    const bridge = runner(root, 10_000, [root], [root], [workspace()], [
+      'sealed/evaluator.rs',
+    ]);
+
+    await bridge.run(request(root, 'stdin'));
+
+    expect(bridge.filesystemEvidence()[0].maskedPaths).toEqual([
+      join(root, '.git'),
+      join(root, 'sealed/evaluator.rs'),
+    ]);
+  });
+
+  it('fails closed when a required evaluator mask is absent', async () => {
+    const root = workspace();
+    await expect(runner(root, 10_000, [root], [root], [workspace()], [
+      'sealed/missing.rs',
+    ]).run(request(root, 'stdin'))).rejects.toThrow('HARNESS_NATIVE_REQUIRED_MASK_PATH_MISSING');
   });
 
   it('terminates the process group on timeout and cancellation', async () => {

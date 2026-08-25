@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
-import type { HarnessConfig } from './contracts.js';
+import { normalizeWorkspacePath, type HarnessConfig } from './contracts.js';
 import {
   isolateNativeFirstPartyModelTraffic,
   type NativeModelOriginPinningBoundary,
@@ -66,6 +66,7 @@ export interface NativeRunnerOptions {
   filesystemBoundary: NativeModelFilesystemBoundary;
   resourceBoundary: NativeResourceBoundary;
   resourceLimits: NativeResourceLimits;
+  maskedWorkspacePaths?: readonly string[];
   maxOutputBytes?: number;
   terminationGraceMs?: number;
 }
@@ -97,6 +98,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
   readonly #filesystemBoundary: NativeModelFilesystemBoundary;
   readonly #resourceBoundary: NativeResourceBoundary;
   readonly #resourceLimits: NativeResourceLimits;
+  readonly #maskedWorkspacePaths: readonly string[];
   readonly #maxOutputBytes: number;
   readonly #terminationGraceMs: number;
   readonly #networkEvidence: NativeModelProcessGrant[] = [];
@@ -139,6 +141,12 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       throw new Error('HARNESS_NATIVE_RESOURCE_BOUNDARY_REQUIRED');
     }
     this.#resourceLimits = options.resourceLimits;
+    const maskedWorkspacePaths = (options.maskedWorkspacePaths ?? []).map((path, index) =>
+      normalizeWorkspacePath(path, `maskedWorkspacePaths[${index}]`));
+    if (new Set(maskedWorkspacePaths).size !== maskedWorkspacePaths.length) {
+      throw new Error('HARNESS_NATIVE_MASKED_WORKSPACE_PATH_DUPLICATE');
+    }
+    this.#maskedWorkspacePaths = Object.freeze(maskedWorkspacePaths);
     this.#maxOutputBytes = validateLimit(
       options.maxOutputBytes ?? options.config.limits.maxOutputBytes,
       options.config.limits.maxOutputBytes,
@@ -162,9 +170,14 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
     let filesystem: NativeFilesystemIsolationResult;
     let resources: NativeResourceIsolationResult;
     try {
-      const maskedPaths = [
+      const defaultMaskedPaths = [
         '.git', '.mcp.json', '.mcp', '.claude', '.codex', '.agents',
       ].map((path) => resolve(request.cwd, path)).filter(existsSync);
+      const requiredMaskedPaths = this.#maskedWorkspacePaths.map((path) => resolve(request.cwd, path));
+      if (requiredMaskedPaths.some((path) => !existsSync(path))) {
+        throw new Error('HARNESS_NATIVE_REQUIRED_MASK_PATH_MISSING');
+      }
+      const maskedPaths = [...new Set([...defaultMaskedPaths, ...requiredMaskedPaths])];
       filesystem = isolateNativeModelFilesystem(network.command, {
         host: request.host,
         workspaceRoot: request.cwd,

@@ -39,6 +39,7 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
     writeFileSync(join(workspace, 'visible.txt'), 'visible\n');
     writeFileSync(join(workspace, '.git/config'), 'host git metadata\n');
     writeFileSync(join(workspace, '.mcp.json'), '{"mcpServers":{"unsafe":{}}}\n');
+    writeFileSync(join(workspace, 'sealed-evaluator.rs'), 'oracle law\n');
     const output = join(workspace, 'result.json');
     writeFileSync(output, '', { mode: 0o600 });
     const hostCredential = join(credentialRoot, 'host.json');
@@ -107,7 +108,11 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
         workspaceRoot: workspace,
         readOnlyRoots: [workspace],
         writablePaths: [output],
-        maskedPaths: [join(workspace, '.git'), join(workspace, '.mcp.json')],
+        maskedPaths: [
+          join(workspace, '.git'),
+          join(workspace, '.mcp.json'),
+          join(workspace, 'sealed-evaluator.rs'),
+        ],
         hostFileConfidentiality: true,
         emptyPrivateHome: true,
         hostRootMounted: false,
@@ -122,6 +127,7 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
         visible: 'visible',
         gitMasked: true,
         mcpMasked: true,
+        evaluatorMasked: true,
         hostCredentialHidden: true,
         runtimeCredential: 'runtime capability',
         home: '/home/harness',
@@ -151,6 +157,7 @@ writeFileSync(output, JSON.stringify({
   visible: readFileSync('visible.txt', 'utf8').trim(),
   gitMasked: hidden('.git/config'),
   mcpMasked: masked('.mcp.json'),
+  evaluatorMasked: hidden('sealed-evaluator.rs'),
   hostCredentialHidden: hidden(hostCredential),
   runtimeCredential: readFileSync('/home/harness/.codex/auth.json', 'utf8').trim(),
   home: process.env.HOME,
