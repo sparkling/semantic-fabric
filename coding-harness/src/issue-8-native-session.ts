@@ -11,7 +11,7 @@ import {
 } from './native-runtime.js';
 import type { NativeResourceLimits } from './resource-boundary.js';
 
-export const ISSUE_8_MODEL_TIMEOUT_MS = 300_000;
+export const ISSUE_8_MODEL_TIMEOUT_MS = 600_000;
 
 export interface Issue8NativeSessionOptions {
   readonly config: HarnessConfig;
