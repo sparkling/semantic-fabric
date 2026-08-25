@@ -75,3 +75,19 @@ describe('lockfile supply chain', () => {
     }
   });
 });
+
+describe('verified package exports', () => {
+  it('loads the pinned harness, router, and both native host adapters', async () => {
+    const [harness, router, claude, codex] = await Promise.all([
+      import('@metaharness/harness'),
+      import('@metaharness/router'),
+      import('@metaharness/host-claude-code'),
+      import('@metaharness/host-codex'),
+    ]);
+    expect(harness).toHaveProperty('PolicyGate');
+    expect(harness).toHaveProperty('HarnessKernel');
+    expect(router).toHaveProperty('Router');
+    expect(claude.default.name).toBe('claude-code');
+    expect(codex.default.name).toBe('codex');
+  });
+});
