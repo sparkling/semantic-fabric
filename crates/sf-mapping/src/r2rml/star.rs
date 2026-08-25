@@ -85,13 +85,11 @@ pub(super) struct ObjectExpansion {
 /// Expand a subject-position `rml:starMap` (ADR-0032 D1). `outer_tm_id` is
 /// the enclosing triples map's own id (the reifier id's declaring-map key);
 /// `outer_source` is its logical source (the D4 cross-source baseline).
-/// `graphs` is ADR-0035's addition: the star-map carrier's own effective
-/// `rr:graphMap`s, inherited by the quoted shape's description map (see
-/// [`quote_shape`]) — the injected `rdf:reifies` POM below does NOT need it
-/// explicitly: its own `graphs` stays empty, correctly falling back to the
-/// OUTER triples map's `tm.subject.graphs` at query time (R2RML §4.6 POM-
-/// overrides-subject, `sf-sparql/src/unfold.rs`'s `eff_graphs`) — the same
-/// value `graphs` already came from, since it IS a sibling POM on that map.
+/// `graphs` initially contains the star-map subject's graph maps and seeds the
+/// quoted-shape description carrier. Once the enclosing map's author POMs are
+/// parsed, `r2rml.rs::parse_triples_map` widens that carrier to the complete
+/// normalized subject/POM graph union. The injected `rdf:reifies` POM keeps an
+/// empty local graph set and therefore targets the subject map's destinations.
 pub(super) fn expand_star_map_subject(
     g: &Graph,
     star_node: &NamedOrBlankNode,
@@ -128,11 +126,8 @@ pub(super) fn expand_star_map_subject(
 
 /// Expand an object-position `rml:starMap` (ADR-0029 shape, ADR-0032 D1
 /// naming). No reifier is minted here — `rml:reifierMap` is rejected.
-/// `graphs` is ADR-0035's addition: the enclosing predicate-object map's
-/// EFFECTIVE graphs (its own `rr:graphMap` else the outer triples map's
-/// subject-map graphs, R2RML §4.6 — computed by the caller,
-/// `r2rml.rs::parse_predicate_object_map`), inherited by the quoted shape's
-/// description map (see [`quote_shape`]).
+/// `graphs` is the enclosing triple's normalized subject-map/POM graph union,
+/// inherited by the quoted shape's description map (see [`quote_shape`]).
 pub(super) fn expand_star_map_object(
     g: &Graph,
     star_node: &NamedOrBlankNode,
@@ -184,12 +179,9 @@ struct QuotedShape {
 /// resolved against *this* level's own `quoted_source`, not the top-level
 /// caller's, matching D4's "outer map" being the immediately enclosing quote.
 ///
-/// `graphs` (ADR-0035) is the effective graphs of the star map that (directly
-/// or, for a nested nested nested quote, transitively) quotes this shape — the
-/// SAME value threads unchanged through every nesting level, since every
-/// description map minted along the way describes a fragment of the ONE
-/// outer annotated proposition, which lives in exactly one graph context (a
-/// nested `rml:starMap` has no `rr:graphMap` of its own to override it with).
+/// `graphs` is the normalized destination set of the star map that directly or
+/// transitively quotes this shape. The same set threads through every nesting
+/// level because each description map is part of the same outer proposition.
 fn quote_shape(
     g: &Graph,
     quoted_node: &NamedOrBlankNode,
@@ -339,11 +331,8 @@ fn quote_shape(
         subject: SubjectMap {
             term: TermMap::Template(pfid.clone(), TermSpec::iri()),
             classes: Vec::new(),
-            // ADR-0035: inherit the quoting star map's own effective graphs — this
-            // standalone TriplesMap is otherwise unrelated (by id) to that outer map,
-            // so nothing else makes its 4 basic-encoding POMs (whose own `graphs` stay
-            // empty, falling back to THIS field at query time — R2RML §4.6) visible
-            // under a `GRAPH ?v`/`GRAPH <g>` clause the way an ordinary POM would be.
+            // Inherit the quoting triple's normalized destination set. This
+            // standalone map is otherwise unrelated by id to the outer map.
             graphs: graphs.to_vec(),
         },
         predicate_object_maps: description_poms,

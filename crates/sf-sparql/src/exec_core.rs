@@ -700,6 +700,15 @@ where
             };
             let graph = if branch.bindings.contains_key(VAR_G) {
                 match bindings.get(VAR_G) {
+                    // A generated graph IRI equal to the reserved `rr:defaultGraph`
+                    // constant means the default graph, even when produced by a
+                    // row-dependent (column/template) graph map (R2RML §6.1) — the
+                    // well-known IRI is checked by VALUE, not by how it was produced.
+                    Some(Term::NamedNode(n))
+                        if n.as_str() == crate::graph_map::RR_DEFAULT_GRAPH =>
+                    {
+                        GraphName::DefaultGraph
+                    }
                     Some(Term::NamedNode(n)) => GraphName::NamedNode(n.clone()),
                     _ => return None, // graph map yielded no value ⇒ drop this quad
                 }

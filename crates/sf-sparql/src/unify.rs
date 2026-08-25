@@ -124,7 +124,12 @@ fn unify_const_derived(c: &Term, tm: &TermMap, alias: usize) -> Unify {
                 )])
             }
             TemplateShape::MultiSlot => {
-                Unify::Unsupported("constant vs multi-slot template".to_owned())
+                let prefix = leading_literal_prefix(t.segments());
+                if !want.starts_with(&prefix) {
+                    Unify::Empty
+                } else {
+                    Unify::Unsupported("constant vs multi-slot template".to_owned())
+                }
             }
         },
     }

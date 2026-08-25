@@ -6,6 +6,7 @@
 //! then rewrites.
 
 use sf_core::datatype::XsdTypeCode;
+use sf_core::graph_map::union;
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 use spargebra::algebra::{
@@ -14,6 +15,7 @@ use spargebra::algebra::{
 };
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
+use crate::graph_map::{apply_filter, bind_variable, is_default_graph, RR_DEFAULT_GRAPH};
 use crate::iq::lower::{convert_path_branches, remap_termdef};
 use crate::iq::node::triple_pattern_vars;
 use crate::iq::{
@@ -27,11 +29,11 @@ use crate::{Error, Plan, PlanForm, Result};
 
 pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
-/// R2RML §6.1: `rr:defaultGraph` is a legal constant graph map that explicitly places
-/// triples in the default graph — stored in the IR as a `NamedNode` with this IRI;
-/// [`graph_maps_match`] and [`declared_constant_graphs`] both treat it as the absent-
-/// graph-map case (never a real named graph to match or enumerate).
-const RR_DEFAULT_GRAPH: &str = "http://www.w3.org/ns/r2rml#defaultGraph";
+#[derive(Clone, Copy)]
+enum AtomGraph<'a> {
+    Bind(&'a str, &'a TermMap),
+    Filter(&'a [&'a TermMap]),
+}
 
 /// The translation of one graph pattern: a bag union of [`Branch`]es plus the
 /// solution modifiers peeled from the algebra.
@@ -578,8 +580,8 @@ impl<'a> Unfolder<'a> {
     /// Resolve one triple pattern **at a given active graph** to its flat atom
     /// alternatives (ADR-0023 M3a). This is the entry point the tree-path
     /// [`crate::iq::resolve`] drives per [`crate::iq::node::IqNode::Intensional`]:
-    /// it pins the `current_graph` to the leaf's resolved constant graph (so
-    /// [`graph_maps_match`] filters exactly as the flat `GRAPH <g>` path does),
+    /// it pins `current_graph` to the leaf's resolved constant graph so the
+    /// canonical graph-map filter matches the flat `GRAPH <g>` path exactly,
     /// delegates to the **unchanged** [`Self::pattern_branches`] oracle, then
     /// restores the previous graph context. Behaviour (arm set, conds, fresh
     /// aliases, `predicate_can_match` pruning) is byte-identical to the flat
@@ -672,45 +674,51 @@ impl<'a> Unfolder<'a> {
             // rr:class → rdf:type atoms (when predicate is rdf:type or a variable).
             // rr:class triples inherit the subject map's graph.
             if want_type || pred_iri.is_none() {
+                let class_graphs = union(&tm.subject.graphs, &[]);
                 match &graph_var {
                     Some(v) => {
-                        for gm in &tm.subject.graphs {
-                            self.class_atoms(tp, tm, Some((v.as_ref(), gm)), &mut out)?;
+                        for &gm in &class_graphs {
+                            if is_default_graph(gm) {
+                                continue;
+                            }
+                            self.class_atoms(
+                                tp,
+                                tm,
+                                &class_graphs,
+                                Some((v.as_ref(), gm)),
+                                &mut out,
+                            )?;
                         }
                         // empty tm.subject.graphs ⇒ default graph ⇒ no attempts (excluded).
                     }
-                    // Skip if the subject map's graph doesn't match the active GRAPH clause.
                     None => {
-                        if graph_maps_match(self.current_graph.as_ref(), &tm.subject.graphs) {
-                            self.class_atoms(tp, tm, None, &mut out)?;
-                        }
+                        self.class_atoms(tp, tm, &class_graphs, None, &mut out)?;
                     }
                 }
             }
             for pom in &tm.predicate_object_maps {
-                // Effective graph: POM overrides subject map (R2RML §4.6).
-                let eff_graphs = if pom.graphs.is_empty() {
-                    &tm.subject.graphs
-                } else {
-                    &pom.graphs
-                };
+                let graph_union = union(&tm.subject.graphs, &pom.graphs);
                 // One graph-binding attempt per call below: `None` (filter mode, ≤1 call
                 // total, unchanged from before this ADR) or one `Some((v, gm))` per
-                // effective graph map (enumeration mode — zero when `eff_graphs` is empty).
-                let gm_attempts: Vec<Option<(&str, &TermMap)>> = match &graph_var {
-                    Some(v) => eff_graphs.iter().map(|gm| Some((v.as_ref(), gm))).collect(),
-                    None => {
-                        if !graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
-                            continue;
-                        }
-                        vec![None]
-                    }
+                // union member (enumeration mode — zero when the union is empty).
+                let graph_attempts: Vec<AtomGraph<'_>> = match &graph_var {
+                    Some(v) => graph_union
+                        .iter()
+                        .copied()
+                        .filter(|gm| !is_default_graph(gm))
+                        .map(|gm| AtomGraph::Bind(v.as_ref(), gm))
+                        .collect(),
+                    // Filter mode (fixed named graph or default-graph context): the
+                    // match/exclude/reject decision needs the atom's own alias to turn
+                    // a row-dependent graph map into a raw-column condition, so it is
+                    // deferred to `atom` itself (below) rather than decided here.
+                    None => vec![AtomGraph::Filter(&graph_union)],
                 };
-                for attempt in gm_attempts {
+                for graph in graph_attempts {
                     for pm in &pom.predicates {
                         for om in &pom.objects {
                             if let Some(b) =
-                                self.atom(tp, tm, pm, om, pred_iri.as_deref(), attempt)?
+                                self.atom(tp, tm, pm, om, pred_iri.as_deref(), graph)?
                             {
                                 out.push(b);
                             }
@@ -724,12 +732,16 @@ impl<'a> Unfolder<'a> {
 
     /// Build one predicate-object atom branch, or `None` if it cannot match.
     ///
-    /// `graph_binding` is ADR-0035's enumeration-mode payload: `Some((var, gm))` binds
-    /// `var` to `gm` (the POM's effective graph map) evaluated at this atom's OWN alias
+    /// `AtomGraph::Bind` is ADR-0035's enumeration-mode payload: it binds the
+    /// graph variable to one normalized graph-union member at this atom's OWN alias
     /// — sound because a graph map is itself a [`TermMap`] read off the same source row
     /// as the subject/object (R2RML §4.6), so `def_of(gm, alias)` builds exactly the
     /// same shape of binding `def_of` already builds for the subject/object positions.
-    /// `None` is the ordinary (filtering / no-GRAPH) case, unchanged.
+    /// `AtomGraph::Filter` is the ordinary fixed/default-graph case:
+    /// [`apply_filter`] resolves the graph union against `self.current_graph`
+    /// at this atom's OWN alias, adding a raw-column condition for
+    /// a row-dependent (column/template) graph map instead of the old coarse
+    /// match/exclude guess (Issue #9).
     fn atom(
         &mut self,
         tp: &TriplePattern,
@@ -737,7 +749,7 @@ impl<'a> Unfolder<'a> {
         pm: &TermMap,
         om: &ObjectMap,
         pred_iri: Option<&str>,
-        graph_binding: Option<(&str, &TermMap)>,
+        graph: AtomGraph<'_>,
     ) -> Result<Option<Branch>> {
         // Fast-reject path (ADR-0013 Path-B): for a concrete query predicate against
         // a constant-predicate POM, check matchability *before* allocating an alias or
@@ -760,9 +772,16 @@ impl<'a> Unfolder<'a> {
         // ADR-0035 GRAPH ?v enumeration: bind the graph variable to this candidate's
         // effective graph map before anything else (an early, if rare, prune point —
         // e.g. `GRAPH ?s { ?s :p ?o }` reusing the subject var as the graph var).
-        if let Some((var, gm)) = graph_binding {
-            if !bind(&mut branch, var, def_of(gm, alias))? {
-                return Ok(None);
+        match graph {
+            AtomGraph::Bind(var, gm) => {
+                if !bind_variable(&mut branch, var, gm, alias)? {
+                    return Ok(None);
+                }
+            }
+            AtomGraph::Filter(graph_union) => {
+                if !apply_filter(&mut branch, self.current_graph.as_ref(), graph_union, alias)? {
+                    return Ok(None);
+                }
             }
         }
 
@@ -852,6 +871,7 @@ impl<'a> Unfolder<'a> {
         &mut self,
         tp: &TriplePattern,
         tm: &TriplesMap,
+        graphs: &[&TermMap],
         graph_binding: Option<(&str, &TermMap)>,
         out: &mut Vec<Branch>,
     ) -> Result<()> {
@@ -873,9 +893,11 @@ impl<'a> Unfolder<'a> {
                 source: tm.source.clone(),
             });
             if let Some((var, gm)) = graph_binding {
-                if !bind(&mut branch, var, def_of(gm, alias))? {
+                if !bind_variable(&mut branch, var, gm, alias)? {
                     continue;
                 }
+            } else if !apply_filter(&mut branch, self.current_graph.as_ref(), graphs, alias)? {
+                continue;
             }
             let subj_def = def_of(&tm.subject.term, alias);
             // predicate is rdf:type (matched); bind object var to the class IRI.
@@ -1122,51 +1144,6 @@ impl<'a> Unfolder<'a> {
     }
 }
 
-/// Whether the effective graph maps of a triple are compatible with the active
-/// `GRAPH <g>` clause (or the absence of one).
-///
-/// Whether a TriplesMap/POM with the given effective `graphs` matches the active
-/// GRAPH context:
-///
-/// * `active = None` (no GRAPH clause, default-graph context):
-///   accept only triples that belong to the **default graph** — i.e. whose
-///   `graphs` is empty (no `rr:graphName` declared). A non-empty `graphs` with
-///   a constant named-node entry means those triples live in a named graph, not
-///   the default graph, and must **not** appear in default-graph queries
-///   (R2RML §7.4 / SPARQL §13.1). Column/template graph maps are unknowable at
-///   translation time and are conservatively included (never wrong on the "missing
-///   rows" side; the alternative would silently drop valid triples).
-/// * `active = Some(g)` — GRAPH <g> clause:
-///   accept only triples where a constant graph map equals `g`. Column/template
-///   graph maps are treated as non-matching (conservative — never admits wrong rows).
-pub(crate) fn graph_maps_match(
-    active: Option<&NamedNode>,
-    graphs: &[sf_core::ir::TermMap],
-) -> bool {
-    match active {
-        None => {
-            // Default-graph query: include triples that have no rr:graph declaration
-            // (empty) OR whose rr:graph map includes rr:defaultGraph.  R2RML §7.4
-            // allows simultaneous rr:defaultGraph + named-graph declarations on the
-            // same predicate-object map; that triple appears in BOTH graphs, so it
-            // must be visible in the default-graph view too.
-            // Triples declared exclusively in named graphs are excluded (=_bag fix).
-            graphs.is_empty()
-                || graphs.iter().any(|gm| {
-                    matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n))
-                        if n.as_str() == RR_DEFAULT_GRAPH)
-                })
-        }
-        Some(g) => {
-            // GRAPH <g>: at least one constant graph map must equal g.
-            // rr:defaultGraph is never equal to any user-specified named-graph IRI.
-            graphs.iter().any(|gm| {
-                matches!(gm, sf_core::ir::TermMap::Constant(sf_core::Term::NamedNode(n)) if n == g)
-            })
-        }
-    }
-}
-
 /// ADR-0035 item 3: every DISTINCT constant named-graph IRI declared anywhere in the
 /// mapping (a subject map's or predicate-object map's `rr:graphMap`/`rr:graph`) — the
 /// finite enumeration `GRAPH ?v { …PATH… }` compiles to (see `path.rs`'s
@@ -1175,8 +1152,7 @@ pub(crate) fn graph_maps_match(
 /// under a variable graph unions over this finite set instead — template/column
 /// graph maps are not statically enumerable, so they are simply absent from it (the
 /// residual pinned 501 lives in the caller, for a path under one of those). Excludes
-/// `rr:defaultGraph` (never a real named graph — [`graph_maps_match`]'s own
-/// exclusion). Deterministic first-seen order.
+/// `rr:defaultGraph` (never a real named graph). Deterministic first-seen order.
 pub(crate) fn declared_constant_graphs(maps: &[TriplesMap]) -> Vec<NamedNode> {
     let mut out: Vec<NamedNode> = Vec::new();
     let mut push = |gm: &TermMap| {

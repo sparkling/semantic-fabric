@@ -15,14 +15,13 @@
 //! no BGP); it reuses the IQ [`Branch`] model so SQL emission, ref-object joins,
 //! and bounded-memory streaming all come for free.
 
+use sf_core::graph_map::union;
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 
 use crate::iq::{Branch, ColRef, Scan, SqlCond, TermDef};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-/// The `rr:defaultGraph` IRI — a graph map naming it means the default graph.
-const RR_DEFAULT_GRAPH: &str = "http://www.w3.org/ns/r2rml#defaultGraph";
 
 /// The fixed variable names the dump branches bind. The executor reads these back
 /// when assembling quads ([`crate::exec::dump_quads`]); `G` is present in a
@@ -47,8 +46,7 @@ pub fn build_branches(maps: &[TriplesMap]) -> Vec<Branch> {
         class_atoms(tm, &mut out);
         for pom in &tm.predicate_object_maps {
             // §6.1 graph union: the subject map's graphs ∪ this POM's graphs.
-            let combined: Vec<&TermMap> =
-                tm.subject.graphs.iter().chain(pom.graphs.iter()).collect();
+            let combined = union(&tm.subject.graphs, &pom.graphs);
             let targets = graph_targets(&combined);
             for pm in &pom.predicates {
                 for om in &pom.objects {
@@ -69,7 +67,7 @@ fn class_atoms(tm: &TriplesMap, out: &mut Vec<Branch>) {
     if tm.subject.classes.is_empty() {
         return;
     }
-    let sg: Vec<&TermMap> = tm.subject.graphs.iter().collect();
+    let sg = union(&tm.subject.graphs, &[]);
     let targets = graph_targets(&sg);
     for class in &tm.subject.classes {
         for &gt in &targets {
@@ -143,21 +141,21 @@ fn bind_graph(b: &mut Branch, gt: Option<&TermMap>) {
 /// The distinct graph destinations for a triple given its applicable graph maps:
 /// `Some(gm)` = a named graph, `None` = the default graph. No graph maps ⇒ a
 /// single default-graph target; an `rr:defaultGraph` member ⇒ a default-graph
-/// target (§6.1). Duplicate destinations are harmless — the comparison dataset is
-/// a *set* of quads — so no per-row dedup is needed here.
+/// target (§6.1). The input has already been normalized to distinct graph maps.
 fn graph_targets<'a>(graphs: &[&'a TermMap]) -> Vec<Option<&'a TermMap>> {
     if graphs.is_empty() {
         return vec![None];
     }
     graphs
         .iter()
-        .map(|&gm| if is_default_graph(gm) { None } else { Some(gm) })
+        .map(|&gm| {
+            if crate::graph_map::is_default_graph(gm) {
+                None
+            } else {
+                Some(gm)
+            }
+        })
         .collect()
-}
-
-/// Is this graph map the `rr:defaultGraph` constant?
-fn is_default_graph(gm: &TermMap) -> bool {
-    matches!(gm, TermMap::Constant(Term::NamedNode(n)) if n.as_str() == RR_DEFAULT_GRAPH)
 }
 
 /// A mapping term map → a [`TermDef`] at `alias` (constants need no alias). Mirrors

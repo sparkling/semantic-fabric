@@ -30,6 +30,7 @@
 //!   or multi-mapping or multi-column predicate, and a non-constant/`rr:class`
 //!   predicate under `!p` — all stay explicit 501s (never silently wrong).
 
+use sf_core::graph_map::union;
 use sf_core::ir::{LogicalSource, ObjectMap, Segment, Template, TermMap, TermSpec};
 use sf_core::Term;
 use spargebra::algebra::PropertyPathExpression;
@@ -319,15 +320,11 @@ impl<'a> Unfolder<'a> {
                 ));
             }
             for pom in &tm.predicate_object_maps {
-                // Same graph filter as `resolve_pred_hop` (R2RML §4.6 POM-overrides-
-                // subject-map precedence): a POM outside the active GRAPH context
-                // must not contribute to the `!p` complement enumeration either.
-                let eff_graphs = if pom.graphs.is_empty() {
-                    &tm.subject.graphs
-                } else {
-                    &pom.graphs
-                };
-                if !crate::unfold::graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                // Same graph filter as `resolve_pred_hop` (R2RML §6.1/§6.2 subject-map
+                // ∪ POM graph union): a POM outside the active GRAPH context must not
+                // contribute to the `!p` complement enumeration either.
+                let graphs = union(&tm.subject.graphs, &pom.graphs);
+                if !crate::graph_map::path_scope_matches(self.current_graph.as_ref(), &graphs)? {
                     continue;
                 }
                 for pm in &pom.predicates {
@@ -422,7 +419,7 @@ impl<'a> Unfolder<'a> {
 
     /// The search loop behind [`Self::resolve_pred_hop`]. `graph_scoped = true`
     /// restricts to predicate-object maps whose effective graph matches
-    /// `current_graph` (R2RML §4.6 POM-overrides-subject-map precedence) — the
+    /// `current_graph` (R2RML subject-map/POM graph union) — the
     /// real-relation case. `false` searches the WHOLE mapping regardless of
     /// graph; `resolve_pred_hop` calls it that way ONLY as the empty-hop shape
     /// source once the scoped pass finds nothing, never to admit real rows from
@@ -432,12 +429,9 @@ impl<'a> Unfolder<'a> {
         for tm in self.maps {
             for pom in &tm.predicate_object_maps {
                 if graph_scoped {
-                    let eff_graphs = if pom.graphs.is_empty() {
-                        &tm.subject.graphs
-                    } else {
-                        &pom.graphs
-                    };
-                    if !crate::unfold::graph_maps_match(self.current_graph.as_ref(), eff_graphs) {
+                    let graphs = union(&tm.subject.graphs, &pom.graphs);
+                    if !crate::graph_map::path_scope_matches(self.current_graph.as_ref(), &graphs)?
+                    {
                         continue;
                     }
                 }

@@ -32,6 +32,7 @@ pub use oxrdf::{
 };
 
 pub mod datatype;
+pub mod graph_map;
 pub mod ir;
 pub mod term;
 

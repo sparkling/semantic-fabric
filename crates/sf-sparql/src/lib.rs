@@ -73,6 +73,7 @@ pub mod exec;
 pub mod exec_core;
 pub mod exec_mysql;
 pub mod exec_pg;
+mod graph_map;
 pub mod iq;
 pub mod leftjoin;
 pub mod path;

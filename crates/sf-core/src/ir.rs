@@ -84,7 +84,7 @@ pub struct Join {
 /// A term map: how a source row becomes an RDF term (R2RML §6). The three
 /// generation mechanisms are distinct variants so invalid states (e.g. a
 /// constant carrying an `rr:datatype`) are unrepresentable.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TermMap {
     /// `rr:constant` — a fixed RDF term, pre-built once and emitted by reference.
     Constant(Term),
@@ -97,7 +97,7 @@ pub enum TermMap {
 /// The term-type plus literal modifiers shared by `rr:column` / `rr:template`
 /// term maps (R2RML §6.2/§7). For `rr:Literal`, at most one of `datatype` /
 /// `language` is set; `datatype` is pre-built for by-reference emission.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TermSpec {
     pub term_type: TermType,
     pub datatype: Option<NamedNode>,
@@ -178,7 +178,7 @@ pub enum TermType {
 /// A pre-compiled `rr:template` (R2RML §7.3): an alternating list of fixed text
 /// and `{column}` references, so expansion is a straight walk with no per-row
 /// placeholder scan (ADR-0006).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     segments: Vec<Segment>,
 }
