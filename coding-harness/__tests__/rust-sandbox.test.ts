@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRustOfflineProfile, bindRustOfflineCommand } from '../src/rust-sandbox.js';
 import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
+import { bwrapAvailable } from './native-test-prerequisites.js';
 
 const roots: string[] = [];
 
@@ -14,7 +15,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe.runIf(process.platform === 'linux' && existsSync('/usr/bin/bwrap'))(
+describe.runIf(bwrapAvailable())(
   'pinned Rust sandbox profile',
   () => {
     it('maps a trusted toolchain and only the exact crates.io cache triplet', () => {

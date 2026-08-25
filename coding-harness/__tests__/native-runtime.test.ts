@@ -97,20 +97,18 @@ function createFixture() {
       codex: realpathSync('/bin/true'),
       claude: realpathSync('/bin/true'),
       node: realpathSync(process.execPath),
-      bwrap: realpathSync('/usr/bin/bwrap'),
-      systemdRun: realpathSync('/usr/bin/systemd-run'),
+      bwrap: realpathSync('/bin/true'),
+      systemdRun: realpathSync('/bin/true'),
       proxyLauncher: launcher,
     },
   };
 }
 
 function controllerEnvironment(): Readonly<Record<string, string>> {
-  const address = process.env.DBUS_SESSION_BUS_ADDRESS;
-  const runtime = process.env.XDG_RUNTIME_DIR;
-  if (address === undefined || runtime === undefined) {
-    throw new Error('test requires the user systemd environment');
-  }
-  return { DBUS_SESSION_BUS_ADDRESS: address, XDG_RUNTIME_DIR: runtime };
+  return {
+    DBUS_SESSION_BUS_ADDRESS: 'unix:path=/test/user-bus',
+    XDG_RUNTIME_DIR: '/test/user-runtime',
+  };
 }
 
 function listRuntimeChildren(path: string): string[] {

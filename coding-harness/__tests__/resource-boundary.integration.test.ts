@@ -10,6 +10,7 @@ import {
   SystemdResourceBoundary,
   type NativeResourceLimits,
 } from '../src/resource-boundary.js';
+import { systemdUserAvailable } from './native-test-prerequisites.js';
 
 const roots: string[] = [];
 const limits: NativeResourceLimits = Object.freeze({
@@ -26,7 +27,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('systemd cgroup v2 resource boundary', () => {
+describe.runIf(systemdUserAvailable())('systemd cgroup v2 resource boundary', () => {
   it('applies the declared cgroup and rlimit contract to a real transient service', () => {
     const root = privateRoot();
     const boundary = systemBoundary();

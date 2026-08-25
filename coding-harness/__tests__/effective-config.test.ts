@@ -1,13 +1,27 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { auditEffectiveConfiguration } from '../src/effective-config.js';
+import {
+  auditEffectiveConfiguration,
+  type SurfaceKind,
+  type UpstreamDiagnostic,
+} from '../src/effective-config.js';
 
-const cleanDiagnostic = (target: 'repository' | 'coding-harness', mcpEnabled: boolean) => ({
+const diagnostic = (
+  target: 'repository' | 'coding-harness',
+  tool: UpstreamDiagnostic['tool'],
+  mcpEnabled: boolean,
+): UpstreamDiagnostic => ({
   target,
+  tool,
   mcpEnabled,
   worstSeverity: 'info',
   verdict: 'clean',
+  toolVersion: 'ruflo-metaharness@0.1.1/metaharness@0.3.0',
+  rawDigest: 'a'.repeat(64),
+  invocationId: tool === 'mcp-scan' ? 'b'.repeat(64) : 'c'.repeat(64),
+  exitCode: 0,
+  degraded: false,
 });
 
 function scope(
@@ -19,13 +33,16 @@ function scope(
     target,
     inventoryComplete: true,
     surfaces,
-    upstreamDiagnostic: cleanDiagnostic(target, mcpEnabled),
+    upstreamDiagnostics: [
+      diagnostic(target, 'mcp-scan', mcpEnabled),
+      diagnostic(target, 'threat-model', mcpEnabled),
+    ],
   };
 }
 
 function surface(
   path: string,
-  kind: 'mcp-json' | 'claude-settings' | 'hook-target' | 'skill' | 'executable-target',
+  kind: SurfaceKind,
   content: string,
   provenance: 'tracked-clean' | 'tracked-dirty' | 'untracked' | 'ignored' = 'tracked-clean',
 ) {
@@ -91,8 +108,8 @@ describe('effective configuration audit', () => {
 
   it('treats a high-severity clean verdict as an inconclusive upstream contradiction', () => {
     const harnessScope = scope('coding-harness');
-    harnessScope.upstreamDiagnostic = {
-      ...harnessScope.upstreamDiagnostic,
+    harnessScope.upstreamDiagnostics[1] = {
+      ...harnessScope.upstreamDiagnostics[1],
       worstSeverity: 'high',
       verdict: 'clean',
     };
@@ -103,6 +120,50 @@ describe('effective configuration audit', () => {
 
     expect(result.status).toBe('INCONCLUSIVE');
     expect(result.findings.map(({ code }) => code)).toContain('UPSTREAM_VERDICT_CONFLICT');
+  });
+
+  it('fails when an upstream diagnostic reports high-severity findings', () => {
+    const repositoryScope = scope('repository');
+    repositoryScope.upstreamDiagnostics[0] = {
+      ...repositoryScope.upstreamDiagnostics[0],
+      worstSeverity: 'high',
+      verdict: 'findings',
+      exitCode: 1,
+    };
+    const result = auditEffectiveConfiguration({
+      schemaVersion: 1,
+      scopes: [repositoryScope, scope('coding-harness')],
+    });
+
+    expect(result.status).toBe('FAIL');
+    expect(result.complete).toBe(true);
+    expect(result.findings.map(({ code }) => code)).toContain('UPSTREAM_DIAGNOSTIC_FINDINGS');
+  });
+
+  it('rejects arbitrary executables and transport values by default', () => {
+    const result = auditEffectiveConfiguration({
+      schemaVersion: 1,
+      scopes: [
+        scope('repository', [surface('.mcp.json', 'mcp-json', JSON.stringify({
+          mcpServers: {
+            bypass: {
+              command: '/tmp/evil',
+              args: [],
+              env: { BASE_URL: 'https://openrouter.ai' },
+            },
+          },
+        }))], true),
+        scope('coding-harness'),
+      ],
+    });
+
+    expect(result.status).toBe('FAIL');
+    expect(result.findings.map(({ code }) => code)).toEqual(expect.arrayContaining([
+      'UNTRUSTED_EXECUTABLE_PATH',
+      'UNSUPPORTED_EXECUTABLE',
+      'FORBIDDEN_MODEL_TRANSPORT',
+      'UNTRUSTED_SERVER_ENVIRONMENT',
+    ]));
   });
 
   it('fails deterministic server-name collisions when visibility is complete', () => {

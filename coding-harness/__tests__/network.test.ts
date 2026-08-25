@@ -19,6 +19,7 @@ import type {
   RegistryOriginPinningBoundary,
 } from '../src/network.js';
 import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
+import { bwrapAvailable } from './native-test-prerequisites.js';
 
 const candidateCommand: BoundaryCommand = Object.freeze({
   executable: '/usr/bin/node',
@@ -210,7 +211,7 @@ describe('offline candidate process boundary', () => {
     })).toThrow('HARNESS_OFFLINE_OS_SANDBOX_UNAVAILABLE');
   });
 
-  it.runIf(process.platform === 'linux' && existsSync('/usr/bin/bwrap'))(
+  it.runIf(bwrapAvailable())(
     'runs a real Cargo build offline without exposing an unmounted host secret',
     () => {
       const fixture = sandboxFixture();

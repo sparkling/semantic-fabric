@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { isolateNativeModelFilesystem } from '../src/native-filesystem.js';
 import { SystemNativeFilesystemBoundary } from '../src/native-system-filesystem.js';
 import type { BoundaryCommand } from '../src/network.js';
+import { bwrapAvailable } from './native-test-prerequisites.js';
 
 const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const roots: string[] = [];
@@ -25,7 +26,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('system native filesystem boundary', () => {
+describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
   it('mounts only the active broker session and hides host/configuration paths', async () => {
     const root = privateRoot();
     const workspace = join(root, 'workspace');
