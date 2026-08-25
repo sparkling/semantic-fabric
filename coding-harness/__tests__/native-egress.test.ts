@@ -9,10 +9,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { createConnection } from 'node:net';
+import { createConnection, Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  armTransportConnectTimeout,
   digestOriginBrokerEvents,
   originBrokerTimeoutIsPolicyDenial,
   pinnedTcpConnectionOptions,
@@ -36,6 +37,19 @@ afterEach(() => {
 });
 
 describe('native exact-origin egress resolution', () => {
+  it('limits the upstream connect handshake without imposing a tunnel idle timeout', () => {
+    const socket = new Socket();
+    const setTimeout = vi.spyOn(socket, 'setTimeout');
+    const onTimeout = vi.fn();
+
+    armTransportConnectTimeout(socket, 30_000, onTimeout);
+    socket.emit('connect');
+
+    expect(setTimeout).toHaveBeenNthCalledWith(1, 30_000, onTimeout);
+    expect(setTimeout).toHaveBeenNthCalledWith(2, 0);
+    socket.destroy();
+  });
+
   it('separates policy denials from allowed-origin transport failures', () => {
     const admitted = { attemptId: 1, target: 'api.openai.com|4|1.1.1.1' } as const;
     expect(summarizeOriginBrokerEvents([

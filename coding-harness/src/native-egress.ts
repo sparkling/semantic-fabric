@@ -274,7 +274,7 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
         transportFailed = true;
         recordOriginBrokerEvent(session, attemptId, binding, 'transport-error');
       };
-      remote.setTimeout(this.#connectionTimeoutMs, () => {
+      armTransportConnectTimeout(remote, this.#connectionTimeoutMs, () => {
         recordTransportFailure();
         remote.destroy();
       });
@@ -293,6 +293,15 @@ export class UnixSocketOriginPinningBoundary implements NativeModelOriginPinning
     };
     client.on('data', onData);
   }
+}
+
+export function armTransportConnectTimeout(
+  socket: Socket,
+  timeoutMs: number,
+  onTimeout: () => void,
+): void {
+  socket.setTimeout(timeoutMs, onTimeout);
+  socket.once('connect', () => socket.setTimeout(0));
 }
 
 function recordOriginBrokerEvent(
