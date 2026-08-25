@@ -180,7 +180,16 @@ function responseSchema(operation: ModelOperation): Readonly<Record<string, unkn
     return deepFreeze({
       ...common,
       properties: {
-        patch: { type: 'string', minLength: 1, maxLength: NATIVE_PATCH_MAX_CHARS },
+        patch: {
+          type: 'string',
+          minLength: 1,
+          maxLength: NATIVE_PATCH_MAX_CHARS,
+          pattern: '^diff --git ',
+          description: [
+            'Complete unified diff beginning exactly with "diff --git ".',
+            'Do not include Markdown fences or apply-patch markers.',
+          ].join(' '),
+        },
       },
       required: ['patch'],
     });

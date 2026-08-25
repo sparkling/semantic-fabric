@@ -134,7 +134,13 @@ describe('native adapter structured client', () => {
     expect(Buffer.byteLength(JSON.stringify(maximallyEscapedProposal), 'utf8'))
       .toBeLessThanOrEqual(64_000);
     expect(schemas[1]).toMatchObject({
-      properties: { patch: { maxLength: 256_000 } },
+      properties: {
+        patch: {
+          maxLength: 256_000,
+          pattern: '^diff --git ',
+          description: expect.stringContaining('Do not include Markdown fences'),
+        },
+      },
     });
     expect(schemas[2]).toMatchObject({
       properties: {

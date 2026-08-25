@@ -141,7 +141,11 @@ export class NativeRepositoryModelController implements RepositoryModelControlle
       candidate,
       'implementation',
       this.#prompt(
-        'Return only a unified diff for the admitted mutable paths.',
+        [
+          'Return one complete unified diff for the admitted mutable paths in the patch field.',
+          'It must begin exactly with "diff --git " and contain no Markdown fences',
+          'or apply-patch markers.',
+        ].join(' '),
         context,
         architecture.value,
       ),
@@ -161,7 +165,11 @@ export class NativeRepositoryModelController implements RepositoryModelControlle
     const invocation = await this.#invoke(
       candidate,
       'repair',
-      this.#prompt('Repair the unified diff; preserve all passing behavior.', context, {
+      this.#prompt([
+        'Repair the unified diff and preserve all passing behavior.',
+        'Return the complete replacement diff in the patch field; it must begin exactly with',
+        '"diff --git " and contain no Markdown fences or apply-patch markers.',
+      ].join(' '), context, {
         submittedPatchDigest: digestValue(patch.payload),
         reasons,
         repairAttempt,

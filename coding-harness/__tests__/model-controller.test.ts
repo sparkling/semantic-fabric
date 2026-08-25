@@ -258,11 +258,20 @@ describe('native repository model controller', () => {
       expect(prompt).toContain(DECLARED_SOURCE.trim());
       expect(prompt).not.toContain(ADMITTED_DIFF);
       expect(prompt.indexOf(DECLARED_SOURCE.trim())).toBeLessThan(
-        prompt.indexOf('Return only a unified diff'),
+        prompt.indexOf('Return one complete unified diff'),
       );
+      expect(prompt).toContain('must begin exactly with "diff --git "');
+      expect(prompt).toContain('no Markdown fences or apply-patch markers');
     }
-    for (const { prompt } of prompts.filter(({ operation }) =>
-      operation === 'repair' || operation === 'review')) {
+    const repairPrompts = prompts.filter(({ operation }) => operation === 'repair');
+    expect(repairPrompts).toHaveLength(1);
+    for (const { prompt } of repairPrompts) {
+      expect(prompt).toContain(ADMITTED_SOURCE.trim());
+      expect(prompt).toContain(ADMITTED_DIFF.trim());
+      expect(prompt).toContain('must begin exactly with "diff --git "');
+      expect(prompt).toContain('no Markdown fences or apply-patch markers');
+    }
+    for (const { prompt } of prompts.filter(({ operation }) => operation === 'review')) {
       expect(prompt).toContain(ADMITTED_SOURCE.trim());
       expect(prompt).toContain(ADMITTED_DIFF.trim());
     }
