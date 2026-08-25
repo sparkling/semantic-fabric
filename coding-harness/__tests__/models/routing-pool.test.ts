@@ -23,14 +23,14 @@ const candidates: NativeModelCandidate[] = [
     id: 'codex-primary',
     host: 'codex',
     model: 'gpt-5.6',
-    handles: ['architecture', 'review'],
+    handles: ['architecture', 'implementation', 'repair', 'review'],
     run: vi.fn(async () => output),
   },
   {
     id: 'claude-primary',
     host: 'claude-code',
     model: 'claude-opus-4-1',
-    handles: ['architecture', 'review'],
+    handles: ['architecture', 'implementation', 'repair', 'review'],
     run: vi.fn(async () => output),
   },
 ];
@@ -142,5 +142,20 @@ describe('persistent quality-first routed pool', () => {
     expect(pool.routeSnapshot().historyEpoch).toBe(frozenEpoch);
     expect(pool.select('architecture').id).toBe('codex-primary');
     expect(pool.poolSnapshot().agents['codex-primary']).toMatchObject({ pulls: 2 });
+  });
+
+  it('preselects and seals every transaction route before model execution', () => {
+    const pool = new PersistentRoutedAgentPool({
+      runId: 'run-frozen', task, candidates, history: new VerifiedRoutingHistory(), embedder,
+    });
+
+    const frozen = pool.freeze(['architecture', 'implementation', 'repair']);
+
+    expect(Object.keys(frozen.decisions).sort()).toEqual([
+      'architecture', 'implementation', 'repair',
+    ]);
+    expect(pool.freeze(['repair', 'architecture', 'implementation'])).toEqual(frozen);
+    expect(() => pool.select('review')).toThrow('HARNESS_ROUTING_SNAPSHOT_FROZEN:review');
+    expect(() => pool.freeze(['architecture'])).toThrow('HARNESS_ROUTING_SNAPSHOT_ALREADY_FROZEN');
   });
 });

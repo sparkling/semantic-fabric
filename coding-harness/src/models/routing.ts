@@ -226,6 +226,7 @@ export class PersistentRoutedAgentPool extends AgentPool {
   readonly #frozenHistory: RoutingHistorySnapshot;
   readonly #router: FrozenQualityFirstRouter;
   readonly #decisions = new Map<ModelStepKind, RoutingDecision>();
+  #sealed = false;
 
   constructor(input: {
     readonly runId: string;
@@ -255,11 +256,30 @@ export class PersistentRoutedAgentPool extends AgentPool {
   override select(kind: string): AgentSpec {
     if (!isModelStepKind(kind)) return super.select(kind);
     const existing = this.#decisions.get(kind);
+    if (existing === undefined && this.#sealed) {
+      throw new Error(`HARNESS_ROUTING_SNAPSHOT_FROZEN:${kind}`);
+    }
     const selected = existing ?? this.route(kind);
     if (existing === undefined) this.#decisions.set(kind, selected);
     const agent = this.get(selected.candidateId);
     if (agent === undefined) throw new Error('HARNESS_ROUTED_AGENT_UNAVAILABLE');
     return agent;
+  }
+
+  freeze(stepKinds: readonly ModelStepKind[]): ReturnType<PersistentRoutedAgentPool['routeSnapshot']> {
+    if (stepKinds.length === 0 || new Set(stepKinds).size !== stepKinds.length) {
+      throw new Error('HARNESS_ROUTING_FREEZE_STEPS_INVALID');
+    }
+    if (this.#sealed) {
+      const decided = [...this.#decisions.keys()].sort();
+      if (JSON.stringify(decided) !== JSON.stringify([...stepKinds].sort())) {
+        throw new Error('HARNESS_ROUTING_SNAPSHOT_ALREADY_FROZEN');
+      }
+      return this.routeSnapshot();
+    }
+    for (const kind of stepKinds) this.select(kind);
+    this.#sealed = true;
+    return this.routeSnapshot();
   }
 
   route(
