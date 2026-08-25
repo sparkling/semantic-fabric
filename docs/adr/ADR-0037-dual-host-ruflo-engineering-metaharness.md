@@ -289,8 +289,14 @@ exhausted one terminal 20-minute deadline. That behavior contradicted this ADR's
 accepted one-retry rule for classified transient process failures. The runtime
 now classifies a complete native deadline exhaustion as transient and permits
 exactly one fresh same-host retry, with two 10-minute attempts preserving the
-same 20-minute worst-case lane budget. The next run remains the first eligible
-issue-#8 acceptance transaction on the reconciled protected snapshot.
+same 20-minute worst-case lane budget. Run 17 exercised that recovery correctly,
+but both Codex architecture attempts exhausted their deadlines while the native
+subscription remained healthy for small requests. Architecture proposals now
+receive the task contract and digest-bound implementation manifest without the
+110 KB source body; implementation and admitted-candidate review retain the
+full source/diff context they require. This applies the proportional-context
+boundary without weakening patch or verifier evidence. The next run remains the
+first eligible issue-#8 acceptance transaction on the reconciled snapshot.
 Dirty user-owned `.mcp.json` and untracked `coding-harness/.claude/` state remain
 unstaged and are masked from model sessions; diagnostics that cannot inspect
 their effective surfaces remain `INCONCLUSIVE`, not clean and not a substitute

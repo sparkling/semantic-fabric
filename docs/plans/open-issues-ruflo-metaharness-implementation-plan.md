@@ -28,7 +28,12 @@ the frozen dependency-closure stage, then failed closed when its first Codex
 architecture call exhausted a terminal 20-minute deadline. Native subscription
 health remained available. Deadline exhaustion is now a classified transient
 process failure with exactly one fresh same-host retry; two 10-minute attempts
-preserve the previous 20-minute worst-case lane budget.
+preserve the previous 20-minute worst-case lane budget. Run 17 proved that retry
+path but both full-source Codex architecture attempts exhausted their bounds.
+Architecture context is therefore reduced to the task contract plus a digest-
+bound file manifest; full declared source remains available to implementation,
+and admitted source plus the exact staged diff remain available to repair and
+review.
 
 | Scope | Outcome | Evidence |
 |---|---|---|

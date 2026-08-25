@@ -241,14 +241,24 @@ describe('native repository model controller', () => {
       artifactDigests: { 'build.out': digestValue('artifact') },
     });
 
-    const declaredPrompts = prompts.filter(({ operation }) =>
-      operation === 'architecture' || operation === 'implementation');
-    expect(declaredPrompts.length).toBeGreaterThanOrEqual(3);
-    for (const { prompt } of declaredPrompts) {
+    const architecturePrompts = prompts.filter(({ operation }) => operation === 'architecture');
+    expect(architecturePrompts).toHaveLength(2);
+    for (const { prompt } of architecturePrompts) {
+      expect(prompt).toContain('Architecture context is intentionally manifest-only');
+      expect(prompt).toContain('"path":"src/a.rs"');
+      expect(prompt).toContain(`"digest":"${digestValue(DECLARED_SOURCE)}"`);
+      expect(prompt).not.toContain(DECLARED_SOURCE.trim());
+      expect(prompt.indexOf('"path":"src/a.rs"')).toBeLessThan(
+        prompt.indexOf('Propose a minimal architecture'),
+      );
+    }
+    const implementationPrompts = prompts.filter(({ operation }) => operation === 'implementation');
+    expect(implementationPrompts).toHaveLength(1);
+    for (const { prompt } of implementationPrompts) {
       expect(prompt).toContain(DECLARED_SOURCE.trim());
       expect(prompt).not.toContain(ADMITTED_DIFF);
       expect(prompt.indexOf(DECLARED_SOURCE.trim())).toBeLessThan(
-        prompt.indexOf(operationInstruction(prompt)),
+        prompt.indexOf('Return only a unified diff'),
       );
     }
     for (const { prompt } of prompts.filter(({ operation }) =>
@@ -259,9 +269,3 @@ describe('native repository model controller', () => {
     for (const { prompt } of prompts) expect(prompt).not.toContain(SEALED_EVALUATOR_FIXTURE);
   });
 });
-
-function operationInstruction(prompt: string): string {
-  if (prompt.includes('Return only a unified diff')) return 'Return only a unified diff';
-  if (prompt.includes('Repair this architecture')) return 'Repair this architecture';
-  return 'Propose a minimal architecture';
-}
