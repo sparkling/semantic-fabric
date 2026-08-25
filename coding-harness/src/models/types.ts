@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: MIT
+
+export type NativeHost = 'codex' | 'claude-code';
+
+export interface NativeProcessRequest {
+  readonly host: NativeHost;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env: Readonly<Record<string, string>>;
+  readonly timeoutMs: number;
+  readonly stdin?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface NativeProcessResult {
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+  readonly cancelled?: boolean;
+}
+
+/** Execution seam implemented by H-A's bounded process layer. */
+export interface NativeProcessRunner {
+  run(request: NativeProcessRequest): Promise<NativeProcessResult>;
+}
+
+export type NativeAuthentication =
+  | 'chatgpt-subscription'
+  | 'claude-subscription';
+
+export interface NativeAuthEvidence {
+  readonly host: NativeHost;
+  readonly requestedModel: string;
+  readonly authentication: NativeAuthentication;
+  readonly clientVersion: string;
+  readonly fallback: 'none';
+  readonly subscriptionCostUsd: 0;
+}
+
+export interface NativePreflightRequest {
+  readonly cwd: string;
+  readonly requestedModel: string;
+  readonly signal?: AbortSignal;
+}
+
+export type WorkspaceAccess = 'read' | 'write';
+
+interface NativeInvocationBase {
+  readonly cwd: string;
+  readonly model: string;
+  readonly prompt: string;
+  readonly schema: Readonly<Record<string, unknown>>;
+  readonly workspaceAccess: WorkspaceAccess;
+  readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface CodexInvocationRequest extends NativeInvocationBase {
+  readonly schemaPath: string;
+  readonly outputPath: string;
+}
+
+export type ClaudeInvocationRequest = NativeInvocationBase;
+
+export interface NativeSubscriptionAdapter {
+  readonly host: NativeHost;
+  preflight(request: NativePreflightRequest): Promise<NativeAuthEvidence>;
+}
