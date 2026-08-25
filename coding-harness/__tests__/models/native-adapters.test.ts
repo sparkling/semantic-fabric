@@ -104,6 +104,12 @@ describe('native subscription adapters', () => {
       expect(request.env.OPENAI_API_KEY).toBeUndefined();
       expect(request.env.ANTHROPIC_BASE_URL).toBeUndefined();
       expect(request.env.HTTPS_PROXY).toBeUndefined();
+      if (request.host === 'codex') {
+        expect(request.args.filter((argument) => argument === 'analytics.enabled=false'))
+          .toHaveLength(1);
+        expect(request.args.filter((argument) => argument === 'otel.metrics_exporter="none"'))
+          .toHaveLength(1);
+      }
       expect(request.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe(
         request.host === 'claude-code' ? '1' : undefined,
       );
@@ -167,6 +173,8 @@ describe('native subscription adapters', () => {
     );
     expect(codexRequest?.args.join(' ')).toContain('model_provider="openai"');
     expect(codexRequest?.args.join(' ')).toContain('model_reasoning_effort="low"');
+    expect(codexRequest?.args.join(' ')).toContain('analytics.enabled=false');
+    expect(codexRequest?.args.join(' ')).toContain('otel.metrics_exporter="none"');
     expect(claudeRequest?.args).toEqual(
       expect.arrayContaining([
         '-p',

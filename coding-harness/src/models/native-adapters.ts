@@ -32,11 +32,16 @@ import { runAbortableCohort } from '../parallel.js';
 
 const PREFLIGHT_TIMEOUT_MS = 30_000;
 const MAX_SCHEMA_BYTES = 64_000;
+const CODEX_ESSENTIAL_TRAFFIC_CONFIG = Object.freeze([
+  'analytics.enabled=false',
+  'otel.metrics_exporter="none"',
+] as const);
 
 const CODEX_FIXED_CONFIG = Object.freeze([
   'model_provider="openai"',
   'model_reasoning_effort="low"',
   'approval_policy="never"',
+  ...CODEX_ESSENTIAL_TRAFFIC_CONFIG,
   'project_doc_max_bytes=0',
   'project_doc_fallback_filenames=[]',
   'web_search="disabled"',
@@ -113,7 +118,10 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
     const [login, version] = await runAbortableCohort([
       async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
-          ['-c', 'model_provider="openai"', 'login', 'status'],
+          [
+            ...CODEX_ESSENTIAL_TRAFFIC_CONFIG.flatMap((value) => ['-c', value]),
+            '-c', 'model_provider="openai"', 'login', 'status',
+          ],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
           cohortSignal,
@@ -123,7 +131,10 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       ),
       async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
-          ['--version'],
+          [
+            ...CODEX_ESSENTIAL_TRAFFIC_CONFIG.flatMap((value) => ['-c', value]),
+            '--version',
+          ],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
           cohortSignal,
