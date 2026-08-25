@@ -2,6 +2,7 @@
 
 export * from './acceptance-task.js';
 export * from './acceptance-runner.js';
+export * from './agentic-qe-lcov.js';
 export * from './candidate.js';
 export * from './config.js';
 export * from './contracts.js';
@@ -10,6 +11,7 @@ export * from './effective-config.js';
 export * from './effective-config-diagnostics.js';
 export * from './effective-config-filesystem.js';
 export * from './evaluator.js';
+export * from './frozen-cargo-lock.js';
 export * from './git-process.js';
 export * from './git-worktrees.js';
 export * from './kernel.js';
