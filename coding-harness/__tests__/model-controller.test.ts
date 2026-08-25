@@ -3,6 +3,7 @@
 import { VerifierRegistry, predicateVerifier } from '@metaharness/harness';
 import { describe, expect, it } from 'vitest';
 import { NativeRepositoryModelController } from '../src/model-controller.js';
+import type { ModelContextProvider } from '../src/model-context.js';
 import { NativeInvocationRecovery } from '../src/models/recovery.js';
 import {
   PersistentRoutedAgentPool,
@@ -28,7 +29,45 @@ const candidates: readonly NativeModelCandidate[] = [
   },
 ];
 
-function controller(events: string[]): NativeRepositoryModelController {
+const SEALED_EVALUATOR_FIXTURE = 'SEALED_EVALUATOR_FIXTURE_MUST_NOT_LEAK';
+const DECLARED_SOURCE = 'fn checked_bind() { /* DECLARED_IMPLEMENTATION_SOURCE */ }\n';
+const ADMITTED_SOURCE = 'fn checked_bind() { /* CURRENT_ADMITTED_SOURCE */ }\n';
+const ADMITTED_DIFF = [
+  'diff --git a/src/a.rs b/src/a.rs',
+  '--- a/src/a.rs',
+  '+++ b/src/a.rs',
+  '@@ -1 +1 @@',
+  '-fn checked_bind() {}',
+  '+fn checked_bind() { /* CURRENT_ADMITTED_SOURCE */ }',
+  '',
+].join('\n');
+
+const contextProvider: ModelContextProvider = {
+  declaredSource: async () => ({
+    schemaVersion: 1,
+    kind: 'declared-implementation-source',
+    headCommit: 'a'.repeat(40),
+    indexTree: 'b'.repeat(40),
+    files: [{ path: 'src/a.rs', digest: digestValue(DECLARED_SOURCE), content: DECLARED_SOURCE }],
+    digest: digestValue(['declared', DECLARED_SOURCE]),
+  }),
+  admittedSource: async () => ({
+    schemaVersion: 1,
+    kind: 'admitted-implementation',
+    headCommit: 'a'.repeat(40),
+    indexTree: 'c'.repeat(40),
+    files: [{ path: 'src/a.rs', digest: digestValue(ADMITTED_SOURCE), content: ADMITTED_SOURCE }],
+    stagedPaths: ['src/a.rs'],
+    stagedDiff: ADMITTED_DIFF,
+    stagedDiffDigest: digestValue(ADMITTED_DIFF),
+    digest: digestValue(['admitted', ADMITTED_SOURCE, ADMITTED_DIFF]),
+  }),
+};
+
+function controller(
+  events: string[],
+  prompts: Array<{ operation: string; prompt: string }> = [],
+): NativeRepositoryModelController {
   const pool = new PersistentRoutedAgentPool({
     runId: 'run-model-controller',
     task: {
@@ -42,8 +81,13 @@ function controller(events: string[]): NativeRepositoryModelController {
     history: new VerifiedRoutingHistory(),
     embedder: { dimensions: 2, embed: () => [0.5, 0.5] },
   });
-  const invoke = async (input: { candidate: NativeModelCandidate; operation: string }) => {
+  const invoke = async (input: {
+    candidate: NativeModelCandidate;
+    operation: string;
+    prompt: string;
+  }) => {
     events.push(`${input.operation}:${input.candidate.host}`);
+    prompts.push({ operation: input.operation, prompt: input.prompt });
     let output: unknown;
     if (input.operation === 'architecture') {
       output = {
@@ -74,6 +118,7 @@ function controller(events: string[]): NativeRepositoryModelController {
     architectureVerifiers: verifiers,
     recovery: new NativeInvocationRecovery(),
     taskPrompt: 'Issue #8',
+    contextProvider,
   });
 }
 
@@ -132,6 +177,7 @@ describe('native repository model controller', () => {
       ),
       recovery: new NativeInvocationRecovery(),
       taskPrompt: 'Issue #8',
+      contextProvider,
     });
     const build = {
       candidate: { commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
@@ -143,4 +189,41 @@ describe('native repository model controller', () => {
       'HARNESS_NATIVE_REVIEW_REASON_REQUIRED',
     );
   });
+
+  it('injects declared source and admitted source plus exact staged diff without evaluator data', async () => {
+    const events: string[] = [];
+    const prompts: Array<{ operation: string; prompt: string }> = [];
+    const target = controller(events, prompts);
+    const architecture = await target.architecture();
+    const patch = await target.implement(architecture);
+    await target.repair(patch, ['independent verifier failed'], 1);
+    await target.review('codex', {
+      candidate: { commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
+      commands: [],
+      artifactDigests: { 'build.out': digestValue('artifact') },
+    });
+
+    const declaredPrompts = prompts.filter(({ operation }) =>
+      operation === 'architecture' || operation === 'implementation');
+    expect(declaredPrompts.length).toBeGreaterThanOrEqual(3);
+    for (const { prompt } of declaredPrompts) {
+      expect(prompt).toContain(DECLARED_SOURCE.trim());
+      expect(prompt).not.toContain(ADMITTED_DIFF);
+      expect(prompt.indexOf(DECLARED_SOURCE.trim())).toBeLessThan(
+        prompt.indexOf(operationInstruction(prompt)),
+      );
+    }
+    for (const { prompt } of prompts.filter(({ operation }) =>
+      operation === 'repair' || operation === 'review')) {
+      expect(prompt).toContain(ADMITTED_SOURCE.trim());
+      expect(prompt).toContain(ADMITTED_DIFF.trim());
+    }
+    for (const { prompt } of prompts) expect(prompt).not.toContain(SEALED_EVALUATOR_FIXTURE);
+  });
 });
+
+function operationInstruction(prompt: string): string {
+  if (prompt.includes('Return only a unified diff')) return 'Return only a unified diff';
+  if (prompt.includes('Repair this architecture')) return 'Repair this architecture';
+  return 'Propose a minimal architecture';
+}

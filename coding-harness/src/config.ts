@@ -46,6 +46,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/index.ts',
     'coding-harness/src/kernel.ts',
     'coding-harness/src/manifest.ts',
+    'coding-harness/src/model-context.ts',
     'coding-harness/src/model-controller.ts',
     'coding-harness/src/native-client.ts',
     'coding-harness/src/native-egress.ts',

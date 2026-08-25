@@ -14,6 +14,7 @@ export * from './git-process.js';
 export * from './git-worktrees.js';
 export * from './kernel.js';
 export * from './manifest.js';
+export * from './model-context.js';
 export * from './model-controller.js';
 export * from './native-client.js';
 export * from './native-egress.js';
