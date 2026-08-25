@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-07-16
+updated: 2026-08-25
 ratified: 2026-07-16
 tags: [testing, coverage, quality-engineering, ci, agentic-qe, sql-server, correctness]
 supersedes: []
@@ -60,6 +61,16 @@ Installed `agentic-qe@3.12.2` globally and wired its MCP server into this repo's
 `.mcp.json` (`aqe init`'s own `--with-mcp` default did not actually write the
 file — wired by hand after verifying the gap). `.agentic-qe/` (local memory/
 pattern DB) added to `.gitignore`, same treatment as `.swarm/`.
+
+**Revalidation (2026-08-25).** The dual-host issue-remediation harness uses
+`agentic-qe@3.13.10` from an exact attested installation tree, with provider
+variables removed and its MCP process inside an offline bubblewrap mount/network
+namespace with bounded wall time and output. For issue #8 the implemented,
+task-bound profiles are real-LCOV gap analysis and provider-free SAST.
+`rust-testgen-no-ai` and `quality-contract` remain permitted future profile
+labels, but issue #8 has no collectors or runners for them. This supersedes the
+executable version recorded above without changing this ADR's direct-evidence
+authority.
 
 ### What the coverage-gap pass found and closed
 

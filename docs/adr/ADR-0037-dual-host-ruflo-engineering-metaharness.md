@@ -20,7 +20,8 @@ connectors, conformance, and live sources. It benefits from parallel analysis
 and independent model review, but product correctness must remain a direct,
 deterministic property of the patched repository.
 
-The tracked `coding-harness/` is currently a legacy single-host smoke scaffold:
+At decision time, the tracked `coding-harness/` was a legacy single-host smoke
+scaffold:
 it loads `@metaharness/kernel`, declares only Claude, and offers only `init`,
 `doctor`, `--version`, and `--help`. It has no task runner, verifier transaction,
 routing, repair loop, receipt chain, or Codex adapter. Its manifest hashes
@@ -80,8 +81,11 @@ to both native host families:
 
 Preflight verifies both first-party authentication classes. Child processes get
 an explicit environment allow-list; provider API keys, base-URL overrides, and
-proxy transport variables are removed. OpenRouter, Requesty, and any indirect
-gateway are prohibited for execution, routing, fallback, retry, or mutation.
+ambient proxy transport variables are removed. The controller then supplies only
+its own loopback CONNECT endpoint, backed by an exact-origin Unix-socket broker,
+as the enforcement mechanism; it is not a provider route or fallback. OpenRouter,
+Requesty, and any indirect gateway are prohibited for execution, routing,
+fallback, retry, or mutation.
 Hard decisions require distinct-host proposals and independent cross-vendor
 review; absence of either host fails closed.
 
@@ -147,12 +151,14 @@ of product correctness.
 ### 6. Agentic-QE boundary
 
 ADR-0026 remains authoritative. Agentic-QE is invoked only through named,
-task-bound local profiles with provider variables removed: real-LCOV gap
-analysis, Rust test generation with AI enhancement disabled, quality/contract
-assessment, and SAST where applicable. It may propose tests and risks; generated
-tests become authoritative only after human/model review, freezing, commit, and
-direct execution. Cargo, W3C, spareval/materialization differentials, live DBs,
-and mutation gates remain the oracles.
+task-bound, provider-free local profiles. The task contract selects the relevant
+profiles rather than requiring every profile for every change: issue #8 requires
+real-LCOV gap analysis and SAST. `rust-testgen-no-ai` and `quality-contract` are
+permitted future profile labels, but issue #8 implements no collectors or runners
+for them. Agentic-QE may propose tests and risks; generated tests become
+authoritative only after review, freezing, commit, and direct execution. Cargo,
+W3C, spareval/materialization differentials, live DBs, and mutation gates remain
+the oracles.
 
 ### 7. Receipts and authority
 
@@ -167,13 +173,19 @@ Each canonical receipt records:
 - prior-receipt digest and `development-only-no-promotion` authority.
 
 Digest integrity proves tamper evidence, not authorship or correctness.
+The trusted launcher seals that receipt inside a second, digest-bound programme
+envelope containing the seven-dimension assessment. A passing candidate with a
+rejected programme assessment is returned as `gated`, never as success.
 
-The old `.harness/manifest.json` is not the protected-input digest source.
-Protected digests are computed at task start over an explicit tracked-path list
-containing at least the harness manifest and lock, evaluator task, ADRs, and all
-task-contract protected paths. A listed path that is untracked is a hard
-failure. Regenerate the factory manifest to cover tracked files only or remove
-it.
+The factory `.harness/manifest.json` is not, by itself, the protected-input
+digest source. Protected digests are computed at task start over an explicit
+tracked-path list containing at least the harness manifest and lock, evaluator
+task, ADRs, CI/publication controls, every Cargo manifest, and all task-contract
+protected paths. A listed path that is untracked is a hard failure. The current
+canonical manifest mirrors this list and the trusted build checks that every
+declared harness TypeScript source has a corresponding attested output. Other
+governance, ADR, Cargo, CI, and publication-control paths are bound as Git blob
+digests rather than build outputs.
 
 ### 8. Factory, diagnostics, and evolution
 
@@ -201,6 +213,24 @@ Doctor, genome, score, OIA, threat model, MCP scan, and drift are diagnostics.
 A scanner that cannot inspect the repository's actual `.mcp.json` surface is
 `INCONCLUSIVE`, never clean.
 
+**Decision amendment (2026-08-25).** The earlier accepted criterion requiring a
+non-degraded upstream MetaHarness score of at least 98 is replaced by the
+project-owned rubric below. Exact source audit of the owning Ruflo wrapper and
+its active `metaharness@0.3.2` cache showed that `harnessFit` is
+`round(plan.confidence * 100)` over shallow repository metadata: it does not
+execute tests or inspect the custom harness source. The selected Rust archetype
+tops out near `0.8003 → 0.80 → 80`; even the global archetype ceiling is
+`0.967 → 0.97 → 97`. Repository/harness values such as 71/67 are therefore
+version-bound context, not programme scores. Upstream degraded execution or
+failed hard constraints still fail the diagnostic gate; `harnessFit` itself
+contributes no points.
+
+The exact native Ruflo score results and owning implementation hashes are stored
+in the parsed `config/metaharness-diagnostics.json` snapshot. That tracked blob
+is a protected task input, and the programme envelope must match its receipt
+digest before deriving diagnostic status. A literal score or hard-constraint
+claim embedded only in controller code is not evidence.
+
 Darwin/GEPA is ineligible until at least five discriminating training tasks and
 five sealed holdouts exist. Task IDs are opaque; evaluator law, thresholds,
 authority, and holdout truth stay outside the genome. Models and route snapshots
@@ -220,8 +250,8 @@ work is not AVO-eligible.
 
 ## Acceptance
 
-Harness-programme acceptance requires every hard gate below and a non-degraded
-MetaHarness score of at least 98/100:
+Harness-programme acceptance requires every hard gate below and at least 98/100
+on this project-owned, seven-dimension evidence rubric:
 
 | Dimension | Points | Hard evidence |
 |---|---:|---|
@@ -234,34 +264,36 @@ MetaHarness score of at least 98/100:
 | Ruflo and QE integration | 10 | real coordination IDs; task-bound QE evidence; authority separation |
 
 No aggregate score can average away a failed correctness, standards, security,
-supply-chain, or provider-authentication gate. The first real acceptance task is
-issue #8 end to end; expansion to the full corpus waits for that receipt and its
-direct product gates. The score is a post-gate readiness diagnostic and is never
-a Darwin/GEPA fitness, promotion, or repair reward.
+supply-chain, or provider-authentication gate. Upstream diagnostic values do not
+contribute points. The first real acceptance task is issue #8 end to end;
+expansion to the full corpus waits for that receipt and its direct product gates.
+The project-owned score is a post-gate readiness summary and is never a
+Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture; framework implemented, programme acceptance gated.
-Commits `19fe67a`, `0db187a`, `51d238e`, `f55f2a4`, and `8d63970` establish the
-private supply chain, execution contracts, native dual-host routing, patched-
-candidate verifier transaction, and fail-closed process limits. The harness
-builds and passes 113 tests across 22 files. It has no publication or evolution
-path, and all source files remain under 500 lines.
+Accepted architecture; framework and trusted runtime implemented; final
+programme transaction pending. The incremental harness commits through
+`947253d` establish the private supply chain, dual-host routing, patched-candidate
+transaction, exact-origin broker, mount namespace, copied credential
+capabilities, systemd cgroup-v2 quotas, bounded retry/cancellation, provider-free
+QE/SAST, protected governance inputs, and digest-chained receipts. The harness
+builds and passes 276 tests across 44 files. It has no publication or evolution
+path, and all harness source files remain under 500 lines.
 
-This is not an accepted issue-#8 MetaHarness run. The package validates injected
-filesystem/origin evidence but does not bundle the trusted broker, and
-`RepositoryCandidateOperations` does not yet assemble runner, preflight, and
-structured-output records into invocation-correlated native evidence. Resource
-quotas are also absent. The dirty root `.mcp.json` and untracked
-`coding-harness/.claude/` command surfaces remain outside the committed harness
-and block programme acceptance.
+Development runs 03–05 emitted failure receipts while exposing and then closing
+native runtime containment defects; none is acceptance evidence. The next run is
+the first eligible issue-#8 transaction on the reconciled protected snapshot.
+Dirty user-owned `.mcp.json` and untracked `coding-harness/.claude/` state remain
+unstaged and are masked from model sessions; diagnostics that cannot inspect
+their effective surfaces remain `INCONCLUSIVE`, not clean and not a substitute
+for direct controls.
 
-Ruflo diagnostics still score the repository 71 and tracked harness 67; the
-harness genome is `needs-work`. OIA/threat/MCP scans that report no MCP surface
-are inconclusive against the inspected configuration. Until those hard gates
-pass and the score is at least 98, real execution must emit a gated outcome,
-Darwin/GEPA stays disabled, and no receipt may be described as semantic
-acceptance.
+Upstream MetaHarness diagnostics classify the repository/harness at 71/67 and
+the genome as `needs-work`; those values are non-authoritative for the reasons in
+section 8. Darwin/GEPA stays disabled. No receipt may be described as semantic
+acceptance until the real dual-host transaction, every hard gate, and the
+project-owned score threshold pass.
 
 ## Consequences
 
@@ -271,8 +303,8 @@ acceptance.
   repair reproducible and auditable.
 - Good: evolution and search activate only when their evaluators can distinguish
   real semantic-fabric quality.
-- Cost: the current scaffold needs a secure package foundation and a real
-  control plane before it can run product tasks.
+- Cost: secure native execution adds systemd, mount-namespace, broker, frozen
+  dependency-closure, and independent-evidence complexity and latency.
 - Neutral: nothing in this ADR changes an `sf-*` runtime dependency or grants
   publication, provider API spend, or promotion authority.
 

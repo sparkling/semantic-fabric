@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: MIT
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CandidateBuildFailure,
   CandidateTransaction,
 } from '../src/candidate.js';
+import {
+  createIssue8ProgrammeEnvelope,
+  finalizeIssue8ProgrammeOutcome,
+  parseIssue8ProgrammeEnvelope,
+  serializeIssue8ProgrammeEnvelope,
+} from '../src/issue-8-programme-envelope.js';
 import { NativeCancellationError } from '../src/models/recovery.js';
+import { METAHARNESS_DIAGNOSTICS_PATH } from '../src/metaharness-diagnostics.js';
+import { ReceiptChain, digestValue } from '../src/receipts.js';
 import {
   commandEvidence,
   context,
+  diagnosticBlob,
+  diagnosticSnapshot,
   digest,
   identity,
   operations,
@@ -38,6 +49,41 @@ describe('patched candidate transaction', () => {
     expect(result.receipt.status).toBe('pass');
     expect(result.receipt.recovery.repairCount).toBe(1);
     expect(transaction.receipts.verify()).toEqual({ ok: true });
+    const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
+    expect(envelope.programmeAcceptance.status).toBe('ACCEPTED');
+    expect(envelope.programmeAcceptance.score).toBe(100);
+    expect(parseIssue8ProgrammeEnvelope(serializeIssue8ProgrammeEnvelope(envelope)))
+      .toEqual(envelope);
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: result.status, transactionReason: result.reason, envelope,
+    })).toEqual({ status: 'pass', reason: null });
+    const tampered = JSON.parse(JSON.stringify(envelope));
+    tampered.programmeAcceptance.score = 99;
+    expect(() => parseIssue8ProgrammeEnvelope(JSON.stringify(tampered)))
+      .toThrow('HARNESS_ISSUE_8_PROGRAMME_ENVELOPE_DIGEST_INVALID');
+    const { digest: _oldDigest, ...diagnosticBody } = JSON.parse(JSON.stringify(diagnosticSnapshot));
+    diagnosticBody.targets[0].degraded = true;
+    const degradedDiagnostics = { ...diagnosticBody, digest: digestValue(diagnosticBody) };
+    const degradedBlob = `${JSON.stringify(degradedDiagnostics, null, 2)}\n`;
+    const degradedBlobDigest = createHash('sha256').update(degradedBlob).digest('hex');
+    const {
+      sequence: _sequence, previousDigest: _previousDigest, digest: _receiptDigest, ...draft
+    } = result.receipt;
+    const degradedReceipt = new ReceiptChain().append({
+      ...draft,
+      protectedInputs: {
+        ...draft.protectedInputs,
+        [METAHARNESS_DIAGNOSTICS_PATH]: degradedBlobDigest,
+      },
+    });
+    const gated = createIssue8ProgrammeEnvelope(degradedReceipt, degradedBlob);
+    expect(finalizeIssue8ProgrammeOutcome({
+      transactionStatus: result.status, transactionReason: result.reason, envelope: gated,
+    })).toEqual({
+      status: 'gated', reason: 'HARNESS_ISSUE_8_PROGRAMME_ACCEPTANCE_REJECTED',
+    });
+    expect(() => createIssue8ProgrammeEnvelope(result.receipt, `${diagnosticBlob} `))
+      .toThrow('HARNESS_ISSUE_8_PROGRAMME_DIAGNOSTIC_BLOB_MISMATCH');
   });
 
   it('routes an exact-source admission mismatch through the bounded repair loop', async () => {
@@ -148,6 +194,10 @@ describe('patched candidate transaction', () => {
     expect(result.finalPatch).toBeNull();
     expect(result.reason).toMatch(/STALE_BUILD_IDENTITY/);
     expect(result.receipt.status).toBe('fail');
+    expect(createIssue8ProgrammeEnvelope(
+      result.receipt, diagnosticBlob,
+    ).programmeAcceptance.status)
+      .toBe('REJECTED');
   });
 
   it('records cancellation even when it occurs before a patch exists', async () => {

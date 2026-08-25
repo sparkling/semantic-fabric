@@ -12,7 +12,16 @@ import {
 import { runGitCommand } from './git-process.js';
 import { runIssue8Transaction, type Issue8DriverResult } from './issue-8-driver.js';
 import { createIssue8NativeSession } from './issue-8-native-session.js';
+import {
+  createIssue8ProgrammeEnvelope,
+  finalizeIssue8ProgrammeOutcome,
+  parseIssue8ProgrammeEnvelope,
+  serializeIssue8ProgrammeEnvelope,
+} from './issue-8-programme-envelope.js';
 import { createIssue8QeCollector } from './issue-8-qe.js';
+import {
+  METAHARNESS_DIAGNOSTICS_PATH,
+} from './metaharness-diagnostics.js';
 import {
   ISSUE_8_NATIVE_LIMITS,
   ISSUE_8_RUST_LIMITS,
@@ -20,7 +29,6 @@ import {
   attestIssue8SystemTools,
   prepareCargoExtension,
 } from './issue-8-system.js';
-import { ReceiptChain } from './receipts.js';
 import { SystemdResourceBoundary } from './resource-boundary.js';
 import { prepareIssue8RustClosure } from './rust-closure.js';
 import { createRustOfflineProfile } from './rust-sandbox.js';
@@ -45,7 +53,13 @@ export interface TrustedBootstrapEvidence {
 export interface TrustedControllerOutcome {
   readonly status: 'pass' | 'fail' | 'gated' | 'cancelled';
   readonly reason: string | null;
-  seal(): Promise<Readonly<{ status: string; receiptPath: string; receiptDigest: string }>>;
+  seal(): Promise<Readonly<{
+    status: string;
+    receiptPath: string;
+    receiptDigest: string;
+    programmeAcceptanceDigest: string;
+    envelopeDigest: string;
+  }>>;
 }
 
 export async function trustedControllerMain(
@@ -83,18 +97,29 @@ export async function trustedControllerMain(
   if (executionError !== undefined) throw executionError;
   if (result === undefined) throw new Error('HARNESS_ISSUE_8_RESULT_MISSING');
 
-  const serialized = `${JSON.stringify({
-    schemaVersion: 2,
-    receipts: [result.transaction.receipt],
-  }, null, 2)}\n`;
-  const verified = ReceiptChain.import(serialized);
-  if (verified.length !== 1 || verified.headDigest !== result.transaction.receipt.digest) {
+  const diagnosticBlob = await readProgrammeDiagnostics(
+    invocation.controllerStore,
+    invocation.controllerCommit,
+  );
+  const envelope = createIssue8ProgrammeEnvelope(
+    result.transaction.receipt,
+    diagnosticBlob,
+  );
+  const serialized = serializeIssue8ProgrammeEnvelope(envelope);
+  const verified = parseIssue8ProgrammeEnvelope(serialized);
+  if (verified.receiptChain.receipts.length !== 1
+    || verified.receiptChain.receipts[0]?.digest !== result.transaction.receipt.digest) {
     throw new Error('HARNESS_ISSUE_8_RECEIPT_CHAIN_INVALID');
   }
+  const { status, reason } = finalizeIssue8ProgrammeOutcome({
+    transactionStatus: result.transaction.status,
+    transactionReason: result.transaction.reason,
+    envelope: verified,
+  });
   let sealed = false;
   return Object.freeze({
-    status: result.transaction.status,
-    reason: result.transaction.reason,
+    status,
+    reason,
     async seal() {
       if (sealed) throw new Error('HARNESS_ISSUE_8_OUTCOME_ALREADY_SEALED');
       await prepareResultsRoot(invocation.repositoryRoot);
@@ -102,9 +127,11 @@ export async function trustedControllerMain(
       await writeFile(receiptPath, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
       sealed = true;
       return Object.freeze({
-        status: result.transaction.status,
+        status,
         receiptPath,
         receiptDigest: result.transaction.receipt.digest,
+        programmeAcceptanceDigest: verified.programmeAcceptanceDigest,
+        envelopeDigest: verified.envelopeDigest,
       });
     },
   });
@@ -442,4 +469,14 @@ function hash(value: unknown): string {
     throw new Error('HARNESS_ISSUE_8_BOOTSTRAP_DIGEST_INVALID');
   }
   return text;
+}
+
+async function readProgrammeDiagnostics(store: string, commit: string) {
+  const result = await runGitCommand(store, [
+    'show', `${commit}:${METAHARNESS_DIAGNOSTICS_PATH}`,
+  ], { maxOutputBytes: 1_000_000 });
+  if (result.exitCode !== 0 || Buffer.byteLength(result.stdout, 'utf8') < 1) {
+    throw new Error('HARNESS_ISSUE_8_PROGRAMME_DIAGNOSTICS_READ_FAILED');
+  }
+  return result.stdout;
 }

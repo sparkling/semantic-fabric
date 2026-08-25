@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { parseMetaHarnessDiagnosticSnapshot } from '../src/metaharness-diagnostics.js';
 import {
   PROGRAMME_ACCEPTANCE_DIMENSIONS,
   scoreProgrammeAcceptance,
@@ -10,8 +12,9 @@ const digest = (character: string) => character.repeat(64);
 
 function passingInput(overrides: Record<string, unknown> = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     authority: 'development-only-no-promotion',
+    receiptDigest: digest('f'),
     dimensions: Object.entries(PROGRAMME_ACCEPTANCE_DIMENSIONS).map(([id, maximumPoints], index) => ({
       id,
       verifiedPoints: maximumPoints,
@@ -21,17 +24,27 @@ function passingInput(overrides: Record<string, unknown> = {}) {
     upstreamDiagnostics: [
       {
         target: 'repository',
+        implementation: 'metaharness@0.3.2',
+        success: true,
         degraded: false,
+        exitCode: 0,
+        scaffoldReady: true,
         hardConstraintsPassed: 6,
         hardConstraintsTotal: 6,
         harnessFit: 71,
+        evidenceDigest: digest('1'),
       },
       {
         target: 'coding-harness',
+        implementation: 'metaharness@0.3.2',
+        success: true,
         degraded: false,
+        exitCode: 0,
+        scaffoldReady: true,
         hardConstraintsPassed: 6,
         hardConstraintsTotal: 6,
         harnessFit: 67,
+        evidenceDigest: digest('2'),
       },
     ],
     ...overrides,
@@ -108,6 +121,26 @@ describe('ADR-0037 programme acceptance scoring', () => {
         index === 0 ? { ...dimension, evidenceDigests: ['not-a-digest'] } : dimension
       )),
     })).toThrow(/SHA-256/);
+  });
+
+  it('binds the assessment to one exact receipt and audited diagnostic implementation', () => {
+    const input = passingInput();
+    expect(scoreProgrammeAcceptance(input).receiptDigest).toBe(input.receiptDigest);
+    expect(() => scoreProgrammeAcceptance({ ...input, receiptDigest: 'not-a-digest' }))
+      .toThrow(/receiptDigest/);
+    expect(() => scoreProgrammeAcceptance({
+      ...input,
+      upstreamDiagnostics: input.upstreamDiagnostics.map((diagnostic, index) => (
+        index === 0 ? { ...diagnostic, implementation: 'metaharness@future' } : diagnostic
+      )),
+    })).toThrow(/audited diagnostic implementation/);
+  });
+
+  it('validates the protected snapshot captured by the native Ruflo score tools', () => {
+    const path = new URL('../config/metaharness-diagnostics.json', import.meta.url);
+    const snapshot = parseMetaHarnessDiagnosticSnapshot(JSON.parse(readFileSync(path, 'utf8')));
+    expect(snapshot.targets.map(({ harnessFit }) => harnessFit)).toEqual([71, 67]);
+    expect(snapshot.implementation.metaharness).toBe('0.3.2');
   });
 });
 

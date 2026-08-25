@@ -7,22 +7,16 @@ import { rm } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-const NODE = '/usr/bin/node';
-const GIT = '/usr/bin/git';
+const NODE = '/usr/bin/node'; const GIT = '/usr/bin/git';
 const NODE_DIGEST = '53fb205ae78805130177e24bcb459a69a1518c8d98f8965f31d85aae7ea840fc';
 const GIT_DIGEST = '2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668';
 const BUILD_PATH = 'coding-harness/.harness/controller-build.json';
 const MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
-const LOCK_PATH = 'coding-harness/package-lock.json';
-const PACKAGE_PATH = 'coding-harness/package.json';
+const LOCK_PATH = 'coding-harness/package-lock.json'; const PACKAGE_PATH = 'coding-harness/package.json';
 const RUNTIME_ENTRY = 'coding-harness/dist/issue-8-program.js';
-const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
-const DIGEST = /^[a-f0-9]{64}$/;
-const MAX_FILE_BYTES = 100_000_000;
-let privateRuntime = null;
-let controllerStore = null;
-let controllerStoreDigest = null;
-let controllerStoreCommit = null;
+const GIT_OBJECT = /^[a-f0-9]{40,64}$/; const DIGEST = /^[a-f0-9]{64}$/;
+const MAX_FILE_BYTES = 100_000_000; let privateRuntime = null;
+let controllerStore = null; let controllerStoreDigest = null; let controllerStoreCommit = null;
 try {
   validateProcess();
   const invocation = parseInvocation(process.argv.slice(2));
@@ -77,8 +71,14 @@ try {
   }
   await cleanupPrivateState();
   const sealed = await outcome.seal();
-  process.stdout.write(`${JSON.stringify({ status: sealed.status,
-    receiptDigest: sealed.receiptDigest })}\n`);
+  const sealedDigests = [sealed.receiptDigest, sealed.programmeAcceptanceDigest, sealed.envelopeDigest];
+  if (sealed.status !== outcome.status || !['pass', 'fail', 'gated', 'cancelled'].includes(sealed.status)
+    || !sealedDigests.every((digest) => DIGEST.test(digest))) {
+    throw new Error('HARNESS_BOOTSTRAP_SEALED_OUTCOME_INVALID');
+  }
+  process.stdout.write(`${JSON.stringify({ status: sealed.status, receiptDigest: sealed.receiptDigest,
+    programmeAcceptanceDigest: sealed.programmeAcceptanceDigest,
+    envelopeDigest: sealed.envelopeDigest })}\n`);
   process.exitCode = sealed.status === 'pass' ? 0 : 1;
 } catch (error) {
   try {

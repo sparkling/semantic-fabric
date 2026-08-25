@@ -18,7 +18,9 @@ npm test
 
 CI tests use fake model processes and make no provider calls. Runtime model
 execution requires successful native subscription preflights. Provider API
-keys, proxy variables, base-URL overrides, OpenRouter, and Requesty are rejected.
+keys, ambient proxy variables, base-URL overrides, OpenRouter, and Requesty are
+rejected. The controller injects only a loopback CONNECT endpoint backed by its
+exact-origin Unix-socket broker.
 
 ## Transaction
 
@@ -31,6 +33,7 @@ frozen baseline + evaluator worktrees
   → public + independent + regression verification in parallel
   → independent Codex and Claude reviews
   → protected-input check and digest-chained receipt
+  → receipt-bound seven-dimension programme envelope
 ```
 
 Every repair resets the candidate and repeats admission, build, all verifier
@@ -38,16 +41,14 @@ lanes, and both reviews. Candidate commands require an OS network namespace;
 dependency installation is a separate registry-pinned stage. Missing isolation
 or either native host fails closed.
 
-Native model execution additionally requires injected, independently enforced
-origin-pinning and filesystem boundaries. The filesystem grant must expose only
-a Git-masked candidate snapshot, private output channel, empty private home, and
-brokered authentication; it must hide the controller, evaluator, verifier,
-common Git object store, and all other host paths. This package validates that
-contract but does not bundle a trusted boundary or auth broker, so a real
-programme remains gated rather than treating an interface claim or login check
-as isolation. CPU, memory, PID, and disk quotas are also required before running
-untrusted model or Cargo workloads; the current wall-time/output limits do not
-replace them.
+Native model execution uses independently enforced exact-origin, filesystem, and
+resource boundaries. The trusted runtime exposes only a Git-masked candidate
+snapshot, private output channel, empty private home, copied credential
+capability, and one broker socket; it hides the controller, evaluator, verifier,
+common Git object store, and other host paths. A systemd cgroup-v2 transient unit
+enforces CPU, memory, PID, file-size, descriptor, and runtime ceilings. Timeout,
+cancellation, or output overflow stops and verifies the exact unit before a
+result can be accepted, and execution failure revokes active broker sessions.
 
 ## Main modules
 
@@ -61,6 +62,10 @@ replace them.
   independence.
 - `contracts.ts`, `policy.ts`, `evidence.ts`, and `receipts.ts` validate task,
   Ruflo, Agentic-QE, protected-input, and receipt boundaries.
+- `issue-8-programme-envelope.ts` binds the project-owned acceptance score to
+  the exact receipt and makes a rejected score a non-zero launcher result.
+- `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
+  its exact Git blob digest must match the candidate receipt.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
   identifies the repository's actual `.mcp.json` coordination surface.
 

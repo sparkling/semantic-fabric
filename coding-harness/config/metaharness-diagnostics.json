@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "authority": "development-only-no-promotion",
+  "source": "ruflo-metaharness-score-mcp",
+  "capturedAt": "2026-08-25T15:44:09.009Z",
+  "implementation": {
+    "ruflo": "3.38.20",
+    "claudeFlowCli": "3.34.0",
+    "metaharnessRange": "~0.3.0",
+    "metaharness": "0.3.2",
+    "wrapperDigest": "e14b64f1bcd51c61d3a33c0f1c6712c248e71726f104cbab1d0e0ffc26d775d5",
+    "bridgeDigest": "9bd511d2ed8b52d40a911113169f8cb9075a124e0a49b966c3975e6959cd0302",
+    "scorecardDigest": "89af201762b2e1284ca0715bc77bbb5c76a9703113ac7e139f2be282db423a31",
+    "analyzerDigest": "da6050f1db03a5f8a267074b6f8f06f05d7c8c5ea158b391edd9443cff9a55f9"
+  },
+  "targets": [
+    {
+      "target": "repository",
+      "repositoryPath": ".",
+      "success": true,
+      "degraded": false,
+      "exitCode": 0,
+      "schema": 1,
+      "harnessFit": 71,
+      "compileConfidence": 100,
+      "taskCoverage": 79,
+      "toolSafety": 100,
+      "memoryUsefulness": 46,
+      "scaffoldReady": true,
+      "hardConstraintsPassed": 6,
+      "hardConstraintsTotal": 6,
+      "archetype": "rust-crate-harness",
+      "template": "vertical:coding",
+      "recommendedMode": "CLI + MCP",
+      "generatedAt": "2026-08-25T15:44:08.681Z",
+      "durationMs": 88
+    },
+    {
+      "target": "coding-harness",
+      "repositoryPath": "coding-harness",
+      "success": true,
+      "degraded": false,
+      "exitCode": 0,
+      "schema": 1,
+      "harnessFit": 67,
+      "compileConfidence": 90,
+      "taskCoverage": 79,
+      "toolSafety": 100,
+      "memoryUsefulness": 36,
+      "scaffoldReady": true,
+      "hardConstraintsPassed": 6,
+      "hardConstraintsTotal": 6,
+      "archetype": "typescript-sdk-harness",
+      "template": "vertical:coding",
+      "recommendedMode": "CLI + MCP",
+      "generatedAt": "2026-08-25T15:44:09.009Z",
+      "durationMs": 82
+    }
+  ],
+  "digest": "d8432f516f1941f0d2ca3dc6c1dfb324e746a689d26bafa4bf1fcca62b55b1f9"
+}

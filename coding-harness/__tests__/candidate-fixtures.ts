@@ -7,6 +7,9 @@ import type {
   CandidateTransactionContext,
 } from '../src/candidate.js';
 import type { NativeInvocationExpectation } from '../src/candidate-types.js';
+import { SECURE_HARNESS_CONFIG } from '../src/config.js';
+import { METAHARNESS_DIAGNOSTICS_PATH } from '../src/metaharness-diagnostics.js';
+import { digestValue } from '../src/receipts.js';
 
 export const digest = (character: string) => character.repeat(64);
 
@@ -15,12 +18,45 @@ export const identity = (character: string) => ({
   tree: character.repeat(40),
 });
 
+const diagnosticBody = {
+  schemaVersion: 1,
+  authority: 'development-only-no-promotion',
+  source: 'ruflo-metaharness-score-mcp',
+  capturedAt: '2026-08-25T15:44:09.009Z',
+  implementation: {
+    ruflo: '3.38.20',
+    claudeFlowCli: '3.34.0',
+    metaharnessRange: '~0.3.0',
+    metaharness: '0.3.2',
+    wrapperDigest: 'e14b64f1bcd51c61d3a33c0f1c6712c248e71726f104cbab1d0e0ffc26d775d5',
+    bridgeDigest: '9bd511d2ed8b52d40a911113169f8cb9075a124e0a49b966c3975e6959cd0302',
+    scorecardDigest: '89af201762b2e1284ca0715bc77bbb5c76a9703113ac7e139f2be282db423a31',
+    analyzerDigest: 'da6050f1db03a5f8a267074b6f8f06f05d7c8c5ea158b391edd9443cff9a55f9',
+  },
+  targets: [diagnosticTarget('repository', '.', 71), diagnosticTarget(
+    'coding-harness', 'coding-harness', 67,
+  )],
+};
+
+export const diagnosticSnapshot = {
+  ...diagnosticBody,
+  digest: digestValue(diagnosticBody),
+};
+export const diagnosticBlob = `${JSON.stringify(diagnosticSnapshot, null, 2)}\n`;
+export const diagnosticBlobDigest = createHash('sha256').update(diagnosticBlob).digest('hex');
+
 export const context: CandidateTransactionContext = {
   runId: 'run-candidate-0001',
-  taskId: 'task-candidate-0001',
+  taskId: 'bprune_8_20260825',
   authority: 'development-only-no-promotion',
   identities: { controller: identity('0'), baseline: identity('1'), evaluator: identity('2') },
-  protectedInputs: { 'protected.txt': digest('a') },
+  protectedInputs: Object.fromEntries([
+    ...SECURE_HARNESS_CONFIG.requiredProtectedPaths,
+    'crates/sf-conformance/tests/issue_8_binding_pruning.rs',
+  ].map((path) => [
+    path,
+    path === METAHARNESS_DIAGNOSTICS_PATH ? diagnosticBlobDigest : digest('a'),
+  ])),
   route: {
     snapshotDigest: digest('b'),
     frozenAt: '2026-08-25T12:00:00.000Z',
@@ -36,12 +72,36 @@ export const context: CandidateTransactionContext = {
       authClass: 'native-anthropic-subscription', subscriptionCostUsd: 0,
     },
   ],
-  toolVersions: { git: '2.51.0', cargo: '1.90.0' },
+  toolVersions: {
+    bootstrapSource: 'verified-packed-private-runtime',
+    bootstrapControllerStoreDigest: digest('1'),
+    bootstrapBuildManifestDigest: digest('2'),
+    bootstrapRuntimeTreeDigest: digest('3'),
+    bootstrapNodeDigest: digest('4'),
+    bootstrapGitDigest: digest('5'),
+    controllerExecutionDigest: digest('6'),
+    controllerBuildManifestDigest: digest('7'),
+    controllerRuntimeTreeDigest: digest('8'),
+    controllerManifestDigest: digest('a'),
+    controllerTaskDigest: digest('a'),
+    cargo: 'cargo#sha256:test',
+    cargoLlvmCov: 'cargo-llvm-cov#sha256:test',
+    node: 'node#sha256:test',
+    codex: 'codex 1',
+    claude: 'claude 1',
+    bwrap: 'bwrap#sha256:test',
+    systemdRun: 'systemd-run#sha256:test',
+    systemctl: 'systemctl#sha256:test',
+    agenticQeMcp: 'agentic-qe#sha256:test',
+    agenticQe: '3.13.10#sast-only-flat-v1+lcov-gap',
+    rufloHive: 'hive-test-0001',
+    rufloConsensus: 'consensus-test-0001',
+  },
   requiredQeProfiles: ['lcov-gap', 'sast'],
   rufloEvidence: {
     schemaVersion: 1,
     source: 'ruflo-coordination-ledger',
-    taskId: 'task-candidate-0001',
+    taskId: 'bprune_8_20260825',
     runId: 'run-candidate-0001',
     swarmId: 'swarm-0001',
     coordinationTaskId: 'ruflo-task-0001',
@@ -123,7 +183,7 @@ export function operations(events: string[]): CandidateOperations {
       return {
         candidate: identity(cycle === 1 ? '3' : '4'),
         patchDigest: createHash('sha256').update(payload, 'utf8').digest('hex'),
-        admittedPaths: ['src/file.ts'],
+        admittedPaths: ['crates/sf-sparql/src/unfold.rs'],
       };
     }),
     validateAdmission: vi.fn(async () => {
@@ -266,5 +326,23 @@ function nativeProof(expectations: readonly NativeInvocationExpectation[]) {
         expected.candidateTree,
       );
     }),
+  };
+}
+
+function diagnosticTarget(
+  target: 'repository' | 'coding-harness',
+  repositoryPath: '.' | 'coding-harness',
+  harnessFit: number,
+) {
+  return {
+    target, repositoryPath, success: true, degraded: false, exitCode: 0, schema: 1,
+    harnessFit, compileConfidence: target === 'repository' ? 100 : 90,
+    taskCoverage: 79, toolSafety: 100, memoryUsefulness: target === 'repository' ? 46 : 36,
+    scaffoldReady: true, hardConstraintsPassed: 6, hardConstraintsTotal: 6,
+    archetype: target === 'repository' ? 'rust-crate-harness' : 'typescript-sdk-harness',
+    template: 'vertical:coding', recommendedMode: 'CLI + MCP',
+    generatedAt: target === 'repository'
+      ? '2026-08-25T15:44:08.681Z' : '2026-08-25T15:44:09.009Z',
+    durationMs: target === 'repository' ? 88 : 82,
   };
 }

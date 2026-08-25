@@ -35,14 +35,21 @@ export interface ProgrammeDimensionEvidence {
 
 export interface UpstreamDiagnosticEvidence {
   target: DiagnosticTarget;
+  implementation: 'metaharness@0.3.2';
+  success: boolean;
   degraded: boolean;
+  exitCode: number;
+  scaffoldReady: boolean;
   hardConstraintsPassed: number;
   hardConstraintsTotal: number;
   harnessFit: number;
+  evidenceDigest: string;
 }
 
 export interface ProgrammeAcceptanceResult {
+  schemaVersion: 2;
   authority: typeof DEVELOPMENT_AUTHORITY;
+  receiptDigest: string;
   score: number;
   maximumScore: 100;
   threshold: typeof PROGRAMME_ACCEPTANCE_THRESHOLD;
@@ -63,12 +70,15 @@ export function scoreProgrammeAcceptance(value: unknown): ProgrammeAcceptanceRes
   const input = asRecord(value, 'programme acceptance');
   assertExactKeys(
     input,
-    ['schemaVersion', 'authority', 'dimensions', 'upstreamDiagnostics'],
+    ['schemaVersion', 'authority', 'receiptDigest', 'dimensions', 'upstreamDiagnostics'],
     'programme acceptance',
   );
-  if (input.schemaVersion !== 1) throw new TypeError('programme acceptance.schemaVersion must be 1');
+  if (input.schemaVersion !== 2) throw new TypeError('programme acceptance.schemaVersion must be 2');
   if (input.authority !== DEVELOPMENT_AUTHORITY) {
     throw new TypeError('programme acceptance.authority cannot grant promotion');
+  }
+  if (typeof input.receiptDigest !== 'string' || !SHA256_PATTERN.test(input.receiptDigest)) {
+    throw new TypeError('programme acceptance.receiptDigest must be a lowercase SHA-256 digest');
   }
 
   const dimensions = parseDimensions(input.dimensions);
@@ -78,14 +88,17 @@ export function scoreProgrammeAcceptance(value: unknown): ProgrammeAcceptanceRes
     .filter(({ hardGatePassed }) => !hardGatePassed)
     .map(({ id }) => id);
   const failedDiagnostics = upstreamDiagnostics
-    .filter((diagnostic) => diagnostic.degraded
+    .filter((diagnostic) => !diagnostic.success || diagnostic.exitCode !== 0
+      || diagnostic.degraded || !diagnostic.scaffoldReady
       || diagnostic.hardConstraintsPassed !== diagnostic.hardConstraintsTotal)
     .map(({ target }) => target);
   const hardGatesPassed = failedDimensions.length === 0;
   const diagnosticGatePassed = failedDiagnostics.length === 0;
 
   return deepFreeze({
+    schemaVersion: 2,
     authority: DEVELOPMENT_AUTHORITY,
+    receiptDigest: input.receiptDigest,
     score,
     maximumScore: 100,
     threshold: PROGRAMME_ACCEPTANCE_THRESHOLD,
@@ -155,12 +168,20 @@ function parseDiagnostic(value: unknown, index: number): UpstreamDiagnosticEvide
   const label = `programme acceptance.upstreamDiagnostics[${index}]`;
   const input = asRecord(value, label);
   assertExactKeys(input, [
-    'target', 'degraded', 'hardConstraintsPassed', 'hardConstraintsTotal', 'harnessFit',
+    'target', 'implementation', 'success', 'degraded', 'exitCode', 'scaffoldReady',
+    'hardConstraintsPassed', 'hardConstraintsTotal', 'harnessFit', 'evidenceDigest',
   ], label);
   if (input.target !== 'repository' && input.target !== 'coding-harness') {
     throw new TypeError(`${label}.target is invalid`);
   }
-  if (typeof input.degraded !== 'boolean') throw new TypeError(`${label}.degraded must be a boolean`);
+  if (input.implementation !== 'metaharness@0.3.2') {
+    throw new TypeError(`${label}.implementation is not the audited diagnostic implementation`);
+  }
+  if (typeof input.success !== 'boolean' || typeof input.degraded !== 'boolean'
+    || typeof input.scaffoldReady !== 'boolean') {
+    throw new TypeError(`${label} status evidence must be boolean`);
+  }
+  const exitCode = asInteger(input.exitCode, `${label}.exitCode`);
   const hardConstraintsTotal = asInteger(input.hardConstraintsTotal, `${label}.hardConstraintsTotal`, 1);
   const hardConstraintsPassed = asInteger(input.hardConstraintsPassed, `${label}.hardConstraintsPassed`);
   if (hardConstraintsPassed > hardConstraintsTotal) {
@@ -168,12 +189,20 @@ function parseDiagnostic(value: unknown, index: number): UpstreamDiagnosticEvide
   }
   const harnessFit = asInteger(input.harnessFit, `${label}.harnessFit`);
   if (harnessFit > 100) throw new TypeError(`${label}.harnessFit cannot exceed 100`);
+  if (typeof input.evidenceDigest !== 'string' || !SHA256_PATTERN.test(input.evidenceDigest)) {
+    throw new TypeError(`${label}.evidenceDigest must be a lowercase SHA-256 digest`);
+  }
   return {
     target: input.target,
+    implementation: 'metaharness@0.3.2',
+    success: input.success,
     degraded: input.degraded,
+    exitCode,
+    scaffoldReady: input.scaffoldReady,
     hardConstraintsPassed,
     hardConstraintsTotal,
     harnessFit,
+    evidenceDigest: input.evidenceDigest,
   };
 }
 
