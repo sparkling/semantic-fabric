@@ -15,7 +15,8 @@ export function createTestConfig(requiredProtectedPaths = ['protected.txt']): Ha
     requiredProtectedPaths,
     environment: {
       allow: [
-        'PATH', 'HOME', 'TMPDIR', 'LANG', 'SAFE_FLAG', 'OPENAI_API_KEY',
+        'PATH', 'HOME', 'TMPDIR', 'LANG', 'SAFE_FLAG', 'CARGO_HOME', 'CARGO_INCREMENTAL',
+        'CARGO_NET_OFFLINE', 'CARGO_TARGET_DIR', 'OPENAI_API_KEY',
         'OPENROUTER_API_KEY', 'HTTP_PROXY', 'OPENAI_BASE_URL',
       ],
       denyExact: ['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HTTP_PROXY'],

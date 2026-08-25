@@ -31,6 +31,9 @@ export interface HostEvidence {
 }
 
 export interface CommandEvidence {
+  stage: 'red-baseline' | 'build' | 'mutation';
+  attempt: number;
+  candidateTree: string;
   tool: string;
   executable: string;
   argv: string[];
@@ -43,6 +46,7 @@ export interface CommandEvidence {
   timedOut: boolean;
   cancelled: boolean;
   outputLimitExceeded: boolean;
+  spawnErrorDigest: string | null;
 }
 
 export interface ReceiptDraft {
@@ -67,6 +71,7 @@ export interface ReceiptDraft {
   hosts: HostEvidence[];
   admittedPaths: string[];
   patchDigest: string | null;
+  patchDigests: string[];
   toolVersions: Record<string, string>;
   commands: CommandEvidence[];
   artifactDigests: Record<string, string>;
@@ -83,7 +88,10 @@ export interface ReceiptDraft {
     swarmId: string | null;
     taskId: string | null;
     hookIds: string[];
+    traceIds: string[];
     agenticQeEvidenceDigests: string[];
+    nativeEvidenceDigests: string[];
+    nativeRuntimeEvidenceDigest: string | null;
   };
 }
 
@@ -98,7 +106,7 @@ export type ChainVerification = { ok: true } | { ok: false; brokenAt: number; re
 const GENESIS_DIGEST = '0'.repeat(64);
 const DRAFT_KEYS = [
   'schemaVersion', 'runId', 'taskId', 'step', 'status', 'authority', 'issuedAt', 'identities',
-  'protectedInputs', 'route', 'hosts', 'admittedPaths', 'patchDigest', 'toolVersions', 'commands',
+  'protectedInputs', 'route', 'hosts', 'admittedPaths', 'patchDigest', 'patchDigests', 'toolVersions', 'commands',
   'artifactDigests', 'verifierDigests', 'critiqueDigests', 'reviewDigests', 'recovery', 'coordination',
 ] as const;
 const RECEIPT_KEYS = [...DRAFT_KEYS, 'sequence', 'previousDigest', 'digest'] as const;
@@ -202,7 +210,7 @@ export function parseReceiptDraft(value: unknown): ReceiptDraft {
   const recovery = parseRecovery(input.recovery);
   const coordination = parseCoordination(input.coordination);
 
-  return deepFreeze({
+  const draft: ReceiptDraft = deepFreeze({
     schemaVersion: 1,
     runId: asNonEmptyString(input.runId, 'receipt.runId'),
     taskId: asNonEmptyString(input.taskId, 'receipt.taskId'),
@@ -217,6 +225,7 @@ export function parseReceiptDraft(value: unknown): ReceiptDraft {
     admittedPaths: asUniqueStrings(input.admittedPaths, 'receipt.admittedPaths', true)
       .map((path, index) => normalizeWorkspacePath(path, `receipt.admittedPaths[${index}]`)),
     patchDigest: input.patchDigest === null ? null : parseDigest(input.patchDigest, 'receipt.patchDigest'),
+    patchDigests: parseDigestArray(input.patchDigests, 'receipt.patchDigests'),
     toolVersions: parseStringRecord(input.toolVersions, 'receipt.toolVersions'),
     commands: input.commands.map((command, index) => parseCommandEvidence(command, index)),
     artifactDigests: parseDigestRecord(input.artifactDigests, 'receipt.artifactDigests', true),
@@ -226,6 +235,8 @@ export function parseReceiptDraft(value: unknown): ReceiptDraft {
     recovery,
     coordination,
   });
+  assertPassReceipt(draft);
+  return draft;
 }
 
 function parseReceipt(value: unknown): Receipt {
@@ -279,13 +290,20 @@ function parseCommandEvidence(value: unknown, index: number): CommandEvidence {
   const label = `receipt.commands[${index}]`;
   const input = asRecord(value, label);
   assertExactKeys(input, [
-    'tool', 'executable', 'argv', 'cwd', 'exitCode', 'signal', 'durationMs', 'stdoutDigest',
-    'stderrDigest', 'timedOut', 'cancelled', 'outputLimitExceeded',
+    'stage', 'attempt', 'candidateTree', 'tool', 'executable', 'argv', 'cwd', 'exitCode', 'signal',
+    'durationMs', 'stdoutDigest', 'stderrDigest', 'timedOut', 'cancelled',
+    'outputLimitExceeded', 'spawnErrorDigest',
   ], label);
   if (!Array.isArray(input.argv)) throw new TypeError(`${label}.argv must be an array`);
+  if (input.stage !== 'red-baseline' && input.stage !== 'build' && input.stage !== 'mutation') {
+    throw new TypeError(`${label}.stage is invalid`);
+  }
   const exitCode = input.exitCode === null ? null : asInteger(input.exitCode, `${label}.exitCode`);
   const signal = input.signal === null ? null : asNonEmptyString(input.signal, `${label}.signal`);
   return {
+    stage: input.stage,
+    attempt: asInteger(input.attempt, `${label}.attempt`),
+    candidateTree: parseGitObject(input.candidateTree, `${label}.candidateTree`),
     tool: assertStructuredText(input.tool, `${label}.tool`),
     executable: assertStructuredText(input.executable, `${label}.executable`),
     argv: input.argv.map((arg, argIndex) => assertStructuredText(arg, `${label}.argv[${argIndex}]`)),
@@ -298,6 +316,9 @@ function parseCommandEvidence(value: unknown, index: number): CommandEvidence {
     timedOut: parseBoolean(input.timedOut, `${label}.timedOut`),
     cancelled: parseBoolean(input.cancelled, `${label}.cancelled`),
     outputLimitExceeded: parseBoolean(input.outputLimitExceeded, `${label}.outputLimitExceeded`),
+    spawnErrorDigest: input.spawnErrorDigest === null
+      ? null
+      : parseDigest(input.spawnErrorDigest, `${label}.spawnErrorDigest`),
   };
 }
 
@@ -317,17 +338,85 @@ function parseRecovery(value: unknown): ReceiptDraft['recovery'] {
 
 function parseCoordination(value: unknown): ReceiptDraft['coordination'] {
   const input = asRecord(value, 'receipt.coordination');
-  assertExactKeys(input, ['swarmId', 'taskId', 'hookIds', 'agenticQeEvidenceDigests'], 'receipt.coordination');
+  assertExactKeys(
+    input,
+    [
+      'swarmId', 'taskId', 'hookIds', 'traceIds', 'agenticQeEvidenceDigests',
+      'nativeEvidenceDigests', 'nativeRuntimeEvidenceDigest',
+    ],
+    'receipt.coordination',
+  );
   const nullable = (entry: unknown, label: string) => entry === null ? null : asNonEmptyString(entry, label);
   return {
     swarmId: nullable(input.swarmId, 'receipt.coordination.swarmId'),
     taskId: nullable(input.taskId, 'receipt.coordination.taskId'),
     hookIds: asUniqueStrings(input.hookIds, 'receipt.coordination.hookIds', true),
+    traceIds: asUniqueStrings(input.traceIds, 'receipt.coordination.traceIds', true),
     agenticQeEvidenceDigests: parseDigestArray(
       input.agenticQeEvidenceDigests,
       'receipt.coordination.agenticQeEvidenceDigests',
     ),
+    nativeEvidenceDigests: parseDigestArray(
+      input.nativeEvidenceDigests,
+      'receipt.coordination.nativeEvidenceDigests',
+    ),
+    nativeRuntimeEvidenceDigest: input.nativeRuntimeEvidenceDigest === null
+      ? null
+      : parseDigest(
+        input.nativeRuntimeEvidenceDigest,
+        'receipt.coordination.nativeRuntimeEvidenceDigest',
+      ),
   };
+}
+
+function assertPassReceipt(receipt: ReceiptDraft): void {
+  if (receipt.status !== 'pass') return;
+  const hosts = new Set(receipt.hosts.map(({ host }) => host));
+  const stages = new Set(receipt.commands.map(({ stage }) => stage));
+  const attempt = receipt.recovery.repairCount;
+  const normallyCompleted = (command: CommandEvidence) => command.signal === null
+    && !command.timedOut && !command.cancelled && !command.outputLimitExceeded
+    && command.spawnErrorDigest === null;
+  const red = receipt.commands.filter(({ stage }) => stage === 'red-baseline');
+  const build = receipt.commands.filter((command) => command.stage === 'build' && command.attempt === attempt);
+  const mutation = receipt.commands.filter((command) => command.stage === 'mutation' && command.attempt === attempt);
+  const verifierKeys = [
+    `attempt-${attempt}:public`,
+    `attempt-${attempt}:independent`,
+    `attempt-${attempt}:regression`,
+  ];
+  if (receipt.step !== 'candidate-transaction'
+    || receipt.hosts.length !== 2
+    || hosts.size !== 2 || !hosts.has('codex') || !hosts.has('claude-code')
+    || receipt.identities.candidate.tree === receipt.identities.evaluator.tree
+    || receipt.admittedPaths.length === 0 || receipt.patchDigest === null
+    || receipt.patchDigests.length < 1 || receipt.patchDigests.at(-1) !== receipt.patchDigest
+    || stages.size !== 3 || red.length === 0 || build.length === 0 || mutation.length === 0
+    || red.some((command) => command.attempt !== 0
+      || command.candidateTree !== receipt.identities.evaluator.tree
+      || command.exitCode !== 101 || !normallyCompleted(command))
+    || build.some((command) => command.candidateTree !== receipt.identities.candidate.tree
+      || command.exitCode !== 0 || !normallyCompleted(command))
+    || mutation.some((command) => command.candidateTree !== receipt.identities.candidate.tree
+      || command.exitCode !== 101 || !normallyCompleted(command))
+    || Object.keys(receipt.artifactDigests).length === 0
+    || Object.keys(receipt.protectedInputs).length === 0
+    || Object.keys(receipt.toolVersions).length === 0
+    || !verifierKeys.every((key) => key in receipt.verifierDigests)
+    || !('red-baseline' in receipt.verifierDigests)
+    || !Object.keys(receipt.verifierDigests).some((key) => key.startsWith('mutation'))
+    || receipt.critiqueDigests.length === 0 || receipt.reviewDigests.length !== 2
+    || receipt.coordination.agenticQeEvidenceDigests.length === 0
+    || receipt.coordination.nativeEvidenceDigests.length < 4
+    || receipt.coordination.nativeRuntimeEvidenceDigest === null) {
+    throw new Error('HARNESS_PASS_RECEIPT_EVIDENCE_INCOMPLETE');
+  }
+}
+
+function parseGitObject(value: unknown, label: string): string {
+  const object = asNonEmptyString(value, label);
+  if (!/^[a-f0-9]{40,64}$/.test(object)) throw new TypeError(`${label} is not a Git object ID`);
+  return object;
 }
 
 function parseDigestRecord(value: unknown, label: string, pathKeys = false): Record<string, string> {

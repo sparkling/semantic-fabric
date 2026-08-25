@@ -13,7 +13,7 @@ import {
   normalizeWorkspacePath,
   pathsOverlap,
 } from './contracts.js';
-import { runStructuredProcess } from './process.js';
+import { runGitCommand } from './git-process.js';
 import { countFileLines, resolveMutablePath, resolveWorkspacePath, sha256File } from './workspace.js';
 
 export type PolicyActionKind = 'read' | 'write' | 'execute' | 'network' | 'promote';
@@ -151,20 +151,15 @@ export async function captureProtectedInputs(
 ): Promise<Readonly<Record<string, string>>> {
   const digests: Record<string, string> = {};
   for (const path of [...task.protectedPaths].sort()) {
-    const tracked = await runStructuredProcess({
-      tool: 'git',
-      executable: 'git',
-      argv: ['ls-files', '--error-unmatch', '--', path],
-      cwd: '.',
-      env: {},
-      timeoutMs: Math.min(10_000, config.limits.maxTimeoutMs),
-      maxOutputBytes: Math.min(1_000_000, config.limits.maxOutputBytes),
-    }, {
-      workspaceRoot: task.workspaceRoot,
-      config,
-      declaredTools: ['git'],
-    });
-    if (!tracked.success || tracked.stdout.trim() !== path) {
+    const tracked = await runGitCommand(
+      task.workspaceRoot,
+      ['ls-files', '--error-unmatch', '--', path],
+      {
+        timeoutMs: Math.min(10_000, config.limits.maxTimeoutMs),
+        maxOutputBytes: Math.min(1_000_000, config.limits.maxOutputBytes),
+      },
+    );
+    if (tracked.exitCode !== 0 || tracked.stdout.trim() !== path) {
       throw new Error(`protected input is not tracked: ${path}`);
     }
     const absolute = resolveWorkspacePath(task.workspaceRoot, path, {
@@ -196,20 +191,17 @@ export async function verifyProtectedInputs(
 }
 
 export async function listTrackedPaths(task: TaskContract, config: HarnessConfig): Promise<readonly string[]> {
-  const result = await runStructuredProcess({
-    tool: 'git',
-    executable: 'git',
-    argv: ['ls-files', '-z', '--'],
-    cwd: '.',
-    env: {},
-    timeoutMs: Math.min(10_000, config.limits.maxTimeoutMs),
-    maxOutputBytes: config.limits.maxOutputBytes,
-  }, {
-    workspaceRoot: task.workspaceRoot,
-    config,
-    declaredTools: ['git'],
-  });
-  if (!result.success) throw new Error(`cannot enumerate tracked paths: ${result.stderr || result.spawnError}`);
+  const result = await runGitCommand(
+    task.workspaceRoot,
+    ['ls-files', '-z', '--'],
+    {
+      timeoutMs: Math.min(10_000, config.limits.maxTimeoutMs),
+      maxOutputBytes: config.limits.maxOutputBytes,
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`cannot enumerate tracked paths: ${result.stderr || `git exited ${String(result.exitCode)}`}`);
+  }
   return deepFreeze([...new Set(result.stdout.split('\0').filter(Boolean))].sort());
 }
 

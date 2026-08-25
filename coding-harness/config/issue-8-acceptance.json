@@ -1,0 +1,223 @@
+{
+  "schemaVersion": 1,
+  "taskId": "bprune_8_20260825",
+  "issue": 8,
+  "authority": "development-only-no-promotion",
+  "baseline": {
+    "commit": "d510fc952a8dc701d65b1a4f3ad25a8109b98669",
+    "tree": "b5d67e0fdb107e6502959fd2ff36831170d093b1"
+  },
+  "sourceFix": {
+    "commit": "10dedd40bda63d3acef18b8d34f61a32214e98d4",
+    "tree": "a3f637f6b14fff73e5209e539b7a19f0b6b73ffa"
+  },
+  "evaluatorPaths": [
+    "crates/sf-conformance/tests/issue_8_binding_pruning.rs"
+  ],
+  "implementationPaths": [
+    "crates/sf-sparql/src/unfold.rs"
+  ],
+  "artifactPaths": [
+    "crates/sf-sparql/src/unfold.rs"
+  ],
+  "tools": ["cargo"],
+  "redBaseline": {
+    "commands": [
+      {
+        "commandId": "red-baseline",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "issue_8_binding_pruning"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      }
+    ],
+    "expected": {
+      "exitCode": 101,
+      "failedTests": [
+        "class_atom_repeated_graph_and_object_variable_is_pruned",
+        "class_atom_repeated_predicate_and_object_variable_is_pruned",
+        "incompatible_constant_subject_prunes_the_whole_atom_branch",
+        "repeated_subject_and_predicate_variable_prunes_incompatible_branches"
+      ]
+    }
+  },
+  "commands": {
+    "build": [
+      {
+        "commandId": "workspace-build",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "build", "--locked", "--workspace", "--all-targets"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      }
+    ],
+    "public": [
+      {
+        "commandId": "issue8-public",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "issue_8_binding_pruning"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      }
+    ],
+    "independent": [
+      {
+        "commandId": "differential-oracle",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "differential_oracle"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "commandId": "differential-tree",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "differential_tree"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      }
+    ],
+    "regression": [
+      {
+        "commandId": "format-check",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "fmt", "--all", "--check"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "commandId": "workspace-clippy",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "warnings"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "commandId": "workspace-tests",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "--workspace"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "commandId": "w3c-conformance",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "run", "--locked", "-p", "sf-cli", "--", "conformance"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      }
+    ],
+    "mutation": [
+      {
+        "mutationId": "ordinary-predicate-bind-prune",
+        "path": "crates/sf-sparql/src/unfold.rs",
+        "search": "if !bind(&mut branch, pv.as_str(), pred_def)? {\n                return Ok(None);\n            }",
+        "replacement": "bind(&mut branch, pv.as_str(), pred_def)?;",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "issue_8_binding_pruning", "repeated_subject_and_predicate_variable_prunes_incompatible_branches", "--", "--exact"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "mutationId": "ordinary-subject-bind-prune",
+        "path": "crates/sf-sparql/src/unfold.rs",
+        "search": "if !self.bind_position(&mut branch, &tp.subject, q_subj)? {\n            return Ok(None);\n        }",
+        "replacement": "self.bind_position(&mut branch, &tp.subject, q_subj)?;",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "issue_8_binding_pruning", "incompatible_constant_subject_prunes_the_whole_atom_branch", "--", "--exact"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "mutationId": "class-object-bind-prune",
+        "path": "crates/sf-sparql/src/unfold.rs",
+        "search": "if !bind(\n                    &mut branch,\n                    ov.as_str(),\n                    TermDef::Const(Term::NamedNode(class.clone())),\n                )? {\n                    continue;\n                }",
+        "replacement": "bind(\n                    &mut branch,\n                    ov.as_str(),\n                    TermDef::Const(Term::NamedNode(class.clone())),\n                )?;",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "issue_8_binding_pruning", "class_atom_repeated_graph_and_object_variable_is_pruned", "--", "--exact"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      },
+      {
+        "mutationId": "class-predicate-bind-prune",
+        "path": "crates/sf-sparql/src/unfold.rs",
+        "search": "if !bind(\n                    &mut branch,\n                    pv.as_str(),\n                    TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RDF_TYPE))),\n                )? {\n                    continue;\n                }",
+        "replacement": "bind(\n                    &mut branch,\n                    pv.as_str(),\n                    TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RDF_TYPE))),\n                )?;",
+        "command": {
+          "tool": "cargo",
+          "executable": "cargo",
+          "argv": ["--offline", "test", "--locked", "-p", "sf-conformance", "--test", "issue_8_binding_pruning", "class_atom_repeated_predicate_and_object_variable_is_pruned", "--", "--exact"],
+          "cwd": ".",
+          "env": {"CARGO_NET_OFFLINE": "true"},
+          "timeoutMs": 1800000,
+          "maxOutputBytes": 10000000
+        }
+      }
+    ]
+  },
+  "policy": {
+    "candidateNetwork": "offline",
+    "modelTransport": "native-first-party-only",
+    "nativeHosts": ["codex", "claude-code"]
+  },
+  "evolutionEligible": false
+}

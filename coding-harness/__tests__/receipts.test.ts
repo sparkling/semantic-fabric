@@ -13,7 +13,7 @@ function draft(step = 'build') {
     runId: 'run-0001',
     taskId: 'task-0001',
     step,
-    status: 'pass',
+    status: 'fail',
     authority: 'development-only-no-promotion',
     issuedAt: timestamp,
     identities: {
@@ -37,8 +37,12 @@ function draft(step = 'build') {
     }],
     admittedPaths: ['src/change.ts'],
     patchDigest: digestValue('patch'),
+    patchDigests: [digestValue('patch')],
     toolVersions: { node: process.version },
     commands: [{
+      stage: 'build',
+      attempt: 0,
+      candidateTree: gitTree,
       tool: 'node',
       executable: 'node',
       argv: ['--version'],
@@ -51,6 +55,7 @@ function draft(step = 'build') {
       timedOut: false,
       cancelled: false,
       outputLimitExceeded: false,
+      spawnErrorDigest: null,
     }],
     artifactDigests: { build: digestValue('artifact') },
     verifierDigests: { unit: digestValue('verifier') },
@@ -66,7 +71,10 @@ function draft(step = 'build') {
       swarmId: 'swarm-1',
       taskId: 'ruflo-task-1',
       hookIds: ['route-1'],
+      traceIds: ['trace-1'],
       agenticQeEvidenceDigests: [digestValue('qe')],
+      nativeEvidenceDigests: [digestValue('native')],
+      nativeRuntimeEvidenceDigest: null,
     },
   };
 }
@@ -75,6 +83,12 @@ describe('strict receipt schema', () => {
   it('requires fixed development-only authority and rejects unknown fields', () => {
     expect(() => parseReceiptDraft({ ...draft(), authority: 'publish' })).toThrow(/promotion authority/);
     expect(() => parseReceiptDraft({ ...draft(), extra: true })).toThrow(/invalid keys/);
+  });
+
+  it('rejects a structurally hashed pass without candidate transaction evidence', () => {
+    expect(() => parseReceiptDraft({ ...draft(), status: 'pass' })).toThrow(
+      'HARNESS_PASS_RECEIPT_EVIDENCE_INCOMPLETE',
+    );
   });
 
   it('binds native host authentication and rejects indirect gateways', () => {
@@ -106,7 +120,7 @@ describe('receipt chain', () => {
     const chain = new ReceiptChain();
     chain.append(draft());
     const exported = JSON.parse(chain.export());
-    exported.receipts[0].status = 'fail';
+    exported.receipts[0].status = 'gated';
     expect(() => ReceiptChain.import(JSON.stringify(exported))).toThrow(/digest does not match body/);
   });
 

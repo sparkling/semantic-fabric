@@ -1,8 +1,25 @@
 // SPDX-License-Identifier: MIT
 
+export * from './acceptance-task.js';
+export * from './acceptance-runner.js';
+export * from './candidate.js';
 export * from './config.js';
 export * from './contracts.js';
+export * from './evidence.js';
+export * from './evaluator.js';
+export * from './git-process.js';
+export * from './git-worktrees.js';
+export * from './kernel.js';
+export * from './manifest.js';
+export * from './model-controller.js';
+export * from './native-client.js';
+export * from './native-filesystem.js';
+export * from './models/index.js';
+export * from './native-process.js';
+export * from './network.js';
 export * from './policy.js';
 export * from './process.js';
 export * from './receipts.js';
+export * from './repository-operations.js';
+export * from './rust-sandbox.js';
 export * from './workspace.js';

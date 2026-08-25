@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-import { isAbsolute } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { resolveWorkspacePath } from '../workspace.js';
 import {
   assertNativeSubscriptionEnvironment,
   buildNativeSubscriptionEnvironment,
@@ -52,6 +54,10 @@ interface AdapterOptions {
   readonly sourceEnvironment: Readonly<Record<string, string | undefined>>;
 }
 
+interface CodexAdapterOptions extends AdapterOptions {
+  readonly evidenceRoot: string;
+}
+
 export class NativeAuthPreflightError extends Error {
   readonly host: 'codex' | 'claude-code';
 
@@ -77,8 +83,9 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
   readonly #executable: string;
   readonly #runner: NativeProcessRunner;
   readonly #environment: Readonly<Record<string, string>>;
+  readonly #evidenceRoot: string;
 
-  constructor(options: AdapterOptions) {
+  constructor(options: CodexAdapterOptions) {
     assertAdapterOptions(options);
     this.#executable = options.executable;
     this.#runner = options.runner;
@@ -86,6 +93,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       this.host,
       options.sourceEnvironment,
     );
+    this.#evidenceRoot = validateRoot(options.evidenceRoot, 'EVIDENCE_ROOT');
   }
 
   async preflight(request: NativePreflightRequest): Promise<NativeAuthEvidence> {
@@ -128,8 +136,11 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
 
   buildInvocation(request: CodexInvocationRequest): NativeProcessRequest {
     validateInvocation(request);
-    validateAbsolutePath(request.schemaPath, 'SCHEMA_PATH');
-    validateAbsolutePath(request.outputPath, 'OUTPUT_PATH');
+    validateScopedPath(this.#evidenceRoot, request.schemaPath, 'SCHEMA_PATH', true);
+    validateScopedPath(this.#evidenceRoot, request.outputPath, 'OUTPUT_PATH', false);
+    if (request.schemaPath === request.outputPath) {
+      throw new Error('HARNESS_NATIVE_OUTPUT_PATH_INVALID');
+    }
     const args = [
       'exec',
       '--cd',
@@ -158,6 +169,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       request.timeoutMs,
       request.signal,
       `${request.prompt}\n`,
+      [request.schemaPath],
+      [request.outputPath],
     );
   }
 
@@ -171,6 +184,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
     timeoutMs: number,
     signal?: AbortSignal,
     stdin?: string,
+    readOnlyPaths?: readonly string[],
+    writablePaths?: readonly string[],
   ): NativeProcessRequest {
     assertNativeSubscriptionEnvironment(this.host, this.#environment);
     return Object.freeze({
@@ -181,6 +196,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       env: this.#environment,
       timeoutMs,
       ...(stdin === undefined ? {} : { stdin }),
+      ...(readOnlyPaths === undefined ? {} : { readOnlyPaths }),
+      ...(writablePaths === undefined ? {} : { writablePaths }),
       ...(signal === undefined ? {} : { signal }),
     });
   }
@@ -262,7 +279,14 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
             '--disallowedTools',
             'Bash,WebFetch,WebSearch,Task',
           ]
-        : ['--permission-mode', 'dontAsk', '--tools', ''];
+        : [
+            '--permission-mode',
+            'dontAsk',
+            '--tools',
+            'Read,Glob,Grep',
+            '--disallowedTools',
+            'Edit,Write,Bash,WebFetch,WebSearch,Task',
+          ];
     return this.#processRequest(
       [
         '-p',
@@ -401,9 +425,45 @@ function validateModel(model: string): void {
 }
 
 function validateAbsolutePath(path: string, field: string): void {
-  if (!isAbsolute(path) || path.includes('\0')) {
+  if (!isAbsolute(path) || resolve(path) !== path || path.includes('\0')) {
     throw new Error(`HARNESS_NATIVE_${field}_INVALID`);
   }
+}
+
+function validateScopedPath(
+  root: string,
+  path: string,
+  field: string,
+  requireFile: boolean,
+): void {
+  validateAbsolutePath(root, 'CWD');
+  validateAbsolutePath(path, field);
+  const delta = relative(root, path);
+  if (delta === '' || delta === '..' || delta.startsWith(`..${sep}`) || isAbsolute(delta)) {
+    throw new Error(`HARNESS_NATIVE_${field}_OUTSIDE_CWD`);
+  }
+  const workspacePath = delta.split(sep).join('/');
+  try {
+    const absolute = resolveWorkspacePath(root, workspacePath, requireFile
+      ? { requireRegularFile: true, rejectHardlinks: true }
+      : { allowMissingLeaf: true });
+    if (!requireFile && existsSync(absolute)) {
+      resolveWorkspacePath(root, workspacePath, {
+        requireRegularFile: true,
+        rejectHardlinks: true,
+      });
+    }
+  } catch (error) {
+    throw new Error(`HARNESS_NATIVE_${field}_INVALID`, { cause: error });
+  }
+}
+
+function validateRoot(path: string, field: string): string {
+  validateAbsolutePath(path, field);
+  if (realpathSync(path) !== path || !statSync(path).isDirectory()) {
+    throw new Error(`HARNESS_NATIVE_${field}_INVALID`);
+  }
+  return path;
 }
 
 function captureVersion(
@@ -423,7 +483,6 @@ function captureVersion(
 function processSucceeded(result: NativeProcessResult): boolean {
   return result.exitCode === 0 && !result.timedOut && result.cancelled !== true;
 }
-
 function signalAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }

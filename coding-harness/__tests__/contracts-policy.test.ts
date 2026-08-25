@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -159,6 +167,30 @@ describe('protected and mutable evidence', () => {
     const config = createTestConfig(['untracked.txt']);
     const task = createTask(root, config, { protectedPaths: ['untracked.txt'] });
     await expect(captureProtectedInputs(task, config)).rejects.toThrow(/not tracked/);
+  });
+
+  it('uses the pinned Git executable when PATH begins with a fake git', async () => {
+    const root = workspace();
+    const fakeBin = join(root, 'fake-bin');
+    const sentinel = join(root, 'fake-git-invoked');
+    mkdirSync(fakeBin, { mode: 0o700 });
+    writeFileSync(
+      join(fakeBin, 'git'),
+      '#!/bin/sh\nprintf invoked > fake-git-invoked\nexit 99\n',
+      { mode: 0o700 },
+    );
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
+    try {
+      const config = createTestConfig();
+      const task = createTask(root, config);
+      await expect(captureProtectedInputs(task, config)).resolves.toHaveProperty('protected.txt');
+      await expect(listTrackedPaths(task, config)).resolves.toContain('protected.txt');
+      expect(existsSync(sentinel)).toBe(false);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
   });
 
   it('rejects newly-created files over 500 lines', async () => {

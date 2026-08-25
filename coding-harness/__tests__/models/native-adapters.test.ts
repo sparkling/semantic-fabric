@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
@@ -35,8 +38,15 @@ const ok = (stdout: string): NativeProcessResult => ({
   timedOut: false,
 });
 
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
 describe('native subscription adapters', () => {
   it('proves both first-party subscriptions without provider fallback', async () => {
+    const evidenceRoot = mkdtempSync(join(tmpdir(), 'coding-harness-adapter-'));
+    roots.push(evidenceRoot);
     const runner = new FakeRunner((request) => {
       if (request.executable === '/tools/codex') {
         return ok(request.args.includes('--version') ? 'codex-cli 1.2.3' : 'Logged in using ChatGPT');
@@ -63,6 +73,7 @@ describe('native subscription adapters', () => {
       executable: '/tools/codex',
       runner,
       sourceEnvironment: environment,
+      evidenceRoot,
     });
     const claude = new ClaudeCodeSubscriptionAdapter({
       executable: '/tools/claude',
@@ -93,30 +104,36 @@ describe('native subscription adapters', () => {
   it('builds ephemeral structured invocations with cancellation propagation', async () => {
     const runner = new FakeRunner(() => ok('{}'));
     const controller = new AbortController();
+    const root = mkdtempSync(join(tmpdir(), 'coding-harness-adapter-'));
+    roots.push(root);
     const codex = new CodexSubscriptionAdapter({
       executable: '/tools/codex',
       runner,
       sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+      evidenceRoot: root,
     });
     const claude = new ClaudeCodeSubscriptionAdapter({
       executable: '/tools/claude',
       runner,
       sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
     });
+    const schemaPath = join(root, 'response.schema.json');
+    const outputPath = join(root, 'response.json');
+    writeFileSync(schemaPath, JSON.stringify({ type: 'object' }));
 
     await codex.invoke({
-      cwd: '/repo',
+      cwd: root,
       model: 'gpt-5.6',
       prompt: 'review this patch',
       schema: { type: 'object' },
-      schemaPath: '/run/response.schema.json',
-      outputPath: '/run/response.json',
+      schemaPath,
+      outputPath,
       workspaceAccess: 'read',
       timeoutMs: 1_000,
       signal: controller.signal,
     });
     await claude.invoke({
-      cwd: '/repo',
+      cwd: root,
       model: 'claude-opus-4-1',
       prompt: 'review this patch',
       schema: { type: 'object' },
@@ -133,13 +150,15 @@ describe('native subscription adapters', () => {
         '--ignore-user-config',
         '--strict-config',
         '--output-schema',
-        '/run/response.schema.json',
+        schemaPath,
       ]),
     );
     expect(codexRequest?.args.join(' ')).toContain('model_provider="openai"');
     expect(claudeRequest?.args).toEqual(
       expect.arrayContaining([
         '-p',
+        'Read,Glob,Grep',
+        'Edit,Write,Bash,WebFetch,WebSearch,Task',
         '--strict-mcp-config',
         '--no-session-persistence',
         '--safe-mode',
@@ -148,6 +167,16 @@ describe('native subscription adapters', () => {
     expect(claudeRequest?.args).not.toContain('WebSearch');
     expect(codexRequest?.signal).toBe(controller.signal);
     expect(claudeRequest?.signal).toBe(controller.signal);
+    expect(() => codex.buildInvocation({
+      cwd: root,
+      model: 'gpt-5.6',
+      prompt: 'escape',
+      schema: { type: 'object' },
+      schemaPath,
+      outputPath: join(root, '..', 'escape.json'),
+      workspaceAccess: 'read',
+      timeoutMs: 1_000,
+    })).toThrow('HARNESS_NATIVE_OUTPUT_PATH_OUTSIDE_CWD');
   });
 
   it('rejects Claude auth evidence backed by an API key', async () => {

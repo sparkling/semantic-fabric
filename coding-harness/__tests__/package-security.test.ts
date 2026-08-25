@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -20,6 +21,7 @@ type Lockfile = {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as Record<string, unknown>;
 const lockfile = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8')) as Lockfile;
+const manifest = JSON.parse(readFileSync(resolve(root, '.harness/manifest.json'), 'utf8')) as Record<string, unknown>;
 
 const expectedRuntime = {
   '@metaharness/harness': '0.2.0',
@@ -53,8 +55,22 @@ describe('private package boundary', () => {
   it('has no executable evolution path before the evidence gate', () => {
     const scripts = packageJson.scripts as Record<string, string>;
     expect(Object.keys(scripts).some((name) => name.startsWith('evolve'))).toBe(false);
-    expect(() => readFileSync(resolve(root, 'suite.json'))).toThrow();
-    expect(() => readFileSync(resolve(root, '.harness/manifest.json'))).toThrow();
+    expect(packageJson.devDependencies).not.toHaveProperty('@metaharness/darwin');
+    expect(manifest.evolution).toEqual({
+      eligible: false,
+      minimumTrainingTasks: 5,
+      minimumSealedHoldouts: 5,
+      suiteFile: null,
+    });
+    const trackedSuite = spawnSync(
+      'git',
+      ['ls-files', '--', 'coding-harness/suite.json'],
+      { cwd: resolve(root, '..'), encoding: 'utf8' },
+    );
+    expect(trackedSuite.status).toBe(0);
+    expect(trackedSuite.stdout).toBe('');
+    expect(existsSync(resolve(root, 'suite.json'))).toBe(false);
+    expect(existsSync(resolve(root, '.metaharness'))).toBe(false);
   });
 });
 

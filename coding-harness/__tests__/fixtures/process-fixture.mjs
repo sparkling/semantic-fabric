@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+import { writeFileSync } from 'node:fs';
+
 const mode = process.argv[2];
 
 if (mode === 'environment') {
@@ -14,6 +16,10 @@ if (mode === 'environment') {
   process.stdout.write('x'.repeat(20_000));
 } else if (mode === 'wait') {
   setInterval(() => undefined, 1_000);
+} else if (mode === 'artifact') {
+  writeFileSync(process.argv[3], 'candidate artifact\n');
+} else if (mode === 'success') {
+  process.stdout.write('verified\n');
 } else {
   process.exitCode = 2;
 }

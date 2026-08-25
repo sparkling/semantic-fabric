@@ -5,6 +5,10 @@ import type { ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import type { HarnessConfig, StructuredCommand } from './contracts.js';
 import { isForbiddenEnvironmentName, parseStructuredCommand } from './contracts.js';
+import {
+  isolateOfflineCandidateCommand,
+  type OfflineProcessIsolator,
+} from './network.js';
 import { resolveWorkspacePath } from './workspace.js';
 
 export interface ProcessContext {
@@ -13,6 +17,13 @@ export interface ProcessContext {
   declaredTools: readonly string[];
   sourceEnvironment?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  boundary:
+    | { kind: 'trusted-control-plane' }
+    | {
+        kind: 'offline-candidate';
+        isolator: OfflineProcessIsolator;
+        writablePaths: readonly string[];
+      };
 }
 
 export interface ProcessResult {
@@ -68,12 +79,30 @@ export async function runStructuredProcess(
   if (context.signal?.aborted) return cancelledBeforeStart(startedAt);
 
   const env = sanitizeEnvironment(context.sourceEnvironment ?? process.env, command.env, context.config);
+  if (context.boundary === undefined) throw new Error('HARNESS_PROCESS_BOUNDARY_REQUIRED');
+  const launch = context.boundary.kind === 'trusted-control-plane'
+    ? { executable: command.executable, args: command.argv, cwd, env }
+    : isolateOfflineCandidateCommand({
+      mode: 'offline',
+      channel: 'candidate-command',
+      stage: 'candidate-execution',
+      deterministic: true,
+      allowedOrigins: [],
+      command: {
+        executable: command.executable,
+        args: command.argv,
+        cwd,
+        env,
+        writablePaths: context.boundary.writablePaths,
+      },
+    }, context.boundary.isolator).command;
+  if (context.boundary.kind === 'offline-candidate') context.boundary.isolator.assertStable();
   return new Promise((resolveResult) => {
     let child: StructuredChild;
     try {
-      child = spawn(command.executable, command.argv, {
-        cwd,
-        env,
+      child = spawn(launch.executable, [...launch.args], {
+        cwd: launch.cwd,
+        env: { ...launch.env },
         shell: false,
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],

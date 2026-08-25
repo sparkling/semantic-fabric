@@ -43,6 +43,7 @@ describe('structured process runner', () => {
       workspaceRoot: root,
       config,
       declaredTools: ['node'],
+      boundary: { kind: 'trusted-control-plane' },
       sourceEnvironment: {
         PATH: process.env.PATH,
         OPENAI_API_KEY: 'secret',
@@ -62,6 +63,7 @@ describe('structured process runner', () => {
       workspaceRoot: workspace(),
       config,
       declaredTools: ['node'],
+      boundary: { kind: 'trusted-control-plane' },
     })).rejects.toThrow(/shell metacharacter/);
   });
 
@@ -70,6 +72,7 @@ describe('structured process runner', () => {
       workspaceRoot: workspace(),
       config: createTestConfig(),
       declaredTools: ['node'],
+      boundary: { kind: 'trusted-control-plane' },
     });
     expect(result.success).toBe(false);
     expect(result.outputLimitExceeded).toBe(true);
@@ -81,6 +84,7 @@ describe('structured process runner', () => {
       workspaceRoot: workspace(),
       config: createTestConfig(),
       declaredTools: ['node'],
+      boundary: { kind: 'trusted-control-plane' },
     });
     expect(result.success).toBe(false);
     expect(result.timedOut).toBe(true);
@@ -94,6 +98,7 @@ describe('structured process runner', () => {
       config: createTestConfig(),
       declaredTools: ['node'],
       signal: controller.signal,
+      boundary: { kind: 'trusted-control-plane' },
     });
     setTimeout(() => controller.abort(), 50);
     const result = await pending;

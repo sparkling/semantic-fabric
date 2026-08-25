@@ -4,4 +4,5 @@
 export const SYSTEM_PROMPT = `You write the tests the change needs: the happy path, the boundary, and the one failure mode most likely to regress. Mirror the project's existing test style and runner. A test that cannot fail is worse than no test — assert behaviour, not implementation. You operate inside the coding-harness harness; defer destructive actions to the user.`;
 
 export const NAME = 'test-writer';
-export const TIER = 'sonnet' as const;
+export const ELIGIBLE_HOSTS = ['codex', 'claude-code'] as const;
+export const ROUTING_ROLE = 'repair' as const;

@@ -1,0 +1,268 @@
+// SPDX-License-Identifier: MIT
+
+import type { VerifierRegistry, Verdict } from '@metaharness/harness';
+import {
+  asNonEmptyString,
+  asRecord,
+  assertExactKeys,
+  deepFreeze,
+} from './contracts.js';
+import type {
+  ArchitectureEvidence,
+  CandidateBuild,
+  CandidateReview,
+  PatchSubmission,
+} from './candidate.js';
+import { critiqueAndChooseArchitecture } from './kernel.js';
+import { NativeInvocationRecovery } from './models/recovery.js';
+import {
+  requireDistinctHostProposal,
+  requireCrossVendorReviewers,
+} from './models/review.js';
+import type {
+  NativeModelCandidate,
+  PersistentRoutedAgentPool,
+} from './models/routing.js';
+import type { NativeHost } from './models/types.js';
+import { digestValue } from './receipts.js';
+import type { RepositoryModelController } from './repository-operations.js';
+
+export type ModelOperation = 'architecture' | 'implementation' | 'repair' | 'review';
+
+export interface NativeStructuredClient {
+  invoke(input: Readonly<{
+    candidate: NativeModelCandidate;
+    operation: ModelOperation;
+    prompt: string;
+    signal?: AbortSignal;
+  }>): Promise<NativeStructuredInvocation>;
+}
+
+export interface NativeStructuredInvocation {
+  readonly invocationId: string;
+  readonly output: unknown;
+  readonly outputDigest: string;
+}
+
+export interface NativeModelControllerOptions {
+  pool: PersistentRoutedAgentPool;
+  candidates: readonly NativeModelCandidate[];
+  clients: Readonly<Record<NativeHost, NativeStructuredClient>>;
+  architectureVerifiers: VerifierRegistry;
+  recovery: NativeInvocationRecovery;
+  taskPrompt: string;
+}
+
+export class NativeRepositoryModelController implements RepositoryModelController {
+  readonly #options: NativeModelControllerOptions;
+
+  constructor(options: NativeModelControllerOptions) {
+    if (options.candidates.length < 2) throw new Error('HARNESS_NATIVE_CANDIDATES_REQUIRED');
+    requireCrossVendorReviewers(options.candidates);
+    this.#options = options;
+  }
+
+  async architecture(signal?: AbortSignal): Promise<ArchitectureEvidence> {
+    const primary = this.#selected('architecture');
+    const shadow = requireDistinctHostProposal(primary, this.#options.candidates);
+    const invocations: Array<{ invocationId: string; host: NativeHost }> = [];
+    const proposals = await Promise.all([primary, shadow].map(async (candidate) => {
+      const invocation = await this.#invoke(
+        candidate,
+        'architecture',
+        this.#prompt('Propose a minimal architecture and explicit invariants.'),
+        signal,
+      );
+      invocations.push({ invocationId: invocation.invocationId, host: candidate.host });
+      const output = parseArchitecture(invocation.output);
+      return { host: candidate.host, value: output.proposal, confidence: output.confidence };
+    }));
+    const critiqued = await critiqueAndChooseArchitecture({
+      proposals: proposals as [typeof proposals[number], typeof proposals[number]],
+      verifiers: this.#options.architectureVerifiers,
+      repair: async (host, value, verdict) => {
+        const candidate = this.#candidateForHost(host, 'architecture');
+        const invocation = await this.#invoke(
+          candidate,
+          'architecture',
+          this.#prompt('Repair this architecture from verifier feedback.', { value, verdict }),
+          signal,
+        );
+        invocations.push({ invocationId: invocation.invocationId, host: candidate.host });
+        return parseArchitecture(invocation.output).proposal;
+      },
+      maxAttempts: 2,
+    });
+    return deepFreeze({
+      value: critiqued.winner,
+      critiqueDigests: critiqued.entries.map(({ digest }) => digest),
+      invocations: invocations.sort((left, right) => left.invocationId.localeCompare(right.invocationId)),
+    });
+  }
+
+  async implement(
+    architecture: ArchitectureEvidence,
+    signal?: AbortSignal,
+  ): Promise<PatchSubmission> {
+    const candidate = this.#selected('implementation');
+    const invocation = await this.#invoke(
+      candidate,
+      'implementation',
+      this.#prompt('Return only a unified diff for the admitted mutable paths.', architecture.value),
+      signal,
+    );
+    return parsePatch(invocation.output, invocation.invocationId);
+  }
+
+  async repair(
+    patch: PatchSubmission,
+    reasons: readonly string[],
+    repairAttempt: number,
+    signal?: AbortSignal,
+  ): Promise<PatchSubmission> {
+    const candidate = this.#selected('repair');
+    const invocation = await this.#invoke(
+      candidate,
+      'repair',
+      this.#prompt('Repair the unified diff; preserve all passing behavior.', {
+        patch: patch.payload,
+        reasons,
+        repairAttempt,
+      }),
+      signal,
+    );
+    return parsePatch(invocation.output, invocation.invocationId);
+  }
+
+  async review(
+    host: NativeHost,
+    build: CandidateBuild,
+    signal?: AbortSignal,
+  ): Promise<CandidateReview> {
+    const candidate = this.#candidateForHost(host, 'review');
+    const invocation = await this.#invoke(
+      candidate,
+      'review',
+      this.#prompt('Review the admitted candidate and immutable artifact digests.', {
+        candidate: build.candidate,
+        commands: build.commands,
+        artifactDigests: build.artifactDigests,
+      }),
+      signal,
+    );
+    const output = parseReview(invocation.output);
+    return deepFreeze({
+      host,
+      invocationId: invocation.invocationId,
+      candidate: build.candidate,
+      accepted: output.accepted,
+      digest: digestValue({
+        host,
+        candidate: build.candidate,
+        commands: build.commands,
+        artifactDigests: build.artifactDigests,
+        invocationId: invocation.invocationId,
+        outputDigest: invocation.outputDigest,
+        output,
+      }),
+      reasons: output.reasons,
+    });
+  }
+
+  recoveryEvidence() {
+    const snapshot = this.#options.recovery.snapshot();
+    const states = Object.values(snapshot.breakers);
+    const breakerState: 'closed' | 'open' | 'half-open' = states.includes('open')
+      ? 'open'
+      : states.includes('half-open') ? 'half-open' : 'closed';
+    return deepFreeze({
+      retryCount: snapshot.events.filter(({ outcome }) => outcome === 'transient-retry').length,
+      breakerState,
+      events: snapshot.events,
+    });
+  }
+
+  async #invoke(
+    candidate: NativeModelCandidate,
+    operation: ModelOperation,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<NativeStructuredInvocation> {
+    return await this.#options.recovery.invoke({
+      candidate,
+      operation,
+      signal,
+      invoke: async () => await this.#options.clients[candidate.host].invoke({
+        candidate,
+        operation,
+        prompt,
+        signal,
+      }),
+    });
+  }
+
+  #selected(kind: 'architecture' | 'implementation' | 'repair'): NativeModelCandidate {
+    const selected = this.#options.pool.select(kind);
+    const candidate = this.#options.candidates.find(({ id }) => id === selected.id);
+    if (candidate === undefined) throw new Error(`HARNESS_ROUTED_AGENT_UNAVAILABLE:${kind}`);
+    return candidate;
+  }
+
+  #candidateForHost(host: NativeHost, kind: 'architecture' | 'review'): NativeModelCandidate {
+    const candidate = this.#options.candidates
+      .filter((entry) => entry.host === host && entry.handles.includes(kind))
+      .sort((left, right) => left.id.localeCompare(right.id))[0];
+    if (candidate === undefined) throw new Error(`HARNESS_NATIVE_ROLE_UNAVAILABLE:${host}:${kind}`);
+    return candidate;
+  }
+
+  #prompt(instruction: string, evidence?: unknown): string {
+    return [
+      this.#options.taskPrompt,
+      instruction,
+      'Authority: development-only-no-promotion.',
+      evidence === undefined ? '' : JSON.stringify(evidence),
+    ].filter(Boolean).join('\n\n');
+  }
+}
+
+function parseArchitecture(value: unknown): { proposal: unknown; confidence: number } {
+  const input = asRecord(value, 'architecture response');
+  assertExactKeys(input, ['proposal', 'confidence'], 'architecture response');
+  if (!Number.isFinite(input.confidence) || (input.confidence as number) < 0 || (input.confidence as number) > 1) {
+    throw new TypeError('architecture response.confidence must be between 0 and 1');
+  }
+  return {
+    proposal: input.proposal,
+    confidence: input.confidence as number,
+  };
+}
+
+function parsePatch(value: unknown, invocationId: string): PatchSubmission {
+  const input = asRecord(value, 'patch response');
+  assertExactKeys(input, ['patch'], 'patch response');
+  const payload = asNonEmptyString(input.patch, 'patch response.patch');
+  if (Buffer.byteLength(payload, 'utf8') > 10_000_000 || !payload.startsWith('diff --git ')) {
+    throw new Error('HARNESS_NATIVE_PATCH_INVALID');
+  }
+  return deepFreeze({
+    payload,
+    authorInvocationId: asNonEmptyString(invocationId, 'native invocation ID'),
+  });
+}
+
+function parseReview(value: unknown): { accepted: boolean; reasons: string[] } {
+  const input = asRecord(value, 'review response');
+  assertExactKeys(input, ['accepted', 'reasons'], 'review response');
+  if (typeof input.accepted !== 'boolean' || !Array.isArray(input.reasons)) {
+    throw new TypeError('review response is invalid');
+  }
+  const reasons = input.reasons.map((reason, index) =>
+    asNonEmptyString(reason, `review response.reasons[${index}]`));
+  if (input.accepted && reasons.length > 0) throw new Error('HARNESS_NATIVE_REVIEW_CONTRADICTORY');
+  if (!input.accepted && reasons.length === 0) throw new Error('HARNESS_NATIVE_REVIEW_REASON_REQUIRED');
+  return {
+    accepted: input.accepted,
+    reasons,
+  };
+}

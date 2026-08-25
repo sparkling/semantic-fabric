@@ -10,6 +10,8 @@ export interface NativeProcessRequest {
   readonly env: Readonly<Record<string, string>>;
   readonly timeoutMs: number;
   readonly stdin?: string;
+  readonly readOnlyPaths?: readonly string[];
+  readonly writablePaths?: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -19,6 +21,8 @@ export interface NativeProcessResult {
   readonly stderr: string;
   readonly timedOut: boolean;
   readonly cancelled?: boolean;
+  readonly outputLimitExceeded?: boolean;
+  readonly spawnError?: string;
 }
 
 /** Execution seam implemented by H-A's bounded process layer. */

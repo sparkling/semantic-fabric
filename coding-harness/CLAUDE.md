@@ -1,32 +1,22 @@
-# coding-harness
+@../AGENTS.md
 
-Harness for semantic-fabric
+# coding-harness host guidance
 
-> Advanced Coding harness · domain: `software-engineering`. Generated with [create-agent-harness](https://github.com/ruvnet/agent-harness-generator).
+This directory is a private, development-only MetaHarness control plane. Shared
+repository instructions come from `../AGENTS.md`.
 
-## Behavioral rules
+- Use native Codex/ChatGPT and Claude Code subscription clients only.
+- Never configure OpenRouter, Requesty, provider API keys, base-URL overrides,
+  or proxy fallback.
+- Treat Ruflo as the coordination ledger and Agentic-QE as advisory evidence;
+  neither replaces direct product evaluators.
+- Run candidate commands offline in an enforced process boundary. Dependency
+  resolution is a separate, registry-pinned `npm ci` stage.
+- Preserve the frozen evaluator, policy, lockfile, ADR, manifest, and `.mcp.json`
+  digests. A repair must reset, re-admit, rebuild, and rerun every verifier.
+- Require independent Codex and Claude reviews and emit a chained
+  `development-only-no-promotion` receipt.
+- Do not add a CLI, MCP server, publish/deploy path, or evolution command.
 
-- Use the harness's MCP tools (`mcp__coding-harness__*`) for orchestration
-- Memory and routing are handled by the kernel — you don't need to learn them
-- Defer destructive operations to the user
-
-## Agents
-
-| Agent | Tier | Role |
-|---|---|---|
-| `architect` | opus | Designs the change before code is written. |
-| `implementer` | sonnet | Writes code that matches the surrounding style. |
-| `reviewer` | opus | Hunts correctness bugs in the diff. |
-| `test-writer` | sonnet | Adds the missing tests for the change. |
-## Skills
-
-- `/plan-change` — Turn a feature request into a minimal, file-level implementation plan before any code.
-
-## Commands
-
-- `doctor` — Health-check the harness: kernel load, MCP wiring, memory backend, host adapter.
-- `review-diff` — Review the current working diff for correctness, security, and reuse.
-
-## Architecture
-
-This harness uses [@metaharness/kernel](https://www.npmjs.com/package/@metaharness/kernel) — a Rust-compiled WASM module with a NAPI-RS native fallback — so the same code runs identically on every platform.
+Local verification is `npm ci && npm run build && npm test`. Tests must use fake
+native executables and must not contact a model provider.
