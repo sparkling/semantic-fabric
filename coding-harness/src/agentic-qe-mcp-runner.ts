@@ -6,7 +6,6 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { signalProcessGroup } from './native-process-contracts.js';
 import type {
-  ProviderFreeAgenticQeMcpRequest,
   ProviderFreeAgenticQeMcpRunner,
 } from './agentic-qe-lcov.js';
 import {
@@ -20,16 +19,25 @@ import {
 } from './agentic-qe-mcp-identity.js';
 import {
   AGENTIC_QE_MCP_INITIALIZE_ID,
+  AGENTIC_QE_MCP_SAST_SHUTDOWN_ID,
+  AGENTIC_QE_MCP_SAST_TOOL_CALL_ID,
   AGENTIC_QE_MCP_SHUTDOWN_ID,
   AGENTIC_QE_MCP_TOOL_CALL_ID,
   initializeMessage,
   initializedAndToolMessages,
   parseRpcResponse,
+  sastToolMessage,
   shutdownMessage,
+  validateAdvertisedSastTool,
   validateInitializeResult,
   validateShutdownResult,
 } from './agentic-qe-mcp-protocol.js';
-import { validateProviderFreeMcpRequest } from './agentic-qe-mcp-request.js';
+import {
+  validateProviderFreeMcpRequest,
+  type SupportedProviderFreeAgenticQeMcpRequest,
+} from './agentic-qe-mcp-request.js';
+import { digestValue } from './receipts.js';
+import { AGENTIC_QE_SAST_TOOL } from './agentic-qe-sast-response.js';
 
 type McpChild = ChildProcessByStdio<Writable, Readable, Readable>;
 
@@ -116,7 +124,7 @@ export class SystemAgenticQeMcpRunner implements ProviderFreeAgenticQeMcpRunner 
   }
 
   async invoke(
-    rawRequest: ProviderFreeAgenticQeMcpRequest,
+    rawRequest: SupportedProviderFreeAgenticQeMcpRequest,
     signal?: AbortSignal,
   ): Promise<unknown> {
     if (signal?.aborted === true) throw abortError();
@@ -137,6 +145,33 @@ export class SystemAgenticQeMcpRunner implements ProviderFreeAgenticQeMcpRunner 
     } finally {
       this.#assertStable();
     }
+  }
+
+  commandDigest(rawRequest: SupportedProviderFreeAgenticQeMcpRequest): string {
+    const request = validateProviderFreeMcpRequest(rawRequest);
+    this.#assertDisjointInputs(request);
+    this.#assertStable();
+    return digestValue({
+      schemaVersion: 1,
+      executable: { path: this.#bwrap.path, sha256: this.#bwrap.sha256 },
+      arguments: bubblewrapArguments(
+        request,
+        this.#node,
+        this.#package,
+        this.#runtimeMounts,
+      ),
+      node: { path: this.#node.path, sha256: this.#node.sha256 },
+      package: {
+        root: this.#package.root,
+        entryPath: this.#package.entryPath,
+        name: this.#package.name,
+        version: this.#package.version,
+        entrySha256: this.#package.entrySha256,
+        treeSha256: this.#package.treeSha256,
+        fileCount: this.#package.fileCount,
+        totalBytes: this.#package.totalBytes,
+      },
+    });
   }
 
   identityEvidence(): AgenticQeMcpRunnerIdentityEvidence {
@@ -162,8 +197,8 @@ export class SystemAgenticQeMcpRunner implements ProviderFreeAgenticQeMcpRunner 
     assertAgenticQePackageStable(this.#package, this.#packageLimits);
   }
 
-  #assertDisjointInputs(request: ProviderFreeAgenticQeMcpRequest): void {
-    const inputs = [request.arguments.target, request.arguments.coverageFile];
+  #assertDisjointInputs(request: SupportedProviderFreeAgenticQeMcpRequest): void {
+    const inputs = request.runtime.filesystem.readOnlyPaths;
     if (inputs.some((input) => pathsOverlap(input, this.#package.root)
       || input === this.#node.path || input === this.#bwrap.path)) {
       throw new Error('HARNESS_AGENTIC_QE_RUNTIME_INPUT_OVERLAP');
@@ -172,18 +207,15 @@ export class SystemAgenticQeMcpRunner implements ProviderFreeAgenticQeMcpRunner 
 }
 
 function bubblewrapArguments(
-  request: ProviderFreeAgenticQeMcpRequest,
+  request: SupportedProviderFreeAgenticQeMcpRequest,
   node: StableExecutableIdentity,
   packageIdentity: AgenticQePackageIdentity,
   runtimeMounts: readonly RuntimeMount[],
 ): string[] {
-  const inputMounts: RuntimeMount[] = [{
-    source: request.arguments.target,
-    destination: request.arguments.target,
-  }, {
-    source: request.arguments.coverageFile,
-    destination: request.arguments.coverageFile,
-  }];
+  const inputMounts: RuntimeMount[] = request.runtime.filesystem.readOnlyPaths.map((path) => ({
+    source: path,
+    destination: path,
+  }));
   const mounts = dedupeMounts([
     ...runtimeMounts,
     { source: node.path, destination: node.path },
@@ -229,7 +261,7 @@ function bubblewrapArguments(
 async function runMcpSession(
   executable: string,
   args: readonly string[],
-  request: ProviderFreeAgenticQeMcpRequest,
+  request: SupportedProviderFreeAgenticQeMcpRequest,
   packageVersion: string,
   timeoutMs: number,
   maxOutputBytes: number,
@@ -250,7 +282,7 @@ async function runMcpSession(
       reject(error);
       return;
     }
-    let expectedId: 1 | 2 | 3 | 4 = AGENTIC_QE_MCP_INITIALIZE_ID;
+    let expectedId: 1 | 2 | 3 | 4 | 5 = AGENTIC_QE_MCP_INITIALIZE_ID;
     let toolResult: unknown;
     let pending = Buffer.alloc(0);
     let observedBytes = 0;
@@ -285,19 +317,30 @@ async function runMcpSession(
         const lineBytes = bytes.at(-1) === 13 ? bytes.subarray(0, -1) : bytes;
         if (lineBytes.length === 0) throw new Error('HARNESS_AGENTIC_QE_MCP_EMPTY_RESPONSE');
         const line = new TextDecoder('utf-8', { fatal: true }).decode(lineBytes);
-        if (expectedId === 4) throw new Error('HARNESS_AGENTIC_QE_MCP_EXTRA_RESPONSE');
+        if (expectedId === 5) throw new Error('HARNESS_AGENTIC_QE_MCP_EXTRA_RESPONSE');
         const result = parseRpcResponse(line, expectedId);
         if (expectedId === AGENTIC_QE_MCP_INITIALIZE_ID) {
           validateInitializeResult(result, packageVersion);
           expectedId = AGENTIC_QE_MCP_TOOL_CALL_ID;
           write(initializedAndToolMessages(request));
         } else if (expectedId === AGENTIC_QE_MCP_TOOL_CALL_ID) {
+          if (request.toolName === AGENTIC_QE_SAST_TOOL) {
+            validateAdvertisedSastTool(result);
+            expectedId = AGENTIC_QE_MCP_SAST_TOOL_CALL_ID;
+            write(sastToolMessage(request));
+          } else {
+            toolResult = result;
+            expectedId = AGENTIC_QE_MCP_SHUTDOWN_ID;
+            write(shutdownMessage());
+          }
+        } else if (request.toolName === AGENTIC_QE_SAST_TOOL
+          && expectedId === AGENTIC_QE_MCP_SAST_TOOL_CALL_ID) {
           toolResult = result;
-          expectedId = AGENTIC_QE_MCP_SHUTDOWN_ID;
-          write(shutdownMessage());
+          expectedId = AGENTIC_QE_MCP_SAST_SHUTDOWN_ID;
+          write(shutdownMessage(AGENTIC_QE_MCP_SAST_SHUTDOWN_ID));
         } else {
           validateShutdownResult(result);
-          expectedId = 4;
+          expectedId = 5;
           child.stdin.end();
         }
       } catch (error) {
@@ -349,7 +392,7 @@ async function runMcpSession(
       else if (outputExceeded) reject(new Error('HARNESS_AGENTIC_QE_MCP_OUTPUT_LIMIT_EXCEEDED'));
       else if (spawnError !== undefined) reject(spawnError);
       else if (protocolError !== undefined) reject(protocolError);
-      else if (pending.length !== 0 || expectedId !== 4 || toolResult === undefined) {
+      else if (pending.length !== 0 || expectedId !== 5 || toolResult === undefined) {
         reject(new Error('HARNESS_AGENTIC_QE_MCP_PROTOCOL_INCOMPLETE'));
       } else if (exitCode !== 0) {
         reject(new Error(`HARNESS_AGENTIC_QE_MCP_EXIT:${String(exitCode)}`));

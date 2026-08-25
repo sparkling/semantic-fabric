@@ -14,26 +14,54 @@ import {
   type ProviderFreeAgenticQeMcpRequest,
 } from './agentic-qe-lcov.js';
 import { AGENTIC_QE_MAX_MCP_OUTPUT_BYTES } from './agentic-qe-lcov-response.js';
+import {
+  AGENTIC_QE_SAST_PROFILE,
+  AGENTIC_QE_SAST_TOOL,
+  type ProviderFreeAgenticQeSastMcpRequest,
+} from './agentic-qe-sast.js';
 
 const GIT_OBJECT = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,128}$/;
 
+export type SupportedProviderFreeAgenticQeMcpRequest =
+  | ProviderFreeAgenticQeMcpRequest
+  | ProviderFreeAgenticQeSastMcpRequest;
+
 export function validateProviderFreeMcpRequest(
   value: unknown,
-): ProviderFreeAgenticQeMcpRequest {
+): SupportedProviderFreeAgenticQeMcpRequest {
   const request = asRecord(value, 'Agentic-QE MCP runner request');
   assertExactKeys(request, [
     'executable', 'transport', 'method', 'toolName', 'arguments', 'bindings', 'runtime',
   ], 'Agentic-QE MCP runner request');
   if (request.executable !== 'aqe-mcp'
     || request.transport !== 'stdio-mcp'
-    || request.method !== 'tools/call'
-    || request.toolName !== AGENTIC_QE_LCOV_GAPS_TOOL) {
+    || request.method !== 'tools/call') {
+    throw new Error('HARNESS_AGENTIC_QE_MCP_REQUEST_ROUTE_INVALID');
+  }
+  if (request.toolName === AGENTIC_QE_SAST_TOOL) {
+    const argumentsValue = parseSastArguments(request.arguments);
+    const bindings = parseSastBindings(request.bindings);
+    const runtime = parseRuntime(request.runtime, [argumentsValue.target]);
+    return deepFreeze({
+      executable: 'aqe-mcp',
+      transport: 'stdio-mcp',
+      method: 'tools/call',
+      toolName: AGENTIC_QE_SAST_TOOL,
+      arguments: argumentsValue,
+      bindings,
+      runtime,
+    });
+  }
+  if (request.toolName !== AGENTIC_QE_LCOV_GAPS_TOOL) {
     throw new Error('HARNESS_AGENTIC_QE_MCP_REQUEST_ROUTE_INVALID');
   }
   const argumentsValue = parseArguments(request.arguments);
   const bindings = parseBindings(request.bindings);
-  const runtime = parseRuntime(request.runtime, argumentsValue.target, argumentsValue.coverageFile);
+  const runtime = parseRuntime(request.runtime, [
+    argumentsValue.target,
+    argumentsValue.coverageFile,
+  ]);
   return deepFreeze({
     executable: 'aqe-mcp',
     transport: 'stdio-mcp',
@@ -43,6 +71,47 @@ export function validateProviderFreeMcpRequest(
     bindings,
     runtime,
   });
+}
+
+function parseSastArguments(
+  value: unknown,
+): ProviderFreeAgenticQeSastMcpRequest['arguments'] {
+  const input = asRecord(value, 'Agentic-QE SAST MCP arguments');
+  assertExactKeys(input, ['target', 'sast', 'dast'], 'Agentic-QE SAST MCP arguments');
+  const target = canonicalDirectory(input.target, 'HARNESS_AGENTIC_QE_SAST_TARGET_INVALID');
+  if (input.sast !== true || input.dast !== false) {
+    throw new Error('HARNESS_AGENTIC_QE_SAST_ARGUMENT_PROFILE_INVALID');
+  }
+  return {
+    target,
+    sast: true,
+    dast: false,
+  };
+}
+
+function parseSastBindings(
+  value: unknown,
+): ProviderFreeAgenticQeSastMcpRequest['bindings'] {
+  const input = asRecord(value, 'Agentic-QE SAST MCP bindings');
+  assertExactKeys(input, [
+    'taskId', 'runId', 'candidateTree', 'snapshotSha256', 'profile',
+  ], 'Agentic-QE SAST MCP bindings');
+  const taskId = opaqueId(input.taskId, 'taskId');
+  const runId = opaqueId(input.runId, 'runId');
+  if (typeof input.candidateTree !== 'string' || !GIT_OBJECT.test(input.candidateTree)) {
+    throw new Error('HARNESS_AGENTIC_QE_SAST_CANDIDATE_TREE_INVALID');
+  }
+  if (typeof input.snapshotSha256 !== 'string' || !SHA256_PATTERN.test(input.snapshotSha256)
+    || input.profile !== AGENTIC_QE_SAST_PROFILE) {
+    throw new Error('HARNESS_AGENTIC_QE_SAST_BINDING_INVALID');
+  }
+  return {
+    taskId,
+    runId,
+    candidateTree: input.candidateTree,
+    snapshotSha256: input.snapshotSha256,
+    profile: AGENTIC_QE_SAST_PROFILE,
+  };
 }
 
 function parseArguments(value: unknown): ProviderFreeAgenticQeMcpRequest['arguments'] {
@@ -102,8 +171,7 @@ function parseBindings(value: unknown): ProviderFreeAgenticQeMcpRequest['binding
 
 function parseRuntime(
   value: unknown,
-  target: string,
-  coverageFile: string,
+  readOnlyPaths: readonly string[],
 ): ProviderFreeAgenticQeMcpRequest['runtime'] {
   const input = asRecord(value, 'Agentic-QE MCP runtime');
   assertExactKeys(
@@ -135,7 +203,7 @@ function parseRuntime(
   assertExactKeys(filesystem, [
     'inputAccess', 'readOnlyPaths', 'privateHome', 'privateWritableTmp',
   ], 'Agentic-QE MCP filesystem');
-  const expectedPaths = [...new Set([target, coverageFile])].sort();
+  const expectedPaths = [...new Set(readOnlyPaths)].sort();
   if (filesystem.inputAccess !== 'read-only'
     || filesystem.privateHome !== true || filesystem.privateWritableTmp !== true
     || !Array.isArray(filesystem.readOnlyPaths)

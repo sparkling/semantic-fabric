@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderFreeAgenticQeMcpRequest } from '../src/agentic-qe-lcov.js';
 import { SystemAgenticQeMcpRunner } from '../src/agentic-qe-mcp-runner.js';
+import type { ProviderFreeAgenticQeSastMcpRequest } from '../src/agentic-qe-sast.js';
 
 type Behavior = 'success' | 'wrong-id' | 'rpc-error' | 'hang' | 'flood';
 
@@ -85,6 +86,35 @@ describe('system Agentic-QE MCP runner', () => {
         treeSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
     });
+  });
+
+  it('discovers and runs only the advertised comprehensive SAST profile', async () => {
+    const fixture = await createFixture('success');
+    const runner = createRunner(fixture);
+    const request = sastRequest(fixture.candidateRoot);
+    await runner.invoke(request);
+    const boundary = await jsonFile(fixture.boundaryObservation);
+    const mcp = await jsonFile(fixture.mcpObservation);
+
+    expect(boundary.mounts).toEqual(expect.arrayContaining([
+      [fixture.candidateRoot, fixture.candidateRoot],
+      [fixture.packageRoot, fixture.packageRoot],
+      [fixture.nodePath, fixture.nodePath],
+    ]));
+    expect(boundary.mounts).not.toContainEqual([fixture.lcovPath, fixture.lcovPath]);
+    expect(mcp.messages).toMatchObject([
+      { jsonrpc: '2.0', id: 1, method: 'initialize' },
+      { jsonrpc: '2.0', method: 'initialized', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+      {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'security_scan_comprehensive', arguments: request.arguments },
+      },
+      { jsonrpc: '2.0', id: 4, method: 'shutdown', params: {} },
+    ]);
+    expect(runner.commandDigest(request)).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it.each([
@@ -263,13 +293,22 @@ for await (const line of createInterface({ input: process.stdin })) {
     protocolVersion: '2025-11-25', capabilities: { tools: { listChanged: true }, logging: {} },
     serverInfo: { name: 'agentic-qe-v3', version: '3.13.10-test', protocolVersion: '2025-11-25' }
   }});
+  if (message.method === 'tools/list') send({ jsonrpc: '2.0', id: message.id, result: { tools: [{
+    name: 'security_scan_comprehensive', description: 'Run SAST scans', inputSchema: {
+      type: 'object', properties: {
+        sast: { type: 'boolean', description: 'Run SAST scan', default: true },
+        dast: { type: 'boolean', description: 'Run DAST scan', default: false },
+        target: { type: 'string', description: 'Target to scan' }
+      }
+    }
+  }] } });
   if (message.method === 'tools/call') {
     if (behavior === 'hang') continue;
     if (behavior === 'flood') { process.stderr.write('x'.repeat(5000)); continue; }
-    if (behavior === 'rpc-error') { send({ jsonrpc: '2.0', id: 2, error: { code: -32000, message: 'forced failure' } }); continue; }
-    send({ jsonrpc: '2.0', id: behavior === 'wrong-id' ? 99 : 2, result: { content: [{ type: 'text', text: '{"success":true}' }] } });
+    if (behavior === 'rpc-error') { send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'forced failure' } }); continue; }
+    send({ jsonrpc: '2.0', id: behavior === 'wrong-id' ? 99 : message.id, result: { content: [{ type: 'text', text: '{"success":true}' }] } });
   }
-  if (message.method === 'shutdown') { send({ jsonrpc: '2.0', id: 3, result: {} }); process.stdin.unref(); setTimeout(() => process.exit(0), 10); }
+  if (message.method === 'shutdown') { send({ jsonrpc: '2.0', id: message.id, result: {} }); process.stdin.unref(); setTimeout(() => process.exit(0), 10); }
 }
 `;
 }
@@ -280,4 +319,45 @@ async function jsonFile(path: string): Promise<Record<string, any>> {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function sastRequest(target: string): ProviderFreeAgenticQeSastMcpRequest {
+  return {
+    executable: 'aqe-mcp',
+    transport: 'stdio-mcp',
+    method: 'tools/call',
+    toolName: 'security_scan_comprehensive',
+    arguments: {
+      target,
+      sast: true,
+      dast: false,
+    },
+    bindings: {
+      taskId: 'task-aqe-sast-0001',
+      runId: 'run-aqe-sast-0001',
+      candidateTree: 'd'.repeat(40),
+      snapshotSha256: 'e'.repeat(64),
+      profile: 'sast-only-flat-v1',
+    },
+    runtime: {
+      network: 'offline',
+      environment: {
+        inheritance: 'none',
+        variables: {
+          AQE_MEMORY_BACKEND: 'memory',
+          AQE_LLM_ROUTER_DISABLED: '1',
+          AQE_SESSION_CACHE: 'off',
+          AQE_LOOP_DETECTION_ENABLED: 'false',
+        },
+      },
+      filesystem: {
+        inputAccess: 'read-only',
+        readOnlyPaths: [target],
+        privateHome: true,
+        privateWritableTmp: true,
+      },
+      timeoutMs: 120_000,
+      maxOutputBytes: 5_000_000,
+    },
+  };
 }
