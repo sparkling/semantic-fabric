@@ -30,6 +30,7 @@ export const ISSUE_8_SYSTEM_PATHS = Object.freeze({
   bwrap: '/usr/bin/bwrap',
   systemdRun: '/usr/bin/systemd-run',
   systemctl: '/usr/bin/systemctl',
+  caBundle: '/etc/ssl/certs/ca-certificates.crt',
   agenticQeRoot: '/home/claude/.npm-global/lib/node_modules/agentic-qe',
   agenticQeMcp: '/home/claude/.npm-global/lib/node_modules/agentic-qe/dist/mcp/bundle.js',
 });
@@ -40,7 +41,7 @@ export const ISSUE_8_TARGET_TRIPLE = 'x86_64-unknown-linux-gnu';
 export const ISSUE_8_LOCKED_REGISTRY_CONTENT_DIGEST =
   '1bb717af28554b8cbb83ff1a219bbbd294ccee98691191bc9f65dc431106e908';
 
-const EXPECTED_EXECUTABLES = Object.freeze({
+const EXPECTED_SYSTEM_ARTIFACTS = Object.freeze({
   cargo: 'f30f9fd1b1d0b8fd10dc33219eb4cd4bec3543f40e434ac71f5a03fd0359063f',
   cargoLlvmCov: 'c59831d34b46a3e3a3dc5b357fa12f75eb0af3172f8e9e81a6fc1412cdbcaa1a',
   node: '53fb205ae78805130177e24bcb459a69a1518c8d98f8965f31d85aae7ea840fc',
@@ -49,6 +50,7 @@ const EXPECTED_EXECUTABLES = Object.freeze({
   bwrap: '52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712',
   systemdRun: 'dbc8b988a849d5c9d7ef2de7068a6f107021bc6c11e0d7864c73f373eef726a7',
   systemctl: 'e0d3d0e9444da1b2b58c792c3f5028b69f049b77d5ca17b3ec0d09f89117225b',
+  caBundle: '6602a85a36afc2e51c66a0df5ae3d383c5b7c2fed93339ccef7d37e01faf09e8',
   agenticQeMcp: 'eba7e52a3c86cd57203fb7f1cc079fb627491bee2b566bbb14c8ac4acdcaaa9b',
 });
 
@@ -74,7 +76,7 @@ export const ISSUE_8_NATIVE_LIMITS: NativeResourceLimits = Object.freeze({
 
 export function attestIssue8SystemTools(): Readonly<Record<string, string>> {
   const evidence: Record<string, string> = {};
-  for (const [name, expected] of Object.entries(EXPECTED_EXECUTABLES)) {
+  for (const [name, expected] of Object.entries(EXPECTED_SYSTEM_ARTIFACTS)) {
     const path = ISSUE_8_SYSTEM_PATHS[name as keyof typeof ISSUE_8_SYSTEM_PATHS];
     const actual = fileDigest(path);
     if (actual !== expected) throw new Error(`HARNESS_ISSUE_8_SYSTEM_TOOL_MISMATCH:${name}`);
@@ -89,7 +91,7 @@ export function prepareCargoExtension(scratchRoot: string): string {
   const target = join(root, 'cargo-llvm-cov');
   copyFileSync(ISSUE_8_SYSTEM_PATHS.cargoLlvmCov, target, constants.COPYFILE_EXCL);
   chmodSync(target, 0o555);
-  if (fileDigest(target) !== EXPECTED_EXECUTABLES.cargoLlvmCov) {
+  if (fileDigest(target) !== EXPECTED_SYSTEM_ARTIFACTS.cargoLlvmCov) {
     throw new Error('HARNESS_ISSUE_8_CARGO_EXTENSION_COPY_MISMATCH');
   }
   return root;

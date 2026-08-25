@@ -269,8 +269,8 @@ const SYSTEM_LIBRARY_MOUNTS = Object.freeze([
   Object.freeze({ source: '/usr/lib', destination: '/lib' }),
   Object.freeze({ source: '/usr/lib64', destination: '/usr/lib64' }),
   Object.freeze({ source: '/usr/lib64', destination: '/lib64' }),
+  Object.freeze({ source: '/etc/ssl/certs/ca-certificates.crt', destination: '/etc/ssl/certs/ca-certificates.crt' }),
 ] as const);
-
 export function systemNativeRuntimeLibraryMounts(): readonly NativeRuntimeMount[] {
   return Object.freeze(SYSTEM_LIBRARY_MOUNTS
     .filter(({ source }) => existsSync(source))
@@ -289,7 +289,7 @@ function assertMountScope(
   if (context.kind === 'common') {
     const allowed = SYSTEM_LIBRARY_MOUNTS.some((entry) =>
       entry.source === source && entry.destination === destination);
-    if (!allowed || !stat.isDirectory()
+    if (!allowed || (!stat.isDirectory() && !stat.isFile())
       || overlapsAny(source, context.forbiddenMountRoots)
       || overlapsAny(destination, context.forbiddenMountRoots)) {
       throw new Error(`HARNESS_NATIVE_${label}_MOUNT_OUTSIDE_ALLOWLIST`);

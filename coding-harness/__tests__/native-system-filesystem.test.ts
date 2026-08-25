@@ -30,12 +30,16 @@ afterEach(() => {
 });
 
 describe('system native filesystem mount validation', () => {
-  it('exposes only the closed system-library mount set', () => {
+  it('exposes only the closed system-runtime mount set', () => {
     expect(systemNativeRuntimeLibraryMounts()).toEqual([
       { source: '/usr/lib', destination: '/usr/lib' },
       { source: '/usr/lib', destination: '/lib' },
       { source: '/usr/lib64', destination: '/usr/lib64' },
       { source: '/usr/lib64', destination: '/lib64' },
+      {
+        source: '/etc/ssl/certs/ca-certificates.crt',
+        destination: '/etc/ssl/certs/ca-certificates.crt',
+      },
     ]);
     expect(Object.isFrozen(systemNativeRuntimeLibraryMounts())).toBe(true);
   });
@@ -191,6 +195,7 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
         evaluatorMasked: true,
         hostCredentialHidden: true,
         runtimeCredential: 'runtime capability',
+        caBundleVisible: true,
         home: '/home/harness',
       });
       expect(isolated.mountManifestDigest).toMatch(/^[a-f0-9]{64}$/);
@@ -270,6 +275,8 @@ writeFileSync(output, JSON.stringify({
   evaluatorMasked: hidden('sealed-evaluator.rs'),
   hostCredentialHidden: hidden(hostCredential),
   runtimeCredential: readFileSync('/home/harness/.codex/auth.json', 'utf8').trim(),
+  caBundleVisible: readFileSync('/etc/ssl/certs/ca-certificates.crt', 'utf8')
+    .includes('BEGIN CERTIFICATE'),
   home: process.env.HOME,
 }));
 `;
