@@ -29,6 +29,7 @@ import type {
   PersistentRoutedAgentPool,
 } from './models/routing.js';
 import type { NativeHost } from './models/types.js';
+import { runAbortableCohort } from './parallel.js';
 import { digestValue } from './receipts.js';
 import type { RepositoryModelController } from './repository-operations.js';
 
@@ -77,17 +78,21 @@ export class NativeRepositoryModelController implements RepositoryModelControlle
     const primary = this.#selected('architecture');
     const shadow = requireDistinctHostProposal(primary, this.#options.candidates);
     const invocations: Array<{ invocationId: string; host: NativeHost }> = [];
-    const proposals = await Promise.all([primary, shadow].map(async (candidate) => {
+    const propose = async (candidate: NativeModelCandidate, cohortSignal: AbortSignal) => {
       const invocation = await this.#invoke(
         candidate,
         'architecture',
         this.#prompt('Propose a minimal architecture and explicit invariants.', context),
-        signal,
+        cohortSignal,
       );
       invocations.push({ invocationId: invocation.invocationId, host: candidate.host });
       const output = parseArchitecture(invocation.output);
       return { host: candidate.host, value: output.proposal, confidence: output.confidence };
-    }));
+    };
+    const proposals = await runAbortableCohort([
+      async (cohortSignal) => await propose(primary, cohortSignal),
+      async (cohortSignal) => await propose(shadow, cohortSignal),
+    ] as const, signal);
     const critiqued = await critiqueAndChooseArchitecture({
       proposals: proposals as [typeof proposals[number], typeof proposals[number]],
       verifiers: this.#options.architectureVerifiers,

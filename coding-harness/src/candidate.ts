@@ -10,6 +10,7 @@ import {
 } from './receipts.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
+import { runAbortableCohort } from './parallel.js';
 import {
   bindExternalEvidence,
   bindNativeRuntimeEvidence,
@@ -187,9 +188,9 @@ export class CandidateTransaction {
         const attempt = evidence.repairCount;
         const artifactPrefix = `attempt-${attempt}:`;
 
-        const verifiers = await Promise.all(VERIFIER_STAGES.map(
-          (stage) => this.#operations.verify(stage, build, this.#signal),
-        ));
+        const verifiers = await runAbortableCohort(VERIFIER_STAGES.map((stage) =>
+          async (cohortSignal) => await this.#operations.verify(stage, build, cohortSignal),
+        ), this.#signal);
         for (const [index, verifier] of verifiers.entries()) {
           const requestedStage = VERIFIER_STAGES[index];
           if (verifier.stage !== requestedStage) throw new Error('HARNESS_VERIFIER_STAGE_MISMATCH');
@@ -213,9 +214,9 @@ export class CandidateTransaction {
           evidence,
         );
 
-        const reviews = await Promise.all((['codex', 'claude-code'] as const).map(
-          (host) => this.#operations.review(host, build, this.#signal),
-        ));
+        const reviews = await runAbortableCohort((['codex', 'claude-code'] as const).map((host) =>
+          async (cohortSignal) => await this.#operations.review(host, build, cohortSignal),
+        ), this.#signal);
         assertIndependentReviewEvidence(patch.authorInvocationId, reviews);
         for (const review of reviews) {
           assertSameIdentity(review.candidate, build.candidate, 'HARNESS_STALE_REVIEW_IDENTITY');
@@ -236,10 +237,10 @@ export class CandidateTransaction {
           continue;
         }
 
-        const [protectedInputs, mutableOutputs] = await Promise.all([
-          this.#operations.verifyProtectedInputs(this.#signal),
-          this.#operations.auditMutableOutputs(this.#signal),
-        ]);
+        const [protectedInputs, mutableOutputs] = await runAbortableCohort([
+          async (cohortSignal) => await this.#operations.verifyProtectedInputs(cohortSignal),
+          async (cohortSignal) => await this.#operations.auditMutableOutputs(cohortSignal),
+        ] as const, this.#signal);
         if (!protectedInputs.allow) {
           throw new Error(`HARNESS_PROTECTED_INPUT_GATE:${protectedInputs.reasons.join('; ')}`);
         }

@@ -28,6 +28,7 @@ import {
   validateRoot,
   validateScopedPath,
 } from './native-adapter-contracts.js';
+import { runAbortableCohort } from '../parallel.js';
 
 const PREFLIGHT_TIMEOUT_MS = 30_000;
 const MAX_SCHEMA_BYTES = 64_000;
@@ -108,28 +109,28 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
 
   async preflight(request: NativePreflightRequest): Promise<NativeAuthEvidence> {
     validatePreflightRequest(request);
-    const [login, version] = await Promise.all([
-      this.#runner.run(
+    const [login, version] = await runAbortableCohort([
+      async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
           ['-c', 'model_provider="openai"', 'login', 'status'],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
-          request.signal,
+          cohortSignal,
           'authentication-preflight',
           request.requestedModel,
         ),
       ),
-      this.#runner.run(
+      async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
           ['--version'],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
-          request.signal,
+          cohortSignal,
           'version-preflight',
           request.requestedModel,
         ),
       ),
-    ]);
+    ] as const, request.signal);
     const status = `${login.stdout}${login.stderr}`.trim();
     if (!processSucceeded(login) || status !== 'Logged in using ChatGPT') {
       throw new NativeAuthPreflightError(
@@ -245,28 +246,28 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
 
   async preflight(request: NativePreflightRequest): Promise<NativeAuthEvidence> {
     validatePreflightRequest(request);
-    const [login, version] = await Promise.all([
-      this.#runner.run(
+    const [login, version] = await runAbortableCohort([
+      async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
           ['auth', 'status', '--json'],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
-          request.signal,
+          cohortSignal,
           'authentication-preflight',
           request.requestedModel,
         ),
       ),
-      this.#runner.run(
+      async (cohortSignal) => await this.#runner.run(
         this.#processRequest(
           ['--version'],
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
-          request.signal,
+          cohortSignal,
           'version-preflight',
           request.requestedModel,
         ),
       ),
-    ]);
+    ] as const, request.signal);
     const status = parseRecord(login.stdout);
     if (
       !processSucceeded(login) ||
@@ -386,18 +387,18 @@ export async function preflightNativeSubscriptions(input: {
   readonly requestedModels: Readonly<{ codex: string; claude: string }>;
   readonly signal?: AbortSignal;
 }): Promise<readonly [NativeAuthEvidence, NativeAuthEvidence]> {
-  const evidence = await Promise.all([
-    input.codex.preflight({
+  const evidence = await runAbortableCohort([
+    async (cohortSignal) => await input.codex.preflight({
       cwd: input.cwd,
       requestedModel: input.requestedModels.codex,
-      signal: input.signal,
+      signal: cohortSignal,
     }),
-    input.claude.preflight({
+    async (cohortSignal) => await input.claude.preflight({
       cwd: input.cwd,
       requestedModel: input.requestedModels.claude,
-      signal: input.signal,
+      signal: cohortSignal,
     }),
-  ]);
+  ] as const, input.signal);
   if (evidence[0].host === evidence[1].host) {
     throw new Error('HARNESS_NATIVE_PREFLIGHT_HOST_COLLISION');
   }
