@@ -15,6 +15,7 @@ import {
   RepositoryCandidateOperations,
   type RepositoryModelController,
 } from '../src/repository-operations.js';
+import type { ProtectedInputBoundary } from '../src/policy.js';
 import { digestValue, type CommandEvidence } from '../src/receipts.js';
 import { createTestConfig } from './helpers.js';
 
@@ -243,7 +244,92 @@ describe('repository operations integration', () => {
     expect(transaction.receipts.verify()).toEqual({ ok: true });
     expect(result.receipt.coordination.traceIds).toEqual(['trace-0001']);
   });
+
+  it('uses a composite protected boundary with explicitly pre-prepared historical worktrees', async () => {
+    const fixture = repository();
+    const parent = mkdtempSync(join(tmpdir(), 'coding-harness-composite-boundary-'));
+    roots.push(parent);
+    const controllerRoot = join(parent, 'controller');
+    mkdirSync(controllerRoot, { mode: 0o700 });
+    writeFileSync(join(controllerRoot, 'controller.txt'), 'trusted controller\n');
+    const worktrees = new GitWorktreeSet({
+      repositoryRoot: fixture.root,
+      runRoot: join(parent, 'run'),
+    });
+    const prePrepared = await worktrees.prepare(fixture.commit, fixture.commit);
+    expect(() => readFileSync(join(prePrepared.candidateRoot, 'controller.txt'))).toThrow();
+
+    const config = createTestConfig(['controller.txt', 'protected.txt']);
+    const capture = async () => Object.freeze({
+      'controller.txt': fileDigest(join(controllerRoot, 'controller.txt')),
+      'protected.txt': fileDigest(join(prePrepared.evaluatorRoot, 'protected.txt')),
+    });
+    const protectedInputBoundary: ProtectedInputBoundary = {
+      capture,
+      verify: async (_task, _config, expected) => {
+        const current = await capture();
+        const changed = Object.keys(expected).filter((path) => expected[path] !== current[path]);
+        return changed.length === 0
+          ? { allow: true, reasons: ['composite protected inputs match'] }
+          : { allow: false, reasons: [`protected inputs changed: ${changed.join(', ')}`] };
+      },
+    };
+    const build = command('artifact');
+    const verify = command('success');
+    const model: RepositoryModelController = {
+      architecture: async () => { throw new Error('not used'); },
+      implement: async () => { throw new Error('not used'); },
+      repair: async () => { throw new Error('not used'); },
+      review: async () => { throw new Error('not used'); },
+      recoveryEvidence: () => ({ retryCount: 0, breakerState: 'closed', events: [] }),
+    };
+    const operations = new RepositoryCandidateOperations({
+      worktrees,
+      config,
+      baselineCommit: fixture.commit,
+      evaluatorCommit: fixture.commit,
+      taskForWorkspace: (candidateRoot) => parseTaskContract({
+        schemaVersion: 1,
+        taskId: 'task-composite-0001',
+        runId: 'run-composite-0001',
+        workspaceRoot: candidateRoot,
+        readablePaths: [],
+        mutablePaths: ['src/file.txt', 'build.out'],
+        protectedPaths: ['controller.txt', 'protected.txt'],
+        tools: ['node', 'apply_patch', 'git'],
+        commands: [build, verify],
+        network: { mode: 'offline', allowedOrigins: [] },
+        authority: 'development-only-no-promotion',
+      }, config),
+      buildCommands: [build],
+      verifierCommands: { public: [verify], independent: [verify], regression: [verify] },
+      artifactPaths: ['build.out'],
+      model,
+      offlineIsolator,
+      offlineEnvironment: { PATH: process.env.PATH, HOME: '/home/harness' },
+      protectedInputBoundary,
+      agenticQeEvidence: async () => [],
+      preflightEvidence: async () => ({ passed: true, reasons: [], commands: [], digests: {} }),
+      mutationEvidence: async () => ({ passed: true, reasons: [], commands: [], digests: {} }),
+    });
+
+    const prepared = await operations.prepare();
+    expect(prepared.candidate).toEqual(prePrepared.candidate);
+    expect(Object.keys(prepared.protectedInputs).sort()).toEqual(['controller.txt', 'protected.txt']);
+    expect((await operations.verifyProtectedInputs()).allow).toBe(true);
+
+    writeFileSync(join(controllerRoot, 'controller.txt'), 'mutated controller\n');
+    expect((await operations.verifyProtectedInputs()).reasons.join(' ')).toContain('controller.txt');
+    writeFileSync(join(controllerRoot, 'controller.txt'), 'trusted controller\n');
+    writeFileSync(join(prePrepared.evaluatorRoot, 'protected.txt'), 'mutated evaluator\n');
+    expect((await operations.verifyProtectedInputs()).reasons.join(' ')).toContain('protected.txt');
+    await operations.cleanup();
+  });
 });
+
+function fileDigest(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
 
 function acceptanceCommand(
   stage: 'red-baseline' | 'mutation',

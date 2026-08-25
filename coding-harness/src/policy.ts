@@ -5,6 +5,7 @@ import { PolicyGate, allowTools, denyTools } from '@metaharness/harness';
 import type { HarnessConfig, TaskContract } from './contracts.js';
 import {
   DEVELOPMENT_AUTHORITY,
+  SHA256_PATTERN,
   asRecord,
   assertExactKeys,
   assertStructuredText,
@@ -30,6 +31,15 @@ export interface PolicyAction {
 export interface GateDecision {
   allow: boolean;
   reasons: string[];
+}
+
+export interface ProtectedInputBoundary {
+  capture(task: TaskContract, config: HarnessConfig): Promise<Readonly<Record<string, string>>>;
+  verify(
+    task: TaskContract,
+    config: HarnessConfig,
+    expected: Readonly<Record<string, string>>,
+  ): Promise<GateDecision>;
 }
 
 export interface HarnessPolicyDecision {
@@ -168,6 +178,7 @@ export async function captureProtectedInputs(
     });
     digests[path] = sha256File(absolute);
   }
+  assertProtectedInputSnapshot(task, digests);
   return deepFreeze(digests);
 }
 
@@ -177,6 +188,7 @@ export async function verifyProtectedInputs(
   expected: Readonly<Record<string, string>>,
 ): Promise<GateDecision> {
   try {
+    assertProtectedInputSnapshot(task, expected);
     const current = await captureProtectedInputs(task, config);
     const expectedPaths = Object.keys(expected).sort();
     const currentPaths = Object.keys(current).sort();
@@ -187,6 +199,25 @@ export async function verifyProtectedInputs(
     return changed.length === 0 ? allow('protected input digests match') : deny(`protected inputs changed: ${changed.join(', ')}`);
   } catch (error) {
     return deny(errorMessage(error));
+  }
+}
+
+export const DEFAULT_PROTECTED_INPUT_BOUNDARY: ProtectedInputBoundary = Object.freeze({
+  capture: captureProtectedInputs,
+  verify: verifyProtectedInputs,
+});
+
+export function assertProtectedInputSnapshot(
+  task: TaskContract,
+  snapshot: Readonly<Record<string, string>>,
+): void {
+  const expectedPaths = [...task.protectedPaths].sort();
+  const actualPaths = Object.keys(snapshot).sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    throw new Error('HARNESS_PROTECTED_INPUT_PATH_SET_MISMATCH');
+  }
+  if (actualPaths.some((path) => !SHA256_PATTERN.test(snapshot[path]))) {
+    throw new Error('HARNESS_PROTECTED_INPUT_DIGEST_INVALID');
   }
 }
 

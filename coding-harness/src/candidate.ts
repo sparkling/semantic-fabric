@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+import { createHash } from 'node:crypto';
 import { deepFreeze, DEVELOPMENT_AUTHORITY } from './contracts.js';
 import {
   digestValue,
@@ -254,7 +255,12 @@ export class CandidateTransaction {
         });
         if (external.qe.length === 0) throw new Error('HARNESS_AGENTIC_QE_EVIDENCE_REQUIRED');
         evidence.coordination.agenticQeEvidenceDigests = [...external.qeDigests];
-        return await this.#finish('pass', null, evidence);
+        if (evidence.admission === null
+          || createHash('sha256').update(patch.payload, 'utf8').digest('hex')
+            !== evidence.admission.patchDigest) {
+          throw new Error('HARNESS_FINAL_PATCH_DIGEST_MISMATCH');
+        }
+        return await this.#finish('pass', null, evidence, patch.payload);
       }
     } catch (error) {
       const cancelled = this.#isCancellation(error);
@@ -262,6 +268,7 @@ export class CandidateTransaction {
         cancelled ? 'cancelled' : 'fail',
         error instanceof Error ? error.message : String(error),
         evidence,
+        null,
       );
     }
   }
@@ -270,6 +277,7 @@ export class CandidateTransaction {
     requestedStatus: CandidateTransactionResult['status'],
     requestedReason: string | null,
     evidence: CandidateEvidenceState,
+    finalPatch: string | null,
   ): Promise<CandidateTransactionResult> {
     let status = requestedStatus;
     let reason = requestedReason;
@@ -305,7 +313,7 @@ export class CandidateTransaction {
       status = 'fail';
       reason = reason === null ? cleanupReason : `${reason}; ${cleanupReason}`;
     }
-    return this.#finalize(status, reason, evidence);
+    return this.#finalize(status, reason, evidence, status === 'pass' ? finalPatch : null);
   }
 
   async #repairOrFail(
@@ -382,6 +390,7 @@ export class CandidateTransaction {
     status: CandidateTransactionResult['status'],
     reason: string | null,
     evidence: CandidateEvidenceState,
+    finalPatch: string | null,
   ): CandidateTransactionResult {
     const cancelled = status === 'cancelled';
     const receipt = this.receipts.append({
@@ -417,7 +426,13 @@ export class CandidateTransaction {
       },
       coordination: evidence.coordination,
     });
-    return deepFreeze({ status, reason, repairCount: evidence.repairCount, receipt });
+    return deepFreeze({
+      status,
+      reason,
+      repairCount: evidence.repairCount,
+      finalPatch,
+      receipt,
+    });
   }
 
   #assertActive(): void {

@@ -115,6 +115,7 @@ export interface CandidateTransactionResult {
   status: Receipt['status'];
   reason: string | null;
   repairCount: number;
+  finalPatch: string | null;
   receipt: Receipt;
 }
 

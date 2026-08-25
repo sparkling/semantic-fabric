@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CandidateBuildFailure,
@@ -7,13 +8,11 @@ import {
   type CandidateTransactionContext,
 } from '../src/candidate.js';
 import { NativeCancellationError } from '../src/models/recovery.js';
-
 const digest = (character: string) => character.repeat(64);
 const identity = (character: string) => ({
   commit: character.repeat(40),
   tree: character.repeat(40),
 });
-
 const context: CandidateTransactionContext = {
   runId: 'run-candidate-0001',
   taskId: 'task-candidate-0001',
@@ -75,7 +74,6 @@ function commandEvidence(
     spawnErrorDigest: null,
   };
 }
-
 function operations(events: string[]): CandidateOperations {
   let cycle = 0;
   return {
@@ -117,9 +115,10 @@ function operations(events: string[]): CandidateOperations {
     }),
     admitAndApply: vi.fn(async () => {
       events.push('admit');
+      const payload = cycle === 1 ? 'patch-one' : 'patch-two';
       return {
         candidate: identity(cycle === 1 ? '3' : '4'),
-        patchDigest: digest(cycle === 1 ? '1' : '2'),
+        patchDigest: createHash('sha256').update(payload, 'utf8').digest('hex'),
         admittedPaths: ['src/file.ts'],
       };
     }),
@@ -196,7 +195,6 @@ function operations(events: string[]): CandidateOperations {
     }),
   };
 }
-
 function nativeProof() {
   const host = (
     name: 'codex' | 'claude-code',
@@ -257,7 +255,6 @@ function nativeProof() {
     ],
   };
 }
-
 describe('patched candidate transaction', () => {
   it('re-admits, rebuilds, and reruns all parallel verifiers after repair', async () => {
     const events: string[] = [];
@@ -272,6 +269,7 @@ describe('patched candidate transaction', () => {
 
     expect(result.status).toBe('pass');
     expect(result.repairCount).toBe(1);
+    expect(result.finalPatch).toBe('patch-two');
     expect(events).toEqual([
       'prepare', 'architecture', 'implement',
       'reset', 'admit', 'build',
@@ -301,6 +299,7 @@ describe('patched candidate transaction', () => {
     }).execute();
 
     expect(result.status).toBe('fail');
+    expect(result.finalPatch).toBeNull();
     expect(result.reason).toMatch(/STALE_BUILD_IDENTITY/);
     expect(result.receipt.status).toBe('fail');
   });
@@ -319,6 +318,7 @@ describe('patched candidate transaction', () => {
     }).execute();
 
     expect(result.status).toBe('cancelled');
+    expect(result.finalPatch).toBeNull();
     expect(result.receipt.status).toBe('cancelled');
     expect(result.receipt.recovery.cancelled).toBe(true);
   });

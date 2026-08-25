@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { createHash } from 'node:crypto';
 import { constants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { chmod, copyFile, mkdir, rm } from 'node:fs/promises';
@@ -7,7 +6,6 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { normalizeWorkspacePath } from './contracts.js';
 import { gitAbortError, runGitCommand, type GitCommandResult } from './git-process.js';
 import type { GitIdentity } from './receipts.js';
-
 export interface PreparedWorktrees {
   baseline: GitIdentity;
   evaluator: GitIdentity;
@@ -22,7 +20,6 @@ export interface AppliedPatch {
   patchDigest: string;
   admittedPaths: string[];
 }
-
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
 const MAX_PATCH_BYTES = 10_000_000;
 export type VerifierWorkspace = 'public' | 'independent' | 'regression';
@@ -44,9 +41,8 @@ export class GitWorktreeSet {
   readonly #registered = new Set<string>();
   #baseline: GitIdentity | null = null;
   #evaluator: GitIdentity | null = null;
-  #prepared = false;
+  #preparation: PreparedWorktrees | null = null;
   #runRootIdentity: DirectoryIdentity | null = null;
-
   constructor(input: { repositoryRoot: string; runRoot: string }) {
     this.#repositoryRoot = normalizedAbsolute(input.repositoryRoot, 'repositoryRoot');
     this.#repositoryIdentity = directoryIdentity(
@@ -79,9 +75,15 @@ export class GitWorktreeSet {
     evaluatorCommit: string,
     signal?: AbortSignal,
   ): Promise<PreparedWorktrees> {
-    if (this.#prepared) throw new Error('HARNESS_WORKTREES_ALREADY_PREPARED');
     assertGitObject(baselineCommit, 'baselineCommit');
     assertGitObject(evaluatorCommit, 'evaluatorCommit');
+    if (this.#preparation !== null) {
+      if (baselineCommit !== this.#preparation.baseline.commit
+        || evaluatorCommit !== this.#preparation.evaluator.commit) {
+        throw new Error('HARNESS_WORKTREE_PREPARATION_IDENTITY_MISMATCH');
+      }
+      return this.#preparation;
+    }
     this.#assertTrustedParent();
     assertAbsent(this.#runRoot);
     await this.#assertCommit(baselineCommit, signal);
@@ -105,8 +107,7 @@ export class GitWorktreeSet {
       await this.#assertClean(this.#candidateRoot);
       await this.#assertClean(this.#evaluatorRoot);
       for (const stage of VERIFIER_WORKSPACES) await this.#assertClean(this.#verifierRoots[stage]);
-      this.#prepared = true;
-      return Object.freeze({
+      this.#preparation = Object.freeze({
         baseline: this.#baseline,
         evaluator: this.#evaluator,
         candidate,
@@ -114,6 +115,7 @@ export class GitWorktreeSet {
         evaluatorRoot: this.#evaluatorRoot,
         verifierRoots: { ...this.#verifierRoots },
       });
+      return this.#preparation;
     } catch (error) {
       try {
         await this.dispose();
@@ -123,7 +125,6 @@ export class GitWorktreeSet {
       throw error;
     }
   }
-
   async admitAndApply(
     patch: string,
     mutablePaths: readonly string[],
@@ -294,7 +295,7 @@ export class GitWorktreeSet {
       throw new AggregateError(failures, 'HARNESS_WORKTREE_CLEANUP_FAILED');
     }
     this.#registered.clear();
-    this.#prepared = false;
+    this.#preparation = null;
     this.#baseline = null;
     this.#evaluator = null;
     if (this.#runRootIdentity !== null) {
@@ -377,14 +378,13 @@ export class GitWorktreeSet {
   async #assertCommit(commit: string, signal?: AbortSignal): Promise<void> {
     await this.#git(this.#repositoryRoot, ['cat-file', '-e', `${commit}^{commit}`], undefined, signal);
   }
-
   async #assertClean(cwd: string, signal?: AbortSignal): Promise<void> {
     const status = await this.#git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], undefined, signal);
     if (status.stdout !== '') throw new Error('HARNESS_WORKTREE_NOT_CLEAN');
   }
 
   #assertPrepared(): void {
-    if (!this.#prepared || this.#baseline === null || this.#evaluator === null) {
+    if (this.#preparation === null || this.#baseline === null || this.#evaluator === null) {
       throw new Error('HARNESS_WORKTREES_NOT_PREPARED');
     }
     this.#assertOwnedRunRoot();

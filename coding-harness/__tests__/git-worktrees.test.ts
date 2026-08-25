@@ -143,6 +143,31 @@ describe('isolated Git candidate and evaluator worktrees', () => {
     expect(existsSync(runRoot)).toBe(false);
   });
 
+  it('reuses an exact preparation and rejects a different Git identity', async () => {
+    const fixture = repository();
+    const parent = mkdtempSync(join(tmpdir(), 'coding-harness-idempotent-parent-'));
+    roots.push(parent);
+    const worktrees = new GitWorktreeSet({
+      repositoryRoot: fixture.root,
+      runRoot: join(parent, 'run'),
+    });
+
+    const first = await worktrees.prepare(fixture.commit, fixture.commit);
+    expect(await worktrees.prepare(fixture.commit, fixture.commit)).toBe(first);
+
+    writeFileSync(join(fixture.root, 'other.txt'), 'different identity\n');
+    git(fixture.root, ['add', '--', 'other.txt']);
+    git(fixture.root, ['commit', '--quiet', '-m', 'different identity']);
+    const otherCommit = git(fixture.root, ['rev-parse', 'HEAD']);
+    await expect(worktrees.prepare(otherCommit, fixture.commit)).rejects.toThrow(
+      /PREPARATION_IDENTITY_MISMATCH/,
+    );
+    await expect(worktrees.prepare(fixture.commit, otherCommit)).rejects.toThrow(
+      /PREPARATION_IDENTITY_MISMATCH/,
+    );
+    await worktrees.dispose();
+  });
+
   it('rejects and never deletes a pre-existing run root', () => {
     const fixture = repository();
     const parent = mkdtempSync(join(tmpdir(), 'coding-harness-preexisting-parent-'));

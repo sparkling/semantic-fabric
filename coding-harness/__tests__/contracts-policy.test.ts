@@ -16,6 +16,7 @@ import { checkEvolutionEligibility } from '../src/config.js';
 import { parseHarnessConfig, parseTaskContract } from '../src/contracts.js';
 import {
   HarnessPolicy,
+  assertProtectedInputSnapshot,
   auditMutableOutputs,
   captureProtectedInputs,
   listTrackedPaths,
@@ -150,6 +151,16 @@ describe('five policy gates', () => {
 });
 
 describe('protected and mutable evidence', () => {
+  it('requires the exact declared protected path set and valid digests', () => {
+    const root = workspace();
+    const config = createTestConfig();
+    const task = createTask(root, config);
+    expect(() => assertProtectedInputSnapshot(task, {})).toThrow(/PATH_SET_MISMATCH/);
+    expect(() => assertProtectedInputSnapshot(task, { 'protected.txt': 'not-a-digest' })).toThrow(
+      /DIGEST_INVALID/,
+    );
+  });
+
   it('digests only explicit tracked protected paths and detects changes', async () => {
     const root = workspace();
     const config = createTestConfig();

@@ -23,12 +23,13 @@ import {
 import { GitWorktreeSet } from './git-worktrees.js';
 import type { OfflineProcessIsolator } from './network.js';
 import {
+  DEFAULT_PROTECTED_INPUT_BOUNDARY,
   HarnessPolicy,
+  assertProtectedInputSnapshot,
   auditMutableOutputs,
-  captureProtectedInputs,
   listTrackedPaths,
-  verifyProtectedInputs,
   type GateDecision,
+  type ProtectedInputBoundary,
 } from './policy.js';
 import { runStructuredProcess } from './process.js';
 import { digestValue } from './receipts.js';
@@ -72,6 +73,7 @@ export interface RepositoryOperationsOptions {
   model: RepositoryModelController;
   offlineIsolator: OfflineProcessIsolator;
   offlineEnvironment: Readonly<Record<string, string | undefined>>;
+  protectedInputBoundary?: ProtectedInputBoundary;
   frozenLockfile?: Readonly<{ sourcePath: string; workspacePath: string; digest: string }>;
   agenticQeEvidence: (
     build: CandidateBuild,
@@ -137,7 +139,10 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     this.#assertCommandsDeclared(task);
     this.#task = task;
     this.#policy = new HarnessPolicy(task, this.#options.config);
-    this.#protectedInputs = await captureProtectedInputs(task, this.#options.config);
+    this.#protectedInputs = await (
+      this.#options.protectedInputBoundary ?? DEFAULT_PROTECTED_INPUT_BOUNDARY
+    ).capture(task, this.#options.config);
+    assertProtectedInputSnapshot(task, this.#protectedInputs);
     this.#trackedAtStart = await listTrackedPaths(task, this.#options.config);
     for (const path of this.#options.artifactPaths) {
       if (!task.mutablePaths.includes(path)) throw new Error(`HARNESS_ARTIFACT_PATH_NOT_DECLARED:${path}`);
@@ -346,7 +351,8 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async verifyProtectedInputs(): Promise<GateDecision> {
-    return await verifyProtectedInputs(
+    assertProtectedInputSnapshot(this.#requireTask(), this.#protectedInputs ?? {});
+    return await (this.#options.protectedInputBoundary ?? DEFAULT_PROTECTED_INPUT_BOUNDARY).verify(
       this.#requireTask(),
       this.#options.config,
       this.#protectedInputs ?? {},
