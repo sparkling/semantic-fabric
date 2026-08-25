@@ -26,7 +26,7 @@ import { prepareIssue8RustClosure } from './rust-closure.js';
 import { createRustOfflineProfile } from './rust-sandbox.js';
 
 const ISSUE_8_TASK_ID = 'bprune_8_20260825';
-const MODELS = Object.freeze({ codex: 'gpt-5.6', claude: 'claude-sonnet-4-6' });
+const MODELS = Object.freeze({ codex: 'gpt-5.6-sol', claude: 'claude-sonnet-4-6' });
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,160}$/;
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
 const SCRATCH_PARENT = '/home/claude/.cache/semantic-fabric-harness';

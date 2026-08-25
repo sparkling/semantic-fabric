@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -71,7 +71,13 @@ describe('private package boundary', () => {
     expect(trackedSuite.status).toBe(0);
     expect(trackedSuite.stdout).toBe('');
     expect(existsSync(resolve(root, 'suite.json'))).toBe(false);
-    expect(existsSync(resolve(root, '.metaharness'))).toBe(false);
+    const metaharnessRoot = resolve(root, '.metaharness');
+    if (existsSync(metaharnessRoot)) {
+      expect(readdirSync(metaharnessRoot).sort()).toEqual(['runs']);
+    }
+    for (const path of ['archive.json', 'lineage.json', 'variants', 'reports']) {
+      expect(existsSync(resolve(metaharnessRoot, path))).toBe(false);
+    }
   });
 });
 

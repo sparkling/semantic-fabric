@@ -165,6 +165,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       '--ignore-user-config',
       '--ignore-rules',
       '--strict-config',
+      '--skip-git-repo-check',
       '--sandbox',
       request.workspaceAccess === 'read' ? 'read-only' : 'workspace-write',
       '--model',

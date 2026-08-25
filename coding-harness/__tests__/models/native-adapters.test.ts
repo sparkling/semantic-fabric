@@ -90,7 +90,7 @@ describe('native subscription adapters', () => {
       codex,
       claude,
       cwd: '/repo',
-      requestedModels: { codex: 'gpt-5.6', claude: 'claude-opus-4-1' },
+      requestedModels: { codex: 'gpt-5.6-sol', claude: 'claude-sonnet-4-6' },
     });
 
     expect(evidence.map(({ host }) => host)).toEqual(['codex', 'claude-code']);
@@ -128,7 +128,7 @@ describe('native subscription adapters', () => {
 
     await codex.invoke({
       cwd: root,
-      model: 'gpt-5.6',
+      model: 'gpt-5.6-sol',
       prompt: 'review this patch',
       schema: { type: 'object' },
       schemaPath,
@@ -140,7 +140,7 @@ describe('native subscription adapters', () => {
     });
     await claude.invoke({
       cwd: root,
-      model: 'claude-opus-4-1',
+      model: 'claude-sonnet-4-6',
       prompt: 'review this patch',
       schema: { type: 'object' },
       workspaceAccess: 'read',
@@ -156,6 +156,7 @@ describe('native subscription adapters', () => {
         '--ephemeral',
         '--ignore-user-config',
         '--strict-config',
+        '--skip-git-repo-check',
         '--output-schema',
         schemaPath,
       ]),
@@ -176,7 +177,7 @@ describe('native subscription adapters', () => {
     expect(claudeRequest?.signal).toBe(controller.signal);
     expect(() => codex.buildInvocation({
       cwd: root,
-      model: 'gpt-5.6',
+      model: 'gpt-5.6-sol',
       prompt: 'escape',
       schema: { type: 'object' },
       schemaPath,
