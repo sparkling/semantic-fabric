@@ -2,43 +2,26 @@
   "name": "coding-harness",
   "version": "0.1.0",
   "description": "Harness for semantic-fabric",
+  "private": true,
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "coding-harness": "bin/cli.js"
-  },
-  "files": [
-    "bin/**",
-    "dist/**",
-    "src/**",
-    "tsconfig.json",
-    ".claude/**",
-    "CLAUDE.md",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "init": "node ./bin/cli.js init",
-    "doctor": "node ./bin/cli.js doctor",
-    "evolve": "metaharness-darwin evolve . --sandbox real --generations 3 --children 4",
-    "evolve:dry": "metaharness-darwin evolve . --sandbox mock --generations 2 --children 3"
+    "prepublishOnly": "node scripts/deny-publish.mjs"
   },
   "dependencies": {
-    "@metaharness/kernel": "^0.1.0",
-    "@metaharness/host-claude-code": "^0.1.0"
+    "@metaharness/harness": "0.2.0",
+    "@metaharness/host-claude-code": "0.1.2",
+    "@metaharness/host-codex": "0.1.2",
+    "@metaharness/router": "0.4.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.4.0",
-    "vitest": "^3.0.0",
-    "@metaharness/darwin": "^0.2.2"
+    "@types/node": "20.19.43",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
   },
   "engines": {
     "node": ">=20.0.0"
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }
