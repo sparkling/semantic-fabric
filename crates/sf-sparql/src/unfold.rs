@@ -816,9 +816,13 @@ impl<'a> Unfolder<'a> {
 
         // Bind/constrain the three query positions.
         if let NamedNodePattern::Variable(pv) = &tp.predicate {
-            bind(&mut branch, pv.as_str(), pred_def)?;
+            if !bind(&mut branch, pv.as_str(), pred_def)? {
+                return Ok(None);
+            }
         }
-        self.bind_position(&mut branch, &tp.subject, q_subj)?;
+        if !self.bind_position(&mut branch, &tp.subject, q_subj)? {
+            return Ok(None);
+        }
         if !self.bind_position(&mut branch, &tp.object, q_obj)? {
             return Ok(None);
         }
@@ -876,18 +880,22 @@ impl<'a> Unfolder<'a> {
             let subj_def = def_of(&tm.subject.term, alias);
             // predicate is rdf:type (matched); bind object var to the class IRI.
             if let TermPattern::Variable(ov) = &tp.object {
-                bind(
+                if !bind(
                     &mut branch,
                     ov.as_str(),
                     TermDef::Const(Term::NamedNode(class.clone())),
-                )?;
+                )? {
+                    continue;
+                }
             }
             if let NamedNodePattern::Variable(pv) = &tp.predicate {
-                bind(
+                if !bind(
                     &mut branch,
                     pv.as_str(),
                     TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RDF_TYPE))),
-                )?;
+                )? {
+                    continue;
+                }
             }
             if self.bind_position(&mut branch, &tp.subject, subj_def)? {
                 out.push(branch);
