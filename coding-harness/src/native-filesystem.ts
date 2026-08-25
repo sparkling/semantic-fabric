@@ -31,6 +31,7 @@ export interface NativeFilesystemIsolationResult extends NativeFilesystemPolicy 
   readonly enforcement: 'os-filesystem-namespace';
   readonly mechanism: string;
   readonly mountManifestDigest: string;
+  readonly configurationMaskDigest: string;
   readonly command: BoundaryCommand;
 }
 
@@ -39,7 +40,7 @@ export interface NativeModelFilesystemBoundary {
 }
 
 const RESULT_KEYS = [
-  'enforcement', 'mechanism', 'mountManifestDigest', 'host', 'workspaceRoot',
+  'enforcement', 'mechanism', 'mountManifestDigest', 'configurationMaskDigest', 'host', 'workspaceRoot',
   'readOnlyRoots', 'writablePaths', 'hostFileConfidentiality', 'emptyPrivateHome',
   'hostRootMounted', 'maskedPaths', 'command',
 ] as const;
@@ -70,6 +71,14 @@ export function isolateNativeModelFilesystem(
   if (!SHA256_PATTERN.test(mountManifestDigest) || mountManifestDigest === '0'.repeat(64)) {
     throw new Error('HARNESS_NATIVE_FILESYSTEM_BOUNDARY_INVALID');
   }
+  const configurationMaskDigest = asNonEmptyString(
+    input.configurationMaskDigest,
+    'native filesystem configuration mask digest',
+  );
+  if (!SHA256_PATTERN.test(configurationMaskDigest)
+    || configurationMaskDigest === '0'.repeat(64)) {
+    throw new Error('HARNESS_NATIVE_FILESYSTEM_BOUNDARY_INVALID');
+  }
   const readOnlyRoots = asUniqueStrings(input.readOnlyRoots, 'native filesystem readOnlyRoots');
   const writablePaths = asUniqueStrings(
     input.writablePaths,
@@ -94,6 +103,7 @@ export function isolateNativeModelFilesystem(
     enforcement: 'os-filesystem-namespace',
     mechanism,
     mountManifestDigest,
+    configurationMaskDigest,
     host: policy.host,
     workspaceRoot: policy.workspaceRoot,
     readOnlyRoots,

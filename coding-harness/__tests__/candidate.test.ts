@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { describe, expect, it, vi } from 'vitest';
 import {
   CandidateBuildFailure,
@@ -209,6 +208,8 @@ function nativeProof() {
     executablePath: `/tools/${name}`,
     executableDigest: digest(name === 'codex' ? '1' : '2'),
     preflightDigest: digest(name === 'codex' ? '3' : '4'),
+    credentialCapability: 'invocation-private-copy',
+    hostCredentialPathMounted: false,
   });
   const invocation = (
     invocationId: string,
@@ -224,12 +225,19 @@ function nativeProof() {
       pinnedOrigins: name === 'codex'
         ? ['https://api.openai.com', 'https://chatgpt.com']
         : ['https://api.anthropic.com', 'https://claude.ai'],
+      allowedConnections: 1, deniedConnections: 0, connectDigest: digest('a'),
     },
     filesystem: {
       enforcement: 'os-filesystem-namespace', mechanism: 'test-namespace',
       workspaceRootDigest: digest('7'), mountManifestDigest: digest('8'),
+      configurationMaskDigest: digest('a'),
       outputChannelDigest: digest('9'), hostFileConfidentiality: true,
-      emptyPrivateHome: true, hostRootMounted: false, gitMetadataMasked: true,
+      emptyPrivateHome: true, privateEphemeralHome: true, hostRootMounted: false,
+      hostCredentialPathMounted: false, gitMetadataMasked: true,
+    },
+    resources: {
+      enforcement: 'systemd-cgroup-v2', mechanism: 'systemd-transient-service',
+      limitsDigest: digest('b'),
     },
   });
   return {

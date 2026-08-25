@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/harden-build.mjs",
     "test": "vitest run",
     "prepublishOnly": "node scripts/deny-publish.mjs"
   },

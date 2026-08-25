@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRustOfflineProfile, bindRustOfflineCommand } from '../src/rust-sandbox.js';
+import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -32,6 +33,8 @@ describe.runIf(process.platform === 'linux' && existsSync('/usr/bin/bwrap'))(
         toolchainRoot: toolchain,
         registryRoot,
         registryKey,
+        resourceBoundary: fakeResourceBoundary,
+        resourceLimits: TEST_RESOURCE_LIMITS,
       });
       const command = bindRustOfflineCommand({
         tool: 'cargo',

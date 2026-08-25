@@ -18,6 +18,7 @@ import type {
   OfflineProcessIsolator,
   RegistryOriginPinningBoundary,
 } from '../src/network.js';
+import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
 
 const candidateCommand: BoundaryCommand = Object.freeze({
   executable: '/usr/bin/node',
@@ -167,6 +168,8 @@ describe('offline candidate process boundary', () => {
       executablePath: '/usr/bin/bwrap',
       writableRoot: fixture.runRoot,
       readOnlyMounts: [{ source: '/usr', destination: '/usr' }],
+      resourceBoundary: fakeResourceBoundary,
+      resourceLimits: TEST_RESOURCE_LIMITS,
     });
     const request = {
       ...offlineRequest,
@@ -177,14 +180,14 @@ describe('offline candidate process boundary', () => {
       },
     };
     const bwrapGrant = isolateOfflineCandidateCommand(request, bwrap);
-    expect(bwrapGrant.command.executable).toBe('/usr/bin/bwrap');
+    expect(bwrapGrant.command.executable).toBe('/usr/bin/env');
     expect(bwrapGrant.command.args).toEqual(expect.arrayContaining([
       '--unshare-all', '--tmpfs', '/', '--ro-bind', '/usr', '/usr',
       '--ro-bind', fixture.cwd, fixture.cwd, '--bind', fixture.output, fixture.output,
       '--chdir', fixture.cwd, '--', '/usr/bin/node', '--test', 'candidate.test.mjs',
     ]));
     expect(bwrapGrant.command.args.join(' ')).not.toContain('--ro-bind / /');
-    expect(bwrapGrant.mechanism).toBe('bwrap-allowlisted-filesystem');
+    expect(bwrapGrant.mechanism).toBe('systemd-cgroup-v2-bwrap');
   });
 
   it('refuses to run unsandboxed when the platform or isolator is unavailable', () => {
@@ -194,12 +197,16 @@ describe('offline candidate process boundary', () => {
       executablePath: '/does/not/exist/bwrap',
       writableRoot: fixture.runRoot,
       readOnlyMounts: [{ source: '/usr', destination: '/usr' }],
+      resourceBoundary: fakeResourceBoundary,
+      resourceLimits: TEST_RESOURCE_LIMITS,
     })).toThrow('HARNESS_OFFLINE_OS_SANDBOX_PATH_INVALID');
     expect(() => createSystemOfflineIsolator({
       platform: 'darwin',
       executablePath: '/usr/bin/bwrap',
       writableRoot: fixture.runRoot,
       readOnlyMounts: [{ source: '/usr', destination: '/usr' }],
+      resourceBoundary: fakeResourceBoundary,
+      resourceLimits: TEST_RESOURCE_LIMITS,
     })).toThrow('HARNESS_OFFLINE_OS_SANDBOX_UNAVAILABLE');
   });
 
@@ -254,6 +261,8 @@ describe('offline candidate process boundary', () => {
         executablePath: '/usr/bin/bwrap',
         writableRoot: fixture.runRoot,
         readOnlyMounts: mounts,
+        resourceBoundary: fakeResourceBoundary,
+        resourceLimits: TEST_RESOURCE_LIMITS,
       });
       const grant = isolateOfflineCandidateCommand({
         ...offlineRequest,
@@ -337,13 +346,13 @@ describe('native first-party model network boundary', () => {
     )).toThrow();
   });
 
-  it('requires an origin-pinning process wrapper and binds its command', () => {
+  it('requires an origin-pinning process wrapper and binds its command', async () => {
     const request = { ...nativeRequest('codex'), command: candidateCommand };
-    expect(() => isolateNativeFirstPartyModelTraffic(
+    await expect(isolateNativeFirstPartyModelTraffic(
       request,
       SECURE_HARNESS_CONFIG,
-    )).toThrow('HARNESS_NATIVE_ORIGIN_BOUNDARY_REQUIRED');
-    expect(() => isolateNativeFirstPartyModelTraffic(
+    )).rejects.toThrow('HARNESS_NATIVE_ORIGIN_BOUNDARY_REQUIRED');
+    await expect(isolateNativeFirstPartyModelTraffic(
       request,
       SECURE_HARNESS_CONFIG,
       {
@@ -354,9 +363,9 @@ describe('native first-party model network boundary', () => {
           command,
         }),
       },
-    )).toThrow('HARNESS_NATIVE_ORIGIN_COMMAND_MISMATCH');
+    )).rejects.toThrow('HARNESS_NATIVE_ORIGIN_COMMAND_MISMATCH');
 
-    const grant = isolateNativeFirstPartyModelTraffic(
+    const grant = await isolateNativeFirstPartyModelTraffic(
       request,
       SECURE_HARNESS_CONFIG,
       {

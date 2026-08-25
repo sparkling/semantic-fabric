@@ -30,10 +30,18 @@ import {
   verifyProtectedInputs,
   type GateDecision,
 } from './policy.js';
-import { runStructuredProcess, type ProcessResult } from './process.js';
-import { digestValue, type CommandEvidence } from './receipts.js';
+import { runStructuredProcess } from './process.js';
+import { digestValue } from './receipts.js';
 import { resolveWorkspacePath, sha256File } from './workspace.js';
 import type { NativeHost } from './models/types.js';
+import type { NativeInvocationExpectation } from './evidence.js';
+import { NativeRuntimeLedger } from './native-runtime-ledger.js';
+import type { HostEvidence } from './receipts.js';
+import {
+  commandEvidence,
+  commandPassed,
+  type UnboundCommandEvidence,
+} from './repository-command-evidence.js';
 
 export interface RepositoryModelController {
   architecture(signal?: AbortSignal): Promise<ArchitectureEvidence>;
@@ -69,7 +77,12 @@ export interface RepositoryOperationsOptions {
     build: CandidateBuild,
     signal?: AbortSignal,
   ) => Promise<readonly unknown[]>;
-  nativeEvidence: () => unknown;
+  nativeRuntime?: Readonly<{
+    ledger: NativeRuntimeLedger;
+    taskId: string;
+    runId: string;
+    hosts: readonly HostEvidence[];
+  }>;
   preflightEvidence: (
     prepared: PreparedCandidate,
     signal?: AbortSignal,
@@ -79,8 +92,6 @@ export interface RepositoryOperationsOptions {
     signal?: AbortSignal,
   ) => Promise<AcceptanceGateEvidence>;
 }
-
-type UnboundCommandEvidence = Omit<CommandEvidence, 'stage' | 'attempt' | 'candidateTree'>;
 
 export class RepositoryCandidateOperations implements CandidateOperations {
   readonly #options: RepositoryOperationsOptions;
@@ -104,6 +115,10 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     }
     if (this.#hasRustCommands(options) && options.frozenLockfile === undefined) {
       throw new Error('HARNESS_FROZEN_LOCKFILE_REQUIRED');
+    }
+    if (options.nativeRuntime !== undefined
+      && !(options.nativeRuntime.ledger instanceof NativeRuntimeLedger)) {
+      throw new Error('HARNESS_NATIVE_TRUSTED_RUNTIME_UNAVAILABLE');
     }
     this.#options = options;
   }
@@ -311,12 +326,21 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     await this.#options.worktrees.dispose();
   }
 
-  runtimeEvidence() {
+  runtimeEvidence(expectations: readonly NativeInvocationExpectation[]) {
     const recovery = this.#options.model.recoveryEvidence();
+    if (this.#options.nativeRuntime === undefined) {
+      throw new Error('HARNESS_NATIVE_TRUSTED_RUNTIME_UNAVAILABLE');
+    }
+    const nativeEvidence = this.#options.nativeRuntime.ledger.seal({
+      taskId: this.#options.nativeRuntime.taskId,
+      runId: this.#options.nativeRuntime.runId,
+      hosts: this.#options.nativeRuntime.hosts,
+      expectations,
+    });
     return Object.freeze({
       retryCount: recovery.retryCount,
       breakerState: recovery.breakerState,
-      nativeEvidence: this.#options.nativeEvidence(),
+      nativeEvidence,
       recoveryEvents: Object.freeze([...recovery.events]),
     });
   }
@@ -458,32 +482,6 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     if (this.#policy === null) throw new Error('HARNESS_OPERATIONS_NOT_PREPARED');
     return this.#policy;
   }
-}
-
-function commandEvidence(command: StructuredCommand, result: ProcessResult): UnboundCommandEvidence {
-  return Object.freeze({
-    tool: command.tool,
-    executable: command.executable,
-    argv: [...command.argv],
-    cwd: command.cwd,
-    exitCode: result.exitCode,
-    signal: result.signal,
-    durationMs: result.durationMs,
-    stdoutDigest: digestValue(result.stdout),
-    stderrDigest: digestValue(result.stderr),
-    timedOut: result.timedOut,
-    cancelled: result.cancelled,
-    outputLimitExceeded: result.outputLimitExceeded,
-    spawnErrorDigest: result.spawnError === null ? null : digestValue(result.spawnError),
-  });
-}
-
-function commandPassed(command: UnboundCommandEvidence): boolean {
-  return command.exitCode === 0
-    && !command.timedOut
-    && !command.cancelled
-    && !command.outputLimitExceeded
-    && command.spawnErrorDigest === null;
 }
 
 function stableCommand(command: StructuredCommand): string {

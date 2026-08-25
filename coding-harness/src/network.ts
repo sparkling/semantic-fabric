@@ -37,6 +37,7 @@ export interface OfflineIsolationResult {
 export interface OfflineProcessIsolator {
   isolate(command: BoundaryCommand): unknown;
   assertStable(): void;
+  launchEnvironment?(environment: Readonly<Record<string, string>>): Readonly<Record<string, string>>;
 }
 
 export interface OfflineCandidateGrant extends OfflineIsolationResult {
@@ -62,7 +63,9 @@ export interface NativeModelProcessGrant extends NativeModelNetworkGrant, Regist
 }
 
 export interface NativeModelOriginPinningBoundary {
-  pin(command: BoundaryCommand, origins: readonly string[]): unknown;
+  pin(command: BoundaryCommand, origins: readonly string[]): unknown | Promise<unknown>;
+  complete?(command: BoundaryCommand): unknown | Promise<unknown>;
+  assertStable?(): void;
 }
 
 export interface RegistryPinResult {
@@ -189,11 +192,11 @@ export function admitNativeFirstPartyModelTraffic(
   });
 }
 
-export function isolateNativeFirstPartyModelTraffic(
+export async function isolateNativeFirstPartyModelTraffic(
   value: unknown,
   config: HarnessConfig,
   boundary?: NativeModelOriginPinningBoundary,
-): NativeModelProcessGrant {
+): Promise<NativeModelProcessGrant> {
   const input = asRecord(value, 'native model process request');
   assertExactKeys(
     input,
@@ -215,7 +218,8 @@ export function isolateNativeFirstPartyModelTraffic(
   const command = parseBoundaryCommand(input.command, 'native model process request.command');
   assertNoRouteEnvironment(command.env, 'native model process request.command.env');
   if (boundary === undefined) throw new Error('HARNESS_NATIVE_ORIGIN_BOUNDARY_REQUIRED');
-  const pinned = parseRegistryPin(boundary.pin(command, admission.allowedOrigins));
+  boundary.assertStable?.();
+  const pinned = parseRegistryPin(await boundary.pin(command, admission.allowedOrigins));
   assertSameOrigins(
     pinned.pinnedOrigins,
     admission.allowedOrigins,
@@ -228,6 +232,7 @@ export function isolateNativeFirstPartyModelTraffic(
     'HARNESS_NATIVE_ORIGIN_COMMAND_MISMATCH',
   );
   assertNoRouteEnvironment(pinned.command.env, 'native pinned command.env');
+  boundary.assertStable?.();
   return deepFreeze({ ...admission, ...pinned });
 }
 

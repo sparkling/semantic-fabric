@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,7 @@ import type { NativeProcessRequest } from '../src/models/types.js';
 import type { NativeModelOriginPinningBoundary } from '../src/network.js';
 import type { NativeModelFilesystemBoundary } from '../src/native-filesystem.js';
 import { digestValue } from '../src/receipts.js';
+import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
 
 const roots: string[] = [];
 const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/native-process-fixture.mjs');
@@ -21,6 +22,7 @@ afterEach(() => {
 
 function workspace(): string {
   const root = mkdtempSync(join(tmpdir(), 'coding-harness-native-'));
+  mkdirSync(join(root, '.git'));
   roots.push(root);
   return root;
 }
@@ -32,6 +34,9 @@ function request(
 ): NativeProcessRequest {
   return {
     host: 'codex',
+    purpose: 'model-invocation',
+    model: 'gpt-5.6',
+    operation: 'implementation',
     executable: process.execPath,
     args: [fixture, mode],
     cwd: root,
@@ -57,6 +62,11 @@ const egressBoundary: NativeModelOriginPinningBoundary = {
       args: [command.executable, ...command.args],
     },
   }),
+  complete: () => ({
+    allowedConnections: 1,
+    deniedConnections: 0,
+    connectDigest: digestValue('test-connect'),
+  }),
 };
 
 const filesystemBoundary: NativeModelFilesystemBoundary = {
@@ -64,6 +74,7 @@ const filesystemBoundary: NativeModelFilesystemBoundary = {
     enforcement: 'os-filesystem-namespace',
     mechanism: 'test-filesystem-namespace',
     mountManifestDigest: digestValue(policy),
+    configurationMaskDigest: digestValue(policy.maskedPaths),
     ...policy,
     command: {
       ...command,
@@ -89,6 +100,8 @@ function runner(
     forbiddenRoots,
     egressBoundary,
     filesystemBoundary,
+    resourceBoundary: fakeResourceBoundary,
+    resourceLimits: TEST_RESOURCE_LIMITS,
     maxOutputBytes,
     terminationGraceMs: 25,
   });
@@ -205,6 +218,8 @@ describe('bounded native subscription process bridge', () => {
       forbiddenRoots: [workspace()],
       egressBoundary,
       filesystemBoundary,
+      resourceBoundary: fakeResourceBoundary,
+      resourceLimits: TEST_RESOURCE_LIMITS,
     })).toThrow('HARNESS_NATIVE_EXECUTABLE_UNTRUSTED:codex');
   });
 });

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import {
   SHA256_PATTERN,
   asNonEmptyString,
@@ -17,7 +16,6 @@ export type AgenticQeProfile =
   | 'rust-testgen-no-ai'
   | 'quality-contract'
   | 'sast';
-
 export interface RufloEvidence {
   schemaVersion: 1;
   source: 'ruflo-coordination-ledger';
@@ -74,6 +72,8 @@ export interface NativeRuntimeEvidence {
     executablePath: string;
     executableDigest: string;
     preflightDigest: string;
+    credentialCapability: 'invocation-private-copy';
+    hostCredentialPathMounted: false;
   }>;
   invocations: ReadonlyArray<{
     invocationId: string;
@@ -88,17 +88,28 @@ export interface NativeRuntimeEvidence {
       enforcement: 'origin-pinned-process-boundary';
       mechanism: string;
       pinnedOrigins: string[];
+      allowedConnections: number;
+      deniedConnections: 0;
+      connectDigest: string;
     };
     filesystem: {
       enforcement: 'os-filesystem-namespace';
       mechanism: string;
       workspaceRootDigest: string;
       mountManifestDigest: string;
+      configurationMaskDigest: string;
       outputChannelDigest: string;
       hostFileConfidentiality: true;
       emptyPrivateHome: true;
+      privateEphemeralHome: true;
       hostRootMounted: false;
+      hostCredentialPathMounted: false;
       gitMetadataMasked: true;
+    };
+    resources: {
+      enforcement: 'systemd-cgroup-v2';
+      mechanism: 'systemd-transient-service';
+      limitsDigest: string;
     };
   }>;
 }
@@ -117,11 +128,11 @@ const QE_PROFILES = new Set<AgenticQeProfile>([
 ]);
 const NATIVE_HOST_KEYS = [
   'host', 'model', 'authentication', 'clientVersion', 'executablePath',
-  'executableDigest', 'preflightDigest',
+  'executableDigest', 'preflightDigest', 'credentialCapability', 'hostCredentialPathMounted',
 ] as const;
 const NATIVE_INVOCATION_KEYS = [
   'invocationId', 'host', 'model', 'operation', 'candidateTree', 'environmentDigest',
-  'outputDigest', 'exitCode', 'network', 'filesystem',
+  'outputDigest', 'exitCode', 'network', 'filesystem', 'resources',
 ] as const;
 const NATIVE_ORIGINS: Readonly<Record<NativeHost, readonly string[]>> = Object.freeze({
   codex: Object.freeze(['https://api.openai.com', 'https://chatgpt.com']),
@@ -309,6 +320,8 @@ function parseNativeHostEvidence(
     executablePath,
     executableDigest: parseDigest(entry.executableDigest, `${label}.executableDigest`),
     preflightDigest: parseDigest(entry.preflightDigest, `${label}.preflightDigest`),
+    credentialCapability: parseCredentialCapability(entry.credentialCapability, label),
+    hostCredentialPathMounted: parseFalse(entry.hostCredentialPathMounted, label),
   });
 }
 
@@ -330,6 +343,7 @@ function parseNativeInvocation(
   }
   const network = parseNativeNetwork(entry.network, host, `${label}.network`);
   const filesystem = parseNativeFilesystem(entry.filesystem, `${label}.filesystem`);
+  const resources = parseNativeResources(entry.resources, `${label}.resources`);
   if (entry.exitCode !== 0) throw new Error('HARNESS_NATIVE_INVOCATION_DID_NOT_SUCCEED');
   return deepFreeze({
     invocationId: asNonEmptyString(entry.invocationId, `${label}.invocationId`),
@@ -342,6 +356,7 @@ function parseNativeInvocation(
     exitCode: 0,
     network,
     filesystem,
+    resources,
   });
 }
 
@@ -351,7 +366,10 @@ function parseNativeNetwork(
   label: string,
 ): NativeRuntimeEvidence['invocations'][number]['network'] {
   const entry = asRecord(value, label);
-  assertExactKeys(entry, ['enforcement', 'mechanism', 'pinnedOrigins'], label);
+  assertExactKeys(entry, [
+    'enforcement', 'mechanism', 'pinnedOrigins', 'allowedConnections',
+    'deniedConnections', 'connectDigest',
+  ], label);
   if (entry.enforcement !== 'origin-pinned-process-boundary') {
     throw new Error('HARNESS_NATIVE_NETWORK_ENFORCEMENT_REQUIRED');
   }
@@ -363,6 +381,9 @@ function parseNativeNetwork(
     enforcement: 'origin-pinned-process-boundary',
     mechanism: asNonEmptyString(entry.mechanism, `${label}.mechanism`),
     pinnedOrigins,
+    allowedConnections: positiveInteger(entry.allowedConnections, `${label}.allowedConnections`),
+    deniedConnections: parseZero(entry.deniedConnections, `${label}.deniedConnections`),
+    connectDigest: parseDigest(entry.connectDigest, `${label}.connectDigest`),
   });
 }
 
@@ -373,13 +394,16 @@ function parseNativeFilesystem(
   const entry = asRecord(value, label);
   assertExactKeys(entry, [
     'enforcement', 'mechanism', 'workspaceRootDigest', 'mountManifestDigest',
-    'outputChannelDigest', 'hostFileConfidentiality', 'emptyPrivateHome', 'hostRootMounted',
-    'gitMetadataMasked',
+    'configurationMaskDigest', 'outputChannelDigest', 'hostFileConfidentiality',
+    'emptyPrivateHome', 'privateEphemeralHome', 'hostRootMounted',
+    'hostCredentialPathMounted', 'gitMetadataMasked',
   ], label);
   if (entry.enforcement !== 'os-filesystem-namespace'
     || entry.hostFileConfidentiality !== true
     || entry.emptyPrivateHome !== true
+    || entry.privateEphemeralHome !== true
     || entry.hostRootMounted !== false
+    || entry.hostCredentialPathMounted !== false
     || entry.gitMetadataMasked !== true) {
     throw new Error('HARNESS_NATIVE_FILESYSTEM_BOUNDARY_REQUIRED');
   }
@@ -388,12 +412,62 @@ function parseNativeFilesystem(
     mechanism: asNonEmptyString(entry.mechanism, `${label}.mechanism`),
     workspaceRootDigest: parseDigest(entry.workspaceRootDigest, `${label}.workspaceRootDigest`),
     mountManifestDigest: parseDigest(entry.mountManifestDigest, `${label}.mountManifestDigest`),
+    configurationMaskDigest: parseDigest(
+      entry.configurationMaskDigest,
+      `${label}.configurationMaskDigest`,
+    ),
     outputChannelDigest: parseDigest(entry.outputChannelDigest, `${label}.outputChannelDigest`),
     hostFileConfidentiality: true,
     emptyPrivateHome: true,
+    privateEphemeralHome: true,
     hostRootMounted: false,
+    hostCredentialPathMounted: false,
     gitMetadataMasked: true,
   });
+}
+
+function parseNativeResources(
+  value: unknown,
+  label: string,
+): NativeRuntimeEvidence['invocations'][number]['resources'] {
+  const entry = asRecord(value, label);
+  assertExactKeys(entry, ['enforcement', 'mechanism', 'limitsDigest'], label);
+  if (entry.enforcement !== 'systemd-cgroup-v2'
+    || entry.mechanism !== 'systemd-transient-service') {
+    throw new Error('HARNESS_NATIVE_RESOURCE_ENFORCEMENT_REQUIRED');
+  }
+  return deepFreeze({
+    enforcement: 'systemd-cgroup-v2',
+    mechanism: 'systemd-transient-service',
+    limitsDigest: parseDigest(entry.limitsDigest, `${label}.limitsDigest`),
+  });
+}
+
+function parseCredentialCapability(
+  value: unknown,
+  label: string,
+): 'invocation-private-copy' {
+  if (value !== 'invocation-private-copy') {
+    throw new Error(`HARNESS_NATIVE_CREDENTIAL_CAPABILITY_INVALID:${label}`);
+  }
+  return value;
+}
+
+function parseFalse(value: unknown, label: string): false {
+  if (value !== false) throw new Error(`HARNESS_NATIVE_EXPECTED_FALSE:${label}`);
+  return false;
+}
+
+function parseZero(value: unknown, label: string): 0 {
+  if (value !== 0) throw new Error(`HARNESS_NATIVE_EXPECTED_ZERO:${label}`);
+  return 0;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value as number;
 }
 
 function parseNativeHost(value: unknown, label: string): NativeHost {

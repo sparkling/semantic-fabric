@@ -93,7 +93,7 @@ export interface CandidateOperations {
   auditMutableOutputs(signal?: AbortSignal): Promise<GateDecision>;
   agenticQeEvidence(build: CandidateBuild, signal?: AbortSignal): Promise<readonly unknown[]>;
   mutationEvidence(build: CandidateBuild, signal?: AbortSignal): Promise<AcceptanceGateEvidence>;
-  runtimeEvidence(): CandidateRuntimeEvidence;
+  runtimeEvidence(expectations: readonly NativeInvocationExpectation[]): CandidateRuntimeEvidence;
   cleanup(): Promise<void>;
 }
 

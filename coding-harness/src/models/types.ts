@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 export type NativeHost = 'codex' | 'claude-code';
+export type NativeProcessPurpose = 'authentication-preflight' | 'version-preflight' | 'model-invocation';
+export type NativeProcessOperation = 'architecture' | 'implementation' | 'repair' | 'review';
 
 export interface NativeProcessRequest {
   readonly host: NativeHost;
+  readonly purpose: NativeProcessPurpose;
+  readonly model: string;
+  readonly operation?: NativeProcessOperation;
   readonly executable: string;
   readonly args: readonly string[];
   readonly cwd: string;
@@ -16,6 +21,7 @@ export interface NativeProcessRequest {
 }
 
 export interface NativeProcessResult {
+  readonly executionId: string;
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
@@ -23,6 +29,8 @@ export interface NativeProcessResult {
   readonly cancelled?: boolean;
   readonly outputLimitExceeded?: boolean;
   readonly spawnError?: string;
+  readonly stdoutDigest: string;
+  readonly stderrDigest: string;
 }
 
 /** Execution seam implemented by H-A's bounded process layer. */
@@ -41,6 +49,7 @@ export interface NativeAuthEvidence {
   readonly clientVersion: string;
   readonly fallback: 'none';
   readonly subscriptionCostUsd: 0;
+  readonly preflightExecutionIds: readonly [string, string];
 }
 
 export interface NativePreflightRequest {
@@ -59,6 +68,7 @@ interface NativeInvocationBase {
   readonly workspaceAccess: WorkspaceAccess;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  readonly operation: NativeProcessOperation;
 }
 
 export interface CodexInvocationRequest extends NativeInvocationBase {

@@ -1,9 +1,38 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { HarnessConfig, TaskContract } from '../src/contracts.js';
 import { parseHarnessConfig, parseTaskContract } from '../src/contracts.js';
+import type { NativeResourceBoundary, NativeResourceLimits } from '../src/resource-boundary.js';
+
+export const TEST_RESOURCE_LIMITS: NativeResourceLimits = Object.freeze({
+  memoryBytes: 512 * 1024 * 1024,
+  processCount: 64,
+  cpuQuotaPercent: 200,
+  cpuTimeSeconds: 30,
+  runtimeSeconds: 30,
+  fileBytes: 10 * 1024 * 1024,
+  openFiles: 256,
+});
+
+export const fakeResourceBoundary: NativeResourceBoundary = Object.freeze({
+  assertStable() {},
+  wrap(command, limits) {
+    return {
+      enforcement: 'systemd-cgroup-v2',
+      mechanism: 'systemd-transient-service',
+      limits,
+      limitsDigest: createHash('sha256').update(JSON.stringify(limits)).digest('hex'),
+      command: {
+        ...command,
+        executable: '/usr/bin/env',
+        args: [command.executable, ...command.args],
+      },
+    };
+  },
+});
 
 export function createTestConfig(requiredProtectedPaths = ['protected.txt']): HarnessConfig {
   return parseHarnessConfig({

@@ -3,6 +3,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { StructuredCommand } from './contracts.js';
+import type { NativeResourceBoundary, NativeResourceLimits } from './resource-boundary.js';
 import {
   createSystemOfflineIsolator,
   type OfflineProcessIsolator,
@@ -16,6 +17,8 @@ export interface RustOfflineProfileOptions {
   readonly registryRoot: string;
   readonly registryKey: string;
   readonly bwrapExecutable: string;
+  readonly resourceBoundary: NativeResourceBoundary;
+  readonly resourceLimits: NativeResourceLimits;
 }
 
 export interface RustOfflineProfile {
@@ -67,6 +70,8 @@ export function createRustOfflineProfile(options: RustOfflineProfileOptions): Ru
       writableRoot: options.writableRoot,
       readOnlyMounts: mounts,
       executablePath: options.bwrapExecutable,
+      resourceBoundary: options.resourceBoundary,
+      resourceLimits: options.resourceLimits,
     }),
     cargoExecutable: '/toolchain/bin/cargo',
     environment,

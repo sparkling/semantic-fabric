@@ -27,7 +27,8 @@ export interface HarnessManifest {
   protectedPaths: string[];
   acceptanceTasks: string[];
   diagnostics: {
-    minimumScore: 98;
+    programmeAcceptanceScore: 98;
+    upstreamScores: 'diagnostic-only';
     blindSurfaceOutcome: 'INCONCLUSIVE';
   };
   evolution: {
@@ -74,8 +75,16 @@ export function parseHarnessManifest(value: unknown, config: HarnessConfig): Har
   }
 
   const diagnostics = asRecord(input.diagnostics, 'harness manifest.diagnostics');
-  assertExactKeys(diagnostics, ['minimumScore', 'blindSurfaceOutcome'], 'harness manifest.diagnostics');
-  if (asInteger(diagnostics.minimumScore, 'harness manifest.diagnostics.minimumScore') !== 98
+  assertExactKeys(
+    diagnostics,
+    ['programmeAcceptanceScore', 'upstreamScores', 'blindSurfaceOutcome'],
+    'harness manifest.diagnostics',
+  );
+  if (asInteger(
+    diagnostics.programmeAcceptanceScore,
+    'harness manifest.diagnostics.programmeAcceptanceScore',
+  ) !== 98
+    || diagnostics.upstreamScores !== 'diagnostic-only'
     || diagnostics.blindSurfaceOutcome !== 'INCONCLUSIVE') {
     throw new TypeError('harness manifest diagnostic gates are invalid');
   }
@@ -104,7 +113,11 @@ export function parseHarnessManifest(value: unknown, config: HarnessConfig): Har
     coordinationSurface: '.mcp.json',
     protectedPaths,
     acceptanceTasks,
-    diagnostics: { minimumScore: 98, blindSurfaceOutcome: 'INCONCLUSIVE' },
+    diagnostics: {
+      programmeAcceptanceScore: 98,
+      upstreamScores: 'diagnostic-only',
+      blindSurfaceOutcome: 'INCONCLUSIVE',
+    },
     evolution: {
       eligible: false,
       minimumTrainingTasks: 5,

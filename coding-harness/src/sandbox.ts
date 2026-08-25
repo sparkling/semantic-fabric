@@ -9,6 +9,11 @@ import type {
   OfflineIsolationResult,
   OfflineProcessIsolator,
 } from './network.js';
+import {
+  isolateNativeResources,
+  type NativeResourceBoundary,
+  type NativeResourceLimits,
+} from './resource-boundary.js';
 
 export interface ReadOnlyMount {
   readonly source: string;
@@ -20,6 +25,8 @@ export interface SystemOfflineIsolatorOptions {
   readonly executablePath: string;
   readonly writableRoot: string;
   readonly readOnlyMounts: readonly ReadOnlyMount[];
+  readonly resourceBoundary: NativeResourceBoundary;
+  readonly resourceLimits: NativeResourceLimits;
 }
 
 export function createSystemOfflineIsolator(
@@ -32,19 +39,34 @@ export function createSystemOfflineIsolator(
   const writableRoot = validateDirectory(options.writableRoot, 'HARNESS_OFFLINE_WRITABLE_ROOT_INVALID');
   const mounts = validateMounts(options.readOnlyMounts);
   if (mounts.length === 0) throw new Error('HARNESS_OFFLINE_READ_ONLY_MOUNTS_REQUIRED');
-  return systemIsolator(executable, writableRoot, mounts);
+  if (options.resourceBoundary === undefined) {
+    throw new Error('HARNESS_OFFLINE_RESOURCE_BOUNDARY_REQUIRED');
+  }
+  return systemIsolator(
+    executable,
+    writableRoot,
+    mounts,
+    options.resourceBoundary,
+    options.resourceLimits,
+  );
 }
 
 function systemIsolator(
   executable: ExecutableIdentity,
   writableRoot: string,
   mounts: readonly ReadOnlyMount[],
+  resourceBoundary: NativeResourceBoundary,
+  resourceLimits: NativeResourceLimits,
 ): OfflineProcessIsolator {
   return Object.freeze({
+    launchEnvironment(environment: Readonly<Record<string, string>>) {
+      return resourceBoundary.launchEnvironment?.(environment) ?? environment;
+    },
     assertStable(): void {
       if (validateExecutable(executable.path).digest !== executable.digest) {
         throw new Error('HARNESS_OFFLINE_OS_SANDBOX_CHANGED');
       }
+      resourceBoundary.assertStable();
     },
     isolate(command: BoundaryCommand): OfflineIsolationResult {
       if (validateExecutable(executable.path).digest !== executable.digest) {
@@ -73,14 +95,16 @@ function systemIsolator(
         ...Object.entries(command.env).flatMap(([name, value]) => ['--setenv', name, value]),
         '--chdir', command.cwd, '--',
       ];
+      const namespace = deepFreeze({
+        ...command,
+        executable: executable.path,
+        args: [...prefix, command.executable, ...command.args],
+      });
+      const bounded = isolateNativeResources(namespace, resourceLimits, resourceBoundary);
       return deepFreeze({
         enforcement: 'os-network-namespace',
-        mechanism: 'bwrap-allowlisted-filesystem',
-        command: {
-          ...command,
-          executable: executable.path,
-          args: [...prefix, command.executable, ...command.args],
-        },
+        mechanism: 'systemd-cgroup-v2-bwrap',
+        command: bounded.command,
       });
     },
   });

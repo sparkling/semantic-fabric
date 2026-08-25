@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { existsSync, realpathSync, statSync } from 'node:fs';
-import { resolveWorkspacePath } from '../workspace.js';
 import {
   assertNativeSubscriptionEnvironment,
   buildNativeSubscriptionEnvironment,
@@ -21,9 +18,18 @@ import type {
   NativeProcessRunner,
   NativeSubscriptionAdapter,
 } from './types.js';
+import {
+  assertAdapterExecutable,
+  parseRecord,
+  processSucceeded,
+  signalAborted,
+  validateInvocation,
+  validatePreflightRequest,
+  validateRoot,
+  validateScopedPath,
+} from './native-adapter-contracts.js';
 
 const PREFLIGHT_TIMEOUT_MS = 30_000;
-const MAX_PROMPT_BYTES = 1_000_000;
 const MAX_SCHEMA_BYTES = 64_000;
 
 const CODEX_FIXED_CONFIG = Object.freeze([
@@ -45,6 +51,10 @@ const CODEX_FIXED_CONFIG = Object.freeze([
   'features.plugins=false',
   'features.remote_plugin=false',
   'features.skill_search=false',
+  'features.shell_tool=false',
+  'features.unified_exec=false',
+  'features.code_mode=false',
+  'features.code_mode_only=false',
   'features.standalone_web_search=false',
 ] as const);
 
@@ -86,7 +96,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
   readonly #evidenceRoot: string;
 
   constructor(options: CodexAdapterOptions) {
-    assertAdapterOptions(options);
+    assertAdapterExecutable(options.executable);
     this.#executable = options.executable;
     this.#runner = options.runner;
     this.#environment = buildNativeSubscriptionEnvironment(
@@ -105,6 +115,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
           request.signal,
+          'authentication-preflight',
+          request.requestedModel,
         ),
       ),
       this.#runner.run(
@@ -113,6 +125,8 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
           request.signal,
+          'version-preflight',
+          request.requestedModel,
         ),
       ),
     ]);
@@ -131,6 +145,7 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       clientVersion,
       fallback: 'none',
       subscriptionCostUsd: 0,
+      preflightExecutionIds: [login.executionId, version.executionId] as const,
     });
   }
 
@@ -168,6 +183,9 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
       request.cwd,
       request.timeoutMs,
       request.signal,
+      'model-invocation',
+      request.model,
+      request.operation,
       `${request.prompt}\n`,
       [request.schemaPath],
       [request.outputPath],
@@ -183,6 +201,9 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
     cwd: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    purpose: NativeProcessRequest['purpose'] = 'model-invocation',
+    model = 'unknown',
+    operation?: NativeProcessRequest['operation'],
     stdin?: string,
     readOnlyPaths?: readonly string[],
     writablePaths?: readonly string[],
@@ -190,6 +211,9 @@ export class CodexSubscriptionAdapter implements NativeSubscriptionAdapter {
     assertNativeSubscriptionEnvironment(this.host, this.#environment);
     return Object.freeze({
       host: this.host,
+      purpose,
+      model,
+      ...(operation === undefined ? {} : { operation }),
       executable: this.#executable,
       args: Object.freeze([...args]),
       cwd,
@@ -210,7 +234,7 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
   readonly #environment: Readonly<Record<string, string>>;
 
   constructor(options: AdapterOptions) {
-    assertAdapterOptions(options);
+    assertAdapterExecutable(options.executable);
     this.#executable = options.executable;
     this.#runner = options.runner;
     this.#environment = buildNativeSubscriptionEnvironment(
@@ -228,6 +252,8 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
           request.signal,
+          'authentication-preflight',
+          request.requestedModel,
         ),
       ),
       this.#runner.run(
@@ -236,6 +262,8 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
           request.cwd,
           PREFLIGHT_TIMEOUT_MS,
           request.signal,
+          'version-preflight',
+          request.requestedModel,
         ),
       ),
     ]);
@@ -260,6 +288,7 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
       clientVersion,
       fallback: 'none',
       subscriptionCostUsd: 0,
+      preflightExecutionIds: [login.executionId, version.executionId] as const,
     });
   }
 
@@ -275,7 +304,7 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
             '--permission-mode',
             'acceptEdits',
             '--tools',
-            'Read,Edit,Write,Glob,Grep',
+            '',
             '--disallowedTools',
             'Bash,WebFetch,WebSearch,Task',
           ]
@@ -283,7 +312,7 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
             '--permission-mode',
             'dontAsk',
             '--tools',
-            'Read,Glob,Grep',
+            '',
             '--disallowedTools',
             'Edit,Write,Bash,WebFetch,WebSearch,Task',
           ];
@@ -301,6 +330,8 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
         '--json-schema',
         schema,
         ...toolArguments,
+        '--mcp-config',
+        '{"mcpServers":{}}',
         '--strict-mcp-config',
         '--no-session-persistence',
         '--safe-mode',
@@ -310,6 +341,9 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
       request.cwd,
       request.timeoutMs,
       request.signal,
+      'model-invocation',
+      request.model,
+      request.operation,
       `${request.prompt}\n`,
     );
   }
@@ -323,11 +357,17 @@ export class ClaudeCodeSubscriptionAdapter implements NativeSubscriptionAdapter 
     cwd: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    purpose: NativeProcessRequest['purpose'] = 'model-invocation',
+    model = 'unknown',
+    operation?: NativeProcessRequest['operation'],
     stdin?: string,
   ): NativeProcessRequest {
     assertNativeSubscriptionEnvironment(this.host, this.#environment);
     return Object.freeze({
       host: this.host,
+      purpose,
+      model,
+      ...(operation === undefined ? {} : { operation }),
       executable: this.#executable,
       args: Object.freeze([...args]),
       cwd,
@@ -387,85 +427,6 @@ async function invokeChecked(
   return result;
 }
 
-function assertAdapterOptions(options: AdapterOptions): void {
-  if (options.executable.trim().length === 0 || options.executable.includes('\0')) {
-    throw new Error('HARNESS_NATIVE_EXECUTABLE_INVALID');
-  }
-}
-
-function validatePreflightRequest(request: NativePreflightRequest): void {
-  validateAbsolutePath(request.cwd, 'CWD');
-  validateModel(request.requestedModel);
-}
-
-function validateInvocation(request: ClaudeInvocationRequest): void {
-  validateAbsolutePath(request.cwd, 'CWD');
-  validateModel(request.model);
-  if (
-    request.prompt.trim().length === 0 ||
-    request.prompt.includes('\0') ||
-    Buffer.byteLength(request.prompt, 'utf8') > MAX_PROMPT_BYTES
-  ) {
-    throw new Error('HARNESS_NATIVE_PROMPT_INVALID');
-  }
-  if (
-    request.schema === null ||
-    Array.isArray(request.schema) ||
-    !Number.isSafeInteger(request.timeoutMs) ||
-    request.timeoutMs < 1
-  ) {
-    throw new Error('HARNESS_NATIVE_INVOCATION_INVALID');
-  }
-}
-
-function validateModel(model: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(model)) {
-    throw new Error('HARNESS_NATIVE_MODEL_INVALID');
-  }
-}
-
-function validateAbsolutePath(path: string, field: string): void {
-  if (!isAbsolute(path) || resolve(path) !== path || path.includes('\0')) {
-    throw new Error(`HARNESS_NATIVE_${field}_INVALID`);
-  }
-}
-
-function validateScopedPath(
-  root: string,
-  path: string,
-  field: string,
-  requireFile: boolean,
-): void {
-  validateAbsolutePath(root, 'CWD');
-  validateAbsolutePath(path, field);
-  const delta = relative(root, path);
-  if (delta === '' || delta === '..' || delta.startsWith(`..${sep}`) || isAbsolute(delta)) {
-    throw new Error(`HARNESS_NATIVE_${field}_OUTSIDE_CWD`);
-  }
-  const workspacePath = delta.split(sep).join('/');
-  try {
-    const absolute = resolveWorkspacePath(root, workspacePath, requireFile
-      ? { requireRegularFile: true, rejectHardlinks: true }
-      : { allowMissingLeaf: true });
-    if (!requireFile && existsSync(absolute)) {
-      resolveWorkspacePath(root, workspacePath, {
-        requireRegularFile: true,
-        rejectHardlinks: true,
-      });
-    }
-  } catch (error) {
-    throw new Error(`HARNESS_NATIVE_${field}_INVALID`, { cause: error });
-  }
-}
-
-function validateRoot(path: string, field: string): string {
-  validateAbsolutePath(path, field);
-  if (realpathSync(path) !== path || !statSync(path).isDirectory()) {
-    throw new Error(`HARNESS_NATIVE_${field}_INVALID`);
-  }
-  return path;
-}
-
 function captureVersion(
   result: NativeProcessResult,
   host: 'codex' | 'claude-code',
@@ -478,22 +439,4 @@ function captureVersion(
     );
   }
   return version;
-}
-
-function processSucceeded(result: NativeProcessResult): boolean {
-  return result.exitCode === 0 && !result.timedOut && result.cancelled !== true
-    && result.outputLimitExceeded !== true && result.spawnError === undefined;
-}
-function signalAborted(signal?: AbortSignal): boolean {
-  return signal?.aborted === true;
-}
-function parseRecord(text: string): Record<string, unknown> | null {
-  try {
-    const value = JSON.parse(text) as unknown;
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }

@@ -25,6 +25,7 @@ import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
 } from './models/native-adapters.js';
+import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 
 type NativeAdapter = CodexSubscriptionAdapter | ClaudeCodeSubscriptionAdapter;
 
@@ -34,6 +35,7 @@ export interface NativeAdapterStructuredClientOptions {
   readonly workspaceRoot: string | (() => string);
   readonly timeoutMs: number;
   readonly maxOutputBytes?: number;
+  readonly runtimeLedger?: NativeRuntimeLedger;
 }
 
 const DEFAULT_MAX_OUTPUT_BYTES = 10_000_000;
@@ -44,6 +46,7 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
   readonly #workspaceRoot: () => string;
   readonly #timeoutMs: number;
   readonly #maxOutputBytes: number;
+  readonly #runtimeLedger?: NativeRuntimeLedger;
 
   constructor(options: NativeAdapterStructuredClientOptions) {
     this.#adapter = options.adapter;
@@ -57,6 +60,7 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
       DEFAULT_MAX_OUTPUT_BYTES,
       'maxOutputBytes',
     );
+    this.#runtimeLedger = options.runtimeLedger;
   }
 
   async invoke(input: Readonly<{
@@ -77,7 +81,6 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
       || contains(this.#evidenceRoot, workspaceRoot)) {
       throw new Error('HARNESS_NATIVE_EVIDENCE_WORKSPACE_OVERLAP');
     }
-    const invocationId = `native:${this.#adapter.host}:${input.operation}:${randomUUID()}`;
     const invocationRoot = join(this.#evidenceRoot, randomUUID());
     mkdirSync(invocationRoot, { mode: 0o700 });
     const schema = responseSchema(input.operation);
@@ -87,8 +90,9 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
     createExclusiveFile(outputPath, '');
 
     let raw: string;
+    let executionId: string;
     if (this.#adapter.host === 'codex') {
-      await this.#adapter.invoke({
+      const result = await this.#adapter.invoke({
         cwd: workspaceRoot,
         model: input.candidate.model,
         prompt: input.prompt,
@@ -98,7 +102,9 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
         workspaceAccess: 'read',
         timeoutMs: this.#timeoutMs,
         signal: input.signal,
+        operation: input.operation,
       });
+      executionId = result.executionId;
       raw = readEvidenceFile(outputPath, this.#maxOutputBytes);
     } else {
       const result = await this.#adapter.invoke({
@@ -109,17 +115,27 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
         workspaceAccess: 'read',
         timeoutMs: this.#timeoutMs,
         signal: input.signal,
+        operation: input.operation,
       });
+      executionId = result.executionId;
       raw = boundedOutput(result.stdout, this.#maxOutputBytes);
       writeEvidenceFile(outputPath, raw);
     }
     const output = this.#adapter.host === 'claude-code'
       ? parseClaudeEnvelope(raw)
       : parseJson(raw, 'Codex structured output');
+    const outputDigest = createHash('sha256').update(raw, 'utf8').digest('hex');
+    this.#runtimeLedger?.recordInvocation({
+      invocationId: executionId,
+      host: input.candidate.host,
+      model: input.candidate.model,
+      operation: input.operation,
+      outputDigest,
+    });
     return deepFreeze({
-      invocationId,
+      invocationId: executionId,
       output,
-      outputDigest: createHash('sha256').update(raw, 'utf8').digest('hex'),
+      outputDigest,
     });
   }
 }

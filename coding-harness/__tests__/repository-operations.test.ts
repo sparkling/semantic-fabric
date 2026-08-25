@@ -197,10 +197,6 @@ describe('repository operations integration', () => {
         authoritative: false,
         capturedAt: '2026-08-25T12:00:30.000Z',
       }],
-      nativeEvidence: () => repositoryNativeProof(
-        baseline.tree,
-        git(worktrees.candidateRoot(), ['write-tree']),
-      ),
       preflightEvidence: async (prepared) => ({
         passed: true,
         reasons: [],
@@ -231,7 +227,8 @@ describe('repository operations integration', () => {
 
     const result = await transaction.execute();
 
-    expect(result.status, result.reason ?? '').toBe('pass');
+    expect(result.status, result.reason ?? '').toBe('gated');
+    expect(result.reason).toContain('HARNESS_NATIVE_TRUSTED_RUNTIME_UNAVAILABLE');
     expect(result.receipt.commands).toHaveLength(3);
     expect(result.receipt.commands.find(({ stage }) => stage === 'build')).toMatchObject({
       attempt: 0,
@@ -259,54 +256,5 @@ function acceptanceCommand(
     argv: [], cwd: '.', exitCode, signal: null, durationMs: 1,
     stdoutDigest: digestValue('stdout'), stderrDigest: digestValue('stderr'),
     timedOut: false, cancelled: false, outputLimitExceeded: false, spawnErrorDigest: null,
-  };
-}
-
-function repositoryNativeProof(evaluatorTree: string, candidateTree: string) {
-  const invocation = (
-    invocationId: string,
-    host: 'codex' | 'claude-code',
-    model: string,
-    operation: 'architecture' | 'implementation' | 'review',
-    tree: string,
-  ) => ({
-    invocationId, host, model, operation, candidateTree: tree,
-    environmentDigest: digestValue('environment'), outputDigest: digestValue(invocationId),
-    exitCode: 0,
-    network: {
-      enforcement: 'origin-pinned-process-boundary', mechanism: 'test-firewall',
-      pinnedOrigins: host === 'codex'
-        ? ['https://api.openai.com', 'https://chatgpt.com']
-        : ['https://api.anthropic.com', 'https://claude.ai'],
-    },
-    filesystem: {
-      enforcement: 'os-filesystem-namespace', mechanism: 'test-namespace',
-      workspaceRootDigest: digestValue('workspace'), mountManifestDigest: digestValue('mounts'),
-      outputChannelDigest: digestValue(invocationId), hostFileConfidentiality: true,
-      emptyPrivateHome: true, hostRootMounted: false, gitMetadataMasked: true,
-    },
-  });
-  return {
-    schemaVersion: 1, source: 'trusted-native-runtime',
-    taskId: 'task-operations-0001', runId: 'run-operations-0001',
-    hosts: [
-      {
-        host: 'codex', model: 'gpt-5', authentication: 'chatgpt-subscription',
-        clientVersion: 'codex 1', executablePath: '/tools/codex',
-        executableDigest: digestValue('codex-bin'), preflightDigest: digestValue('codex-auth'),
-      },
-      {
-        host: 'claude-code', model: 'claude-sonnet', authentication: 'claude-subscription',
-        clientVersion: 'claude 1', executablePath: '/tools/claude',
-        executableDigest: digestValue('claude-bin'), preflightDigest: digestValue('claude-auth'),
-      },
-    ],
-    invocations: [
-      invocation('architecture-codex', 'codex', 'gpt-5', 'architecture', evaluatorTree),
-      invocation('architecture-claude', 'claude-code', 'claude-sonnet', 'architecture', evaluatorTree),
-      invocation('author-0001', 'codex', 'gpt-5', 'implementation', evaluatorTree),
-      invocation('review-codex', 'codex', 'gpt-5', 'review', candidateTree),
-      invocation('review-claude-code', 'claude-code', 'claude-sonnet', 'review', candidateTree),
-    ],
   };
 }

@@ -3,6 +3,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ClaudeCodeSubscriptionAdapter,
@@ -31,11 +32,15 @@ class FakeRunner implements NativeProcessRunner {
   }
 }
 
+let sequence = 0;
 const ok = (stdout: string): NativeProcessResult => ({
+  executionId: `native-run:00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`,
   exitCode: 0,
   stdout,
   stderr: '',
   timedOut: false,
+  stdoutDigest: createHash('sha256').update(stdout).digest('hex'),
+  stderrDigest: createHash('sha256').update('').digest('hex'),
 });
 
 const roots: string[] = [];
@@ -131,6 +136,7 @@ describe('native subscription adapters', () => {
       workspaceAccess: 'read',
       timeoutMs: 1_000,
       signal: controller.signal,
+      operation: 'review',
     });
     await claude.invoke({
       cwd: root,
@@ -140,6 +146,7 @@ describe('native subscription adapters', () => {
       workspaceAccess: 'read',
       timeoutMs: 1_000,
       signal: controller.signal,
+      operation: 'review',
     });
 
     const [codexRequest, claudeRequest] = runner.requests;
@@ -157,7 +164,7 @@ describe('native subscription adapters', () => {
     expect(claudeRequest?.args).toEqual(
       expect.arrayContaining([
         '-p',
-        'Read,Glob,Grep',
+        '',
         'Edit,Write,Bash,WebFetch,WebSearch,Task',
         '--strict-mcp-config',
         '--no-session-persistence',
@@ -176,6 +183,7 @@ describe('native subscription adapters', () => {
       outputPath: join(root, '..', 'escape.json'),
       workspaceAccess: 'read',
       timeoutMs: 1_000,
+      operation: 'review',
     })).toThrow('HARNESS_NATIVE_OUTPUT_PATH_OUTSIDE_CWD');
   });
 

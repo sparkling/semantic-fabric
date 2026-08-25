@@ -274,7 +274,7 @@ export class CandidateTransaction {
     let status = requestedStatus;
     let reason = requestedReason;
     try {
-      const runtime = this.#operations.runtimeEvidence();
+      const runtime = this.#operations.runtimeEvidence(evidence.nativeInvocations);
       evidence.runtime = {
         retryCount: runtime.retryCount,
         breakerState: runtime.breakerState,
@@ -295,7 +295,7 @@ export class CandidateTransaction {
       }
     } catch (error) {
       const runtimeReason = `HARNESS_RUNTIME_EVIDENCE_FAILED:${error instanceof Error ? error.message : String(error)}`;
-      status = 'fail';
+      status = runtimeTrustUnavailable(error) ? 'gated' : 'fail';
       reason = reason === null ? runtimeReason : `${reason}; ${runtimeReason}`;
     }
     try {
@@ -429,6 +429,11 @@ export class CandidateTransaction {
       || error instanceof NativeCancellationError
       || (error instanceof Error && error.name === 'AbortError');
   }
+}
+
+function runtimeTrustUnavailable(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes('HARNESS_NATIVE_TRUSTED_RUNTIME_UNAVAILABLE');
 }
 
 function prefixArtifacts(

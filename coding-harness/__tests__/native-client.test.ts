@@ -3,6 +3,7 @@
 import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NativeAdapterStructuredClient } from '../src/native-client.js';
 import {
@@ -27,11 +28,15 @@ function root(prefix: string): string {
   return path;
 }
 
+let sequence = 0;
 const ok = (stdout: string): NativeProcessResult => ({
+  executionId: `native-run:10000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`,
   exitCode: 0,
   stdout,
   stderr: '',
   timedOut: false,
+  stdoutDigest: createHash('sha256').update(stdout).digest('hex'),
+  stderrDigest: createHash('sha256').update('').digest('hex'),
 });
 
 class FakeRunner implements NativeProcessRunner {
@@ -77,7 +82,7 @@ describe('native adapter structured client', () => {
     });
 
     expect(first.output).toEqual({ patch: validPatch() });
-    expect(first.invocationId).toMatch(/^native:codex:implementation:/);
+    expect(first.invocationId).toMatch(/^native-run:/);
     expect(first.invocationId).not.toBe(second.invocationId);
     expect(first.outputDigest).toMatch(/^[a-f0-9]{64}$/);
     for (const directory of readdirSync(evidenceRoot)) {
@@ -111,7 +116,7 @@ describe('native adapter structured client', () => {
     });
 
     expect(invocation.output).toEqual({ accepted: false, reasons: ['invariant mismatch'] });
-    expect(invocation.invocationId).toMatch(/^native:claude-code:review:/);
+    expect(invocation.invocationId).toMatch(/^native-run:/);
     expect(invocation.outputDigest).toMatch(/^[a-f0-9]{64}$/);
   });
 

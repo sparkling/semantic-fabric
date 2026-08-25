@@ -97,12 +97,16 @@ export async function runStructuredProcess(
       },
     }, context.boundary.isolator).command;
   if (context.boundary.kind === 'offline-candidate') context.boundary.isolator.assertStable();
+  const launchEnvironment = context.boundary.kind === 'offline-candidate'
+    ? (context.boundary.isolator.launchEnvironment?.(definedEnvironment(launch.env))
+      ?? definedEnvironment(launch.env))
+    : launch.env;
   return new Promise((resolveResult) => {
     let child: StructuredChild;
     try {
       child = spawn(launch.executable, [...launch.args], {
         cwd: launch.cwd,
-        env: { ...launch.env },
+        env: { ...launchEnvironment },
         shell: false,
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -182,6 +186,15 @@ export async function runStructuredProcess(
       }));
     });
   });
+}
+
+function definedEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  return Object.freeze(Object.fromEntries(
+    Object.entries(environment).filter((entry): entry is [string, string] =>
+      typeof entry[1] === 'string'),
+  ));
 }
 
 function signalProcessGroup(child: StructuredChild, signal: NodeJS.Signals): void {

@@ -2,9 +2,9 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcessByStdio } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import type { HarnessConfig } from './contracts.js';
 import {
@@ -24,6 +24,36 @@ import {
   type NativeFilesystemIsolationResult,
   type NativeModelFilesystemBoundary,
 } from './native-filesystem.js';
+import {
+  isolateNativeResources,
+  type NativeResourceBoundary,
+  type NativeResourceIsolationResult,
+  type NativeResourceLimits,
+} from './resource-boundary.js';
+import { UnixSocketOriginPinningBoundary } from './native-egress.js';
+import { SystemNativeFilesystemBoundary } from './native-system-filesystem.js';
+import { SystemdResourceBoundary } from './resource-boundary.js';
+import {
+  assertCapabilityPath,
+  cancelledResult,
+  digestValue,
+  errorMessage,
+  pathsOverlap,
+  signalProcessGroup,
+  spawnFailure,
+  validateBoundaryPaths,
+  validateDirectory,
+  validateExecutable,
+  validateLimit,
+  type NativeExecutableEvidence,
+  type NativeExecutionEvidence,
+  type OriginCompletion,
+} from './native-process-contracts.js';
+
+export type {
+  NativeExecutableEvidence,
+  NativeExecutionEvidence,
+} from './native-process-contracts.js';
 
 export interface NativeRunnerOptions {
   config: HarnessConfig;
@@ -34,6 +64,8 @@ export interface NativeRunnerOptions {
   forbiddenRoots: readonly string[];
   egressBoundary: NativeModelOriginPinningBoundary;
   filesystemBoundary: NativeModelFilesystemBoundary;
+  resourceBoundary: NativeResourceBoundary;
+  resourceLimits: NativeResourceLimits;
   maxOutputBytes?: number;
   terminationGraceMs?: number;
 }
@@ -63,10 +95,14 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
   readonly #forbiddenRoots: readonly string[];
   readonly #egressBoundary: NativeModelOriginPinningBoundary;
   readonly #filesystemBoundary: NativeModelFilesystemBoundary;
+  readonly #resourceBoundary: NativeResourceBoundary;
+  readonly #resourceLimits: NativeResourceLimits;
   readonly #maxOutputBytes: number;
   readonly #terminationGraceMs: number;
   readonly #networkEvidence: NativeModelProcessGrant[] = [];
   readonly #filesystemEvidence: NativeFilesystemIsolationResult[] = [];
+  readonly #resourceEvidence: NativeResourceIsolationResult[] = [];
+  readonly #executionEvidence = new Map<string, NativeExecutionEvidence>();
   readonly #executableEvidence: Readonly<Record<NativeHost, NativeExecutableEvidence>>;
 
   constructor(options: NativeRunnerOptions) {
@@ -98,6 +134,11 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
     if (this.#filesystemBoundary === undefined) {
       throw new Error('HARNESS_NATIVE_FILESYSTEM_BOUNDARY_REQUIRED');
     }
+    this.#resourceBoundary = options.resourceBoundary;
+    if (this.#resourceBoundary === undefined) {
+      throw new Error('HARNESS_NATIVE_RESOURCE_BOUNDARY_REQUIRED');
+    }
+    this.#resourceLimits = options.resourceLimits;
     this.#maxOutputBytes = validateLimit(
       options.maxOutputBytes ?? options.config.limits.maxOutputBytes,
       options.config.limits.maxOutputBytes,
@@ -111,38 +152,76 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
   }
 
   async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
+    const executionId = `native-run:${randomUUID()}`;
     this.#validateRequest(request);
     const executable = validateExecutable(request.executable, request.host);
     if (executable.digest !== this.#executableEvidence[request.host].digest) {
       throw new Error(`HARNESS_NATIVE_EXECUTABLE_CHANGED:${request.host}`);
     }
-    const network = this.#authorizeNetwork(request);
-    const filesystem = isolateNativeModelFilesystem(network.command, {
-      host: request.host,
-      workspaceRoot: request.cwd,
-      readOnlyRoots: [request.cwd, ...(request.readOnlyPaths ?? [])],
-      writablePaths: request.writablePaths ?? [],
-      maskedPaths: [resolve(request.cwd, '.git')],
-      hostFileConfidentiality: true,
-      emptyPrivateHome: true,
-      hostRootMounted: false,
-    }, this.#filesystemBoundary);
+    const network = await this.#authorizeNetwork(request);
+    let filesystem: NativeFilesystemIsolationResult;
+    let resources: NativeResourceIsolationResult;
+    try {
+      const maskedPaths = [
+        '.git', '.mcp.json', '.mcp', '.claude', '.codex', '.agents',
+      ].map((path) => resolve(request.cwd, path)).filter(existsSync);
+      filesystem = isolateNativeModelFilesystem(network.command, {
+        host: request.host,
+        workspaceRoot: request.cwd,
+        readOnlyRoots: [request.cwd, ...(request.readOnlyPaths ?? [])],
+        writablePaths: request.writablePaths ?? [],
+        maskedPaths,
+        hostFileConfidentiality: true,
+        emptyPrivateHome: true,
+        hostRootMounted: false,
+      }, this.#filesystemBoundary);
+      resources = isolateNativeResources(
+        filesystem.command,
+        this.#resourceLimits,
+        this.#resourceBoundary,
+      );
+    } catch (error) {
+      try {
+        await this.#completeNetwork(network.command);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'HARNESS_NATIVE_BOUNDARY_SETUP_AND_CLEANUP_FAILED',
+        );
+      }
+      throw error;
+    }
     this.#networkEvidence.push(network);
     this.#filesystemEvidence.push(filesystem);
-    if (request.signal?.aborted === true) return cancelledResult();
+    this.#resourceEvidence.push(resources);
+    if (request.signal?.aborted === true) {
+      const completion = await this.#completeNetwork(network.command);
+      return this.#record(
+        executionId,
+        request,
+        network,
+        filesystem,
+        resources,
+        cancelledResult(executionId),
+        completion,
+      );
+    }
 
-    return await new Promise((resolveResult) => {
+    const result = await new Promise<NativeProcessResult>((resolveResult) => {
       let child: NativeChild;
       try {
-        child = spawn(filesystem.command.executable, [...filesystem.command.args], {
-          cwd: filesystem.command.cwd,
-          env: { ...filesystem.command.env },
+        child = spawn(resources.command.executable, [...resources.command.args], {
+          cwd: resources.command.cwd,
+          env: {
+            ...(this.#resourceBoundary.launchEnvironment?.(resources.command.env)
+              ?? resources.command.env),
+          },
           shell: false,
           detached: process.platform !== 'win32',
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) {
-        resolveResult(spawnFailure(error));
+        resolveResult(spawnFailure(executionId, error));
         return;
       }
 
@@ -206,6 +285,7 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
         if (killTimer) clearTimeout(killTimer);
         request.signal?.removeEventListener('abort', abort);
         resolveResult(Object.freeze({
+          executionId,
           exitCode,
           stdout: Buffer.concat(stdout).toString('utf8'),
           stderr: Buffer.concat(stderr).toString('utf8'),
@@ -213,9 +293,25 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
           cancelled,
           outputLimitExceeded,
           ...(spawnError === undefined ? {} : { spawnError }),
+          stdoutDigest: digestValue(Buffer.concat(stdout)),
+          stderrDigest: digestValue(Buffer.concat(stderr)),
         }));
       });
     });
+    const completion = await this.#completeNetwork(network.command);
+    if (request.purpose === 'model-invocation'
+      && (completion.allowedConnections < 1 || completion.deniedConnections !== 0)) {
+      throw new Error('HARNESS_NATIVE_ORIGIN_ENFORCEMENT_FAILED');
+    }
+    return this.#record(
+      executionId,
+      request,
+      network,
+      filesystem,
+      resources,
+      result,
+      completion,
+    );
   }
 
   networkEvidence(): readonly NativeModelProcessGrant[] {
@@ -226,15 +322,95 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
     return Object.freeze([...this.#filesystemEvidence]);
   }
 
+  resourceEvidence(): readonly NativeResourceIsolationResult[] {
+    return Object.freeze([...this.#resourceEvidence]);
+  }
+
+  executionEvidence(executionId: string): NativeExecutionEvidence {
+    const evidence = this.#executionEvidence.get(executionId);
+    if (evidence === undefined) throw new Error('HARNESS_NATIVE_EXECUTION_EVIDENCE_UNKNOWN');
+    return evidence;
+  }
+
+  allExecutionEvidence(): readonly NativeExecutionEvidence[] {
+    return Object.freeze([...this.#executionEvidence.values()]);
+  }
+
+  hasTrustedSystemBoundaries(): boolean {
+    return this.#egressBoundary instanceof UnixSocketOriginPinningBoundary
+      && this.#filesystemBoundary instanceof SystemNativeFilesystemBoundary
+      && this.#resourceBoundary instanceof SystemdResourceBoundary;
+  }
+
   executableEvidence(): Readonly<Record<NativeHost, NativeExecutableEvidence>> {
     return this.#executableEvidence;
   }
 
-  #authorizeNetwork(request: NativeProcessRequest): NativeModelProcessGrant {
+  async #completeNetwork(command: import('./network.js').BoundaryCommand): Promise<OriginCompletion> {
+    if (this.#egressBoundary.complete === undefined) {
+      throw new Error('HARNESS_NATIVE_ORIGIN_COMPLETION_REQUIRED');
+    }
+    const value = await this.#egressBoundary.complete(command) as Partial<OriginCompletion>;
+    if (!Number.isSafeInteger(value.allowedConnections) || (value.allowedConnections ?? -1) < 0
+      || !Number.isSafeInteger(value.deniedConnections) || (value.deniedConnections ?? -1) < 0
+      || typeof value.connectDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.connectDigest)) {
+      throw new Error('HARNESS_NATIVE_ORIGIN_COMPLETION_INVALID');
+    }
+    return Object.freeze(value as OriginCompletion);
+  }
+
+  #record(
+    executionId: string,
+    request: NativeProcessRequest,
+    network: NativeModelProcessGrant,
+    filesystem: NativeFilesystemIsolationResult,
+    resources: NativeResourceIsolationResult,
+    result: NativeProcessResult,
+    completion: OriginCompletion,
+  ): NativeProcessResult {
+    if (this.#executionEvidence.has(executionId)) throw new Error('HARNESS_NATIVE_EXECUTION_ID_COLLISION');
+    this.#executionEvidence.set(executionId, Object.freeze({
+      executionId,
+      host: request.host,
+      purpose: request.purpose,
+      model: request.model,
+      operation: request.operation ?? null,
+      executable: this.#executableEvidence[request.host],
+      environmentDigest: digestValue(request.env),
+      exitCode: result.exitCode,
+      stdoutDigest: result.stdoutDigest,
+      stderrDigest: result.stderrDigest,
+      network: Object.freeze({
+        enforcement: network.enforcement,
+        mechanism: network.mechanism,
+        pinnedOrigins: [...network.pinnedOrigins],
+        ...completion,
+      }),
+      filesystem: Object.freeze({
+        enforcement: filesystem.enforcement,
+        mechanism: filesystem.mechanism,
+        workspaceRootDigest: digestValue(filesystem.workspaceRoot),
+        mountManifestDigest: filesystem.mountManifestDigest,
+        configurationMaskDigest: filesystem.configurationMaskDigest,
+        hostFileConfidentiality: filesystem.hostFileConfidentiality,
+        emptyPrivateHome: filesystem.emptyPrivateHome,
+        hostRootMounted: filesystem.hostRootMounted,
+        gitMetadataMasked: filesystem.maskedPaths.includes(resolve(request.cwd, '.git')),
+      }),
+      resources: Object.freeze({
+        enforcement: resources.enforcement,
+        mechanism: resources.mechanism,
+        limitsDigest: resources.limitsDigest,
+      }),
+    }));
+    return result;
+  }
+
+  async #authorizeNetwork(request: NativeProcessRequest): Promise<NativeModelProcessGrant> {
     const profile = HOST_NETWORK[request.host];
     const allowedOrigins = profile.knownOrigins.filter((origin) =>
       this.#config.firstPartyOrigins.includes(origin));
-    return isolateNativeFirstPartyModelTraffic({
+    return await isolateNativeFirstPartyModelTraffic({
       mode: 'first-party-model',
       channel: 'native-subscription-client',
       host: request.host,
@@ -266,6 +442,16 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
     validateDirectory(request.cwd, this.#allowedRoots);
     assertCapabilityPath(request.cwd, this.#allowedReadRoots, this.#forbiddenRoots, false);
     assertNativeSubscriptionEnvironment(request.host, request.env);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(request.model)) {
+      throw new Error('HARNESS_NATIVE_MODEL_INVALID');
+    }
+    if (request.purpose === 'model-invocation') {
+      if (!['architecture', 'implementation', 'repair', 'review'].includes(request.operation ?? '')) {
+        throw new Error('HARNESS_NATIVE_OPERATION_REQUIRED');
+      }
+    } else if (request.operation !== undefined) {
+      throw new Error('HARNESS_NATIVE_PREFLIGHT_OPERATION_INVALID');
+    }
     if (!Number.isSafeInteger(request.timeoutMs)
       || request.timeoutMs < 1
       || request.timeoutMs > this.#config.limits.maxTimeoutMs) {
@@ -295,130 +481,4 @@ export class BoundedNativeProcessRunner implements NativeProcessRunner {
       throw new Error('HARNESS_NATIVE_STDIN_TOO_LARGE');
     }
   }
-}
-
-export interface NativeExecutableEvidence {
-  readonly path: string;
-  readonly digest: string;
-}
-
-function validateExecutable(value: string, host: NativeHost): NativeExecutableEvidence {
-  if (!isAbsolute(value) || resolve(value) !== value || value.includes('\0')) {
-    throw new TypeError(`HARNESS_NATIVE_EXECUTABLE_INVALID:${host}`);
-  }
-  const stat = lstatSync(value);
-  const currentUid = typeof process.getuid === 'function' ? process.getuid() : stat.uid;
-  if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(value) !== value
-    || stat.nlink !== 1 || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0
-    || (stat.uid !== 0 && stat.uid !== currentUid)) {
-    throw new Error(`HARNESS_NATIVE_EXECUTABLE_UNTRUSTED:${host}`);
-  }
-  return Object.freeze({
-    path: value,
-    digest: createHash('sha256').update(readFileSync(value)).digest('hex'),
-  });
-}
-
-function validateBoundaryPaths(
-  paths: readonly string[],
-  label: string,
-  allowedRoots: readonly string[],
-  forbiddenRoots: readonly string[],
-  writable: boolean,
-): void {
-  if (new Set(paths).size !== paths.length) throw new Error(`HARNESS_NATIVE_${label}_PATH_DUPLICATE`);
-  for (const path of paths) {
-    if (!isAbsolute(path) || resolve(path) !== path || path.includes('\0')) {
-      throw new Error(`HARNESS_NATIVE_${label}_PATH_INVALID`);
-    }
-    assertCapabilityPath(path, allowedRoots, forbiddenRoots, writable);
-  }
-}
-
-function assertCapabilityPath(
-  path: string,
-  allowedRoots: readonly string[],
-  forbiddenRoots: readonly string[],
-  writable: boolean,
-): void {
-  const stat = lstatSync(path);
-  if (stat.isSymbolicLink() || realpathSync(path) !== path
-    || (stat.isFile() && stat.nlink !== 1)
-    || (!stat.isFile() && !stat.isDirectory())) {
-    throw new Error('HARNESS_NATIVE_CAPABILITY_PATH_UNTRUSTED');
-  }
-  const parent = realpathSync(dirname(path));
-  if (!allowedRoots.some((root) => path === root
-      || (contains(root, path) && contains(root, parent)))
-    || forbiddenRoots.some((root) => contains(root, path) || contains(path, root))) {
-    throw new Error('HARNESS_NATIVE_CAPABILITY_PATH_OUTSIDE_SCOPE');
-  }
-  if (writable && stat.isDirectory()) throw new Error('HARNESS_NATIVE_WRITABLE_PATH_MUST_BE_FILE');
-}
-
-function pathsOverlap(left: string, right: string): boolean {
-  return contains(left, right) || contains(right, left);
-}
-
-function validateDirectory(value: string, allowedRoots: readonly string[]): string {
-  if (!isAbsolute(value) || resolve(value) !== value || realpathSync(value) !== value || !statSync(value).isDirectory()) {
-    throw new TypeError('HARNESS_NATIVE_CWD_INVALID');
-  }
-  if (allowedRoots.length > 0 && !allowedRoots.some((root) => contains(root, value))) {
-    throw new Error('HARNESS_NATIVE_CWD_OUTSIDE_ALLOWED_ROOTS');
-  }
-  return value;
-}
-
-function contains(root: string, path: string): boolean {
-  const delta = relative(root, path);
-  return delta === '' || (delta !== '..' && !delta.startsWith(`..${sep}`) && !isAbsolute(delta));
-}
-
-function validateLimit(value: number, ceiling: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > ceiling) {
-    throw new TypeError(`${label} must be a safe integer within the configured ceiling`);
-  }
-  return value;
-}
-
-function signalProcessGroup(child: NativeChild, signal: NodeJS.Signals): void {
-  if (child.pid === undefined) return;
-  try {
-    if (process.platform !== 'win32') process.kill(-child.pid, signal);
-    else child.kill(signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      // The process already exited.
-    }
-  }
-}
-
-function cancelledResult(): NativeProcessResult {
-  return Object.freeze({
-    exitCode: null,
-    stdout: '',
-    stderr: '',
-    timedOut: false,
-    cancelled: true,
-    outputLimitExceeded: false,
-  });
-}
-
-function spawnFailure(error: unknown): NativeProcessResult {
-  return Object.freeze({
-    exitCode: null,
-    stdout: '',
-    stderr: '',
-    timedOut: false,
-    cancelled: false,
-    outputLimitExceeded: false,
-    spawnError: errorMessage(error),
-  });
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
