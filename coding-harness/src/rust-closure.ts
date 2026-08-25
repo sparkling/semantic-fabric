@@ -20,7 +20,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 const TOOLCHAIN_CONTENT_DIGEST =
   '81cc515ef94bae07d2451ff3701ce6e6eee7878327dc8088ebac773f1570f7c4';
 const REGISTRY_CONTENT_DIGEST =
-  '13c044505bc77ccb98ad61887bf118d850df7484faa2901f7288698399098ff0';
+  'e65dfcb12783828dad04db2dc69e6e979cdecbe1a4228617fd7a473d43d7c28e';
 const REGISTRY_KEY = 'index.crates.io-1949cf8c6b5b557f';
 const MAX_FILE_BYTES = 1_000_000_000;
 const MAX_TOOLCHAIN_ENTRIES = 70_000;

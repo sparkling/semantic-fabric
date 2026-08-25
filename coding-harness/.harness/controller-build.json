@@ -80,7 +80,7 @@
     "coding-harness/dist/repository-operations.js": "8a1d16e6866eec5b8708ac533fab5f01d4a147f0ca839f6499457f9ffc03f4ef",
     "coding-harness/dist/repository-options.js": "85d6ba1f59006f6e8e7fe939227a893e721f5ab689aa4e108adcec7091525e75",
     "coding-harness/dist/resource-boundary.js": "02d291a83edd75ff78bc0b7950de98b31fe0e2a15407e8f1cc5e2e0cb30e8961",
-    "coding-harness/dist/rust-closure.js": "d6dcf4b3f244bd3d3def3d8be660aeecb3a0f17fd3a4d1d4110abd81132824bf",
+    "coding-harness/dist/rust-closure.js": "d82422b0c642bfa3e3f59669f7d4f403a9ccf60f3fddc98158b4b6b31fce64dd",
     "coding-harness/dist/rust-sandbox.js": "34e9b1bfa077d709134a6fdc451694215e55cd48b72442f1e07c6dff79453a89",
     "coding-harness/dist/sandbox.js": "d799c0a3da9d124925f25124c91787fdfc2e75662594da28ed39607d402b9059",
     "coding-harness/dist/workspace.js": "a749587d6eeb865ca12e2c08285d8510f69c27c14025471590cb7942399e6319",
@@ -209,5 +209,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "69efb34e2b7e8a450ab7a9209f687cce1afcf4ab4182e08b32873608f0c162c2"
+  "runtimeTreeDigest": "26b162b50f61acd9c931c42d7043225346cd810c9bc5f964439524e2f90a219f"
 }
