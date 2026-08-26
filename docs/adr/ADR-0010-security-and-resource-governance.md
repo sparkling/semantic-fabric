@@ -88,8 +88,10 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > The REST family additionally collects complete result pages before returning
 > a `BranchStream`, so it does not conform to R5; a one-row stream interface
 > alone proves neither bounded first-result latency nor bounded memory. The
-> supported `sf-serve` surface remains SQLite, PostgreSQL, and MySQL. Any other
-> adapter may join that surface only after provider-native parameter transport,
+> At that point the supported `sf-serve` surface remained SQLite, PostgreSQL,
+> and MySQL; the DuckDB amendment below is the later, narrowly scoped change.
+> Any other adapter may join that surface only after provider-native parameter
+> transport,
 > bounded streaming, lifecycle/error handling, cancellation, and direct
 > conformance evidence exist. Issue #6's optional fallible/early-exit quad sink
 > is an API refinement and does not change this ADR's accepted status.
@@ -119,14 +121,45 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > The source identity and schema snapshot are frozen at startup. Serving-lane
 > DDL is impossible on the read-only shared instance; schema changes are
 > discovered only after restart/reopen and a new plan-cache lifetime. Hot drift
-> detection is not claimed. TLS, provider authentication, remote pagination,
+> detection is not claimed. The admitted native engine is exactly
+> `duckdb-rs =1.10505.0` with its bundled DuckDB library; a system DuckDB ABI is
+> not loaded. Release evidence currently covers `x86_64-unknown-linux-gnu` on
+> the Ubuntu CI runner. Other targets remain build-time best effort until they
+> have an equivalent admission lane; this amendment makes no cross-platform
+> production-support claim.
+>
+> The filesystem contract is a local regular file on storage that honors normal
+> local file locking. Symlinks are resolved once by canonicalization. Network
+> and userspace filesystems with weaker locking or replacement semantics are not
+> admitted. One serving process owns the read-only instance for its lifetime;
+> concurrent external writers are unsupported and must be stopped before serve
+> startup. semantic-fabric does not add an exclusive application lock or use a
+> DuckDB file lock as drift detection: operator-enforced single ownership is a
+> deployment precondition. Operators replace or update a source only during a
+> clean stop, then restart so identity, schema, and plans are rebuilt together.
+> The private spill directory is ephemeral and must have space for the
+> configured 1 GiB cap.
+>
+> Engine upgrades are explicit operations, not automatic file migrations. A
+> DuckDB version bump requires a dedicated dependency change plus the complete
+> DuckDB admission lane. Operators must retain a backup, validate a copy with
+> the new bundled engine, stop the old process, and only then reopen the source.
+> Downgrade compatibility after a newer engine has written a file is not
+> promised; semantic-fabric never writes or upgrades the served file itself.
+>
+> TLS, provider authentication, remote pagination,
 > transport retries, and connector credentials are **not applicable** to a local
 > embedded file; endpoint auth/TLS remain delegated to ADR-0018/ADR-0014.
 > Cancellation, pooling, schema discovery, source identity, error redaction, and
 > direct evidence remain required and are tested. The non-skipping embedded
 > lane records W3C 61/63 R2RML and 22/23 Direct Mapping, two explicit DuckDB
 > `CHAR(n)` deviations, one exact DDL-fixture skip, SQLite↔DuckDB differential
-> coverage, cyclic-path execution, and restricted file-backed HTTP receipts.
+> coverage plus a DuckDB↔live-PostgreSQL differential whenever the CI service
+> is reachable, cyclic-path execution, and restricted file-backed HTTP receipts.
+> A deterministic 1,000,000-row receipt measures the adapter channel capacity
+> as one row and observes row one while the producer still owns the connection,
+> proving first result precedes complete-result collection without a timing
+> benchmark claim.
 >
 > This admission does **not** assert the unimplemented repository-wide portions
 > of R4: a cumulative response-size cap and pre-execution cost check remain open

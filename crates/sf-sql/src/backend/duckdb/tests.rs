@@ -235,6 +235,63 @@ async fn streaming_crosses_arrow_batch_boundaries() {
     assert_eq!(count, ROWS);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn growing_result_yields_before_completion_with_a_cap_one_bridge() {
+    const TOTAL_ROWS: usize = 1_000_000;
+
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    let shared = Arc::new(Mutex::new(conn));
+    let mut backend = DuckDbBackend::new(Arc::clone(&shared));
+    let mut stream = backend
+        .open_branch("SELECT i::INTEGER FROM range(1000000) values_(i)", &[])
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while stream.rx.len() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first growing-result row should reach the bridge");
+    assert_eq!(
+        stream.rx.max_capacity(),
+        1,
+        "the measured adapter channel capacity must stay at one row"
+    );
+
+    let first = stream.next_row().await.unwrap().unwrap();
+    assert_eq!(first.values[0].as_deref(), Some("0"));
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while stream.rx.len() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("backpressure should refill exactly one channel slot");
+    assert!(
+        shared.try_lock().is_err(),
+        "row 1 of {TOTAL_ROWS} arrived while the producer still held the connection; the full result was not collected first"
+    );
+
+    drop(stream);
+    let shared_for_probe = Arc::clone(&shared);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            let connection = shared_for_probe
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
+        }),
+    )
+    .await
+    .expect("dropping the growing-result stream should release the connection")
+    .expect("probe worker should join")
+    .expect("connection should remain usable after growing-result cancellation");
+}
+
 #[tokio::test]
 async fn typed_multi_parameter_binding_uses_all_positions() {
     let conn = duckdb::Connection::open_in_memory().unwrap();

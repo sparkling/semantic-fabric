@@ -1,11 +1,16 @@
-//! Always-on cross-backend differential for the admitted embedded engines.
+//! Always-on DuckDB/SQLite differential plus DuckDB/live-PostgreSQL parity.
+//!
+//! The PostgreSQL arm skips only when no server is reachable; the repository CI
+//! supplies a live service through `SF_PG_URL`, so that arm is active there.
 
 use std::sync::{Arc, Mutex};
 
 use sf_conformance::oracle::{engine_bag, solutions_bag_eq};
 use sf_conformance::sqlite;
-use sf_sparql::{exec, exec_duckdb, parse_and_translate_with, Tbox};
+use sf_sparql::{exec, exec_duckdb, exec_pg, parse_and_translate_with, Tbox};
+use sf_sql::introspect::introspect_postgres;
 use sf_sql::{Dialect, TableSchema};
+use tokio_postgres::{Client, NoTls};
 
 const CREATE_SQL: &str = r#"
 CREATE TABLE dept (id INTEGER PRIMARY KEY, label VARCHAR NOT NULL);
@@ -96,6 +101,45 @@ fn duckdb_schema(conn: &duckdb::Connection) -> Vec<TableSchema> {
         .collect()
 }
 
+fn base_pg_conn() -> String {
+    std::env::var("SF_PG_URL").unwrap_or_else(|_| {
+        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
+        format!("host=localhost port=5432 user={user}")
+    })
+}
+
+async fn connect_pg(conn_str: &str) -> Result<Client, String> {
+    let (client, connection) = tokio_postgres::connect(conn_str, NoTls)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    Ok(client)
+}
+
+async fn postgres_schema(client: &Client) -> Result<Vec<TableSchema>, String> {
+    let rows = client
+        .query(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
+             ORDER BY table_name",
+            &[],
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut schemas = Vec::with_capacity(rows.len());
+    for row in rows {
+        let name: String = row.get(0);
+        schemas.push(
+            introspect_postgres(client, &name)
+                .await
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(schemas)
+}
+
 #[tokio::test]
 async fn duckdb_and_sqlite_match_across_representative_obda_shapes() {
     let sqlite_conn = sqlite::load(CREATE_SQL).unwrap();
@@ -166,4 +210,116 @@ async fn duckdb_and_sqlite_match_across_representative_obda_shapes() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn duckdb_and_live_postgres_match_when_postgres_is_available() {
+    let base = base_pg_conn();
+    let admin = match connect_pg(&format!("{base} dbname=postgres")).await {
+        Ok(client) => client,
+        Err(_) => {
+            eprintln!("no PostgreSQL server reachable — skipping DuckDB/PostgreSQL differential");
+            return;
+        }
+    };
+    let dbname = format!("sf_duck_diff_{}", std::process::id());
+    admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .await
+        .expect("drop pre-existing throwaway PostgreSQL database");
+    admin
+        .batch_execute(&format!("CREATE DATABASE {dbname}"))
+        .await
+        .expect("create throwaway PostgreSQL database");
+
+    let pg_client = Arc::new(
+        connect_pg(&format!("{base} dbname={dbname}"))
+            .await
+            .expect("connect throwaway PostgreSQL database"),
+    );
+    pg_client
+        .batch_execute(CREATE_SQL)
+        .await
+        .expect("seed PostgreSQL fixture");
+    let pg_schema = postgres_schema(&pg_client)
+        .await
+        .expect("introspect PostgreSQL fixture");
+
+    let duckdb_conn = duckdb::Connection::open_in_memory().unwrap();
+    duckdb_conn.execute_batch(CREATE_SQL).unwrap();
+    let duck_schema = duckdb_schema(&duckdb_conn);
+    let duckdb_conn = Arc::new(Mutex::new(duckdb_conn));
+    let maps = sf_mapping::parse_r2rml(R2RML).unwrap();
+
+    for (name, query) in SELECT_QUERIES {
+        let duckdb_plan = parse_and_translate_with(
+            query,
+            &maps,
+            Dialect::DuckDb,
+            &Tbox::default(),
+            &duck_schema,
+        )
+        .unwrap();
+        let pg_plan = parse_and_translate_with(
+            query,
+            &maps,
+            Dialect::Postgres,
+            &Tbox::default(),
+            &pg_schema,
+        )
+        .unwrap();
+        let duckdb_bag = engine_bag(
+            &exec_duckdb::select_duckdb(&duckdb_plan, Arc::clone(&duckdb_conn))
+                .await
+                .unwrap(),
+        );
+        let pg_bag = engine_bag(&exec_pg::select_pg(&pg_plan, &pg_client).await.unwrap());
+        assert!(
+            solutions_bag_eq(&duckdb_bag, &pg_bag),
+            "{name} differs: duckdb={duckdb_bag:#?}, postgres={pg_bag:#?}"
+        );
+    }
+
+    for (query, expected) in [
+        ("PREFIX ex: <http://ex/> ASK { ?p ex:name \"Ann\" }", true),
+        (
+            "PREFIX ex: <http://ex/> ASK { ?p ex:name \"Nobody\" }",
+            false,
+        ),
+    ] {
+        let duckdb_plan = parse_and_translate_with(
+            query,
+            &maps,
+            Dialect::DuckDb,
+            &Tbox::default(),
+            &duck_schema,
+        )
+        .unwrap();
+        let pg_plan = parse_and_translate_with(
+            query,
+            &maps,
+            Dialect::Postgres,
+            &Tbox::default(),
+            &pg_schema,
+        )
+        .unwrap();
+        assert_eq!(
+            exec_duckdb::ask_duckdb(&duckdb_plan, Arc::clone(&duckdb_conn))
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            exec_pg::ask_pg(&pg_plan, Arc::clone(&pg_client))
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+
+    drop(pg_client);
+    admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
+        .await
+        .expect("drop throwaway PostgreSQL database");
 }

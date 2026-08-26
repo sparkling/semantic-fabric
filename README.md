@@ -126,6 +126,19 @@ Optional flags include `--ontology`, `--bind`, `--timeout-secs`,
 maximum 8). The default endpoint is
 `http://127.0.0.1:7878/sparql`.
 
+The DuckDB serving contract pins the bundled engine at `duckdb-rs =1.10505.0`
+and is release-tested on `x86_64-unknown-linux-gnu`. It admits an existing local
+regular file on a filesystem with normal local locking; symlinks resolve once
+at startup, network filesystems and concurrent writers are unsupported, and
+the source stays read-only. The service does not add an exclusive application
+lock, so operator-enforced single ownership is required. File identity, schema,
+and cached plans are one startup snapshot, so data-file replacement, schema
+change, and engine upgrade all require a clean stop and restart. Before an
+engine-version bump, back up the file and validate a copy with the new binary;
+downgrade compatibility is not promised. Other targets are best effort until
+they have an equivalent CI admission lane. See
+[ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
+
 ```bash
 curl -s 'http://127.0.0.1:7878/sparql' \
   -H 'Accept: application/sparql-results+json' \
@@ -152,8 +165,9 @@ pool, and cancellation controls from
   joins and named-graph composition.
 - SQLite, PostgreSQL, MySQL, and opt-in DuckDB execution through the shared
   `SqlBackend` contract. DuckDB has a non-skipping embedded W3C lane, an
-  SQLite differential, restricted file-backed endpoint tests, and cyclic-path
-  execution coverage.
+  SQLite differential, a live-PostgreSQL differential when that CI service is
+  available, a deterministic million-row bounded-first-result receipt,
+  restricted file-backed endpoint tests, and cyclic-path execution coverage.
 - A governed HTTP endpoint with streaming, content negotiation, bounded pools,
   request cancellation, and overload shedding.
 
