@@ -1221,15 +1221,15 @@ fn render_cond(
 /// some other operator) — see its own doc comment for why an explicit
 /// wrapper is required rather than assumed.
 ///
-/// **Dialect support.** The production-wired dialects are implemented:
+/// **Dialect support.** The public-serving dialects are implemented:
 /// PostgreSQL/SQLite/DuckDB via ANSI `||`, MySQL via `CONCAT(...)` (`||` is
 /// boolean OR there by default, per MySQL's non-default `PIPES_AS_CONCAT`
 /// sql_mode). Every OTHER dialect
 /// returns `Unsupported` rather than guessing — e.g. SQL Server's own
 /// `CONCAT()` function treats `NULL` as an EMPTY STRING (breaking the
 /// soundness argument above outright), and `+`, SQL Server's NULL-safe
-/// concat operator, is unverified against this rendering; Oracle/DuckDB/etc.
-/// are ANSI-`||`-following by reputation but likewise unverified here —
+/// concat operator, is unverified against this rendering; Oracle and other
+/// remaining dialects are likewise unverified here —
 /// "sound over complete", the same bar `str_match`'s PostgreSQL-only `LIKE`
 /// pushdown already sets for an analogous dialect-behavior gap.
 fn render_template_concat(
@@ -1590,6 +1590,9 @@ fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -
     let name = resolve_col(&c.column, actuals.get(&c.alias).map(Vec::as_slice));
     format!("t{}.{}", c.alias, dialect.quote_ident(name))
 }
+
+#[cfg(test)]
+mod duckdb_tests;
 
 #[cfg(test)]
 mod tests {

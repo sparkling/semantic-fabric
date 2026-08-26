@@ -108,6 +108,15 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > and ADR-0010, rather than weaker invariants or a renamed prototype. Issue #10
 > is dependency hygiene and does not supersede this architecture.
 
+> **Adapter-boundary reconciliation (2026-08-26, issue #14).** PR #11's
+> feature-gated DuckDB `SqlBackend` was introduced as a library adapter: its
+> embedded live-parity receipts validated adapter behavior without, by
+> themselves, admitting DuckDB to `sf-serve` or making a production-support
+> claim. This did not reopen rejected Option D: DuckDB is used as the directly
+> queried source, not as an intermediary that normalizes or buffers another
+> backend. The separate serving admission and its security, lifecycle, and
+> resource-governance evidence are recorded below.
+
 > **DuckDB implementation reconciliation (2026-08-26).** DuckDB now has a thin
 > `SqlBackend` adapter over its streaming Arrow cursor and a feature-gated,
 > restricted file-backed serving lane. The shared executor remains unchanged;

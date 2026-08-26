@@ -435,3 +435,40 @@ async fn dropped_stream_interrupts_blocking_cursor() {
     .expect("probe worker should join")
     .expect("connection should remain usable after interruption");
 }
+
+/// Cancellation after delivery has begun must release a producer blocked on
+/// the cap-1 channel and must not leak its interrupt into the next query.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_stream_after_first_row_releases_connection_without_interrupt_spill() {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    let shared = Arc::new(Mutex::new(conn));
+    let mut backend = DuckDbBackend::new(Arc::clone(&shared));
+    let mut stream = backend
+        .open_branch("SELECT i::INTEGER FROM range(1000000000) values_(i)", &[])
+        .await
+        .unwrap();
+
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next_row())
+        .await
+        .expect("DuckDB stream should deliver its first row")
+        .expect("first row should decode")
+        .expect("range should not be empty");
+    assert_eq!(first.values[0].as_deref(), Some("0"));
+    drop(stream);
+
+    let shared_for_probe = Arc::clone(&shared);
+    let value = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            let connection = shared_for_probe
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            connection.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+        }),
+    )
+    .await
+    .expect("canceled streaming query should release the connection")
+    .expect("probe worker should join")
+    .expect("subsequent query should not inherit the interrupt");
+    assert_eq!(value, 42);
+}
