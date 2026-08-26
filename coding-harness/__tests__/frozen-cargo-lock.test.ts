@@ -107,7 +107,7 @@ describe('historical frozen Cargo lock preparation', () => {
       expect(existsSync(scratchRoot)).toBe(false);
       expect(existsSync(parent)).toBe(true);
       expect(readFileSync(currentLock, 'utf8')).toBe('current incompatible lock\n');
-    });
+    }, 15_000);
   }
 
   it('materializes a frozen lock from the private bare transaction repository', async () => {

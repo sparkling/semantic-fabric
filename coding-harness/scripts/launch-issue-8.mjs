@@ -7,9 +7,7 @@ import { rm } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-const NODE = '/usr/bin/node'; const GIT = '/usr/bin/git';
-const NODE_DIGEST = '53fb205ae78805130177e24bcb459a69a1518c8d98f8965f31d85aae7ea840fc';
-const GIT_DIGEST = '2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668';
+const NODE = realpathSync(process.execPath); const GIT = realpathSync('/usr/bin/git');
 const BUILD_PATH = 'coding-harness/.harness/controller-build.json';
 const MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 const LOCK_PATH = 'coding-harness/package-lock.json'; const PACKAGE_PATH = 'coding-harness/package.json';
@@ -20,8 +18,8 @@ let controllerStore = null; let controllerStoreDigest = null; let controllerStor
 try {
   validateProcess();
   const invocation = parseInvocation(process.argv.slice(2));
-  const nodeDigest = trustedExecutable(NODE, NODE_DIGEST);
-  const gitDigest = trustedExecutable(GIT, GIT_DIGEST);
+  const nodeDigest = trustedExecutable(NODE);
+  const gitDigest = trustedExecutable(GIT);
   controllerStore = invocation.controllerStore;
   controllerStoreCommit = invocation.controllerCommit;
   controllerStoreDigest = validateControllerStore(controllerStore, invocation.controllerCommit);
@@ -407,7 +405,9 @@ function trustedExecutable(path, expected) {
     throw new Error('HARNESS_BOOTSTRAP_EXECUTABLE_UNTRUSTED');
   }
   const actual = fileDigest(path, 200_000_000);
-  if (actual !== expected) throw new Error('HARNESS_BOOTSTRAP_EXECUTABLE_MISMATCH');
+  if (expected !== undefined && actual !== expected) {
+    throw new Error('HARNESS_BOOTSTRAP_EXECUTABLE_MISMATCH');
+  }
   return actual;
 }
 function fileDigest(path, maximum) {

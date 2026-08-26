@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -100,14 +100,17 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function sandboxFixture(): { runRoot: string; cwd: string; output: string } {
+function sandboxFixture(): { runRoot: string; cwd: string; output: string; bwrap: string } {
   const runRoot = mkdtempSync(join(tmpdir(), 'coding-harness-sandbox-'));
   temporaryRoots.push(runRoot);
   const cwd = join(runRoot, 'candidate');
   const output = join(runRoot, 'outputs', 'candidate');
   mkdirSync(cwd);
   mkdirSync(output, { recursive: true });
-  return { runRoot, cwd, output };
+  const bwrap = join(runRoot, 'bwrap');
+  writeFileSync(bwrap, '#!/bin/sh\nexit 0\n');
+  chmodSync(bwrap, 0o555);
+  return { runRoot, cwd, output, bwrap };
 }
 
 function dependencyRequest(command: BoundaryCommand = dependencyCommand): Record<string, unknown> {
@@ -171,7 +174,7 @@ describe('offline candidate process boundary', () => {
     const fixture = sandboxFixture();
     const bwrap = createSystemOfflineIsolator({
       platform: 'linux',
-      executablePath: '/usr/bin/bwrap',
+      executablePath: fixture.bwrap,
       writableRoot: fixture.runRoot,
       readOnlyMounts: [{ source: '/usr', destination: '/usr' }],
       resourceBoundary: fakeResourceBoundary,

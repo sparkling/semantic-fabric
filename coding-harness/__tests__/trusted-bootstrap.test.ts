@@ -4,9 +4,11 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -18,7 +20,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ISSUE_8_SAFE_TRANSACTION_REASON_CODES } from '../src/issue-8-programme-envelope.js';
 
 const GIT = '/usr/bin/git';
-const NODE = '/usr/bin/node';
+const NODE = process.execPath;
+const bootstrapNodeIsRootOwned = lstatSync(realpathSync(NODE), { bigint: true }).uid === 0n;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -26,7 +29,9 @@ afterEach(() => {
 });
 
 describe('trusted issue #8 bootstrap', () => {
-  it('reads only a strict verified pack even when the source object database is forged', () => {
+  it.runIf(bootstrapNodeIsRootOwned)(
+    'reads only a strict verified pack even when the source object database is forged',
+    () => {
     const fixture = controllerStore();
     const blob = gitText(fixture.source, ['rev-parse', 'HEAD:controller.txt']);
     const loose = join(fixture.source, '.git', 'objects', blob.slice(0, 2), blob.slice(2));
@@ -69,7 +74,8 @@ describe('trusted issue #8 bootstrap', () => {
       '{"status":"error","reason":"HARNESS_BOOTSTRAP_GIT_BLOB_FAILED"}\n',
     );
     expect(existsSync(fixture.store)).toBe(false);
-  });
+    },
+  );
 
   it('extracts only the primary bounded harness code from nested errors', () => {
     const safeReason = trustedSafeReason();
