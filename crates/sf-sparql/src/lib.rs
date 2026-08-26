@@ -67,6 +67,7 @@ use spargebra::Query;
 pub mod build;
 pub mod cache;
 pub mod cascade;
+mod control;
 pub mod dump;
 pub mod emit;
 pub mod exec;
@@ -83,6 +84,8 @@ pub mod unfold;
 pub mod unify;
 
 pub use cache::{Epoch, PlanCache, PlanKey};
+pub(crate) use control::CompileStage;
+pub use control::{with_compile_control, CompileCancellation, CompileControl};
 pub use iq::Branch;
 pub use saturate::Tbox;
 
@@ -105,6 +108,12 @@ pub enum Error {
     /// Term generation / datatype error from `sf-core`.
     #[error("core error: {0}")]
     Core(String),
+    /// Cooperative cancellation requested by an attacker-facing host.
+    #[error("query compilation cancelled")]
+    Cancelled,
+    /// Pre-allocation plan expansion would exceed a host memory-safety budget.
+    #[error("query compilation resource limit: {0}")]
+    ResourceLimit(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -199,6 +208,41 @@ impl Plan {
     }
 }
 
+/// Conservative work estimate for cloning a compiled plan. It counts every
+/// branch-owned collection element and recurses into nested subplans. The value
+/// is intentionally independent of source rows and query execution.
+fn plan_expansion_work(plan: &Plan) -> usize {
+    let form_work = match &plan.form {
+        PlanForm::Select { vars } => vars.len(),
+        PlanForm::Construct { template } => template.len(),
+        PlanForm::Ask => 0,
+    };
+    plan.branches.iter().map(branch_expansion_work).fold(
+        1usize
+            .saturating_add(form_work)
+            .saturating_add(plan.order.len())
+            .saturating_add(plan.dedup_groups.len()),
+        usize::saturating_add,
+    )
+}
+
+fn branch_expansion_work(branch: &Branch) -> usize {
+    branch
+        .subplan_joins
+        .iter()
+        .map(|join| plan_expansion_work(&join.plan))
+        .fold(
+            1usize
+                .saturating_add(branch.core.len())
+                .saturating_add(branch.opts.len())
+                .saturating_add(branch.bindings.len())
+                .saturating_add(branch.where_conds.len())
+                .saturating_add(branch.order.len())
+                .saturating_add(branch.subplan_joins.len()),
+            usize::saturating_add,
+        )
+}
+
 /// Translate a parsed SPARQL query against `maps` into a [`Plan`] (no T-Box, no
 /// schema — the plain R2RML conformance path). Routes through the operator-tree
 /// (IQ) pipeline — the default since ADR-0023 M8. See [`translate_with`].
@@ -272,6 +316,7 @@ fn translate_inner_flat(
     schema: &[TableSchema],
     optimize: bool,
 ) -> Result<Plan> {
+    control::checkpoint(CompileStage::Rewrite)?;
     // ADR-0031/ADR-0032: desugar quoted-triple patterns onto the ADR-0029 basic
     // encoding BEFORE anything else sees the WHERE pattern — everything below
     // this line (and everywhere else in this module) never encounters a
@@ -280,6 +325,7 @@ fn translate_inner_flat(
     // to pre-substitute the CONSTRUCT template and, once `branches` is
     // otherwise finalized, to install the native projection (D2).
     let (query, star_env) = star::rewrite_query(query)?;
+    control::checkpoint(CompileStage::Rewrite)?;
     let query = &query;
     // M6 offline T-mapping: fold Tbox hierarchy into the maps once at startup so
     // the per-query unfold can use an empty Tbox (no runtime hash-map lookups).
@@ -287,6 +333,7 @@ fn translate_inner_flat(
     let (saturated_maps, uf_tbox) = if tbox.is_empty() {
         (std::borrow::Cow::Borrowed(maps), tbox)
     } else {
+        control::charge_expansion_work(saturate::expansion_work(maps, tbox))?;
         let expanded = saturate::saturate_maps(maps, tbox);
         (expanded, &empty_tbox)
     };
@@ -365,6 +412,7 @@ fn translate_inner_flat(
             (t, PlanForm::Construct { template })
         }
     };
+    control::checkpoint(CompileStage::Cascade)?;
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
     // a DISTINCT redundant; SELECT carries an explicit projection, CONSTRUCT/ASK
     // project every binding (`None`). ADR-0032 D3 item 2: expanded with any
@@ -381,7 +429,15 @@ fn translate_inner_flat(
             distinct: trans.distinct,
             project: project_vars.as_deref(),
         };
-        cascade::run(trans.branches, schema, &ctx)
+        let cascade_work = trans
+            .branches
+            .iter()
+            .map(branch_expansion_work)
+            .fold(0usize, usize::saturating_add);
+        control::charge_expansion_work(cascade_work)?;
+        let branches = cascade::run(trans.branches, schema, &ctx);
+        control::checkpoint(CompileStage::Cascade)?;
+        branches
     } else {
         // `cascade::run` is skipped here by design — this is the NoREC unoptimized
         // baseline (ADR-0007: "none of the order-sensitive cascade rewrites"). D1
@@ -463,6 +519,7 @@ pub fn translate_tree(
     dialect: Dialect,
     schema: &[TableSchema],
 ) -> Result<Plan> {
+    control::checkpoint(CompileStage::Rewrite)?;
     // ADR-0031/ADR-0032: the SAME shared pre-pass `translate_inner_flat` runs, so
     // both engines see an identical, already-desugared WHERE pattern (never a
     // `TermPattern::Triple`) — `build.rs`/`iq/resolve.rs`/`iq/normalize.rs` need
@@ -472,6 +529,7 @@ pub fn translate_tree(
     // still need — see `lower`'s own doc comment for why. `star_env` — see the
     // identical note in `translate_inner_flat`.
     let (query, star_env) = star::rewrite_query(query)?;
+    control::checkpoint(CompileStage::Rewrite)?;
     let query = &query;
     let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect, schema);
     let extra_keep = star::all_component_var_names(&star_env);
@@ -479,10 +537,16 @@ pub fn translate_tree(
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
     // (e.g. DESCRIBE's CBD join) keeps disjoint aliases across them.
     let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
+        control::checkpoint(CompileStage::Build)?;
         let built = build::build_tree(pattern, None)?;
+        control::checkpoint(CompileStage::Resolve)?;
         let resolved = iq::resolve::resolve(built, &mut cx)?;
+        control::checkpoint(CompileStage::Normalize)?;
         let normalized = iq::normalize::normalize(resolved)?;
-        iq::lower::lower(normalized, dialect, &extra_keep, &star_env)
+        control::checkpoint(CompileStage::Lower)?;
+        let plan = iq::lower::lower(normalized, dialect, &extra_keep, &star_env)?;
+        control::checkpoint(CompileStage::Lower)?;
+        Ok(plan)
     };
 
     let mut plan = match query {
@@ -574,7 +638,10 @@ pub fn translate_tree(
         distinct: plan.distinct,
         project: project_vars.as_deref(),
     };
+    control::checkpoint(CompileStage::Cascade)?;
+    control::charge_expansion_work(plan_expansion_work(&plan))?;
     plan.branches = cascade::run(plan.branches, schema, &ctx);
+    control::checkpoint(CompileStage::Cascade)?;
     // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
     // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
     // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
@@ -584,7 +651,7 @@ pub fn translate_tree(
     // guard above — a nested arm's raw columns feed its outer union/aggregation BY
     // NAME, so they must never be shrunk away).
     for b in &mut plan.branches {
-        cascade_subplans(b, schema);
+        cascade_subplans(b, schema)?;
     }
     // ADR-0034: dedup below GROUP BY (see the identical note in
     // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
@@ -633,22 +700,30 @@ pub fn translate_tree(
 /// (post-cascade) — otherwise keep the pre-cascade arms for this SubPlan (still
 /// correct; this SubPlan alone forgoes the optimization). A single-branch nested
 /// Plan has no such cross-arm contract, so it always keeps the cascaded result.
-fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
+fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) -> Result<()> {
+    control::checkpoint(CompileStage::Cascade)?;
     for sp in &mut b.subplan_joins {
         let ctx = cascade::CascadeCtx {
             distinct: false,
             project: None,
         };
-        let pre = sp.plan.branches.clone();
+        let pre = std::mem::take(&mut sp.plan.branches);
+        let clone_work = pre
+            .iter()
+            .map(branch_expansion_work)
+            .fold(0usize, usize::saturating_add);
+        control::charge_expansion_work(clone_work)?;
         let post = cascade::run(pre.clone(), schema, &ctx);
+        control::checkpoint(CompileStage::Cascade)?;
         let post_lens: Vec<usize> = post.iter().map(|br| br.projection().len()).collect();
         let safe = pre.len() == 1
             || (post.len() == pre.len() && post_lens.windows(2).all(|w| w[0] == w[1]));
         sp.plan.branches = if safe { post } else { pre };
         for inner in &mut sp.plan.branches {
-            cascade_subplans(inner, schema);
+            cascade_subplans(inner, schema)?;
         }
     }
+    Ok(())
 }
 
 /// Translate through the compiled-plan cache (ADR-0007 *Plan cache, hot path*):
@@ -666,10 +741,14 @@ pub fn translate_cached(
     epoch: Epoch,
 ) -> Result<Plan> {
     let key = cache::plan_key(query, epoch);
-    if let Some(plan) = cache.get(&key) {
-        return Ok(plan);
+    if let Some(plan) = cache.get_shared(&key) {
+        control::checkpoint(CompileStage::CacheClone)?;
+        control::charge_expansion_work(plan_expansion_work(&plan))?;
+        return Ok((*plan).clone());
     }
     let plan = translate_with(query, maps, dialect, tbox, schema)?;
+    control::checkpoint(CompileStage::CacheClone)?;
+    control::charge_expansion_work(plan_expansion_work(&plan))?;
     cache.put(key, plan.clone());
     Ok(plan)
 }
@@ -688,17 +767,22 @@ pub fn parse_and_translate_cached(
     cache: &PlanCache<Plan>,
     epoch: Epoch,
 ) -> Result<Plan> {
+    let query = parse_query(sparql)?;
+    translate_cached(&query, maps, dialect, tbox, schema, cache, epoch)
+}
+
+fn parse_query(sparql: &str) -> Result<Query> {
+    control::checkpoint(CompileStage::Parse)?;
     let query = spargebra::SparqlParser::new()
         .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
-    translate_cached(&query, maps, dialect, tbox, schema, cache, epoch)
+        .map_err(|error| Error::Parse(error.to_string()))?;
+    control::checkpoint(CompileStage::Parse)?;
+    Ok(query)
 }
 
 /// Parse `sparql` and translate it (convenience over [`translate`]).
 pub fn parse_and_translate(sparql: &str, maps: &[TriplesMap], dialect: Dialect) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate(&query, maps, dialect)
 }
 
@@ -712,9 +796,7 @@ pub fn parse_and_translate_tree_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_tree(&query, maps, tbox, dialect, schema)
 }
 
@@ -730,9 +812,7 @@ pub fn parse_and_translate_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_with(&query, maps, dialect, tbox, schema)
 }
 
@@ -747,9 +827,7 @@ pub fn parse_and_translate_flat_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_with_flat(&query, maps, dialect, tbox, schema)
 }
 
@@ -962,6 +1040,39 @@ mod tests {
         let _ =
             translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e2).unwrap();
         assert_eq!(cache.len(), 2, "a new epoch recompiles under a fresh key");
+    }
+
+    #[test]
+    fn cached_plan_clone_is_admitted_before_materialization() {
+        let q = spargebra::SparqlParser::new()
+            .parse_query("SELECT * WHERE { ?s ?p ?o }")
+            .unwrap();
+        let cache: PlanCache<Plan> = PlanCache::new(1);
+        let epoch = Epoch(1);
+        translate_cached(
+            &q,
+            &[],
+            Dialect::Sqlite,
+            &Tbox::default(),
+            &[],
+            &cache,
+            epoch,
+        )
+        .unwrap();
+
+        let result =
+            with_compile_control(CompileControl::new(CompileCancellation::new(), 0), || {
+                translate_cached(
+                    &q,
+                    &[],
+                    Dialect::Sqlite,
+                    &Tbox::default(),
+                    &[],
+                    &cache,
+                    epoch,
+                )
+            });
+        assert!(matches!(result, Err(Error::ResourceLimit(_))));
     }
 
     #[test]

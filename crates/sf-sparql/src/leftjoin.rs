@@ -32,10 +32,15 @@ pub fn left_join_branches(
     expr: Option<&spargebra::algebra::Expression>,
     dialect: sf_sql::Dialect,
 ) -> Result<Vec<Branch>> {
-    // OPTIONAL {} = identity.
+    // OPTIONAL {} = identity and allocates no new branches.
     if right.is_empty() {
         return Ok(left);
     }
+    crate::control::charge_expansion_work(
+        left.len()
+            .saturating_mul(right.len())
+            .saturating_add(left.len()),
+    )?;
 
     // All right branches must be opt-free (nested OPTIONAL inside OPTIONAL
     // right is not yet supported).  Multi-scan right (core.len() > 1) is sound

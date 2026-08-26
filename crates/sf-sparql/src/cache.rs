@@ -16,6 +16,7 @@
 //! share one plan is the documented refinement (ADR-0007), tracked here.
 
 use spargebra::Query;
+use std::sync::Arc;
 
 /// A monotonic `⟨T, M⟩` + schema epoch. Bump it whenever the ontology, the
 /// mappings, or a source schema changes; all plans from an older epoch are dead.
@@ -71,26 +72,25 @@ pub fn plan_key(query: &Query, epoch: Epoch) -> PlanKey {
 /// pressure, never the whole map at once (the prior `HashMap` + clear-on-overflow
 /// collapsed the hit rate to ~0 past `capacity` distinct keys — M4 wave-2 finding 1).
 pub struct PlanCache<P> {
-    inner: quick_cache::sync::Cache<PlanKey, P>,
+    inner: quick_cache::sync::Cache<PlanKey, Arc<P>>,
 }
 
-impl<P: Clone> PlanCache<P> {
+impl<P> PlanCache<P> {
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: quick_cache::sync::Cache::new(capacity),
         }
     }
 
-    /// Look up a compiled plan.
-    pub fn get(&self, key: &PlanKey) -> Option<P> {
+    /// Look up a compiled plan without cloning the potentially large plan.
+    /// Callers can perform resource admission before making an owned copy.
+    pub fn get_shared(&self, key: &PlanKey) -> Option<Arc<P>> {
         self.inner.get(key)
     }
 
-    /// Insert a compiled plan. Eviction (approximately-LRU, `quick_cache`) drops
-    /// individual cold entries as capacity is reached — the cache is
-    /// `⟨T, M⟩`-bounded, so eviction rarely fires in practice.
+    /// Insert a compiled plan behind a shared cache allocation.
     pub fn put(&self, key: PlanKey, plan: P) {
-        self.inner.insert(key, plan);
+        self.inner.insert(key, Arc::new(plan));
     }
 
     pub fn len(&self) -> usize {
@@ -99,6 +99,13 @@ impl<P: Clone> PlanCache<P> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl<P: Clone> PlanCache<P> {
+    /// Look up a compiled plan.
+    pub fn get(&self, key: &PlanKey) -> Option<P> {
+        self.get_shared(key).map(|plan| (*plan).clone())
     }
 }
 

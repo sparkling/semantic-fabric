@@ -671,6 +671,7 @@ impl<'a> Unfolder<'a> {
         let graph_var = self.current_graph_var.clone();
 
         for tm in self.maps {
+            crate::control::checkpoint(crate::CompileStage::Rewrite)?;
             // rr:class → rdf:type atoms (when predicate is rdf:type or a variable).
             // rr:class triples inherit the subject map's graph.
             if want_type || pred_iri.is_none() {
@@ -702,12 +703,19 @@ impl<'a> Unfolder<'a> {
                 // total, unchanged from before this ADR) or one `Some((v, gm))` per
                 // union member (enumeration mode — zero when the union is empty).
                 let graph_attempts: Vec<AtomGraph<'_>> = match &graph_var {
-                    Some(v) => graph_union
-                        .iter()
-                        .copied()
-                        .filter(|gm| !is_default_graph(gm))
-                        .map(|gm| AtomGraph::Bind(v.as_ref(), gm))
-                        .collect(),
+                    Some(v) => {
+                        let named_graphs = graph_union
+                            .iter()
+                            .filter(|gm| !is_default_graph(gm))
+                            .count();
+                        crate::control::charge_expansion_work(named_graphs)?;
+                        graph_union
+                            .iter()
+                            .copied()
+                            .filter(|gm| !is_default_graph(gm))
+                            .map(|gm| AtomGraph::Bind(v.as_ref(), gm))
+                            .collect()
+                    }
                     // Filter mode (fixed named graph or default-graph context): the
                     // match/exclude/reject decision needs the atom's own alias to turn
                     // a row-dependent graph map into a raw-column condition, so it is
@@ -715,8 +723,10 @@ impl<'a> Unfolder<'a> {
                     None => vec![AtomGraph::Filter(&graph_union)],
                 };
                 for graph in graph_attempts {
+                    crate::control::checkpoint(crate::CompileStage::Rewrite)?;
                     for pm in &pom.predicates {
                         for om in &pom.objects {
+                            crate::control::charge_expansion_work(1)?;
                             if let Some(b) =
                                 self.atom(tp, tm, pm, om, pred_iri.as_deref(), graph)?
                             {
@@ -882,11 +892,13 @@ impl<'a> Unfolder<'a> {
             _ => return Ok(()), // class object can only be an IRI or a variable
         };
         for class in &tm.subject.classes {
+            crate::control::checkpoint(crate::CompileStage::Rewrite)?;
             if let Some(w) = &wanted {
                 if !w.iter().any(|c| c == class.as_str()) {
                     continue;
                 }
             }
+            crate::control::charge_expansion_work(1)?;
             let alias = self.alias();
             let mut branch = Branch::single(Scan {
                 alias,
@@ -2050,6 +2062,7 @@ fn term_map_spec(tm: &TermMap) -> Option<&sf_core::ir::TermSpec> {
 }
 
 pub fn join_branches(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>> {
+    crate::control::charge_expansion_work(left.len().saturating_mul(right.len()))?;
     let mut out = Vec::new();
     for l in &left {
         for r in &right {

@@ -302,6 +302,7 @@ fn lower_node(
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
 ) -> Result<Vec<Branch>> {
+    crate::control::charge_expansion_work(1)?;
     match node {
         // ---- leaves --------------------------------------------------------------
         IqNode::Extensional { scan, bind } => {
@@ -316,6 +317,7 @@ fn lower_node(
             Ok(vec![Branch::single(scan)])
         }
         IqNode::Values { vars, rows } => {
+            crate::control::charge_expansion_work(rows.len())?;
             // One core-less `Const` branch per row; an UNDEF (`None`) cell leaves the
             // variable absent (design §5 Values — mirrors the flat `Values` arm).
             let mut branches = Vec::with_capacity(rows.len());
