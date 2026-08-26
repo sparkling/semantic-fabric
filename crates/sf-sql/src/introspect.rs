@@ -225,10 +225,11 @@ const DUCKDB_COLUMNS_SQL: &str = "SELECT column_name, data_type, is_nullable \
 #[cfg(feature = "duckdb-backend")]
 const DUCKDB_CONSTRAINTS_SQL: &str = "SELECT constraint_index, constraint_type, \
      unnest(constraint_column_names) AS column_name, referenced_table, \
-     unnest(referenced_column_names) AS referenced_column \
+     unnest(referenced_column_names) AS referenced_column, \
+     generate_subscripts(constraint_column_names, 1) AS column_ordinal \
      FROM duckdb_constraints() \
      WHERE schema_name = current_schema() AND lower(table_name) = lower(?) \
-     ORDER BY constraint_index";
+     ORDER BY constraint_index, column_ordinal";
 
 #[cfg(feature = "duckdb-backend")]
 const DUCKDB_ESTIMATE_SQL: &str = "SELECT estimated_size FROM duckdb_tables() \
@@ -823,16 +824,25 @@ mod tests {
     fn introspects_duckdb_columns_keys_foreign_keys_and_estimate() {
         let conn = duckdb::Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE departments (id INTEGER PRIMARY KEY, code VARCHAR UNIQUE); \
+            "CREATE TABLE departments ( \
+                 a INTEGER, b INTEGER, x VARCHAR, y VARCHAR, \
+                 PRIMARY KEY (b, a), UNIQUE (y, x) \
+             ); \
              CREATE TABLE Employees ( \
                  id BIGINT PRIMARY KEY, \
-                 department_id INTEGER REFERENCES departments(id), \
+                 department_x INTEGER, \
+                 department_y INTEGER, \
+                 FOREIGN KEY (department_x, department_y) REFERENCES departments(b, a), \
                  name VARCHAR NOT NULL \
              ); \
-             INSERT INTO departments VALUES (1, 'engineering'); \
-             INSERT INTO Employees VALUES (10, 1, 'Alice');",
+             INSERT INTO departments VALUES (1, 2, 'engineering', 'eng'); \
+             INSERT INTO Employees VALUES (10, 2, 1, 'Alice');",
         )
         .unwrap();
+
+        let departments = introspect_duckdb(&conn, "departments").unwrap();
+        assert_eq!(departments.primary_key, vec!["b", "a"]);
+        assert_eq!(departments.unique, vec![vec!["y", "x"]]);
 
         // DuckDB resolves identifiers case-insensitively even though its
         // information_schema preserves declaration case.
@@ -840,9 +850,12 @@ mod tests {
         assert_eq!(table.primary_key, vec!["id"]);
         assert!(table.column("name").unwrap().not_null);
         assert_eq!(table.foreign_keys.len(), 1);
-        assert_eq!(table.foreign_keys[0].columns, vec!["department_id"]);
+        assert_eq!(
+            table.foreign_keys[0].columns,
+            vec!["department_x", "department_y"]
+        );
         assert_eq!(table.foreign_keys[0].parent_table, "departments");
-        assert_eq!(table.foreign_keys[0].parent_columns, vec!["id"]);
+        assert_eq!(table.foreign_keys[0].parent_columns, vec!["b", "a"]);
         assert_eq!(table.row_estimate, Some(1));
         assert!(introspect_duckdb(&conn, "missing").is_err());
     }
