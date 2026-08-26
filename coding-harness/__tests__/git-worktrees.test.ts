@@ -143,6 +143,24 @@ describe('isolated Git candidate and evaluator worktrees', () => {
     expect(existsSync(runRoot)).toBe(false);
   });
 
+  it('recounts model-authored hunk lengths without weakening exact context', async () => {
+    const fixture = repository();
+    const parent = mkdtempSync(join(tmpdir(), 'coding-harness-recount-parent-'));
+    roots.push(parent);
+    const worktrees = new GitWorktreeSet({
+      repositoryRoot: fixture.root,
+      runRoot: join(parent, 'run'),
+    });
+    await worktrees.prepare(fixture.commit, fixture.commit);
+    const recounted = fixture.patch.replace(/^@@ .*$/m, '@@ -1,99 +1,99 @@');
+
+    const admitted = await worktrees.admitAndApply(recounted, ['src/file.txt']);
+
+    expect(admitted.admittedPaths).toEqual(['src/file.txt']);
+    expect(admitted.candidate.tree).not.toBe((await worktrees.baselineIdentity()).tree);
+    await worktrees.dispose();
+  });
+
   it('reuses an exact preparation and rejects a different Git identity', async () => {
     const fixture = repository();
     const parent = mkdtempSync(join(tmpdir(), 'coding-harness-idempotent-parent-'));

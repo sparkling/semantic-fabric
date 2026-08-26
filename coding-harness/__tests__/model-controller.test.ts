@@ -277,6 +277,7 @@ describe('native repository model controller', () => {
       );
       expect(prompt).toContain('must begin exactly with "diff --git "');
       expect(prompt).toContain('no Markdown fences or apply-patch markers');
+      expect(prompt).toContain('Omit index lines and Git blob IDs');
     }
     const repairPrompts = prompts.filter(({ operation }) => operation === 'repair');
     expect(repairPrompts).toHaveLength(1);
@@ -317,6 +318,7 @@ describe('native repository model controller', () => {
     expect(prompt).not.toContain(ADMITTED_SOURCE.trim());
     expect(prompt).not.toContain(ADMITTED_DIFF.trim());
     expect(prompt).toContain('previous diff was not admitted');
+    expect(prompt).toContain('Omit index lines and Git blob IDs');
     expect(evidence).toMatchObject({
       schemaVersion: 1,
       kind: 'untrusted-repair-evidence',

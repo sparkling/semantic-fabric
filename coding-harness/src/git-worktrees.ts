@@ -145,7 +145,7 @@ export class GitWorktreeSet {
     for (const root of this.#mutableRoots()) await this.#assertClean(root, signal);
     const numstat = await this.#git(
       this.#candidateRoot,
-      ['apply', '--numstat', '-z', '--whitespace=error-all', '-'],
+      ['apply', '--numstat', '-z', '--recount', '--whitespace=error-all', '-'],
       patch,
       signal,
     );
@@ -352,8 +352,8 @@ export class GitWorktreeSet {
     admittedPaths: readonly string[],
     signal?: AbortSignal,
   ): Promise<void> {
-    await this.#git(root, ['apply', '--check', '--index', '--whitespace=error-all', '-'], patch, signal);
-    await this.#git(root, ['apply', '--index', '--whitespace=error-all', '-'], patch, signal);
+    await this.#git(root, ['apply', '--check', '--index', '--recount', '--whitespace=error-all', '-'], patch, signal);
+    await this.#git(root, ['apply', '--index', '--recount', '--whitespace=error-all', '-'], patch, signal);
     const changed = parseNullPaths((await this.#git(
       root,
       ['diff', '--cached', '--name-only', '-z', '--'],
