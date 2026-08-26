@@ -59,6 +59,7 @@ docs/handover/
 /.claude-flow/neural/
 /.claude-flow/sessions/
 /.claude-flow/hive-mind/
+/.claude-flow/intelligence/
 /.claude-flow/security/
 /.claude-flow/daemon-state.json
 /.claude-flow/daemon.pid
