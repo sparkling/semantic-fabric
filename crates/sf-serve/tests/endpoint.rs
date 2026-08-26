@@ -485,12 +485,12 @@ mod pg {
             n: usize,
             rows: i64,
         ) -> std::time::Duration {
-            let cfg = Arc::new(ServeConfig::new(
-                Backend::Pg(pool),
-                maps,
-                Tbox::default(),
-                schema,
-            ));
+            let mut config = ServeConfig::new(Backend::Pg(pool), maps, Tbox::default(), schema);
+            // The max_size=1 receipt deliberately serializes sixteen large
+            // streaming responses; keep the production 30-second default out
+            // of this pool-throughput measurement.
+            config.timeout = std::time::Duration::from_secs(90);
+            let cfg = Arc::new(config);
             let start = std::time::Instant::now();
             let mut handles = Vec::with_capacity(n);
             for _ in 0..n {
