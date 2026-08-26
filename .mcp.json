@@ -43,7 +43,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "/Users/henrik/source/hm/semantic-fabric/semantic-fabric-harness/bin/cli.js",
+        "semantic-fabric-harness/bin/cli.js",
         "mcp",
         "start"
       ],

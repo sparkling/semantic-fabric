@@ -28,6 +28,8 @@
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .claude/settings.json.before-stop-fix-*
+.claude/settings.json.bak-*
+.claude/sessions/
 .claude-flow/
 .swarm/
 .agentic-qe/
@@ -64,6 +66,12 @@ docs/handover/
 /.claude-flow/cjs-intelligence-signals.json
 /.claude-flow/memory.rvf
 /.claude-flow/memory.rvf.meta
+/.claude-flow/agents.json
+/.claude-flow/coordination/
+/.claude-flow/memory/
+/.claude-flow/policy/
+/.claude-flow/routing-outcomes.json
+/.claude-flow/tasks/
 **/.claude-flow/data/
 **/.claude-flow/logs/
 **/.claude-flow/neural/
@@ -72,6 +80,7 @@ ruvector.db
 ruvector.db-shm
 ruvector.db-wal
 agentdb.rvf.lock
+agentdb.rvf.idmap.json
 hnsw.index
 **/hnsw.index
 
@@ -86,6 +95,9 @@ hnsw.index
 .env
 .env.local
 .env.*.local
+.mcp.json.bak-*
+node_modules/
+coding-harness/.claude/
 
 # ruflo-add-codex:gitignore — secrets + runtime
 .claude-flow/sessions/
