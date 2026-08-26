@@ -222,8 +222,8 @@ Darwin/GEPA remains disabled until at least five discriminating training tasks
 and five sealed holdouts exist. No diagnostic score can override a failed
 product oracle.
 
-GitHub-hosted CI runs the portable harness contract on Node 20 and 24. Native
-integration remains fail-closed and is run only by the manually dispatched
+GitHub-hosted CI runs the portable harness contract on its pinned Node 20
+baseline. Native integration remains fail-closed and is run only by the manually dispatched
 `harness-native` workflow on a labelled `self-hosted`, `bwrap`, `systemd-user`
 runner; hosted runners cannot create the network namespace the production
 isolation contract requires.

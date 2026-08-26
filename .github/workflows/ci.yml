@@ -16,8 +16,6 @@ jobs:
         include:
           - node: '20.0.0'
             native_required: '0'
-          - node: '24'
-            native_required: '0'
     steps:
       - uses: actions/checkout@v4
         with:

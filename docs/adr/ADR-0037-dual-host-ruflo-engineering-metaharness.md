@@ -93,8 +93,8 @@ CI uses fake native executables and never calls a model provider.
 
 **CI capability amendment (2026-08-26).** GitHub-hosted Ubuntu runners cannot
 create the network namespace required by the production `bwrap --unshare-net`
-contract. Their Node 20 and 24 jobs therefore run only portable, provider-free
-unit and contract coverage with native integration explicitly disabled. The
+contract. The hosted Node 20 baseline therefore runs only portable,
+provider-free unit and contract coverage with native integration explicitly disabled. The
 same native tests remain fail-closed when required and are dispatched through
 the labelled `self-hosted`, `linux`, `bwrap`, `systemd-user` workflow, which
 preflights both bubblewrap and the user-systemd boundary. A hosted green check

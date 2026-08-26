@@ -12,6 +12,7 @@
   "coordinationSurface": ".mcp.json",
   "protectedPaths": [
     ".github/workflows/ci.yml",
+    ".github/workflows/harness-native.yml",
     ".gitignore",
     ".mcp.json",
     "AGENTS.md",

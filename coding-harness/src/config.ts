@@ -15,6 +15,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
   allowedTools: ['read_file', 'write_file', 'apply_patch', 'git', 'node', 'npm', 'cargo', 'rustc'],
   requiredProtectedPaths: [
     '.github/workflows/ci.yml',
+    '.github/workflows/harness-native.yml',
     '.gitignore',
     '.mcp.json',
     'AGENTS.md',
