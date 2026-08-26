@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SECURE_HARNESS_CONFIG } from './config.js';
+import { ISSUE_8_ACCEPTANCE_TASK_PATH } from './controller-attestation.js';
 import { requireExactReferenceCandidate } from './acceptance-task.js';
 import {
   createStructuredFrozenCargoLockExecutor,
@@ -13,6 +14,7 @@ import {
 import { runGitCommand } from './git-process.js';
 import { runIssue8Transaction, type Issue8DriverResult } from './issue-8-driver.js';
 import { createIssue8NativeSession } from './issue-8-native-session.js';
+import { normalizeAcceptanceTaskPath } from './manifest.js';
 import { prepareIssue8RustRuntimeFactory } from './issue-8-rust-runtime.js';
 import {
   createIssue8ProgrammeEnvelope,
@@ -40,9 +42,10 @@ const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
 const SCRATCH_PARENT = '/home/claude/.cache/semantic-fabric-harness';
 
 export interface TrustedBootstrapEvidence {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly source: 'verified-packed-private-runtime';
   readonly controllerCommit: string;
+  readonly taskPath: string;
   readonly controllerStoreDigest: string;
   readonly buildManifestDigest: string;
   readonly runtimeTreeDigest: string;
@@ -68,8 +71,9 @@ export async function trustedControllerMain(
 ): Promise<TrustedControllerOutcome> {
   const invocation = parseInvocation(argv);
   const bootstrap = parseBootstrap(rawBootstrap);
-  if (bootstrap.controllerCommit !== invocation.controllerCommit) {
-    throw new Error('HARNESS_ISSUE_8_BOOTSTRAP_COMMIT_MISMATCH');
+  if (bootstrap.controllerCommit !== invocation.controllerCommit
+    || bootstrap.taskPath !== invocation.taskPath) {
+    throw new Error('HARNESS_ISSUE_8_BOOTSTRAP_BINDING_MISMATCH');
   }
   const receiptPath = join(
     invocation.repositoryRoot, 'coding-harness', '.metaharness', 'runs', `${invocation.runId}.json`,
@@ -141,6 +145,7 @@ interface Issue8Invocation {
   readonly repositoryRoot: string;
   readonly controllerStore: string;
   readonly controllerCommit: string;
+  readonly taskPath: string;
   readonly runId: string;
   readonly swarmId: string;
   readonly coordinationTaskId: string;
@@ -180,6 +185,7 @@ async function executeIssue8(
     runRoot: paths.worktrees,
     evaluatorScratchRoot: paths.evaluator,
     controllerCommit: invocation.controllerCommit,
+    taskPath: invocation.taskPath,
     runId: invocation.runId,
     models: MODELS,
     toolVersions: {
@@ -214,13 +220,14 @@ async function executeIssue8(
         sourceEnvironment: {},
       }),
     }),
-    createNativeSession: async ({ prepared, evaluatorPaths, models }) =>
+    createNativeSession: async ({ prepared, evaluatorPaths, taskPath, models }) =>
       await createIssue8NativeSession({
         config: SECURE_HARNESS_CONFIG,
         controllerRoot: invocation.repositoryRoot,
         runtimeParent: paths.native,
         prepared,
         evaluatorPaths,
+        taskPath,
         models,
         executables: {
           codex: ISSUE_8_SYSTEM_PATHS.codex,
@@ -317,20 +324,26 @@ async function prepareScratchLayout(scratch: string) {
 }
 
 function parseInvocation(argv: readonly string[]): Issue8Invocation {
-  const expected = [
+  const requiredFlags = [
     'repository', 'controller-store', 'controller-commit', 'run-id', 'swarm-id',
     'coordination-task-id', 'hive-id', 'consensus-id',
   ];
-  if (argv.length !== expected.length * 2) throw new Error('HARNESS_ISSUE_8_ARGUMENTS_INVALID');
+  const allowed = [...requiredFlags, 'task-path'];
+  if (![requiredFlags.length * 2, allowed.length * 2].includes(argv.length)) {
+    throw new Error('HARNESS_ISSUE_8_ARGUMENTS_INVALID');
+  }
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
     const name = flag.startsWith('--') ? flag.slice(2) : '';
     const value = argv[index + 1];
-    if (!expected.includes(name) || values.has(name) || value === undefined || value.includes('\0')) {
+    if (!allowed.includes(name) || values.has(name) || value === undefined || value.includes('\0')) {
       throw new Error('HARNESS_ISSUE_8_ARGUMENTS_INVALID');
     }
     values.set(name, value);
+  }
+  if (requiredFlags.some((name) => !values.has(name))) {
+    throw new Error('HARNESS_ISSUE_8_ARGUMENTS_INVALID');
   }
   const repositoryRoot = canonicalDirectory(required(values, 'repository'));
   const controllerStore = privateDirectory(required(values, 'controller-store'), 'CONTROLLER_STORE');
@@ -340,6 +353,7 @@ function parseInvocation(argv: readonly string[]): Issue8Invocation {
     repositoryRoot,
     controllerStore,
     controllerCommit,
+    taskPath: normalizeAcceptanceTaskPath(values.get('task-path') ?? ISSUE_8_ACCEPTANCE_TASK_PATH),
     runId: opaque(required(values, 'run-id'), 'RUN_ID'),
     swarmId: opaque(required(values, 'swarm-id'), 'SWARM_ID'),
     coordinationTaskId: opaque(required(values, 'coordination-task-id'), 'TASK_ID'),
@@ -356,18 +370,19 @@ function parseBootstrap(value: unknown): TrustedBootstrapEvidence {
   const keys = Object.keys(input).sort();
   const expected = [
     'buildManifestDigest', 'controllerCommit', 'controllerStoreDigest', 'gitDigest', 'nodeDigest',
-    'runtimeTreeDigest', 'schemaVersion', 'source',
+    'runtimeTreeDigest', 'schemaVersion', 'source', 'taskPath',
   ].sort();
   if (JSON.stringify(keys) !== JSON.stringify(expected)
-    || input.schemaVersion !== 2 || input.source !== 'verified-packed-private-runtime') {
+    || input.schemaVersion !== 3 || input.source !== 'verified-packed-private-runtime') {
     throw new Error('HARNESS_ISSUE_8_BOOTSTRAP_EVIDENCE_INVALID');
   }
   const controllerCommit = String(input.controllerCommit);
   if (!GIT_OBJECT.test(controllerCommit)) throw new Error('HARNESS_ISSUE_8_BOOTSTRAP_EVIDENCE_INVALID');
   const parsed = {
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     source: 'verified-packed-private-runtime' as const,
     controllerCommit,
+    taskPath: normalizeAcceptanceTaskPath(input.taskPath),
     controllerStoreDigest: hash(input.controllerStoreDigest),
     buildManifestDigest: hash(input.buildManifestDigest),
     runtimeTreeDigest: hash(input.runtimeTreeDigest),

@@ -13,7 +13,7 @@ import { AcceptanceRunner } from './acceptance-runner.js';
 import { CandidateTransaction, type CandidateBuild } from './candidate.js';
 import type { CandidateTransactionResult } from './candidate-types.js';
 import { SECURE_HARNESS_CONFIG } from './config.js';
-import { attestIssue8Controller, type ControllerAttestation } from './controller-attestation.js';
+import { attestController, ISSUE_8_ACCEPTANCE_TASK_PATH, type ControllerAttestation } from './controller-attestation.js';
 import { DEVELOPMENT_AUTHORITY, parseTaskContract } from './contracts.js';
 import { materializeEvaluatorCommit, type EvaluatorIdentity } from './evaluator.js';
 import type { FrozenRegistryPackage } from './frozen-cargo-metadata.js';
@@ -22,23 +22,13 @@ import { runGitCommand } from './git-process.js';
 import { assertGitMaterializationSafe } from './git-materialization.js';
 import { GitWorktreeSet, type PreparedWorktrees } from './git-worktrees.js';
 import { RepositoryModelContextProvider } from './model-context.js';
-import {
-  NativeRepositoryModelController,
-  type NativeStructuredClient,
-} from './model-controller.js';
+import { NativeRepositoryModelController, type NativeStructuredClient } from './model-controller.js';
 import { NativeInvocationRecovery } from './models/recovery.js';
-import {
-  PersistentRoutedAgentPool,
-  VerifiedRoutingHistory,
-  type NativeModelCandidate,
-} from './models/routing.js';
+import { PersistentRoutedAgentPool, VerifiedRoutingHistory, type NativeModelCandidate } from './models/routing.js';
 import type { NativeHost } from './models/types.js';
 import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 import { digestValue, type HostEvidence } from './receipts.js';
-import {
-  candidateExpectationForTask,
-  RepositoryCandidateOperations,
-} from './repository-operations.js';
+import { candidateExpectationForTask, RepositoryCandidateOperations } from './repository-operations.js';
 import type { RustOfflineProfile } from './rust-sandbox.js';
 
 export interface Issue8FrozenLockLease {
@@ -67,6 +57,7 @@ export interface Issue8DriverOptions {
   readonly runRoot: string;
   readonly evaluatorScratchRoot: string;
   readonly controllerCommit: string;
+  readonly taskPath: string;
   readonly runId: string;
   readonly models: Readonly<{ codex: string; claude: string }>;
   readonly toolVersions: Readonly<Record<string, string>>;
@@ -85,6 +76,7 @@ export interface Issue8DriverOptions {
   readonly createNativeSession: (input: Readonly<{
     prepared: PreparedWorktrees;
     evaluatorPaths: readonly string[];
+    taskPath: string;
     models: Readonly<{ codex: string; claude: string }>;
   }>) => Promise<Issue8NativeSession>;
   readonly captureRufloEvidence: (input: Readonly<{
@@ -125,13 +117,16 @@ export async function runIssue8Transaction(
   options: Issue8DriverOptions,
 ): Promise<Issue8DriverResult> {
   assertRunBindings(options);
-  const controller = await attestIssue8Controller({
+  const controller = await attestController({
     repositoryRoot: options.controllerSourceRoot,
     controllerRepositoryRoot: options.controllerRepositoryRoot,
     controllerCommit: options.controllerCommit,
+    taskPath: options.taskPath,
     signal: options.signal,
   });
-  if (controller.task.schemaVersion !== 2) {
+  if (controller.taskPath !== options.taskPath
+    || controller.taskPath !== ISSUE_8_ACCEPTANCE_TASK_PATH
+    || controller.task.schemaVersion !== 2) {
     throw new Error('HARNESS_ISSUE_8_REQUIRES_TASK_SCHEMA_V2');
   }
   const unboundTask = controller.task;
@@ -202,6 +197,7 @@ export async function runIssue8Transaction(
     native = await options.createNativeSession({
       prepared,
       evaluatorPaths: task.evaluatorPaths,
+      taskPath: controller.taskPath,
       models: options.models,
     });
     assertNativeSession(native, options.models);
@@ -317,28 +313,32 @@ export async function runIssue8Transaction(
       mutationEvidence: async (build, signal) =>
         await acceptance.mutations(build, signal),
     });
+    const protectedInputs = await protectedInputBoundary.capture(
+      parseTaskContract({
+        schemaVersion: 1,
+        taskId: task.taskId,
+        runId: options.runId,
+        workspaceRoot: prepared.candidateRoot,
+        readablePaths: task.implementationPaths,
+        mutablePaths: task.implementationPaths,
+        protectedPaths,
+        tools: ['cargo', 'apply_patch'],
+        commands,
+        network: { mode: 'offline', allowedOrigins: [] },
+        authority: DEVELOPMENT_AUTHORITY,
+      }, SECURE_HARNESS_CONFIG),
+      SECURE_HARNESS_CONFIG,
+    );
+    if (protectedInputs[controller.taskPath] !== controller.taskBlobDigest) {
+      throw new Error('HARNESS_CONTROLLER_TASK_PROTECTED_INPUT_MISMATCH');
+    }
     const candidateTransaction = new CandidateTransaction({
       context: {
         runId: options.runId,
         taskId: task.taskId,
         authority: DEVELOPMENT_AUTHORITY,
         identities: { controller: controller.identity, baseline: task.baseline, evaluator },
-        protectedInputs: await protectedInputBoundary.capture(
-          parseTaskContract({
-            schemaVersion: 1,
-            taskId: task.taskId,
-            runId: options.runId,
-            workspaceRoot: prepared.candidateRoot,
-            readablePaths: task.implementationPaths,
-            mutablePaths: task.implementationPaths,
-            protectedPaths,
-            tools: ['cargo', 'apply_patch'],
-            commands,
-            network: { mode: 'offline', allowedOrigins: [] },
-            authority: DEVELOPMENT_AUTHORITY,
-          }, SECURE_HARNESS_CONFIG),
-          SECURE_HARNESS_CONFIG,
-        ),
+        protectedInputs,
         route: {
           snapshotDigest: routeSnapshotDigest,
           frozenAt,
@@ -353,6 +353,8 @@ export async function runIssue8Transaction(
           controllerRuntimeTreeDigest: controller.build.runtimeTreeDigest,
           controllerManifestDigest: controller.manifestBlobDigest,
           controllerTaskDigest: controller.taskBlobDigest,
+          controllerTaskPath: controller.taskPath,
+          controllerTaskPathDigest: digestValue(controller.taskPath),
           codex: native.hosts.find(({ host }) => host === 'codex')?.clientVersion ?? 'unknown',
           claude: native.hosts.find(({ host }) => host === 'claude-code')?.clientVersion ?? 'unknown',
         },
@@ -491,6 +493,4 @@ function assertNativeSession(
   }
 }
 
-function unique(values: readonly string[]): string[] {
-  return [...new Set(values)];
-}
+function unique(values: readonly string[]): string[] { return [...new Set(values)]; }

@@ -45,9 +45,14 @@ describe('canonical harness manifest', () => {
     expect(normalizeAcceptanceTaskPath(taskPath)).toBe(taskPath);
     expect(selectAcceptanceTaskPath(parsed, taskPath)).toBe(taskPath);
     for (const invalid of [
+      '',
+      '/coding-harness/config/issue-8-acceptance.json',
       './coding-harness/config/issue-8-acceptance.json',
       'coding-harness/config/../config/issue-8-acceptance.json',
+      'coding-harness\\config\\issue-8-acceptance.json',
+      'coding-harness/config/issue-8-acceptance.json\0',
       'coding-harness/config/Issue-8-acceptance.json',
+      'coding-harness/config/issué-8-acceptance.json',
       'coding-harness/config/issue-8-acceptance.json/',
       'coding-harness/config/issue-8.json',
       'docs/issue-8-acceptance.json',

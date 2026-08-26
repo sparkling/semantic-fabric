@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 
+import { lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
-import type { HarnessConfig } from './contracts.js';
+import { dirname, join } from 'node:path';
+import { normalizeWorkspacePath, type HarnessConfig } from './contracts.js';
 import type { PreparedWorktrees } from './git-worktrees.js';
 import type { Issue8NativeSession } from './issue-8-driver.js';
+import { normalizeAcceptanceTaskPath } from './manifest.js';
 import {
   createTrustedNativeRuntime,
   type NativeRuntimeExecutablePaths,
@@ -19,6 +21,7 @@ export interface Issue8NativeSessionOptions {
   readonly runtimeParent: string;
   readonly prepared: PreparedWorktrees;
   readonly evaluatorPaths: readonly string[];
+  readonly taskPath: string;
   readonly models: Readonly<{ codex: string; claude: string }>;
   readonly executables: NativeRuntimeExecutablePaths;
   readonly credentials: Readonly<{ codex: string; 'claude-code': string }>;
@@ -33,6 +36,11 @@ export async function createIssue8NativeSession(
     throw new Error('HARNESS_ISSUE_8_MODEL_TIMEOUT_NOT_NESTED');
   }
   const runRoot = preparedRunRoot(options.prepared);
+  const maskedWorkspacePaths = issue8MaskedWorkspacePaths(
+    options.prepared.candidateRoot,
+    options.evaluatorPaths,
+    options.taskPath,
+  );
   const runtime = createTrustedNativeRuntime({
     config: options.config,
     runtimeParent: options.runtimeParent,
@@ -42,7 +50,7 @@ export async function createIssue8NativeSession(
     credentials: options.credentials,
     resourceLimits: options.resourceLimits,
     timeoutMs: ISSUE_8_MODEL_TIMEOUT_MS,
-    maskedWorkspacePaths: options.evaluatorPaths,
+    maskedWorkspacePaths,
     forbiddenMountRoots: [
       homedir(), options.controllerRoot, runRoot, options.runtimeParent,
       dirname(options.credentials.codex), dirname(options.credentials['claude-code']),
@@ -78,6 +86,29 @@ export async function createIssue8NativeSession(
     runtime.cleanup();
     throw error;
   }
+}
+
+export function issue8MaskedWorkspacePaths(
+  candidateRoot: string,
+  evaluatorPaths: readonly string[],
+  taskPath: string,
+): readonly string[] {
+  normalizeAcceptanceTaskPath(taskPath);
+  const paths = evaluatorPaths.map((path, index) =>
+    normalizeWorkspacePath(path, `evaluatorPaths[${index}]`));
+  const configRoot = join(candidateRoot, 'coding-harness', 'config');
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(configRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Object.freeze([...new Set(paths)]);
+    throw error;
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync(configRoot) !== configRoot) {
+    throw new Error('HARNESS_NATIVE_TASK_CONFIG_MASK_INVALID');
+  }
+  paths.push('coding-harness/config');
+  return Object.freeze([...new Set(paths)]);
 }
 
 async function unavailablePoolExecution(): Promise<never> {

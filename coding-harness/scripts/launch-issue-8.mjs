@@ -13,6 +13,7 @@ const MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 const LOCK_PATH = 'coding-harness/package-lock.json'; const PACKAGE_PATH = 'coding-harness/package.json';
 const RUNTIME_ENTRY = 'coding-harness/dist/issue-8-program.js';
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/; const DIGEST = /^[a-f0-9]{64}$/;
+const DEFAULT_TASK_PATH = 'coding-harness/config/issue-8-acceptance.json'; const TASK_PATH = /^coding-harness\/config\/[a-z0-9]+(?:[-_][a-z0-9]+)*-acceptance\.json$/;
 const MAX_FILE_BYTES = 100_000_000; let privateRuntime = null;
 let controllerStore = null; let controllerStoreDigest = null; let controllerStoreCommit = null;
 try {
@@ -24,9 +25,7 @@ try {
   controllerStoreCommit = invocation.controllerCommit;
   controllerStoreDigest = validateControllerStore(controllerStore, invocation.controllerCommit);
   const head = gitText(controllerStore, ['rev-parse', '--verify', 'HEAD']);
-  const commit = gitText(controllerStore, [
-    'rev-parse', '--verify', `${invocation.controllerCommit}^{commit}`,
-  ]);
+  const commit = gitText(controllerStore, ['rev-parse', '--verify', `${invocation.controllerCommit}^{commit}`]);
   if (head !== commit || commit !== invocation.controllerCommit) {
     throw new Error('HARNESS_BOOTSTRAP_CONTROLLER_COMMIT_MISMATCH');
   }
@@ -43,19 +42,18 @@ try {
   privateRuntime = mkdtempSync(join(runtimeParent, 'semantic-fabric-controller-'));
   chmodSync(privateRuntime, 0o700);
   writeCommittedFile(privateRuntime, PACKAGE_PATH, packageBytes);
-  for (const [path, expected] of [
-    ...Object.entries(build.outputs),
-    ...Object.entries(build.productionFiles),
-  ]) copyCurrentFile(invocation.repositoryRoot, privateRuntime, path, expected);
+  for (const [path, expected] of [...Object.entries(build.outputs), ...Object.entries(build.productionFiles)])
+    copyCurrentFile(invocation.repositoryRoot, privateRuntime, path, expected);
   hardenRuntime(privateRuntime);
   installResolutionBoundary(privateRuntime);
   const entry = safePath(privateRuntime, build.runtimeEntry);
   const module = await import(pathToFileURL(entry).href);
   if (typeof module.trustedControllerMain !== 'function') throw new Error('HARNESS_BOOTSTRAP_ENTRY_INVALID');
   const outcome = await module.trustedControllerMain(process.argv.slice(2), Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: 3,
     source: 'verified-packed-private-runtime',
     controllerCommit: commit,
+    taskPath: invocation.taskPath,
     controllerStoreDigest,
     buildManifestDigest: sha256(buildBytes),
     runtimeTreeDigest: build.runtimeTreeDigest,
@@ -74,9 +72,7 @@ try {
     || !reasonValid || !sealedDigests.every((digest) => DIGEST.test(digest))) {
     throw new Error('HARNESS_BOOTSTRAP_SEALED_OUTCOME_INVALID');
   }
-  process.stdout.write(`${JSON.stringify({ status: sealed.status, reason: outcome.reason, receiptDigest: sealed.receiptDigest,
-    programmeAcceptanceDigest: sealed.programmeAcceptanceDigest,
-    envelopeDigest: sealed.envelopeDigest })}\n`);
+  process.stdout.write(`${JSON.stringify({ status: sealed.status, reason: outcome.reason, receiptDigest: sealed.receiptDigest, programmeAcceptanceDigest: sealed.programmeAcceptanceDigest, envelopeDigest: sealed.envelopeDigest })}\n`);
   process.exitCode = sealed.status === 'pass' ? 0 : 1;
 } catch (error) {
   try {
@@ -130,22 +126,24 @@ function validateProcess() {
   }
 }
 function parseInvocation(argv) {
-  const expected = [
+  const required = [
     'repository', 'controller-store', 'controller-commit', 'run-id', 'swarm-id',
     'coordination-task-id', 'hive-id', 'consensus-id',
   ];
-  if (argv.length !== expected.length * 2) throw new Error('HARNESS_BOOTSTRAP_ARGUMENTS_INVALID');
+  const allowed = [...required, 'task-path'];
+  if (![required.length * 2, allowed.length * 2].includes(argv.length)) throw new Error('HARNESS_BOOTSTRAP_ARGUMENTS_INVALID');
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
     const name = flag?.startsWith('--') ? flag.slice(2) : '';
     const value = argv[index + 1];
-    if (!expected.includes(name) || values.has(name) || typeof value !== 'string'
+    if (!allowed.includes(name) || values.has(name) || typeof value !== 'string'
       || value.length === 0 || value.includes('\0')) {
       throw new Error('HARNESS_BOOTSTRAP_ARGUMENTS_INVALID');
     }
     values.set(name, value);
   }
+  if (required.some((name) => !values.has(name))) throw new Error('HARNESS_BOOTSTRAP_ARGUMENTS_INVALID');
   const repositoryRoot = canonicalDirectory(values.get('repository'), 'REPOSITORY_INVALID');
   const controllerStore = privateDirectory(values.get('controller-store'), 'CONTROLLER_STORE_INVALID');
   const runtimeParent = privateDirectory(process.env.XDG_RUNTIME_DIR, 'RUNTIME_PARENT');
@@ -156,7 +154,9 @@ function parseInvocation(argv) {
   }
   const controllerCommit = values.get('controller-commit');
   if (!GIT_OBJECT.test(controllerCommit)) throw new Error('HARNESS_BOOTSTRAP_COMMIT_INVALID');
-  return Object.freeze({ repositoryRoot, controllerStore, controllerCommit });
+  const taskPath = values.get('task-path') ?? DEFAULT_TASK_PATH;
+  if (!TASK_PATH.test(taskPath)) throw new Error('HARNESS_BOOTSTRAP_ARGUMENTS_INVALID');
+  return Object.freeze({ repositoryRoot, controllerStore, controllerCommit, taskPath });
 }
 function validateControllerStore(root, commit) {
   privateDirectory(root, 'CONTROLLER_STORE_INVALID');

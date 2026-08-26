@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ISSUE_8_SAFE_TRANSACTION_REASON_CODES } from '../src/issue-8-programme-envelope.js';
@@ -45,29 +45,7 @@ describe('trusted issue #8 bootstrap', () => {
     expect(gitText(fixture.store, ['show', `${fixture.commit}:controller.txt`]))
       .toBe('trusted controller');
 
-    const launcher = readFileSync(new URL('../scripts/launch-issue-8.mjs', import.meta.url));
-    const previousUmask = process.umask(0o077);
-    const result = spawnSync(NODE, [
-      '--no-addons', '--disable-proto=throw', '--input-type=module', '-',
-      '--repository', fixture.source,
-      '--controller-store', fixture.store,
-      '--controller-commit', fixture.commit,
-      '--run-id', 'bootstrap_test_run',
-      '--swarm-id', 'bootstrap_test_swarm',
-      '--coordination-task-id', 'bootstrap_test_task',
-      '--hive-id', 'bootstrap_test_hive',
-      '--consensus-id', 'bootstrap_test_consensus',
-    ], {
-      input: launcher,
-      env: {
-        XDG_RUNTIME_DIR: fixture.runtime,
-        DBUS_SESSION_BUS_ADDRESS: `unix:path=${fixture.runtime}/bus`,
-        LANG: 'C.UTF-8',
-      },
-      encoding: 'utf8',
-      maxBuffer: 2_000_000,
-    });
-    process.umask(previousUmask);
+    const result = runLauncher(fixture);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe(
@@ -76,6 +54,60 @@ describe('trusted issue #8 bootstrap', () => {
     expect(existsSync(fixture.store)).toBe(false);
     },
   );
+
+  it.runIf(bootstrapNodeIsRootOwned)(
+    'accepts the explicit issue #8 task path while retaining the omitted default',
+    () => {
+      const fixture = controllerStore();
+      const result = runLauncher(fixture, [
+        '--task-path', 'coding-harness/config/issue-8-acceptance.json',
+      ]);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe(
+        '{"status":"error","reason":"HARNESS_BOOTSTRAP_GIT_BLOB_FAILED"}\n',
+      );
+      expect(existsSync(fixture.store)).toBe(false);
+    },
+  );
+
+  it('defaults, binds, and rejects malformed task-path invocations before trust use', () => {
+    const parseInvocation = trustedParseInvocation();
+    const base = [
+      '--repository', '/repository',
+      '--controller-store', '/runtime/semantic-fabric-controller-store-test',
+      '--controller-commit', 'a'.repeat(40),
+      '--run-id', 'bootstrap_test_run',
+      '--swarm-id', 'bootstrap_test_swarm',
+      '--coordination-task-id', 'bootstrap_test_task',
+      '--hive-id', 'bootstrap_test_hive',
+      '--consensus-id', 'bootstrap_test_consensus',
+    ];
+    const taskPath = 'coding-harness/config/issue-8-acceptance.json';
+    expect(parseInvocation(base).taskPath).toBe(taskPath);
+    expect(parseInvocation([...base, '--task-path', taskPath]).taskPath).toBe(taskPath);
+    const malformedPaths = [
+      '', '../task.json', '/coding-harness/config/issue-8-acceptance.json',
+      './coding-harness/config/issue-8-acceptance.json',
+      'coding-harness/config/../config/issue-8-acceptance.json',
+      'coding-harness\\config\\issue-8-acceptance.json',
+      'coding-harness/config/Issue-8-acceptance.json',
+      'coding-harness/config/issué-8-acceptance.json',
+      'coding-harness/config/issue-8-acceptance.json\0',
+    ];
+    for (const extra of [
+      ...malformedPaths.map((path) => ['--task-path', path]),
+      ['--task-path'],
+      [`--task-path=${taskPath}`],
+      ['--unknown', taskPath],
+      ['--task-path', taskPath, '--task-path', taskPath],
+      [...base.slice(0, -2), '--task-path', taskPath],
+    ]) {
+      const invocation = extra.length === base.length ? extra : [...base, ...extra];
+      expect(() => parseInvocation(invocation))
+        .toThrow('HARNESS_BOOTSTRAP_ARGUMENTS_INVALID');
+    }
+  });
 
   it('extracts only the primary bounded harness code from nested errors', () => {
     const safeReason = trustedSafeReason();
@@ -132,6 +164,26 @@ function trustedSafeReason(): (error: unknown) => string | null {
   return Function(`${declaration}; return safeReason;`)() as (error: unknown) => string | null;
 }
 
+function trustedParseInvocation(): (argv: readonly string[]) => Readonly<{ taskPath: string }> {
+  const source = readFileSync(new URL('../scripts/launch-issue-8.mjs', import.meta.url), 'utf8');
+  const constantsStart = source.indexOf('const DEFAULT_TASK_PATH =');
+  const constants = source.slice(constantsStart, source.indexOf('const MAX_FILE_BYTES', constantsStart));
+  const start = source.indexOf('function parseInvocation(argv) {');
+  const declaration = source.slice(start, source.indexOf('function validateControllerStore', start));
+  return Function(
+    'canonicalDirectory', 'privateDirectory', 'pathsOverlap', 'dirname', 'basename',
+    'GIT_OBJECT',
+    `${constants}; ${declaration}; return parseInvocation;`,
+  )(
+    (value: string) => value,
+    (value: string | undefined, label: string) => label === 'RUNTIME_PARENT' ? '/runtime' : value,
+    () => false,
+    dirname,
+    basename,
+    /^[a-f0-9]{40,64}$/,
+  ) as (argv: readonly string[]) => Readonly<{ taskPath: string }>;
+}
+
 function controllerStore(): Readonly<{
   source: string;
   store: string;
@@ -163,6 +215,39 @@ function controllerStore(): Readonly<{
   git(source, [`--git-dir=${store}`, 'symbolic-ref', 'HEAD', 'refs/heads/controller']);
   harden(store);
   return { source, store, runtime, commit };
+}
+
+function runLauncher(
+  fixture: ReturnType<typeof controllerStore>,
+  extraArgs: readonly string[] = [],
+) {
+  const launcher = readFileSync(new URL('../scripts/launch-issue-8.mjs', import.meta.url));
+  const previousUmask = process.umask(0o077);
+  try {
+    return spawnSync(NODE, [
+      '--no-addons', '--disable-proto=throw', '--input-type=module', '-',
+      '--repository', fixture.source,
+      '--controller-store', fixture.store,
+      '--controller-commit', fixture.commit,
+      '--run-id', 'bootstrap_test_run',
+      '--swarm-id', 'bootstrap_test_swarm',
+      '--coordination-task-id', 'bootstrap_test_task',
+      '--hive-id', 'bootstrap_test_hive',
+      '--consensus-id', 'bootstrap_test_consensus',
+      ...extraArgs,
+    ], {
+      input: launcher,
+      env: {
+        XDG_RUNTIME_DIR: fixture.runtime,
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${fixture.runtime}/bus`,
+        LANG: 'C.UTF-8',
+      },
+      encoding: 'utf8',
+      maxBuffer: 2_000_000,
+    });
+  } finally {
+    process.umask(previousUmask);
+  }
 }
 
 function privateTemporary(prefix: string): string {
