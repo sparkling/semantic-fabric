@@ -2,9 +2,10 @@
 //!
 //! **Every** result path streams end to end through one generic streamer per query
 //! form — none collects the result set or the whole serialised body. Since ADR-0024
-//! M5 the three backends share a single async pipeline: each `spawn`ed task acquires
-//! its backend (SQLite `SqliteOwnedBackend` over a `spawn_blocking` cap-1 bridge; PG
-//! `PgBackend<Arc<Client>>`; MySQL a DEDICATED pooled `Conn`), then drives the
+//! M5 the supported backends share a single async pipeline: each `spawn`ed task
+//! acquires its backend (SQLite `SqliteOwnedBackend` over a `spawn_blocking` cap-1
+//! bridge; PG `PgBackend<Arc<Client>>`; MySQL a DEDICATED pooled `Conn`; DuckDB a
+//! cloned read-only connection), then drives the
 //! driver-agnostic core ([`sf_sparql::exec_core::select_each_async`] /
 //! [`construct_each_async`](sf_sparql::exec_core::construct_each_async)) serialising
 //! each row/triple into a small shared buffer ([`SharedBuf`]) and `send().await`ing a
@@ -13,7 +14,8 @@
 //!
 //! A slow/aborted client and the absolute request deadline are raced against the
 //! entire driver future, including work before its first row. Losing either race
-//! drops the driver immediately, triggering backend cancellation. ASK is a single
+//! drops the driver immediately: interrupt-capable adapters request cancellation,
+//! while the others stop at their next send or cursor boundary. ASK is a single
 //! boolean — bounded by construction — and is serialised whole via
 //! [`collected_body`].
 

@@ -122,6 +122,10 @@ jobs:
         run: cargo test -p sf-sparql -p sf-serve -p sf-cli --features sf-cli/duckdb-backend
       - name: clippy (DuckDB exposed stack)
         run: cargo clippy -p sf-sql -p sf-sparql -p sf-serve -p sf-cli --all-targets --features sf-cli/duckdb-backend -- -D warnings
+      - name: test (DuckDB provider admission)
+        run: cargo test -p sf-conformance --no-default-features --features duckdb-backend --test w3c_duckdb_suite --test differential_duckdb_sqlite
+      - name: clippy (DuckDB provider admission)
+        run: cargo clippy -p sf-conformance --all-targets --no-default-features --features duckdb-backend -- -D warnings
       # SAP HANA marshalling/quoting unit tests only (backend::hana::tests::with_driver) —
       # pure value-marshalling logic with no connection, safe to run here. The rest of
       # the hana-backend surface needs a live SAP HANA server, so it's excluded.

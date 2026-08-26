@@ -22,6 +22,9 @@ pub struct DuckDbPool {
     conns: Arc<Vec<Arc<Mutex<Connection>>>>,
     free: Arc<Mutex<Vec<usize>>>,
     admission: Arc<Semaphore>,
+    // Keeps DuckDB spill files in a private, pool-owned directory that is
+    // removed when the source closes.
+    _temp_dir: Arc<tempfile::TempDir>,
 }
 
 /// One admitted DuckDB request. Dropping it releases the pool permit.
@@ -85,27 +88,19 @@ impl DuckDbLease {
 }
 
 impl DuckDbPool {
-    /// Wrap a caller-owned connection as a single-connection pool. Intended for
-    /// embedded callers and tests; path-based serving should use [`Self::open`]
-    /// so the read-only and external-access restrictions are applied.
-    pub(crate) fn one(conn: Connection) -> Self {
-        Self::new(vec![conn])
-    }
-
-    fn new(conns: Vec<Connection>) -> Self {
+    fn new(conns: Vec<Connection>, temp_dir: tempfile::TempDir) -> Self {
         assert!(!conns.is_empty(), "DuckDbPool needs a connection");
         let size = conns.len();
         Self {
             conns: Arc::new(conns.into_iter().map(|c| Arc::new(Mutex::new(c))).collect()),
             free: Arc::new(Mutex::new((0..size).rev().collect())),
             admission: Arc::new(Semaphore::new(size)),
+            _temp_dir: Arc::new(temp_dir),
         }
     }
 
     /// Open an existing DuckDB database and introspect all base tables in the
-    /// active schema. In-memory databases are available only through
-    /// [`Self::one`] for callers that already own a seeded connection; a CLI
-    /// source must be an existing, read-only file.
+    /// active schema. Serving accepts only an existing, read-only file.
     pub(crate) fn open(path: &str, pool_size: usize) -> Result<(Self, Vec<TableSchema>), String> {
         if path.is_empty() {
             return Err("DuckDB source path must not be empty".to_owned());
@@ -136,16 +131,39 @@ impl DuckDbPool {
             ));
         }
 
+        let temp_dir = tempfile::Builder::new()
+            .prefix("semantic-fabric-duckdb-")
+            .tempdir()
+            .map_err(|e| format!("create private DuckDB spill directory: {e}"))?;
+        let config = restricted_config(AccessMode::ReadOnly)?;
+        // Open the canonical path exactly once, then clone connections to that
+        // database instance. A pathname replacement cannot redirect a running
+        // pool to a different source between independent opens.
+        let primary = Connection::open_with_flags(&canonical, config)
+            .map_err(|e| format!("open DuckDB read-only {}: {e}", canonical.display()))?;
+        let temp_dir_text = temp_dir
+            .path()
+            .to_str()
+            .ok_or_else(|| "DuckDB spill directory path is not valid UTF-8".to_owned())?;
+        primary
+            .execute("SET temp_directory = ?", [temp_dir_text])
+            .map_err(|e| format!("set private DuckDB spill directory: {e}"))?;
+        primary
+            .execute_batch(
+                "SET enable_external_access = false; \
+                 SET lock_configuration = true",
+            )
+            .map_err(|e| format!("lock restricted DuckDB configuration: {e}"))?;
+        let schema = introspect_duckdb_all(&primary)?;
         let mut conns = Vec::with_capacity(pool_size);
-        for _ in 0..pool_size {
-            let config = restricted_config(AccessMode::ReadOnly)?;
-            conns.push(
-                Connection::open_with_flags(&canonical, config)
-                    .map_err(|e| format!("open DuckDB read-only {}: {e}", canonical.display()))?,
-            );
+        conns.push(primary);
+        for _ in 1..pool_size {
+            let cloned = conns[0]
+                .try_clone()
+                .map_err(|e| format!("clone DuckDB serve connection: {e}"))?;
+            conns.push(cloned);
         }
-        let schema = introspect_duckdb_all(&conns[0])?;
-        Ok((Self::new(conns), schema))
+        Ok((Self::new(conns, temp_dir), schema))
     }
 
     /// Admit one request without queueing. The caller maps exhaustion to HTTP
@@ -173,14 +191,12 @@ fn restricted_config(access_mode: AccessMode) -> Result<Config, String> {
     Config::default()
         .access_mode(access_mode)
         .and_then(|config| config.enable_autoload_extension(false))
-        .and_then(|config| config.enable_external_access(false))
         .and_then(|config| config.max_memory("512MB"))
         .and_then(|config| config.threads(2))
         .and_then(|config| config.with("max_temp_directory_size", "1GB"))
         .and_then(|config| config.with("allow_community_extensions", "false"))
         .and_then(|config| config.with("allow_unsigned_extensions", "false"))
         .and_then(|config| config.with("allow_persistent_secrets", "false"))
-        .and_then(|config| config.with("lock_configuration", "true"))
         .map_err(|e| format!("configure restricted DuckDB source: {e}"))
 }
 
@@ -293,6 +309,21 @@ mod tests {
             )
             .expect("read DuckDB setting");
         assert!(!external, "external file/network access must default off");
+        let spill_dir: String = conn
+            .query_row("SELECT current_setting('temp_directory')", [], |row| {
+                row.get(0)
+            })
+            .expect("read DuckDB spill directory");
+        let spill_dir = Path::new(&spill_dir);
+        assert!(spill_dir.is_dir(), "private spill directory must exist");
+        assert!(
+            spill_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("semantic-fabric-duckdb-")),
+            "spill directory must be pool-owned: {}",
+            spill_dir.display()
+        );
         assert!(
             conn.execute_batch("SET enable_external_access = true")
                 .is_err(),
@@ -302,6 +333,29 @@ mod tests {
             conn.execute_batch("SET threads = 8").is_err(),
             "locked configuration must prevent resource-limit changes"
         );
+        for (operation, sql) in [
+            ("DDL", "CREATE TABLE forbidden(id INTEGER)"),
+            ("attach", "ATTACH '/tmp/forbidden.duckdb' AS forbidden"),
+            (
+                "external CSV",
+                "SELECT * FROM read_csv_auto('/tmp/forbidden.csv')",
+            ),
+            (
+                "external Parquet",
+                "SELECT * FROM read_parquet('/tmp/forbidden.parquet')",
+            ),
+            ("extension install", "INSTALL httpfs"),
+            ("extension load", "LOAD httpfs"),
+            (
+                "persistent secret",
+                "CREATE PERSISTENT SECRET forbidden (TYPE S3, KEY_ID 'x', SECRET 'y')",
+            ),
+        ] {
+            assert!(
+                conn.execute_batch(sql).is_err(),
+                "restricted serve connection must reject {operation}"
+            );
+        }
         drop(conn);
         drop(lease);
         drop(pool);
@@ -321,12 +375,71 @@ mod tests {
 
     #[test]
     fn admission_is_bounded_by_pool_size() {
-        let conn = Connection::open_in_memory().unwrap();
-        let pool = DuckDbPool::one(conn);
+        let path = temp_path("pool_two");
+        {
+            let conn = Connection::open(&path).expect("create fixture");
+            conn.execute_batch("CREATE TABLE widgets(id INTEGER)")
+                .expect("seed fixture");
+        }
+        let (pool, _) = DuckDbPool::open(path.to_str().unwrap(), 2).expect("open pool");
         let first = pool.try_acquire().expect("first request admitted");
-        assert!(pool.try_acquire().is_err(), "second request must be shed");
+        let second = pool.try_acquire().expect("second request admitted");
+        {
+            let conn = second.conn.lock().unwrap();
+            let external: bool = conn
+                .query_row(
+                    "SELECT current_setting('enable_external_access')::BOOLEAN",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read cloned connection setting");
+            assert!(!external, "cloned connections must remain restricted");
+            assert!(
+                conn.execute_batch("SET enable_external_access = true")
+                    .is_err(),
+                "cloned connections must inherit the configuration lock"
+            );
+        }
+        assert!(pool.try_acquire().is_err(), "third request must be shed");
         drop(first);
         assert!(pool.try_acquire().is_ok(), "permit must return on drop");
+        drop(second);
+        drop(pool);
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn schema_snapshot_changes_only_after_source_restart() {
+        let path = temp_path("schema_restart");
+        {
+            let conn = Connection::open(&path).expect("create fixture");
+            conn.execute_batch("CREATE TABLE widgets(id INTEGER)")
+                .expect("seed fixture");
+        }
+        let (pool, before) = DuckDbPool::open(path.to_str().unwrap(), 1).expect("open pool");
+        assert_eq!(before[0].columns.len(), 1);
+        let lease = pool.try_acquire().expect("request admitted");
+        assert!(
+            lease
+                .conn
+                .lock()
+                .unwrap()
+                .execute_batch("ALTER TABLE widgets ADD COLUMN name VARCHAR")
+                .is_err(),
+            "the live read-only source cannot drift through serving DDL"
+        );
+        drop(lease);
+        drop(pool);
+
+        {
+            let conn = Connection::open(&path).expect("reopen writable fixture");
+            conn.execute_batch("ALTER TABLE widgets ADD COLUMN name VARCHAR")
+                .expect("change schema between server lifetimes");
+        }
+        let (reopened, after) = DuckDbPool::open(path.to_str().unwrap(), 1).expect("reopen pool");
+        assert_eq!(after[0].columns.len(), 2);
+        drop(reopened);
+        std::fs::remove_file(path).expect("remove fixture");
     }
 
     #[test]

@@ -38,7 +38,7 @@ The unbounded **instance data (A-Box)** is never materialised: it is produced on
 |---|---|
 | Mode | **Virtualisation / OBDA only** — SPARQL → SQL at query time. No instance triple store, no batch materialisation. |
 | Mappings | **R2RML** + **Direct Mapping** (treated as auto-generated R2RML). Nothing else. |
-| Sources | **Relational databases only** — PostgreSQL, SQLite, and MySQL are supported by the public serving path. |
+| Sources | **Relational databases only** — PostgreSQL, SQLite, and MySQL are supported by the public serving path; embedded DuckDB is admitted behind the opt-in `duckdb-backend` feature. |
 | Query | **Full SPARQL 1.2** — BGPs, OPTIONAL, UNION, MINUS, FILTER + (NOT) EXISTS, BIND, VALUES, subqueries, aggregation (GROUP BY/HAVING), solution modifiers, **recursive property paths (`*`/`+`)**, and all four query forms (SELECT/ASK/CONSTRUCT/DESCRIBE). |
 | Data model | **RDF 1.2** — triple terms, reifiers, directional language-tagged strings. |
 | Results | SELECT/ASK → **SPARQL 1.2 Results, JSON**; CONSTRUCT/DESCRIBE → **streamed JSON-LD** (expanded/flattened, emitted incrementally — never framed/compacted). |
@@ -69,7 +69,8 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 ### Confirmation
 
 - `cargo build --workspace` succeeds; `sf-cli` exposes `serve` for SQLite,
-  PostgreSQL, and MySQL (+ `conformance`/`bench`) and **no `materialize` verb**.
+  PostgreSQL, and MySQL, plus feature-gated DuckDB (+ `conformance`/`bench`),
+  and **no `materialize` verb**.
 - `sf-conformance` drives the W3C RDB2RDF suite via CONSTRUCT and the Ontop oracle (red until engine logic lands).
 - No crate depends on a triple store for instance data; Oxigraph holds only `⟨T, M⟩` (ADR-0004).
 
@@ -77,6 +78,12 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 > "follows" to the admitted public `serve` path through the shared backend
 > abstraction. Cloud/REST prototypes remain unadmitted under ADR-0024 and
 > ADR-0036; this does not broaden the relational-only charter.
+
+> **DuckDB admission amendment (2026-08-26).** DuckDB is an embedded relational
+> file source, not the excluded heterogeneous file-reader layer. It is opt-in
+> because it bundles a native engine. Serving accepts only an existing database
+> file through the restricted opener described by ADR-0010; unrestricted
+> caller-owned DuckDB connections are not a public serving constructor.
 
 ## More Information
 

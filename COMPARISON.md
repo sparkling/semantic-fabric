@@ -28,7 +28,7 @@ over the *same* PostgreSQL, timed by the *same* client with the *same* queries.*
 |---|---|
 | Machine | Apple M5 Max, 36 GB RAM (`Mac17,6`) |
 | OS | macOS 26.4 (Darwin 25.4.0), arm64 |
-| Rust | cargo 1.96.0; measured `semantic-fabric` binary built `--release --no-default-features` (before bundled DuckDB, now enabled by default) |
+| Rust | cargo 1.96.0; `semantic-fabric` built `--release` |
 | PostgreSQL | 17.7 (Homebrew) at `localhost:5432`, user `henrik` |
 | Java | OpenJDK 23.0.2 (Temurin) |
 | Ontop | ontop-cli **5.5.0**, PostgreSQL JDBC 42.7.4 |
@@ -61,7 +61,7 @@ query is warmed 3× then timed with `curl %{time_total}` (`Accept: text/csv`),
 **median of N round-trips**. Identical methodology, identical client.
 
 ```bash
-cargo build --release -p sf-cli --no-default-features
+cargo build --release -p sf-cli
 scripts/load_gtfs_postgres.sh 1            # then 10
 ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 1 25    # SCALE RUNS
 ONTOP_HOME=/path/to/ontop-cli scripts/compare/race.sh 10 31
@@ -124,13 +124,11 @@ ONTOP_HOME=/path/to/ontop-cli scripts/compare/footprint.sh
 first HTTP 200), and **resident set size while serving** (after warm-up + 20
 queries). RSS of the *serving process* is the one fair cross-runtime memory axis —
 native allocator vs JVM heap internals are not comparable, but the OS resident set
-of each live server is. The historical footprint run uses the minimal
-`--no-default-features` CLI build so its published numbers remain reproducible;
-the default build now includes bundled DuckDB and has a larger native artifact.
+of each live server is.
 
 | Metric | semantic-fabric | Ontop 5.5.0 |
 |---|---|---|
-| On-disk artifact | **13,390,624 B (12.8 MiB)**, minimal `--no-default-features` binary, no runtime | 51.4 MiB unpacked, 171 lib jars **+ a JVM** (Java 23 here) |
+| On-disk artifact | **13,390,624 B (12.8 MiB)**, one static binary, no runtime | 51.4 MiB unpacked, 171 lib jars **+ a JVM** (Java 23 here) |
 | Cold start (launch → first 200) | **0.15 s** | 1.6–1.7 s |
 | Serving RSS | **12.0 MiB** | 276–317 MiB |
 
@@ -187,7 +185,7 @@ cargo run -p sf-cli -- conformance
 |---|---|---|
 | **W3C RDB2RDF** | **81/82 (SQLite)**: R2RML 62/63 + Direct Mapping 19/19, 1 documented deviation (`R2RMLTC0002f`, ADR-0015); **80/81 (PostgreSQL)** | Mature R2RML/OBDA implementation (not re-run here) |
 | **GTFS-Madrid-Bench queries** | answers all 5 of the representative subset used here (parity verified) | **answers ~half of the benchmark's 18 queries** — cited below |
-| **Backends** | 4 serve executors in the default CLI: SQLite, PostgreSQL, MySQL, and DuckDB | many (PostgreSQL, MySQL, Oracle, SQL Server, Spark, Denodo, …) |
+| **Backends** | 2 wired executors: embedded SQLite + PostgreSQL | many (PostgreSQL, MySQL, Oracle, SQL Server, Spark, Denodo, …) |
 | **SPARQL surface** | OBDA SELECT/ASK/CONSTRUCT; property paths now full expressions (inverse/seq/alt/?/NPS/+/*); features outside the v1 surface return 501 (never silently wrong) | broad, mature SPARQL 1.1 |
 
 **Cited Ontop coverage.** The GTFS-Madrid-Bench authors report that **Ontop is only
@@ -202,8 +200,7 @@ repo <https://github.com/oeg-upm/gtfs-bench>; related Morph-CSV paper
 
 **Honest feature-scope note.** Ontop is a mature, broad system: many backends, much
 fuller SPARQL/OBDA coverage, a sophisticated optimizer. semantic-fabric is an early
-engine with four live source executors; its published conformance figures cover
-SQLite and PostgreSQL, and the benchmark uses PostgreSQL. The fact that *Ontop* misses
+engine: 2 backends, the OBDA path subset from Wave 3. The fact that *Ontop* misses
 half of the full 18-query GTFS set is about complex SPARQL features outside the
 5-query subset measured here — it is **not** a claim that semantic-fabric covers
 more of GTFS-Madrid-Bench overall (it does not; only the 5-query subset is wired and
@@ -282,7 +279,7 @@ live database without copying it.
 ## Verdict (one paragraph, honest)
 
 semantic-fabric's **defensible, architectural wins are clear and measured**: a
-minimal **12.8 MiB native binary with no JVM**, a **0.15 s cold start** (vs ~1.7 s),
+single **12.8 MiB native binary with no JVM**, a **0.15 s cold start** (vs ~1.7 s),
 a **~12 MiB serving footprint that stays flat as data grows 10×**, and a
 **byte-constant engine heap (129 358 B) under 16× data growth** — the streaming,
 non-materialising design doing what it claims. On **latency**, the now-fair
@@ -306,7 +303,7 @@ remains the mature choice.**
 
 ```bash
 # build
-cargo build --release -p sf-cli --no-default-features
+cargo build --release -p sf-cli
 
 # get Ontop 5.5.0 + PostgreSQL JDBC (one-time)
 curl -sSLO https://github.com/ontop/ontop/releases/download/ontop-5.5.0/ontop-cli-5.5.0.zip

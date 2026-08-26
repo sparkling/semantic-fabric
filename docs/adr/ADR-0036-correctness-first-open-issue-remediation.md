@@ -57,7 +57,7 @@ open PR #12. They are not one homogeneous backlog:
 | #8 | Public query paths retain branches after incompatible term binding; the reported subject call is one instance of a wider unchecked-bind invariant. | P0, implement first |
 | #9 | Query unfolding disagrees with R2RML and the materializer on subject/POM graph union and `rr:defaultGraph`; paths and RDF-star share the assumption. | P0, implement after #8 |
 | #10 | `rusqlite 0.32` blocks downstream `0.40.2` because both link SQLite; five manifests repeat the version. | P1, implement in parallel after baseline reconciliation |
-| #7 | REST-family adapters are buffered and incomplete; the adapter called Athena speaks Presto, and none is a supported serving source. | P2, re-scope before implementation |
+| #7 | REST-family adapters are buffered and incomplete; the adapter called Athena speaks Presto. Embedded DuckDB is handled as a separate, feature-gated provider admission with direct engine evidence. | P2 for cloud providers; DuckDB admission implemented separately |
 | #6 | A collaboration umbrella mixes design questions and optional seams; only a consumer-proven fallible/early-exit quad sink is currently focused enough. | P3, extract rather than implement wholesale |
 
 ## Bounded contexts
@@ -102,7 +102,7 @@ workspace should begin tracking `Cargo.lock` is a separate explicit decision.
 
 Issue #7 is re-scoped into a small umbrella plus provider-specific work for
 Trino/Presto, AWS Athena, Snowflake, Databricks, and BigQuery. The admission
-gate also protects every non-serving adapter: DuckDB, HANA, MonetDB, ODBC,
+gate also protects every non-serving adapter: HANA, MonetDB, ODBC,
 Oracle, Redshift, and SQL Server. `rest.rs` (currently 1,183 lines) is split
 into provider modules plus shared protocol code, each under 500 lines, before
 expansion. A backend is production-supported only after its
@@ -131,8 +131,9 @@ ADR/evaluator baselines
  ├─ Dependency Governance: PR #12 reconciliation → #10 → audit/live gate
  └─ Materialization API: extract a focused #6 issue when a consumer is red
 
-#7 provider design starts after the baselines; serving exposure waits for one
-provider to pass every protocol, security, streaming, and live-canary gate.
+#7 cloud-provider design starts after the baselines; serving exposure waits for
+each provider to pass every protocol, security, streaming, and live-canary gate.
+Embedded DuckDB follows the local-provider amendment below.
 ```
 
 Each writing lane uses its own branch and worktree. A single integration owner
@@ -153,9 +154,9 @@ worktree.
   feature builds, SQLite/conformance/benchmark tests, live MySQL tests, and
   `cargo audit` pass. Any advisory exception is limited, documented, and backed
   by a feature-resolution proof rather than a reachable vulnerable path.
-- #7: no adapter outside SQLite, PostgreSQL, and MySQL reaches `sf-serve` until
-  every provider-specific gate above passes; an admission test locks that set,
-  and unsupported prototypes remain clearly labeled and inaccessible.
+- #7: the serving set is SQLite, PostgreSQL, MySQL, and opt-in DuckDB. No other
+  adapter reaches `sf-serve` until every provider-specific gate above passes;
+  admission tests lock that set and unsupported prototypes remain inaccessible.
 - #6: the extracted API is justified by an external red test and proves early
   termination, error separation, cursor release, and bounded memory.
 
@@ -175,3 +176,23 @@ Agentic-QE suggestions, and model reviews cannot waive a failed oracle.
 - Cost: #6 may close with only extracted follow-ups, not a single umbrella PR.
 - Neutral: this ADR authorizes planning and isolated implementation slices; it
   does not authorize publishing, pushing, merging, or changing issue state.
+
+## DuckDB provider-admission amendment (2026-08-26)
+
+DuckDB clears the applicable gate as an embedded local relational provider, not
+as a precedent for cloud adapters. Its serving constructor accepts only an
+existing canonical file through a locked read-only opener; opens once and clones
+that database instance; disables external access, extension autoload, persistent
+secrets, and configuration changes; confines spill to a private owned directory;
+and applies bounded admission, deadlines, cancellation, and redacted errors.
+Schema and file identity are startup snapshots and require restart to change.
+
+Remote TLS/auth, remote pagination, connector transport retries, and connector
+credentials are N/A. Direct schema discovery, identity, cancellation, pooling,
+error redaction, dialect semantics, and live evidence are required. The bundled
+engine therefore runs non-skipping W3C, SQLite differential, cyclic-path, source
+restriction, and HTTP tests in CI. Its documented `CHAR(n)` deviations and
+unsupported D025 `ALTER TABLE ... ADD FOREIGN KEY` fixture stay visible rather
+than being relabeled as passes. This amendment does not admit any REST/cloud
+adapter and does not claim the shared R4 cost/total-result controls that remain
+open.

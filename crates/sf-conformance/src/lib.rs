@@ -21,6 +21,8 @@
 
 use std::path::Path;
 
+#[cfg(feature = "duckdb-backend")]
+pub mod duckdb;
 pub mod earl;
 pub mod graph;
 pub mod manifest;

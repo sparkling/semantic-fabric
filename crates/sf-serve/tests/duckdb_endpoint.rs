@@ -30,25 +30,34 @@ const MAPPING: &str = r#"
   rr:logicalTable [ rr:tableName "Large" ] ;
   rr:subjectMap [ rr:template "http://ex/large/{id}" ] ;
   rr:predicateObjectMap [ rr:predicate ex:largeName ; rr:objectMap [ rr:column "name" ] ] .
+
+<#Error> a rr:TriplesMap ;
+  rr:logicalTable [
+    rr:sqlQuery "SELECT error('SENSITIVE_DUCKDB_DETAIL') AS value"
+  ] ;
+  rr:subjectMap [ rr:template "http://ex/error/{value}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:errorValue ; rr:objectMap [ rr:column "value" ] ] .
 "#;
 
-fn duckdb_config(timeout: Duration) -> Arc<ServeConfig> {
-    let conn = duckdb::Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "CREATE TABLE People(id INTEGER PRIMARY KEY, name VARCHAR); \
-         INSERT INTO People VALUES (1, 'Alice'), (2, 'Bob'); \
-         CREATE TABLE Large(id BIGINT PRIMARY KEY, name VARCHAR); \
-         INSERT INTO Large SELECT i, repeat('x', 20000) FROM range(100) values_(i);",
-    )
-    .unwrap();
-    let schema = vec![
-        sf_sql::introspect::introspect_duckdb(&conn, "People").unwrap(),
-        sf_sql::introspect::introspect_duckdb(&conn, "Large").unwrap(),
-    ];
+fn duckdb_config(timeout: Duration) -> (tempfile::TempDir, Arc<ServeConfig>) {
+    let source = tempfile::tempdir().expect("create DuckDB fixture directory");
+    let path = source.path().join("source.duckdb");
+    {
+        let conn = duckdb::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE People(id INTEGER PRIMARY KEY, name VARCHAR); \
+             INSERT INTO People VALUES (1, 'Alice'), (2, 'Bob'); \
+             CREATE TABLE Large(id BIGINT PRIMARY KEY, name VARCHAR); \
+             INSERT INTO Large SELECT i, repeat('x', 20000) FROM range(100) values_(i);",
+        )
+        .unwrap();
+    }
+    let (backend, schema) = Backend::duckdb_pool_from_path(path.to_str().unwrap(), 1)
+        .expect("open restricted file-backed DuckDB source");
     let maps = sf_mapping::parse_r2rml(MAPPING).unwrap();
-    let mut config = ServeConfig::new(Backend::duckdb(conn), maps, Tbox::default(), schema);
+    let mut config = ServeConfig::new(backend, maps, Tbox::default(), schema);
     config.timeout = timeout;
-    Arc::new(config)
+    (source, Arc::new(config))
 }
 
 fn post_query(query: &str, accept: &str) -> Request<Body> {
@@ -99,7 +108,7 @@ async fn wait_for_fast_query(config: Arc<ServeConfig>) -> String {
 
 #[tokio::test]
 async fn endpoint_supports_select_ask_and_construct_over_duckdb() {
-    let config = duckdb_config(Duration::from_secs(5));
+    let (_source, config) = duckdb_config(Duration::from_secs(5));
     let (status, _headers, body) = send(
         Arc::clone(&config),
         "SELECT ?name WHERE { ?s <http://ex/name> ?name . FILTER(?name = \"Alice\") }",
@@ -140,7 +149,7 @@ async fn endpoint_supports_select_ask_and_construct_over_duckdb() {
 
 #[tokio::test]
 async fn exhausted_duckdb_pool_is_shed_with_retry_after() {
-    let config = duckdb_config(Duration::from_secs(5));
+    let (_source, config) = duckdb_config(Duration::from_secs(5));
     let first = router(Arc::clone(&config))
         .oneshot(post_query(
             "SELECT ?name WHERE { ?s <http://ex/largeName> ?name }",
@@ -164,7 +173,7 @@ async fn exhausted_duckdb_pool_is_shed_with_retry_after() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_first_row_timeout_interrupts_and_releases_duckdb() {
-    let config = duckdb_config(Duration::from_millis(20));
+    let (_source, config) = duckdb_config(Duration::from_millis(20));
     let response = router(Arc::clone(&config))
         .oneshot(post_query(
             "SELECT ?value WHERE { ?s <http://ex/slowValue> ?value }",
@@ -187,7 +196,7 @@ async fn dropped_response_body_interrupts_and_releases_duckdb() {
     // Debug builds spend noticeable time in IRI-template percent encoding before
     // the shared 16 KiB serializer emits its first frame, so keep this deadline
     // comfortably above that work; this test targets client-drop, not timeout.
-    let config = duckdb_config(Duration::from_secs(30));
+    let (_source, config) = duckdb_config(Duration::from_secs(30));
     let response = router(Arc::clone(&config))
         .oneshot(post_query(
             "SELECT ?name WHERE { ?s <http://ex/largeName> ?name }",
@@ -206,4 +215,21 @@ async fn dropped_response_body_interrupts_and_releases_duckdb() {
 
     let follow_up = wait_for_fast_query(config).await;
     assert!(follow_up.contains("Alice") && follow_up.contains("Bob"));
+}
+
+#[tokio::test]
+async fn duckdb_execution_errors_are_redacted() {
+    let (_source, config) = duckdb_config(Duration::from_secs(5));
+    let (status, _headers, body) = send(
+        config,
+        "ASK { ?s <http://ex/errorValue> ?value }",
+        "application/sparql-results+json",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(body, "query execution failed");
+    assert!(!body.contains("SENSITIVE_DUCKDB_DETAIL"));
+    assert!(!body.contains("SELECT"));
+    assert!(!body.contains("source.duckdb"));
 }

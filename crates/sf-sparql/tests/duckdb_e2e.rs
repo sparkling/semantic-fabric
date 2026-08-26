@@ -23,6 +23,20 @@ const MAPPING: &str = r#"
     rr:predicate ex:age ;
     rr:objectMap [ rr:column "age" ; rr:datatype xsd:integer ]
   ] .
+
+"#;
+
+const EDGES_MAPPING: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+
+<#Edges> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "Edges" ] ;
+  rr:subjectMap [ rr:template "http://ex/node/{src}" ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:next ;
+    rr:objectMap [ rr:template "http://ex/node/{dst}" ]
+  ] .
 "#;
 
 #[tokio::test]
@@ -104,4 +118,67 @@ async fn public_duckdb_executor_supports_bound_select_ask_and_construct() {
             "<http://ex/person/bob> <http://ex/name> \"Bob\"".to_owned(),
         ])
     );
+}
+
+#[tokio::test]
+async fn duckdb_cycle_detecting_recursion_terminates_and_deduplicates_pairs() {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE Edges(src INTEGER, dst INTEGER); \
+         INSERT INTO Edges VALUES (1, 2), (1, 2), (2, 3), (3, 1), (3, 4);",
+    )
+    .unwrap();
+    let schema = vec![sf_sql::introspect::introspect_duckdb(&conn, "Edges").unwrap()];
+    let conn = Arc::new(Mutex::new(conn));
+    let maps = sf_mapping::parse_r2rml(EDGES_MAPPING).unwrap();
+
+    let plus = parse_and_translate_with(
+        "SELECT ?start ?end WHERE { ?start <http://ex/next>+ ?end }",
+        &maps,
+        Dialect::DuckDb,
+        &Tbox::default(),
+        &schema,
+    )
+    .unwrap();
+    let sql = plus.emitted().unwrap()[0].sql.clone();
+    assert!(sql.contains("list_contains"), "{sql}");
+    assert!(sql.contains("list_append"), "{sql}");
+    assert!(sql.contains("sf_d") && sql.contains("< 256"), "{sql}");
+    let plus_rows = select_duckdb(&plus, Arc::clone(&conn)).await.unwrap();
+    let plus_pairs: BTreeSet<(String, String)> = plus_rows
+        .rows
+        .into_iter()
+        .map(|row| {
+            (
+                row[0].as_ref().unwrap().to_string(),
+                row[1].as_ref().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(plus_pairs.len(), 12, "{plus_pairs:#?}");
+
+    let star = parse_and_translate_with(
+        "SELECT ?start ?end WHERE { ?start <http://ex/next>* ?end }",
+        &maps,
+        Dialect::DuckDb,
+        &Tbox::default(),
+        &schema,
+    )
+    .unwrap();
+    let star_rows = select_duckdb(&star, conn).await.unwrap();
+    let star_pairs: BTreeSet<(String, String)> = star_rows
+        .rows
+        .into_iter()
+        .map(|row| {
+            (
+                row[0].as_ref().unwrap().to_string(),
+                row[1].as_ref().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(star_pairs.len(), 13, "{star_pairs:#?}");
+    assert!(star_pairs.contains(&(
+        "<http://ex/node/4>".to_owned(),
+        "<http://ex/node/4>".to_owned()
+    )));
 }

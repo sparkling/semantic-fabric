@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-25
+updated: 2026-08-26
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -30,7 +30,7 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 * **The mapping is the reachability allow-list:** generated SQL can reference only the tables/columns the R2RML mapping IR exposes; identifiers come from the *trusted mapping*, never user input — so neither table/column injection nor access to un-mapped data is expressible. *This bounds what is reachable; it is not authorization (ADR-0018).*
 
 ### B. Resource governance (DoS controls)
-* **Bounded recursion:** every `P+`/`P*` recursive CTE carries a depth limit **and** cycle detection (`CYCLE` on PG14+ / `USING KEY` on a DuckDB source).
+* **Bounded recursion:** every `P+`/`P*` recursive CTE carries a depth limit. An admitted DuckDB source also carries a visited-node list and refuses cyclic revisits; the SQL remains round-tripped through `sqlparser`, whose current DuckDB grammar does not support `USING KEY`.
 * **Statement timeout + result-size cap + pre-execution cost check + admission control** on every generated query — the source DB is never taken down.
 
 ### C. Result streaming (bounded memory + backpressure)
@@ -93,6 +93,44 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > bounded streaming, lifecycle/error handling, cancellation, and direct
 > conformance evidence exist. Issue #6's optional fallible/early-exit quad sink
 > is an API refinement and does not change this ADR's accepted status.
+
+> **Status correction, part 4 — DuckDB admission (2026-08-26).** Feature-gated
+> DuckDB is admitted as an embedded relational source with a narrower contract
+> than a remote provider. The opener canonicalizes an existing regular file,
+> opens it once read-only, and creates the bounded pool with `try_clone`, so a
+> running process does not follow a replaced pathname. Extension autoload,
+> external file/network access, community/unsigned extensions, and persistent
+> secrets are disabled; configuration is locked after assigning a private,
+> pool-owned spill directory. Each database instance is capped at 512 MiB, two
+> threads, and 1 GiB spill. The pool defaults to one connection, rejects zero or
+> more than eight, and fail-fast exhaustion returns `503` + `Retry-After`.
+> Decoded variable-width values and the sum of owned lexical values in a row are
+> capped at 16 MiB; this bounds adapter-owned copies, not DuckDB's internal
+> vector or blocking-operator allocation. Absolute response deadlines and body
+> drop interrupt the blocking worker before its slot is returned. Driver and
+> generated-SQL details are redacted from HTTP errors.
+> The current `duckdb-rs` Arrow iterator may still invoke Rust's process-wide
+> panic hook before the adapter's `catch_unwind` converts a late fetch failure.
+> Replacing that global hook around concurrent requests would itself be racy, so
+> deployments must treat process stderr as sensitive operational output; removing
+> this limitation is tracked against the upstream iterator rather than claimed as
+> application-level log redaction.
+>
+> The source identity and schema snapshot are frozen at startup. Serving-lane
+> DDL is impossible on the read-only shared instance; schema changes are
+> discovered only after restart/reopen and a new plan-cache lifetime. Hot drift
+> detection is not claimed. TLS, provider authentication, remote pagination,
+> transport retries, and connector credentials are **not applicable** to a local
+> embedded file; endpoint auth/TLS remain delegated to ADR-0018/ADR-0014.
+> Cancellation, pooling, schema discovery, source identity, error redaction, and
+> direct evidence remain required and are tested. The non-skipping embedded
+> lane records W3C 61/63 R2RML and 22/23 Direct Mapping, two explicit DuckDB
+> `CHAR(n)` deviations, one exact DDL-fixture skip, SQLite↔DuckDB differential
+> coverage, cyclic-path execution, and restricted file-backed HTTP receipts.
+>
+> This admission does **not** assert the unimplemented repository-wide portions
+> of R4: a cumulative response-size cap and pre-execution cost check remain open
+> shared serving work. No cloud/REST prototype is admitted by this amendment.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

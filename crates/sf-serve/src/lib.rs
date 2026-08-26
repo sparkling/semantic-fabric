@@ -153,14 +153,6 @@ impl Backend {
         Backend::Sqlite(SqlitePool::one(conn))
     }
 
-    /// Wrap a caller-owned DuckDB connection as a single-connection backend.
-    /// The caller controls that connection's configuration; CLI serving uses
-    /// [`Self::duckdb_pool_from_path`] and its restricted read-only defaults.
-    #[cfg(feature = "duckdb-backend")]
-    pub fn duckdb(conn: duckdb::Connection) -> Self {
-        Backend::DuckDb(DuckDbPool::one(conn))
-    }
-
     /// Open an existing DuckDB file as a restricted, fixed-size serve pool and
     /// return its introspected base-table schema.
     #[cfg(feature = "duckdb-backend")]
@@ -360,7 +352,7 @@ async fn compile(cfg: Arc<ServeConfig>, query: String) -> Result<Plan, Response>
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("compile task join error: {e}"),
         )),
-        Ok(Err(e)) => Err(err_text(status_for(&e), e.to_string())),
+        Ok(Err(e)) => Err(err_text(status_for(&e), public_error(&e))),
         Ok(Ok(plan)) => Ok(plan),
     }
 }
@@ -459,8 +451,8 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 Err(_) => {
                     return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
                 }
-                Ok(Err(e)) => {
-                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, format!("exec task: {e}"))
+                Ok(Err(_)) => {
+                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, "query execution failed")
                 }
                 Ok(Ok(r)) => r,
             }
@@ -497,8 +489,8 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 Err(_) => {
                     return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
                 }
-                Ok(Err(e)) => {
-                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, format!("exec task: {e}"))
+                Ok(Err(_)) => {
+                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, "query execution failed")
                 }
                 Ok(Ok(r)) => r,
             }
@@ -529,7 +521,7 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
             Ok(bytes) => ok_stream(fmt.media_type(), stream::collected_body(bytes)),
             Err(e) => err_text(StatusCode::INTERNAL_SERVER_ERROR, e),
         },
-        Err(e) => err_text(status_for(&e), e.to_string()),
+        Err(e) => err_text(status_for(&e), public_error(&e)),
     }
 }
 
@@ -646,6 +638,17 @@ fn status_for(err: &SparqlError) -> StatusCode {
         SparqlError::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
         SparqlError::Mapping(_) | SparqlError::Sql(_) | SparqlError::Core(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Preserve actionable client errors while keeping mapping, generated SQL,
+/// source-driver details, paths, and credentials out of HTTP responses.
+fn public_error(err: &SparqlError) -> String {
+    match err {
+        SparqlError::Parse(_) | SparqlError::Unsupported(_) => err.to_string(),
+        SparqlError::Mapping(_) | SparqlError::Sql(_) | SparqlError::Core(_) => {
+            "query execution failed".to_owned()
         }
     }
 }

@@ -7,9 +7,8 @@ rust-version.workspace = true
 description = "semantic-fabric command-line interface — the single binary (ADR-0006)"
 
 [features]
-# The shipped CLI exposes all four production source backends by default. Library
-# consumers can still avoid DuckDB's bundled native build with `--no-default-features`.
-default = ["duckdb-backend"]
+# DuckDB remains opt-in because it adds a bundled native engine and a distinct
+# serving admission lane.
 duckdb-backend = ["sf-serve/duckdb-backend"]
 
 [[bin]]

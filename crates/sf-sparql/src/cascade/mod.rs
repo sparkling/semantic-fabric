@@ -1565,7 +1565,7 @@ pub(crate) fn narrow_group_for_shared_term_dedup(
 
 /// Whether pooling `members` (a D2 group of ≥2 not-provably-disjoint arms,
 /// [`disjoint_groups`](crate::unfold::disjoint_groups)) positionally on
-/// PostgreSQL risks a `UNION` the engine cannot honor soundly: either a hard SQL
+/// PostgreSQL or DuckDB risks a `UNION` the engine cannot honor soundly: either a hard SQL
 /// type-resolver error, or — if papered over with a `CAST` to align the types — a
 /// silent lexical-drift wrong answer. Live-verified (PostgreSQL 17): a bare
 /// `float8::text` cast switches to scientific notation outside a plain-decimal
@@ -1576,7 +1576,10 @@ pub(crate) fn narrow_group_for_shared_term_dedup(
 /// it either (loses trailing significant digits at extreme magnitudes,
 /// live-verified). No PostgreSQL expression was found that exactly reproduces
 /// Rust's shortest-round-trip plain-decimal formatting, so a floating-point slot
-/// mismatch cannot be aligned soundly in SQL — sound refuse (ADR-0025's own
+/// mismatch cannot be aligned soundly in SQL. DuckDB likewise coerces a
+/// FLOAT/VARCHAR union slot to text, erasing the source type before R2RML
+/// reconstruction. Both use the standalone shared-seen-set path rather than
+/// pooling this shape — sound refuse (ADR-0025's own
 /// established "cannot pool soundly ⇒ 501" shape) rather than risk either
 /// failure mode (W3C R2RMLTC0012e: `IOUs.amount FLOAT` pools against
 /// `Lives.city VARCHAR` at the shared blank-node subject template's 3rd column
@@ -1588,13 +1591,14 @@ pub(crate) fn narrow_group_for_shared_term_dedup(
 /// column-count (`TermDef::columns().len()`) — a differing count is a width
 /// mismatch, a completely different code path (Mechanism B / `pool_rendered`),
 /// not this one. SQLite is dynamically typed (no such `UNION` error exists
-/// there), so this is a no-op for every other dialect.
+/// there), so this is a no-op for other dialects.
 pub(crate) fn group_has_unsafe_float_slot_mismatch(
     members: &[&Branch],
     schema: &[TableSchema],
     dialect: sf_sql::Dialect,
 ) -> bool {
-    if dialect != sf_sql::Dialect::Postgres || members.len() < 2 {
+    if !matches!(dialect, sf_sql::Dialect::Postgres | sf_sql::Dialect::DuckDb) || members.len() < 2
+    {
         return false;
     }
     let schema_map = build_schema_map(schema);

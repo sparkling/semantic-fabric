@@ -401,11 +401,11 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 ///   (NPS) is the bag exception — its `UNION ALL` hop is kept un-`DISTINCT`ed.
 /// * `ZeroOrOne` (`p?`) — the hop ∪ the reflexive `(x, x)` pairs over the active
 ///   graph's nodes (only over a single-predicate bare leaf, `unfold`-enforced).
-/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` closure: the recursive member keeps an
-///   `sf_d` depth counter, its body a `UNION` deduped on `(sf_s, sf_o, sf_d)` so a
-///   pair revisited around a cycle is NOT collapsed there — `sf_d < max_depth` is
-///   the *sole* recursion terminator (ADR-0010; SQLite has no `CYCLE` clause — the
-///   later MB-4 wave). The outer `SELECT DISTINCT` collapses the depth dimension.
+/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` closure with an `sf_d` depth
+///   backstop. DuckDB additionally carries a visited-node list and refuses a
+///   repeated target within a traversal; other dialects currently terminate at
+///   the explicit depth bound. The outer `SELECT DISTINCT` collapses the depth
+///   and cycle-detection dimensions.
 /// * `ZeroOrMore` (`P*`) — `OneOrMore` plus the reflexive `(x, x)` pairs at depth 0.
 ///
 /// The depth ints and the bound are engine constants (not query data), so — like
@@ -457,15 +457,35 @@ fn path_with_prelude(
             } else {
                 one_hop
             };
-            let recursive = format!(
-                "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
-                 FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} WHERE c.{sf_d} < {max}",
-                max = pc.max_depth
-            );
-            format!(
-                "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
-                 {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
-            )
+            if dialect == Dialect::DuckDb {
+                let sf_seen = dialect.quote_ident("sf_seen");
+                let anchor_with_seen = format!(
+                    "SELECT a.{sf_s}, a.{sf_o}, a.{sf_d}, [a.{sf_o}] AS {sf_seen} \
+                     FROM ({anchor}) a"
+                );
+                let recursive = format!(
+                    "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d}, \
+                     list_append(c.{sf_seen}, h.{sf_o}) AS {sf_seen} \
+                     FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} \
+                     WHERE c.{sf_d} < {max} AND NOT list_contains(c.{sf_seen}, h.{sf_o})",
+                    max = pc.max_depth
+                );
+                format!(
+                    "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}, {sf_seen}) \
+                     AS ({anchor_with_seen} UNION {recursive}), {cte}({sf_s}, {sf_o}) AS \
+                     (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
+                )
+            } else {
+                let recursive = format!(
+                    "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
+                     FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} WHERE c.{sf_d} < {max}",
+                    max = pc.max_depth
+                );
+                format!(
+                    "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
+                     {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
+                )
+            }
         }
     })
 }

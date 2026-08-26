@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-01
-updated: 2026-08-25
+updated: 2026-08-26
 ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
@@ -107,6 +107,14 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > requires a separate production-cloud-backend decision, governed by this ADR
 > and ADR-0010, rather than weaker invariants or a renamed prototype. Issue #10
 > is dependency hygiene and does not supersede this architecture.
+
+> **DuckDB implementation reconciliation (2026-08-26).** DuckDB now has a thin
+> `SqlBackend` adapter over its streaming Arrow cursor and a feature-gated,
+> restricted file-backed serving lane. The shared executor remains unchanged;
+> DuckDB-specific code is limited to dialect emission, Arrow/logical-type
+> decoding, interrupt lifecycle, and source admission. Its provider evidence is
+> direct and non-skipping because the engine is bundled. REST/cloud adapters
+> remain prototypes and do not inherit DuckDB's admission.
 
 ## More Information
 
