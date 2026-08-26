@@ -86,7 +86,12 @@ async function observedMetadataTreeDigest(
     const digest = await cooperativeMetadataTreeDigest(sources, options);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    if (changed || watcherFailure !== undefined) throw new Error(changedCode, {
+    // Filesystem watches are advisory and can coalesce or drop a short-lived
+    // event under CI load. Recompute after the drain so a mutation that raced
+    // the cooperative scan is still a hard failure, not a timing-dependent
+    // clean result.
+    const settledDigest = metadataTreeDigest(sources, options);
+    if (changed || watcherFailure !== undefined || digest !== settledDigest) throw new Error(changedCode, {
       cause: watcherFailure,
     });
     return digest;

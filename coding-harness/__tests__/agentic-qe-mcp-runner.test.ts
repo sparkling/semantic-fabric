@@ -204,9 +204,9 @@ async function createFixture(behavior: Behavior): Promise<Fixture> {
     type: 'module',
     bin: { 'aqe-mcp': './dist/mcp/bundle.js' },
   }));
-  await writeFile(bundlePath, fakeMcpSource(behavior, mcpObservation));
-  await writeFile(nodePath, '#!/bin/sh\nexec /usr/bin/node "$@"\n');
-  await writeFile(bwrapPath, fakeBwrapSource(boundaryObservation));
+  await writeFile(bundlePath, fakeMcpSource(behavior, mcpObservation, process.execPath));
+  await writeFile(nodePath, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
+  await writeFile(bwrapPath, fakeBwrapSource(boundaryObservation, process.execPath));
   await Promise.all([bundlePath, nodePath, bwrapPath].map(async (path) => await chmod(path, 0o700)));
   const request: ProviderFreeAgenticQeMcpRequest = {
     executable: 'aqe-mcp',
@@ -258,8 +258,8 @@ async function createFixture(behavior: Behavior): Promise<Fixture> {
   };
 }
 
-function fakeBwrapSource(observation: string): string {
-  return `#!/usr/bin/node
+function fakeBwrapSource(observation: string, nodeExecutable: string): string {
+  return `#!${nodeExecutable}
 const { spawn } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const args = process.argv.slice(2), flags = [], mounts = [], environment = {};
@@ -280,8 +280,8 @@ child.on('error', () => process.exit(127));
 `;
 }
 
-function fakeMcpSource(behavior: Behavior, observation: string): string {
-  return `#!/usr/bin/node
+function fakeMcpSource(behavior: Behavior, observation: string, nodeExecutable: string): string {
+  return `#!${nodeExecutable}
 import { writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 const behavior = ${JSON.stringify(behavior)}, messages = [];

@@ -139,7 +139,7 @@ function repository(version = CARGO_LLVM_COV_VERSION): Readonly<{
 }
 
 function fakeCargo(version: string): string {
-  return `#!/usr/bin/env node
+  return `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] !== 'llvm-cov') process.exit(91);
