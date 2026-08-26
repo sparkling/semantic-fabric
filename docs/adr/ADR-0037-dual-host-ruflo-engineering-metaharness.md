@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -272,44 +272,53 @@ Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture; framework and trusted runtime implemented; final
-programme transaction pending. The incremental harness commits through
-`947253d` establish the private supply chain, dual-host routing, patched-candidate
+Accepted architecture and framework implemented; the first eligible programme
+transaction was executed and rejected. Incremental harness commits through
+`c3834e5` establish the private supply chain, dual-host routing, patched-candidate
 transaction, exact-origin broker, mount namespace, copied credential
 capabilities, systemd cgroup-v2 quotas, bounded retry/cancellation, provider-free
-QE/SAST, protected governance inputs, and digest-chained receipts. The harness
-builds and passes 298 tests across 45 files. It has no publication or evolution
-path, and all harness source files remain under 500 lines.
+QE/SAST, protected governance inputs, digest-chained receipts, responsive frozen-
+closure checks, grounded patch repair, and normalization of model-authored hunk
+counts. The harness builds and passes 327 tests across 47 files. It has no
+publication or evolution path, and all harness source files remain under 500
+lines.
 
-Development runs 03–16 emitted failure receipts while exposing and then closing
-native runtime containment, optional-egress, long-lived-tunnel, response-bound,
-and shared Cargo-registry drift defects; none is acceptance evidence. Run 16
-proved the frozen dependency closure but its first Codex architecture invocation
-exhausted one terminal 20-minute deadline. That behavior contradicted this ADR's
-accepted one-retry rule for classified transient process failures. The runtime
-now classifies a complete native deadline exhaustion as transient and permits
-exactly one fresh same-host retry, with two 10-minute attempts preserving the
-same 20-minute worst-case lane budget. Run 17 exercised that recovery correctly,
-but both Codex architecture attempts exhausted their deadlines while the native
-subscription remained healthy for small requests. Architecture proposals now
-receive the task contract and digest-bound implementation manifest without the
-110 KB source body; implementation and admitted-candidate review retain the
-full source/diff context they require. This applies the proportional-context
-boundary without weakening patch or verifier evidence. The next run remains the
-first eligible issue-#8 acceptance transaction on the reconciled snapshot.
+Development runs 03–24 emitted fail-closed receipts while exposing and closing
+native containment, egress, response-bound, frozen-registry, timeout, and
+verifier-infrastructure defects; none is semantic acceptance evidence. Runs
+25–27 reached a healthy red baseline but exhausted pre-admission repair. Their
+evidence led to bounded rejected-patch context, a fresh base-relative repair
+contract, and strict diff normalization without weakening exact context, path,
+index, lane-tree, or expected-candidate checks. Run 28 then failed the exact-
+origin gate on an intermittent denied connection. One unchanged-controller
+repeat was permitted to classify that result; run 29 did not reproduce it.
+
+Run `issue8_dual_native_20260826_29`, under packed private controller commit
+`c3834e5`, used native `gpt-5.6-sol` and `claude-sonnet-4-6`, proved the red
+baseline, and admitted the initial patch only to
+`crates/sf-sparql/src/unfold.rs`. A post-admission verifier-directed repair was
+attempted once and exhausted its budget. The sealed programme result is
+`REJECTED`, 40/100 against the required 98, with hard gates failed and no fitness
+eligibility. Its receipt, assessment, and envelope digests are respectively
+`065134f2a0ad03a6067d31e1dde3d8fa4b7a87c73f46716e8bb2625f049b0b15`,
+`56221a498c7d08af1bab911f6723f2e6dce7dd4c8720f0b197321b65ddf3a554`, and
+`d54a598464c4bde3195ef37953078ceb74cb18c726622c072e7230486a6236c4`.
+The independently verified product commits remain valid, but their direct
+evidence cannot be substituted for a passing sealed transaction.
+
 Dirty user-owned `.mcp.json` and untracked `coding-harness/.claude/` state remain
-unstaged and are masked from model sessions; diagnostics that cannot inspect
-their effective surfaces remain `INCONCLUSIVE`, not clean and not a substitute
-for direct controls.
+unstaged and masked from model sessions. Diagnostics that cannot inspect their
+effective surfaces remain `INCONCLUSIVE`, not clean and not a substitute for
+direct controls.
 
 Its dependency-scoped Rust closure pins the historical lock, target package
 set, verified crate archives, and minimized exact sparse-index records while
 excluding the mutable shared registry source tree. Upstream MetaHarness
 diagnostics classify the repository/harness at 71/67 and
 the genome as `needs-work`; those values are non-authoritative for the reasons in
-section 8. Darwin/GEPA stays disabled. No receipt may be described as semantic
-acceptance until the real dual-host transaction, every hard gate, and the
-project-owned score threshold pass.
+section 8. Darwin/GEPA stays disabled. No receipt is semantic acceptance until
+a later explicitly authorized dual-host transaction passes every hard gate and
+the project-owned score threshold.
 
 ## Consequences
 

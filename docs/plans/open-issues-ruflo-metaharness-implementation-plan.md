@@ -1,7 +1,7 @@
 ---
-status: final-transaction-pending
+status: executed-acceptance-rejected
 date: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 owners: [integration-owner, query-semantics, dependency-governance, harness-control-plane]
 decisions: [ADR-0010, ADR-0024, ADR-0035, ADR-0036, ADR-0037]
 ---
@@ -19,21 +19,12 @@ project-owned seven-dimension evidence score is at least 98.
 The plan itself grants no issue-state, push, merge, release, or publication
 authority. The user separately authorized its local execution.
 
-## Execution outcome (2026-08-25)
+## Execution outcome (2026-08-26)
 
-The product and framework slices were executed and committed locally. Direct
-product verification passes, the trusted native runtime is implemented, and the
-programme is awaiting its final dual-host issue-#8 transaction. Run 16 passed
-the frozen dependency-closure stage, then failed closed when its first Codex
-architecture call exhausted a terminal 20-minute deadline. Native subscription
-health remained available. Deadline exhaustion is now a classified transient
-process failure with exactly one fresh same-host retry; two 10-minute attempts
-preserve the previous 20-minute worst-case lane budget. Run 17 proved that retry
-path but both full-source Codex architecture attempts exhausted their bounds.
-Architecture context is therefore reduced to the task contract plus a digest-
-bound file manifest; full declared source remains available to implementation,
-and admitted source plus the exact staged diff remain available to repair and
-review.
+The plan was executed locally. Product fixes, dispositions, ADRs, Ruflo
+coordination, and the full trusted harness were completed and committed. Direct
+product verification passes. The sealed dual-host acceptance transaction was
+also executed, but it rejected the model candidate; nothing was promoted.
 
 | Scope | Outcome | Evidence |
 |---|---|---|
@@ -42,22 +33,34 @@ review.
 | #10 SQLite link | implemented with advisory baseline | `5b8415c`; one `rusqlite 0.40.2` workspace version; `RUSTSEC-2026-0235` remains unignored |
 | #7 serving admission | locked, providers deferred | `9d709dd`; only SQLite, PostgreSQL, and MySQL are admitted |
 | #6 materialization API | deferred | no consumer-red Nova reproducer, so no speculative API was added |
-| Harness framework | implemented; final transaction pending | incremental harness commits through `936f738`; bounded timeout-retry reconciliation in progress |
+| Harness framework | implemented | incremental commits through `c3834e5`; build plus 327/327 tests across 47 files |
+| Sealed acceptance | rejected | run 29 admitted only `unfold.rs`, then exhausted one post-admission repair; 40/100, hard gates failed |
 
 Final direct gates passed: locked/offline workspace format, clippy with warnings
-denied, all-target build, workspace tests, and W3C conformance (82 adjudicated,
-zero unexpected failures, one documented deviation). The harness builds and
-passes 298 tests across 45 files before the timeout-retry reconciliation.
+denied, all-target build, issue-#8 target 4/4, differential oracle 7/7,
+differential tree 178/178, workspace 1,088 passed with 3 ignored, and W3C
+conformance with 82 adjudicated, zero unexpected failures, and one documented
+deviation. The harness builds and passes 327 tests across 47 files.
 
-The final transaction starts from a packed private controller commit and uses
-native ChatGPT and Claude subscriptions, a loopback CONNECT endpoint backed by
-the controller's exact-origin Unix-socket broker, sealed mount namespaces,
-copied credential capabilities, systemd cgroup-v2 quotas,
-frozen offline Rust inputs, task-bound LCOV/SAST, independent review, and a
-digest-chained receipt plus a receipt-bound programme envelope. Dirty user-owned
-`.mcp.json` and untracked `coding-harness/.claude/` state remain unstaged and
-masked from model sessions.
-OIA/MCP visibility remains honestly `INCONCLUSIVE`.
+Runs 24–29 exercised the final transaction from packed private controller
+commits with native ChatGPT and Claude subscriptions, exact-origin brokerage,
+sealed mount namespaces, copied credential capabilities, systemd cgroup-v2
+quotas, frozen offline Rust inputs, task-bound LCOV/SAST, bounded repair, and
+sealed receipts. Run 24 exposed event-loop starvation in the frozen-closure
+check. Runs 25–27 failed pre-admission repair and drove bounded rejected-patch
+grounding plus strict diff normalization. Run 28 failed an intermittent origin
+policy check; one identical-controller repeat did not reproduce it. Final run
+`issue8_dual_native_20260826_29` used controller `c3834e5`, proved the red
+baseline, admitted the initial patch only to `crates/sf-sparql/src/unfold.rs`,
+then exhausted one post-admission verifier-directed repair. Its result is
+`REJECTED`, 40/100 against 98, with no fitness eligibility. Receipt, assessment,
+and envelope digests are `065134f2a0ad03a6067d31e1dde3d8fa4b7a87c73f46716e8bb2625f049b0b15`,
+`56221a498c7d08af1bab911f6723f2e6dce7dd4c8720f0b197321b65ddf3a554`, and
+`d54a598464c4bde3195ef37953078ceb74cb18c726622c072e7230486a6236c4`.
+
+Dirty user-owned `.mcp.json` and untracked `coding-harness/.claude/` state remain
+unstaged and masked from model sessions. OIA/MCP visibility remains honestly
+`INCONCLUSIVE`.
 
 The envelope derives diagnostic status from the parsed native Ruflo score
 snapshot in `coding-harness/config/metaharness-diagnostics.json`; the snapshot
@@ -74,7 +77,8 @@ the former upstream 98 criterion with the project-owned rubric; failed upstream
 hard constraints or degraded execution still fail closed.
 
 Darwin/GEPA and AVO remain ineligible. No issue was closed, no PR was merged,
-and nothing was pushed, published, deployed, or promoted.
+and nothing was pushed, published, deployed, or promoted. A future rerun needs
+explicit authorization and must satisfy the unchanged ADR-0037 hard gates.
 
 ## Frozen planning baseline
 
