@@ -1,6 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-26
+updated: 2026-08-27
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -53,7 +54,12 @@ R2RML remains the stable normative mapping baseline.
 
 Adopt the issue-independent programme in
 [`docs/plans/sota-application-completion-programme.md`](../plans/sota-application-completion-programme.md)
-as the proposed route to a charter-complete release.
+as the accepted route to a charter-complete release.
+
+This decision was accepted on 2026-08-27 by maintainer instruction to complete
+the programme with its retained cross-RDBMS federation charter. Acceptance does
+not claim implementation: the reusable-harness prerequisite and M0 foundation
+are in progress, and M1–M7 remain gated by their executable evidence.
 
 ### 1. Definition of complete
 
@@ -152,16 +158,23 @@ Claude Code subscriptions, bounded critique/repair, independent verification,
 and digest-chained receipts. One integration owner promotes verified slices in
 dependency order. No OpenRouter or indirect provider transport is permitted.
 
+Native subscription invocations have no artificial dollar ceiling. They remain
+bounded by task-declared invocation and turn limits, wall-clock and output
+limits, concurrency, first-party provider rate-limit backoff, and receipts. The
+programme must not set or consume provider API keys. Native-provider exhaustion
+or unavailability fails the affected gate closed and never authorizes an
+indirect fallback.
+
 Accepted ADR status means the decision is adopted; it does not imply the code is
 implemented. Each affected ADR must gain a dated implementation-status note as
 its increment lands. ADR-0014's previously deferred areas graduate into this
-programme, but this proposed ADR does not itself mark them implemented.
+programme, but this ADR does not itself mark them implemented.
 
 ## Acceptance
 
-This ADR may move from `proposed` to `accepted` only after maintainers confirm
-that cross-RDBMS federation remains a completion requirement and approve the
-programme gates. It moves to `implemented` only when:
+The acceptance condition was satisfied on 2026-08-27 when the maintainer
+directed completion of this programme without removing its cross-RDBMS
+federation requirement or gates. It moves to `implemented` only when:
 
 - every programme hard gate is green on an immutable release candidate;
 - the charter-complete two-source and three-admitted-backend matrices pass;

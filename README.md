@@ -181,7 +181,7 @@ cargo run -p sf-cli -- conformance
 ## Application-completion programme
 
 The issue-independent [SOTA completion programme](docs/plans/sota-application-completion-programme.md),
-governed by proposed
+governed by accepted
 [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md), derives
 the remaining work from the charter, source, accepted ADRs, tests, CI, standards,
 and measured benchmarks. Its verdict is evolutionary, not a compiler rewrite:
@@ -226,8 +226,11 @@ plane governed by
 [ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md). It
 uses native ChatGPT/Codex and Claude Code subscriptions, isolated candidate and
 evaluator worktrees, frozen inputs, exact-origin egress, bounded repair,
-independent review, provider-free QE/SAST, and digest-chained receipts. It has
-no commit, push, publication, deployment, or promotion authority.
+independent review, provider-free QE/SAST, and digest-chained receipts. Native
+subscription calls have no artificial dollar ceiling, but retain task, turn,
+time, output, concurrency, rate-limit, and receipt bounds. The harness has no
+commit, push, publication, deployment, or promotion authority and never uses
+provider API keys or OpenRouter.
 
 Its schema-v2 acceptance contract is reusable across programme work items: the
 protected task declares its objective, invariants, exclusions, routing metadata,
@@ -331,9 +334,8 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 35 records: 32 accepted, two
-proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md) and
-[ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md)), and one
+The canonical [ADR corpus](docs/adr/) contains 35 records: 33 accepted, one
+proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)), and one
 superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note

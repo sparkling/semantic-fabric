@@ -1,7 +1,8 @@
 # SOTA application-completion programme
 
-- **Status:** Proposed
+- **Status:** In progress
 - **Date:** 2026-08-26
+- **Updated:** 2026-08-27
 - **Decision record:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md)
 
 **Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark
@@ -319,7 +320,7 @@ QA gate:
 
 ## Ruflo and MetaHarness execution model
 
-For M1–M7 code changes, use the ADR-0037 control plane proportionally:
+For M0–M7 code changes, use the ADR-0037 control plane proportionally:
 
 1. **Recall and route.** Search repository and user Ruflo memory; freeze task,
    standards, evaluator and route snapshots. Native subscription hosts only.
@@ -339,6 +340,14 @@ For M1–M7 code changes, use the ADR-0037 control plane proportionally:
 7. **Learn carefully.** Persist verified patterns/outcomes. Diagnostics remain
    read-only signals. No evolution until the 5+5 holdout rule and reward-hack
    controls pass.
+
+Native Codex/ChatGPT and Claude subscription invocations have no artificial
+dollar ceiling. They remain bounded by the task's declared invocation and turn
+limits, wall-clock and output limits, concurrency, first-party provider
+rate-limit backoff, and digest-chained receipts. Do not set or consume provider
+API keys and do not route through OpenRouter. Native-provider exhaustion or
+unavailability fails the affected gate closed; it never authorizes an indirect
+fallback.
 
 Small documentation/status-only corrections use the same truth and review rules
 without paying for an irrelevant full harness transaction. Product behavior,
