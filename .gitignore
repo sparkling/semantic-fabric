@@ -66,6 +66,8 @@ docs/handover/
 /.claude-flow/cjs-intelligence-signals.json
 /.claude-flow/memory.rvf
 /.claude-flow/memory.rvf.meta
+/.claude-flow/memory-package.json
+/.claude-flow/swarm/
 /.claude-flow/agents.json
 /.claude-flow/coordination/
 /.claude-flow/memory/
