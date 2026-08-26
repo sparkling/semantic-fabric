@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-25
+updated: 2026-08-26
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -93,6 +93,15 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > bounded streaming, lifecycle/error handling, cancellation, and direct
 > conformance evidence exist. Issue #6's optional fallible/early-exit quad sink
 > is an API refinement and does not change this ADR's accepted status.
+
+> **Status correction, part 4 (2026-08-26, completion audit).** R3/R4 remain
+> partially implemented on the admitted serving surface. Recursive closures
+> silently stop at a hard-coded depth of 256 without cycle collapse; compilation
+> is outside the request timeout and has no admission budget; there is no common
+> result-row/result-byte cap, cost pre-check, or source-native statement timeout
+> across all three backends. Proposed ADR-0038 makes exact-or-explicit path
+> behavior and a single ingress-to-serialization `QueryBudget` the first product
+> gates. Do not infer those guarantees from this ADR's accepted status today.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

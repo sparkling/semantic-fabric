@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-26
 tags: [crate-layout, cargo-workspace, execution, performance, push-down, semi-join, semi-join-cost, term-generation, cost-driven, streaming, bounded-memory, rayon, tokio]
 supersedes: []
 depends-on:
@@ -207,6 +208,15 @@ Term generation runs once per result row, and its dominant cost is **small-objec
 * GTFS-Madrid OBDA-track scenarios complete with **constant engine memory** under growing scale factor, measured via `sf-bench` (ADR-0005).
 * Term generation emits constants by reference and writes via `generate_into` — an allocation-count test over a fixed result size shows no per-row owned `Term` on the CONSTRUCT path.
 * The cross-source semi-join planner selects side, reducer form, and skip-vs-reduce from catalog/sketch estimates — unit-tested against synthetic cardinalities (small, large, and ≈ 1-reduction).
+
+> **Implementation reconciliation (2026-08-26).** The last confirmation item is
+> unit-tested design, not a production execution path: the public server has one
+> backend and `plan_semijoin` has no non-test caller. The universal bounded-memory
+> wording is also ahead of the implementation for global ORDER BY, Rust grouping,
+> multi-branch solution dedup, and some CONSTRUCT dedup paths, which retain
+> source-sized collections in `exec_core.rs`. Proposed ADR-0038 keeps this
+> architecture but requires composite SQL or a bounded coordinator operator—and
+> an explicit unsupported result until each shape has that proof.
 
 ## More Information
 * **Architecture:** ADR-0003. **Substrate:** ADR-0004. **Rewriting + cascade:** ADR-0007. **Datatype/dialect:** ADR-0015. **Reasoning:** ADR-0008. **Conformance/bench/oracle:** ADR-0005. **Governance + streaming:** ADR-0010. **Test strategy:** ADR-0012.

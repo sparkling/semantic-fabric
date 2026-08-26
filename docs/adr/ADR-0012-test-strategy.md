@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-26
 tags: [testing, unit, integration, property-based, fuzzing, snapshot, ci, security]
 supersedes: []
 depends-on:
@@ -12,6 +13,13 @@ implements:
 ---
 
 # Test strategy — the inner layers below conformance
+
+> **Implementation status (2026-08-26): partially implemented.** Unit,
+> integration, fixed differential/adversarial, W3C, and benchmark coverage are
+> substantial. The required `proptest`, continuous `cargo-fuzz`, `insta` SQL
+> snapshots, generated MR1/NoREC corpus, durable LCOV, mutation threshold, and
+> benchmark regression gates are absent. Proposed ADR-0038 milestone M4 turns
+> these accepted rules into fail-closed product/release evidence.
 
 ## Context and Problem Statement
 

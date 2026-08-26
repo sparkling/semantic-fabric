@@ -78,6 +78,14 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 > abstraction. Cloud/REST prototypes remain unadmitted under ADR-0024 and
 > ADR-0036; this does not broaden the relational-only charter.
 
+> **Cross-source reconciliation (2026-08-26).** The admitted runtime currently
+> owns exactly one relational source per process; the semi-join cost model has no
+> production caller. Cross-RDBMS federation therefore remains accepted scope,
+> not shipped capability. Proposed ADR-0038 sequences the `SourceId`, source
+> registry, federated physical plan, bounded coordinator, and evidence needed to
+> make this v1 claim true. Until then, capability material must say
+> “single-source runtime.”
+
 ## More Information
 
 - **Charter:** ADR-0001. **Architecture:** ADR-0003. **Execution/crates:** ADR-0006. **Rewriting:** ADR-0007. **Reasoning:** ADR-0008. **Conformance/bench:** ADR-0005.

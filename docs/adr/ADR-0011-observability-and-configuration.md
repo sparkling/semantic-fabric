@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
+updated: 2026-08-26
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -12,6 +13,12 @@ implements:
 ---
 
 # Observability & configuration
+
+> **Implementation status (2026-08-26): accepted, not implemented.** The
+> production crates contain no `tracing`/metrics/OTLP stack or layered validated
+> configuration model, and the server exposes no metrics/readiness lifecycle.
+> Proposed ADR-0038 promotes this entire decision into milestones M3/M5 with
+> redaction, bounded-cardinality, overhead, readiness, and reload gates.
 
 ## Context and Problem Statement
 

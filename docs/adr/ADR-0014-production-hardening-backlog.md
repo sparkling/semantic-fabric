@@ -1,6 +1,7 @@
 ---
 status: proposed
 date: 2026-06-26
+updated: 2026-08-26
 tags: [production-hardening, backlog, reliability, operability, security-edge, horizontal-scale, lifecycle, deferred, stub]
 supersedes: []
 depends-on:
@@ -13,6 +14,12 @@ implements:
 # Production-hardening backlog (acknowledged-deferred)
 
 > **STUB / TRACKING RECORD** (2026-06-26) — these production dimensions are real but (a) do not gate the engine build and (b) are mostly deployment/operational, actionable only once the engine runs. Recorded here so they are **tracked, not forgotten**; each graduates to its own ADR when actionable.
+
+> **Graduation note (2026-08-26).** The virtualizer and public three-backend
+> serving path now run, so these dimensions are actionable. Proposed ADR-0038
+> sequences them as application-completion milestones and hard gates. This record
+> stays `proposed`; the graduation note neither accepts ADR-0038 nor marks any
+> item below implemented.
 
 ## Context and Problem Statement
 
@@ -50,3 +57,4 @@ No verification gates apply while these dimensions remain deferred; conformance 
 
 ## More Information
 * **Promoted-out (now their own ADRs):** ADR-0010 (security core), ADR-0011 (observability), ADR-0012 (testing), ADR-0017 (provenance), ADR-0018 (security edge).
+* **Completion programme:** proposed ADR-0038 and `docs/plans/sota-application-completion-programme.md`.

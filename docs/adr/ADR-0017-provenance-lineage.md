@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-26
 tags: [provenance, lineage, prov-o, query-time, rdf-1.2, source-mapping]
 supersedes: []
 depends-on:
@@ -10,6 +11,12 @@ implements:
 ---
 
 # Provenance & lineage — query-time
+
+> **Implementation status (2026-08-26): accepted, not implemented.** No
+> production query path emits mapping/source/row-key lineage or PROV-O. Proposed
+> ADR-0038 milestone M5 retains query-time, non-persisted provenance but binds it
+> to immutable runtime snapshots, source identity, security policy, and request
+> budgets before it is advertised.
 
 ## Context and Problem Statement
 

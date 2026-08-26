@@ -177,6 +177,22 @@ cargo test --workspace
 cargo run -p sf-cli -- conformance
 ```
 
+## Application-completion programme
+
+The issue-independent [SOTA completion programme](docs/plans/sota-application-completion-programme.md),
+governed by proposed
+[ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md), derives
+the remaining work from the charter, source, accepted ADRs, tests, CI, standards,
+and measured benchmarks. Its verdict is evolutionary, not a compiler rewrite:
+make every advertised global operator bounded, then add source identity and a
+federated physical plan so the accepted cross-RDBMS charter becomes real.
+
+The first release blockers are silent 256-hop property-path truncation,
+source-sized Rust state in some global sort/group/dedup paths, incomplete total
+request governance, and a non-reproducible/broad production dependency closure.
+A hardened single-source build is an interim release profile; it is not the
+charter-complete application while cross-RDBMS federation remains in scope.
+
 ## Open-issue remediation closeout
 
 [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md) and
@@ -192,13 +208,15 @@ record the complete decisions and evidence.
 | [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Closed: federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added; green CI and Pages `8b66428` |
 
 The `mysql_async 0.37.0` upgrade resolves the `lru 0.16.4` unsoundness warning,
-and a fresh resolution selects fixed `h2`. `cargo audit` is a blocking CI gate.
-Its narrowly documented `RUSTSEC-2026-0235` exception is limited to the unused
-optional `rust_decimal` `rkyv` feature: the workspace feature tree proves it is
-not activated, and the current upstream `^0.7` requirement cannot admit the
-fixed `rkyv >=0.8.17`. The exception must be removed when that upstream
-requirement is fixed. Cloud adapters are not relabelled production-ready merely
-because mocked happy paths exist.
+and a fresh resolution selects fixed `h2`. `cargo audit` is a blocking CI gate
+and currently passes its configured policy. That policy has six documented
+exceptions: two `quick-xml` denial-of-service advisories in the pinned RDF/XML
+stack, three `rustls-webpki` advisories in the SQL Server-only `tiberius` path,
+and `RUSTSEC-2026-0235` in an unused optional `rust_decimal` archive feature.
+They are accepted exposure, not closure, and ADR-0038 requires owner/expiry/
+reachability evidence and removal when upstream constraints permit. Cloud
+adapters are not relabelled production-ready merely because mocked happy paths
+exist.
 
 ## Engineering MetaHarness status
 
@@ -256,13 +274,15 @@ claim. It is a small localhost workload, not a production sizing result.
 | Cloud/REST adapters | Prototype/library-only; Databricks, AWS Athena, Snowflake, BigQuery, Trino/Presto and other adapters are not admitted to `serve` |
 | Property paths | Broad support; explicit `501` residuals remain for bound-endpoint, nested-closure, shape-mismatched, and some reflexive composite forms |
 | Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
-| Federation | Cross-RDBMS planning is in scope; issuing remote SPARQL `SERVICE` queries is not. semantic-fabric can itself be used as a private SERVICE endpoint |
+| Federation | Cross-RDBMS planning is in scope but not implemented: the current runtime owns one source and the semi-join planner has no production caller. External SPARQL `SERVICE` remains excluded |
 | Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
-| Production hardening | Reliability, deployment-edge security, packaging, horizontal scale, hot reload, schema-drift detection, and result caching remain tracked in proposed ADR-0014 |
-| Accepted designs not wired | Observability/configuration (ADR-0011), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | **Release-blocking:** fresh-lock `cargo audit` fails on `RUSTSEC-2026-0235`; `RUSTSEC-2026-0253` remains visible as an unsoundness warning. Neither is ignored |
+| Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
+| Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
+| Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
+| Dependency security | `cargo audit` passes its configured gate; six documented advisory exceptions and three unmaintained-crate warnings remain release debt. The application `Cargo.lock` is currently ignored, so clean resolutions are not yet reproducible |
 
-Unsupported capabilities fail explicitly rather than returning wrong answers.
+Unsupported shapes are designed to fail explicitly. The current 256-hop path
+truncation violates that invariant and is release-blocking until fixed.
 
 ## Workspace
 
@@ -279,10 +299,13 @@ Unsupported capabilities fail explicitly rather than returning wrong answers.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 34 records: 32 accepted, one
-proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)), and one
+The canonical [ADR corpus](docs/adr/) contains 35 records: 32 accepted, two
+proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md) and
+[ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md)), and one
 superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
+`accepted` means the decision is adopted; the dated implementation-status note
+and direct evidence say whether it has shipped.
 
 | Area | Records |
 |---|---|
@@ -290,7 +313,7 @@ replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Open-issue remediation and engineering control plane | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md), [ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md) |
+| Remediation, engineering control plane, application completion | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md), [ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md), [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative
