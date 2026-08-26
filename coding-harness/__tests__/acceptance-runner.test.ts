@@ -97,7 +97,23 @@ describe('issue #8 acceptance gates', () => {
       commands: [buildEvidence('0'.repeat(40), 2)],
       artifactDigests: {},
     })).rejects.toThrow('HARNESS_CANDIDATE_REFERENCE_MISMATCH');
-    const mutation = await runner.mutations({
+    const verifierOnlyRunner = new AcceptanceRunner({
+      task: {
+        ...task,
+        schemaVersion: 3,
+        candidateOracle: { mode: 'verifier-only' },
+      },
+      worktrees,
+      config: SECURE_HARNESS_CONFIG,
+      offlineIsolator: isolator,
+      sourceEnvironment: { PATH: process.env.PATH },
+    });
+    await expect(verifierOnlyRunner.mutations({
+      candidate: { commit, tree: '0'.repeat(40) },
+      commands: [buildEvidence('0'.repeat(40), 2)],
+      artifactDigests: {},
+    })).rejects.toThrow('HARNESS_MUTATION_STALE_VERIFIER_IDENTITY');
+    const mutation = await verifierOnlyRunner.mutations({
       candidate: { commit, tree },
       commands: [buildEvidence(tree, 2)],
       artifactDigests: {},

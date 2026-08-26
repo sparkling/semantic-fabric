@@ -27,6 +27,37 @@ function cloneTask(): Record<string, any> {
   return structuredClone(taskInput());
 }
 
+function verifierOnlyTaskInput(): Record<string, any> {
+  const input = cloneTask();
+  input.schemaVersion = 3;
+  input.taskId = 'verifier_only_task_0001';
+  input.workItem = 'completion-programme:reproducibility';
+  input.candidateOracle = { mode: 'verifier-only' };
+  delete input.qeProfiles;
+  input.rust = { frozenLockSha256: 'a'.repeat(64) };
+  input.qe = {
+    profiles: [
+      { profile: 'sast', collector: 'agentic-qe-sast' },
+      {
+        profile: 'lcov-gap',
+        collector: 'rust-lcov',
+        packageName: 'sf-conformance',
+        testTarget: 'issue_8_binding_pruning',
+      },
+    ],
+  };
+  input.evidence = {
+    requiredAdmittedPaths: ['crates/sf-sparql/src/unfold.rs'],
+    generatedOutputs: [{
+      stage: 'regression',
+      evidenceId: 'workspace-tests-earl',
+      commandId: 'workspace-tests',
+      workspacePaths: ['tests/w3c/rdb2rdf/earl-semantic-fabric-direct.ttl'],
+    }],
+  };
+  return input;
+}
+
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const rustProfile: RustOfflineProfile = Object.freeze({
@@ -149,6 +180,25 @@ describe('programme acceptance task', () => {
     expect(task.candidateOracle.mode).toBe('exact-reference');
   });
 
+  it('accepts a verifier-only oracle without a pre-known candidate identity', () => {
+    const input = verifierOnlyTaskInput();
+
+    const task = parseAcceptanceTask(input, SECURE_HARNESS_CONFIG);
+
+    expect(task.schemaVersion).toBe(3);
+    if (task.schemaVersion !== 3) throw new Error('expected v3 task');
+    expect(task.candidateOracle).toEqual({ mode: 'verifier-only' });
+    expect(task.rust.frozenLockSha256).toBe('a'.repeat(64));
+    expect(task.qe.profiles.map(({ profile }) => profile)).toEqual(['lcov-gap', 'sast']);
+    expect(task.evidence.requiredAdmittedPaths).toEqual(['crates/sf-sparql/src/unfold.rs']);
+    expect(task.evidence.generatedOutputs).toEqual([{
+      stage: 'regression',
+      evidenceId: 'workspace-tests-earl',
+      commandId: 'workspace-tests',
+      workspacePaths: ['tests/w3c/rdb2rdf/earl-semantic-fabric-direct.ttl'],
+    }]);
+  });
+
   it('deep-clones, binds, and freezes every acceptance command for the Rust profile', () => {
     const parsedTask = parseAcceptanceTask(taskInput(), SECURE_HARNESS_CONFIG);
     const parsedSnapshot = structuredClone(parsedTask);
@@ -202,6 +252,16 @@ describe('programme acceptance task', () => {
     const overlap = cloneTask();
     overlap.implementationPaths = [...overlap.evaluatorPaths];
     expect(() => parseAcceptanceTask(overlap, SECURE_HARNESS_CONFIG)).toThrow(/must not overlap/);
+
+    for (const protectedPath of ['.github/workflows/ci.yml', 'Cargo.lock']) {
+      const governed = cloneTask();
+      governed.implementationPaths = [protectedPath];
+      governed.artifactPaths = [protectedPath];
+      governed.commands.mutation.forEach((mutation: Record<string, unknown>) => {
+        mutation.path = protectedPath;
+      });
+      expect(() => parseAcceptanceTask(governed, SECURE_HARNESS_CONFIG)).toThrow(/protected paths/);
+    }
   });
 
   it('rejects weak red signatures, duplicate mutations, and empty gate groups', () => {
@@ -221,6 +281,8 @@ describe('programme acceptance task', () => {
 
   it('binds each mutation to one exact reference-candidate transform back to baseline code', () => {
     const task = parseAcceptanceTask(taskInput(), SECURE_HARNESS_CONFIG);
+    expect(task.candidateOracle.mode).toBe('exact-reference');
+    if (task.candidateOracle.mode !== 'exact-reference') throw new Error('expected exact reference');
     for (const mutation of task.commands.mutation) {
       const referenceCandidate = execFileSync(
         'git',
@@ -267,12 +329,64 @@ describe('programme acceptance task', () => {
       (task: Record<string, any>) => { task.policy.nativeHosts = ['codex']; },
       (task: Record<string, any>) => { task.authority = 'promotion-authority'; },
       (task: Record<string, any>) => { task.evolutionEligible = true; },
-      (task: Record<string, any>) => { task.candidateOracle.mode = 'verifier-only'; },
       (task: Record<string, any>) => { task.routing.difficulty = 1.1; },
       (task: Record<string, any>) => { task.qeProfiles = ['unknown-qe']; },
       (task: Record<string, any>) => { task.qeProfiles = ['quality-contract']; },
     ]) {
       const input = cloneTask();
+      mutate(input);
+      expect(() => parseAcceptanceTask(input, SECURE_HARNESS_CONFIG)).toThrow();
+    }
+
+    for (const candidateOracle of [
+      { mode: 'verifier-only' },
+      { mode: 'verifier-only', evaluatorSource: 'reference-candidate' },
+      { mode: 'verifier-only', evaluatorSource: 'controller-commit', candidate: {} },
+      { mode: 'exact-reference' },
+      { mode: 'unknown', evaluatorSource: 'controller-commit' },
+    ]) {
+      const input = cloneTask();
+      input.candidateOracle = candidateOracle;
+      expect(() => parseAcceptanceTask(input, SECURE_HARNESS_CONFIG)).toThrow();
+    }
+
+    const widenedV2 = cloneTask();
+    widenedV2.candidateOracle = { mode: 'verifier-only' };
+    expect(() => parseAcceptanceTask(widenedV2, SECURE_HARNESS_CONFIG))
+      .toThrow(/schemaVersion 3/);
+  });
+
+  it('rejects task-controlled QE policy and generated-output boundary escapes', () => {
+    const invalidVariants = [
+      (task: Record<string, any>) => { task.qe.profiles[0].collector = 'task-selected-command'; },
+      (task: Record<string, any>) => { task.qe.profiles[1].testTarget = '../unsafe'; },
+      (task: Record<string, any>) => { task.qe.profiles.push({ profile: 'sast', collector: 'agentic-qe-sast' }); },
+      (task: Record<string, any>) => { task.evidence.generatedOutputs[0].commandId = 'issue8-public'; },
+      (task: Record<string, any>) => { task.evidence.generatedOutputs[0].evidenceId = 'Invalid_ID'; },
+      (task: Record<string, any>) => {
+        task.evidence.generatedOutputs.push({
+          ...task.evidence.generatedOutputs[0],
+          evidenceId: 'duplicate-producer',
+        });
+      },
+      (task: Record<string, any>) => {
+        task.evidence.requiredAdmittedPaths = ['crates/sf-core/src/lib.rs'];
+      },
+      (task: Record<string, any>) => {
+        task.implementationPaths.push('crates/sf-core/src/lib.rs');
+        task.evidence.requiredAdmittedPaths.push('crates/sf-core/src/lib.rs');
+      },
+      (task: Record<string, any>) => {
+        task.evidence.generatedOutputs[0].workspacePaths = ['crates/sf-sparql/src/unfold.rs'];
+      },
+      (task: Record<string, any>) => {
+        task.evidence.generatedOutputs[0].workspacePaths = ['.github/workflows/ci.yml'];
+      },
+      (task: Record<string, any>) => { task.rust.frozenLockSha256 = 'not-a-digest'; },
+      (task: Record<string, any>) => { task.qeProfiles = ['sast']; },
+    ];
+    for (const mutate of invalidVariants) {
+      const input = verifierOnlyTaskInput();
       mutate(input);
       expect(() => parseAcceptanceTask(input, SECURE_HARNESS_CONFIG)).toThrow();
     }

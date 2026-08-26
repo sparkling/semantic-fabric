@@ -19,17 +19,32 @@ import {
   bindRustOfflineCommand,
   type RustOfflineProfile,
 } from './rust-sandbox.js';
+import {
+  RUNTIME_PROTECTED_PATHS,
+  parseLegacyQeProfiles,
+  parseTaskGeneratedEvidencePolicy,
+  parseTaskQePolicy,
+  parseTaskRustPolicy,
+  qeProfilesFromBindings,
+  type TaskGeneratedEvidencePolicy,
+  type TaskQePolicy,
+  type TaskRustEvidencePolicy,
+} from './acceptance-task-v3.js';
 
 const GIT_OBJECT_ID = /^[a-f0-9]{40}$/;
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,128}$/;
 const TEST_NAME = /^[A-Za-z_][A-Za-z0-9_:]*$/;
 const REQUIRED_NATIVE_HOSTS = ['codex', 'claude-code'] as const;
-const QE_PROFILES = new Set<AgenticQeProfile>(['lcov-gap', 'sast']);
 
 export interface GitObjectIdentity {
   commit: string;
   tree: string;
 }
+
+export type ExactReferenceCandidateOracle = Readonly<{ mode: 'exact-reference'; candidate: GitObjectIdentity }>;
+export type VerifierOnlyCandidateOracle = Readonly<{ mode: 'verifier-only' }>;
+
+export type CandidateOracle = ExactReferenceCandidateOracle | VerifierOnlyCandidateOracle;
 
 export interface NamedAcceptanceCommand {
   commandId: string;
@@ -44,8 +59,7 @@ export interface MutationAcceptanceCommand {
   command: StructuredCommand;
 }
 
-export interface AcceptanceTask {
-  schemaVersion: 2;
+interface AcceptanceTaskCommon {
   taskId: string;
   workItem: string;
   objective: string;
@@ -53,10 +67,6 @@ export interface AcceptanceTask {
   exclusions: string[];
   authority: typeof DEVELOPMENT_AUTHORITY;
   baseline: GitObjectIdentity;
-  candidateOracle: {
-    mode: 'exact-reference';
-    candidate: GitObjectIdentity;
-  };
   evaluatorPaths: string[];
   implementationPaths: string[];
   artifactPaths: string[];
@@ -84,19 +94,43 @@ export interface AcceptanceTask {
     tags: string[];
     difficulty: number;
   };
-  qeProfiles: AgenticQeProfile[];
   evolutionEligible: false;
 }
 
+export interface AcceptanceTaskV2 extends AcceptanceTaskCommon {
+  schemaVersion: 2;
+  candidateOracle: ExactReferenceCandidateOracle;
+  qeProfiles: AgenticQeProfile[];
+}
+
+export interface AcceptanceTaskV3 extends AcceptanceTaskCommon {
+  schemaVersion: 3;
+  candidateOracle: CandidateOracle;
+  rust: TaskRustEvidencePolicy;
+  qe: TaskQePolicy;
+  evidence: TaskGeneratedEvidencePolicy;
+}
+
+export type AcceptanceTask = AcceptanceTaskV2 | AcceptanceTaskV3;
+
 export function parseAcceptanceTask(value: unknown, config: HarnessConfig): AcceptanceTask {
   const input = asRecord(value, 'acceptance task');
-  assertExactKeys(input, [
+  const commonKeys = [
     'schemaVersion', 'taskId', 'workItem', 'objective', 'invariants', 'exclusions',
     'authority', 'baseline', 'candidateOracle',
     'evaluatorPaths', 'implementationPaths', 'artifactPaths', 'tools', 'redBaseline',
-    'commands', 'policy', 'routing', 'qeProfiles', 'evolutionEligible',
-  ], 'acceptance task');
-  if (input.schemaVersion !== 2) throw new TypeError('acceptance task.schemaVersion must be 2');
+    'commands', 'policy', 'routing', 'evolutionEligible',
+  ] as const;
+  if (input.schemaVersion !== 2 && input.schemaVersion !== 3) {
+    throw new TypeError('acceptance task.schemaVersion must be 2 or 3');
+  }
+  assertExactKeys(
+    input,
+    input.schemaVersion === 2
+      ? [...commonKeys, 'qeProfiles']
+      : [...commonKeys, 'rust', 'qe', 'evidence'],
+    'acceptance task',
+  );
   if (input.authority !== DEVELOPMENT_AUTHORITY) {
     throw new TypeError('acceptance task.authority cannot grant promotion');
   }
@@ -110,15 +144,21 @@ export function parseAcceptanceTask(value: unknown, config: HarnessConfig): Acce
   const invariants = parsePromptList(input.invariants, 'acceptance task.invariants');
   const exclusions = parsePromptList(input.exclusions, 'acceptance task.exclusions');
   const baseline = parseGitIdentity(input.baseline, 'acceptance task.baseline');
-  const candidateOracle = parseCandidateOracle(input.candidateOracle);
-  if (baseline.commit === candidateOracle.candidate.commit
-    || baseline.tree === candidateOracle.candidate.tree) {
+  const candidateOracle = parseCandidateOracle(input.candidateOracle, input.schemaVersion);
+  if (candidateOracle.mode === 'exact-reference'
+    && (baseline.commit === candidateOracle.candidate.commit
+      || baseline.tree === candidateOracle.candidate.tree)) {
     throw new TypeError('acceptance task baseline and reference candidate identities must differ');
   }
 
   const evaluatorPaths = parsePaths(input.evaluatorPaths, 'acceptance task.evaluatorPaths');
   const implementationPaths = parsePaths(input.implementationPaths, 'acceptance task.implementationPaths');
   assertDisjointPaths(evaluatorPaths, implementationPaths, 'evaluator and implementation paths must not overlap');
+  assertDisjointPaths(
+    implementationPaths,
+    [...config.requiredProtectedPaths, ...RUNTIME_PROTECTED_PATHS],
+    'implementation paths must not overlap protected paths',
+  );
   const artifactPaths = parsePaths(input.artifactPaths, 'acceptance task.artifactPaths');
   if (artifactPaths.some((path) => !implementationPaths.includes(path))) {
     throw new TypeError('acceptance task artifact must be a tracked implementation path');
@@ -155,9 +195,7 @@ export function parseAcceptanceTask(value: unknown, config: HarnessConfig): Acce
 
   const policy = parsePolicy(input.policy);
   const routing = parseRouting(input.routing);
-  const qeProfiles = parseQeProfiles(input.qeProfiles);
-  return deepFreeze({
-    schemaVersion: 2,
+  const common = {
     taskId,
     workItem,
     objective,
@@ -165,7 +203,6 @@ export function parseAcceptanceTask(value: unknown, config: HarnessConfig): Acce
     exclusions,
     authority: DEVELOPMENT_AUTHORITY,
     baseline,
-    candidateOracle,
     evaluatorPaths,
     implementationPaths,
     artifactPaths,
@@ -174,9 +211,34 @@ export function parseAcceptanceTask(value: unknown, config: HarnessConfig): Acce
     commands,
     policy,
     routing,
-    qeProfiles,
     evolutionEligible: false,
+  } satisfies AcceptanceTaskCommon;
+  if (input.schemaVersion === 2) {
+    if (candidateOracle.mode !== 'exact-reference') {
+      throw new TypeError('acceptance task schemaVersion 2 requires an exact-reference oracle');
+    }
+    return deepFreeze({
+      ...common,
+      schemaVersion: 2,
+      candidateOracle,
+      qeProfiles: parseLegacyQeProfiles(input.qeProfiles),
+    });
+  }
+  const rust = parseTaskRustPolicy(input.rust);
+  const qe = parseTaskQePolicy(input.qe);
+  const evidence = parseTaskGeneratedEvidencePolicy({
+    value: input.evidence,
+    commands,
+    implementationPaths,
+    mutationPaths: commands.mutation.map(({ path }) => path),
+    forbiddenPaths: [
+      ...evaluatorPaths,
+      ...implementationPaths,
+      ...config.requiredProtectedPaths,
+      ...RUNTIME_PROTECTED_PATHS,
+    ],
   });
+  return deepFreeze({ ...common, schemaVersion: 3, candidateOracle, rust, qe, evidence });
 }
 
 export function acceptanceTaskPrompt(task: AcceptanceTask): string {
@@ -189,6 +251,19 @@ export function acceptanceTaskPrompt(task: AcceptanceTask): string {
     ...task.exclusions.map((exclusion) => `- ${exclusion}`),
     `Mutable paths: ${task.implementationPaths.join(', ')}.`,
   ].join('\n');
+}
+
+export function requireExactReferenceCandidate(task: AcceptanceTask): GitObjectIdentity {
+  if (task.candidateOracle.mode !== 'exact-reference') {
+    throw new Error('HARNESS_EXACT_REFERENCE_CANDIDATE_REQUIRED');
+  }
+  return task.candidateOracle.candidate;
+}
+
+export function requiredQeProfiles(task: AcceptanceTask): AgenticQeProfile[] {
+  return task.schemaVersion === 2
+    ? [...task.qeProfiles]
+    : qeProfilesFromBindings(task.qe.profiles);
 }
 
 export function bindAcceptanceTaskToRustProfile(
@@ -229,16 +304,23 @@ function parseGitIdentity(value: unknown, label: string): GitObjectIdentity {
   return { commit, tree };
 }
 
-function parseCandidateOracle(value: unknown): AcceptanceTask['candidateOracle'] {
+function parseCandidateOracle(value: unknown, schemaVersion: 2 | 3): CandidateOracle {
   const input = asRecord(value, 'acceptance task.candidateOracle');
-  assertExactKeys(input, ['mode', 'candidate'], 'acceptance task.candidateOracle');
-  if (input.mode !== 'exact-reference') {
-    throw new TypeError('acceptance task candidate oracle must be exact-reference');
+  if (input.mode === 'exact-reference') {
+    assertExactKeys(input, ['mode', 'candidate'], 'acceptance task.candidateOracle');
+    return {
+      mode: 'exact-reference',
+      candidate: parseGitIdentity(input.candidate, 'acceptance task.candidateOracle.candidate'),
+    };
   }
-  return {
-    mode: 'exact-reference',
-    candidate: parseGitIdentity(input.candidate, 'acceptance task.candidateOracle.candidate'),
-  };
+  if (input.mode === 'verifier-only') {
+    if (schemaVersion !== 3) {
+      throw new TypeError('verifier-only candidate oracle requires acceptance task schemaVersion 3');
+    }
+    assertExactKeys(input, ['mode'], 'acceptance task.candidateOracle');
+    return { mode: 'verifier-only' };
+  }
+  throw new TypeError('acceptance task candidate oracle mode is invalid');
 }
 
 function parsePaths(value: unknown, label: string): string[] {
@@ -381,16 +463,6 @@ function parseRouting(value: unknown): AcceptanceTask['routing'] {
     throw new TypeError('acceptance task.routing.difficulty must be in [0, 1]');
   }
   return { tags, difficulty: input.difficulty };
-}
-
-function parseQeProfiles(value: unknown): AgenticQeProfile[] {
-  const profiles = asUniqueStrings(value, 'acceptance task.qeProfiles');
-  for (const profile of profiles) {
-    if (!QE_PROFILES.has(profile as AgenticQeProfile)) {
-      throw new TypeError(`acceptance task QE profile is invalid: ${profile}`);
-    }
-  }
-  return profiles as AgenticQeProfile[];
 }
 
 function parseOpaqueId(value: unknown, label: string): string {

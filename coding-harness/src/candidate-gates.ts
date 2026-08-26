@@ -54,6 +54,14 @@ export function assertRequiredQeProfiles(
   if (missing.length > 0) {
     throw new Error(`HARNESS_REQUIRED_QE_PROFILES_MISSING:${missing.join(',')}`);
   }
+  const extra = [...actual].filter((profile) => !required.includes(profile));
+  if (extra.length > 0) {
+    throw new Error(`HARNESS_REQUIRED_QE_PROFILES_EXTRA:${extra.join(',')}`);
+  }
+  const actualOrder = evidence.map(({ profile }) => profile);
+  if (JSON.stringify(actualOrder) !== JSON.stringify(required)) {
+    throw new Error('HARNESS_REQUIRED_QE_PROFILE_ORDER_MISMATCH');
+  }
 }
 
 export function prefixArtifacts(

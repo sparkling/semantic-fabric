@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-import type { StructuredCommand, TaskContract, HarnessConfig } from './contracts.js';
+import {
+  normalizeWorkspacePath,
+  type StructuredCommand,
+  type TaskContract,
+  type HarnessConfig,
+} from './contracts.js';
 import type {
   AcceptanceGateEvidence,
   ArchitectureEvidence,
   CandidateBuild,
   CandidateReview,
   CandidateRepairPhase,
+  PatchAdmission,
   PatchSubmission,
   PreparedCandidate,
   VerifierStage,
@@ -17,6 +23,102 @@ import type { ProtectedInputBoundary } from './policy.js';
 import type { NativeHost } from './models/types.js';
 import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 import type { GitIdentity, HostEvidence } from './receipts.js';
+import type { AcceptanceTask } from './acceptance-task.js';
+
+const CANDIDATE_EXPECTATION_BRAND = Symbol('candidate-expectation');
+const ISSUED_CANDIDATE_EXPECTATIONS = new WeakSet<object>();
+const GIT_ID = /^[a-f0-9]{40}$/;
+const TASK_ID = /^[A-Za-z0-9_-]{8,128}$/;
+
+type CandidateExpectationBinding = Readonly<{
+  taskId: string;
+  [CANDIDATE_EXPECTATION_BRAND]: true;
+}>;
+
+type CandidateExpectationValue =
+  | Readonly<{ mode: 'exact-reference'; candidate: GitIdentity }>
+  | Readonly<{ mode: 'verifier-only'; requiredAdmittedPaths: readonly string[] }>;
+
+export type CandidateExpectation = CandidateExpectationBinding & CandidateExpectationValue;
+
+export function candidateExpectationForTask(task: AcceptanceTask): CandidateExpectation {
+  let expectation: Readonly<{ taskId: string }> & CandidateExpectationValue;
+  if (task.candidateOracle.mode === 'exact-reference') {
+    expectation = {
+      taskId: task.taskId,
+      mode: 'exact-reference',
+      candidate: Object.freeze({ ...task.candidateOracle.candidate }),
+    };
+  } else {
+    if (task.schemaVersion !== 3) throw new TypeError('HARNESS_CANDIDATE_EXPECTATION_INVALID');
+    expectation = {
+      taskId: task.taskId,
+      mode: 'verifier-only',
+      requiredAdmittedPaths: Object.freeze([...task.evidence.requiredAdmittedPaths]),
+    };
+  }
+  Object.defineProperty(expectation, CANDIDATE_EXPECTATION_BRAND, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  ISSUED_CANDIDATE_EXPECTATIONS.add(expectation);
+  assertCandidateExpectation(expectation);
+  return Object.freeze(expectation) as CandidateExpectation;
+}
+
+export function assertCandidateExpectation(value: unknown): asserts value is CandidateExpectation {
+  if (value === null || typeof value !== 'object') {
+    throw new TypeError('HARNESS_CANDIDATE_EXPECTATION_INVALID');
+  }
+  const input = value as Partial<CandidateExpectation> & Record<PropertyKey, unknown>;
+  if (!ISSUED_CANDIDATE_EXPECTATIONS.has(value)
+    || input[CANDIDATE_EXPECTATION_BRAND] !== true
+    || !TASK_ID.test(String(input.taskId ?? ''))) {
+    throw new TypeError('HARNESS_CANDIDATE_EXPECTATION_INVALID');
+  }
+  if (input.mode === 'verifier-only') {
+    if (!Array.isArray(input.requiredAdmittedPaths) || input.requiredAdmittedPaths.length === 0) {
+      throw new TypeError('HARNESS_CANDIDATE_EXPECTATION_INVALID');
+    }
+    const paths = input.requiredAdmittedPaths.map((path, index) =>
+      normalizeWorkspacePath(path, `candidateExpectation.requiredAdmittedPaths[${index}]`));
+    if (new Set(paths).size !== paths.length) {
+      throw new TypeError('HARNESS_CANDIDATE_EXPECTATION_INVALID');
+    }
+    return;
+  }
+  if (input.mode !== 'exact-reference' || input.candidate === null
+    || typeof input.candidate !== 'object'
+    || !GIT_ID.test(String(input.candidate.commit ?? ''))
+    || !GIT_ID.test(String(input.candidate.tree ?? ''))) {
+    throw new TypeError('HARNESS_CANDIDATE_EXPECTATION_INVALID');
+  }
+}
+
+export function candidateAdmissionReasons(input: Readonly<{
+  expectation: CandidateExpectation;
+  current: GitIdentity;
+  admission: PatchAdmission;
+}>): readonly string[] {
+  const reasons: string[] = [];
+  if (input.current.commit !== input.admission.candidate.commit
+    || input.current.tree !== input.admission.candidate.tree) {
+    reasons.push('HARNESS_ADMISSION_WORKTREE_IDENTITY_MISMATCH');
+  }
+  if (input.expectation.mode === 'exact-reference'
+    && input.admission.candidate.tree !== input.expectation.candidate.tree) {
+    reasons.push('HARNESS_CANDIDATE_SOURCE_FIX_MISMATCH');
+  }
+  if (input.expectation.mode === 'verifier-only'
+    && JSON.stringify([...input.admission.admittedPaths].sort()) !== JSON.stringify(
+      [...input.expectation.requiredAdmittedPaths].sort(),
+    )) {
+    reasons.push('HARNESS_CANDIDATE_ADMITTED_PATHS_MISMATCH');
+  }
+  return Object.freeze(reasons);
+}
 
 export interface RepositoryModelController {
   architecture(signal?: AbortSignal): Promise<ArchitectureEvidence>;
@@ -41,7 +143,7 @@ export interface RepositoryOperationsOptions {
   config: HarnessConfig;
   baselineCommit: string;
   evaluatorCommit: string;
-  expectedCandidate: GitIdentity;
+  candidateExpectation: CandidateExpectation;
   taskForWorkspace: (candidateRoot: string) => TaskContract;
   buildCommands: readonly StructuredCommand[];
   verifierCommands: Readonly<Record<VerifierStage, readonly StructuredCommand[]>>;

@@ -3,7 +3,12 @@
 import { createHash } from 'node:crypto';
 import { VerifierRegistry, predicateVerifier } from '@metaharness/harness';
 import type { AcceptanceTask } from './acceptance-task.js';
-import { acceptanceTaskPrompt, bindAcceptanceTaskToRustProfile } from './acceptance-task.js';
+import {
+  acceptanceTaskPrompt,
+  bindAcceptanceTaskToRustProfile,
+  requiredQeProfiles,
+  requireExactReferenceCandidate,
+} from './acceptance-task.js';
 import { AcceptanceRunner } from './acceptance-runner.js';
 import { CandidateTransaction, type CandidateBuild } from './candidate.js';
 import type { CandidateTransactionResult } from './candidate-types.js';
@@ -30,7 +35,10 @@ import {
 import type { NativeHost } from './models/types.js';
 import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 import { digestValue, type HostEvidence } from './receipts.js';
-import { RepositoryCandidateOperations } from './repository-operations.js';
+import {
+  candidateExpectationForTask,
+  RepositoryCandidateOperations,
+} from './repository-operations.js';
 import type { RustOfflineProfile } from './rust-sandbox.js';
 
 export interface Issue8FrozenLockLease {
@@ -123,14 +131,18 @@ export async function runIssue8Transaction(
     controllerCommit: options.controllerCommit,
     signal: options.signal,
   });
+  if (controller.task.schemaVersion !== 2) {
+    throw new Error('HARNESS_ISSUE_8_REQUIRES_TASK_SCHEMA_V2');
+  }
   const unboundTask = controller.task;
-  await assertDeclaredGitIdentities(options.repositoryRoot, unboundTask);
+  const referenceCandidate = requireExactReferenceCandidate(unboundTask);
+  await assertDeclaredGitIdentities(options.repositoryRoot, unboundTask, referenceCandidate);
   await assertGitMaterializationSafe({
     repositoryRoot: options.repositoryRoot,
     commits: [
       options.controllerCommit,
       unboundTask.baseline.commit,
-      unboundTask.candidateOracle.candidate.commit,
+      referenceCandidate.commit,
     ],
     signal: options.signal,
   });
@@ -138,7 +150,10 @@ export async function runIssue8Transaction(
     repositoryRoot: options.repositoryRoot,
     scratchRoot: options.evaluatorScratchRoot,
     baselineCommit: unboundTask.baseline.commit,
-    referenceCandidateCommit: unboundTask.candidateOracle.candidate.commit,
+    source: {
+      mode: 'exact-reference',
+      referenceCandidateCommit: referenceCandidate.commit,
+    },
     evaluatorPaths: unboundTask.evaluatorPaths,
     implementationPaths: unboundTask.implementationPaths,
     taskId: unboundTask.taskId,
@@ -238,7 +253,7 @@ export async function runIssue8Transaction(
       config: SECURE_HARNESS_CONFIG,
       baselineCommit: task.baseline.commit,
       evaluatorCommit: evaluator.commit,
-      expectedCandidate: task.candidateOracle.candidate,
+      candidateExpectation: candidateExpectationForTask(task),
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: task.taskId,
@@ -341,7 +356,7 @@ export async function runIssue8Transaction(
           codex: native.hosts.find(({ host }) => host === 'codex')?.clientVersion ?? 'unknown',
           claude: native.hosts.find(({ host }) => host === 'claude-code')?.clientVersion ?? 'unknown',
         },
-        requiredQeProfiles: task.qeProfiles,
+        requiredQeProfiles: requiredQeProfiles(task),
         rufloEvidence,
       },
       operations,
@@ -420,10 +435,11 @@ function repositoryArchitectureVerifiers(): VerifierRegistry {
 async function assertDeclaredGitIdentities(
   repositoryRoot: string,
   task: AcceptanceTask,
+  referenceCandidate: AcceptanceTask['baseline'],
 ): Promise<void> {
   for (const [label, identity] of [
     ['baseline', task.baseline],
-    ['reference-candidate', task.candidateOracle.candidate],
+    ['reference-candidate', referenceCandidate],
   ] as const) {
     const commit = await gitValue(repositoryRoot, ['rev-parse', '--verify', `${identity.commit}^{commit}`]);
     const tree = await gitValue(repositoryRoot, ['rev-parse', `${identity.commit}^{tree}`]);

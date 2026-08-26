@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SECURE_HARNESS_CONFIG } from './config.js';
+import { requireExactReferenceCandidate } from './acceptance-task.js';
 import {
   createStructuredFrozenCargoLockExecutor,
   prepareFrozenCargoLock,
@@ -201,7 +202,7 @@ async function executeIssue8(
       repositoryRoot: transactionRepository,
       scratchRoot: paths.frozen,
       baseline: task.baseline,
-      source: task.candidateOracle.candidate,
+      source: requireExactReferenceCandidate(task),
       cargoExecutable: rustProfile.cargoExecutable,
       cargoEnvironment: rustProfile.environment,
       config: SECURE_HARNESS_CONFIG,

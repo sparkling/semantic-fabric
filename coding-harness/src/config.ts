@@ -58,6 +58,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/agentic-qe-sast.ts',
     'coding-harness/src/agentic-qe-sast-response.ts',
     'coding-harness/src/acceptance-task.ts',
+    'coding-harness/src/acceptance-task-v3.ts',
     'coding-harness/src/acceptance-runner.ts',
     'coding-harness/src/candidate.ts',
     'coding-harness/src/candidate-types.ts',

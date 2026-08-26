@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 export * from './acceptance-task.js';
+export * from './acceptance-task-v3.js';
 export * from './acceptance-runner.js';
 export * from './agentic-qe-lcov.js';
 export * from './agentic-qe-mcp-runner.js';

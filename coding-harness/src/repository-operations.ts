@@ -42,9 +42,10 @@ import type {
   RepositoryOperationsOptions,
   VerifierGeneratedOutputSpec,
 } from './repository-options.js';
-export type {
-  RepositoryModelController,
-  RepositoryOperationsOptions,
+import { assertCandidateExpectation, candidateAdmissionReasons } from './repository-options.js';
+export {
+  candidateExpectationForTask, type CandidateExpectation,
+  type RepositoryModelController, type RepositoryOperationsOptions,
 } from './repository-options.js';
 import { runRepositoryCommandBatch } from './repository-command-runner.js';
 
@@ -57,6 +58,7 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   #cleanupPromise: Promise<void> | null = null;
 
   constructor(options: RepositoryOperationsOptions) {
+    assertCandidateExpectation(options.candidateExpectation);
     if (options.buildCommands.length === 0) throw new TypeError('HARNESS_BUILD_COMMANDS_REQUIRED');
     for (const stage of ['public', 'independent', 'regression'] as const) {
       if (options.verifierCommands[stage].length === 0) {
@@ -90,6 +92,9 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     const task = this.#options.taskForWorkspace(prepared.candidateRoot);
     if (task.workspaceRoot !== prepared.candidateRoot || task.authority !== DEVELOPMENT_AUTHORITY) {
       throw new Error('HARNESS_CANDIDATE_TASK_BINDING_INVALID');
+    }
+    if (task.taskId !== this.#options.candidateExpectation.taskId) {
+      throw new Error('HARNESS_CANDIDATE_EXPECTATION_TASK_MISMATCH');
     }
     this.#assertCommandsDeclared(task);
     this.#task = task;
@@ -183,15 +188,11 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   ): Promise<readonly string[]> {
     this.#assertExternalState();
     const current = await this.#options.worktrees.candidateIdentity(signal);
-    const reasons: string[] = [];
-    if (current.commit !== admission.candidate.commit || current.tree !== admission.candidate.tree) {
-      reasons.push('HARNESS_ADMISSION_WORKTREE_IDENTITY_MISMATCH');
-    }
-    if (admission.candidate.tree !== this.#options.expectedCandidate.tree) {
-      reasons.push('HARNESS_CANDIDATE_SOURCE_FIX_MISMATCH');
-    }
+    const reasons = candidateAdmissionReasons({
+      expectation: this.#options.candidateExpectation, current, admission,
+    });
     this.#assertExternalState();
-    return Object.freeze(reasons);
+    return reasons;
   }
 
   async build(

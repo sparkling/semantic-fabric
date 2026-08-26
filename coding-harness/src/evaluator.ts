@@ -3,7 +3,7 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { normalizeWorkspacePath } from './contracts.js';
+import { normalizeWorkspacePath, pathsOverlap } from './contracts.js';
 import { runGitCommand } from './git-process.js';
 import type { GitIdentity } from './receipts.js';
 
@@ -15,11 +15,21 @@ export interface EvaluatorIdentity extends GitIdentity {
   readonly ref: string;
 }
 
+export type EvaluatorSource =
+  | Readonly<{
+    mode: 'exact-reference';
+    referenceCandidateCommit: string;
+  }>
+  | Readonly<{
+    mode: 'verifier-only';
+    controllerCommit: string;
+  }>;
+
 export async function materializeEvaluatorCommit(input: Readonly<{
   repositoryRoot: string;
   scratchRoot: string;
   baselineCommit: string;
-  referenceCandidateCommit: string;
+  source: EvaluatorSource;
   evaluatorPaths: readonly string[];
   implementationPaths: readonly string[];
   taskId: string;
@@ -32,26 +42,41 @@ export async function materializeEvaluatorCommit(input: Readonly<{
   }
   if (existsSync(scratchRoot)) throw new Error('HARNESS_EVALUATOR_SCRATCH_EXISTS');
   assertGitObject(input.baselineCommit, 'baselineCommit');
-  assertGitObject(input.referenceCandidateCommit, 'referenceCandidateCommit');
+  const sourceCommit = input.source.mode === 'exact-reference'
+    ? input.source.referenceCandidateCommit
+    : input.source.controllerCommit;
+  assertGitObject(sourceCommit, 'evaluator source commit');
   if (!TASK_ID.test(input.taskId)) throw new Error('HARNESS_EVALUATOR_TASK_ID_INVALID');
   const evaluatorRef = `refs/metaharness/evaluators/${input.taskId}`;
   const evaluatorPaths = normalizedUniquePaths(input.evaluatorPaths, 'evaluatorPaths');
   const implementationPaths = normalizedUniquePaths(input.implementationPaths, 'implementationPaths');
-  if (evaluatorPaths.some((path) => implementationPaths.includes(path))) {
+  if (evaluatorPaths.some((path) => implementationPaths.some(
+    (implementationPath) => pathsOverlap(path, implementationPath),
+  ))) {
     throw new Error('HARNESS_EVALUATOR_IMPLEMENTATION_PATH_OVERLAP');
   }
   const expectedSourcePaths = [...evaluatorPaths, ...implementationPaths].sort();
   await gitChecked(repositoryRoot, ['cat-file', '-e', `${input.baselineCommit}^{commit}`], input.signal);
-  await gitChecked(repositoryRoot, ['cat-file', '-e', `${input.referenceCandidateCommit}^{commit}`], input.signal);
-  const sourcePaths = parseNullPaths((await gitChecked(
+  await gitChecked(repositoryRoot, ['cat-file', '-e', `${sourceCommit}^{commit}`], input.signal);
+  if (input.source.mode === 'verifier-only') {
+    await assertAncestor(repositoryRoot, input.baselineCommit, sourceCommit, input.signal);
+  } else {
+    const sourcePaths = parseNullPaths((await gitChecked(
+      repositoryRoot,
+      ['diff', '--name-only', '-z', input.baselineCommit, sourceCommit, '--'],
+      input.signal,
+    )).stdout);
+    assertExactPaths(sourcePaths, expectedSourcePaths, 'HARNESS_SOURCE_FIX_PATH_MISMATCH');
+  }
+  const sourceEvaluatorPaths = parseNullPaths((await gitChecked(
     repositoryRoot,
-    ['diff', '--name-only', '-z', input.baselineCommit, input.referenceCandidateCommit, '--'],
+    ['diff', '--name-only', '-z', input.baselineCommit, sourceCommit, '--', ...evaluatorPaths],
     input.signal,
   )).stdout);
-  assertExactPaths(sourcePaths, expectedSourcePaths, 'HARNESS_SOURCE_FIX_PATH_MISMATCH');
+  assertExactPaths(sourceEvaluatorPaths, evaluatorPaths, 'HARNESS_EVALUATOR_SOURCE_PATH_MISMATCH');
   const patch = (await gitChecked(
     repositoryRoot,
-    ['diff', '--binary', '--full-index', input.baselineCommit, input.referenceCandidateCommit, '--', ...evaluatorPaths],
+    ['diff', '--binary', '--full-index', input.baselineCommit, sourceCommit, '--', ...evaluatorPaths],
     input.signal,
   )).stdout;
   if (patch.trim().length === 0) throw new Error('HARNESS_EVALUATOR_PATCH_EMPTY');
@@ -96,7 +121,7 @@ export async function materializeEvaluatorCommit(input: Readonly<{
     await verifyEvaluatorSplit({
       repositoryRoot,
       baselineCommit: input.baselineCommit,
-      referenceCandidateCommit: input.referenceCandidateCommit,
+      source: input.source,
       evaluatorCommit: commit,
       evaluatorPaths,
       implementationPaths,
@@ -134,7 +159,7 @@ async function retainEvaluatorRef(
 async function verifyEvaluatorSplit(input: Readonly<{
   repositoryRoot: string;
   baselineCommit: string;
-  referenceCandidateCommit: string;
+  source: EvaluatorSource;
   evaluatorCommit: string;
   evaluatorPaths: readonly string[];
   implementationPaths: readonly string[];
@@ -146,9 +171,24 @@ async function verifyEvaluatorSplit(input: Readonly<{
     input.signal,
   )).stdout);
   assertExactPaths(evaluatorDiff, [...input.evaluatorPaths].sort(), 'HARNESS_EVALUATOR_PATH_MISMATCH');
+  if (input.source.mode === 'verifier-only') {
+    const evaluatorContentDiff = parseNullPaths((await gitChecked(
+      input.repositoryRoot,
+      [
+        'diff', '--name-only', '-z', input.evaluatorCommit,
+        input.source.controllerCommit, '--', ...input.evaluatorPaths,
+      ],
+      input.signal,
+    )).stdout);
+    assertExactPaths(evaluatorContentDiff, [], 'HARNESS_EVALUATOR_SOURCE_CONTENT_MISMATCH');
+    return;
+  }
   const remainingDiff = parseNullPaths((await gitChecked(
     input.repositoryRoot,
-    ['diff', '--name-only', '-z', input.evaluatorCommit, input.referenceCandidateCommit, '--'],
+    [
+      'diff', '--name-only', '-z', input.evaluatorCommit,
+      input.source.referenceCandidateCommit, '--',
+    ],
     input.signal,
   )).stdout);
   assertExactPaths(
@@ -156,6 +196,20 @@ async function verifyEvaluatorSplit(input: Readonly<{
     [...input.implementationPaths].sort(),
     'HARNESS_IMPLEMENTATION_PATH_MISMATCH',
   );
+}
+
+async function assertAncestor(
+  repositoryRoot: string,
+  baselineCommit: string,
+  sourceCommit: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const result = await runGitCommand(
+    repositoryRoot,
+    ['merge-base', '--is-ancestor', baselineCommit, sourceCommit],
+    { signal },
+  );
+  if (result.exitCode !== 0) throw new Error('HARNESS_EVALUATOR_SOURCE_BASELINE_NOT_ANCESTOR');
 }
 
 async function gitChecked(

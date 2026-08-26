@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CandidateTransaction, type CandidateTransactionContext } from '../src/candidate.js';
+import type { AcceptanceTask } from '../src/acceptance-task.js';
 import { parseTaskContract, type StructuredCommand } from '../src/contracts.js';
 import { GitWorktreeSet } from '../src/git-worktrees.js';
 import type { OfflineProcessIsolator } from '../src/network.js';
@@ -15,6 +16,7 @@ import {
   RepositoryCandidateOperations,
   type RepositoryModelController,
 } from '../src/repository-operations.js';
+import { candidateExpectationForTask } from '../src/repository-options.js';
 import type { ProtectedInputBoundary } from '../src/policy.js';
 import { digestValue, type CommandEvidence } from '../src/receipts.js';
 import { createTestConfig, TEST_RESOURCE_SCOPE } from './helpers.js';
@@ -67,6 +69,17 @@ function command(mode: 'artifact' | 'success'): StructuredCommand {
     timeoutMs: 2_000,
     maxOutputBytes: 10_000,
   };
+}
+
+function exactExpectation(
+  taskId: string,
+  candidate: { commit: string; tree: string },
+) {
+  return candidateExpectationForTask({
+    schemaVersion: 2,
+    taskId,
+    candidateOracle: { mode: 'exact-reference', candidate },
+  } as unknown as AcceptanceTask);
 }
 
 const offlineIsolator: OfflineProcessIsolator = {
@@ -171,7 +184,10 @@ describe('repository operations integration', () => {
       config,
       baselineCommit: fixture.commit,
       evaluatorCommit: fixture.commit,
-      expectedCandidate: { commit: fixture.commit, tree: fixture.sourceTree },
+      candidateExpectation: exactExpectation(
+        'task-operations-0001',
+        { commit: fixture.commit, tree: fixture.sourceTree },
+      ),
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: 'task-operations-0001',
@@ -290,7 +306,10 @@ describe('repository operations integration', () => {
       config,
       baselineCommit: fixture.commit,
       evaluatorCommit: fixture.commit,
-      expectedCandidate: { commit: fixture.commit, tree: fixture.sourceTree },
+      candidateExpectation: exactExpectation(
+        'task-composite-0001',
+        { commit: fixture.commit, tree: fixture.sourceTree },
+      ),
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: 'task-composite-0001',
@@ -352,7 +371,10 @@ describe('repository operations integration', () => {
       config,
       baselineCommit: fixture.commit,
       evaluatorCommit: fixture.commit,
-      expectedCandidate: { commit: fixture.commit, tree: fixture.sourceTree },
+      candidateExpectation: exactExpectation(
+        'task-qe-mutation-0001',
+        { commit: fixture.commit, tree: fixture.sourceTree },
+      ),
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: 'task-qe-mutation-0001',

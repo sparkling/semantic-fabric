@@ -69,7 +69,8 @@ export class AcceptanceRunner {
     build: CandidateBuild,
     signal?: AbortSignal,
   ): Promise<AcceptanceGateEvidence> {
-    if (build.candidate.tree !== this.#options.task.candidateOracle.candidate.tree) {
+    if (this.#options.task.candidateOracle.mode === 'exact-reference'
+      && build.candidate.tree !== this.#options.task.candidateOracle.candidate.tree) {
       throw new Error('HARNESS_CANDIDATE_REFERENCE_MISMATCH');
     }
     const root = this.#options.worktrees.verifierRoot('independent');
