@@ -45,6 +45,27 @@ const RUNTIME = Object.freeze({
   codexHost: '@metaharness/host-codex@0.1.2',
   claudeHost: '@metaharness/host-claude-code@0.1.2',
 } as const);
+const ACCEPTANCE_TASK_PATH =
+  /^coding-harness\/config\/[a-z0-9]+(?:[-_][a-z0-9]+)*-acceptance\.json$/;
+
+export function normalizeAcceptanceTaskPath(value: unknown): string {
+  const path = normalizeWorkspacePath(value, 'acceptance task path');
+  if (!ACCEPTANCE_TASK_PATH.test(path)) {
+    throw new TypeError('acceptance task path must name a normalized harness acceptance JSON file');
+  }
+  return path;
+}
+
+export function selectAcceptanceTaskPath(
+  manifest: Pick<HarnessManifest, 'acceptanceTasks'>,
+  value: unknown,
+): string {
+  const path = normalizeAcceptanceTaskPath(value);
+  if (manifest.acceptanceTasks.filter((candidate) => candidate === path).length !== 1) {
+    throw new Error('HARNESS_MANIFEST_TASK_NOT_LISTED');
+  }
+  return path;
+}
 
 export function parseHarnessManifest(value: unknown, config: HarnessConfig): HarnessManifest {
   const input = asRecord(value, 'harness manifest');
@@ -69,7 +90,13 @@ export function parseHarnessManifest(value: unknown, config: HarnessConfig): Har
   if (JSON.stringify([...protectedPaths].sort()) !== JSON.stringify(expectedProtected)) {
     throw new Error('HARNESS_MANIFEST_PROTECTED_PATHS_MISMATCH');
   }
-  const acceptanceTasks = parsePaths(input.acceptanceTasks, 'harness manifest.acceptanceTasks');
+  const acceptanceTasks = asUniqueStrings(
+    input.acceptanceTasks,
+    'harness manifest.acceptanceTasks',
+  ).map(normalizeAcceptanceTaskPath);
+  if (acceptanceTasks.some((path) => !protectedPaths.includes(path))) {
+    throw new Error('HARNESS_MANIFEST_TASK_NOT_PROTECTED');
+  }
   if (!acceptanceTasks.includes('coding-harness/config/issue-8-acceptance.json')) {
     throw new Error('HARNESS_MANIFEST_ISSUE_8_TASK_MISSING');
   }

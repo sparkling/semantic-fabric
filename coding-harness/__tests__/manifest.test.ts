@@ -6,7 +6,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
-import { parseHarnessManifest } from '../src/manifest.js';
+import {
+  normalizeAcceptanceTaskPath,
+  parseHarnessManifest,
+  selectAcceptanceTaskPath,
+} from '../src/manifest.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(readFileSync(resolve(root, '.harness/manifest.json'), 'utf8')) as unknown;
@@ -32,6 +36,41 @@ describe('canonical harness manifest', () => {
         blindSurfaceOutcome: 'CLEAN',
       },
     }, SECURE_HARNESS_CONFIG)).toThrow(/diagnostic gates/);
+  });
+
+  it('selects one normalized manifest-bound acceptance task', () => {
+    const parsed = parseHarnessManifest(manifest, SECURE_HARNESS_CONFIG);
+    const taskPath = 'coding-harness/config/issue-8-acceptance.json';
+
+    expect(normalizeAcceptanceTaskPath(taskPath)).toBe(taskPath);
+    expect(selectAcceptanceTaskPath(parsed, taskPath)).toBe(taskPath);
+    for (const invalid of [
+      './coding-harness/config/issue-8-acceptance.json',
+      'coding-harness/config/../config/issue-8-acceptance.json',
+      'coding-harness/config/Issue-8-acceptance.json',
+      'coding-harness/config/issue-8-acceptance.json/',
+      'coding-harness/config/issue-8.json',
+      'docs/issue-8-acceptance.json',
+    ]) {
+      expect(() => normalizeAcceptanceTaskPath(invalid)).toThrow();
+    }
+    expect(() => selectAcceptanceTaskPath(
+      parsed,
+      'coding-harness/config/m0-reproducibility-acceptance.json',
+    )).toThrow('HARNESS_MANIFEST_TASK_NOT_LISTED');
+  });
+
+  it('requires every acceptance task to be a unique protected controller input', () => {
+    const input = structuredClone(manifest as Record<string, unknown>) as Record<string, any>;
+    input.acceptanceTasks = [
+      ...input.acceptanceTasks,
+      'coding-harness/config/m0-reproducibility-acceptance.json',
+    ];
+    expect(() => parseHarnessManifest(input, SECURE_HARNESS_CONFIG))
+      .toThrow('HARNESS_MANIFEST_TASK_NOT_PROTECTED');
+
+    input.acceptanceTasks = [input.acceptanceTasks[0], input.acceptanceTasks[0]];
+    expect(() => parseHarnessManifest(input, SECURE_HARNESS_CONFIG)).toThrow(/duplicates/);
   });
 
   it('protects every tracked ADR, Cargo manifest, CI workflow, and publication control', () => {

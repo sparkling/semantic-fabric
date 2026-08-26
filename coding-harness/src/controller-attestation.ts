@@ -20,10 +20,16 @@ import {
 } from './controller-build.js';
 import { deepFreeze } from './contracts.js';
 import { runGitCommand } from './git-process.js';
-import { parseHarnessManifest, type HarnessManifest } from './manifest.js';
+import {
+  normalizeAcceptanceTaskPath,
+  parseHarnessManifest,
+  selectAcceptanceTaskPath,
+  type HarnessManifest,
+} from './manifest.js';
 import { digestValue, type GitIdentity } from './receipts.js';
 
-const TASK_PATH = 'coding-harness/config/issue-8-acceptance.json';
+export const ISSUE_8_ACCEPTANCE_TASK_PATH =
+  'coding-harness/config/issue-8-acceptance.json';
 const MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 const LOCKFILE_PATH = 'coding-harness/package-lock.json';
 const MAX_CONTROLLER_BLOB_BYTES = 10_000_000;
@@ -31,6 +37,7 @@ const MAX_RUNTIME_FILE_BYTES = 50_000_000;
 
 export interface ControllerAttestation {
   readonly identity: GitIdentity;
+  readonly taskPath: string;
   readonly task: AcceptanceTask;
   readonly manifest: HarnessManifest;
   readonly build: ControllerBuildManifest;
@@ -40,14 +47,16 @@ export interface ControllerAttestation {
   readonly executionDigest: string;
 }
 
-export async function attestIssue8Controller(input: Readonly<{
+export async function attestController(input: Readonly<{
   repositoryRoot: string;
   controllerRepositoryRoot: string;
   controllerCommit: string;
+  taskPath: string;
   signal?: AbortSignal;
 }>): Promise<ControllerAttestation> {
   const repositoryRoot = canonicalDirectory(input.repositoryRoot);
   const controllerRepositoryRoot = canonicalDirectory(input.controllerRepositoryRoot);
+  const requestedTaskPath = normalizeAcceptanceTaskPath(input.taskPath);
   const commit = await gitValue(
     controllerRepositoryRoot,
     ['rev-parse', '--verify', `${input.controllerCommit}^{commit}`],
@@ -59,11 +68,21 @@ export async function attestIssue8Controller(input: Readonly<{
   const head = await gitValue(controllerRepositoryRoot, ['rev-parse', '--verify', 'HEAD'], input.signal);
   if (head !== commit) throw new Error('HARNESS_CONTROLLER_NOT_CURRENT_HEAD');
   const tree = await gitValue(controllerRepositoryRoot, ['rev-parse', `${commit}^{tree}`], input.signal);
-  const taskBlob = await readControllerBlob(controllerRepositoryRoot, commit, TASK_PATH, input.signal);
   const manifestBlob = await readControllerBlob(
     controllerRepositoryRoot,
     commit,
     MANIFEST_PATH,
+    input.signal,
+  );
+  const manifest = parseHarnessManifest(
+    parseJson(manifestBlob.value, MANIFEST_PATH),
+    SECURE_HARNESS_CONFIG,
+  );
+  const taskPath = selectAcceptanceTaskPath(manifest, requestedTaskPath);
+  const taskBlob = await readControllerBlob(
+    controllerRepositoryRoot,
+    commit,
+    taskPath,
     input.signal,
   );
   const buildBlob = await readControllerBlob(
@@ -78,11 +97,7 @@ export async function attestIssue8Controller(input: Readonly<{
     LOCKFILE_PATH,
     input.signal,
   );
-  const task = parseAcceptanceTask(parseJson(taskBlob.value, TASK_PATH), SECURE_HARNESS_CONFIG);
-  const manifest = parseHarnessManifest(
-    parseJson(manifestBlob.value, MANIFEST_PATH),
-    SECURE_HARNESS_CONFIG,
-  );
+  const task = parseAcceptanceTask(parseJson(taskBlob.value, taskPath), SECURE_HARNESS_CONFIG);
   const build = parseControllerBuildManifest(
     parseJson(buildBlob.value, CONTROLLER_BUILD_PATH),
   );
@@ -90,7 +105,7 @@ export async function attestIssue8Controller(input: Readonly<{
     || build.lockfileDigest !== lockfileBlob.digest) {
     throw new Error('HARNESS_CONTROLLER_BUILD_INPUT_DIGEST_MISMATCH');
   }
-  const executionPaths = controllerExecutionPaths(manifest.protectedPaths);
+  const executionPaths = controllerExecutionPaths(manifest.protectedPaths, taskPath);
   const sources: Record<string, string> = {};
   const outputs: Record<string, string> = {};
   for (const path of executionPaths) {
@@ -126,6 +141,7 @@ export async function attestIssue8Controller(input: Readonly<{
   }
   return deepFreeze({
     identity: { commit, tree },
+    taskPath,
     task,
     manifest,
     build,
@@ -139,17 +155,29 @@ export async function attestIssue8Controller(input: Readonly<{
   });
 }
 
-function controllerExecutionPaths(paths: readonly string[]): string[] {
+export async function attestIssue8Controller(input: Readonly<{
+  repositoryRoot: string;
+  controllerRepositoryRoot: string;
+  controllerCommit: string;
+  signal?: AbortSignal;
+}>): Promise<ControllerAttestation> {
+  return await attestController({
+    ...input,
+    taskPath: ISSUE_8_ACCEPTANCE_TASK_PATH,
+  });
+}
+
+function controllerExecutionPaths(paths: readonly string[], taskPath: string): string[] {
   const selected = paths.filter((path) =>
     path.startsWith('coding-harness/src/')
     || path.startsWith('coding-harness/scripts/')
     || path === 'coding-harness/package.json'
     || path === 'coding-harness/package-lock.json'
     || path === 'coding-harness/tsconfig.json'
-    || path === TASK_PATH
+    || path === taskPath
     || path === MANIFEST_PATH
     || path === CONTROLLER_BUILD_PATH);
-  if (!selected.includes(TASK_PATH) || !selected.includes(MANIFEST_PATH)
+  if (!selected.includes(taskPath) || !selected.includes(MANIFEST_PATH)
     || !selected.includes('coding-harness/src/controller-attestation.ts')
     || !selected.includes('coding-harness/src/issue-8-driver.ts')
     || !selected.includes(CONTROLLER_BUILD_PATH)
