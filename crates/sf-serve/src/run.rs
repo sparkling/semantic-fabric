@@ -12,7 +12,7 @@ use crate::{introspect_pg_all, router, Backend, ServeConfig};
 /// Options resolved from the `serve` CLI flags. The runner reads the mapping /
 /// ontology files itself so the CLI stays a thin argument parser.
 pub struct ServeOptions {
-    /// `sqlite:<path>` (path may be `:memory:`) or `pg:<conninfo>`.
+    /// `sqlite:<path>` (path may be `:memory:`), `pg:<conninfo>`, or `mysql://<url>`.
     pub source: String,
     /// Path to the R2RML mapping document (Turtle).
     pub mapping_path: String,

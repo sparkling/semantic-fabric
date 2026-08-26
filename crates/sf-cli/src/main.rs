@@ -37,7 +37,7 @@ enum Command {
 /// `serve` flags (ADR-0019 G8, ADR-0010/0011). Read-only query endpoint.
 #[derive(clap::Args)]
 struct ServeArgs {
-    /// Source: `sqlite:<path>` (path may be `:memory:`) or `pg:<conninfo>`.
+    /// Source: `sqlite:<path>` (path may be `:memory:`), `pg:<conninfo>`, or `mysql://<url>`.
     #[arg(long)]
     source: String,
     /// R2RML mapping document (Turtle).

@@ -1,705 +1,301 @@
 # semantic-fabric
 
-**A uniform query layer over every system of record — at OLTP speed. The data foundation you build your agents on.**
+**A uniform query layer over systems of record, at OLTP speed—the live data
+foundation for agents, applications, analytics, and compliance.**
 
 [![CI](https://github.com/sparkling/semantic-fabric/actions/workflows/ci.yml/badge.svg)](https://github.com/sparkling/semantic-fabric/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#13-contributing--license)
-[![W3C RDB2RDF](https://img.shields.io/badge/W3C%20RDB2RDF-81%2F82%20SQLite%20%C2%B7%2080%2F81%20PostgreSQL-success.svg)](#9-status--limitations)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#contributing-and-license)
+[![W3C RDB2RDF](https://img.shields.io/badge/W3C%20RDB2RDF-81%2F82%20SQLite%20%C2%B7%2080%2F81%20PostgreSQL-success.svg)](#correctness-and-verification)
 [![Rust 1.96](https://img.shields.io/badge/rust-1.96.0-orange.svg)](rust-toolchain.toml)
 
-semantic-fabric is a **Rust-native, virtualisation-only OBDA engine**: it answers
-**SPARQL 1.2** by rewriting each query to **SQL** that runs directly against your
-live relational database through **R2RML** mappings ([ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md)).
-There is **no JVM** and **no copy of the data** — instance data (the A-Box) is
-generated on demand at query time, streamed, and discarded. Only the ontology
-hierarchy `T` and the mappings `M` ever live in the engine.
+semantic-fabric is a Rust-native, virtualisation-only OBDA engine. It answers
+SPARQL 1.2 by rewriting queries to SQL that runs directly against live
+relational databases through R2RML mappings. It has no JVM and keeps no copy of
+the instance data: only the ontology `T` and mappings `M` live in the engine;
+source rows are streamed on demand and discarded.
 
-> _Scope chip:_ Rust-native, virtualisation-only OBDA — **SPARQL 1.2 → SQL over
-> R2RML**, executed live against **SQLite & PostgreSQL** ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
+The public serving path currently admits **SQLite, PostgreSQL, and MySQL**.
+Cloud/REST adapter prototypes are library-only and deliberately not admitted to
+`serve` yet. See [Current status](#current-status-and-open-work).
 
-```sparql
-# "Which routes belong to which agency?" — answered live over a database,
-# never materialised. (SPARQL in crates/sf-bench/src/workload.rs::queries)
-PREFIX gtfs: <http://vocab.gtfs.org/terms#>
-SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }
-```
+## Why this exists
 
-```bash
-# Serve it: a real SPARQL 1.2 Protocol HTTP endpoint over a live SQLite or
-# PostgreSQL source — rewrites each query to SQL and streams the results back.
-# (reproducible GTFS source: scripts/load_gtfs_postgres.sh 1)
-cargo run -p sf-cli -- serve \
-  --source pg:dbname=gtfs_bench \
-  --mapping scripts/ontop/gtfs.r2rml.ttl
+Operational data is split across systems whose table names and schemas do not
+share meaning. Warehouses and ETL provide a common view by copying data, trading
+freshness, storage, and operational simplicity for convenience.
 
-# ...then query it like any SPARQL endpoint:
-curl -s 'http://127.0.0.1:7878/sparql' \
-  -H 'Accept: application/sparql-results+json' \
-  --data-urlencode 'query=PREFIX gtfs: <http://vocab.gtfs.org/terms#>
-    SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }'
-```
+semantic-fabric leaves the data in place and exposes it as one virtual,
+ontology-shaped RDF graph. Consumers query stable domain concepts rather than
+per-system schemas; the source database still performs the set work.
 
----
-
-## 1. The problem
-
-Every organisation's data lives in many **systems of record** — OLTP databases,
-internal services, one per team. Every consumer needs uniform access to it, and in
-2026 the most demanding new consumer is the **AI agent**.
-
-An agent reasoning over your business needs a single, typed, ontology-shaped view
-of **live** operational data — not a pile of bespoke per-table tools, not a
-nightly export, not a vector copy that went stale an hour ago. Today, giving it
-that means brittle ETL pipelines, warehouse copies, and one-off integration glue
-for every source. The same pain hits analytics, BI, and compliance: data is
-siloed across systems that each speak their own schema, and unifying them means
-moving and duplicating it ([ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md)).
-
-The standard fix — copy everything into a warehouse or lake — trades freshness
-and cost for convenience. semantic-fabric takes the other path: **leave the data
-where it is and query it in place** ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
-
-## 2. The solution — what semantic-fabric is
-
-semantic-fabric exposes your relational sources as **one virtual RDF knowledge
-graph** and answers SPARQL 1.2 by **rewriting each query to SQL that runs directly
-against the live database** through R2RML mappings ([ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md),
-[ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
-
-The data is **never copied, never materialised**. Instance data (the A-Box) is
-generated on demand at query time, streamed out, and discarded. Only the ontology
-hierarchy `T` and the mappings `M` — the in-memory ⟨T, M⟩ pair — live in the
-engine ([ADR-0004](docs/adr/ADR-0004-oxigraph-rdf-sparql-substrate.md),
-[ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
-
-|  | ETL / warehouse | semantic-fabric |
+| | Warehouse / ETL | semantic-fabric |
 |---|---|---|
-| Setup | Build + schedule a pipeline; stand up a warehouse | Point at a DB + one R2RML file |
-| Freshness | As stale as the last batch | Always live (read in place) |
-| Storage | A full second copy of the data | None — nothing is copied |
-| Query | SQL over the copy | SPARQL over the live source |
+| Setup | Pipeline plus duplicate store | Database plus an R2RML mapping |
+| Freshness | Last completed load | Live at query time |
+| Instance storage | Full second copy | None |
+| Query surface | SQL over the copy | SPARQL over the live source |
 
-## 3. Why "semantic fabric" (the name)
+The architecture is governed by
+[ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md),
+[ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md), and
+[ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md).
 
-**Semantic** — an ontology/RDF layer gives *meaning* and a uniform vocabulary
-across heterogeneous schemas, so a `Route` is a `Route` whatever the underlying
-table calls it ([ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md)).
+## How it works
 
-**Fabric** — a thin weave *over* your systems of record that unifies them
-**without moving the data**, in contrast to a warehouse or lake that copies it.
-The weave is literal: there is no OLAP engine or staging layer in the middle —
-the source does the set-work and the engine just rewrites and streams
-([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)).
-
-The name encodes the architecture: **meaning on top, live sources underneath, no
-copy in between.**
-
-## 4. Why it is amazing
-
-- **Constant engine memory under growing source data** — the source DB does the
-  set-work and spills natively; engine memory is bounded by `|T| + |M| + a fixed
-  batch budget`, independent of dataset size. **Proven byte-for-byte** (see
-  [§7](#7-benchmarks--comparison)) — [ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md),
-  [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
-- **A real SPARQL 1.2 Protocol endpoint** — `serve` exposes a streamed,
-  content-negotiated, governed HTTP query endpoint over a live SQLite **or**
-  PostgreSQL source ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8,
-  [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md)).
-- **No JVM anywhere on the runtime path** — a single native Rust binary, in place
-  of a Jena/Fuseki-class stack: a 12.8 MiB static binary, ~0.15 s cold start, ~12
-  MiB serving footprint ([§7](#7-benchmarks--comparison)) —
-  ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md),
-  [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md)).
-- **No copy / no ETL** — point it at a DB + an R2RML file and query live
-  ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md),
-  [ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)).
-- **Standards-grounded correctness** — W3C RDB2RDF conformance (81/82 SQLite,
-  80/81 PostgreSQL; one documented cross-dialect deviation, shared by both
-  dialects) over a peer-reviewed base translation (ISWC 2018) whose
-  implementation is verified by a differential oracle against a native evaluator
-  ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
-  [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
-- **Two real backends, both executing today** — SQLite **and** PostgreSQL both
-  run the OBDA path end to end via a dialect-correct SQL layer; PostgreSQL is no
-  longer emit-only ([ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md),
-  [ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
-- **RDF-star over live SQL — no known prior art** — statements *about*
-  statements (provenance, certainty, annotations) queryable in native RDF 1.2
-  reification form directly over the relational source, sound and complete
-  against a native-evaluator oracle
-  ([§9](#9-status--limitations); [ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md),
-  [ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
-
-## 5. How it works — and why the HOW is part of why it's amazing
-
-```
+```text
 SPARQL 1.2
-   │  parse (Oxigraph / spargebra)
-   ▼
-algebra ── unfold against M  +  T-saturation (tier-1 entailment)
-   │  ISWC-2018 base translation
-   ▼
-relational plan ── 6-rule cascade  +  term-construction lifting  +  plan cache
-   │  dialect SQL (SQLite / PostgreSQL)
-   ▼
-live source ── executes the set-work, spills natively
-   │  RowStream (bounded batches)
-   ▼
-RDF terms streamed out  (A-Box never materialised)
+    │ parse with Oxigraph/spargebra
+    ▼
+algebra ── unfold against mappings M + tier-1 T-box saturation
+    │ ISWC-2018 base translation and operator-tree normalization
+    ▼
+relational plan ── dialect SQL + parameters
+    │ SQLite / PostgreSQL / MySQL
+    ▼
+live source ── set work and native spilling
+    │ bounded RowStream batches
+    ▼
+RDF terms or SPARQL results; the A-box is never retained
 ```
 
-- **5a. No-JVM Rust + Oxigraph crates** (parser/terms, *not* the store) — fast
-  startup, a tiny footprint, a single embeddable binary
-  ([ADR-0004](docs/adr/ADR-0004-oxigraph-rdf-sparql-substrate.md),
-  [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md)).
-- **5b. The ⟨T, M⟩ pair held in memory, A-Box never materialised** — this is
-  *why* memory is constant: the engine never holds the instance data, only the
-  schema and mappings ([ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md),
-  [ADR-0004](docs/adr/ADR-0004-oxigraph-rdf-sparql-substrate.md)).
-- **5c. SPARQL→SQL via the ISWC-2018 cascade + term-construction lifting + plan
-  cache** — correctness and speed come from a *published, verified* translation,
-  not ad-hoc string SQL ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
-- **5d. Constant-memory streaming** (`RowStream`, bounded `O(|T| + |M| + batch)`)
-  — the headline property: the engine streams fixed-size batches while the source
-  does the heavy lifting ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md),
-  [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)).
-- **5e. Reasoning folded into the rewrite** — tier-1 hierarchy (subclass,
-  subproperty, inverse, symmetric) is unfolded into the query; property-path
-  expressions (`^p`, `p/q`, `p|q`, `p?`, `!p`, and composite `+`/`*`) compile to
-  source-dialect recursive CTEs and are served live — entailment with **no
-  separate reasoner and no JVM** ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)).
-  (A few rarer path shapes return a documented `501` — see [§9](#9-status--limitations).)
-- **5f. W3C conformance + dialect/datatype canonicalisation (R2RML §10)** — why
-  results are byte-correct across SQLite & PostgreSQL despite their different type
-  systems ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
-  [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)).
+Key properties:
 
-## 6. Use cases
+- **Virtualisation only:** no persistent triple store or ETL mode
+  ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
+- **One shared executor core:** dialect SQL plus thin native backend adapters
+  ([ADR-0024](docs/adr/ADR-0024-executor-backend-abstraction.md)).
+- **Bounded memory:** `O(|T| + |M| + batch)` while the database performs and
+  spills the set work
+  ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)).
+- **Correctness before coverage:** unsupported shapes return an explicit
+  `501`/`Error::Unsupported`, never a guessed answer
+  ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
+- **RDF 1.2 / RDF-star:** native triple terms and reification over live SQL,
+  with the basic encoding confined below the visible query surface
+  ([ADR-0029](docs/adr/ADR-0029-rdf-star-mapping-extension-rml-star-vocabulary-basic-encoding.md)–[ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md)).
+- **Named graphs:** `GRAPH <g>` and `GRAPH ?g`, including normalized
+  subject-map/POM graph unions and exclusion of `rr:defaultGraph` from named
+  graph bindings
+  ([ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md)).
 
-**Agent data-access layer.** Give an LLM agent **one ontology-typed SPARQL
-interface** over your live operational DBs instead of N bespoke per-table tools.
-The agent queries meaning, not schema; query-time lineage tells it (and you) where
-every answer came from ([ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md),
-[ADR-0017](docs/adr/ADR-0017-provenance-lineage.md)).
+## Quick start
 
-**Federated read over OLTP systems of record.** Query live transactional
-databases *as a graph* without standing up a warehouse; cross-source joins run as
-bounded semi-joins, not a full copy ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)).
-
-**Ontology-driven access without an ETL pipeline.** Ship an R2RML mapping and
-query immediately — no nightly batch, no staleness window
-([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md),
-[ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)).
-
-**Query a live database as a knowledge graph.** Expose existing relational schemas
-through a shared vocabulary for BI and SPARQL consumers, without re-platforming the
-data ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
-
-## 7. Benchmarks & comparison
-
-> **The honest head-to-head lives in [COMPARISON.md](COMPARISON.md)** — a fair,
-> same-backend race: semantic-fabric and Ontop both as warm HTTP SPARQL endpoints
-> over the **same** PostgreSQL, timed by the same client. In short: **sf is faster
-> on all 14 (query × scale) cells** of the Q1–Q7 race (the one @10× GROUP BY cell
-> is a tie within measurement noise), including the heavy 3-way join, at full
-> answer parity. One earlier loss is kept on the record: Q5 (OPTIONAL) at 10× was
-> a real Ontop win on the pre-optimization binary, fixed by a self-left-join
-> elimination (`deb3a68`). sf is far leaner (12.8 MiB binary vs a JVM stack,
-> ~0.15 s vs ~1.7 s cold start, ~12 vs ~300 MiB serving RSS) with a
-> **byte-constant engine heap (129 358 B)** as data grows. This is a small
-> localhost dataset — no blanket speed-win claim; read it for the caveats.
-
-> **Honesty contract.** semantic-fabric's load-bearing result is the **constant
-> engine memory under growing source data** invariant — a property of the
-> streaming architecture, demonstrated byte-for-byte below. The in-process
-> micro-benchmark numbers in §7b are an in-process Rust library over embedded
-> SQLite (no HTTP); the cross-engine race uses HTTP on both sides — see
-> [COMPARISON.md](COMPARISON.md). Full methodology, caveats, and reproduction live
-> in **[BENCHMARKS.md](BENCHMARKS.md)** and **[COMPARISON.md](COMPARISON.md)**.
-
-Workload: a deterministic, cross-reference-consistent subset of the
-**[GTFS-Madrid-Bench](https://github.com/oeg-upm/gtfs-bench)**, vendored verbatim
-under `crates/sf-bench/vendor/gtfs-madrid-bench/` (see its `PROVENANCE.md`).
-Hardware: Apple M5 Max, macOS 26.4, rustc 1.96.0; sf over embedded SQLite
-(in-process, `--release` via criterion) ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md),
-[ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)).
-
-### 7a. Constant engine memory — the differentiator
+Prerequisite: the pinned Rust toolchain in `rust-toolchain.toml`.
 
 ```bash
-cargo bench -p sf-bench --bench constant_memory
-```
-
-Peak engine heap during the streamed CONSTRUCT dump (source data lives in a
-file-backed SQLite DB, off the engine heap):
-
-| Scale | Triples | Peak engine heap | Bytes / triple |
-|---|---|---|---|
-| 1x | 5 200 | **129 358 B** | 24.88 |
-| 10x | 51 880 | **129 358 B** | 2.49 |
-| 100x | 518 680 | **129 358 B** | 0.249 |
-
-The engine peak heap is **byte-identical (129 358 B) across a 100× growth in
-source data and result size**, while bytes/triple collapses toward zero — the
-`O(|T| + |M| + batch)` invariant, demonstrated. The same property is asserted as a
-fast unit test (peak-heap growth exactly 1× against a 16× row growth):
-
-```bash
-cargo test -p sf-bench --test constant_memory -- --nocapture
-# 1x→5 200, 4x→20 760, 16x→83 000 triples — all 129 358 B; test PASSED
-```
-
-### 7b. Per-query OBDA latency
-
-```bash
-cargo bench -p sf-bench --bench obda_latency
-```
-
-criterion medians @1x, in-process (SQLite):
-
-| Query | Shape | Median @1x |
-|---|---|---|
-| Q1 routes BGP | single-table BGP | 29.35 µs |
-| Q2 route → agency join | 2-way join | 37.83 µs |
-| Q3 stop_time → trip → route join | 3-way join | 738.2 µs |
-| Q4 route FILTER | pushed-down FILTER | 26.69 µs |
-| Q5 trip OPTIONAL headsign | NULL-safe left join | 96.35 µs |
-
-Streamed CONSTRUCT dump — first-result latency stays bounded (~65 µs) while total
-grows linearly with the result (the non-materialising path):
-
-| Scale | Triples | First result | Total |
-|---|---|---|---|
-| 1x | 5 200 | 67.0 µs | 3.284 ms |
-| 10x | 51 880 | 64.2 µs | 28.431 ms |
-| 100x | 518 680 | 64.4 µs | 283.017 ms |
-
-### 7c. Fair head-to-head vs Ontop — same backend, same process model
-
-Now that `serve` and the PostgreSQL executor both ship, the comparison is
-like-for-like: semantic-fabric and **Ontop 5.5.0** both run as **warm HTTP SPARQL
-endpoints over the same PostgreSQL 17.7**, timed by the same `curl` client over the
-same seven queries, at full answer parity. Selected medians (ms):
-
-| Query | sf @1x | Ontop @1x | sf @10x | Ontop @10x |
-|---|---|---|---|---|
-| Q1 routes BGP | **1.02** | 2.41 | **1.19** | 3.08 |
-| Q3 stop_time → trip → route (3-way join) | **2.69** | 12.87 | **9.27** | 48.07 |
-| Q5 trip OPTIONAL | **1.46** | 2.68 | **1.33** | 3.89 |
-| Q6 GROUP BY | **1.60** | 2.22 | 1.70 | 1.82 |
-
-semantic-fabric is faster on **all 14 (query × scale) cells** of the Q1–Q7 race —
-Q6 at 10× (1.70 vs 1.82 ms) is a tie within measurement noise — including the
-heavy 3-way join Q3 at 5.2×. **One loss was real and stays on the record:** Q5
-(OPTIONAL) at 10× measured 8.72 ms on the pre-optimization binary, a clear Ontop
-win at the time; the self-left-join elimination (commit `deb3a68`) collapsed the
-plan to a single scan, and it now measures 1.33 ms. On footprint sf is a
-**12.8 MiB single binary** (vs a JVM + 171 jars), **0.15 s cold start** (vs
-~1.7 s), **~12 MiB serving RSS** (vs ~300 MiB). This is a small, simple-query,
-localhost dataset — **not a blanket speed-win claim**. Full tables, the materialiser
-(Morph-KGC) axis, methodology, and caveats are in **[COMPARISON.md](COMPARISON.md)**.
-
-### 7d. OSS OBDA / RDB-to-RDF landscape
-
-Qualitative positioning (all competitor facts cited; no head-to-head speed number
-is claimed — the canonical GTFS-Madrid-Bench paper publishes *completeness*
-tables, not timings, and explicitly declines to rank engines):
-
-| Engine | Runtime | Virtual? | Mapping→SQL approach | Backends | Maturity |
-|---|---|---|---|---|---|
-| **semantic-fabric** | **Rust (no JVM, single binary)** | **Yes (virtualisation-only, never materialises)** | SPARQL 1.2 → SQL over R2RML | SQLite, PostgreSQL (both execute) | early/public; `serve` HTTP endpoint live; full property-path expressions (with documented 501 residuals); W3C 81/82 SQLite, 80/81 PG (1 shared deviation) |
-| [Ontop](https://github.com/ontop/ontop) | Java/JVM | Yes (core) | SPARQL→datalog→optimised SQL, R2RML/.obda | Many RDBMS | Mature, maintained, reference |
-| [Morph-RDB](https://github.com/oeg-upm/morph-rdb) | JVM (Scala/Java) | Yes (+materialise) | SPARQL→SQL, R2RML | JDBC RDBMS | Unmaintained since 2019 (v3.12.5) |
-| [Squerall](https://github.com/EIS-Bonn/Squerall) | JVM (Scala/Spark+Presto) | Yes | Data-lake OBDA, distributed | CSV/Parquet/Mongo/Cassandra/JDBC | Research (SANSA) |
-| [Morph-KGC](https://github.com/morph-kgc/morph-kgc) | Python | No (materialises) | n/a — builds RDF | RDB/CSV/JSON/XML via RML | Maintained, active |
-| [RMLMapper](https://github.com/RMLio/rmlmapper-java) | Java | No (materialises) | n/a | RML sources | Reference RML tool |
-| [SDM-RDFizer](https://github.com/SDM-TIB/SDM-RDFizer) | Python | No (materialises) | n/a | RML sources | Active, fast |
-
-Context (cited): on GTFS-Madrid-Bench, Ontop has historically answered only ~half
-the 18 queries (failing on OPTIONAL-with-NULLs and arithmetic FILTER/date
-expressions, and needing its memory cap raised from 512 MB to 8 GB) — Morph-CSV
-paper §5.2, [arXiv 2001.09052](https://arxiv.org/pdf/2001.09052). The canonical
-benchmark ([J. Web Semantics 65 (2020) 100596](https://www.sciencedirect.com/science/article/pii/S1570826820300354))
-publishes result-completeness tables, **not** a speed ranking. No precise
-published per-query GTFS-Madrid-Bench *time* is citable for any virtualisation
-engine — hence semantic-fabric positions on **Rust / no-JVM / single-binary,
-virtualisation-only, and constant engine memory**, not a claimed speed win.
-
-## 8. Quick start / how to use
-
-**Prerequisites:** the pinned Rust toolchain (`rust-toolchain.toml`, channel
-1.96.0); PostgreSQL is optional — `serve`/`bench`/`conformance` all run over
-embedded SQLite with no external dependency, and PostgreSQL is needed only to serve
-or compare against a live PG source.
-
-```bash
-# Build the workspace and see the CLI
 cargo build --workspace
-cargo run -p sf-cli -- --help          # the `semantic-fabric` binary (ADR-0006)
+cargo run -p sf-cli -- --help
 ```
 
-The single binary exposes three subcommands:
+The binary has three commands:
 
-| Subcommand | What it does | Status |
-|---|---|---|
-| `serve` | **SPARQL 1.2 Protocol HTTP endpoint** over a live SQLite/PostgreSQL source — streamed, content-negotiated, governed ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8, [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[0011](docs/adr/ADR-0011-observability-and-configuration.md)) | Working |
-| `conformance` | Runs the **real W3C RDB2RDF suite** (SQLite) with EARL reporting ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md)) | Working |
-| `bench` | Runs the **GTFS-Madrid OBDA driver** — live SPARQL→SQL over SQLite ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md)/[0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)) | Working |
+| Command | Purpose |
+|---|---|
+| `serve` | Governed SPARQL 1.2 Protocol endpoint over a live relational source |
+| `conformance` | W3C RDB2RDF suite over SQLite with EARL reporting |
+| `bench` | GTFS-Madrid OBDA workload over SQLite |
 
-```bash
-cargo run -p sf-cli -- serve --source <src> --mapping <ttl>   # live SPARQL 1.2 endpoint (below)
-cargo run -p sf-cli -- conformance     # W3C RDB2RDF over SQLite (prints pass/deviation summary)
-cargo run -p sf-cli -- bench           # GTFS-Madrid OBDA: rewrites SPARQL → SQL, streams from SQLite
-```
-
-**`serve` flags.** `--source sqlite:<path>` (path may be `:memory:`) or
-`pg:<conninfo>`; `--mapping <ttl>` (R2RML, required); `--ontology <ttl>` (optional
-tier-1 T-Box); `--bind host:port` (default `127.0.0.1:7878`); plus `--timeout-secs`
-and `--max-query-len` governance caps, and `--pg-pool-size`/`--pg-pool-wait-secs`/
-`--sqlite-pool-size` connection-pool sizing
-([ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md) §C).
-The endpoint is `GET`/`POST /sparql` (SPARQL 1.2 Protocol), read-only (query only),
-content-negotiated via `Accept` (SPARQL Results JSON/XML/CSV/TSV for SELECT/ASK;
-Turtle/N-Triples/JSON-LD for CONSTRUCT).
+Start the endpoint with an R2RML mapping:
 
 ```bash
-# Reproducible GTFS source: load the shared dataset into PostgreSQL, then serve it.
-scripts/load_gtfs_postgres.sh 1                         # creates the gtfs_bench DB
-
+# SQLite
 cargo run -p sf-cli -- serve \
-  --source pg:dbname=gtfs_bench \
-  --mapping scripts/ontop/gtfs.r2rml.ttl \
-  --bind 127.0.0.1:7878
+  --source sqlite:/path/to/app.db \
+  --mapping /path/to/mapping.ttl
 
-# (SQLite instead — same flags, the other source form:)
-#   --source sqlite:/path/to/your.db        (or sqlite::memory:)
+# PostgreSQL
+cargo run -p sf-cli -- serve \
+  --source 'pg:host=localhost dbname=app' \
+  --mapping /path/to/mapping.ttl
 
-# In another shell — query it like any SPARQL endpoint:
+# MySQL; prefer an environment-expanded secret rather than a literal in history
+cargo run -p sf-cli -- serve \
+  --source "mysql://user:${MYSQL_PASSWORD}@127.0.0.1/app" \
+  --mapping /path/to/mapping.ttl
+```
+
+Optional flags include `--ontology`, `--bind`, `--timeout-secs`,
+`--max-query-len`, `--pg-pool-size`, `--pg-pool-wait-secs`, and
+`--sqlite-pool-size`. The default endpoint is
+`http://127.0.0.1:7878/sparql`.
+
+```bash
 curl -s 'http://127.0.0.1:7878/sparql' \
   -H 'Accept: application/sparql-results+json' \
   --data-urlencode 'query=PREFIX gtfs: <http://vocab.gtfs.org/terms#>
     SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }'
 ```
 
-**Minimal walkthrough.** Give the engine (a) an R2RML mapping `M` describing how a
-SQLite/PostgreSQL table maps to RDF and (b) a SPARQL query — over `serve` (above),
-or in-process via the vendored GTFS example exercised by `bench`
-(`crates/sf-bench/vendor/gtfs-madrid-bench/gtfs-rdb.r2rml.ttl` + the queries in
-`crates/sf-bench/src/workload.rs`). The rewriter unfolds the SPARQL against `M`,
-emits dialect SQL, runs it against the live source, and streams RDF terms back out —
-no copy, no materialisation.
+`GET` and `POST /sparql` are read-only and content-negotiated. SELECT/ASK can
+return SPARQL Results JSON, XML, CSV, or TSV. CONSTRUCT/DESCRIBE can return
+Turtle, N-Triples, or JSON-LD. Requests are bounded by timeout, query-size,
+pool, and cancellation controls from
+[ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
 
-## 9. Status & limitations
+## What works today
 
-**Works today.** A real `serve` SPARQL 1.2 Protocol HTTP endpoint (streamed,
-content-negotiated, governed) over **both** SQLite and PostgreSQL — both backends
-execute the OBDA path; SPARQL 1.2 → SQL over R2RML + Direct Mapping; full
-property-path expressions (`^p`, `p/q`, `p|q`, `p?`, `!p`, composite `+`/`*`);
-conformance and bench end-to-end; named-graph output and querying, including
-variable `GRAPH ?g`; R2RML §10 datatype canonicalisation; constant-memory
-streaming; **RDF-star quoted triples in native RDF 1.2 reification form**
-end-to-end over SQL (R2RML-star extension — see the subsection below).
+- SPARQL 1.2 BGPs, joins, OPTIONAL, UNION, MINUS, FILTER, EXISTS/NOT EXISTS,
+  BIND, VALUES, subqueries, aggregation, ordering, slicing, and all four query
+  forms through the supported plan shapes.
+- Property paths: inverse, sequence, alternative, optional, negated property
+  sets, and composite `+`/`*` through source-dialect recursive CTEs.
+- R2RML plus Direct Mapping, datatype/dialect canonicalisation, templates,
+  graph maps, and streamed term reconstruction.
+- RDF-star quoted triples in native RDF 1.2 reification form, including path
+  joins and named-graph composition.
+- SQLite, PostgreSQL, and MySQL execution through the shared `SqlBackend`
+  contract. The published W3C figures currently cover SQLite and PostgreSQL;
+  MySQL has adapter, endpoint, and live differential coverage.
+- A governed HTTP endpoint with streaming, content negotiation, bounded pools,
+  request cancellation, and overload shedding.
 
-**Limitations — stated plainly so the numbers are not over-read:**
+## Correctness and verification
+
+The load-bearing authority is direct repository evidence, not a model or
+harness score:
+
+- W3C RDB2RDF: **81/82 SQLite**, **80/81 PostgreSQL**. The one shared deviation
+  is `R2RMLTC0002f`; the per-dialect fixture denominators are documented in
+  [ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md) and
+  [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md).
+- Differential suites compare flat and operator-tree planners with native
+  materialized RDF and spareval across ordinary queries, paths, graphs, and
+  RDF-star.
+- The 2026-08-26 closeout passed format, clippy with warnings denied, all-target
+  build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
+  workspace tests 1,088 passed with 3 ignored, and conformance with zero
+  unexpected failures.
+- The versioned engineering harness passes 327/327 tests across 47 files.
+
+Reproduce the primary gates:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace --all-targets
+cargo test --workspace
+cargo run -p sf-cli -- conformance
+```
+
+## Open-issue remediation closeout
+
+[ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md) and
+the [execution plan](docs/plans/open-issues-ruflo-metaharness-implementation-plan.md)
+record the complete decisions and evidence.
+
+| Issue | Disposition | Evidence |
+|---|---|---|
+| [#8](https://github.com/sparkling/semantic-fabric/issues/8) incompatible binding pruning | Implemented: every incompatible subject/predicate/object/class/graph bind prunes its branch | `10dedd4`; flat/tree/materialized-oracle regressions |
+| [#9](https://github.com/sparkling/semantic-fabric/issues/9) graph-union wrong results | Implemented: normalized subject/POM graph union and default-graph handling across BGP, paths, and RDF-star | `5218874`; W3C and differential regressions |
+| [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Core fix implemented: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; issue stays open while the adjacent dependency-security gate is red | `5b8415c`; one `libsqlite3-sys` link target |
+| [#7](https://github.com/sparkling/semantic-fabric/issues/7) cloud backends | Open and deliberately deferred. Only SQLite, PostgreSQL, and MySQL are admitted to `serve` | `9d709dd`; provider-specific protocol/security gates remain |
+| [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Open as collaboration context. Federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added |
+
+The `rusqlite` resolution does not silently absorb the separate
+`mysql_async`/`lru` security follow-up raised on #10. A fresh 2026-08-26 lock
+still fails `cargo audit` on `RUSTSEC-2026-0235` (`rkyv 0.7.46` through the
+resolved `rust_decimal` feature surface), while `mysql_async 0.36.2` resolves
+to `lru 0.16.4`, reported as unsound by `RUSTSEC-2026-0253`. The latter is an
+informational audit warning; the former is a release-blocking vulnerability.
+Neither is newly ignored. Cloud adapters are not relabelled production-ready
+merely because mocked happy paths exist.
+
+## Engineering MetaHarness status
+
+`coding-harness/` is a private, development-only Ruflo MetaHarness control
+plane governed by
+[ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md). It
+uses native ChatGPT/Codex and Claude Code subscriptions, isolated candidate and
+evaluator worktrees, frozen inputs, exact-origin egress, bounded repair,
+independent review, provider-free QE/SAST, and digest-chained receipts. It has
+no commit, push, publication, deployment, or promotion authority.
+
+The first sealed issue-#8 programme transaction was **honestly rejected**. Run
+`issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,
+then exhausted one post-admission verifier-directed repair: 40/100 against the
+required 98, hard gates failed, no fitness eligibility. The independently
+implemented product fix and direct tests remain valid; they are not substituted
+for a passing sealed model transaction. OIA/MCP and persisted ADR-graph
+visibility remain `INCONCLUSIVE` where the active surfaces could not be read.
+
+Darwin/GEPA remains disabled until at least five discriminating training tasks
+and five sealed holdouts exist. No diagnostic score can override a failed
+product oracle.
+
+## Benchmarks
+
+The reproducible methodology and full caveats live in
+[BENCHMARKS.md](BENCHMARKS.md) and [COMPARISON.md](COMPARISON.md).
+
+The strongest measured invariant is constant engine heap during a streamed
+CONSTRUCT dump over a file-backed SQLite source:
+
+| Scale | Triples | Peak engine heap | Bytes/triple |
+|---:|---:|---:|---:|
+| 1× | 5,200 | **129,358 B** | 24.88 |
+| 10× | 51,880 | **129,358 B** | 2.49 |
+| 100× | 518,680 | **129,358 B** | 0.249 |
+
+The peak is byte-identical across 100× source/result growth. The published
+Ontop 5.5.0 comparison uses the same PostgreSQL source and warm HTTP endpoints;
+semantic-fabric wins the measured Q1–Q7 cells except one tie within noise, while
+the report preserves the pre-optimization Q5 loss and avoids a blanket speed
+claim. It is a small localhost workload, not a production sizing result.
+
+## Current status and open work
 
 | Area | Honest status |
 |---|---|
-| `serve` HTTP endpoint | **Built and working** — a SPARQL 1.2 Protocol query endpoint (`GET`/`POST /sparql`), read-only, streamed, content-negotiated, with ADR-0010 governance (timeout, query-length cap, cancel-on-drop) ([ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) G8, [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md)/[0011](docs/adr/ADR-0011-observability-and-configuration.md)) |
-| Backend executor | **SQLite *and* PostgreSQL both execute** the OBDA path end to end (PostgreSQL is no longer emit-only) ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)) |
-| Property paths | **Full expressions** — inverse `^p`, sequence `p/q`, alternative `p|q`, `p?`, negated property set `!p`, and composite `+`/`*`. Honest 501 residuals (never silently wrong): a **bound endpoint** (v1 = `?s PATH ?o`), a **nested closure inside a composite**, **shape-mismatched composites** (`P+`/`P*` whose subject/object node shapes differ across heterogeneous term domains), and **`p?`/`P*` reflexive** over a multi-predicate or composite graph ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md), [ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)) |
-| Named-graph querying | **`GRAPH <g>` and the variable form `GRAPH ?g` both work** — `GRAPH ?g` enumerates the mapping's declared graph maps per branch (constant, template, or column) and binds `?g` through the same unification that joins any shared variable; a star annotation declared inside a named graph composes with it directly. One pinned residual: a property path under `GRAPH ?g` refuses (`501`) once the mapping declares any non-constant (template/column) graph map anywhere, not only on the path's own predicate ([ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md)) |
-| W3C RDB2RDF conformance | **81/82 (SQLite), 80/81 (PostgreSQL)** — **not 100%** — with one documented standards deviation, `R2RMLTC0002f`, shared by both dialects ([ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md), [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)) |
-| Out of scope | Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, FNML ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md), [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)) |
+| Serving | Working read-only SPARQL 1.2 Protocol endpoint over SQLite, PostgreSQL, and MySQL |
+| Cloud/REST adapters | Prototype/library-only; Databricks, AWS Athena, Snowflake, BigQuery, Trino/Presto and other adapters are not admitted to `serve` |
+| Property paths | Broad support; explicit `501` residuals remain for bound-endpoint, nested-closure, shape-mismatched, and some reflexive composite forms |
+| Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
+| Federation | Cross-RDBMS planning is in scope; issuing remote SPARQL `SERVICE` queries is not. semantic-fabric can itself be used as a private SERVICE endpoint |
+| Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
+| Production hardening | Reliability, deployment-edge security, packaging, horizontal scale, hot reload, schema-drift detection, and result caching remain tracked in proposed ADR-0014 |
+| Accepted designs not wired | Observability/configuration (ADR-0011), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
+| Dependency security | **Release-blocking:** fresh-lock `cargo audit` fails on `RUSTSEC-2026-0235`; `RUSTSEC-2026-0253` remains visible as an unsoundness warning. Neither is ignored |
 
-**Reading the conformance figures.** Each figure is R2RML + Direct Mapping:
-SQLite 62/63 + 19/19 = **81/82**; PostgreSQL 57/58 + 23/23 = **80/81**. The
-denominators differ because a fixture the source database cannot load is
-*skipped* and never counted — SQLite cannot load the 5 table-level-constraint
-DDL scenarios (D021–D025; they load and **pass** on PostgreSQL), and PostgreSQL
-cannot load the 6 `VARBINARY` D016 fixtures (which load on SQLite). The single
-non-pass in both figures is the same case, `R2RMLTC0002f` — an *unreviewed
-negative* test expecting a mapping to be **rejected** when a regular identifier
-`{Name}` references a column created as delimited `"Name"`. The honest
-per-dialect status: under SQLite's (and MySQL's) case-insensitive identifier
-semantics, *accepting* that reference is the correct behaviour for the database
-— Ontop fails this same test on MySQL for the same reason — so there it is a
-documented deviation ([ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md)).
-On PostgreSQL, whose unquoted identifiers case-fold and genuinely do not match,
-rejecting is achievable — Ontop passes it there alongside the
-structurally-identical positive cases — so on PostgreSQL this is a small **open
-parity item**, tracked as such, not an impossibility.
+Unsupported capabilities fail explicitly rather than returning wrong answers.
 
-Features outside the v1 surface return 501 / are skipped — they are not silently
-wrong, but they are not done.
-
-### RDF-star: quoted triples over SQL (R2RML-star extension)
-
-semantic-fabric supports **RDF-star** — statements *about* statements (provenance,
-certainty, validity) — end to end over live relational data, without
-materialisation, in **native RDF 1.2 reification form**: reifiers,
-`rdf:reifies` triples, and triple terms are real, queryable RDF 1.2 values at
-every visible surface, not a synthetic stand-in. A mapping declares a quoted
-triple with the RML-STAR vocabulary (`rml:starMap` / `rml:quotedTriplesMap`),
-and a SPARQL-star query — reified `<< ?s ?p ?o >>` or triple-term
-`<<( ?s ?p ?o )>>` — is answered by rewriting it onto the W3C RDF 1.2
-Interoperability *basic encoding*, used purely as an internal SQL wire format.
-The mapping compiler
-([ADR-0029](docs/adr/ADR-0029-rdf-star-mapping-extension-rml-star-vocabulary-basic-encoding.md)),
-the query rewrite
-([ADR-0031](docs/adr/ADR-0031-rdf-star-query-rewrite-quoted-triple-patterns-basic-encoding.md)),
-and the soundness-and-completeness pass making the extension sound and
-complete for RDF 1.2
-([ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md))
-are implemented and test-gated, with equivalence to a native RDF 1.2 evaluator
-mechanically verified over the decoded graph — including a fix making the
-proposition identifier a provably **injective** function of the quoted triple,
-closing a cross-map id-collision gap the same oracle investigation found.
-Quoted patterns at a property-path endpoint — and path-joins generally — now
-compose on **both** query engines
-([ADR-0033](docs/adr/ADR-0033-path-as-derived-table-join-composition.md)). The
-virtual graph is also a **set**, not a bag: duplicate source rows and two maps
-emitting the same triple dedup at the BGP level, elided to zero SQL cost for
-well-keyed, disjointly-templated mappings — the common case
-([ADR-0034](docs/adr/ADR-0034-virtual-graph-set-semantics-bgp-dedup.md)).
-**Named-graph querying, including the variable form `GRAPH ?g`, now works**:
-a variable graph enumerates the mapping's declared graph maps per branch and
-binds `?g` through the same unification that joins any shared variable, and a
-star annotation declared inside a named graph composes with it directly — the
-one pinned residual is a property path under `GRAPH ?g` once the mapping
-declares any non-constant graph map anywhere
-([ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md)). All of this runs
-under a differential-oracle and adversarial-refute test apparatus —
-`differential_star`, `differential_tree`, `differential_paths`,
-`differential_graphs`, plus four dedicated adversarial-refute suites
-(ADR-0033, ADR-0034, general SPARQL-star correctness, and a test-soundness
-audit that mutation-tests the suite itself) — spanning 355 cases with zero
-open failures. This same apparatus also caught and closed four further
-correctness gaps: same-shape cross-kind template equality (an IRI template
-compared against a Literal template, say) now resolves provably empty
-instead of a wrong match; `CONSTRUCT` template blank nodes are freshened per
-solution per SPARQL §16.2, where they used to be shared across rows;
-`CONSTRUCT` now dedups a same-triple emission across candidate maps, not
-only within one; and datatype-mismatched candidate arms are recognized as
-disjoint, so they no longer pool through `UNION`. There is **no prior art** for
-RDF-star over live SQL rewriting
-([ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) §G).
-
-- **[R2RML-star specification](https://sparkling.github.io/semantic-fabric/rdf-star/specification.html)**
-  ([source](docs/rdf-star/specification.html)) — the normative extension spec
-  (vocabulary, the two identifier families, query semantics and the matching
-  law, remaining boundaries), structured after the W3C R2RML Recommendation.
-- **[R2RML-star guide &amp; tutorial](https://sparkling.github.io/semantic-fabric/rdf-star/guide.html)**
-  ([source](docs/rdf-star/guide.html)) — a hands-on walkthrough: why quote a
-  triple, the mental model, and worked mapping + query examples.
-
-### What is deferred or excluded — and the reasoning
-
-Some capabilities are deliberately not here. None of them are silent gaps: the
-engine's governing rule is **`=_bag`-absolute** ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)) —
-where it cannot answer *soundly*, it returns an honest `501`/`Error::Unsupported`
-rather than risk a wrong answer. That rule is what makes the items below safe to
-defer: they cost you an answered query, never a wrong one. Each is a
-living-plan ADR with an explicit trigger and effort estimate, not a forgotten
-corner.
-
-**Full Ontop feature/optimizer parity — deferred, by tier**
-([ADR-0021](docs/adr/ADR-0021-ontop-parity-program.md) program,
-[ADR-0025](docs/adr/ADR-0025-ontop-parity-residue-closure.md) residue). The
-parity that affects *answers* is done — the operator-tree IR is complete (M0–M8)
-and the differential oracle is green. What remains splits two ways:
-
-- *Architecturally-blocked capabilities* (~5, each currently a sound `501`): e.g.
-  a property path inside `EXISTS`/`NOT EXISTS`/`MINUS`, or a multi-branch `UNION`
-  sub-plan used as a join/`OPTIONAL` input. Each needs a real architectural
-  change — for instance, a recursive-CTE path can't be referenced from today's
-  `EXISTS`, so it needs a CTE-aware condition type — and each is a
-  milestone-sized effort. They stay `501` because a *rushed* fix risks turning a
-  sound refusal into a wrong answer, which [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)
-  forbids outright.
-- *Cosmetic SQL-shape differences* (same answers, different SQL text): **closed
-  as won't-do-with-cause.** They reduce entirely to two foundational designs —
-  a query `Plan` is a bag-union of independent `Branch` SELECTs
-  ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)) and RDF
-  term construction is lifted *out* of SQL into Rust
-  ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)). Matching
-  Ontop's collapsed SQL text would mean re-architecting for zero `=_bag` or
-  performance benefit, since the database re-optimizes the query either way.
-
-**OWL 2 QL tier-2 entailment (reasoning over anonymous individuals) — excluded,
-evidence-gated** ([ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md)). Tier-1
-hierarchy entailment *is* live and folded into the rewrite: subclass/subproperty
-saturation, `owl:inverseOf`, `owl:SymmetricProperty`, and transitives served as
-recursive-CTE property paths. Tier-2 adds only *answering over anonymous
-individuals* (a `C ⊑ ∃R.D` axiom queried through an existential join variable —
-tree-witness answering). It is excluded because at **depth-0** — a T-Box with no
-right-hand-side existential — tier-1 is *provably complete*, and the platform's
-OWL-as-documentation policy makes the generated T-Box depth-0 by construction, so
-tier-2 would add nothing. It is also rare in OBDA over relatively-complete
-operational data, causes exponential rewriting blow-up at depth ≥ 2, and a full
-tree-witness rewriter would re-tread 15 years of Ontop and drag a reasoner back
-into the serving path (against the no-JVM-serving charter). The gate: if the
-offline Ontop oracle ever shows a real query missing answers, the rewriter grows
-to depth-1 (still virtual, polynomial), never a hand-rolled full rewriter.
-
-**Production hardening — acknowledged-deferred**
-([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)). Reliability
-(retries, circuit-breakers, failover), deployment-edge security (TLS, secrets
-management, rate-limiting, audit-log transport), packaging (container / systemd /
-k8s, health/readiness probes), horizontal scale (multi-node, read replicas,
-sharding), lifecycle (mapping hot-reload, source-schema-drift detection), and
-result caching. These are operational/deployment dimensions that do not gate the
-engine build and are only actionable against a concrete deployment target; each
-graduates to its own ADR when it becomes so. Tracked, not forgotten. Three
-further accepted ADRs are **design-complete but not yet implemented** — nothing
-from them ships in today's binary: observability
-([ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md)), query-time
-provenance/lineage ([ADR-0017](docs/adr/ADR-0017-provenance-lineage.md)), and
-the security edge ([ADR-0018](docs/adr/ADR-0018-security-edge.md)).
-
-**Hard out-of-scope lines** ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
-Heterogeneous (CSV/JSON/XML) sources, `SERVICE` federation, and FNML are outside
-a virtualisation-only-over-relational charter — they are non-relational or
-cross-endpoint by nature, not a deferral within scope.
-
-> These are the positions as of the current ADR corpus; the ADRs are living
-> plans and move as reality does. If one describes a world that no longer
-> matches the code, that is a bug in the plan — raise it.
-
-## 10. Architecture / workspace
-
-Eight crates ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)
-crate layout, [ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md)
-shared-core/frontend split, [ADR-0004](docs/adr/ADR-0004-oxigraph-rdf-sparql-substrate.md)
-substrate):
+## Workspace
 
 | Crate | Role |
 |---|---|
-| `sf-core` | Shared core: R2RML mapping IR, RDF term generation, R2RML §10 datatypes |
-| `sf-sql` | Source/SQL layer: connectors, dialects (SQLite/PostgreSQL), schema introspection |
-| `sf-mapping` | R2RML / Direct-Mapping parser → core IR |
-| `sf-sparql` | The virtualiser: SPARQL 1.2 → SQL rewriter (instance data never materialised) |
-| `sf-conformance` | W3C RDB2RDF harness + EARL + `M ⋈ T` SHACL gate |
-| `sf-bench` | GTFS-Madrid OBDA benchmark driver |
-| `sf-serve` | The SPARQL 1.2 Protocol HTTP endpoint (streamed, negotiated, governed) over SQLite/PostgreSQL |
-| `sf-cli` | The single binary: `serve · conformance · bench` |
+| `sf-core` | Shared mapping IR, RDF terms, graph-map semantics, datatypes |
+| `sf-sql` | Dialects, source adapters, typed binding, schema introspection |
+| `sf-mapping` | R2RML and Direct-Mapping parsing into the core IR |
+| `sf-sparql` | SPARQL algebra unfolding, normalization, SQL emission, execution |
+| `sf-conformance` | W3C, differential, mutation, and EARL evidence |
+| `sf-bench` | GTFS-Madrid and constant-memory benchmarks |
+| `sf-serve` | Governed SPARQL 1.2 Protocol HTTP endpoint |
+| `sf-cli` | `serve`, `conformance`, and `bench` binary |
 
-## 11. Decision records
+## Architecture decisions
 
-The full ADR corpus — 32 records (0001–0035; **0009 folded into 0004; 0013 and
-0016 never issued**), of which two are `proposed` ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)
-production-hardening backlog, [ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md)
-dev-process tooling) and the rest `accepted`. Each prior section cites its ADRs
-inline; this is the canonical index.
+The canonical [ADR corpus](docs/adr/) contains 34 records: 32 accepted, one
+proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)), and one
+superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
+replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 
-**Charter & scope**
-
-| ADR | Decision |
+| Area | Records |
 |---|---|
-| [ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md) | A custom Rust OBDA data fabric — virtualisation over relational sources (charter) |
-| [ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md) | Scope: virtualisation-only OBDA over relational databases via R2RML |
+| Charter, substrate, conformance, execution, rewriting, reasoning | ADR-0001–0008 |
+| Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
+| Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
+| RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
+| Open-issue remediation and engineering control plane | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md), [ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md) |
 
-**Architecture**
+Research grounding and prior-art reviews are under
+[`docs/research/`](docs/research/). RDF-star has a normative
+[specification](docs/rdf-star/specification.html) and practical
+[guide](docs/rdf-star/guide.html).
 
-| ADR | Decision |
-|---|---|
-| [ADR-0003](docs/adr/ADR-0003-shared-core-two-frontend-architecture.md) | The virtualiser pipeline (SPARQL 1.2 → SQL over R2RML) |
-| [ADR-0004](docs/adr/ADR-0004-oxigraph-rdf-sparql-substrate.md) | Oxigraph crates as the RDF/SPARQL substrate; own the rewriter, hold ⟨T, M⟩ in memory |
+## Contributing and license
 
-**Correctness & performance**
+Before opening a pull request, run the primary gates from
+[Correctness and verification](#correctness-and-verification). Architectural
+changes must update or add an ADR in the same commit.
 
-| ADR | Decision |
-|---|---|
-| [ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md) | W3C RDB2RDF + GTFS/KROWN harness — correctness gate and fitness function |
-| [ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md) | Crate layout, execution & performance model (push-down + semi-join; no OLAP intermediary) |
-| [ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md) | SPARQL→SQL rewriting + cascade correctness (ISWC-2018 base translation) |
-| [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md) | Datatype & dialect correctness — R2RML §10 canonicalization (SQLite affinity) |
-
-**Reasoning**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0008](docs/adr/ADR-0008-reasoning-strategy.md) | Entailment folded into the rewrite, native Rust, no runtime JVM |
-
-**Ops & security**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md) | Security & resource governance (injection-safety, `P+` DoS limits) |
-| [ADR-0011](docs/adr/ADR-0011-observability-and-configuration.md) | Observability (`tracing` + `metrics`/Prometheus) + configuration model — *accepted design, not yet wired* |
-| [ADR-0018](docs/adr/ADR-0018-security-edge.md) | Security edge — source RLS + rewriter ABAC + data-sensitivity authZ — *accepted design, not yet implemented* |
-
-**Quality & process**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0012](docs/adr/ADR-0012-test-strategy.md) | Test strategy (unit/integration/property/fuzz + snapshot) |
-
-**Data & provenance**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0017](docs/adr/ADR-0017-provenance-lineage.md) | Provenance & lineage — query-time named graphs + PROV-O — *accepted design, not yet implemented* |
-
-**Readiness & roadmap**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md) | Production-hardening backlog (acknowledged-deferred) — *proposed* |
-| [ADR-0019](docs/adr/ADR-0019-rdf-sparql-shacl-12-readiness.md) | RDF 1.2 / SPARQL 1.2 / SHACL readiness — Rust stack in place of a JVM (G8: own the 1.2 Protocol endpoint — realised in `sf-serve`) |
-| [ADR-0020](docs/adr/ADR-0020-outstanding-sota-optimisations.md) | Outstanding SOTA optimisations — research register & dispositions |
-
-**Ontop parity, IR & executor**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0021](docs/adr/ADR-0021-ontop-parity-program.md) | Ontop-parity program — reach Ontop 5.5.0 parity within charter (tier-2 entailment excluded) |
-| [ADR-0022](docs/adr/ADR-0022-ws-g-ontop-optimizer-test-port.md) | Port Ontop's IQ-optimizer test suite as the Rust oracle |
-| [ADR-0023](docs/adr/ADR-0023-query-ir-architecture-flat-ucq-vs-iq-tree.md) | Native operator-tree IR with substitution-lifting normalization (production default since M8) |
-| [ADR-0024](docs/adr/ADR-0024-executor-backend-abstraction.md) | Unify per-database execution behind a `Backend` abstraction (dialect SQL + thin driver adapters) |
-| [ADR-0025](docs/adr/ADR-0025-ontop-parity-residue-closure.md) | Parity-residue closure — cataloged outstanding work and documented deferral decisions |
-| [ADR-0028](docs/adr/ADR-0028-full-corpus-audit-ontop-parity-ecosystem-gaps-sparql12-coverage.md) | Full-corpus audit: ADR status, Ontop parity, ecosystem gaps, SPARQL 1.2 coverage |
-
-**RDF-star (R2RML-star extension)**
-
-| ADR | Decision |
-|---|---|
-| [ADR-0029](docs/adr/ADR-0029-rdf-star-mapping-extension-rml-star-vocabulary-basic-encoding.md) | RDF-star mapping: reuse RML-STAR vocabulary, compile to the plain-RDF basic encoding |
-| [ADR-0031](docs/adr/ADR-0031-rdf-star-query-rewrite-quoted-triple-patterns-basic-encoding.md) | RDF-star query: algebra-level desugar of quoted-triple patterns onto the basic encoding |
-| [ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md) | RDF 1.2 soundness & completeness: native reification at every visible surface, encoding only under SQL |
-| [ADR-0033](docs/adr/ADR-0033-path-as-derived-table-join-composition.md) | Join-onto-path composition: path branches as alias-preserving derived tables |
-| [ADR-0034](docs/adr/ADR-0034-virtual-graph-set-semantics-bgp-dedup.md) | Virtual-graph set semantics: BGP-level dedup for duplicate rows and cross-map same-triple emission |
-| [ADR-0035](docs/adr/ADR-0035-variable-graph-querying.md) | Variable-graph querying: `GRAPH ?g` over the R2RML-declared named-graph structure |
-
-**Development process** (tooling around the repo, never the engine runtime)
-
-| ADR | Decision |
-|---|---|
-| [ADR-0026](docs/adr/ADR-0026-agentic-qe-fleet-adoption.md) | Adopting the `agentic-qe` fleet for coverage-gap analysis |
-| [ADR-0027](docs/adr/ADR-0027-qe-fleet-load-test-plan.md) | QE-fleet load testing for `sf-serve` — a concurrency axis ADR-0005 doesn't cover |
-| [ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md) | MetaHarness / Darwin-mode dev-process tooling — *proposed* |
-
-## 12. Research grounding / prior art
-
-These decisions stand on peer-reviewed work, not invention
-([ADR-0001](docs/adr/ADR-0001-semantic-fabric-rust-data-fabric.md) "stand on
-proven designs"; [ADR-0020](docs/adr/ADR-0020-outstanding-sota-optimisations.md)
-SOTA register). The full literature review lives in
-[`docs/research/`](docs/research/): Ontop, Morph-KGC, SDM-RDFizer,
-RMLMapper/Streamer, Oxigraph, R2RML + W3C tests, RML/YARRRML, the SPARQL→SQL
-cascade-correctness result, OBDA resource governance, external-memory join,
-dialect correctness, virtualization streaming, and the Rust substrate survey.
-
-## 13. Contributing & license
-
-Dual-licensed under **[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE)** — your
-choice. Before opening a PR, run the same gates CI runs:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets
-cargo test --workspace
-cargo run -p sf-cli -- conformance     # no UNEXPECTED W3C RDB2RDF regressions
-```
-
-Architectural changes follow the ADR process under [`docs/adr/`](docs/adr/) — open
-or amend an ADR alongside the code so every claim stays backed by a record.
+semantic-fabric is dual-licensed under [MIT](LICENSE-MIT) or
+[Apache-2.0](LICENSE-APACHE), at your option.

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 tags: [correctness, open-issues, r2rml, dependencies, cloud-backends, api]
 supersedes: []
 depends-on:
@@ -16,19 +16,29 @@ implements: []
 
 ## Implementation status
 
-**Accepted and partially executed.** The serialized correctness lane landed #8
-as `10dedd4` and #9 as `5218874`; the parallel dependency lane landed #10 as
-`5b8415c` without absorbing PR #12. Commit `9d709dd` locks `sf-serve` admission
-to SQLite, PostgreSQL, and MySQL while provider work remains deferred. Issue #6
-remains intentionally unchanged because no consumer-red Nova reproducer was
-available.
+**Accepted; product slices executed.** The serialized correctness lane landed
+#8 as `10dedd4` and #9 as `5218874`; the parallel dependency lane landed the
+core #10 `rusqlite 0.40.2` resolution as `5b8415c` without absorbing PR #12.
+Commit `9d709dd` locks `sf-serve` admission to SQLite, PostgreSQL, and MySQL
+while provider work remains deferred. Nova's follow-up pilot proved SERVICE
+federation and SQLite materialization through existing public APIs; its only
+remaining upstream request is an optional fallible early-exit sink, so no
+speculative API was added for #6.
 
 Locked/offline workspace format, clippy, build, tests, and W3C conformance pass
-with one adjudicated documented deviation and no unexpected failure.
-The broader programme is not complete: `cargo audit` retains the unignored
-`RUSTSEC-2026-0235` baseline, provider-specific #7 evaluators are not built,
-and #6 still requires consumer evidence. No issue state or external branch was
-changed by this execution.
+with one adjudicated documented deviation and no unexpected failure. The
+versioned engineering harness passes 327 tests, and its first sealed dual-host
+transaction was executed rather than left pending. That model candidate was
+correctly rejected after one post-admission repair (40/100, hard gates failed),
+which does not replace or invalidate the direct product evidence.
+
+The broader programme remains open around provider-specific #7 evaluators, the
+optional consumer-driven #6 seam, and dependency-security evidence adjacent to
+#10. A fresh lock still fails `cargo audit` on `RUSTSEC-2026-0235` (`rkyv
+0.7.46`), while the separately reported `mysql_async 0.36.2` chain retains the
+`RUSTSEC-2026-0253` `lru 0.16.4` unsoundness warning. Neither is newly ignored.
+GitHub issue closure is gated on posting exact-SHA evidence after remote CI;
+this ADR does not infer external issue state from local commits.
 
 ## Context and problem statement
 

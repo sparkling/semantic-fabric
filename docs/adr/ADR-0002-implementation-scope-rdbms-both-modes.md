@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-26
 tags: [scope, virtualization, obda, rdbms, r2rml, direct-mapping, sparql-1.2, rdf-1.2, conformance]
 depends-on:
   - ADR-0001
@@ -37,7 +38,7 @@ The unbounded **instance data (A-Box)** is never materialised: it is produced on
 |---|---|
 | Mode | **Virtualisation / OBDA only** — SPARQL → SQL at query time. No instance triple store, no batch materialisation. |
 | Mappings | **R2RML** + **Direct Mapping** (treated as auto-generated R2RML). Nothing else. |
-| Sources | **Relational databases only** — PostgreSQL (primary), SQLite (CI/embedded), MySQL (follows). |
+| Sources | **Relational databases only** — PostgreSQL, SQLite, and MySQL are supported by the public serving path. |
 | Query | **Full SPARQL 1.2** — BGPs, OPTIONAL, UNION, MINUS, FILTER + (NOT) EXISTS, BIND, VALUES, subqueries, aggregation (GROUP BY/HAVING), solution modifiers, **recursive property paths (`*`/`+`)**, and all four query forms (SELECT/ASK/CONSTRUCT/DESCRIBE). |
 | Data model | **RDF 1.2** — triple terms, reifiers, directional language-tagged strings. |
 | Results | SELECT/ASK → **SPARQL 1.2 Results, JSON**; CONSTRUCT/DESCRIBE → **streamed JSON-LD** (expanded/flattened, emitted incrementally — never framed/compacted). |
@@ -67,9 +68,15 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 
 ### Confirmation
 
-- `cargo build --workspace` succeeds; `sf-cli` exposes `serve` (+ `conformance`/`bench`) and **no `materialize` verb**.
+- `cargo build --workspace` succeeds; `sf-cli` exposes `serve` for SQLite,
+  PostgreSQL, and MySQL (+ `conformance`/`bench`) and **no `materialize` verb**.
 - `sf-conformance` drives the W3C RDB2RDF suite via CONSTRUCT and the Ontop oracle (red until engine logic lands).
 - No crate depends on a triple store for instance data; Oxigraph holds only `⟨T, M⟩` (ADR-0004).
+
+> **Implementation reconciliation (2026-08-26).** MySQL has moved from
+> "follows" to the admitted public `serve` path through the shared backend
+> abstraction. Cloud/REST prototypes remain unadmitted under ADR-0024 and
+> ADR-0036; this does not broaden the relational-only charter.
 
 ## More Information
 
