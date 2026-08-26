@@ -201,7 +201,7 @@ async function executeIssue8(
       repositoryRoot: transactionRepository,
       scratchRoot: paths.frozen,
       baseline: task.baseline,
-      source: task.sourceFix,
+      source: task.candidateOracle.candidate,
       cargoExecutable: rustProfile.cargoExecutable,
       cargoEnvironment: rustProfile.environment,
       config: SECURE_HARNESS_CONFIG,

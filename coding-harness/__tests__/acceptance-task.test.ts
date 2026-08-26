@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  acceptanceTaskPrompt,
   bindAcceptanceTaskToRustProfile,
   parseAcceptanceTask,
   type AcceptanceTask,
@@ -61,27 +62,35 @@ function visitObjects(value: unknown, visit: (object: object) => void): void {
   for (const child of Object.values(value)) visitObjects(child, visit);
 }
 
-describe('issue #8 acceptance task', () => {
+describe('programme acceptance task', () => {
   it('parses the canonical shell-free task and freezes every nested value', () => {
     const task = parseAcceptanceTask(taskInput(), SECURE_HARNESS_CONFIG);
 
     expect(task).toMatchObject({
-      schemaVersion: 1,
-      issue: 8,
+      schemaVersion: 2,
+      workItem: 'github-issue:8',
       authority: 'development-only-no-promotion',
       baseline: {
         commit: 'd510fc952a8dc701d65b1a4f3ad25a8109b98669',
         tree: 'b5d67e0fdb107e6502959fd2ff36831170d093b1',
       },
-      sourceFix: {
-        commit: '10dedd40bda63d3acef18b8d34f61a32214e98d4',
-        tree: 'a3f637f6b14fff73e5209e539b7a19f0b6b73ffa',
+      candidateOracle: {
+        mode: 'exact-reference',
+        candidate: {
+          commit: '10dedd40bda63d3acef18b8d34f61a32214e98d4',
+          tree: 'a3f637f6b14fff73e5209e539b7a19f0b6b73ffa',
+        },
       },
       policy: {
         candidateNetwork: 'offline',
         modelTransport: 'native-first-party-only',
         nativeHosts: ['codex', 'claude-code'],
       },
+      routing: {
+        tags: ['rust', 'sparql', 'binding-pruning', 'sealed-evaluator'],
+        difficulty: 0.8,
+      },
+      qeProfiles: ['lcov-gap', 'sast'],
       evolutionEligible: false,
     });
     expect(task.evaluatorPaths).toEqual(['crates/sf-conformance/tests/issue_8_binding_pruning.rs']);
@@ -121,6 +130,23 @@ describe('issue #8 acceptance task', () => {
     }
     expect(Object.isFrozen(task)).toBe(true);
     expect(Object.isFrozen(task.commands.mutation[0].command.argv)).toBe(true);
+    expect(acceptanceTaskPrompt(task)).toContain('Objective: Prune an unfolding branch');
+  });
+
+  it('accepts a non-issue work item while keeping the exact-reference oracle explicit', () => {
+    const input = cloneTask();
+    input.taskId = 'bounded_operator_task_0001';
+    input.workItem = 'completion-programme:bounded-operators';
+    input.objective = 'Make one declared global operator bounded without changing its semantics.';
+    input.invariants = ['Direct repository oracles remain authoritative.'];
+    input.exclusions = ['Do not widen the declared mutable path set.'];
+    input.routing = { tags: ['rust', 'boundedness'], difficulty: 0.9 };
+    input.qeProfiles = ['sast'];
+
+    const task = parseAcceptanceTask(input, SECURE_HARNESS_CONFIG);
+    expect(task.workItem).toBe('completion-programme:bounded-operators');
+    expect(task.routing).toEqual({ tags: ['rust', 'boundedness'], difficulty: 0.9 });
+    expect(task.candidateOracle.mode).toBe('exact-reference');
   });
 
   it('deep-clones, binds, and freezes every acceptance command for the Rust profile', () => {
@@ -193,12 +219,12 @@ describe('issue #8 acceptance task', () => {
     expect(() => parseAcceptanceTask(emptyGate, SECURE_HARNESS_CONFIG)).toThrow(/non-empty array/);
   });
 
-  it('binds each mutation to one exact source-fix transform back to baseline code', () => {
+  it('binds each mutation to one exact reference-candidate transform back to baseline code', () => {
     const task = parseAcceptanceTask(taskInput(), SECURE_HARNESS_CONFIG);
     for (const mutation of task.commands.mutation) {
-      const sourceFix = execFileSync(
+      const referenceCandidate = execFileSync(
         'git',
-        ['-C', repositoryRoot, 'show', `${task.sourceFix.commit}:${mutation.path}`],
+        ['-C', repositoryRoot, 'show', `${task.candidateOracle.candidate.commit}:${mutation.path}`],
         { encoding: 'utf8' },
       );
       const baseline = execFileSync(
@@ -206,7 +232,7 @@ describe('issue #8 acceptance task', () => {
         ['-C', repositoryRoot, 'show', `${task.baseline.commit}:${mutation.path}`],
         { encoding: 'utf8' },
       );
-      expect(sourceFix.split(mutation.search)).toHaveLength(2);
+      expect(referenceCandidate.split(mutation.search)).toHaveLength(2);
       expect(baseline).toContain(mutation.replacement);
     }
   });
@@ -241,6 +267,10 @@ describe('issue #8 acceptance task', () => {
       (task: Record<string, any>) => { task.policy.nativeHosts = ['codex']; },
       (task: Record<string, any>) => { task.authority = 'promotion-authority'; },
       (task: Record<string, any>) => { task.evolutionEligible = true; },
+      (task: Record<string, any>) => { task.candidateOracle.mode = 'verifier-only'; },
+      (task: Record<string, any>) => { task.routing.difficulty = 1.1; },
+      (task: Record<string, any>) => { task.qeProfiles = ['unknown-qe']; },
+      (task: Record<string, any>) => { task.qeProfiles = ['quality-contract']; },
     ]) {
       const input = cloneTask();
       mutate(input);

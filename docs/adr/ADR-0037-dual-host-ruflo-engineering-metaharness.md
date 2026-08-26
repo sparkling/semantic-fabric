@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-26
+updated: 2026-08-27
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -121,6 +121,16 @@ state. Every repaired patch is re-admitted, rebuilt, and re-verified. A baseline
 build or pre-patch artifact is never candidate evidence. One same-host retry is
 allowed only for a classified transient transport/process failure. Cancellation
 propagates to process groups and produces a failure/cancellation receipt.
+
+The acceptance contract is schema v2 and programme-oriented rather than
+hard-coded to issue #8. It carries a bounded work-item identifier, objective,
+invariants, exclusions, route tags and difficulty, required QE profiles, and an
+explicit candidate oracle. The only admitted oracle mode is currently
+`exact-reference`; an unknown or future `verifier-only` mode fails closed until
+its transaction semantics are implemented and accepted. The issue-#8 launcher
+remains the first sealed fixture, while its prompt, routing metadata, and QE
+requirements now come from the protected contract rather than controller
+literals.
 
 ### 4. Policy and isolation
 
@@ -257,6 +267,72 @@ copied workspaces, protected inputs, bounded actions/time/invocations, and stops
 at an independently verified winner or honest null. Routine #8, #9, #10, and #6
 work is not AVO-eligible.
 
+### 9. Retrieval-policy flywheel
+
+Ruflo retrieval-policy tuning is separate from Darwin/GEPA code evolution. This
+repository prepares the evaluation surface but does not enable an autonomous
+loop:
+
+- `.claude/eval/semantic-fabric-relevance-anchor-v1.json` is a 48-task,
+  ADR-derived candidate relevance anchor with balanced deterministic train and
+  holdout halves. Its task-canonical SHA-256 is pinned by
+  `.claude/eval/flywheel-anchor.manifest.json`; changes require a new versioned
+  anchor, not an in-place edit.
+- The anchor, its manifest, `.claude/settings.json`, the inherited proven-config
+  pointer, and the active framework policy are protected harness inputs.
+- `RUFLO_HARNESS_LOOP` and `RUFLO_FLYWHEEL_LEGACY_APPLY` are absent from the
+  tracked configuration. A 2026-08-27 operational check also found them absent
+  from the live daemon environment and found the daemon worker set excludes
+  `harness`; that runtime condition must be rechecked after every restart. Both
+  worker entry points returned `opt-in required` without loading or mutating
+  flywheel state during that check.
+- A deliberately overridden *explicit evaluation* may run only against the
+  project anchor and the current `neural_patterns` store. It returns
+  `applied: false`; promotion is a separate, confirmed transaction requiring a
+  trusted Ed25519 key, frozen gates, sequential evidence, stale-head protection,
+  and ledger compare-and-swap.
+
+The tracked active policy is an inherited `framework/node-cli` champion that
+predates this project-local evaluation surface. Its proven-config pointer and
+parameters agree, but it is not a semantic-fabric flywheel promotion receipt and
+must not be presented as one. A future explicit evaluation may use it as the
+baseline it must beat.
+
+The current owner-reported learning stores are inconsistent: historical global
+statistics and the legacy ReasoningBank `patterns.json` contain activity, while
+the `neural_patterns` store consumed by the flywheel contains zero patterns.
+Those counts are not interchangeable. With an explicit one-call override the
+real runtime validates the project anchor and returns `store too small to
+harvest a corpus`, creating no evaluation receipt. Eight owner-visible records
+with at least four harvestable records are only enough to start evaluation; they
+do not imply production readiness. Activation also requires a pinned
+non-fallback embedding provider, an immutable store snapshot, maintainer review
+and live calibration of the candidate relevance anchor, and a model-call-free
+local evaluation producing a non-regressing result. Its 24-task promotion half
+has useful sequential-evidence headroom, but ties and losses can still make a
+trial non-promotable. History must enter through the owning Ruflo ingestion path
+with provenance; benchmark labels must never be copied into the retrieval store
+to manufacture a win.
+
+The older daemon generation worker is not approved here. It persists its own
+generation lineage and can serve a prior champion on a later tick without using
+the explicit ADR-322A promotion transaction. It remains disabled until upstream
+routes background adoption through the same signed, confirmed, fail-closed
+transaction and this ADR is amended.
+
+The tracked active-policy assertion deliberately permits only the inherited
+`framework/node-cli` baseline. A legitimate project-local promotion is therefore
+not authorized by the current state model: it requires an ADR amendment, a
+transaction-verified local pointer model, and durable receipt/ledger retention
+outside the ignored local flywheel directories.
+
+Receipt replay has a precise meaning: it verifies Ed25519 signatures, lineage,
+gate fingerprint, and re-executes the frozen gate over sealed scores. It does
+not re-run retrieval or the benchmark. User-facing text may say that a signed
+receipt is replay-verifiable for integrity and gate decisions; it must not imply
+that replay independently reproduces benchmark execution or that the disabled
+daemon path “provably” promotes winners.
+
 ## Acceptance
 
 Harness-programme acceptance requires every hard gate below and at least 98/100
@@ -287,10 +363,11 @@ transaction was executed and rejected. Incremental harness commits through
 transaction, exact-origin broker, mount namespace, copied credential
 capabilities, systemd cgroup-v2 quotas, bounded retry/cancellation, provider-free
 QE/SAST, protected governance inputs, digest-chained receipts, responsive frozen-
-closure checks, grounded patch repair, and normalization of model-authored hunk
-counts. The harness builds and passes 327 tests across 47 files. It has no
-publication or evolution path, and all harness source files remain under 500
-lines.
+closure checks, grounded patch repair, normalization of model-authored hunk
+counts, a programme-oriented schema-v2 task contract, and protected dormant
+retrieval-flywheel controls. The harness builds and passes its provider-free
+test fleet. It has no publication or evolution path, and all harness source
+files remain under 500 lines.
 
 Development runs 03–24 emitted fail-closed receipts while exposing and closing
 native containment, egress, response-bound, frozen-registry, timeout, and
@@ -315,15 +392,14 @@ eligibility. Its receipt, assessment, and envelope digests are respectively
 The independently verified product commits remain valid, but their direct
 evidence cannot be substituted for a passing sealed transaction.
 
-Dirty user-owned `.mcp.json` and untracked `coding-harness/.claude/` state remain
-unstaged and masked from model sessions. Diagnostics that cannot inspect their
-effective surfaces remain `INCONCLUSIVE`, not clean and not a substitute for
-direct controls.
+The repository's `.mcp.json` is tracked and protected. Diagnostics that still
+cannot inspect its effective surface remain `INCONCLUSIVE`, not clean and not a
+substitute for direct controls.
 
 Its dependency-scoped Rust closure pins the historical lock, target package
 set, verified crate archives, and minimized exact sparse-index records while
 excluding the mutable shared registry source tree. Upstream MetaHarness
-diagnostics classify the repository/harness at 71/67 and
+diagnostics classify the repository/harness at 75/67 and
 the genome as `needs-work`; those values are non-authoritative for the reasons in
 section 8. Darwin/GEPA stays disabled. No receipt is semantic acceptance until
 a later explicitly authorized dual-host transaction passes every hard gate and
@@ -352,3 +428,7 @@ the project-owned score threshold.
   failed product oracle or enters an evolution fitness signal.
 - **R4** — no publication, provider API spend, or harness promotion occurs
   without explicit authorization and complete verifier evidence.
+- **R5** — retrieval tuning stays off by default; neither a daemon generation
+  nor an unsigned/implicit apply may activate a repository-local policy. A
+  receipt replay proves integrity and gate reproducibility, not benchmark
+  re-execution.

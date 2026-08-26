@@ -165,7 +165,8 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 327/327 tests across 47 files.
+- The versioned engineering harness passes 332 tests across 48 files; one
+  environment-specific test is skipped by this provider-free run.
 
 Reproduce the primary gates:
 
@@ -228,6 +229,13 @@ evaluator worktrees, frozen inputs, exact-origin egress, bounded repair,
 independent review, provider-free QE/SAST, and digest-chained receipts. It has
 no commit, push, publication, deployment, or promotion authority.
 
+Its schema-v2 acceptance contract is reusable across programme work items: the
+protected task declares its objective, invariants, exclusions, routing metadata,
+QE profiles, and candidate oracle. Only the fail-closed `exact-reference` oracle
+is implemented today. The trusted executable launcher remains the sealed issue
+#8 fixture; adding task selection and task-specific QE collectors is still
+required before other manifest entries can execute.
+
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,
 then exhausted one post-admission verifier-directed repair: 40/100 against the
@@ -239,6 +247,30 @@ visibility remain `INCONCLUSIVE` where the active surfaces could not be read.
 Darwin/GEPA remains disabled until at least five discriminating training tasks
 and five sealed holdouts exist. No diagnostic score can override a failed
 product oracle.
+
+The separate Ruflo retrieval-policy flywheel is also **off by default**. A
+48-task, ADR-derived candidate relevance benchmark with balanced deterministic
+halves and a canonical SHA-256 pin is tracked under `.claude/eval/` and protected
+by the harness. It still requires maintainer label review and calibration against
+a live retrieval baseline before activation. The 2026-08-27 operational check
+found no flywheel opt-in variables or `harness` worker in the live daemon; that
+runtime fact must be rechecked after every restart. The explicit evaluation path
+validates the anchor but currently reports `store too small to harvest a corpus`:
+Ruflo's flywheel-visible `neural_patterns` store is empty even though older
+learning counters and ReasoningBank files contain history. Those stores are not
+silently conflated or seeded from benchmark labels.
+
+Eight owner-visible records with four harvestable are only enough to begin an
+evaluation; they do not establish production readiness. Once the store,
+non-fallback embedding provider, immutable snapshot, and reviewed benchmark are
+ready, an operator may run a model-call-free, local evaluation-only trial. It
+cannot apply a policy; a separate confirmed promotion requires an amended
+project decision, a trusted Ed25519 key, frozen gates, sequential evidence,
+stale-head protection, durable receipt retention, and ledger compare-and-swap.
+Background generation remains
+prohibited because Ruflo 3.38.20 does not route that daemon path through the same
+transaction. A replayable receipt verifies signatures, lineage, the frozen gate,
+and its decision over sealed scores—it does **not** re-run the benchmark.
 
 GitHub-hosted CI runs the portable harness contract on its pinned Node 20
 baseline. Native integration remains fail-closed and is run only by the manually dispatched

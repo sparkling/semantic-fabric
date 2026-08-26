@@ -37,13 +37,13 @@ describe('frozen evaluator materialization', () => {
     writeFileSync(join(repositoryRoot, 'tests/evaluator.txt'), 'red oracle\n');
     git(repositoryRoot, ['add', '--all']);
     git(repositoryRoot, ['commit', '--quiet', '-m', 'source fix']);
-    const sourceFixCommit = git(repositoryRoot, ['rev-parse', 'HEAD']);
+    const referenceCandidateCommit = git(repositoryRoot, ['rev-parse', 'HEAD']);
 
     const evaluator = await materializeEvaluatorCommit({
       repositoryRoot,
       scratchRoot: join(scratchParent, 'scratch'),
       baselineCommit,
-      sourceFixCommit,
+      referenceCandidateCommit,
       evaluatorPaths: ['tests/evaluator.txt'],
       implementationPaths: ['src/fix.txt'],
       taskId: 'task_evaluator_0001',

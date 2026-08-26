@@ -60,8 +60,11 @@ result can be accepted, and execution failure revokes active broker sessions.
 - `native-process.ts`, `network.ts`, and `models/` implement bounded native
   execution, first-party-only transport, routing, retry, breakers, and review
   independence.
-- `contracts.ts`, `policy.ts`, `evidence.ts`, and `receipts.ts` validate task,
-  Ruflo, Agentic-QE, protected-input, and receipt boundaries.
+- `acceptance-task.ts`, `contracts.ts`, `policy.ts`, `evidence.ts`, and
+  `receipts.ts` validate the schema-v2 programme task, Ruflo, Agentic-QE,
+  protected-input, and receipt boundaries. Objective, invariants, exclusions,
+  route metadata, QE profiles, and the exact-reference oracle are task data, not
+  controller literals.
 - `issue-8-programme-envelope.ts` binds the project-owned acceptance score to
   the exact receipt and makes a rejected score a non-zero launcher result.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
@@ -69,7 +72,33 @@ result can be accepted, and execution failure revokes active broker sessions.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
   identifies the repository's actual `.mcp.json` coordination surface.
 
-The issue #8 acceptance definition lives in
-`config/issue-8-acceptance.json`. It is not an evolution suite or a promotion
-signal. Darwin/GEPA remains disabled until five training tasks and five sealed
-holdouts satisfy the independent evaluator gate.
+The first acceptance definition lives in `config/issue-8-acceptance.json`. The
+contract parser also accepts non-issue work-item identifiers, but the attested
+launcher still selects only this fixture and its LCOV/SAST collector. A second
+task is not executable until manifest-bound task selection and the declared QE
+profiles have concrete collectors. The task is not an evolution suite or a
+promotion signal. Darwin/GEPA remains disabled until five training tasks and
+five sealed holdouts satisfy the independent evaluator gate.
+
+## Retrieval flywheel boundary
+
+Ruflo's retrieval-policy flywheel is governed outside the candidate transaction.
+The project tracks a 48-task, hash-pinned candidate relevance anchor with
+balanced deterministic halves, and the harness protects those files, the opt-in
+settings, and inherited active-policy pointers. The candidate is not approved
+for activation until maintainers review its labels and calibrate them against a
+live retrieval baseline. Background tuning is disabled in tracked configuration;
+the 2026-08-27 operational check also found no opt-in variables or `harness`
+worker in the live daemon, which must be rechecked after each restart.
+
+The explicit Ruflo evaluation path is model-call-free, local, and
+evaluation-only. It currently no-ops because the flywheel-visible neural store
+has no eligible patterns; legacy counters and ReasoningBank data are a different
+store. Eight owner-visible records, four harvestable records, and a pinned
+non-fallback embedding provider are only the threshold to begin evaluation, not
+production readiness. If a future trial emits a signed receipt, replay verifies
+receipt integrity, lineage, the gate fingerprint, and the gate decision over
+sealed scores. Replay does not re-run retrieval. The separate daemon generation
+path is not approved until it uses the same confirmed promotion transaction.
+Production receipts will also require durable retention outside the ignored
+local state directories.

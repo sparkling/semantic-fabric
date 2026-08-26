@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Issue8AcceptanceRunner } from '../src/acceptance-runner.js';
+import { AcceptanceRunner } from '../src/acceptance-runner.js';
 import type { AcceptanceTask } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { GitWorktreeSet } from '../src/git-worktrees.js';
@@ -65,7 +65,7 @@ describe('issue #8 acceptance gates', () => {
     });
     const task = {
       taskId: 'gate_task_0001',
-      sourceFix: { commit, tree },
+      candidateOracle: { mode: 'exact-reference', candidate: { commit, tree } },
       tools: ['cargo'],
       redBaseline: {
         commands: [{ commandId: 'red-baseline', command: command(['--offline', 'test', '--locked']) }],
@@ -83,7 +83,7 @@ describe('issue #8 acceptance gates', () => {
     } as unknown as AcceptanceTask;
     const worktrees = new GitWorktreeSet({ repositoryRoot, runRoot: join(parent, 'worktrees') });
     const prepared = await worktrees.prepare(commit, commit);
-    const runner = new Issue8AcceptanceRunner({
+    const runner = new AcceptanceRunner({
       task,
       worktrees,
       config: SECURE_HARNESS_CONFIG,
@@ -96,7 +96,7 @@ describe('issue #8 acceptance gates', () => {
       candidate: { commit, tree: '0'.repeat(40) },
       commands: [buildEvidence('0'.repeat(40), 2)],
       artifactDigests: {},
-    })).rejects.toThrow('HARNESS_ISSUE_8_CANDIDATE_SOURCE_FIX_MISMATCH');
+    })).rejects.toThrow('HARNESS_CANDIDATE_REFERENCE_MISMATCH');
     const mutation = await runner.mutations({
       candidate: { commit, tree },
       commands: [buildEvidence(tree, 2)],
@@ -112,7 +112,7 @@ describe('issue #8 acceptance gates', () => {
       .toBe('if (checked) {\n return;\n}\n');
 
     const killedCommand = { ...task.redBaseline.commands[0].command, argv: ['hang'], timeoutMs: 25 };
-    const killedRunner = new Issue8AcceptanceRunner({
+    const killedRunner = new AcceptanceRunner({
       task: {
         ...task,
         redBaseline: {

@@ -3,8 +3,8 @@
 import { createHash } from 'node:crypto';
 import { VerifierRegistry, predicateVerifier } from '@metaharness/harness';
 import type { AcceptanceTask } from './acceptance-task.js';
-import { bindAcceptanceTaskToRustProfile } from './acceptance-task.js';
-import { Issue8AcceptanceRunner } from './acceptance-runner.js';
+import { acceptanceTaskPrompt, bindAcceptanceTaskToRustProfile } from './acceptance-task.js';
+import { AcceptanceRunner } from './acceptance-runner.js';
 import { CandidateTransaction, type CandidateBuild } from './candidate.js';
 import type { CandidateTransactionResult } from './candidate-types.js';
 import { SECURE_HARNESS_CONFIG } from './config.js';
@@ -130,7 +130,7 @@ export async function runIssue8Transaction(
     commits: [
       options.controllerCommit,
       unboundTask.baseline.commit,
-      unboundTask.sourceFix.commit,
+      unboundTask.candidateOracle.candidate.commit,
     ],
     signal: options.signal,
   });
@@ -138,7 +138,7 @@ export async function runIssue8Transaction(
     repositoryRoot: options.repositoryRoot,
     scratchRoot: options.evaluatorScratchRoot,
     baselineCommit: unboundTask.baseline.commit,
-    sourceFixCommit: unboundTask.sourceFix.commit,
+    referenceCandidateCommit: unboundTask.candidateOracle.candidate.commit,
     evaluatorPaths: unboundTask.evaluatorPaths,
     implementationPaths: unboundTask.implementationPaths,
     taskId: unboundTask.taskId,
@@ -204,9 +204,9 @@ export async function runIssue8Transaction(
       pool,
       candidates: native.candidates,
       clients: native.clients,
-      architectureVerifiers: issue8ArchitectureVerifiers(),
+      architectureVerifiers: repositoryArchitectureVerifiers(),
       recovery: new NativeInvocationRecovery(),
-      taskPrompt: issue8Prompt(task),
+      taskPrompt: acceptanceTaskPrompt(task),
       contextProvider: new RepositoryModelContextProvider({
         candidateRoot: prepared.candidateRoot,
         implementationPaths: task.implementationPaths,
@@ -214,7 +214,7 @@ export async function runIssue8Transaction(
         maxTotalBytes: 1_000_000,
       }),
     });
-    const acceptance = new Issue8AcceptanceRunner({
+    const acceptance = new AcceptanceRunner({
       task,
       worktrees,
       config: SECURE_HARNESS_CONFIG,
@@ -238,7 +238,7 @@ export async function runIssue8Transaction(
       config: SECURE_HARNESS_CONFIG,
       baselineCommit: task.baseline.commit,
       evaluatorCommit: evaluator.commit,
-      expectedCandidate: task.sourceFix,
+      expectedCandidate: task.candidateOracle.candidate,
       taskForWorkspace: (candidateRoot) => parseTaskContract({
         schemaVersion: 1,
         taskId: task.taskId,
@@ -341,7 +341,7 @@ export async function runIssue8Transaction(
           codex: native.hosts.find(({ host }) => host === 'codex')?.clientVersion ?? 'unknown',
           claude: native.hosts.find(({ host }) => host === 'claude-code')?.clientVersion ?? 'unknown',
         },
-        requiredQeProfiles: ['lcov-gap', 'sast'],
+        requiredQeProfiles: task.qeProfiles,
         rufloEvidence,
       },
       operations,
@@ -392,9 +392,9 @@ function routedPool(
     task: {
       id: task.taskId,
       digest: digestValue(task),
-      prompt: issue8Prompt(task),
-      tags: ['rust', 'sparql', 'binding-pruning', 'sealed-evaluator'],
-      difficulty: 0.8,
+      prompt: acceptanceTaskPrompt(task),
+      tags: task.routing.tags,
+      difficulty: task.routing.difficulty,
     },
     candidates,
     history: new VerifiedRoutingHistory(),
@@ -406,9 +406,9 @@ function routedPool(
   });
 }
 
-function issue8ArchitectureVerifiers(): VerifierRegistry {
+function repositoryArchitectureVerifiers(): VerifierRegistry {
   return new VerifierRegistry().register(predicateVerifier(
-    'issue-8-architecture-shape',
+    'repository-change-architecture-shape',
     'architecture',
     (value) => value !== null
       && typeof value === 'object'
@@ -417,23 +417,13 @@ function issue8ArchitectureVerifiers(): VerifierRegistry {
   ));
 }
 
-function issue8Prompt(task: AcceptanceTask): string {
-  return [
-    'Issue #8: prune an unfolding branch whenever bind or bind_position returns false.',
-    'Apply the invariant consistently to ordinary triple atoms and rr:class atoms.',
-    'Keep the change minimal and confined to the declared implementation path.',
-    `Mutable paths: ${task.implementationPaths.join(', ')}.`,
-    'Do not modify tests, evaluator fixtures, manifests, lockfiles, CI, or documentation.',
-  ].join('\n');
-}
-
 async function assertDeclaredGitIdentities(
   repositoryRoot: string,
   task: AcceptanceTask,
 ): Promise<void> {
   for (const [label, identity] of [
     ['baseline', task.baseline],
-    ['source-fix', task.sourceFix],
+    ['reference-candidate', task.candidateOracle.candidate],
   ] as const) {
     const commit = await gitValue(repositoryRoot, ['rev-parse', '--verify', `${identity.commit}^{commit}`]);
     const tree = await gitValue(repositoryRoot, ['rev-parse', `${identity.commit}^{tree}`]);

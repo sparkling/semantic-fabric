@@ -53,6 +53,8 @@ docs/handover/
 /.claude-flow/data/
 /.claude-flow/logs/
 /.claude-flow/metrics/
+/.claude-flow/flywheel/
+/.claude-flow/flywheel-v1/
 /.claude-flow/models/
 /.claude-flow/neural/
 /.claude-flow/sessions/

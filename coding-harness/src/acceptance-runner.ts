@@ -14,7 +14,7 @@ import { runStructuredProcess, type ProcessResult } from './process.js';
 import { digestValue, type CommandEvidence } from './receipts.js';
 import { resolveWorkspacePath } from './workspace.js';
 
-export interface Issue8AcceptanceRunnerOptions {
+export interface AcceptanceRunnerOptions {
   readonly task: AcceptanceTask;
   readonly worktrees: GitWorktreeSet;
   readonly config: HarnessConfig;
@@ -22,10 +22,10 @@ export interface Issue8AcceptanceRunnerOptions {
   readonly sourceEnvironment: Readonly<Record<string, string | undefined>>;
 }
 
-export class Issue8AcceptanceRunner {
-  readonly #options: Issue8AcceptanceRunnerOptions;
+export class AcceptanceRunner {
+  readonly #options: AcceptanceRunnerOptions;
 
-  constructor(options: Issue8AcceptanceRunnerOptions) {
+  constructor(options: AcceptanceRunnerOptions) {
     this.#options = options;
   }
 
@@ -69,8 +69,8 @@ export class Issue8AcceptanceRunner {
     build: CandidateBuild,
     signal?: AbortSignal,
   ): Promise<AcceptanceGateEvidence> {
-    if (build.candidate.tree !== this.#options.task.sourceFix.tree) {
-      throw new Error('HARNESS_ISSUE_8_CANDIDATE_SOURCE_FIX_MISMATCH');
+    if (build.candidate.tree !== this.#options.task.candidateOracle.candidate.tree) {
+      throw new Error('HARNESS_CANDIDATE_REFERENCE_MISMATCH');
     }
     const root = this.#options.worktrees.verifierRoot('independent');
     const outputRoot = this.#options.worktrees.outputRoot('independent');

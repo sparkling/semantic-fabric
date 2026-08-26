@@ -1,15 +1,29 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "taskId": "bprune_8_20260825",
-  "issue": 8,
+  "workItem": "github-issue:8",
+  "objective": "Prune an unfolding branch whenever bind or bind_position returns false, consistently for ordinary triple atoms and rr:class atoms.",
+  "invariants": [
+    "A false bind result prunes the complete incompatible branch rather than retaining a partial binding.",
+    "The correction is confined to the declared implementation path and preserves compatible branches.",
+    "The red baseline, public, independent, regression, and mutation gates remain direct Cargo evidence."
+  ],
+  "exclusions": [
+    "Do not modify tests, evaluator fixtures, manifests, lockfiles, CI, or documentation.",
+    "Do not replace exact pruning semantics with a fallback or best-effort result.",
+    "Do not perform unrelated refactoring."
+  ],
   "authority": "development-only-no-promotion",
   "baseline": {
     "commit": "d510fc952a8dc701d65b1a4f3ad25a8109b98669",
     "tree": "b5d67e0fdb107e6502959fd2ff36831170d093b1"
   },
-  "sourceFix": {
-    "commit": "10dedd40bda63d3acef18b8d34f61a32214e98d4",
-    "tree": "a3f637f6b14fff73e5209e539b7a19f0b6b73ffa"
+  "candidateOracle": {
+    "mode": "exact-reference",
+    "candidate": {
+      "commit": "10dedd40bda63d3acef18b8d34f61a32214e98d4",
+      "tree": "a3f637f6b14fff73e5209e539b7a19f0b6b73ffa"
+    }
   },
   "evaluatorPaths": [
     "crates/sf-conformance/tests/issue_8_binding_pruning.rs"
@@ -219,5 +233,10 @@
     "modelTransport": "native-first-party-only",
     "nativeHosts": ["codex", "claude-code"]
   },
+  "routing": {
+    "tags": ["rust", "sparql", "binding-pruning", "sealed-evaluator"],
+    "difficulty": 0.8
+  },
+  "qeProfiles": ["lcov-gap", "sast"],
   "evolutionEligible": false
 }

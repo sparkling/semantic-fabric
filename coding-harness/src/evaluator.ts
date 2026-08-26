@@ -19,7 +19,7 @@ export async function materializeEvaluatorCommit(input: Readonly<{
   repositoryRoot: string;
   scratchRoot: string;
   baselineCommit: string;
-  sourceFixCommit: string;
+  referenceCandidateCommit: string;
   evaluatorPaths: readonly string[];
   implementationPaths: readonly string[];
   taskId: string;
@@ -32,7 +32,7 @@ export async function materializeEvaluatorCommit(input: Readonly<{
   }
   if (existsSync(scratchRoot)) throw new Error('HARNESS_EVALUATOR_SCRATCH_EXISTS');
   assertGitObject(input.baselineCommit, 'baselineCommit');
-  assertGitObject(input.sourceFixCommit, 'sourceFixCommit');
+  assertGitObject(input.referenceCandidateCommit, 'referenceCandidateCommit');
   if (!TASK_ID.test(input.taskId)) throw new Error('HARNESS_EVALUATOR_TASK_ID_INVALID');
   const evaluatorRef = `refs/metaharness/evaluators/${input.taskId}`;
   const evaluatorPaths = normalizedUniquePaths(input.evaluatorPaths, 'evaluatorPaths');
@@ -42,16 +42,16 @@ export async function materializeEvaluatorCommit(input: Readonly<{
   }
   const expectedSourcePaths = [...evaluatorPaths, ...implementationPaths].sort();
   await gitChecked(repositoryRoot, ['cat-file', '-e', `${input.baselineCommit}^{commit}`], input.signal);
-  await gitChecked(repositoryRoot, ['cat-file', '-e', `${input.sourceFixCommit}^{commit}`], input.signal);
+  await gitChecked(repositoryRoot, ['cat-file', '-e', `${input.referenceCandidateCommit}^{commit}`], input.signal);
   const sourcePaths = parseNullPaths((await gitChecked(
     repositoryRoot,
-    ['diff', '--name-only', '-z', input.baselineCommit, input.sourceFixCommit, '--'],
+    ['diff', '--name-only', '-z', input.baselineCommit, input.referenceCandidateCommit, '--'],
     input.signal,
   )).stdout);
   assertExactPaths(sourcePaths, expectedSourcePaths, 'HARNESS_SOURCE_FIX_PATH_MISMATCH');
   const patch = (await gitChecked(
     repositoryRoot,
-    ['diff', '--binary', '--full-index', input.baselineCommit, input.sourceFixCommit, '--', ...evaluatorPaths],
+    ['diff', '--binary', '--full-index', input.baselineCommit, input.referenceCandidateCommit, '--', ...evaluatorPaths],
     input.signal,
   )).stdout;
   if (patch.trim().length === 0) throw new Error('HARNESS_EVALUATOR_PATCH_EMPTY');
@@ -96,7 +96,7 @@ export async function materializeEvaluatorCommit(input: Readonly<{
     await verifyEvaluatorSplit({
       repositoryRoot,
       baselineCommit: input.baselineCommit,
-      sourceFixCommit: input.sourceFixCommit,
+      referenceCandidateCommit: input.referenceCandidateCommit,
       evaluatorCommit: commit,
       evaluatorPaths,
       implementationPaths,
@@ -134,7 +134,7 @@ async function retainEvaluatorRef(
 async function verifyEvaluatorSplit(input: Readonly<{
   repositoryRoot: string;
   baselineCommit: string;
-  sourceFixCommit: string;
+  referenceCandidateCommit: string;
   evaluatorCommit: string;
   evaluatorPaths: readonly string[];
   implementationPaths: readonly string[];
@@ -148,7 +148,7 @@ async function verifyEvaluatorSplit(input: Readonly<{
   assertExactPaths(evaluatorDiff, [...input.evaluatorPaths].sort(), 'HARNESS_EVALUATOR_PATH_MISMATCH');
   const remainingDiff = parseNullPaths((await gitChecked(
     input.repositoryRoot,
-    ['diff', '--name-only', '-z', input.evaluatorCommit, input.sourceFixCommit, '--'],
+    ['diff', '--name-only', '-z', input.evaluatorCommit, input.referenceCandidateCommit, '--'],
     input.signal,
   )).stdout);
   assertExactPaths(
