@@ -85,6 +85,49 @@ describe('engineering HarnessKernel composition', () => {
     expect(pool.routeSnapshot().historyEpoch).toBe(0);
   });
 
+  it('does not impose an artificial USD ceiling on native subscription work', async () => {
+    const paidTelemetryCandidate = (
+      id: string,
+      host: NativeModelCandidate['host'],
+    ): NativeModelCandidate => ({
+      ...candidate(id, host),
+      run: vi.fn(async ({ step }) => ({
+        ...output({ kind: step.kind, valid: true }),
+        costUsd: 1_000_000,
+      })),
+    });
+    const pool = new PersistentRoutedAgentPool({
+      runId: 'run-kernel-no-ceiling',
+      task: {
+        id: 'task-kernel-no-ceiling',
+        digest: 'b'.repeat(64),
+        prompt: 'verify native subscription accounting does not gate execution',
+        tags: ['native-subscription'],
+        difficulty: 0.5,
+      },
+      candidates: [
+        paidTelemetryCandidate('codex-no-ceiling', 'codex'),
+        paidTelemetryCandidate('claude-no-ceiling', 'claude-code'),
+      ],
+      history: new VerifiedRoutingHistory(),
+      embedder,
+    });
+    const verifiers = new VerifierRegistry().register(predicateVerifier(
+      'structured-output',
+      'schema',
+      (value) => typeof value === 'object' && value !== null
+        && (value as { valid?: boolean }).valid === true,
+    ));
+
+    const result = await createEngineeringKernel({ pool, verifiers }).run({
+      text: 'verify native subscription accounting',
+      intent: 'repository-change',
+    }, 'run-kernel-no-ceiling');
+
+    expect(result.success).toBe(true);
+    expect(result.steps.every(({ gate }) => gate.costOk)).toBe(true);
+  });
+
   it('critiques distinct-host proposals in parallel and chooses by verified weighted consensus', async () => {
     const verifier = new VerifierRegistry().register({
       id: 'architecture-law',

@@ -49,7 +49,7 @@
     "coding-harness/dist/issue-8-qe.js": "8b10bfd65c9b6502cb75f6c60dfe9a3264603cda6af1368f552599073c409443",
     "coding-harness/dist/issue-8-rust-runtime.js": "9452490bd65c75e001bbd8dff8a19ca1c51cf6d3f73e42040df114155fd7e274",
     "coding-harness/dist/issue-8-system.js": "058f2b3e0f5d2fb7a6e758ec183bff405ec66bc25a793a6e3ade030e4694c0f2",
-    "coding-harness/dist/kernel.js": "f86d454339ebcc3da07b3a0bc63721ea96fff45375f70fe1506cb31468eed59e",
+    "coding-harness/dist/kernel.js": "c1eaf52b967a71175b86f6de08decf61f1e1b6021733eed106464f416859bf90",
     "coding-harness/dist/manifest.js": "e7046ab60d32ad6be21cbd697d6b1ead4c1aaf9ba532949dcb6cdf24f0bd4af4",
     "coding-harness/dist/metadata-tree.js": "0df9bf21d34bbb549c2be96d9f8aaaac0bc0402216758b9ded197e7a58ca476e",
     "coding-harness/dist/metaharness-diagnostics.js": "e7eef46bb850b954e48c03b078b54bef0587bba466bfd66a1423e7b62e191228",
@@ -216,5 +216,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "9454ca1bad99c11c641ba9925217e03a1e14f715fc404ef7c575fa15a4a8ba32"
+  "runtimeTreeDigest": "07dc3d58bc612d94d398a0400700669df292c38dba085628a4810e8522a0b7e6"
 }

@@ -63,7 +63,12 @@ export function createEngineeringKernel(options: EngineeringKernelOptions): Harn
     pool: options.pool,
     verifiers: options.verifiers,
     policy,
-    budget: { costUsd: 0, risk: 0.2, retries: 1, confidence: 0.8 },
+    budget: {
+      costUsd: Number.POSITIVE_INFINITY,
+      risk: 0.2,
+      retries: 1,
+      confidence: 0.8,
+    },
     breakerThreshold: 2,
     actionFor: (step, agentId) => ({
       tool: step.kind,
