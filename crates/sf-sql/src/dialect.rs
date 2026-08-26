@@ -29,9 +29,10 @@ use crate::error::{Error, Result};
 /// The three original dialects (Postgres, Sqlite, MySql) are production-wired. Every
 /// other variant has an associated [`Dialect::placeholder`], [`Dialect::quote_char`],
 /// and [`Dialect::parser_dialect`] implementation, so SQL can be emitted for all of
-/// them today. Live driver wiring is tiered:
+/// them today. Driver wiring is tiered:
 ///
-/// * **Live-wired**: Postgres, Sqlite, MySql, DuckDb (embedded, requires `duckdb-backend` feature)
+/// * **Public serving path**: Postgres, Sqlite, MySql
+/// * **Experimental/library-only**: DuckDb (embedded, requires `duckdb-backend`)
 /// * **Wire-compatible**: Redshift (thin alias over PG wire)
 /// * **Scaffolded**: all others (compile + return `Error::Unsupported` at runtime)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,7 +50,8 @@ pub enum Dialect {
     Redshift,
 
     // --- native-driver dialects (ADR-0024 M8) ---------------------------------
-    /// DuckDB — embedded OLAP; `$n` placeholders, `"`-quoted idents.
+    /// DuckDB — experimental embedded library backend; `?` placeholders,
+    /// `"`-quoted idents. Not admitted to `sf-serve` by this feature.
     DuckDb,
     /// Microsoft SQL Server — TDS protocol; `@Pn` placeholders, `"`-quoted idents.
     SqlServer,
@@ -122,7 +124,7 @@ impl Dialect {
     ///
     /// | Style   | Dialects                                    |
     /// |---------|---------------------------------------------|
-    /// | `$n`    | Postgres, Redshift, DuckDb                  |
+    /// | `$n`    | Postgres, Redshift                          |
     /// | `@Pn`   | SqlServer                                   |
     /// | `:n`    | Oracle                                      |
     /// | `?`     | everything else (positional)                |
@@ -130,7 +132,7 @@ impl Dialect {
     /// The placeholder is the *only* way a value enters generated SQL (ADR-0010 R1).
     pub fn placeholder(self, index: usize) -> String {
         match self {
-            Dialect::Postgres | Dialect::Redshift | Dialect::DuckDb => format!("${index}"),
+            Dialect::Postgres | Dialect::Redshift => format!("${index}"),
             Dialect::SqlServer => format!("@P{index}"),
             Dialect::Oracle => format!(":{index}"),
             _ => "?".to_owned(),
@@ -260,7 +262,7 @@ mod tests {
         assert_eq!(Dialect::Postgres.placeholder(1), "$1");
         assert_eq!(Dialect::Postgres.placeholder(7), "$7");
         assert_eq!(Dialect::Redshift.placeholder(3), "$3");
-        assert_eq!(Dialect::DuckDb.placeholder(2), "$2");
+        assert_eq!(Dialect::DuckDb.placeholder(2), "?");
         assert_eq!(Dialect::SqlServer.placeholder(1), "@P1");
         assert_eq!(Dialect::Oracle.placeholder(2), ":2");
         assert_eq!(Dialect::Sqlite.placeholder(1), "?");

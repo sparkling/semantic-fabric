@@ -8,6 +8,8 @@
 //! * **PostgreSQL** ([`introspect_postgres`]) — implemented over
 //!   `information_schema` + `pg_class.reltuples` + `pg_stats`; it needs a live
 //!   server, so it is exercised by the integration suite (ADR-0012), not here.
+//! * **DuckDB** ([`introspect_duckdb`]) — implemented over `information_schema`
+//!   and DuckDB's bounded catalog table functions when `duckdb-backend` is on.
 //!
 //! Catalog result sets are tiny and bounded, so introspection uses ordinary
 //! buffered queries — the buffer-all ban (ADR-0010 §C) applies to *instance-data*
@@ -210,6 +212,102 @@ fn sqlite_has_stat1(conn: &rusqlite::Connection) -> Result<bool> {
         |r| r.get(0),
     )?;
     Ok(count > 0)
+}
+
+// --- DuckDB (embedded, feature-gated) ------------------------------------
+
+#[cfg(feature = "duckdb-backend")]
+const DUCKDB_COLUMNS_SQL: &str = "SELECT column_name, data_type, is_nullable \
+     FROM information_schema.columns \
+     WHERE table_schema = current_schema() AND lower(table_name) = lower(?) \
+     ORDER BY ordinal_position";
+
+#[cfg(feature = "duckdb-backend")]
+const DUCKDB_CONSTRAINTS_SQL: &str = "SELECT constraint_index, constraint_type, \
+     unnest(constraint_column_names) AS column_name, referenced_table, \
+     unnest(referenced_column_names) AS referenced_column, \
+     generate_subscripts(constraint_column_names, 1) AS column_ordinal \
+     FROM duckdb_constraints() \
+     WHERE schema_name = current_schema() AND lower(table_name) = lower(?) \
+     ORDER BY constraint_index, column_ordinal";
+
+#[cfg(feature = "duckdb-backend")]
+const DUCKDB_ESTIMATE_SQL: &str = "SELECT estimated_size FROM duckdb_tables() \
+     WHERE schema_name = current_schema() AND lower(table_name) = lower(?)";
+
+/// Introspect one DuckDB table in the active schema.
+///
+/// Catalog values are selected through fixed SQL with a bound table name. The
+/// result includes ordered columns, primary/unique keys, foreign keys, and the
+/// engine's table-size estimate when available.
+#[cfg(feature = "duckdb-backend")]
+pub fn introspect_duckdb(conn: &duckdb::Connection, table: &str) -> Result<TableSchema> {
+    let map_error = |error: duckdb::Error| Error::Introspection(format!("duckdb: {error}"));
+    let mut schema = TableSchema::new(table);
+    let mut statement = conn.prepare(DUCKDB_COLUMNS_SQL).map_err(map_error)?;
+    let mut rows = statement.query([table]).map_err(map_error)?;
+    while let Some(row) = rows.next().map_err(map_error)? {
+        let name: String = row.get(0).map_err(map_error)?;
+        let sql_type: String = row.get(1).map_err(map_error)?;
+        let nullable: String = row.get(2).map_err(map_error)?;
+        schema.columns.push(Column::new(
+            name,
+            sql_type,
+            nullable.eq_ignore_ascii_case("NO"),
+        ));
+    }
+    if schema.columns.is_empty() {
+        return Err(Error::Introspection(format!(
+            "DuckDB table {table:?} not found or has no columns"
+        )));
+    }
+
+    type Constraint = (String, Vec<String>, Option<String>, Vec<String>);
+    let mut constraints: BTreeMap<i64, Constraint> = BTreeMap::new();
+    let mut statement = conn.prepare(DUCKDB_CONSTRAINTS_SQL).map_err(map_error)?;
+    let mut rows = statement.query([table]).map_err(map_error)?;
+    while let Some(row) = rows.next().map_err(map_error)? {
+        let index: i64 = row.get(0).map_err(map_error)?;
+        let kind: String = row.get(1).map_err(map_error)?;
+        let column: Option<String> = row.get(2).map_err(map_error)?;
+        let referenced_table: Option<String> = row.get(3).map_err(map_error)?;
+        let referenced_column: Option<String> = row.get(4).map_err(map_error)?;
+        let constraint = constraints
+            .entry(index)
+            .or_insert_with(|| (kind, Vec::new(), referenced_table, Vec::new()));
+        if let Some(column) = column {
+            constraint.1.push(column);
+        }
+        if let Some(column) = referenced_column {
+            constraint.3.push(column);
+        }
+    }
+    for (_, (kind, columns, referenced_table, referenced_columns)) in constraints {
+        match kind.as_str() {
+            "PRIMARY KEY" => schema.primary_key = columns,
+            "UNIQUE" if !columns.is_empty() => schema.unique.push(columns),
+            "FOREIGN KEY" if !columns.is_empty() => {
+                if let Some(parent_table) = referenced_table {
+                    schema.foreign_keys.push(ForeignKey {
+                        columns,
+                        parent_table,
+                        parent_columns: referenced_columns,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut statement = conn.prepare(DUCKDB_ESTIMATE_SQL).map_err(map_error)?;
+    let mut rows = statement.query([table]).map_err(map_error)?;
+    if let Some(row) = rows.next().map_err(map_error)? {
+        let estimate: i64 = row.get(0).map_err(map_error)?;
+        if estimate >= 0 {
+            schema.row_estimate = Some(estimate as u64);
+        }
+    }
+    Ok(schema)
 }
 
 // --- PostgreSQL (integration-tested, ADR-0012) ----------------------------
@@ -719,6 +817,47 @@ mod tests {
     fn missing_table_is_an_introspection_error() {
         let conn = fixture();
         assert!(introspect_sqlite(&conn, "no_such_table").is_err());
+    }
+
+    #[cfg(feature = "duckdb-backend")]
+    #[test]
+    fn introspects_duckdb_columns_keys_foreign_keys_and_estimate() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE departments ( \
+                 a INTEGER, b INTEGER, x VARCHAR, y VARCHAR, \
+                 PRIMARY KEY (b, a), UNIQUE (y, x) \
+             ); \
+             CREATE TABLE Employees ( \
+                 id BIGINT PRIMARY KEY, \
+                 department_x INTEGER, \
+                 department_y INTEGER, \
+                 FOREIGN KEY (department_x, department_y) REFERENCES departments(b, a), \
+                 name VARCHAR NOT NULL \
+             ); \
+             INSERT INTO departments VALUES (1, 2, 'engineering', 'eng'); \
+             INSERT INTO Employees VALUES (10, 2, 1, 'Alice');",
+        )
+        .unwrap();
+
+        let departments = introspect_duckdb(&conn, "departments").unwrap();
+        assert_eq!(departments.primary_key, vec!["b", "a"]);
+        assert_eq!(departments.unique, vec![vec!["y", "x"]]);
+
+        // DuckDB resolves identifiers case-insensitively even though its
+        // information_schema preserves declaration case.
+        let table = introspect_duckdb(&conn, "employees").unwrap();
+        assert_eq!(table.primary_key, vec!["id"]);
+        assert!(table.column("name").unwrap().not_null);
+        assert_eq!(table.foreign_keys.len(), 1);
+        assert_eq!(
+            table.foreign_keys[0].columns,
+            vec!["department_x", "department_y"]
+        );
+        assert_eq!(table.foreign_keys[0].parent_table, "departments");
+        assert_eq!(table.foreign_keys[0].parent_columns, vec!["b", "a"]);
+        assert_eq!(table.row_estimate, Some(1));
+        assert!(introspect_duckdb(&conn, "missing").is_err());
     }
 
     #[test]

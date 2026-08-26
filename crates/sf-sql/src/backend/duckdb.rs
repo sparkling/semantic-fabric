@@ -1,17 +1,29 @@
 //! DuckDB `SqlBackend` adapter (ADR-0024 M8).
 //!
-//! DuckDB's Rust binding (`duckdb` crate, `bundled` feature) mirrors `rusqlite`:
-//! a synchronous `Connection` + `Statement` + `Rows` cursor. The `Connection` is
-//! not `Send`, so the same cap-1 channel bridge pattern used by
-//! `SqliteOwnedBackend` (ADR-0024 §4.1) is applied here, giving a
-//! `Send + 'static` stream suitable for `tokio::spawn`.
-//! One row in flight across the channel → bounded memory (ADR-0010 §C).
+//! DuckDB's Rust binding (`duckdb` crate, `bundled` feature) exposes a distinct
+//! streaming Arrow cursor. `Statement::query()` is not that cursor: it executes
+//! through `duckdb_execute_prepared` and may materialize the complete result
+//! before its `Rows` wrapper yields the first row. `open_branch` therefore uses
+//! `Statement::stream_arrow()` (`duckdb_execute_prepared_streaming`) and decodes
+//! one DuckDB vector at a time. The adapter buffers at most one current Arrow
+//! batch plus the cap-1 channel's owned row and a producer-blocked row; DuckDB
+//! may still materialize internally for blocking operators. This bounds the
+//! adapter's delivery buffers by execution shape, not DuckDB's own operator
+//! memory. The `Connection` is `Send` but not `Sync`, so the same cap-1 channel
+//! bridge used by `SqliteOwnedBackend`
+//! (ADR-0024 §4.1) gives a `Send + 'static` stream suitable for `tokio::spawn`.
+//! Dropping a stream requests an interrupt and schedules the blocking worker for
+//! completion. Interruption is best effort during runtime shutdown.
 //!
-//! Verification tier: live-parity (DuckDB is embedded; no external instance
-//! required). Enabled via `--features duckdb-backend`.
+//! This is an experimental, library-only adapter and is not admitted to the
+//! public `sf-serve` source surface by this change. Its live-parity verification
+//! tier means the focused receipts run against the real embedded engine; it is
+//! not a production-support claim. Enabled via `--features duckdb-backend`.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 
+use duckdb::core::LogicalTypeId;
 use duckdb::params_from_iter;
 use duckdb::Connection;
 use sf_core::datatype::XsdTypeCode;
@@ -19,16 +31,34 @@ use sf_core::datatype::XsdTypeCode;
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 
+mod value;
+
+use value::{duck_arrow_value_ref, duck_value};
+
+#[cfg(test)]
+mod tests;
+
 /// An owned, `'static` DuckDB backend over `Arc<Mutex<Connection>>`.
-/// The `Mutex` is required because `Connection` is `!Send`.
+/// The `Mutex` is required because `Connection` is `!Sync`.
 pub struct DuckDbBackend {
     conn: Arc<Mutex<Connection>>,
+    max_value_bytes: Option<usize>,
 }
 
 impl DuckDbBackend {
     /// Wrap an existing connection handle.
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            max_value_bytes: None,
+        }
+    }
+
+    /// Reject variable-width SQL values whose owned lexical representation
+    /// would exceed `max_value_bytes`.
+    pub fn with_max_value_bytes(mut self, max_value_bytes: usize) -> Self {
+        self.max_value_bytes = Some(max_value_bytes);
+        self
     }
 }
 
@@ -36,15 +66,116 @@ impl DuckDbBackend {
 /// Each `next_row` awaits the next `Result<RawTuple>` from the blocking cursor.
 pub struct DuckDbReceiverStream {
     rx: tokio::sync::mpsc::Receiver<Result<RawTuple>>,
+    state: Arc<Mutex<DuckDbWorkerState>>,
+    worker: Option<tokio::task::JoinHandle<()>>,
+    finished: bool,
+}
+
+#[derive(Default)]
+struct DuckDbWorkerState {
+    cancel_requested: bool,
+    running_with_connection: bool,
+    interrupt: Option<Arc<duckdb::InterruptHandle>>,
+}
+
+struct DuckDbWorkerRunning {
+    state: Arc<Mutex<DuckDbWorkerState>>,
+}
+
+impl Drop for DuckDbWorkerRunning {
+    fn drop(&mut self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.running_with_connection = false;
+        state.interrupt = None;
+    }
+}
+
+impl DuckDbReceiverStream {
+    async fn finish_worker(&mut self) -> Result<()> {
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        worker.await.map_err(|error| {
+            Error::Marshal(format!("duckdb blocking cursor task join error: {error}"))
+        })
+    }
+
+    fn cancel_worker(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.cancel_requested = true;
+        if state.running_with_connection {
+            // Interrupt while holding the state lock: the worker must clear
+            // `running_with_connection` under this same lock before releasing
+            // the connection, so this cannot spill into a subsequent query.
+            if let Some(interrupt) = &state.interrupt {
+                interrupt.interrupt();
+            }
+        }
+    }
 }
 
 impl BranchStream for DuckDbReceiverStream {
     async fn next_row(&mut self) -> Result<Option<RawTuple>> {
         match self.rx.recv().await {
-            None => Ok(None),
+            None => {
+                self.finished = true;
+                self.finish_worker().await?;
+                Ok(None)
+            }
             Some(Ok(tuple)) => Ok(Some(tuple)),
-            Some(Err(e)) => Err(e),
+            Some(Err(error)) => {
+                self.cancel_worker();
+                self.finish_worker().await?;
+                self.finished = true;
+                Err(error)
+            }
         }
+    }
+}
+
+impl Drop for DuckDbReceiverStream {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.cancel_worker();
+        }
+        if let Some(worker) = self.worker.take() {
+            let state = Arc::clone(&self.state);
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    while interrupt_running_worker(&state) {
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    }
+                    let _ = worker.await;
+                });
+            } else {
+                std::thread::spawn(move || {
+                    while interrupt_running_worker(&state) {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    drop(worker);
+                });
+            }
+        }
+    }
+}
+
+fn interrupt_running_worker(state: &Mutex<DuckDbWorkerState>) -> bool {
+    let state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state.running_with_connection {
+        if let Some(interrupt) = &state.interrupt {
+            interrupt.interrupt();
+        }
+        true
+    } else {
+        false
     }
 }
 
@@ -62,7 +193,12 @@ impl SqlBackend for DuckDbBackend {
         // concurrent callers over one shared connection wedge every worker once
         // `N > worker_threads`.
         let conn = Arc::clone(&self.conn);
-        let probe_sql = probe_sql.to_owned();
+        // `Dialect::probe_sql` passes an `rr:sqlQuery` through verbatim.  Calling
+        // DuckDB's non-streaming `Statement::query` on that text materializes the
+        // complete result merely to discover its column names.  Keep metadata
+        // discovery independent of source cardinality just like `open_branch`'s
+        // logical-type probe below.
+        let probe_sql = streaming_metadata_sql(probe_sql);
         let joined = tokio::task::spawn_blocking(move || {
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             let mut stmt = guard
@@ -99,11 +235,68 @@ impl SqlBackend for DuckDbBackend {
     ) -> Result<DuckDbReceiverStream> {
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
         let conn = Arc::clone(&self.conn);
+        let max_value_bytes = self.max_value_bytes;
+        let state = Arc::new(Mutex::new(DuckDbWorkerState::default()));
+        let worker_state = Arc::clone(&state);
         let sql = sql.to_owned();
         let params: Vec<String> = lexical_params.to_vec();
 
-        tokio::task::spawn_blocking(move || {
+        let worker = tokio::task::spawn_blocking(move || {
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
+            let interrupt = guard.interrupt_handle();
+            {
+                let mut state = worker_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if state.cancel_requested {
+                    return;
+                }
+                state.running_with_connection = true;
+                state.interrupt = Some(interrupt);
+            }
+            // Declared after the connection guard so it marks the worker idle
+            // before the connection can be acquired by another branch.
+            let _running = DuckDbWorkerRunning {
+                state: Arc::clone(&worker_state),
+            };
+            // duckdb-rs exposes exact logical result types only after a
+            // statement has executed.  Arrow's physical schema alone cannot
+            // distinguish HUGEINT, UHUGEINT, and DECIMAL(38, 0), so execute a
+            // zero-row wrapper first.  DuckDB plans this query but LIMIT 0
+            // prevents it from consuming the source result; the real query
+            // below still uses the genuinely streaming execution API.
+            let metadata_sql = streaming_metadata_sql(&sql);
+            let mut metadata_stmt = match guard.prepare(&metadata_sql) {
+                Ok(stmt) => stmt,
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(Error::Marshal(format!(
+                        "duckdb metadata prepare: {error}"
+                    ))));
+                    return;
+                }
+            };
+            let metadata_rows = match metadata_stmt.query(params_from_iter(params.iter())) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(Error::Marshal(format!(
+                        "duckdb metadata query: {error}"
+                    ))));
+                    return;
+                }
+            };
+            let Some(metadata) = metadata_rows.as_ref() else {
+                let _ = tx.blocking_send(Err(Error::Marshal(
+                    "DuckDB metadata query did not expose a result schema".to_owned(),
+                )));
+                return;
+            };
+            let ncols = metadata.column_count();
+            let logical_types = (0..ncols)
+                .map(|index| metadata.column_logical_type(index).id())
+                .collect::<Vec<_>>();
+            drop(metadata_rows);
+            drop(metadata_stmt);
+
             let mut stmt = match guard.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
@@ -111,300 +304,68 @@ impl SqlBackend for DuckDbBackend {
                     return;
                 }
             };
-            let mut rows = match stmt.query(params_from_iter(params.iter())) {
-                Ok(r) => r,
+            let mut batches = match stmt.stream_arrow(params_from_iter(params.iter())) {
+                Ok(batches) => batches,
                 Err(e) => {
                     let _ = tx.blocking_send(Err(Error::Marshal(format!("duckdb query: {e}"))));
                     return;
                 }
             };
-            // Column count is available from the statement once the result is ready.
-            let ncols = rows.as_ref().map(|s| s.column_count()).unwrap_or(0);
-            loop {
-                match rows.next() {
-                    Ok(Some(row)) => {
+            // ArrowStream::next currently reports a late DuckDB fetch error by
+            // panicking. Keep that implementation detail inside the blocking
+            // worker and surface it as the same hard stream failure as other
+            // marshalling errors.
+            let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<()> {
+                for batch in &mut batches {
+                    if batch.num_columns() != ncols {
+                        return Err(Error::Marshal(format!(
+                            "DuckDB streaming batch has {} columns, expected {ncols}",
+                            batch.num_columns()
+                        )));
+                    }
+                    for row in 0..batch.num_rows() {
                         let mut values = Vec::with_capacity(ncols);
                         let mut codes: Vec<Option<XsdTypeCode>> = Vec::with_capacity(ncols);
-                        let mut ok = true;
-                        for i in 0..ncols {
-                            match row.get_ref(i) {
-                                Ok(v) => match duck_value(v) {
-                                    Ok((text, code)) => {
-                                        values.push(text);
-                                        codes.push(code);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.blocking_send(Err(e));
-                                        ok = false;
-                                        break;
-                                    }
-                                },
-                                Err(e) => {
-                                    let _ = tx.blocking_send(Err(Error::Marshal(format!(
-                                        "duckdb col {i}: {e}"
-                                    ))));
-                                    ok = false;
-                                    break;
-                                }
-                            }
+                        for (i, &logical_type) in logical_types.iter().enumerate() {
+                            let value = duck_arrow_value_ref(batch.column(i), row, logical_type)?;
+                            let (text, code) = duck_value(
+                                value,
+                                logical_type == LogicalTypeId::TimestampTZ,
+                                max_value_bytes,
+                            )?;
+                            values.push(text);
+                            codes.push(code);
                         }
-                        if ok && tx.blocking_send(Ok(RawTuple { values, codes })).is_err() {
-                            break;
-                        }
-                        if !ok {
-                            break;
+                        if tx.blocking_send(Ok(RawTuple { values, codes })).is_err() {
+                            return Ok(());
                         }
                     }
-                    Ok(None) => break,
-                    Err(e) => {
-                        let _ = tx.blocking_send(Err(Error::Marshal(format!("duckdb row: {e}"))));
-                        break;
-                    }
+                }
+                Ok(())
+            }));
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    let _ = tx.blocking_send(Err(error));
+                }
+                Err(_) => {
+                    let _ = tx.blocking_send(Err(Error::Marshal(
+                        "DuckDB streaming fetch panicked".to_owned(),
+                    )));
                 }
             }
         });
-        Ok(DuckDbReceiverStream { rx })
+        Ok(DuckDbReceiverStream {
+            rx,
+            state,
+            worker: Some(worker),
+            finished: false,
+        })
     }
 }
 
-/// Map a DuckDB [`duckdb::types::ValueRef`] to a lexical string + XSD type code.
-///
-/// Primitive scalar types are mapped directly. Complex/nested types
-/// (Timestamp, Date, Time, Decimal, Interval, List, Struct, Enum, Union, Array, Map)
-/// return `Error::Unsupported` — the caller will surface a 501 skip via
-/// `exec_core::map_sql_err` (ADR-0024 design A2).
-fn duck_value(v: duckdb::types::ValueRef<'_>) -> Result<(Option<String>, Option<XsdTypeCode>)> {
-    use duckdb::types::ValueRef;
-    use XsdTypeCode as X;
-    match v {
-        ValueRef::Null => Ok((None, None)),
-        ValueRef::Boolean(b) => Ok((Some(b.to_string()), Some(X::Boolean))),
-        ValueRef::TinyInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::SmallInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::Int(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::BigInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::HugeInt(i) => Ok((Some(i.to_string()), Some(X::Integer))),
-        ValueRef::UTinyInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::USmallInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::UInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::UBigInt(u) => Ok((Some(u.to_string()), Some(X::Integer))),
-        ValueRef::Float(f) => Ok((Some(f.to_string()), Some(X::Double))),
-        ValueRef::Double(d) => Ok((Some(d.to_string()), Some(X::Double))),
-        ValueRef::Text(t) => {
-            let s = std::str::from_utf8(t)
-                .map_err(|e| Error::Marshal(format!("duckdb non-UTF8 text: {e}")))?;
-            Ok((Some(s.to_owned()), Some(X::String)))
-        }
-        ValueRef::Blob(b) => {
-            let mut out = String::new();
-            sf_core::datatype::hex_binary_upper(b, &mut out);
-            Ok((Some(out), Some(X::HexBinary)))
-        }
-        // Timestamp, Date32, Time64, Decimal, Interval, List, Struct, Enum, Union, Array, Map
-        other => Err(Error::Unsupported(format!(
-            "DuckDB value type {:?} not supported",
-            other.data_type()
-        ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use super::*;
-
-    /// Smoke test: open an in-memory DuckDB, create a table, insert rows, and
-    /// drive the `SqlBackend` trait's `open_branch` → `next_row` loop to verify
-    /// the cap-1 channel bridge delivers every row correctly.
-    ///
-    /// Verification tier: live-parity (DuckDB is embedded; no external instance needed).
-    #[test]
-    fn duckdb_backend_streams_rows() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let conn = duckdb::Connection::open_in_memory().unwrap();
-            conn.execute_batch(
-                "CREATE TABLE emp (id INTEGER, name VARCHAR, salary DOUBLE);
-                 INSERT INTO emp VALUES (1, 'Alice', 90000.5);
-                 INSERT INTO emp VALUES (2, 'Bob', 80000.0);
-                 INSERT INTO emp VALUES (3, 'Carol', NULL);",
-            )
-            .unwrap();
-            let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn)));
-
-            // column_names probe
-            let cols = backend
-                .column_names("SELECT * FROM emp LIMIT 0")
-                .await
-                .unwrap();
-            assert_eq!(cols, vec!["id", "name", "salary"]);
-
-            // open_branch and stream all rows
-            let mut stream = backend
-                .open_branch("SELECT id, name, salary FROM emp ORDER BY id", &[])
-                .await
-                .unwrap();
-
-            let row1 = stream.next_row().await.unwrap().unwrap();
-            assert_eq!(row1.values[0].as_deref(), Some("1"));
-            assert_eq!(row1.values[1].as_deref(), Some("Alice"));
-            assert_eq!(row1.values[2].as_deref(), Some("90000.5"));
-
-            let row2 = stream.next_row().await.unwrap().unwrap();
-            assert_eq!(row2.values[0].as_deref(), Some("2"));
-            assert_eq!(row2.values[1].as_deref(), Some("Bob"));
-
-            let row3 = stream.next_row().await.unwrap().unwrap();
-            assert_eq!(row3.values[2], None, "NULL salary should be None");
-
-            let eof = stream.next_row().await.unwrap();
-            assert!(eof.is_none(), "should be EOF after 3 rows");
-        });
-    }
-
-    /// Verify that `open_branch` with parameters binds correctly.
-    #[test]
-    fn duckdb_backend_parameter_binding() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let conn = duckdb::Connection::open_in_memory().unwrap();
-            conn.execute_batch(
-                "CREATE TABLE val (n INTEGER);
-                 INSERT INTO val VALUES (10);
-                 INSERT INTO val VALUES (20);
-                 INSERT INTO val VALUES (30);",
-            )
-            .unwrap();
-            let mut backend = DuckDbBackend::new(Arc::new(Mutex::new(conn)));
-            let mut stream = backend
-                .open_branch("SELECT n FROM val WHERE n > ?", &["15".to_owned()])
-                .await
-                .unwrap();
-
-            let r1 = stream.next_row().await.unwrap().unwrap();
-            let r2 = stream.next_row().await.unwrap().unwrap();
-            let eof = stream.next_row().await.unwrap();
-
-            let mut got = vec![
-                r1.values[0].as_deref().unwrap().parse::<i32>().unwrap(),
-                r2.values[0].as_deref().unwrap().parse::<i32>().unwrap(),
-            ];
-            got.sort_unstable();
-            assert_eq!(got, vec![20, 30]);
-            assert!(eof.is_none());
-        });
-    }
-
-    /// P0 deadlock regression (2e78f3f fixed `column_names` on both the SQLite and
-    /// DuckDB twins; the SQLite twin got a live concurrency receipt
-    /// (`sf-serve/tests/endpoint.rs::column_names_spawn_blocking_deadlock_regression`)
-    /// but the DuckDB twin never did — this is that receipt. `sf-serve` has no
-    /// DuckDB `Backend` variant, so this drives `DuckDbBackend` directly (the
-    /// `SqlBackend` trait) rather than through the HTTP endpoint.
-    ///
-    /// Deterministic choreography, not a timing race: a naive "spawn N identical
-    /// tasks and hope they collide" version does NOT reliably reproduce this on an
-    /// under-loaded, many-core machine — every contender starts by racing for an
-    /// INITIALLY FREE lock, and the OS's wake-one-waiter fairness lets them cycle
-    /// through `column_names` in quick succession *before* any of them reaches
-    /// `open_branch`'s long hold, so the run just serializes instead of wedging
-    /// (empirically confirmed while building this test). The real bug needs the
-    /// lock ALREADY held by a streaming cursor when the contenders arrive, so this
-    /// test forces that ordering explicitly: get exactly one row through
-    /// `open_branch` first — the `Mutex` guard spans open_branch's WHOLE
-    /// `spawn_blocking` closure, so once a row is observed, the connection lock is
-    /// provably held until the entire cursor is drained — THEN spawn `N_CONTENDERS
-    /// >= worker_threads` fresh callers of `column_names` against that
-    /// already-held lock, and only then resume draining.
-    ///
-    /// Pre-fix failure shape (mirrors the SQLite RED evidence exactly, same
-    /// mechanism, different driver): if `column_names`'s `Mutex` lock is ever
-    /// taken INLINE again (not inside its own `spawn_blocking`), each contender's
-    /// lock attempt blocks ITS OWN tokio worker thread outright — once enough
-    /// contenders pile on to saturate every worker thread, nothing remains free to
-    /// poll the mpsc receiver that would let the cursor's `blocking_send` drain
-    /// and release the lock: total starvation, not even tokio's own timer can
-    /// schedule (the SQLite regression was force-killed at 90s, zero output;
-    /// confirmed here by locally reintroducing the inline-lock pattern and
-    /// observing the identical hang-past-timeout shape, then reverting). Wrapped
-    /// in a 30s `tokio::time::timeout` so a regression is a clean test FAILURE in
-    /// the common case — though a TRUE total wedge can starve the timer too, same
-    /// as the SQLite precedent, in which case the test process itself must be
-    /// externally killed.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn column_names_concurrent_deadlock_regression() {
-        const N_CONTENDERS: usize = 4; // >= worker_threads: enough to wedge every one
-        const ROWS: usize = 20_000;
-
-        let conn = duckdb::Connection::open_in_memory().unwrap();
-        conn.execute_batch(&format!(
-            "CREATE TABLE emp (id INTEGER, name VARCHAR);
-             INSERT INTO emp SELECT range, 'Person' || range FROM range({ROWS});"
-        ))
-        .unwrap();
-        let shared = Arc::new(Mutex::new(conn));
-
-        let run = async {
-            let mut backend = DuckDbBackend::new(Arc::clone(&shared));
-            backend
-                .column_names("SELECT id, name FROM emp LIMIT 0")
-                .await
-                .expect("winner column_names");
-            let mut stream = backend
-                .open_branch("SELECT id, name FROM emp ORDER BY id", &[])
-                .await
-                .expect("winner open_branch");
-            // Proves the spawn_blocking cursor has started and is now holding the
-            // connection Mutex for the rest of its (long) drain.
-            let row1 = stream.next_row().await.expect("winner row 1");
-            assert!(row1.is_some(), "expected at least one row");
-
-            let mut handles = Vec::with_capacity(N_CONTENDERS);
-            for _ in 0..N_CONTENDERS {
-                let shared = Arc::clone(&shared);
-                handles.push(tokio::spawn(async move {
-                    let mut backend = DuckDbBackend::new(shared);
-                    let cols = backend
-                        .column_names("SELECT id, name FROM emp LIMIT 0")
-                        .await
-                        .expect("contender column_names");
-                    assert_eq!(cols, vec!["id", "name"]);
-                }));
-            }
-            // A genuine yield (not just an immediately-ready poll) so the
-            // contenders are guaranteed a chance to start and block on the
-            // already-held lock BEFORE draining resumes — removing any
-            // dependence on tokio's cooperative-yield timing.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-            // The call that must hang in the pre-fix world: no worker thread
-            // remains free to poll it once the contenders above have wedged
-            // every one of them.
-            let mut n = 1usize;
-            while stream.next_row().await.expect("winner next_row").is_some() {
-                n += 1;
-            }
-            assert_eq!(n, ROWS);
-
-            for h in handles {
-                h.await.expect("contender task join");
-            }
-        };
-
-        tokio::time::timeout(std::time::Duration::from_secs(30), run)
-            .await
-            .expect(
-                "column_names deadlock regression: contenders piling onto column_names \
-                 while a cursor holds the connection Mutex mid-stream hung past 30s under \
-                 worker_threads=4 — DuckDbBackend::column_names is locking its Mutex \
-                 inline again",
-            );
-    }
+fn streaming_metadata_sql(sql: &str) -> String {
+    let sql = sql.trim();
+    let sql = sql.strip_suffix(';').map(str::trim_end).unwrap_or(sql);
+    format!("SELECT * FROM ({sql}) AS __nova_stream_schema LIMIT 0")
 }
