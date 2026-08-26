@@ -187,18 +187,18 @@ record the complete decisions and evidence.
 |---|---|---|
 | [#8](https://github.com/sparkling/semantic-fabric/issues/8) incompatible binding pruning | Implemented: every incompatible subject/predicate/object/class/graph bind prunes its branch | `10dedd4`; flat/tree/materialized-oracle regressions |
 | [#9](https://github.com/sparkling/semantic-fabric/issues/9) graph-union wrong results | Implemented: normalized subject/POM graph union and default-graph handling across BGP, paths, and RDF-star | `5218874`; W3C and differential regressions |
-| [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Core fix implemented: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; issue stays open while the adjacent dependency-security gate is red | `5b8415c`; one `libsqlite3-sys` link target |
+| [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Resolved: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; the MySQL dependency chain is also upgraded | `5b8415c`; `mysql_async 0.37.0`; one `libsqlite3-sys` link target |
 | [#7](https://github.com/sparkling/semantic-fabric/issues/7) cloud backends | Open and deliberately deferred. Only SQLite, PostgreSQL, and MySQL are admitted to `serve` | `9d709dd`; provider-specific protocol/security gates remain |
 | [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Open as collaboration context. Federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added |
 
-The `rusqlite` resolution does not silently absorb the separate
-`mysql_async`/`lru` security follow-up raised on #10. A fresh 2026-08-26 lock
-still fails `cargo audit` on `RUSTSEC-2026-0235` (`rkyv 0.7.46` through the
-resolved `rust_decimal` feature surface), while `mysql_async 0.36.2` resolves
-to `lru 0.16.4`, reported as unsound by `RUSTSEC-2026-0253`. The latter is an
-informational audit warning; the former is a release-blocking vulnerability.
-Neither is newly ignored. Cloud adapters are not relabelled production-ready
-merely because mocked happy paths exist.
+The `mysql_async 0.37.0` upgrade resolves the `lru 0.16.4` unsoundness warning,
+and a fresh resolution selects fixed `h2`. `cargo audit` is a blocking CI gate.
+Its narrowly documented `RUSTSEC-2026-0235` exception is limited to the unused
+optional `rust_decimal` `rkyv` feature: the workspace feature tree proves it is
+not activated, and the current upstream `^0.7` requirement cannot admit the
+fixed `rkyv >=0.8.17`. The exception must be removed when that upstream
+requirement is fixed. Cloud adapters are not relabelled production-ready merely
+because mocked happy paths exist.
 
 ## Engineering MetaHarness status
 
@@ -221,6 +221,12 @@ visibility remain `INCONCLUSIVE` where the active surfaces could not be read.
 Darwin/GEPA remains disabled until at least five discriminating training tasks
 and five sealed holdouts exist. No diagnostic score can override a failed
 product oracle.
+
+GitHub-hosted CI runs the portable harness contract on Node 20 and 24. Native
+integration remains fail-closed and is run only by the manually dispatched
+`harness-native` workflow on a labelled `self-hosted`, `bwrap`, `systemd-user`
+runner; hosted runners cannot create the network namespace the production
+isolation contract requires.
 
 ## Benchmarks
 

@@ -32,13 +32,16 @@ transaction was executed rather than left pending. That model candidate was
 correctly rejected after one post-admission repair (40/100, hard gates failed),
 which does not replace or invalidate the direct product evidence.
 
-The broader programme remains open around provider-specific #7 evaluators, the
-optional consumer-driven #6 seam, and dependency-security evidence adjacent to
-#10. A fresh lock still fails `cargo audit` on `RUSTSEC-2026-0235` (`rkyv
-0.7.46`), while the separately reported `mysql_async 0.36.2` chain retains the
-`RUSTSEC-2026-0253` `lru 0.16.4` unsoundness warning. Neither is newly ignored.
-GitHub issue closure is gated on posting exact-SHA evidence after remote CI;
-this ADR does not infer external issue state from local commits.
+The broader programme remains open around provider-specific #7 evaluators and
+the optional consumer-driven #6 seam. The dependency lane upgraded all five
+`mysql_async` manifests to `0.37.0`, resolving the `lru 0.16.4` unsoundness
+warning; a fresh resolution also selects fixed `h2`. `RUSTSEC-2026-0235` is
+recorded as a narrow audit exception because it is an unused optional `rkyv`
+feature of current `rust_decimal`: the workspace feature tree proves it is not
+enabled, and the upstream `^0.7` requirement cannot admit fixed `rkyv >=0.8.17`.
+Remove that exception when upstream moves to a fixed requirement. GitHub issue
+closure remains gated on posting exact-SHA evidence after remote CI; this ADR
+does not infer external issue state from local commits.
 
 ## Context and problem statement
 
@@ -145,7 +148,8 @@ worktree.
 - #10: a fresh isolated pre-change reproducer captures the reported `0.40.2`
   SQLite link conflict; the post-change resolution has one link target; focused and workspace
   feature builds, SQLite/conformance/benchmark tests, live MySQL tests, and
-  `cargo audit` pass without a new advisory ignore.
+  `cargo audit` pass. Any advisory exception is limited, documented, and backed
+  by a feature-resolution proof rather than a reachable vulnerable path.
 - #7: no adapter outside SQLite, PostgreSQL, and MySQL reaches `sf-serve` until
   every provider-specific gate above passes; an admission test locks that set,
   and unsupported prototypes remain clearly labeled and inaccessible.

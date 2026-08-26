@@ -22,7 +22,7 @@ tokio-postgres = "0.7"
 # Live-MySQL OBDA path (ADR-0024 M5): packet-bounded exec_iter streaming via the
 # driver-agnostic exec_core over MysqlBackend. Same pin/features as sf-sql so the
 # driver crates agree.
-mysql_async = { version = "0.36.2", default-features = false, features = ["default-rustls"] }
+mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] }
 
 [dev-dependencies]
 # criterion latency benches (ADR-0005). tempfile holds the file-backed source DB

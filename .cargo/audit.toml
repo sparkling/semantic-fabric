@@ -29,4 +29,13 @@ ignore = [
     "RUSTSEC-2026-0104", # rustls-webpki: reachable panic in CRL parsing
     "RUSTSEC-2026-0098", # rustls-webpki: name constraints for URI names incorrectly accepted
     "RUSTSEC-2026-0099", # rustls-webpki: name constraints accepted for wildcard-asserting certs
+
+    # rkyv 0.7.46 is an unused optional dependency declared by the current
+    # rust_decimal 1.42.1 release (transitive through the SHACL stack). Cargo
+    # records optional dependencies in an untracked resolution lock, but
+    # `cargo tree -p rust_decimal -e features` proves that its `rkyv` feature is
+    # not enabled in any workspace build. The upstream requirement is ^0.7 and
+    # cannot admit the fixed rkyv >=0.8.17; remove this exception immediately
+    # when rust_decimal moves its optional archive feature to a fixed release.
+    "RUSTSEC-2026-0235", # rkyv: unused optional rust_decimal archive feature
 ]
