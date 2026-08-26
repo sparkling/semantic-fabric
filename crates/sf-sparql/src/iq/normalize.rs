@@ -96,6 +96,7 @@ use crate::{Error, Result};
 /// [`IqCond::NotExists`]) and normalizes them as first-class `IqNode`s (design-lock §3
 /// recursion clause, BINDING).
 pub fn normalize(node: IqNode) -> Result<IqNode> {
+    crate::control::charge_expansion_work(1)?;
     match node {
         // ---- substitution-lifting carrier (a) -----------------------------------
         IqNode::Construction {
@@ -221,6 +222,13 @@ fn lift_construction(
         // `=_bag` violation: the trapped `Union` never cross-products with the join's
         // other operands).
         IqNode::Union { children: arms, .. } => {
+            crate::control::charge_expansion_work(
+                arms.len().saturating_mul(
+                    1usize
+                        .saturating_add(subst.len())
+                        .saturating_add(project.len()),
+                ),
+            )?;
             let mut out = Vec::with_capacity(arms.len());
             for a in arms {
                 out.push(lift_construction(subst.clone(), project.clone(), a)?);
@@ -331,6 +339,13 @@ fn normalize_inner_join(children: Vec<IqNode>, cond: Vec<IqCond>) -> Result<IqNo
         let IqNode::Union { children: arms, .. } = children.remove(i) else {
             unreachable!("position matched a Union");
         };
+        crate::control::charge_expansion_work(
+            arms.len().saturating_mul(
+                1usize
+                    .saturating_add(children.len())
+                    .saturating_add(cond.len()),
+            ),
+        )?;
         let mut out_arms = Vec::with_capacity(arms.len());
         for arm in arms {
             let mut nc = children.clone();
@@ -429,6 +444,9 @@ fn normalize_filter(cond: Vec<IqCond>, child: IqNode) -> Result<IqNode> {
             children: arms,
             project,
         } => {
+            crate::control::charge_expansion_work(
+                arms.len().saturating_mul(1usize.saturating_add(cond.len())),
+            )?;
             let mut out = Vec::with_capacity(arms.len());
             for a in arms {
                 out.push(normalize_filter(cond.clone(), a)?);
@@ -504,6 +522,9 @@ fn normalize_left_join(left: IqNode, right: IqNode, cond: Vec<IqCond>) -> Result
             vars: combined_vars,
         }),
         IqNode::Union { children: arms, .. } => {
+            crate::control::charge_expansion_work(
+                arms.len().saturating_mul(1usize.saturating_add(cond.len())),
+            )?;
             let mut out = Vec::with_capacity(arms.len());
             for a in arms {
                 out.push(normalize_left_join(a, right.clone(), cond.clone())?);

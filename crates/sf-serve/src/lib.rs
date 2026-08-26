@@ -15,6 +15,7 @@
 //! max-query-length cap, and cancel-on-client-drop. Error → status mapping:
 //! parse → 400, unsupported feature → 501, execution → 500, success → 200.
 
+mod compiler;
 pub mod ontology;
 pub mod run;
 pub mod stream;
@@ -39,6 +40,7 @@ use sf_sparql::{
 use sf_sql::introspect::introspect_sqlite;
 use sf_sql::{Dialect, TableSchema};
 use sparesults::QueryResultsFormat;
+use tokio::sync::Semaphore;
 
 /// Plan-cache capacity (ADR-0007 *Plan cache, hot path*). 64 entries covers a
 /// diverse serve-mode workload without over-committing memory; the cache is sized
@@ -51,6 +53,11 @@ pub use stream::RdfFormat;
 /// Default request timeout and max query length when constructed via [`ServeConfig::new`].
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
+const DEFAULT_MAX_COMPILE_EXPANSION_WORK: usize = 1_048_576;
+
+fn default_max_concurrent_compilers() -> usize {
+    std::thread::available_parallelism().map_or(1, |parallelism| parallelism.get())
+}
 
 /// A pooled PostgreSQL connection, re-derefed to `tokio_postgres::Client` in one
 /// hop. `deadpool_postgres::Object` derefs to its own `ClientWrapper` (adds
@@ -199,6 +206,10 @@ pub struct ServeConfig {
     pub backend: Backend,
     pub timeout: Duration,
     pub max_query_len: usize,
+    /// Pre-allocation safety budget for planner-generated nodes and branch
+    /// products. It does not limit source rows, result rows, or execution work.
+    pub max_compile_expansion_work: usize,
+    compile_permits: Arc<Semaphore>,
     /// Compiled-plan cache (ADR-0007): repeated queries at the same `⟨T, M⟩` +
     /// schema epoch reuse their plan without recompilation.
     plan_cache: PlanCache<Plan>,
@@ -221,9 +232,18 @@ impl ServeConfig {
             backend,
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
+            max_compile_expansion_work: DEFAULT_MAX_COMPILE_EXPANSION_WORK,
+            compile_permits: Arc::new(Semaphore::new(default_max_concurrent_compilers())),
             plan_cache: PlanCache::new(PLAN_CACHE_CAP),
             epoch: Epoch::default(),
         }
+    }
+
+    /// Override compiler admission for deployments whose CPU or memory budget
+    /// differs from the host's reported parallelism.
+    pub fn with_max_concurrent_compilers(mut self, max_concurrent_compilers: usize) -> Self {
+        self.compile_permits = Arc::new(Semaphore::new(max_concurrent_compilers.max(1)));
+        self
     }
 }
 
@@ -312,7 +332,10 @@ async fn process(cfg: Arc<ServeConfig>, query: String, accept: Option<String>) -
 /// skip the full rewrite and return a cached plan clone.
 async fn compile(cfg: Arc<ServeConfig>, query: String) -> Result<Plan, Response> {
     let dialect = cfg.backend.dialect();
-    let joined = tokio::task::spawn_blocking(move || {
+    let permits = Arc::clone(&cfg.compile_permits);
+    let timeout = cfg.timeout;
+    let max_expansion_work = cfg.max_compile_expansion_work;
+    match compiler::run(permits, timeout, max_expansion_work, move |_| {
         sf_sparql::parse_and_translate_cached(
             &query,
             &cfg.mapping,
@@ -323,14 +346,28 @@ async fn compile(cfg: Arc<ServeConfig>, query: String) -> Result<Plan, Response>
             cfg.epoch,
         )
     })
-    .await;
-    match joined {
-        Err(e) => Err(err_text(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("compile task join error: {e}"),
+    .await
+    {
+        Err(compiler::CompileFailure::AdmissionTimeout) => Err(err_text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "query compilation timed out waiting for planner admission",
         )),
-        Ok(Err(e)) => Err(err_text(status_for(&e), e.to_string())),
-        Ok(Ok(plan)) => Ok(plan),
+        Err(compiler::CompileFailure::Unavailable) => Err(err_text(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "query compiler is unavailable",
+        )),
+        Err(compiler::CompileFailure::Deadline) => Err(err_text(
+            StatusCode::REQUEST_TIMEOUT,
+            "query compilation exceeded the request deadline",
+        )),
+        Err(compiler::CompileFailure::Join(error)) => Err(err_text(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("compile task join error: {error}"),
+        )),
+        Err(compiler::CompileFailure::Planner(error)) => {
+            Err(err_text(status_for(&error), error.to_string()))
+        }
+        Ok(plan) => Ok(plan),
     }
 }
 
@@ -544,6 +581,8 @@ fn status_for(err: &SparqlError) -> StatusCode {
     match err {
         SparqlError::Parse(_) => StatusCode::BAD_REQUEST,
         SparqlError::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
+        SparqlError::Cancelled => StatusCode::REQUEST_TIMEOUT,
+        SparqlError::ResourceLimit(_) => StatusCode::UNPROCESSABLE_ENTITY,
         SparqlError::Mapping(_) | SparqlError::Sql(_) | SparqlError::Core(_) => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
@@ -660,6 +699,14 @@ mod pure_helper_tests {
         assert_eq!(
             status_for(&SparqlError::Unsupported("x".into())),
             StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            status_for(&SparqlError::Cancelled),
+            StatusCode::REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            status_for(&SparqlError::ResourceLimit("x".into())),
+            StatusCode::UNPROCESSABLE_ENTITY
         );
         assert_eq!(
             status_for(&SparqlError::Mapping("x".into())),

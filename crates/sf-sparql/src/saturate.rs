@@ -209,6 +209,26 @@ impl Tbox {
 /// `saturate_class` per query — the same branches that would be emitted at
 /// query time are instead present from the start. The cascade passes are
 /// unaffected (no new structural patterns are introduced).
+pub(crate) fn expansion_work(maps: &[TriplesMap], tbox: &Tbox) -> usize {
+    if tbox.sub_classes.is_empty() && tbox.sub_properties.is_empty() {
+        return 0;
+    }
+    maps.iter().fold(maps.len(), |work, triples_map| {
+        triples_map
+            .subject
+            .classes
+            .iter()
+            .fold(work, |work, class| {
+                let super_classes = tbox
+                    .sub_classes
+                    .values()
+                    .filter(|subclasses| subclasses.iter().any(|sub| sub == class.as_str()))
+                    .count();
+                work.saturating_add(super_classes)
+            })
+    })
+}
+
 pub fn saturate_maps<'a>(
     maps: &'a [TriplesMap],
     tbox: &Tbox,

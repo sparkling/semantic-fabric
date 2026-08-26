@@ -121,6 +121,7 @@ impl<'a> ResolveCx<'a> {
 /// descends into those subtrees too — the "ZERO Intensional" invariant is over the
 /// *entire* tree, including condition-embedded patterns.
 pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
+    crate::control::checkpoint(crate::CompileStage::Resolve)?;
     match node {
         // ---- the one resolving case ---------------------------------------------
         IqNode::Intensional { pattern, graph } => {

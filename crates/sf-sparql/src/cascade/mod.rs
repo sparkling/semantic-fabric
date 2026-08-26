@@ -107,6 +107,9 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
     let mut out: Vec<Branch> = branches
         .into_iter()
         .filter_map(|mut b| {
+            if crate::control::is_cancelled() {
+                return None;
+            }
             // A recursive property-path closure has no base scans to rewrite — the
             // constraint-driven passes are inapplicable; pass it through untouched.
             // A MINUS anti-join branch likewise carries a correlated `NotExists`
@@ -242,6 +245,9 @@ pub fn run(branches: Vec<Branch>, schema: &[TableSchema], ctx: &CascadeCtx) -> V
     // Projection shrinking: drop bindings not in the project list (pass 7).
     if let Some(project) = ctx.project {
         for b in &mut out {
+            if crate::control::is_cancelled() {
+                break;
+            }
             b.bindings.retain(|var, _| project.iter().any(|p| p == var));
         }
     }
