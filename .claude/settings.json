@@ -39,7 +39,6 @@
     ]
   },
   "env": {
-    "RUFLO_HARNESS_LOOP": "1",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_FLOW_V3_ENABLED": "true",
     "CLAUDE_FLOW_HOOKS_ENABLED": "true"
