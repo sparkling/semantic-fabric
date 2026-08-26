@@ -114,6 +114,38 @@ describe('structured process runner', () => {
     expect(result.durationMs).toBeLessThan(1_000);
   });
 
+  it('does not spawn after cancellation during cooperative isolation', async () => {
+    const root = workspace();
+    const artifact = join(root, 'must-not-exist.txt');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const assertStable = vi.fn(async () => await gate);
+    const isolator: OfflineProcessIsolator = {
+      assertStable,
+      async terminateAndVerify() {},
+      isolate: (source) => ({
+        enforcement: 'os-network-namespace', mechanism: 'test-offline-scope',
+        resourceScope: TEST_RESOURCE_SCOPE,
+        command: { ...source, executable: '/usr/bin/env', args: [source.executable, ...source.args] },
+      }),
+    };
+    const controller = new AbortController();
+    const pending = runStructuredProcess(command('artifact', {
+      argv: [fixture, 'artifact', artifact],
+    }), {
+      workspaceRoot: root, config: createTestConfig(), declaredTools: ['node'],
+      signal: controller.signal,
+      boundary: { kind: 'offline-candidate', isolator, writablePaths: [] },
+    });
+    await waitFor(() => assertStable.mock.calls.length === 1);
+    controller.abort();
+    release();
+
+    const result = await pending;
+    expect(result.cancelled).toBe(true);
+    expect(existsSync(artifact)).toBe(false);
+  });
+
   it('does not resolve an offline timeout before its exact resource scope is released', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });

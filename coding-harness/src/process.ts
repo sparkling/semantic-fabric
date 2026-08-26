@@ -85,7 +85,7 @@ export async function runStructuredProcess(
   if (context.boundary === undefined) throw new Error('HARNESS_PROCESS_BOUNDARY_REQUIRED');
   const isolation = context.boundary.kind === 'trusted-control-plane'
     ? null
-    : isolateOfflineCandidateCommand({
+    : await isolateOfflineCandidateCommand({
       mode: 'offline',
       channel: 'candidate-command',
       stage: 'candidate-execution',
@@ -101,11 +101,12 @@ export async function runStructuredProcess(
     }, context.boundary.isolator);
   const launch = isolation?.command
     ?? { executable: command.executable, args: command.argv, cwd, env };
-  if (context.boundary.kind === 'offline-candidate') context.boundary.isolator.assertStable();
+  if (context.boundary.kind === 'offline-candidate') await context.boundary.isolator.assertStable();
   const launchEnvironment = context.boundary.kind === 'offline-candidate'
     ? (context.boundary.isolator.launchEnvironment?.(definedEnvironment(launch.env))
       ?? definedEnvironment(launch.env))
     : launch.env;
+  if (context.signal?.aborted) return cancelledBeforeStart(startedAt);
   const offlineBoundary = context.boundary.kind === 'offline-candidate'
     ? context.boundary
     : null;
@@ -233,7 +234,7 @@ export async function runStructuredProcess(
       settled = true;
       if (offlineBoundary !== null) {
         try {
-          offlineBoundary.isolator.assertStable();
+          await offlineBoundary.isolator.assertStable();
         } catch (error) {
           spawnError ??= errorMessage(error);
         }

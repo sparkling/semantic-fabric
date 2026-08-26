@@ -36,6 +36,7 @@ export interface RustOfflineProfileOptions {
   readonly resourceBoundary: NativeResourceBoundary;
   readonly resourceLimits: NativeResourceLimits;
   readonly assertClosureStable?: () => void;
+  readonly assertClosureStableAsync?: () => Promise<void>;
 }
 
 export interface RustOfflineProfile {
@@ -100,8 +101,18 @@ export function createRustOfflineProfile(options: RustOfflineProfileOptions): Ru
     if (typeof options.assertClosureStable !== 'function') {
       throw new TypeError('HARNESS_RUST_CLOSURE_ASSERTION_INVALID');
     }
+    if (options.assertClosureStableAsync !== undefined
+      && typeof options.assertClosureStableAsync !== 'function') {
+      throw new TypeError('HARNESS_RUST_CLOSURE_ASSERTION_INVALID');
+    }
     options.assertClosureStable();
-    isolator = closureStableIsolator(isolator, options.assertClosureStable);
+    isolator = closureStableIsolator(
+      isolator,
+      options.assertClosureStable,
+      options.assertClosureStableAsync,
+    );
+  } else if (options.assertClosureStableAsync !== undefined) {
+    throw new TypeError('HARNESS_RUST_CLOSURE_ASSERTION_INVALID');
   }
   return Object.freeze({
     isolator,
@@ -114,17 +125,22 @@ export function createRustOfflineProfile(options: RustOfflineProfileOptions): Ru
 function closureStableIsolator(
   isolator: OfflineProcessIsolator,
   assertClosureStable: () => void,
+  assertClosureStableAsync?: () => Promise<void>,
 ): OfflineProcessIsolator {
+  const assertClosure = async () => {
+    if (assertClosureStableAsync === undefined) assertClosureStable();
+    else await assertClosureStableAsync();
+  };
   return Object.freeze({
-    assertStable() {
-      assertClosureStable();
-      isolator.assertStable();
-      assertClosureStable();
+    async assertStable() {
+      await assertClosure();
+      await isolator.assertStable();
+      await assertClosure();
     },
-    isolate(command: BoundaryCommand) {
-      assertClosureStable();
-      const isolated = isolator.isolate(command);
-      assertClosureStable();
+    async isolate(command: BoundaryCommand) {
+      await assertClosure();
+      const isolated = await isolator.isolate(command);
+      await assertClosure();
       return isolated;
     },
     async terminateAndVerify(scope: NativeResourceScope) {
@@ -185,13 +201,13 @@ function extensionStableIsolator(
     }
   };
   return Object.freeze({
-    assertStable() {
-      isolator.assertStable();
+    async assertStable() {
+      await isolator.assertStable();
       assertExtension();
     },
-    isolate(command: BoundaryCommand) {
+    async isolate(command: BoundaryCommand) {
       assertExtension();
-      return isolator.isolate(command);
+      return await isolator.isolate(command);
     },
     async terminateAndVerify(scope: NativeResourceScope) {
       await isolator.terminateAndVerify(scope);

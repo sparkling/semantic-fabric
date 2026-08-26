@@ -18,6 +18,11 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { FrozenRegistryPackage } from './frozen-cargo-metadata.js';
 import {
+  cooperativeMetadataAssertion,
+  metadataTreeDigest,
+  type MetadataTreeSource,
+} from './metadata-tree.js';
+import {
   prepareLockedRustRegistryClosure,
   type LockedRustRegistryClosure,
 } from './rust-registry-closure.js';
@@ -37,6 +42,7 @@ export interface Issue8RustClosure {
   readonly cargoExecutable: string;
   readonly evidence: Readonly<Record<string, string>>;
   assertStable(): void;
+  assertStableAsync(): Promise<void>;
   lock(input: Issue8RustLockInput): LockedRustRegistryClosure;
 }
 
@@ -47,11 +53,6 @@ export type Issue8RustLockInput = Readonly<{
   targetTriple: string;
   expectedContentDigest: string;
 }>;
-
-interface TreeSource {
-  readonly source: string;
-  readonly prefix: string;
-}
 
 interface CopiedTree {
   readonly contentDigest: string;
@@ -94,16 +95,26 @@ export function prepareIssue8RustClosure(input: Readonly<{
   }
   hardenTree(toolchainRoot);
   hardenTree(registryRoot);
-  const metadataDigest = metadataTreeDigest([
+  const metadataSources = [
     { source: toolchainRoot, prefix: 'toolchain' },
     { source: registryRoot, prefix: 'registry' },
-  ]);
-  const assertStable = () => {
-    if (metadataTreeDigest([
-      { source: toolchainRoot, prefix: 'toolchain' },
-      { source: registryRoot, prefix: 'registry' },
-    ]) !== metadataDigest) throw new Error('HARNESS_RUST_CLOSURE_CHANGED');
+  ];
+  const metadataOptions = {
+    maxEntries: MAX_TOOLCHAIN_ENTRIES + MAX_REGISTRY_ENTRIES,
+    invalidCode: 'HARNESS_RUST_CLOSURE_COPY_INVALID',
   };
+  const metadataDigest = metadataTreeDigest(metadataSources, metadataOptions);
+  const assertStable = () => {
+    if (metadataTreeDigest(metadataSources, metadataOptions) !== metadataDigest) {
+      throw new Error('HARNESS_RUST_CLOSURE_CHANGED');
+    }
+  };
+  const assertStableAsync = cooperativeMetadataAssertion(
+    metadataSources,
+    metadataDigest,
+    metadataOptions,
+    'HARNESS_RUST_CLOSURE_CHANGED',
+  );
   assertStable();
   return Object.freeze({
     toolchainRoot,
@@ -115,6 +126,7 @@ export function prepareIssue8RustClosure(input: Readonly<{
       rustBootstrapClosureMetadata: metadataDigest,
     }),
     assertStable,
+    assertStableAsync,
     lock(input: Issue8RustLockInput) {
       assertStable();
       const locked = prepareLockedRustRegistryClosure({
@@ -131,13 +143,18 @@ export function prepareIssue8RustClosure(input: Readonly<{
           locked.assertStable();
           assertStable();
         },
+        async assertStableAsync() {
+          await assertStableAsync();
+          await locked.assertStableAsync();
+          await assertStableAsync();
+        },
       });
     },
   });
 }
 
 function copyTrees(
-  sources: readonly TreeSource[],
+  sources: readonly MetadataTreeSource[],
   destinationRoot: string,
   maxEntries: number,
   maxBytes: number,
@@ -240,42 +257,6 @@ function hardenTree(root: string): void {
     chmodSync(directory, 0o700);
   };
   visit(root);
-}
-
-function metadataTreeDigest(sources: readonly TreeSource[]): string {
-  const hash = createHash('sha256');
-  for (const { source, prefix } of sources) {
-    const visit = (directory: string) => {
-      for (const name of readdirSync(directory).sort()) {
-        const path = join(directory, name);
-        const stat = lstatSync(path, { bigint: true });
-        const child = relative(source, path).split(sep).join('/');
-        const virtual = prefix === '' ? child : `${prefix}/${child}`;
-        if (stat.isDirectory() && !stat.isSymbolicLink()
-          && realpathSync(path) === path) {
-          metadataEntry(hash, 'd', virtual, stat);
-          visit(path);
-        } else if (stat.isFile() && !stat.isSymbolicLink()
-          && realpathSync(path) === path) {
-          metadataEntry(hash, 'f', virtual, stat);
-        } else throw new Error('HARNESS_RUST_CLOSURE_COPY_INVALID');
-      }
-    };
-    visit(source);
-  }
-  return hash.digest('hex');
-}
-
-function metadataEntry(
-  hash: ReturnType<typeof createHash>,
-  kind: 'd' | 'f',
-  path: string,
-  stat: BigIntStats,
-): void {
-  hash.update([
-    kind, path, String(stat.dev), String(stat.ino), String(stat.mode), String(stat.size),
-    String(stat.mtimeNs), String(stat.ctimeNs), '',
-  ].join('\0'), 'utf8');
 }
 
 function registryDirectory(root: string, kind: 'cache' | 'index'): string {

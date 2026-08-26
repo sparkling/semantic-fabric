@@ -42,8 +42,8 @@ export interface OfflineIsolationResult {
 }
 
 export interface OfflineProcessIsolator {
-  isolate(command: BoundaryCommand): unknown;
-  assertStable(): void;
+  isolate(command: BoundaryCommand): unknown | Promise<unknown>;
+  assertStable(): void | Promise<void>;
   terminateAndVerify(scope: NativeResourceScope): Promise<void>;
   launchEnvironment?(environment: Readonly<Record<string, string>>): Readonly<Record<string, string>>;
 }
@@ -117,10 +117,10 @@ const NPM_CI_SUFFIX = Object.freeze(['--audit=false', '--fund=false'] as const);
 const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]*$/;
 const MECHANISM_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-export function isolateOfflineCandidateCommand(
+export async function isolateOfflineCandidateCommand(
   value: unknown,
   isolator: OfflineProcessIsolator,
-): OfflineCandidateGrant {
+): Promise<OfflineCandidateGrant> {
   const input = asRecord(value, 'offline candidate request');
   assertExactKeys(
     input,
@@ -142,9 +142,9 @@ export function isolateOfflineCandidateCommand(
   if (typeof isolator.terminateAndVerify !== 'function') {
     throw new Error('HARNESS_OFFLINE_RESOURCE_TERMINATION_REQUIRED');
   }
-  isolator.assertStable();
-  const isolated = parseOfflineIsolation(isolator.isolate(command));
-  isolator.assertStable();
+  await isolator.assertStable();
+  const isolated = parseOfflineIsolation(await isolator.isolate(command));
+  await isolator.assertStable();
   assertBoundaryCommandBinding(
     command,
     isolated.command,

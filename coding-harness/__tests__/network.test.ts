@@ -122,8 +122,8 @@ function dependencyRequest(command: BoundaryCommand = dependencyCommand): Record
 }
 
 describe('offline candidate process boundary', () => {
-  it('wraps deterministic candidate argv in an injected OS-network isolator', () => {
-    const grant = isolateOfflineCandidateCommand(offlineRequest, fakeOfflineIsolator);
+  it('wraps deterministic candidate argv in an injected OS-network isolator', async () => {
+    const grant = await isolateOfflineCandidateCommand(offlineRequest, fakeOfflineIsolator);
 
     expect(grant).toMatchObject({
       mode: 'offline',
@@ -142,20 +142,20 @@ describe('offline candidate process boundary', () => {
     expect(Object.isFrozen(grant.command)).toBe(true);
   });
 
-  it('fails closed for the wrong mode, channel, origins, or a no-op isolator', () => {
-    expect(() => isolateOfflineCandidateCommand(
+  it('fails closed for the wrong mode, channel, origins, or a no-op isolator', async () => {
+    await expect(isolateOfflineCandidateCommand(
       { ...offlineRequest, mode: 'first-party-model' },
       fakeOfflineIsolator,
-    )).toThrow('candidate execution must use offline mode');
-    expect(() => isolateOfflineCandidateCommand(
+    )).rejects.toThrow('candidate execution must use offline mode');
+    await expect(isolateOfflineCandidateCommand(
       { ...offlineRequest, channel: 'native-subscription-client' },
       fakeOfflineIsolator,
-    )).toThrow('candidate-command channel');
-    expect(() => isolateOfflineCandidateCommand(
+    )).rejects.toThrow('candidate-command channel');
+    await expect(isolateOfflineCandidateCommand(
       { ...offlineRequest, allowedOrigins: ['https://api.openai.com'] },
       fakeOfflineIsolator,
-    )).toThrow('must be an empty array');
-    expect(() => isolateOfflineCandidateCommand(offlineRequest, {
+    )).rejects.toThrow('must be an empty array');
+    await expect(isolateOfflineCandidateCommand(offlineRequest, {
       assertStable() {},
       async terminateAndVerify() {},
       isolate: (command) => ({
@@ -164,10 +164,10 @@ describe('offline candidate process boundary', () => {
         resourceScope: TEST_RESOURCE_SCOPE,
         command,
       }),
-    })).toThrow('HARNESS_OFFLINE_ISOLATOR_DID_NOT_WRAP_COMMAND');
+    })).rejects.toThrow('HARNESS_OFFLINE_ISOLATOR_DID_NOT_WRAP_COMMAND');
   });
 
-  it('constructs an allowlisted bwrap filesystem without exposing host root', () => {
+  it('constructs an allowlisted bwrap filesystem without exposing host root', async () => {
     const fixture = sandboxFixture();
     const bwrap = createSystemOfflineIsolator({
       platform: 'linux',
@@ -185,7 +185,7 @@ describe('offline candidate process boundary', () => {
         writablePaths: [fixture.output],
       },
     };
-    const bwrapGrant = isolateOfflineCandidateCommand(request, bwrap);
+    const bwrapGrant = await isolateOfflineCandidateCommand(request, bwrap);
     expect(bwrapGrant.command.executable).toBe('/usr/bin/env');
     expect(bwrapGrant.command.args).toEqual(expect.arrayContaining([
       '--unshare-all', '--tmpfs', '/', '--ro-bind', '/usr', '/usr',
@@ -218,7 +218,7 @@ describe('offline candidate process boundary', () => {
 
   it.runIf(bwrapAvailable())(
     'runs a real Cargo build offline without exposing an unmounted host secret',
-    () => {
+    async () => {
       const fixture = sandboxFixture();
       const source = fixture.cwd;
       mkdirSync(join(source, 'src'));
@@ -270,7 +270,7 @@ describe('offline candidate process boundary', () => {
         resourceBoundary: fakeResourceBoundary,
         resourceLimits: TEST_RESOURCE_LIMITS,
       });
-      const grant = isolateOfflineCandidateCommand({
+      const grant = await isolateOfflineCandidateCommand({
         ...offlineRequest,
         command: {
           executable: cargo,

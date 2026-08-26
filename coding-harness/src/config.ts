@@ -84,6 +84,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/issue-8-system.ts',
     'coding-harness/src/kernel.ts',
     'coding-harness/src/manifest.ts',
+    'coding-harness/src/metadata-tree.ts',
     'coding-harness/src/metaharness-diagnostics.ts',
     'coding-harness/src/model-context.ts',
     'coding-harness/src/model-controller.ts',

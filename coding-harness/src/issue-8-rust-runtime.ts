@@ -41,6 +41,7 @@ export function prepareIssue8RustRuntimeFactory(input: Readonly<{
     writableRoot: string,
     registryRoot: string,
     assertStable: () => void,
+    assertStableAsync: () => Promise<void>,
   ) => createRustOfflineProfile({
     writableRoot,
     cargoExecutable: closure.cargoExecutable,
@@ -57,11 +58,14 @@ export function prepareIssue8RustRuntimeFactory(input: Readonly<{
     }),
     resourceLimits: ISSUE_8_RUST_LIMITS,
     assertClosureStable: assertStable,
+    assertClosureStableAsync: assertStableAsync,
   });
   return Object.freeze({
     bootstrapEvidence: closure.evidence,
     createBootstrapProfile: (writableRoot: string) =>
-      profile(writableRoot, closure.registryRoot, closure.assertStable),
+      profile(
+        writableRoot, closure.registryRoot, closure.assertStable, closure.assertStableAsync,
+      ),
     createLockedRuntime(
       writableRoot: string,
       lockfile: FrozenCargoLockFile,
@@ -75,7 +79,9 @@ export function prepareIssue8RustRuntimeFactory(input: Readonly<{
         expectedContentDigest: ISSUE_8_LOCKED_REGISTRY_CONTENT_DIGEST,
       });
       return Object.freeze({
-        profile: profile(writableRoot, locked.registryRoot, locked.assertStable),
+        profile: profile(
+          writableRoot, locked.registryRoot, locked.assertStable, locked.assertStableAsync,
+        ),
         toolVersions: locked.evidence,
       });
     },

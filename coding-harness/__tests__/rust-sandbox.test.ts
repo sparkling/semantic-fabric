@@ -24,7 +24,7 @@ afterEach(() => {
 describe(
   'pinned Rust sandbox profile',
   () => {
-    it('maps a trusted toolchain, locked registry inputs, and sealed coverage extension', () => {
+    it('maps a trusted toolchain, locked registry inputs, and sealed coverage extension', async () => {
       const rustup = spawnSync('rustup', ['which', 'cargo'], { encoding: 'utf8' });
       expect(rustup.status, rustup.stderr).toBe(0);
       const cargo = realpathSync(rustup.stdout.trim());
@@ -73,9 +73,9 @@ describe(
       });
       expect(profile.environment.PATH).toBe('/cargo-home/bin:/toolchain/bin:/usr/bin');
       expect(profile.readOnlyMounts.some(({ destination }) => destination === '/')).toBe(false);
-      profile.isolator.assertStable();
+      await profile.isolator.assertStable();
       chmodSync(coverageExecutable, 0o700);
-      expect(() => profile.isolator.assertStable()).toThrow(/CARGO_EXTENSION/);
+      await expect(profile.isolator.assertStable()).rejects.toThrow(/CARGO_EXTENSION/);
     });
   },
 );

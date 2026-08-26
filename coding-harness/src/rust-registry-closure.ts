@@ -19,6 +19,10 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { TextDecoder } from 'node:util';
 import type { FrozenRegistryPackage } from './frozen-cargo-metadata.js';
+import {
+  cooperativeMetadataAssertion,
+  metadataTreeDigest,
+} from './metadata-tree.js';
 
 const CRATES_IO_SOURCE = 'registry+https://github.com/rust-lang/crates.io-index';
 const CRATE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -40,6 +44,7 @@ export interface LockedRustRegistryClosure {
   readonly registryRoot: string;
   readonly evidence: Readonly<Record<string, string>>;
   assertStable(): void;
+  assertStableAsync(): Promise<void>;
 }
 
 export function prepareLockedRustRegistryClosure(input: Readonly<{
@@ -122,12 +127,23 @@ function prepareLockedRustRegistryClosureInner(input: Readonly<{
   if (content.digest !== input.expectedContentDigest) {
     throw new Error('HARNESS_RUST_REGISTRY_CONTENT_MISMATCH');
   }
-  const metadataDigest = metadataTreeDigest(destination);
+  const metadataSources = [{ source: destination, prefix: '' }];
+  const metadataOptions = {
+    maxEntries: MAX_ENTRIES,
+    invalidCode: 'HARNESS_RUST_REGISTRY_COPY_INVALID',
+  };
+  const metadataDigest = metadataTreeDigest(metadataSources, metadataOptions);
   const assertStable = () => {
-    if (metadataTreeDigest(destination) !== metadataDigest) {
+    if (metadataTreeDigest(metadataSources, metadataOptions) !== metadataDigest) {
       throw new Error('HARNESS_RUST_REGISTRY_CHANGED');
     }
   };
+  const assertStableAsync = cooperativeMetadataAssertion(
+    metadataSources,
+    metadataDigest,
+    metadataOptions,
+    'HARNESS_RUST_REGISTRY_CHANGED',
+  );
   assertStable();
   return Object.freeze({
     registryRoot: destination,
@@ -138,6 +154,7 @@ function prepareLockedRustRegistryClosureInner(input: Readonly<{
       rustRegistryMetadata: metadataDigest,
     }),
     assertStable,
+    assertStableAsync,
   });
 }
 
@@ -351,30 +368,6 @@ function hardenTree(root: string): void {
     chmodSync(directory, 0o700);
   };
   visit(root);
-}
-
-function metadataTreeDigest(root: string): string {
-  const hash = createHash('sha256');
-  const visit = (directory: string) => {
-    for (const name of readdirSync(directory).sort()) {
-      const path = join(directory, name);
-      const stat = lstatSync(path, { bigint: true });
-      const relativePath = relative(root, path).split(sep).join('/');
-      if (stat.isDirectory() && !stat.isSymbolicLink() && realpathSync(path) === path) {
-        metadataEntry(hash, 'd', relativePath, stat);
-        visit(path);
-      } else if (stat.isFile() && !stat.isSymbolicLink() && realpathSync(path) === path) {
-        metadataEntry(hash, 'f', relativePath, stat);
-      } else throw new Error('HARNESS_RUST_REGISTRY_COPY_INVALID');
-    }
-  };
-  visit(root);
-  return hash.digest('hex');
-}
-
-function metadataEntry(hash: ReturnType<typeof createHash>, kind: 'd' | 'f', path: string, stat: BigIntStats): void {
-  hash.update([kind, path, String(stat.dev), String(stat.ino), String(stat.mode), String(stat.size),
-    String(stat.mtimeNs), String(stat.ctimeNs), ''].join('\0'), 'utf8');
 }
 
 function hardPath(value: string): string {
