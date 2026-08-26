@@ -185,11 +185,11 @@ record the complete decisions and evidence.
 
 | Issue | Disposition | Evidence |
 |---|---|---|
-| [#8](https://github.com/sparkling/semantic-fabric/issues/8) incompatible binding pruning | Implemented: every incompatible subject/predicate/object/class/graph bind prunes its branch | `10dedd4`; flat/tree/materialized-oracle regressions |
-| [#9](https://github.com/sparkling/semantic-fabric/issues/9) graph-union wrong results | Implemented: normalized subject/POM graph union and default-graph handling across BGP, paths, and RDF-star | `5218874`; W3C and differential regressions |
-| [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Resolved: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; the MySQL dependency chain is also upgraded | `5b8415c`; `mysql_async 0.37.0`; one `libsqlite3-sys` link target |
+| [#8](https://github.com/sparkling/semantic-fabric/issues/8) incompatible binding pruning | Closed: every incompatible subject/predicate/object/class/graph bind prunes its branch | `10dedd4`; flat/tree/materialized-oracle regressions; green CI `8b66428` |
+| [#9](https://github.com/sparkling/semantic-fabric/issues/9) graph-union wrong results | Closed: normalized subject/POM graph union and default-graph handling across BGP, paths, and RDF-star | `5218874`; W3C and differential regressions; green CI `8b66428` |
+| [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Closed: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; the MySQL dependency chain is also upgraded | `5b8415c`; `mysql_async 0.37.0`; one `libsqlite3-sys` link target; green CI `8b66428` |
 | [#7](https://github.com/sparkling/semantic-fabric/issues/7) cloud backends | Open and deliberately deferred. Only SQLite, PostgreSQL, and MySQL are admitted to `serve` | `9d709dd`; provider-specific protocol/security gates remain |
-| [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Open as collaboration context. Federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added |
+| [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Closed: federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added; green CI and Pages `8b66428` |
 
 The `mysql_async 0.37.0` upgrade resolves the `lru 0.16.4` unsoundness warning,
 and a fresh resolution selects fixed `h2`. `cargo audit` is a blocking CI gate.

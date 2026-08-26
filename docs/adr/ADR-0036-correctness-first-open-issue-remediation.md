@@ -16,14 +16,17 @@ implements: []
 
 ## Implementation status
 
-**Accepted; product slices executed.** The serialized correctness lane landed
+**Accepted; product slices executed and external closure recorded.** The serialized correctness lane landed
 #8 as `10dedd4` and #9 as `5218874`; the parallel dependency lane landed the
 core #10 `rusqlite 0.40.2` resolution as `5b8415c` without absorbing PR #12.
 Commit `9d709dd` locks `sf-serve` admission to SQLite, PostgreSQL, and MySQL
 while provider work remains deferred. Nova's follow-up pilot proved SERVICE
 federation and SQLite materialization through existing public APIs; its only
 remaining upstream request is an optional fallible early-exit sink, so no
-speculative API was added for #6.
+speculative API was added for #6. After CI and Pages passed for
+`8b664283269340439fabeebb0fa013a6b48de6e6`, GitHub issues #6, #8, #9, and
+#10 were closed with exact-SHA evidence. Issue #7 remains open because no
+cloud provider meets its protocol, security, streaming, and live-canary gates.
 
 Locked/offline workspace format, clippy, build, tests, and W3C conformance pass
 with one adjudicated documented deviation and no unexpected failure. The
@@ -32,16 +35,16 @@ transaction was executed rather than left pending. That model candidate was
 correctly rejected after one post-admission repair (40/100, hard gates failed),
 which does not replace or invalidate the direct product evidence.
 
-The broader programme remains open around provider-specific #7 evaluators and
-the optional consumer-driven #6 seam. The dependency lane upgraded all five
+The broader programme remains open around provider-specific #7 evaluators. The
+dependency lane upgraded all five
 `mysql_async` manifests to `0.37.0`, resolving the `lru 0.16.4` unsoundness
 warning; a fresh resolution also selects fixed `h2`. `RUSTSEC-2026-0235` is
 recorded as a narrow audit exception because it is an unused optional `rkyv`
 feature of current `rust_decimal`: the workspace feature tree proves it is not
 enabled, and the upstream `^0.7` requirement cannot admit fixed `rkyv >=0.8.17`.
 Remove that exception when upstream moves to a fixed requirement. GitHub issue
-closure remains gated on posting exact-SHA evidence after remote CI; this ADR
-does not infer external issue state from local commits.
+closure was posted only after the exact SHA passed remote CI; this ADR does not
+infer external issue state from local commits.
 
 ## Context and problem statement
 
