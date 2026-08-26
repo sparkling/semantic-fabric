@@ -2,11 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { deepFreeze, DEVELOPMENT_AUTHORITY } from './contracts.js';
-import {
-  digestValue,
-  ReceiptChain,
-  type CommandEvidence,
-} from './receipts.js';
+import { digestValue, ReceiptChain, type CommandEvidence } from './receipts.js';
 import { failureCodeForError, repairablePatchFailureForError, type ReceiptFailureCode } from './failure-code.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
@@ -20,6 +16,7 @@ import {
   runtimeTrustUnavailable,
 } from './candidate-gates.js';
 import { runAbortableCohort } from './parallel.js';
+import { normalizeVerifierFailure } from './verifier-failure.js';
 import {
   bindExternalEvidence,
   bindNativeRuntimeEvidence,
@@ -39,7 +36,6 @@ import type {
   VerifierStage,
 } from './candidate-types.js';
 export type * from './candidate-types.js';
-
 export class CandidateBuildFailure extends Error {
   readonly build: CandidateBuild;
   readonly reasons: readonly string[];
@@ -55,7 +51,6 @@ export class CandidateBuildFailure extends Error {
 const VERIFIER_STAGES = Object.freeze([
   'public', 'independent', 'regression',
 ] as const satisfies readonly VerifierStage[]);
-
 export class CandidateTransaction {
   readonly receipts = new ReceiptChain();
   readonly #context: CandidateTransactionContext;
@@ -217,8 +212,10 @@ export class CandidateTransaction {
         const artifactPrefix = `attempt-${attempt}:`;
 
         const verifiers = await runAbortableCohort(VERIFIER_STAGES.map((stage) =>
-          async (cohortSignal) => await this.#operations.verify(stage, build, cohortSignal),
-        ), this.#signal);
+          async (cohortSignal) => {
+            try { return await this.#operations.verify(stage, build, cohortSignal); }
+            catch (error) { throw normalizeVerifierFailure(stage, error, cohortSignal); }
+          }), this.#signal);
         for (const [index, verifier] of verifiers.entries()) {
           const requestedStage = VERIFIER_STAGES[index];
           if (verifier.stage !== requestedStage) throw new Error('HARNESS_VERIFIER_STAGE_MISMATCH');

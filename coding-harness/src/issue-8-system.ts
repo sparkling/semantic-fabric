@@ -59,7 +59,7 @@ export const ISSUE_8_RUST_LIMITS: NativeResourceLimits = Object.freeze({
   processCount: 1024,
   cpuQuotaPercent: 1600,
   cpuTimeSeconds: 14_400,
-  runtimeSeconds: 1_800,
+  runtimeSeconds: 1_801,
   fileBytes: 20 * 1024 ** 3,
   openFiles: 8192,
 });

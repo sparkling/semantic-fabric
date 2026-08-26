@@ -11,6 +11,8 @@ import {
 } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import type { StructuredCommand } from '../src/contracts.js';
+import { ISSUE_8_RUST_LIMITS } from '../src/issue-8-system.js';
+import { limitsForProcessDeadline } from '../src/resource-boundary.js';
 import type { RustOfflineProfile } from '../src/rust-sandbox.js';
 
 function taskInput(): Record<string, unknown> {
@@ -110,6 +112,13 @@ describe('issue #8 acceptance task', () => {
     expect(allCommands.every(({ argv }) => argv[1] === 'fmt'
       ? !argv.includes('--locked')
       : argv.includes('--locked'))).toBe(true);
+    for (const command of allCommands) {
+      expect(limitsForProcessDeadline(
+        ISSUE_8_RUST_LIMITS,
+        command.timeoutMs,
+        SECURE_HARNESS_CONFIG.limits.terminationGraceMs,
+      ).runtimeSeconds).toBe(1_801);
+    }
     expect(Object.isFrozen(task)).toBe(true);
     expect(Object.isFrozen(task.commands.mutation[0].command.argv)).toBe(true);
   });

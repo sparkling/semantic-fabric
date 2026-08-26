@@ -121,6 +121,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/rust-registry-closure.ts',
     'coding-harness/src/rust-sandbox.ts',
     'coding-harness/src/sandbox.ts',
+    'coding-harness/src/verifier-failure.ts',
     'coding-harness/src/workspace.ts',
     'coding-harness/src/writable-overlays.ts',
     'coding-harness/tsconfig.json',
