@@ -7,7 +7,8 @@ rust-version.workspace = true
 description = "semantic-fabric source/SQL layer: dialect emission, introspection, streaming, semi-join cost (ADR-0006)"
 
 [features]
-## Enable the DuckDB backend (embedded DuckDB via the `duckdb` crate, `bundled` feature).
+## Enable the experimental, library-only DuckDB backend (embedded DuckDB via
+## the `duckdb` crate, `bundled` feature). This does not admit DuckDB to sf-serve.
 duckdb-backend = ["dep:duckdb"]
 ## Enable the SQL Server backend (tiberius TDS driver, async, @Pn placeholders).
 ## Requires `tokio-util` compat feature for TcpStream → futures_io bridge.

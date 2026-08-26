@@ -7,16 +7,18 @@
 //! `Statement::stream_arrow()` (`duckdb_execute_prepared_streaming`) and decodes
 //! one DuckDB vector at a time. The adapter buffers at most one current Arrow
 //! batch plus the cap-1 channel's owned row and a producer-blocked row; DuckDB
-//! may still materialize internally for blocking operators. The `Connection` is `Send` but not
-//! `Sync`, so the same cap-1 channel bridge used by `SqliteOwnedBackend`
+//! may still materialize internally for blocking operators. This bounds the
+//! adapter's delivery buffers by execution shape, not DuckDB's own operator
+//! memory. The `Connection` is `Send` but not `Sync`, so the same cap-1 channel
+//! bridge used by `SqliteOwnedBackend`
 //! (ADR-0024 §4.1) gives a `Send + 'static` stream suitable for `tokio::spawn`.
-//! One DuckDB vector plus one row in flight across the channel keeps memory
-//! independent of total result cardinality (ADR-0010 §C).
 //! Dropping a stream requests an interrupt and schedules the blocking worker for
 //! completion. Interruption is best effort during runtime shutdown.
 //!
-//! Verification tier: live-parity (DuckDB is embedded; no external instance
-//! required). Enabled via `--features duckdb-backend`.
+//! This is an experimental, library-only adapter and is not admitted to the
+//! public `sf-serve` source surface by this change. Its live-parity verification
+//! tier means the focused receipts run against the real embedded engine; it is
+//! not a production-support claim. Enabled via `--features duckdb-backend`.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};

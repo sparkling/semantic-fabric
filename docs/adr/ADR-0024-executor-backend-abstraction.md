@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-01
-updated: 2026-08-25
+updated: 2026-08-26
 ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
@@ -107,6 +107,15 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > requires a separate production-cloud-backend decision, governed by this ADR
 > and ADR-0010, rather than weaker invariants or a renamed prototype. Issue #10
 > is dependency hygiene and does not supersede this architecture.
+
+> **Implementation reconciliation (2026-08-26, issue #14).** The feature-gated
+> DuckDB `SqlBackend` is an experimental, library-only adapter. Its embedded
+> live-parity receipts validate adapter behavior without admitting DuckDB to
+> `sf-serve` or making a production-support claim. This does not reopen rejected
+> Option D: DuckDB is used here as the directly queried source, not as an
+> intermediary that normalizes or buffers another backend. Public serving-path
+> admission remains a separate change with its own security, lifecycle, and
+> resource-governance evidence.
 
 ## More Information
 
