@@ -9,7 +9,7 @@ import type {
   NativeProcessResult,
 } from './types.js';
 
-const MAX_PROMPT_BYTES = 1_000_000;
+export const NATIVE_PROMPT_MAX_BYTES = 1_000_000;
 
 export function assertAdapterExecutable(executable: string): void {
   if (executable.trim().length === 0 || executable.includes('\0')) {
@@ -27,7 +27,7 @@ export function validateInvocation(request: ClaudeInvocationRequest): void {
   validateModel(request.model);
   if (request.prompt.trim().length === 0
     || request.prompt.includes('\0')
-    || Buffer.byteLength(request.prompt, 'utf8') > MAX_PROMPT_BYTES) {
+    || Buffer.byteLength(request.prompt, 'utf8') > NATIVE_PROMPT_MAX_BYTES) {
     throw new Error('HARNESS_NATIVE_PROMPT_INVALID');
   }
   if (request.schema === null || Array.isArray(request.schema)
