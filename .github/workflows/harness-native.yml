@@ -1,0 +1,45 @@
+name: harness-native
+
+on:
+  workflow_dispatch:
+
+jobs:
+  native-isolation:
+    name: native isolation · node 24 · required capability gate
+    # Hosted GitHub runners cannot create the network namespace required by the
+    # production bwrap contract. This job is intentionally dispatched only to a
+    # provisioned runner whose labels attest that it can enforce both boundaries.
+    runs-on: [self-hosted, linux, bwrap, systemd-user]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: coding-harness/package-lock.json
+      - name: preflight native isolation capabilities
+        run: |
+          test -x /usr/bin/bwrap
+          test -x /usr/bin/systemd-run
+          test -n "${XDG_RUNTIME_DIR:-}"
+          test -n "${DBUS_SESSION_BUS_ADDRESS:-}"
+          bwrap_args=(--unshare-net)
+          for source in /usr /usr/lib /usr/lib64; do
+            [ -e "$source" ] || continue
+            destination="$source"
+            [ "$source" != /usr/lib ] || destination=/lib
+            [ "$source" != /usr/lib64 ] || destination=/lib64
+            bwrap_args+=(--ro-bind "$source" "$destination")
+          done
+          /usr/bin/bwrap "${bwrap_args[@]}" -- /usr/bin/true
+          /usr/bin/systemd-run --user --quiet --wait --collect --pipe --service-type=exec -- /usr/bin/true
+      - name: install pinned harness dependencies
+        run: npm --prefix coding-harness ci --ignore-scripts
+      - name: build canonical coding harness
+        run: npm --prefix coding-harness run build
+      - name: test native isolation contract
+        env:
+          HARNESS_REQUIRE_NATIVE_INTEGRATION: '1'
+        run: npm --prefix coding-harness test

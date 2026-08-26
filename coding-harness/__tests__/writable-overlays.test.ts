@@ -21,6 +21,7 @@ import {
   prepareWorkspaceFileOverlays,
 } from '../src/writable-overlays.js';
 import { fakeResourceBoundary, TEST_RESOURCE_LIMITS } from './helpers.js';
+import { bwrapAvailable } from './native-test-prerequisites.js';
 
 const roots: string[] = [];
 
@@ -142,7 +143,7 @@ describe('disposable writable file overlays', () => {
     expect(overlayBind).toBeGreaterThan(workspaceBind);
   });
 
-  it('executes a real offline writer against only the disposable overlay', () => {
+  it.runIf(bwrapAvailable())('executes a real offline writer against only the disposable overlay', () => {
     const fixture = makeFixture();
     const lease = prepareWorkspaceFileOverlays({
       controlledRoot: fixture.controlled,
