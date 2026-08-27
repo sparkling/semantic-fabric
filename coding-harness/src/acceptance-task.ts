@@ -23,6 +23,7 @@ import {
   RUNTIME_PROTECTED_PATHS,
   parseLegacyQeProfiles,
   parseTaskGeneratedEvidencePolicy,
+  parseTaskOpaqueId,
   parseTaskQePolicy,
   parseTaskRustPolicy,
   qeProfilesFromBindings,
@@ -32,7 +33,6 @@ import {
 } from './acceptance-task-v3.js';
 
 const GIT_OBJECT_ID = /^[a-f0-9]{40}$/;
-const OPAQUE_ID = /^[A-Za-z0-9_-]{8,128}$/;
 const TEST_NAME = /^[A-Za-z_][A-Za-z0-9_:]*$/;
 const REQUIRED_NATIVE_HOSTS = ['codex', 'claude-code'] as const;
 
@@ -138,7 +138,7 @@ export function parseAcceptanceTask(value: unknown, config: HarnessConfig): Acce
     throw new TypeError('acceptance task.evolutionEligible must remain false');
   }
 
-  const taskId = parseOpaqueId(input.taskId, 'acceptance task.taskId');
+  const taskId = parseTaskOpaqueId(input.taskId, 'acceptance task.taskId');
   const workItem = parsePromptText(input.workItem, 'acceptance task.workItem', 256);
   const objective = parsePromptText(input.objective, 'acceptance task.objective', 2_000);
   const invariants = parsePromptList(input.invariants, 'acceptance task.invariants');
@@ -383,7 +383,7 @@ function parseCommandGroups(
       const replacement = parseTransformText(item.replacement, `${label}.replacement`);
       if (search === replacement) throw new TypeError(`${label} transform must change the source`);
       return {
-        mutationId: parseOpaqueId(item.mutationId, `${label}.mutationId`),
+        mutationId: parseTaskOpaqueId(item.mutationId, `${label}.mutationId`),
         path,
         search,
         replacement,
@@ -404,7 +404,7 @@ function parseNamedCommands(
     const item = asRecord(entry, itemLabel);
     assertExactKeys(item, ['commandId', 'command'], itemLabel);
     return {
-      commandId: parseOpaqueId(item.commandId, `${itemLabel}.commandId`),
+      commandId: parseTaskOpaqueId(item.commandId, `${itemLabel}.commandId`),
       command: parseOfflineCommand(item.command, config, tools),
     };
   });
@@ -463,12 +463,6 @@ function parseRouting(value: unknown): AcceptanceTask['routing'] {
     throw new TypeError('acceptance task.routing.difficulty must be in [0, 1]');
   }
   return { tags, difficulty: input.difficulty };
-}
-
-function parseOpaqueId(value: unknown, label: string): string {
-  const id = asNonEmptyString(value, label);
-  if (!OPAQUE_ID.test(id)) throw new TypeError(`${label} must be an opaque 8-128 character ID`);
-  return id;
 }
 
 function parseTransformText(value: unknown, label: string): string {

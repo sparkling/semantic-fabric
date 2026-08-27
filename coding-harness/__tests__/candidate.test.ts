@@ -49,6 +49,12 @@ describe('patched candidate transaction', () => {
     expect(result.receipt.status).toBe('pass');
     expect(result.receipt.failureCode).toBeNull();
     expect(result.receipt.recovery.repairCount).toBe(1);
+    expect(Object.keys(result.receipt.verifierDigests).filter((key) => key.includes(':qe:')))
+      .toEqual(['attempt-1:qe:lcov-gap', 'attempt-1:qe:sast']);
+    expect([
+      result.receipt.verifierDigests['attempt-1:qe:lcov-gap'],
+      result.receipt.verifierDigests['attempt-1:qe:sast'],
+    ]).toEqual(result.receipt.coordination.agenticQeEvidenceDigests);
     expect(transaction.receipts.verify()).toEqual({ ok: true });
     const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
     expect(envelope.programmeAcceptance.status).toBe('ACCEPTED');
@@ -240,6 +246,29 @@ describe('patched candidate transaction', () => {
     expect(result.status).toBe('fail');
     expect(result.reason).toContain('HARNESS_REQUIRED_QE_PROFILES_MISSING:sast');
     expect(target.verifyProtectedInputs).not.toHaveBeenCalled();
+  });
+
+  it('keeps profile-labelled QE digests consistent in a post-QE failure receipt', async () => {
+    const target = operations([]);
+    target.verify = vi.fn(async (stage, build) => ({
+      stage,
+      candidate: build.candidate,
+      passed: true,
+      digest: digest(stage === 'public' ? '5' : stage === 'independent' ? '6' : '7'),
+      reasons: [],
+    }));
+    target.auditMutableOutputs = vi.fn(async () => ({ allow: false, reasons: ['changed'] }));
+
+    const result = await new CandidateTransaction({
+      context, operations: target, maxRepairs: 0,
+      now: () => '2026-08-25T12:02:00.000Z',
+    }).execute();
+
+    expect(result.status).toBe('fail');
+    expect([
+      result.receipt.verifierDigests['attempt-0:qe:lcov-gap'],
+      result.receipt.verifierDigests['attempt-0:qe:sast'],
+    ]).toEqual(result.receipt.coordination.agenticQeEvidenceDigests);
   });
 
   it('rejects stale build identities and emits a failure receipt', async () => {

@@ -256,7 +256,8 @@ describe('repository operations integration', () => {
     });
     expect(Object.keys(result.receipt.verifierDigests).sort()).toEqual([
       'attempt-0:independent', 'attempt-0:mutation', 'attempt-0:public',
-      'attempt-0:regression', 'red-baseline',
+      'attempt-0:qe:lcov-gap', 'attempt-0:qe:sast', 'attempt-0:regression',
+      'red-baseline',
     ]);
     expect(result.receipt.protectedInputs['protected.txt']).toMatch(/^[a-f0-9]{64}$/);
     expect(transaction.receipts.verify()).toEqual({ ok: true });

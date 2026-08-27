@@ -2,6 +2,7 @@
 
 import type { ArchitectureEvidence } from './candidate-types.js';
 import type { AgenticQeEvidence, AgenticQeProfile } from './evidence.js';
+import { receiptArtifactKey } from './programme-receipt-keys.js';
 import type { GitIdentity } from './receipts.js';
 
 export function assertSameIdentity(
@@ -69,7 +70,7 @@ export function prefixArtifacts(
   repairCount: number,
 ): Record<string, string> {
   return Object.fromEntries(Object.entries(artifacts).map(([name, digest]) => [
-    `attempt-${repairCount}:${name}`,
+    receiptArtifactKey(repairCount, name),
     digest,
   ]));
 }

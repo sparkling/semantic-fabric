@@ -16,6 +16,14 @@ import {
   runtimeTrustUnavailable,
 } from './candidate-gates.js';
 import { runAbortableCohort } from './parallel.js';
+import {
+  recordQeReceiptDigests,
+  recordVerifierReceiptDigests,
+} from './candidate-receipt-evidence.js';
+import {
+  RED_BASELINE_RECEIPT_KEY,
+  receiptMutationEvidenceKey,
+} from './programme-receipt-keys.js';
 import { normalizeVerifierFailure } from './verifier-failure.js';
 import {
   bindExternalEvidence,
@@ -149,7 +157,7 @@ export class CandidateTransaction {
       this.#recordGateEvidence(
         await this.#operations.preflightEvidence(prepared, this.#signal),
         prepared.evaluator.tree,
-        'red-baseline',
+        RED_BASELINE_RECEIPT_KEY,
         0,
         evidence,
       );
@@ -209,8 +217,6 @@ export class CandidateTransaction {
         }
         this.#recordBuild(build, evidence.admission, evidence);
         const attempt = evidence.repairCount;
-        const artifactPrefix = `attempt-${attempt}:`;
-
         const verifiers = await runAbortableCohort(VERIFIER_STAGES.map((stage) =>
           async (cohortSignal) => {
             try { return await this.#operations.verify(stage, build, cohortSignal); }
@@ -220,12 +226,7 @@ export class CandidateTransaction {
           const requestedStage = VERIFIER_STAGES[index];
           if (verifier.stage !== requestedStage) throw new Error('HARNESS_VERIFIER_STAGE_MISMATCH');
           assertSameIdentity(verifier.candidate, build.candidate, 'HARNESS_STALE_VERIFIER_IDENTITY');
-          evidence.verifiers[`${artifactPrefix}${verifier.stage}`] = verifier.digest;
-          for (const [name, digest] of Object.entries(verifier.generatedOutputDigests ?? {})) {
-            const key = `${artifactPrefix}${verifier.stage}:generated:${name}`;
-            if (key in evidence.verifiers) throw new Error('HARNESS_VERIFIER_DIGEST_COLLISION');
-            evidence.verifiers[key] = digest;
-          }
+          recordVerifierReceiptDigests({ target: evidence.verifiers, attempt, evidence: verifier });
         }
         const verifierFailures = verifiers.filter(({ passed }) => !passed)
           .flatMap(({ stage, reasons }) => reasons.length === 0
@@ -275,7 +276,9 @@ export class CandidateTransaction {
           qe: await this.#operations.agenticQeEvidence(build, this.#signal),
         });
         assertRequiredQeProfiles(external.qe, this.#context.requiredQeProfiles);
-        evidence.coordination.agenticQeEvidenceDigests = [...external.qeDigests];
+        evidence.coordination.agenticQeEvidenceDigests = [...recordQeReceiptDigests({
+          target: evidence.verifiers, attempt, evidence: external.qe,
+        })];
         const [protectedInputs, mutableOutputs] = await runAbortableCohort([
           async (cohortSignal) => await this.#operations.verifyProtectedInputs(cohortSignal),
           async (cohortSignal) => await this.#operations.auditMutableOutputs(cohortSignal),
@@ -419,7 +422,7 @@ export class CandidateTransaction {
       }
     }
     for (const [name, digest] of Object.entries(gate.digests)) {
-      const key = stage === 'mutation' ? `attempt-${attempt}:${name}` : name;
+      const key = stage === 'mutation' ? receiptMutationEvidenceKey(attempt, name) : name;
       if (key in evidence.verifiers) throw new Error('HARNESS_ACCEPTANCE_DIGEST_COLLISION');
       evidence.verifiers[key] = digest;
     }

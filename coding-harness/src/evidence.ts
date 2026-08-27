@@ -10,12 +10,9 @@ import {
 import { isAbsolute, resolve } from 'node:path';
 import { digestValue, type HostEvidence } from './receipts.js';
 import type { NativeHost } from './models/types.js';
+import { AGENTIC_QE_PROFILES, type AgenticQeProfile } from './qe-profile.js';
 
-export type AgenticQeProfile =
-  | 'lcov-gap'
-  | 'rust-testgen-no-ai'
-  | 'quality-contract'
-  | 'sast';
+export { AGENTIC_QE_PROFILES, type AgenticQeProfile } from './qe-profile.js';
 export interface RufloEvidence {
   schemaVersion: 1;
   source: 'ruflo-coordination-ledger';
@@ -123,9 +120,6 @@ const QE_KEYS = [
   'commandDigest', 'outputDigest', 'providerVariablesStripped', 'authoritative',
   'capturedAt',
 ] as const;
-const QE_PROFILES = new Set<AgenticQeProfile>([
-  'lcov-gap', 'rust-testgen-no-ai', 'quality-contract', 'sast',
-]);
 const NATIVE_HOST_KEYS = [
   'host', 'model', 'authentication', 'clientVersion', 'executablePath',
   'executableDigest', 'preflightDigest', 'credentialCapability', 'hostCredentialPathMounted',
@@ -168,7 +162,9 @@ export function parseAgenticQeEvidence(value: unknown): AgenticQeEvidence {
   assertExactKeys(input, QE_KEYS, 'Agentic-QE evidence');
   if (input.schemaVersion !== 1) throw new TypeError('Agentic-QE evidence schemaVersion must be 1');
   if (input.source !== 'agentic-qe-local-profile') throw new TypeError('Agentic-QE evidence source is invalid');
-  if (!QE_PROFILES.has(input.profile as AgenticQeProfile)) throw new TypeError('Agentic-QE evidence profile is invalid');
+  if (!AGENTIC_QE_PROFILES.includes(input.profile as AgenticQeProfile)) {
+    throw new TypeError('Agentic-QE evidence profile is invalid');
+  }
   if (input.providerVariablesStripped !== true) {
     throw new TypeError('Agentic-QE evidence must prove provider variables were stripped');
   }

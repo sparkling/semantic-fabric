@@ -120,9 +120,8 @@ export function parseTaskGeneratedEvidencePolicy(inputValue: Readonly<{
       throw new TypeError(`${label}.stage is invalid`);
     }
     const stage = item.stage as GeneratedOutputStage;
-    const evidenceId = asNonEmptyString(item.evidenceId, `${label}.evidenceId`);
-    if (!EVIDENCE_ID.test(evidenceId)) throw new TypeError(`${label}.evidenceId is invalid`);
-    const commandId = parseOpaqueId(item.commandId, `${label}.commandId`);
+    const evidenceId = parseTaskEvidenceId(item.evidenceId, `${label}.evidenceId`);
+    const commandId = parseTaskOpaqueId(item.commandId, `${label}.commandId`);
     const matches = inputValue.commands[stage].filter((command) => command.commandId === commandId);
     if (matches.length !== 1) {
       throw new TypeError(`${label}.commandId must resolve exactly once in ${stage} commands`);
@@ -202,8 +201,14 @@ function parseQeBinding(value: unknown, index: number): TaskQeBinding {
   throw new TypeError(`${label}.profile is invalid`);
 }
 
-function parseOpaqueId(value: unknown, label: string): string {
+export function parseTaskOpaqueId(value: unknown, label: string): string {
   const id = asNonEmptyString(value, label);
   if (!OPAQUE_ID.test(id)) throw new TypeError(`${label} must be an opaque 8-128 character ID`);
+  return id;
+}
+
+export function parseTaskEvidenceId(value: unknown, label: string): string {
+  const id = asNonEmptyString(value, label);
+  if (!EVIDENCE_ID.test(id)) throw new TypeError(`${label} is invalid`);
   return id;
 }

@@ -14,6 +14,11 @@ import {
   normalizeWorkspacePath,
 } from './contracts.js';
 import { parseReceiptFailureCode, type ReceiptFailureCode } from './failure-code.js';
+import {
+  RED_BASELINE_RECEIPT_KEY,
+  receiptMutationEvidenceKey,
+  receiptVerifierKey,
+} from './programme-receipt-keys.js';
 
 export type ReceiptStatus = 'pass' | 'fail' | 'gated' | 'cancelled';
 
@@ -390,9 +395,9 @@ function assertPassReceipt(receipt: ReceiptDraft): void {
   const build = receipt.commands.filter((command) => command.stage === 'build' && command.attempt === attempt);
   const mutation = receipt.commands.filter((command) => command.stage === 'mutation' && command.attempt === attempt);
   const verifierKeys = [
-    `attempt-${attempt}:public`,
-    `attempt-${attempt}:independent`,
-    `attempt-${attempt}:regression`,
+    receiptVerifierKey(attempt, 'public'),
+    receiptVerifierKey(attempt, 'independent'),
+    receiptVerifierKey(attempt, 'regression'),
   ];
   if (receipt.step !== 'candidate-transaction'
     || receipt.hosts.length !== 2
@@ -413,9 +418,9 @@ function assertPassReceipt(receipt: ReceiptDraft): void {
     || Object.keys(receipt.protectedInputs).length === 0
     || Object.keys(receipt.toolVersions).length === 0
     || !verifierKeys.every((key) => key in receipt.verifierDigests)
-    || !('red-baseline' in receipt.verifierDigests)
+    || !(RED_BASELINE_RECEIPT_KEY in receipt.verifierDigests)
     || !Object.keys(receipt.verifierDigests)
-      .some((key) => key.startsWith(`attempt-${attempt}:mutation`))
+      .some((key) => key.startsWith(receiptMutationEvidenceKey(attempt, 'mutation')))
     || receipt.critiqueDigests.length === 0 || receipt.reviewDigests.length !== 2
     || new Set(receipt.reviewDigests).size !== receipt.reviewDigests.length
     || receipt.recovery.cancelled || receipt.recovery.breakerState !== 'closed'
