@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "authority": "development-only-no-promotion",
   "runtimeEntry": "coding-harness/dist/issue-8-program.js",
-  "harnessManifestDigest": "0ec932ed040f4d8e94a627b6b2cfad3d5e9d3aad7bbdd7b8e07ba778aa280b62",
+  "harnessManifestDigest": "44a5ba37cfb45d028fb267033ac581611f5285dae78440f5d1f59c26c66120dc",
   "lockfileDigest": "c800a44631b5a7e37300052399251db0f60c8e2da8de35aa4727203022e64098",
   "outputs": {
     "coding-harness/dist/acceptance-runner.js": "4a7719db6ffd1dc33a7e3323714fa60fb636c8236c0e740449e53351629c7946",
@@ -24,9 +24,9 @@
     "coding-harness/dist/candidate-receipt-evidence.js": "09b09d54f7bd73b4dc21e99eedeb3e34a52bfa470eb937c18289f2dcdbe61d34",
     "coding-harness/dist/candidate-types.js": "cb9807bbbf566a3f3864690d59613b9bbfd7d1c5f2028d670650653501ceeb1b",
     "coding-harness/dist/candidate.js": "a590934e130369cce84b284f5981fffcdaea5a8d73d6b4366d88aaa2e616d568",
-    "coding-harness/dist/config.js": "812e6b080dc8ed96facced3844b201fca50fc52acc7066b042b90c739ecb8618",
+    "coding-harness/dist/config.js": "f80ec586910977c75ab782fd3ec507c731fd0c0ab301ccb262eb1cead36982f8",
     "coding-harness/dist/contracts.js": "67e2480fc0c1ea137d260d29c9d8af11f2e48f72f9f168755f984b9531113310",
-    "coding-harness/dist/controller-attestation.js": "51e06ab8dfb979858aa6ec8c14cbfb7a35f1a8faac91b6f6a20df6f74d3db6f3",
+    "coding-harness/dist/controller-attestation.js": "30a7c823b31f0bfec0dd09bb0ed876351f2c9c8f62497b4c66d557ae550b82ad",
     "coding-harness/dist/controller-build.js": "037a9366736d0ad846d238ddabf573926a000e209e78c1a4c2689af3b64053c2",
     "coding-harness/dist/effective-config-command.js": "9e9fed52f355e8f2de97bcd3ccaa65550d9045b2266f1f5caab8388bf08098c7",
     "coding-harness/dist/effective-config-diagnostics.js": "4cb99f3dd4bf85c9684853b5082deaff8c020ee2fc2729476d46cc180a05a361",
@@ -93,9 +93,12 @@
     "coding-harness/dist/programme-task-runtime-v1.js": "ea2b9791d113db1c4872d06687ed9ed0401a172b68b5f6f547077146e84b6b6e",
     "coding-harness/dist/programme-v5-driver-support.js": "7ad69c6a3832551a739b54a7126f3c2d0e18f3b39e9c6e33f96e7f7739cd6c5a",
     "coding-harness/dist/programme-v5-driver.js": "22f128514b128856d270d602eb9a6153dea6f15d9f9e3d38f70b1dc9c423c8de",
-    "coding-harness/dist/programme-v5-program-runtime.js": "a3b77922dd23b141d65666e9c38fd162d4c7778ee5c4eedd8b2c8866bb5a6414",
-    "coding-harness/dist/programme-v5-program.js": "99dcf3b1ba3d5b833ed2e38f349d1b0f95db6d0dd1c2336fce11247d9f39f942",
+    "coding-harness/dist/programme-v5-policy-anchor.js": "be3ac2119b823907e3640079099daa8b2074dc9653d3b077c200a6a7796499d2",
+    "coding-harness/dist/programme-v5-program-runtime.js": "19a7e2084b7dca793b3baf374f4929bc8469d6c7f2812397dfa12ce58575b470",
+    "coding-harness/dist/programme-v5-program.js": "8e7c1c12eca8a125ff4a1f14ef40f486f98d0615b6580e121533aaf46dd45ce8",
     "coding-harness/dist/programme-v5-qe.js": "d50f6c8ef3571be3e84c3fd2637493b8bba0ac35ea6b058dd13f49a3f18c503b",
+    "coding-harness/dist/programme-v5-receipt-io.js": "e640e63101017dd36c133246ba1e4cee43e5854e3a82d3a6ba1cab3416274fa8",
+    "coding-harness/dist/programme-v5-replay.js": "ed4443fa6c5e0bc360c3168900e7b235cbd6718d356be0dcd730afc73521c35c",
     "coding-harness/dist/programme-v5-ruflo-contract.js": "bd4b2c9f74d73c141cbaf925d81803636c5a848fc37507b08b8cd0ba393fd01b",
     "coding-harness/dist/programme-v5-ruflo-runtime.js": "c2974edc62547828908d1458880c8a95da25c048af46633fba3e44adae9a6593",
     "coding-harness/dist/programme-v5-ruflo.js": "bf0bd38c1b8490145b8dc0f02ada376db32c44eac351a6e9d6f5cb2f2c4af2c8",
@@ -241,5 +244,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "ff9c0bd3374e9e57370e0f83a83db8fa36017e307cac6566dc66d45c6a90ab26"
+  "runtimeTreeDigest": "36b9525d80d8d851990c9e7b228a13612b7539a21eb4fcbcf413bc0f167a070e"
 }

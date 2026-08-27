@@ -3,16 +3,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
+  realpathSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -24,38 +16,23 @@ const PRIMARY_ENTRY = 'coding-harness/dist/issue-8-program.js';
 const V5_ENTRY = 'coding-harness/dist/programme-v5-program.js';
 const DEFAULT_TASK = 'coding-harness/config/programme-v5-acceptance.json';
 const POLICY = '{"alpha":[{"beta":true}],"zeta":1}';
-const RECEIPT_DIGEST = 'a'.repeat(64);
-const ACCEPTANCE_DIGEST = 'b'.repeat(64);
-const ENVELOPE_DIGEST = 'c'.repeat(64);
-const LEGACY_LAUNCHER_DIGEST =
-  'b6be487acfd45c5e947f1cf7b2a1fdbbf789b46918a79f2fdb3724bf8904b660';
-const bootstrapNodeIsRootOwned = lstatSync(realpathSync(NODE), { bigint: true }).uid === 0n;
+const RECEIPT_DIGEST = 'a'.repeat(64), ACCEPTANCE_DIGEST = 'b'.repeat(64);
+const ENVELOPE_DIGEST = 'c'.repeat(64), CLAIM_DIGEST = 'd'.repeat(64);
+const REPLAY_DIGEST = 'e'.repeat(64);
+const LEGACY_LAUNCHER_DIGEST = 'b6be487acfd45c5e947f1cf7b2a1fdbbf789b46918a79f2fdb3724bf8904b660';
 const roots: string[] = [];
 
-interface Behavior {
-  readonly policyBlob: string;
-  readonly changingPolicy?: boolean;
-  readonly executeThrows?: boolean;
-  readonly wrongFingerprint?: boolean;
-}
+interface Behavior { readonly policyBlob: string; readonly changingPolicy?: boolean;
+  readonly executeThrows?: boolean; readonly wrongReviewFingerprint?: boolean;
+  readonly wrongFingerprint?: boolean; }
+interface Fixture { readonly repository: string; readonly runtime: string;
+  readonly store: string; readonly commit: string; readonly events: string;
+  readonly policyFingerprint: string; }
 
-interface Fixture {
-  readonly repository: string;
-  readonly runtime: string;
-  readonly store: string;
-  readonly commit: string;
-  readonly events: string;
-  readonly policyFingerprint: string;
-}
-
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('trusted programme-v5 bootstrap', () => {
-  it.runIf(bootstrapNodeIsRootOwned)(
-    'anchors canonical policy bytes after prepare and before execute',
-    () => {
+  it('anchors canonical policy bytes after prepare and before execute', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const result = runLauncher(fixture);
       const policyFingerprint = sha256(POLICY);
@@ -84,20 +61,76 @@ describe('trusted programme-v5 bootstrap', () => {
         programmeAcceptanceDigest: ACCEPTANCE_DIGEST,
         envelopeDigest: ENVELOPE_DIGEST,
         policyFingerprint,
+        executionClaimDigest: CLAIM_DIGEST,
       });
       expect(output.launchReceiptDigest).toBe(sha256(canonical({
         controllerCommit: fixture.commit,
         taskPath: DEFAULT_TASK,
         policyFingerprint,
         envelopeDigest: ENVELOPE_DIGEST,
+        executionClaimDigest: CLAIM_DIGEST,
       })));
       expect(existsSync(fixture.store)).toBe(false);
-    },
-  );
+    });
 
-  it.runIf(bootstrapNodeIsRootOwned)(
-    'rejects changing, noncanonical, and malformed policy without execute',
-    () => {
+  it('emits a replayable prepare-only policy receipt after complete cleanup', () => {
+      const fixture = controllerFixture({ policyBlob: POLICY });
+      const result = runLauncher(fixture, [], fixture.policyFingerprint, true);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(readEvents(fixture)).toEqual([{ event: 'prepare-review' }]);
+      expect(existsSync(fixture.store)).toBe(false);
+      const receipt = JSON.parse(result.stdout);
+      const { policyReviewReceiptDigest, ...body } = receipt;
+      expect(body).toMatchObject({
+        schemaVersion: 1,
+        authority: 'development-only-no-promotion',
+        operation: 'programme-v5-policy-review',
+        controllerCommit: fixture.commit,
+        taskPath: DEFAULT_TASK,
+        runId: 'programme_v5_run',
+        swarmId: 'programme_v5_swarm', coordinationTaskId: 'programme_v5_task',
+        hiveId: 'hierarchical', consensusId: 'raft',
+        policyFingerprint: fixture.policyFingerprint,
+        policyBlob: POLICY,
+      });
+      expect(policyReviewReceiptDigest).toBe(sha256(canonical(body)));
+    });
+
+  it('verifies replay without preparing or executing and preserves recorded rejection', () => {
+      const fixture = controllerFixture({ policyBlob: POLICY });
+      const result = runLauncher(fixture, [], fixture.policyFingerprint, false, true);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(readEvents(fixture)).toEqual([
+        { event: 'replay' }, { event: 'replay-seal', runtimePresent: false },
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        verificationStatus: 'verified',
+        recordedStatus: 'gated',
+        recordedReason: 'HARNESS_PROGRAMME_ACCEPTANCE_REJECTED',
+        replayReceiptDigest: REPLAY_DIGEST,
+        policyFingerprint: fixture.policyFingerprint,
+      });
+    });
+
+  it('rejects a false prepare-only fingerprint without leaking its store', () => {
+      const fixture = controllerFixture({ policyBlob: POLICY, wrongReviewFingerprint: true });
+      const result = runLauncher(fixture, [], fixture.policyFingerprint, true);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(JSON.parse(result.stderr)).toEqual({
+        status: 'error',
+        reason: 'HARNESS_BOOTSTRAP_POLICY_REVIEW_FINGERPRINT_MISMATCH',
+      });
+      expect(readEvents(fixture)).toEqual([{ event: 'prepare-review' }]);
+      expect(existsSync(fixture.store)).toBe(false);
+    });
+
+  it('rejects changing, noncanonical, and malformed policy without execute', () => {
       const cases: readonly [Behavior, string][] = [
         [
           { policyBlob: POLICY, changingPolicy: true },
@@ -123,12 +156,9 @@ describe('trusted programme-v5 bootstrap', () => {
         expect(events.some(({ event }) => event === 'execute')).toBe(false);
         expect(existsSync(fixture.store)).toBe(false);
       }
-    },
-  );
+    });
 
-  it.runIf(bootstrapNodeIsRootOwned)(
-    'rejects an externally anchored fingerprint mismatch before execute',
-    () => {
+  it('rejects an externally anchored fingerprint mismatch before execute', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const result = runLauncher(fixture, [], 'd'.repeat(64));
       const events = readEvents(fixture);
@@ -141,12 +171,9 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(events.map(({ event }) => event)).toEqual(['prepare', 'abort']);
       expect(events.some(({ event }) => event === 'execute')).toBe(false);
       expect(existsSync(fixture.store)).toBe(false);
-    },
-  );
+    });
 
-  it.runIf(bootstrapNodeIsRootOwned)(
-    'rejects a sealed fingerprint that differs from the launcher anchor',
-    () => {
+  it('rejects a sealed fingerprint that differs from the launcher anchor', () => {
       const fixture = controllerFixture({ policyBlob: POLICY, wrongFingerprint: true });
       const result = runLauncher(fixture);
       const events = readEvents(fixture);
@@ -159,12 +186,9 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(events.map(({ event }) => event)).toEqual(['prepare', 'execute', 'seal']);
       expect(events.some(({ event }) => event === 'abort')).toBe(false);
       expect(existsSync(fixture.store)).toBe(false);
-    },
-  );
+    });
 
-  it.runIf(bootstrapNodeIsRootOwned)(
-    'calls abort exactly once when execute does not complete successfully',
-    () => {
+  it('calls abort exactly once when execute does not complete successfully', () => {
       const fixture = controllerFixture({ policyBlob: POLICY, executeThrows: true });
       const result = runLauncher(fixture);
       const events = readEvents(fixture);
@@ -177,12 +201,9 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(events.map(({ event }) => event)).toEqual(['prepare', 'execute', 'abort']);
       expect(events.filter(({ event }) => event === 'abort')).toHaveLength(1);
       expect(existsSync(fixture.store)).toBe(false);
-    },
-  );
+    });
 
-  it.runIf(bootstrapNodeIsRootOwned)(
-    'binds an explicit v5 task without falling back to the v4 default',
-    () => {
+  it('binds an explicit v5 task without falling back to the v4 default', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const taskPath = 'coding-harness/config/alternate-programme-v5-acceptance.json';
       const result = runLauncher(fixture, ['--task-path', taskPath]);
@@ -194,8 +215,7 @@ describe('trusted programme-v5 bootstrap', () => {
         bootstrapTaskPath: taskPath,
       });
       expect(result.stdout).not.toContain('issue-8-acceptance.json');
-    },
-  );
+    });
 
   it('keeps the legacy bootstrap byte-frozen and imports only the secondary v5 entry', () => {
     const legacy = readFileSync(
@@ -233,8 +253,7 @@ function controllerFixture(behavior: Behavior): Fixture {
     ['coding-harness/package.json', packageJson],
     [PRIMARY_ENTRY, 'export const legacyEntry = true;\n'],
     [V5_ENTRY, controllerModule(behavior)],
-    ['coding-harness/node_modules/bootstrap-fixture/package.json',
-      '{"name":"bootstrap-fixture","version":"1.0.0"}\n'],
+    ['coding-harness/node_modules/bootstrap-fixture/package.json', '{"name":"bootstrap-fixture","version":"1.0.0"}\n'],
   ]);
   for (const [path, contents] of files) write(repository, path, contents);
   const outputs = Object.fromEntries(
@@ -272,14 +291,8 @@ function controllerFixture(behavior: Behavior): Fixture {
   git(repository, ['--git-dir=' + store, 'update-ref', 'refs/heads/controller', commit]);
   git(repository, ['--git-dir=' + store, 'symbolic-ref', 'HEAD', 'refs/heads/controller']);
   harden(store);
-  return {
-    repository,
-    runtime,
-    store,
-    commit,
-    events: join(repository, 'launcher-events.jsonl'),
-    policyFingerprint: sha256(behavior.policyBlob),
-  };
+  return { repository, runtime, store, commit, events: join(repository, 'launcher-events.jsonl'),
+    policyFingerprint: sha256(behavior.policyBlob) };
 }
 
 function controllerModule(behavior: Behavior): string {
@@ -301,6 +314,21 @@ function controllerModule(behavior: Behavior): string {
     'return index<0?undefined:argv[index+1];}',
     'function record(argv,event){appendFileSync(join(flag(argv,"--repository"),',
     '"launcher-events.jsonl"),JSON.stringify(event)+"\\n");}',
+    'export async function prepareReviewableProgrammeV5Policy(argv){',
+    'record(argv,{event:"prepare-review"});return{policyBlob:POLICY,',
+    'policyFingerprint:' + JSON.stringify(
+      behavior.wrongReviewFingerprint ? 'f'.repeat(64) : sha256(behavior.policyBlob),
+    ) + '};}',
+    'export async function replayTrustedProgrammeV5(argv){record(argv,{event:"replay"});',
+    'return{status:"gated",reason:"HARNESS_PROGRAMME_ACCEPTANCE_REJECTED",async seal(){',
+    'record(argv,{event:"replay-seal",runtimePresent:existsSync(MODULE_PATH)});return{',
+    'verificationStatus:"verified",recordedStatus:"gated",',
+    'recordedReason:"HARNESS_PROGRAMME_ACCEPTANCE_REJECTED",',
+    'receiptPath:join(flag(argv,"--repository"),"coding-harness",".metaharness","runs",',
+    'flag(argv,"--run-id")+".replay.json"),replayReceiptDigest:'
+      + JSON.stringify(REPLAY_DIGEST) + ',envelopeDigest:' + JSON.stringify(ENVELOPE_DIGEST) + ',',
+    'policyFingerprint:flag(argv,"--expected-policy-fingerprint"),launchReceiptDigest:'
+      + JSON.stringify(RECEIPT_DIGEST) + '};}};}',
     'export async function prepareTrustedProgrammeV5(argv,bootstrap){',
     'const taskPath=flag(argv,"--task-path")??' + JSON.stringify(DEFAULT_TASK) + ';',
     'const expectedPolicyFingerprint=flag(argv,"--expected-policy-fingerprint");',
@@ -319,6 +347,7 @@ function controllerModule(behavior: Behavior): string {
     'receiptDigest:' + JSON.stringify(RECEIPT_DIGEST) + ',',
     'programmeAcceptanceDigest:' + JSON.stringify(ACCEPTANCE_DIGEST) + ',',
     'envelopeDigest:' + JSON.stringify(ENVELOPE_DIGEST) + ',',
+    'executionClaimDigest:' + JSON.stringify(CLAIM_DIGEST) + ',',
     behavior.wrongFingerprint
       ? 'policyFingerprint:"f".repeat(64)};'
       : 'policyFingerprint:expectedPolicyFingerprint};',
@@ -336,6 +365,8 @@ function runLauncher(
   fixture: Fixture,
   extraArgs: readonly string[] = [],
   expectedPolicyFingerprint = fixture.policyFingerprint,
+  policyReview = false,
+  replay = false,
 ) {
   const launcher = readFileSync(
     new URL('../scripts/launch-programme-v5.mjs', import.meta.url),
@@ -352,7 +383,30 @@ function runLauncher(
       '--coordination-task-id', 'programme_v5_task',
       '--hive-id', 'hierarchical',
       '--consensus-id', 'raft',
-      '--expected-policy-fingerprint', expectedPolicyFingerprint,
+      ...(policyReview
+        ? ['--policy-review', 'prepare-only']
+        : replay ? [
+            '--replay', 'verify-only',
+            '--expected-policy-fingerprint', expectedPolicyFingerprint,
+            '--policy-review-receipt', join(
+              fixture.repository, 'coding-harness', '.metaharness', 'runs',
+              'programme_v5_run.policy-review.json',
+            ),
+            '--envelope-receipt', join(
+              fixture.repository, 'coding-harness', '.metaharness', 'runs',
+              'programme_v5_run.json',
+            ),
+            '--receipt-path', join(
+              fixture.repository, 'coding-harness', '.metaharness', 'runs',
+              'programme_v5_run.replay.json',
+            ),
+          ] : [
+            '--expected-policy-fingerprint', expectedPolicyFingerprint,
+            '--policy-review-receipt', join(
+              fixture.repository, 'coding-harness', '.metaharness', 'runs',
+              'programme_v5_run.policy-review.json',
+            ),
+          ]),
       ...extraArgs,
     ], {
       input: launcher,

@@ -9,6 +9,8 @@ import {
   assertProgrammeV5ControlledRoot,
   parseProgrammeV5Bootstrap,
   parseProgrammeV5Invocation,
+  parseProgrammeV5PolicyReviewInvocation,
+  parseProgrammeV5ReplayInvocation,
   verifyProgrammeV5ExpectedPolicyFingerprint,
 } from '../src/programme-v5-program-runtime.js';
 
@@ -28,6 +30,9 @@ describe('programme v5 trusted runtime inputs', () => {
       taskPath: PROGRAMME_V5_ACCEPTANCE_TASK_PATH,
       fingerprint: 'f'.repeat(64),
     });
+    expect(invocation.policyReviewReceipt)
+      .toBe(join(invocation.repositoryRoot, 'coding-harness', '.metaharness', 'runs',
+        'programme_v5_test_run.policy-review.json'));
     const explicit = parseProgrammeV5Invocation([
       ...invocationArgs(), '--task-path', PROGRAMME_V5_ACCEPTANCE_TASK_PATH,
     ]);
@@ -60,9 +65,68 @@ describe('programme v5 trusted runtime inputs', () => {
     expect(() => parseProgrammeV5Invocation(missingAnchor)).toThrow(
       'HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID',
     );
+    const missingReceipt = invocationArgs();
+    const receiptIndex = missingReceipt.indexOf('--policy-review-receipt');
+    missingReceipt.splice(receiptIndex, 2);
+    expect(() => parseProgrammeV5Invocation(missingReceipt)).toThrow(
+      'HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID',
+    );
     expect(() => parseProgrammeV5Invocation([
       ...invocationArgs(), '--expected-policy-fingerprint', 'e'.repeat(64),
     ])).toThrow('HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID');
+  });
+
+  it('parses prepare-only policy review separately from execution authority', () => {
+    const reviewArgs = invocationArgs();
+    reviewArgs.splice(
+      reviewArgs.indexOf('--expected-policy-fingerprint'),
+      2,
+      '--policy-review',
+      'prepare-only',
+    );
+    reviewArgs.splice(reviewArgs.indexOf('--policy-review-receipt'), 2);
+    expect(parseProgrammeV5PolicyReviewInvocation(reviewArgs)).toMatchObject({
+      controllerCommit: COMMIT,
+      taskPath: PROGRAMME_V5_ACCEPTANCE_TASK_PATH,
+      reviewMode: 'prepare-only',
+    });
+    expect(() => parseProgrammeV5Invocation(reviewArgs))
+      .toThrow('HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID');
+    reviewArgs[reviewArgs.indexOf('--policy-review') + 1] = 'execute';
+    expect(() => parseProgrammeV5PolicyReviewInvocation(reviewArgs))
+      .toThrow('HARNESS_PROGRAMME_V5_POLICY_REVIEW_MODE_INVALID');
+    expect(() => parseProgrammeV5PolicyReviewInvocation([
+      ...reviewArgs,
+      '--expected-policy-fingerprint',
+      'f'.repeat(64),
+    ])).toThrow('HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID');
+  });
+
+  it('parses verify-only replay with exact run-scoped receipt paths', () => {
+    const args = invocationArgs();
+    const repository = args[args.indexOf('--repository') + 1]!;
+    args.push(
+      '--replay', 'verify-only',
+      '--envelope-receipt', join(
+        repository, 'coding-harness', '.metaharness', 'runs',
+        'programme_v5_test_run.json',
+      ),
+      '--receipt-path', join(
+        repository, 'coding-harness', '.metaharness', 'runs',
+        'programme_v5_test_run.replay.json',
+      ),
+    );
+    const replay = parseProgrammeV5ReplayInvocation(args);
+    expect(replay).toMatchObject({
+      replayMode: 'verify-only',
+      runId: 'programme_v5_test_run',
+      expectedPolicy: { fingerprint: 'f'.repeat(64) },
+    });
+    expect(() => parseProgrammeV5Invocation(args))
+      .toThrow('HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID');
+    args[args.indexOf('--replay') + 1] = 'execute';
+    expect(() => parseProgrammeV5ReplayInvocation(args))
+      .toThrow('HARNESS_PROGRAMME_V5_REPLAY_MODE_INVALID');
   });
 
   it('requires the exact trusted bootstrap shape and non-genesis digests', () => {
@@ -103,8 +167,9 @@ describe('programme v5 trusted runtime inputs', () => {
 });
 
 function invocationArgs(): string[] {
+  const repository = temporary('programme-v5-repository-');
   return [
-    '--repository', temporary('programme-v5-repository-'),
+    '--repository', repository,
     '--controller-store', temporary('programme-v5-store-'),
     '--controller-commit', COMMIT,
     '--run-id', 'programme_v5_test_run',
@@ -113,6 +178,10 @@ function invocationArgs(): string[] {
     '--hive-id', 'hierarchical',
     '--consensus-id', 'raft',
     '--expected-policy-fingerprint', 'f'.repeat(64),
+    '--policy-review-receipt', join(
+      repository, 'coding-harness', '.metaharness', 'runs',
+      'programme_v5_test_run.policy-review.json',
+    ),
   ];
 }
 

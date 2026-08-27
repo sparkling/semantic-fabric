@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SECURE_HARNESS_CONFIG } from './config.js';
@@ -35,27 +35,44 @@ import {
 import { createProgrammeV5TaskQeCollector } from './programme-v5-qe.js';
 import { collectProgrammeV5RufloEvidence } from './programme-v5-ruflo.js';
 import {
+  claimProgrammeV5Execution,
+  readProgrammeV5PolicyReviewReceipt,
+} from './programme-v5-policy-anchor.js';
+import {
   assertAbsent,
   assertProgrammeV5ControlledRoot,
   cloneProgrammeV5ControllerRepository,
   createProgrammeV5ScratchRoot,
   parseProgrammeV5Bootstrap,
   parseProgrammeV5Invocation,
-  prepareProgrammeV5ResultsRoot,
   prepareProgrammeV5ScratchLayout,
+  parseProgrammeV5PolicyReviewInvocation,
   readProgrammeV5Diagnostics,
   removeProgrammeV5Scratch,
   verifyProgrammeV5ExpectedPolicyFingerprint,
+  type ProgrammeV5BaseInvocation,
   type ProgrammeV5BootstrapEvidence,
   type ProgrammeV5Invocation,
 } from './programme-v5-program-runtime.js';
+import {
+  PROGRAMME_V5_CLAIM_AUTHORITY_ROOT,
+  programmeV5ArtifactPath,
+  writeProgrammeV5PrivateArtifact,
+} from './programme-v5-receipt-io.js';
 
 const MODELS = Object.freeze({ codex: 'gpt-5.6-sol', claude: 'claude-sonnet-4-6' });
+
+export { replayTrustedProgrammeV5 } from './programme-v5-replay.js';
 
 export interface TrustedProgrammeV5Preparation {
   readonly policyBlob: string;
   execute(policyBlob: string): Promise<TrustedProgrammeV5Outcome>;
   abort(): Promise<void>;
+}
+
+export interface TrustedProgrammeV5PolicyReview {
+  readonly policyBlob: string;
+  readonly policyFingerprint: string;
 }
 
 export interface TrustedProgrammeV5Outcome {
@@ -68,24 +85,85 @@ export interface TrustedProgrammeV5Outcome {
     programmeAcceptanceDigest: string;
     envelopeDigest: string;
     policyFingerprint: string;
+    executionClaimDigest: string;
   }>>;
+}
+
+export async function prepareReviewableProgrammeV5Policy(
+  argv: readonly string[],
+  rawBootstrap: unknown,
+): Promise<TrustedProgrammeV5PolicyReview> {
+  const invocation = parseProgrammeV5PolicyReviewInvocation(argv);
+  const bootstrap = parseProgrammeV5Bootstrap(rawBootstrap);
+  assertBootstrapBinding(invocation, bootstrap);
+  const receiptPath = programmeV5ArtifactPath(
+    invocation.repositoryRoot, invocation.runId, 'execution',
+  );
+  assertAbsent(receiptPath, 'HARNESS_PROGRAMME_V5_RECEIPT_EXISTS');
+  const scratch = await createProgrammeV5ScratchRoot();
+  let prepared: ProgrammeV5PreparedTransaction | undefined;
+  try {
+    prepared = await prepareExecution(invocation, bootstrap, scratch);
+  } catch (error) {
+    let failure: unknown = error;
+    try {
+      await removeProgrammeV5Scratch(scratch);
+    } catch (cleanupError) {
+      failure = new AggregateError(
+        [failure, cleanupError],
+        'HARNESS_PROGRAMME_V5_POLICY_REVIEW_AND_SCRATCH_CLEANUP_FAILED',
+      );
+    }
+    throw failure;
+  }
+  const review = Object.freeze({
+    policyBlob: prepared.policyBlob,
+    policyFingerprint: prepared.policyFingerprint,
+  });
+  let failure: unknown = createHash('sha256').update(review.policyBlob, 'utf8').digest('hex')
+    === review.policyFingerprint
+    ? undefined
+    : new Error('HARNESS_PROGRAMME_V5_POLICY_REVIEW_FINGERPRINT_MISMATCH');
+  try {
+    await prepared.abort();
+  } catch (error) {
+    failure = failure === undefined
+      ? error
+      : new AggregateError(
+          [failure, error],
+          'HARNESS_PROGRAMME_V5_POLICY_REVIEW_AND_TRANSACTION_CLEANUP_FAILED',
+        );
+  }
+  try {
+    await removeProgrammeV5Scratch(scratch);
+  } catch (cleanupError) {
+    failure = failure === undefined
+      ? cleanupError
+      : new AggregateError(
+          [failure, cleanupError],
+          'HARNESS_PROGRAMME_V5_POLICY_REVIEW_AND_SCRATCH_CLEANUP_FAILED',
+        );
+  }
+  if (failure !== undefined) throw failure;
+  return review;
 }
 
 export async function prepareTrustedProgrammeV5(
   argv: readonly string[],
   rawBootstrap: unknown,
+  claimAuthorityRoot = PROGRAMME_V5_CLAIM_AUTHORITY_ROOT,
 ): Promise<TrustedProgrammeV5Preparation> {
   const invocation = parseProgrammeV5Invocation(argv);
   const bootstrap = parseProgrammeV5Bootstrap(rawBootstrap);
-  if (bootstrap.controllerCommit !== invocation.controllerCommit
-    || bootstrap.taskPath !== invocation.taskPath) {
-    throw new Error('HARNESS_PROGRAMME_V5_BOOTSTRAP_BINDING_MISMATCH');
-  }
-  const receiptPath = join(
-    invocation.repositoryRoot,
-    'coding-harness', '.metaharness', 'runs', `${invocation.runId}.json`,
+  assertBootstrapBinding(invocation, bootstrap);
+  const receiptPath = programmeV5ArtifactPath(
+    invocation.repositoryRoot, invocation.runId, 'execution',
   );
   assertAbsent(receiptPath, 'HARNESS_PROGRAMME_V5_RECEIPT_EXISTS');
+  const policyReviewReceipt = readProgrammeV5PolicyReviewReceipt(invocation, bootstrap);
+  const executionClaim = claimProgrammeV5Execution(
+    invocation, policyReviewReceipt, claimAuthorityRoot,
+  );
   const scratch = await createProgrammeV5ScratchRoot();
   let prepared: ProgrammeV5PreparedTransaction | undefined;
   try {
@@ -145,6 +223,7 @@ export async function prepareTrustedProgrammeV5(
       if (result === undefined) throw new Error('HARNESS_PROGRAMME_V5_RESULT_MISSING');
       return await createOutcome(
         invocation, result, invocation.expectedPolicy.fingerprint, receiptPath,
+        executionClaim.digest,
       );
     },
     async abort() {
@@ -172,7 +251,7 @@ export async function prepareTrustedProgrammeV5(
 }
 
 async function prepareExecution(
-  invocation: ProgrammeV5Invocation,
+  invocation: ProgrammeV5BaseInvocation,
   bootstrap: ProgrammeV5BootstrapEvidence,
   scratch: string,
 ): Promise<ProgrammeV5PreparedTransaction> {
@@ -292,11 +371,22 @@ async function prepareExecution(
   });
 }
 
+function assertBootstrapBinding(
+  invocation: ProgrammeV5BaseInvocation,
+  bootstrap: ProgrammeV5BootstrapEvidence,
+): void {
+  if (bootstrap.controllerCommit !== invocation.controllerCommit
+    || bootstrap.taskPath !== invocation.taskPath) {
+    throw new Error('HARNESS_PROGRAMME_V5_BOOTSTRAP_BINDING_MISMATCH');
+  }
+}
+
 async function createOutcome(
   invocation: ProgrammeV5Invocation,
   result: ProgrammeV5DriverResult,
   policyFingerprint: string,
   receiptPath: string,
+  executionClaimDigest: string,
 ): Promise<TrustedProgrammeV5Outcome> {
   if (result.policyFingerprint !== policyFingerprint) {
     throw new Error('HARNESS_PROGRAMME_V5_DRIVER_POLICY_ANCHOR_MISMATCH');
@@ -328,9 +418,8 @@ async function createOutcome(
     ...finalized,
     async seal() {
       if (sealed) throw new Error('HARNESS_PROGRAMME_V5_OUTCOME_ALREADY_SEALED');
-      await prepareProgrammeV5ResultsRoot(invocation.repositoryRoot);
       assertAbsent(receiptPath, 'HARNESS_PROGRAMME_V5_RECEIPT_EXISTS');
-      await writeFile(receiptPath, serialized, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      writeProgrammeV5PrivateArtifact(invocation.repositoryRoot, receiptPath, serialized);
       sealed = true;
       return Object.freeze({
         status: finalized.status,
@@ -339,6 +428,7 @@ async function createOutcome(
         programmeAcceptanceDigest: verified.programmeAcceptanceDigest,
         envelopeDigest: verified.envelopeDigest,
         policyFingerprint,
+        executionClaimDigest,
       });
     },
   });

@@ -35,12 +35,17 @@ export const PROGRAMME_V5_ACCEPTANCE_TASK_PATH =
 export const HARNESS_MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 export const PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS = Object.freeze([
   'coding-harness/scripts/launch-programme-v5.mjs',
+  'coding-harness/scripts/programme-v5-operator-support.mjs',
+  'coding-harness/scripts/run-programme-v5.mjs',
   'coding-harness/src/immutable-private-runtime.ts',
   'coding-harness/src/programme-v5-driver-support.ts',
   'coding-harness/src/programme-v5-driver.ts',
+  'coding-harness/src/programme-v5-policy-anchor.ts',
   'coding-harness/src/programme-v5-program-runtime.ts',
   'coding-harness/src/programme-v5-program.ts',
   'coding-harness/src/programme-v5-qe.ts',
+  'coding-harness/src/programme-v5-receipt-io.ts',
+  'coding-harness/src/programme-v5-replay.ts',
   'coding-harness/src/programme-v5-ruflo-contract.ts',
   'coding-harness/src/programme-v5-ruflo-runtime.ts',
   'coding-harness/src/programme-v5-ruflo.ts',

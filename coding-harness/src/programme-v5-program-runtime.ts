@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { runGitCommand } from './git-process.js';
 import { normalizeAcceptanceTaskPath } from './manifest.js';
 import { METAHARNESS_DIAGNOSTICS_PATH } from './metaharness-diagnostics.js';
+import { requireProgrammeV5ArtifactPath } from './programme-v5-receipt-io.js';
 
 export const PROGRAMME_V5_ACCEPTANCE_TASK_PATH =
   'coding-harness/config/programme-v5-acceptance.json';
@@ -27,7 +28,7 @@ export interface ProgrammeV5BootstrapEvidence {
   readonly gitDigest: string;
 }
 
-export interface ProgrammeV5Invocation {
+export interface ProgrammeV5BaseInvocation {
   readonly repositoryRoot: string;
   readonly controllerStore: string;
   readonly controllerCommit: string;
@@ -37,6 +38,26 @@ export interface ProgrammeV5Invocation {
   readonly coordinationTaskId: string;
   readonly hiveId: string;
   readonly consensusId: string;
+}
+
+export interface ProgrammeV5Invocation extends ProgrammeV5BaseInvocation {
+  readonly policyReviewReceipt: string;
+  readonly expectedPolicy: Readonly<{
+    readonly controllerCommit: string;
+    readonly taskPath: string;
+    readonly fingerprint: string;
+  }>;
+}
+
+export interface ProgrammeV5PolicyReviewInvocation extends ProgrammeV5BaseInvocation {
+  readonly reviewMode: 'prepare-only';
+}
+
+export interface ProgrammeV5ReplayInvocation extends ProgrammeV5BaseInvocation {
+  readonly replayMode: 'verify-only';
+  readonly policyReviewReceipt: string;
+  readonly envelopeReceipt: string;
+  readonly replayReceipt: string;
   readonly expectedPolicy: Readonly<{
     readonly controllerCommit: string;
     readonly taskPath: string;
@@ -55,9 +76,77 @@ export interface ProgrammeV5ScratchLayout {
 }
 
 export function parseProgrammeV5Invocation(argv: readonly string[]): ProgrammeV5Invocation {
+  const values = parseInvocationValues(
+    argv, ['expected-policy-fingerprint', 'policy-review-receipt'],
+  );
+  const base = parseBaseInvocation(values);
+  const expectedPolicyFingerprint = policyFingerprint(
+    required(values, 'expected-policy-fingerprint'),
+  );
+  return Object.freeze({
+    ...base,
+    policyReviewReceipt: requireProgrammeV5ArtifactPath(
+      base.repositoryRoot,
+      base.runId,
+      'policy-review',
+      required(values, 'policy-review-receipt'),
+    ),
+    expectedPolicy: Object.freeze({
+      controllerCommit: base.controllerCommit,
+      taskPath: base.taskPath,
+      fingerprint: expectedPolicyFingerprint,
+    }),
+  });
+}
+
+export function parseProgrammeV5PolicyReviewInvocation(
+  argv: readonly string[],
+): ProgrammeV5PolicyReviewInvocation {
+  const values = parseInvocationValues(argv, ['policy-review']);
+  if (required(values, 'policy-review') !== 'prepare-only') {
+    throw new Error('HARNESS_PROGRAMME_V5_POLICY_REVIEW_MODE_INVALID');
+  }
+  return Object.freeze({ ...parseBaseInvocation(values), reviewMode: 'prepare-only' });
+}
+
+export function parseProgrammeV5ReplayInvocation(
+  argv: readonly string[],
+): ProgrammeV5ReplayInvocation {
+  const values = parseInvocationValues(argv, [
+    'replay', 'expected-policy-fingerprint', 'policy-review-receipt',
+    'envelope-receipt', 'receipt-path',
+  ]);
+  if (required(values, 'replay') !== 'verify-only') {
+    throw new Error('HARNESS_PROGRAMME_V5_REPLAY_MODE_INVALID');
+  }
+  const base = parseBaseInvocation(values);
+  return Object.freeze({
+    ...base,
+    replayMode: 'verify-only',
+    policyReviewReceipt: requireProgrammeV5ArtifactPath(
+      base.repositoryRoot, base.runId, 'policy-review', required(values, 'policy-review-receipt'),
+    ),
+    envelopeReceipt: requireProgrammeV5ArtifactPath(
+      base.repositoryRoot, base.runId, 'execution', required(values, 'envelope-receipt'),
+    ),
+    replayReceipt: requireProgrammeV5ArtifactPath(
+      base.repositoryRoot, base.runId, 'replay', required(values, 'receipt-path'),
+    ),
+    expectedPolicy: Object.freeze({
+      controllerCommit: base.controllerCommit,
+      taskPath: base.taskPath,
+      fingerprint: policyFingerprint(required(values, 'expected-policy-fingerprint')),
+    }),
+  });
+}
+
+function parseInvocationValues(
+  argv: readonly string[],
+  operationFlags: readonly string[],
+): Map<string, string> {
   const requiredFlags = [
     'repository', 'controller-store', 'controller-commit', 'run-id', 'swarm-id',
-    'coordination-task-id', 'hive-id', 'consensus-id', 'expected-policy-fingerprint',
+    'coordination-task-id', 'hive-id', 'consensus-id', ...operationFlags,
   ];
   const allowed = [...requiredFlags, 'task-path'];
   if (![requiredFlags.length * 2, allowed.length * 2].includes(argv.length)) {
@@ -77,15 +166,18 @@ export function parseProgrammeV5Invocation(argv: readonly string[]): ProgrammeV5
   if (requiredFlags.some((name) => !values.has(name))) {
     throw new Error('HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID');
   }
+  return values;
+}
+
+function parseBaseInvocation(
+  values: ReadonlyMap<string, string>,
+): ProgrammeV5BaseInvocation {
   const controllerCommit = required(values, 'controller-commit');
   if (!GIT_OBJECT.test(controllerCommit)) {
     throw new Error('HARNESS_PROGRAMME_V5_CONTROLLER_COMMIT_INVALID');
   }
   const taskPath = normalizeAcceptanceTaskPath(
     values.get('task-path') ?? PROGRAMME_V5_ACCEPTANCE_TASK_PATH,
-  );
-  const expectedPolicyFingerprint = policyFingerprint(
-    required(values, 'expected-policy-fingerprint'),
   );
   return Object.freeze({
     repositoryRoot: canonicalDirectory(required(values, 'repository')),
@@ -97,11 +189,6 @@ export function parseProgrammeV5Invocation(argv: readonly string[]): ProgrammeV5
     coordinationTaskId: opaque(required(values, 'coordination-task-id'), 'TASK_ID'),
     hiveId: exactRufloSetting(required(values, 'hive-id'), 'hierarchical', 'HIVE_ID'),
     consensusId: exactRufloSetting(required(values, 'consensus-id'), 'raft', 'CONSENSUS_ID'),
-    expectedPolicy: Object.freeze({
-      controllerCommit,
-      taskPath,
-      fingerprint: expectedPolicyFingerprint,
-    }),
   });
 }
 
@@ -240,15 +327,6 @@ export async function readProgrammeV5Diagnostics(store: string, commit: string):
     throw new Error('HARNESS_PROGRAMME_V5_DIAGNOSTICS_READ_FAILED');
   }
   return result.stdout;
-}
-
-export async function prepareProgrammeV5ResultsRoot(repositoryRoot: string): Promise<string> {
-  const root = join(repositoryRoot, 'coding-harness', '.metaharness');
-  const runs = join(root, 'runs');
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await mkdir(runs, { recursive: true, mode: 0o700 });
-  privateDirectory(root, 'RESULT_ROOT');
-  return privateDirectory(runs, 'RESULTS_ROOT');
 }
 
 export async function removeProgrammeV5Scratch(path: string): Promise<void> {

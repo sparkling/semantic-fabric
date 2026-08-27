@@ -4,7 +4,10 @@ import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { prepareTrustedProgrammeV5 } from '../src/programme-v5-program.js';
+import {
+  prepareReviewableProgrammeV5Policy,
+  prepareTrustedProgrammeV5,
+} from '../src/programme-v5-program.js';
 import { PROGRAMME_V5_ACCEPTANCE_TASK_PATH } from '../src/programme-v5-program-runtime.js';
 
 const COMMIT = 'a'.repeat(40);
@@ -25,11 +28,29 @@ describe('trusted programme-v5 preparation boundary', () => {
       controllerCommit: 'b'.repeat(40),
     })).rejects.toThrow('HARNESS_PROGRAMME_V5_BOOTSTRAP_BINDING_MISMATCH');
   });
+
+  it('binds prepare-only policy review before any transaction preparation', async () => {
+    const review = invocationArgs();
+    review.splice(
+      review.indexOf('--expected-policy-fingerprint'),
+      2,
+      '--policy-review',
+      'prepare-only',
+    );
+    review.splice(review.indexOf('--policy-review-receipt'), 2);
+    await expect(prepareReviewableProgrammeV5Policy(review, {
+      ...bootstrap(),
+      controllerCommit: 'b'.repeat(40),
+    })).rejects.toThrow('HARNESS_PROGRAMME_V5_BOOTSTRAP_BINDING_MISMATCH');
+    await expect(prepareReviewableProgrammeV5Policy(invocationArgs(), bootstrap()))
+      .rejects.toThrow('HARNESS_PROGRAMME_V5_ARGUMENTS_INVALID');
+  });
 });
 
 function invocationArgs(): string[] {
+  const repository = temporary('programme-v5-program-repository-');
   return [
-    '--repository', temporary('programme-v5-program-repository-'),
+    '--repository', repository,
     '--controller-store', temporary('programme-v5-program-store-'),
     '--controller-commit', COMMIT,
     '--run-id', 'programme_v5_program_run',
@@ -38,6 +59,10 @@ function invocationArgs(): string[] {
     '--hive-id', 'hierarchical',
     '--consensus-id', 'raft',
     '--expected-policy-fingerprint', 'f'.repeat(64),
+    '--policy-review-receipt', join(
+      repository, 'coding-harness', '.metaharness', 'runs',
+      'programme_v5_program_run.policy-review.json',
+    ),
   ];
 }
 
