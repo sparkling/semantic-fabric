@@ -16,6 +16,10 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { HarnessConfig } from './contracts.js';
+import {
+  createImmutablePrivateRuntime,
+  type ImmutablePrivateRuntime,
+} from './immutable-private-runtime.js';
 import { NativeAdapterStructuredClient } from './native-client.js';
 import {
   NATIVE_EGRESS_SOCKET_PATH_LIMIT,
@@ -95,6 +99,7 @@ export function createTrustedNativeRuntime(
   assertBrokerSocketBudget(parent);
   const runtimeRoot = mkdtempSync(join(parent, RUNTIME_PREFIX));
   let cleaned = false;
+  let immutableRuntime: ImmutablePrivateRuntime | undefined;
   try {
     const brokerRoot = createPrivateDirectory(runtimeRoot, BROKER_DIRECTORY);
     const evidenceRoot = createPrivateDirectory(runtimeRoot, 'evidence');
@@ -105,22 +110,45 @@ export function createTrustedNativeRuntime(
     const claudeAuth = join(claudeAuthRoot, '.credentials.json');
     copyCredential(options.credentials.codex, codexAuth, 'CODEX');
     copyCredential(options.credentials['claude-code'], claudeAuth, 'CLAUDE');
-    const runtimeFiles = unique([
-      options.executables.codex,
-      options.executables.claude,
-      options.executables.node,
-      options.executables.proxyLauncher,
-    ]).map((path, index) => canonicalFile(path, `RUNTIME_FILE_${index}`));
+    immutableRuntime = createImmutablePrivateRuntime({
+      parent: runtimeRoot,
+      prefix: 'executables-',
+      files: [
+        { key: 'codex', sourcePath: canonicalFile(options.executables.codex, 'CODEX'),
+          relativePath: 'codex', executable: true },
+        { key: 'claude', sourcePath: canonicalFile(options.executables.claude, 'CLAUDE'),
+          relativePath: 'claude', executable: true },
+        { key: 'node', sourcePath: canonicalFile(options.executables.node, 'NODE'),
+          relativePath: 'node', executable: true },
+        { key: 'proxyLauncher',
+          sourcePath: canonicalFile(options.executables.proxyLauncher, 'PROXY_LAUNCHER'),
+          relativePath: 'native-proxy-launcher.js', executable: false },
+      ],
+    });
+    const claudeRuntimePath = options.executables.claude === options.executables.codex
+      ? immutableRuntime.files.codex.path
+      : immutableRuntime.files.claude.path;
+    const runtimeFiles = Object.freeze({
+      codex: runtimeMount(immutableRuntime.files.codex.path, immutableRuntime.files.codex.path),
+      claude: runtimeMount(claudeRuntimePath, claudeRuntimePath),
+      node: runtimeMount(immutableRuntime.files.node.path, immutableRuntime.files.node.path),
+      proxyLauncher: runtimeMount(
+        immutableRuntime.files.proxyLauncher.path,
+        immutableRuntime.files.proxyLauncher.path,
+      ),
+    });
 
     const egress = new UnixSocketOriginPinningBoundary({
       brokerRoot,
-      nodeExecutable: canonicalFile(options.executables.node, 'NODE'),
-      launcherPath: canonicalFile(options.executables.proxyLauncher, 'PROXY_LAUNCHER'),
+      nodeExecutable: immutableRuntime.files.node.path,
+      launcherPath: immutableRuntime.files.proxyLauncher.path,
     });
     const filesystem = new SystemNativeFilesystemBoundary({
       bwrapExecutable: canonicalFile(options.executables.bwrap, 'BWRAP'),
       brokerRoot,
-      allowedRuntimeFiles: runtimeFiles,
+      allowedRuntimeFiles: Object.values(runtimeFiles).filter((mount, index, mounts) =>
+        mounts.findIndex((item) => item.source === mount.source
+          && item.destination === mount.destination) === index),
       authenticationSourceRoot: authRoot,
       forbiddenMountRoots: unique([
         homedir(), runtimeRoot,
@@ -132,9 +160,9 @@ export function createTrustedNativeRuntime(
         codex: {
           authenticationMounts: [{ source: codexAuth, destination: '/home/harness/.codex/auth.json' }],
           runtimeMounts: [
-            samePathMount(options.executables.codex),
-            samePathMount(options.executables.node),
-            samePathMount(options.executables.proxyLauncher),
+            runtimeFiles.codex,
+            runtimeFiles.node,
+            runtimeFiles.proxyLauncher,
           ],
           privateEnvironment: {
             HOME: '/home/harness',
@@ -147,9 +175,9 @@ export function createTrustedNativeRuntime(
             destination: '/home/harness/.claude/.credentials.json',
           }],
           runtimeMounts: [
-            samePathMount(options.executables.claude),
-            samePathMount(options.executables.node),
-            samePathMount(options.executables.proxyLauncher),
+            runtimeFiles.claude,
+            runtimeFiles.node,
+            runtimeFiles.proxyLauncher,
           ],
           privateEnvironment: {
             HOME: '/home/harness',
@@ -171,8 +199,8 @@ export function createTrustedNativeRuntime(
     const runner = new BoundedNativeProcessRunner({
       config: options.config,
       executables: {
-        codex: canonicalFile(options.executables.codex, 'CODEX'),
-        'claude-code': canonicalFile(options.executables.claude, 'CLAUDE'),
+        codex: immutableRuntime.files.codex.path,
+        'claude-code': claudeRuntimePath,
       },
       allowedRoots: options.allowedWorkspaceRoots,
       allowedReadRoots: [...options.allowedWorkspaceRoots, evidenceRoot],
@@ -184,17 +212,18 @@ export function createTrustedNativeRuntime(
       resourceLimits: options.resourceLimits,
       maskedWorkspacePaths: options.maskedWorkspacePaths,
     });
+    assertRunnerExecutableCopies(runner, immutableRuntime, claudeRuntimePath);
     const ledger = new NativeRuntimeLedger(runner);
     const sourceEnvironment = Object.freeze({});
     const adapters = Object.freeze({
       codex: new CodexSubscriptionAdapter({
-        executable: options.executables.codex,
+        executable: immutableRuntime.files.codex.path,
         runner,
         sourceEnvironment,
         evidenceRoot,
       }),
       claude: new ClaudeCodeSubscriptionAdapter({
-        executable: options.executables.claude,
+        executable: claudeRuntimePath,
         runner,
         sourceEnvironment,
       }),
@@ -249,10 +278,12 @@ export function createTrustedNativeRuntime(
       cleanup() {
         if (cleaned) return;
         cleaned = true;
+        immutableRuntime?.cleanup();
         rmSync(runtimeRoot, { recursive: true, force: true });
       },
     });
   } catch (error) {
+    immutableRuntime?.cleanup();
     rmSync(runtimeRoot, { recursive: true, force: true });
     throw error;
   }
@@ -348,8 +379,24 @@ function canonicalPath(path: string, label: string): string {
   return path;
 }
 
-function samePathMount(path: string): NativeRuntimeMount {
-  return Object.freeze({ source: path, destination: path });
+function runtimeMount(source: string, destination: string): NativeRuntimeMount {
+  return Object.freeze({ source, destination });
+}
+
+function assertRunnerExecutableCopies(
+  runner: BoundedNativeProcessRunner,
+  runtime: ImmutablePrivateRuntime,
+  claudePath: string,
+): void {
+  const identities = runner.executableEvidence();
+  if (identities.codex.path !== runtime.files.codex.path
+    || identities.codex.digest !== runtime.files.codex.digest
+    || identities['claude-code'].path !== claudePath
+    || identities['claude-code'].digest !== (claudePath === runtime.files.codex.path
+      ? runtime.files.codex.digest
+      : runtime.files.claude.digest)) {
+    throw new Error('HARNESS_NATIVE_PRIVATE_EXECUTABLE_IDENTITY_MISMATCH');
+  }
 }
 
 function unique(values: readonly string[]): string[] {

@@ -2,6 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -92,6 +93,27 @@ describe('system native filesystem mount validation', () => {
         },
       },
     })).toThrow('HARNESS_NATIVE_codex:AUTH_MOUNT_OUTSIDE_ALLOWLIST');
+  });
+
+  it('admits only byte-identical private runtime sources at the attested destination', () => {
+    const fixture = validationFixture();
+    const privateCopy = join(dirname(fixture.runtimeFile), 'private-runtime.mjs');
+    writeFileSync(privateCopy, readFileSync(fixture.runtimeFile), { mode: 0o500 });
+    const mount = { source: privateCopy, destination: fixture.runtimeFile };
+    const options = {
+      ...fixture.options,
+      allowedRuntimeFiles: [mount],
+      hosts: {
+        codex: { ...fixture.options.hosts.codex, runtimeMounts: [mount] },
+        'claude-code': { ...fixture.options.hosts['claude-code'], runtimeMounts: [mount] },
+      },
+    };
+    expect(() => new SystemNativeFilesystemBoundary(options)).not.toThrow();
+
+    chmodSync(privateCopy, 0o700);
+    writeFileSync(privateCopy, 'export const replaced = true;\n');
+    expect(() => new SystemNativeFilesystemBoundary(options))
+      .toThrow('HARNESS_NATIVE_RUNTIME_FILE_INVALID');
   });
 });
 

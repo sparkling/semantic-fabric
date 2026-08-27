@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import {
+  PROGRAMME_V5_ACCEPTANCE_TASK_PATH,
+  PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS,
+  controllerExecutionPaths,
+} from '../src/controller-attestation.js';
+import {
   normalizeAcceptanceTaskPath,
   parseHarnessManifest,
   selectAcceptanceTaskPath,
@@ -41,9 +46,12 @@ describe('canonical harness manifest', () => {
   it('selects one normalized manifest-bound acceptance task', () => {
     const parsed = parseHarnessManifest(manifest, SECURE_HARNESS_CONFIG);
     const taskPath = 'coding-harness/config/issue-8-acceptance.json';
+    const programmeV5TaskPath = 'coding-harness/config/programme-v5-acceptance.json';
 
     expect(normalizeAcceptanceTaskPath(taskPath)).toBe(taskPath);
     expect(selectAcceptanceTaskPath(parsed, taskPath)).toBe(taskPath);
+    expect(normalizeAcceptanceTaskPath(programmeV5TaskPath)).toBe(programmeV5TaskPath);
+    expect(selectAcceptanceTaskPath(parsed, programmeV5TaskPath)).toBe(programmeV5TaskPath);
     for (const invalid of [
       '',
       '/coding-harness/config/issue-8-acceptance.json',
@@ -76,6 +84,19 @@ describe('canonical harness manifest', () => {
 
     input.acceptanceTasks = [input.acceptanceTasks[0], input.acceptanceTasks[0]];
     expect(() => parseHarnessManifest(input, SECURE_HARNESS_CONFIG)).toThrow(/duplicates/);
+  });
+
+  it('fails closed when any trusted programme-v5 execution source is omitted', () => {
+    const paths = SECURE_HARNESS_CONFIG.requiredProtectedPaths;
+    expect(controllerExecutionPaths(paths, PROGRAMME_V5_ACCEPTANCE_TASK_PATH)).toEqual(
+      expect.arrayContaining([...PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS]),
+    );
+    for (const required of PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS) {
+      expect(() => controllerExecutionPaths(
+        paths.filter((path) => path !== required),
+        PROGRAMME_V5_ACCEPTANCE_TASK_PATH,
+      )).toThrow('HARNESS_CONTROLLER_EXECUTION_MANIFEST_INCOMPLETE');
+    }
   });
 
   it('protects every tracked ADR, Cargo manifest, CI workflow, and publication control', () => {

@@ -2,7 +2,11 @@
 
 import type { AcceptanceTaskV3 } from './acceptance-task.js';
 import { SHA256_PATTERN, deepFreeze } from './contracts.js';
-import { parseRufloEvidence, type RufloEvidence } from './evidence.js';
+import {
+  parseProgrammeV5RufloEvidence,
+  validProgrammeV5RufloBinding,
+  type ProgrammeV5RufloEvidence,
+} from './evidence.js';
 import {
   parseMetaHarnessDiagnosticSnapshot,
   type MetaHarnessDiagnosticSnapshot,
@@ -47,7 +51,7 @@ export function evaluateProgrammeGatesV5(input: Readonly<{
   policy: ParsedProgrammePolicyV1;
   receipt: Receipt;
   diagnostics: MetaHarnessDiagnosticSnapshot;
-  rufloEvidence: RufloEvidence;
+  rufloEvidence: ProgrammeV5RufloEvidence;
 }>): ProgrammeGateEvaluationV5 {
   const { policy, receipt } = input;
   const snapshot = policy.snapshot;
@@ -56,7 +60,7 @@ export function evaluateProgrammeGatesV5(input: Readonly<{
     || receipt.recovery.repairCount > gate.attempts.maximumRepairs) {
     throw new Error('HARNESS_PROGRAMME_REPAIR_COUNT_EXCEEDS_POLICY');
   }
-  const ruflo = parseRufloEvidence(input.rufloEvidence);
+  const ruflo = parseProgrammeV5RufloEvidence(input.rufloEvidence);
   const diagnostics = parseMetaHarnessDiagnosticSnapshot(input.diagnostics);
   assertDiagnosticOrder(diagnostics, gate);
 
@@ -80,10 +84,20 @@ export function evaluateProgrammeGatesV5(input: Readonly<{
     && receipt.recovery.breakerState === gate.reliability.breakerState
     && nonnegativeInteger(receipt.recovery.retryCount)
     && commands.completed && commands.attemptHistory;
-  const rufloGate = validRufloBinding(receipt, ruflo)
+  const rufloGate = validProgrammeV5RufloBinding(ruflo, {
+    taskId: receipt.taskId,
+    runId: receipt.runId,
+    routeSnapshotDigest: receipt.route.snapshotDigest,
+    swarmId: receipt.coordination.swarmId,
+    coordinationTaskId: receipt.coordination.taskId,
+    hookIds: receipt.coordination.hookIds,
+    traceIds: receipt.coordination.traceIds,
+    transactionStartedAt: receipt.route.frozenAt,
+    receiptIssuedAt: receipt.issuedAt,
+  })
     && route
-    && nonempty(receipt.toolVersions.rufloHive)
-    && nonempty(receipt.toolVersions.rufloConsensus)
+    && receipt.toolVersions.rufloHive === ruflo.swarmStatus.topology
+    && receipt.toolVersions.rufloConsensus === ruflo.swarmStatus.config.consensusMechanism
     && keys.qe;
 
   const checks: Record<ProgrammeDimensionId, Readonly<Record<string, boolean>>> = {
@@ -346,16 +360,6 @@ function validNativeControlPlane(receipt: Receipt, gate: ProgrammeGateContractV1
     && uniqueDigests(receipt.coordination.nativeEvidenceDigests)
     && receipt.coordination.nativeRuntimeEvidenceDigest !== null
     && validDigest(receipt.coordination.nativeRuntimeEvidenceDigest);
-}
-
-function validRufloBinding(receipt: Receipt, ruflo: RufloEvidence): boolean {
-  return ruflo.taskId === receipt.taskId
-    && ruflo.runId === receipt.runId
-    && ruflo.routeSnapshotDigest === receipt.route.snapshotDigest
-    && ruflo.swarmId === receipt.coordination.swarmId
-    && ruflo.coordinationTaskId === receipt.coordination.taskId
-    && sameStrings(ruflo.hookIds, receipt.coordination.hookIds)
-    && sameStrings(ruflo.traceIds, receipt.coordination.traceIds);
 }
 
 function assertDiagnosticOrder(

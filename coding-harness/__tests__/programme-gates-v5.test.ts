@@ -8,12 +8,13 @@ import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { DEVELOPMENT_AUTHORITY } from '../src/contracts.js';
 import { HARNESS_MANIFEST_PATH } from '../src/controller-attestation.js';
 import { CONTROLLER_BUILD_PATH } from '../src/controller-build.js';
-import type { RufloEvidence } from '../src/evidence.js';
+import type { ProgrammeV5RufloEvidence } from '../src/evidence.js';
 import {
   parseMetaHarnessDiagnosticSnapshot,
   type MetaHarnessDiagnosticSnapshot,
 } from '../src/metaharness-diagnostics.js';
 import { evaluateProgrammeGatesV5 } from '../src/programme-gates-v5.js';
+import { programmeV5RufloSnapshotDigest } from '../src/programme-v5-ruflo-contract.js';
 import {
   createFrozenProgrammePolicyV1,
   programmePolicyFingerprint,
@@ -41,6 +42,7 @@ import {
   type ReceiptDraft,
 } from '../src/receipts.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
+import { programmeV5RufloFixture } from './candidate-fixtures.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const taskUrl = new URL('../config/issue-8-acceptance.json', import.meta.url);
@@ -51,7 +53,7 @@ interface GateInput {
   policy: ParsedProgrammePolicyV1;
   receipt: Receipt;
   diagnostics: MetaHarnessDiagnosticSnapshot;
-  rufloEvidence: RufloEvidence;
+  rufloEvidence: ProgrammeV5RufloEvidence;
 }
 
 describe('schema-v5 programme gate evaluator', () => {
@@ -123,6 +125,9 @@ describe('schema-v5 programme gate evaluator', () => {
     ['QE digest order', 'ruflo-and-qe-integration', (x) => {
       x.receipt.coordination.agenticQeEvidenceDigests.reverse();
     }],
+    ['Ruflo topology binding', 'ruflo-and-qe-integration', (x) => {
+      x.receipt.toolVersions.rufloHive = 'mesh';
+    }],
   ];
 
   it.each(receiptCases)('fails closed on %s', (_name, dimension, mutate) => {
@@ -135,9 +140,13 @@ describe('schema-v5 programme gate evaluator', () => {
 
   it('binds the embedded Ruflo evidence to route, run, task, and coordination', () => {
     const input = mutableFixture();
-    input.rufloEvidence.runId = 'different_run';
+    input.receipt.runId = 'different_run'; input.receipt = rehashReceipt(input.receipt);
     const result = evaluateProgrammeGatesV5(input);
     expect(result.dimensions.at(-1)?.passed).toBe(false);
+    const replay = mutableFixture();
+    replay.receipt.issuedAt = '2026-08-25T11:59:59.000Z';
+    replay.receipt = rehashReceipt(replay.receipt);
+    expect(evaluateProgrammeGatesV5(replay).dimensions.at(-1)?.passed).toBe(false);
   });
 
   it('rejects an over-policy repair count before attempt-key expansion', () => {
@@ -157,7 +166,10 @@ describe('schema-v5 programme gate evaluator', () => {
     changedReceipt.receipt = rehashReceipt(changedReceipt.receipt);
     const receiptResult = evaluateProgrammeGatesV5(changedReceipt);
     const changedRuflo = mutableFixture();
-    changedRuflo.rufloEvidence.capturedAt = '2026-08-25T12:00:01.000Z';
+    changedRuflo.rufloEvidence.taskStatus.progress = 51;
+    changedRuflo.rufloEvidence.taskStatusDigest = programmeV5RufloSnapshotDigest(
+      changedRuflo.rufloEvidence.taskStatus,
+    );
     const rufloResult = evaluateProgrammeGatesV5(changedRuflo);
 
     expect(receiptResult.dimensions.every(({ passed }) => passed)).toBe(true);
@@ -261,14 +273,14 @@ function mutableFixture(): GateInput {
   const diagnostics = parseMetaHarnessDiagnosticSnapshot(
     JSON.parse(readFileSync(diagnosticsUrl, 'utf8')),
   );
-  const rufloEvidence: RufloEvidence = {
-    schemaVersion: 1, source: 'ruflo-coordination-ledger', authoritative: false,
+  const rufloEvidence: ProgrammeV5RufloEvidence = programmeV5RufloFixture({
     taskId: receipt.taskId, runId: receipt.runId,
     swarmId: receipt.coordination.swarmId!,
     coordinationTaskId: receipt.coordination.taskId!,
     hookIds: [...receipt.coordination.hookIds], traceIds: [...receipt.coordination.traceIds],
     routeSnapshotDigest: receipt.route.snapshotDigest, capturedAt: receipt.issuedAt,
-  };
+    transactionStartedAt: receipt.route.frozenAt,
+  });
   return structuredClone({ policy, receipt, diagnostics, rufloEvidence });
 }
 

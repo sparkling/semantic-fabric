@@ -11,9 +11,11 @@ import { isAbsolute, resolve } from 'node:path';
 import { digestValue, type HostEvidence } from './receipts.js';
 import type { NativeHost } from './models/types.js';
 import { AGENTIC_QE_PROFILES, type AgenticQeProfile } from './qe-profile.js';
+import { parseProgrammeV5RufloEvidence, type ProgrammeV5RufloEvidence } from './programme-v5-ruflo-contract.js';
 
 export { AGENTIC_QE_PROFILES, type AgenticQeProfile } from './qe-profile.js';
-export interface RufloEvidence {
+export { parseProgrammeV5RufloEvidence, validProgrammeV5RufloBinding, type ProgrammeV5RufloEvidence } from './programme-v5-ruflo-contract.js';
+export interface RufloEvidenceV1 {
   schemaVersion: 1;
   source: 'ruflo-coordination-ledger';
   taskId: string;
@@ -26,6 +28,7 @@ export interface RufloEvidence {
   authoritative: false;
   capturedAt: string;
 }
+export type RufloEvidence = RufloEvidenceV1 | ProgrammeV5RufloEvidence;
 
 export interface AgenticQeEvidence {
   schemaVersion: 1;
@@ -135,6 +138,7 @@ const NATIVE_ORIGINS: Readonly<Record<NativeHost, readonly string[]>> = Object.f
 
 export function parseRufloEvidence(value: unknown): RufloEvidence {
   const input = asRecord(value, 'ruflo evidence');
+  if (input.schemaVersion === 2) return parseProgrammeV5RufloEvidence(input);
   assertExactKeys(input, RUFLO_KEYS, 'ruflo evidence');
   if (input.schemaVersion !== 1) throw new TypeError('ruflo evidence schemaVersion must be 1');
   if (input.source !== 'ruflo-coordination-ledger') throw new TypeError('ruflo evidence source is invalid');

@@ -9,6 +9,14 @@ import type {
 import type { NativeInvocationExpectation } from '../src/candidate-types.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { METAHARNESS_DIAGNOSTICS_PATH } from '../src/metaharness-diagnostics.js';
+import {
+  PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+  PROGRAMME_V5_RUFLO_MCP_IDENTITY,
+  programmeV5RufloCaptureBindingDigest,
+  programmeV5RufloRequests,
+  programmeV5RufloSnapshotDigest,
+  type ProgrammeV5RufloEvidence,
+} from '../src/programme-v5-ruflo-contract.js';
 import { digestValue } from '../src/receipts.js';
 
 export const digest = (character: string) => character.repeat(64);
@@ -17,6 +25,52 @@ export const identity = (character: string) => ({
   commit: character.repeat(40),
   tree: character.repeat(40),
 });
+
+export function programmeV5RufloFixture(input: Readonly<{
+  taskId: string;
+  runId: string;
+  swarmId: string;
+  coordinationTaskId: string;
+  routeSnapshotDigest: string;
+  hookIds: readonly string[];
+  traceIds: readonly string[];
+  capturedAt: string;
+  captureNonce?: string;
+  transactionStartedAt?: string;
+}>): ProgrammeV5RufloEvidence {
+  const captureNonce = input.captureNonce ?? digest('9');
+  const transactionStartedAt = input.transactionStartedAt ?? input.capturedAt;
+  const taskStatus = {
+    taskId: input.coordinationTaskId, type: 'feature', description: 'Schema-v5 programme fixture',
+    status: 'in_progress' as const, progress: 50, priority: 'critical' as const,
+    assignedTo: ['codex-root'], tags: ['schema-v5'],
+    createdAt: '2026-08-25T11:58:00.000Z', startedAt: '2026-08-25T11:59:00.000Z',
+    completedAt: null, result: null,
+  };
+  const swarmStatus = {
+    swarmId: input.swarmId, status: 'running' as const, topology: 'hierarchical' as const,
+    maxAgents: 4, agentCount: 0, taskCount: 0,
+    config: {
+      topology: 'hierarchical' as const, maxAgents: 4, strategy: 'specialized' as const,
+      communicationProtocol: 'message-bus' as const, autoScaling: false,
+      consensusMechanism: 'raft' as const,
+    },
+    createdAt: '2026-08-25T11:57:00.000Z', updatedAt: '2026-08-25T12:00:00.000Z',
+  };
+  const captureBindingDigest = programmeV5RufloCaptureBindingDigest({
+    ...input, captureNonce, transactionStartedAt,
+  });
+  return {
+    schemaVersion: 2, source: 'ruflo-coordination-ledger', ...input,
+    hookIds: [...input.hookIds], traceIds: [...input.traceIds],
+    captureNonce, transactionStartedAt, captureBindingDigest,
+    mcp: PROGRAMME_V5_RUFLO_MCP_IDENTITY, cli: PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+    ...programmeV5RufloRequests(input.coordinationTaskId, input.swarmId),
+    taskStatus, taskStatusDigest: programmeV5RufloSnapshotDigest(taskStatus),
+    swarmStatus, swarmStatusDigest: programmeV5RufloSnapshotDigest(swarmStatus),
+    providerVariablesStripped: true, authoritative: false,
+  };
+}
 
 const diagnosticBody = {
   schemaVersion: 1,

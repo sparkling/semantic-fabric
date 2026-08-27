@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -9,6 +11,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -80,6 +83,37 @@ describe('trusted native runtime composition', () => {
     expect(listRuntimeChildren(fixture.runtimeParent)).toEqual([]);
   });
 
+  it('retains the attested private bytes after a source pathname replacement', () => {
+    const fixture = createFixture();
+    const runtime = createTrustedNativeRuntime({
+      config: createTestConfig(),
+      runtimeParent: fixture.runtimeParent,
+      allowedWorkspaceRoots: [fixture.workspace],
+      workspaceRoot: fixture.workspace,
+      executables: fixture.executables,
+      credentials: fixture.credentials,
+      resourceLimits: TEST_RESOURCE_LIMITS,
+      controllerEnvironment: controllerEnvironment(),
+    });
+    try {
+      const executableDirectory = readdirSync(runtime.runtimeRoot)
+        .find((entry) => entry.startsWith('executables-'));
+      expect(executableDirectory).toBeTypeOf('string');
+      const privateCodex = join(runtime.runtimeRoot, executableDirectory!, 'codex');
+      const originalDigest = runtime.runner.executableEvidence().codex.digest;
+      renameSync(fixture.executables.codex, `${fixture.executables.codex}.replaced`);
+      writeFileSync(fixture.executables.codex, '#!/bin/sh\necho attacker\n', { mode: 0o700 });
+
+      const executed = spawnSync(privateCodex, [], { encoding: 'utf8' });
+      expect(executed.status).toBe(0);
+      expect(executed.stdout).toBe('codex-original\n');
+      expect(stableDigest(privateCodex)).toBe(originalDigest);
+      expect(statSync(privateCodex).mode & 0o222).toBe(0);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it('rejects a forbidden root that overlaps the closed system-library set', () => {
     const fixture = createFixture();
     expect(() => createTrustedNativeRuntime({
@@ -129,17 +163,21 @@ function createFixture() {
   const codex = join(credentialsRoot, 'codex.json');
   const claude = join(credentialsRoot, 'claude.json');
   const launcher = join(root, 'launcher.mjs');
+  const codexExecutable = join(root, 'codex');
+  const claudeExecutable = join(root, 'claude');
   writeFileSync(codex, '{"auth":"codex"}\n', { mode: 0o600 });
   writeFileSync(claude, '{"auth":"claude"}\n', { mode: 0o600 });
   writeFileSync(launcher, 'export {};\n', { mode: 0o600 });
+  writeFileSync(codexExecutable, '#!/bin/sh\necho codex-original\n', { mode: 0o700 });
+  writeFileSync(claudeExecutable, '#!/bin/sh\necho claude-original\n', { mode: 0o700 });
   return {
     runtimeParent,
     workspace,
     credentials: { codex, 'claude-code': claude } as const,
     executables: {
-      codex: realpathSync('/bin/true'),
-      claude: realpathSync('/bin/true'),
-      node: realpathSync(process.execPath),
+      codex: codexExecutable,
+      claude: claudeExecutable,
+      node: realpathSync('/bin/true'),
       bwrap: realpathSync('/bin/true'),
       systemdRun: realpathSync('/bin/true'),
       systemctl: realpathSync('/bin/true'),
@@ -157,4 +195,8 @@ function controllerEnvironment(): Readonly<Record<string, string>> {
 
 function listRuntimeChildren(path: string): string[] {
   return existsSync(path) ? readdirSync(path) : [];
+}
+
+function stableDigest(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
 }

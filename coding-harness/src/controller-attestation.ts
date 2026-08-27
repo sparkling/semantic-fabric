@@ -30,7 +30,22 @@ import { digestValue, type GitIdentity } from './receipts.js';
 
 export const ISSUE_8_ACCEPTANCE_TASK_PATH =
   'coding-harness/config/issue-8-acceptance.json';
+export const PROGRAMME_V5_ACCEPTANCE_TASK_PATH =
+  'coding-harness/config/programme-v5-acceptance.json';
 export const HARNESS_MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
+export const PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS = Object.freeze([
+  'coding-harness/scripts/launch-programme-v5.mjs',
+  'coding-harness/src/immutable-private-runtime.ts',
+  'coding-harness/src/programme-v5-driver-support.ts',
+  'coding-harness/src/programme-v5-driver.ts',
+  'coding-harness/src/programme-v5-program-runtime.ts',
+  'coding-harness/src/programme-v5-program.ts',
+  'coding-harness/src/programme-v5-qe.ts',
+  'coding-harness/src/programme-v5-ruflo-contract.ts',
+  'coding-harness/src/programme-v5-ruflo-runtime.ts',
+  'coding-harness/src/programme-v5-ruflo.ts',
+  'coding-harness/src/programme-v5-system.ts',
+] as const);
 const LOCKFILE_PATH = 'coding-harness/package-lock.json';
 const MAX_CONTROLLER_BLOB_BYTES = 10_000_000;
 const MAX_RUNTIME_FILE_BYTES = 50_000_000;
@@ -177,7 +192,7 @@ export async function attestIssue8Controller(input: Readonly<{
   });
 }
 
-function controllerExecutionPaths(paths: readonly string[], taskPath: string): string[] {
+export function controllerExecutionPaths(paths: readonly string[], taskPath: string): string[] {
   const selected = paths.filter((path) =>
     path.startsWith('coding-harness/src/')
     || path.startsWith('coding-harness/scripts/')
@@ -187,11 +202,16 @@ function controllerExecutionPaths(paths: readonly string[], taskPath: string): s
     || path === taskPath
     || path === HARNESS_MANIFEST_PATH
     || path === CONTROLLER_BUILD_PATH);
+  const required = taskPath === PROGRAMME_V5_ACCEPTANCE_TASK_PATH
+    ? PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS
+    : [
+        'coding-harness/scripts/launch-issue-8.mjs',
+        'coding-harness/src/issue-8-driver.ts',
+      ];
   if (!selected.includes(taskPath) || !selected.includes(HARNESS_MANIFEST_PATH)
     || !selected.includes('coding-harness/src/controller-attestation.ts')
-    || !selected.includes('coding-harness/src/issue-8-driver.ts')
     || !selected.includes(CONTROLLER_BUILD_PATH)
-    || !selected.includes('coding-harness/scripts/launch-issue-8.mjs')) {
+    || required.some((path) => !selected.includes(path))) {
     throw new Error('HARNESS_CONTROLLER_EXECUTION_MANIFEST_INCOMPLETE');
   }
   return [...selected].sort();
@@ -269,9 +289,17 @@ function sha256(value: string): string {
 }
 
 function sha256FileBounded(path: string): string {
+  const pathBefore = lstatSync(path, { bigint: true });
+  if (!pathBefore.isFile() || pathBefore.isSymbolicLink() || pathBefore.nlink !== 1n
+    || realpathSync(path) !== path) {
+    throw new Error('HARNESS_CONTROLLER_RUNTIME_FILE_UNTRUSTED');
+  }
   const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const before = fstatSync(descriptor, { bigint: true });
+    if (!sameRuntimeFile(pathBefore, before)) {
+      throw new Error('HARNESS_CONTROLLER_RUNTIME_FILE_CHANGED');
+    }
     if (!before.isFile() || before.size < 1n || before.size > BigInt(MAX_RUNTIME_FILE_BYTES)) {
       throw new Error('HARNESS_CONTROLLER_RUNTIME_FILE_SIZE_INVALID');
     }
@@ -286,13 +314,28 @@ function sha256FileBounded(path: string): string {
       offset += BigInt(count);
     }
     const after = fstatSync(descriptor, { bigint: true });
-    if (offset !== before.size || before.dev !== after.dev || before.ino !== after.ino
-      || before.mode !== after.mode || before.size !== after.size
-      || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
+    const pathAfter = lstatSync(path, { bigint: true });
+    if (offset !== before.size || !sameRuntimeFile(before, after)
+      || !sameRuntimeFile(after, pathAfter) || realpathSync(path) !== path) {
       throw new Error('HARNESS_CONTROLLER_RUNTIME_FILE_CHANGED');
     }
     return hash.digest('hex');
   } finally {
     closeSync(descriptor);
   }
+}
+
+function sameRuntimeFile(
+  left: Readonly<{
+    dev: bigint; ino: bigint; mode: bigint; nlink: bigint; size: bigint;
+    mtimeNs: bigint; ctimeNs: bigint;
+  }>,
+  right: Readonly<{
+    dev: bigint; ino: bigint; mode: bigint; nlink: bigint; size: bigint;
+    mtimeNs: bigint; ctimeNs: bigint;
+  }>,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode
+    && left.nlink === right.nlink && left.size === right.size
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }

@@ -7,7 +7,7 @@ import { parseAcceptanceTask } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { HARNESS_MANIFEST_PATH } from '../src/controller-attestation.js';
 import { CONTROLLER_BUILD_PATH } from '../src/controller-build.js';
-import type { RufloEvidence } from '../src/evidence.js';
+import type { ProgrammeV5RufloEvidence } from '../src/evidence.js';
 import { METAHARNESS_DIAGNOSTICS_PATH } from '../src/metaharness-diagnostics.js';
 import {
   createProgrammeEnvelopeV5,
@@ -41,12 +41,16 @@ import {
 } from '../src/programme-task-runtime-v1.js';
 import { digestValue, ReceiptChain, type Receipt, type ReceiptStatus } from '../src/receipts.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
-import { diagnosticBlob, diagnosticBlobDigest } from './candidate-fixtures.js';
+import {
+  diagnosticBlob,
+  diagnosticBlobDigest,
+  programmeV5RufloFixture,
+} from './candidate-fixtures.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '0d5505e4952c87bd12204ffb11caf40ae31351b29a950358d3ea54f3b85161bb';
-const ACCEPTANCE_DIGEST = '4f4fe45c2c9ce9a0a30c95519769bc1a3607c71b2e6526f78914ce42e331a977';
-const ENVELOPE_DIGEST = 'fdab0843eeffad9ce75d8b730d4977ccd3149bf72d0af748bb6d3e6cd10065e7';
+const POLICY_FINGERPRINT = '72f0332c62b10bd983cd0d96d35afa02956b42daa1fad363ada00e0ea4ec3757';
+const ACCEPTANCE_DIGEST = 'f4fe69abe64f480ba487e9704bae7ec1b22efdfe932637d8df4732e3ee6158be';
+const ENVELOPE_DIGEST = '27e2aaac624d3158d879314590540c61a3c96999cd919925e7b1cf0fd9f23ba0';
 
 describe('strict schema-v5 programme envelope', () => {
   it('round-trips one receipt against independent policy and envelope anchors', () => {
@@ -204,15 +208,13 @@ describe('strict schema-v5 programme envelope', () => {
 
 function envelopeFixture(status: ReceiptStatus, gateValid = true) {
   const policy = policyFixture();
-  const rufloEvidence = {
-    schemaVersion: 1 as const,
-    source: 'ruflo-coordination-ledger' as const,
+  const rufloEvidence = programmeV5RufloFixture({
     taskId: 'verifier_only_task_0001', runId: 'programme-run-0001',
     swarmId: 'swarm-0001', coordinationTaskId: 'coordination-task-0001',
     hookIds: ['hook-route-0001'], traceIds: ['trace-0001'],
     routeSnapshotDigest: policy.execution.routeSnapshotDigest,
-    authoritative: false as const, capturedAt: '2026-08-27T08:00:00.000Z',
-  };
+    capturedAt: '2026-08-27T08:00:00.000Z',
+  });
   const receipt = receiptFixture(policy, rufloEvidence, status, gateValid);
   return {
     policy,
@@ -223,7 +225,7 @@ function envelopeFixture(status: ReceiptStatus, gateValid = true) {
 
 function receiptFixture(
   policy: FrozenProgrammePolicyV1,
-  ruflo: RufloEvidence,
+  ruflo: ProgrammeV5RufloEvidence,
   status: ReceiptStatus,
   gateValid: boolean,
 ): Receipt {

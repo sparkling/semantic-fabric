@@ -19,6 +19,17 @@ export interface NativeInvocationRecord {
   readonly outputDigest: string;
 }
 
+export interface NativePreflightExecutableIdentity {
+  readonly host: NativeHost;
+  readonly path: string;
+  readonly digest: string;
+}
+
+export type NativePreflightExecutableIdentitySnapshot = readonly [
+  NativePreflightExecutableIdentity,
+  NativePreflightExecutableIdentity,
+];
+
 interface HostRecord {
   readonly evidence: NativeAuthEvidence;
   readonly executablePath: string;
@@ -26,6 +37,8 @@ interface HostRecord {
   readonly preflightDigest: string;
   readonly hostCredentialPathMounted: false;
 }
+
+const NATIVE_HOSTS = ['codex', 'claude-code'] as const;
 
 export class NativeRuntimeLedger {
   readonly #runner: BoundedNativeProcessRunner;
@@ -65,7 +78,7 @@ export class NativeRuntimeLedger {
       executablePath: executable.path,
       executableDigest: executable.digest,
       preflightDigest: digest(executions),
-      hostCredentialPathMounted: executions[0].filesystem.hostCredentialPathMounted,
+      hostCredentialPathMounted: false,
     }));
   }
 
@@ -92,6 +105,37 @@ export class NativeRuntimeLedger {
     this.#invocations.set(input.invocationId, deepFreeze({ ...input }));
   }
 
+  preflightExecutableIdentitySnapshot(): NativePreflightExecutableIdentitySnapshot {
+    this.#assertOpen();
+    if (this.#hosts.size !== NATIVE_HOSTS.length
+      || NATIVE_HOSTS.some((host) => !this.#hosts.has(host))) {
+      throw new Error('HARNESS_NATIVE_PREFLIGHT_IDENTITY_INCOMPLETE');
+    }
+    const trusted = this.#runner.executableEvidence();
+    const identityFor = (host: NativeHost): NativePreflightExecutableIdentity => {
+      const record = this.#hosts.get(host) as HostRecord;
+      const identity = trusted[host];
+      if (record.evidence.host !== host
+        || typeof record.executablePath !== 'string'
+        || record.executablePath.trim() === ''
+        || !SHA256_PATTERN.test(record.executableDigest)
+        || identity === undefined
+        || record.executablePath !== identity.path
+        || record.executableDigest !== identity.digest) {
+        throw new Error('HARNESS_NATIVE_PREFLIGHT_IDENTITY_INVALID');
+      }
+      return {
+        host,
+        path: record.executablePath,
+        digest: record.executableDigest,
+      };
+    };
+    return deepFreeze([
+      identityFor('codex'),
+      identityFor('claude-code'),
+    ]);
+  }
+
   seal(input: Readonly<{
     taskId: string;
     runId: string;
@@ -99,6 +143,7 @@ export class NativeRuntimeLedger {
     expectations: readonly NativeInvocationExpectation[];
   }>): NativeRuntimeEvidence {
     this.#assertOpen();
+    this.#sealed = true;
     const expectedHosts = new Map(input.hosts.map((host) => [host.host, host]));
     if (input.hosts.length !== 2 || expectedHosts.size !== 2 || this.#hosts.size !== 2) {
       throw new Error('HARNESS_NATIVE_RUNTIME_HOST_COVERAGE_REQUIRED');
@@ -138,7 +183,6 @@ export class NativeRuntimeLedger {
       }
       return invocationEvidence(recorded, execution, expected.candidateTree);
     });
-    this.#sealed = true;
     return deepFreeze({
       schemaVersion: 1,
       source: 'trusted-native-runtime',

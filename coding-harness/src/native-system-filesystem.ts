@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-} from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { deepFreeze } from './contracts.js';
 import type {
@@ -17,10 +11,7 @@ import type {
 import type { NativeHost } from './models/types.js';
 import type { BoundaryCommand } from './network.js';
 
-export interface NativeRuntimeMount {
-  readonly source: string;
-  readonly destination: string;
-}
+export interface NativeRuntimeMount { readonly source: string; readonly destination: string }
 export interface NativeHostFilesystemProfile {
   readonly authenticationMounts: readonly NativeRuntimeMount[];
   readonly runtimeMounts: readonly NativeRuntimeMount[];
@@ -30,7 +21,7 @@ export interface NativeHostFilesystemProfile {
 export interface SystemNativeFilesystemBoundaryOptions {
   readonly bwrapExecutable: string;
   readonly brokerRoot: string;
-  readonly allowedRuntimeFiles: readonly string[];
+  readonly allowedRuntimeFiles: readonly (string | NativeRuntimeMount)[];
   readonly authenticationSourceRoot: string;
   readonly forbiddenMountRoots: readonly string[];
   readonly hosts: Readonly<Record<NativeHost, NativeHostFilesystemProfile>>;
@@ -185,7 +176,7 @@ export class SystemNativeFilesystemBoundary implements NativeModelFilesystemBoun
   }
 }
 interface MountValidationContext {
-  readonly allowedRuntimeFiles: ReadonlySet<string>;
+  readonly allowedRuntimeFiles: ReadonlyMap<string, string>;
   readonly authenticationSourceRoot: string;
   readonly forbiddenMountRoots: readonly string[];
 }
@@ -297,7 +288,7 @@ function assertMountScope(
     return;
   }
   if (context.kind === 'runtime-file') {
-    if (!stat.isFile() || source !== destination || !context.allowedRuntimeFiles.has(source)) {
+    if (!stat.isFile() || context.allowedRuntimeFiles.get(source) !== destination) {
       throw new Error(`HARNESS_NATIVE_${label}_MOUNT_OUTSIDE_ALLOWLIST`);
     }
     return;
@@ -308,13 +299,21 @@ function assertMountScope(
   }
 }
 
-function validateRuntimeFiles(values: readonly string[]): ReadonlySet<string> {
+function validateRuntimeFiles(
+  values: readonly (string | NativeRuntimeMount)[],
+): ReadonlyMap<string, string> {
   if (values.length === 0) throw new Error('HARNESS_NATIVE_RUNTIME_FILES_REQUIRED');
-  const output = new Set(values.map((path, index) => {
-    const value = existingPath(path, `RUNTIME_FILES[${index}]`);
-    if (!lstatSync(value).isFile()) throw new Error('HARNESS_NATIVE_RUNTIME_FILE_INVALID');
-    mountIdentity(value, false);
-    return value;
+  const output = new Map(values.map((entry, index) => {
+    const rawSource = typeof entry === 'string' ? entry : entry.source;
+    const rawDestination = typeof entry === 'string' ? entry : entry.destination;
+    const source = existingPath(rawSource, `RUNTIME_FILES[${index}].source`);
+    const destination = existingPath(rawDestination, `RUNTIME_FILES[${index}].destination`);
+    if (!lstatSync(source).isFile() || !lstatSync(destination).isFile()
+      || digest(readFileSync(source)) !== digest(readFileSync(destination))) {
+      throw new Error('HARNESS_NATIVE_RUNTIME_FILE_INVALID');
+    }
+    mountIdentity(source, false);
+    return [source, destination] as const;
   }));
   if (output.size !== values.length) throw new Error('HARNESS_NATIVE_RUNTIME_FILE_DUPLICATE');
   return output;

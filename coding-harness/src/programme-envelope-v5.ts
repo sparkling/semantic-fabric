@@ -9,7 +9,9 @@ import {
   assertExactKeys,
   deepFreeze,
 } from './contracts.js';
-import { parseRufloEvidence, type RufloEvidence } from './evidence.js';
+import {
+  parseProgrammeV5RufloEvidence, type ProgrammeV5RufloEvidence,
+} from './evidence.js';
 import { failureCodeForReason } from './failure-code.js';
 import {
   parseMetaHarnessDiagnosticSnapshot,
@@ -52,7 +54,7 @@ export interface ProgrammeEnvelopeV5 {
   readonly authority: typeof DEVELOPMENT_AUTHORITY;
   readonly policy: FrozenProgrammePolicyV1;
   readonly policyFingerprint: string;
-  readonly rufloEvidence: RufloEvidence;
+  readonly rufloEvidence: ProgrammeV5RufloEvidence;
   readonly rufloEvidenceDigest: string;
   readonly receiptChain: ProgrammeReceiptChainV5;
   readonly diagnosticBlob: string;
@@ -64,7 +66,7 @@ export interface ProgrammeEnvelopeV5 {
 
 export interface ProgrammeEnvelopeInputV5 {
   readonly policy: FrozenProgrammePolicyV1;
-  readonly rufloEvidence: RufloEvidence;
+  readonly rufloEvidence: ProgrammeV5RufloEvidence;
   readonly receipt: Receipt;
   readonly diagnosticBlob: string;
 }
@@ -168,7 +170,7 @@ function assembleEnvelope(input: Readonly<{
   const receiptChain = verifyOneReceipt(input.receiptChain);
   const receipt = receiptChain.receipts[0];
   if (receipt === undefined) throw new Error('HARNESS_PROGRAMME_ENVELOPE_V5_RECEIPT_MISSING');
-  const rufloEvidence = parseRufloEvidence(input.rufloEvidence);
+  const rufloEvidence = parseProgrammeV5RufloEvidence(input.rufloEvidence);
   const rufloEvidenceDigest = digestValue(rufloEvidence);
   const diagnostics = parseDiagnosticBlob(input.diagnosticBlob, policy);
   if (receipt.protectedInputs[policy.snapshot.gateContract.envelope.diagnosticBlobPath]
