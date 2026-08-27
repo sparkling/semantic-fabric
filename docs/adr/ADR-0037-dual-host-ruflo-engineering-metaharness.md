@@ -122,15 +122,14 @@ build or pre-patch artifact is never candidate evidence. One same-host retry is
 allowed only for a classified transient transport/process failure. Cancellation
 propagates to process groups and produces a failure/cancellation receipt.
 
-The acceptance contract is schema v2 and programme-oriented rather than
-hard-coded to issue #8. It carries a bounded work-item identifier, objective,
-invariants, exclusions, route tags and difficulty, required QE profiles, and an
-explicit candidate oracle. The only admitted oracle mode is currently
-`exact-reference`; an unknown or future `verifier-only` mode fails closed until
-its transaction semantics are implemented and accepted. The issue-#8 launcher
-remains the first sealed fixture, while its prompt, routing metadata, and QE
-requirements now come from the protected contract rather than controller
-literals.
+The frozen issue-#8 acceptance path remains schema v2 with the
+`exact-reference` oracle. The reusable contract foundation also accepts schema
+v3 `verifier-only` tasks whose admitted paths, generated outputs, command
+evidence and QE profiles are derived from protected task data and bound through
+a versioned Rust runtime profile. Unknown schemas and oracle modes fail closed.
+The issue-#8 launcher remains the first sealed fixture; schema-v5 programme
+acceptance stays disabled until its evaluator, envelope and trusted-launcher
+emitter are implemented and independently verified.
 
 ### 4. Policy and isolation
 
@@ -368,6 +367,16 @@ counts, a programme-oriented schema-v2 task contract, and protected dormant
 retrieval-flywheel controls. The harness builds and passes its provider-free
 test fleet. It has no publication or evolution path, and all harness source
 files remain under 500 lines.
+
+The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
+`f8db1e0`, `7a5244a`, `6e7c153`, and `b40dbc6`. H0a now freezes schema-v5 gate
+law, strict duplicate-key parsing, versioned task/runtime derivation, an
+externally anchored policy fingerprint, and authoritative protected-input
+bindings for the harness manifest, task, controller build, controller lock and
+frozen Cargo lock. Frozen schema-v4 replay and AQE 3.13.10 identity remain
+unchanged. This is dormant policy infrastructure, not acceptance: H0b evaluator
+and envelope work is in progress, H0c launcher activation is pending, and v5
+dispatch still fails closed.
 
 Development runs 03–24 emitted fail-closed receipts while exposing and closing
 native containment, egress, response-bound, frozen-registry, timeout, and

@@ -232,12 +232,15 @@ time, output, concurrency, rate-limit, and receipt bounds. The harness has no
 commit, push, publication, deployment, or promotion authority and never uses
 provider API keys or OpenRouter.
 
-Its schema-v2 acceptance contract is reusable across programme work items: the
-protected task declares its objective, invariants, exclusions, routing metadata,
-QE profiles, and candidate oracle. Only the fail-closed `exact-reference` oracle
-is implemented today. The trusted executable launcher remains the sealed issue
-#8 fixture; adding task selection and task-specific QE collectors is still
-required before other manifest entries can execute.
+The frozen issue-#8 path remains a schema-v2 `exact-reference` transaction. The
+reusable foundation now also parses schema-v3 `verifier-only` tasks and derives
+their admitted paths, generated outputs, commands and QE evidence from protected
+task data through a versioned Rust runtime binding. Commit `b40dbc6` adds the
+strict, externally anchored schema-v5 replay-policy foundation while preserving
+the frozen v4 parser and delegating unambiguous schema-v4 bytes to it unchanged.
+Schema v5 is still disabled: its evaluator, envelope and trusted-launcher
+emitter must land in H0b/H0c before another manifest task can produce accepted
+programme evidence.
 
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,

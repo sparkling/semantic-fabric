@@ -8,6 +8,15 @@
 **Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark
 evidence. GitHub issues and pull requests are deliberately not programme inputs.
 
+## Execution status
+
+| Slice | Status | Verified evidence |
+|---|---|---|
+| H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
+| H0b — schema-v5 evaluator, scorer and envelope | In progress | Parallel evaluator/scorer/envelope implementation; no accepted v5 envelope yet |
+| H0c — trusted-launcher activation | Pending | Schema v5 remains fail-closed and disabled until exact tool, Ruflo and receipt evidence is emitted and replayed |
+| M0–M7 — application completion | Gated | Existing product evidence remains valid, but no milestone is marked complete until its milestone QA gate passes |
+
 ## Outcome
 
 Complete semantic-fabric as a state-of-the-art, virtualisation-only knowledge

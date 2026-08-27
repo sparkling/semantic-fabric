@@ -170,6 +170,16 @@ implemented. Each affected ADR must gain a dated implementation-status note as
 its increment lands. ADR-0014's previously deferred areas graduate into this
 programme, but this ADR does not itself mark them implemented.
 
+### 7. Implementation status (2026-08-27)
+
+The H0a reusable-harness foundation is implemented in `b40dbc6`: frozen v5 gate
+law and task/runtime derivation, strict schema dispatch, an externally anchored
+policy fingerprint, and authoritative protected-input bindings. Schema v4
+remains frozen and schema v5 remains disabled. H0b evaluator/scorer/envelope
+work is in progress; H0c trusted-launcher activation and every M0–M7 milestone
+remain pending their executable gates. This status does not raise the 44/100
+application-readiness baseline or claim product completion.
+
 ## Acceptance
 
 The acceptance condition was satisfied on 2026-08-27 when the maintainer

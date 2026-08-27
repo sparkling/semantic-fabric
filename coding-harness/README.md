@@ -61,12 +61,18 @@ result can be accepted, and execution failure revokes active broker sessions.
   execution, first-party-only transport, routing, retry, breakers, and review
   independence.
 - `acceptance-task.ts`, `contracts.ts`, `policy.ts`, `evidence.ts`, and
-  `receipts.ts` validate the schema-v2 programme task, Ruflo, Agentic-QE,
-  protected-input, and receipt boundaries. Objective, invariants, exclusions,
-  route metadata, QE profiles, and the exact-reference oracle are task data, not
-  controller literals.
+  `receipts.ts` validate schema-v2 exact-reference and schema-v3 verifier-only
+  tasks, Ruflo, Agentic-QE, protected-input, and receipt boundaries. Objective,
+  invariants, exclusions, route metadata, commands, generated outputs, QE
+  profiles, and oracle mode are protected task data, not controller literals.
 - `issue-8-programme-envelope.ts` binds the project-owned acceptance score to
-  the exact receipt and makes a rejected score a non-zero launcher result.
+  the frozen schema-v4 issue-8 receipt and makes a rejected score a non-zero
+  launcher result.
+- `programme-envelope.ts`, `programme-policy-v5.ts`,
+  `programme-gate-contract-v1.ts`, and `programme-task-runtime-v1.ts` provide the
+  dormant schema-v5 dispatch and externally anchored replay-policy foundation.
+  V5 remains fail-closed until its evaluator, envelope and launcher emitter are
+  implemented and independently verified.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
   its exact Git blob digest must match the candidate receipt.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
