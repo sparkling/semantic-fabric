@@ -104,6 +104,36 @@ describe('programme-v5 private receipt IO', () => {
     )).toThrow('HARNESS_PROGRAMME_V5_RECEIPT_EXISTS');
   });
 
+  it('rejects a symlinked claim directory before creating a claim', () => {
+    const repository = fixtureRepository();
+    const invocation = executionInvocation(repository);
+    const review = policyReviewReceipt();
+    const authority = temporary('programme-v5-claim-authority-');
+    const outside = temporary('programme-v5-claim-outside-');
+    const claimKey = sha256(canonicalClaimKey(invocation, review));
+    symlinkSync(outside, join(authority, 'programme-v5-claims'));
+
+    expect(() => claimProgrammeV5Execution(invocation, review, authority))
+      .toThrow('HARNESS_PROGRAMME_V5_CLAIM_AUTHORITY_INVALID');
+    expect(existsSync(join(outside, `${claimKey}.json`))).toBe(false);
+  });
+
+  it('treats a dangling claim symlink as an existing fail-closed artifact', () => {
+    const repository = fixtureRepository();
+    const invocation = executionInvocation(repository);
+    const review = policyReviewReceipt();
+    const authority = temporary('programme-v5-claim-authority-');
+    mkdirSync(join(authority, 'programme-v5-claims'), { mode: 0o700 });
+    const claimKey = sha256(canonicalClaimKey(invocation, review));
+    const path = programmeV5AuthorityClaimPath(claimKey, authority);
+    const outside = join(temporary('programme-v5-dangling-claim-target-'), 'claim.json');
+    symlinkSync(outside, path);
+
+    expect(() => claimProgrammeV5Execution(invocation, review, authority))
+      .toThrow('HARNESS_PROGRAMME_V5_RECEIPT_EXISTS');
+    expect(existsSync(outside)).toBe(false);
+  });
+
   it('rejects a tampered policy-review digest before creating an execution claim', async () => {
     const repository = fixtureRepository();
     const store = temporary('programme-v5-receipt-store-');
