@@ -55,5 +55,10 @@ async fn accumulated_row_lexical_size_is_bounded() {
         .await
         .err()
         .expect("the aggregate row cap must reject two individually valid values");
-    assert!(error.to_string().contains("row requires more than 8"));
+    let message = error.to_string();
+    assert!(
+        message.contains("row requires 10 lexical bytes")
+            && message.contains("per-row limit of 8 bytes"),
+        "unexpected row-limit error: {message}"
+    );
 }
