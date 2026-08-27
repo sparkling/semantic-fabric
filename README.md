@@ -14,9 +14,10 @@ relational databases through R2RML mappings. It has no JVM and keeps no copy of
 the instance data: only the ontology `T` and mappings `M` live in the engine;
 source rows are streamed on demand and discarded.
 
-The public serving path currently admits **SQLite, PostgreSQL, and MySQL**.
-Cloud/REST adapter prototypes are library-only and deliberately not admitted to
-`serve` yet. See [Current status](#current-status-and-open-work).
+The public serving path admits **SQLite, PostgreSQL, and MySQL**, plus embedded
+**DuckDB behind the opt-in `duckdb-backend` feature**. Cloud/REST adapter
+prototypes are library-only and deliberately not admitted to `serve` yet. See
+[Current status](#current-status-and-open-work).
 
 ## Why this exists
 
@@ -50,7 +51,7 @@ algebra ── unfold against mappings M + tier-1 T-box saturation
     │ ISWC-2018 base translation and operator-tree normalization
     ▼
 relational plan ── dialect SQL + parameters
-    │ SQLite / PostgreSQL / MySQL
+    │ SQLite / PostgreSQL / MySQL / opt-in DuckDB
     ▼
 live source ── set work and native spilling
     │ bounded RowStream batches
@@ -112,12 +113,31 @@ cargo run -p sf-cli -- serve \
 cargo run -p sf-cli -- serve \
   --source "mysql://user:${MYSQL_PASSWORD}@127.0.0.1/app" \
   --mapping /path/to/mapping.ttl
+
+# DuckDB; existing files only, through the restricted read-only opener
+cargo run -p sf-cli --features duckdb-backend -- serve \
+  --source duckdb:/path/to/app.duckdb \
+  --mapping /path/to/mapping.ttl
 ```
 
 Optional flags include `--ontology`, `--bind`, `--timeout-secs`,
-`--max-query-len`, `--pg-pool-size`, `--pg-pool-wait-secs`, and
-`--sqlite-pool-size`. The default endpoint is
+`--max-query-len`, `--pg-pool-size`, `--pg-pool-wait-secs`,
+`--sqlite-pool-size`, and `--duckdb-pool-size` (feature-gated, default 1,
+maximum 8). The default endpoint is
 `http://127.0.0.1:7878/sparql`.
+
+The DuckDB serving contract pins the bundled engine at `duckdb-rs =1.10505.0`
+and is release-tested on `x86_64-unknown-linux-gnu`. It admits an existing local
+regular file on a filesystem with normal local locking; symlinks resolve once
+at startup, network filesystems and concurrent writers are unsupported, and
+the source stays read-only. The service does not add an exclusive application
+lock, so operator-enforced single ownership is required. File identity, schema,
+and cached plans are one startup snapshot, so data-file replacement, schema
+change, and engine upgrade all require a clean stop and restart. Before an
+engine-version bump, back up the file and validate a copy with the new binary;
+downgrade compatibility is not promised. Other targets are best effort until
+they have an equivalent CI admission lane. See
+[ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
 
 ```bash
 curl -s 'http://127.0.0.1:7878/sparql' \
@@ -143,9 +163,11 @@ pool, and cancellation controls from
   graph maps, and streamed term reconstruction.
 - RDF-star quoted triples in native RDF 1.2 reification form, including path
   joins and named-graph composition.
-- SQLite, PostgreSQL, and MySQL execution through the shared `SqlBackend`
-  contract. The published W3C figures currently cover SQLite and PostgreSQL;
-  MySQL has adapter, endpoint, and live differential coverage.
+- SQLite, PostgreSQL, MySQL, and opt-in DuckDB execution through the shared
+  `SqlBackend` contract. DuckDB has a non-skipping embedded W3C lane, an
+  SQLite differential, a live-PostgreSQL differential when that CI service is
+  available, a deterministic million-row bounded-first-result receipt,
+  restricted file-backed endpoint tests, and cyclic-path execution coverage.
 - A governed HTTP endpoint with streaming, content negotiation, bounded pools,
   request cancellation, and overload shedding.
 
@@ -158,6 +180,10 @@ harness score:
   is `R2RMLTC0002f`; the per-dialect fixture denominators are documented in
   [ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md) and
   [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md).
+- DuckDB's embedded, non-skipping admission lane passes **61/63 R2RML** and
+  **22/23 Direct Mapping** cases. Its two expected datatype deviations and one
+  unsupported fixture are adjudicated explicitly in
+  [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
 - Differential suites compare flat and operator-tree planners with native
   materialized RDF and spareval across ordinary queries, paths, graphs, and
   RDF-star.
@@ -175,6 +201,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --all-targets
 cargo test --workspace
 cargo run -p sf-cli -- conformance
+cargo test -p sf-conformance --no-default-features --features duckdb-backend \
+  --test w3c_duckdb_suite --test differential_duckdb_sqlite
 ```
 
 ## Open-issue remediation closeout
@@ -188,16 +216,17 @@ record the complete decisions and evidence.
 | [#8](https://github.com/sparkling/semantic-fabric/issues/8) incompatible binding pruning | Closed: every incompatible subject/predicate/object/class/graph bind prunes its branch | `10dedd4`; flat/tree/materialized-oracle regressions; green CI `8b66428` |
 | [#9](https://github.com/sparkling/semantic-fabric/issues/9) graph-union wrong results | Closed: normalized subject/POM graph union and default-graph handling across BGP, paths, and RDF-star | `5218874`; W3C and differential regressions; green CI `8b66428` |
 | [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Closed: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; the MySQL dependency chain is also upgraded | `5b8415c`; `mysql_async 0.37.0`; one `libsqlite3-sys` link target; green CI `8b66428` |
-| [#7](https://github.com/sparkling/semantic-fabric/issues/7) cloud backends | Open and deliberately deferred. Only SQLite, PostgreSQL, and MySQL are admitted to `serve` | `9d709dd`; provider-specific protocol/security gates remain |
+| [#7](https://github.com/sparkling/semantic-fabric/issues/7) provider admission | Embedded DuckDB is admitted behind an opt-in feature; cloud/REST providers remain deliberately deferred | ADR-0010/0024/0036; DuckDB W3C, differential, restricted-endpoint, and restart-drift tests |
 | [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Closed: federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added; green CI and Pages `8b66428` |
 
 The `mysql_async 0.37.0` upgrade resolves the `lru 0.16.4` unsoundness warning,
-and a fresh resolution selects fixed `h2`. `cargo audit` is a blocking CI gate.
-Its narrowly documented `RUSTSEC-2026-0235` exception is limited to the unused
-optional `rust_decimal` `rkyv` feature: the workspace feature tree proves it is
-not activated, and the current upstream `^0.7` requirement cannot admit the
-fixed `rkyv >=0.8.17`. The exception must be removed when that upstream
-requirement is fixed. Cloud adapters are not relabelled production-ready merely
+and a fresh resolution selects fixed `h2`. `cargo audit` is a blocking CI gate;
+every temporary advisory exception is documented in `.cargo/audit.toml` with
+its upstream constraint and removal condition. DuckDB adds no exception. In
+particular, `RUSTSEC-2026-0235` is limited to the unused optional
+`rust_decimal` `rkyv` feature: the workspace feature tree proves it is not
+activated, and the current upstream `^0.7` requirement cannot admit the fixed
+`rkyv >=0.8.17`. Cloud adapters are not relabelled production-ready merely
 because mocked happy paths exist.
 
 ## Engineering MetaHarness status
@@ -252,15 +281,15 @@ claim. It is a small localhost workload, not a production sizing result.
 
 | Area | Honest status |
 |---|---|
-| Serving | Working read-only SPARQL 1.2 Protocol endpoint over SQLite, PostgreSQL, and MySQL |
+| Serving | Working read-only SPARQL 1.2 Protocol endpoint over SQLite, PostgreSQL, MySQL, and opt-in embedded DuckDB |
 | Cloud/REST adapters | Prototype/library-only; Databricks, AWS Athena, Snowflake, BigQuery, Trino/Presto and other adapters are not admitted to `serve` |
 | Property paths | Broad support; explicit `501` residuals remain for bound-endpoint, nested-closure, shape-mismatched, and some reflexive composite forms |
 | Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
 | Federation | Cross-RDBMS planning is in scope; issuing remote SPARQL `SERVICE` queries is not. semantic-fabric can itself be used as a private SERVICE endpoint |
 | Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
-| Production hardening | Reliability, deployment-edge security, packaging, horizontal scale, hot reload, schema-drift detection, and result caching remain tracked in proposed ADR-0014 |
+| Production hardening | Reliability, deployment-edge security, packaging, horizontal scale, hot reload, and result caching remain tracked in proposed ADR-0014; DuckDB schema changes are restart-only by contract |
 | Accepted designs not wired | Observability/configuration (ADR-0011), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | **Release-blocking:** fresh-lock `cargo audit` fails on `RUSTSEC-2026-0235`; `RUSTSEC-2026-0253` remains visible as an unsoundness warning. Neither is ignored |
+| Dependency security | `cargo audit` is blocking and passes with the documented temporary upstream exceptions; DuckDB adds no exception |
 
 Unsupported capabilities fail explicitly rather than returning wrong answers.
 

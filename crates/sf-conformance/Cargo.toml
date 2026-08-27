@@ -9,6 +9,7 @@ description = "semantic-fabric W3C RDB2RDF conformance harness + EARL + M⋈T SH
 [features]
 default = ["sqlserver-backend"]
 sqlserver-backend = ["sf-sql/sqlserver-backend"]
+duckdb-backend = ["dep:duckdb", "sf-sql/duckdb-backend", "sf-sparql/duckdb-backend"]
 
 [dependencies]
 sf-core.workspace = true
@@ -30,6 +31,7 @@ tokio-postgres = "0.7"
 # server, executed via the packet-streamed exec_iter cursor. Skips gracefully when
 # no server is reachable (probe / SF_MYSQL_URL), so CI stays green.
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] }
+duckdb = { version = "=1.10505.0", features = ["bundled"], optional = true }
 # M⋈T SHACL gate — rudof `shacl` in Native mode (ADR-0005 / ADR-0019 G4). The
 # `oxrdf` it pulls is 0.3.3, identical to the workspace pin (no second RDF stack).
 shacl = "0.3"
@@ -45,3 +47,11 @@ spargebra.workspace = true
 [[test]]
 name = "differential_mssql"
 required-features = ["sqlserver-backend"]
+
+[[test]]
+name = "w3c_duckdb_suite"
+required-features = ["duckdb-backend"]
+
+[[test]]
+name = "differential_duckdb_sqlite"
+required-features = ["duckdb-backend"]

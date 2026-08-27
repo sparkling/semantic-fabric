@@ -401,11 +401,11 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 ///   (NPS) is the bag exception — its `UNION ALL` hop is kept un-`DISTINCT`ed.
 /// * `ZeroOrOne` (`p?`) — the hop ∪ the reflexive `(x, x)` pairs over the active
 ///   graph's nodes (only over a single-predicate bare leaf, `unfold`-enforced).
-/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` closure: the recursive member keeps an
-///   `sf_d` depth counter, its body a `UNION` deduped on `(sf_s, sf_o, sf_d)` so a
-///   pair revisited around a cycle is NOT collapsed there — `sf_d < max_depth` is
-///   the *sole* recursion terminator (ADR-0010; SQLite has no `CYCLE` clause — the
-///   later MB-4 wave). The outer `SELECT DISTINCT` collapses the depth dimension.
+/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` closure with an `sf_d` depth
+///   backstop. DuckDB additionally carries a visited-node list and refuses a
+///   repeated target within a traversal; other dialects currently terminate at
+///   the explicit depth bound. The outer `SELECT DISTINCT` collapses the depth
+///   and cycle-detection dimensions.
 /// * `ZeroOrMore` (`P*`) — `OneOrMore` plus the reflexive `(x, x)` pairs at depth 0.
 ///
 /// The depth ints and the bound are engine constants (not query data), so — like
@@ -457,15 +457,35 @@ fn path_with_prelude(
             } else {
                 one_hop
             };
-            let recursive = format!(
-                "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
-                 FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} WHERE c.{sf_d} < {max}",
-                max = pc.max_depth
-            );
-            format!(
-                "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
-                 {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
-            )
+            if dialect == Dialect::DuckDb {
+                let sf_seen = dialect.quote_ident("sf_seen");
+                let anchor_with_seen = format!(
+                    "SELECT a.{sf_s}, a.{sf_o}, a.{sf_d}, [a.{sf_o}] AS {sf_seen} \
+                     FROM ({anchor}) a"
+                );
+                let recursive = format!(
+                    "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d}, \
+                     list_append(c.{sf_seen}, h.{sf_o}) AS {sf_seen} \
+                     FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} \
+                     WHERE c.{sf_d} < {max} AND NOT list_contains(c.{sf_seen}, h.{sf_o})",
+                    max = pc.max_depth
+                );
+                format!(
+                    "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}, {sf_seen}) \
+                     AS ({anchor_with_seen} UNION {recursive}), {cte}({sf_s}, {sf_o}) AS \
+                     (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
+                )
+            } else {
+                let recursive = format!(
+                    "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
+                     FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} WHERE c.{sf_d} < {max}",
+                    max = pc.max_depth
+                );
+                format!(
+                    "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
+                     {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
+                )
+            }
         }
     })
 }
@@ -953,8 +973,8 @@ fn emit_subplan_sql(plan: &crate::Plan, dialect: Dialect) -> Result<(String, Vec
 }
 
 /// Rebase positional `$N` placeholders in `sql` from base 1 to start at `base+1`,
-/// for PostgreSQL numbered placeholders. SQLite uses `?` (positional by text order,
-/// no numbering), so for SQLite (or when `base == 0`) returns `sql` unchanged.
+/// for PostgreSQL numbered placeholders. SQLite and DuckDB use `?` (positional
+/// by text order), so they (or `base == 0`) return `sql` unchanged.
 fn rebase_placeholders(sql: &str, dialect: Dialect, base: usize) -> Result<String> {
     if dialect != Dialect::Postgres || base == 0 {
         return Ok(sql.to_owned());
@@ -1201,15 +1221,15 @@ fn render_cond(
 /// some other operator) — see its own doc comment for why an explicit
 /// wrapper is required rather than assumed.
 ///
-/// **Dialect support.** Only the three PRODUCTION-WIRED dialects
-/// (`sf_sql::Dialect`'s own grouping) are implemented: PostgreSQL/SQLite via
-/// ANSI `||`, MySQL via `CONCAT(...)` (`||` is boolean OR there by default,
-/// per MySQL's non-default `PIPES_AS_CONCAT` sql_mode). Every OTHER dialect
+/// **Dialect support.** The public-serving dialects are implemented:
+/// PostgreSQL/SQLite/DuckDB via ANSI `||`, MySQL via `CONCAT(...)` (`||` is
+/// boolean OR there by default, per MySQL's non-default `PIPES_AS_CONCAT`
+/// sql_mode). Every OTHER dialect
 /// returns `Unsupported` rather than guessing — e.g. SQL Server's own
 /// `CONCAT()` function treats `NULL` as an EMPTY STRING (breaking the
 /// soundness argument above outright), and `+`, SQL Server's NULL-safe
-/// concat operator, is unverified against this rendering; Oracle/DuckDB/etc.
-/// are ANSI-`||`-following by reputation but likewise unverified here —
+/// concat operator, is unverified against this rendering; Oracle and other
+/// remaining dialects are likewise unverified here —
 /// "sound over complete", the same bar `str_match`'s PostgreSQL-only `LIKE`
 /// pushdown already sets for an analogous dialect-behavior gap.
 fn render_template_concat(
@@ -1241,7 +1261,9 @@ fn render_template_concat(
         });
     }
     match dialect {
-        Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
+        Dialect::Postgres | Dialect::Sqlite | Dialect::DuckDb => {
+            Ok(format!("({})", parts.join(" || ")))
+        }
         Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
         other => Err(Error::Unsupported(format!(
             "template-shape-mismatch equality (SQL CONCAT fallback) is not implemented for \
@@ -1310,7 +1332,9 @@ pub(crate) fn render_template_inline(
         });
     }
     match dialect {
-        Dialect::Postgres | Dialect::Sqlite => Ok(format!("({})", parts.join(" || "))),
+        Dialect::Postgres | Dialect::Sqlite | Dialect::DuckDb => {
+            Ok(format!("({})", parts.join(" || ")))
+        }
         Dialect::MySql => Ok(format!("CONCAT({})", parts.join(", "))),
         other => Err(Error::Unsupported(format!(
             "ADR-0034 D2 rendered-projection pooling (SQL CONCAT fallback) is not implemented \
@@ -1361,7 +1385,7 @@ fn sql_string_literal(text: &str) -> String {
 /// natively). Parse depth is CONSTANT regardless of the encode-set size or
 /// the runtime string length — confirmed fast (single-digit milliseconds)
 /// against the SAME realistic OR-IS-NULL-wrapped, multi-column WHERE clause
-/// that broke the flat-chain design, for all three dialects.
+/// that broke the flat-chain design, for all supported dialects.
 ///
 /// **Byte- vs. character-oriented, per dialect — not interchangeable.**
 /// SQLite's/MySQL's plain `LENGTH()`/`SUBSTRING()` on a TEXT argument are
@@ -1419,6 +1443,7 @@ fn percent_encode_col(col_sql: &str, dialect: Dialect) -> Result<String> {
         Dialect::Sqlite => percent_encode_col_sqlite(col_sql),
         Dialect::MySql => percent_encode_col_mysql(col_sql),
         Dialect::Postgres => percent_encode_col_postgres(col_sql),
+        Dialect::DuckDb => percent_encode_col_duckdb(col_sql),
         other => {
             return Err(Error::Unsupported(format!(
                 "IRI-template percent-encoding is not implemented for {other:?} → 501 \
@@ -1530,6 +1555,28 @@ END, '' ORDER BY ord\
     )
 }
 
+/// DuckDB: character-oriented like PostgreSQL, but `string_split(text, '')`
+/// is the verified character iterator. The explicit non-empty predicate keeps
+/// DuckDB's single empty split element from becoming a spurious `%00`.
+fn percent_encode_col_duckdb(col: &str) -> String {
+    format!(
+        "(SELECT CASE WHEN {col}::text IS NULL THEN NULL ELSE COALESCE((\
+SELECT string_agg(\
+CASE \
+WHEN ascii(ch) BETWEEN 48 AND 57 \
+OR ascii(ch) BETWEEN 65 AND 90 \
+OR ascii(ch) BETWEEN 97 AND 122 \
+OR ch IN ('-', '.', '_', '~') \
+OR ascii(ch) >= 128 \
+THEN ch \
+ELSE '%' || UPPER(LPAD(TO_HEX(ascii(ch)), 2, '0')) \
+END, '' ORDER BY ord\
+) FROM unnest(string_split({col}::text, '')) WITH ORDINALITY AS t(ch, ord) \
+WHERE length({col}::text) > 0\
+), '') END)"
+    )
+}
+
 fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {
     // The Direct Mapping no-PK blank-node identifier is keyed on the source's
     // physical row id (`sf-mapping`'s synthetic `rowid` column). SQLite exposes
@@ -1543,6 +1590,9 @@ fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -
     let name = resolve_col(&c.column, actuals.get(&c.alias).map(Vec::as_slice));
     format!("t{}.{}", c.alias, dialect.quote_ident(name))
 }
+
+#[cfg(test)]
+mod duckdb_tests;
 
 #[cfg(test)]
 mod tests {

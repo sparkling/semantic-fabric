@@ -7,7 +7,9 @@ rust-version.workspace = true
 description = "semantic-fabric source/SQL layer: dialect emission, introspection, streaming, semi-join cost (ADR-0006)"
 
 [features]
-## Enable the DuckDB backend (embedded DuckDB via the `duckdb` crate, `bundled` feature).
+## Enable the DuckDB library adapter (embedded DuckDB via the `duckdb` crate,
+## `bundled` feature). Public serving also requires sf-serve's separate
+## feature and source-admission layer.
 duckdb-backend = ["dep:duckdb"]
 ## Enable the SQL Server backend (tiberius TDS driver, async, @Pn placeholders).
 ## Requires `tokio-util` compat feature for TcpStream → futures_io bridge.
@@ -35,7 +37,7 @@ futures-util = "0.3"                                    # poll the tokio-postgre
 bytes = "1"                                            # BytesMut, for the LexicalParam ToSql wrapper (ADR-0024 M3, moved from sf-sparql)
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] } # MySQL source: async query + streaming (WS-D)
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }    # SQLite serve-lane bridge (ADR-0024 §4.1): spawn_blocking + cap-1 mpsc so the !Send Connection lives only on the blocking thread; rt-multi-thread for DuckDb backend tests; macros for #[tokio::test] in backend unit tests, needed for standalone `cargo test -p sf-sql` (workspace-wide runs previously masked this via feature unification)
-duckdb = { version = "1.1", features = ["bundled"], optional = true } # DuckDB source: embedded OLAP engine (ADR-0024 M8)
+duckdb = { version = "=1.10505.0", features = ["bundled"], optional = true } # DuckDB source: embedded OLAP engine (ADR-0024 M8)
 # SQL Server backend — TDS protocol via tiberius, with compat shim for tokio TcpStream.
 tiberius = { version = "0.12", default-features = false, features = ["rustls", "tds73"], optional = true }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }

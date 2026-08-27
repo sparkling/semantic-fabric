@@ -2,19 +2,22 @@
 //!
 //! **Every** result path streams end to end through one generic streamer per query
 //! form — none collects the result set or the whole serialised body. Since ADR-0024
-//! M5 the three backends share a single async pipeline: each `spawn`ed task acquires
-//! its backend (SQLite `SqliteOwnedBackend` over a `spawn_blocking` cap-1 bridge; PG
-//! `PgBackend<Arc<Client>>`; MySQL a DEDICATED pooled `Conn`), then drives the
+//! M5 the supported backends share a single async pipeline: each `spawn`ed task
+//! acquires its backend (SQLite `SqliteOwnedBackend` over a `spawn_blocking` cap-1
+//! bridge; PG `PgBackend<Arc<Client>>`; MySQL a DEDICATED pooled `Conn`; DuckDB a
+//! cloned read-only connection), then drives the
 //! driver-agnostic core ([`sf_sparql::exec_core::select_each_async`] /
 //! [`construct_each_async`](sf_sparql::exec_core::construct_each_async)) serialising
 //! each row/triple into a small shared buffer ([`SharedBuf`]) and `send().await`ing a
 //! chunk once it fills — backpressure flows straight back to the server-side cursor
 //! (PG `query_raw`, SQLite cap-1 bridge, MySQL packet-bounded `exec_iter`).
 //!
-//! A slow/aborted client (receiver dropped) makes the next send fail → the producer
-//! stops (cancel-on-drop, ADR-0010 §C), and a passed deadline aborts at the next
-//! chunk/row (the request timeout). ASK is a single boolean — bounded by
-//! construction — and is serialised whole via [`collected_body`].
+//! A slow/aborted client and the absolute request deadline are raced against the
+//! entire driver future, including work before its first row. Losing either race
+//! drops the driver immediately: interrupt-capable adapters request cancellation,
+//! while the others stop at their next send or cursor boundary. ASK is a single
+//! boolean — bounded by construction — and is serialised whole via
+//! [`collected_body`].
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -182,9 +185,7 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            drive(sink)
-                .await
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            drive_until_closed_or_deadline(drive(sink), &tx, deadline).await?;
             let writer = writer
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -233,9 +234,7 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            drive(sink)
-                .await
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            drive_until_closed_or_deadline(drive(sink), &tx, deadline).await?;
             let ser = sink_ser
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -250,6 +249,31 @@ where
         }
     });
     Body::from_stream(ReceiverStream::new(rx))
+}
+
+async fn drive_until_closed_or_deadline(
+    drive: BoxedResult,
+    tx: &Sender<Result<Bytes, io::Error>>,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
+    let client_closed = tx.closed();
+    match deadline {
+        Some(deadline) => {
+            tokio::select! {
+                result = drive => result.map_err(|e| io::Error::other(e.to_string())),
+                () = client_closed => Err(io::Error::new(io::ErrorKind::BrokenPipe, "HTTP response body dropped")),
+                () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "request timeout (ADR-0010)"))
+                }
+            }
+        }
+        None => {
+            tokio::select! {
+                result = drive => result.map_err(|e| io::Error::other(e.to_string())),
+                () = client_closed => Err(io::Error::new(io::ErrorKind::BrokenPipe, "HTTP response body dropped")),
+            }
+        }
+    }
 }
 
 /// One solution row's bound `(variable, term)` pairs in projection order (unbound

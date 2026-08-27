@@ -37,7 +37,8 @@ enum Command {
 /// `serve` flags (ADR-0019 G8, ADR-0010/0011). Read-only query endpoint.
 #[derive(clap::Args)]
 struct ServeArgs {
-    /// Source: `sqlite:<path>` (path may be `:memory:`), `pg:<conninfo>`, or `mysql://<url>`.
+    /// Source: `sqlite:<path>`, `pg:<conninfo>`, `mysql://<url>`, or (when built
+    /// with `duckdb-backend`) `duckdb:<existing-path>`.
     #[arg(long)]
     source: String,
     /// R2RML mapping document (Turtle).
@@ -65,6 +66,10 @@ struct ServeArgs {
     /// Read-only connection pool size for a file-backed SQLite source.
     #[arg(long, default_value_t = 4)]
     sqlite_pool_size: usize,
+    /// Fixed DuckDB connection-pool size. DuckDB already parallelizes within a
+    /// query, so one connection is the resource-safe default (maximum: 8).
+    #[arg(long, default_value_t = 1)]
+    duckdb_pool_size: usize,
 }
 
 fn main() -> ExitCode {
@@ -88,6 +93,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         pg_pool_size: args.pg_pool_size,
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
         sqlite_pool_size: args.sqlite_pool_size,
+        duckdb_pool_size: args.duckdb_pool_size,
     };
     match serve_blocking(opts) {
         Ok(()) => ExitCode::SUCCESS,
@@ -252,8 +258,23 @@ mod tests {
             pg_pool_size: 16,
             pg_pool_wait_secs: 5,
             sqlite_pool_size: 4,
+            duckdb_pool_size: 1,
         };
         assert_eq!(serve(opts), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn serve_help_describes_feature_gated_duckdb_source_support() {
+        use clap::CommandFactory;
+
+        let mut command = Cli::command();
+        let serve = command
+            .find_subcommand_mut("serve")
+            .expect("serve subcommand");
+        let help = serve.render_long_help().to_string();
+        assert!(help.contains("duckdb:<existing-path>"), "{help}");
+        assert!(help.contains("duckdb-backend"), "{help}");
+        assert!(help.contains("--duckdb-pool-size"), "{help}");
     }
 
     #[test]

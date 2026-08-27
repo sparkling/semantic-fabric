@@ -6,6 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 description = "semantic-fabric command-line interface — the single binary (ADR-0006)"
 
+[features]
+# DuckDB remains opt-in because it adds a bundled native engine and a distinct
+# serving admission lane.
+duckdb-backend = ["sf-serve/duckdb-backend"]
+
 [[bin]]
 name = "semantic-fabric"
 path = "src/main.rs"

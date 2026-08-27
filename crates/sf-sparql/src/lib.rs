@@ -71,6 +71,8 @@ pub mod dump;
 pub mod emit;
 pub mod exec;
 pub mod exec_core;
+#[cfg(feature = "duckdb-backend")]
+pub mod exec_duckdb;
 pub mod exec_mysql;
 pub mod exec_pg;
 mod graph_map;

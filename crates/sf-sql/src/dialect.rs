@@ -29,9 +29,10 @@ use crate::error::{Error, Result};
 /// The three original dialects (Postgres, Sqlite, MySql) are production-wired. Every
 /// other variant has an associated [`Dialect::placeholder`], [`Dialect::quote_char`],
 /// and [`Dialect::parser_dialect`] implementation, so SQL can be emitted for all of
-/// them today. Live driver wiring is tiered:
+/// them today. Driver wiring is tiered:
 ///
-/// * **Live-wired**: Postgres, Sqlite, MySql, DuckDb (embedded, requires `duckdb-backend` feature)
+/// * **Public serving path**: Postgres, Sqlite, MySql, DuckDb (embedded;
+///   requires the separate `duckdb-backend` feature and source admission)
 /// * **Wire-compatible**: Redshift (thin alias over PG wire)
 /// * **Scaffolded**: all others (compile + return `Error::Unsupported` at runtime)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,7 +50,8 @@ pub enum Dialect {
     Redshift,
 
     // --- native-driver dialects (ADR-0024 M8) ---------------------------------
-    /// DuckDB — embedded OLAP; `$n` placeholders, `"`-quoted idents.
+    /// DuckDB — feature-gated embedded OLAP source; `?` placeholders,
+    /// `"`-quoted idents.
     DuckDb,
     /// Microsoft SQL Server — TDS protocol; `@Pn` placeholders, `"`-quoted idents.
     SqlServer,
@@ -108,12 +110,16 @@ impl Dialect {
     }
 
     /// Prepare-only metadata probe for a source's result-column names. `LIMIT 0` is
-    /// uniform across all supported dialects: column metadata is available at prepare
-    /// time regardless of LIMIT, and the statement never executes.
+    /// uniform across all supported dialects. DuckDB's driver must execute a
+    /// prepared statement to expose column metadata, so mapping-authored queries
+    /// are wrapped and limited there rather than executed in full.
     pub fn probe_sql(&self, source: &sf_core::ir::LogicalSource) -> String {
         use sf_core::ir::LogicalSource;
         match source {
             LogicalSource::Table(t) => format!("SELECT * FROM {} LIMIT 0", self.quote_ident(t)),
+            LogicalSource::Query(q) if *self == Dialect::DuckDb => {
+                format!("SELECT * FROM ({q}) AS sf_probe LIMIT 0")
+            }
             LogicalSource::Query(q) => q.clone(),
         }
     }
@@ -122,7 +128,7 @@ impl Dialect {
     ///
     /// | Style   | Dialects                                    |
     /// |---------|---------------------------------------------|
-    /// | `$n`    | Postgres, Redshift, DuckDb                  |
+    /// | `$n`    | Postgres, Redshift                          |
     /// | `@Pn`   | SqlServer                                   |
     /// | `:n`    | Oracle                                      |
     /// | `?`     | everything else (positional)                |
@@ -130,7 +136,7 @@ impl Dialect {
     /// The placeholder is the *only* way a value enters generated SQL (ADR-0010 R1).
     pub fn placeholder(self, index: usize) -> String {
         match self {
-            Dialect::Postgres | Dialect::Redshift | Dialect::DuckDb => format!("${index}"),
+            Dialect::Postgres | Dialect::Redshift => format!("${index}"),
             Dialect::SqlServer => format!("@P{index}"),
             Dialect::Oracle => format!(":{index}"),
             _ => "?".to_owned(),
@@ -260,7 +266,7 @@ mod tests {
         assert_eq!(Dialect::Postgres.placeholder(1), "$1");
         assert_eq!(Dialect::Postgres.placeholder(7), "$7");
         assert_eq!(Dialect::Redshift.placeholder(3), "$3");
-        assert_eq!(Dialect::DuckDb.placeholder(2), "$2");
+        assert_eq!(Dialect::DuckDb.placeholder(2), "?");
         assert_eq!(Dialect::SqlServer.placeholder(1), "@P1");
         assert_eq!(Dialect::Oracle.placeholder(2), ":2");
         assert_eq!(Dialect::Sqlite.placeholder(1), "?");
@@ -319,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_sql_limits_table_and_passes_query_through() {
+    fn probe_sql_limits_table_and_handles_query_by_driver_contract() {
         use sf_core::ir::LogicalSource;
         let table = LogicalSource::Table("emp".to_owned());
         assert_eq!(
@@ -328,6 +334,10 @@ mod tests {
         );
         let query = LogicalSource::Query("SELECT 1 AS x".to_owned());
         assert_eq!(Dialect::Postgres.probe_sql(&query), "SELECT 1 AS x");
+        assert_eq!(
+            Dialect::DuckDb.probe_sql(&query),
+            "SELECT * FROM (SELECT 1 AS x) AS sf_probe LIMIT 0"
+        );
     }
 
     #[test]
