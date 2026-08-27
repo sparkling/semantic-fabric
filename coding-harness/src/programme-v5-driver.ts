@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { randomBytes } from 'node:crypto';
-import {
-  acceptanceTaskPrompt,
-  bindAcceptanceTaskToRustProfile,
-  type AcceptanceTaskV3,
-} from './acceptance-task.js';
+import { acceptanceTaskPrompt, bindAcceptanceTaskToRustProfile, type AcceptanceTaskV3 } from './acceptance-task.js';
 import { AcceptanceRunner } from './acceptance-runner.js';
 import { CandidateTransaction, type CandidateBuild } from './candidate.js';
 import type { CandidateTransactionResult } from './candidate-types.js';
@@ -166,6 +162,7 @@ export async function prepareProgrammeV5Transaction(
     taskId: unboundTask.taskId,
     signal: options.signal,
   });
+  const evaluatorIdentity = deepFreeze({ commit: evaluator.commit, tree: evaluator.tree });
   await assertGitMaterializationSafe({
     repositoryRoot: options.repositoryRoot,
     commits: [options.controllerCommit, unboundTask.baseline.commit, evaluator.commit],
@@ -261,7 +258,7 @@ export async function prepareProgrammeV5Transaction(
         gitDigest: bootstrap.gitDigest,
       },
       controller,
-      execution: { evaluator, protectedInputs, routeSnapshot },
+      execution: { evaluator: evaluatorIdentity, protectedInputs, routeSnapshot },
       taskEvidencePlanDigest: evidencePlan.declarationDigest,
       maxRepairs: 1,
     });
@@ -388,7 +385,7 @@ export async function prepareProgrammeV5Transaction(
             runId: options.runId,
             taskId: task.taskId,
             authority: DEVELOPMENT_AUTHORITY,
-            identities: { controller: controller.identity, baseline: task.baseline, evaluator },
+            identities: { controller: controller.identity, baseline: task.baseline, evaluator: evaluatorIdentity },
             protectedInputs,
             route: {
               snapshotDigest: routeSnapshotDigest,

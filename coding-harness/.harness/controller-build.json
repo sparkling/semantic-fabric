@@ -88,12 +88,12 @@
     "coding-harness/dist/programme-envelope.js": "8b059a23fd4cb28b2f645436c71f989b16629c7a61b4f09dc57ffe6cc12693d4",
     "coding-harness/dist/programme-gate-contract-v1.js": "49b08412825111655b28023d5b236581e8653ef0b85e618c8821f14e4bf47323",
     "coding-harness/dist/programme-gates-v5.js": "0acc0880f5e5fed0171666fee50c3868442afce3eeeaa3ab348231f02e8a760d",
-    "coding-harness/dist/programme-policy-v5.js": "9d0595340224b245d614429a3802e833a978ac756814b17e4807edd7f63b970c",
+    "coding-harness/dist/programme-policy-v5.js": "34d659d298af9848bd2aa7cc852640633e0254c7bf5f6dec23be590ecdab024a",
     "coding-harness/dist/programme-receipt-keys.js": "beeb68758ed66aad605872dd5c47974973b42f973bbd6fef38b120458b57c419",
     "coding-harness/dist/programme-score-v5.js": "1751fcdf9491c2ae02a642e7d5331213447da5801bb7cca21e98644135b8f89a",
     "coding-harness/dist/programme-task-runtime-v1.js": "ea2b9791d113db1c4872d06687ed9ed0401a172b68b5f6f547077146e84b6b6e",
     "coding-harness/dist/programme-v5-driver-support.js": "c3efaa3a87c6c1aa7ebdd87e45208faff16a5eaf6819f21664a4476d2d15d13c",
-    "coding-harness/dist/programme-v5-driver.js": "bc230b8d9744818b0ad4e1cf24d74317d76819d7594d30e47d5b600417c3928d",
+    "coding-harness/dist/programme-v5-driver.js": "07a5a37e6645e6eb379ac9db80bded0eeb275f6d13e4f13a01eec4c2bc77e86e",
     "coding-harness/dist/programme-v5-policy-anchor.js": "be3ac2119b823907e3640079099daa8b2074dc9653d3b077c200a6a7796499d2",
     "coding-harness/dist/programme-v5-program-runtime.js": "b7f78124278f62a34e5f3942d3101fd5c5b97955935fe20faa21d3d6227a8670",
     "coding-harness/dist/programme-v5-program.js": "375f588df975f1db95669e050680c5946b53faf18a18e32f09b910ba5219455d",
@@ -246,5 +246,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "ba358334b10331a8b8795c2f1121a7798412ccf8f51edd8f9cca114a12d50c98"
+  "runtimeTreeDigest": "d4e3b3dd528d879827d9f3b52577a087eaa086a316d0cbc2ec473d41c9b28f8a"
 }

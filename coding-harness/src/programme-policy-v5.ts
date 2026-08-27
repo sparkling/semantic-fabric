@@ -132,7 +132,10 @@ export function createFrozenProgrammePolicyV1(
     harnessConfig: SECURE_HARNESS_CONFIG,
     bootstrap: input.bootstrap,
     controller: {
-      identity: input.controller.identity,
+      identity: {
+        commit: input.controller.identity.commit,
+        tree: input.controller.identity.tree,
+      },
       manifestPath: input.controller.manifestPath,
       manifestBlob: input.controller.manifestBlob,
       manifestBlobDigest: input.controller.manifestBlobDigest,
@@ -147,7 +150,10 @@ export function createFrozenProgrammePolicyV1(
       executionDigest: input.controller.executionDigest,
     },
     execution: {
-      evaluator: input.execution.evaluator,
+      evaluator: {
+        commit: input.execution.evaluator.commit,
+        tree: input.execution.evaluator.tree,
+      },
       protectedInputs: input.execution.protectedInputs,
       boundTaskDigest: programmeBoundTaskDigestV1(input.controller.task),
       routeSnapshotBlob,
@@ -277,7 +283,7 @@ function parseExecutionPolicy(
     'evaluator', 'protectedInputs', 'boundTaskDigest', 'routeSnapshotBlob',
     'routeSnapshotBlobDigest', 'routeSnapshotDigest',
   ], 'programme policy v5.execution');
-  const evaluator = parseIdentity(input.evaluator);
+  const evaluator = parseIdentity(input.evaluator, 'programme policy v5 evaluator identity');
   const protectedInputs = parseProtectedInputs(input.protectedInputs, config, task);
   const boundTaskDigest = parseDigest(
     input.boundTaskDigest,
@@ -358,7 +364,7 @@ function parseControllerPolicy(value: unknown, config: HarnessConfig): Readonly<
     'buildManifestBlob', 'buildManifestBlobDigest', 'runtimeTreeDigest',
     'lockfileDigest', 'executionDigest',
   ], 'programme policy v5.controller');
-  const identity = parseIdentity(input.identity);
+  const identity = parseIdentity(input.identity, 'programme policy v5 controller identity');
   if (input.manifestPath !== HARNESS_MANIFEST_PATH) {
     throw new TypeError('programme policy v5 controller manifestPath is invalid');
   }
@@ -428,17 +434,17 @@ function parseControllerPolicy(value: unknown, config: HarnessConfig): Readonly<
   });
 }
 
-function parseIdentity(value: unknown): GitIdentity {
-  const input = asRecord(value, 'programme policy v5 controller identity');
-  assertExactKeys(input, ['commit', 'tree'], 'programme policy v5 controller identity');
+function parseIdentity(value: unknown, label: string): GitIdentity {
+  const input = asRecord(value, label);
+  assertExactKeys(input, ['commit', 'tree'], label);
   const parseObject = (entry: unknown, label: string) => {
     const object = asNonEmptyString(entry, label);
     if (!/^[a-f0-9]{40,64}$/.test(object)) throw new TypeError(`${label} is invalid`);
     return object;
   };
   return {
-    commit: parseObject(input.commit, 'programme policy v5 controller commit'),
-    tree: parseObject(input.tree, 'programme policy v5 controller tree'),
+    commit: parseObject(input.commit, `${label} commit`),
+    tree: parseObject(input.tree, `${label} tree`),
   };
 }
 

@@ -119,7 +119,7 @@ vi.mock('../src/candidate.js', async (importOriginal) => {
   return {
     ...actual,
     CandidateTransaction: class {
-      constructor() { state.transactionConstructed(); }
+      constructor(input: unknown) { state.transactionConstructed(input); }
       async execute() {
         state.transactionExecute();
         return Object.freeze({
@@ -206,6 +206,8 @@ describe('programme v5 driver', () => {
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(prepared.policyBlob.endsWith('\n')).toBe(false);
     expect(prepared.policyBlob).toBe(canonicalJson(JSON.parse(prepared.policyBlob)));
+    expect(JSON.parse(prepared.policyBlob).execution.evaluator)
+      .toEqual({ commit: 'd'.repeat(40), tree: 'e'.repeat(40) });
     expect(state.clientInvoke).not.toHaveBeenCalled();
     expect(state.candidateRun).not.toHaveBeenCalled();
     expect(state.transactionConstructed).not.toHaveBeenCalled();
@@ -231,6 +233,8 @@ describe('programme v5 driver', () => {
     await expect(prepared.execute(prepared.policyBlob, prepared.policyFingerprint))
       .rejects.toThrow('HARNESS_PROGRAMME_V5_TRANSACTION_ALREADY_USED');
     expect(state.transactionConstructed).toHaveBeenCalledTimes(1);
+    expect((state.transactionConstructed.mock.calls[0]![0] as any).context.identities.evaluator)
+      .toEqual({ commit: 'd'.repeat(40), tree: 'e'.repeat(40) });
     expect(state.transactionExecute).toHaveBeenCalledTimes(1);
     expect(state.operationCleanup).toHaveBeenCalledTimes(1);
     expect(state.frozenCleanup).toHaveBeenCalledTimes(1);

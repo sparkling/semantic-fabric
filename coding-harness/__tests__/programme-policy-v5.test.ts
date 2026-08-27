@@ -79,6 +79,23 @@ describe('frozen schema-v5 programme policy', () => {
       .toEqual(programmeCommandReceiptProjectionsV1(bound));
   });
 
+  it('projects transient repository refs out of frozen Git identities', () => {
+    const input = policyInput() as any;
+    input.controller.identity.ref = 'refs/heads/controller';
+    input.execution.evaluator.ref = 'refs/metaharness/evaluators/test';
+
+    const policy = createFrozenProgrammePolicyV1(input);
+
+    expect(policy.controller.identity).toEqual({ commit: '1'.repeat(40), tree: '2'.repeat(40) });
+    expect(policy.execution.evaluator).toEqual({ commit: '9'.repeat(40), tree: '8'.repeat(40) });
+    expect(programmePolicyFingerprint(policy)).toBe(EXPECTED_POLICY_FINGERPRINT);
+
+    const serialized = structuredClone(policy) as any;
+    serialized.execution.evaluator.ref = 'refs/metaharness/evaluators/test';
+    expect(() => verifyFrozenProgrammePolicyV1(serialized, EXPECTED_POLICY_FINGERPRINT))
+      .toThrow('programme policy v5 evaluator identity has invalid keys');
+  });
+
   it('fails closed on raw-input, gate, config, path, or derived-plan tampering', () => {
     const policy = createFrozenProgrammePolicyV1(policyInput());
     const fingerprint = EXPECTED_POLICY_FINGERPRINT;
