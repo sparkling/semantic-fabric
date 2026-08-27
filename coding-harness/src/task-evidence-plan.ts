@@ -34,7 +34,7 @@ export interface TaskEvidencePlan {
   readonly declarationDigest: string;
 }
 
-export function resolveTaskEvidencePlan(input: Readonly<{
+export function resolveTaskEvidencePlanV1(input: Readonly<{
   task: AcceptanceTask;
   taskPath: string;
   legacyV2?: LegacyTaskEvidenceBindings;
@@ -59,6 +59,14 @@ export function resolveTaskEvidencePlan(input: Readonly<{
     verifierGeneratedOutputs,
     declarationDigest,
   });
+}
+
+export function resolveTaskEvidencePlan(input: Readonly<{
+  task: AcceptanceTask;
+  taskPath: string;
+  legacyV2?: LegacyTaskEvidenceBindings;
+}>): TaskEvidencePlan {
+  return resolveTaskEvidencePlanV1(input);
 }
 
 function evidenceDeclarations(input: Readonly<{

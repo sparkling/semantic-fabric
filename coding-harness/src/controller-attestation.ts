@@ -30,14 +30,19 @@ import { digestValue, type GitIdentity } from './receipts.js';
 
 export const ISSUE_8_ACCEPTANCE_TASK_PATH =
   'coding-harness/config/issue-8-acceptance.json';
-const MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
+export const HARNESS_MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 const LOCKFILE_PATH = 'coding-harness/package-lock.json';
 const MAX_CONTROLLER_BLOB_BYTES = 10_000_000;
 const MAX_RUNTIME_FILE_BYTES = 50_000_000;
 
 export interface ControllerAttestation {
   readonly identity: GitIdentity;
+  readonly manifestPath: typeof HARNESS_MANIFEST_PATH;
+  readonly manifestBlob: string;
   readonly taskPath: string;
+  readonly taskBlob: string;
+  readonly buildManifestPath: typeof CONTROLLER_BUILD_PATH;
+  readonly buildManifestBlob: string;
   readonly task: AcceptanceTask;
   readonly manifest: HarnessManifest;
   readonly build: ControllerBuildManifest;
@@ -71,11 +76,11 @@ export async function attestController(input: Readonly<{
   const manifestBlob = await readControllerBlob(
     controllerRepositoryRoot,
     commit,
-    MANIFEST_PATH,
+    HARNESS_MANIFEST_PATH,
     input.signal,
   );
   const manifest = parseHarnessManifest(
-    parseJson(manifestBlob.value, MANIFEST_PATH),
+    parseJson(manifestBlob.value, HARNESS_MANIFEST_PATH),
     SECURE_HARNESS_CONFIG,
   );
   const taskPath = selectAcceptanceTaskPath(manifest, requestedTaskPath);
@@ -141,7 +146,12 @@ export async function attestController(input: Readonly<{
   }
   return deepFreeze({
     identity: { commit, tree },
+    manifestPath: HARNESS_MANIFEST_PATH,
+    manifestBlob: manifestBlob.value,
     taskPath,
+    taskBlob: taskBlob.value,
+    buildManifestPath: CONTROLLER_BUILD_PATH,
+    buildManifestBlob: buildBlob.value,
     task,
     manifest,
     build,
@@ -175,9 +185,9 @@ function controllerExecutionPaths(paths: readonly string[], taskPath: string): s
     || path === 'coding-harness/package-lock.json'
     || path === 'coding-harness/tsconfig.json'
     || path === taskPath
-    || path === MANIFEST_PATH
+    || path === HARNESS_MANIFEST_PATH
     || path === CONTROLLER_BUILD_PATH);
-  if (!selected.includes(taskPath) || !selected.includes(MANIFEST_PATH)
+  if (!selected.includes(taskPath) || !selected.includes(HARNESS_MANIFEST_PATH)
     || !selected.includes('coding-harness/src/controller-attestation.ts')
     || !selected.includes('coding-harness/src/issue-8-driver.ts')
     || !selected.includes(CONTROLLER_BUILD_PATH)
