@@ -7,7 +7,7 @@ import {
   sealCandidateRepairTransitions,
   type CandidateRepairTransitionDraft,
 } from '../src/candidate-repair-transition.js';
-import type { NativeRuntimeEvidence } from '../src/evidence.js';
+import type { NativeRuntimeEvidenceV2 } from '../src/native-runtime-evidence-v2.js';
 import { digestValue } from '../src/receipts.js';
 import { digest, identity } from './candidate-fixtures.js';
 
@@ -71,6 +71,12 @@ describe('candidate repair transition evidence', () => {
     )).toThrow('HARNESS_REPAIR_TRANSITION_NATIVE_INVOCATION_UNBOUND');
   });
 
+  it('rejects a replacement patch not bound to the native repair output', () => {
+    expect(() => sealCandidateRepairTransitions(
+      [completedDraft()], nativeEvidence(identity('3').tree, false, digest('c')),
+    )).toThrow('HARNESS_REPAIR_TRANSITION_PATCH_BINDING_MISMATCH');
+  });
+
   it('requires exactly one pending predecessor for every non-initial reset', () => {
     expect(() => completeCandidateRepairTransitionReset([], 1, identity('2'), digest('b')))
       .toThrow('HARNESS_REPAIR_TRANSITION_PENDING_MISSING');
@@ -94,6 +100,12 @@ describe('candidate repair transition evidence', () => {
     expect(() => createCandidateRepairTransitionDraft({
       ...common, phase: 'pre-admission', trigger: 'patch-admission',
     })).toThrow('HARNESS_REPAIR_TRANSITION_REPAIR_RESET_REQUIRED');
+    expect(() => createCandidateRepairTransitionDraft({
+      ...common,
+      phase: 'pre-admission',
+      trigger: 'patch-admission',
+      repairResetIdentity: identity('2'),
+    })).toThrow('HARNESS_REPAIR_TRANSITION_REPAIR_RESET_MISMATCH');
     expect(() => createCandidateRepairTransitionDraft({
       ...common,
       phase: 'post-admission',
@@ -149,7 +161,8 @@ function completedDraft(): CandidateRepairTransitionDraft {
 function nativeEvidence(
   candidateTree = identity('3').tree,
   includeStray = false,
-): NativeRuntimeEvidence {
+  patchPayloadSha256 = digest('b'),
+): NativeRuntimeEvidenceV2 {
   const invocation = (invocationId: string) => ({
     invocationId,
     host: 'claude-code' as const,
@@ -158,6 +171,7 @@ function nativeEvidence(
     candidateTree,
     environmentDigest: digest('1'),
     outputDigest: digest('2'),
+    patchPayloadSha256,
     exitCode: 0 as const,
     network: {
       enforcement: 'origin-pinned-process-boundary' as const,
@@ -188,7 +202,7 @@ function nativeEvidence(
     },
   });
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: 'trusted-native-runtime',
     taskId: 'task',
     runId: 'run',

@@ -180,6 +180,7 @@ export class CandidateTransaction {
         invocationId: patch.authorInvocationId,
         operation: 'implementation',
         candidateTree: prepared.evaluator.tree,
+        patchPayloadSha256: createHash('sha256').update(patch.payload, 'utf8').digest('hex'),
       });
       while (true) {
         this.#assertActive();
@@ -198,8 +199,9 @@ export class CandidateTransaction {
           resetIdentity,
           patchDigest,
         );
+        let admission: PatchAdmission;
         try {
-          evidence.admission = await this.#operations.admitAndApply(patch, this.#signal);
+          admission = await this.#operations.admitAndApply(patch, this.#signal);
         } catch (error) {
           const code = repairablePatchFailureForError(error);
           if (code === null) throw error;
@@ -214,12 +216,13 @@ export class CandidateTransaction {
           );
           continue;
         }
-        if (evidence.admission.patchDigest !== patchDigest) {
+        if (admission.patchDigest !== patchDigest) {
           throw new Error('HARNESS_PATCH_ADMISSION_DIGEST_MISMATCH');
         }
-        if (evidence.admission.candidate.tree === evidence.prepared.evaluator.tree) {
+        if (admission.candidate.tree === evidence.prepared.evaluator.tree) {
           throw new Error('HARNESS_CANDIDATE_TREE_UNCHANGED');
         }
+        evidence.admission = admission;
         const admissionFailures = await this.#operations.validateAdmission(
           evidence.admission,
           this.#signal,
@@ -395,23 +398,25 @@ export class CandidateTransaction {
       nextAttempt, phase,
       this.#signal,
     );
+    const replacementPatchDigest = createHash('sha256')
+      .update(repaired.payload, 'utf8').digest('hex');
+    evidence.nativeInvocations.push({
+      invocationId: repaired.authorInvocationId,
+      operation: 'repair',
+      candidateTree: sourceCandidate.tree,
+      patchPayloadSha256: replacementPatchDigest,
+    });
     this.#assertActive();
     const transition = createCandidateRepairTransitionDraft({
       fromAttempt,
       phase,
       trigger,
       sourcePatchDigest,
-      replacementPatchDigest: createHash('sha256')
-        .update(repaired.payload, 'utf8').digest('hex'),
+      replacementPatchDigest,
       sourceCandidate,
       repairResetIdentity,
       reasons,
       repairInvocationId: repaired.authorInvocationId,
-    });
-    evidence.nativeInvocations.push({
-      invocationId: repaired.authorInvocationId,
-      operation: 'repair',
-      candidateTree: sourceCandidate.tree,
     });
     evidence.repairTransitions.push(transition);
     evidence.repairCount = nextAttempt;

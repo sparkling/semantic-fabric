@@ -35,6 +35,7 @@ export * from './native-filesystem.js';
 export * from './native-system-filesystem.js';
 export * from './models/index.js';
 export * from './native-process.js';
+export * from './native-runtime-evidence-v2.js';
 export * from './native-runtime-ledger.js';
 export * from './native-runtime.js';
 export * from './network.js';

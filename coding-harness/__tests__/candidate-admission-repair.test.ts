@@ -168,14 +168,17 @@ describe('pre-admission candidate repair', () => {
     expect(target.validateAdmission).not.toHaveBeenCalled();
     expect(target.build).not.toHaveBeenCalled();
     expect(target.repair).not.toHaveBeenCalled();
+    expect(result.receipt.identities.candidate).toEqual(context.identities.evaluator);
+    expect(result.receipt.admittedPaths).toEqual([]);
+    expect(result.receipt.patchDigest).toBeNull();
     expect(result.repairTransitions).toEqual([]);
   });
 
   it('commits repair count and transition evidence only after a valid repair returns', async () => {
-    for (const repair of [
-      vi.fn(async () => { throw new Error('repair failed'); }),
-      vi.fn(async () => ({ payload: 'patch-one', authorInvocationId: 'repair-0001' })),
-    ]) {
+    for (const [repair, expectedInvocations] of [
+      [vi.fn(async () => { throw new Error('repair failed'); }), 0],
+      [vi.fn(async () => ({ payload: 'patch-one', authorInvocationId: 'repair-0001' })), 1],
+    ] as const) {
       const target = operations([]);
       target.admitAndApply = vi.fn(async () => {
         throw new Error('HARNESS_PATCH_ADMISSION_INVALID');
@@ -188,6 +191,10 @@ describe('pre-admission candidate repair', () => {
       expect(result.repairCount).toBe(0);
       expect(result.receipt.recovery.repairCount).toBe(0);
       expect(result.repairTransitions).toEqual([]);
+      const expectations = vi.mocked(target.runtimeEvidence).mock.calls[0]?.[0] ?? [];
+      expect(expectations.filter(({ operation }) => operation === 'repair'))
+        .toHaveLength(expectedInvocations);
+      expect(result.reason).not.toContain('HARNESS_RUNTIME_EVIDENCE_FAILED');
     }
   });
 
@@ -203,6 +210,7 @@ describe('pre-admission candidate repair', () => {
     expect(result.receipt.failureCode).toBe('HARNESS_REPAIR_BUDGET_EXHAUSTED');
     expect(result.repairCount).toBe(0);
     expect(target.repair).not.toHaveBeenCalled();
+    expect(target.resetCandidate).toHaveBeenCalledTimes(2);
     expect(result.receipt.patchDigests).toHaveLength(1);
     expect(result.receipt.patchDigest).toBeNull();
   });

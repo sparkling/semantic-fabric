@@ -22,10 +22,13 @@ import type {
   NativeStructuredInvocation,
 } from './model-controller.js';
 import {
-  NATIVE_PATCH_MAX_CHARS,
   NATIVE_REVIEW_MAX_REASONS,
   NATIVE_REVIEW_REASON_MAX_CHARS,
 } from './model-controller.js';
+import {
+  NATIVE_PATCH_MAX_CHARS,
+  patchPayloadSha256ForNativeOutput,
+} from './native-patch-output.js';
 import {
   ClaudeCodeSubscriptionAdapter,
   CodexSubscriptionAdapter,
@@ -130,6 +133,12 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
     const output = this.#adapter.host === 'claude-code'
       ? parseClaudeEnvelope(raw)
       : parseCodexEnvelope(raw);
+    let patchPayloadSha256: string | null;
+    try {
+      patchPayloadSha256 = patchPayloadSha256ForNativeOutput(input.operation, output);
+    } catch (error) {
+      throw new Error('HARNESS_NATIVE_PATCH_RESPONSE_INVALID', { cause: error });
+    }
     const outputDigest = createHash('sha256').update(raw, 'utf8').digest('hex');
     this.#runtimeLedger?.recordInvocation({
       invocationId: executionId,
@@ -137,11 +146,13 @@ export class NativeAdapterStructuredClient implements NativeStructuredClient {
       model: input.candidate.model,
       operation: input.operation,
       outputDigest,
+      patchPayloadSha256,
     });
     return deepFreeze({
       invocationId: executionId,
       output,
       outputDigest,
+      patchPayloadSha256,
     });
   }
 }

@@ -12,9 +12,7 @@ import type {
   CandidateTransactionResult,
 } from './candidate-types.js';
 import { deepFreeze, DEVELOPMENT_AUTHORITY } from './contracts.js';
-import {
-  bindNativeRuntimeEvidence,
-} from './evidence.js';
+import { bindNativeRuntimeEvidenceV2 } from './native-runtime-evidence-v2.js';
 import type { ReceiptFailureCode } from './failure-code.js';
 import { digestValue, type ReceiptChain } from './receipts.js';
 
@@ -45,7 +43,7 @@ export async function finishCandidateTransaction(
     };
     const runtime = input.operations.runtimeEvidence(input.evidence.nativeInvocations);
     if (input.requestedStatus === 'pass') {
-      const native = bindNativeRuntimeEvidence({
+      const native = bindNativeRuntimeEvidenceV2({
         value: runtime.nativeEvidence,
         taskId: input.context.taskId,
         runId: input.context.runId,

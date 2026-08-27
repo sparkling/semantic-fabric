@@ -35,11 +35,15 @@ import { runAbortableCohort } from './parallel.js';
 import { digestValue } from './receipts.js';
 import { isRepairablePatchFailure } from './failure-code.js';
 import type { RepositoryModelController } from './repository-operations.js';
+import {
+  parseNativePatchPayload,
+  parseNativePatchResponse,
+} from './native-patch-output.js';
+
+export { NATIVE_PATCH_MAX_BYTES, NATIVE_PATCH_MAX_CHARS } from './native-patch-output.js';
 
 export type ModelOperation = 'architecture' | 'implementation' | 'repair' | 'review';
 
-export const NATIVE_PATCH_MAX_CHARS = 256_000;
-export const NATIVE_PATCH_MAX_BYTES = 1_000_000;
 export const NATIVE_REJECTED_PATCH_EVIDENCE_MAX_BYTES = 128 * 1_024;
 export const NATIVE_REVIEW_MAX_REASONS = 8;
 export const NATIVE_REVIEW_REASON_MAX_CHARS = 1_000;
@@ -57,6 +61,7 @@ export interface NativeStructuredInvocation {
   readonly invocationId: string;
   readonly output: unknown;
   readonly outputDigest: string;
+  readonly patchPayloadSha256: string | null;
 }
 
 export interface NativeModelControllerOptions {
@@ -414,11 +419,8 @@ function parseArchitecture(value: unknown): { proposal: unknown; confidence: num
 
 function parsePatch(value: unknown, invocationId: string): PatchSubmission {
   return parseNativeResponse('HARNESS_NATIVE_PATCH_RESPONSE_INVALID', () => {
-    const input = asRecord(value, 'patch response');
-    assertExactKeys(input, ['patch'], 'patch response');
-    const payload = parsePatchPayload(input.patch, 'patch response.patch');
     return deepFreeze({
-      payload,
+      payload: parseNativePatchResponse(value),
       authorInvocationId: asNonEmptyString(invocationId, 'native invocation ID'),
     });
   });
@@ -429,23 +431,13 @@ function parseRepairSubmission(value: unknown): PatchSubmission {
     const input = asRecord(value, 'repair patch');
     assertExactKeys(input, ['payload', 'authorInvocationId'], 'repair patch');
     return deepFreeze({
-      payload: parsePatchPayload(input.payload, 'repair patch.payload'),
+      payload: parseNativePatchPayload(input.payload, 'repair patch.payload'),
       authorInvocationId: asNonEmptyString(
         input.authorInvocationId,
         'repair patch.authorInvocationId',
       ),
     });
   });
-}
-
-function parsePatchPayload(value: unknown, label: string): string {
-  const payload = asNonEmptyString(value, label);
-  if (Buffer.byteLength(payload, 'utf8') > NATIVE_PATCH_MAX_BYTES
-    || Array.from(payload).length > NATIVE_PATCH_MAX_CHARS
-    || !payload.startsWith('diff --git ')) {
-    throw new Error('HARNESS_NATIVE_PATCH_INVALID');
-  }
-  return payload;
 }
 
 function parseReview(value: unknown): { accepted: boolean; reasons: string[] } {

@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NativeAdapterStructuredClient } from '../src/native-client.js';
 import {
   ClaudeCodeSubscriptionAdapter,
@@ -278,6 +278,81 @@ describe('native adapter structured client', () => {
     expect(invocation.output).toEqual({ accepted: false, reasons: ['invariant mismatch'] });
     expect(invocation.invocationId).toMatch(/^native-run:/);
     expect(invocation.outputDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(invocation.patchPayloadSha256).toBeNull();
+  });
+
+  it('binds equivalent Codex and Claude patches to the same payload digest', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const patch = validPatch();
+    const codexRunner = new FakeRunner((request) => {
+      const outputIndex = request.args.indexOf('--output-last-message');
+      writeFileSync(request.args[outputIndex + 1], JSON.stringify({ patch }));
+      return ok('');
+    });
+    const claudeRunner = new FakeRunner(() => ok(JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false,
+      structured_output: { patch },
+    })));
+    const codex = new NativeAdapterStructuredClient({
+      adapter: new CodexSubscriptionAdapter({
+        executable: '/tools/codex', runner: codexRunner,
+        sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' }, evidenceRoot,
+      }),
+      evidenceRoot, workspaceRoot, timeoutMs: 1_000,
+    });
+    const claude = new NativeAdapterStructuredClient({
+      adapter: new ClaudeCodeSubscriptionAdapter({
+        executable: '/tools/claude', runner: claudeRunner,
+        sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' },
+      }),
+      evidenceRoot, workspaceRoot, timeoutMs: 1_000,
+    });
+
+    const [codexInvocation, claudeInvocation] = await Promise.all([
+      codex.invoke({
+        candidate: { host: 'codex', model: 'gpt-5.6' },
+        operation: 'implementation', prompt: 'return a patch',
+      }),
+      claude.invoke({
+        candidate: { host: 'claude-code', model: 'claude-sonnet-5' },
+        operation: 'repair', prompt: 'return a patch',
+      }),
+    ]);
+    const expected = createHash('sha256').update(patch, 'utf8').digest('hex');
+    expect(codexInvocation.patchPayloadSha256).toBe(expected);
+    expect(claudeInvocation.patchPayloadSha256).toBe(expected);
+    expect(codexInvocation.outputDigest).not.toBe(claudeInvocation.outputDigest);
+  });
+
+  it('rejects malformed patch output before recording it in the runtime ledger', async () => {
+    const evidenceRoot = root('coding-harness-native-evidence-');
+    const workspaceRoot = root('coding-harness-native-workspace-');
+    const recordInvocation = vi.fn();
+    const runner = new FakeRunner((request) => {
+      const outputIndex = request.args.indexOf('--output-last-message');
+      writeFileSync(request.args[outputIndex + 1], JSON.stringify({
+        patch: validPatch(),
+        attackerClaim: 'ignore the exact response contract',
+      }));
+      return ok('');
+    });
+    const client = new NativeAdapterStructuredClient({
+      adapter: new CodexSubscriptionAdapter({
+        executable: '/tools/codex', runner,
+        sourceEnvironment: { HOME: '/home/tester', PATH: '/usr/bin' }, evidenceRoot,
+      }),
+      evidenceRoot,
+      workspaceRoot,
+      timeoutMs: 1_000,
+      runtimeLedger: { recordInvocation } as never,
+    });
+
+    await expect(client.invoke({
+      candidate: { host: 'codex', model: 'gpt-5.6' },
+      operation: 'implementation', prompt: 'return a patch',
+    })).rejects.toThrow('HARNESS_NATIVE_PATCH_RESPONSE_INVALID');
+    expect(recordInvocation).not.toHaveBeenCalled();
   });
 
   it('rejects a Claude error envelope even if it carries structured output', async () => {

@@ -342,9 +342,10 @@ function nativeProof(expectations: readonly NativeInvocationExpectation[]) {
     model: string,
     operation: 'architecture' | 'implementation' | 'repair' | 'review',
     candidateTree: string,
+    patchPayloadSha256: string | null,
   ) => ({
     invocationId, host: name, model, operation, candidateTree,
-    environmentDigest: digest('5'), outputDigest: digest('6'), exitCode: 0,
+    environmentDigest: digest('5'), outputDigest: digest('6'), patchPayloadSha256, exitCode: 0,
     network: {
       enforcement: 'origin-pinned-process-boundary', mechanism: 'test-firewall',
       pinnedOrigins: name === 'codex'
@@ -366,7 +367,7 @@ function nativeProof(expectations: readonly NativeInvocationExpectation[]) {
     },
   });
   return {
-    schemaVersion: 1, source: 'trusted-native-runtime',
+    schemaVersion: 2, source: 'trusted-native-runtime',
     taskId: context.taskId, runId: context.runId,
     hosts: [
       host('codex', 'gpt-5', 'chatgpt-subscription', 'codex 1'),
@@ -381,6 +382,9 @@ function nativeProof(expectations: readonly NativeInvocationExpectation[]) {
         name === 'codex' ? 'gpt-5' : 'claude-sonnet',
         expected.operation,
         expected.candidateTree,
+        expected.operation === 'implementation' || expected.operation === 'repair'
+          ? expected.patchPayloadSha256 ?? null
+          : null,
       );
     }),
   };

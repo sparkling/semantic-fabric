@@ -51,12 +51,12 @@ export interface BoundExternalEvidence {
 }
 
 export type NativeModelOperation = 'architecture' | 'implementation' | 'repair' | 'review';
-
 export interface NativeInvocationExpectation {
   invocationId: string;
   operation: NativeModelOperation;
   candidateTree: string;
   host?: NativeHost;
+  patchPayloadSha256?: string | null;
 }
 
 export interface NativeRuntimeEvidence {

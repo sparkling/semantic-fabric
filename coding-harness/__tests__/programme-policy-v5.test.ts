@@ -33,7 +33,7 @@ import type { RustOfflineProfile } from '../src/rust-sandbox.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
-  '07cad0ee660e9377416770a643e4ab05e5aa68a89a157c52b2248f6fed2ff465';
+  'f3cf2fd83f4bf8ab79b4b30981946a5a5854d952a1b2d95d05917f053a647ec4';
 const manifestUrl = new URL('../.harness/manifest.json', import.meta.url);
 const taskUrl = new URL('../config/issue-8-acceptance.json', import.meta.url);
 
@@ -42,7 +42,6 @@ describe('frozen schema-v5 programme policy', () => {
     const input = policyInput();
     const policy = createFrozenProgrammePolicyV1(input);
     const fingerprint = programmePolicyFingerprint(policy);
-
     expect(fingerprint).toBe(EXPECTED_POLICY_FINGERPRINT);
     const parsed = verifyFrozenProgrammePolicyV1(policy, EXPECTED_POLICY_FINGERPRINT);
     expect(parsed.fingerprint).toBe(EXPECTED_POLICY_FINGERPRINT);

@@ -103,6 +103,95 @@ describe('native runtime preflight executable identity', () => {
   });
 });
 
+describe('native runtime patch payload provenance', () => {
+  it('emits schema V2 and enforces operation-compatible payload digests', () => {
+    const runtime = fixture();
+    const implementation = modelInvocationExecution(
+      runtime, 'implementation-0001', 'codex', 'implementation',
+    );
+    const review = modelInvocationExecution(runtime, 'review-0001', 'claude-code', 'review');
+    const preflights = mockPreflights(runtime, undefined, [implementation, review]);
+    runtime.ledger.recordPreflight(preflights.codex);
+    runtime.ledger.recordPreflight(preflights['claude-code']);
+
+    expect(() => runtime.ledger.recordInvocation({
+      invocationId: implementation.executionId,
+      host: 'codex', model: model('codex'), operation: 'implementation',
+      outputDigest: digestValue('implementation-output'), patchPayloadSha256: null,
+    })).toThrow('HARNESS_NATIVE_PATCH_PAYLOAD_DIGEST_INVALID');
+    expect(() => runtime.ledger.recordInvocation({
+      invocationId: review.executionId,
+      host: 'claude-code', model: model('claude-code'), operation: 'review',
+      outputDigest: digestValue('review-output'), patchPayloadSha256: digestValue('unexpected'),
+    })).toThrow('HARNESS_NATIVE_PATCH_PAYLOAD_DIGEST_UNEXPECTED');
+
+    const patchPayloadSha256 = digestValue('exact-patch-payload');
+    runtime.ledger.recordInvocation({
+      invocationId: implementation.executionId,
+      host: 'codex', model: model('codex'), operation: 'implementation',
+      outputDigest: digestValue('implementation-output'), patchPayloadSha256,
+    });
+    runtime.ledger.recordInvocation({
+      invocationId: review.executionId,
+      host: 'claude-code', model: model('claude-code'), operation: 'review',
+      outputDigest: digestValue('review-output'), patchPayloadSha256: null,
+    });
+    const sealed = runtime.ledger.seal({
+      taskId: 'task-1', runId: 'run-1', hosts: hostEvidence(),
+      expectations: [
+        {
+          invocationId: implementation.executionId, host: 'codex',
+          operation: 'implementation', candidateTree: 'a'.repeat(40), patchPayloadSha256,
+        },
+        {
+          invocationId: review.executionId, host: 'claude-code',
+          operation: 'review', candidateTree: 'b'.repeat(40),
+        },
+      ],
+    });
+    expect(sealed.schemaVersion).toBe(2);
+    expect(sealed.invocations.map(({ patchPayloadSha256: digest }) => digest))
+      .toEqual([patchPayloadSha256, null]);
+  });
+
+  it('fails closed when the transaction expectation substitutes another patch digest', () => {
+    const runtime = fixture();
+    const implementation = modelInvocationExecution(
+      runtime, 'implementation-0001', 'codex', 'implementation',
+    );
+    const review = modelInvocationExecution(runtime, 'review-0001', 'claude-code', 'review');
+    const preflights = mockPreflights(runtime, undefined, [implementation, review]);
+    runtime.ledger.recordPreflight(preflights.codex);
+    runtime.ledger.recordPreflight(preflights['claude-code']);
+    runtime.ledger.recordInvocation({
+      invocationId: implementation.executionId,
+      host: 'codex', model: model('codex'), operation: 'implementation',
+      outputDigest: digestValue('implementation-output'),
+      patchPayloadSha256: digestValue('exact-patch-payload'),
+    });
+    runtime.ledger.recordInvocation({
+      invocationId: review.executionId,
+      host: 'claude-code', model: model('claude-code'), operation: 'review',
+      outputDigest: digestValue('review-output'), patchPayloadSha256: null,
+    });
+
+    expect(() => runtime.ledger.seal({
+      taskId: 'task-1', runId: 'run-1', hosts: hostEvidence(),
+      expectations: [
+        {
+          invocationId: implementation.executionId, host: 'codex',
+          operation: 'implementation', candidateTree: 'a'.repeat(40),
+          patchPayloadSha256: digestValue('substituted-patch-payload'),
+        },
+        {
+          invocationId: review.executionId, host: 'claude-code',
+          operation: 'review', candidateTree: 'b'.repeat(40),
+        },
+      ],
+    })).toThrow('HARNESS_NATIVE_INVOCATION_BINDING_MISMATCH');
+  });
+});
+
 function fixture(): TrustedNativeRuntime {
   const root = mkdtempSync(join(tmpdir(), 'native-runtime-ledger-'));
   roots.push(root);
@@ -156,6 +245,7 @@ function executable(root: string, name: string): string {
 function mockPreflights(
   runtime: TrustedNativeRuntime,
   invalidHost?: NativeHost,
+  additionalExecutions: readonly NativeExecutionEvidence[] = [],
 ): Readonly<Record<NativeHost, NativeAuthEvidence>> {
   const executions = new Map<string, NativeExecutionEvidence>();
   const evidence = Object.fromEntries(HOSTS.map((host) => {
@@ -176,12 +266,58 @@ function mockPreflights(
       preflightExecutionIds: ids,
     })];
   })) as unknown as Readonly<Record<NativeHost, NativeAuthEvidence>>;
+  for (const item of additionalExecutions) executions.set(item.executionId, item);
   vi.spyOn(runtime.runner, 'executionEvidence').mockImplementation((id) => {
     const item = executions.get(id);
     if (item === undefined) throw new Error('unexpected execution id');
     return item;
   });
   return evidence;
+}
+
+function modelInvocationExecution(
+  runtime: TrustedNativeRuntime,
+  executionId: string,
+  host: NativeHost,
+  operation: 'implementation' | 'review',
+): NativeExecutionEvidence {
+  return Object.freeze({
+    executionId, host, purpose: 'model-invocation', model: model(host), operation,
+    executable: runtime.runner.executableEvidence()[host],
+    environmentDigest: digestValue(`${executionId}:environment`), exitCode: 0,
+    stdoutDigest: digestValue(`${executionId}:stdout`),
+    stderrDigest: digestValue(`${executionId}:stderr`),
+    network: Object.freeze({
+      enforcement: 'origin-pinned-process-boundary', mechanism: 'test-origin-boundary',
+      pinnedOrigins: host === 'codex'
+        ? ['https://api.openai.com', 'https://chatgpt.com']
+        : ['https://api.anthropic.com', 'https://claude.ai'],
+      allowedConnections: 1, deniedConnections: 0,
+      connectDigest: digestValue(`${executionId}:connect`),
+    }),
+    filesystem: Object.freeze({
+      enforcement: 'os-filesystem-namespace', mechanism: 'test-filesystem-boundary',
+      workspaceRootDigest: digestValue('workspace'),
+      mountManifestDigest: digestValue(`${executionId}:mounts`),
+      configurationMaskDigest: digestValue(`${executionId}:masks`),
+      hostFileConfidentiality: true, emptyPrivateHome: true, privateEphemeralHome: true,
+      hostRootMounted: false, hostCredentialPathMounted: false, gitMetadataMasked: true,
+    }),
+    resources: Object.freeze({
+      enforcement: 'systemd-cgroup-v2', mechanism: 'systemd-transient-service',
+      limitsDigest: digestValue(`${executionId}:limits`),
+    }),
+  });
+}
+
+function hostEvidence() {
+  return HOSTS.map((host) => ({
+    host, model: model(host), role: `${host}-review`, clientVersion: `${host}-1.0.0`,
+    authClass: host === 'codex'
+      ? 'native-openai-subscription' as const
+      : 'native-anthropic-subscription' as const,
+    subscriptionCostUsd: 0 as const,
+  }));
 }
 
 function execution(

@@ -5,8 +5,8 @@ import { deepFreeze, SHA256_PATTERN } from './contracts.js';
 import type {
   NativeInvocationExpectation,
   NativeModelOperation,
-  NativeRuntimeEvidence,
 } from './evidence.js';
+import type { NativeRuntimeEvidenceV2 } from './native-runtime-evidence-v2.js';
 import type { NativeAuthEvidence, NativeHost } from './models/types.js';
 import { BoundedNativeProcessRunner, type NativeExecutionEvidence } from './native-process.js';
 import type { HostEvidence } from './receipts.js';
@@ -17,6 +17,7 @@ export interface NativeInvocationRecord {
   readonly model: string;
   readonly operation: NativeModelOperation;
   readonly outputDigest: string;
+  readonly patchPayloadSha256: string | null;
 }
 
 export interface NativePreflightExecutableIdentity {
@@ -87,6 +88,7 @@ export class NativeRuntimeLedger {
     if (!SHA256_PATTERN.test(input.outputDigest) || input.outputDigest === '0'.repeat(64)) {
       throw new Error('HARNESS_NATIVE_OUTPUT_DIGEST_INVALID');
     }
+    assertPatchDigest(input.operation, input.patchPayloadSha256);
     if (this.#invocations.has(input.invocationId)) {
       throw new Error('HARNESS_NATIVE_INVOCATION_DUPLICATE');
     }
@@ -141,7 +143,7 @@ export class NativeRuntimeLedger {
     runId: string;
     hosts: readonly HostEvidence[];
     expectations: readonly NativeInvocationExpectation[];
-  }>): NativeRuntimeEvidence {
+  }>): NativeRuntimeEvidenceV2 {
     this.#assertOpen();
     this.#sealed = true;
     const expectedHosts = new Map(input.hosts.map((host) => [host.host, host]));
@@ -178,13 +180,14 @@ export class NativeRuntimeLedger {
       const recorded = this.#invocations.get(expected.invocationId) as NativeInvocationRecord;
       const execution = this.#runner.executionEvidence(expected.invocationId);
       if (recorded.operation !== expected.operation
-        || (expected.host !== undefined && recorded.host !== expected.host)) {
+        || (expected.host !== undefined && recorded.host !== expected.host)
+        || expectedPatchDigest(expected) !== recorded.patchPayloadSha256) {
         throw new Error('HARNESS_NATIVE_INVOCATION_BINDING_MISMATCH');
       }
       return invocationEvidence(recorded, execution, expected.candidateTree);
     });
     return deepFreeze({
-      schemaVersion: 1,
+      schemaVersion: 2,
       source: 'trusted-native-runtime',
       taskId: nonEmpty(input.taskId, 'TASK_ID'),
       runId: nonEmpty(input.runId, 'RUN_ID'),
@@ -202,7 +205,7 @@ function invocationEvidence(
   recorded: NativeInvocationRecord,
   execution: NativeExecutionEvidence,
   candidateTree: string,
-): NativeRuntimeEvidence['invocations'][number] {
+): NativeRuntimeEvidenceV2['invocations'][number] {
   return deepFreeze({
     invocationId: recorded.invocationId,
     host: recorded.host,
@@ -211,6 +214,7 @@ function invocationEvidence(
     candidateTree,
     environmentDigest: execution.environmentDigest,
     outputDigest: recorded.outputDigest,
+    patchPayloadSha256: recorded.patchPayloadSha256,
     exitCode: 0,
     network: {
       enforcement: execution.network.enforcement,
@@ -259,4 +263,39 @@ function digest(value: unknown): string {
 function nonEmpty(value: string, label: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`HARNESS_NATIVE_${label}_INVALID`);
   return value;
+}
+
+function assertPatchDigest(
+  operation: NativeModelOperation,
+  value: string | null,
+): void {
+  const patchOperation = operation === 'implementation' || operation === 'repair';
+  if (patchOperation) {
+    if (typeof value !== 'string'
+      || !SHA256_PATTERN.test(value)
+      || value === '0'.repeat(64)) {
+      throw new Error('HARNESS_NATIVE_PATCH_PAYLOAD_DIGEST_INVALID');
+    }
+  } else if (value !== null) {
+    throw new Error('HARNESS_NATIVE_PATCH_PAYLOAD_DIGEST_UNEXPECTED');
+  }
+}
+
+function expectedPatchDigest(expectation: NativeInvocationExpectation): string | null {
+  const patchOperation = expectation.operation === 'implementation'
+    || expectation.operation === 'repair';
+  if (!patchOperation) {
+    if (expectation.patchPayloadSha256 !== undefined
+      && expectation.patchPayloadSha256 !== null) {
+      throw new Error('HARNESS_NATIVE_PATCH_PAYLOAD_DIGEST_UNEXPECTED');
+    }
+    return null;
+  }
+  const digest = expectation.patchPayloadSha256;
+  if (typeof digest !== 'string'
+    || !SHA256_PATTERN.test(digest)
+    || digest === '0'.repeat(64)) {
+    throw new Error('HARNESS_NATIVE_PATCH_PAYLOAD_DIGEST_INVALID');
+  }
+  return digest;
 }

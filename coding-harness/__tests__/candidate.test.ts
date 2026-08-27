@@ -26,9 +26,10 @@ import {
 describe('patched candidate transaction', () => {
   it('re-admits, rebuilds, and reruns all parallel verifiers after repair', async () => {
     const events: string[] = [];
+    const target = operations(events);
     const transaction = new CandidateTransaction({
       context,
-      operations: operations(events),
+      operations: target,
       maxRepairs: 1,
       now: () => '2026-08-25T12:02:00.000Z',
     });
@@ -68,6 +69,11 @@ describe('patched candidate transaction', () => {
       reasonDigests: [digestValue('independent: red oracle')],
       nativeInvocation: { invocationId: 'repair-0001', operation: 'repair' },
     });
+    const native = vi.mocked(target.runtimeEvidence).mock.calls[0]?.[0] ?? [];
+    expect(native.find(({ operation }) => operation === 'implementation')?.patchPayloadSha256)
+      .toBe(createHash('sha256').update('patch-one', 'utf8').digest('hex'));
+    expect(native.find(({ operation }) => operation === 'repair')?.patchPayloadSha256)
+      .toBe(createHash('sha256').update('patch-two', 'utf8').digest('hex'));
     const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
     expect(envelope.programmeAcceptance.status).toBe('ACCEPTED');
     expect(envelope.programmeAcceptance.score).toBe(100);

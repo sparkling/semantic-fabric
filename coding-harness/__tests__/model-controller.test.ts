@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 
+import { createHash } from 'node:crypto';
 import { VerifierRegistry, predicateVerifier } from '@metaharness/harness';
 import { describe, expect, it } from 'vitest';
 import {
   NATIVE_PATCH_MAX_BYTES,
   NATIVE_REJECTED_PATCH_EVIDENCE_MAX_BYTES,
   NativeRepositoryModelController,
+  type ModelOperation,
 } from '../src/model-controller.js';
 import type { ModelContextProvider } from '../src/model-context.js';
 import { NATIVE_PROMPT_MAX_BYTES } from '../src/models/native-adapter-contracts.js';
@@ -114,6 +116,7 @@ function controller(
       invocationId: `${input.operation}-${input.candidate.host}`,
       output,
       outputDigest: digestValue(output),
+      patchPayloadSha256: fakePatchPayloadDigest(input.operation as ModelOperation, output),
     };
   };
   const verifiers = new VerifierRegistry().register(
@@ -129,6 +132,16 @@ function controller(
     taskPrompt: 'Issue #8',
     contextProvider: provider,
   });
+}
+
+function fakePatchPayloadDigest(operation: ModelOperation, output: unknown): string | null {
+  if (operation !== 'implementation' && operation !== 'repair') return null;
+  const patch = output !== null && typeof output === 'object'
+    ? (output as { patch?: unknown }).patch
+    : undefined;
+  return typeof patch === 'string'
+    ? createHash('sha256').update(patch, 'utf8').digest('hex')
+    : digestValue(output);
 }
 
 function untrustedEvidence(prompt: string): Record<string, unknown> {
@@ -177,6 +190,7 @@ describe('native repository model controller', () => {
           invocationId: `internal-${input.operation}-${input.candidate.host}`,
           output,
           outputDigest: digestValue(output),
+          patchPayloadSha256: null,
         };
       },
     };

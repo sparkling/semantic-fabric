@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { deepFreeze, SHA256_PATTERN } from './contracts.js';
-import type { NativeRuntimeEvidence } from './evidence.js';
+import type { NativeRuntimeEvidenceV2 } from './native-runtime-evidence-v2.js';
 import { digestValue, type GitIdentity } from './receipts.js';
 
 export type CandidateRepairPhase = 'pre-admission' | 'post-admission';
@@ -35,7 +35,7 @@ export interface CandidateRepairTransition extends Omit<
   'resetIdentity' | 'repairInvocationId'
 > {
   readonly resetIdentity: GitIdentity;
-  readonly nativeInvocation: NativeRuntimeEvidence['invocations'][number];
+  readonly nativeInvocation: NativeRuntimeEvidenceV2['invocations'][number];
   readonly digest: string;
 }
 
@@ -67,6 +67,10 @@ export function createCandidateRepairTransitionDraft(input: Readonly<{
       throw new Error('HARNESS_REPAIR_TRANSITION_REPAIR_RESET_REQUIRED');
     }
     assertIdentity(repairResetIdentity, 'repair transition.repairResetIdentity');
+    if (repairResetIdentity.commit !== input.sourceCandidate.commit
+      || repairResetIdentity.tree !== input.sourceCandidate.tree) {
+      throw new Error('HARNESS_REPAIR_TRANSITION_REPAIR_RESET_MISMATCH');
+    }
   } else if (repairResetIdentity !== null) {
     throw new Error('HARNESS_REPAIR_TRANSITION_REPAIR_RESET_UNEXPECTED');
   }
@@ -116,7 +120,7 @@ export function completeCandidateRepairTransitionReset(
 
 export function sealCandidateRepairTransitions(
   drafts: readonly CandidateRepairTransitionDraft[],
-  nativeEvidence: NativeRuntimeEvidence,
+  nativeEvidence: NativeRuntimeEvidenceV2,
 ): readonly CandidateRepairTransition[] {
   const repairInvocations = new Map(nativeEvidence.invocations
     .filter(({ operation }) => operation === 'repair')
@@ -135,6 +139,9 @@ export function sealCandidateRepairTransitions(
     }
     if (nativeInvocation.candidateTree !== draft.sourceCandidate.tree) {
       throw new Error('HARNESS_REPAIR_TRANSITION_CANDIDATE_MISMATCH');
+    }
+    if (nativeInvocation.patchPayloadSha256 !== draft.replacementPatchDigest) {
+      throw new Error('HARNESS_REPAIR_TRANSITION_PATCH_BINDING_MISMATCH');
     }
     used.add(nativeInvocation.invocationId);
     const body = {
