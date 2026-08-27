@@ -56,6 +56,18 @@ describe('patched candidate transaction', () => {
       result.receipt.verifierDigests['attempt-1:qe:sast'],
     ]).toEqual(result.receipt.coordination.agenticQeEvidenceDigests);
     expect(transaction.receipts.verify()).toEqual({ ok: true });
+    expect(result.repairTransitions).toHaveLength(1);
+    expect(result.repairTransitions[0]).toMatchObject({
+      fromAttempt: 0,
+      toAttempt: 1,
+      phase: 'post-admission',
+      trigger: 'verification',
+      buildDisposition: 'passed',
+      sourceCandidate: identity('3'),
+      resetIdentity: context.identities.evaluator,
+      reasonDigests: [digestValue('independent: red oracle')],
+      nativeInvocation: { invocationId: 'repair-0001', operation: 'repair' },
+    });
     const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
     expect(envelope.programmeAcceptance.status).toBe('ACCEPTED');
     expect(envelope.programmeAcceptance.score).toBe(100);
@@ -126,6 +138,18 @@ describe('patched candidate transaction', () => {
     const native = vi.mocked(target.runtimeEvidence).mock.calls[0]?.[0] ?? [];
     expect(native.find(({ operation }) => operation === 'repair')?.candidateTree)
       .toBe(identity('3').tree);
+    expect(result.receipt.commands.filter(({ stage }) => stage === 'build')
+      .map(({ attempt }) => attempt)).toEqual([1]);
+    expect(result.repairTransitions[0]).toMatchObject({
+      fromAttempt: 0,
+      toAttempt: 1,
+      phase: 'post-admission',
+      trigger: 'admission-validation',
+      buildDisposition: 'not-started',
+      sourceCandidate: identity('3'),
+      resetIdentity: context.identities.evaluator,
+      reasonDigests: [digestValue('HARNESS_CANDIDATE_SOURCE_FIX_MISMATCH')],
+    });
   });
 
   it('prefixes mutation evidence when a final admission check triggers repair', async () => {
@@ -152,6 +176,11 @@ describe('patched candidate transaction', () => {
     expect(result.repairCount).toBe(1);
     expect(result.receipt.verifierDigests).toHaveProperty('attempt-0:mutation');
     expect(result.receipt.verifierDigests).toHaveProperty('attempt-1:mutation');
+    expect(result.repairTransitions[0]).toMatchObject({
+      trigger: 'final-admission',
+      buildDisposition: 'passed',
+      reasonDigests: [digestValue('HARNESS_FINAL_ADMISSION_CHANGED')],
+    });
   });
 
   it('requires both issue-8 QE profiles before the final audits can pass', async () => {
@@ -443,5 +472,10 @@ describe('patched candidate transaction', () => {
     expect(result.receipt.patchDigests).toHaveLength(2);
     expect(result.receipt.artifactDigests).toHaveProperty('attempt-0:binary');
     expect(result.receipt.artifactDigests).toHaveProperty('attempt-1:binary');
+    expect(result.repairTransitions[0]).toMatchObject({
+      trigger: 'build',
+      buildDisposition: 'failed',
+      reasonDigests: [digestValue('cargo exited 101')],
+    });
   });
 });

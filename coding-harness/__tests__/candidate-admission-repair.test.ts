@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { CandidateTransaction } from '../src/candidate.js';
+import { digestValue } from '../src/receipts.js';
 import { context, digest, identity, operations } from './candidate-fixtures.js';
 
 describe('pre-admission candidate repair', () => {
@@ -31,6 +32,29 @@ describe('pre-admission candidate repair', () => {
     const native = vi.mocked(target.runtimeEvidence).mock.calls[0]?.[0] ?? [];
     expect(native.find(({ operation }) => operation === 'repair')?.candidateTree)
       .toBe(context.identities.evaluator.tree);
+    expect(result.repairTransitions).toHaveLength(1);
+    const [transition] = result.repairTransitions;
+    expect(transition).toMatchObject({
+      schemaVersion: 1,
+      fromAttempt: 0,
+      toAttempt: 1,
+      phase: 'pre-admission',
+      trigger: 'patch-admission',
+      buildDisposition: 'not-started',
+      sourcePatchDigest: result.receipt.patchDigests[0],
+      replacementPatchDigest: result.receipt.patchDigests[1],
+      sourceCandidate: context.identities.evaluator,
+      repairResetIdentity: context.identities.evaluator,
+      resetIdentity: context.identities.evaluator,
+      reasonDigests: [digestValue('HARNESS_PATCH_ADMISSION_INVALID')],
+      nativeInvocation: {
+        invocationId: 'repair-0001',
+        operation: 'repair',
+        candidateTree: context.identities.evaluator.tree,
+      },
+    });
+    const { digest: transitionDigest, ...transitionBody } = transition;
+    expect(transitionDigest).toBe(digestValue(transitionBody));
   });
 
   it('clears stale admission evidence before the repair budget is exhausted', async () => {
@@ -62,6 +86,7 @@ describe('pre-admission candidate repair', () => {
     expect(result.receipt.admittedPaths).toEqual([]);
     expect(result.receipt.patchDigest).toBeNull();
     expect(result.receipt.patchDigests).toHaveLength(2);
+    expect(result.repairTransitions).toEqual([]);
   });
 
   it('does not model-repair a terminal patch application or wrapped admission failure', async () => {
@@ -98,7 +123,7 @@ describe('pre-admission candidate repair', () => {
     target.resetCandidate = vi.fn(async (...args) => {
       resets += 1;
       if (resets === 2) throw new Error('HARNESS_WORKTREE_RESET_FAILED');
-      await reset(...args);
+      return await reset(...args);
     });
     target.admitAndApply = vi.fn(async () => {
       throw new Error('HARNESS_PATCH_ADMISSION_INVALID');
@@ -112,6 +137,58 @@ describe('pre-admission candidate repair', () => {
     expect(target.repair).not.toHaveBeenCalled();
     expect(result.receipt.admittedPaths).toEqual([]);
     expect(result.receipt.patchDigest).toBeNull();
+    expect(result.repairTransitions).toEqual([]);
+  });
+
+  it('rejects a reset that does not restore the frozen evaluator identity', async () => {
+    const target = operations([]);
+    target.resetCandidate = vi.fn(async () => identity('9'));
+
+    const result = await transaction(target, 1).execute();
+
+    expect(result.status).toBe('fail');
+    expect(result.reason).toContain('HARNESS_CANDIDATE_RESET_IDENTITY_MISMATCH');
+    expect(target.admitAndApply).not.toHaveBeenCalled();
+    expect(target.repair).not.toHaveBeenCalled();
+    expect(result.repairTransitions).toEqual([]);
+  });
+
+  it('rejects an admission whose patch digest is not the submitted patch', async () => {
+    const target = operations([]);
+    const admit = target.admitAndApply;
+    target.admitAndApply = vi.fn(async (...args) => ({
+      ...await admit(...args),
+      patchDigest: digest('f'),
+    }));
+
+    const result = await transaction(target, 1).execute();
+
+    expect(result.status).toBe('fail');
+    expect(result.reason).toContain('HARNESS_PATCH_ADMISSION_DIGEST_MISMATCH');
+    expect(target.validateAdmission).not.toHaveBeenCalled();
+    expect(target.build).not.toHaveBeenCalled();
+    expect(target.repair).not.toHaveBeenCalled();
+    expect(result.repairTransitions).toEqual([]);
+  });
+
+  it('commits repair count and transition evidence only after a valid repair returns', async () => {
+    for (const repair of [
+      vi.fn(async () => { throw new Error('repair failed'); }),
+      vi.fn(async () => ({ payload: 'patch-one', authorInvocationId: 'repair-0001' })),
+    ]) {
+      const target = operations([]);
+      target.admitAndApply = vi.fn(async () => {
+        throw new Error('HARNESS_PATCH_ADMISSION_INVALID');
+      });
+      target.repair = repair;
+
+      const result = await transaction(target, 1).execute();
+
+      expect(result.status).toBe('fail');
+      expect(result.repairCount).toBe(0);
+      expect(result.receipt.recovery.repairCount).toBe(0);
+      expect(result.repairTransitions).toEqual([]);
+    }
   });
 
   it('records one rejected submission without calling a zero-budget repair', async () => {

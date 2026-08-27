@@ -230,6 +230,7 @@ export function operations(events: string[]): CandidateOperations {
     resetCandidate: vi.fn(async () => {
       events.push('reset');
       cycle += 1;
+      return identity('2');
     }),
     admitAndApply: vi.fn(async () => {
       events.push('admit');

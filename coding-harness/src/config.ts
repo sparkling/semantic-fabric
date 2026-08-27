@@ -65,6 +65,8 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/acceptance-task.ts',
     'coding-harness/src/acceptance-task-v3.ts',
     'coding-harness/src/acceptance-runner.ts',
+    'coding-harness/src/candidate-finish.ts',
+    'coding-harness/src/candidate-repair-transition.ts',
     'coding-harness/src/candidate.ts',
     'coding-harness/src/candidate-types.ts',
     'coding-harness/src/candidate-gates.ts',

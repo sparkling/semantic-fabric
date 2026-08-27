@@ -150,9 +150,10 @@ export class RepositoryCandidateOperations implements CandidateOperations {
     return await this.#options.model.repair(patch, reasons, repairAttempt, phase, signal);
   }
 
-  async resetCandidate(signal?: AbortSignal): Promise<void> {
+  async resetCandidate(signal?: AbortSignal): Promise<PreparedCandidate['candidate']> {
     await this.#options.worktrees.resetCandidate(signal);
     await this.#installFrozenLockfile(signal);
+    return await this.#options.worktrees.candidateIdentity(signal);
   }
 
   async admitAndApply(patch: PatchSubmission, signal?: AbortSignal): Promise<PatchAdmission> {

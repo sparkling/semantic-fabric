@@ -123,7 +123,8 @@ vi.mock('../src/candidate.js', async (importOriginal) => {
       async execute() {
         state.transactionExecute();
         return Object.freeze({
-          status: 'pass', reason: null, receipt: { digest: '9'.repeat(64) }, finalPatch: 'patch',
+          status: 'pass', reason: null, repairCount: 0, repairTransitions: [],
+          receipt: { digest: '9'.repeat(64) }, finalPatch: 'patch',
         });
       }
     },

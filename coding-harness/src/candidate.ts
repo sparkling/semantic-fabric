@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 
 import { createHash } from 'node:crypto';
+import {
+  completeCandidateRepairTransitionReset,
+  createCandidateRepairTransitionDraft,
+} from './candidate-repair-transition.js';
 import { deepFreeze, DEVELOPMENT_AUTHORITY } from './contracts.js';
-import { digestValue, ReceiptChain, type CommandEvidence } from './receipts.js';
+import { ReceiptChain, type CommandEvidence, type GitIdentity } from './receipts.js';
 import { failureCodeForError, normalizeNativeReviewError, repairablePatchFailureForError, type ReceiptFailureCode } from './failure-code.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
@@ -13,8 +17,8 @@ import {
   assertRequiredQeProfiles,
   assertSameIdentity,
   prefixArtifacts,
-  runtimeTrustUnavailable,
 } from './candidate-gates.js';
+import { finishCandidateTransaction } from './candidate-finish.js';
 import { runAbortableCohort } from './parallel.js';
 import {
   recordQeReceiptDigests,
@@ -27,7 +31,6 @@ import {
 import { normalizeVerifierFailure } from './verifier-failure.js';
 import {
   bindExternalEvidence,
-  bindNativeRuntimeEvidence,
   parseRufloEvidence,
   type RufloEvidence,
 } from './evidence.js';
@@ -37,6 +40,7 @@ import type {
   CandidateBuild,
   CandidateEvidenceState,
   CandidateOperations,
+  CandidateRepairTrigger,
   CandidateTransactionContext,
   CandidateTransactionResult,
   PatchAdmission,
@@ -123,6 +127,7 @@ export class CandidateTransaction {
       reviews: [],
       admission: null,
       patchDigests: [],
+      repairTransitions: [],
       coordination: {
         swarmId: this.#ruflo.swarmId,
         taskId: this.#ruflo.coordinationTaskId,
@@ -179,16 +184,38 @@ export class CandidateTransaction {
       while (true) {
         this.#assertActive();
         evidence.admission = null;
-        await this.#operations.resetCandidate(this.#signal);
-        evidence.patchDigests.push(createHash('sha256').update(patch.payload, 'utf8').digest('hex'));
+        const resetIdentity = await this.#operations.resetCandidate(this.#signal);
+        assertSameIdentity(
+          resetIdentity,
+          evidence.prepared.evaluator,
+          'HARNESS_CANDIDATE_RESET_IDENTITY_MISMATCH',
+        );
+        const patchDigest = createHash('sha256').update(patch.payload, 'utf8').digest('hex');
+        evidence.patchDigests.push(patchDigest);
+        completeCandidateRepairTransitionReset(
+          evidence.repairTransitions,
+          evidence.repairCount,
+          resetIdentity,
+          patchDigest,
+        );
         try {
           evidence.admission = await this.#operations.admitAndApply(patch, this.#signal);
         } catch (error) {
           const code = repairablePatchFailureForError(error);
           if (code === null) throw error;
-          await this.#operations.resetCandidate(this.#signal);
-          patch = await this.#repairOrFail(patch, [code], evidence, 'pre-admission');
+          const repairResetIdentity = await this.#operations.resetCandidate(this.#signal);
+          assertSameIdentity(
+            repairResetIdentity,
+            evidence.prepared.evaluator,
+            'HARNESS_CANDIDATE_RESET_IDENTITY_MISMATCH',
+          );
+          patch = await this.#repairOrFail(
+            patch, [code], evidence, 'pre-admission', 'patch-admission', repairResetIdentity,
+          );
           continue;
+        }
+        if (evidence.admission.patchDigest !== patchDigest) {
+          throw new Error('HARNESS_PATCH_ADMISSION_DIGEST_MISMATCH');
         }
         if (evidence.admission.candidate.tree === evidence.prepared.evaluator.tree) {
           throw new Error('HARNESS_CANDIDATE_TREE_UNCHANGED');
@@ -198,7 +225,9 @@ export class CandidateTransaction {
           this.#signal,
         );
         if (admissionFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, admissionFailures, evidence, 'post-admission');
+          patch = await this.#repairOrFail(
+            patch, admissionFailures, evidence, 'post-admission', 'admission-validation',
+          );
           continue;
         }
         let build: CandidateBuild;
@@ -211,7 +240,9 @@ export class CandidateTransaction {
         } catch (error) {
           if (!(error instanceof CandidateBuildFailure)) throw error;
           this.#recordBuild(error.build, evidence.admission, evidence);
-          patch = await this.#repairOrFail(patch, error.reasons, evidence, 'post-admission');
+          patch = await this.#repairOrFail(
+            patch, error.reasons, evidence, 'post-admission', 'build',
+          );
           continue;
         }
         this.#recordBuild(build, evidence.admission, evidence);
@@ -232,7 +263,9 @@ export class CandidateTransaction {
             ? [`${stage}: HARNESS_VERIFIER_REJECTED_WITHOUT_REASON`]
             : reasons.map((reason) => `${stage}: ${reason}`));
         if (verifierFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, verifierFailures, evidence, 'post-admission');
+          patch = await this.#repairOrFail(
+            patch, verifierFailures, evidence, 'post-admission', 'verification',
+          );
           continue;
         }
 
@@ -264,7 +297,9 @@ export class CandidateTransaction {
             ? [`${host}: HARNESS_REVIEW_REJECTED_WITHOUT_REASON`]
             : reasons.map((reason) => `${host}: ${reason}`));
         if (reviewFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, reviewFailures, evidence, 'post-admission');
+          patch = await this.#repairOrFail(
+            patch, reviewFailures, evidence, 'post-admission', 'review',
+          );
           continue;
         }
 
@@ -294,7 +329,9 @@ export class CandidateTransaction {
           this.#signal,
         );
         if (finalAdmissionFailures.length > 0) {
-          patch = await this.#repairOrFail(patch, finalAdmissionFailures, evidence, 'post-admission');
+          patch = await this.#repairOrFail(
+            patch, finalAdmissionFailures, evidence, 'post-admission', 'final-admission',
+          );
           continue;
         }
         if (evidence.admission === null
@@ -323,68 +360,61 @@ export class CandidateTransaction {
     evidence: CandidateEvidenceState,
     finalPatch: string | null,
   ): Promise<CandidateTransactionResult> {
-    let status = requestedStatus;
-    let reason = requestedReason;
-    let failureCode = requestedFailureCode;
-    try {
-      const recovery = this.#operations.recoveryEvidence();
-      evidence.runtime = {
-        retryCount: recovery.retryCount,
-        breakerState: recovery.breakerState,
-      };
-      const runtime = this.#operations.runtimeEvidence(evidence.nativeInvocations);
-      if (requestedStatus === 'pass') {
-        const native = bindNativeRuntimeEvidence({
-          value: runtime.nativeEvidence,
-          taskId: this.#context.taskId,
-          runId: this.#context.runId,
-          hosts: this.#context.hosts,
-          expectations: evidence.nativeInvocations,
-        });
-        evidence.coordination.nativeEvidenceDigests = [
-          ...native.hosts.map(digestValue),
-          ...native.invocations.map(digestValue),
-        ];
-        evidence.coordination.nativeRuntimeEvidenceDigest = digestValue(native);
-      }
-    } catch (error) {
-      const runtimeReason = `HARNESS_RUNTIME_EVIDENCE_FAILED:${error instanceof Error ? error.message : String(error)}`;
-      status = runtimeTrustUnavailable(error) ? 'gated' : 'fail';
-      reason = reason === null ? runtimeReason : `${reason}; ${runtimeReason}`;
-      failureCode ??= 'HARNESS_RUNTIME_EVIDENCE_FAILED';
-    }
-    try {
-      await this.#operations.cleanup();
-    } catch (error) {
-      const cleanupReason = `HARNESS_CLEANUP_FAILED:${error instanceof Error ? error.message : String(error)}`;
-      status = 'fail';
-      reason = reason === null ? cleanupReason : `${reason}; ${cleanupReason}`;
-      failureCode ??= 'HARNESS_CLEANUP_FAILED';
-    }
-    return this.#finalize(status, reason, failureCode, evidence, status === 'pass' ? finalPatch : null);
+    return await finishCandidateTransaction({
+      receipts: this.receipts,
+      context: this.#context,
+      operations: this.#operations,
+      now: this.#now,
+      requestedStatus,
+      requestedReason,
+      requestedFailureCode,
+      evidence,
+      finalPatch,
+    });
   }
 
   async #repairOrFail(
     patch: PatchSubmission,
     reasons: readonly string[],
-    evidence: CandidateEvidenceState, phase: 'pre-admission' | 'post-admission',
+    evidence: CandidateEvidenceState,
+    phase: 'pre-admission' | 'post-admission',
+    trigger: CandidateRepairTrigger,
+    repairResetIdentity: GitIdentity | null = null,
   ): Promise<PatchSubmission> {
     this.#assertActive();
     if (evidence.repairCount >= this.#maxRepairs) {
       throw new Error(`HARNESS_REPAIR_BUDGET_EXHAUSTED:${reasons.join('; ')}`);
     }
-    evidence.repairCount += 1;
+    const fromAttempt = evidence.repairCount;
+    const nextAttempt = fromAttempt + 1;
+    const sourcePatchDigest = createHash('sha256').update(patch.payload, 'utf8').digest('hex');
+    const sourceCandidate = evidence.admission?.candidate ?? evidence.prepared.evaluator;
     const repaired = await this.#operations.repair(
       patch,
       reasons,
-      evidence.repairCount, phase,
+      nextAttempt, phase,
       this.#signal,
     );
+    this.#assertActive();
+    const transition = createCandidateRepairTransitionDraft({
+      fromAttempt,
+      phase,
+      trigger,
+      sourcePatchDigest,
+      replacementPatchDigest: createHash('sha256')
+        .update(repaired.payload, 'utf8').digest('hex'),
+      sourceCandidate,
+      repairResetIdentity,
+      reasons,
+      repairInvocationId: repaired.authorInvocationId,
+    });
     evidence.nativeInvocations.push({
       invocationId: repaired.authorInvocationId,
       operation: 'repair',
-      candidateTree: evidence.admission?.candidate.tree ?? evidence.prepared.evaluator.tree,
+      candidateTree: sourceCandidate.tree,
     });
+    evidence.repairTransitions.push(transition);
+    evidence.repairCount = nextAttempt;
     return repaired;
   }
 
@@ -433,58 +463,6 @@ export class CandidateTransaction {
         : gate.reasons;
       throw new Error(`HARNESS_ACCEPTANCE_GATE_FAILED:${reasons.join('; ')}`);
     }
-  }
-
-  #finalize(
-    status: CandidateTransactionResult['status'],
-    reason: string | null,
-    failureCode: ReceiptFailureCode | null,
-    evidence: CandidateEvidenceState,
-    finalPatch: string | null,
-  ): CandidateTransactionResult {
-    const cancelled = status === 'cancelled';
-    const receipt = this.receipts.append({
-      schemaVersion: 3,
-      runId: this.#context.runId,
-      taskId: this.#context.taskId,
-      step: 'candidate-transaction',
-      status,
-      failureCode,
-      authority: DEVELOPMENT_AUTHORITY,
-      issuedAt: this.#now(),
-      identities: {
-        controller: this.#context.identities.controller,
-        baseline: evidence.prepared.baseline,
-        evaluator: evidence.prepared.evaluator,
-        candidate: evidence.admission?.candidate ?? evidence.prepared.candidate,
-      },
-      protectedInputs: evidence.prepared.protectedInputs,
-      route: this.#context.route,
-      hosts: this.#context.hosts,
-      admittedPaths: evidence.admission?.admittedPaths ?? [],
-      patchDigest: evidence.admission?.patchDigest ?? null,
-      patchDigests: evidence.patchDigests,
-      toolVersions: this.#context.toolVersions,
-      commands: evidence.commands,
-      artifactDigests: evidence.artifacts,
-      verifierDigests: evidence.verifiers,
-      critiqueDigests: evidence.critiques,
-      reviewDigests: evidence.reviews,
-      recovery: {
-        retryCount: evidence.runtime.retryCount,
-        breakerState: evidence.runtime.breakerState,
-        cancelled,
-        repairCount: evidence.repairCount,
-      },
-      coordination: evidence.coordination,
-    });
-    return deepFreeze({
-      status,
-      reason,
-      repairCount: evidence.repairCount,
-      finalPatch,
-      receipt,
-    });
   }
 
   #assertActive(): void {

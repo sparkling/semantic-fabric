@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: MIT
 
 import type { DEVELOPMENT_AUTHORITY } from './contracts.js';
+import type {
+  CandidateRepairTransition,
+  CandidateRepairTransitionDraft,
+  CandidateRepairPhase,
+} from './candidate-repair-transition.js';
+export type {
+  CandidateBuildDisposition,
+  CandidateRepairPhase,
+  CandidateRepairTransition,
+  CandidateRepairTransitionDraft,
+  CandidateRepairTrigger,
+} from './candidate-repair-transition.js';
 import type { AgenticQeProfile, NativeInvocationExpectation } from './evidence.js';
 import type { NativeHost } from './models/types.js';
 import type { GateDecision } from './policy.js';
@@ -13,7 +25,6 @@ import type {
 } from './receipts.js';
 
 export type VerifierStage = 'public' | 'independent' | 'regression';
-export type CandidateRepairPhase = 'pre-admission' | 'post-admission';
 
 export interface CandidateTransactionContext {
   runId: string;
@@ -88,7 +99,7 @@ export interface CandidateOperations {
     phase: CandidateRepairPhase,
     signal?: AbortSignal,
   ): Promise<PatchSubmission>;
-  resetCandidate(signal?: AbortSignal): Promise<void>;
+  resetCandidate(signal?: AbortSignal): Promise<GitIdentity>;
   admitAndApply(patch: PatchSubmission, signal?: AbortSignal): Promise<PatchAdmission>;
   validateAdmission(admission: PatchAdmission, signal?: AbortSignal): Promise<readonly string[]>;
   build(admission: PatchAdmission, attempt: number, signal?: AbortSignal): Promise<CandidateBuild>;
@@ -126,6 +137,7 @@ export interface CandidateTransactionResult {
   repairCount: number;
   finalPatch: string | null;
   receipt: Receipt;
+  repairTransitions: readonly CandidateRepairTransition[];
 }
 
 export interface CandidateEvidenceState {
@@ -137,6 +149,7 @@ export interface CandidateEvidenceState {
   reviews: string[];
   admission: PatchAdmission | null;
   patchDigests: string[];
+  repairTransitions: CandidateRepairTransitionDraft[];
   coordination: ReceiptDraft['coordination'];
   repairCount: number;
   runtime: Pick<CandidateRecoveryEvidence, 'retryCount' | 'breakerState'>;
