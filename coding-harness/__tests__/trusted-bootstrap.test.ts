@@ -17,12 +17,43 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ISSUE_8_SAFE_TRANSACTION_REASON_CODES } from '../src/issue-8-programme-envelope.js';
 
 const GIT = '/usr/bin/git';
 const NODE = process.execPath;
 const bootstrapNodeIsRootOwned = lstatSync(realpathSync(NODE), { bigint: true }).uid === 0n;
 const roots: string[] = [];
+// The schema-v4 launcher is an immutable historical verifier. Keep its original
+// allowlist as test evidence instead of coupling it to the live receipt policy.
+const LEGACY_ISSUE_8_SAFE_TRANSACTION_REASON_CODES = Object.freeze([
+  'HARNESS_ACCEPTANCE_GATE_FAILED',
+  'HARNESS_CLEANUP_FAILED',
+  'HARNESS_NATIVE_ARCHITECTURE_RESPONSE_INVALID',
+  'HARNESS_NATIVE_CIRCUIT_OPEN',
+  'HARNESS_NATIVE_HOST_FAILED',
+  'HARNESS_NATIVE_HOST_TIMEOUT',
+  'HARNESS_NATIVE_INVOCATION_CANCELLED',
+  'HARNESS_NATIVE_ORIGIN_POLICY_DENIED',
+  'HARNESS_NATIVE_ORIGIN_UNUSED',
+  'HARNESS_NATIVE_PATCH_INVALID',
+  'HARNESS_NATIVE_PATCH_RESPONSE_INVALID',
+  'HARNESS_NATIVE_RETRY_BUDGET_EXHAUSTED',
+  'HARNESS_NATIVE_REVIEW_RESPONSE_INVALID',
+  'HARNESS_NATIVE_STRUCTURED_ENVELOPE_INVALID',
+  'HARNESS_NATIVE_STRUCTURED_OUTPUT_INVALID',
+  'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING',
+  'HARNESS_PATCH_ADMISSION_INVALID',
+  'HARNESS_PATCH_APPLICATION_FAILED',
+  'HARNESS_PATCH_EMPTY',
+  'HARNESS_PATCH_INVALID',
+  'HARNESS_PATCH_PATH_NOT_DECLARED',
+  'HARNESS_PATCH_TOO_LARGE',
+  'HARNESS_REPAIR_BUDGET_EXHAUSTED',
+  'HARNESS_RUNTIME_EVIDENCE_FAILED',
+  'HARNESS_TRANSACTION_FAILED',
+  'HARNESS_VERIFIER_INDEPENDENT_INFRASTRUCTURE_FAILED',
+  'HARNESS_VERIFIER_PUBLIC_INFRASTRUCTURE_FAILED',
+  'HARNESS_VERIFIER_REGRESSION_INFRASTRUCTURE_FAILED',
+] as const);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -152,7 +183,7 @@ describe('trusted issue #8 bootstrap', () => {
     expect(safeReason(hostile)).toBeNull();
 
     const launcher = readFileSync(new URL('../scripts/launch-issue-8.mjs', import.meta.url), 'utf8');
-    for (const code of ISSUE_8_SAFE_TRANSACTION_REASON_CODES) {
+    for (const code of LEGACY_ISSUE_8_SAFE_TRANSACTION_REASON_CODES) {
       expect(launcher).toContain(`'${code}'`);
     }
   });

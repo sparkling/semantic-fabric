@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   failureCodeForError,
+  normalizeNativeReviewError,
   gitApplyFailureCode,
   isRepairablePatchFailure,
 } from '../src/failure-code.js';
@@ -150,6 +151,23 @@ describe('strict receipt schema', () => {
       .toBe('HARNESS_TRANSACTION_FAILED');
     expect(failureCodeForError(new Error(`HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`)))
       .toBe('HARNESS_TRANSACTION_FAILED');
+    for (const code of [
+      'HARNESS_NATIVE_EVIDENCE_FILE_CHANGED',
+      'HARNESS_NATIVE_EVIDENCE_FILE_INVALID',
+      'HARNESS_NATIVE_INVOCATION_EXECUTION_MISMATCH',
+      'HARNESS_NATIVE_OUTPUT_DIGEST_INVALID',
+      'HARNESS_NATIVE_REVIEW_CONTRADICTORY',
+      'HARNESS_NATIVE_REVIEW_LIMIT_EXCEEDED',
+      'HARNESS_NATIVE_REVIEW_REASON_REQUIRED',
+    ]) expect(failureCodeForError(new Error(code))).toBe(code);
+  });
+
+  it('retains safe review errors and assigns an opaque failure to the review stage', () => {
+    const exact = new Error('HARNESS_NATIVE_HOST_TIMEOUT:codex');
+    expect(normalizeNativeReviewError(exact)).toBe(exact);
+    expect(failureCodeForError(normalizeNativeReviewError(
+      new Error('private provider parser detail'),
+    ))).toBe('HARNESS_NATIVE_REVIEW_FAILED');
   });
 
   it('separates model-correctable admission failures from terminal application failures', () => {

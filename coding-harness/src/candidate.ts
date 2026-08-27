@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { deepFreeze, DEVELOPMENT_AUTHORITY } from './contracts.js';
 import { digestValue, ReceiptChain, type CommandEvidence } from './receipts.js';
-import { failureCodeForError, repairablePatchFailureForError, type ReceiptFailureCode } from './failure-code.js';
+import { failureCodeForError, normalizeNativeReviewError, repairablePatchFailureForError, type ReceiptFailureCode } from './failure-code.js';
 import { NativeCancellationError } from './models/recovery.js';
 import { assertIndependentReviewEvidence } from './models/review.js';
 import {
@@ -55,7 +55,6 @@ export class CandidateBuildFailure extends Error {
     this.reasons = Object.freeze([...reasons]);
   }
 }
-
 const VERIFIER_STAGES = Object.freeze([
   'public', 'independent', 'regression',
 ] as const satisfies readonly VerifierStage[]);
@@ -246,7 +245,8 @@ export class CandidateTransaction {
         );
 
         const reviews = await runAbortableCohort((['codex', 'claude-code'] as const).map((host) =>
-          async (cohortSignal) => await this.#operations.review(host, build, cohortSignal),
+          async (cohortSignal) => await this.#operations.review(host, build, cohortSignal)
+            .catch((error: unknown) => { throw normalizeNativeReviewError(error); }),
         ), this.#signal);
         assertIndependentReviewEvidence(patch.authorInvocationId, reviews);
         for (const review of reviews) {

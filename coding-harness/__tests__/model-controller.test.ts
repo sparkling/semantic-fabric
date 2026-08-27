@@ -293,6 +293,9 @@ describe('native repository model controller', () => {
     for (const { prompt } of prompts.filter(({ operation }) => operation === 'review')) {
       expect(prompt).toContain(ADMITTED_SOURCE.trim());
       expect(prompt).toContain(ADMITTED_DIFF.trim());
+      expect(prompt).toContain('accepted=true only when every required invariant passes');
+      expect(prompt).toContain('accepted=true requires reasons=[]');
+      expect(prompt).toContain('accepted=false requires at least one actionable rejection reason');
     }
     for (const { prompt } of prompts) expect(prompt).not.toContain(SEALED_EVALUATOR_FIXTURE);
   });

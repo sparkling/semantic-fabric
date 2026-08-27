@@ -23,7 +23,7 @@
     "coding-harness/dist/candidate-gates.js": "0a97751b67730763e11955dda7f628cd3e72bdcf8fcb60e09beb2d4b8825ce9f",
     "coding-harness/dist/candidate-receipt-evidence.js": "09b09d54f7bd73b4dc21e99eedeb3e34a52bfa470eb937c18289f2dcdbe61d34",
     "coding-harness/dist/candidate-types.js": "cb9807bbbf566a3f3864690d59613b9bbfd7d1c5f2028d670650653501ceeb1b",
-    "coding-harness/dist/candidate.js": "a590934e130369cce84b284f5981fffcdaea5a8d73d6b4366d88aaa2e616d568",
+    "coding-harness/dist/candidate.js": "94ed8fff8dd17f88ac57f31b833a00542ba8d55717df3395e456650812009315",
     "coding-harness/dist/config.js": "c3729ccb296568771d69a92fd90d727a22230a5f51ada7ae2edf57399fc75227",
     "coding-harness/dist/contracts.js": "67e2480fc0c1ea137d260d29c9d8af11f2e48f72f9f168755f984b9531113310",
     "coding-harness/dist/controller-attestation.js": "1960feb9419a37bb1fc52dcca9f30d2ca2ab694bec86ab3ef1764cff0722dec5",
@@ -35,7 +35,7 @@
     "coding-harness/dist/effective-config.js": "e7a858b093ff4facd5f1e4d2b21b51fef35d1506b16cfcf33e681e449c646e00",
     "coding-harness/dist/evaluator.js": "1e8c6f2e98adfd05d9b18e2ba145f8b5d4a14edaf21fcbe1711752d76a2834e5",
     "coding-harness/dist/evidence.js": "eb49ab493a45c047e309961ad056a750f4f9d08676ca859ddacda9a56233a453",
-    "coding-harness/dist/failure-code.js": "c5d16d891852749a768616b9201427c0b6ee0644b3b96d83a9429f1c6ed42a1a",
+    "coding-harness/dist/failure-code.js": "033081d35316f07c3eb743cda07fc346e36e15c13d59c77780c5a71a73bfda0f",
     "coding-harness/dist/frozen-cargo-lock-fixture.js": "7e14d5187786a1a7ced57feca9e2ba7e2ae9de8f3f1c9416767da4ee55240f65",
     "coding-harness/dist/frozen-cargo-lock.js": "e57400321bab08815f104f0804ec7d498a9739a8bba2981f100ccf85f68eb1f4",
     "coding-harness/dist/frozen-cargo-metadata.js": "a9fd9219e7eb4fd86a2de8827acfa4e27618b2905afe4591ef808600c1c1b6af",
@@ -59,7 +59,7 @@
     "coding-harness/dist/metadata-tree.js": "0df9bf21d34bbb549c2be96d9f8aaaac0bc0402216758b9ded197e7a58ca476e",
     "coding-harness/dist/metaharness-diagnostics.js": "e7eef46bb850b954e48c03b078b54bef0587bba466bfd66a1423e7b62e191228",
     "coding-harness/dist/model-context.js": "997c586a7a9db2ea1405fc27303688fd1853b6b2d33c04c48ea109b1d673304c",
-    "coding-harness/dist/model-controller.js": "9becc442aaec9c6843f51f0b2f9c6e2daa272169df7fd6f5e6da0511fe2db761",
+    "coding-harness/dist/model-controller.js": "fca12959e8ccac2642eba30203a70203ebe04c5c4a03a02cf1562e1b45da8bfc",
     "coding-harness/dist/models/environment.js": "479589f8b86b5de8a52f4cc5a23faedcd6dbb2edf1ec6f7eb5ea8239cfa8a223",
     "coding-harness/dist/models/index.js": "59f4214462617f166a6246ad3a23b235fa3562fad3c63c99cb30adb495807c15",
     "coding-harness/dist/models/native-adapter-contracts.js": "e09875ffa0f08139e776ddcbabae5ec2abb06dca8312734a255c5a3f454bfb6f",
@@ -68,7 +68,7 @@
     "coding-harness/dist/models/review.js": "bde6088f9ce5dc191b49dcf8eee949b3d3df1e7acc5b0cce281404497a78ad41",
     "coding-harness/dist/models/routing.js": "a1dd940cc7a76812bfb14062dd5c1e8321d4d5ced6f2c5c029f3520cf532f911",
     "coding-harness/dist/models/types.js": "2cb4f7582164af833acc225508059f37be8f87de543605c17e941f5153e2027f",
-    "coding-harness/dist/native-client.js": "4f3ac377c9ac45ec762e2e3e4880aafb026bfac9a1acc5450be6185b19ae252d",
+    "coding-harness/dist/native-client.js": "9adb6307928f769b1638d5e51e1a482b83a85d916df98d7ad109ec2854e40cdb",
     "coding-harness/dist/native-egress-audit.js": "4f802c6db31a943d0a33dd11184a3eaaa36a844d9130df06267f08e7c5f61803",
     "coding-harness/dist/native-egress.js": "d054ef5ac70eb046a40057fb725dc709118bdba0407513c4c61fb0c25572f5d0",
     "coding-harness/dist/native-filesystem.js": "c619396dde4b7790b90cc013f01e2bc744f1efaed6cd162c585d7ab494f8eb93",
@@ -246,5 +246,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "d4e3b3dd528d879827d9f3b52577a087eaa086a316d0cbc2ec473d41c9b28f8a"
+  "runtimeTreeDigest": "d4a401f93a9b5be264f46e556282300696a5745ac49757629a16e9a720770974"
 }

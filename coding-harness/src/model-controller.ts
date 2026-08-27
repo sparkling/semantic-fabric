@@ -249,11 +249,20 @@ export class NativeRepositoryModelController implements RepositoryModelControlle
     const invocation = await this.#invoke(
       candidate,
       'review',
-      this.#prompt('Review the admitted candidate and immutable artifact digests.', context, {
-        candidate: build.candidate,
-        commands: build.commands,
-        artifactDigests: build.artifactDigests,
-      }),
+      this.#prompt(
+        [
+          'Review the admitted candidate and immutable artifact digests.',
+          'Set accepted=true only when every required invariant passes.',
+          'The response contract is exact: accepted=true requires reasons=[];',
+          'accepted=false requires at least one actionable rejection reason.',
+        ].join(' '),
+        context,
+        {
+          candidate: build.candidate,
+          commands: build.commands,
+          artifactDigests: build.artifactDigests,
+        },
+      ),
       signal,
     );
     const output = parseReview(invocation.output);

@@ -144,8 +144,14 @@ describe('native adapter structured client', () => {
       },
     });
     expect(schemas[2]).toMatchObject({
+      description: expect.stringContaining('accepted=true requires reasons=[]'),
       properties: {
-        reasons: { maxItems: 8, items: { maxLength: 1_000 } },
+        accepted: { description: expect.stringContaining('reasons must be empty') },
+        reasons: {
+          description: expect.stringContaining('actionable rejection reason'),
+          maxItems: 8,
+          items: { maxLength: 1_000 },
+        },
       },
     });
   });

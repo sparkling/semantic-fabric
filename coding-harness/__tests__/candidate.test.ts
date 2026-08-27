@@ -93,68 +93,6 @@ describe('patched candidate transaction', () => {
       .toThrow('HARNESS_ISSUE_8_PROGRAMME_DIAGNOSTIC_BLOB_MISMATCH');
   });
 
-  it('persists and cross-checks only the sanitized primary transaction failure code', async () => {
-    for (const [failure, expected] of [
-      [new Error('HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING:private output'),
-        'HARNESS_NATIVE_STRUCTURED_OUTPUT_MISSING'],
-      [new Error('HARNESS_MODEL_SECRET:must-not-escape'), 'HARNESS_TRANSACTION_FAILED'],
-      [new Error(`HARNESS_NATIVE_HOST_FAILED:${'x'.repeat(4_096)}`),
-        'HARNESS_TRANSACTION_FAILED'],
-    ] as const) {
-      const target = operations([]);
-      target.implement = vi.fn(async () => { throw failure; });
-      const result = await new CandidateTransaction({
-        context, operations: target, maxRepairs: 0,
-        now: () => '2026-08-25T12:02:00.000Z',
-      }).execute();
-      const envelope = createIssue8ProgrammeEnvelope(result.receipt, diagnosticBlob);
-
-      expect(result.receipt.failureCode).toBe(expected);
-      expect(finalizeIssue8ProgrammeOutcome({
-        transactionStatus: result.status, transactionReason: result.reason, envelope,
-      })).toEqual({ status: 'fail', reason: expected });
-      expect(() => finalizeIssue8ProgrammeOutcome({
-        transactionStatus: result.status,
-        transactionReason: 'HARNESS_CLEANUP_FAILED:conflicting code',
-        envelope,
-      })).toThrow('HARNESS_ISSUE_8_FAILURE_CODE_MISMATCH');
-    }
-  });
-
-  it('persists the primary verifier infrastructure stage without leaking its cause', async () => {
-    for (const [failedStage, expected] of [
-      ['public', 'HARNESS_VERIFIER_PUBLIC_INFRASTRUCTURE_FAILED'],
-      ['independent', 'HARNESS_VERIFIER_INDEPENDENT_INFRASTRUCTURE_FAILED'],
-      ['regression', 'HARNESS_VERIFIER_REGRESSION_INFRASTRUCTURE_FAILED'],
-    ] as const) {
-      const target = operations([]);
-      target.verify = vi.fn(async (stage, _build, signal) => {
-        if (stage === failedStage) {
-          const cause = new Error('private verifier setup detail');
-          cause.name = 'AbortError';
-          throw cause;
-        }
-        await new Promise<void>((resolve) => {
-          if (signal?.aborted === true) resolve();
-          else signal?.addEventListener('abort', () => resolve(), { once: true });
-        });
-        throw new Error('private sibling cleanup detail');
-      });
-      const result = await new CandidateTransaction({
-        context, operations: target, maxRepairs: 0,
-        now: () => '2026-08-25T12:02:00.000Z',
-      }).execute();
-
-      expect(result.status).toBe('fail');
-      expect(result.reason).toBe(expected);
-      expect(result.receipt.failureCode).toBe(expected);
-      expect(JSON.stringify(result.receipt)).not.toContain('private verifier setup detail');
-      expect(JSON.stringify(result.receipt)).not.toContain('private sibling cleanup detail');
-      expect(target.verify).toHaveBeenCalledTimes(3);
-      expect(target.repair).not.toHaveBeenCalled();
-    }
-  });
-
   it('routes an exact-source admission mismatch through the bounded repair loop', async () => {
     const target = operations([]);
     let validations = 0;

@@ -197,11 +197,23 @@ function responseSchema(operation: ModelOperation): Readonly<Record<string, unkn
   }
   return deepFreeze({
     ...common,
+    description: [
+      'Independent candidate review verdict.',
+      'accepted=true requires reasons=[];',
+      'accepted=false requires at least one actionable rejection reason.',
+    ].join(' '),
     properties: {
-      accepted: { type: 'boolean' },
+      accepted: {
+        type: 'boolean',
+        description: 'When true, reasons must be empty; when false, reasons must be non-empty.',
+      },
       reasons: {
         type: 'array',
         maxItems: NATIVE_REVIEW_MAX_REASONS,
+        description: [
+          'Empty only for acceptance.',
+          'For rejection, include at least one actionable rejection reason.',
+        ].join(' '),
         items: {
           type: 'string', minLength: 1, maxLength: NATIVE_REVIEW_REASON_MAX_CHARS,
         },

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -9,7 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-
+import { RECEIPT_FAILURE_CODES } from '../src/failure-code.js';
 const GIT = '/usr/bin/git';
 const NODE = '/usr/bin/node';
 const PRIMARY_ENTRY = 'coding-harness/dist/issue-8-program.js';
@@ -232,6 +231,7 @@ describe('trusted programme-v5 bootstrap', () => {
     expect(launcher).toContain('safePath(privateRuntime,V5_ENTRY)');
     expect(launcher).not.toContain('trustedControllerMain');
     for (const reason of ['"HARNESS_PROGRAMME_ACCEPTANCE_REJECTED"', '"HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH"']) expect(launcher).toContain(reason);
+    for (const code of RECEIPT_FAILURE_CODES) expect(launcher).toContain(`"${code}"`);
   });
 });
 
