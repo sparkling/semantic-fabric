@@ -48,10 +48,33 @@ describe('programme envelope version dispatcher', () => {
       .toEqual(parseIssue8ProgrammeEnvelope(nestedDuplicate));
   });
 
-  it('recognizes schema v5 without enabling an incomplete parser', () => {
+  it('requires an externally anchored expectation before dispatching schema v5', () => {
     expect(() => parseProgrammeEnvelope('{"schemaVersion":5}'))
-      .toThrow('HARNESS_PROGRAMME_ENVELOPE_V5_NOT_ENABLED');
+      .toThrow('HARNESS_PROGRAMME_ENVELOPE_V5_POLICY_ANCHOR_REQUIRED');
+    expect(() => parseProgrammeEnvelope('{"schemaVersion":5}', { schemaVersion: 4 }))
+      .toThrow('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_MISMATCH');
+    expect(() => parseProgrammeEnvelope(fixture, {
+      schemaVersion: 5,
+      policyFingerprint: 'a'.repeat(64),
+    })).toThrow('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_DOWNGRADE');
     expect(() => parseIssue8ProgrammeEnvelope('{"schemaVersion":5}')).toThrow();
+  });
+
+  it('rejects every malformed supplied expectation before version dispatch', () => {
+    const envelope = parseIssue8ProgrammeEnvelope(fixture);
+    for (const expectation of [
+      null,
+      {},
+      { schemaVersion: '5' },
+      { schemaVersion: 6 },
+      { schemaVersion: 4, policyFingerprint: 'a'.repeat(64) },
+      { schemaVersion: 5, policyFingerprint: 'not-a-digest' },
+      { schemaVersion: 5, policyFingerprint: '0'.repeat(64) },
+      { schemaVersion: 5, policyFingerprint: 'a'.repeat(64), extra: true },
+    ]) {
+      expect(() => (parseProgrammeEnvelope as any)(fixture, expectation)).toThrow();
+      expect(() => (serializeProgrammeEnvelope as any)(envelope, expectation)).toThrow();
+    }
   });
 
   it('rejects unsupported, ambiguous, and malformed serializations', () => {
