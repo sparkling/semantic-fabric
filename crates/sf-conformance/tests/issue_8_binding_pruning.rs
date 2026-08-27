@@ -104,6 +104,12 @@ fn incompatible_constant_subject_prunes_the_whole_atom_branch() {
 #[test]
 fn repeated_subject_and_predicate_variable_prunes_incompatible_branches() {
     assert_both_match_oracle(SQL, R2RML, "SELECT ?x ?value WHERE { ?x ?x ?value }", 0);
+    assert_both_match_oracle(
+        SQL,
+        GRAPH_PREDICATE_R2RML,
+        r#"SELECT ?x ?s WHERE { GRAPH ?x { ?s ?x "Alice" } }"#,
+        0,
+    );
 }
 
 #[test]
@@ -121,6 +127,22 @@ const GRAPH_R2RML: &str = r#"
         rr:template "http://ex/person/{id}" ;
         rr:class ex:Person ;
         rr:graphMap [ rr:constant ex:peopleGraph ]
+    ] .
+"#;
+
+const GRAPH_PREDICATE_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+
+<#People>
+    rr:logicalTable [ rr:tableName "people" ] ;
+    rr:subjectMap [
+        rr:template "http://ex/person/{id}" ;
+        rr:graphMap [ rr:constant ex:peopleGraph ]
+    ] ;
+    rr:predicateObjectMap [
+        rr:predicate ex:name ;
+        rr:objectMap [ rr:column "name" ]
     ] .
 "#;
 
