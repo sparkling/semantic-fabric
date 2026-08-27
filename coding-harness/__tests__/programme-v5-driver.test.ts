@@ -267,6 +267,7 @@ describe('programme v5 driver', () => {
     ['missing', (tools: Record<string, string>) => { delete tools.caBundle; }],
     ['extra', (tools: Record<string, string>) => { tools.legacyCodex = 'forbidden'; }],
     ['mismatched', (tools: Record<string, string>) => { tools.node = '/wrong/node#sha256:bad'; }],
+    ['malformed native', (tools: Record<string, string>) => { tools.codexExecutable = 'bad'; }],
   ])('fails closed on a %s base tool set before model execution', async (_name, mutate) => {
     const base = baseTools();
     mutate(base);
@@ -287,14 +288,24 @@ describe('programme v5 driver', () => {
 
     const native = nativeSession() as any;
     native.ledger.preflightExecutableIdentitySnapshot = () => [
-      executableIdentity('codex', baseTools().codexExecutable),
-      { ...executableIdentity('claude-code', baseTools().claudeExecutable), digest: 'f'.repeat(64) },
+      executableIdentity('codex', baseTools().codexExecutable, '/private/runtime/codex'),
+      { ...executableIdentity('claude-code', baseTools().claudeExecutable,
+        '/private/runtime/claude'), digest: 'f'.repeat(64) },
     ];
     state.cleanupEvents.length = 0;
     await expect(prepareProgrammeV5Transaction(options({
       createNativeSession: async () => native,
     }))).rejects.toThrow('HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH:claude-code');
     expect(state.cleanupEvents.indexOf('frozen')).toBeLessThan(state.cleanupEvents.indexOf('worktrees'));
+
+    const sourceBound = nativeSession() as any;
+    sourceBound.ledger.preflightExecutableIdentitySnapshot = () => [
+      executableIdentity('codex', baseTools().codexExecutable),
+      executableIdentity('claude-code', baseTools().claudeExecutable, '/private/runtime/claude'),
+    ];
+    await expect(prepareProgrammeV5Transaction(options({
+      createNativeSession: async () => sourceBound,
+    }))).rejects.toThrow('HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH:codex');
   });
 });
 
@@ -408,8 +419,8 @@ function nativeSession() {
       preflightExecutableIdentitySnapshot: () => {
         const tools = baseTools();
         return [
-          executableIdentity('codex', tools.codexExecutable),
-          executableIdentity('claude-code', tools.claudeExecutable),
+          executableIdentity('codex', tools.codexExecutable, '/private/runtime/codex'),
+          executableIdentity('claude-code', tools.claudeExecutable, '/private/runtime/claude'),
         ];
       },
     },
@@ -467,9 +478,9 @@ function recheckedTools(): Record<string, string> {
   return Object.fromEntries(keys.map((key) => [key, tools[key]]));
 }
 
-function executableIdentity(host: 'codex' | 'claude-code', claim: string) {
+function executableIdentity(host: 'codex' | 'claude-code', claim: string, privatePath?: string) {
   const [path, digest] = claim.split('#sha256:');
-  return { host, path, digest };
+  return { host, path: privatePath ?? path, digest };
 }
 
 function canonicalJson(value: unknown): string {

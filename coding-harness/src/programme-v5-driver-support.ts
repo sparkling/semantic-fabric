@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { createHash } from 'node:crypto';
+import { isAbsolute, resolve } from 'node:path';
 import { VerifierRegistry, predicateVerifier } from '@metaharness/harness';
 import {
   acceptanceTaskPrompt,
@@ -300,15 +301,39 @@ export function assertProgrammeV5NativeExecutableBindings(
 ): void {
   const hosts = ['codex', 'claude-code'] as const;
   const keys = ['codexExecutable', 'claudeExecutable'] as const;
+  if (snapshot.length !== hosts.length) {
+    throw new Error('HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH:snapshot');
+  }
   for (let index = 0; index < hosts.length; index += 1) {
     const identity = snapshot[index];
-    const claim = identity === undefined
-      ? ''
-      : `${identity.path}#sha256:${identity.digest}`;
-    if (identity?.host !== hosts[index] || toolVersions[keys[index]] !== claim) {
+    const source = parseNativeExecutableClaim(toolVersions[keys[index]]);
+    // The tool claim attests the installed source; the ledger attests the
+    // immutable private copy that actually executed. Copy construction and the
+    // runner already prove source-to-copy bytes, so bind the two domains by the
+    // digest while requiring them to remain distinct paths.
+    if (identity?.host !== hosts[index] || source === null
+      || !validAbsolutePath(identity.path) || identity.path === source.path
+      || !SHA256_PATTERN.test(identity.digest) || identity.digest === '0'.repeat(64)
+      || identity.digest !== source.digest) {
       throw new Error(`HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH:${hosts[index]}`);
     }
   }
+}
+
+function parseNativeExecutableClaim(value: string | undefined): Readonly<{
+  path: string; digest: string;
+}> | null {
+  if (typeof value !== 'string') return null;
+  const marker = '#sha256:';
+  const index = value.lastIndexOf(marker);
+  if (index <= 0 || index !== value.indexOf(marker)) return null;
+  const path = value.slice(0, index), digest = value.slice(index + marker.length);
+  return validAbsolutePath(path) && SHA256_PATTERN.test(digest) && digest !== '0'.repeat(64)
+    ? Object.freeze({ path, digest }) : null;
+}
+
+function validAbsolutePath(value: string): boolean {
+  return isAbsolute(value) && resolve(value) === value && !value.includes('\0');
 }
 
 export function assertProgrammeV5ToolRecheck(

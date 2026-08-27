@@ -92,7 +92,7 @@
     "coding-harness/dist/programme-receipt-keys.js": "beeb68758ed66aad605872dd5c47974973b42f973bbd6fef38b120458b57c419",
     "coding-harness/dist/programme-score-v5.js": "1751fcdf9491c2ae02a642e7d5331213447da5801bb7cca21e98644135b8f89a",
     "coding-harness/dist/programme-task-runtime-v1.js": "ea2b9791d113db1c4872d06687ed9ed0401a172b68b5f6f547077146e84b6b6e",
-    "coding-harness/dist/programme-v5-driver-support.js": "d3d5021b34fdbf69d856e618e8e0475eed4e252f21bbe995b502efd772a2170e",
+    "coding-harness/dist/programme-v5-driver-support.js": "c3efaa3a87c6c1aa7ebdd87e45208faff16a5eaf6819f21664a4476d2d15d13c",
     "coding-harness/dist/programme-v5-driver.js": "bc230b8d9744818b0ad4e1cf24d74317d76819d7594d30e47d5b600417c3928d",
     "coding-harness/dist/programme-v5-policy-anchor.js": "be3ac2119b823907e3640079099daa8b2074dc9653d3b077c200a6a7796499d2",
     "coding-harness/dist/programme-v5-program-runtime.js": "b7f78124278f62a34e5f3942d3101fd5c5b97955935fe20faa21d3d6227a8670",
@@ -246,5 +246,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "159c2c15af00a67a3472eac6e7bf10414a070e847ee94f53cc16210e991858f5"
+  "runtimeTreeDigest": "ba358334b10331a8b8795c2f1121a7798412ccf8f51edd8f9cca114a12d50c98"
 }

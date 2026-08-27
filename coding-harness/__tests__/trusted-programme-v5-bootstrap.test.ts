@@ -231,7 +231,7 @@ describe('trusted programme-v5 bootstrap', () => {
     expect(launcher).toContain('const V5_ENTRY="coding-harness/dist/programme-v5-program.js"');
     expect(launcher).toContain('safePath(privateRuntime,V5_ENTRY)');
     expect(launcher).not.toContain('trustedControllerMain');
-    expect(launcher).toContain('"HARNESS_PROGRAMME_ACCEPTANCE_REJECTED"');
+    for (const reason of ['"HARNESS_PROGRAMME_ACCEPTANCE_REJECTED"', '"HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH"']) expect(launcher).toContain(reason);
   });
 });
 
