@@ -6,14 +6,13 @@ import type { AcceptanceTask } from './acceptance-task.js';
 import {
   acceptanceTaskPrompt,
   bindAcceptanceTaskToRustProfile,
-  requiredQeProfiles,
   requireExactReferenceCandidate,
 } from './acceptance-task.js';
 import { AcceptanceRunner } from './acceptance-runner.js';
 import { CandidateTransaction, type CandidateBuild } from './candidate.js';
 import type { CandidateTransactionResult } from './candidate-types.js';
 import { SECURE_HARNESS_CONFIG } from './config.js';
-import { attestController, ISSUE_8_ACCEPTANCE_TASK_PATH, type ControllerAttestation } from './controller-attestation.js';
+import { attestController, type ControllerAttestation } from './controller-attestation.js';
 import { DEVELOPMENT_AUTHORITY, parseTaskContract } from './contracts.js';
 import { materializeEvaluatorCommit, type EvaluatorIdentity } from './evaluator.js';
 import type { FrozenRegistryPackage } from './frozen-cargo-metadata.js';
@@ -21,6 +20,10 @@ import { GitProtectedInputBoundary } from './git-protected-boundary.js';
 import { runGitCommand } from './git-process.js';
 import { assertGitMaterializationSafe } from './git-materialization.js';
 import { GitWorktreeSet, type PreparedWorktrees } from './git-worktrees.js';
+import {
+  ISSUE_8_V2_EVIDENCE_BINDINGS,
+  assertIssue8V2ExecutionTask,
+} from './issue-8-v2-evidence.js';
 import { RepositoryModelContextProvider } from './model-context.js';
 import { NativeRepositoryModelController, type NativeStructuredClient } from './model-controller.js';
 import { NativeInvocationRecovery } from './models/recovery.js';
@@ -30,6 +33,8 @@ import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 import { digestValue, type HostEvidence } from './receipts.js';
 import { candidateExpectationForTask, RepositoryCandidateOperations } from './repository-operations.js';
 import type { RustOfflineProfile } from './rust-sandbox.js';
+import { resolveTaskEvidencePlan } from './task-evidence-plan.js';
+import type { TaskQeCollectorFactory } from './task-qe.js';
 
 export interface Issue8FrozenLockLease {
   readonly lockfile: Readonly<{
@@ -84,16 +89,7 @@ export interface Issue8DriverOptions {
     runId: string;
     routeSnapshotDigest: string;
   }>) => Promise<unknown> | unknown;
-  readonly agenticQeEvidence: (
-    build: CandidateBuild,
-    context: Readonly<{
-      controlledRoot: string;
-      candidateRoot: string;
-      outputRoot: string;
-      rustProfile: RustOfflineProfile;
-    }>,
-    signal?: AbortSignal,
-  ) => Promise<readonly unknown[]>;
+  readonly createAgenticQeCollector: TaskQeCollectorFactory;
   readonly signal?: AbortSignal;
   readonly now?: () => string;
 }
@@ -108,10 +104,6 @@ export interface Issue8DriverResult {
 const ROUTED_STEPS = Object.freeze([
   'architecture', 'implementation', 'repair',
 ] as const);
-const CONFORMANCE_REPORT_PATHS = Object.freeze([
-  'tests/w3c/rdb2rdf/earl-semantic-fabric-direct.ttl',
-  'tests/w3c/rdb2rdf/earl-semantic-fabric-r2rml.ttl',
-]);
 
 export async function runIssue8Transaction(
   options: Issue8DriverOptions,
@@ -124,11 +116,11 @@ export async function runIssue8Transaction(
     taskPath: options.taskPath,
     signal: options.signal,
   });
-  if (controller.taskPath !== options.taskPath
-    || controller.taskPath !== ISSUE_8_ACCEPTANCE_TASK_PATH
-    || controller.task.schemaVersion !== 2) {
-    throw new Error('HARNESS_ISSUE_8_REQUIRES_TASK_SCHEMA_V2');
-  }
+  assertIssue8V2ExecutionTask({
+    requestedTaskPath: options.taskPath,
+    selectedTaskPath: controller.taskPath,
+    task: controller.task,
+  });
   const unboundTask = controller.task;
   const referenceCandidate = requireExactReferenceCandidate(unboundTask);
   await assertDeclaredGitIdentities(options.repositoryRoot, unboundTask, referenceCandidate);
@@ -188,6 +180,16 @@ export async function runIssue8Transaction(
     );
     const rustProfile = rustRuntime.profile;
     const task = bindAcceptanceTaskToRustProfile(unboundTask, rustProfile);
+    const evidencePlan = resolveTaskEvidencePlan({
+      task,
+      taskPath: controller.taskPath,
+      legacyV2: task.schemaVersion === 2 ? ISSUE_8_V2_EVIDENCE_BINDINGS : undefined,
+    });
+    const qe = options.createAgenticQeCollector({
+      taskId: task.taskId,
+      runId: options.runId,
+      qeBindings: evidencePlan.qeBindings,
+    });
     await worktrees.installFrozenOverlay(
       frozenLockfile.sourcePath,
       frozenLockfile.workspacePath,
@@ -269,18 +271,7 @@ export async function runIssue8Transaction(
         independent: task.commands.independent.map(({ command }) => command),
         regression: task.commands.regression.map(({ command }) => command),
       },
-      verifierGeneratedOutputs: { regression: [
-        {
-          evidenceId: 'workspace-tests-earl',
-          command: namedCommand(task, 'workspace-tests'),
-          workspacePaths: CONFORMANCE_REPORT_PATHS,
-        },
-        {
-          evidenceId: 'w3c-conformance-earl',
-          command: namedCommand(task, 'w3c-conformance'),
-          workspacePaths: CONFORMANCE_REPORT_PATHS,
-        },
-      ] },
+      verifierGeneratedOutputs: evidencePlan.verifierGeneratedOutputs,
       artifactPaths: task.artifactPaths,
       model,
       offlineIsolator: rustProfile.isolator,
@@ -292,7 +283,7 @@ export async function runIssue8Transaction(
         async () => await frozen?.cleanup(),
         async () => await native?.cleanup(),
       ],
-      agenticQeEvidence: async (build, signal) => await options.agenticQeEvidence(
+      agenticQeEvidence: async (build, signal) => await qe(
         build,
         {
           controlledRoot: worktrees.controlledRoot(),
@@ -355,10 +346,11 @@ export async function runIssue8Transaction(
           controllerTaskDigest: controller.taskBlobDigest,
           controllerTaskPath: controller.taskPath,
           controllerTaskPathDigest: digestValue(controller.taskPath),
+          taskEvidencePlanDigest: evidencePlan.declarationDigest,
           codex: native.hosts.find(({ host }) => host === 'codex')?.clientVersion ?? 'unknown',
           claude: native.hosts.find(({ host }) => host === 'claude-code')?.clientVersion ?? 'unknown',
         },
-        requiredQeProfiles: requiredQeProfiles(task),
+        requiredQeProfiles: [...evidencePlan.requiredQeProfiles],
         rufloEvidence,
       },
       operations,
@@ -391,12 +383,6 @@ function allCommands(task: AcceptanceTask) {
     ...task.commands.regression,
     ...task.commands.mutation,
   ].map(({ command }) => command);
-}
-
-function namedCommand(task: AcceptanceTask, commandId: string) {
-  const matches = task.commands.regression.filter((entry) => entry.commandId === commandId);
-  if (matches.length !== 1) throw new Error(`HARNESS_ISSUE_8_COMMAND_BINDING_INVALID:${commandId}`);
-  return matches[0].command;
 }
 
 function routedPool(

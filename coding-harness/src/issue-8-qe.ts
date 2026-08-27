@@ -1,26 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-import { AgenticQeLcovGapEvidenceAdapter } from './agentic-qe-lcov.js';
-import { SystemAgenticQeMcpRunner } from './agentic-qe-mcp-runner.js';
-import { AgenticQeSastEvidenceAdapter } from './agentic-qe-sast.js';
-import type { CandidateBuild } from './candidate.js';
-import { IndependentRustLcovGenerator } from './independent-rust-lcov.js';
-import { runAbortableCohort } from './parallel.js';
-import { SECURE_HARNESS_CONFIG } from './config.js';
-import type { RustOfflineProfile } from './rust-sandbox.js';
+import { ISSUE_8_V2_EVIDENCE_BINDINGS } from './issue-8-v2-evidence.js';
+import type { TaskQeBinding } from './acceptance-task-v3.js';
+import {
+  createTaskQeCollector,
+  type TaskQeContext,
+} from './task-qe.js';
 
-const EXPECTED_AGENTIC_QE_VERSION = '3.13.10';
-const EXPECTED_AGENTIC_QE_TREE =
-  '9e08c960bc1d8150d3814c2b4395762ec640afa5cdd8cbf216fafc255ed1d7a7';
+export type Issue8QeContext = TaskQeContext;
 
-export interface Issue8QeContext {
-  readonly controlledRoot: string;
-  readonly candidateRoot: string;
-  readonly outputRoot: string;
-  readonly rustProfile: RustOfflineProfile;
-}
-
-export function createIssue8QeCollector(options: Readonly<{
+interface Issue8QeOptions {
   taskId: string;
   runId: string;
   snapshotParent: string;
@@ -28,56 +17,30 @@ export function createIssue8QeCollector(options: Readonly<{
   bwrapExecutable: string;
   packageRoot: string;
   mcpExecutable: string;
-}>) {
-  const runner = new SystemAgenticQeMcpRunner({
-    nodeExecutable: options.nodeExecutable,
-    aqeMcpExecutable: options.mcpExecutable,
-    aqePackageRoot: options.packageRoot,
-    bwrapExecutable: options.bwrapExecutable,
-  });
-  const identity = runner.identityEvidence();
-  if (identity.package.version !== EXPECTED_AGENTIC_QE_VERSION
-    || identity.package.treeSha256 !== EXPECTED_AGENTIC_QE_TREE) {
+}
+
+export function createIssue8TaskQeCollector(options: Readonly<
+  Issue8QeOptions & { qeBindings: readonly TaskQeBinding[] }
+>) {
+  try {
+    return createTaskQeCollector(options);
+  } catch (error) {
+    rethrowIssue8QeFactoryError(error);
+  }
+}
+
+export function rethrowIssue8QeFactoryError(error: unknown): never {
+  if (error !== null && typeof error === 'object'
+    && 'message' in error
+    && error.message === 'HARNESS_TASK_QE_IDENTITY_MISMATCH') {
     throw new Error('HARNESS_ISSUE_8_AGENTIC_QE_IDENTITY_MISMATCH');
   }
-  const lcov = new AgenticQeLcovGapEvidenceAdapter({ runner });
-  const sast = new AgenticQeSastEvidenceAdapter({
-    runner,
-    snapshotParent: options.snapshotParent,
-  });
+  throw error;
+}
 
-  return async (
-    build: CandidateBuild,
-    context: Issue8QeContext,
-    signal?: AbortSignal,
-  ) => await runAbortableCohort([
-    async (cohortSignal) => {
-      const generator = new IndependentRustLcovGenerator({
-        config: SECURE_HARNESS_CONFIG,
-        rustProfile: context.rustProfile,
-        packageName: 'sf-conformance',
-        testTarget: 'issue_8_binding_pruning',
-      });
-      const artifact = await generator.capture({
-        controlledRoot: context.controlledRoot,
-        candidateRoot: context.candidateRoot,
-        candidateTree: build.candidate.tree,
-        outputRoot: context.outputRoot,
-        signal: cohortSignal,
-      });
-      return await lcov.capture({
-        taskId: options.taskId,
-        runId: options.runId,
-        candidateTree: build.candidate.tree,
-        candidateRoot: context.candidateRoot,
-        lcov: artifact,
-      }, cohortSignal);
-    },
-    async (cohortSignal) => await sast.capture({
-      taskId: options.taskId,
-      runId: options.runId,
-      candidateTree: build.candidate.tree,
-      candidateRoot: context.candidateRoot,
-    }, cohortSignal),
-  ] as const, signal);
+export function createIssue8QeCollector(options: Readonly<Issue8QeOptions>) {
+  return createIssue8TaskQeCollector({
+    ...options,
+    qeBindings: ISSUE_8_V2_EVIDENCE_BINDINGS.qeBindings,
+  });
 }

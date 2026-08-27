@@ -22,7 +22,7 @@ import {
   parseIssue8ProgrammeEnvelope,
   serializeIssue8ProgrammeEnvelope,
 } from './issue-8-programme-envelope.js';
-import { createIssue8QeCollector } from './issue-8-qe.js';
+import { createIssue8TaskQeCollector } from './issue-8-qe.js';
 import {
   METAHARNESS_DIAGNOSTICS_PATH,
 } from './metaharness-diagnostics.js';
@@ -35,7 +35,6 @@ import {
   prepareCargoExtension,
 } from './issue-8-system.js';
 
-const ISSUE_8_TASK_ID = 'bprune_8_20260825';
 const MODELS = Object.freeze({ codex: 'gpt-5.6-sol', claude: 'claude-sonnet-4-6' });
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,160}$/;
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
@@ -168,15 +167,6 @@ async function executeIssue8(
   const cargoExtensionRoot = prepareCargoExtension(scratch);
   const rust = prepareIssue8RustRuntimeFactory({ scratchRoot: scratch, cargoExtensionRoot });
   const systemTools = { ...attestIssue8SystemTools(), ...rust.bootstrapEvidence };
-  const qe = createIssue8QeCollector({
-    taskId: ISSUE_8_TASK_ID,
-    runId: invocation.runId,
-    snapshotParent: paths.sast,
-    nodeExecutable: ISSUE_8_SYSTEM_PATHS.node,
-    bwrapExecutable: ISSUE_8_SYSTEM_PATHS.bwrap,
-    packageRoot: ISSUE_8_SYSTEM_PATHS.agenticQeRoot,
-    mcpExecutable: ISSUE_8_SYSTEM_PATHS.agenticQeMcp,
-  });
   const proxyLauncher = join(dirname(fileURLToPath(import.meta.url)), 'native-proxy-launcher.js');
   return await runIssue8Transaction({
     repositoryRoot: transactionRepository,
@@ -258,7 +248,16 @@ async function executeIssue8(
       authoritative: false,
       capturedAt: new Date().toISOString(),
     }),
-    agenticQeEvidence: qe,
+    createAgenticQeCollector: ({ taskId, runId, qeBindings }) => createIssue8TaskQeCollector({
+      taskId,
+      runId,
+      qeBindings,
+      snapshotParent: paths.sast,
+      nodeExecutable: ISSUE_8_SYSTEM_PATHS.node,
+      bwrapExecutable: ISSUE_8_SYSTEM_PATHS.bwrap,
+      packageRoot: ISSUE_8_SYSTEM_PATHS.agenticQeRoot,
+      mcpExecutable: ISSUE_8_SYSTEM_PATHS.agenticQeMcp,
+    }),
   });
 }
 

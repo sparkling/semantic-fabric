@@ -150,6 +150,20 @@ export function qeProfilesFromBindings(bindings: readonly TaskQeBinding[]): Agen
   return bindings.map(({ profile }) => profile);
 }
 
+export function assertTaskQeBindings(bindings: readonly TaskQeBinding[]): void {
+  if (bindings.length === 0
+    || new Set(bindings.map(({ profile }) => profile)).size !== bindings.length) {
+    throw new Error('HARNESS_TASK_QE_BINDINGS_INVALID');
+  }
+  for (const binding of bindings) {
+    if (binding.profile === 'sast' && binding.collector === 'agentic-qe-sast') continue;
+    if (binding.profile === 'lcov-gap' && binding.collector === 'rust-lcov'
+      && CARGO_PACKAGE_NAME.test(binding.packageName)
+      && RUST_TEST_TARGET.test(binding.testTarget)) continue;
+    throw new Error('HARNESS_TASK_QE_BINDING_INVALID');
+  }
+}
+
 export function parseLegacyQeProfiles(value: unknown): AgenticQeProfile[] {
   const profiles = asUniqueStrings(value, 'acceptance task.qeProfiles');
   for (const profile of profiles) {
