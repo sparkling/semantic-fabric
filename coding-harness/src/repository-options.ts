@@ -158,6 +158,7 @@ export interface RepositoryOperationsOptions {
   protectedInputBoundary?: ProtectedInputBoundary;
   frozenLockfile?: Readonly<{ sourcePath: string; workspacePath: string; digest: string }>;
   assertExternalState?: () => void;
+  worktreeChildCleanupCallbacks?: readonly (() => Promise<void> | void)[];
   cleanupCallbacks?: readonly (() => Promise<void> | void)[];
   agenticQeEvidence: (
     build: CandidateBuild,

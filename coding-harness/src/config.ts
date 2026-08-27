@@ -150,6 +150,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/process.ts',
     'coding-harness/src/receipts.ts',
     'coding-harness/src/resource-boundary.ts',
+    'coding-harness/src/resource-cleanup.ts',
     'coding-harness/src/repository-operations.ts',
     'coding-harness/src/repository-command-evidence.ts',
     'coding-harness/src/repository-command-runner.ts',

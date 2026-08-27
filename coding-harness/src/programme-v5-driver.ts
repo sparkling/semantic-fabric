@@ -42,7 +42,6 @@ import {
   canonicalProgrammePolicyJson,
   canonicalProgrammeTimestamp,
   captureProgrammeV5Bootstrap,
-  cleanupProgrammeV5Resources,
   programmeV5ArchitectureVerifiers,
   programmeV5Commands,
   programmeV5RoutedPool,
@@ -51,6 +50,7 @@ import {
   type ProgrammeV5BootstrapInputs,
   uniqueProgrammeV5Strings,
 } from './programme-v5-driver-support.js';
+import { cleanupParentedResources, cleanupRequiresAncestorPreservation, runWithCleanup } from './resource-cleanup.js';
 import { bindProgrammeTaskRuntimeV1 } from './programme-task-runtime-v1.js';
 import { digestValue, type GitIdentity } from './receipts.js';
 import { candidateExpectationForTask, RepositoryCandidateOperations } from './repository-operations.js';
@@ -171,18 +171,18 @@ export async function prepareProgrammeV5Transaction(
     commits: [options.controllerCommit, unboundTask.baseline.commit, evaluator.commit],
     signal: options.signal,
   });
-
   const worktrees = new GitWorktreeSet({ repositoryRoot: options.repositoryRoot, runRoot: options.runRoot });
   let native: Issue8NativeSession | null = null;
   let frozen: Issue8FrozenLockLease | null = null;
   let operations: RepositoryCandidateOperations | null = null;
   let cleanupPromise: Promise<void> | null = null;
   const cleanup = () => cleanupPromise ??= operations === null
-    ? cleanupProgrammeV5Resources([
-      async () => await native?.cleanup(),
-      async () => await frozen?.cleanup(),
-      async () => await worktrees.dispose(),
-    ])
+    ? cleanupParentedResources({
+      children: [async () => await frozen?.cleanup()],
+      parent: async () => await worktrees.dispose(),
+      independent: [async () => await native?.cleanup()],
+      failureMessage: 'HARNESS_PROGRAMME_V5_RESOURCE_CLEANUP_FAILED',
+    })
     : operations.cleanup();
   try {
     const prepared = await worktrees.prepare(unboundTask.baseline.commit, evaluator.commit, options.signal);
@@ -327,7 +327,8 @@ export async function prepareProgrammeV5Transaction(
       protectedInputBoundary: boundary,
       frozenLockfile,
       assertExternalState: () => frozen?.assertStable(),
-      cleanupCallbacks: [async () => await frozen?.cleanup(), async () => await native?.cleanup()],
+      worktreeChildCleanupCallbacks: [async () => await frozen?.cleanup()],
+      cleanupCallbacks: [async () => await native?.cleanup()],
       agenticQeEvidence: async (build, signal) => await qe(build, {
         controlledRoot: worktrees.controlledRoot(),
         candidateRoot: prepared.verifierRoots.independent,
@@ -338,7 +339,6 @@ export async function prepareProgrammeV5Transaction(
       preflightEvidence: async (candidate, signal) => await acceptance.redBaseline(candidate, signal),
       mutationEvidence: async (build, signal) => await acceptance.mutations(build, signal),
     });
-
     let state: 'prepared' | 'executing' | 'executed' | 'aborted' = 'prepared';
     let abortPromise: Promise<void> | null = null;
     const route = deepFreeze({
@@ -350,7 +350,7 @@ export async function prepareProgrammeV5Transaction(
     const execute = async (expectedBlob: string, expectedFingerprint: string) => {
       if (state !== 'prepared') throw new Error('HARNESS_PROGRAMME_V5_TRANSACTION_ALREADY_USED');
       state = 'executing';
-      try {
+      return await runWithCleanup(async () => {
         if (expectedBlob !== policyBlob) throw new Error('HARNESS_PROGRAMME_V5_POLICY_BLOB_MISMATCH');
         if (expectedFingerprint !== policyFingerprint) {
           throw new Error('HARNESS_PROGRAMME_V5_POLICY_FINGERPRINT_MISMATCH');
@@ -415,10 +415,10 @@ export async function prepareProgrammeV5Transaction(
           rufloEvidence: ruflo,
           transaction,
         });
-      } finally {
+      }, async () => {
         state = 'executed';
         await cleanup();
-      }
+      }, 'HARNESS_PROGRAMME_V5_EXECUTION_AND_CLEANUP_FAILED');
     };
     const abort = async () => {
       if (state !== 'prepared') return await (abortPromise ?? Promise.resolve());
@@ -428,13 +428,13 @@ export async function prepareProgrammeV5Transaction(
     };
     return Object.freeze({ policyBlob, policyFingerprint, execute, abort });
   } catch (error) {
+    if (cleanupRequiresAncestorPreservation(error)) throw error;
     try { await cleanup(); } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], 'HARNESS_PROGRAMME_V5_PREPARE_AND_CLEANUP_FAILED');
     }
     throw error;
   }
 }
-
 async function recheckPreparedState(input: Readonly<{
   options: ProgrammeV5DriverOptions;
   bootstrap: ProgrammeV5BootstrapInputs;

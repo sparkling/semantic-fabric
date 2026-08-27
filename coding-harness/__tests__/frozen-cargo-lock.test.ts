@@ -27,6 +27,10 @@ import { parseFrozenCargoMetadata } from '../src/frozen-cargo-metadata.js';
 import type { OfflineProcessIsolator } from '../src/network.js';
 import type { ProcessResult } from '../src/process.js';
 import type { GitIdentity } from '../src/receipts.js';
+import {
+  cleanupRequiresAncestorPreservation,
+  ParentedResourceCleanupError,
+} from '../src/resource-cleanup.js';
 import { TEST_RESOURCE_SCOPE } from './helpers.js';
 
 const roots: string[] = [];
@@ -223,6 +227,30 @@ describe('historical frozen Cargo lock preparation', () => {
       expectedDigest: '0'.repeat(64),
     })).rejects.toThrow(/DIGEST_MISMATCH/);
     expect(stages).toEqual(['generate-lockfile']);
+  });
+
+  it('marks a failed preparation cleanup so no ancestor can erase the rejected subtree', async () => {
+    const fixture = repository();
+    const parent = privateRoot('coding-harness-frozen-lock-preserve-');
+    const executor: FrozenCargoLockExecutor = {
+      kind: 'native-offline',
+      execute: async () => {
+        chmodSync(parent, 0o755);
+        throw new Error('CARGO_EXECUTION_FAILED');
+      },
+    };
+    let failure: unknown;
+    try {
+      await prepareFrozenCargoLock(preparationInput(fixture, join(parent, 'lease'), executor));
+    } catch (error) {
+      failure = error;
+    } finally {
+      chmodSync(parent, 0o700);
+    }
+
+    expect(failure).toBeInstanceOf(ParentedResourceCleanupError);
+    expect(cleanupRequiresAncestorPreservation(failure)).toBe(true);
+    expect(existsSync(join(parent, 'lease'))).toBe(true);
   });
 
   it('detects mutation of the immutable returned lock', async () => {

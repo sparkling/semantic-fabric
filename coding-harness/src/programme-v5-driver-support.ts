@@ -346,19 +346,6 @@ export function canonicalProgrammeTimestamp(value: string): string {
   return value;
 }
 
-export async function cleanupProgrammeV5Resources(
-  cleanups: readonly (() => Promise<void>)[],
-): Promise<void> {
-  const outcomes = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
-  const failures = outcomes.filter((outcome) => outcome.status === 'rejected');
-  if (failures.length > 0) {
-    throw new AggregateError(
-      failures.map((outcome) => (outcome as PromiseRejectedResult).reason),
-      'HARNESS_PROGRAMME_V5_RESOURCE_CLEANUP_FAILED',
-    );
-  }
-}
-
 async function gitValue(root: string, args: readonly string[]): Promise<string> {
   const result = await runGitCommand(root, args, { maxOutputBytes: 1024 });
   if (result.exitCode !== 0) throw new Error(`HARNESS_PROGRAMME_V5_GIT_FAILED:${args[0]}`);

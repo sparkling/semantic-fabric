@@ -42,6 +42,7 @@ import type {
   RepositoryOperationsOptions,
   VerifierGeneratedOutputSpec,
 } from './repository-options.js';
+import { cleanupParentedResources } from './resource-cleanup.js';
 import { assertCandidateExpectation, candidateAdmissionReasons } from './repository-options.js';
 export {
   candidateExpectationForTask, type CandidateExpectation,
@@ -463,17 +464,12 @@ export class RepositoryCandidateOperations implements CandidateOperations {
   }
 
   async #cleanupAll(): Promise<void> {
-    const outcomes = await Promise.allSettled([
-      this.#options.worktrees.dispose(),
-      ...(this.#options.cleanupCallbacks ?? []).map(async (cleanup) => await cleanup()),
-    ]);
-    const failures = outcomes.filter((outcome) => outcome.status === 'rejected');
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures.map((outcome) => (outcome as PromiseRejectedResult).reason),
-        'HARNESS_REPOSITORY_RESOURCE_CLEANUP_FAILED',
-      );
-    }
+    await cleanupParentedResources({
+      children: this.#options.worktreeChildCleanupCallbacks ?? [],
+      parent: async () => await this.#options.worktrees.dispose(),
+      independent: this.#options.cleanupCallbacks,
+      failureMessage: 'HARNESS_REPOSITORY_RESOURCE_CLEANUP_FAILED',
+    });
   }
 
   #hasRustCommands(options: RepositoryOperationsOptions): boolean {

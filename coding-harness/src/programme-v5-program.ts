@@ -107,7 +107,7 @@ export async function prepareReviewableProgrammeV5Policy(
   } catch (error) {
     let failure: unknown = error;
     try {
-      await removeProgrammeV5Scratch(scratch);
+      await removeProgrammeV5Scratch(scratch, failure);
     } catch (cleanupError) {
       failure = new AggregateError(
         [failure, cleanupError],
@@ -135,7 +135,7 @@ export async function prepareReviewableProgrammeV5Policy(
         );
   }
   try {
-    await removeProgrammeV5Scratch(scratch);
+    await removeProgrammeV5Scratch(scratch, failure);
   } catch (cleanupError) {
     failure = failure === undefined
       ? cleanupError
@@ -180,7 +180,7 @@ export async function prepareTrustedProgrammeV5(
       }
     }
     try {
-      await removeProgrammeV5Scratch(scratch);
+      await removeProgrammeV5Scratch(scratch, failure);
     } catch (cleanupError) {
       failure = new AggregateError(
         [failure, cleanupError],
@@ -191,10 +191,9 @@ export async function prepareTrustedProgrammeV5(
   }
   let state: 'prepared' | 'executing' | 'closed' = 'prepared';
   let scratchPresent = true;
-  const removeScratch = async () => {
+  const removeScratch = async (priorFailure?: unknown) => {
     if (!scratchPresent) return;
-    await removeProgrammeV5Scratch(scratch);
-    scratchPresent = false;
+    if (await removeProgrammeV5Scratch(scratch, priorFailure)) scratchPresent = false;
   };
   return Object.freeze({
     policyBlob: prepared.policyBlob,
@@ -209,7 +208,7 @@ export async function prepareTrustedProgrammeV5(
         failure = error;
       }
       try {
-        await removeScratch();
+        await removeScratch(failure);
       } catch (cleanupError) {
         failure = failure === undefined
           ? cleanupError
@@ -236,7 +235,7 @@ export async function prepareTrustedProgrammeV5(
         failure = error;
       }
       try {
-        await removeScratch();
+        await removeScratch(failure);
       } catch (cleanupError) {
         failure = failure === undefined
           ? cleanupError

@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   transactionConstructed: vi.fn(),
   transactionExecute: vi.fn(),
   operationCleanup: vi.fn(),
+  cleanupEvents: [] as string[],
 }));
 
 vi.mock('../src/controller-attestation.js', () => ({
@@ -62,7 +63,7 @@ vi.mock('../src/git-worktrees.js', () => ({
     }
     async assertCandidateSourceStable() {}
     async assertVerifierSourceStable() {}
-    async dispose() { state.worktreeDispose(); }
+    async dispose() { state.cleanupEvents.push('worktrees'); state.worktreeDispose(); }
   },
 }));
 
@@ -93,13 +94,18 @@ vi.mock('../src/acceptance-runner.js', () => ({
 vi.mock('../src/repository-operations.js', () => ({
   candidateExpectationForTask: vi.fn(() => Object.freeze({ mode: 'verifier-only' })),
   RepositoryCandidateOperations: class {
-    readonly options: { worktrees: { dispose(): Promise<void> }; cleanupCallbacks: (() => Promise<void>)[] };
+    readonly options: {
+      worktrees: { dispose(): Promise<void> };
+      worktreeChildCleanupCallbacks: (() => Promise<void>)[];
+      cleanupCallbacks: (() => Promise<void>)[];
+    };
     cleaned = false;
     constructor(options: typeof this.options) { this.options = options; }
     async cleanup() {
       if (this.cleaned) return;
       this.cleaned = true;
       state.operationCleanup();
+      await Promise.all(this.options.worktreeChildCleanupCallbacks.map(async (cleanup) => await cleanup()));
       await Promise.all([
         this.options.worktrees.dispose(),
         ...this.options.cleanupCallbacks.map(async (cleanup) => await cleanup()),
@@ -177,6 +183,7 @@ const legacyTask = parseAcceptanceTask(JSON.parse(readFileSync(
 describe('programme v5 driver', () => {
   beforeEach(() => {
     for (const spy of Object.values(state)) if (typeof spy === 'function' && 'mockClear' in spy) spy.mockClear();
+    state.cleanupEvents.length = 0;
     state.controller = controller(validTask);
     state.attest.mockImplementation(async () => state.controller);
     state.materialize.mockResolvedValue({
@@ -229,6 +236,7 @@ describe('programme v5 driver', () => {
     expect(state.frozenCleanup).toHaveBeenCalledTimes(1);
     expect(state.nativeCleanup).toHaveBeenCalledTimes(1);
     expect(state.worktreeDispose).toHaveBeenCalledTimes(1);
+    expect(state.cleanupEvents.indexOf('frozen')).toBeLessThan(state.cleanupEvents.indexOf('worktrees'));
   });
 
   it('rejects otherwise valid evidence captured for a different transaction nonce', async () => {
@@ -282,9 +290,11 @@ describe('programme v5 driver', () => {
       executableIdentity('codex', baseTools().codexExecutable),
       { ...executableIdentity('claude-code', baseTools().claudeExecutable), digest: 'f'.repeat(64) },
     ];
+    state.cleanupEvents.length = 0;
     await expect(prepareProgrammeV5Transaction(options({
       createNativeSession: async () => native,
     }))).rejects.toThrow('HARNESS_PROGRAMME_V5_NATIVE_EXECUTABLE_BINDING_MISMATCH:claude-code');
+    expect(state.cleanupEvents.indexOf('frozen')).toBeLessThan(state.cleanupEvents.indexOf('worktrees'));
   });
 });
 
@@ -324,7 +334,7 @@ function options(overrides: Partial<ProgrammeV5DriverOptions> = {}): ProgrammeV5
     },
     registryPackages: [],
     assertStable: state.frozenStable,
-    cleanup: async () => { state.frozenCleanup(); },
+    cleanup: async () => { state.cleanupEvents.push('frozen'); state.frozenCleanup(); },
   };
   const native = nativeSession();
   return {
@@ -403,7 +413,7 @@ function nativeSession() {
         ];
       },
     },
-    cleanup: async () => { state.nativeCleanup(); },
+    cleanup: async () => { state.cleanupEvents.push('native'); state.nativeCleanup(); },
   } as unknown as Awaited<ReturnType<ProgrammeV5DriverOptions['createNativeSession']>>;
 }
 

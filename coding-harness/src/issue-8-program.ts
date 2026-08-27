@@ -23,6 +23,7 @@ import {
   serializeIssue8ProgrammeEnvelope,
 } from './issue-8-programme-envelope.js';
 import { createIssue8TaskQeCollector } from './issue-8-qe.js';
+import { cleanupRequiresAncestorPreservation } from './resource-cleanup.js';
 import {
   METAHARNESS_DIAGNOSTICS_PATH,
 } from './metaharness-diagnostics.js';
@@ -87,7 +88,7 @@ export async function trustedControllerMain(
     executionError = error;
   }
   try {
-    await removeScratch(scratch);
+    await removeScratch(scratch, executionError);
   } catch (cleanupError) {
     if (executionError !== undefined) {
       throw new AggregateError(
@@ -310,7 +311,7 @@ async function prepareScratchLayout(scratch: string) {
   const paths = {
     worktrees: join(scratch, 'worktrees'),
     evaluator: join(scratch, 'evaluator'),
-    frozen: join(scratch, 'frozen'),
+    frozen: join(scratch, 'worktrees', 'frozen'),
     native: join(scratch, 'n'),
     sast: join(scratch, 'sast'),
     repository: join(scratch, 'repository.git'),
@@ -417,9 +418,11 @@ function assertControlledRoot(scratch: string, controlledRoot: string): string {
   return scratch;
 }
 
-async function removeScratch(path: string): Promise<void> {
+async function removeScratch(path: string, priorFailure?: unknown): Promise<boolean> {
+  if (cleanupRequiresAncestorPreservation(priorFailure)) return false;
   privateDirectory(path, 'SCRATCH_ROOT_CHANGED');
   await rm(path, { recursive: true, force: true });
+  return true;
 }
 
 function privateDirectory(value: string, label: string): string {

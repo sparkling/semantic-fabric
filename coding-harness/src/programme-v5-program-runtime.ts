@@ -4,6 +4,7 @@ import { chmodSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { runGitCommand } from './git-process.js';
+import { cleanupRequiresAncestorPreservation } from './resource-cleanup.js';
 import { normalizeAcceptanceTaskPath } from './manifest.js';
 import { METAHARNESS_DIAGNOSTICS_PATH } from './metaharness-diagnostics.js';
 import { requireProgrammeV5ArtifactPath } from './programme-v5-receipt-io.js';
@@ -249,7 +250,7 @@ export async function prepareProgrammeV5ScratchLayout(
   const paths = {
     worktrees: join(scratch, 'worktrees'),
     evaluator: join(scratch, 'evaluator'),
-    frozen: join(scratch, 'frozen'),
+    frozen: join(scratch, 'worktrees', 'frozen'),
     native: join(scratch, 'n'),
     sast: join(scratch, 'sast'),
     repository: join(scratch, 'repository.git'),
@@ -329,9 +330,14 @@ export async function readProgrammeV5Diagnostics(store: string, commit: string):
   return result.stdout;
 }
 
-export async function removeProgrammeV5Scratch(path: string): Promise<void> {
+export async function removeProgrammeV5Scratch(
+  path: string,
+  priorFailure?: unknown,
+): Promise<boolean> {
+  if (cleanupRequiresAncestorPreservation(priorFailure)) return false;
   privateDirectory(path, 'SCRATCH_ROOT_CHANGED');
   await rm(path, { recursive: true, force: true });
+  return true;
 }
 
 export function assertAbsent(path: string, error: string): void {

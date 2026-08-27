@@ -32,6 +32,7 @@ import type { NativeHost } from './models/types.js';
 import type { NativeRuntimeLedger } from './native-runtime-ledger.js';
 import { digestValue, type HostEvidence } from './receipts.js';
 import { candidateExpectationForTask, RepositoryCandidateOperations } from './repository-operations.js';
+import { cleanupParentedResources, runWithCleanup } from './resource-cleanup.js';
 import type { RustOfflineProfile } from './rust-sandbox.js';
 import { resolveTaskEvidencePlan } from './task-evidence-plan.js';
 import type { TaskQeCollectorFactory } from './task-qe.js';
@@ -159,7 +160,7 @@ export async function runIssue8Transaction(
   let frozen: Issue8FrozenLockLease | null = null;
   let operations: RepositoryCandidateOperations | null = null;
   let transactionOwnsCleanup = false;
-  try {
+  return await runWithCleanup(async () => {
     const prepared = await worktrees.prepare(
       unboundTask.baseline.commit,
       evaluator.commit,
@@ -279,10 +280,8 @@ export async function runIssue8Transaction(
       protectedInputBoundary,
       frozenLockfile,
       assertExternalState: () => frozen?.assertStable(),
-      cleanupCallbacks: [
-        async () => await frozen?.cleanup(),
-        async () => await native?.cleanup(),
-      ],
+      worktreeChildCleanupCallbacks: [async () => await frozen?.cleanup()],
+      cleanupCallbacks: [async () => await native?.cleanup()],
       agenticQeEvidence: async (build, signal) => await qe(
         build,
         {
@@ -361,17 +360,18 @@ export async function runIssue8Transaction(
     transactionOwnsCleanup = true;
     const transaction = await candidateTransaction.execute();
     return Object.freeze({ controller: controller.identity, evaluator, routeSnapshotDigest, transaction });
-  } finally {
+  }, async () => {
     if (transactionOwnsCleanup && operations !== null) {
       await operations.cleanup();
     } else {
-      await cleanupResources([
-        async () => await native?.cleanup(),
-        async () => await frozen?.cleanup(),
-        async () => await worktrees.dispose(),
-      ]);
+      await cleanupParentedResources({
+        children: [async () => await frozen?.cleanup()],
+        parent: async () => await worktrees.dispose(),
+        independent: [async () => await native?.cleanup()],
+        failureMessage: 'HARNESS_ISSUE_8_RESOURCE_CLEANUP_FAILED',
+      });
     }
-  }
+  }, 'HARNESS_ISSUE_8_EXECUTION_AND_RESOURCE_CLEANUP_FAILED');
 }
 
 function allCommands(task: AcceptanceTask) {
@@ -449,17 +449,6 @@ function assertRunBindings(options: Issue8DriverOptions): void {
   }
   if (!/^[a-f0-9]{40,64}$/.test(options.controllerCommit)) {
     throw new Error('HARNESS_ISSUE_8_CONTROLLER_COMMIT_INVALID');
-  }
-}
-
-async function cleanupResources(cleanups: readonly (() => Promise<void>)[]): Promise<void> {
-  const outcomes = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
-  const failures = outcomes.filter((outcome) => outcome.status === 'rejected');
-  if (failures.length > 0) {
-    throw new AggregateError(
-      failures.map((outcome) => (outcome as PromiseRejectedResult).reason),
-      'HARNESS_ISSUE_8_RESOURCE_CLEANUP_FAILED',
-    );
   }
 }
 

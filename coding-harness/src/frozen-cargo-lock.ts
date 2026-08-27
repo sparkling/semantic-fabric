@@ -20,6 +20,7 @@ import {
 import type { OfflineProcessIsolator } from './network.js';
 import { runStructuredProcess, type ProcessResult } from './process.js';
 import { digestValue, type GitIdentity } from './receipts.js';
+import { ParentedResourceCleanupError } from './resource-cleanup.js';
 import { resolveWorkspacePath, sha256File } from './workspace.js';
 const CARGO_LOCK = 'Cargo.lock' as const;
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
@@ -219,7 +220,9 @@ export async function prepareFrozenCargoLock(
       assertOwnedScratch(scratchRoot, scratchIdentity, scratchParent, parentIdentity);
       await rm(scratchRoot, { recursive: true, force: true });
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'HARNESS_FROZEN_LOCK_PREPARE_AND_CLEANUP_FAILED');
+      throw new ParentedResourceCleanupError(
+        [error, cleanupError], 'HARNESS_FROZEN_LOCK_PREPARE_AND_CLEANUP_FAILED',
+      );
     }
     throw error;
   }

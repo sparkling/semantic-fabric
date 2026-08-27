@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,8 +11,11 @@ import {
   parseProgrammeV5Invocation,
   parseProgrammeV5PolicyReviewInvocation,
   parseProgrammeV5ReplayInvocation,
+  prepareProgrammeV5ScratchLayout,
+  removeProgrammeV5Scratch,
   verifyProgrammeV5ExpectedPolicyFingerprint,
 } from '../src/programme-v5-program-runtime.js';
+import { ParentedResourceCleanupError } from '../src/resource-cleanup.js';
 
 const roots: string[] = [];
 const COMMIT = 'a'.repeat(40);
@@ -163,6 +166,25 @@ describe('programme v5 trusted runtime inputs', () => {
       .toThrow('HARNESS_PROGRAMME_V5_CONTROLLED_ROOT_INVALID');
     expect(() => assertProgrammeV5ControlledRoot(scratch, temporary('programme-v5-outside-')))
       .toThrow('HARNESS_PROGRAMME_V5_CONTROLLED_ROOT_INVALID');
+  });
+
+  it('keeps frozen Cargo-lock writes inside the worktree-controlled root', async () => {
+    const scratch = temporary('programme-v5-layout-');
+    const layout = await prepareProgrammeV5ScratchLayout(scratch);
+
+    expect(layout.frozen).toBe(join(layout.worktrees, 'frozen'));
+  });
+
+  it('preserves trusted scratch when nested cleanup requires recovery evidence', async () => {
+    const scratch = temporary('programme-v5-preserved-');
+    const failure = new ParentedResourceCleanupError(
+      [new Error('CHILD_CLEANUP_FAILURE')], 'CLEANUP_FAILED',
+    );
+
+    expect(await removeProgrammeV5Scratch(scratch, new AggregateError([failure]))).toBe(false);
+    expect(existsSync(scratch)).toBe(true);
+    expect(await removeProgrammeV5Scratch(scratch)).toBe(true);
+    expect(existsSync(scratch)).toBe(false);
   });
 });
 
