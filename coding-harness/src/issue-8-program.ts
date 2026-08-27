@@ -11,6 +11,7 @@ import {
   createStructuredFrozenCargoLockExecutor,
   prepareFrozenCargoLock,
 } from './frozen-cargo-lock.js';
+import { readIssue8FrozenCargoLock } from './frozen-cargo-lock-fixture.js';
 import { runGitCommand } from './git-process.js';
 import { runIssue8Transaction, type Issue8DriverResult } from './issue-8-driver.js';
 import { createIssue8NativeSession } from './issue-8-native-session.js';
@@ -204,6 +205,11 @@ async function executeIssue8(
       cargoEnvironment: rustProfile.environment,
       config: SECURE_HARNESS_CONFIG,
       expectedDigest: ISSUE_8_FROZEN_LOCK_DIGEST,
+      pinnedLockfileContents: await readIssue8FrozenCargoLock({
+        controllerRepositoryRoot: transactionRepository,
+        controllerCommit: invocation.controllerCommit,
+        expectedDigest: ISSUE_8_FROZEN_LOCK_DIGEST,
+      }),
       targetTriple: ISSUE_8_TARGET_TRIPLE,
       executor: createStructuredFrozenCargoLockExecutor({
         config: SECURE_HARNESS_CONFIG,

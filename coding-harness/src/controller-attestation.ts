@@ -19,6 +19,7 @@ import {
   type ControllerBuildManifest,
 } from './controller-build.js';
 import { deepFreeze } from './contracts.js';
+import { ISSUE_8_FROZEN_LOCK_FIXTURE_PATH } from './frozen-cargo-lock-fixture.js';
 import { runGitCommand } from './git-process.js';
 import {
   normalizeAcceptanceTaskPath,
@@ -34,6 +35,7 @@ export const PROGRAMME_V5_ACCEPTANCE_TASK_PATH =
   'coding-harness/config/programme-v5-acceptance.json';
 export const HARNESS_MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 export const PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS = Object.freeze([
+  ISSUE_8_FROZEN_LOCK_FIXTURE_PATH,
   'coding-harness/scripts/launch-programme-v5.mjs',
   'coding-harness/scripts/programme-v5-operator-support.mjs',
   'coding-harness/scripts/run-programme-v5.mjs',
@@ -204,6 +206,7 @@ export function controllerExecutionPaths(paths: readonly string[], taskPath: str
     || path === 'coding-harness/package.json'
     || path === 'coding-harness/package-lock.json'
     || path === 'coding-harness/tsconfig.json'
+    || path === ISSUE_8_FROZEN_LOCK_FIXTURE_PATH
     || path === taskPath
     || path === HARNESS_MANIFEST_PATH
     || path === CONTROLLER_BUILD_PATH);

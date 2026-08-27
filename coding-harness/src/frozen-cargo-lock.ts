@@ -17,6 +17,7 @@ import {
   parseFrozenCargoMetadata,
   type FrozenRegistryPackage,
 } from './frozen-cargo-metadata.js';
+import { installPinnedCargoLock } from './frozen-cargo-lock-fixture.js';
 import type { OfflineProcessIsolator } from './network.js';
 import { runStructuredProcess, type ProcessResult } from './process.js';
 import { digestValue, type GitIdentity } from './receipts.js';
@@ -69,7 +70,8 @@ export interface FrozenCargoLockPreparationInput {
   readonly executor: FrozenCargoLockExecutor;
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
-  readonly expectedDigest?: string;
+  readonly expectedDigest: string;
+  readonly pinnedLockfileContents: string;
   readonly targetTriple?: string;
   readonly signal?: AbortSignal;
 }
@@ -176,12 +178,13 @@ export async function prepareFrozenCargoLock(
       CARGO_NET_OFFLINE: 'true',
       CARGO_TARGET_DIR: targetRoot,
     };
-    await executeCargo(input, workspaceRoot, [workspaceRoot, targetRoot], environment,
-      ['generate-lockfile', '--offline'], 'GENERATE');
-    const generatedLock = validateLockfile(workspaceRoot);
-    const generatedIdentity = fileIdentity(generatedLock);
-    const generatedDigest = sha256File(generatedLock);
-    if (input.expectedDigest !== undefined && generatedDigest !== input.expectedDigest) {
+    await installPinnedCargoLock(
+      workspaceRoot, input.pinnedLockfileContents, input.expectedDigest,
+    );
+    const pinnedLock = validateLockfile(workspaceRoot);
+    const pinnedIdentity = fileIdentity(pinnedLock);
+    const pinnedDigest = sha256File(pinnedLock);
+    if (pinnedDigest !== input.expectedDigest) {
       throw new Error('HARNESS_FROZEN_LOCK_DIGEST_MISMATCH');
     }
     const metadataArguments = ['metadata', '--locked', '--offline'];
@@ -195,14 +198,15 @@ export async function prepareFrozenCargoLock(
     const metadata = await executeCargo(input, workspaceRoot, [workspaceRoot, targetRoot], environment,
       metadataArguments, 'METADATA');
     const registryPackages = parseFrozenCargoMetadata(metadata.stdout, workspaceRoot, targetRoot);
-    if (!sameFile(generatedIdentity, fileIdentity(generatedLock))
-      || generatedDigest !== sha256File(generatedLock)) {
+    if (!sameFile(pinnedIdentity, fileIdentity(pinnedLock))
+      || pinnedDigest !== sha256File(pinnedLock)) {
       throw new Error('HARNESS_FROZEN_LOCK_CHANGED_DURING_METADATA');
     }
     const sourcePath = join(frozenRoot, CARGO_LOCK);
-    await copyFile(generatedLock, sourcePath, constants.COPYFILE_EXCL);
+    await copyFile(pinnedLock, sourcePath, constants.COPYFILE_EXCL);
     await chmod(sourcePath, 0o444);
     const digest = validateImmutableLock(sourcePath);
+    if (digest !== input.expectedDigest) throw new Error('HARNESS_FROZEN_LOCK_DIGEST_MISMATCH');
     assertOwnedScratch(scratchRoot, scratchIdentity, scratchParent, parentIdentity);
     return new FrozenCargoLockLease(
       Object.freeze({ sourcePath, workspacePath: CARGO_LOCK, digest }),
@@ -274,7 +278,7 @@ async function executeCargo(
   writablePaths: readonly string[],
   environment: Readonly<Record<string, string>>,
   argv: readonly string[],
-  stage: 'GENERATE' | 'METADATA',
+  stage: 'METADATA',
 ): Promise<ProcessResult> {
   const command = parseStructuredCommand({
     tool: 'cargo',

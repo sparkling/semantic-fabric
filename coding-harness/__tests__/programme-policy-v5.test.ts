@@ -33,7 +33,7 @@ import type { RustOfflineProfile } from '../src/rust-sandbox.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
-  '24839503e7ce3027041d33edc7c5070f3246bd75007f3d2f05e507670104dd8d';
+  'd9fcc489f005f03bc5898fe2a80d584058151bf20b0e5cde4c266fb28251de13';
 const manifestUrl = new URL('../.harness/manifest.json', import.meta.url);
 const taskUrl = new URL('../config/issue-8-acceptance.json', import.meta.url);
 
