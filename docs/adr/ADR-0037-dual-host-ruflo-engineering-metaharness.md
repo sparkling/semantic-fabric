@@ -369,14 +369,19 @@ test fleet. It has no publication or evolution path, and all harness source
 files remain under 500 lines.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
-`f8db1e0`, `7a5244a`, `6e7c153`, and `b40dbc6`. H0a now freezes schema-v5 gate
+`f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate
 law, strict duplicate-key parsing, versioned task/runtime derivation, an
 externally anchored policy fingerprint, and authoritative protected-input
 bindings for the harness manifest, task, controller build, controller lock and
 frozen Cargo lock. Frozen schema-v4 replay and AQE 3.13.10 identity remain
-unchanged. This is dormant policy infrastructure, not acceptance: H0b evaluator
-and envelope work is in progress, H0c launcher activation is pending, and v5
-dispatch still fails closed.
+unchanged. H0b adds the replay-complete evaluator, canonical scorer, strict v5
+envelope, and externally expectation-aware dispatcher. Its pinned ACCEPTED test
+vector has policy, assessment, and envelope digests
+`0d5505e4952c87bd12204ffb11caf40ae31351b29a950358d3ea54f3b85161bb`,
+`4f4fe45c2c9ce9a0a30c95519769bc1a3607c71b2e6526f78914ce42e331a977`, and
+`fdab0843eeffad9ce75d8b730d4977ccd3149bf72d0af748bb6d3e6cd10065e7`.
+This remains dormant replay infrastructure, not a real acceptance transaction:
+H0c launcher activation is pending and no production caller can select v5.
 
 Development runs 03–24 emitted fail-closed receipts while exposing and closing
 native containment, egress, response-bound, frozen-registry, timeout, and

@@ -238,9 +238,12 @@ their admitted paths, generated outputs, commands and QE evidence from protected
 task data through a versioned Rust runtime binding. Commit `b40dbc6` adds the
 strict, externally anchored schema-v5 replay-policy foundation while preserving
 the frozen v4 parser and delegating unambiguous schema-v4 bytes to it unchanged.
-Schema v5 is still disabled: its evaluator, envelope and trusted-launcher
-emitter must land in H0b/H0c before another manifest task can produce accepted
-programme evidence.
+Commit `7a1fa24` completes H0b with a replay-complete gate evaluator, canonical
+all-or-zero scorer, strict externally anchored envelope, and expectation-aware
+v4/v5 dispatch. Schema v5 is still launcher-disabled: H0c must derive the trusted
+anchor independently and emit exact tool, Ruflo, QE, native-host, repair, and
+receipt evidence before another manifest task can produce accepted programme
+evidence.
 
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,

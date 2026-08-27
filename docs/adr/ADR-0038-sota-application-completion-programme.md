@@ -174,11 +174,14 @@ programme, but this ADR does not itself mark them implemented.
 
 The H0a reusable-harness foundation is implemented in `b40dbc6`: frozen v5 gate
 law and task/runtime derivation, strict schema dispatch, an externally anchored
-policy fingerprint, and authoritative protected-input bindings. Schema v4
-remains frozen and schema v5 remains disabled. H0b evaluator/scorer/envelope
-work is in progress; H0c trusted-launcher activation and every M0–M7 milestone
-remain pending their executable gates. This status does not raise the 44/100
-application-readiness baseline or claim product completion.
+policy fingerprint, and authoritative protected-input bindings. H0b is
+implemented in `7a1fa24`: the evaluator recomputes the frozen seven dimensions,
+the scorer admits only a canonical digest-consistent receipt and awards each
+dimension all-or-zero, and the strict v5 envelope requires an external anchor
+while v4 replay remains frozen. H0c trusted-launcher activation and every M0–M7
+milestone remain pending their executable gates; no runtime caller can yet
+select v5. This status does not raise the 44/100 application-readiness baseline
+or claim product completion.
 
 ## Acceptance
 

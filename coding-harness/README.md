@@ -68,11 +68,14 @@ result can be accepted, and execution failure revokes active broker sessions.
 - `issue-8-programme-envelope.ts` binds the project-owned acceptance score to
   the frozen schema-v4 issue-8 receipt and makes a rejected score a non-zero
   launcher result.
-- `programme-envelope.ts`, `programme-policy-v5.ts`,
-  `programme-gate-contract-v1.ts`, and `programme-task-runtime-v1.ts` provide the
-  dormant schema-v5 dispatch and externally anchored replay-policy foundation.
-  V5 remains fail-closed until its evaluator, envelope and launcher emitter are
-  implemented and independently verified.
+- `programme-policy-v5.ts`, `programme-gate-contract-v1.ts`, and
+  `programme-task-runtime-v1.ts` freeze schema-v5 replay law and protected task
+  derivation. `programme-gates-v5.ts`, `programme-score-v5.ts`, and
+  `programme-envelope-v5.ts` recompute every gate, score dimensions all-or-zero,
+  and require an external policy-fingerprint anchor. `programme-envelope.ts`
+  preserves frozen v4 replay while dispatching v5 only against an exact runtime
+  expectation. The v5 launcher remains disabled until H0c supplies the anchor
+  from a trusted pre-execution stage and emits the complete evidence contract.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
   its exact Git blob digest must match the candidate receipt.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
