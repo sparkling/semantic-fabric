@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-26
-updated: 2026-08-27
+updated: 2026-08-28
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -160,10 +160,16 @@ dependency order. No OpenRouter or indirect provider transport is permitted.
 
 Native subscription invocations have no artificial dollar ceiling. They remain
 bounded by task-declared invocation and turn limits, wall-clock and output
-limits, concurrency, first-party provider rate-limit backoff, and receipts. The
-programme must not set or consume provider API keys. Native-provider exhaustion
-or unavailability fails the affected gate closed and never authorizes an
-indirect fallback.
+limits, concurrency, first-party provider rate-limit backoff, and receipts.
+`subscriptionCostUsd: 0` records the marginal provider-API spend attributable to
+a native subscription invocation; it is a receipt/routing ledger fact, not a
+task budget, spend cap, or execution ceiling. The programme must not set or
+consume provider API keys. Native-provider exhaustion or unavailability fails
+the affected gate closed and never authorizes an indirect fallback. Product
+`QueryBudget` cost limits govern source work and result resources, not model
+spend. Persisting a verified engineering outcome does not activate the separate
+retrieval-policy flywheel; it remains off without explicit opt-in and its own
+accepted promotion transaction.
 
 Accepted ADR status means the decision is adopted; it does not imply the code is
 implemented. Each affected ADR must gain a dated implementation-status note as
@@ -178,10 +184,20 @@ policy fingerprint, and authoritative protected-input bindings. H0b is
 implemented in `7a1fa24`: the evaluator recomputes the frozen seven dimensions,
 the scorer admits only a canonical digest-consistent receipt and awards each
 dimension all-or-zero, and the strict v5 envelope requires an external anchor
-while v4 replay remains frozen. H0c trusted-launcher activation and every M0–M7
-milestone remain pending their executable gates; no runtime caller can yet
-select v5. This status does not raise the 44/100 application-readiness baseline
-or claim product completion.
+while v4 replay remains frozen. H0c now has an explicit immutable fresh-ID v5
+operator, but not a general/default promotion path. Runs
+`programme_v5_h0c_20260827_03` and `_04`, both on controller `ad32d4a`, completed
+deterministic gates and then failed at the final-review boundary before any
+review digest was sealed; both recorded `status: fail`, their programme
+assessments were `REJECTED` at 40/100, and provider-free replay verified. Run
+`_04` bound receipt
+`d888c175f54ce39f5e9c62837487758ed0410d5b57591564a11a771dd9937bc7` and replay
+receipt `c588022d606009b9d15777fbf70c843085d783e3f8dd579544c19b0d78fab833`.
+Commit `f82c2b5` classifies future opaque native review-operation exceptions
+without weakening cancellation or legacy-v4 replay. A new policy, claim, and run
+ID are required before retry. Every M0–M7 milestone remains pending its
+executable gate; this status changes neither the application architecture nor
+its goals and does not raise the 44/100 readiness baseline.
 
 ## Acceptance
 

@@ -165,8 +165,8 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 332 tests across 48 files; one
-  environment-specific test is skipped by this provider-free run.
+- The versioned engineering harness passes 514 tests across 76 files; two
+  environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
 
@@ -228,9 +228,12 @@ uses native ChatGPT/Codex and Claude Code subscriptions, isolated candidate and
 evaluator worktrees, frozen inputs, exact-origin egress, bounded repair,
 independent review, provider-free QE/SAST, and digest-chained receipts. Native
 subscription calls have no artificial dollar ceiling, but retain task, turn,
-time, output, concurrency, rate-limit, and receipt bounds. The harness has no
-commit, push, publication, deployment, or promotion authority and never uses
-provider API keys or OpenRouter.
+time, output, concurrency, rate-limit, and receipt bounds.
+`subscriptionCostUsd: 0` records marginal provider-API spend attributable to a
+native subscription invocation; it is a receipt/routing ledger fact, not a task
+budget, spend cap, or execution ceiling. The harness has no commit, push,
+publication, deployment, or promotion authority and never uses provider API
+keys or OpenRouter.
 
 The frozen issue-#8 path remains a schema-v2 `exact-reference` transaction. The
 reusable foundation now also parses schema-v3 `verifier-only` tasks and derives
@@ -240,10 +243,16 @@ strict, externally anchored schema-v5 replay-policy foundation while preserving
 the frozen v4 parser and delegating unambiguous schema-v4 bytes to it unchanged.
 Commit `7a1fa24` completes H0b with a replay-complete gate evaluator, canonical
 all-or-zero scorer, strict externally anchored envelope, and expectation-aware
-v4/v5 dispatch. Schema v5 is still launcher-disabled: H0c must derive the trusted
-anchor independently and emit exact tool, Ruflo, QE, native-host, repair, and
-receipt evidence before another manifest task can produce accepted programme
-evidence.
+v4/v5 dispatch. H0c now has an explicit immutable fresh-ID schema-v5 operator,
+but no general/default promotion path. Runs `programme_v5_h0c_20260827_03` and
+`_04`, both on controller `ad32d4a`, reached deterministic gates and failed at
+the final-review boundary before any review digest was sealed; both recorded
+`status: fail`, their programme assessments were `REJECTED` at 40/100, and
+replay verified. Run `_04` bound receipt
+`d888c175…bc7` and provider-free replay receipt
+`c588022d…833`. Commit `f82c2b5` now assigns a safe stage code to future opaque
+native review-operation exceptions. A retry requires a new reviewed policy,
+claim, and run ID; neither failed run is programme acceptance evidence.
 
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,
@@ -268,6 +277,9 @@ validates the anchor but currently reports `store too small to harvest a corpus`
 Ruflo's flywheel-visible `neural_patterns` store is empty even though older
 learning counters and ReasoningBank files contain history. Those stores are not
 silently conflated or seeded from benchmark labels.
+
+H0c receipt collection and ordinary verified-outcome persistence do not opt into
+or activate this flywheel.
 
 Eight owner-visible records with four harvestable are only enough to begin an
 evaluation; they do not establish production readiness. Once the store,

@@ -49,6 +49,11 @@ common Git object store, and other host paths. A systemd cgroup-v2 transient uni
 enforces CPU, memory, PID, file-size, descriptor, and runtime ceilings. Timeout,
 cancellation, or output overflow stops and verifies the exact unit before a
 result can be accepted, and execution failure revokes active broker sessions.
+Native subscription invocations have no artificial dollar ceiling.
+`subscriptionCostUsd: 0` records marginal provider-API spend attributable to a
+native subscription invocation; it is a receipt/routing ledger fact, not a task
+budget, spend cap, or execution ceiling. The resource ceilings above are
+operational safety controls.
 
 ## Main modules
 
@@ -74,20 +79,33 @@ result can be accepted, and execution failure revokes active broker sessions.
   `programme-envelope-v5.ts` recompute every gate, score dimensions all-or-zero,
   and require an external policy-fingerprint anchor. `programme-envelope.ts`
   preserves frozen v4 replay while dispatching v5 only against an exact runtime
-  expectation. The v5 launcher remains disabled until H0c supplies the anchor
-  from a trusted pre-execution stage and emits the complete evidence contract.
+  expectation. The explicit fresh-ID v5 operator/launcher now derives a trusted
+  pre-execution anchor and complete evidence contract; it is not a general or
+  default promotion path.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
   its exact Git blob digest must match the candidate receipt.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
   identifies the repository's actual `.mcp.json` coordination surface.
 
-The first acceptance definition lives in `config/issue-8-acceptance.json`. The
-contract parser also accepts non-issue work-item identifiers, but the attested
-launcher still selects only this fixture and its LCOV/SAST collector. A second
-task is not executable until manifest-bound task selection and the declared QE
-profiles have concrete collectors. The task is not an evolution suite or a
-promotion signal. Darwin/GEPA remains disabled until five training tasks and
-five sealed holdouts satisfy the independent evaluator gate.
+The first acceptance definition lives in `config/issue-8-acceptance.json`. H0c
+runs `programme_v5_h0c_20260827_03` and `_04` both reached deterministic gates,
+then failed at the final-review boundary before any review digest was sealed and
+recorded `status: fail`; both programme assessments were `REJECTED` at 40/100 and
+provider-free replay verified both. Run `_04` bound receipt `d888c175…bc7` and
+replay receipt `c588022d…833`. Commit `f82c2b5` preserves classified failures and
+explicit cancellation while safely labelling a future opaque native
+review-operation exception. A new reviewed policy, claim, and run ID are
+required before retry.
+
+The legacy schema-v4 `launch-issue-8.mjs` path is bound to
+`config/issue-8-acceptance.json`. The explicit schema-v5 operator uses
+`config/programme-v5-acceptance.json`, which remains an issue-8 H0c activation
+fixture; no general next-product-task launcher exists. The contract parser
+accepts non-issue work-item identifiers, but a second product task is not
+executable until manifest-bound task selection and its declared QE profiles have
+concrete collectors. Neither task is an evolution suite or promotion signal.
+Darwin/GEPA remains disabled until five training tasks and five sealed holdouts
+satisfy the independent evaluator gate.
 
 ## Retrieval flywheel boundary
 
@@ -99,6 +117,8 @@ for activation until maintainers review its labels and calibrate them against a
 live retrieval baseline. Background tuning is disabled in tracked configuration;
 the 2026-08-27 operational check also found no opt-in variables or `harness`
 worker in the live daemon, which must be rechecked after each restart.
+H0c execution and ordinary verified-outcome persistence do not opt into this
+flywheel.
 
 The explicit Ruflo evaluation path is model-call-free, local, and
 evaluation-only. It currently no-ops because the flywheel-visible neural store

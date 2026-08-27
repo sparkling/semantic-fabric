@@ -2,7 +2,7 @@
 
 - **Status:** In progress
 - **Date:** 2026-08-26
-- **Updated:** 2026-08-27
+- **Updated:** 2026-08-28
 - **Decision record:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md)
 
 **Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark
@@ -14,8 +14,19 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 |---|---|---|
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
-| H0c — trusted-launcher activation | In progress | Schema v5 remains fail-closed and launcher-disabled until the independently derived anchor plus exact tool, Ruflo, QE, native-host, repair and receipt evidence is emitted and replayed |
+| H0c — trusted-launcher activation | In progress | The explicit immutable fresh-ID v5 operator is implemented. Runs `_03` and `_04` both reached deterministic gates, then failed at the final-review boundary before any review digest was sealed; both recorded `status: fail`, their programme assessments were `REJECTED` at 40/100, and replay verified. `f82c2b5` now classifies future opaque native review-operation exceptions; a fresh post-fix policy/anchor is required before another run |
 | M0–M7 — application completion | Gated | Existing product evidence remains valid, but no milestone is marked complete until its milestone QA gate passes |
+
+Both H0c runs used controller `ad32d4a`; neither is acceptance evidence. Run
+`programme_v5_h0c_20260827_04` has receipt
+`d888c175f54ce39f5e9c62837487758ed0410d5b57591564a11a771dd9937bc7` and
+provider-free replay receipt
+`c588022d606009b9d15777fbf70c843085d783e3f8dd579544c19b0d78fab833`.
+It proved the red baseline, build, three verifier lanes, EARL evidence, and four
+mutation sentinels, but emitted no final-review digest. The generic recorded
+failure cannot support attribution to spend, rate limits, or either model. No
+blind repeat is permitted: the next run must bind the committed classification
+fix, a newly reviewed policy, a new claim, and a fresh run ID.
 
 ## Outcome
 
@@ -347,16 +358,21 @@ For M0–M7 code changes, use the ADR-0037 control plane proportionally:
    order and produces digest-chained evidence. Ruflo state proves coordination,
    not product correctness.
 7. **Learn carefully.** Persist verified patterns/outcomes. Diagnostics remain
-   read-only signals. No evolution until the 5+5 holdout rule and reward-hack
-   controls pass.
+   read-only signals. This does not opt into the retrieval-policy flywheel. It
+   stays off unless separately and explicitly activated after every gate passes;
+   passing gates alone does not activate it. No evolution starts before the 5+5
+   holdout and reward-hack controls pass.
 
 Native Codex/ChatGPT and Claude subscription invocations have no artificial
-dollar ceiling. They remain bounded by the task's declared invocation and turn
-limits, wall-clock and output limits, concurrency, first-party provider
-rate-limit backoff, and digest-chained receipts. Do not set or consume provider
-API keys and do not route through OpenRouter. Native-provider exhaustion or
-unavailability fails the affected gate closed; it never authorizes an indirect
-fallback.
+dollar ceiling. `subscriptionCostUsd: 0` records the marginal provider-API spend
+attributable to a native subscription invocation; it is a receipt/routing ledger
+fact, not a task budget, spend cap, or execution ceiling. Task, turn, wall-clock,
+output, concurrency, provider-rate backoff, and receipt bounds remain operational
+safety controls. Do not set or consume provider API keys and do not route through
+OpenRouter. Native-provider exhaustion or unavailability fails the affected gate
+closed; it never authorizes an indirect fallback. References elsewhere in this
+programme to query “cost” or `QueryBudget` govern source work and result resources,
+not model-provider spend.
 
 Small documentation/status-only corrections use the same truth and review rules
 without paying for an irrelevant full harness transaction. Product behavior,

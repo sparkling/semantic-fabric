@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-27
+updated: 2026-08-28
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -62,10 +62,13 @@ export and compatibility verification; it does not retain the obsolete direct
 
 Use the real `@metaharness/router` for quality-first routing. At cold start,
 select the least-observed capable native host. Record quality only after direct
-verification, use reliability and elapsed time to break equal subscription-cost
-routes, and freeze the route snapshot for each run or evaluation epoch.
-Subscription programme cost is recorded honestly as `$0`; no fabricated token
-price is supplied to force a route.
+verification, use reliability and elapsed time to break routes with equal
+marginal provider-API spend, and freeze the route snapshot for each run or
+evaluation epoch. `subscriptionCostUsd: 0` records the marginal provider-API
+spend attributable to a native subscription invocation; it is a receipt/routing
+ledger fact, not a task budget, spend cap, or execution ceiling. Native
+subscription invocations have no artificial dollar ceiling, and no fabricated
+token price is supplied to force a route.
 
 Logical workers retain route, breaker, and outcome state for a run. Individual
 model invocations are ephemeral so task context and credentials do not leak
@@ -127,9 +130,12 @@ The frozen issue-#8 acceptance path remains schema v2 with the
 v3 `verifier-only` tasks whose admitted paths, generated outputs, command
 evidence and QE profiles are derived from protected task data and bound through
 a versioned Rust runtime profile. Unknown schemas and oracle modes fail closed.
-The issue-#8 launcher remains the first sealed fixture; schema-v5 programme
-acceptance stays disabled until its evaluator, envelope and trusted-launcher
-emitter are implemented and independently verified.
+The legacy schema-v4 `launch-issue-8.mjs` path remains bound to
+`config/issue-8-acceptance.json`. The explicit immutable fresh-ID schema-v5
+operator uses `config/programme-v5-acceptance.json`, which remains an issue-8
+H0c activation fixture; no general next-product-task or default promotion path
+exists. H0c is accepted only when an actual fresh run passes every gate, seals
+an accepted envelope, and provider-free replay verifies it.
 
 ### 4. Policy and isolation
 
@@ -356,17 +362,18 @@ Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture and framework implemented; the first eligible programme
-transaction was executed and rejected. Incremental harness commits through
-`c3834e5` establish the private supply chain, dual-host routing, patched-candidate
-transaction, exact-origin broker, mount namespace, copied credential
+Accepted architecture and framework implemented; programme transactions have
+executed, but none has produced acceptance. Incremental harness commits
+through `f82c2b5` establish the private supply chain, dual-host routing,
+patched-candidate transaction, exact-origin broker, mount namespace, copied credential
 capabilities, systemd cgroup-v2 quotas, bounded retry/cancellation, provider-free
 QE/SAST, protected governance inputs, digest-chained receipts, responsive frozen-
 closure checks, grounded patch repair, normalization of model-authored hunk
-counts, a programme-oriented schema-v2 task contract, and protected dormant
-retrieval-flywheel controls. The harness builds and passes its provider-free
-test fleet. It has no publication or evolution path, and all harness source
-files remain under 500 lines.
+counts, a programme-oriented task contract, safe opaque native review-operation
+exception classification, and protected dormant retrieval-flywheel controls.
+The harness builds and passes 514 provider-free tests with two expected skips.
+It has no publication or evolution path, and all harness source files remain
+under 500 lines.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
 `f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate
@@ -380,8 +387,8 @@ vector has policy, assessment, and envelope digests
 `0d5505e4952c87bd12204ffb11caf40ae31351b29a950358d3ea54f3b85161bb`,
 `4f4fe45c2c9ce9a0a30c95519769bc1a3607c71b2e6526f78914ce42e331a977`, and
 `fdab0843eeffad9ce75d8b730d4977ccd3149bf72d0af748bb6d3e6cd10065e7`.
-This remains dormant replay infrastructure, not a real acceptance transaction:
-H0c launcher activation is pending and no production caller can select v5.
+The explicit v5 operator can now execute a freshly claimed run, but it is not a
+general/default promotion path and does not make H0c accepted.
 
 Development runs 03–24 emitted fail-closed receipts while exposing and closing
 native containment, egress, response-bound, frozen-registry, timeout, and
@@ -405,6 +412,23 @@ eligibility. Its receipt, assessment, and envelope digests are respectively
 `d54a598464c4bde3195ef37953078ceb74cb18c726622c072e7230486a6236c4`.
 The independently verified product commits remain valid, but their direct
 evidence cannot be substituted for a passing sealed transaction.
+
+H0c runs `programme_v5_h0c_20260827_03` and `_04`, both under packed controller
+`ad32d4a`, proved the red baseline, build, three verifier lanes, generated EARL,
+and four mutation sentinels, then failed at the final-review boundary before any
+review digest was sealed. Both recorded `status: fail`; their programme
+assessments were `REJECTED` at 40/100, and provider-free replay verified the
+recorded failure. Run `_04` bound policy fingerprint
+`7d6e3a25966a56472fc4504cf4f15dee32c5188395f45ab8bc09c377730cb21e`, receipt
+`d888c175f54ce39f5e9c62837487758ed0410d5b57591564a11a771dd9937bc7`, envelope
+`66618b0bd8d74992bc485af6fe8af5bd14e0f8e8d5ce0b214f732e2e84849a32`, and replay
+receipt `c588022d606009b9d15777fbf70c843085d783e3f8dd579544c19b0d78fab833`.
+The historical generic `HARNESS_TRANSACTION_FAILED` receipt cannot attribute the
+failure to spend, rate limits, or either model. Commit `f82c2b5` now maps future
+opaque native review-operation exceptions to `HARNESS_NATIVE_REVIEW_FAILED`
+while preserving explicit cancellation, privacy, current v5 codes, and frozen
+v4 bytes. Another run requires a new controller policy, claim, and run ID;
+neither H0c run opts into the retrieval flywheel.
 
 The repository's `.mcp.json` is tracked and protected. Diagnostics that still
 cannot inspect its effective surface remain `INCONCLUSIVE`, not clean and not a
@@ -430,7 +454,7 @@ the project-owned score threshold.
 - Cost: secure native execution adds systemd, mount-namespace, broker, frozen
   dependency-closure, and independent-evidence complexity and latency.
 - Neutral: nothing in this ADR changes an `sf-*` runtime dependency or grants
-  publication, provider API spend, or promotion authority.
+  publication, metered provider-API spend, or promotion authority.
 
 ## Rules
 
@@ -440,7 +464,7 @@ the project-owned score threshold.
   worker; no evolution command exists before the 5+5 eligibility gate.
 - **R3** — no aggregate, synthetic, diagnostic, or model score overrides a
   failed product oracle or enters an evolution fitness signal.
-- **R4** — no publication, provider API spend, or harness promotion occurs
+- **R4** — no publication, metered provider-API spend, or harness promotion occurs
   without explicit authorization and complete verifier evidence.
 - **R5** — retrieval tuning stays off by default; neither a daemon generation
   nor an unsigned/implicit apply may activate a repository-local policy. A
