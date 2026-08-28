@@ -168,7 +168,7 @@ fn artifact_mode(path: &Path) -> Result<u32, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Ok(metadata.mode() & 0o777)
+        Ok(metadata.mode() & 0o7777)
     }
     #[cfg(not(unix))]
     {
@@ -296,5 +296,15 @@ mod tests {
             "Advanced Micro Devices X86-64"
         )
         .is_err());
+        for mode in [0o4755, 0o2755, 0o1755] {
+            assert!(enforce_fixed_facts(
+                mode,
+                "ELF64",
+                "2's complement, little endian",
+                "UNIX - System V",
+                "Advanced Micro Devices X86-64"
+            )
+            .is_err());
+        }
     }
 }
