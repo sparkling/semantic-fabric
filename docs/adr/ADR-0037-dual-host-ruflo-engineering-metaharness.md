@@ -64,11 +64,13 @@ Use the real `@metaharness/router` for quality-first routing. At cold start,
 select the least-observed capable native host. Record quality only after direct
 verification, use reliability and elapsed time to break routes with equal
 marginal provider-API spend, and freeze the route snapshot for each run or
-evaluation epoch. `subscriptionCostUsd: 0` records the marginal provider-API
-spend attributable to a native subscription invocation; it is a receipt/routing
-ledger fact, not a task budget, spend cap, or execution ceiling. Native
-subscription invocations have no artificial dollar ceiling, and no fabricated
-token price is supplied to force a route.
+evaluation epoch. `subscriptionCostUsd: 0` records zero marginal provider-API
+charge in the receipt/routing ledger; it is neither a budget or cap nor a claim
+of unlimited subscription capacity. Native subscription invocations have no
+project-imposed provider-dollar spend ceiling, and no fabricated token price is
+supplied to force a route. Task, turn, time, output, concurrency, first-party
+rate-limit backoff, retry/repair, resource, and receipt limits remain operational
+safety controls.
 
 Logical workers retain route, breaker, and outcome state for a run. Individual
 model invocations are ephemeral so task context and credentials do not leak
@@ -404,7 +406,8 @@ Run `issue8_dual_native_20260826_29`, under packed private controller commit
 `c3834e5`, used native `gpt-5.6-sol` and `claude-sonnet-4-6`, proved the red
 baseline, and admitted the initial patch only to
 `crates/sf-sparql/src/unfold.rs`. A post-admission verifier-directed repair was
-attempted once and exhausted its budget. The sealed programme result is
+attempted once and exhausted its configured one-repair operational allowance.
+The sealed programme result is
 `REJECTED`, 40/100 against the required 98, with hard gates failed and no fitness
 eligibility. Its receipt, assessment, and envelope digests are respectively
 `065134f2a0ad03a6067d31e1dde3d8fa4b7a87c73f46716e8bb2625f049b0b15`,
@@ -430,6 +433,27 @@ while preserving explicit cancellation, privacy, current v5 codes, and frozen
 v4 bytes. Another run requires a new controller policy, claim, and run ID;
 neither H0c run opts into the retrieval flywheel.
 
+Fresh run `programme_v5_h0c_20260828_05`, under controller `4b0756f`, then
+completed a passing candidate transaction after one patch-admission repair. It
+proved the final build, three verifier lanes, generated EARL, four mutation
+sentinels, QE, protected inputs, and dual native reviews. The frozen V1
+reliability law nevertheless rejected the programme at 85/100 because the
+pre-build repair had no prior build command. Its policy, receipt, assessment,
+envelope, and replay digests are
+`c4411178334b54620da099ba7e2c9e029ebcc6873a0bc85e9dfca93bacbfeb79`,
+`91bfc845961c84237ff7f9ea58e75bc77c76d21913f042e05e77c68bc7ab98d1`,
+`cf7734d88eaa05e91916992c8ad8e1c2dfdc285e7a14fe14858bed3744288930`,
+`4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`,
+and `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
+
+The accepted correction is an additive schema V6: a V2 outer policy and gate
+contract bind the complete candidate transaction/native sidecar and derive each
+prior attempt as `not-started`, `failed`, or `passed` from its repair transition.
+V1, V4, and V5 remain frozen, and `_05` is never reinterpreted. H0c still needs
+a fresh V6 policy review, execution claim, run ID, sealed envelope, and provider-
+free replay. This changes harness evidence law, not the product architecture or
+application goals.
+
 The repository's `.mcp.json` is tracked and protected. Diagnostics that still
 cannot inspect its effective surface remain `INCONCLUSIVE`, not clean and not a
 substitute for direct controls.
@@ -454,7 +478,7 @@ the project-owned score threshold.
 - Cost: secure native execution adds systemd, mount-namespace, broker, frozen
   dependency-closure, and independent-evidence complexity and latency.
 - Neutral: nothing in this ADR changes an `sf-*` runtime dependency or grants
-  publication, metered provider-API spend, or promotion authority.
+  publication, API-key-backed provider transport, or promotion authority.
 
 ## Rules
 
@@ -464,8 +488,8 @@ the project-owned score threshold.
   worker; no evolution command exists before the 5+5 eligibility gate.
 - **R3** — no aggregate, synthetic, diagnostic, or model score overrides a
   failed product oracle or enters an evolution fitness signal.
-- **R4** — no publication, metered provider-API spend, or harness promotion occurs
-  without explicit authorization and complete verifier evidence.
+- **R4** — no publication, API-key-backed provider transport, or harness
+  promotion occurs without explicit authorization and complete verifier evidence.
 - **R5** — retrieval tuning stays off by default; neither a daemon generation
   nor an unsigned/implicit apply may activate a repository-local policy. A
   receipt replay proves integrity and gate reproducibility, not benchmark

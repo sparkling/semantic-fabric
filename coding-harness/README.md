@@ -49,10 +49,11 @@ common Git object store, and other host paths. A systemd cgroup-v2 transient uni
 enforces CPU, memory, PID, file-size, descriptor, and runtime ceilings. Timeout,
 cancellation, or output overflow stops and verifies the exact unit before a
 result can be accepted, and execution failure revokes active broker sessions.
-Native subscription invocations have no artificial dollar ceiling.
-`subscriptionCostUsd: 0` records marginal provider-API spend attributable to a
-native subscription invocation; it is a receipt/routing ledger fact, not a task
-budget, spend cap, or execution ceiling. The resource ceilings above are
+Native subscription invocations have no project-imposed provider-dollar spend
+ceiling. `subscriptionCostUsd: 0` records zero marginal provider-API charge in
+the receipt/routing ledger; it is neither a budget or cap nor a claim of
+unlimited subscription capacity. Task, turn, time, output, concurrency,
+first-party rate-limit backoff, retry/repair, resource, and receipt limits remain
 operational safety controls.
 
 ## Main modules
@@ -87,15 +88,16 @@ operational safety controls.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
   identifies the repository's actual `.mcp.json` coordination surface.
 
-The first acceptance definition lives in `config/issue-8-acceptance.json`. H0c
-runs `programme_v5_h0c_20260827_03` and `_04` both reached deterministic gates,
-then failed at the final-review boundary before any review digest was sealed and
-recorded `status: fail`; both programme assessments were `REJECTED` at 40/100 and
-provider-free replay verified both. Run `_04` bound receipt `d888c175…bc7` and
-replay receipt `c588022d…833`. Commit `f82c2b5` preserves classified failures and
-explicit cancellation while safely labelling a future opaque native
-review-operation exception. A new reviewed policy, claim, and run ID are
-required before retry.
+The first acceptance definition lives in `config/issue-8-acceptance.json`.
+After honest final-review failures in H0c runs `_03` and `_04`, run
+`programme_v5_h0c_20260828_05` completed a passing transaction after one patch-
+admission repair. The frozen V1 reliability law nevertheless rejected the
+programme at 85/100 because that attempt never reached build. Receipt
+`91bfc845…98d1`, envelope `4c089769…05f`, and replay receipt `ca2bbbb3…cfc` bind
+the result. The sibling schema-V6 path adds full transaction/native sidecar
+evidence and transition-derived prior-attempt semantics. It does not upgrade
+historical V4/V5 evidence; execution needs a fresh policy, claim, run ID, and
+provider-free replay.
 
 The legacy schema-v4 `launch-issue-8.mjs` path is bound to
 `config/issue-8-acceptance.json`. The explicit schema-v5 operator uses

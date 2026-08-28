@@ -158,25 +158,25 @@ Claude Code subscriptions, bounded critique/repair, independent verification,
 and digest-chained receipts. One integration owner promotes verified slices in
 dependency order. No OpenRouter or indirect provider transport is permitted.
 
-Native subscription invocations have no artificial dollar ceiling. They remain
-bounded by task-declared invocation and turn limits, wall-clock and output
-limits, concurrency, first-party provider rate-limit backoff, and receipts.
-`subscriptionCostUsd: 0` records the marginal provider-API spend attributable to
-a native subscription invocation; it is a receipt/routing ledger fact, not a
-task budget, spend cap, or execution ceiling. The programme must not set or
-consume provider API keys. Native-provider exhaustion or unavailability fails
-the affected gate closed and never authorizes an indirect fallback. Product
-`QueryBudget` cost limits govern source work and result resources, not model
-spend. Persisting a verified engineering outcome does not activate the separate
-retrieval-policy flywheel; it remains off without explicit opt-in and its own
-accepted promotion transaction.
+Native subscription invocations have no project-imposed provider-dollar spend
+ceiling. `subscriptionCostUsd: 0` records zero marginal provider-API charge in
+the receipt/routing ledger; it is neither a budget or cap nor a claim of
+unlimited subscription capacity. Task, turn, wall-clock, output, concurrency,
+first-party rate-limit backoff, retry/repair, resource, and receipt limits remain
+operational safety controls. The programme must not set or consume provider API
+keys. Native-provider exhaustion or unavailability fails the affected gate
+closed and never authorizes an indirect fallback. Product `QueryBudget` cost
+limits govern source work and result resources, not model spend. Persisting a
+verified engineering outcome does not activate the separate retrieval-policy
+flywheel; it remains off without explicit opt-in and its own accepted promotion
+transaction.
 
 Accepted ADR status means the decision is adopted; it does not imply the code is
 implemented. Each affected ADR must gain a dated implementation-status note as
 its increment lands. ADR-0014's previously deferred areas graduate into this
 programme, but this ADR does not itself mark them implemented.
 
-### 7. Implementation status (2026-08-27)
+### 7. Implementation status (2026-08-28)
 
 The H0a reusable-harness foundation is implemented in `b40dbc6`: frozen v5 gate
 law and task/runtime derivation, strict schema dispatch, an externally anchored
@@ -185,19 +185,25 @@ implemented in `7a1fa24`: the evaluator recomputes the frozen seven dimensions,
 the scorer admits only a canonical digest-consistent receipt and awards each
 dimension all-or-zero, and the strict v5 envelope requires an external anchor
 while v4 replay remains frozen. H0c now has an explicit immutable fresh-ID v5
-operator, but not a general/default promotion path. Runs
-`programme_v5_h0c_20260827_03` and `_04`, both on controller `ad32d4a`, completed
-deterministic gates and then failed at the final-review boundary before any
-review digest was sealed; both recorded `status: fail`, their programme
-assessments were `REJECTED` at 40/100, and provider-free replay verified. Run
-`_04` bound receipt
-`d888c175f54ce39f5e9c62837487758ed0410d5b57591564a11a771dd9937bc7` and replay
-receipt `c588022d606009b9d15777fbf70c843085d783e3f8dd579544c19b0d78fab833`.
-Commit `f82c2b5` classifies future opaque native review-operation exceptions
-without weakening cancellation or legacy-v4 replay. A new policy, claim, and run
-ID are required before retry. Every M0–M7 milestone remains pending its
-executable gate; this status changes neither the application architecture nor
-its goals and does not raise the 44/100 readiness baseline.
+operator, but not a general/default promotion path. Historical runs `_03` and
+`_04` failed honestly at final review. Run
+`programme_v5_h0c_20260828_05`, under controller `4b0756f`, then completed a
+passing candidate transaction after one patch-admission repair. It proved the
+final build, verifier, mutation, QE, protected-input, and dual-native-review
+evidence, but the frozen V1 reliability law rejected the programme at 85/100
+because an attempt that never reached build had no prior build command.
+Provider-free replay verified receipt
+`91bfc845961c84237ff7f9ea58e75bc77c76d21913f042e05e77c68bc7ab98d1`, envelope
+`4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`, and replay
+receipt `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
+
+The remedy is an additive schema V6 with a V2 outer policy, full candidate
+transaction/native sidecar evidence, and transition-derived prior-attempt build
+semantics. It does not rewrite product architecture or application goals, and
+it cannot reinterpret historical V4/V5 evidence. A fresh V6 policy review,
+claim, run ID, sealed outcome, and replay are required. Every M0–M7 milestone
+remains pending its executable gate; this status does not raise the 44/100
+readiness baseline.
 
 ## Acceptance
 

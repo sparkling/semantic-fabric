@@ -227,11 +227,12 @@ plane governed by
 uses native ChatGPT/Codex and Claude Code subscriptions, isolated candidate and
 evaluator worktrees, frozen inputs, exact-origin egress, bounded repair,
 independent review, provider-free QE/SAST, and digest-chained receipts. Native
-subscription calls have no artificial dollar ceiling, but retain task, turn,
-time, output, concurrency, rate-limit, and receipt bounds.
-`subscriptionCostUsd: 0` records marginal provider-API spend attributable to a
-native subscription invocation; it is a receipt/routing ledger fact, not a task
-budget, spend cap, or execution ceiling. The harness has no commit, push,
+subscription calls have no project-imposed provider-dollar spend ceiling.
+`subscriptionCostUsd: 0` records zero marginal provider-API charge in the
+receipt/routing ledger; it is neither a budget or cap nor a claim of unlimited
+subscription capacity. Task, turn, time, output, concurrency, first-party
+rate-limit backoff, retry/repair, resource, and receipt limits remain operational
+safety controls. The harness has no commit, push,
 publication, deployment, or promotion authority and never uses provider API
 keys or OpenRouter.
 
@@ -244,15 +245,15 @@ the frozen v4 parser and delegating unambiguous schema-v4 bytes to it unchanged.
 Commit `7a1fa24` completes H0b with a replay-complete gate evaluator, canonical
 all-or-zero scorer, strict externally anchored envelope, and expectation-aware
 v4/v5 dispatch. H0c now has an explicit immutable fresh-ID schema-v5 operator,
-but no general/default promotion path. Runs `programme_v5_h0c_20260827_03` and
-`_04`, both on controller `ad32d4a`, reached deterministic gates and failed at
-the final-review boundary before any review digest was sealed; both recorded
-`status: fail`, their programme assessments were `REJECTED` at 40/100, and
-replay verified. Run `_04` bound receipt
-`d888c175…bc7` and provider-free replay receipt
-`c588022d…833`. Commit `f82c2b5` now assigns a safe stage code to future opaque
-native review-operation exceptions. A retry requires a new reviewed policy,
-claim, and run ID; neither failed run is programme acceptance evidence.
+but no general/default promotion path. After honest final-review failures in
+`_03` and `_04`, run `programme_v5_h0c_20260828_05` completed a passing
+candidate transaction after one patch-admission repair. The frozen V1 prior-
+attempt law then rejected the programme at 85/100 because that pre-build repair
+had no build command. Receipt `91bfc845…98d1`, envelope `4c089769…05f`, and
+provider-free replay receipt `ca2bbbb3…cfc` verify that result. The additive V6
+path binds full transaction/native evidence and derives `not-started`, `failed`,
+or `passed` prior-build semantics. It requires a fresh policy, claim, run ID, and
+replay; historical V4/V5 evidence is never reinterpreted.
 
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,
