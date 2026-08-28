@@ -350,6 +350,25 @@ describe('canonical harness manifest', () => {
     ).toEqual(['0.22.2']);
   });
 
+  it('installs and invokes readiness tooling only from the committed npm lock', () => {
+    const workflow = readFileSync(resolve(root, '../.github/workflows/ci.yml'), 'utf8');
+    const lines = workflow.split(/\r?\n/);
+    const start = lines.indexOf('  readiness:');
+    const end = lines.findIndex((line, index) => index > start && /^  [\w-]+:\s*$/.test(line));
+    expect(start, 'ci.yml must define a readiness job').toBeGreaterThan(-1);
+    const readiness = lines.slice(start, end === -1 ? undefined : end).join('\n');
+
+    expect(readiness).not.toMatch(/\b(?:npx|npm\s+exec)\b/);
+    expect(readiness).not.toMatch(/(?:OPENROUTER|OPENAI|ANTHROPIC).*API_KEY/);
+    expect(readiness.match(
+      /npm --prefix coding-harness ci --ignore-scripts --include=dev --omit=optional/g,
+    )).toHaveLength(1);
+    expect(readiness.match(/\.\/coding-harness\/node_modules\/\.bin\/metaharness\b/g))
+      .toHaveLength(2);
+    expect(readiness.match(/\.\/coding-harness\/node_modules\/\.bin\/harness\b/g))
+      .toHaveLength(2);
+  });
+
   it('pins every workflow action, hosted runner, service image, Node runtime, and apt tool', () => {
     const repository = resolve(root, '..');
     const violations: string[] = [];

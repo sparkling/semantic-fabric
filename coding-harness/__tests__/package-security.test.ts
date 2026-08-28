@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 type LockPackage = {
+  dependencies?: Record<string, string>;
+  dev?: boolean;
+  devDependencies?: Record<string, string>;
   integrity?: string;
   link?: boolean;
   resolved?: string;
@@ -28,6 +31,21 @@ const expectedRuntime = {
   '@metaharness/host-claude-code': '0.1.2',
   '@metaharness/host-codex': '0.1.2',
   '@metaharness/router': '0.4.0',
+};
+
+const expectedReadinessPackages = {
+  'node_modules/metaharness': {
+    version: '0.3.0',
+    resolved: 'https://registry.npmjs.org/metaharness/-/metaharness-0.3.0.tgz',
+    integrity: 'sha512-GgBCEGZe9D+aKrO4fibZNtpsrsuWqG6206CG1Ro0kH5gTn4oqpwQVaE0ig21/fSrx0Y1WE1gHMzwmNq6nV04Ow==',
+    dev: true,
+  },
+  'node_modules/@metaharness/darwin': {
+    version: '0.2.8',
+    resolved: 'https://registry.npmjs.org/@metaharness/darwin/-/darwin-0.2.8.tgz',
+    integrity: 'sha512-B8tF7IrrSxwKS6fEPEL6N2Juth9WWn+hppLUtUYPTJ2vcHzzZPIg2cS5T9qTyNNuANlTSWnQHnvzlfvYdGNfeQ==',
+    dev: true,
+  },
 };
 
 describe('private package boundary', () => {
@@ -96,6 +114,16 @@ describe('lockfile supply chain', () => {
       expect(url.password, path).toBe('');
       expect(entry.integrity, path).toMatch(/^sha512-[A-Za-z0-9+/]+={0,2}$/);
     }
+  });
+
+  it('binds the readiness CLI and Darwin engine to reviewed registry artifacts', () => {
+    expect(packageJson.devDependencies).toHaveProperty('metaharness', '0.3.0');
+    expect(lockfile.packages['']?.devDependencies).toHaveProperty('metaharness', '0.3.0');
+    for (const [path, expected] of Object.entries(expectedReadinessPackages)) {
+      expect(lockfile.packages[path], path).toMatchObject(expected);
+    }
+    expect(lockfile.packages['node_modules/metaharness']?.dependencies)
+      .toHaveProperty('@metaharness/darwin', '^0.2.2');
   });
 });
 

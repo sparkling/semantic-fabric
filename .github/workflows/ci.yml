@@ -145,27 +145,24 @@ jobs:
     runs-on: ubuntu-24.04
     # Read-layer telemetry only (ADR-0026 Part A) — non-blocking, drift tracking.
     # 2026-07-05 baseline: harnessFit 71 · compileConfidence 100 · scaffoldReady true.
-    # Version PINNED, never @latest: the upstream ruflo-metaharness plugin's own
-    # _harness.mjs documents this as a fixed HIGH-severity issue — @latest means a
-    # compromised upstream publish executes arbitrary code on the very next call.
-    # Bump METAHARNESS_PIN in lock-step with the ruflo-metaharness plugin's pin, on
-    # a manual, verified version bump only.
+    # The readiness CLI and its Darwin dependency are integrity-locked by the
+    # coding-harness package lock and installed without lifecycle scripts.
     continue-on-error: true
-    env:
-      METAHARNESS_PIN: metaharness@0.3.0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24.14.1'
+      - name: install integrity-locked readiness CLI
+        run: npm --prefix coding-harness ci --ignore-scripts --include=dev --omit=optional
       - name: harness score + genome + mcp-scan + threat-model (informational snapshot)
         run: |
           { echo '### Meta-harness readiness (ADR-0026)'; echo '```json'; } >> "$GITHUB_STEP_SUMMARY"
-          npx -y -p "$METAHARNESS_PIN" metaharness score . --json | tee score.json >> "$GITHUB_STEP_SUMMARY"
+          ./coding-harness/node_modules/.bin/metaharness score . --json | tee score.json >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          npx -y -p "$METAHARNESS_PIN" metaharness genome . --json || true
-          npx -y -p "$METAHARNESS_PIN" harness mcp-scan . --json || true
-          npx -y -p "$METAHARNESS_PIN" harness threat-model . --json || true
+          ./coding-harness/node_modules/.bin/metaharness genome . --json || true
+          ./coding-harness/node_modules/.bin/harness mcp-scan . --json || true
+          ./coding-harness/node_modules/.bin/harness threat-model . --json || true
           fit=$(jq -r '.harnessFit' score.json)
           echo "harnessFit=$fit (ADR-0026 baseline: 71)"
           if [ "$fit" -lt 60 ]; then
