@@ -142,7 +142,11 @@ describe('M0 protected authority and CI contract', () => {
     ]));
 
     const tracked = spawnSync(
-      'git', ['-C', repository, 'ls-files', '--error-unmatch', '--', ...M0_AUTHORITY_PATHS],
+      'git', [
+        '-C', repository, 'ls-files', '--error-unmatch', '--',
+        ...M0_AUTHORITY_PATHS,
+        ...EXPECTED_ARTIFACT_INTERFACE_PATHS,
+      ],
       { encoding: 'utf8' },
     );
     expect(tracked.status, tracked.stderr).toBe(0);
