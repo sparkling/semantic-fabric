@@ -86,6 +86,9 @@ operational safety controls.
 - `programme-gates-v6.ts`, `programme-v6-program.ts`, and the V6 operator,
   policy-anchor, receipt, and replay modules bind transition-aware repair
   evidence and full native-runtime sidecars without changing frozen V4/V5 law.
+- `frozen-cargo-lock-fixture.ts` reads V5/V6 patch-task locks as raw bytes from
+  the exact attested ancestor baseline; only two exact historical task blobs may
+  use the embedded legacy fixture.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
   its exact Git blob digest must match the candidate receipt.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
@@ -104,12 +107,12 @@ or repair. Receipt `d9d244ef…0216`, candidate evidence `a1dc3071…ac7f`, enve
 The legacy schema-v4 `launch-issue-8.mjs` path is bound to
 `config/issue-8-acceptance.json`. The explicit schema-v5 operator uses
 `config/programme-v5-acceptance.json`, which remains an issue-8 H0c activation
-fixture; no general next-product-task launcher exists. The contract parser
-accepts non-issue work-item identifiers, but a second product task is not
-executable until manifest-bound task selection and its declared QE profiles have
-concrete collectors. Neither task is an evolution suite or promotion signal.
-Darwin/GEPA remains disabled until five training tasks and five sealed holdouts
-satisfy the independent evaluator gate.
+fixture; no general next-product patch launcher exists. Proposed
+[ADR-0041](../docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
+describes a separate single-attempt observational transaction, but no capture task
+or controlled profile is registered yet. Neither patch task is an evolution
+suite or promotion signal. Darwin/GEPA remains disabled until five training
+tasks and five sealed holdouts satisfy the independent evaluator gate.
 
 ## Retrieval flywheel boundary
 

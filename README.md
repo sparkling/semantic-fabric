@@ -214,7 +214,10 @@ The issue-independent [SOTA completion programme](docs/plans/sota-application-co
 governed by accepted
 [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md), derives
 the remaining work from the charter, source, accepted ADRs, tests, CI, standards,
-and measured benchmarks. Its verdict is evolutionary, not a compiler rewrite:
+and measured benchmarks. Proposed
+[ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
+describes the sibling controlled-capture transaction. The programme is
+evolutionary, not a compiler rewrite:
 make every advertised global operator bounded, then add source identity and a
 federated physical plan so the accepted cross-RDBMS charter becomes real.
 
@@ -230,10 +233,10 @@ one-hop HostSystem aliases. Its `0600` receipt remains private, external,
 uncommitted, unpublished, and noncanonical. It binds current binary and observed
 build/link provenance without claiming complete tool/system closure, linker
 time-of-use, SBOM, reproducibility, minimal-production packaging, or admission.
-Controlled performance producer and comparison machinery exists, but no
-controlled profile, baseline, candidate, or measured numbers exist. The clean-
-release first baseline still requires clean committed source on the exact
-controlled runner/profile. M0 remains open for complete binary/tool/system
+Controlled performance machinery exists, and `f2cc800` removes issue-8 lock
+hardcoding from future V5/V6 patch tasks. ADR-0041 keeps measurement in a sibling
+single-attempt transaction rather than weakening V6 patch semantics. No controlled
+profile, baseline, candidate, capture receipt, or measured numbers exist. M0 remains open for complete binary/tool/system
 closure, SBOM/reproducibility and production minimality/admission, that controlled
 performance baseline, and a final two-builder release replay after those authorities exist.
 Current-tranche repeatability is proven: exact commit
@@ -299,6 +302,8 @@ transaction after one patch-admission repair, then was honestly rejected at
 decision. The additive V6 path through `c8e3f68` binds full transaction/native
 evidence and derives `not-started`, `failed`, or `passed` prior-build semantics
 without reinterpreting V4/V5.
+Commit `f2cc800` generalizes frozen-lock authority for future V5/V6 patch tasks,
+while exact task-blob bindings preserve the two historical embedded fixtures.
 
 V6 run `programme_v6_h0c_20260828_01` failed closed at the native-origin gate
 and replay verified the failure. Fresh run `programme_v6_h0c_20260828_02`, on
@@ -419,7 +424,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation now binds one current binary and its observed final-link inputs, but not complete build-script/tool/system execution, linker time-of-use, SBOM, reproducibility, production minimality, or admission. Six advisory exceptions, three unmaintained-crate warnings, complete artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | Capture and comparison machinery exists, but no controlled runner profile, baseline, candidate, or measured numbers exist. The first clean-release baseline must run on the exact controlled runner/profile |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. No controlled runner profile, baseline, candidate, capture receipt, or measured numbers exist; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
@@ -439,10 +444,11 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 37 records: 33 accepted, three
+The canonical [ADR corpus](docs/adr/) contains 38 records: 33 accepted, four
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
 [ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), and
-[ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md)),
+[ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
+and [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)),
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -454,7 +460,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative

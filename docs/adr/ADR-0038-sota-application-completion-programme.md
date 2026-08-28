@@ -296,9 +296,15 @@ The observation also explicitly leaves linker time-of-use and link-path race
 resistance unattested; it is empirical current-artifact evidence, not gates 1–3
 of proposed ADR-0039.
 Performance production and comparison machinery exists, but no controlled
-runner profile, baseline, candidate, or measured numbers exist. The clean-
-release first baseline still requires clean committed source and the exact
-controlled runner/profile.
+runner profile, baseline, candidate, or measured numbers exist. Commit
+`f2cc800` makes future V5/V6 patch tasks consume exact tracked `Cargo.lock` bytes
+from their attested ancestor baseline while retaining an exact task-blob-bound
+exception for the two historical fixtures. It does not create measurement
+authority. Proposed
+[ADR-0041](ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
+keeps the clean-release baseline in a sibling single-attempt observational
+transaction rather than weakening V6 patch semantics. A dedicated controlled
+runner/profile, capture receipt, replay, and imported baseline remain open.
 
 M0 is not complete until actual complete binary artifact closure, SBOM and
 reproducibility/minimality/admission evidence, and the controlled performance

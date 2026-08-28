@@ -3,7 +3,7 @@
 - **Status:** In progress
 - **Date:** 2026-08-26
 - **Updated:** 2026-08-28
-- **Decision record:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md)
+- **Decision records:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md) (accepted) and [ADR-0041](../adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) (proposed capture design)
 
 **Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark evidence; GitHub issues and pull requests are deliberately not programme inputs.
 
@@ -66,9 +66,9 @@ reproducibility, or production admission.
 
 The current tranche adds a fail-closed **host-observed non-closure observation** for one freshly built current `sf-cli` executable. The first private `0600` external receipt, from clean `5a06eac`, replayed with 363 raw inputs, 357 canonical terminals and three one-hop HostSystem aliases; portable/host/receipt digests are `72ce37b4…9b9a`, `024fbbbd…3ad8` and `173d0698…51ca`. It is uncommitted, unpublished and noncanonical. CI tests only the parser/integration contract on mutable `ubuntu-24.04` and neither captures nor publishes. Linker-only alias authority binds alias topology and terminal bytes while generic authority remains symlink-rejecting; structured GNU-note parsing binds build-ID owner, type, size and digest. The producer still requires an exclusive, quiescent root/effective-UID builder. Same-principal/root ABA, linker time-of-use and path-resolution race resistance are explicitly unattested. Configured tools and the final-link depfile do not attest complete tool execution or exclusive linker authorship; build-script/system/`strace` closure, runtime resolution, dynamic-library closure, SBOM/provenance, reproducibility, production minimality and backend admission remain open.
 
-Performance production and comparison machinery now exists, but no controlled runner profile, baseline, candidate,
-or measured numbers exist. The clean-release first baseline must still be captured from clean committed source on
-the exact controlled runner/profile.
+Performance machinery exists, and `f2cc800` removes issue-8 lock hardcoding from future V5/V6 patch tasks. Proposed
+ADR-0041 keeps the first clean-release measurement outside that patch transaction; no controlled runner profile,
+baseline, candidate, capture receipt, or measured numbers exist.
 
 On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links under the hardened-builder
 `umask 0022`. Each checkout rebuilt the controller, passed all 91 harness files (627 tests passed and 8 environment-

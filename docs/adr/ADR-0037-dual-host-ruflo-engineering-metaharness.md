@@ -138,6 +138,7 @@ operator uses `config/programme-v5-acceptance.json`, which remains an issue-8
 H0c activation fixture; no general next-product-task or default promotion path
 exists. H0c is accepted only when an actual fresh run passes every gate, seals
 an accepted envelope, and provider-free replay verifies it.
+**Proposal note (2026-08-28):** [ADR-0041](ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) proposes a sibling observational plane without amending this boundary.
 
 ### 4. Policy and isolation
 
