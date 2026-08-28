@@ -71,7 +71,8 @@ Key properties:
   `501`/`Error::Unsupported`, never a guessed answer
   ([ADR-0007](docs/adr/ADR-0007-sparql-to-sql-rewriting-strategy.md)).
 - **RDF 1.2 / RDF-star:** native triple terms and reification over live SQL,
-  with the basic encoding confined below the visible query surface
+  with the basic encoding confined below the visible query surface and
+  RDF 1.2-aligned triple-term mappings compiled by `sf-mapping`
   ([ADR-0029](docs/adr/ADR-0029-rdf-star-mapping-extension-rml-star-vocabulary-basic-encoding.md)–[ADR-0032](docs/adr/ADR-0032-rdf-12-soundness-completeness-native-reification.md)).
 - **Named graphs:** `GRAPH <g>` and `GRAPH ?g`, including normalized
   subject-map/POM graph unions and exclusion of `rr:defaultGraph` from named

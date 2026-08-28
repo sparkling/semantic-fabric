@@ -4,8 +4,10 @@
 //! Turtle is read with `oxttl` (RDF 1.2; ADR-0004 / ADR-0019). This crate is the
 //! single place mapping documents are parsed — the virtualiser (`sf-sparql`)
 //! consumes the IR and never re-parses (ADR-0003 R1). RDF terms stay `oxrdf`
-//! types end to end (ADR-0003 R2). Scope is R2RML-only: no RML reference
-//! formulation / heterogeneous-source generality (ADR-0002).
+//! types end to end (ADR-0003 R2). This crate owns both validation and
+//! relational lowering for R2RML plus the RDF 1.2 triple-term mapping
+//! extension. There is no general RML reference-formulation or heterogeneous-
+//! source support (ADR-0002, ADR-0032).
 
 pub mod direct_mapping;
 pub mod r2rml;
