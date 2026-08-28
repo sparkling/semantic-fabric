@@ -15,7 +15,7 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | Through `4ff81b3`: dependencies and CI inputs are pinned; 1 suite manifest, 26 scenarios, 87 cases and 189 files are sealed; SQLite/PostgreSQL execute in canonical order; required-live PostgreSQL fails closed; the SQLite v2 receipt binds immutable captured inputs to per-case status and typed cause; the generated matrix has 74 exact cells (38 implemented, 34 planned, 2 unsupported, zero production-admitted); and CI plus the controller protect the complete authority closure. Current required-live PostgreSQL evidence, product correctness/heap/RSS/latency/dependency/binary-closure baselines, and the two-clean-checkout gate remain open |
+| M0 — architectural truth and deterministic foundation | In progress | Through the current tranche: the sealed mapping authorities remain protected; per-test expected SQLite query/protocol baselines and the default `sf-cli` package dependency closure now have provider-free receipts; and controlled performance capture/comparison machinery exists. Current required-live PostgreSQL evidence, actual binary artifact closure, a controlled performance baseline, and the two-clean-checkout proof remain open |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03` and `_04` remain honest historical failures at the final-review
@@ -65,6 +65,22 @@ Provider-free replay independently verified the pass in receipt
 H0c is therefore complete. M0 is in progress through verified incremental
 product slices; M1–M7 remain gated by their own product evidence.
 
+The SPARQL regression receipts bind per-test expected SQLite query and Protocol
+outcomes. They are regression baselines only: they do not attest W3C SPARQL
+Query/Protocol conformance, runtime provenance, or backend admission. The
+default `sf-cli` dependency receipt closes locked package resolution, enabled
+features, and normal/build dependency edges only. It does not attest binary
+bytes, build-script output, linker or system provenance, an SBOM,
+reproducibility, or production admission.
+
+Performance production and comparison machinery now exists, but no controlled
+runner profile, baseline, candidate, or measured numbers exist. The clean-
+release first baseline must still be captured from clean committed source on
+the exact controlled runner/profile. M0 therefore remains open for current
+required-live PostgreSQL evidence, actual binary artifact closure, that
+controlled performance baseline, and a complete gate pass in two clean
+checkouts. M1–M7 remain gated.
+
 ## Outcome
 
 Complete semantic-fabric as a state-of-the-art, virtualisation-only knowledge
@@ -105,8 +121,8 @@ Material gaps found directly in the current tree:
 | P0 | Silent path truncation | `path.rs` fixes `PATH_MAX_DEPTH = 256`; recursive rows retain depth | Exact cycle-safe closure or explicit limit failure, tested beyond 256 |
 | P0 | Bounded-memory invariant is too broad | `exec_core.rs` buffers global order, Rust grouping, solution/triple dedup | Composite SQL or bounded spill/merge; otherwise capability-profile `501` |
 | P0 | Cross-source charter is not delivered | One `ServeConfig.backend`; no `SourceId`; semi-join planner has no production caller | Source registry, source-bound mappings, federated plan and coordinator |
-| P0 | Reproducibility closure is incomplete | `93ae3c2` tracks `Cargo.lock`; `374ca99` pins actions, service images and selected tools; `31a1164` installs MetaHarness/Darwin only from the committed npm lock; two isolated exports reproduced lock/controller bytes | Close the recorded hosted-runner, apt-transitive and exact release-toolchain residuals; repeat the complete M0 gate in two clean checkouts |
-| P0 | Standards evidence is not yet release-complete | `1c9bb61` seals the exact suite and per-ID policy; `a3efb32` runs SQLite/PostgreSQL in sealed order, rejects count-neutral drift, and makes CI-required PostgreSQL absence fail; `33e202b` binds a canonical SQLite per-ID outcome baseline to the inventory digest. Current PostgreSQL evidence still derives from the prior live baseline | Add a durable current required-live PostgreSQL receipt, add MySQL mapping coverage, and keep mapping/query/protocol evidence disjoint |
+| P0 | Reproducibility closure is incomplete | `93ae3c2` tracks `Cargo.lock`; `374ca99` pins actions, service images and selected tools; `31a1164` installs MetaHarness/Darwin only from the committed npm lock; the default `sf-cli` receipt now closes package resolution, features and dependency edges only | Capture actual binary bytes plus build-script, linker and system provenance; produce an SBOM and reproducibility/admission evidence; close the hosted-runner, apt-transitive and release-toolchain residuals; repeat the complete M0 gate in two clean checkouts |
+| P0 | Standards evidence is not yet release-complete | `1c9bb61` seals the exact mapping suite and per-ID policy; `a3efb32` runs SQLite/PostgreSQL in sealed order; `33e202b` binds the SQLite mapping baseline; per-test expected SQLite query/protocol baselines now detect product regression without claiming W3C Query/Protocol conformance, runtime provenance or backend admission. Current PostgreSQL evidence still derives from the prior live baseline | Add a durable current required-live PostgreSQL receipt, add MySQL mapping coverage, and keep mapping/query/protocol evidence disjoint |
 | P1 | Governance covers only part of a request | compile is unbounded; no result/byte/cost cap or common cancellation budget | One `QueryBudget` from ingress through serialization, every backend |
 | P1 | Production secret/transport exposure | PostgreSQL `NoTls`; source secrets accepted in argv; parse errors echo conninfo | `SecretRef`, verified TLS, redacted errors and secret-corpus tests |
 | P1 | Accepted runtime ADRs are not delivered | ADR-0011/0017/0018 have no production implementation | Implement or supersede with dated status/evidence |
@@ -192,8 +208,11 @@ Outcomes:
 - track `Cargo.lock`; use `--locked`; pin CI actions, installed tools, W3C suite
   inventory, fixtures, expected outcomes, skips, deviations, and spec snapshots;
 - split RDB2RDF mapping conformance from SPARQL query/protocol evidence;
-- freeze baseline correctness, heap/RSS, latency, dependency, and binary-closure
-  receipts; and
+- **SPARQL baselines:** freeze per-test expected SQLite query and Protocol
+  outcomes as regression receipts, without treating them as W3C conformance,
+  runtime provenance, or backend admission;
+- freeze controlled heap/RSS and latency receipts, and keep package dependency
+  closure distinct from actual binary artifact and supply-chain closure; and
 - write subordinate ADRs for the production artifact and the federated global-
   operator/spill choice.
 

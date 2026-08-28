@@ -4,6 +4,7 @@ use std::process::Command;
 
 use serde_json::Value;
 use sf_conformance::capability_catalog::{self, Status};
+use sf_conformance::capability_model::CommandMode;
 use sf_conformance::capability_render;
 
 fn root() -> PathBuf {
@@ -48,6 +49,32 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
         .standards
         .iter()
         .all(|standard| standard.url.contains("/TR/") && standard.byte_length > 0));
+}
+
+#[test]
+fn sqlite_regression_receipt_commands_are_canonical_and_required() {
+    let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
+    for (id, argv) in [
+        (
+            "cmd-protocol-regression-sqlite",
+            "cargo run --locked --offline -p sf-conformance --features evidence-receipts \
+             --bin sparql-protocol-regression-baseline -- --check",
+        ),
+        (
+            "cmd-query-regression-sqlite",
+            "cargo run --locked --offline -p sf-conformance --features evidence-receipts \
+             --bin sparql-query-regression-baseline -- --check",
+        ),
+    ] {
+        let command = loaded
+            .catalog
+            .commands
+            .iter()
+            .find(|command| command.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(command.argv, argv);
+        assert_eq!(command.mode, CommandMode::Required);
+    }
 }
 
 #[test]

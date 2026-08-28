@@ -9,6 +9,7 @@ description = "semantic-fabric W3C RDB2RDF conformance harness + EARL + M⋈T SH
 [features]
 default = ["sqlserver-backend"]
 sqlserver-backend = ["sf-sql/sqlserver-backend"]
+evidence-receipts = ["dep:cargo-platform", "dep:libc"]
 
 [dependencies]
 sf-core.workspace = true
@@ -22,6 +23,8 @@ oxttl.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
 thiserror.workspace = true
 sha2.workspace = true
+libc = { workspace = true, optional = true }
+cargo-platform = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 # Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway database per
@@ -48,3 +51,26 @@ spargebra.workspace = true
 [[test]]
 name = "differential_mssql"
 required-features = ["sqlserver-backend"]
+
+[[bin]]
+name = "sparql-query-regression-baseline"
+path = "src/bin/sparql-query-regression-baseline.rs"
+required-features = ["evidence-receipts"]
+
+[[bin]]
+name = "sparql-protocol-regression-baseline"
+path = "src/bin/sparql-protocol-regression-baseline.rs"
+required-features = ["evidence-receipts"]
+
+[[bin]]
+name = "rust-closure-receipt"
+path = "src/bin/rust-closure-receipt.rs"
+required-features = ["evidence-receipts"]
+
+[[test]]
+name = "regression_baseline_cli"
+required-features = ["evidence-receipts"]
+
+[[test]]
+name = "rust_closure_receipt"
+required-features = ["evidence-receipts"]

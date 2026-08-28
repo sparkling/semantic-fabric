@@ -1,6 +1,11 @@
 use std::fmt;
+use std::path::Path;
+
+use super::bounded_io;
+use super::worker::ProcessIdentity;
 
 pub const MAX_PROC_STATUS_BYTES: usize = 1_048_576;
+pub const MAX_PROC_STAT_BYTES: usize = 65_536;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcStatusError(pub String);
@@ -46,10 +51,66 @@ pub fn parse_vmhwm_bytes(status: &str) -> Result<u64, ProcStatusError> {
     value.ok_or_else(|| ProcStatusError("missing VmHWM field".into()))
 }
 
+/// Parse `/proc/<pid>/stat` field 22 without assuming that the parenthesized
+/// command name contains no spaces or closing parentheses.
+pub fn parse_process_identity(
+    stat: &str,
+    expected_pid: u32,
+) -> Result<ProcessIdentity, ProcStatusError> {
+    if stat.len() > MAX_PROC_STAT_BYTES {
+        return Err(ProcStatusError("proc stat exceeds byte bound".into()));
+    }
+    let (pid, rest) = stat
+        .split_once(' ')
+        .ok_or_else(|| ProcStatusError("invalid proc stat pid field".into()))?;
+    if pid.parse::<u32>().ok() != Some(expected_pid) {
+        return Err(ProcStatusError("proc stat PID mismatch".into()));
+    }
+    let close = rest
+        .rfind(") ")
+        .ok_or_else(|| ProcStatusError("invalid proc stat command field".into()))?;
+    let fields: Vec<&str> = rest[close + 2..].split_whitespace().collect();
+    let start_time_ticks = fields
+        .get(19)
+        .ok_or_else(|| ProcStatusError("proc stat is missing field 22".into()))?
+        .parse::<u64>()
+        .map_err(|_| ProcStatusError("invalid proc stat start time".into()))?;
+    if expected_pid == 0 || start_time_ticks == 0 {
+        return Err(ProcStatusError("invalid process identity".into()));
+    }
+    Ok(ProcessIdentity {
+        pid: expected_pid,
+        start_time_ticks,
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub fn read_process_identity(pid: u32) -> Result<ProcessIdentity, ProcStatusError> {
+    let path = format!("/proc/{pid}/stat");
+    let bytes = bounded_io::read(Path::new(&path), MAX_PROC_STAT_BYTES)
+        .map_err(|error| ProcStatusError(error.to_string()))?;
+    let stat =
+        String::from_utf8(bytes).map_err(|_| ProcStatusError(format!("{path} is not UTF-8")))?;
+    parse_process_identity(&stat, pid)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn read_process_identity(_pid: u32) -> Result<ProcessIdentity, ProcStatusError> {
+    Err(ProcStatusError(
+        "process identity is available only on Linux controlled runners".into(),
+    ))
+}
+
+pub fn read_self_process_identity() -> Result<ProcessIdentity, ProcStatusError> {
+    read_process_identity(std::process::id())
+}
+
 #[cfg(target_os = "linux")]
 pub fn read_self_vmhwm_bytes() -> Result<u64, ProcStatusError> {
-    let status = std::fs::read_to_string("/proc/self/status")
-        .map_err(|error| ProcStatusError(format!("read /proc/self/status: {error}")))?;
+    let bytes = bounded_io::read(Path::new("/proc/self/status"), MAX_PROC_STATUS_BYTES)
+        .map_err(|error| ProcStatusError(error.to_string()))?;
+    let status = String::from_utf8(bytes)
+        .map_err(|_| ProcStatusError("/proc/self/status is not UTF-8".into()))?;
     parse_vmhwm_bytes(&status)
 }
 

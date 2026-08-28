@@ -6,6 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 description = "semantic-fabric GTFS-Madrid OBDA benchmark driver (ADR-0005)"
 
+[features]
+default = []
+performance-receipts = ["dep:libc"]
+
 [dependencies]
 sf-core.workspace = true
 sf-sql.workspace = true
@@ -24,6 +28,7 @@ tokio-postgres = "0.7"
 # driver crates agree.
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] }
 sha2.workspace = true # canonical performance receipt and comparison digests
+libc = { workspace = true, optional = true } # receipt subprocess process-group teardown
 
 [dev-dependencies]
 # criterion latency benches (ADR-0005). tempfile holds the file-backed source DB
@@ -51,3 +56,40 @@ harness = false
 [[bench]]
 name = "micro_hotpaths"
 harness = false
+
+[[bin]]
+name = "sf-performance-receipt"
+path = "src/bin/sf-performance-receipt.rs"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_capture"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_cli"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_paths"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_platform"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_profile"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_receipt"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_stats"
+required-features = ["performance-receipts"]
+
+[[test]]
+name = "performance_subprocess"
+required-features = ["performance-receipts"]

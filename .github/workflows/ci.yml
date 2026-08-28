@@ -31,6 +31,8 @@ jobs:
         run: npm --prefix coding-harness ci --ignore-scripts
       - name: build canonical coding harness
         run: npm --prefix coding-harness run build
+      - name: verify committed controller attestation is current
+        run: git diff --exit-code -- coding-harness/.harness/controller-build.json
       - name: test canonical coding harness
         env:
           HARNESS_REQUIRE_NATIVE_INTEGRATION: ${{ matrix.native_required }}
@@ -137,6 +139,22 @@ jobs:
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check
       - name: replay sealed SQLite RDB2RDF outcome baseline
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
+      - name: clippy deterministic evidence receipt tooling
+        run: cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings
+      - name: test deterministic evidence receipt tooling
+        run: cargo test --locked -p sf-conformance --features evidence-receipts --lib --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1
+      - name: replay expected SQLite SPARQL query regression baseline
+        run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check
+      - name: replay expected SQLite SPARQL protocol regression baseline
+        run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-protocol-regression-baseline -- --check
+      - name: verify default sf-cli package dependency closure
+        run: cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check
+      - name: clippy controlled performance receipt tooling
+        run: cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings
+      - name: test controlled performance receipt tooling
+        run: cargo test --locked -p sf-bench --features performance-receipts
+      - name: verify fixed performance scenario authority
+        run: cargo run --locked -p sf-bench --features performance-receipts --bin sf-performance-receipt -- check-scenarios
       - name: verify generated capability, backend, standards, and README claims
         run: cargo run --locked -p sf-conformance --bin capability-matrix -- --check
       # W3C RDB2RDF conformance gate (ADR-0005). The canonical inventory contains

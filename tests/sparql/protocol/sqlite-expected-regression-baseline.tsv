@@ -1,0 +1,32 @@
+semantic-fabric-expected-regression-baseline-v1
+meta	profile-id	sqlite-protocol-regression-v2
+meta	surface	sparql-protocol
+meta	backend	sqlite
+meta	inventory-path	tests/sparql/protocol/inventory.tsv
+meta	inventory-sha256	b6f016ca67942bbdcd27a16963e002d28a043d158450511cf456b4f07b2f427f
+meta	hash-algorithm	sha256
+meta	attestation-scope	expected-local-test-outcomes-not-runtime-provenance-w3c-conformance-or-backend-admission
+meta	suite-count	1
+meta	test-count	20
+meta	excluded-count	4
+meta	outcomes-sha256	07e0d946c6e1a9c615b59ff2460461f8b78aca1c8a20c9ee64d301d8418c14db
+test	protocol-endpoint	ask_query_backend_sql_error_returns_500	passed
+test	protocol-endpoint	ask_query_exceeding_timeout_returns_504	passed
+test	protocol-endpoint	ask_returns_boolean	passed
+test	protocol-endpoint	column_names_spawn_blocking_deadlock_regression	passed
+test	protocol-endpoint	construct_returns_jsonld	passed
+test	protocol-endpoint	construct_returns_ntriples	passed
+test	protocol-endpoint	construct_returns_turtle	passed
+test	protocol-endpoint	deferred_feature_returns_501	passed
+test	protocol-endpoint	malformed_query_returns_400	passed
+test	protocol-endpoint	missing_query_param_returns_400	passed
+test	protocol-endpoint	oversized_query_returns_413	passed
+test	protocol-endpoint	post_form_urlencoded_body_is_accepted	passed
+test	protocol-endpoint	post_sparql_query_body_non_utf8_returns_400	passed
+test	protocol-endpoint	post_unsupported_content_type_returns_415	passed
+test	protocol-endpoint	select_returns_csv	passed
+test	protocol-endpoint	select_returns_json_bindings	passed
+test	protocol-endpoint	select_returns_tsv	passed
+test	protocol-endpoint	select_returns_xml	passed
+test	protocol-endpoint	select_streams_many_rows	passed
+test	protocol-endpoint	select_via_get_url_param	passed

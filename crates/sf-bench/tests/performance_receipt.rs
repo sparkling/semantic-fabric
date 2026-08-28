@@ -1,4 +1,4 @@
-use sf_bench::performance::compare::{compare, ComparisonVerdict};
+use sf_bench::performance::compare::{compare, within_percent, ComparisonVerdict, GateVerdict};
 use sf_bench::performance::config::{parse_scenarios, render_scenarios};
 use sf_bench::performance::format::{
     parse_receipt, receipt_sha256, render_receipt, CommittedBaseline, MAX_RECEIPT_BYTES,
@@ -173,4 +173,173 @@ fn should_reference_immutable_baseline_digest_in_comparison() {
     let comparison = compare(&baseline, &candidate).expect("comparison receipt");
 
     assert_eq!(comparison.baseline_sha256, receipt_sha256(&baseline_text));
+}
+
+#[test]
+fn should_pass_the_exact_five_percent_median_boundary() {
+    let mut candidate = receipt(ReceiptKind::Candidate, PROFILE_A, SourceTree::Clean);
+    candidate.observations[0] = ScenarioObservation::new(
+        candidate.observations[0].config.clone(),
+        vec![105; M0_SAMPLE_COUNT],
+    )
+    .unwrap();
+    let mut baseline_receipt = receipt(ReceiptKind::Baseline, PROFILE_A, SourceTree::Clean);
+    baseline_receipt.observations[0] = ScenarioObservation::new(
+        baseline_receipt.observations[0].config.clone(),
+        vec![100; M0_SAMPLE_COUNT],
+    )
+    .unwrap();
+    let baseline_text = render_receipt(&baseline_receipt).unwrap();
+    let baseline = CommittedBaseline::parse(baseline_text.as_bytes()).unwrap();
+
+    let comparison = compare(&baseline, &candidate).unwrap();
+
+    assert_eq!(comparison.verdict, ComparisonVerdict::Pass);
+    assert_eq!(comparison.scenarios[0].median_verdict, GateVerdict::Pass);
+}
+
+#[test]
+fn should_report_a_threshold_regression() {
+    let mut baseline_receipt = receipt(ReceiptKind::Baseline, PROFILE_A, SourceTree::Clean);
+    baseline_receipt.observations[0] = ScenarioObservation::new(
+        baseline_receipt.observations[0].config.clone(),
+        vec![100; M0_SAMPLE_COUNT],
+    )
+    .unwrap();
+    let baseline_text = render_receipt(&baseline_receipt).unwrap();
+    let baseline = CommittedBaseline::parse(baseline_text.as_bytes()).unwrap();
+    let mut candidate = receipt(ReceiptKind::Candidate, PROFILE_A, SourceTree::Clean);
+    candidate.observations[0] = ScenarioObservation::new(
+        candidate.observations[0].config.clone(),
+        vec![106; M0_SAMPLE_COUNT],
+    )
+    .unwrap();
+
+    let comparison = compare(&baseline, &candidate).unwrap();
+
+    assert_eq!(comparison.verdict, ComparisonVerdict::Regression);
+    assert_eq!(
+        comparison.scenarios[0].median_verdict,
+        GateVerdict::Regression
+    );
+}
+
+#[test]
+fn should_gate_p95_independently_at_ten_percent() {
+    let mut baseline_receipt = receipt(ReceiptKind::Baseline, PROFILE_A, SourceTree::Clean);
+    baseline_receipt.observations[0] = ScenarioObservation::new(
+        baseline_receipt.observations[0].config.clone(),
+        vec![100; M0_SAMPLE_COUNT],
+    )
+    .unwrap();
+    let baseline_text = render_receipt(&baseline_receipt).unwrap();
+    let baseline = CommittedBaseline::parse(baseline_text.as_bytes()).unwrap();
+    let mut raw = vec![100; M0_SAMPLE_COUNT];
+    raw[47..].fill(111);
+    let mut candidate = receipt(ReceiptKind::Candidate, PROFILE_A, SourceTree::Clean);
+    candidate.observations[0] =
+        ScenarioObservation::new(candidate.observations[0].config.clone(), raw).unwrap();
+
+    let comparison = compare(&baseline, &candidate).unwrap();
+
+    assert_eq!(comparison.scenarios[0].median_verdict, GateVerdict::Pass);
+    assert_eq!(comparison.scenarios[0].p95_verdict, GateVerdict::Regression);
+}
+
+#[test]
+fn should_use_exact_integer_percent_arithmetic() {
+    assert!(within_percent(105, 100, 5));
+    assert!(!within_percent(106, 100, 5));
+    assert!(within_percent(110, 100, 10));
+    assert!(!within_percent(111, 100, 10));
+    assert!(within_percent(u64::MAX as u128, u64::MAX as u128, 5));
+}
+
+#[test]
+fn should_gate_heap_scaling_from_ten_to_one_hundred() {
+    let make = |kind| {
+        let observations = [(10, "scale010", 100), (100, "scale100", 111)]
+            .into_iter()
+            .map(|(scale, suffix, value)| {
+                let config = ScenarioConfig::new(
+                    &format!("gtfs.sqlite.construct.heap.{suffix}"),
+                    scale,
+                    MetricId::HeapRustRequestedLiveDelta,
+                    BoundaryId::SqliteParseTranslateExecuteDiscard,
+                    Unit::Bytes,
+                    0,
+                    M0_SAMPLE_COUNT,
+                )
+                .unwrap();
+                ScenarioObservation::new(config, vec![value; M0_SAMPLE_COUNT]).unwrap()
+            })
+            .collect();
+        PerformanceReceipt::new(
+            kind,
+            RunnerBinding::new("linux-controlled-v1", PROFILE_A).unwrap(),
+            SourceBinding::new(
+                "0123456789abcdef0123456789abcdef01234567",
+                SourceTree::Clean,
+                ARTIFACT,
+                WORKLOAD,
+            )
+            .unwrap(),
+            observations,
+        )
+        .unwrap()
+    };
+    let baseline_text = render_receipt(&make(ReceiptKind::Baseline)).unwrap();
+    let baseline = CommittedBaseline::parse(baseline_text.as_bytes()).unwrap();
+
+    let comparison = compare(&baseline, &make(ReceiptKind::Candidate)).unwrap();
+
+    assert_eq!(comparison.verdict, ComparisonVerdict::Regression);
+    assert_eq!(comparison.scaling.len(), 1);
+    assert_eq!(
+        comparison.scaling[0].median_verdict,
+        GateVerdict::Regression
+    );
+    assert!(comparison
+        .informational
+        .iter()
+        .any(|note| note.contains("soak comparison is unmeasured")));
+}
+
+#[test]
+fn should_make_an_incomplete_memory_scaling_set_inconclusive() {
+    let config = ScenarioConfig::new(
+        "gtfs.sqlite.construct.heap.scale010",
+        10,
+        MetricId::HeapRustRequestedLiveDelta,
+        BoundaryId::SqliteParseTranslateExecuteDiscard,
+        Unit::Bytes,
+        0,
+        M0_SAMPLE_COUNT,
+    )
+    .unwrap();
+    let make = |kind| {
+        PerformanceReceipt::new(
+            kind,
+            RunnerBinding::new("linux-controlled-v1", PROFILE_A).unwrap(),
+            SourceBinding::new(
+                "0123456789abcdef0123456789abcdef01234567",
+                SourceTree::Clean,
+                ARTIFACT,
+                WORKLOAD,
+            )
+            .unwrap(),
+            vec![ScenarioObservation::new(config.clone(), vec![100; M0_SAMPLE_COUNT]).unwrap()],
+        )
+        .unwrap()
+    };
+    let baseline_text = render_receipt(&make(ReceiptKind::Baseline)).unwrap();
+    let baseline = CommittedBaseline::parse(baseline_text.as_bytes()).unwrap();
+
+    let comparison = compare(&baseline, &make(ReceiptKind::Candidate)).unwrap();
+
+    assert_eq!(comparison.verdict, ComparisonVerdict::Inconclusive);
+    assert_eq!(
+        comparison.reason,
+        "memory scaling scenario set is incomplete"
+    );
 }

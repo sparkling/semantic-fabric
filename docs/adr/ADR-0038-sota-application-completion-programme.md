@@ -217,8 +217,8 @@ replay receipt are
 `d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
 `02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
 and `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
-H0c is complete. M0 is now in progress through ten verified product/evidence
-slices:
+H0c is complete. M0 is now in progress through the verified product/evidence
+slices listed below:
 `93ae3c2` tracks the root lockfile and freezes dependency resolution;
 `374ca99` pins the reviewed CI action, service-image and selected tool inputs;
 `1c9bb61` adds a fail-closed, per-file-digested RDB2RDF inventory for 1 suite
@@ -242,12 +242,24 @@ authority closure in the controller, and proves generic MetaHarness-fit scores
 cannot decide programme acceptance. Proposed ADR status is deliberate: neither
 packaging nor federation is accepted or implemented by writing its design lock.
 
-M0 is not complete until current required-live PostgreSQL evidence, the product
-correctness/heap/RSS/latency/dependency/binary-closure baselines, and the
-complete gate pass in two clean checkouts. The generated matrix and SQLite v2
-receipt are deterministic authorities, not release or backend-admission proof.
-M1–M7 remain gated. These incremental closures do not by themselves rescore the
-44/100 application-readiness baseline.
+The current M0 tranche also adds per-test expected SQLite query and Protocol
+regression baselines. Those receipts do not attest W3C SPARQL Query/Protocol
+conformance, runtime provenance, or backend admission. The default `sf-cli`
+dependency receipt closes package resolution, enabled features, and normal/build
+dependency edges only; it does not attest binary bytes, build-script output,
+linker or system provenance, an SBOM, reproducibility, or production admission.
+Performance production and comparison machinery exists, but no controlled
+runner profile, baseline, candidate, or measured numbers exist. The clean-
+release first baseline still requires clean committed source and the exact
+controlled runner/profile.
+
+M0 is not complete until current required-live PostgreSQL evidence, actual
+binary artifact closure, the controlled performance baseline, and the complete
+gate pass in two clean checkouts have been performed. The generated matrix,
+SQLite v2 mapping receipt, query/protocol regression receipts, and package
+dependency receipt are deterministic scoped authorities, not release or backend-
+admission proof. M1–M7 remain gated. These incremental closures do not by
+themselves rescore the 44/100 application-readiness baseline.
 
 The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before
 successful cleanup. Future harness optimisation may use immutable

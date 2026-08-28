@@ -178,6 +178,13 @@ harness score:
   is fatal, and PostgreSQL provider absence fails in required CI mode. A sealed
   SQLite outcome baseline binds all 87 case identities, kinds and statuses to
   the inventory digest; a current live PostgreSQL receipt is still an M0 gate.
+- Per-test expected SQLite query and Protocol regression baselines are now
+  receipt-bound. They are product regression oracles, not evidence of W3C SPARQL
+  Query/Protocol conformance, runtime provenance, or backend admission.
+- The default `sf-cli` dependency receipt closes locked package resolution,
+  enabled features, and normal/build dependency edges only. It does not attest
+  binary bytes, build-script output, linker or system provenance, an SBOM,
+  reproducibility, or production admission.
 - Differential suites compare flat and operator-tree planners with native
   materialized RDF and spareval across ordinary queries, paths, graphs, and
   RDF-star.
@@ -210,11 +217,15 @@ federated physical plan so the accepted cross-RDBMS charter becomes real.
 
 The first release blockers are silent 256-hop property-path truncation,
 source-sized Rust state in some global sort/group/dedup paths, incomplete total
-request governance, and a broad production dependency closure. M0 now tracks
-and locks the application graph, pins reviewed CI inputs and local MetaHarness
-readiness tools, and makes RDB2RDF execution consume the sealed suite. Exact
-release closure, durable execution/capability/baseline receipts, current
-required-live evidence, and two-clean-checkout proof remain open.
+request governance, and a broad production dependency closure. M0 now also has
+per-test expected SQLite query/protocol baselines and a receipt for the default
+`sf-cli` package dependency closure. Controlled performance producer and
+comparison machinery exists, but no controlled profile, baseline, candidate, or
+measured numbers exist. The clean-release first baseline still requires clean
+committed source on the exact controlled runner/profile. M0 remains open for
+current required-live PostgreSQL evidence, actual binary artifact closure, that
+controlled performance baseline, and the complete proof in two clean checkouts.
+M1–M7 remain gated.
 A hardened single-source build is an interim release profile; it is not the
 charter-complete application while cross-RDBMS federation remains in scope.
 
@@ -292,6 +303,13 @@ v2 receipt binds immutable captured inputs to typed outcome causes (`81caec2`)
 without claiming runner/toolchain provenance. CI and the controller now protect
 and replay those authorities read-only (`4ff81b3`). M1–M7 remain gated, and the
 44/100 application-readiness baseline has not been formally rescored.
+
+The current M0 tranche adds per-test expected SQLite query/Protocol baselines,
+the scoped default `sf-cli` package dependency receipt, and controlled
+performance production/comparison machinery. The query/protocol receipts do not
+claim W3C conformance, runtime provenance, or backend admission; the dependency
+receipt does not claim actual artifact or supply-chain closure; and no controlled
+performance profile, receipt, or numbers have been captured.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build
@@ -376,7 +394,8 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, reviewed actions and service images are immutable references, local MetaHarness/Darwin readiness tools are npm-integrity-locked, and two clean exports reproduced lock/controller bytes. `cargo audit` passes its configured gate; six documented advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. This is not binary-byte, build-script, linker/system, SBOM, reproducibility, or admission evidence. Six advisory exceptions, three unmaintained-crate warnings, actual artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
+| M0 performance evidence | Capture and comparison machinery exists, but no controlled runner profile, baseline, candidate, or measured numbers exist. The first clean-release baseline must run on the exact controlled runner/profile |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.

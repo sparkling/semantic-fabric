@@ -31,7 +31,12 @@ pub mod inventory;
 pub mod manifest;
 pub mod oracle;
 pub mod pg;
+#[cfg(feature = "evidence-receipts")]
+#[path = "regression_receipt/mod.rs"]
+pub mod regression_baseline;
 pub mod runner;
+#[cfg(feature = "evidence-receipts")]
+pub mod rust_closure_receipt;
 pub mod sealed_suite;
 pub mod shacl_gate;
 pub mod sqlite;

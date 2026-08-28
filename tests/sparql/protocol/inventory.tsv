@@ -1,0 +1,36 @@
+semantic-fabric-regression-profile-v1
+meta	profile-id	sqlite-protocol-regression-v2
+meta	surface	sparql-protocol
+meta	backend	sqlite
+meta	hash-algorithm	sha256
+meta	attestation-scope	expected-local-test-outcomes-not-runtime-provenance-w3c-conformance-or-backend-admission
+input	Cargo.lock	158523	91cc1270c725d1bde2ed41d8c796268df929b8895ea839f33483d90a28ecbffc
+input	Cargo.toml	2554	923859c6e94d2a88b46603772ae5f5c6d8e31e1bfb3a79c568087098726af183
+input	crates/sf-serve/Cargo.toml	1428	01a442bfa29af27f93826f82c8adb94dcd0b463490b194d9fdd0bdb81521d55b
+input	crates/sf-serve/tests/endpoint.rs	38611	c00a42a5200ed9fc15fdeb2a8dcb5a04eae56c78d8b69185f882f1ef52f4d2ef
+input	rust-toolchain.toml	122	e8c8b3d67e37fa6c751296b6583b82805e597b619a1868b35369185eb61e4b45
+suite	protocol-endpoint	sf-serve	endpoint	600
+test	protocol-endpoint	ask_query_backend_sql_error_returns_500	include	required
+test	protocol-endpoint	ask_query_exceeding_timeout_returns_504	include	required
+test	protocol-endpoint	ask_returns_boolean	include	required
+test	protocol-endpoint	column_names_spawn_blocking_deadlock_regression	include	required
+test	protocol-endpoint	construct_returns_jsonld	include	required
+test	protocol-endpoint	construct_returns_ntriples	include	required
+test	protocol-endpoint	construct_returns_turtle	include	required
+test	protocol-endpoint	deferred_feature_returns_501	include	required
+test	protocol-endpoint	malformed_query_returns_400	include	required
+test	protocol-endpoint	missing_query_param_returns_400	include	required
+test	protocol-endpoint	oversized_query_returns_413	include	required
+test	protocol-endpoint	pg::pg_pool_concurrency_receipt	exclude	live-provider-optional
+test	protocol-endpoint	pg::pg_pool_exhaustion_sheds_503_with_retry_after	exclude	live-provider-optional
+test	protocol-endpoint	pg::pg_select_and_construct	exclude	live-provider-optional
+test	protocol-endpoint	post_form_urlencoded_body_is_accepted	include	required
+test	protocol-endpoint	post_sparql_query_body_non_utf8_returns_400	include	required
+test	protocol-endpoint	post_unsupported_content_type_returns_415	include	required
+test	protocol-endpoint	select_returns_csv	include	required
+test	protocol-endpoint	select_returns_json_bindings	include	required
+test	protocol-endpoint	select_returns_tsv	include	required
+test	protocol-endpoint	select_returns_xml	include	required
+test	protocol-endpoint	select_streams_many_rows	include	required
+test	protocol-endpoint	select_via_get_url_param	include	required
+test	protocol-endpoint	sqlite_pool_concurrency_receipt	exclude	timing-performance

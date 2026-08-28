@@ -1,9 +1,10 @@
 use std::convert::Infallible;
 
 use sf_bench::performance::model::{BoundaryId, MetricId, ScenarioConfig, Unit, M0_SAMPLE_COUNT};
-use sf_bench::performance::proc_status::parse_vmhwm_bytes;
+use sf_bench::performance::proc_status::{parse_process_identity, parse_vmhwm_bytes};
 use sf_bench::performance::worker::{
-    collect_fresh_samples, ProcessIdentity, WorkerLauncher, WorkerRequest, WorkerResult,
+    collect_fresh_samples, parse_worker_result, render_worker_result, ProcessIdentity,
+    WorkerLauncher, WorkerRequest, WorkerResult,
 };
 
 #[test]
@@ -84,6 +85,7 @@ fn should_launch_one_fresh_worker_for_every_raw_sample() {
 
     assert_eq!(samples.len(), M0_SAMPLE_COUNT);
     assert_eq!(launcher.requests.len(), M0_SAMPLE_COUNT);
+    assert_eq!(launcher.requests[0].request_token, "run-0001-s001-0000");
 }
 
 #[test]
@@ -96,4 +98,31 @@ fn should_reject_reused_process_identity_between_samples() {
     let result = collect_fresh_samples(&rss_config(), "run-0001", &mut launcher);
 
     assert!(result.is_err());
+}
+
+#[test]
+fn should_parse_linux_start_time_with_a_tricky_command_name() {
+    let mut fields = vec!["S"; 20];
+    fields[19] = "987654";
+    let stat = format!("123 (name with ) paren) {}", fields.join(" "));
+
+    let identity = parse_process_identity(&stat, 123).unwrap();
+
+    assert_eq!(identity.pid, 123);
+    assert_eq!(identity.start_time_ticks, 987_654);
+}
+
+#[test]
+fn should_round_trip_canonical_worker_output() {
+    let result = WorkerResult {
+        request_token: "run-1-2-0000".into(),
+        identity: ProcessIdentity {
+            pid: 123,
+            start_time_ticks: 456,
+        },
+        value: 789,
+    };
+    let text = render_worker_result(&result).unwrap();
+
+    assert_eq!(parse_worker_result(text.as_bytes()).unwrap(), result);
 }

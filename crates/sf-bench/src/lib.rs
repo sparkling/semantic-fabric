@@ -21,6 +21,7 @@
 
 pub mod driver;
 pub mod mem;
+#[cfg(feature = "performance-receipts")]
 pub mod performance;
 pub mod workload;
 
