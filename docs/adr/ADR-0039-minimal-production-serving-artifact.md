@@ -21,21 +21,46 @@ This ADR is a **proposal**, not an acceptance or implementation claim. Its
 `implements` relationship means that it is the subordinate design lock requested
 by ADR-0038 M0; no release is conformant until the acceptance gates below pass.
 
-Interim M0 tooling can record and verify a host-observed non-closure observation
-of the current all-in-one `sf-cli` executable. That observation is about the
-artifact which exists today, not this proposal's `sf-server`, and it is not a
-complete binary closure, SBOM, reproducibility result, production-minimality
-proof, or admission receipt. Its configured tool identities and final-link
-dependency file are observations, not complete tool-execution evidence or proof
-of exclusive linker authorship. Authority ancestry and held-directory checks
-fail closed on untrusted or persistent replacement, while same-principal/root
-ABA resistance remains explicitly unattested and requires an exclusive,
-quiescent builder principal. CI exercises only the parser/contract on its mutable
-hosted runner and does not capture or publish an observation. The broad
-conformance/benchmark closure observed today motivates the split, but supplies
-no acceptance evidence for gates 1–3 below. This improves the implementation
-baseline without accepting this ADR or resolving the proposed packaging
-decision.
+Interim M0 tooling records and verifies a host-observed non-closure observation
+of the current all-in-one `sf-cli` executable. On 2026-08-28 the first exact
+observation was captured from clean source commit
+`5a06eacbf0164ca36a1421d3106247034e0d1e7b` and replayed structurally with the
+same CLI. Its external `0600` receipt contains 363 raw final-link inputs, 357
+canonical terminal inputs, and three one-hop alias records. It binds portable
+authority digest
+`72ce37b4320e5126ef32a693eab80f2f30df3757881c6e2495e8882068079b9a`,
+host-observation digest
+`024fbbbde94471f15a15e65193b1a0c66767f5590b2621f8d9c7b896381a3ad8`,
+and receipt digest
+`173d0698e7955da881a39574bb5a08d302b80b67fc3e89a95c27d282270e51ca`.
+The receipt remains outside the repository and
+has not been committed, uploaded, promoted, or made canonical; these summary
+digests are not a substitute for its replayable bytes.
+
+The linker exception is deliberately narrower than generic file authority. It
+accepts only a final one-hop symlink named by the dependency file when both its
+alias and independently normalized terminal map to `HostSystem`. The receipt
+binds the alias, terminal, raw target topology, and terminal bytes; held alias
+and terminal descriptors plus root guards are rechecked at phase boundaries.
+Generic workspace, toolchain, Cargo, build-output, and other authority paths
+remain symlink- and hard-link-rejecting. The raw primary/phony dependency-file
+sequences must agree before normalization, and GNU build IDs are accepted only
+from one structurally valid `.note.gnu.build-id` record whose owner, type,
+declared size, and lowercase digest agree.
+
+This observation is about the artifact which exists today, not this proposal's
+`sf-server`, and it is not a complete binary closure, SBOM, reproducibility
+result, production-minimality proof, or admission receipt. Its configured tool
+identities and final-link dependency file are observations, not complete tool-
+execution evidence or proof of exclusive linker authorship. Link-input bytes are
+observed after linking, so linker time-of-use and path-resolution race resistance
+remain explicitly unattested. Authority ancestry and held-directory checks fail
+closed on untrusted or persistent replacement, while same-principal/root ABA
+resistance still requires an exclusive, quiescent builder principal. CI
+exercises only the parser/contract on its mutable hosted runner and does not
+capture or publish an observation. This advances the implementation baseline
+without accepting this ADR, satisfying gates 1–3, or resolving the proposed
+packaging decision.
 
 ## Context and problem statement
 

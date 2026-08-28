@@ -219,13 +219,20 @@ The first release blockers are silent 256-hop property-path truncation,
 source-sized Rust state in some global sort/group/dedup paths, incomplete total
 request governance, and a broad production dependency closure. M0 now also has
 per-test expected SQLite query/protocol baselines and a receipt for the default
-`sf-cli` package dependency closure. Controlled performance producer and
-comparison machinery exists, but no controlled profile, baseline, candidate, or
-measured numbers exist. The clean-release first baseline still requires clean
-committed source on the exact controlled runner/profile. M0 remains open for
-current required-live PostgreSQL evidence, actual binary artifact closure, that
-controlled performance baseline, and a final two-builder release replay after
-those authorities exist. Current-tranche repeatability is proven: exact commit
+`sf-cli` package dependency closure. The first exact current-`sf-cli` host
+observation was also captured externally from clean commit `5a06eac` and replayed:
+363 raw final-link inputs normalize to 357 canonical terminals plus three
+one-hop HostSystem aliases. Its `0600` receipt remains private, external,
+uncommitted, unpublished, and noncanonical. It binds current binary and observed
+build/link provenance without claiming complete tool/system closure, linker
+time-of-use, SBOM, reproducibility, minimal-production packaging, or admission.
+Controlled performance producer and comparison machinery exists, but no
+controlled profile, baseline, candidate, or measured numbers exist. The clean-
+release first baseline still requires clean committed source on the exact
+controlled runner/profile. M0 remains open for current required-live PostgreSQL
+evidence, complete binary/tool/system closure, that controlled performance
+baseline, and a final two-builder release replay after those authorities exist.
+Current-tranche repeatability is proven: exact commit
 `ad94cdb` rebuilt and replayed byte-identically in two clean, no-hard-link
 checkouts under hardened-builder `umask 0022`, with both trees remaining clean.
 That proof does not attest actual binary reproducibility. M1–M7 remain gated.
@@ -312,7 +319,12 @@ the scoped default `sf-cli` package dependency receipt, and controlled
 performance production/comparison machinery. The query/protocol receipts do not
 claim W3C conformance, runtime provenance, or backend admission; the dependency
 receipt does not claim actual artifact or supply-chain closure; and no controlled
-performance profile, receipt, or numbers have been captured.
+performance profile, receipt, or numbers have been captured. The first private
+external current-`sf-cli` artifact observation now also replays from clean
+`5a06eac`. Its 363 raw inputs, 357 canonical terminals, three one-hop aliases,
+and structured GNU build ID are bounded current-host evidence only; complete
+tool execution, linker time-of-use, runtime resolution, SBOM, reproducibility,
+production minimality, and admission remain explicit nonclaims.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build
@@ -397,7 +409,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. This is not binary-byte, build-script, linker/system, SBOM, reproducibility, or admission evidence. Six advisory exceptions, three unmaintained-crate warnings, actual artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation now binds one current binary and its observed final-link inputs, but not complete build-script/tool/system execution, linker time-of-use, SBOM, reproducibility, production minimality, or admission. Six advisory exceptions, three unmaintained-crate warnings, complete artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
 | M0 performance evidence | Capture and comparison machinery exists, but no controlled runner profile, baseline, candidate, or measured numbers exist. The first clean-release baseline must run on the exact controlled runner/profile |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path

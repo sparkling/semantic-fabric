@@ -252,11 +252,21 @@ The tranche now also provides a fail-closed contract and tool for recording and
 verifying a **host-observed non-closure observation** of a freshly built current
 `sf-cli` executable. CI validates that bounded parser/contract only: it does not
 capture, commit, upload, or promote an observation from the mutable hosted
-runner. No canonical observation receipt exists yet; any future observation
-remains external to the observed source tree to avoid receipt self-reference.
+runner. The first external observation was captured from clean commit `5a06eac`
+and replayed on 2026-08-28. Its private `0600` receipt binds 363 raw inputs to
+357 canonical terminal inputs and three one-hop HostSystem alias records, with
+portable/host/receipt digests
+`72ce37b4320e5126ef32a693eab80f2f30df3757881c6e2495e8882068079b9a`,
+`024fbbbde94471f15a15e65193b1a0c66767f5590b2621f8d9c7b896381a3ad8`, and
+`173d0698e7955da881a39574bb5a08d302b80b67fc3e89a95c27d282270e51ca`.
+It remains uncommitted, unpublished, noncanonical, and outside
+the observed source tree to avoid receipt self-reference.
 Authority paths now require root/effective-UID ownership and reject writable
 ancestors except root-owned sticky proper ancestors; held directory identities
-detect persistent replacement at phase boundaries.
+detect persistent replacement at phase boundaries. The linker-only alias
+authority binds alias topology and terminal bytes without weakening generic
+symlink rejection, and the structured GNU-note parser binds build-ID owner,
+type, declared size, and digest.
 The producer still trusts UID 0 and its effective UID and requires that builder
 principal to be exclusive and quiescent: resistance to same-principal/root ABA
 replacement is an explicit nonclaim, not evidence supplied by this tooling.
@@ -270,6 +280,9 @@ system and `strace`-grade closure; loader-policy runtime resolution and dynamic-
 library closure; SBOM and release provenance; independent reproducibility; the
 proposed minimal production artifact and backend admission; current required-
 live PostgreSQL evidence; and controlled performance evidence all remain open.
+The observation also explicitly leaves linker time-of-use and link-path race
+resistance unattested; it is empirical current-artifact evidence, not gates 1–3
+of proposed ADR-0039.
 Performance production and comparison machinery exists, but no controlled
 runner profile, baseline, candidate, or measured numbers exist. The clean-
 release first baseline still requires clean committed source and the exact
