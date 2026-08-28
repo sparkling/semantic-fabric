@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use sha2::{Digest, Sha256};
@@ -103,6 +104,7 @@ pub struct ToolIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BuildScriptEvent {
     pub package_id: String,
+    pub logical_out_dir: String,
     pub directives_source_byte_length: u64,
     pub directives_sha256: String,
     pub stderr_byte_length: u64,
@@ -273,8 +275,15 @@ impl HostObservation {
         if self.build_script_events.is_empty() || self.final_link_inputs.is_empty() {
             return Err("build-script events and final link inputs must be observed".to_owned());
         }
+        let mut build_script_identities = BTreeSet::new();
         for event in &self.build_script_events {
             validate_text("build-script package id", &event.package_id, 512)?;
+            validate_build_script_out_dir(&event.logical_out_dir)?;
+            if !build_script_identities
+                .insert((event.package_id.as_str(), event.logical_out_dir.as_str()))
+            {
+                return Err("duplicate build-script package and OUT_DIR identity".to_owned());
+            }
             validate_file_length(
                 event.directives_source_byte_length,
                 "build-script directives source",
@@ -297,6 +306,21 @@ impl HostObservation {
         self.artifact.validate()?;
         validate_dynamic_libraries(&self.dynamic_libraries)
     }
+}
+
+fn validate_build_script_out_dir(value: &str) -> Result<(), String> {
+    validate_logical_path(value)?;
+    let suffix = value
+        .strip_prefix("build-output/")
+        .ok_or_else(|| "build-script OUT_DIR must be a build-output logical path".to_owned())?;
+    if suffix.is_empty()
+        || suffix
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err("build-script OUT_DIR is not canonical".to_owned());
+    }
+    Ok(())
 }
 
 impl ArtifactObservation {

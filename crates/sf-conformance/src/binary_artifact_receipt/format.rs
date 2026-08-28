@@ -99,7 +99,7 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
                     sha256: (*digest).to_owned(),
                 });
             }
-            ["build-script-event", package, directives_length, directives_digest, stderr_length, stderr_digest, out_file_count, out_tree_length, out_tree_digest] =>
+            ["build-script-event", package, out_dir, directives_length, directives_digest, stderr_length, stderr_digest, out_file_count, out_tree_length, out_tree_digest] =>
             {
                 advance(&mut stage, Stage::BuildScript, number)?;
                 if build_script_events.len() == MAX_BUILD_SCRIPT_EVENTS {
@@ -107,6 +107,7 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
                 }
                 build_script_events.push(BuildScriptEvent {
                     package_id: (*package).to_owned(),
+                    logical_out_dir: (*out_dir).to_owned(),
                     directives_source_byte_length: parse_length(directives_length, number)?,
                     directives_sha256: (*directives_digest).to_owned(),
                     stderr_byte_length: parse_length(stderr_length, number)?,
@@ -278,8 +279,9 @@ pub(super) fn observation_records(observation: &HostObservation) -> String {
     for item in &observation.build_script_events {
         writeln!(
             output,
-            "build-script-event\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "build-script-event\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             item.package_id,
+            item.logical_out_dir,
             item.directives_source_byte_length,
             item.directives_sha256,
             item.stderr_byte_length,

@@ -88,6 +88,7 @@ fn receipt() -> Receipt {
         ],
         build_script_events: vec![BuildScriptEvent {
             package_id: "libsqlite3-sys@0.38.0".to_owned(),
+            logical_out_dir: "build-output/release/build/libsqlite3-sys-fixture/out".to_owned(),
             directives_source_byte_length: 32,
             directives_sha256: digest('e'),
             stderr_byte_length: 0,

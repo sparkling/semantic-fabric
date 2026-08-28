@@ -336,17 +336,11 @@ impl BoundTools {
 fn build_script_events(
     inventories: Vec<build_script_capture::BuildScriptInventory>,
 ) -> Result<Vec<BuildScriptEvent>, String> {
-    let mut package_ids = BTreeSet::new();
     let mut events = Vec::with_capacity(inventories.len());
     for inventory in inventories {
-        if !package_ids.insert(inventory.package_id.clone()) {
-            return Err(
-                "multiple build-script executions collapse to one package-only receipt identity"
-                    .to_owned(),
-            );
-        }
         events.push(BuildScriptEvent {
             package_id: inventory.package_id,
+            logical_out_dir: inventory.receipt_out_dir,
             directives_source_byte_length: inventory.directives_bytes,
             directives_sha256: inventory.directives_sha256,
             stderr_byte_length: inventory.stderr_bytes,

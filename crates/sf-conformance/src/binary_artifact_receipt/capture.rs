@@ -1,11 +1,11 @@
 //! Fresh-target build-script output inventory.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use super::{authority, cargo, producer_paths::SandboxPathMap};
+use super::{authority, cargo, model::LinkInputOrigin, producer_paths::SandboxPathMap};
 
 const MAX_BUILD_SCRIPT_FILES: usize = 20_000;
 const MAX_BUILD_SCRIPT_BYTES: u64 = 512 * 1024 * 1024;
@@ -15,7 +15,7 @@ pub(super) const DIRECTIVES_FORMAT: &str = "semantic-fabric-canonical-build-scri
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BuildScriptInventory {
     pub(super) package_id: String,
-    pub(super) out_dir: PathBuf,
+    pub(super) receipt_out_dir: String,
     pub(super) directives_sha256: String,
     pub(super) directives_bytes: u64,
     pub(super) stderr_sha256: String,
@@ -38,12 +38,12 @@ pub(super) fn inventory(
     inventories.sort_by(|left, right| {
         left.package_id
             .cmp(&right.package_id)
-            .then(left.out_dir.cmp(&right.out_dir))
+            .then(left.receipt_out_dir.cmp(&right.receipt_out_dir))
     });
-    if inventories
-        .windows(2)
-        .any(|pair| pair[0].package_id == pair[1].package_id && pair[0].out_dir == pair[1].out_dir)
-    {
+    if inventories.windows(2).any(|pair| {
+        pair[0].package_id == pair[1].package_id
+            && pair[0].receipt_out_dir == pair[1].receipt_out_dir
+    }) {
         return Err("duplicate build-script inventory".to_owned());
     }
     Ok(inventories)
@@ -54,7 +54,11 @@ fn one(
     path_map: &SandboxPathMap,
     script: &cargo::BuildScript,
 ) -> Result<BuildScriptInventory, String> {
-    let out_dir = path_map.map_target(&script.logical_out_dir)?;
+    let mapped_out_dir = path_map.map(&script.logical_out_dir)?;
+    if mapped_out_dir.origin != LinkInputOrigin::BuildOutput {
+        return Err("build-script OUT_DIR is not inside logical /target".to_owned());
+    }
+    let out_dir = mapped_out_dir.backing;
     authority::validate_beneath(target_dir, &out_dir, "build-script OUT_DIR")?;
     authority::validate_directory(&out_dir, "build-script OUT_DIR")?;
     let build_dir = out_dir
@@ -74,7 +78,7 @@ fn one(
     let tree = tree(&out_dir)?;
     Ok(BuildScriptInventory {
         package_id: checked_package_id(&script.package_id)?,
-        out_dir,
+        receipt_out_dir: mapped_out_dir.receipt_path,
         directives_sha256: canonical_directives_sha256(&directives.bytes)?,
         directives_bytes: directives.size,
         stderr_sha256: stderr.sha256,

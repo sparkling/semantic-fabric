@@ -72,6 +72,7 @@ fn observation() -> HostObservation {
         ],
         build_script_events: vec![BuildScriptEvent {
             package_id: "libsqlite3-sys@0.38.0".to_owned(),
+            logical_out_dir: "build-output/release/build/libsqlite3-sys-fixture/out".to_owned(),
             directives_source_byte_length: 32,
             directives_sha256: digest('e'),
             stderr_byte_length: 0,
@@ -303,6 +304,80 @@ fn retains_empty_build_script_out_tree_and_rejects_omission() {
     assert!(Receipt::new(authority(), omitted)
         .unwrap_err()
         .contains("build-script events"));
+}
+
+#[test]
+fn build_script_identity_includes_the_logical_out_dir() {
+    let mut multiple_contexts = observation();
+    let mut second = multiple_contexts.build_script_events[0].clone();
+    second.logical_out_dir = "build-output/release/build/libsqlite3-sys-other/out".to_owned();
+    multiple_contexts.build_script_events.push(second);
+    multiple_contexts.build_script_events.sort();
+    let receipt = Receipt::new(authority(), multiple_contexts).unwrap();
+    assert_eq!(parse(&render(&receipt).unwrap()).unwrap(), receipt);
+
+    let mut duplicate_identity = observation();
+    let mut changed = duplicate_identity.build_script_events[0].clone();
+    changed.directives_sha256 = digest('a');
+    duplicate_identity.build_script_events.push(changed);
+    duplicate_identity.build_script_events.sort();
+    assert!(Receipt::new(authority(), duplicate_identity)
+        .unwrap_err()
+        .contains("duplicate build-script package and OUT_DIR identity"));
+}
+
+#[test]
+fn rejects_noncanonical_build_script_out_dir_identities() {
+    for invalid in [
+        "build-output/",
+        "build-output/release/build/pkg/out/",
+        "build-output/release/./build/pkg/out",
+        "workspace/release/build/pkg/out",
+    ] {
+        let mut invalid_observation = observation();
+        invalid_observation.build_script_events[0].logical_out_dir = invalid.to_owned();
+        assert!(Receipt::new(authority(), invalid_observation).is_err());
+    }
+}
+
+#[test]
+fn parser_rejects_the_obsolete_package_only_build_script_shape() {
+    let rendered = render(&receipt()).unwrap();
+    let event = rendered
+        .lines()
+        .find(|line| line.starts_with("build-script-event\t"))
+        .unwrap();
+    let fields: Vec<_> = event.split('\t').collect();
+    let obsolete = fields
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 2)
+        .map(|(_, field)| *field)
+        .collect::<Vec<_>>()
+        .join("\t");
+    assert!(parse(&rendered.replace(event, &obsolete))
+        .unwrap_err()
+        .contains("unknown or malformed record"));
+}
+
+#[test]
+fn parser_rejects_duplicate_build_script_identity_with_different_facts() {
+    let rendered = render(&receipt()).unwrap();
+    let event = rendered
+        .lines()
+        .find(|line| line.starts_with("build-script-event\t"))
+        .unwrap();
+    let mut fields: Vec<_> = event.split('\t').map(str::to_owned).collect();
+    fields[4] = digest('f');
+    let duplicate = fields.join("\t");
+    let changed_count = rendered.replace(
+        "meta\tbuild-script-event-count\t1\n",
+        "meta\tbuild-script-event-count\t2\n",
+    );
+    let duplicated = changed_count.replace(event, &format!("{event}\n{duplicate}"));
+    assert!(parse(&duplicated)
+        .unwrap_err()
+        .contains("duplicate build-script package and OUT_DIR identity"));
 }
 
 #[test]
