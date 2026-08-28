@@ -36,7 +36,6 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-bench/tests/performance_stats.rs',
   'crates/sf-bench/tests/performance_subprocess.rs',
   'crates/sf-conformance/src/bin/capability-matrix.rs',
-  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs',
   'crates/sf-conformance/src/bin/rdb2rdf-execution-receipt.rs',
   'crates/sf-conformance/src/bin/rdb2rdf-inventory.rs',
   'crates/sf-conformance/src/bin/rust-closure-receipt.rs',
@@ -51,6 +50,14 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/binary_artifact_receipt/mod.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/model.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/process.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/producer.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/producer_paths.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/receipt_file.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/sandbox.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/sandbox_environment.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/source.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/source_blobs.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/source_tree.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/tests.rs',
   'crates/sf-conformance/src/capability_catalog.rs',
   'crates/sf-conformance/src/capability_model.rs',
@@ -68,9 +75,10 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/pg.rs',
   'crates/sf-conformance/src/runner.rs',
   'crates/sf-conformance/src/rust_closure_receipt.rs',
+  'crates/sf-conformance/src/rust_closure_receipt/controlled.rs',
+  'crates/sf-conformance/src/rust_closure_receipt/controlled_tests.rs',
   'crates/sf-conformance/src/sealed_suite.rs',
   'crates/sf-conformance/src/sqlite.rs',
-  'crates/sf-conformance/tests/binary_artifact_receipt.rs',
   'crates/sf-conformance/tests/capability_matrix.rs',
   'crates/sf-conformance/tests/differential_graphs.rs',
   'crates/sf-conformance/tests/differential_paths.rs',
@@ -98,6 +106,11 @@ const M0_AUTHORITY_PATHS = [
   'tests/w3c/rdb2rdf/sqlite-execution-receipt.tsv',
 ] as const;
 
+const EXPECTED_ARTIFACT_INTERFACE_PATHS = [
+  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs',
+  'crates/sf-conformance/tests/binary_artifact_receipt.rs',
+] as const;
+
 const REQUIRED_CI_COMMANDS = [
   'cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check',
   'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check',
@@ -119,8 +132,14 @@ const REQUIRED_ARTIFACT_OBSERVATION_TEST =
 describe('M0 protected authority and CI contract', () => {
   it('protects every tracked authority in both config and manifest', () => {
     expect(SECURE_HARNESS_CONFIG.requiredProtectedPaths)
-      .toEqual(expect.arrayContaining([...M0_AUTHORITY_PATHS]));
-    expect(manifest.protectedPaths).toEqual(expect.arrayContaining([...M0_AUTHORITY_PATHS]));
+      .toEqual(expect.arrayContaining([
+        ...M0_AUTHORITY_PATHS,
+        ...EXPECTED_ARTIFACT_INTERFACE_PATHS,
+      ]));
+    expect(manifest.protectedPaths).toEqual(expect.arrayContaining([
+      ...M0_AUTHORITY_PATHS,
+      ...EXPECTED_ARTIFACT_INTERFACE_PATHS,
+    ]));
 
     const tracked = spawnSync(
       'git', ['-C', repository, 'ls-files', '--error-unmatch', '--', ...M0_AUTHORITY_PATHS],
