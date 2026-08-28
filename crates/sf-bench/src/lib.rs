@@ -21,6 +21,7 @@
 
 pub mod driver;
 pub mod mem;
+pub mod performance;
 pub mod workload;
 
 use std::time::{SystemTime, UNIX_EPOCH};

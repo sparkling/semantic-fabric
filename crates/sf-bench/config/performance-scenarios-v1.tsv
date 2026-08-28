@@ -1,0 +1,18 @@
+sf-performance-scenarios-v1
+scenario	gtfs.sqlite.construct.first.scale001	1	latency.first-result	sqlite.execute-to-first-triple	ns	3	50
+scenario	gtfs.sqlite.construct.first.scale010	10	latency.first-result	sqlite.execute-to-first-triple	ns	3	50
+scenario	gtfs.sqlite.construct.first.scale100	100	latency.first-result	sqlite.execute-to-first-triple	ns	3	50
+scenario	gtfs.sqlite.construct.full.scale001	1	latency.full-result	sqlite.parse-translate-execute-discard	ns	3	50
+scenario	gtfs.sqlite.construct.full.scale010	10	latency.full-result	sqlite.parse-translate-execute-discard	ns	3	50
+scenario	gtfs.sqlite.construct.full.scale100	100	latency.full-result	sqlite.parse-translate-execute-discard	ns	3	50
+scenario	gtfs.sqlite.construct.heap.scale001	1	heap.rust-requested-live-delta	sqlite.parse-translate-execute-discard	bytes	0	50
+scenario	gtfs.sqlite.construct.heap.scale010	10	heap.rust-requested-live-delta	sqlite.parse-translate-execute-discard	bytes	0	50
+scenario	gtfs.sqlite.construct.heap.scale100	100	heap.rust-requested-live-delta	sqlite.parse-translate-execute-discard	bytes	0	50
+scenario	gtfs.sqlite.construct.rss.scale001	1	rss.linux-process-peak	linux.fresh-process-lifetime	bytes	0	50
+scenario	gtfs.sqlite.construct.rss.scale010	10	rss.linux-process-peak	linux.fresh-process-lifetime	bytes	0	50
+scenario	gtfs.sqlite.construct.rss.scale100	100	rss.linux-process-peak	linux.fresh-process-lifetime	bytes	0	50
+scenario	gtfs.sqlite.q1.full.scale001	1	latency.full-result	sqlite.parse-translate-execute-collect	ns	3	50
+scenario	gtfs.sqlite.q2.full.scale001	1	latency.full-result	sqlite.parse-translate-execute-collect	ns	3	50
+scenario	gtfs.sqlite.q3.full.scale001	1	latency.full-result	sqlite.parse-translate-execute-collect	ns	3	50
+scenario	gtfs.sqlite.q4.full.scale001	1	latency.full-result	sqlite.parse-translate-execute-collect	ns	3	50
+scenario	gtfs.sqlite.q5.full.scale001	1	latency.full-result	sqlite.parse-translate-execute-collect	ns	3	50
