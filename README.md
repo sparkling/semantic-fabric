@@ -343,18 +343,18 @@ PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
 CI and the controller protect and replay those authorities read-only. M1–M7 remain gated, and the
 44/100 application-readiness baseline has not been formally rescored.
 
-The current M0 tranche adds per-test expected SQLite query/Protocol baselines,
-the scoped default `sf-cli` package dependency receipt, and controlled
-performance production/comparison machinery plus the non-authorizing local
-run-claim reservation described above. The query/protocol receipts do not
-claim W3C conformance, runtime provenance, or backend admission; the dependency
-receipt does not claim actual artifact or supply-chain closure; and no controlled
-performance profile, receipt, or numbers have been captured. The first private
-external current-`sf-cli` artifact observation now also replays from clean
-`5a06eac`. Its 363 raw inputs, 357 canonical terminals, three one-hop aliases,
-and structured GNU build ID are bounded current-host evidence only; complete
-tool execution, linker time-of-use, runtime resolution, SBOM, reproducibility,
-production minimality, and admission remain explicit nonclaims.
+The current M0 tranche adds per-test SQLite query/Protocol baselines, the scoped
+`sf-cli` dependency receipt, controlled performance machinery, a non-authorizing
+local run claim, and a strict runtime-linkage plan/parser. Query/Protocol receipts
+do not claim conformance, runtime provenance, or backend admission; the dependency
+receipt does not claim artifact or supply-chain closure; and no controlled
+performance profile, receipt, or numbers exist. The first private current-`sf-cli`
+artifact observation also replays from clean `5a06eac`. Its 363 raw inputs, 357
+canonical terminals, three aliases, and GNU build ID are bounded current-host
+evidence only. The linkage contract fixes a host-input-read-only, networkless,
+environment-cleared `ld.so --list` plan and parser, but executes nothing and captures
+no runtime bytes or receipt. Complete tool execution, linker time-of-use, dynamic
+closure, SBOM, reproducibility, production minimality, and admission remain nonclaims.
 
 The PostgreSQL mapping receipt records 80 pass, one documented deviation and six
 exact skips; its file/outcome/inventory digests are `c04e6f86…0f52`,

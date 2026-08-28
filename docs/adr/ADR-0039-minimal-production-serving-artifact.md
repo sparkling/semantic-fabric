@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-08-28
+updated: 2026-08-29
 tags: [production, packaging, release, cargo, reproducibility, sbom, provenance, supply-chain]
 supersedes: []
 depends-on:
@@ -47,6 +47,13 @@ remain symlink- and hard-link-rejecting. The raw primary/phony dependency-file
 sequences must agree before normalization, and GNU build IDs are accepted only
 from one structurally valid `.note.gnu.build-id` record whose owner, type,
 declared size, and lowercase digest agree.
+
+An additive runtime-linkage contract now fixes a host-input-read-only, network-
+isolated, environment-cleared bubblewrap plan and a strict parser for glibc
+`ld.so --list`. It is explicitly non-authorizing and exports no executor or
+receipt path. No loader was invoked, and no runtime-object bytes or dynamic-
+closure receipt was captured. Exact artifact/tool identity and rejection of
+loader-active dynamic tags remain mandatory gates for any future collector.
 
 This observation is about the artifact which exists today, not this proposal's
 `sf-server`, and it is not a complete binary closure, SBOM, reproducibility

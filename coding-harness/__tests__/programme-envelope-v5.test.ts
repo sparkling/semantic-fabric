@@ -41,39 +41,15 @@ import { digestValue, ReceiptChain, type Receipt, type ReceiptStatus } from '../
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
 import { diagnosticBlob, diagnosticBlobDigest, programmeV5RufloFixture }
   from './candidate-fixtures.js';
+import { PROGRAMME_V5_POST_HISTORICAL_PATHS }
+  from './programme-v5-post-historical-paths.js';
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = 'b9964691cdf7c4cf80748e7f4faecc104739a50a1c1a1175a2cb7ad30570c979';
-const ACCEPTANCE_DIGEST = '62e0dc493f1177c7ac6a9bae22a75a35dfce795172d499cc3aaece4eae6e66dc';
-const ENVELOPE_DIGEST = '5a4eb844b3a9a168aa1b4cdb7112436c4a560317b8afd77e73a5d526f277cad4';
+const POLICY_FINGERPRINT = 'c0b5872f497d7ff5c348e8491e4ed82cc6c12dc9129862f2a6b503cf2bd534d3';
+const ACCEPTANCE_DIGEST = 'f05d845706fd2af10e3a350918ee06117778ff1cc6ece9fb3257a9b83be649ac';
+const ENVELOPE_DIGEST = 'c6546d6bdf909a110eb1d12926148c9ecddba2e52bf5663c2ced910c1d027ad6';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
-const CAPTURE_PATHS = new Set([
-  'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-git-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-state-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-task-v1.test.ts',
-  'coding-harness/src/programme-capture-claim-io-v1.ts',
-  'coding-harness/src/programme-capture-claim-record-v1.ts',
-  'coding-harness/src/programme-capture-config-v1.ts',
-  'coding-harness/src/programme-capture-git-v1.ts',
-  'coding-harness/src/programme-capture-host-authority-v1.ts',
-  'coding-harness/src/programme-capture-host-observation-v1.ts',
-  'coding-harness/src/programme-capture-host-preflight-v1.ts',
-  'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
-  'coding-harness/src/programme-capture-input-attestation-v1.ts',
-  'coding-harness/src/programme-capture-private-source-fs-v1.ts',
-  'coding-harness/src/programme-capture-private-source-v1.ts',
-  'coding-harness/src/programme-capture-runner-profile-v1.ts',
-  'coding-harness/src/programme-capture-state-v1.ts',
-  'coding-harness/src/programme-capture-task-v1.ts',
-  'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
-]);
 
 describe('strict schema-v5 programme envelope', () => {
   it('round-trips one receipt against independent policy and envelope anchors', () => {
@@ -478,12 +454,14 @@ function historicalManifest(): { manifestBlob: string; harnessConfig: HarnessCon
   const manifest = JSON.parse(readFileSync(
     new URL('../.harness/manifest.json', import.meta.url), 'utf8',
   )) as Record<string, any>;
-  manifest.protectedPaths = manifest.protectedPaths.filter((path: string) => !CAPTURE_PATHS.has(path));
+  manifest.protectedPaths = manifest.protectedPaths.filter(
+    (path: string) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path),
+  );
   const manifestBlob = `${JSON.stringify(manifest, null, 2)}\n`;
   return { manifestBlob, harnessConfig: parseHarnessConfig({
     ...structuredClone(SECURE_HARNESS_CONFIG),
     requiredProtectedPaths: SECURE_HARNESS_CONFIG.requiredProtectedPaths
-      .filter((path) => !CAPTURE_PATHS.has(path)),
+      .filter((path) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path)),
   }) };
 }
 

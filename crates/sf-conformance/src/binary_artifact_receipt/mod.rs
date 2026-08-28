@@ -17,6 +17,7 @@ mod process;
 mod producer;
 mod producer_paths;
 mod receipt_file;
+mod runtime_linkage;
 mod sandbox;
 mod sandbox_environment;
 mod source;
@@ -32,3 +33,7 @@ pub use model::{
 };
 pub use producer::{capture, CaptureRequest};
 pub use receipt_file::{load_external, write_new_external};
+pub use runtime_linkage::{
+    parse_runtime_linkage_view, plan_runtime_linkage, ResolvedRuntimeObject, RuntimeLinkageView,
+    RuntimeLoaderPlan, VirtualRuntimeObject,
+};

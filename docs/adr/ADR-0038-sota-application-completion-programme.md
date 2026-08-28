@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-26
-updated: 2026-08-28
+updated: 2026-08-29
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -283,13 +283,20 @@ The producer still trusts UID 0 and its effective UID and requires that builder
 principal to be exclusive and quiescent: resistance to same-principal/root ABA
 replacement is an explicit nonclaim, not evidence supplied by this tooling.
 
+An additive runtime-linkage contract now describes the exact host-input-read-
+only, network-isolated, environment-cleared loader plan and canonicalizes strict,
+bounded glibc `ld.so --list` output. It exports no executor or receipt path. No
+loader was invoked, and no runtime-object bytes or closure receipt was captured;
+artifact/tool identity and loader-active dynamic-tag rejection remain future
+collector gates.
+
 This observation tooling advances M0 without closing the actual binary-artifact
 boundary. It records configured tool identities and a post-build final-link-
 dependency-file snapshot with hashes of its listed, mapped inputs; it does not
 attest the complete execution closure of any tool or sole configured-linker
 authorship of that dependency file. Complete tool-execution, build-script-input,
-system and `strace`-grade closure; loader-policy runtime resolution and dynamic-
-library closure; SBOM and release provenance; independent reproducibility; the
+system and `strace`-grade closure; execution of the fixed loader policy and
+dynamic-library byte closure; SBOM and release provenance; independent reproducibility; the
 proposed minimal production artifact and backend admission; and controlled
 performance evidence all remain open.
 The observation also explicitly leaves linker time-of-use and link-path race

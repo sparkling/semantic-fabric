@@ -31,40 +31,16 @@ import {
 } from '../src/programme-task-runtime-v1.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
 import type { RustOfflineProfile } from '../src/rust-sandbox.js';
+import { PROGRAMME_V5_POST_HISTORICAL_PATHS }
+  from './programme-v5-post-historical-paths.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
-  '7d67a31282e3f251d0cfa8206ef16c6441605e7048d72b4a941dda3f20ef69c4';
+  '38b5233cdd0584bc3bf6c468af79176078b01412f295c25637c2e54557a368ff';
 const HISTORICAL_POLICY_FINGERPRINT =
   '7888d16a81b048d2bd1a436047cac8ebd13d61050daeff670371140383526c3c';
 const HISTORICAL_MANIFEST_DIGEST =
   'f1dbcaf5c49c45b84e0c4bb09f305b9787eaa2493f659e445eeced60324cf104';
-const CAPTURE_PATHS = new Set([
-  'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-git-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-state-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-task-v1.test.ts',
-  'coding-harness/src/programme-capture-claim-io-v1.ts',
-  'coding-harness/src/programme-capture-claim-record-v1.ts',
-  'coding-harness/src/programme-capture-config-v1.ts',
-  'coding-harness/src/programme-capture-git-v1.ts',
-  'coding-harness/src/programme-capture-host-authority-v1.ts',
-  'coding-harness/src/programme-capture-host-observation-v1.ts',
-  'coding-harness/src/programme-capture-host-preflight-v1.ts',
-  'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
-  'coding-harness/src/programme-capture-input-attestation-v1.ts',
-  'coding-harness/src/programme-capture-private-source-fs-v1.ts',
-  'coding-harness/src/programme-capture-private-source-v1.ts',
-  'coding-harness/src/programme-capture-runner-profile-v1.ts',
-  'coding-harness/src/programme-capture-state-v1.ts',
-  'coding-harness/src/programme-capture-task-v1.ts',
-  'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
-]);
 const manifestUrl = new URL('../.harness/manifest.json', import.meta.url);
 const taskUrl = new URL('../config/issue-8-acceptance.json', import.meta.url);
 
@@ -434,12 +410,14 @@ function policyInput(
 
 function historicalManifest(): { manifestBlob: string; harnessConfig: HarnessConfig } {
   const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8')) as Record<string, any>;
-  manifest.protectedPaths = manifest.protectedPaths.filter((path: string) => !CAPTURE_PATHS.has(path));
+  manifest.protectedPaths = manifest.protectedPaths.filter(
+    (path: string) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path),
+  );
   const manifestBlob = `${JSON.stringify(manifest, null, 2)}\n`;
   const harnessConfig = parseHarnessConfig({
     ...structuredClone(SECURE_HARNESS_CONFIG),
     requiredProtectedPaths: SECURE_HARNESS_CONFIG.requiredProtectedPaths
-      .filter((path) => !CAPTURE_PATHS.has(path)),
+      .filter((path) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path)),
   });
   return { manifestBlob, harnessConfig };
 }
