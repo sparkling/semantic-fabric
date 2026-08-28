@@ -207,3 +207,33 @@ fn postgres_entrypoint_rejects_bad_inventory_before_provider_probe() {
     let error = pg::run(&suite.0, LiveMode::LocalOptional).unwrap_err();
     assert_eq!(error, "inventory is empty");
 }
+
+#[test]
+fn sealed_postgres_execution_ignores_every_post_capture_input_mutation() {
+    if std::env::var_os("SF_PG_URL").is_none() && std::env::var_os("CI").is_none() {
+        eprintln!("UNTESTED: set SF_PG_URL to exercise the sealed PostgreSQL snapshot");
+        return;
+    }
+    let suite = TempSuite::copy();
+    let sealed = SealedSuite::load(&suite.0).expect("capture sealed suite");
+    let scenario = suite.0.join("cases/D000-1table1column0rows");
+    fs::write(scenario.join("create.sql"), "invalid post-capture SQL").unwrap();
+    fs::write(scenario.join("r2rml.ttl"), "invalid post-capture Turtle").unwrap();
+    fs::write(scenario.join("mapped.nq"), "invalid post-capture N-Quads").unwrap();
+    fs::write(
+        scenario.join("create.postgres.sql"),
+        "unsealed dialect fork must not be observed",
+    )
+    .unwrap();
+
+    let report = pg::run_sealed_suite_required(&sealed)
+        .expect("PostgreSQL executes only the immutable captured snapshot");
+    for id in ["DirectGraphTC0000", "R2RMLTC0000"] {
+        let case = report
+            .cases
+            .iter()
+            .find(|case| case.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(case.status, Status::Passed, "{id}: {}", case.reason);
+    }
+}

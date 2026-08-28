@@ -18,6 +18,7 @@ const capabilityCatalog = JSON.parse(
 
 const M0_AUTHORITY_PATHS = [
   '.cargo/audit.toml',
+  '.harness/mcp-policy.json',
   'coding-harness/__tests__/m0-authority.test.ts',
   'coding-harness/__tests__/programme-envelope-v5.test.ts',
   'coding-harness/__tests__/programme-policy-v5.test.ts',
@@ -80,6 +81,8 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/manifest.rs',
   'crates/sf-conformance/src/oracle.rs',
   'crates/sf-conformance/src/pg.rs',
+  'crates/sf-conformance/src/pg/outcome.rs',
+  'crates/sf-conformance/src/pg/tests.rs',
   'crates/sf-conformance/src/runner.rs',
   'crates/sf-conformance/src/rust_closure_receipt.rs',
   'crates/sf-conformance/src/rust_closure_receipt/controlled.rs',
@@ -110,6 +113,7 @@ const M0_AUTHORITY_PATHS = [
   'tests/sparql/query/inventory.tsv',
   'tests/sparql/query/sqlite-expected-regression-baseline.tsv',
   'tests/w3c/rdb2rdf/inventory.tsv',
+  'tests/w3c/rdb2rdf/postgresql-execution-receipt.tsv',
   'tests/w3c/rdb2rdf/sqlite-execution-receipt.tsv',
 ] as const;
 
@@ -121,6 +125,7 @@ const EXPECTED_ARTIFACT_INTERFACE_PATHS = [
 const REQUIRED_CI_COMMANDS = [
   'cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check',
   'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check',
+  'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-protocol-regression-baseline -- --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check',

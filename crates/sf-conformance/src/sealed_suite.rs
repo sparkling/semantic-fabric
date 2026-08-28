@@ -16,6 +16,23 @@ pub enum Backend {
     Postgres,
 }
 
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::Postgres => "postgresql",
+        }
+    }
+
+    pub fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "sqlite" => Some(Self::Sqlite),
+            "postgresql" => Some(Self::Postgres),
+            _ => None,
+        }
+    }
+}
+
 /// Stable adjudication cause. Free-form reason text remains diagnostic only;
 /// receipts and the non-passing policy bind this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

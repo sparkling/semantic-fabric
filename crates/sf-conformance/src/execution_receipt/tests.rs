@@ -114,3 +114,29 @@ fn parser_rejects_the_eighty_eighth_case_immediately() {
     let error = format::parse(&receipt).unwrap_err();
     assert!(error.contains("exceeds 87 cases"), "{error}");
 }
+
+#[test]
+fn selected_backend_mismatch_is_rejected_before_suite_or_runner_access() {
+    let called = Cell::new(false);
+    let error = check_for_with_runner(
+        Path::new("/suite-must-not-be-opened"),
+        &source_receipt(),
+        Backend::Postgres,
+        never_run(&called),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("backend mismatch"), "{error}");
+    assert!(error.contains("requested=postgresql"), "{error}");
+    assert!(!called.get(), "runner must not execute");
+}
+
+#[test]
+fn backend_and_runner_must_be_an_exact_registered_pair() {
+    let receipt = fs::read_to_string(source_receipt()).expect("read tracked receipt");
+    let forged = receipt.replacen("meta\tbackend\tsqlite", "meta\tbackend\tpostgresql", 1);
+    let error = format::parse(&forged).unwrap_err();
+
+    assert!(error.contains("metadata runner"), "{error}");
+    assert!(error.contains("run_sealed_suite_required"), "{error}");
+}

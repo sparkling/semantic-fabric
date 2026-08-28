@@ -7,8 +7,10 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sf_conformance::execution_receipt;
+use sf_conformance::sealed_suite::Backend;
 
-const RECEIPT_NAME: &str = "sqlite-execution-receipt.tsv";
+const SQLITE_RECEIPT_NAME: &str = "sqlite-execution-receipt.tsv";
+const POSTGRES_RECEIPT_NAME: &str = "postgresql-execution-receipt.tsv";
 const TEMP_ATTEMPTS: usize = 128;
 static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
 
@@ -21,6 +23,7 @@ enum Mode {
 #[derive(Debug)]
 struct Options {
     mode: Mode,
+    backend: Backend,
     suite: PathBuf,
     receipt: PathBuf,
 }
@@ -39,27 +42,32 @@ fn run() -> Result<(), String> {
     let Some(options) = parse_args(env::args().skip(1))? else {
         println!(
             "Usage: rdb2rdf-execution-receipt (--check | --generate) \
-             [--suite PATH] [--receipt PATH]"
+             [--backend sqlite|postgresql] [--suite PATH] [--receipt PATH]"
         );
         return Ok(());
     };
     match options.mode {
         Mode::Check => {
-            let receipt = execution_receipt::check(&options.suite, &options.receipt)?;
+            let receipt =
+                execution_receipt::check_for(&options.suite, &options.receipt, options.backend)?;
             println!(
-                "verified {} SQLite outcome-baseline records; inventory-sha256={}; \
-                 outcomes-sha256={}; runner-provenance=not-attested",
+                "verified {} {} outcome-baseline records; inventory-sha256={}; \
+                 outcomes-sha256={}; runner-toolchain-host-provider-provenance=not-attested",
                 receipt.cases().len(),
+                receipt.backend().name(),
                 receipt.inventory_sha256(),
                 receipt.outcomes_sha256()
             );
         }
         Mode::Generate => {
-            let target = validate_generation_target(&options.suite, &options.receipt)?;
-            let generated = execution_receipt::generate(&options.suite)?;
+            let target =
+                validate_generation_target(&options.suite, &options.receipt, options.backend)?;
+            let generated = execution_receipt::generate_for(&options.suite, options.backend)?;
             atomic_replace(&target, generated.as_bytes())?;
             println!(
-                "generated SQLite outcome baseline {} (runner provenance not attested)",
+                "generated {} outcome baseline {} \
+                 (runner/toolchain/host/provider provenance not attested)",
+                options.backend.name(),
                 target.display()
             );
         }
@@ -70,6 +78,7 @@ fn run() -> Result<(), String> {
 fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
     let suite_default = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/w3c/rdb2rdf");
     let mut suite = suite_default;
+    let mut backend = Backend::Sqlite;
     let mut receipt = None;
     let mut mode = None;
     let mut args = arguments.into_iter();
@@ -77,6 +86,14 @@ fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Opti
         match argument.as_str() {
             "--check" => set_mode(&mut mode, Mode::Check)?,
             "--generate" => set_mode(&mut mode, Mode::Generate)?,
+            "--backend" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--backend requires a value".to_owned())?;
+                backend = Backend::from_name(&value).ok_or_else(|| {
+                    format!("invalid backend {value:?}; expected sqlite or postgresql")
+                })?;
+            }
             "--suite" => {
                 suite = PathBuf::from(
                     args.next()
@@ -94,12 +111,20 @@ fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<Option<Opti
         }
     }
     let mode = mode.ok_or_else(|| "choose exactly one of --check or --generate".to_owned())?;
-    let receipt = receipt.unwrap_or_else(|| suite.join(RECEIPT_NAME));
+    let receipt = receipt.unwrap_or_else(|| suite.join(receipt_name(backend)));
     Ok(Some(Options {
         mode,
+        backend,
         suite,
         receipt,
     }))
+}
+
+fn receipt_name(backend: Backend) -> &'static str {
+    match backend {
+        Backend::Sqlite => SQLITE_RECEIPT_NAME,
+        Backend::Postgres => POSTGRES_RECEIPT_NAME,
+    }
 }
 
 fn set_mode(target: &mut Option<Mode>, candidate: Mode) -> Result<(), String> {
@@ -112,15 +137,20 @@ fn set_mode(target: &mut Option<Mode>, candidate: Mode) -> Result<(), String> {
 
 /// Restrict the only write path to a non-symlink file with the canonical name
 /// directly inside the canonical suite root.
-fn validate_generation_target(suite: &Path, receipt: &Path) -> Result<PathBuf, String> {
+fn validate_generation_target(
+    suite: &Path,
+    receipt: &Path,
+    backend: Backend,
+) -> Result<PathBuf, String> {
     let canonical_suite = fs::canonicalize(suite)
         .map_err(|error| format!("canonicalize suite {}: {error}", suite.display()))?;
     if !canonical_suite.is_dir() {
         return Err(format!("suite {} is not a directory", suite.display()));
     }
-    if receipt.file_name() != Some(OsStr::new(RECEIPT_NAME)) {
+    let expected_name = receipt_name(backend);
+    if receipt.file_name() != Some(OsStr::new(expected_name)) {
         return Err(format!(
-            "--generate target must be named {RECEIPT_NAME} inside the suite root"
+            "--generate target must be named {expected_name} inside the suite root"
         ));
     }
     let parent = receipt
@@ -147,7 +177,7 @@ fn validate_generation_target(suite: &Path, receipt: &Path) -> Result<PathBuf, S
             ))
         }
     }
-    Ok(canonical_suite.join(RECEIPT_NAME))
+    Ok(canonical_suite.join(expected_name))
 }
 
 /// Durably replace the canonical receipt without truncating an existing inode.
@@ -164,7 +194,11 @@ where
     let parent = target
         .parent()
         .ok_or_else(|| format!("atomic target {} has no parent", target.display()))?;
-    let (temporary, mut file) = create_temporary(parent)?;
+    let target_name = target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| format!("atomic target {} has no UTF-8 filename", target.display()))?;
+    let (temporary, mut file) = create_temporary(parent, target_name)?;
     let result = (|| {
         file.write_all(bytes)
             .map_err(|error| format!("write {}: {error}", temporary.display()))?;
@@ -188,11 +222,11 @@ where
     result
 }
 
-fn create_temporary(parent: &Path) -> Result<(PathBuf, File), String> {
+fn create_temporary(parent: &Path, target_name: &str) -> Result<(PathBuf, File), String> {
     for _ in 0..TEMP_ATTEMPTS {
         let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path = parent.join(format!(
-            ".{RECEIPT_NAME}.tmp-{}-{serial}",
+            ".{target_name}.tmp-{}-{serial}",
             std::process::id()
         ));
         let mut options = OpenOptions::new();
@@ -306,6 +340,12 @@ mod tests {
         assert!(parse_args(strings(&["--receipt"]))
             .unwrap_err()
             .contains("--receipt requires"));
+        assert!(parse_args(strings(&["--backend"]))
+            .unwrap_err()
+            .contains("--backend requires"));
+        assert!(parse_args(strings(&["--check", "--backend", "postgres"]))
+            .unwrap_err()
+            .contains("expected sqlite or postgresql"));
         assert!(parse_args(strings(&["--unknown"]))
             .unwrap_err()
             .contains("unknown argument"));
@@ -318,15 +358,22 @@ mod tests {
         let outside = root.0.join("outside");
         fs::create_dir(&suite).expect("create suite");
         fs::create_dir(&outside).expect("create outside directory");
-        let intended = suite.join(RECEIPT_NAME);
+        let intended = suite.join(SQLITE_RECEIPT_NAME);
         assert_eq!(
-            validate_generation_target(&suite, &intended).expect("intended target"),
-            fs::canonicalize(&suite).unwrap().join(RECEIPT_NAME)
+            validate_generation_target(&suite, &intended, Backend::Sqlite)
+                .expect("intended target"),
+            fs::canonicalize(&suite).unwrap().join(SQLITE_RECEIPT_NAME)
         );
-        let error = validate_generation_target(&suite, &outside.join(RECEIPT_NAME)).unwrap_err();
+        let error =
+            validate_generation_target(&suite, &outside.join(SQLITE_RECEIPT_NAME), Backend::Sqlite)
+                .unwrap_err();
         assert!(error.contains("directly inside"), "{error}");
-        let error = validate_generation_target(&suite, &suite.join("other.tsv")).unwrap_err();
+        let error = validate_generation_target(&suite, &suite.join("other.tsv"), Backend::Sqlite)
+            .unwrap_err();
         assert!(error.contains("must be named"), "{error}");
+        let pg = suite.join(POSTGRES_RECEIPT_NAME);
+        validate_generation_target(&suite, &pg, Backend::Postgres)
+            .expect("PostgreSQL target has its own canonical name");
     }
 
     #[cfg(unix)]
@@ -339,9 +386,9 @@ mod tests {
         fs::create_dir(&suite).expect("create suite");
         let destination = root.0.join("destination.tsv");
         fs::write(&destination, b"do not overwrite\n").expect("write destination");
-        let receipt = suite.join(RECEIPT_NAME);
+        let receipt = suite.join(SQLITE_RECEIPT_NAME);
         symlink(&destination, &receipt).expect("create receipt symlink");
-        let error = validate_generation_target(&suite, &receipt).unwrap_err();
+        let error = validate_generation_target(&suite, &receipt, Backend::Sqlite).unwrap_err();
         assert!(error.contains("refuses a symlink"), "{error}");
         assert_eq!(
             fs::read(destination).expect("read destination"),
@@ -355,7 +402,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let root = TempDir::new();
-        let target = root.0.join(RECEIPT_NAME);
+        let target = root.0.join(SQLITE_RECEIPT_NAME);
         let victim = root.0.join("victim.tsv");
         fs::write(&victim, b"victim stays\n").unwrap();
         let error = atomic_replace_with(&target, b"new receipt\n", |_| {
@@ -376,7 +423,7 @@ mod tests {
     #[test]
     fn atomic_replace_rejects_a_raced_hard_link_without_touching_its_victim() {
         let root = TempDir::new();
-        let target = root.0.join(RECEIPT_NAME);
+        let target = root.0.join(SQLITE_RECEIPT_NAME);
         let victim = root.0.join("victim.tsv");
         fs::write(&victim, b"victim stays\n").unwrap();
         let error = atomic_replace_with(&target, b"new receipt\n", |_| {
@@ -393,7 +440,7 @@ mod tests {
     #[test]
     fn atomic_replace_failure_preserves_the_previous_receipt() {
         let root = TempDir::new();
-        let target = root.0.join(RECEIPT_NAME);
+        let target = root.0.join(SQLITE_RECEIPT_NAME);
         fs::write(&target, b"previous receipt\n").unwrap();
         let error = atomic_replace_with(&target, b"new receipt\n", |_| {
             Err("injected pre-rename failure".to_owned())
@@ -408,7 +455,7 @@ mod tests {
     #[test]
     fn atomic_replace_success_is_exact_and_leaves_no_temporary() {
         let root = TempDir::new();
-        let target = root.0.join(RECEIPT_NAME);
+        let target = root.0.join(SQLITE_RECEIPT_NAME);
         fs::write(&target, b"previous receipt\n").unwrap();
 
         atomic_replace(&target, b"new receipt\n").expect("atomic replacement");
@@ -425,7 +472,7 @@ mod tests {
         assert!(
             names.iter().all(|name| !name
                 .to_string_lossy()
-                .starts_with(&format!(".{RECEIPT_NAME}.tmp-"))),
+                .starts_with(&format!(".{SQLITE_RECEIPT_NAME}.tmp-"))),
             "temporary receipt leaked: {names:?}"
         );
     }

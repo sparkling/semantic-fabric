@@ -22,6 +22,7 @@ As of 2026-08-28, the generated catalog records:
 - **Current:** DESCRIBE CBD compilation has required compiler-only tests; this does not establish backend or endpoint execution.
 - **Limitation:** Full SPARQL 1.2 Query or Protocol conformance is not claimed.
 - **Qualified:** PostgreSQL and MySQL have live query and endpoint evidence, but those suites can still skip and do not establish production admission.
+- **Qualified:** Sealed required-live PostgreSQL RDB2RDF execution records 57 passes, one documented deviation and five exact skips across 63 R2RML cases, plus 23 passes and one exact skip across 24 Direct Mapping cases; this is mapping evidence only and does not establish production admission.
 - **Qualified:** Sealed SQLite RDB2RDF execution records 62/63 R2RML cases passing with one documented deviation and 19/24 Direct Mapping cases passing with five exact skips; this is mapping evidence only.
 - **Limitation:** Exact unbounded property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
 - **Limitation:** None of SQLite, PostgreSQL or MySQL is production-admitted under ADR-0038 R3.

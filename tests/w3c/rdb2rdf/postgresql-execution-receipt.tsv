@@ -1,6 +1,6 @@
 semantic-fabric-rdb2rdf-execution-receipt-v3
-meta	backend	sqlite
-meta	runner	sf-conformance::runner::run_sealed_suite
+meta	backend	postgresql
+meta	runner	sf-conformance::pg::run_sealed_suite_required
 meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance
 meta	inventory-path	inventory.tsv
 meta	inventory-sha256	4d2eb56e25920c4b8488b47d971cf887902b4e4178257420bf3a7ea44c504c96
@@ -8,10 +8,10 @@ meta	hash-algorithm	sha256
 meta	case-count	87
 meta	r2rml-count	63
 meta	direct-mapping-count	24
-meta	passed-count	81
+meta	passed-count	80
 meta	failed-count	1
-meta	skipped-count	5
-meta	outcomes-sha256	bf334cf72c875524cac99c0727e46de862a3cde4cc3cfe74e8c58d087cc320de
+meta	skipped-count	6
+meta	outcomes-sha256	63eb3bdcd9e7ca172edbb3ef271af8a69d0a4099af0be25a4f95f6a0d4fcb2ac
 case	DirectGraphTC0000	direct-mapping	passed	graph-matched
 case	DirectGraphTC0001	direct-mapping	passed	graph-matched
 case	DirectGraphTC0002	direct-mapping	passed	graph-matched
@@ -28,14 +28,14 @@ case	DirectGraphTC0012	direct-mapping	passed	graph-matched
 case	DirectGraphTC0013	direct-mapping	passed	graph-matched
 case	DirectGraphTC0014	direct-mapping	passed	graph-matched
 case	DirectGraphTC0015	direct-mapping	passed	graph-matched
-case	DirectGraphTC0016	direct-mapping	passed	graph-matched
+case	DirectGraphTC0016	direct-mapping	skipped	fixture-load-error
 case	DirectGraphTC0017	direct-mapping	passed	graph-matched
 case	DirectGraphTC0018	direct-mapping	passed	graph-matched
-case	DirectGraphTC0021	direct-mapping	skipped	fixture-load-error
-case	DirectGraphTC0022	direct-mapping	skipped	fixture-load-error
-case	DirectGraphTC0023	direct-mapping	skipped	fixture-load-error
-case	DirectGraphTC0024	direct-mapping	skipped	fixture-load-error
-case	DirectGraphTC0025	direct-mapping	skipped	fixture-load-error
+case	DirectGraphTC0021	direct-mapping	passed	graph-matched
+case	DirectGraphTC0022	direct-mapping	passed	graph-matched
+case	DirectGraphTC0023	direct-mapping	passed	graph-matched
+case	DirectGraphTC0024	direct-mapping	passed	graph-matched
+case	DirectGraphTC0025	direct-mapping	passed	graph-matched
 case	R2RMLTC0000	r2rml	passed	graph-matched
 case	R2RMLTC0001a	r2rml	passed	graph-matched
 case	R2RMLTC0001b	r2rml	passed	graph-matched
@@ -46,7 +46,7 @@ case	R2RMLTC0002d	r2rml	passed	graph-matched
 case	R2RMLTC0002e	r2rml	passed	execution-error
 case	R2RMLTC0002f	r2rml	failed	unexpected-output
 case	R2RMLTC0002g	r2rml	passed	execution-error
-case	R2RMLTC0002h	r2rml	passed	source-validation-error
+case	R2RMLTC0002h	r2rml	passed	execution-error
 case	R2RMLTC0002i	r2rml	passed	graph-matched
 case	R2RMLTC0002j	r2rml	passed	graph-matched
 case	R2RMLTC0003a	r2rml	passed	mapping-error
@@ -89,11 +89,11 @@ case	R2RMLTC0014c	r2rml	passed	graph-matched
 case	R2RMLTC0014d	r2rml	passed	graph-matched
 case	R2RMLTC0015a	r2rml	passed	graph-matched
 case	R2RMLTC0015b	r2rml	passed	mapping-error
-case	R2RMLTC0016a	r2rml	passed	graph-matched
-case	R2RMLTC0016b	r2rml	passed	graph-matched
-case	R2RMLTC0016c	r2rml	passed	graph-matched
-case	R2RMLTC0016d	r2rml	passed	graph-matched
-case	R2RMLTC0016e	r2rml	passed	graph-matched
+case	R2RMLTC0016a	r2rml	skipped	fixture-load-error
+case	R2RMLTC0016b	r2rml	skipped	fixture-load-error
+case	R2RMLTC0016c	r2rml	skipped	fixture-load-error
+case	R2RMLTC0016d	r2rml	skipped	fixture-load-error
+case	R2RMLTC0016e	r2rml	skipped	fixture-load-error
 case	R2RMLTC0018a	r2rml	passed	graph-matched
 case	R2RMLTC0019a	r2rml	passed	graph-matched
 case	R2RMLTC0019b	r2rml	passed	execution-error

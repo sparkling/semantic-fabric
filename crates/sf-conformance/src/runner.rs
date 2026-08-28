@@ -444,16 +444,6 @@ pub(crate) fn read(dir: &Path, file: &str) -> Result<String, String> {
     std::fs::read_to_string(dir.join(file)).map_err(|error| error.to_string())
 }
 
-pub(crate) fn read_forked(dir: &Path, file: &str, dialect_tag: &str) -> Result<String, String> {
-    if let Some((stem, ext)) = file.rsplit_once('.') {
-        let forked = format!("{stem}.{dialect_tag}.{ext}");
-        if dir.join(&forked).exists() {
-            return read(dir, &forked);
-        }
-    }
-    read(dir, file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -21,6 +21,7 @@
     ".github/workflows/ci.yml",
     ".github/workflows/harness-native.yml",
     ".gitignore",
+    ".harness/mcp-policy.json",
     ".mcp.json",
     "AGENTS.md",
     "BENCHMARKS.md",
@@ -269,6 +270,8 @@
     "crates/sf-conformance/src/manifest.rs",
     "crates/sf-conformance/src/oracle.rs",
     "crates/sf-conformance/src/pg.rs",
+    "crates/sf-conformance/src/pg/outcome.rs",
+    "crates/sf-conformance/src/pg/tests.rs",
     "crates/sf-conformance/src/regression_receipt/atomic.rs",
     "crates/sf-conformance/src/regression_receipt/environment.rs",
     "crates/sf-conformance/src/regression_receipt/format.rs",
@@ -366,6 +369,7 @@
     "tests/sparql/query/inventory.tsv",
     "tests/sparql/query/sqlite-expected-regression-baseline.tsv",
     "tests/w3c/rdb2rdf/inventory.tsv",
+    "tests/w3c/rdb2rdf/postgresql-execution-receipt.tsv",
     "tests/w3c/rdb2rdf/sqlite-execution-receipt.tsv"
   ],
   "acceptanceTasks": [

@@ -4,7 +4,7 @@ use std::process::Command;
 
 use serde_json::Value;
 use sf_conformance::capability_catalog::{self, Status};
-use sf_conformance::capability_model::CommandMode;
+use sf_conformance::capability_model::{CommandMode, Verification};
 use sf_conformance::capability_render;
 
 fn root() -> PathBuf {
@@ -52,7 +52,7 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
 }
 
 #[test]
-fn sqlite_regression_receipt_commands_are_canonical_and_required() {
+fn receipt_commands_are_canonical_and_required() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     for (id, argv) in [
         (
@@ -64,6 +64,11 @@ fn sqlite_regression_receipt_commands_are_canonical_and_required() {
             "cmd-query-regression-sqlite",
             "cargo run --locked --offline -p sf-conformance --features evidence-receipts \
              --bin sparql-query-regression-baseline -- --check",
+        ),
+        (
+            "cmd-receipt-postgresql-check",
+            "cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt \
+             -- --backend postgresql --check",
         ),
     ] {
         let command = loaded
@@ -167,6 +172,39 @@ fn mapping_evidence_cannot_promote_query_or_protocol_cells() {
     })
     .unwrap_err();
     assert!(error.contains("promotes mapping evidence"), "{error}");
+
+    let postgres = mutated(|value| {
+        let cell = by_id(array(value, "cells"), "select-execution-postgresql");
+        cell["evidenceIds"] = serde_json::json!(["e-receipt-postgresql"]);
+        cell["verification"] = Value::String("receipt".to_owned());
+    })
+    .unwrap_err();
+    assert!(postgres.contains("promotes mapping evidence"), "{postgres}");
+}
+
+#[test]
+fn postgresql_mapping_receipt_does_not_admit_the_backend() {
+    let loaded = capability_catalog::load(&root()).expect("load catalog");
+    for id in ["mapping-direct-postgresql", "mapping-r2rml-postgresql"] {
+        let cell = loaded
+            .catalog
+            .cells
+            .iter()
+            .find(|cell| cell.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(cell.verification, Verification::Receipt);
+        assert!(!cell.advertisable);
+        assert!(!cell.semantic_exact);
+    }
+    let admission = loaded
+        .catalog
+        .cells
+        .iter()
+        .find(|cell| cell.id == "production-source-admission-postgresql")
+        .expect("PostgreSQL admission cell");
+    assert_eq!(admission.status, Status::Planned);
+    assert_eq!(admission.verification, Verification::SourceOnly);
+    assert!(!admission.advertisable);
 }
 
 #[test]

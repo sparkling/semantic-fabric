@@ -1,4 +1,4 @@
-//! Deterministic SQLite outcome baseline for the sealed W3C RDB2RDF suite.
+//! Deterministic backend outcome baselines for the sealed W3C RDB2RDF suite.
 //!
 //! The receipt binds canonical inventory bytes to ordered
 //! `(identifier, kind, status, outcome-code)` records. Human-readable reasons,
@@ -34,12 +34,17 @@ pub struct ReceiptCase {
 /// Parsed, canonical, and self-verified outcome receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionReceipt {
+    backend: Backend,
     inventory_sha256: String,
     outcomes_sha256: String,
     cases: Vec<ReceiptCase>,
 }
 
 impl ExecutionReceipt {
+    pub fn backend(&self) -> Backend {
+        self.backend
+    }
+
     pub fn inventory_sha256(&self) -> &str {
         &self.inventory_sha256
     }
@@ -62,17 +67,36 @@ impl ExecutionReceipt {
 
 /// Capture one immutable suite, execute exactly that snapshot, and render it.
 pub fn generate(suite_root: &Path) -> Result<String, String> {
+    generate_for(suite_root, Backend::Sqlite)
+}
+
+/// Capture and render one explicit backend. PostgreSQL is always required-live;
+/// it cannot produce a receipt from typed untested evidence.
+pub fn generate_for(suite_root: &Path, backend: Backend) -> Result<String, String> {
     let sealed = SealedSuite::load(suite_root)?;
-    let report = runner::run_sealed_suite(&sealed)?;
-    Ok(format::render(&from_report(&sealed, &report)?))
+    let report = run_backend(&sealed, backend)?;
+    Ok(format::render(&from_report(&sealed, backend, &report)?))
 }
 
 /// Validate the expected baseline and inventory before executing that same
 /// captured snapshot. This path performs no writes.
 pub fn check(suite_root: &Path, receipt_path: &Path) -> Result<ExecutionReceipt, String> {
-    check_with_runner(suite_root, receipt_path, runner::run_sealed_suite)
+    check_for(suite_root, receipt_path, Backend::Sqlite)
 }
 
+/// Replay an explicit backend. The selected backend must agree with the parsed
+/// receipt before suite access or provider construction.
+pub fn check_for(
+    suite_root: &Path,
+    receipt_path: &Path,
+    backend: Backend,
+) -> Result<ExecutionReceipt, String> {
+    check_for_with_runner(suite_root, receipt_path, backend, |sealed| {
+        run_backend(sealed, backend)
+    })
+}
+
+#[cfg(test)]
 fn check_with_runner<F>(
     suite_root: &Path,
     receipt_path: &Path,
@@ -81,12 +105,38 @@ fn check_with_runner<F>(
 where
     F: FnOnce(&SealedSuite) -> Result<ClassifiedReport, String>,
 {
+    check_for_with_runner(suite_root, receipt_path, Backend::Sqlite, run)
+}
+
+fn check_for_with_runner<F>(
+    suite_root: &Path,
+    receipt_path: &Path,
+    backend: Backend,
+    run: F,
+) -> Result<ExecutionReceipt, String>
+where
+    F: FnOnce(&SealedSuite) -> Result<ClassifiedReport, String>,
+{
     let expected = load_receipt(receipt_path)?;
+    if expected.backend != backend {
+        return Err(format!(
+            "execution receipt backend mismatch: requested={}, recorded={}",
+            backend.name(),
+            expected.backend.name()
+        ));
+    }
     let sealed = SealedSuite::load(suite_root)?;
     validate_inventory_binding(&sealed, &expected)?;
-    let observed = from_report(&sealed, &run(&sealed)?)?;
+    let observed = from_report(&sealed, backend, &run(&sealed)?)?;
     compare(&expected, &observed)?;
     Ok(expected)
+}
+
+fn run_backend(sealed: &SealedSuite, backend: Backend) -> Result<ClassifiedReport, String> {
+    match backend {
+        Backend::Sqlite => runner::run_sealed_suite(sealed),
+        Backend::Postgres => crate::pg::run_sealed_suite_required(sealed),
+    }
 }
 
 fn load_receipt(receipt_path: &Path) -> Result<ExecutionReceipt, String> {
@@ -116,11 +166,13 @@ fn read_bounded(path: &Path) -> Result<String, String> {
 
 fn from_report(
     sealed: &SealedSuite,
+    backend: Backend,
     report: &ClassifiedReport,
 ) -> Result<ExecutionReceipt, String> {
-    sealed.validate_classified_report(Backend::Sqlite, report)?;
+    sealed.validate_classified_report(backend, report)?;
     let cases: Vec<_> = report.cases.iter().map(receipt_case).collect();
     Ok(ExecutionReceipt {
+        backend,
         inventory_sha256: sealed.inventory_sha256().to_owned(),
         outcomes_sha256: format::outcomes_digest(&cases),
         cases,
@@ -181,10 +233,13 @@ fn validate_inventory_binding(
             })
             .collect(),
     };
-    sealed.validate_classified_report(Backend::Sqlite, &classified)
+    sealed.validate_classified_report(receipt.backend, &classified)
 }
 
 fn compare(expected: &ExecutionReceipt, observed: &ExecutionReceipt) -> Result<(), String> {
+    if expected.backend != observed.backend {
+        return Err("execution receipt backend changed during replay".to_owned());
+    }
     if expected.inventory_sha256 != observed.inventory_sha256 {
         return Err("execution receipt inventory digest changed during replay".to_owned());
     }

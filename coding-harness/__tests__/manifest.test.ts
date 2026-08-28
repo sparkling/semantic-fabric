@@ -19,6 +19,9 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(readFileSync(resolve(root, '.harness/manifest.json'), 'utf8')) as unknown;
+const mcpPolicy = JSON.parse(
+  readFileSync(resolve(root, '../.harness/mcp-policy.json'), 'utf8'),
+) as unknown;
 
 interface WorkflowRunScript {
   line: number;
@@ -182,6 +185,35 @@ function workflowCargoCommands(source: string): CargoCommand[] {
 }
 
 describe('canonical harness manifest', () => {
+  it('keeps the MCP surface development-only and default-deny', () => {
+    expect(mcpPolicy).toEqual({
+      schemaVersion: 1,
+      authority: 'development-only-no-promotion',
+      architectureDecision: 'docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md',
+      defaultDeny: true,
+      allowNetwork: false,
+      allowShell: false,
+      allowFileWrite: false,
+      requireApprovalForDangerous: true,
+      toolTimeoutMs: 30_000,
+      maxToolCallsPerTurn: 8,
+      auditLog: true,
+    });
+
+    const scanner = resolve(root, 'node_modules/metaharness/dist/harness-bin.js');
+    const repository = resolve(root, '..');
+    const scan = spawnSync(process.execPath, [scanner, 'mcp-scan', repository, '--json'], {
+      encoding: 'utf8',
+    });
+    expect(scan.status, scan.stderr).toBe(0);
+    expect(JSON.parse(scan.stdout)).toMatchObject({
+      dir: repository,
+      mcpEnabled: true,
+      findings: [{ id: 'clean', severity: 'info' }],
+      worst: 'info',
+    });
+  });
+
   it('matches the protected runtime config and exposes the actual coordination surface', () => {
     const parsed = parseHarnessManifest(manifest, SECURE_HARNESS_CONFIG);
     expect(parsed.coordinationSurface).toBe('.mcp.json');

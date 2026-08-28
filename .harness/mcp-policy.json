@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "authority": "development-only-no-promotion",
+  "architectureDecision": "docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md",
+  "defaultDeny": true,
+  "allowNetwork": false,
+  "allowShell": false,
+  "allowFileWrite": false,
+  "requireApprovalForDangerous": true,
+  "toolTimeoutMs": 30000,
+  "maxToolCallsPerTurn": 8,
+  "auditLog": true
+}

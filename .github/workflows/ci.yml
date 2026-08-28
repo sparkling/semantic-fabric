@@ -42,9 +42,10 @@ jobs:
     name: fmt · clippy · build · test
     runs-on: ubuntu-24.04
     # Live PostgreSQL/MySQL/SQL Server service containers. The sealed PostgreSQL
-    # RDB2RDF suite is required when CI=1; the other provider-specific suites still
-    # expose their live-optional grade in the generated capability matrix rather
-    # than silently becoming production-admission evidence. `sqlserver-backend` is
+    # RDB2RDF receipt check below explicitly requires this live service; the other
+    # provider-specific suites still expose their live-optional grade in the generated
+    # capability matrix rather than silently becoming production-admission evidence.
+    # `sqlserver-backend` is
     # already enabled here via workspace feature unification (sf-conformance
     # depends on sf-sql with it on) — no extra feature flag is needed below.
     services:
@@ -139,6 +140,8 @@ jobs:
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check
       - name: replay sealed SQLite RDB2RDF outcome baseline
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
+      - name: replay sealed required-live PostgreSQL RDB2RDF outcome baseline
+        run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check
       - name: clippy deterministic evidence receipt tooling
         run: cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings
       # This mutable hosted runner validates only the bounded parser and receipt

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sf_conformance::execution_receipt;
+use sf_conformance::sealed_suite::Backend;
 use sf_conformance::Status;
 use sha2::{Digest, Sha256};
 
@@ -15,6 +16,14 @@ fn source_suite() -> PathBuf {
 
 fn source_receipt() -> PathBuf {
     source_suite().join("sqlite-execution-receipt.tsv")
+}
+
+fn postgres_receipt() -> PathBuf {
+    source_suite().join("postgresql-execution-receipt.tsv")
+}
+
+fn live_postgres_is_configured() -> bool {
+    std::env::var_os("SF_PG_URL").is_some()
 }
 
 struct TempDir(PathBuf);
@@ -173,6 +182,7 @@ fn production_check_replays_exact_outcomes_and_is_whole_suite_neutral() {
         .expect("production check matches replay");
 
     assert_eq!(receipt.cases().len(), 87);
+    assert_eq!(receipt.backend(), Backend::Sqlite);
     assert_eq!(receipt.count(Status::Passed), 81);
     assert_eq!(receipt.count(Status::Failed), 1);
     assert_eq!(receipt.count(Status::Skipped), 5);
@@ -183,6 +193,41 @@ fn production_check_replays_exact_outcomes_and_is_whole_suite_neutral() {
             Sha256::digest(fs::read(source_suite().join("inventory.tsv")).unwrap())
         )
     );
+    assert_eq!(suite_snapshot(&source_suite()), before);
+}
+
+#[test]
+fn legacy_v2_header_is_not_reinterpreted_as_backend_aware() {
+    let receipt = TempReceipt::copy();
+    replace_once(
+        &receipt.path,
+        "semantic-fabric-rdb2rdf-execution-receipt-v3",
+        "semantic-fabric-rdb2rdf-execution-receipt-v2",
+    );
+
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
+    assert!(
+        error.contains("invalid execution receipt header"),
+        "{error}"
+    );
+}
+
+#[test]
+fn postgresql_receipt_replays_exact_required_live_outcomes_when_configured() {
+    if !live_postgres_is_configured() {
+        eprintln!("UNTESTED: set SF_PG_URL to replay the required-live PostgreSQL receipt");
+        return;
+    }
+    let before = suite_snapshot(&source_suite());
+    let receipt =
+        execution_receipt::check_for(&source_suite(), &postgres_receipt(), Backend::Postgres)
+            .expect("required-live PostgreSQL outcomes match the tracked receipt");
+
+    assert_eq!(receipt.backend(), Backend::Postgres);
+    assert_eq!(receipt.cases().len(), 87);
+    assert_eq!(receipt.count(Status::Passed), 80);
+    assert_eq!(receipt.count(Status::Failed), 1);
+    assert_eq!(receipt.count(Status::Skipped), 6);
     assert_eq!(suite_snapshot(&source_suite()), before);
 }
 

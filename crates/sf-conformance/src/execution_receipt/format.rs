@@ -6,12 +6,10 @@ use sha2::{Digest, Sha256};
 use super::{ExecutionReceipt, ReceiptCase};
 use crate::inventory::CASE_COUNT;
 use crate::manifest::Kind;
-use crate::sealed_suite::OutcomeCode;
+use crate::sealed_suite::{Backend, OutcomeCode};
 use crate::Status;
 
-const HEADER: &str = "semantic-fabric-rdb2rdf-execution-receipt-v2";
-const BACKEND: &str = "sqlite";
-const RUNNER: &str = "sf-conformance::runner::run_sealed_suite";
+const HEADER: &str = "semantic-fabric-rdb2rdf-execution-receipt-v3";
 const INVENTORY_PATH: &str = "inventory.tsv";
 const HASH_ALGORITHM: &str = "sha256";
 const METADATA_COUNT: usize = 13;
@@ -82,14 +80,14 @@ pub(super) fn parse(input: &str) -> Result<ExecutionReceipt, String> {
         }
     }
 
+    let backend = parse_backend(take(&mut metadata, "backend")?)?;
     let inventory_sha256 = take(&mut metadata, "inventory-sha256")?.to_owned();
     let recorded_outcomes_sha256 = take(&mut metadata, "outcomes-sha256")?.to_owned();
-    expect(&mut metadata, "backend", BACKEND)?;
-    expect(&mut metadata, "runner", RUNNER)?;
+    expect(&mut metadata, "runner", runner_name(backend))?;
     expect(
         &mut metadata,
         "attestation-scope",
-        "sealed-input-and-outcome-baseline-not-runner-provenance",
+        "sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance",
     )?;
     expect(&mut metadata, "inventory-path", INVENTORY_PATH)?;
     expect(&mut metadata, "hash-algorithm", HASH_ALGORITHM)?;
@@ -133,6 +131,7 @@ pub(super) fn parse(input: &str) -> Result<ExecutionReceipt, String> {
         ));
     }
     Ok(ExecutionReceipt {
+        backend,
         inventory_sha256,
         outcomes_sha256: recorded_outcomes_sha256,
         cases,
@@ -160,11 +159,12 @@ pub(super) fn status_name(status: Status) -> &'static str {
 
 fn metadata(receipt: &ExecutionReceipt) -> Vec<(&'static str, String)> {
     vec![
-        ("backend", BACKEND.to_owned()),
-        ("runner", RUNNER.to_owned()),
+        ("backend", receipt.backend.name().to_owned()),
+        ("runner", runner_name(receipt.backend).to_owned()),
         (
             "attestation-scope",
-            "sealed-input-and-outcome-baseline-not-runner-provenance".to_owned(),
+            "sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance"
+                .to_owned(),
         ),
         ("inventory-path", INVENTORY_PATH.to_owned()),
         ("inventory-sha256", receipt.inventory_sha256.clone()),
@@ -183,6 +183,17 @@ fn metadata(receipt: &ExecutionReceipt) -> Vec<(&'static str, String)> {
         ("skipped-count", receipt.count(Status::Skipped).to_string()),
         ("outcomes-sha256", receipt.outcomes_sha256.clone()),
     ]
+}
+
+fn parse_backend(value: &str) -> Result<Backend, String> {
+    Backend::from_name(value).ok_or_else(|| format!("invalid execution receipt backend {value:?}"))
+}
+
+fn runner_name(backend: Backend) -> &'static str {
+    match backend {
+        Backend::Sqlite => "sf-conformance::runner::run_sealed_suite",
+        Backend::Postgres => "sf-conformance::pg::run_sealed_suite_required",
+    }
 }
 
 fn outcome_records(cases: &[ReceiptCase]) -> String {
