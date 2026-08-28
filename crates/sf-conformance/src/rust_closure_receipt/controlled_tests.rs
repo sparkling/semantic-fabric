@@ -16,6 +16,13 @@ fn fixture() -> (PathBuf, ControlledCheckRequest<'static>) {
     for directory in ["source/tests", "toolchain/bin", "cargo-home", "temporary"] {
         fs::create_dir_all(root.join(directory)).unwrap();
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for directory in ["toolchain", "toolchain/bin"] {
+            fs::set_permissions(root.join(directory), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
     for tool in ["cargo", "rustc"] {
         let path = root.join("toolchain/bin").join(tool);
         fs::write(&path, b"#!/bin/sh\nexit 99\n").unwrap();
@@ -121,5 +128,132 @@ fn rejects_controlled_cargo_home_credentials() {
         .err()
         .expect("credentials must be rejected");
     assert!(error.contains("configuration or credentials"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_hard_linked_tool() {
+    let (root, request) = fixture();
+    fs::hard_link(
+        root.join("toolchain/bin/cargo"),
+        root.join("cargo-hard-link"),
+    )
+    .unwrap();
+    let error = Context::new(&request)
+        .err()
+        .expect("hard-linked Cargo must be rejected");
+    assert!(error.contains("hard link"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_writable_toolchain_path_component() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, request) = fixture();
+    fs::set_permissions(
+        root.join("toolchain/bin"),
+        fs::Permissions::from_mode(0o770),
+    )
+    .unwrap();
+    let error = Context::new(&request)
+        .err()
+        .expect("group-writable toolchain bin must be rejected");
+    assert!(error.contains("writable"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_group_writable_tool() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, request) = fixture();
+    fs::set_permissions(
+        root.join("toolchain/bin/cargo"),
+        fs::Permissions::from_mode(0o720),
+    )
+    .unwrap();
+    let error = Context::new(&request)
+        .err()
+        .expect("group-writable Cargo must be rejected");
+    assert!(error.contains("writable"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_tool() {
+    use std::os::unix::fs::symlink;
+
+    let (root, request) = fixture();
+    fs::remove_file(root.join("toolchain/bin/cargo")).unwrap();
+    symlink("rustc", root.join("toolchain/bin/cargo")).unwrap();
+    let error = Context::new(&request)
+        .err()
+        .expect("symlinked Cargo must be rejected");
+    assert!(error.contains("canonical"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_toolchain_path_component() {
+    use std::os::unix::fs::symlink;
+
+    let (root, request) = fixture();
+    fs::rename(root.join("toolchain/bin"), root.join("toolchain/real-bin")).unwrap();
+    symlink("real-bin", root.join("toolchain/bin")).unwrap();
+    let error = Context::new(&request)
+        .err()
+        .expect("symlinked toolchain component must be rejected");
+    assert!(error.contains("canonical"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn detects_same_byte_tool_replacement() {
+    let (root, request) = fixture();
+    let context = Context::new(&request).unwrap();
+    let before = context.tool_fingerprints().unwrap();
+    let cargo = root.join("toolchain/bin/cargo");
+    let replacement = root.join("cargo-replacement");
+    fs::write(&replacement, fs::read(&cargo).unwrap()).unwrap();
+    fs::set_permissions(&replacement, fs::metadata(&cargo).unwrap().permissions()).unwrap();
+    fs::rename(&replacement, &cargo).unwrap();
+    let after = context.tool_fingerprints().unwrap();
+    assert!(
+        after != before,
+        "same-byte inode replacement was not detected"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_tool_replacement_during_subprocess() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, request) = fixture();
+    let cargo = root.join("toolchain/bin/cargo");
+    fs::write(
+        &cargo,
+        b"#!/bin/sh\n/bin/cp \"$RUSTC\" \"$RUSTC.replacement\"\n/bin/mv \"$RUSTC.replacement\" \"$RUSTC\"\nprintf 'cargo fixture\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o700)).unwrap();
+    let context = Context::new(&request).unwrap();
+    let error = context
+        .cargo_command(&["-Vv"])
+        .output(
+            "mutating Cargo fixture",
+            super::super::MAX_TOOL_OUTPUT_BYTES,
+            super::super::TOOL_TIMEOUT,
+        )
+        .unwrap_err();
+    assert!(error.contains("changed"), "{error}");
     fs::remove_dir_all(root).unwrap();
 }
