@@ -165,9 +165,9 @@ harness score:
   fixture evidence, not a SPARQL query/protocol conformance claim.
 - SQLite and PostgreSQL runners consume that inventory in canonical order;
   per-ID policy rejects count-neutral skip/deviation drift, missing sealed input
-  is fatal, and PostgreSQL provider absence fails in required CI mode. SQLite's
-  87-case execution was replayed locally; a current live PostgreSQL receipt is
-  still an M0 gate.
+  is fatal, and PostgreSQL provider absence fails in required CI mode. A sealed
+  SQLite outcome baseline binds all 87 case identities, kinds and statuses to
+  the inventory digest; a current live PostgreSQL receipt is still an M0 gate.
 - Differential suites compare flat and operator-tree planners with native
   materialized RDF and spareval across ordinary queries, paths, graphs, and
   RDF-star.
@@ -275,8 +275,9 @@ replayable evidence chain. H0c is complete. M0 is in progress through the
 tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
 RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
-inventory-authoritative execution runners (`a3efb32`). M1–M7 remain gated, and
-the 44/100 application-readiness baseline has not been formally rescored.
+inventory-authoritative execution runners (`a3efb32`), plus the sealed SQLite
+execution-outcome receipt (`33e202b`). M1–M7 remain gated, and the 44/100
+application-readiness baseline has not been formally rescored.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build
