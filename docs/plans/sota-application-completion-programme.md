@@ -14,7 +14,7 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 |---|---|---|
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
-| H0c — trusted-launcher activation | In progress | V5 run `_05` completed a passing transaction after one pre-build repair, but its frozen V1 reliability law required prior build evidence and rejected the programme at 85/100. Provider-free replay verified the rejection. The additive V6 path is being implemented to bind contemporaneous transaction/native evidence and interpret prior attempts from their recorded repair transitions; V4/V5 remain frozen |
+| H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
 | M0–M7 — application completion | Gated | Existing product evidence remains valid, but no milestone is marked complete until its milestone QA gate passes |
 
 Runs `_03` and `_04` remain honest historical failures at the final-review
@@ -32,11 +32,36 @@ digests are respectively
 `4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`,
 and `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
 
-The correction is a sibling schema V6, not a reinterpretation of `_05`: it
-adds a V2 outer policy and gate contract, full candidate transaction/native
-evidence, and transition-derived `not-started`, `failed`, or `passed` prior-build
-semantics. Historical V4/V5 bytes and decisions stay immutable. H0c requires a
-fresh V6 policy review, claim, run ID, sealed envelope, and provider-free replay.
+The correction is a sibling schema V6, not a reinterpretation of `_05`. Commits
+`106da58` through `c8e3f68` add a V2 outer policy and gate contract, full
+candidate transaction/native evidence, transition-derived `not-started`,
+`failed`, or `passed` prior-build semantics, a trusted launcher, and
+provider-free replay. Historical V4/V5 bytes and decisions remain immutable.
+
+The first V6 attempt, `programme_v6_h0c_20260828_01`, passed policy review and
+then failed closed with `HARNESS_NATIVE_ORIGIN_POLICY_DENIED` before admitting
+native evidence. Its schema-V6 failure envelope and provider-free replay remain
+honest historical evidence; they were not edited or reused. Exact subprocess
+probes then confirmed that the pinned Claude essential-traffic environment uses
+only `api.anthropic.com` and the Codex subscription route uses `chatgpt.com`, both
+already declared first-party origins. No origin allow-list was widened and no
+provider key or indirect route was introduced.
+
+Fresh run `programme_v6_h0c_20260828_02`, under controller `c8e3f68`, sealed
+policy fingerprint
+`e71107e522342e1b19206c88d861549d00f9df87f27ed4293b0cc36139b2ae34`.
+The transaction passed with six bound commands, seven native-evidence digests,
+two final native reviews, and zero retries or repairs. Programme acceptance was
+100/100 with every hard and diagnostic gate green. Candidate evidence, receipt,
+acceptance, envelope, and execution-claim digests are respectively
+`a1dc307130c6d3efb42354e0c464fcc66095d016564d5227e6259dc71998ac7f`,
+`d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
+`1cf36b1d9bcb2c4e6d2c81525baead859b2b62ed9042bfd33991bed8367430f7`,
+`02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
+and `578799eff72dd84cc3b5601754654d1bce33a7b4b1fa56666271fe6833979c86`.
+Provider-free replay independently verified the pass in receipt
+`f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
+H0c is therefore complete; M0–M7 remain gated by their product evidence.
 
 ## Outcome
 
@@ -387,6 +412,15 @@ fallback. References elsewhere in this programme to query “cost” or
 Small documentation/status-only corrections use the same truth and review rules
 without paying for an irrelevant full harness transaction. Product behavior,
 security boundaries, evaluator law, or release controls always use the full lane.
+
+The H0c V6 pass also exposed an engineering-efficiency target: its isolated Rust
+verifier outputs peaked at about 35 GiB and the controller spent material time
+rehashing them before sealing, although cleanup completed and all resource gates
+held. A subsequent harness slice should benchmark and introduce immutable,
+content-addressed Rust closure/build reuse plus per-lane digest manifests. It
+must retain separate writable targets, verifier independence, exact input
+bindings, fail-closed cache validation, and replayable receipts; speed or disk
+savings cannot weaken those controls.
 
 ## Non-goals unless the charter changes
 

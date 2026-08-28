@@ -165,7 +165,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 514 tests across 76 files; two
+- The versioned engineering harness passes 623 tests across 90 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -244,16 +244,26 @@ strict, externally anchored schema-v5 replay-policy foundation while preserving
 the frozen v4 parser and delegating unambiguous schema-v4 bytes to it unchanged.
 Commit `7a1fa24` completes H0b with a replay-complete gate evaluator, canonical
 all-or-zero scorer, strict externally anchored envelope, and expectation-aware
-v4/v5 dispatch. H0c now has an explicit immutable fresh-ID schema-v5 operator,
-but no general/default promotion path. After honest final-review failures in
-`_03` and `_04`, run `programme_v5_h0c_20260828_05` completed a passing
-candidate transaction after one patch-admission repair. The frozen V1 prior-
-attempt law then rejected the programme at 85/100 because that pre-build repair
-had no build command. Receipt `91bfc845…98d1`, envelope `4c089769…05f`, and
-provider-free replay receipt `ca2bbbb3…cfc` verify that result. The additive V6
-path binds full transaction/native evidence and derives `not-started`, `failed`,
-or `passed` prior-build semantics. It requires a fresh policy, claim, run ID, and
-replay; historical V4/V5 evidence is never reinterpreted.
+v4/v5 dispatch. V5 run `programme_v5_h0c_20260828_05` passed its candidate
+transaction after one patch-admission repair, then was honestly rejected at
+85/100 by its frozen prior-attempt law; its provider-free replay preserves that
+decision. The additive V6 path through `c8e3f68` binds full transaction/native
+evidence and derives `not-started`, `failed`, or `passed` prior-build semantics
+without reinterpreting V4/V5.
+
+V6 run `programme_v6_h0c_20260828_01` failed closed at the native-origin gate
+and replay verified the failure. Fresh run `programme_v6_h0c_20260828_02`, on
+the same controller commit, then passed with 100/100 acceptance, six bound
+commands, seven native-evidence digests, two final native reviews, and no retry
+or repair. Receipt `d9d244ef…0216`, candidate evidence `a1dc3071…ac7f`, envelope
+`02c30ed3…9a06`, and provider-free replay receipt `f1bcf0fe…bf02` form the
+replayable evidence chain. H0c is complete; the M0–M7 product milestones and the
+44/100 application-readiness baseline are unchanged.
+
+The passing transaction also measured about 35 GiB of ephemeral isolated Rust
+verifier outputs before successful cleanup. Content-addressed read-only build
+reuse and digest manifests are a harness-efficiency target, subject to unchanged
+lane isolation, independent verification, fail-closed validation, and replay.
 
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,

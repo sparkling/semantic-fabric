@@ -197,13 +197,32 @@ Provider-free replay verified receipt
 `4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`, and replay
 receipt `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
 
-The remedy is an additive schema V6 with a V2 outer policy, full candidate
-transaction/native sidecar evidence, and transition-derived prior-attempt build
-semantics. It does not rewrite product architecture or application goals, and
-it cannot reinterpret historical V4/V5 evidence. A fresh V6 policy review,
-claim, run ID, sealed outcome, and replay are required. Every M0–M7 milestone
-remains pending its executable gate; this status does not raise the 44/100
-readiness baseline.
+The additive schema V6 remedy is implemented through `c8e3f68`, with a V2 outer
+policy, full candidate transaction/native sidecar evidence, transition-derived
+prior-attempt build semantics, trusted execution, and provider-free replay. It
+does not rewrite product architecture or application goals and cannot
+reinterpret historical V4/V5 evidence. V6 run
+`programme_v6_h0c_20260828_01` failed closed on native-origin policy and replay
+verified that failure. It remains immutable historical evidence.
+
+Fresh V6 run `programme_v6_h0c_20260828_02`, under controller `c8e3f68`, then
+passed the transaction and every programme gate at 100/100 with six bound
+commands, seven native-evidence digests, two final native reviews, and no retry
+or repair. Its policy, candidate evidence, receipt, envelope, and provider-free
+replay receipt are
+`e71107e522342e1b19206c88d861549d00f9df87f27ed4293b0cc36139b2ae34`,
+`a1dc307130c6d3efb42354e0c464fcc66095d016564d5227e6259dc71998ac7f`,
+`d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
+`02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
+and `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
+H0c is complete. Every M0–M7 milestone remains pending its executable product
+gate, so this result does not raise the 44/100 application-readiness baseline.
+
+The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before
+successful cleanup. Future harness optimisation may use immutable
+content-addressed build reuse and digest manifests, but only with separate
+writable lane targets and unchanged isolation, independence, fail-closed cache
+validation, evidence binding, and replay semantics.
 
 ## Acceptance
 

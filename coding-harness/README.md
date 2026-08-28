@@ -83,21 +83,23 @@ operational safety controls.
   expectation. The explicit fresh-ID v5 operator/launcher now derives a trusted
   pre-execution anchor and complete evidence contract; it is not a general or
   default promotion path.
+- `programme-gates-v6.ts`, `programme-v6-program.ts`, and the V6 operator,
+  policy-anchor, receipt, and replay modules bind transition-aware repair
+  evidence and full native-runtime sidecars without changing frozen V4/V5 law.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
   its exact Git blob digest must match the candidate receipt.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
   identifies the repository's actual `.mcp.json` coordination surface.
 
 The first acceptance definition lives in `config/issue-8-acceptance.json`.
-After honest final-review failures in H0c runs `_03` and `_04`, run
-`programme_v5_h0c_20260828_05` completed a passing transaction after one patch-
-admission repair. The frozen V1 reliability law nevertheless rejected the
-programme at 85/100 because that attempt never reached build. Receipt
-`91bfc845…98d1`, envelope `4c089769…05f`, and replay receipt `ca2bbbb3…cfc` bind
-the result. The sibling schema-V6 path adds full transaction/native sidecar
-evidence and transition-derived prior-attempt semantics. It does not upgrade
-historical V4/V5 evidence; execution needs a fresh policy, claim, run ID, and
-provider-free replay.
+V5 run `programme_v5_h0c_20260828_05` completed a passing transaction after one
+pre-build repair, then was honestly rejected at 85/100 by its frozen V1 law.
+The sibling schema-V6 path does not upgrade that historical evidence. V6 run
+`programme_v6_h0c_20260828_01` failed closed at exact-origin enforcement and
+replay preserved the failure. Fresh run `_02` passed at 100/100 with six bound
+commands, seven native-evidence digests, two final native reviews, and no retry
+or repair. Receipt `d9d244ef…0216`, candidate evidence `a1dc3071…ac7f`, envelope
+`02c30ed3…9a06`, and provider-free replay `f1bcf0fe…bf02` complete H0c.
 
 The legacy schema-v4 `launch-issue-8.mjs` path is bound to
 `config/issue-8-acceptance.json`. The explicit schema-v5 operator uses
@@ -116,11 +118,10 @@ The project tracks a 48-task, hash-pinned candidate relevance anchor with
 balanced deterministic halves, and the harness protects those files, the opt-in
 settings, and inherited active-policy pointers. The candidate is not approved
 for activation until maintainers review its labels and calibrate them against a
-live retrieval baseline. Background tuning is disabled in tracked configuration;
-the 2026-08-27 operational check also found no opt-in variables or `harness`
-worker in the live daemon, which must be rechecked after each restart.
-H0c execution and ordinary verified-outcome persistence do not opt into this
-flywheel.
+live retrieval baseline. Background tuning is disabled in tracked configuration.
+The 2026-08-28 post-H0c check found no opt-in variables or `harness` worker in
+the live daemon; that must be rechecked after each restart. H0c execution and
+ordinary verified-outcome persistence do not opt into this flywheel.
 
 The explicit Ruflo evaluation path is model-call-free, local, and
 evaluation-only. It currently no-ops because the flywheel-visible neural store

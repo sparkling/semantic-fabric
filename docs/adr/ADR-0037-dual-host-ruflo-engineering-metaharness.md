@@ -288,11 +288,11 @@ loop:
 - The anchor, its manifest, `.claude/settings.json`, the inherited proven-config
   pointer, and the active framework policy are protected harness inputs.
 - `RUFLO_HARNESS_LOOP` and `RUFLO_FLYWHEEL_LEGACY_APPLY` are absent from the
-  tracked configuration. A 2026-08-27 operational check also found them absent
-  from the live daemon environment and found the daemon worker set excludes
-  `harness`; that runtime condition must be rechecked after every restart. Both
-  worker entry points returned `opt-in required` without loading or mutating
-  flywheel state during that check.
+  tracked configuration. The 2026-08-28 post-H0c operational check also found
+  them absent from the live daemon environment and confirmed that the daemon
+  worker set excludes `harness`; that condition must be rechecked after every
+  restart. Both worker entry points return `opt-in required` without loading or
+  mutating flywheel state.
 - A deliberately overridden *explicit evaluation* may run only against the
   project anchor and the current `neural_patterns` store. It returns
   `applied: false`; promotion is a separate, confirmed transaction requiring a
@@ -364,18 +364,14 @@ Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture and framework implemented; programme transactions have
-executed, but none has produced acceptance. Incremental harness commits
-through `f82c2b5` establish the private supply chain, dual-host routing,
-patched-candidate transaction, exact-origin broker, mount namespace, copied credential
-capabilities, systemd cgroup-v2 quotas, bounded retry/cancellation, provider-free
-QE/SAST, protected governance inputs, digest-chained receipts, responsive frozen-
-closure checks, grounded patch repair, normalization of model-authored hunk
-counts, a programme-oriented task contract, safe opaque native review-operation
-exception classification, and protected dormant retrieval-flywheel controls.
-The harness builds and passes 514 provider-free tests with two expected skips.
-It has no publication or evolution path, and all harness source files remain
-under 500 lines.
+Accepted architecture, framework, and H0c activation implemented. Harness
+commits through `c8e3f68` establish the private supply chain, dual-host routing,
+patched-candidate transaction, exact-origin and filesystem/resource isolation,
+bounded retry/cancellation, provider-free QE/SAST, frozen dependency closure,
+schema-V6 evidence law, trusted execution/replay, and protected dormant
+retrieval-flywheel controls. The harness builds and passes 623 provider-free
+tests across 90 files with two expected skips. It has no publication or
+evolution path, and all harness source files remain under 500 lines.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
 `f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate
@@ -446,13 +442,16 @@ envelope, and replay digests are
 `4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`,
 and `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
 
-The accepted correction is an additive schema V6: a V2 outer policy and gate
-contract bind the complete candidate transaction/native sidecar and derive each
-prior attempt as `not-started`, `failed`, or `passed` from its repair transition.
-V1, V4, and V5 remain frozen, and `_05` is never reinterpreted. H0c still needs
-a fresh V6 policy review, execution claim, run ID, sealed envelope, and provider-
-free replay. This changes harness evidence law, not the product architecture or
-application goals.
+The additive schema V6 correction is implemented through `c8e3f68`; V1, V4,
+and V5 stay frozen. Run `programme_v6_h0c_20260828_01` failed closed at the
+native-origin gate and replay preserved the failure. Fresh run `_02` passed the
+transaction and every gate at 100/100 with six bound commands, seven native-
+evidence digests, two final native reviews, and no retry or repair. Its policy,
+receipt, envelope, and provider-free replay receipt are `e71107e5…ae34`,
+`d9d244ef…0216`, `02c30ed3…9a06`, and `f1bcf0fe…bf02`. H0c is complete; product
+milestones remain gated. The run cleaned about 35 GiB of ephemeral verifier
+outputs, leaving immutable build reuse and digest manifests as a constrained
+efficiency target. Neither run enabled the retrieval flywheel.
 
 The repository's `.mcp.json` is tracked and protected. Diagnostics that still
 cannot inspect its effective surface remain `INCONCLUSIVE`, not clean and not a
