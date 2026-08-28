@@ -26,6 +26,10 @@ fn observation() -> HostObservation {
         environment_sha256: digest('9'),
         link_dependency_file_byte_length: 128,
         link_dependency_file_sha256: digest('a'),
+        link_output_logical_path:
+            "build-output/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-0123456789abcdef"
+                .to_owned(),
+        raw_link_input_count: 1,
         tools: vec![
             ToolIdentity {
                 role: ToolRole::GitMaterializer,
@@ -393,4 +397,20 @@ fn requires_exactly_one_identity_for_every_bound_tool_role() {
     assert!(Receipt::new(authority(), duplicate)
         .unwrap_err()
         .contains("tool identities must be exactly"));
+}
+
+#[test]
+fn rejects_invalid_link_output_identity_and_raw_input_count() {
+    let mut wrong_output = observation();
+    wrong_output.link_output_logical_path =
+        "build-output/release/deps/semantic_fabric-0123456789abcdef".to_owned();
+    assert!(Receipt::new(authority(), wrong_output)
+        .unwrap_err()
+        .contains("Cargo binary law"));
+
+    let mut no_raw_inputs = observation();
+    no_raw_inputs.raw_link_input_count = 0;
+    assert!(Receipt::new(authority(), no_raw_inputs)
+        .unwrap_err()
+        .contains("raw final-link input count"));
 }

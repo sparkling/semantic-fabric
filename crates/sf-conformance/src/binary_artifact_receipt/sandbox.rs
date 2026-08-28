@@ -10,7 +10,6 @@ use std::time::Duration;
 use super::{authority, cargo, process, sandbox_environment::ExactBuildEnvironment};
 
 pub(super) const LINKER: &str = "/usr/bin/x86_64-linux-gnu-gcc-13";
-
 pub(super) const SYSTEM_ROOTS: &[(&str, bool)] = &[
     ("/usr/bin", true),
     ("/usr/lib", true),
@@ -201,6 +200,8 @@ fn arguments(
         "--message-format=json-render-diagnostics",
         "--",
         "-C",
+        "save-temps=yes",
+        "-C",
         "linker=/usr/bin/x86_64-linux-gnu-gcc-13",
         "-C",
         "link-arg=-Wl,--dependency-file=/target/final-link.d",
@@ -383,8 +384,8 @@ mod tests {
         let argv = text(&arguments(&request, &system, &environment));
         assert_eq!(argv[..9].join("\0"),
             "--die-with-parent\0--new-session\0--unshare-all\0--unshare-net\0--clearenv\0--tmpfs\0/\0--cap-drop\0ALL");
-        assert_eq!(argv[argv.len() - 22..].join("\0"),
-            "--chdir\0/workspace\0--\0/toolchain/bin/cargo\0rustc\0--locked\0--offline\0--release\0-p\0sf-cli\0--bin\0semantic-fabric\0--target\0x86_64-unknown-linux-gnu\0--target-dir\0/target\0--message-format=json-render-diagnostics\0--\0-C\0linker=/usr/bin/x86_64-linux-gnu-gcc-13\0-C\0link-arg=-Wl,--dependency-file=/target/final-link.d");
+        assert_eq!(argv[argv.len() - 24..].join("\0"),
+            "--chdir\0/workspace\0--\0/toolchain/bin/cargo\0rustc\0--locked\0--offline\0--release\0-p\0sf-cli\0--bin\0semantic-fabric\0--target\0x86_64-unknown-linux-gnu\0--target-dir\0/target\0--message-format=json-render-diagnostics\0--\0-C\0save-temps=yes\0-C\0linker=/usr/bin/x86_64-linux-gnu-gcc-13\0-C\0link-arg=-Wl,--dependency-file=/target/final-link.d");
         let environment = argv
             .windows(3)
             .filter(|window| window[0] == "--setenv")

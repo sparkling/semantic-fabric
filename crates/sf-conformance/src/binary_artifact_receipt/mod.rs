@@ -3,6 +3,7 @@
 //! This schema deliberately records one builder observation. It is not a
 //! production, release, admission, minimality, or reproducibility attestation.
 
+mod artifact_pair;
 mod authority;
 mod authority_guard;
 mod capture;

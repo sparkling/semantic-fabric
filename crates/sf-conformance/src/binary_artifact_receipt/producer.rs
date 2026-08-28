@@ -11,6 +11,7 @@ use super::model::{
     ToolIdentity, ToolRole,
 };
 use super::{
+    artifact_pair::ArtifactPair,
     authority, capture as build_script_capture, cargo, elf, linker,
     producer_paths::{SandboxPathMap, Workspace},
     sandbox, source,
@@ -109,15 +110,13 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         &path_map,
         &messages.build_scripts,
     )?)?;
-    let dependency_file = linker::capture(
-        &workspace.target.join("final-link.d"),
-        Path::new(cargo::LOGICAL_ARTIFACT),
-        &path_map,
-    )?;
-    let link_inputs = link_inputs(&path_map, &dependency_file.inputs)?;
-    let (readelf_identity, elf_observation) = elf::inspect(&artifact_path, request.readelf)?;
+    let dependency_file = linker::capture(&workspace.target.join("final-link.d"), &path_map)?;
+    let artifact_pair = ArtifactPair::bind(&artifact_path, &dependency_file.output_path)?;
+    let link_inputs = link_inputs(&dependency_file.inputs)?;
+    let (readelf_identity, elf_observation) = elf::inspect(&artifact_pair, request.readelf)?;
     tools.require_readelf_identity(&readelf_identity)?;
     workspace.assert_current()?;
+    artifact_pair.assert_current()?;
 
     stabilize(
         request,
@@ -129,6 +128,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         &cargo_home_inputs,
     )?;
     workspace.assert_current()?;
+    artifact_pair.assert_current()?;
 
     Receipt::new(
         PortableAuthority {
@@ -148,6 +148,8 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
             environment_sha256: plan.environment.sha256(),
             link_dependency_file_byte_length: dependency_file.byte_length,
             link_dependency_file_sha256: dependency_file.sha256,
+            link_output_logical_path: dependency_file.receipt_output,
+            raw_link_input_count: dependency_file.raw_input_count as u64,
             tools: tools.receipt_identities(),
             build_script_events: build_scripts,
             final_link_inputs: link_inputs,
@@ -354,20 +356,16 @@ fn build_script_events(
     Ok(events)
 }
 
-fn link_inputs(
-    path_map: &SandboxPathMap,
-    inputs: &[linker::Input],
-) -> Result<Vec<LinkInput>, String> {
+fn link_inputs(inputs: &[linker::Input]) -> Result<Vec<LinkInput>, String> {
     let mut receipt_paths = BTreeSet::new();
     let mut observed = Vec::with_capacity(inputs.len());
     for input in inputs {
-        let mapped = path_map.map(&input.logical_path)?;
-        if !receipt_paths.insert(mapped.receipt_path.clone()) {
-            return Err("link input logical-path mapping collision".to_owned());
+        if !receipt_paths.insert(input.receipt_path.clone()) {
+            return Err("link input receipt identity collision".to_owned());
         }
         observed.push(LinkInput {
-            origin: mapped.origin,
-            logical_path: mapped.receipt_path,
+            origin: input.origin,
+            logical_path: input.receipt_path.clone(),
             byte_length: input.byte_length,
             sha256: input.sha256.clone(),
         });

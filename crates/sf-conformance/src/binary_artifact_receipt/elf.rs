@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use super::{authority, process};
+use super::{artifact_pair::ArtifactPair, authority, process};
 
 const MAX_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_TOOL_OUTPUT: u64 = 512 * 1024;
@@ -34,18 +34,20 @@ pub(super) struct Observation {
 }
 
 pub(super) fn inspect(
-    binary_path: &Path,
+    artifact: &ArtifactPair,
     readelf: &Path,
 ) -> Result<(ReadelfIdentity, Observation), String> {
     if !readelf.is_absolute() {
         return Err("readelf path must be absolute".to_owned());
     }
-    let artifact_argument = binary_path
+    artifact.assert_current()?;
+    let artifact_argument = artifact
+        .selected_path()
         .to_str()
         .ok_or_else(|| "artifact binary path is not UTF-8".to_owned())?;
-    let (artifact_sha256, artifact_size) =
-        authority::digest(binary_path, MAX_BINARY_BYTES, "artifact binary")?;
-    let unix_mode = artifact_mode(binary_path)?;
+    let artifact_sha256 = artifact.sha256().to_owned();
+    let artifact_size = artifact.byte_length();
+    let unix_mode = artifact.unix_mode();
     let (tool_sha256, tool_size) = authority::digest(readelf, MAX_BINARY_BYTES, "readelf tool")?;
     let version = utf8(&invoke(readelf, &["--version"])?, "readelf version")?;
     let headers = utf8(
@@ -65,16 +67,9 @@ pub(super) fn inspect(
         "ELF notes",
     )?;
     reject_runtime_search_paths(&dynamic)?;
-    let (artifact_sha256_after, artifact_size_after) =
-        authority::digest(binary_path, MAX_BINARY_BYTES, "artifact binary")?;
+    artifact.assert_current()?;
     let (tool_sha256_after, tool_size_after) =
         authority::digest(readelf, MAX_BINARY_BYTES, "readelf tool")?;
-    if artifact_sha256 != artifact_sha256_after || artifact_size != artifact_size_after {
-        return Err("artifact binary changed during ELF inspection".to_owned());
-    }
-    if unix_mode != artifact_mode(binary_path)? {
-        return Err("artifact binary mode changed during ELF inspection".to_owned());
-    }
     if tool_sha256 != tool_sha256_after || tool_size != tool_size_after {
         return Err("readelf tool changed during ELF inspection".to_owned());
     }
@@ -153,24 +148,6 @@ fn required_field(input: &str, prefix: &str, label: &str) -> Result<String, Stri
     match values.as_slice() {
         [value] if !value.is_empty() && value.len() <= 4096 => Ok((*value).to_owned()),
         _ => Err(format!("{label} has no unique value")),
-    }
-}
-
-fn artifact_mode(path: &Path) -> Result<u32, String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("inspect artifact binary mode {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("artifact binary is not a regular non-symlink file".to_owned());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(metadata.mode() & 0o7777)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        Err("ELF observation requires Unix mode bits".to_owned())
     }
 }
 

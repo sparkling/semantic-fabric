@@ -42,6 +42,10 @@ fn receipt() -> Receipt {
         environment_sha256: digest('9'),
         link_dependency_file_byte_length: 128,
         link_dependency_file_sha256: digest('a'),
+        link_output_logical_path:
+            "build-output/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-0123456789abcdef"
+                .to_owned(),
+        raw_link_input_count: 1,
         tools: vec![
             tool(
                 ToolRole::GitMaterializer,

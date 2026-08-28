@@ -13,7 +13,7 @@ pub const ROOT_PACKAGE: &str = "sf-cli";
 pub const ROOT_BINARY: &str = "semantic-fabric";
 pub const PROFILE: &str = "release";
 pub const TARGET: &str = "x86_64-unknown-linux-gnu";
-pub const COMMAND_TEMPLATE: &str = "cargo rustc --locked --offline --release -p sf-cli --bin semantic-fabric --target x86_64-unknown-linux-gnu --target-dir <TARGET_DIR> --message-format=json-render-diagnostics -- -C linker=<LINKER> -C link-arg=-Wl,--dependency-file=<LINK_DEPFILE>";
+pub const COMMAND_TEMPLATE: &str = "cargo rustc --locked --offline --release -p sf-cli --bin semantic-fabric --target x86_64-unknown-linux-gnu --target-dir <TARGET_DIR> --message-format=json-render-diagnostics -- -C save-temps=yes -C linker=<LINKER> -C link-arg=-Wl,--dependency-file=<LINK_DEPFILE>";
 pub const ARTIFACT_PATH: &str = "target/x86_64-unknown-linux-gnu/release/semantic-fabric";
 pub const BUILD_SCRIPT_DIRECTIVES_FORMAT: &str =
     "semantic-fabric-canonical-build-script-directives-v1";
@@ -169,6 +169,8 @@ pub struct HostObservation {
     pub environment_sha256: String,
     pub link_dependency_file_byte_length: u64,
     pub link_dependency_file_sha256: String,
+    pub link_output_logical_path: String,
+    pub raw_link_input_count: u64,
     pub tools: Vec<ToolIdentity>,
     pub build_script_events: Vec<BuildScriptEvent>,
     pub final_link_inputs: Vec<LinkInput>,
@@ -263,6 +265,7 @@ impl HostObservation {
             self.link_dependency_file_byte_length,
             "final link dependency file",
         )?;
+        validate_link_output_path(&self.link_output_logical_path)?;
         if self.build_script_events.len() > super::format::MAX_BUILD_SCRIPT_EVENTS
             || self.final_link_inputs.len() > super::format::MAX_FINAL_LINK_INPUTS
             || self.dynamic_libraries.len() > super::format::MAX_DYNAMIC_LIBRARIES
@@ -274,6 +277,12 @@ impl HostObservation {
         validate_sorted(&self.final_link_inputs, "final link inputs")?;
         if self.build_script_events.is_empty() || self.final_link_inputs.is_empty() {
             return Err("build-script events and final link inputs must be observed".to_owned());
+        }
+        if self.raw_link_input_count == 0
+            || self.raw_link_input_count > super::linker::MAX_INPUTS as u64
+            || self.raw_link_input_count < self.final_link_inputs.len() as u64
+        {
+            return Err("raw final-link input count is outside bounds".to_owned());
         }
         let mut build_script_identities = BTreeSet::new();
         for event in &self.build_script_events {
@@ -306,6 +315,22 @@ impl HostObservation {
         self.artifact.validate()?;
         validate_dynamic_libraries(&self.dynamic_libraries)
     }
+}
+
+fn validate_link_output_path(value: &str) -> Result<(), String> {
+    validate_logical_path(value)?;
+    const PREFIX: &str = "build-output/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-";
+    let suffix = value
+        .strip_prefix(PREFIX)
+        .ok_or_else(|| "link output logical path does not match the Cargo binary law".to_owned())?;
+    if suffix.len() != 16
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("link output logical path does not match the Cargo binary law".to_owned());
+    }
+    Ok(())
 }
 
 fn validate_build_script_out_dir(value: &str) -> Result<(), String> {

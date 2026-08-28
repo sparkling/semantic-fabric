@@ -70,7 +70,8 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
                     return Err(format!("line {number}: duplicate metadata key {key}"));
                 }
             }
-            ["host", host_triple, os_release, environment, link_depfile_length, link_depfile] => {
+            ["host", host_triple, os_release, environment, link_depfile_length, link_depfile, link_output, raw_link_inputs] =>
+            {
                 advance(&mut stage, Stage::Host, number)?;
                 if host
                     .replace((
@@ -79,6 +80,8 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
                         *environment,
                         parse_length(link_depfile_length, number)?,
                         *link_depfile,
+                        *link_output,
+                        parse_length(raw_link_inputs, number)?,
                     ))
                     .is_some()
                 {
@@ -180,6 +183,8 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
         environment_sha256,
         link_dependency_file_byte_length,
         link_dependency_file_sha256,
+        link_output_logical_path,
+        raw_link_input_count,
     ) = host.ok_or_else(|| "missing host observation".to_owned())?;
     let observation = HostObservation {
         host_triple: host_triple.to_owned(),
@@ -187,6 +192,8 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
         environment_sha256: environment_sha256.to_owned(),
         link_dependency_file_byte_length,
         link_dependency_file_sha256: link_dependency_file_sha256.to_owned(),
+        link_output_logical_path: link_output_logical_path.to_owned(),
+        raw_link_input_count,
         tools,
         build_script_events,
         final_link_inputs,
@@ -256,12 +263,14 @@ pub(super) fn observation_records(observation: &HostObservation) -> String {
     let mut output = String::new();
     writeln!(
         output,
-        "host\t{}\t{}\t{}\t{}\t{}",
+        "host\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         observation.host_triple,
         observation.os_release_sha256,
         observation.environment_sha256,
         observation.link_dependency_file_byte_length,
         observation.link_dependency_file_sha256,
+        observation.link_output_logical_path,
+        observation.raw_link_input_count,
     )
     .expect("String writes cannot fail");
     for tool in &observation.tools {

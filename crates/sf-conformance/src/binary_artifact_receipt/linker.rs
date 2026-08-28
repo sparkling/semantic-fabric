@@ -1,83 +1,95 @@
-//! GNU/LLD dependency-file capture without executing a loader or artifact.
+//! GNU linker dependency-file capture without executing a loader or artifact.
 
-use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-use super::{authority, producer_paths::SandboxPathMap};
+use super::{authority, model::LinkInputOrigin, producer_paths::SandboxPathMap};
 
 const MAX_DEPFILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_INPUTS: usize = 16_384;
+pub(super) const MAX_INPUTS: usize = 16_384;
 const MAX_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_PATH_BYTES: usize = 16 * 1024;
+const MAX_PATH_COMPONENTS: usize = 128;
+const OUTPUT_PREFIX: &str = "/target/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DependencyFile {
     pub(super) sha256: String,
     pub(super) byte_length: u64,
-    /// Logical target emitted before the depfile colon.
-    pub(super) logical_output: PathBuf,
+    pub(super) raw_input_count: usize,
+    /// Hashed linker output in the host-backed fresh target tree.
+    pub(super) output_path: PathBuf,
+    /// Canonical receipt identity for the hashed linker output.
+    pub(super) receipt_output: String,
+    /// Canonical, unique inventory; raw order and multiplicity remain bound by
+    /// `sha256` and `raw_input_count`.
     pub(super) inputs: Vec<Input>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Input {
-    /// Preserved for producer conversion into a schema logical path and origin.
-    pub(super) logical_path: PathBuf,
+    pub(super) origin: LinkInputOrigin,
+    pub(super) receipt_path: String,
     pub(super) sha256: String,
     pub(super) byte_length: u64,
 }
 
-/// Reads the final linker depfile and requires its target to be the exact
-/// sandbox-logical binary. Every dependency maps through one unambiguous,
-/// longest trusted root to a hardened host backing file.
-pub(super) fn capture(
-    depfile: &Path,
-    expected_output: &Path,
-    path_map: &SandboxPathMap,
-) -> Result<DependencyFile, String> {
-    validate_expected_output(expected_output)?;
+/// Reads the complete GNU ld depfile. The accepted grammar is exactly one
+/// continued primary rule followed by one empty phony rule per primary input,
+/// in the same normalized order (GNU `--dependency-file` output).
+pub(super) fn capture(depfile: &Path, path_map: &SandboxPathMap) -> Result<DependencyFile, String> {
     let authority = authority::read(depfile, MAX_DEPFILE_BYTES, "link dependency file")?;
     let rule = parse(&authority.bytes)?;
-    if rule.output != expected_output {
-        return Err(format!(
-            "link dependency output must be exactly {}",
-            expected_output.display()
-        ));
+    let output = path_map.map(&rule.output)?;
+    if output.origin != LinkInputOrigin::BuildOutput {
+        return Err("link dependency output is not inside logical /target".to_owned());
     }
-    if rule.inputs.is_empty() || rule.inputs.len() > MAX_INPUTS {
-        return Err(format!(
-            "link dependency input count is outside bounds: {}",
-            rule.inputs.len()
-        ));
-    }
-    let mut seen = BTreeSet::new();
-    let mut inputs = Vec::with_capacity(rule.inputs.len());
-    for logical_path in rule.inputs {
-        if !seen.insert(logical_path.clone()) {
-            return Err(format!(
-                "duplicate link dependency path {}",
-                logical_path.display()
-            ));
+
+    let mut unique = BTreeMap::<String, ObservedInput>::new();
+    for logical_path in &rule.inputs {
+        let mapped = path_map.map(logical_path)?;
+        if let Some(prior) = unique.get(&mapped.receipt_path) {
+            if prior.backing != mapped.backing || prior.origin != mapped.origin {
+                return Err("link input aliases disagree on backing authority".to_owned());
+            }
+            continue;
         }
-        let mapped = path_map.map(&logical_path)?;
         let (sha256, byte_length) =
             authority::digest(&mapped.backing, MAX_INPUT_BYTES, "link dependency")?;
-        inputs.push(Input {
-            logical_path,
-            sha256,
-            byte_length,
-        });
+        unique.insert(
+            mapped.receipt_path.clone(),
+            ObservedInput {
+                backing: mapped.backing,
+                origin: mapped.origin,
+                sha256,
+                byte_length,
+            },
+        );
     }
+    let inputs = unique
+        .into_iter()
+        .map(|(receipt_path, observed)| Input {
+            origin: observed.origin,
+            receipt_path,
+            sha256: observed.sha256,
+            byte_length: observed.byte_length,
+        })
+        .collect();
     Ok(DependencyFile {
         sha256: authority.sha256,
         byte_length: authority.size,
-        logical_output: rule.output,
+        raw_input_count: rule.inputs.len(),
+        output_path: output.backing,
+        receipt_output: output.receipt_path,
         inputs,
     })
 }
 
-fn validate_expected_output(path: &Path) -> Result<(), String> {
-    validate_logical(path, "expected link output")?;
-    Ok(())
+struct ObservedInput {
+    backing: PathBuf,
+    origin: LinkInputOrigin,
+    sha256: String,
+    byte_length: u64,
 }
 
 struct Rule {
@@ -86,17 +98,89 @@ struct Rule {
 }
 
 fn parse(bytes: &[u8]) -> Result<Rule, String> {
-    let colon = first_unescaped_colon(bytes)?;
-    let targets = words(&bytes[..colon])?;
-    let [target] = targets.as_slice() else {
-        return Err("link dependency file must contain exactly one output target".to_owned());
-    };
-    let output = logical_path(target, "link dependency output")?;
-    let inputs = words(&bytes[colon + 1..])?
-        .into_iter()
-        .map(|value| logical_path(&value, "link dependency input"))
+    if bytes.is_empty() || bytes.len() > MAX_DEPFILE_BYTES as usize {
+        return Err("link dependency file size is outside bounds".to_owned());
+    }
+    let lines = logical_lines(bytes)?;
+    if lines.len() < 3 || lines.len().is_multiple_of(2) {
+        return Err("link dependency file has an invalid rule layout".to_owned());
+    }
+    let (target, input_words) = parse_rule(&lines[0])?;
+    let output = normalized_path(&target, "link dependency output")?;
+    validate_output(&output)?;
+    if input_words.is_empty() || input_words.len() > MAX_INPUTS {
+        return Err("link dependency input count is outside bounds".to_owned());
+    }
+    let inputs = input_words
+        .iter()
+        .map(|value| normalized_path(value, "link dependency input"))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut phony = Vec::with_capacity(inputs.len());
+    for pair in lines[1..].chunks_exact(2) {
+        if !pair[0].is_empty() {
+            return Err("link dependency phony rules require one empty separator".to_owned());
+        }
+        let (target, prerequisites) = parse_rule(&pair[1])?;
+        if !prerequisites.is_empty() {
+            return Err("link dependency phony rule has prerequisites".to_owned());
+        }
+        phony.push(normalized_path(&target, "link dependency phony target")?);
+        if phony.len() > MAX_INPUTS {
+            return Err("link dependency phony rule count is outside bounds".to_owned());
+        }
+    }
+    if phony != inputs {
+        return Err("link dependency phony rules do not match primary inputs".to_owned());
+    }
     Ok(Rule { output, inputs })
+}
+
+/// Joins escaped physical continuations before any rule splitting. Every other
+/// physical line must end in LF (CRLF is accepted but canonicalized in memory).
+fn logical_lines(bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' if bytes.get(index + 1) == Some(&b'\n') => {
+                current.push(b' ');
+                index += 2;
+            }
+            b'\\'
+                if bytes.get(index + 1) == Some(&b'\r') && bytes.get(index + 2) == Some(&b'\n') =>
+            {
+                current.push(b' ');
+                index += 3;
+            }
+            b'\n' => {
+                lines.push(std::mem::take(&mut current));
+                index += 1;
+            }
+            b'\r' if bytes.get(index + 1) == Some(&b'\n') => {
+                lines.push(std::mem::take(&mut current));
+                index += 2;
+            }
+            b'\r' => return Err("link dependency file contains a bare carriage return".to_owned()),
+            byte => {
+                current.push(byte);
+                index += 1;
+            }
+        }
+    }
+    if !current.is_empty() {
+        return Err("link dependency file must end with LF".to_owned());
+    }
+    Ok(lines)
+}
+
+fn parse_rule(line: &[u8]) -> Result<(String, Vec<String>), String> {
+    let colon = first_unescaped_colon(line)?;
+    let targets = words(&line[..colon])?;
+    let [target] = targets.as_slice() else {
+        return Err("link dependency rule must contain exactly one target".to_owned());
+    };
+    Ok((target.clone(), words(&line[colon + 1..])?))
 }
 
 fn first_unescaped_colon(bytes: &[u8]) -> Result<usize, String> {
@@ -110,7 +194,7 @@ fn first_unescaped_colon(bytes: &[u8]) -> Result<usize, String> {
             return Ok(index);
         }
     }
-    Err("link dependency file has no rule separator".to_owned())
+    Err("link dependency rule has no separator".to_owned())
 }
 
 fn words(bytes: &[u8]) -> Result<Vec<String>, String> {
@@ -119,7 +203,7 @@ fn words(bytes: &[u8]) -> Result<Vec<String>, String> {
     let mut index = 0usize;
     while index < bytes.len() {
         match bytes[index] {
-            b' ' | b'\t' | b'\r' | b'\n' => {
+            b' ' | b'\t' => {
                 if !current.is_empty() {
                     values.push(finish(&mut current)?);
                 }
@@ -127,18 +211,15 @@ fn words(bytes: &[u8]) -> Result<Vec<String>, String> {
             }
             b'\\' => {
                 let Some(next) = bytes.get(index + 1).copied() else {
-                    return Err("link dependency file ends with an escape".to_owned());
+                    return Err("link dependency rule ends with an escape".to_owned());
                 };
-                if next == b'\n' {
-                    index += 2;
-                } else if next == b'\r' && bytes.get(index + 2) == Some(&b'\n') {
-                    index += 3;
-                } else {
-                    current.push(next);
-                    index += 2;
-                }
+                current.push(next);
+                index += 2;
             }
-            b'#' => return Err("link dependency file contains an unsupported comment".to_owned()),
+            b'#' => return Err("link dependency file contains a comment".to_owned()),
+            byte if byte.is_ascii_control() => {
+                return Err("link dependency rule contains a control byte".to_owned());
+            }
             byte => {
                 current.push(byte);
                 index += 1;
@@ -154,38 +235,58 @@ fn words(bytes: &[u8]) -> Result<Vec<String>, String> {
 fn finish(bytes: &mut Vec<u8>) -> Result<String, String> {
     let value = String::from_utf8(std::mem::take(bytes))
         .map_err(|error| format!("link dependency path is not UTF-8: {error}"))?;
-    if value.is_empty() {
-        Err("empty link dependency path".to_owned())
+    if value.is_empty() || value.len() > MAX_PATH_BYTES {
+        Err("link dependency path length is outside bounds".to_owned())
     } else {
         Ok(value)
     }
 }
 
-fn logical_path(value: &str, label: &str) -> Result<PathBuf, String> {
-    if value.is_empty()
-        || value.len() > 16 * 1024
+fn normalized_path(value: &str, label: &str) -> Result<PathBuf, String> {
+    if !value.starts_with('/')
+        || value.len() > MAX_PATH_BYTES
+        || value.contains('\\')
         || value.bytes().any(|byte| byte.is_ascii_control())
     {
         return Err(format!("invalid {label}"));
     }
-    let path = PathBuf::from(value);
-    if !path.is_absolute()
-        || value.contains("//")
-        || value.contains('\\')
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
-    {
-        Err(format!("invalid {label}"))
-    } else {
-        Ok(path)
+    let mut components = Vec::new();
+    for component in value.split('/').skip(1) {
+        match component {
+            "" => return Err(format!("invalid {label}")),
+            "." => {}
+            ".." => {
+                if components.pop().is_none() {
+                    return Err(format!("{label} escapes the sandbox root"));
+                }
+            }
+            normal => {
+                if components.len() == MAX_PATH_COMPONENTS {
+                    return Err(format!("{label} has too many components"));
+                }
+                components.push(normal);
+            }
+        }
     }
+    if components.is_empty() {
+        return Err(format!("invalid {label}"));
+    }
+    Ok(PathBuf::from(format!("/{}", components.join("/"))))
 }
 
-fn validate_logical(path: &Path, label: &str) -> Result<(), String> {
-    let value = path.to_str().ok_or_else(|| format!("invalid {label}"))?;
-    if logical_path(value, label)? != path {
-        return Err(format!("invalid {label}"));
+fn validate_output(path: &Path) -> Result<(), String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| "invalid link dependency output".to_owned())?;
+    let suffix = value
+        .strip_prefix(OUTPUT_PREFIX)
+        .ok_or_else(|| "link dependency output does not match the Cargo binary law".to_owned())?;
+    if suffix.len() != 16
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("link dependency output does not match the Cargo binary law".to_owned());
     }
     Ok(())
 }
@@ -194,29 +295,84 @@ fn validate_logical(path: &Path, label: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const OUTPUT: &str =
+        "/target/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-0123456789abcdef";
+
+    fn depfile(inputs: &[&str], phony: &[&str]) -> Vec<u8> {
+        let mut output = format!("{OUTPUT}: \\\n");
+        for (index, input) in inputs.iter().enumerate() {
+            let continuation = if index + 1 == inputs.len() {
+                ""
+            } else {
+                " \\\n"
+            };
+            output.push_str(&format!("  {input}{continuation}"));
+        }
+        output.push_str("\n\n");
+        for (index, input) in phony.iter().enumerate() {
+            output.push_str(&format!("{input}:\n"));
+            if index + 1 != phony.len() {
+                output.push('\n');
+            }
+        }
+        output.into_bytes()
+    }
+
     #[test]
-    fn retains_output_and_parses_gnu_continuations() {
-        let rule = parse(
-            b"/target/x86_64-unknown-linux-gnu/release/semantic-fabric: /target/one \\\n /target/with\\ space\n",
-        )
-        .unwrap();
-        assert_eq!(
-            rule.output,
-            Path::new("/target/x86_64-unknown-linux-gnu/release/semantic-fabric")
-        );
+    fn parses_gnu_primary_and_phony_rules_with_normalization_and_repeats() {
+        let raw = [
+            "/usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o",
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib/x86_64-linux-gnu/libc.so.6",
+        ];
+        let rule = parse(&depfile(&raw, &raw)).unwrap();
+        assert_eq!(rule.output, Path::new(OUTPUT));
         assert_eq!(
             rule.inputs,
             [
-                PathBuf::from("/target/one"),
-                PathBuf::from("/target/with space")
+                PathBuf::from("/usr/lib/x86_64-linux-gnu/Scrt1.o"),
+                PathBuf::from("/lib/x86_64-linux-gnu/libc.so.6"),
+                PathBuf::from("/lib/x86_64-linux-gnu/libc.so.6"),
             ]
         );
     }
 
     #[test]
-    fn rejects_bad_targets_and_paths() {
-        assert!(parse(b"/target/a /target/b: /target/input\n").is_err());
-        assert!(parse(b"relative: /target/input\n").is_err());
-        assert!(parse(b"/target/out: /target/../escape\n").is_err());
+    fn rejects_missing_extra_reordered_and_nonempty_phony_rules() {
+        let inputs = ["/target/a", "/target/b"];
+        assert!(parse(&depfile(&inputs, &inputs[..1])).is_err());
+        assert!(parse(&depfile(&inputs, &["/target/a", "/target/b", "/target/c"])).is_err());
+        assert!(parse(&depfile(&inputs, &["/target/b", "/target/a"])).is_err());
+        let mut malformed = depfile(&inputs, &inputs);
+        let needle = b"/target/a:\n";
+        let start = malformed
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .unwrap();
+        malformed.splice(
+            start..start + needle.len(),
+            b"/target/a: /target/b\n".iter().copied(),
+        );
+        assert!(parse(&malformed).is_err());
+    }
+
+    #[test]
+    fn rejects_above_root_and_output_name_near_misses() {
+        assert!(normalized_path("/../../etc/passwd", "fixture").is_err());
+        for invalid in [
+            "/target/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-0123456789abcde",
+            "/target/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-0123456789abcdeg",
+            "/target/x86_64-unknown-linux-gnu/release/deps/semantic-fabric-0123456789abcdef",
+        ] {
+            assert!(validate_output(Path::new(invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_layout_comments_and_unterminated_content() {
+        assert!(parse(format!("{OUTPUT}: /target/a\n").as_bytes()).is_err());
+        assert!(parse(format!("{OUTPUT}: /target/a # x\n\n/target/a:\n").as_bytes()).is_err());
+        assert!(logical_lines(b"/target/out: /target/a").is_err());
+        assert!(words(b"/target/a\\").is_err());
     }
 }

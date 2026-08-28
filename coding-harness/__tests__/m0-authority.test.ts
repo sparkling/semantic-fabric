@@ -42,6 +42,7 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/bin/sparql-protocol-regression-baseline.rs',
   'crates/sf-conformance/src/bin/sparql-query-regression-baseline.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/authority.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/artifact_pair.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/capture.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/cargo.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/elf.rs',

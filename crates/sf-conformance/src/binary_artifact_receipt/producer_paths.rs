@@ -76,6 +76,7 @@ enum Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Root {
     logical: PathBuf,
+    receipt_logical: PathBuf,
     backing: PathBuf,
     kind: Kind,
 }
@@ -108,6 +109,26 @@ impl SandboxPathMap {
         ];
         for mount in system_mounts {
             roots.push(root(mount.destination, &mount.source, Kind::HostSystem)?);
+        }
+        let canonical_host_roots: BTreeSet<_> = roots
+            .iter()
+            .filter(|root| root.kind == Kind::HostSystem)
+            .map(|root| root.backing.clone())
+            .collect();
+        for backing in canonical_host_roots {
+            let receipt_logical = roots
+                .iter()
+                .filter(|root| root.kind == Kind::HostSystem && root.backing == backing)
+                .max_by_key(|root| (root.logical.components().count(), root.logical.clone()))
+                .ok_or_else(|| "host-system root group is empty".to_owned())?
+                .logical
+                .clone();
+            for root in roots
+                .iter_mut()
+                .filter(|root| root.kind == Kind::HostSystem && root.backing == backing)
+            {
+                root.receipt_logical = receipt_logical.clone();
+            }
         }
         let logical: BTreeSet<_> = roots.iter().map(|root| &root.logical).collect();
         if logical.len() != roots.len() {
@@ -143,12 +164,16 @@ impl SandboxPathMap {
                 prefixed("build-output", relative)?,
             ),
             Kind::HostSystem => {
-                let absolute_relative = logical
+                // Merged-/usr aliases share one bound backing root. Receipt
+                // identity follows the most specific canonical logical mount,
+                // so aliases cannot create two records for one host file.
+                let source_relative = root
+                    .receipt_logical
                     .strip_prefix("/")
-                    .map_err(|_| "host-system path lost its root".to_owned())?;
+                    .map_err(|_| "host-system source lost its root".to_owned())?;
                 (
                     LinkInputOrigin::HostSystem,
-                    prefixed("host-system", absolute_relative)?,
+                    prefixed("host-system", &source_relative.join(relative))?,
                 )
             }
         };
@@ -197,6 +222,7 @@ fn root(logical: &str, backing: &Path, kind: Kind) -> Result<Root, String> {
     validate_absolute_normal(&logical, "sandbox logical root")?;
     let backing = canonical_directory(backing, "sandbox backing root")?;
     Ok(Root {
+        receipt_logical: logical.clone(),
         logical,
         backing,
         kind,
@@ -366,6 +392,53 @@ mod tests {
         let system = map.map(Path::new("/usr/lib/libc.so")).unwrap();
         assert_eq!(system.receipt_path, "host-system/usr/lib/libc.so");
         assert!(map.map(Path::new("/unmapped/x")).is_err());
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merged_usr_aliases_share_one_receipt_identity() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = std::env::temp_dir().join(format!(
+            "semantic-fabric-sandbox-alias-map-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&fixture);
+        fs::create_dir(&fixture).unwrap();
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
+        for name in ["source", "registry", "toolchain", "target", "usr-lib"] {
+            let path = fixture.join(name);
+            fs::create_dir_all(&path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let mounts = [
+            sandbox::Mount {
+                source: fixture.join("usr-lib"),
+                destination: "/usr/lib",
+            },
+            sandbox::Mount {
+                source: fixture.join("usr-lib"),
+                destination: "/lib",
+            },
+        ];
+        let map = SandboxPathMap::new(
+            &fixture.join("source"),
+            &fixture.join("registry"),
+            &fixture.join("toolchain"),
+            &fixture.join("target"),
+            &mounts,
+        )
+        .unwrap();
+        fs::write(fixture.join("usr-lib/libc.so.6"), b"libc").unwrap();
+        fs::set_permissions(
+            fixture.join("usr-lib/libc.so.6"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let canonical = map.map(Path::new("/usr/lib/libc.so.6")).unwrap();
+        let alias = map.map(Path::new("/lib/libc.so.6")).unwrap();
+        assert_eq!(canonical.backing, alias.backing);
+        assert_eq!(canonical.receipt_path, alias.receipt_path);
         fs::remove_dir_all(fixture).unwrap();
     }
 }
