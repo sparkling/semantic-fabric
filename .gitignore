@@ -28,6 +28,7 @@
 .claude/settings.json.before-stop-fix-*
 .claude/settings.json.bak-*
 .claude/sessions/
+.claude/security-scans/scan-all-deep.json
 .claude-flow/
 .swarm/
 .agentic-qe/
