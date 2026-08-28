@@ -15,7 +15,7 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | `93ae3c2` tracks and locks the application graph; `374ca99` pins CI actions, service images, Node, cargo-audit and unixODBC; `1c9bb61` seals 1 root manifest, 26 scenarios, 87 cases and 189 case-tree files; `401c1bb` adds proposed ADR-0039/0040 and protects them; `31a1164` integrity-locks the local MetaHarness readiness tools; `a3efb32` makes SQLite/PostgreSQL execution consume the canonical seal and makes required-live PostgreSQL fail closed; `33e202b` freezes all 87 SQLite outcomes by case identity, kind and status against the sealed inventory digest. The generated capability/standards matrix, current required-live PostgreSQL evidence, product baselines, and the two-clean-checkout gate remain open |
+| M0 — architectural truth and deterministic foundation | In progress | Through `4ff81b3`: dependencies and CI inputs are pinned; 1 suite manifest, 26 scenarios, 87 cases and 189 files are sealed; SQLite/PostgreSQL execute in canonical order; required-live PostgreSQL fails closed; the SQLite v2 receipt binds immutable captured inputs to per-case status and typed cause; the generated matrix has 74 exact cells (38 implemented, 34 planned, 2 unsupported, zero production-admitted); and CI plus the controller protect the complete authority closure. Current required-live PostgreSQL evidence, product correctness/heap/RSS/latency/dependency/binary-closure baselines, and the two-clean-checkout gate remain open |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03` and `_04` remain honest historical failures at the final-review
@@ -423,6 +423,13 @@ content-addressed Rust closure/build reuse plus per-lane digest manifests. It
 must retain separate writable targets, verifier independence, exact input
 bindings, fail-closed cache validation, and replayable receipts; speed or disk
 savings cannot weaken those controls.
+
+The 2026-08-28 generic MetaHarness diagnostic scores the repository root 75 and
+`ready`, while scoring the private nested package 67 and `needs-work`. Source
+inspection shows the nested delta is a monorepo/private-package classifier
+artifact, not a product or harness gate: it misses root CI and treats deliberate
+non-publication as a deficit. A regression test keeps `harnessFit` diagnostic-
+only; no README keyword or dummy workflow is added to game the score.
 
 ## Non-goals unless the charter changes
 

@@ -286,8 +286,12 @@ tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
 RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
 inventory-authoritative execution runners (`a3efb32`), plus the sealed SQLite
-execution-outcome receipt (`33e202b`). M1–M7 remain gated, and the 44/100
-application-readiness baseline has not been formally rescored.
+execution-outcome receipt (`33e202b`). The evidence matrix now contains 74
+exact cells with zero production-admitted backends (`a1a6dc9`), and the SQLite
+v2 receipt binds immutable captured inputs to typed outcome causes (`81caec2`)
+without claiming runner/toolchain provenance. CI and the controller now protect
+and replay those authorities read-only (`4ff81b3`). M1–M7 remain gated, and the
+44/100 application-readiness baseline has not been formally rescored.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build
@@ -310,7 +314,7 @@ The separate Ruflo retrieval-policy flywheel is also **off by default**. A
 48-task, ADR-derived candidate relevance benchmark with balanced deterministic
 halves and a canonical SHA-256 pin is tracked under `.claude/eval/` and protected
 by the harness. It still requires maintainer label review and calibration against
-a live retrieval baseline before activation. The 2026-08-27 operational check
+a live retrieval baseline before activation. The 2026-08-28 operational check
 found no flywheel opt-in variables or `harness` worker in the live daemon; that
 runtime fact must be rechecked after every restart. The explicit evaluation path
 validates the anchor but currently reports `store too small to harvest a corpus`:

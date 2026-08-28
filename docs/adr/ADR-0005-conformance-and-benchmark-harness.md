@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-28
 tags: [conformance, benchmarks, w3c, rdb2rdf, earl, gtfs-madrid, obda-oracle, ontop, m-join-t, shacl, fitness-function]
 supersedes: []
 depends-on:
@@ -11,6 +12,16 @@ implements:
 ---
 
 # Conformance & benchmark harness — the correctness gate and the fitness function
+
+> **Implementation status (2026-08-28): partially implemented.** The canonical
+> RDB2RDF input authority now seals 1 suite manifest, 26 scenarios, 87 exact
+> cases, and 189 case-tree files. SQLite and PostgreSQL runners consume that
+> authority in canonical order; PostgreSQL provider absence is fatal in CI.
+> SQLite has an immutable-snapshot v2 receipt binding per-case status and typed
+> outcome cause, while a durable current PostgreSQL
+> receipt, MySQL mapping matrix, complete `M ⋈ T` execution, and the full M0
+> performance/release baseline envelope remain open. Mapping conformance does
+> not establish SPARQL Query, Protocol, or production-backend admission.
 
 ## Context and Problem Statement
 

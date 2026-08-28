@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-26
+updated: 2026-08-28
 tags: [testing, unit, integration, property-based, fuzzing, snapshot, ci, security]
 supersedes: []
 depends-on:
@@ -20,6 +20,11 @@ implements:
 > snapshots, generated MR1/NoREC corpus, durable LCOV, mutation threshold, and
 > benchmark regression gates are absent. Proposed ADR-0038 milestone M4 turns
 > these accepted rules into fail-closed product/release evidence.
+> M0 now also has deterministic mutation sentinels for the sealed RDB2RDF
+> inventory, outcome receipt, generated capability matrix, and read-only CI
+> checks. Those integrity tests protect fixed authorities; they do not satisfy
+> the still-missing generative, fuzz, mutation-score, coverage, or benchmark
+> regression layers required here.
 
 ## Context and Problem Statement
 

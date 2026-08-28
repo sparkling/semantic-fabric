@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-08-28
 tags: [rdf-1.2, sparql-1.2, shacl, oxigraph, rudof, jena-replacement, conformance, gap-register, feature-flags, upstream-contribution]
 depends-on:
   - ADR-0001
@@ -10,6 +11,16 @@ implements:
 ---
 
 # RDF 1.2 / SPARQL 1.2 / SHACL readiness — replacing Jena (JVM) with the Rust stack
+
+> **Implementation status (2026-08-28): partially implemented.** The workspace
+> enables the selected RDF/SPARQL 1.2 crate features, and semantic-fabric has
+> direct evidence for a bounded set of query and HTTP response paths. It does
+> not yet execute a pinned SPARQL 1.2 Query or Protocol conformance manifest,
+> Graph Store Protocol is absent, external `SERVICE` is outside the charter, and
+> both compiler paths currently reject the enabled `LATERAL` algebra variant.
+> The generated capability matrix is the application/release authority;
+> upstream library capability is feasibility evidence, not semantic-fabric
+> implementation or production admission.
 
 ## Context and Problem Statement
 
@@ -25,7 +36,11 @@ The ontology and its validation/query layer use **RDF 1.2 and SPARQL 1.2** (trip
 
 ## Decision Outcome
 
-**Yes — the Rust stack replaces Jena with no capability loss for our architecture, once 1.2 feature flags are enabled and the crates are wired.** Oxigraph passes the full W3C RDF 1.2 and SPARQL 1.2 test suites (empty skip-lists); rudof `shacl` 0.3.4 covers SHACL 1.0 Core (Native mode) plus `sh:sparql`; and Jena 6.1.0 — the baseline — has nothing the Rust stack lacks that is either (a) still unshipped everywhere (SHACL 1.2), (b) already shipped in our Rust pins, or (c) unreachable in our configuration.
+**Choose the Rust stack as the Jena replacement.** The library-level assessment
+found no architectural blocker once the selected 1.2 features are enabled and
+wired. That assessment does not establish complete semantic-fabric Query,
+Protocol, SHACL, or production capability; those claims require the local
+profile/backend evidence and release gates in ADR-0038.
 
 1. **Adopt the Rust stack (Oxigraph crates + rudof) as the Jena replacement.**
 2. **Enable the feature-flag / wiring matrix above**, pin exact patch versions (specs pre-final), and run **rudof SHACL in Native mode** (its `sparql` feature is on by default — pin Native so G4's panic path is unreachable).
@@ -48,21 +63,29 @@ The ontology and its validation/query layer use **RDF 1.2 and SPARQL 1.2** (trip
 - **SPARQL 1.2 — spargebra parser/algebra (`sparql-12`):** full grammar — `VERSION`, triple-term / reifier / annotation syntax, `TRIPLE`/`SUBJECT`/`PREDICATE`/`OBJECT`/`isTRIPLE`, `LANGDIR`/`hasLANG`/`hasLANGDIR`/`STRLANGDIR`; Query + Update; `SERVICE` parsed; results JSON/XML/CSV-TSV (sparesults). semantic-fabric uses the parser, not Oxigraph's evaluator.
 - **SHACL — rudof `shacl` 0.3.4 (Native mode):** complete SHACL 1.0 Core constraint set, plus the `sh:sparql` SPARQL-based constraint component.
 
-Both acceptance questions are therefore **YES**.
+At the dependency-feasibility layer, both acceptance questions are **YES**. At
+the semantic-fabric application/release layer, acceptance remains profile-
+specific and incomplete until the local executable gates above pass.
 
 ### Required configuration — the #1 actionable
 
-Today the engine builds with **all 1.2 capability compiled out**: `oxrdf`/`spargebra` are declared with no feature flags (so `rdf-12`/`sparql-12`/`rdfc-10` are off); `oxttl`/`sparesults`/`sparopt`/`oxsdatatypes` are declared-but-unwired; `oxjsonld`/`oxrdfio`/`oxrdfxml` are not declared. To realise 1.2:
+The workspace now enables `rdf-12`, `rdfc-10`, `sparql-12`, `sep-0002`,
+`sep-0006`, and strict Unicode escaping on its pinned crates; `oxttl`,
+`sparesults`, `oxjsonld`, and `oxsdatatypes` are wired where used. `sparopt`
+remains outside the engine optimizer by design, although its pinned version
+compiles with the feature set and is present through the oracle dependency.
+The configuration record is:
 
-| Crate | Action | Feature flags |
+| Crate | Current disposition | Feature flags |
 |---|---|---|
-| oxrdf | wired — add flags | `rdf-12`, `rdfc-10` |
-| spargebra | wired — add flags | `sparql-12`, **`sep-0002`** (ADJUST), **`sep-0006`** (LATERAL — opt-in extension, ADR-0007), `standard-unicode-escaping` (strict 1.2 `\u`) |
-| oxttl | wire | `rdf-12` (+ `async-tokio`) |
-| sparesults | wire | `sparql-12` (+ `async-tokio`) |
-| sparopt, oxsdatatypes | wire | current |
-| oxjsonld | **add dep** (≥ 0.2.5) | `rdf-12` |
-| oxrdfio (facade), oxrdfxml | add if needed | `rdf-12` |
+| oxrdf | Wired in workspace | `rdf-12`, `rdfc-10` |
+| spargebra | Wired in workspace; `LATERAL` still rejected by semantic-fabric | `sparql-12`, **`sep-0002`**, **`sep-0006`**, `standard-unicode-escaping` |
+| oxttl | Wired where used | `rdf-12` |
+| sparesults | Wired where used | `sparql-12` |
+| oxsdatatypes | Wired in `sf-sparql` | current |
+| sparopt | Oracle-transitive; deliberately not an engine optimizer | current |
+| oxjsonld | Wired in `sf-sparql` and `sf-serve` | `rdf-12` |
+| oxrdfio, oxrdfxml | Not required by the current application profile | add only with a tested profile |
 
 Two traps the sweep surfaced: **`sparql-12` alone is not full 1.2** — `ADJUST` is gated behind `sep-0002`, and strict whole-string `\u` unescaping behind `standard-unicode-escaping`. **`LATERAL` (`sep-0006`) is enabled** as a documented opt-in extension (it maps directly to SQL `LATERAL`/`CROSS APPLY` and unlocks top-N-per-group; ADR-0007) — but it is a non-standard SPARQL extension (absent from the SPARQL 1.2 Query WD), so it is **kept out of, and reported as outside, the 1.2 conformance surface**.
 
@@ -73,7 +96,7 @@ Two traps the sweep surfaced: **`sparql-12` alone is not full 1.2** — `ADJUST`
 | # | Gap | Disposition |
 |---|---|---|
 | G1 | Triple terms unrepresentable in **JSON-LD and RDF/XML** (syntax-level; Jena has the same limit) | Serialise triple-term graphs as **Turtle / N-Triples 1.2**. Not contributable (spec-level). |
-| G2 | JSON-LD `@direction` | **Resolved upstream** — oxjsonld ≥ 0.2.5 implements it; the skipped W3C tests are an intentional RDF-1.2-forward deviation. Add + wire oxjsonld with `rdf-12`. |
+| G2 | JSON-LD `@direction` | **Resolved upstream and wired** — oxjsonld ≥ 0.2.5 implements it with `rdf-12`; application behavior remains bounded by local response tests. |
 | G3 | No entailment-regime engine in the store | **By design** — entailment lives in the rewriter (ADR-0008). Non-issue. |
 | G4 | rudof property-pair `validate_sparql()` = `unimplemented!()` (panics in SPARQL mode) | We run **Native** (no panic). rudof's `sparql` feature is on by default → **pin Native explicitly**. Contribute the fix (effort S). |
 | G5 | rudof `sh:sparql` SPARQL-based constraint component | **Resolved upstream** — shipped rudof 0.3.2, present in our 0.3.4. Use default features. |
@@ -87,7 +110,7 @@ Jena 6.1.0 (2026-05-11): stable RDF 1.2 + SPARQL 1.2; jena-shacl = SHACL Core + 
 
 ### Consequences
 
-* Good, because the Rust stack replaces Jena with no capability loss for our architecture once 1.2 feature flags are enabled and the crates are wired, and there is no functional regression in switching off Jena.
+* Good, because the Rust dependency stack has no identified architectural blocker to replacing Jena for the intended profile; application parity is still earned by local executable gates.
 * Good, because gaps G2 and G5 are already resolved upstream and present in our Rust pins, and G4 is neutralised by running rudof in Native mode.
 * Neutral, because triple-term graphs must serialise as Turtle / N-Triples 1.2 (G1); JSON-LD is reserved for triple-term-free graphs (a syntax-level limit Jena shares).
 * Neutral, because the SPARQL 1.2 Protocol / Graph Store Protocol serve endpoint (G8) is ours to build — Oxigraph ships those only in its server binary at 1.1 — and external `SERVICE` stays out of scope (ADR-0002).
@@ -97,7 +120,9 @@ Jena 6.1.0 (2026-05-11): stable RDF 1.2 + SPARQL 1.2; jena-shacl = SHACL Core + 
 ### Confirmation
 
 - The ontology (Turtle 1.2, incl. `rdf:reifies <<( … )>>`) parses via oxttl `rdf-12` with no loss; the `sh:sparql` / `PREDICATE()` constructs parse via spargebra `sparql-12`.
-- `cargo build` with the feature matrix compiles in triple terms, dir-lang strings, RDFC-1.0, and the full SPARQL 1.2 grammar.
+- `cargo build` with the feature matrix compiles the selected triple-term,
+  directional-language, RDFC-1.0, and parser grammar features; this is not a
+  substitute for Query or Protocol conformance execution.
 - rudof Native-mode validation of the meta-shapes passes with no `unimplemented!()` path hit.
 - Evidence basis: W3C RDF 1.2 / SPARQL 1.2 test suites (Oxigraph CI, empty skip-lists) and the ADR-0005 conformance / SHACL-Native gates.
 

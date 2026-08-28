@@ -23,8 +23,10 @@ implements: []
 ## Context and problem statement
 
 semantic-fabric has a strong virtual knowledge graph core, a large fixed-case
-correctness suite, three admitted relational backends, and credible bounded-
-streaming and Ontop comparison evidence. It is not yet a complete application.
+correctness suite, runtime selector paths for three relational backends, and
+credible bounded-streaming and Ontop comparison evidence. Under this ADR's R3,
+zero backends are yet production-admitted: a reachable runtime path is not an
+admission decision. It is not yet a complete application.
 The 2026-08-26 source audit found five release-level contradictions:
 
 1. recursive property paths return a normal result after a hard-coded 256-hop
@@ -215,7 +217,8 @@ replay receipt are
 `d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
 `02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
 and `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
-H0c is complete. M0 is now in progress through six verified product slices:
+H0c is complete. M0 is now in progress through ten verified product/evidence
+slices:
 `93ae3c2` tracks the root lockfile and freezes dependency resolution;
 `374ca99` pins the reviewed CI action, service-image and selected tool inputs;
 `1c9bb61` adds a fail-closed, per-file-digested RDB2RDF inventory for 1 suite
@@ -227,14 +230,24 @@ invoking only local binaries. `a3efb32` makes the SQLite and PostgreSQL runners
 consume the sealed inventory in canonical order, rejects count-neutral
 per-identity outcome drift, distinguishes local untested PostgreSQL from
 CI-required provider failure, and treats missing or malformed sealed inputs as
-fatal. Proposed ADR status is deliberate: neither packaging nor federation is
-accepted or implemented by writing its design lock.
+fatal. `33e202b` introduced the ordered 87-case SQLite outcome baseline;
+`a1a6dc9` generates 74 exact capability/backend cells (38 implemented, 34
+planned, 2 unsupported, and zero production-admitted); and `81caec2` replaces
+the v1 outcome representation with an immutable-snapshot v2 receipt whose
+typed status/cause records, bounded parser, read-only production replay, and
+atomic generator have mutation coverage. That receipt explicitly does not
+attest runner, lockfile, or toolchain provenance. `4ff81b3` runs the inventory,
+receipt, and generated-claim checks read-only in CI, protects their complete
+authority closure in the controller, and proves generic MetaHarness-fit scores
+cannot decide programme acceptance. Proposed ADR status is deliberate: neither
+packaging nor federation is accepted or implemented by writing its design lock.
 
-M0 is not complete until canonical execution/status and baseline receipts
-exist, the generated capability/backend/standards matrix reconciles every
-public claim, required live backend evidence is current, and the complete gate
-passes in two clean checkouts. M1–M7 remain gated. These incremental closures do
-not by themselves rescore the 44/100 application-readiness baseline.
+M0 is not complete until current required-live PostgreSQL evidence, the product
+correctness/heap/RSS/latency/dependency/binary-closure baselines, and the
+complete gate pass in two clean checkouts. The generated matrix and SQLite v2
+receipt are deterministic authorities, not release or backend-admission proof.
+M1–M7 remain gated. These incremental closures do not by themselves rescore the
+44/100 application-readiness baseline.
 
 The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before
 successful cleanup. Future harness optimisation may use immutable
