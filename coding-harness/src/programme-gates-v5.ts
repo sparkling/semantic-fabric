@@ -64,7 +64,7 @@ export function evaluateProgrammeGatesV5(input: Readonly<{
   const diagnostics = parseMetaHarnessDiagnosticSnapshot(input.diagnostics);
   assertDiagnosticOrder(diagnostics, gate);
 
-  const receiptIntegrity = validReceiptIntegrity(receipt, gate);
+  const receiptIntegrity = validProgrammeReceiptIntegrityV1(receipt, gate);
   const policyBindings = validPolicyBindings(policy, receipt);
   const protectedInputs = sameRecord(receipt.protectedInputs, snapshot.execution.protectedInputs)
     && Object.values(receipt.protectedInputs).every(validDigest);
@@ -138,7 +138,7 @@ export function evaluateProgrammeGatesV5(input: Readonly<{
       diagnosticGate(diagnostics.targets.find(({ target }) => target === expected.target)!, expected)),
   });
 }
-function validReceiptIntegrity(receipt: Receipt, gate: ProgrammeGateContractV1): boolean {
+export function validProgrammeReceiptIntegrityV1(receipt: Receipt, gate: ProgrammeGateContractV1): boolean {
   const { digest, ...body } = receipt;
   return receipt.schemaVersion === gate.receiptSchemaVersion
     && receipt.sequence === gate.receipt.sequence
@@ -247,22 +247,22 @@ function evaluateCommands(task: AcceptanceTaskV3, receipt: Receipt): CommandEval
     command.stage === 'build' && command.attempt === finalAttempt);
   const finalMutation = receipt.commands.filter((command) =>
     command.stage === 'mutation' && command.attempt === finalAttempt);
-  const completed = receipt.commands.every(normalCompletion);
+  const completed = receipt.commands.every(normalProgrammeCommandCompletionV1);
   const allDeclared = receipt.commands.every((command) =>
     nonnegativeInteger(command.attempt) && command.attempt <= finalAttempt
     && (command.stage === 'red-baseline' || command.stage === 'build' || command.stage === 'mutation')
-    && expected(command.stage).some((projection) => sameProjection(command, projection)));
+    && expected(command.stage).some((projection) => matchesProgrammeCommandProjectionV1(command, projection)));
   return {
     red: sameCommandMultiset(red, expected('red-baseline'))
       && red.every((command) => command.attempt === 0
         && command.candidateTree === receipt.identities.evaluator.tree
-        && command.exitCode === 101 && normalCompletion(command)),
+        && command.exitCode === 101 && normalProgrammeCommandCompletionV1(command)),
     finalBuild: sameCommandMultiset(finalBuild, expected('build'))
       && finalBuild.every((command) => command.candidateTree === receipt.identities.candidate.tree
-        && command.exitCode === 0 && normalCompletion(command)),
+        && command.exitCode === 0 && normalProgrammeCommandCompletionV1(command)),
     finalMutation: sameCommandMultiset(finalMutation, expected('mutation'))
       && finalMutation.every((command) => command.candidateTree === receipt.identities.candidate.tree
-        && command.exitCode === 101 && normalCompletion(command)),
+        && command.exitCode === 101 && normalProgrammeCommandCompletionV1(command)),
     allDeclared,
     completed,
     attemptHistory: priorBuildHistory(receipt, expected('build')),
@@ -277,7 +277,7 @@ function priorBuildHistory(
     const actual = receipt.commands.filter((command) =>
       command.stage === 'build' && command.attempt === attempt);
     if (actual.length === 0 || actual.length > expected.length
-      || actual.some((command, index) => !sameProjection(command, expected[index]))) return false;
+      || actual.some((command, index) => !matchesProgrammeCommandProjectionV1(command, expected[index]))) return false;
     const completeSuccess = actual.length === expected.length
       && actual.every((command) => command.exitCode === 0);
     const lastExit = actual.at(-1)?.exitCode;
@@ -415,23 +415,24 @@ function matchCommands(
   const unused = [...actual];
   const ordered: CommandEvidence[] = [];
   for (const projection of expected) {
-    const index = unused.findIndex((command) => sameProjection(command, projection));
+    const index = unused.findIndex((command) => matchesProgrammeCommandProjectionV1(command, projection));
     if (index < 0) return null;
     ordered.push(unused.splice(index, 1)[0]);
   }
   return ordered;
 }
 
-function sameProjection(
+export function matchesProgrammeCommandProjectionV1(
   command: CommandEvidence,
-  expected: ProgrammeCommandReceiptProjectionV1,
+  expected: ProgrammeCommandReceiptProjectionV1 | undefined,
 ): boolean {
-  return command.stage === expected.stage && command.tool === expected.tool
+  return expected !== undefined
+    && command.stage === expected.stage && command.tool === expected.tool
     && command.executable === expected.executable && command.cwd === expected.cwd
     && sameStrings(command.argv, expected.argv);
 }
 
-function normalCompletion(command: CommandEvidence): boolean {
+export function normalProgrammeCommandCompletionV1(command: CommandEvidence): boolean {
   return command.signal === null && !command.timedOut && !command.cancelled
     && !command.outputLimitExceeded && command.spawnErrorDigest === null;
 }
