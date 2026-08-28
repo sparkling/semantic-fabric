@@ -206,21 +206,125 @@ fn reject_runtime_search_paths(input: &str) -> Result<(), String> {
 }
 
 fn build_id(input: &str) -> Result<String, String> {
-    let values: Vec<_> = input
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("Build ID: "))
-        .collect();
-    match values.as_slice() {
-        [value]
-            if (16..=128).contains(&value.len())
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
-        {
-            Ok((*value).to_owned())
-        }
-        _ => Err("ELF notes have no unique hexadecimal build ID".to_owned()),
+    const SECTION: &str = "Displaying notes found in: .note.gnu.build-id";
+    const COLUMNS: [&str; 4] = ["Owner", "Data", "size", "Description"];
+    const DESCRIPTION: [&str; 4] = ["(unique", "build", "ID", "bitstring)"];
+    let invalid = || "ELF notes have no unique hexadecimal build ID".to_owned();
+    if !input.ends_with('\n')
+        || input.bytes().any(|byte| {
+            !byte.is_ascii() || (byte.is_ascii_control() && !matches!(byte, b'\n' | b'\t'))
+        })
+    {
+        return Err(invalid());
     }
+    let lines: Vec<_> = input.split_terminator('\n').collect();
+    let build_sections: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let name = line.trim().strip_prefix("Displaying notes found in: ")?;
+            name.starts_with(".note.gnu.build-id")
+                .then_some((index, name))
+        })
+        .collect();
+    let [(section_index, name)] = build_sections.as_slice() else {
+        return Err(invalid());
+    };
+    if *name != ".note.gnu.build-id" || lines[*section_index].trim() != SECTION {
+        return Err(invalid());
+    }
+    if build_id_marker_count(input) != 1 {
+        return Err(invalid());
+    }
+    let columns: Vec<_> = lines
+        .get(section_index + 1)
+        .ok_or_else(&invalid)?
+        .split_ascii_whitespace()
+        .collect();
+    if columns != COLUMNS {
+        return Err(invalid());
+    }
+    let descriptor = lines.get(section_index + 2).ok_or_else(&invalid)?;
+    if descriptor.trim_end_matches([' ', '\t']) != *descriptor {
+        return Err(invalid());
+    }
+    let tokens: Vec<_> = descriptor.split_ascii_whitespace().collect();
+    if tokens.len() < 7
+        || tokens[0] != "GNU"
+        || tokens[2] != "NT_GNU_BUILD_ID"
+        || tokens[3..7] != DESCRIPTION
+    {
+        return Err(invalid());
+    }
+    let size = note_size(tokens[1]).ok_or_else(&invalid)?;
+    let (digest, consumed) = match tokens.get(7..) {
+        Some(["Build", "ID:", digest]) => (*digest, 3),
+        Some([]) => {
+            let continuation = lines.get(section_index + 3).ok_or_else(&invalid)?;
+            if continuation.trim_end_matches([' ', '\t']) != *continuation {
+                return Err(invalid());
+            }
+            let continuation: Vec<_> = continuation.split_ascii_whitespace().collect();
+            let ["Build", "ID:", digest] = continuation.as_slice() else {
+                return Err(invalid());
+            };
+            (*digest, 4)
+        }
+        _ => return Err(invalid()),
+    };
+    if !(16..=128).contains(&digest.len())
+        || digest.len() % 2 != 0
+        || size.checked_mul(2) != Some(digest.len())
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid());
+    }
+    for line in lines.iter().skip(section_index + consumed) {
+        if is_notes_header(line) {
+            break;
+        }
+        if !line.trim().is_empty() {
+            return Err(invalid());
+        }
+    }
+    Ok(digest.to_owned())
+}
+
+fn build_id_marker_count(input: &str) -> usize {
+    input
+        .lines()
+        .map(|line| {
+            let tokens: Vec<_> = line.split_ascii_whitespace().collect();
+            tokens
+                .windows(2)
+                .filter(|tokens| matches!(*tokens, ["Build", "ID:"]))
+                .count()
+        })
+        .sum()
+}
+
+fn note_size(value: &str) -> Option<usize> {
+    let digits = value.strip_prefix("0x")?;
+    if digits.is_empty()
+        || digits.len() > 16
+        || !digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let size = usize::from_str_radix(digits, 16).ok()?;
+    (size <= 64).then_some(size)
+}
+
+fn is_notes_header(line: &str) -> bool {
+    line.trim()
+        .strip_prefix("Displaying notes found in: ")
+        .is_some_and(|name| {
+            !name.is_empty() && !name.bytes().any(|byte| byte.is_ascii_whitespace())
+        })
 }
 
 #[cfg(test)]
@@ -240,10 +344,72 @@ mod tests {
     }
 
     #[test]
-    fn accepts_unique_build_id() {
+    fn accepts_structured_inline_and_wrapped_build_ids() {
         let id = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(build_id(&format!("Build ID: {id}\n")).unwrap(), id);
-        assert!(build_id("Build ID: not-a-digest\n").is_err());
+        let inline = format!(
+            "\nDisplaying notes found in: .note.gnu.property\n  Owner Data size Description\n\nDisplaying notes found in: .note.gnu.build-id\n  Owner                Data size \tDescription\n  GNU 0x00000014 NT_GNU_BUILD_ID (unique build ID bitstring) Build ID: {id}\n\nDisplaying notes found in: .note.ABI-tag\n  Owner Data size Description\n"
+        );
+        assert_eq!(build_id(&inline).unwrap(), id);
+        let wrapped = format!(
+            "Displaying notes found in: .note.gnu.build-id\n\tOwner\tData\tsize\tDescription\n\tGNU\t0x14\tNT_GNU_BUILD_ID\t(unique build ID bitstring)\n    Build\tID:\t{id}\n"
+        );
+        assert_eq!(build_id(&wrapped).unwrap(), id);
+    }
+
+    #[test]
+    fn rejects_unstructured_spoofed_or_duplicate_build_ids() {
+        let id = "0123456789abcdef0123456789abcdef01234567";
+        let valid = format!(
+            "Displaying notes found in: .note.gnu.build-id\nOwner Data size Description\nGNU 0x14 NT_GNU_BUILD_ID (unique build ID bitstring) Build ID: {id}\n"
+        );
+        let invalid = [
+            format!("Build ID: {id}\n"),
+            valid.replace("\nGNU ", "\nLLVM "),
+            valid.replace("NT_GNU_BUILD_ID", "NT_GNU_BUILD_IDX"),
+            valid.replace("(unique build ID bitstring)", "(GNU build ID)"),
+            valid.replace("Owner Data size Description", "Owner Size Description"),
+            valid.replace(".note.gnu.build-id", ".note.gnu.build-id.evil"),
+            format!("{valid}{valid}"),
+            format!("Displaying notes found in: .note.fake\nOwner Data size Description\nGNU 0x14 NT_FAKE (description) Build ID: {id}\n\n{valid}"),
+            valid.replace(id, &format!("{id} trailing")),
+            valid.replace(id, &id.to_ascii_uppercase()),
+            valid.replace("0x14", "0x13"),
+            valid.replace("0x14", "0X14"),
+            valid.replace("0x14", "0xffffffffffffffff"),
+            valid
+                .replace("0x14", "0x7")
+                .replace(id, "0123456789abcd"),
+            valid
+                .replace("0x14", "0x41")
+                .replace(id, &"a".repeat(130)),
+            valid.replace(id, "0123456789abcdef0"),
+            valid.replace(id, "0123456789abcdef0123456789abcdef0123456g"),
+            valid.replace("Owner", "Own\0er"),
+            valid.replace('\n', "\r\n"),
+            valid.trim_end().to_owned(),
+            valid.replace(&format!("{id}\n"), &format!("{id} \n")),
+            valid.replace(&format!("Build ID: {id}"), &format!("Build ID: {id}\nextra row")),
+        ];
+        for notes in invalid {
+            assert!(
+                build_id(&notes).is_err(),
+                "accepted invalid notes: {notes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_intervening_or_competing_wrapped_build_id_rows() {
+        let id = "0123456789abcdef0123456789abcdef01234567";
+        let prefix = "Displaying notes found in: .note.gnu.build-id\nOwner Data size Description\nGNU 0x14 NT_GNU_BUILD_ID (unique build ID bitstring)";
+        for suffix in [
+            format!("\n\nBuild ID: {id}\n"),
+            format!("\nBuild ID: {id}\nBuild ID: {id}\n"),
+            format!(" Build ID: {id}\nBuild ID: {id}\n"),
+            format!("\nBuild ID:{id}\n"),
+        ] {
+            assert!(build_id(&format!("{prefix}{suffix}")).is_err());
+        }
     }
 
     #[test]
