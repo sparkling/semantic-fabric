@@ -115,6 +115,12 @@ fn canonical_receipt_round_trips_and_binds_two_domains() {
 }
 
 #[test]
+fn same_principal_authority_race_resistance_is_an_explicit_nonclaim() {
+    let rendered = render(&receipt()).unwrap();
+    assert!(rendered.contains("meta\tsame-principal-authority-race-resistance\tnot-attested\n"));
+}
+
+#[test]
 fn host_changes_do_not_rewrite_portable_authority_identity() {
     let first = receipt();
     let mut changed_observation = observation();

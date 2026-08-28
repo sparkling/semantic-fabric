@@ -61,14 +61,13 @@ The default `sf-cli` dependency receipt closes locked package resolution, enable
 dependency edges only. It does not attest binary bytes, build-script output, linker or system provenance, an SBOM,
 reproducibility, or production admission.
 
-The current tranche adds a fail-closed contract and tool for a **host-observed non-closure observation** of one
-freshly built current `sf-cli` executable. It does not create a canonical receipt. CI exercises the bounded parser
-and integration contract only; future observations stay external to the observed source tree to avoid self-reference.
-Its mutable `ubuntu-24.04` host is not a controlled provenance builder, and CI neither captures nor publishes an observation.
-The tool records configured tool identities and a post-build final-link-dependency-file snapshot with hashes of its
-listed, mapped inputs. It does not attest complete tool-execution closure or sole configured-linker authorship of
-that file; build-script-input and system/`strace`-grade closure, runtime resolution and dynamic-library closure,
-SBOM/release provenance, independent reproducibility, production minimality, and backend admission remain open.
+The current tranche adds a fail-closed contract and tool for a **host-observed non-closure observation** of one freshly built current `sf-cli` executable.
+No canonical receipt exists; future observations stay external to the source tree. CI tests only the parser/integration contract
+on mutable `ubuntu-24.04` and neither captures nor publishes. The producer rejects untrusted/writable authority ancestry and
+holds directory identities across phase checkpoints, but trusts UID 0 and its effective UID to be exclusive and quiescent.
+Same-principal/root ABA resistance is explicitly unattested. Configured tool identities and the final-link dependency-file
+snapshot do not attest complete tool execution or exclusive linker authorship; build-script/system/`strace` closure, runtime
+resolution, dynamic-library closure, SBOM/provenance, reproducibility, production minimality, and backend admission remain open.
 
 Performance production and comparison machinery now exists, but no controlled runner profile, baseline, candidate,
 or measured numbers exist. The clean-release first baseline must still be captured from clean committed source on

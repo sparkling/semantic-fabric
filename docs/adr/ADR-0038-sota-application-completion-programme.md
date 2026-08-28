@@ -254,6 +254,12 @@ verifying a **host-observed non-closure observation** of a freshly built current
 capture, commit, upload, or promote an observation from the mutable hosted
 runner. No canonical observation receipt exists yet; any future observation
 remains external to the observed source tree to avoid receipt self-reference.
+Authority paths now require root/effective-UID ownership and reject writable
+ancestors except root-owned sticky proper ancestors; held directory identities
+detect persistent replacement at phase boundaries.
+The producer still trusts UID 0 and its effective UID and requires that builder
+principal to be exclusive and quiescent: resistance to same-principal/root ABA
+replacement is an explicit nonclaim, not evidence supplied by this tooling.
 
 This observation tooling advances M0 without closing the actual binary-artifact
 boundary. It records configured tool identities and a post-build final-link-

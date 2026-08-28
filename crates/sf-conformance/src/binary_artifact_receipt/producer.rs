@@ -64,7 +64,9 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         "fixed /usr/lib/os-release",
     )?;
 
+    workspace.assert_current()?;
     let snapshot = source::materialize(request.git, request.repository, &workspace.source)?;
+    workspace.assert_current()?;
     let inputs = SourceInputs::read(&workspace.source)?;
     let cargo_config_set = source::empty_cargo_config_set(&workspace.source, request.cargo_home)?;
     let cargo_home_inputs = source::cargo_home_inputs(&cargo_registry)?;
@@ -78,6 +80,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         source_date_epoch: snapshot.source_date_epoch,
     })?;
 
+    workspace.assert_current()?;
     let (build_output, plan) = sandbox::execute(&sandbox::Request {
         bwrap: request.bwrap,
         source: &workspace.source,
@@ -86,6 +89,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         target: &workspace.target,
         source_date_epoch: snapshot.source_date_epoch,
     })?;
+    workspace.assert_current()?;
     tools.require_sandbox_identity(&plan)?;
     let messages = cargo::parse_sandbox_stdout(&build_output.stdout, ROOT_PACKAGE_ID)?;
     if messages.package_id != ROOT_PACKAGE_ID {
@@ -98,6 +102,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         &workspace.target,
         &plan.system_mounts,
     )?;
+    workspace.assert_current()?;
     let artifact_path = path_map.map_target(&messages.logical_artifact)?;
     let build_scripts = build_script_events(build_script_capture::inventory(
         &workspace.target,
@@ -112,6 +117,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
     let link_inputs = link_inputs(&path_map, &dependency_file.inputs)?;
     let (readelf_identity, elf_observation) = elf::inspect(&artifact_path, request.readelf)?;
     tools.require_readelf_identity(&readelf_identity)?;
+    workspace.assert_current()?;
 
     stabilize(
         request,
@@ -122,6 +128,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
         &cargo_config_set,
         &cargo_home_inputs,
     )?;
+    workspace.assert_current()?;
 
     Receipt::new(
         PortableAuthority {

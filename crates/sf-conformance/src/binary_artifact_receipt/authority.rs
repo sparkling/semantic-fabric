@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use super::authority_guard;
+
 const MAX_PATH_COMPONENTS: usize = 128;
 
 /// A regular, immutable-enough file opened without following a final symlink.
@@ -17,6 +19,7 @@ pub(super) struct AuthorityFile {
 }
 
 pub(super) fn read(path: &Path, max_bytes: u64, label: &str) -> Result<AuthorityFile, String> {
+    authority_guard::validate_parent_ancestry(path, label)?;
     let before = inspect_file(path, label)?;
     let file =
         File::open(path).map_err(|error| format!("open {label} {}: {error}", path.display()))?;
@@ -46,6 +49,7 @@ pub(super) fn read(path: &Path, max_bytes: u64, label: &str) -> Result<Authority
 }
 
 pub(super) fn digest(path: &Path, max_bytes: u64, label: &str) -> Result<(String, u64), String> {
+    authority_guard::validate_parent_ancestry(path, label)?;
     let before = inspect_file(path, label)?;
     if before.len() > max_bytes {
         return Err(format!("{label} exceeds {max_bytes} bytes"));
@@ -85,15 +89,7 @@ pub(super) fn digest(path: &Path, max_bytes: u64, label: &str) -> Result<(String
 }
 
 pub(super) fn validate_directory(path: &Path, label: &str) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("inspect {label} directory {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("{label} directory is a symlink"));
-    }
-    if !metadata.is_dir() {
-        return Err(format!("{label} directory is not a directory"));
-    }
-    validate_permissions(&metadata, label)
+    authority_guard::DirectoryGuard::bind(path, label).map(|_| ())
 }
 
 /// Reject lexical escapes and every symlink component below `root`.
@@ -163,14 +159,7 @@ fn validate_file(metadata: &Metadata, label: &str) -> Result<(), String> {
 }
 
 fn validate_permissions(metadata: &Metadata, label: &str) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.mode() & 0o022 != 0 {
-            return Err(format!("{label} is group- or world-writable"));
-        }
-    }
-    Ok(())
+    authority_guard::validate_leaf(metadata, label)
 }
 
 #[cfg(unix)]
@@ -246,6 +235,30 @@ mod tests {
         assert!(read(&link, 16, "fixture").unwrap_err().contains("symlink"));
         fs::set_permissions(&file, fs::Permissions::from_mode(0o664)).unwrap();
         assert!(read(&file, 16, "fixture").unwrap_err().contains("writable"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_private_file_beneath_a_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = fixture("writable-ancestor");
+        let writable = root.join("writable");
+        let private = writable.join("private");
+        fs::create_dir(&writable).unwrap();
+        fs::set_permissions(&writable, fs::Permissions::from_mode(0o770)).unwrap();
+        fs::create_dir(&private).unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+        let file = private.join("input");
+        write_private(&file, b"input");
+
+        let error = read(&file, 16, "fixture").unwrap_err();
+
+        assert!(
+            error.contains("ancestor") && error.contains("writable"),
+            "{error}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

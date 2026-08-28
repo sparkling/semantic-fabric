@@ -444,6 +444,8 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         for directory in ["source", "toolchain", "toolchain/bin", "registry", "target"] {
             let path = root.join(directory);
             fs::create_dir_all(&path).unwrap();

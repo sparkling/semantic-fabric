@@ -27,8 +27,11 @@ artifact which exists today, not this proposal's `sf-server`, and it is not a
 complete binary closure, SBOM, reproducibility result, production-minimality
 proof, or admission receipt. Its configured tool identities and final-link
 dependency file are observations, not complete tool-execution evidence or proof
-of exclusive linker authorship. CI exercises only the parser/contract on its
-mutable hosted runner and does not capture or publish an observation. The broad
+of exclusive linker authorship. Authority ancestry and held-directory checks
+fail closed on untrusted or persistent replacement, while same-principal/root
+ABA resistance remains explicitly unattested and requires an exclusive,
+quiescent builder principal. CI exercises only the parser/contract on its mutable
+hosted runner and does not capture or publish an observation. The broad
 conformance/benchmark closure observed today motivates the split, but supplies
 no acceptance evidence for gates 1–3 below. This improves the implementation
 baseline without accepting this ADR or resolving the proposed packaging

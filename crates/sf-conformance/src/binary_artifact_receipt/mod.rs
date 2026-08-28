@@ -4,6 +4,7 @@
 //! production, release, admission, minimality, or reproducibility attestation.
 
 mod authority;
+mod authority_guard;
 mod capture;
 mod cargo;
 mod elf;

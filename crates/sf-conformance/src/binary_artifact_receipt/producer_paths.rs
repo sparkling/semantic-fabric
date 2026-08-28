@@ -4,13 +4,14 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use super::{authority, model::LinkInputOrigin, sandbox};
+use super::{authority, authority_guard::DirectoryGuard, model::LinkInputOrigin, sandbox};
 
 #[derive(Debug)]
 pub(super) struct Workspace {
     pub(super) source: PathBuf,
     pub(super) target: PathBuf,
     pub(super) temporary: PathBuf,
+    guards: Vec<DirectoryGuard>,
 }
 
 impl Workspace {
@@ -24,6 +25,12 @@ impl Workspace {
         let scratch = canonical_directory(scratch_root, "capture scratch root")?;
         let toolchain = canonical_directory(toolchain_root, "toolchain root")?;
         let cargo_home = canonical_directory(cargo_home, "controlled Cargo home")?;
+        let mut guards = vec![
+            DirectoryGuard::bind(&repository, "repository")?,
+            DirectoryGuard::bind(&scratch, "capture scratch root")?,
+            DirectoryGuard::bind(&toolchain, "toolchain root")?,
+            DirectoryGuard::bind(&cargo_home, "controlled Cargo home")?,
+        ];
         require_private(&scratch, "capture scratch root")?;
         require_empty(&scratch, "capture scratch root")?;
         for authority in [&repository, &toolchain, &cargo_home] {
@@ -34,11 +41,26 @@ impl Workspace {
         let source = create_private(&scratch.join("source"))?;
         let target = create_private(&scratch.join("target"))?;
         let temporary = create_private(&scratch.join("temporary"))?;
-        Ok(Self {
+        guards.extend([
+            DirectoryGuard::bind(&source, "materialized source")?,
+            DirectoryGuard::bind(&target, "fresh target directory")?,
+            DirectoryGuard::bind(&temporary, "capture temporary directory")?,
+        ]);
+        let workspace = Self {
             source,
             target,
             temporary,
-        })
+            guards,
+        };
+        workspace.assert_current()?;
+        Ok(workspace)
+    }
+
+    pub(super) fn assert_current(&self) -> Result<(), String> {
+        for guard in &self.guards {
+            guard.assert_current()?;
+        }
+        Ok(())
     }
 }
 
@@ -268,6 +290,43 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn workspace_guard_rejects_a_persistent_scratch_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = std::env::temp_dir().join(format!(
+            "semantic-fabric-workspace-guard-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&fixture);
+        fs::create_dir(&fixture).unwrap();
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
+        for name in ["repository", "scratch", "toolchain", "cargo-home"] {
+            let path = fixture.join(name);
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let scratch = fixture.join("scratch");
+        let moved = fixture.join("moved-scratch");
+        let workspace = Workspace::prepare(
+            &fixture.join("repository"),
+            &scratch,
+            &fixture.join("toolchain"),
+            &fixture.join("cargo-home"),
+        )
+        .unwrap();
+        fs::rename(&scratch, &moved).unwrap();
+        fs::create_dir(&scratch).unwrap();
+        fs::set_permissions(&scratch, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = workspace.assert_current().unwrap_err();
+
+        assert!(error.contains("changed"), "{error}");
+        drop(workspace);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn maps_all_origin_classes_without_host_path_leakage() {
         use std::os::unix::fs::PermissionsExt;
         let fixture = std::env::temp_dir().join(format!(
@@ -275,6 +334,8 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&fixture);
+        fs::create_dir(&fixture).unwrap();
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o700)).unwrap();
         for name in ["source", "registry", "toolchain", "target", "system"] {
             let path = fixture.join(name);
             fs::create_dir_all(&path).unwrap();
