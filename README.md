@@ -8,15 +8,32 @@ foundation for agents, applications, analytics, and compliance.**
 [![W3C RDB2RDF](https://img.shields.io/badge/W3C%20RDB2RDF-81%2F82%20SQLite%20%C2%B7%2080%2F81%20PostgreSQL-success.svg)](#correctness-and-verification)
 [![Rust 1.96](https://img.shields.io/badge/rust-1.96.0-orange.svg)](rust-toolchain.toml)
 
-semantic-fabric is a Rust-native, virtualisation-only OBDA engine. It answers
-SPARQL 1.2 by rewriting queries to SQL that runs directly against live
-relational databases through R2RML mappings. It has no JVM and keeps no copy of
-the instance data: only the ontology `T` and mappings `M` live in the engine;
-source rows are streamed on demand and discarded.
+semantic-fabric is a Rust-native, virtualisation-only OBDA engine. It implements
+a tested read-only SPARQL 1.2 query subset by rewriting queries to SQL that runs
+directly against live relational databases through R2RML mappings. It has no JVM
+and keeps no copy of the instance data: only the ontology `T` and mappings `M`
+live in the engine; source rows are streamed on demand and discarded.
 
-The public serving path currently admits **SQLite, PostgreSQL, and MySQL**.
-Cloud/REST adapter prototypes are library-only and deliberately not admitted to
-`serve` yet. See [Current status](#current-status-and-open-work).
+<!-- capability-matrix:start -->
+## Evidence-scoped capability status
+
+As of 2026-08-28, the generated catalog records:
+
+- **Current:** DESCRIBE CBD compilation has required compiler-only tests; this does not establish backend or endpoint execution.
+- **Limitation:** Full SPARQL 1.2 Query or Protocol conformance is not claimed.
+- **Qualified:** PostgreSQL and MySQL have live query and endpoint evidence, but those suites can still skip and do not establish production admission.
+- **Qualified:** Sealed SQLite RDB2RDF execution records 62/63 R2RML cases passing with one documented deviation and 19/24 Direct Mapping cases passing with five exact skips; this is mapping evidence only.
+- **Limitation:** Exact unbounded property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
+- **Limitation:** None of SQLite, PostgreSQL or MySQL is production-admitted under ADR-0038 R3.
+- **Qualified:** The runtime contains SQLite, PostgreSQL and MySQL source-selector paths; reachability is not production admission.
+- **Qualified:** External SERVICE and named non-enabled source forms are rejected before query execution or connector construction.
+- **Current:** SQLite has required evidence for GET/raw/form POST, ASK JSON, SELECT JSON/XML/CSV/TSV and CONSTRUCT Turtle/N-Triples/JSON-LD within the tested read-only endpoint subset.
+- **Current:** The simple SQLite streaming-CONSTRUCT profile has a required growing-source constant-memory benchmark; this does not cover global operators.
+
+See the generated [capability/backend/standards matrix](docs/capability-matrix.md)
+for per-cell evidence grades, exact limitations, and dated standards reference metadata.
+
+<!-- capability-matrix:end -->
 
 ## Why this exists
 
@@ -64,8 +81,8 @@ Key properties:
   ([ADR-0002](docs/adr/ADR-0002-implementation-scope-rdbms-both-modes.md)).
 - **One shared executor core:** dialect SQL plus thin native backend adapters
   ([ADR-0024](docs/adr/ADR-0024-executor-backend-abstraction.md)).
-- **Bounded memory:** `O(|T| + |M| + batch)` while the database performs and
-  spills the set work
+- **Bounded simple streaming profile:** `O(|T| + |M| + batch)` for the measured
+  simple streaming path; some global operators remain release blockers
   ([ADR-0006](docs/adr/ADR-0006-crate-layout-and-performance-model.md)).
 - **Correctness before coverage:** unsupported shapes return an explicit
   `501`/`Error::Unsupported`, never a guessed answer
@@ -135,20 +152,13 @@ pool, and cancellation controls from
 
 ## What works today
 
-- SPARQL 1.2 BGPs, joins, OPTIONAL, UNION, MINUS, FILTER, EXISTS/NOT EXISTS,
-  BIND, VALUES, subqueries, aggregation, ordering, slicing, and all four query
-  forms through the supported plan shapes.
-- Property paths: inverse, sequence, alternative, optional, negated property
-  sets, and composite `+`/`*` through source-dialect recursive CTEs.
-- R2RML plus Direct Mapping, datatype/dialect canonicalisation, templates,
-  graph maps, and streamed term reconstruction.
-- RDF-star quoted triples in native RDF 1.2 reification form, including path
-  joins and named-graph composition.
-- SQLite, PostgreSQL, and MySQL execution through the shared `SqlBackend`
-  contract. The published W3C figures currently cover SQLite and PostgreSQL;
-  MySQL has adapter, endpoint, and live differential coverage.
-- A governed HTTP endpoint with streaming, content negotiation, bounded pools,
-  request cancellation, and overload shedding.
+The generated matrix above is authoritative for claim scope. In brief, required
+SQLite evidence covers the frozen core query cases and read-only HTTP format
+subset; PostgreSQL and MySQL have live-optional evidence that can still skip.
+The runtime has source-selector paths for all three, but none is production-
+admitted under ADR-0038 R3. Property-path cases, RDF-star, named graphs, R2RML,
+Direct Mapping and simple streaming all have bounded evidence profiles with the
+deviations and release blockers recorded per matrix cell.
 
 ## Correctness and verification
 
@@ -219,7 +229,7 @@ record the complete decisions and evidence.
 | [#8](https://github.com/sparkling/semantic-fabric/issues/8) incompatible binding pruning | Closed: every incompatible subject/predicate/object/class/graph bind prunes its branch | `10dedd4`; flat/tree/materialized-oracle regressions; green CI `8b66428` |
 | [#9](https://github.com/sparkling/semantic-fabric/issues/9) graph-union wrong results | Closed: normalized subject/POM graph union and default-graph handling across BGP, paths, and RDF-star | `5218874`; W3C and differential regressions; green CI `8b66428` |
 | [#10](https://github.com/sparkling/semantic-fabric/issues/10) `rusqlite` link conflict | Closed: one workspace `rusqlite 0.40.2`, preserving `bundled` and `column_decltype`; the MySQL dependency chain is also upgraded | `5b8415c`; `mysql_async 0.37.0`; one `libsqlite3-sys` link target; green CI `8b66428` |
-| [#7](https://github.com/sparkling/semantic-fabric/issues/7) cloud backends | Open and deliberately deferred. Only SQLite, PostgreSQL, and MySQL are admitted to `serve` | `9d709dd`; provider-specific protocol/security gates remain |
+| [#7](https://github.com/sparkling/semantic-fabric/issues/7) cloud backends | Open and deliberately deferred. SQLite, PostgreSQL, and MySQL have runtime source paths; none is production-admitted under ADR-0038 R3 | `9d709dd`; provider-specific protocol/security gates remain |
 | [#6](https://github.com/sparkling/semantic-fabric/issues/6) Nova collaboration | Closed: federation/materialization pilots work without exposing raw plans; the optional fallible early-exit sink remains consumer-driven | No speculative public API added; green CI and Pages `8b66428` |
 
 The `mysql_async 0.37.0` upgrade resolves the `lru 0.16.4` unsoundness warning,

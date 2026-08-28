@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-fabric.dev/schema/capability-catalog-v1.json",
+  "title": "semantic-fabric capability catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "asOf",
+    "standards",
+    "profiles",
+    "backends",
+    "commands",
+    "evidence",
+    "limitations",
+    "cells",
+    "claims",
+    "scopeExclusions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "asOf": { "$ref": "#/$defs/date" },
+    "standards": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/standard" }
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/profile" }
+    },
+    "backends": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/backend" }
+    },
+    "commands": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/limitation" }
+    },
+    "cells": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/cell" }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/claim" }
+    },
+    "scopeExclusions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/scopeExclusion" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "standard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "status",
+        "url",
+        "snapshotDate",
+        "sha256",
+        "byteLength",
+        "classification"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https://www\\.w3\\.org/TR/" },
+        "snapshotDate": { "$ref": "#/$defs/date" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "byteLength": { "type": "integer", "minimum": 1 },
+        "classification": {
+          "enum": ["project-spec", "retrieved-reference-metadata"]
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "surface", "capability", "backends"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "surface": {
+          "enum": [
+            "mapping-execution",
+            "operations",
+            "production-source-admission",
+            "release",
+            "resource-governance",
+            "runtime-architecture",
+            "runtime-source-path",
+            "sparql-protocol",
+            "sparql-query"
+          ]
+        },
+        "capability": { "type": "string", "minLength": 1 },
+        "backends": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1 }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "argv", "mode"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "argv": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["diagnostic", "required"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "domain",
+        "path",
+        "sha256",
+        "selector",
+        "commandId",
+        "verification",
+        "required"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "domain": {
+          "enum": [
+            "architecture-plan",
+            "backend-admission",
+            "backend-live",
+            "benchmark",
+            "mapping-execution",
+            "mapping-fixture",
+            "negative-rejection",
+            "sparql-protocol",
+            "sparql-query"
+          ]
+        },
+        "path": { "type": "string", "pattern": "^[^/\\\\][^\\\\]*$" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "selector": { "type": "string", "minLength": 1 },
+        "commandId": {
+          "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+        },
+        "verification": { "$ref": "#/$defs/verification" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "verification": {
+      "enum": ["ci-required", "live-optional", "mock", "receipt", "source-only"]
+    },
+    "limitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "summary", "releaseBlocking", "adr"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "summary": { "type": "string", "minLength": 1 },
+        "releaseBlocking": { "type": "boolean" },
+        "adr": { "type": "string", "pattern": "^ADR-[0-9]{4}$" }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "profileId",
+        "backendId",
+        "status",
+        "verification",
+        "evidenceIds",
+        "limitationIds",
+        "semanticExact",
+        "bounded",
+        "advertisable",
+        "qualification"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "profileId": { "$ref": "#/$defs/id" },
+        "backendId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["admitted", "implemented", "planned", "unsupported"] },
+        "verification": { "$ref": "#/$defs/verification" },
+        "evidenceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "limitationIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "semanticExact": { "type": "boolean" },
+        "bounded": { "type": "boolean" },
+        "advertisable": { "type": "boolean" },
+        "qualification": { "type": "string", "minLength": 1 }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "text", "cellIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["current", "limitation", "qualification"] },
+        "text": { "type": "string", "minLength": 1 },
+        "cellIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "scopeExclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -4714,6 +4714,8 @@ dependencies = [
  "oxttl",
  "rudof_rdf",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sf-core",
  "sf-mapping",
  "sf-sparql",

@@ -21,6 +21,9 @@
 
 use std::path::Path;
 
+pub mod capability_catalog;
+pub mod capability_model;
+pub mod capability_render;
 pub mod earl;
 pub mod execution_receipt;
 pub mod graph;

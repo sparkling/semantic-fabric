@@ -22,6 +22,8 @@ oxttl.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
 thiserror.workspace = true
 sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 # Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway database per
 # sealed suite run, executed via the PgRowStream cursor. Local provider absence
 # is typed untested; required CI mode fails when the provider is unavailable.
