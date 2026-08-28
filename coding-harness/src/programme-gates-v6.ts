@@ -4,19 +4,21 @@ import {
   parseCandidateTransactionEvidenceV1,
   type CandidateTransactionEvidenceV1,
 } from './candidate-transaction-evidence-v1.js';
-import { DEVELOPMENT_AUTHORITY, deepFreeze } from './contracts.js';
+import { DEVELOPMENT_AUTHORITY, SHA256_PATTERN, deepFreeze } from './contracts.js';
 import type { MetaHarnessDiagnosticSnapshot } from './metaharness-diagnostics.js';
 import type { ProgrammeV5RufloEvidence } from './programme-v5-ruflo-contract.js';
 import {
-  evaluateProgrammeGatesV5,
-  matchesProgrammeCommandProjectionV1,
-  normalProgrammeCommandCompletionV1,
-  validProgrammeReceiptIntegrityV1,
-  type ProgrammeGateEvaluationV5,
+  evaluateProgrammeGatesV5, type ProgrammeGateEvaluationV5,
 } from './programme-gates-v5.js';
+import type { ProgrammeGateContractV1 } from './programme-gate-contract-v1.js';
 import type { ParsedProgrammePolicyV2 } from './programme-policy-v6.js';
-import { programmeCommandReceiptProjectionsV1 } from './programme-task-runtime-v1.js';
-import { digestValue, type Receipt } from './receipts.js';
+import {
+  programmeCommandReceiptProjectionsV1,
+  type ProgrammeCommandReceiptProjectionV1,
+} from './programme-task-runtime-v1.js';
+import { digestValue, type CommandEvidence, type Receipt } from './receipts.js';
+
+const GENESIS_DIGEST = '0'.repeat(64);
 
 export interface ProgrammeGateEvaluationV6 extends ProgrammeGateEvaluationV5 {
   readonly candidateTransactionEvidence: CandidateTransactionEvidenceV1 | null;
@@ -120,6 +122,56 @@ function validReliabilityBase(policy: ParsedProgrammePolicyV2, receipt: Receipt)
     && receipt.recovery.breakerState === gate.reliability.breakerState
     && nonnegativeInteger(receipt.recovery.retryCount)
     && receipt.commands.every(normalProgrammeCommandCompletionV1);
+}
+
+function validProgrammeReceiptIntegrityV1(
+  receipt: Receipt,
+  gate: ProgrammeGateContractV1,
+): boolean {
+  const { digest, ...body } = receipt;
+  return receipt.schemaVersion === gate.receiptSchemaVersion
+    && receipt.sequence === gate.receipt.sequence
+    && receipt.previousDigest === gate.receipt.previousDigest
+    && validDigest(digest) && digestValue(body) === digest
+    && receipt.step === gate.receipt.step
+    && receipt.status === gate.receipt.status
+    && receipt.failureCode === gate.receipt.failureCode
+    && receipt.authority === gate.receipt.authority
+    && canonicalTimestamp(receipt.issuedAt)
+    && nonnegativeInteger(receipt.recovery.repairCount)
+    && receipt.recovery.repairCount <= gate.attempts.maximumRepairs
+    && receipt.patchDigests.length === receipt.recovery.repairCount + 1
+    && receipt.patchDigests.every(validDigest)
+    && receipt.patchDigest !== null && validDigest(receipt.patchDigest)
+    && receipt.patchDigests.at(-1) === receipt.patchDigest;
+}
+
+function matchesProgrammeCommandProjectionV1(
+  command: CommandEvidence,
+  expected: ProgrammeCommandReceiptProjectionV1 | undefined,
+): boolean {
+  return expected !== undefined
+    && command.stage === expected.stage && command.tool === expected.tool
+    && command.executable === expected.executable && command.cwd === expected.cwd
+    && sameStrings(command.argv, expected.argv);
+}
+
+function normalProgrammeCommandCompletionV1(command: CommandEvidence): boolean {
+  return command.signal === null && !command.timedOut && !command.cancelled
+    && !command.outputLimitExceeded && command.spawnErrorDigest === null;
+}
+
+function validDigest(value: unknown): value is string {
+  return typeof value === 'string' && SHA256_PATTERN.test(value) && value !== GENESIS_DIGEST;
+}
+
+function canonicalTimestamp(value: string): boolean {
+  const date = new Date(value);
+  return Number.isFinite(date.valueOf()) && date.toISOString() === value;
+}
+
+function sameStrings(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
 
 function nonnegativeInteger(value: unknown): value is number {
