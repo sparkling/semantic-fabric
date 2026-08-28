@@ -254,8 +254,15 @@ release first baseline still requires clean committed source and the exact
 controlled runner/profile.
 
 M0 is not complete until current required-live PostgreSQL evidence, actual
-binary artifact closure, the controlled performance baseline, and the complete
-gate pass in two clean checkouts have been performed. The generated matrix,
+binary artifact closure, and the controlled performance baseline have been
+performed. Exact commit `ad94cdb` did replay the current deterministic tranche
+byte-identically in two clean, no-hard-link checkouts under the hardened-builder
+`umask 0022`: each rebuilt the controller, passed all 91 harness files, replayed
+every current deterministic authority, and remained Git-clean. An initial
+`umask 0002` pair was correctly rejected for group-writable inputs, and no trust
+check was relaxed. This proves current-tranche repeatability, not actual binary
+reproducibility; the complete M0 release gate must run again in two clean
+builders after the remaining authorities exist. The generated matrix,
 SQLite v2 mapping receipt, query/protocol regression receipts, and package
 dependency receipt are deterministic scoped authorities, not release or backend-
 admission proof. M1–M7 remain gated. These incremental closures do not by

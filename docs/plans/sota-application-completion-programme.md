@@ -15,7 +15,7 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | Through the current tranche: the sealed mapping authorities remain protected; per-test expected SQLite query/protocol baselines and the default `sf-cli` package dependency closure now have provider-free receipts; and controlled performance capture/comparison machinery exists. Current required-live PostgreSQL evidence, actual binary artifact closure, a controlled performance baseline, and the two-clean-checkout proof remain open |
+| M0 — architectural truth and deterministic foundation | In progress | Through the current tranche: the sealed mapping authorities remain protected; per-test expected SQLite query/protocol baselines and the default `sf-cli` package dependency closure now have provider-free receipts; controlled performance capture/comparison machinery exists; and commit `ad94cdb` replayed byte-identically in two clean checkouts. Current required-live PostgreSQL evidence, actual binary artifact closure, and a controlled performance baseline remain open; the complete M0 release gate must be repeated in two clean builders after those authorities exist |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03` and `_04` remain honest historical failures at the final-review
@@ -76,10 +76,22 @@ reproducibility, or production admission.
 Performance production and comparison machinery now exists, but no controlled
 runner profile, baseline, candidate, or measured numbers exist. The clean-
 release first baseline must still be captured from clean committed source on
-the exact controlled runner/profile. M0 therefore remains open for current
-required-live PostgreSQL evidence, actual binary artifact closure, that
-controlled performance baseline, and a complete gate pass in two clean
-checkouts. M1–M7 remain gated.
+the exact controlled runner/profile.
+
+On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links
+under the hardened-builder `umask 0022`. Each checkout rebuilt the controller,
+passed all 91 harness files (627 tests passed and 8 environment-intentional
+skips), replayed the RDB2RDF, query, Protocol, dependency-closure, performance-
+scenario, and capability authorities, remained Git-clean, and produced
+byte-identical authority and controller digests. The harness correctly rejected
+an earlier pair created under `umask 0002` because tracked inputs were group-
+writable; no trust check was relaxed. This closes current-tranche checkout
+repeatability, not binary reproducibility or the final release proof.
+
+M0 therefore remains open for current required-live PostgreSQL evidence, actual
+binary artifact closure, and the controlled performance baseline. Once those
+exist, the complete release gate must run again in two clean builders. M1–M7
+remain gated.
 
 ## Outcome
 

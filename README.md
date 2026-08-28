@@ -224,8 +224,11 @@ comparison machinery exists, but no controlled profile, baseline, candidate, or
 measured numbers exist. The clean-release first baseline still requires clean
 committed source on the exact controlled runner/profile. M0 remains open for
 current required-live PostgreSQL evidence, actual binary artifact closure, that
-controlled performance baseline, and the complete proof in two clean checkouts.
-M1–M7 remain gated.
+controlled performance baseline, and a final two-builder release replay after
+those authorities exist. Current-tranche repeatability is proven: exact commit
+`ad94cdb` rebuilt and replayed byte-identically in two clean, no-hard-link
+checkouts under hardened-builder `umask 0022`, with both trees remaining clean.
+That proof does not attest actual binary reproducibility. M1–M7 remain gated.
 A hardened single-source build is an interim release profile; it is not the
 charter-complete application while cross-RDBMS federation remains in scope.
 
