@@ -255,13 +255,15 @@ capture, commit, upload, or promote an observation from the mutable hosted
 runner. No canonical observation receipt exists yet; any future observation
 remains external to the observed source tree to avoid receipt self-reference.
 
-This observation tooling advances M0 without closing the actual binary artifact
-boundary. It records configured compiler/linker/system identities and final
-inputs, while complete tool-execution, build-script-input, system and
-`strace`-grade closure; loader-policy runtime resolution and dynamic-library
-closure; SBOM and release provenance; independent reproducibility; the proposed
-minimal production artifact and backend admission; current required-live
-PostgreSQL evidence; and controlled performance evidence all remain open.
+This observation tooling advances M0 without closing the actual binary-artifact
+boundary. It records configured tool identities and a post-build final-link-
+dependency-file snapshot with hashes of its listed, mapped inputs; it does not
+attest the complete execution closure of any tool or sole configured-linker
+authorship of that dependency file. Complete tool-execution, build-script-input,
+system and `strace`-grade closure; loader-policy runtime resolution and dynamic-
+library closure; SBOM and release provenance; independent reproducibility; the
+proposed minimal production artifact and backend admission; current required-
+live PostgreSQL evidence; and controlled performance evidence all remain open.
 Performance production and comparison machinery exists, but no controlled
 runner profile, baseline, candidate, or measured numbers exist. The clean-
 release first baseline still requires clean committed source and the exact

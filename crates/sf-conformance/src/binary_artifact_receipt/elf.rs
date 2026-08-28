@@ -27,7 +27,6 @@ pub(super) struct Observation {
     pub(super) elf_class: String,
     pub(super) data: String,
     pub(super) os_abi: String,
-    pub(super) file_type: String,
     pub(super) machine: String,
     pub(super) interpreter: String,
     pub(super) needed: Vec<String>,
@@ -88,7 +87,6 @@ pub(super) fn inspect(
     let elf_class = required_field(&headers, "Class:", "ELF class")?;
     let data = required_field(&headers, "Data:", "ELF data encoding")?;
     let os_abi = required_field(&headers, "OS/ABI:", "ELF OS/ABI")?;
-    let file_type = required_field(&headers, "Type:", "ELF type")?;
     let machine = required_field(&headers, "Machine:", "ELF machine")?;
     enforce_fixed_facts(unix_mode, &elf_class, &data, &os_abi, &machine)?;
     let observation = Observation {
@@ -98,7 +96,6 @@ pub(super) fn inspect(
         elf_class,
         data,
         os_abi,
-        file_type,
         machine,
         interpreter: program
             .lines()

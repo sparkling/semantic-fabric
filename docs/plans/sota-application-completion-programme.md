@@ -65,9 +65,12 @@ The current tranche adds a fail-closed contract and tool for a **host-observed n
 freshly built current `sf-cli` executable. It does not create a canonical receipt. CI exercises the bounded parser
 and integration contract only; future observations stay external to the observed source tree to avoid self-reference.
 Its mutable `ubuntu-24.04` host is not a controlled provenance builder, and CI neither captures nor publishes an observation.
-The tool records configured compiler/linker/system identities and final inputs, but complete tool-execution, build-script-input, system and `strace`-grade closure; loader-policy
-runtime resolution and dynamic-library closure; SBOM and release provenance; independent reproducibility;
-production minimality; and backend admission all remain open.
+The tool records configured tool identities and a post-build final-link-
+dependency-file snapshot with hashes of its listed, mapped inputs. It does not
+attest complete tool-execution closure or sole configured-linker authorship of
+that file; build-script-input and system/`strace`-grade closure, runtime
+resolution and dynamic-library closure, SBOM/release provenance, independent
+reproducibility, production minimality, and backend admission remain open.
 
 Performance production and comparison machinery now exists, but no controlled runner profile, baseline, candidate,
 or measured numbers exist. The clean-release first baseline must still be captured from clean committed source on

@@ -23,7 +23,7 @@ pub const ENVIRONMENT_DIGEST_FORMAT: &str =
 pub const SOURCE_DATE_EPOCH_LAW: &str = "git-commit-committer-timestamp-seconds-v1";
 pub const NOT_ATTESTED: &str = "not-attested";
 
-pub const NONCLAIM_KEYS: [&str; 14] = [
+pub const NONCLAIM_KEYS: [&str; 16] = [
     "production-minimality",
     "reproducibility",
     "sbom",
@@ -36,6 +36,8 @@ pub const NONCLAIM_KEYS: [&str; 14] = [
     "adr-0039-acceptance",
     "flagless-build-byte-equality",
     "linker-tool-closure",
+    "tool-execution-closure",
+    "final-link-depfile-authorship",
     "signing",
     "slsa-provenance",
 ];
