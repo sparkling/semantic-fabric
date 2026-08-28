@@ -22,6 +22,7 @@
 use std::path::Path;
 
 pub mod earl;
+pub mod execution_receipt;
 pub mod graph;
 pub mod inventory;
 pub mod manifest;

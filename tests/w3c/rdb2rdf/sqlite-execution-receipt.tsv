@@ -1,0 +1,101 @@
+semantic-fabric-rdb2rdf-execution-receipt-v1
+meta	backend	sqlite
+meta	runner	sf-conformance::run_suite
+meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-provenance
+meta	inventory-path	inventory.tsv
+meta	inventory-sha256	4d2eb56e25920c4b8488b47d971cf887902b4e4178257420bf3a7ea44c504c96
+meta	hash-algorithm	sha256
+meta	case-count	87
+meta	r2rml-count	63
+meta	direct-mapping-count	24
+meta	passed-count	81
+meta	failed-count	1
+meta	skipped-count	5
+meta	outcomes-sha256	740a5b419f2942c5884b85349d5cc9a502a6a0c57b52d5630c3577de2006dbd4
+case	DirectGraphTC0000	direct-mapping	passed
+case	DirectGraphTC0001	direct-mapping	passed
+case	DirectGraphTC0002	direct-mapping	passed
+case	DirectGraphTC0003	direct-mapping	passed
+case	DirectGraphTC0004	direct-mapping	passed
+case	DirectGraphTC0005	direct-mapping	passed
+case	DirectGraphTC0006	direct-mapping	passed
+case	DirectGraphTC0007	direct-mapping	passed
+case	DirectGraphTC0008	direct-mapping	passed
+case	DirectGraphTC0009	direct-mapping	passed
+case	DirectGraphTC0010	direct-mapping	passed
+case	DirectGraphTC0011	direct-mapping	passed
+case	DirectGraphTC0012	direct-mapping	passed
+case	DirectGraphTC0013	direct-mapping	passed
+case	DirectGraphTC0014	direct-mapping	passed
+case	DirectGraphTC0015	direct-mapping	passed
+case	DirectGraphTC0016	direct-mapping	passed
+case	DirectGraphTC0017	direct-mapping	passed
+case	DirectGraphTC0018	direct-mapping	passed
+case	DirectGraphTC0021	direct-mapping	skipped
+case	DirectGraphTC0022	direct-mapping	skipped
+case	DirectGraphTC0023	direct-mapping	skipped
+case	DirectGraphTC0024	direct-mapping	skipped
+case	DirectGraphTC0025	direct-mapping	skipped
+case	R2RMLTC0000	r2rml	passed
+case	R2RMLTC0001a	r2rml	passed
+case	R2RMLTC0001b	r2rml	passed
+case	R2RMLTC0002a	r2rml	passed
+case	R2RMLTC0002b	r2rml	passed
+case	R2RMLTC0002c	r2rml	passed
+case	R2RMLTC0002d	r2rml	passed
+case	R2RMLTC0002e	r2rml	passed
+case	R2RMLTC0002f	r2rml	failed
+case	R2RMLTC0002g	r2rml	passed
+case	R2RMLTC0002h	r2rml	passed
+case	R2RMLTC0002i	r2rml	passed
+case	R2RMLTC0002j	r2rml	passed
+case	R2RMLTC0003a	r2rml	passed
+case	R2RMLTC0003b	r2rml	passed
+case	R2RMLTC0003c	r2rml	passed
+case	R2RMLTC0004a	r2rml	passed
+case	R2RMLTC0004b	r2rml	passed
+case	R2RMLTC0005a	r2rml	passed
+case	R2RMLTC0005b	r2rml	passed
+case	R2RMLTC0006a	r2rml	passed
+case	R2RMLTC0007a	r2rml	passed
+case	R2RMLTC0007b	r2rml	passed
+case	R2RMLTC0007c	r2rml	passed
+case	R2RMLTC0007d	r2rml	passed
+case	R2RMLTC0007e	r2rml	passed
+case	R2RMLTC0007f	r2rml	passed
+case	R2RMLTC0007g	r2rml	passed
+case	R2RMLTC0007h	r2rml	passed
+case	R2RMLTC0008a	r2rml	passed
+case	R2RMLTC0008b	r2rml	passed
+case	R2RMLTC0008c	r2rml	passed
+case	R2RMLTC0009a	r2rml	passed
+case	R2RMLTC0009b	r2rml	passed
+case	R2RMLTC0009c	r2rml	passed
+case	R2RMLTC0009d	r2rml	passed
+case	R2RMLTC0010a	r2rml	passed
+case	R2RMLTC0010b	r2rml	passed
+case	R2RMLTC0010c	r2rml	passed
+case	R2RMLTC0011a	r2rml	passed
+case	R2RMLTC0011b	r2rml	passed
+case	R2RMLTC0012a	r2rml	passed
+case	R2RMLTC0012b	r2rml	passed
+case	R2RMLTC0012c	r2rml	passed
+case	R2RMLTC0012d	r2rml	passed
+case	R2RMLTC0012e	r2rml	passed
+case	R2RMLTC0013a	r2rml	passed
+case	R2RMLTC0014a	r2rml	passed
+case	R2RMLTC0014b	r2rml	passed
+case	R2RMLTC0014c	r2rml	passed
+case	R2RMLTC0014d	r2rml	passed
+case	R2RMLTC0015a	r2rml	passed
+case	R2RMLTC0015b	r2rml	passed
+case	R2RMLTC0016a	r2rml	passed
+case	R2RMLTC0016b	r2rml	passed
+case	R2RMLTC0016c	r2rml	passed
+case	R2RMLTC0016d	r2rml	passed
+case	R2RMLTC0016e	r2rml	passed
+case	R2RMLTC0018a	r2rml	passed
+case	R2RMLTC0019a	r2rml	passed
+case	R2RMLTC0019b	r2rml	passed
+case	R2RMLTC0020a	r2rml	passed
+case	R2RMLTC0020b	r2rml	passed
