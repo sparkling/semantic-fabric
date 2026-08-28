@@ -4718,6 +4718,7 @@ dependencies = [
  "sf-mapping",
  "sf-sparql",
  "sf-sql",
+ "sha2 0.10.9",
  "shacl",
  "spareval",
  "spargebra",

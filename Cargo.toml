@@ -32,6 +32,7 @@ oxsdatatypes = "0.2.2"
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+sha2 = "=0.10.9"
 # --- internal crates ---
 sf-core = { path = "crates/sf-core" }
 sf-sql = { path = "crates/sf-sql" }

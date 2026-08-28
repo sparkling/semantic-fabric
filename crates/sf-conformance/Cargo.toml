@@ -21,6 +21,7 @@ oxttl.workspace = true
 # In-memory SQLite fixture per W3C case (matches the sf-sparql execution wave).
 rusqlite = { workspace = true, features = ["bundled"] }
 thiserror.workspace = true
+sha2.workspace = true
 # Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway schema per
 # case loaded over a real server, executed via the PgRowStream cursor. Skips
 # gracefully when no server is reachable (probe / SF_PG_URL), so CI stays green.

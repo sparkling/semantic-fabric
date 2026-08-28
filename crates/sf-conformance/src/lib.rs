@@ -23,6 +23,7 @@ use std::path::Path;
 
 pub mod earl;
 pub mod graph;
+pub mod inventory;
 pub mod manifest;
 pub mod oracle;
 pub mod pg;
