@@ -141,8 +141,11 @@ jobs:
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
       - name: clippy deterministic evidence receipt tooling
         run: cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings
+      # This mutable hosted runner validates only the bounded parser and receipt
+      # contract. It is not a controlled provenance builder, so CI neither captures
+      # nor publishes a current-binary observation here.
       - name: test deterministic evidence receipt tooling
-        run: cargo test --locked -p sf-conformance --features evidence-receipts --lib --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1
+        run: cargo test --locked -p sf-conformance --features evidence-receipts --lib --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1
       - name: replay expected SQLite SPARQL query regression baseline
         run: cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check
       - name: replay expected SQLite SPARQL protocol regression baseline

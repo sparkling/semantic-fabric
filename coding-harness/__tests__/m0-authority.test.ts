@@ -12,6 +12,9 @@ const repository = resolve(harnessRoot, '..');
 const manifest = JSON.parse(
   readFileSync(resolve(harnessRoot, '.harness/manifest.json'), 'utf8'),
 ) as { protectedPaths: string[] };
+const capabilityCatalog = JSON.parse(
+  readFileSync(resolve(repository, 'tests/capabilities/catalog-v1.json'), 'utf8'),
+) as { cells: Array<{ id: string; status: string; verification: string }> };
 
 const M0_AUTHORITY_PATHS = [
   '.cargo/audit.toml',
@@ -33,11 +36,22 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-bench/tests/performance_stats.rs',
   'crates/sf-bench/tests/performance_subprocess.rs',
   'crates/sf-conformance/src/bin/capability-matrix.rs',
+  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs',
   'crates/sf-conformance/src/bin/rdb2rdf-execution-receipt.rs',
   'crates/sf-conformance/src/bin/rdb2rdf-inventory.rs',
   'crates/sf-conformance/src/bin/rust-closure-receipt.rs',
   'crates/sf-conformance/src/bin/sparql-protocol-regression-baseline.rs',
   'crates/sf-conformance/src/bin/sparql-query-regression-baseline.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/authority.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/capture.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/cargo.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/elf.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/format.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/linker.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/mod.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/model.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/process.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/tests.rs',
   'crates/sf-conformance/src/capability_catalog.rs',
   'crates/sf-conformance/src/capability_model.rs',
   'crates/sf-conformance/src/capability_render.rs',
@@ -56,6 +70,7 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/rust_closure_receipt.rs',
   'crates/sf-conformance/src/sealed_suite.rs',
   'crates/sf-conformance/src/sqlite.rs',
+  'crates/sf-conformance/tests/binary_artifact_receipt.rs',
   'crates/sf-conformance/tests/capability_matrix.rs',
   'crates/sf-conformance/tests/differential_graphs.rs',
   'crates/sf-conformance/tests/differential_paths.rs',
@@ -98,6 +113,9 @@ const REQUIRED_FEATURE_CLIPPY = [
   'cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings',
 ] as const;
 
+const REQUIRED_ARTIFACT_OBSERVATION_TEST =
+  'cargo test --locked -p sf-conformance --features evidence-receipts --lib --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1';
+
 describe('M0 protected authority and CI contract', () => {
   it('protects every tracked authority in both config and manifest', () => {
     expect(SECURE_HARNESS_CONFIG.requiredProtectedPaths)
@@ -130,6 +148,19 @@ describe('M0 protected authority and CI contract', () => {
         .toEqual(expect.arrayContaining(paths));
       expect(manifest.protectedPaths).toEqual(expect.arrayContaining(paths));
     }
+
+    // The receipt may grow into a directory module. If it does, every tracked
+    // child becomes protected without relying on a hand-maintained source list.
+    const artifactDirectory = 'crates/sf-conformance/src/binary_artifact_receipt/';
+    const listed = spawnSync(
+      'git', ['-C', repository, 'ls-files', artifactDirectory], { encoding: 'utf8' },
+    );
+    expect(listed.status, listed.stderr).toBe(0);
+    const artifactPaths = listed.stdout.split(/\r?\n/).filter(Boolean);
+    expect(artifactPaths.length).toBeGreaterThan(0);
+    expect(SECURE_HARNESS_CONFIG.requiredProtectedPaths)
+      .toEqual(expect.arrayContaining(artifactPaths));
+    expect(manifest.protectedPaths).toEqual(expect.arrayContaining(artifactPaths));
   });
 
   it('runs each read-only authority check exactly once and in dependency order', () => {
@@ -156,6 +187,10 @@ describe('M0 protected authority and CI contract', () => {
     expect(workflow).not.toMatch(
       /--bin sf-performance-receipt -- (?:capture-baseline|capture-candidate)\b/,
     );
+    expect(workflow.split(REQUIRED_ARTIFACT_OBSERVATION_TEST)).toHaveLength(2);
+    expect(workflow).not.toMatch(
+      /cargo run[^\n]*--bin current-sf-cli-artifact-observation\b/,
+    );
   });
 
   it('fails CI on stale controller attestation and feature-only Clippy findings', () => {
@@ -175,5 +210,12 @@ describe('M0 protected authority and CI contract', () => {
     expect(workflow.indexOf(REQUIRED_FEATURE_CLIPPY[1])).toBeLessThan(
       workflow.indexOf('cargo test --locked -p sf-bench --features performance-receipts'),
     );
+  });
+
+  it('keeps the minimal production artifact planned until its release gates close', () => {
+    const cell = capabilityCatalog.cells.find(
+      ({ id }) => id === 'minimal-production-artifact-generic',
+    );
+    expect(cell).toMatchObject({ status: 'planned', verification: 'source-only' });
   });
 });

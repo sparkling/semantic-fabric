@@ -21,6 +21,17 @@ This ADR is a **proposal**, not an acceptance or implementation claim. Its
 `implements` relationship means that it is the subordinate design lock requested
 by ADR-0038 M0; no release is conformant until the acceptance gates below pass.
 
+Interim M0 tooling can record and verify a host-observed non-closure observation
+of the current all-in-one `sf-cli` executable. That observation is about the
+artifact which exists today, not this proposal's `sf-server`, and it is not a
+complete binary closure, SBOM, reproducibility result, production-minimality
+proof, or admission receipt. CI exercises only the parser/contract on its mutable
+hosted runner and does not capture or publish an observation. The broad
+conformance/benchmark closure observed today motivates the split, but supplies
+no acceptance evidence for gates 1–3 below. This improves the implementation
+baseline without accepting this ADR or resolving the proposed packaging
+decision.
+
 ## Context and problem statement
 
 ADR-0006 fixed one `sf-cli` package and one `semantic-fabric` binary containing

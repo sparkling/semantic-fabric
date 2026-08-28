@@ -5,8 +5,7 @@
 - **Updated:** 2026-08-28
 - **Decision record:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md)
 
-**Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark
-evidence. GitHub issues and pull requests are deliberately not programme inputs.
+**Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark evidence; GitHub issues and pull requests are deliberately not programme inputs.
 
 ## Execution status
 
@@ -15,93 +14,82 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | Through the current tranche: the sealed mapping authorities remain protected; per-test expected SQLite query/protocol baselines and the default `sf-cli` package dependency closure now have provider-free receipts; controlled performance capture/comparison machinery exists; and commit `ad94cdb` replayed byte-identically in two clean checkouts. Current required-live PostgreSQL evidence, actual binary artifact closure, and a controlled performance baseline remain open; the complete M0 release gate must be repeated in two clean builders after those authorities exist |
+| M0 — architectural truth and deterministic foundation | In progress | Sealed mapping authorities remain protected; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; a host-observed current-`sf-cli` non-closure parser/tool contract exists without a canonical observation; performance capture/comparison machinery exists; and `ad94cdb` replayed byte-identically in two clean checkouts. Required-live PostgreSQL evidence, actual complete binary closure, SBOM/reproducibility, production minimality/admission, and a controlled performance baseline remain open |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
-Runs `_03` and `_04` remain honest historical failures at the final-review
-boundary. Fresh run `programme_v5_h0c_20260828_05`, under controller `4b0756f`,
-then passed the candidate transaction after one patch-admission repair and
-proved the final build, three verifier lanes, generated EARL, four mutation
-sentinels, dual native reviews, QE, and protected inputs. Its sealed V5 envelope
-was nevertheless `REJECTED` at 85/100 solely because the frozen V1 reliability
-law requires build evidence for every prior attempt, including an attempt whose
-patch never reached build. Its policy, receipt, acceptance, envelope, and replay
-digests are respectively
+Runs `_03` and `_04` remain honest historical failures at the final-review boundary. Fresh run
+`programme_v5_h0c_20260828_05`, under controller `4b0756f`, then passed the candidate transaction after one
+patch-admission repair and proved the final build, three verifier lanes, generated EARL, four mutation sentinels,
+dual native reviews, QE, and protected inputs. Its sealed V5 envelope was nevertheless `REJECTED` at 85/100 solely
+because the frozen V1 reliability law requires build evidence for every prior attempt, including an attempt whose
+patch never reached build. Its policy, receipt, acceptance, envelope, and replay digests are respectively
 `c4411178334b54620da099ba7e2c9e029ebcc6873a0bc85e9dfca93bacbfeb79`,
 `91bfc845961c84237ff7f9ea58e75bc77c76d21913f042e05e77c68bc7ab98d1`,
 `cf7734d88eaa05e91916992c8ad8e1c2dfdc285e7a14fe14858bed3744288930`,
 `4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`,
 and `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
 
-The correction is a sibling schema V6, not a reinterpretation of `_05`. Commits
-`106da58` through `c8e3f68` add a V2 outer policy and gate contract, full
-candidate transaction/native evidence, transition-derived `not-started`,
-`failed`, or `passed` prior-build semantics, a trusted launcher, and
-provider-free replay. Historical V4/V5 bytes and decisions remain immutable.
+The correction is a sibling schema V6, not a reinterpretation of `_05`. Commits `106da58` through `c8e3f68` add a V2
+outer policy and gate contract, full candidate transaction/native evidence, transition-derived `not-started`,
+`failed`, or `passed` prior-build semantics, a trusted launcher, and provider-free replay. Historical V4/V5 bytes
+and decisions remain immutable.
 
-The first V6 attempt, `programme_v6_h0c_20260828_01`, passed policy review and
-then failed closed with `HARNESS_NATIVE_ORIGIN_POLICY_DENIED` before admitting
-native evidence. Its schema-V6 failure envelope and provider-free replay remain
-honest historical evidence; they were not edited or reused. Exact subprocess
-probes then confirmed that the pinned Claude essential-traffic environment uses
-only `api.anthropic.com` and the Codex subscription route uses `chatgpt.com`, both
-already declared first-party origins. No origin allow-list was widened and no
-provider key or indirect route was introduced.
+The first V6 attempt, `programme_v6_h0c_20260828_01`, passed policy review and then failed closed with
+`HARNESS_NATIVE_ORIGIN_POLICY_DENIED` before admitting native evidence. Its schema-V6 failure envelope and
+provider-free replay remain honest historical evidence; they were not edited or reused. Exact subprocess probes
+then confirmed that the pinned Claude essential-traffic environment uses only `api.anthropic.com` and the Codex
+subscription route uses `chatgpt.com`, both already declared first-party origins. No origin allow-list was widened
+and no provider key or indirect route was introduced.
 
-Fresh run `programme_v6_h0c_20260828_02`, under controller `c8e3f68`, sealed
-policy fingerprint
-`e71107e522342e1b19206c88d861549d00f9df87f27ed4293b0cc36139b2ae34`.
-The transaction passed with six bound commands, seven native-evidence digests,
-two final native reviews, and zero retries or repairs. Programme acceptance was
-100/100 with every hard and diagnostic gate green. Candidate evidence, receipt,
-acceptance, envelope, and execution-claim digests are respectively
+Fresh run `programme_v6_h0c_20260828_02`, under controller `c8e3f68`, sealed policy fingerprint
+`e71107e522342e1b19206c88d861549d00f9df87f27ed4293b0cc36139b2ae34`. The transaction passed with six bound
+commands, seven native-evidence digests, two final native reviews, and zero retries or repairs. Programme acceptance
+was 100/100 with every hard and diagnostic gate green. Candidate evidence, receipt, acceptance, envelope, and
+execution-claim digests are respectively
 `a1dc307130c6d3efb42354e0c464fcc66095d016564d5227e6259dc71998ac7f`,
 `d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
 `1cf36b1d9bcb2c4e6d2c81525baead859b2b62ed9042bfd33991bed8367430f7`,
 `02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
 and `578799eff72dd84cc3b5601754654d1bce33a7b4b1fa56666271fe6833979c86`.
 Provider-free replay independently verified the pass in receipt
-`f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
-H0c is therefore complete. M0 is in progress through verified incremental
-product slices; M1–M7 remain gated by their own product evidence.
+`f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`. H0c is therefore complete. M0 is in progress
+through verified incremental product slices; M1–M7 remain gated by their own product evidence.
 
-The SPARQL regression receipts bind per-test expected SQLite query and Protocol
-outcomes. They are regression baselines only: they do not attest W3C SPARQL
-Query/Protocol conformance, runtime provenance, or backend admission. The
-default `sf-cli` dependency receipt closes locked package resolution, enabled
-features, and normal/build dependency edges only. It does not attest binary
-bytes, build-script output, linker or system provenance, an SBOM,
+The SPARQL regression receipts bind per-test expected SQLite query and Protocol outcomes. They are regression
+baselines only: they do not attest W3C SPARQL Query/Protocol conformance, runtime provenance, or backend admission.
+The default `sf-cli` dependency receipt closes locked package resolution, enabled features, and normal/build
+dependency edges only. It does not attest binary bytes, build-script output, linker or system provenance, an SBOM,
 reproducibility, or production admission.
 
-Performance production and comparison machinery now exists, but no controlled
-runner profile, baseline, candidate, or measured numbers exist. The clean-
-release first baseline must still be captured from clean committed source on
+The current tranche adds a fail-closed contract and tool for a **host-observed non-closure observation** of one
+freshly built current `sf-cli` executable. It does not create a canonical receipt. CI exercises the bounded parser
+and integration contract only; future observations stay external to the observed source tree to avoid self-reference.
+Its mutable `ubuntu-24.04` host is not a controlled provenance builder, and CI neither captures nor publishes an observation.
+The tool records configured compiler/linker/system identities and final inputs, but complete tool-execution, build-script-input, system and `strace`-grade closure; loader-policy
+runtime resolution and dynamic-library closure; SBOM and release provenance; independent reproducibility;
+production minimality; and backend admission all remain open.
+
+Performance production and comparison machinery now exists, but no controlled runner profile, baseline, candidate,
+or measured numbers exist. The clean-release first baseline must still be captured from clean committed source on
 the exact controlled runner/profile.
 
-On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links
-under the hardened-builder `umask 0022`. Each checkout rebuilt the controller,
-passed all 91 harness files (627 tests passed and 8 environment-intentional
-skips), replayed the RDB2RDF, query, Protocol, dependency-closure, performance-
-scenario, and capability authorities, remained Git-clean, and produced
-byte-identical authority and controller digests. The harness correctly rejected
-an earlier pair created under `umask 0002` because tracked inputs were group-
-writable; no trust check was relaxed. This closes current-tranche checkout
-repeatability, not binary reproducibility or the final release proof.
+On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links under the hardened-builder
+`umask 0022`. Each checkout rebuilt the controller, passed all 91 harness files (627 tests passed and 8 environment-
+intentional skips), replayed the RDB2RDF, query, Protocol, dependency-closure, performance-scenario, and capability
+authorities, remained Git-clean, and produced byte-identical authority and controller digests. The harness correctly
+rejected an earlier pair created under `umask 0002` because tracked inputs were group-writable; no trust check was
+relaxed. This closes current-tranche checkout repeatability, not binary reproducibility or the final release proof.
 
-M0 therefore remains open for current required-live PostgreSQL evidence, actual
-binary artifact closure, and the controlled performance baseline. Once those
-exist, the complete release gate must run again in two clean builders. M1–M7
-remain gated.
+M0 remains open for required-live PostgreSQL evidence, complete binary artifact closure, and controlled performance.
+The complete gate must then run in two clean builders; M1–M7 remain gated.
 
 ## Outcome
 
-Complete semantic-fabric as a state-of-the-art, virtualisation-only knowledge
-graph over live relational systems of record. Completion means exact-or-fail
-semantics, bounded execution, real cross-source query execution, production
+Complete semantic-fabric as a state-of-the-art, virtualisation-only knowledge graph over live relational systems of
+record. Completion means exact-or-fail semantics, bounded execution, real cross-source query execution, production
 security and operability, and independently verifiable release evidence.
 
-The semantic compiler does **not** need a wholesale rewrite. Two substantial,
-evolutionary architecture changes are required:
+The semantic compiler does **not** need a wholesale rewrite. Two substantial, evolutionary architecture changes are required:
 
 1. lower every advertised global operator to a bounded physical execution path;
 2. add source identity, a source registry, and a federated physical plan.

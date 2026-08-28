@@ -248,15 +248,29 @@ conformance, runtime provenance, or backend admission. The default `sf-cli`
 dependency receipt closes package resolution, enabled features, and normal/build
 dependency edges only; it does not attest binary bytes, build-script output,
 linker or system provenance, an SBOM, reproducibility, or production admission.
+The tranche now also provides a fail-closed contract and tool for recording and
+verifying a **host-observed non-closure observation** of a freshly built current
+`sf-cli` executable. CI validates that bounded parser/contract only: it does not
+capture, commit, upload, or promote an observation from the mutable hosted
+runner. No canonical observation receipt exists yet; any future observation
+remains external to the observed source tree to avoid receipt self-reference.
+
+This observation tooling advances M0 without closing the actual binary artifact
+boundary. It records configured compiler/linker/system identities and final
+inputs, while complete tool-execution, build-script-input, system and
+`strace`-grade closure; loader-policy runtime resolution and dynamic-library
+closure; SBOM and release provenance; independent reproducibility; the proposed
+minimal production artifact and backend admission; current required-live
+PostgreSQL evidence; and controlled performance evidence all remain open.
 Performance production and comparison machinery exists, but no controlled
 runner profile, baseline, candidate, or measured numbers exist. The clean-
 release first baseline still requires clean committed source and the exact
 controlled runner/profile.
 
 M0 is not complete until current required-live PostgreSQL evidence, actual
-binary artifact closure, and the controlled performance baseline have been
-performed. Exact commit `ad94cdb` did replay the current deterministic tranche
-byte-identically in two clean, no-hard-link checkouts under the hardened-builder
+complete binary artifact closure, and the controlled performance baseline have
+been performed. Exact commit `ad94cdb` did replay the current deterministic
+tranche byte-identically in two clean, no-hard-link checkouts under the hardened-builder
 `umask 0022`: each rebuilt the controller, passed all 91 harness files, replayed
 every current deterministic authority, and remained Git-clean. An initial
 `umask 0002` pair was correctly rejected for group-writable inputs, and no trust
