@@ -29,92 +29,76 @@ const DUMP: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 const BASE: &str = "http://example.com/base/";
 
 /// Adjudicate one case, given its scenario directory.
-pub fn run_case(dir: &Path, case: &Case) -> CaseResult {
+pub fn run_case(dir: &Path, case: &Case) -> Result<CaseResult, String> {
     let (status, reason) = match case.kind {
         Kind::R2rml => run_r2rml(dir, case),
         Kind::DirectMapping => run_direct(dir, case),
-    };
-    CaseResult {
+    }?;
+    Ok(CaseResult {
         id: case.identifier.clone(),
         kind: case.kind,
         status,
         reason,
-    }
+    })
 }
 
-fn run_r2rml(dir: &Path, case: &Case) -> (Status, String) {
-    let conn = match read(dir, "create.sql").and_then(|s| sqlite::load(&s)) {
+fn run_r2rml(dir: &Path, case: &Case) -> Result<(Status, String), String> {
+    let sql = read(dir, "create.sql").map_err(|e| input_error(case, "create.sql", &e))?;
+    let conn = match sqlite::load(&sql) {
         Ok(c) => c,
-        Err(e) => return (Status::Skipped, format!("fixture: {e}")),
+        Err(e) => return Ok((Status::Skipped, format!("fixture: {e}"))),
     };
-    let doc = match &case.mapping_document {
-        Some(d) => d,
-        None => {
-            return (
-                Status::Skipped,
-                "R2RML case without a mapping document".to_owned(),
-            )
-        }
-    };
-    let ttl = match read(dir, doc) {
-        Ok(t) => t,
-        Err(e) => return (Status::Skipped, format!("read {doc}: {e}")),
-    };
+    let doc = case
+        .mapping_document
+        .as_deref()
+        .ok_or_else(|| input_error(case, "mappingDocument", "missing from sealed case"))?;
+    let ttl = read(dir, doc).map_err(|e| input_error(case, doc, &e))?;
 
     let maps = match sf_mapping::parse_r2rml(&ttl) {
         Ok(m) => m,
-        Err(e) => return parse_error_outcome(case, &format!("mapping parse: {e}")),
+        Err(e) => return Ok(parse_error_outcome(case, &format!("mapping parse: {e}"))),
     };
     // R2RML §5.1: an R2RML view's SQL query must not produce two columns with the
     // same name — validate each `rr:sqlQuery` source against the live database
     // (the source RDBMS is the SQL authority in a virtualiser).
     if let Err(e) = validate_query_sources(&conn, &maps) {
-        return parse_error_outcome(case, &e);
+        return Ok(parse_error_outcome(case, &e));
     }
     // Introspect the live base tables so the ADR-0007 cascade passes (self-join /
     // FD / FK-PK join elimination / redundant-DISTINCT) actually fire over the
     // W3C data — this is the real correctness exercise of those rewrites.
     let schemas = match sqlite::introspect_all(&conn) {
         Ok(s) => s,
-        Err(e) => return (Status::Skipped, format!("introspect: {e}")),
+        Err(e) => return Ok((Status::Skipped, format!("introspect: {e}"))),
     };
     let plan =
         match parse_and_translate_with(DUMP, &maps, Dialect::Sqlite, &Tbox::default(), &schemas) {
             Ok(p) => p,
             Err(SparqlError::Unsupported(m)) => {
-                return (Status::Skipped, format!("501 translate: {m}"))
+                return Ok((Status::Skipped, format!("501 translate: {m}")))
             }
-            Err(e) => return parse_error_outcome(case, &format!("translate: {e}")),
+            Err(e) => return Ok(parse_error_outcome(case, &format!("translate: {e}"))),
         };
     let triples = match exec::construct_triples(&plan, &conn) {
         Ok(t) => t,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 exec: {m}")),
-        Err(e) => return parse_error_outcome(case, &format!("exec: {e}")),
+        Err(SparqlError::Unsupported(m)) => return Ok((Status::Skipped, format!("501 exec: {m}"))),
+        Err(e) => return Ok(parse_error_outcome(case, &format!("exec: {e}"))),
     };
 
     if !case.has_expected_output {
-        return (
+        return Ok((
             Status::Failed,
             "error case: engine produced output instead of signalling an error".to_owned(),
-        );
+        ));
     }
 
-    let out = match &case.output {
-        Some(o) => o,
-        None => {
-            return (
-                Status::Skipped,
-                "positive case without an output file".to_owned(),
-            )
-        }
-    };
-    let expected = match read(dir, out)
-        .map_err(|e| e.to_string())
-        .and_then(|t| parse_nquads(&t))
-    {
-        Ok(d) => d,
-        Err(e) => return (Status::Skipped, format!("expected output: {e}")),
-    };
+    let out = case
+        .output
+        .as_deref()
+        .ok_or_else(|| input_error(case, "output", "missing from sealed positive case"))?;
+    let expected_text = read(dir, out).map_err(|e| input_error(case, out, &e))?;
+    let expected = parse_nquads(&expected_text)
+        .map_err(|e| input_error(case, out, &format!("invalid N-Quads: {e}")))?;
     if has_named_graph(&expected) {
         // `rr:graphMap` named-graph output: the `?s ?p ?o` CONSTRUCT triple dump
         // cannot carry the graph term, so re-run as a mapping-IR **quad** dump
@@ -124,13 +108,13 @@ fn run_r2rml(dir: &Path, case: &Case) -> (Status, String) {
         let quads = match exec::dump_quads(&maps, &conn, Dialect::Sqlite) {
             Ok(q) => q,
             Err(SparqlError::Unsupported(m)) => {
-                return (Status::Skipped, format!("501 quad dump: {m}"))
+                return Ok((Status::Skipped, format!("501 quad dump: {m}")))
             }
-            Err(e) => return parse_error_outcome(case, &format!("quad dump: {e}")),
+            Err(e) => return Ok(parse_error_outcome(case, &format!("quad dump: {e}"))),
         };
-        return compare_quads(&quads, &expected);
+        return Ok(compare_quads(&quads, &expected));
     }
-    compare(&triples, &expected)
+    Ok(compare(&triples, &expected))
 }
 
 /// Compare the engine's mapping-IR quad dump to the expected N-Quads by full
@@ -153,48 +137,55 @@ pub(crate) fn compare_quads(quads: &[oxrdf::Quad], expected: &oxrdf::Dataset) ->
     }
 }
 
-fn run_direct(dir: &Path, case: &Case) -> (Status, String) {
-    let conn = match read(dir, "create.sql").and_then(|s| sqlite::load(&s)) {
+fn run_direct(dir: &Path, case: &Case) -> Result<(Status, String), String> {
+    let sql = read(dir, "create.sql").map_err(|e| input_error(case, "create.sql", &e))?;
+    let conn = match sqlite::load(&sql) {
         Ok(c) => c,
-        Err(e) => return (Status::Skipped, format!("fixture: {e}")),
+        Err(e) => return Ok((Status::Skipped, format!("fixture: {e}"))),
     };
     let schemas = match sqlite::introspect_all(&conn) {
         Ok(s) => s,
-        Err(e) => return (Status::Skipped, format!("introspect: {e}")),
+        Err(e) => return Ok((Status::Skipped, format!("introspect: {e}"))),
     };
     let maps = match sf_mapping::direct_mapping(&schemas, BASE) {
         Ok(m) => m,
-        Err(e) => return (Status::Failed, format!("direct mapping: {e}")),
+        Err(e) => return Ok((Status::Failed, format!("direct mapping: {e}"))),
     };
     let plan =
         match parse_and_translate_with(DUMP, &maps, Dialect::Sqlite, &Tbox::default(), &schemas) {
             Ok(p) => p,
             Err(SparqlError::Unsupported(m)) => {
-                return (Status::Skipped, format!("501 translate: {m}"))
+                return Ok((Status::Skipped, format!("501 translate: {m}")))
             }
-            Err(e) => return (Status::Failed, format!("translate: {e}")),
+            Err(e) => return Ok((Status::Failed, format!("translate: {e}"))),
         };
     let triples = match exec::construct_triples(&plan, &conn) {
         Ok(t) => t,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 exec: {m}")),
-        Err(e) => return (Status::Failed, format!("exec: {e}")),
+        Err(SparqlError::Unsupported(m)) => return Ok((Status::Skipped, format!("501 exec: {m}"))),
+        Err(e) => return Ok((Status::Failed, format!("exec: {e}"))),
     };
 
     if !case.has_expected_output {
-        return (
+        return Ok((
             Status::Failed,
             "error case: engine produced output instead of signalling an error".to_owned(),
-        );
+        ));
     }
-    let out = case.output.as_deref().unwrap_or("directGraph.ttl");
-    let expected = match read(dir, out)
-        .map_err(|e| e.to_string())
-        .and_then(|t| parse_turtle(&t, BASE))
-    {
-        Ok(d) => d,
-        Err(e) => return (Status::Skipped, format!("expected output: {e}")),
-    };
-    compare(&triples, &expected)
+    let out = case
+        .output
+        .as_deref()
+        .ok_or_else(|| input_error(case, "output", "missing from sealed positive case"))?;
+    let expected_text = read(dir, out).map_err(|e| input_error(case, out, &e))?;
+    let expected = parse_turtle(&expected_text, BASE)
+        .map_err(|e| input_error(case, out, &format!("invalid Turtle: {e}")))?;
+    Ok(compare(&triples, &expected))
+}
+
+pub(crate) fn input_error(case: &Case, input: &str, detail: &str) -> String {
+    format!(
+        "sealed input error for {} ({input}): {detail}",
+        case.identifier
+    )
 }
 
 /// Compare engine triples to the expected graph **through the oracle** (ADR-0005):
@@ -273,4 +264,24 @@ pub(crate) fn read_forked(dir: &Path, file: &str, dialect_tag: &str) -> Result<S
         }
     }
     read(dir, file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_sealed_input_is_an_error_not_a_skip() {
+        let case = Case {
+            identifier: "R2RMLTC0000".to_owned(),
+            kind: Kind::R2rml,
+            mapping_document: Some("r2rml.ttl".to_owned()),
+            output: Some("mapped.nq".to_owned()),
+            has_expected_output: true,
+        };
+        let error = run_case(Path::new("/definitely/not/a/w3c/scenario"), &case)
+            .expect_err("missing input must fail closed");
+        assert!(error.contains("sealed input error"), "{error}");
+        assert!(error.contains("create.sql"), "{error}");
+    }
 }

@@ -8,15 +8,14 @@ use std::path::PathBuf;
 
 use sf_conformance::{run_and_report, Kind};
 
-fn cases_dir() -> PathBuf {
+fn suite_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/w3c/rdb2rdf")
 }
 
 #[test]
 fn w3c_rdb2rdf_construct_conformance() {
-    let root = cases_dir();
-    let cases = root.join("cases");
-    let report = run_and_report(&cases, &root).expect("suite runs");
+    let root = suite_root();
+    let report = run_and_report(&root, &root).expect("suite runs");
 
     let r2rml_pass = report.passed(Some(Kind::R2rml));
     let r2rml_total = report.adjudicated(Some(Kind::R2rml));

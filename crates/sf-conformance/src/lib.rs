@@ -28,6 +28,7 @@ pub mod manifest;
 pub mod oracle;
 pub mod pg;
 pub mod runner;
+pub mod sealed_suite;
 pub mod shacl_gate;
 pub mod sqlite;
 pub mod star_decode;
@@ -173,50 +174,35 @@ impl Report {
     }
 }
 
-/// Run the vendored W3C RDB2RDF suite rooted at `cases_dir` (each child directory
-/// is one `D###` scenario with a `manifest.ttl`). Skips a directory with no
-/// manifest. I/O errors propagate; per-case engine errors are adjudicated, not
-/// propagated (ADR-0005 honesty contract).
-pub fn run_suite(cases_dir: &Path) -> std::io::Result<Report> {
-    let mut dirs: Vec<_> = std::fs::read_dir(cases_dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-
-    let mut cases = Vec::new();
-    for dir in dirs {
-        let manifest_path = dir.join("manifest.ttl");
-        let Ok(manifest_text) = std::fs::read_to_string(&manifest_path) else {
-            continue;
-        };
-        let parsed = match manifest::parse(&manifest_text) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("manifest parse failed for {}: {e}", dir.display());
-                continue;
-            }
-        };
-        for case in &parsed {
-            cases.push(runner::run_case(&dir, case));
-        }
-    }
-    Ok(Report { cases })
+/// Run the vendored W3C RDB2RDF suite from its canonical suite root. The full
+/// inventory is validated before execution, and cases run in sealed ID order.
+pub fn run_suite(suite_root: &Path) -> Result<Report, String> {
+    let sealed = sealed_suite::SealedSuite::load(suite_root)?;
+    let cases = sealed
+        .cases()
+        .iter()
+        .map(|entry| runner::run_case(&entry.directory, &entry.case))
+        .collect::<Result<Vec<_>, _>>()?;
+    let report = Report { cases };
+    sealed.validate_report(sealed_suite::Backend::Sqlite, &report)?;
+    Ok(report)
 }
 
 /// Convenience: run the suite and write both EARL reports into `out_dir`.
-pub fn run_and_report(cases_dir: &Path, out_dir: &Path) -> std::io::Result<Report> {
-    let report = run_suite(cases_dir)?;
+pub fn run_and_report(suite_root: &Path, out_dir: &Path) -> Result<Report, String> {
+    let report = run_suite(suite_root)?;
     earl::write(
         &report.cases,
         Kind::R2rml,
         &out_dir.join("earl-semantic-fabric-r2rml.ttl"),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     earl::write(
         &report.cases,
         Kind::DirectMapping,
         &out_dir.join("earl-semantic-fabric-direct.ttl"),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(report)
 }
 

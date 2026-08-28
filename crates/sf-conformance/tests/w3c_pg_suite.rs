@@ -4,16 +4,17 @@
 //! table-level-constraint DDL fixtures — run and adjudicate here, and the
 //! CHAR(n)-padding cases pass against PostgreSQL's native space-padding.
 //!
-//! **Gating:** with no server reachable the suite SKIPS (never fails), so CI
-//! stays green offline. Set `SF_PG_URL` (host/user params, no dbname) to target
+//! **Gating:** local absence is typed untested; `CI` selects required-live mode,
+//! where absence fails. Set `SF_PG_URL` (host/user params, no dbname) to target
 //! a server; the local default is trust auth on `localhost:5432`.
 
 use std::path::PathBuf;
 
-use sf_conformance::{pg, Kind};
+use sf_conformance::pg::{self, LiveMode, SuiteRun};
+use sf_conformance::Kind;
 
-fn cases_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/w3c/rdb2rdf/cases")
+fn suite_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/w3c/rdb2rdf")
 }
 
 // Measured non-regression baselines (live PostgreSQL). Bumped only upward; a drop
@@ -53,11 +54,20 @@ const DM_PG_BASELINE: usize = 23;
 
 #[test]
 fn w3c_rdb2rdf_postgres_conformance() {
-    let Some(report) = pg::run(&cases_dir()).expect("pg suite runs or skips") else {
-        eprintln!(
-            "\nSKIP: no PostgreSQL server reachable — set SF_PG_URL to run the PG conformance suite."
-        );
-        return;
+    let mode = if std::env::var_os("CI").is_some() {
+        LiveMode::CiRequired
+    } else {
+        LiveMode::LocalOptional
+    };
+    let report = match pg::run(&suite_root(), mode).expect("pg suite runs or is typed untested") {
+        SuiteRun::Tested(report) => report,
+        SuiteRun::Untested(reason) => {
+            eprintln!(
+                "\nUNTESTED: PostgreSQL conformance provider unavailable ({reason:?}); \
+                 set SF_PG_URL to run locally."
+            );
+            return;
+        }
     };
 
     let r2rml_pass = report.passed(Some(Kind::R2rml));

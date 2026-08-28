@@ -9,9 +9,9 @@
 //! the produced graph is adjudicated against the (optionally per-DBMS forked,
 //! ADR-0015) gold by the same blank-node isomorphism.
 //!
-//! **Graceful skip (CI):** [`run`] probes the connection; with no server
-//! reachable it returns `Ok(None)` so the integration test skips rather than
-//! fails. Point it at a server with `SF_PG_URL` (host/user params, no dbname).
+//! The canonical inventory is validated before any provider probe. Local runs
+//! may explicitly return typed untested evidence when PostgreSQL is absent;
+//! CI-required mode turns the same absence into an error.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,8 +22,9 @@ use sf_sql::{Dialect, TableSchema};
 use tokio_postgres::{Client, NoTls};
 
 use crate::graph::{has_named_graph, parse_nquads, parse_turtle};
-use crate::manifest::{self, Case, Kind};
-use crate::runner::{compare, compare_quads, parse_error_outcome, read, read_forked};
+use crate::manifest::{Case, Kind};
+use crate::runner::{compare, compare_quads, input_error, parse_error_outcome, read, read_forked};
+use crate::sealed_suite::{Backend, SealedSuite};
 use crate::{CaseResult, Report, Status};
 
 /// The W3C conformance query (the whole virtual graph as a triple dump).
@@ -32,6 +33,23 @@ const DUMP: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 const BASE: &str = "http://example.com/base/";
 /// The forked-fixture dialect tag (`create.postgres.sql`, `mappeda.postgres.nq`).
 const TAG: &str = "postgres";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveMode {
+    LocalOptional,
+    CiRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UntestedReason {
+    ProviderUnavailable { detail: String },
+}
+
+#[derive(Debug)]
+pub enum SuiteRun {
+    Tested(Report),
+    Untested(UntestedReason),
+}
 
 /// Base connection params (host/port/user, **no** dbname): `SF_PG_URL` if set,
 /// else a local trust-auth default keyed on `$USER`.
@@ -53,19 +71,19 @@ async fn connect(conn_str: &str) -> Result<Client, String> {
     Ok(client)
 }
 
-/// Run the full suite against a live PostgreSQL server. `Ok(None)` ⇒ no server
-/// reachable (graceful CI skip); `Ok(Some(report))` ⇒ it ran.
-pub fn run(cases_dir: &Path) -> Result<Option<Report>, String> {
+/// Run the sealed suite against PostgreSQL. Inputs are validated before the
+/// runtime or connection probe is created.
+pub fn run(suite_root: &Path, mode: LiveMode) -> Result<SuiteRun, String> {
+    let sealed = SealedSuite::load(suite_root)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
     rt.block_on(async move {
         let base = base_conn();
-        // Probe via the maintenance database; absence ⇒ graceful skip.
         let admin = match connect(&format!("{base} dbname=postgres")).await {
             Ok(c) => c,
-            Err(_) => return Ok(None),
+            Err(error) => return unavailable(mode, error),
         };
         let dbname = format!("sf_conformance_{}", std::process::id());
         admin
@@ -78,58 +96,52 @@ pub fn run(cases_dir: &Path) -> Result<Option<Report>, String> {
             .map_err(|e| e.to_string())?;
 
         let work = connect(&format!("{base} dbname={dbname}")).await?;
-        let report = run_cases(cases_dir, &work).await;
+        let report = run_cases(&sealed, &work).await;
         drop(work);
         // Best-effort teardown (FORCE terminates any lingering session).
         let _ = admin
             .batch_execute(&format!("DROP DATABASE IF EXISTS {dbname} WITH (FORCE)"))
             .await;
-        report.map(Some)
+        report.map(SuiteRun::Tested)
     })
 }
 
-/// Walk the cases directory and adjudicate each case over `client`.
-async fn run_cases(cases_dir: &Path, client: &Client) -> Result<Report, String> {
-    let mut dirs: Vec<_> = std::fs::read_dir(cases_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-
-    let mut cases = Vec::new();
-    for dir in dirs {
-        let Ok(manifest_text) = std::fs::read_to_string(dir.join("manifest.ttl")) else {
-            continue;
-        };
-        let parsed = match manifest::parse(&manifest_text) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("manifest parse failed for {}: {e}", dir.display());
-                continue;
-            }
-        };
-        for case in &parsed {
-            let (status, reason) = match case.kind {
-                Kind::R2rml => run_r2rml_pg(&dir, case, client).await,
-                Kind::DirectMapping => run_direct_pg(&dir, case, client).await,
-            };
-            cases.push(CaseResult {
-                id: case.identifier.clone(),
-                kind: case.kind,
-                status,
-                reason,
-            });
-        }
+fn unavailable(mode: LiveMode, detail: String) -> Result<SuiteRun, String> {
+    match mode {
+        LiveMode::LocalOptional => Ok(SuiteRun::Untested(UntestedReason::ProviderUnavailable {
+            detail,
+        })),
+        LiveMode::CiRequired => Err(format!(
+            "required PostgreSQL provider is unavailable: {detail}"
+        )),
     }
-    Ok(Report { cases })
+}
+
+/// Adjudicate each case in canonical inventory order over `client`.
+async fn run_cases(sealed: &SealedSuite, client: &Client) -> Result<Report, String> {
+    let mut cases = Vec::new();
+    for entry in sealed.cases() {
+        let case = &entry.case;
+        let (status, reason) = match case.kind {
+            Kind::R2rml => run_r2rml_pg(&entry.directory, case, client).await,
+            Kind::DirectMapping => run_direct_pg(&entry.directory, case, client).await,
+        }?;
+        cases.push(CaseResult {
+            id: case.identifier.clone(),
+            kind: case.kind,
+            status,
+            reason,
+        });
+    }
+    let report = Report { cases };
+    sealed.validate_report(Backend::Postgres, &report)?;
+    Ok(report)
 }
 
 /// Recreate an empty `public` schema and load the (forked) `create.sql` into it.
 /// A DDL PostgreSQL cannot accept (e.g. `VARBINARY`, `X'…'`) surfaces as an error
 /// the caller turns into a documented skip.
-async fn load_fixture(client: &Client, dir: &Path) -> Result<(), String> {
-    let sql = read_forked(dir, "create.sql", TAG)?;
+async fn load_fixture(client: &Client, sql: &str) -> Result<(), String> {
     client
         .batch_execute(
             "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; SET search_path TO public;",
@@ -137,7 +149,7 @@ async fn load_fixture(client: &Client, dir: &Path) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     client
-        .batch_execute(&sql)
+        .batch_execute(sql)
         .await
         .map_err(|e| format!("create.sql load failed: {e}"))
 }
@@ -190,33 +202,31 @@ async fn validate_query_sources(
     Ok(())
 }
 
-async fn run_r2rml_pg(dir: &Path, case: &Case, client: &Client) -> (Status, String) {
-    if let Err(e) = load_fixture(client, dir).await {
-        return (Status::Skipped, format!("fixture: {e}"));
+async fn run_r2rml_pg(
+    dir: &Path,
+    case: &Case,
+    client: &Client,
+) -> Result<(Status, String), String> {
+    let sql =
+        read_forked(dir, "create.sql", TAG).map_err(|e| input_error(case, "create.sql", &e))?;
+    if let Err(e) = load_fixture(client, &sql).await {
+        return Ok((Status::Skipped, format!("fixture: {e}")));
     }
-    let doc = match &case.mapping_document {
-        Some(d) => d,
-        None => {
-            return (
-                Status::Skipped,
-                "R2RML case without a mapping document".to_owned(),
-            )
-        }
-    };
-    let ttl = match read(dir, doc) {
-        Ok(t) => t,
-        Err(e) => return (Status::Skipped, format!("read {doc}: {e}")),
-    };
+    let doc = case
+        .mapping_document
+        .as_deref()
+        .ok_or_else(|| input_error(case, "mappingDocument", "missing from sealed case"))?;
+    let ttl = read(dir, doc).map_err(|e| input_error(case, doc, &e))?;
     let maps = match sf_mapping::parse_r2rml(&ttl) {
         Ok(m) => m,
-        Err(e) => return parse_error_outcome(case, &format!("mapping parse: {e}")),
+        Err(e) => return Ok(parse_error_outcome(case, &format!("mapping parse: {e}"))),
     };
     if let Err(e) = validate_query_sources(client, &maps).await {
-        return parse_error_outcome(case, &e);
+        return Ok(parse_error_outcome(case, &e));
     }
     let schemas = match introspect_all(client).await {
         Ok(s) => s,
-        Err(e) => return (Status::Skipped, format!("introspect: {e}")),
+        Err(e) => return Ok((Status::Skipped, format!("introspect: {e}"))),
     };
     let plan = match parse_and_translate_with(
         DUMP,
@@ -227,58 +237,58 @@ async fn run_r2rml_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Stri
     ) {
         Ok(p) => p,
         Err(SparqlError::Unsupported(m)) => {
-            return (Status::Skipped, format!("501 translate: {m}"))
+            return Ok((Status::Skipped, format!("501 translate: {m}")))
         }
-        Err(e) => return parse_error_outcome(case, &format!("translate: {e}")),
+        Err(e) => return Ok(parse_error_outcome(case, &format!("translate: {e}"))),
     };
     let triples = match exec_pg::construct_triples_pg(&plan, client).await {
         Ok(t) => t,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 exec: {m}")),
-        Err(e) => return parse_error_outcome(case, &format!("exec: {e}")),
+        Err(SparqlError::Unsupported(m)) => return Ok((Status::Skipped, format!("501 exec: {m}"))),
+        Err(e) => return Ok(parse_error_outcome(case, &format!("exec: {e}"))),
     };
     if !case.has_expected_output {
-        return (
+        return Ok((
             Status::Failed,
             "error case: engine produced output instead of signalling an error".to_owned(),
-        );
+        ));
     }
-    let out = match &case.output {
-        Some(o) => o,
-        None => {
-            return (
-                Status::Skipped,
-                "positive case without an output file".to_owned(),
-            )
-        }
-    };
-    let expected = match read_forked(dir, out, TAG).and_then(|t| parse_nquads(&t)) {
-        Ok(d) => d,
-        Err(e) => return (Status::Skipped, format!("expected output: {e}")),
-    };
+    let out = case
+        .output
+        .as_deref()
+        .ok_or_else(|| input_error(case, "output", "missing from sealed positive case"))?;
+    let expected_text = read_forked(dir, out, TAG).map_err(|e| input_error(case, out, &e))?;
+    let expected = parse_nquads(&expected_text)
+        .map_err(|e| input_error(case, out, &format!("invalid N-Quads: {e}")))?;
     if has_named_graph(&expected) {
         let quads = match exec_pg::dump_quads_pg(&maps, client, Dialect::Postgres).await {
             Ok(q) => q,
             Err(SparqlError::Unsupported(m)) => {
-                return (Status::Skipped, format!("501 quad dump: {m}"))
+                return Ok((Status::Skipped, format!("501 quad dump: {m}")))
             }
-            Err(e) => return parse_error_outcome(case, &format!("quad dump: {e}")),
+            Err(e) => return Ok(parse_error_outcome(case, &format!("quad dump: {e}"))),
         };
-        return compare_quads(&quads, &expected);
+        return Ok(compare_quads(&quads, &expected));
     }
-    compare(&triples, &expected)
+    Ok(compare(&triples, &expected))
 }
 
-async fn run_direct_pg(dir: &Path, case: &Case, client: &Client) -> (Status, String) {
-    if let Err(e) = load_fixture(client, dir).await {
-        return (Status::Skipped, format!("fixture: {e}"));
+async fn run_direct_pg(
+    dir: &Path,
+    case: &Case,
+    client: &Client,
+) -> Result<(Status, String), String> {
+    let sql =
+        read_forked(dir, "create.sql", TAG).map_err(|e| input_error(case, "create.sql", &e))?;
+    if let Err(e) = load_fixture(client, &sql).await {
+        return Ok((Status::Skipped, format!("fixture: {e}")));
     }
     let schemas = match introspect_all(client).await {
         Ok(s) => s,
-        Err(e) => return (Status::Skipped, format!("introspect: {e}")),
+        Err(e) => return Ok((Status::Skipped, format!("introspect: {e}"))),
     };
     let maps = match sf_mapping::direct_mapping(&schemas, BASE) {
         Ok(m) => m,
-        Err(e) => return (Status::Failed, format!("direct mapping: {e}")),
+        Err(e) => return Ok((Status::Failed, format!("direct mapping: {e}"))),
     };
     let plan = match parse_and_translate_with(
         DUMP,
@@ -289,25 +299,51 @@ async fn run_direct_pg(dir: &Path, case: &Case, client: &Client) -> (Status, Str
     ) {
         Ok(p) => p,
         Err(SparqlError::Unsupported(m)) => {
-            return (Status::Skipped, format!("501 translate: {m}"))
+            return Ok((Status::Skipped, format!("501 translate: {m}")))
         }
-        Err(e) => return (Status::Failed, format!("translate: {e}")),
+        Err(e) => return Ok((Status::Failed, format!("translate: {e}"))),
     };
     let triples = match exec_pg::construct_triples_pg(&plan, client).await {
         Ok(t) => t,
-        Err(SparqlError::Unsupported(m)) => return (Status::Skipped, format!("501 exec: {m}")),
-        Err(e) => return (Status::Failed, format!("exec: {e}")),
+        Err(SparqlError::Unsupported(m)) => return Ok((Status::Skipped, format!("501 exec: {m}"))),
+        Err(e) => return Ok((Status::Failed, format!("exec: {e}"))),
     };
     if !case.has_expected_output {
-        return (
+        return Ok((
             Status::Failed,
             "error case: engine produced output instead of signalling an error".to_owned(),
-        );
+        ));
     }
-    let out = case.output.as_deref().unwrap_or("directGraph.ttl");
-    let expected = match read_forked(dir, out, TAG).and_then(|t| parse_turtle(&t, BASE)) {
-        Ok(d) => d,
-        Err(e) => return (Status::Skipped, format!("expected output: {e}")),
-    };
-    compare(&triples, &expected)
+    let out = case
+        .output
+        .as_deref()
+        .ok_or_else(|| input_error(case, "output", "missing from sealed positive case"))?;
+    let expected_text = read_forked(dir, out, TAG).map_err(|e| input_error(case, out, &e))?;
+    let expected = parse_turtle(&expected_text, BASE)
+        .map_err(|e| input_error(case, out, &format!("invalid Turtle: {e}")))?;
+    Ok(compare(&triples, &expected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_provider_absence_is_typed_untested() {
+        let outcome = unavailable(LiveMode::LocalOptional, "connection refused".to_owned())
+            .expect("local absence is allowed");
+        assert!(matches!(
+            outcome,
+            SuiteRun::Untested(UntestedReason::ProviderUnavailable { detail })
+                if detail == "connection refused"
+        ));
+    }
+
+    #[test]
+    fn ci_required_provider_absence_is_an_error() {
+        let error = unavailable(LiveMode::CiRequired, "connection refused".to_owned())
+            .expect_err("required provider absence must fail");
+        assert!(error.contains("required PostgreSQL provider"), "{error}");
+        assert!(error.contains("connection refused"), "{error}");
+    }
 }

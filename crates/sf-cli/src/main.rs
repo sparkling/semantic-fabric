@@ -141,7 +141,7 @@ fn suite_root() -> PathBuf {
 /// as failures; skips are untested, not failures (ADR-0005 honesty contract).
 fn conformance() -> ExitCode {
     let root = suite_root();
-    let report = match run_and_report(&root.join("cases"), &root) {
+    let report = match run_and_report(&root, &root) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("semantic-fabric: conformance suite failed to run: {e}");
