@@ -254,6 +254,17 @@ describe('schema-v5 programme gate evaluator', () => {
       ['repository', false], ['coding-harness', true],
     ]);
   });
+
+  it('keeps generic harness-fit scores diagnostic-only', () => {
+    const input = mutableFixture();
+    for (const target of input.diagnostics.targets) target.harnessFit = 0;
+    input.diagnostics = rehashDiagnostics(input.diagnostics);
+
+    const result = evaluateProgrammeGatesV5(input);
+    expect(result.diagnostics.map(({ harnessFit, passed }) => [harnessFit, passed]))
+      .toEqual([[0, true], [0, true]]);
+    expect(result.dimensions.every(({ passed }) => passed)).toBe(true);
+  });
 });
 
 function fixture(): GateInput {

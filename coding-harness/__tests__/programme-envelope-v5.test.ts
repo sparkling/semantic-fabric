@@ -48,9 +48,9 @@ import {
 } from './candidate-fixtures.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '8c857eeb6bf17dbe00bbea2c07c9827522b11c3067bdd1e69225733741c71c3e';
-const ACCEPTANCE_DIGEST = 'db861b3d7a293a37a50d712d4e6e2696c208cf1cb4b4d0603977f000ed78e24f';
-const ENVELOPE_DIGEST = '92370189241829ea1faade2477d4275987ca23e919f8a90d4c863b29bb6821bc';
+const POLICY_FINGERPRINT = '49b5cb18ad75490247dfc2120b9e607eb9847385da6365d578b1cc6616b47be0';
+const ACCEPTANCE_DIGEST = 'bc7664c9ddf728f6bf2ed8409fb42f69ab918155b7a0e6117d2b1753e73fe906';
+const ENVELOPE_DIGEST = '3468809f913782bb30a1824c87d5e33f48c43e23b89698064d49f660257dcf94';
 
 describe('strict schema-v5 programme envelope', () => {
   it('round-trips one receipt against independent policy and envelope anchors', () => {

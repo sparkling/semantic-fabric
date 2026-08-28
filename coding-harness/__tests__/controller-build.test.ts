@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseControllerBuildManifest } from '../src/controller-build.js';
 
 const buildPath = new URL('../.harness/controller-build.json', import.meta.url);
+const harnessManifestPath = new URL('../.harness/manifest.json', import.meta.url);
+const lockfilePath = new URL('../package-lock.json', import.meta.url);
 
 describe('sealed controller build manifest', () => {
   it('binds the runtime entry, exact outputs, and production dependency files', () => {
@@ -13,6 +16,8 @@ describe('sealed controller build manifest', () => {
     expect(Object.keys(build.outputs).length).toBeGreaterThan(50);
     expect(Object.keys(build.productionFiles).length).toBeGreaterThan(50);
     expect(build.runtimeTreeDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(build.harnessManifestDigest).toBe(sha256(readFileSync(harnessManifestPath)));
+    expect(build.lockfileDigest).toBe(sha256(readFileSync(lockfilePath)));
   });
 
   it('rejects an output mutation or an ambient dependency path', () => {
@@ -28,3 +33,7 @@ describe('sealed controller build manifest', () => {
     })).toThrow(/PRODUCTION_PATH_INVALID/);
   });
 });
+
+function sha256(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}

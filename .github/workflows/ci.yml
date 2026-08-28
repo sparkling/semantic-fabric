@@ -39,12 +39,12 @@ jobs:
   build:
     name: fmt · clippy · build · test
     runs-on: ubuntu-24.04
-    # Live PostgreSQL/MySQL/SQL Server service containers so the graceful-skip
-    # integration suites (differential_pg_sqlite, mysql_e2e, differential_mssql,
-    # mysql_release, constant_memory, adversarial_antijoin_review) actually run in
-    # CI instead of silently no-op'ing. `sqlserver-backend` is already enabled here
-    # via workspace feature unification (sf-conformance depends on sf-sql with it
-    # on) — no extra --features flag needed for the `test` step below.
+    # Live PostgreSQL/MySQL/SQL Server service containers. The sealed PostgreSQL
+    # RDB2RDF suite is required when CI=1; the other provider-specific suites still
+    # expose their live-optional grade in the generated capability matrix rather
+    # than silently becoming production-admission evidence. `sqlserver-backend` is
+    # already enabled here via workspace feature unification (sf-conformance
+    # depends on sf-sql with it on) — no extra feature flag is needed below.
     services:
       postgres:
         image: postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8 # postgres:16
@@ -133,10 +133,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends unixodbc-dev=2.3.12-1ubuntu0.24.04.1
       - name: test (sf-sql odbc-backend quote-escaping)
         run: cargo test --locked -p sf-sql --features odbc-backend backend::odbc::real::tests
-      # W3C RDB2RDF conformance gate (ADR-0005) — verified 2026-07-05: 82 adjudicated,
-      # 0 unexpected failures, 1 documented deviation (ADR-0015). The conformance run
-      # regenerates the EARL report files with non-deterministic bnode labels; that
-      # diff is expected and not committed.
+      - name: verify canonical RDB2RDF inventory
+        run: cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check
+      - name: replay sealed SQLite RDB2RDF outcome baseline
+        run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
+      - name: verify generated capability, backend, standards, and README claims
+        run: cargo run --locked -p sf-conformance --bin capability-matrix -- --check
+      # W3C RDB2RDF conformance gate (ADR-0005). The canonical inventory contains
+      # 87 cases and per-ID outcome policy; the preceding read-only checks reject
+      # input, outcome, generated-artifact, or public-claim drift. This command also
+      # emits EARL with non-deterministic blank-node labels; that diff is not committed.
       - name: conformance (W3C RDB2RDF)
         run: cargo run --locked -p sf-cli -- conformance
 
