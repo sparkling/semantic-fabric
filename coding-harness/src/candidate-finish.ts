@@ -4,6 +4,9 @@ import {
   sealCandidateRepairTransitions,
   type CandidateRepairTransition,
 } from './candidate-repair-transition.js';
+import {
+  createCandidateTransactionEvidenceV1,
+} from './candidate-transaction-evidence-v1.js';
 import { runtimeTrustUnavailable } from './candidate-gates.js';
 import type {
   CandidateEvidenceState,
@@ -13,6 +16,7 @@ import type {
 } from './candidate-types.js';
 import { deepFreeze, DEVELOPMENT_AUTHORITY } from './contracts.js';
 import { bindNativeRuntimeEvidenceV2 } from './native-runtime-evidence-v2.js';
+import type { NativeRuntimeEvidenceV2 } from './native-runtime-evidence-v2.js';
 import type { ReceiptFailureCode } from './failure-code.js';
 import { digestValue, type ReceiptChain } from './receipts.js';
 
@@ -35,6 +39,7 @@ export async function finishCandidateTransaction(
   let reason = input.requestedReason;
   let failureCode = input.requestedFailureCode;
   let repairTransitions: readonly CandidateRepairTransition[] = [];
+  let nativeRuntimeEvidence: NativeRuntimeEvidenceV2 | null = null;
   try {
     const recovery = input.operations.recoveryEvidence();
     input.evidence.runtime = {
@@ -56,6 +61,7 @@ export async function finishCandidateTransaction(
       ];
       input.evidence.coordination.nativeRuntimeEvidenceDigest = digestValue(native);
       repairTransitions = sealCandidateRepairTransitions(input.evidence.repairTransitions, native);
+      nativeRuntimeEvidence = native;
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -79,6 +85,7 @@ export async function finishCandidateTransaction(
     reason,
     failureCode,
     repairTransitions,
+    nativeRuntimeEvidence,
   });
 }
 
@@ -87,6 +94,7 @@ function finalizeCandidateTransaction(input: FinishCandidateTransactionInput & R
   reason: string | null;
   failureCode: ReceiptFailureCode | null;
   repairTransitions: readonly CandidateRepairTransition[];
+  nativeRuntimeEvidence: NativeRuntimeEvidenceV2 | null;
 }>): CandidateTransactionResult {
   const cancelled = input.status === 'cancelled';
   const receipt = input.receipts.append({
@@ -124,6 +132,13 @@ function finalizeCandidateTransaction(input: FinishCandidateTransactionInput & R
     },
     coordination: input.evidence.coordination,
   });
+  const transactionEvidence = input.status === 'pass' && input.nativeRuntimeEvidence !== null
+    ? createCandidateTransactionEvidenceV1({
+      receipt,
+      nativeRuntimeEvidence: input.nativeRuntimeEvidence,
+      repairTransitions: input.repairTransitions,
+    })
+    : null;
   return deepFreeze({
     status: input.status,
     reason: input.reason,
@@ -131,5 +146,6 @@ function finalizeCandidateTransaction(input: FinishCandidateTransactionInput & R
     finalPatch: input.status === 'pass' ? input.finalPatch : null,
     receipt,
     repairTransitions: input.repairTransitions,
+    transactionEvidence,
   });
 }

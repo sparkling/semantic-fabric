@@ -9,6 +9,7 @@ export * from './agentic-qe-sast.js';
 export * from './candidate.js';
 export * from './candidate-gates.js';
 export * from './candidate-receipt-evidence.js';
+export * from './candidate-transaction-evidence-v1.js';
 export * from './config.js';
 export * from './contracts.js';
 export * from './controller-attestation.js';

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import type { DEVELOPMENT_AUTHORITY } from './contracts.js';
+import type { CandidateTransactionEvidenceV1 } from './candidate-transaction-evidence-v1.js';
 import type {
   CandidateRepairTransition,
   CandidateRepairTransitionDraft,
@@ -138,6 +139,7 @@ export interface CandidateTransactionResult {
   finalPatch: string | null;
   receipt: Receipt;
   repairTransitions: readonly CandidateRepairTransition[];
+  transactionEvidence: CandidateTransactionEvidenceV1 | null;
 }
 
 export interface CandidateEvidenceState {
