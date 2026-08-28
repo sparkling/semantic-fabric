@@ -230,6 +230,8 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'docs/adr/ADR-0036-correctness-first-open-issue-remediation.md',
     'docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md',
     'docs/adr/ADR-0038-sota-application-completion-programme.md',
+    'docs/adr/ADR-0039-minimal-production-serving-artifact.md',
+    'docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md',
     'docs/plans/open-issues-ruflo-metaharness-implementation-plan.md',
     'harness-plan.json',
     'repo-profile.json',
