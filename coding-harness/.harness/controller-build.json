@@ -39,11 +39,11 @@
     "coding-harness/dist/evaluator.js": "1e8c6f2e98adfd05d9b18e2ba145f8b5d4a14edaf21fcbe1711752d76a2834e5",
     "coding-harness/dist/evidence.js": "eb49ab493a45c047e309961ad056a750f4f9d08676ca859ddacda9a56233a453",
     "coding-harness/dist/failure-code.js": "033081d35316f07c3eb743cda07fc346e36e15c13d59c77780c5a71a73bfda0f",
-    "coding-harness/dist/frozen-cargo-lock-fixture.js": "7e14d5187786a1a7ced57feca9e2ba7e2ae9de8f3f1c9416767da4ee55240f65",
+    "coding-harness/dist/frozen-cargo-lock-fixture.js": "14f6cd43463d6143dfea22315028fa2bd5d8b1119457fa805e9f0832f224e053",
     "coding-harness/dist/frozen-cargo-lock.js": "e57400321bab08815f104f0804ec7d498a9739a8bba2981f100ccf85f68eb1f4",
     "coding-harness/dist/frozen-cargo-metadata.js": "a9fd9219e7eb4fd86a2de8827acfa4e27618b2905afe4591ef808600c1c1b6af",
     "coding-harness/dist/git-materialization.js": "f6b0469327f9d667a3bbc664fb083b1ba6e056b6e752189530d23028e089ea2b",
-    "coding-harness/dist/git-process.js": "316e056b00871891fbd265d8db75f1d1d116a72bc6980e63b2ee32b0e8cc3a3c",
+    "coding-harness/dist/git-process.js": "ff16cdae6d9f6de86ed2fad4215ff8635a6b2ce23444faee5ce2084cdb406f0b",
     "coding-harness/dist/git-protected-boundary.js": "5f0d9f9b285894ce45a0f2efd397c23f93c711dc13cf7bbd487df74f2ffea186",
     "coding-harness/dist/git-worktrees.js": "ab7b880d08eff6102cfed53bdc9021d6ffdbc01cf7a86aeec20c92d00f8fd88a",
     "coding-harness/dist/immutable-private-runtime.js": "c2f78b6017a933cc642654b1a2001e45fe161addf71ff135757e6cf16b3eee40",
@@ -105,7 +105,7 @@
     "coding-harness/dist/programme-v5-driver.js": "07a5a37e6645e6eb379ac9db80bded0eeb275f6d13e4f13a01eec4c2bc77e86e",
     "coding-harness/dist/programme-v5-policy-anchor.js": "be3ac2119b823907e3640079099daa8b2074dc9653d3b077c200a6a7796499d2",
     "coding-harness/dist/programme-v5-program-runtime.js": "b7f78124278f62a34e5f3942d3101fd5c5b97955935fe20faa21d3d6227a8670",
-    "coding-harness/dist/programme-v5-program.js": "375f588df975f1db95669e050680c5946b53faf18a18e32f09b910ba5219455d",
+    "coding-harness/dist/programme-v5-program.js": "ffa047697cf15686f6c8b8aac54822b6354a5f4b1a68c7f5805e8e3fce46c6d4",
     "coding-harness/dist/programme-v5-qe.js": "d50f6c8ef3571be3e84c3fd2637493b8bba0ac35ea6b058dd13f49a3f18c503b",
     "coding-harness/dist/programme-v5-receipt-io.js": "e640e63101017dd36c133246ba1e4cee43e5854e3a82d3a6ba1cab3416274fa8",
     "coding-harness/dist/programme-v5-replay.js": "ed4443fa6c5e0bc360c3168900e7b235cbd6718d356be0dcd730afc73521c35c",
@@ -113,7 +113,7 @@
     "coding-harness/dist/programme-v5-ruflo-runtime.js": "c2974edc62547828908d1458880c8a95da25c048af46633fba3e44adae9a6593",
     "coding-harness/dist/programme-v5-ruflo.js": "bf0bd38c1b8490145b8dc0f02ada376db32c44eac351a6e9d6f5cb2f2c4af2c8",
     "coding-harness/dist/programme-v5-system.js": "a11ff237cf4439ecee6cca0006577f17ffa9a64f256fcefd67d268f06cc0d6f5",
-    "coding-harness/dist/programme-v6-base-execution.js": "0fe9a021e22f801b6f2e3281140040cb3db01075b5812ccc419760677fd63088",
+    "coding-harness/dist/programme-v6-base-execution.js": "a36b340766b3d17d72dd9761d6b821cd502b71ed2143e64b6d60869efd662e45",
     "coding-harness/dist/programme-v6-policy-anchor.js": "8ed200093b3cf90102eef17758177092f48623900426e52d26c5c5f63fd5e5c1",
     "coding-harness/dist/programme-v6-program.js": "ccc06c7df0668633b7aadfd1cbcce58a16142a4de9c326d9b689e449b7ace6f4",
     "coding-harness/dist/programme-v6-receipt-io.js": "0426e54d507717dc36c8a84efe2deda997052e5bf215b7a5f789b1b1be89f30d",
@@ -260,5 +260,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "f303d9ed5e372fa739dccec235dce43130fe271313ac20c3e799de80bbe5e57c"
+  "runtimeTreeDigest": "a3091aa2743fc6e7bc07a0d79057698d1cfda4c6092c14653385bf050a1bfba4"
 }

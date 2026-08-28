@@ -11,6 +11,26 @@ export interface GitCommandResult {
   readonly exitCode: number | null;
 }
 
+export interface GitCommandBytesResult {
+  readonly stdout: Buffer;
+  readonly stderr: string;
+  readonly exitCode: number | null;
+}
+
+interface RawGitCommandResult {
+  readonly stdout: Buffer;
+  readonly stderr: Buffer;
+  readonly exitCode: number | null;
+}
+
+interface GitCommandOptions {
+  readonly stdin?: string;
+  readonly signal?: AbortSignal;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly timeoutMs?: number;
+  readonly maxOutputBytes?: number;
+}
+
 const DEFAULT_MAX_OUTPUT_BYTES = 10_000_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const GIT_EXECUTABLE = process.platform === 'win32'
@@ -27,17 +47,37 @@ const EXTRA_ENVIRONMENT = new Set([
   'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_COMMITTER_DATE',
 ]);
 
-export function runGitCommand(
+export async function runGitCommand(
   cwd: string,
   args: readonly string[],
-  options: Readonly<{
-    stdin?: string;
-    signal?: AbortSignal;
-    environment?: Readonly<Record<string, string>>;
-    timeoutMs?: number;
-    maxOutputBytes?: number;
-  }> = {},
+  options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
+  const result = await runRawGitCommand(cwd, args, options);
+  return Object.freeze({
+    stdout: result.stdout.toString('utf8'),
+    stderr: result.stderr.toString('utf8'),
+    exitCode: result.exitCode,
+  });
+}
+
+export async function runGitCommandBytes(
+  cwd: string,
+  args: readonly string[],
+  options: GitCommandOptions = {},
+): Promise<GitCommandBytesResult> {
+  const result = await runRawGitCommand(cwd, args, options);
+  return Object.freeze({
+    stdout: result.stdout,
+    stderr: result.stderr.toString('utf8'),
+    exitCode: result.exitCode,
+  });
+}
+
+function runRawGitCommand(
+  cwd: string,
+  args: readonly string[],
+  options: GitCommandOptions,
+): Promise<RawGitCommandResult> {
   return new Promise((resolveResult, reject) => {
     if (options.signal?.aborted === true) {
       reject(gitAbortError());
@@ -93,11 +133,11 @@ export function runGitCommand(
         reject(new Error('HARNESS_GIT_OUTPUT_LIMIT_EXCEEDED'));
         return;
       }
-      resolveResult({
-        stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
+      resolveResult(Object.freeze({
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr),
         exitCode,
-      });
+      }));
     }));
     child.stdin.on('error', () => {
       // Early Git exit is represented by exit status; EPIPE must not crash the controller.
