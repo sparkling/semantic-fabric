@@ -14,7 +14,7 @@
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | Backend-aware v3 receipts now bind all 87 SQLite and required-live PostgreSQL mapping outcomes; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; the first external current-`sf-cli` host observation was captured and replayed from clean `5a06eac`; performance capture/comparison machinery, exact capture-input attestation, and a capability-minimal negative-only host gate exist; and `ad94cdb` replayed byte-identically in two clean checkouts. Complete positive runner admission, tool/system closure, SBOM/reproducibility, production minimality/admission, and a controlled performance baseline remain open |
+| M0 — architectural truth and deterministic foundation | In progress | Backend-aware v3 receipts now bind all 87 SQLite and required-live PostgreSQL mapping outcomes; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; the first external current-`sf-cli` host observation was captured and replayed from clean `5a06eac`; performance capture/comparison machinery, exact capture-input attestation, a capability-minimal negative-only host gate, and a non-authorizing same-UID run-claim reservation exist; and `ad94cdb` replayed byte-identically in two clean checkouts. Complete external claim witnessing, positive runner admission, tool/system closure, SBOM/reproducibility, production minimality/admission, and a controlled performance baseline remain open |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03` and `_04` remain honest historical failures at the final-review boundary. Fresh run
@@ -69,6 +69,10 @@ The current tranche adds a fail-closed **host-observed non-closure observation**
 Performance machinery exists, and `f2cc800` removes issue-8 lock hardcoding from future V5/V6 patch tasks. Proposed ADR-0041 keeps the first clean-release measurement outside that patch transaction; no controlled runner profile, baseline, candidate, capture receipt, or measured numbers exist. The capture controller now parses a conservative byte-canonical subset of the product runner profile and observes two fixed, read-only `/proc`/`sysfs` snapshots; an AST-walked exact-import/open-call mutation sentinel rejects known command, provider, socket, loader, write-flag and ambient escape forms in the protected current source, but is not an OS capability sandbox. Captured module-private operations distinguish fixed from injected collection locally; durable records prove canonical self-consistency, not independently witnessed collector provenance, which remains required before positive capture.
 Its result domain is deliberately only `ineligible | unproven`; either result snapshots immutable profile bytes through typed-array intrinsics, rederives the classification, binds exact input-attested and returned terminal states, and leaves the attempt count at zero. This module cannot emit `pass-host-preflight` or authorize capture; future positive replay must authenticate evidence kind before the generic state transition. Raw source hashes remain recorded, stability uses normalized controls, and CPU lists are parsed independently so malformed evidence cannot hide relations among the valid lists or other disqualifiers. A live diagnostic on this development host returned `ineligible`: allowed CPUs `0-31` are not isolated, governors are `powersave`, turbo control is unavailable, and swap is `33,519,612 KiB`.
 Because no canonical tracked profile or capture task exists, this is diagnostic non-admission evidence only, not an authoritative programme run or measurement.
+
+The current control-plane slice adds a capture-specific run-claim codec and local single-use reservation. Its stable slot depends only on an independently supplied project-authority digest and run ID; the immutable body binds the controller, task, input attestation, runner profile and expected runner identity, while host admission remains unevaluated and all lease, attempt and capture authority remains false. Reserve and replay independently re-attest the controller store, pinned commit and task; a caller-supplied self-consistent attestation is not authority.
+A pre-existing owner-only `0700` authority directory is descriptor-pinned; the derived `0600` file uses `O_EXCL`/`O_NOFOLLOW`, file and directory `fsync`, stable metadata checks and exact canonical readback. Returned admission/state bytes are reproducible non-authoritative views. The first host consumer and verifier reopen the rooted claim and reject missing, deleted, replaced and caller-forged authority. Separate-process attack tests prove one concurrent winner and that a pre-existing file, directory, FIFO, hard link or symlink spends the slot.
+The adapter is owner-deletable and therefore proves neither external append-only durability nor rollback resistance. It has no lease, launch, deletion, TTL, reclaim or retry API. Tests use temporary synthetic roots; no real project run ID was claimed on this host.
 
 On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links under the hardened-builder
 `umask 0022`. Each checkout rebuilt the controller, passed all 91 harness files (627 tests passed and 8 environment-
@@ -482,17 +486,12 @@ only; no README keyword or dummy workflow is added to game the score.
 
 The programme closes only when:
 
-- every accepted ADR is implemented with current executable evidence or is
-  explicitly superseded;
-- every advertised query/profile/backend cell is exact, and every unsupported
-  cell fails before a valid-looking response;
-- bounded heap/RSS, total budgets, cancellation and overload gates pass for every
-  admitted operator and backend;
+- every accepted ADR is implemented with current executable evidence or is explicitly superseded;
+- every advertised query/profile/backend cell is exact, and every unsupported cell fails before a valid-looking response;
+- bounded heap/RSS, total budgets, cancellation and overload gates pass for every admitted operator and backend;
 - identity/policy/provenance, snapshot lifecycle and operability gates pass;
-- cross-source differential, boundedness, reduction, cancellation and failure
-  semantics pass;
-- the minimal immutable artifact and its supply-chain/release evidence verify on
-  clean machines; and
+- cross-source differential, boundedness, reduction, cancellation and failure semantics pass;
+- the minimal immutable artifact and its supply-chain/release evidence verify on clean machines; and
 - the score is at least 98/100 with no hard-gate failure or inconclusive evidence.
 
 Anything less may be a useful preview or interim single-source production

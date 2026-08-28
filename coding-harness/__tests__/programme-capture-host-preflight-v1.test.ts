@@ -5,11 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
   collectProgrammeCaptureHostDiagnosticObservationV1,
   collectProgrammeCaptureHostObservationV1,
+  deriveProgrammeCaptureHostNonAdmissionViewV1,
   diagnoseProgrammeCaptureHostObservationV1,
   parseProgrammeCaptureHostNonAdmissionV1,
-  rejectProgrammeCaptureHostPreflightV1,
   rustArchitecture,
-  verifyProgrammeCaptureHostNonAdmissionV1,
+  verifyProgrammeCaptureHostNonAdmissionViewV1,
   type ProgrammeCaptureHostSurfaceSourceV1,
 } from '../src/programme-capture-host-preflight-v1.js';
 import {
@@ -172,7 +172,7 @@ function rejectionFixture(
   profileBytes: Uint8Array | null = Buffer.from(PROFILE_TEXT),
 ) {
   const attestation = inputAttestation();
-  return rejectProgrammeCaptureHostPreflightV1({
+  return deriveProgrammeCaptureHostNonAdmissionViewV1({
     state: inputsAttestedState(attestation),
     inputAttestation: attestation,
     profileBytes: profileBytes ?? undefined,
@@ -288,7 +288,7 @@ describe('programme capture negative-only host preflight V1', () => {
 
     const invalidProfile = Buffer.from(PROFILE_TEXT.replace('controlled\ttrue', 'controlled\tTRUE'));
     const invalidAttestation = inputAttestation(invalidProfile);
-    const invalid = rejectProgrammeCaptureHostPreflightV1({
+    const invalid = deriveProgrammeCaptureHostNonAdmissionViewV1({
       state: inputsAttestedState(invalidAttestation),
       inputAttestation: invalidAttestation,
       profileBytes: invalidProfile,
@@ -320,7 +320,7 @@ describe('programme capture negative-only host preflight V1', () => {
     expect(drifted.state.captureAttempts).toBe(0);
 
     const emptyAttestation = inputAttestation(Buffer.alloc(0));
-    const empty = rejectProgrammeCaptureHostPreflightV1({
+    const empty = deriveProgrammeCaptureHostNonAdmissionViewV1({
       state: inputsAttestedState(emptyAttestation),
       inputAttestation: emptyAttestation,
       profileBytes: Buffer.alloc(0),
@@ -379,7 +379,7 @@ describe('programme capture negative-only host preflight V1', () => {
 
     const attestation = inputAttestation();
     const state = inputsAttestedState(attestation);
-    const anchored = rejectProgrammeCaptureHostPreflightV1({
+    const anchored = deriveProgrammeCaptureHostNonAdmissionViewV1({
       state,
       inputAttestation: attestation,
       profileBytes: Buffer.from(PROFILE_TEXT),
@@ -391,7 +391,7 @@ describe('programme capture negative-only host preflight V1', () => {
     rehashed.recordDigest = digestValue(body);
     expect(parseProgrammeCaptureHostNonAdmissionV1(rehashed).runId)
       .toBe('capture_run_20260828_9999');
-    expect(() => verifyProgrammeCaptureHostNonAdmissionV1({
+    expect(() => verifyProgrammeCaptureHostNonAdmissionViewV1({
       record: rehashed,
       beforeState: state,
       afterState: anchored.state,
@@ -405,7 +405,7 @@ describe('programme capture negative-only host preflight V1', () => {
     const { recordDigest: _digest, ...relabelledBody } = relabelled;
     relabelled.recordDigest = digestValue(relabelledBody);
     expect(parseProgrammeCaptureHostNonAdmissionV1(relabelled).outcome).toBe('ineligible');
-    expect(() => verifyProgrammeCaptureHostNonAdmissionV1({
+    expect(() => verifyProgrammeCaptureHostNonAdmissionViewV1({
       record: relabelled,
       beforeState: state,
       afterState: anchored.state,
@@ -418,7 +418,7 @@ describe('programme capture negative-only host preflight V1', () => {
       processDispositionDigest: digest('7'), egressDispositionDigest: digest('6'),
       leaseDispositionDigest: digest('5'),
     });
-    expect(() => verifyProgrammeCaptureHostNonAdmissionV1({
+    expect(() => verifyProgrammeCaptureHostNonAdmissionViewV1({
       record: anchored.record, beforeState: state, afterState: wrongTerminal,
       inputAttestation: attestation, profileBytes: Buffer.from(PROFILE_TEXT),
     })).toThrow(/TERMINAL_MISMATCH/);
@@ -434,13 +434,13 @@ describe('programme capture negative-only host preflight V1', () => {
     const attestation = inputAttestation();
     const state = inputsAttestedState(attestation);
     const observation = collectProgrammeCaptureHostDiagnosticObservationV1(new FakeSurfaceSource());
-    expect(() => rejectProgrammeCaptureHostPreflightV1({
+    expect(() => deriveProgrammeCaptureHostNonAdmissionViewV1({
       state: { ...state, claimDigest: digest('a') } as any,
       inputAttestation: attestation,
       profileBytes: Buffer.from(PROFILE_TEXT),
       observation,
     })).toThrow();
-    expect(() => rejectProgrammeCaptureHostPreflightV1({
+    expect(() => deriveProgrammeCaptureHostNonAdmissionViewV1({
       state: createProgrammeCaptureStateV1({
         runId: state.runId,
         taskDigest: state.taskDigest,
@@ -482,7 +482,7 @@ describe('programme capture negative-only host preflight V1', () => {
     expect(['ineligible', 'unproven']).toContain(diagnosis.outcome);
     expect(diagnosis.captureAuthorized).toBe(false);
     const attestation = inputAttestation();
-    const result = rejectProgrammeCaptureHostPreflightV1({
+    const result = deriveProgrammeCaptureHostNonAdmissionViewV1({
       state: inputsAttestedState(attestation),
       inputAttestation: attestation,
       profileBytes: undefined,

@@ -40,6 +40,25 @@ not independently witnessed collector provenance; positive capture must add that
 This remains partial fail-closed
 implementation, not acceptance of this ADR or proof of a controlled runner.
 
+The controller also now has a capture-specific run-claim codec and a cooperative
+same-UID create-new authority adapter. Claim-slot selection varies only with an
+independently supplied project-authority digest and run ID; controller, task,
+input-attestation, runner-profile, and expected-runner identities are immutable
+claim-body bindings. Reserve and replay independently re-attest the pinned
+controller store, commit, and task before comparing the whole claim. Only after
+descriptor-rooted persistence and exact readback does the adapter return
+claim-admission and state-genesis **views**. Those deterministic bytes are not
+provenance: the first host consumer and authoritative replay reopen the rooted
+claim and re-attest controller authority before exact state derivation. The
+records state explicitly that host admission is not evaluated and that no runner
+lease, attempt start, or capture is authorized. The adapter requires a
+pre-existing, canonical owner-only `0700` authority directory, creates the
+derived `0600` claim with `O_EXCL`/`O_NOFOLLOW`, and fsyncs file and directory.
+An identical claim is spent rather than idempotent. This proves cooperative
+concurrent exclusion within that one root only: it is owner-deletable, has no
+external append-only witness or rollback resistance, and is not the future
+runner lease. No real project claim has been minted on this ineligible host.
+
 The `implements: ADR-0038` relationship denotes a subordinate proposed design
 lock. It is not implementation completion or M0 evidence.
 
@@ -215,6 +234,19 @@ of the uniqueness key. An existing identical claim is already spent, never an
 idempotent launch authorization. A same-UID create-new file prevents concurrent
 claims but is owner-deletable; hostile rollback resistance requires a pinned
 signing key and a separately administered append-only supervisor.
+
+The implemented local claim binds an **expected** runner identity, not an
+observed runner identity. The latter is temporally available only when a future
+independently administered supervisor issues the runner lease. Pure claim
+parsing proves canonical self-consistency only. Reserve and replay must receive
+the authority root, project-authority digest, run ID, controller store, pinned
+commit, task path, and expected runner identity independently; they re-attest
+the commit and task before exact comparison. Claim-admission and state-genesis
+views are deliberately reproducible plain data, not persistence proof or an
+external witness. Every authoritative consumer must reopen the rooted claim and
+reconstruct exact state; the first host-rejection boundary does so and rejects
+missing, deleted, replaced or self-authored authority. There is no local API to acquire
+a lease, authorize an attempt, delete, release, renew, reclaim, or retry a claim.
 
 Within the leased runner and controller process boundary, model processes and
 model-network brokers must not exist during the measured interval. Pre-review

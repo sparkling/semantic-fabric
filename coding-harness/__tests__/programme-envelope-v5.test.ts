@@ -50,21 +50,26 @@ import {
 } from './candidate-fixtures.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = 'fcf4b9f46f4f221ca01ca699408458ef3987553456ced7fe6164a7b7d87b303e';
-const ACCEPTANCE_DIGEST = 'a59d031399dc0b53daf73d2b80a02a62ccd31b67c3e2211dd1162fc11b7343fe';
-const ENVELOPE_DIGEST = '031188094bdef7be720b15322f3af702c588d48e78a676f365f57fb670235c30';
+const POLICY_FINGERPRINT = '1f3073cb96343682d89d756783dc279e0fd1fd3c074b9537c78da0905f62b5b0';
+const ACCEPTANCE_DIGEST = '8fc09cc7fc9ab925931b16bf72b1c3f520312fdd2f20138cf7bbcafda1389df4';
+const ENVELOPE_DIGEST = '422eae7e01cec2f804bce6b6ce3b1482c318cdb610ce4d96c449408dd5b71a22';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
 const CAPTURE_PATHS = new Set([
+  'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
   'coding-harness/__tests__/programme-capture-git-v1.test.ts',
   'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
   'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
   'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
   'coding-harness/__tests__/programme-capture-state-v1.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
+  'coding-harness/src/programme-capture-claim-io-v1.ts',
+  'coding-harness/src/programme-capture-claim-record-v1.ts',
   'coding-harness/src/programme-capture-config-v1.ts',
   'coding-harness/src/programme-capture-git-v1.ts',
+  'coding-harness/src/programme-capture-host-authority-v1.ts',
   'coding-harness/src/programme-capture-host-observation-v1.ts',
   'coding-harness/src/programme-capture-host-preflight-v1.ts',
   'coding-harness/src/programme-capture-input-attestation-record-v1.ts',

@@ -123,7 +123,7 @@ export function diagnoseProgrammeCaptureHostObservationV1(
   });
 }
 
-export function rejectProgrammeCaptureHostPreflightV1(value: Readonly<{
+export function deriveProgrammeCaptureHostNonAdmissionViewV1(value: Readonly<{
   state: ProgrammeCaptureStateV1;
   inputAttestation: ProgrammeCaptureInputAttestationV1;
   profileBytes: Uint8Array | undefined;
@@ -194,7 +194,7 @@ export function rejectProgrammeCaptureHostPreflightV1(value: Readonly<{
     egressDispositionDigest: digestValue({ providerEgress: 'not-authorized' }),
     leaseDispositionDigest: digestValue({ runnerLease: 'not-acquired' }),
   });
-  verifyProgrammeCaptureHostNonAdmissionV1({
+  verifyProgrammeCaptureHostNonAdmissionViewV1({
     record,
     beforeState: state,
     afterState: failed,
@@ -204,7 +204,7 @@ export function rejectProgrammeCaptureHostPreflightV1(value: Readonly<{
   return deepFreeze({ record, state: failed });
 }
 
-export function verifyProgrammeCaptureHostNonAdmissionV1(value: Readonly<{
+export function verifyProgrammeCaptureHostNonAdmissionViewV1(value: Readonly<{
   record: ProgrammeCaptureHostNonAdmissionV1;
   beforeState: ProgrammeCaptureStateV1;
   afterState: ProgrammeCaptureStateV1;

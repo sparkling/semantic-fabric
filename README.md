@@ -195,7 +195,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 635 tests across 91 files; two
+- The versioned engineering harness passes 702 tests across 99 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -239,6 +239,18 @@ single-attempt transaction rather than weakening V6 patch semantics. No controll
 profile, baseline, candidate, capture receipt, or measured numbers exist. M0 remains open for complete binary/tool/system
 closure, SBOM/reproducibility and production minimality/admission, that controlled
 performance baseline, and a final two-builder release replay after those authorities exist.
+The capture control plane now also has a closed, non-authorizing run-claim
+record and a local same-UID create-new adapter. Its slot varies only by an
+independently supplied project-authority digest and run ID; the body binds the
+controller, task, input attestation, runner profile and expected runner identity
+while keeping host admission unevaluated and lease/attempt/capture authority
+false. Reserve and replay re-attest the pinned controller store, commit and task.
+A pre-existing owner-only authority directory is descriptor-pinned, the derived
+claim uses `O_EXCL`/`O_NOFOLLOW`, and successful fsync plus exact readback returns
+local admission/state views. Those reproducible bytes are not provenance: the
+host consumer and verifier reopen the rooted claim and reject absent, deleted,
+replaced or caller-forged authority. The root remains owner-deletable and proves
+neither an external witness nor rollback resistance. No real claim was minted.
 Current-tranche repeatability is proven: exact commit
 `ad94cdb` rebuilt and replayed byte-identically in two clean, no-hard-link
 checkouts under hardened-builder `umask 0022`, with both trees remaining clean.
@@ -325,7 +337,8 @@ CI and the controller protect and replay those authorities read-only. M1–M7 re
 
 The current M0 tranche adds per-test expected SQLite query/Protocol baselines,
 the scoped default `sf-cli` package dependency receipt, and controlled
-performance production/comparison machinery. The query/protocol receipts do not
+performance production/comparison machinery plus the non-authorizing local
+run-claim reservation described above. The query/protocol receipts do not
 claim W3C conformance, runtime provenance, or backend admission; the dependency
 receipt does not claim actual artifact or supply-chain closure; and no controlled
 performance profile, receipt, or numbers have been captured. The first private
@@ -424,7 +437,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation now binds one current binary and its observed final-link inputs, but not complete build-script/tool/system execution, linker time-of-use, SBOM, reproducibility, production minimality, or admission. Six advisory exceptions, three unmaintained-crate warnings, complete artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. No controlled runner profile, baseline, candidate, capture receipt, or measured numbers exist; this host is ineligible |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, and a same-UID non-authorizing run-claim reservation exist. There is still no external append-only witness, positive runner admission, controlled profile, baseline, candidate, capture receipt, or measured number; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
