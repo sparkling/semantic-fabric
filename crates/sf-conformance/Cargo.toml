@@ -67,10 +67,19 @@ name = "rust-closure-receipt"
 path = "src/bin/rust-closure-receipt.rs"
 required-features = ["evidence-receipts"]
 
+[[bin]]
+name = "current-sf-cli-artifact-observation"
+path = "src/bin/current-sf-cli-artifact-observation.rs"
+required-features = ["evidence-receipts"]
+
 [[test]]
 name = "regression_baseline_cli"
 required-features = ["evidence-receipts"]
 
 [[test]]
 name = "rust_closure_receipt"
+required-features = ["evidence-receipts"]
+
+[[test]]
+name = "binary_artifact_receipt"
 required-features = ["evidence-receipts"]
