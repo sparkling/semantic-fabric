@@ -82,6 +82,7 @@ describe('retrieval flywheel governance', () => {
 
   it('keeps background tuning and legacy apply off by default', () => {
     const env = settings.env as Record<string, unknown> | undefined;
+    expect(env).toHaveProperty('RUFLO_FUNNEL', '0');
     expect(env).not.toHaveProperty('RUFLO_HARNESS_LOOP');
     expect(env).not.toHaveProperty('RUFLO_FLYWHEEL_LEGACY_APPLY');
 

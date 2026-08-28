@@ -14,19 +14,29 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 |---|---|---|
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
-| H0c — trusted-launcher activation | In progress | The explicit immutable fresh-ID v5 operator is implemented. Runs `_03` and `_04` both reached deterministic gates, then failed at the final-review boundary before any review digest was sealed; both recorded `status: fail`, their programme assessments were `REJECTED` at 40/100, and replay verified. `f82c2b5` now classifies future opaque native review-operation exceptions; a fresh post-fix policy/anchor is required before another run |
+| H0c — trusted-launcher activation | In progress | V5 run `_05` completed a passing transaction after one pre-build repair, but its frozen V1 reliability law required prior build evidence and rejected the programme at 85/100. Provider-free replay verified the rejection. The additive V6 path is being implemented to bind contemporaneous transaction/native evidence and interpret prior attempts from their recorded repair transitions; V4/V5 remain frozen |
 | M0–M7 — application completion | Gated | Existing product evidence remains valid, but no milestone is marked complete until its milestone QA gate passes |
 
-Both H0c runs used controller `ad32d4a`; neither is acceptance evidence. Run
-`programme_v5_h0c_20260827_04` has receipt
-`d888c175f54ce39f5e9c62837487758ed0410d5b57591564a11a771dd9937bc7` and
-provider-free replay receipt
-`c588022d606009b9d15777fbf70c843085d783e3f8dd579544c19b0d78fab833`.
-It proved the red baseline, build, three verifier lanes, EARL evidence, and four
-mutation sentinels, but emitted no final-review digest. The generic recorded
-failure cannot support attribution to spend, rate limits, or either model. No
-blind repeat is permitted: the next run must bind the committed classification
-fix, a newly reviewed policy, a new claim, and a fresh run ID.
+Runs `_03` and `_04` remain honest historical failures at the final-review
+boundary. Fresh run `programme_v5_h0c_20260828_05`, under controller `4b0756f`,
+then passed the candidate transaction after one patch-admission repair and
+proved the final build, three verifier lanes, generated EARL, four mutation
+sentinels, dual native reviews, QE, and protected inputs. Its sealed V5 envelope
+was nevertheless `REJECTED` at 85/100 solely because the frozen V1 reliability
+law requires build evidence for every prior attempt, including an attempt whose
+patch never reached build. Its policy, receipt, acceptance, envelope, and replay
+digests are respectively
+`c4411178334b54620da099ba7e2c9e029ebcc6873a0bc85e9dfca93bacbfeb79`,
+`91bfc845961c84237ff7f9ea58e75bc77c76d21913f042e05e77c68bc7ab98d1`,
+`cf7734d88eaa05e91916992c8ad8e1c2dfdc285e7a14fe14858bed3744288930`,
+`4c0897695d9a865ff636088be806b4ce5074d3e3552a15038c58435b0017e05f`,
+and `ca2bbbb3a909f846b0a443ce21572680a2fc9e930a0cb30d294cf2b4af178cfc`.
+
+The correction is a sibling schema V6, not a reinterpretation of `_05`: it
+adds a V2 outer policy and gate contract, full candidate transaction/native
+evidence, and transition-derived `not-started`, `failed`, or `passed` prior-build
+semantics. Historical V4/V5 bytes and decisions stay immutable. H0c requires a
+fresh V6 policy review, claim, run ID, sealed envelope, and provider-free replay.
 
 ## Outcome
 
@@ -363,16 +373,16 @@ For M0–M7 code changes, use the ADR-0037 control plane proportionally:
    passing gates alone does not activate it. No evolution starts before the 5+5
    holdout and reward-hack controls pass.
 
-Native Codex/ChatGPT and Claude subscription invocations have no artificial
-dollar ceiling. `subscriptionCostUsd: 0` records the marginal provider-API spend
-attributable to a native subscription invocation; it is a receipt/routing ledger
-fact, not a task budget, spend cap, or execution ceiling. Task, turn, wall-clock,
-output, concurrency, provider-rate backoff, and receipt bounds remain operational
-safety controls. Do not set or consume provider API keys and do not route through
-OpenRouter. Native-provider exhaustion or unavailability fails the affected gate
-closed; it never authorizes an indirect fallback. References elsewhere in this
-programme to query “cost” or `QueryBudget` govern source work and result resources,
-not model-provider spend.
+Native Codex/ChatGPT and Claude subscription invocations have no project-imposed
+provider-dollar spend ceiling. `subscriptionCostUsd: 0` records zero marginal
+provider-API charge in the receipt/routing ledger; it is neither a budget or cap
+nor a claim of unlimited subscription capacity. Task, turn, wall-clock, output,
+concurrency, first-party rate-limit backoff, retry/repair, resource, and receipt
+limits remain operational safety controls. Do not set or consume provider API
+keys and do not route through OpenRouter. Native-provider exhaustion or
+unavailability fails the affected gate closed; it never authorizes an indirect
+fallback. References elsewhere in this programme to query “cost” or
+`QueryBudget` govern source work and result resources, not model-provider spend.
 
 Small documentation/status-only corrections use the same truth and review rules
 without paying for an irrelevant full harness transaction. Product behavior,
