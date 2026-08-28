@@ -9,7 +9,7 @@ env:
 jobs:
   coding-harness:
     name: coding harness · node ${{ matrix.node }} · build · test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -17,12 +17,12 @@ jobs:
           - node: '20.0.0'
             native_required: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # The acceptance-task contract verifies the immutable #8 source-fix
           # commit, so its history is a test input rather than an optimisation.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -38,7 +38,7 @@ jobs:
 
   build:
     name: fmt · clippy · build · test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Live PostgreSQL/MySQL/SQL Server service containers so the graceful-skip
     # integration suites (differential_pg_sqlite, mysql_e2e, differential_mssql,
     # mysql_release, constant_memory, adversarial_antijoin_review) actually run in
@@ -47,7 +47,7 @@ jobs:
     # on) — no extra --features flag needed for the `test` step below.
     services:
       postgres:
-        image: postgres:16
+        image: postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8 # postgres:16
         env:
           POSTGRES_USER: sftest
           POSTGRES_PASSWORD: sftest
@@ -60,7 +60,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       mysql:
-        image: mysql:8
+        image: mysql@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0 # mysql:8
         env:
           MYSQL_ROOT_PASSWORD: sftest
           MYSQL_DATABASE: sftest
@@ -72,7 +72,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server@sha256:ba4c8329f48fb8f02e1416be6a930ebfd71268caee78aa985f3af4315e457c89 # 2022-latest
         env:
           ACCEPT_EULA: Y
           MSSQL_SA_PASSWORD: SfTest123!
@@ -83,10 +83,10 @@ jobs:
       SF_MYSQL_URL: "mysql://root:sftest@127.0.0.1:13306/sftest"
       SF_MSSQL_URL: "server=tcp:localhost,11433;user id=SA;password=SfTest123!"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain (pinned via rust-toolchain.toml)
         run: rustup show
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # SQL Server has no lightweight in-container healthcheck tool available to
       # `options:`, unlike postgres/mysql above — poll the TCP port directly instead.
       - name: wait for SQL Server
@@ -130,7 +130,7 @@ jobs:
       # driver manager package is installed first; the rest of the odbc-backend surface
       # (DB2/H2/Spark/Dremio/Denodo/Teiid) needs a live DSN, so it's excluded.
       - name: install unixODBC (odbc-backend link dependency)
-        run: sudo apt-get update && sudo apt-get install -y unixodbc-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends unixodbc-dev=2.3.12-1ubuntu0.24.04.1
       - name: test (sf-sql odbc-backend quote-escaping)
         run: cargo test --locked -p sf-sql --features odbc-backend backend::odbc::real::tests
       # W3C RDB2RDF conformance gate (ADR-0005) — verified 2026-07-05: 82 adjudicated,
@@ -142,7 +142,7 @@ jobs:
 
   readiness:
     name: meta-harness readiness telemetry (ADR-0026)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Read-layer telemetry only (ADR-0026 Part A) — non-blocking, drift tracking.
     # 2026-07-05 baseline: harnessFit 71 · compileConfidence 100 · scaffoldReady true.
     # Version PINNED, never @latest: the upstream ruflo-metaharness plugin's own
@@ -154,10 +154,10 @@ jobs:
     env:
       METAHARNESS_PIN: metaharness@0.3.0
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '24'
+          node-version: '24.14.1'
       - name: harness score + genome + mcp-scan + threat-model (informational snapshot)
         run: |
           { echo '### Meta-harness readiness (ADR-0026)'; echo '```json'; } >> "$GITHUB_STEP_SUMMARY"

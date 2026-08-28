@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -58,6 +58,33 @@ const DEPENDENCY_RESOLVING_CARGO_SUBCOMMANDS = new Set([
 ]);
 const NON_RESOLVING_CARGO_SUBCOMMANDS = new Set(['fmt']);
 const CARGO_GLOBAL_OPTIONS_WITH_VALUE = new Set(['--color', '--config', '-C', '-Z']);
+const EXACT_NODE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+const PINNED_ACTION = /^[^@\s]+@[0-9a-f]{40}$/;
+const PINNED_IMAGE = /@sha256:[0-9a-f]{64}$/;
+const UNIXODBC_VERSION = '2.3.12-1ubuntu0.24.04.1';
+
+function yamlScalar(value: string): string {
+  const scalar = value.replace(/\s+#.*$/, '').trim();
+  if ((scalar.startsWith("'") && scalar.endsWith("'"))
+    || (scalar.startsWith('"') && scalar.endsWith('"'))) {
+    return scalar.slice(1, -1);
+  }
+  return scalar;
+}
+
+function workflowSources(repository: string): ReadonlyArray<Readonly<{
+  path: string;
+  source: string;
+}>> {
+  const directory = resolve(repository, '.github/workflows');
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.ya?ml$/.test(entry.name))
+    .map((entry) => ({
+      path: `.github/workflows/${entry.name}`,
+      source: readFileSync(resolve(directory, entry.name), 'utf8'),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
 
 function workflowRunScripts(source: string): WorkflowRunScript[] {
   const lines = source.split(/\r?\n/);
@@ -321,5 +348,76 @@ describe('canonical harness manifest', () => {
       auditVersions,
       'cargo-audit must be pinned with exactly one --version value of 0.22.2',
     ).toEqual(['0.22.2']);
+  });
+
+  it('pins every workflow action, hosted runner, service image, Node runtime, and apt tool', () => {
+    const repository = resolve(root, '..');
+    const violations: string[] = [];
+    let unixOdbcInstallers = 0;
+
+    for (const workflow of workflowSources(repository)) {
+      const lines = workflow.source.split(/\r?\n/);
+      const matrixNodes = lines.flatMap((line) => {
+        const match = /^\s*(?:-\s+)?node:\s*(.+?)\s*$/.exec(line);
+        return match ? [yamlScalar(match[1] ?? '')] : [];
+      });
+      let setupNodeActions = 0;
+      let nodeVersionInputs = 0;
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index] ?? '';
+        const location = `${workflow.path}:${index + 1}`;
+        const action = /^\s*(?:-\s+)?uses:\s*(.+?)\s*$/.exec(line);
+        if (action) {
+          const value = yamlScalar(action[1] ?? '');
+          if (!PINNED_ACTION.test(value)) {
+            violations.push(`${location}: action ref must end in a 40-hex commit SHA`);
+          }
+          if (value.startsWith('actions/setup-node@')) setupNodeActions += 1;
+        }
+
+        const runner = /^\s*runs-on:\s*(.+?)\s*$/.exec(line);
+        const runnerValue = runner ? yamlScalar(runner[1] ?? '') : '';
+        if (runner && !runnerValue.includes('self-hosted') && /(?:^|[\s[,'"])[^\s\],'"]+-latest(?:$|[\s\],'"])/.test(runnerValue)) {
+          violations.push(`${location}: hosted runner family must not use a *-latest label`);
+        }
+
+        const image = /^\s*image:\s*(.+?)\s*$/.exec(line);
+        if (image && !PINNED_IMAGE.test(yamlScalar(image[1] ?? ''))) {
+          violations.push(`${location}: service image must end in a sha256 digest`);
+        }
+
+        const node = /^\s*node-version:\s*(.+?)\s*$/.exec(line);
+        if (node) {
+          nodeVersionInputs += 1;
+          const value = yamlScalar(node[1] ?? '');
+          const exactMatrix = value === '${{ matrix.node }}'
+            && matrixNodes.length > 0 && matrixNodes.every((entry) => EXACT_NODE_VERSION.test(entry));
+          if (!EXACT_NODE_VERSION.test(value) && !exactMatrix) {
+            violations.push(`${location}: Node version must be exact major.minor.patch`);
+          }
+        }
+      }
+      if (setupNodeActions !== nodeVersionInputs) {
+        violations.push(`${workflow.path}: every setup-node action must bind one exact node-version`);
+      }
+
+      for (const { line, script } of workflowRunScripts(workflow.source)) {
+        if (!/\bunixodbc-dev(?:=|\s|$)/.test(script)) continue;
+        unixOdbcInstallers += 1;
+        const words = shellWords(script);
+        const packages = words.filter((word) => word === 'unixodbc-dev'
+          || word.startsWith('unixodbc-dev='));
+        if (!words.includes('--no-install-recommends')
+          || packages.length !== 1 || packages[0] !== `unixodbc-dev=${UNIXODBC_VERSION}`) {
+          violations.push(
+            `${workflow.path}:${line}: unixodbc-dev must use the exact reviewed version and no recommends`,
+          );
+        }
+      }
+    }
+
+    expect(violations, 'Every workflow supply-chain input must be immutable').toEqual([]);
+    expect(unixOdbcInstallers, 'Exactly one workflow must install unixodbc-dev').toBe(1);
   });
 });
