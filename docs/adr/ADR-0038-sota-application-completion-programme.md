@@ -215,8 +215,19 @@ replay receipt are
 `d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
 `02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
 and `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
-H0c is complete. Every M0–M7 milestone remains pending its executable product
-gate, so this result does not raise the 44/100 application-readiness baseline.
+H0c is complete. M0 is now in progress through four verified product slices:
+`93ae3c2` tracks the root lockfile and freezes dependency resolution;
+`374ca99` pins the reviewed CI action, service-image and selected tool inputs;
+`1c9bb61` adds a fail-closed, per-file-digested RDB2RDF inventory for 1 suite
+manifest, 26 scenarios, 87 exact cases and 189 case-tree files; and `401c1bb`
+adds proposed subordinate ADR-0039/0040 while extending the harness-protected
+ADR boundary. Proposed status is deliberate: neither packaging nor federation
+is accepted or implemented by writing its design lock.
+
+M0 is not complete until its runners consume the inventory, generated status
+and baseline receipts exist, public claims reconcile, and the complete gate
+passes in two clean checkouts. M1–M7 remain gated. These incremental closures do
+not by themselves rescore the 44/100 application-readiness baseline.
 
 The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before
 successful cleanup. Future harness optimisation may use immutable

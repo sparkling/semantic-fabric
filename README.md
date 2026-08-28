@@ -158,6 +158,10 @@ harness score:
   is `R2RMLTC0002f`; the per-dialect fixture denominators are documented in
   [ADR-0005](docs/adr/ADR-0005-conformance-and-benchmark-harness.md) and
   [ADR-0015](docs/adr/ADR-0015-datatype-dialect-correctness.md).
+- The canonical mapping-input inventory seals 1 suite manifest, 26 scenarios,
+  87 case identities (63 R2RML and 24 Direct Mapping), 189 case-tree files,
+  every SHA-256 digest, and the per-backend allowed-outcome policy. It is mapping
+  fixture evidence, not a SPARQL query/protocol conformance claim.
 - Differential suites compare flat and operator-tree planners with native
   materialized RDF and spareval across ordinary queries, paths, graphs, and
   RDF-star.
@@ -165,17 +169,17 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 623 tests across 90 files; two
+- The versioned engineering harness passes 626 tests across 90 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace --all-targets
-cargo test --workspace
-cargo run -p sf-cli -- conformance
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo build --locked --workspace --all-targets
+cargo test --locked --workspace
+cargo run --locked -p sf-cli -- conformance
 ```
 
 ## Application-completion programme
@@ -190,7 +194,9 @@ federated physical plan so the accepted cross-RDBMS charter becomes real.
 
 The first release blockers are silent 256-hop property-path truncation,
 source-sized Rust state in some global sort/group/dedup paths, incomplete total
-request governance, and a non-reproducible/broad production dependency closure.
+request governance, and a broad production dependency closure. M0 now tracks
+and locks the application graph and pins reviewed CI inputs; exact release
+closure, tooling provenance, and two-clean-checkout proof remain open.
 A hardened single-source build is an interim release profile; it is not the
 charter-complete application while cross-RDBMS federation remains in scope.
 
@@ -257,8 +263,11 @@ the same controller commit, then passed with 100/100 acceptance, six bound
 commands, seven native-evidence digests, two final native reviews, and no retry
 or repair. Receipt `d9d244ef…0216`, candidate evidence `a1dc3071…ac7f`, envelope
 `02c30ed3…9a06`, and provider-free replay receipt `f1bcf0fe…bf02` form the
-replayable evidence chain. H0c is complete; the M0–M7 product milestones and the
-44/100 application-readiness baseline are unchanged.
+replayable evidence chain. H0c is complete. M0 is in progress through the
+tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
+RDB2RDF input seal (`1c9bb61`), and proposed protected design locks ADR-0039/0040
+(`401c1bb`). M1–M7 remain gated, and the 44/100 application-readiness baseline
+has not been formally rescored.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build
@@ -343,7 +352,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | `cargo audit` passes its configured gate; six documented advisory exceptions and three unmaintained-crate warnings remain release debt. The application `Cargo.lock` is currently ignored, so clean resolutions are not yet reproducible |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, reviewed actions and service images are immutable references, and two clean exports reproduced lock/controller bytes. `cargo audit` passes its configured gate; six documented advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive pinning, exact MetaHarness installation, and release SBOM/provenance remain debt |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.

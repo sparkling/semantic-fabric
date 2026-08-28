@@ -15,7 +15,8 @@ evidence. GitHub issues and pull requests are deliberately not programme inputs.
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0–M7 — application completion | Gated | Existing product evidence remains valid, but no milestone is marked complete until its milestone QA gate passes |
+| M0 — architectural truth and deterministic foundation | In progress | `93ae3c2` tracks and locks the application graph; `374ca99` pins CI actions, service images, Node, cargo-audit and unixODBC; `1c9bb61` seals 1 root manifest, 26 scenarios, 87 cases and 189 case-tree files; `401c1bb` adds proposed ADR-0039/0040 and protects them in the harness. Runner authority, generated matrices/baselines, and the two-clean-checkout gate remain open |
+| M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03` and `_04` remain honest historical failures at the final-review
 boundary. Fresh run `programme_v5_h0c_20260828_05`, under controller `4b0756f`,
@@ -61,7 +62,8 @@ acceptance, envelope, and execution-claim digests are respectively
 and `578799eff72dd84cc3b5601754654d1bce33a7b4b1fa56666271fe6833979c86`.
 Provider-free replay independently verified the pass in receipt
 `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
-H0c is therefore complete; M0–M7 remain gated by their product evidence.
+H0c is therefore complete. M0 is in progress through verified incremental
+product slices; M1–M7 remain gated by their own product evidence.
 
 ## Outcome
 
@@ -103,8 +105,8 @@ Material gaps found directly in the current tree:
 | P0 | Silent path truncation | `path.rs` fixes `PATH_MAX_DEPTH = 256`; recursive rows retain depth | Exact cycle-safe closure or explicit limit failure, tested beyond 256 |
 | P0 | Bounded-memory invariant is too broad | `exec_core.rs` buffers global order, Rust grouping, solution/triple dedup | Composite SQL or bounded spill/merge; otherwise capability-profile `501` |
 | P0 | Cross-source charter is not delivered | One `ServeConfig.backend`; no `SourceId`; semi-join planner has no production caller | Source registry, source-bound mappings, federated plan and coordinator |
-| P0 | Non-reproducible application graph | root `Cargo.lock` is ignored; normal CI is not `--locked` | Track lockfile; pin actions/tools; deterministic clean-checkout graph |
-| P0 | Standards gate can lose cases silently | missing/malformed manifests are skipped; live suites may succeed without a DB | Exact case inventory/digests and fail-closed CI-required live execution |
+| P0 | Reproducibility closure is incomplete | `93ae3c2` tracks `Cargo.lock` and makes CI Cargo resolution locked; `374ca99` pins actions, service images and selected tools, and two isolated exports reproduced lock/controller bytes | Close the recorded hosted-runner, apt-transitive, MetaHarness-install and exact release-toolchain residuals; repeat the complete M0 gate in two clean checkouts |
+| P0 | Standards execution is not yet inventory-authoritative | `1c9bb61` fails closed over the exact suite manifest, 87 case identities, 189 case-tree files, digests and per-backend allowed outcomes; existing SQLite/PostgreSQL entry points still need to consume that authority and required live mode | Wire sealed-order runners, make CI-required provider absence fail, and bind canonical execution receipts to the inventory digest |
 | P1 | Governance covers only part of a request | compile is unbounded; no result/byte/cost cap or common cancellation budget | One `QueryBudget` from ingress through serialization, every backend |
 | P1 | Production secret/transport exposure | PostgreSQL `NoTls`; source secrets accepted in argv; parse errors echo conninfo | `SecretRef`, verified TLS, redacted errors and secret-corpus tests |
 | P1 | Accepted runtime ADRs are not delivered | ADR-0011/0017/0018 have no production implementation | Implement or supersede with dated status/evidence |
