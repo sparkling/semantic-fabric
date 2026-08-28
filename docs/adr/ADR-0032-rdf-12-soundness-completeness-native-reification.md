@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-18
-updated: 2026-07-19
+updated: 2026-08-28
 tags: [rdf-star, rdf-1.2, sparql-1.2, soundness, completeness, native-reification, query-rewrite, mapping-model]
 supersedes: []
 depends-on:
@@ -42,6 +42,18 @@ uniform-composedness laws (union-mixed / VALUES-mixed → explicit 501s), the
 `var_col` template-bound-component equality residual, and the in-code deferred
 notes (subplan-joins recursion, EXISTS-only composed vars) — all carried in the
 follow-up ledger.
+
+**Update (2026-08-28) — RDF 1.2-aligned mapping syntax lives directly in
+`sf-mapping`.** Object maps may now use the current `http://w3id.org/rml/`
+vocabulary with `rml:TripleTermMap` and `rml:quotedTriplesMap`. Reifiers use an
+ordinary subject map plus an explicit `rdf:reifies` predicate-object map;
+`rml:AssertedTriplesMap` and `rml:NonAssertedTriplesMap` control independent
+emission of the component triple. The historic MMLab namespace and wrapped
+`rml:starMap` form remain compatibility inputs. The parser rejects
+subject/predicate-position triple terms, multiple quoted-map references,
+non-single-SPO quoted shapes, and recursive triple-term cycles. This is an
+RDF 1.2-capable R2RML extension, not a claim of conformance to a separate
+published “R2RML 1.2” specification.
 
 **Update (2026-07-19, Run 4 Fix-1) — the D1 proposition-id construction was
 NOT injective as first implemented; fixed.** The A3 general-mapping oracle

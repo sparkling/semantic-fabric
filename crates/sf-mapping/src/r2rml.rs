@@ -58,15 +58,49 @@ const RR_IRI: &str = "http://www.w3.org/ns/r2rml#IRI";
 const RR_BLANK_NODE: &str = "http://www.w3.org/ns/r2rml#BlankNode";
 const RR_LITERAL: &str = "http://www.w3.org/ns/r2rml#Literal";
 
-// --- RML-STAR vocabulary (namespace `http://semweb.mmlab.be/ns/rml#`) — the
-// first RML-namespace terms this processor parses (ADR-0029). ------------------
+// --- RDF 1.2-aligned mapping extension. The current `w3id.org/rml/` namespace
+// is preferred. The historic MMLab namespace and wrapped `rml:starMap` shape
+// stay accepted as compatibility input (ADR-0032). ----------------------------
 
-const RML_STAR_MAP: &str = "http://semweb.mmlab.be/ns/rml#starMap";
-const RML_QUOTED_TRIPLES_MAP: &str = "http://semweb.mmlab.be/ns/rml#quotedTriplesMap";
-const RML_NON_ASSERTED_TRIPLES_MAP: &str = "http://semweb.mmlab.be/ns/rml#nonAssertedTriplesMap";
-/// ADR-0032 D1, documented extension: overrides the default deterministic
-/// reifier term map on a subject-position `rml:starMap`.
-const RML_REIFIER_MAP: &str = "http://semweb.mmlab.be/ns/rml#reifierMap";
+const RML_STAR_MAP: [&str; 2] = [
+    "http://w3id.org/rml/starMap",
+    "http://semweb.mmlab.be/ns/rml#starMap",
+];
+const RML_QUOTED_TRIPLES_MAP: [&str; 2] = [
+    "http://w3id.org/rml/quotedTriplesMap",
+    "http://semweb.mmlab.be/ns/rml#quotedTriplesMap",
+];
+const RML_LEGACY_NON_ASSERTED_MARKER: [&str; 2] = [
+    "http://w3id.org/rml/nonAssertedTriplesMap",
+    "http://semweb.mmlab.be/ns/rml#nonAssertedTriplesMap",
+];
+const RML_ASSERTED_TRIPLES_MAP: [&str; 2] = [
+    "http://w3id.org/rml/AssertedTriplesMap",
+    "http://semweb.mmlab.be/ns/rml#AssertedTriplesMap",
+];
+const RML_NON_ASSERTED_TRIPLES_MAP: [&str; 2] = [
+    "http://w3id.org/rml/NonAssertedTriplesMap",
+    "http://semweb.mmlab.be/ns/rml#NonAssertedTriplesMap",
+];
+/// Compatibility extension for the historic wrapped subject-position form.
+/// Canonical RDF 1.2 mappings use an ordinary subject map plus an explicit
+/// `rdf:reifies` predicate-object map instead.
+const RML_REIFIER_MAP: [&str; 2] = [
+    "http://w3id.org/rml/reifierMap",
+    "http://semweb.mmlab.be/ns/rml#reifierMap",
+];
+const RML_JOIN_CONDITION: [&str; 2] = [
+    "http://w3id.org/rml/joinCondition",
+    "http://semweb.mmlab.be/ns/rml#joinCondition",
+];
+const RML_CHILD: [&str; 2] = [
+    "http://w3id.org/rml/child",
+    "http://semweb.mmlab.be/ns/rml#child",
+];
+const RML_PARENT: [&str; 2] = [
+    "http://w3id.org/rml/parent",
+    "http://semweb.mmlab.be/ns/rml#parent",
+];
 
 // --- RDF 1.2 Interoperability "basic encoding" (ADR-0029 §B.2) — the compiled
 // target for an `rml:StarMap`, namespace `http://www.w3.org/1999/02/22-rdf-syntax-ns#`.
@@ -83,6 +117,43 @@ const RDF_PROPOSITION_FORM_OBJECT: &str =
 /// `sf-sparql/src/star.rs`'s own copy (`oxrdf::vocab::rdf::REIFIES`) exactly.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
+fn object_any<'a>(
+    graph: &'a Graph,
+    subject: &NamedOrBlankNode,
+    predicates: &[&'static str],
+) -> Option<&'a Term> {
+    predicates
+        .iter()
+        .copied()
+        .find_map(|predicate| graph.object(subject, predicate))
+}
+
+fn objects_any<'a>(
+    graph: &'a Graph,
+    subject: &NamedOrBlankNode,
+    predicates: &[&'static str],
+) -> Vec<&'a Term> {
+    predicates
+        .iter()
+        .copied()
+        .flat_map(|predicate| graph.objects(subject, predicate))
+        .collect()
+}
+
+fn has_type_any(graph: &Graph, subject: &NamedOrBlankNode, classes: &[&str]) -> bool {
+    graph
+        .objects(subject, RDF_TYPE)
+        .any(|term| matches!(term, Term::NamedNode(class) if classes.contains(&class.as_str())))
+}
+
+fn direct_triple_term_map(graph: &Graph, node: &NamedOrBlankNode) -> bool {
+    object_any(graph, node, &RML_QUOTED_TRIPLES_MAP).is_some()
+}
+
+fn wrapped_star_map<'a>(graph: &'a Graph, node: &NamedOrBlankNode) -> Option<&'a Term> {
+    object_any(graph, node, &RML_STAR_MAP)
+}
+
 /// Base IRI applied to the mapping document so relative triples-map identifiers
 /// (`<#TriplesMap1>`, ubiquitous in R2RML) resolve to absolute IRIs consistently;
 /// a `@base` directive in the document overrides it. R2RML's own examples use
@@ -96,11 +167,12 @@ const DEFAULT_BASE_IRI: &str = "http://example.com/base/";
 /// `rr:logicalTable` / `rr:subjectMap` / `rr:subject`; each must resolve to a
 /// logical table and a subject map or parsing fails.
 ///
-/// An `rml:starMap` subject (ADR-0032 D1) is expanded in place into a reifier-id
-/// subject plus one injected `rdf:reifies` predicate-object map, with the 4
-/// basic-encoding predicate-object maps moved onto a standalone description
-/// map; the quoted triples map it references is suppressed from the result
-/// when every `rml:starMap` referencing it marks it `rml:nonAssertedTriplesMap`.
+/// The canonical RDF 1.2 profile uses an ordinary mapped reifier subject and an
+/// explicit `rdf:reifies` predicate-object map whose object is an
+/// `rml:TripleTermMap`. The historic wrapped `rml:starMap` subject is still
+/// lowered to that form as compatibility input. Either form produces a
+/// standalone proposition-description map; a referenced
+/// `rml:NonAssertedTriplesMap` is not emitted independently.
 pub fn parse_r2rml(turtle: &str) -> Result<Vec<TriplesMap>> {
     let graph = Graph::load(turtle)?;
 
@@ -113,14 +185,13 @@ pub fn parse_r2rml(turtle: &str) -> Result<Vec<TriplesMap>> {
     subjects.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut maps = Vec::with_capacity(subjects.len());
-    // ADR-0029 §B.3: a quoted triples map is suppressed only if every
-    // `rml:starMap` referencing it marks it non-asserted — an explicit
-    // assertion anywhere (a plain occurrence in the doc doesn't count; only
-    // another StarMap's bare `rml:quotedTriplesMap`) wins.
+    // Assertion is independent of triple-term occurrence. A quoted triples map
+    // is suppressed only if every reference treats it as non-asserted; an
+    // explicit asserted reference wins.
     let mut asserted_ids: HashSet<String> = HashSet::new();
     let mut non_asserted_ids: HashSet<String> = HashSet::new();
-    // Every `rml:starMap` (ADR-0032 D1; both positions, and every nesting
-    // level — see `star::quote_shape`) carries a standalone description
+    // Every triple-term map (canonical or wrapped compatibility form, at every
+    // nesting level — see `star::quote_shape`) carries a standalone description
     // TriplesMap for its 4 basic-encoding predicate-object maps — collected
     // here and appended after the outer maps, deduplicated by id (keyed on
     // the quoted map's own id, so two different star maps quoting the same
@@ -289,7 +360,7 @@ fn parse_subject_map(
     let mut star_assertions = Vec::new();
     let (term, carrier) = if let Some(sm) = g.object(tm, RR_SUBJECT_MAP) {
         let node = as_resource(sm)?;
-        if let Some(star_map) = g.object(&node, RML_STAR_MAP) {
+        if let Some(star_map) = wrapped_star_map(g, &node) {
             let star_node = as_resource(star_map)?;
             let outer_tm_id = node_id(tm);
             // Seed the description carrier with the subject graph maps. Once
@@ -307,6 +378,11 @@ fn parse_subject_map(
             standalone_maps = expansion.description_maps;
             star_assertions = expansion.assertions;
             (expansion.reifier_term, node)
+        } else if direct_triple_term_map(g, &node) {
+            return Err(Error::Mapping(format!(
+                "rml:TripleTermMap {} is not allowed in subject position: RDF 1.2 Concepts §3.1 makes triple terms object-position-only; generate a reifier subject and an explicit rdf:reifies predicate-object map",
+                node_id(&node)
+            )));
         } else {
             let term = parse_term_map(g, &node, Position::Subject)?;
             (term, node)
@@ -363,9 +439,9 @@ fn parse_predicate_object_map(
     for pm in &pm_nodes {
         // ADR-0032 D5 (R4): rml:starMap is rejected in predicate position —
         // RDF 1.2 Concepts §3.1, predicates are IRIs only.
-        if g.object(pm, RML_STAR_MAP).is_some() {
+        if wrapped_star_map(g, pm).is_some() || direct_triple_term_map(g, pm) {
             return Err(Error::Mapping(format!(
-                "rml:starMap is not allowed in predicate position ({}): RDF 1.2 Concepts §3.1 — predicates are IRIs only",
+                "rml:TripleTermMap is not allowed in predicate position ({}): RDF 1.2 Concepts §3.1 — predicates are IRIs only",
                 node_id(pm)
             )));
         }
@@ -438,8 +514,14 @@ fn parse_object_map(
     outer_source: &LogicalSource,
     graphs: &[TermMap],
 ) -> Result<(ObjectMap, Vec<TriplesMap>, Vec<StarAssertion>)> {
-    if let Some(star_map) = g.object(node, RML_STAR_MAP) {
-        let star_node = as_resource(star_map)?;
+    let triple_term_node = if let Some(star_map) = wrapped_star_map(g, node) {
+        Some(as_resource(star_map)?)
+    } else if direct_triple_term_map(g, node) {
+        Some(node.clone())
+    } else {
+        None
+    };
+    if let Some(star_node) = triple_term_node {
         let expansion = star::expand_star_map_object(g, &star_node, outer_source, graphs)?;
         return Ok((
             expansion.object,
@@ -470,17 +552,21 @@ fn parse_object_map(
 /// `node` — an object map for an ordinary `rr:parentTriplesMap` join, or an
 /// `rml:starMap` node for a cross-source star-map join (ADR-0032 D4).
 fn parse_join_conditions(g: &Graph, node: &NamedOrBlankNode) -> Result<Vec<Join>> {
-    let jc_nodes: Vec<NamedOrBlankNode> = g
-        .objects(node, RR_JOIN_CONDITION)
+    let mut join_terms: Vec<&Term> = g.objects(node, RR_JOIN_CONDITION).collect();
+    join_terms.extend(objects_any(g, node, &RML_JOIN_CONDITION));
+    let jc_nodes: Vec<NamedOrBlankNode> = join_terms
+        .into_iter()
         .map(as_resource)
         .collect::<Result<_>>()?;
     let mut joins = Vec::with_capacity(jc_nodes.len());
     for jc in &jc_nodes {
         let child = g
             .object(jc, RR_CHILD)
+            .or_else(|| object_any(g, jc, &RML_CHILD))
             .ok_or_else(|| Error::Mapping("rr:joinCondition has no rr:child".to_owned()))?;
         let parent_col = g
             .object(jc, RR_PARENT)
+            .or_else(|| object_any(g, jc, &RML_PARENT))
             .ok_or_else(|| Error::Mapping("rr:joinCondition has no rr:parent".to_owned()))?;
         joins.push(Join {
             child: sql_identifier(lexical(child)?),
