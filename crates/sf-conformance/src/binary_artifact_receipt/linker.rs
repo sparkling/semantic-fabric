@@ -1,74 +1,78 @@
-//! GNU/LLD dependency-file capture without executing an artifact or loader.
+//! GNU/LLD dependency-file capture without executing a loader or artifact.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::authority;
 
 const MAX_DEPFILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_INPUTS: usize = 20_000;
+const MAX_INPUTS: usize = 16_384;
 const MAX_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DependencyFile {
     pub(super) sha256: String,
     pub(super) byte_length: u64,
+    /// Logical target emitted before the depfile colon.
+    pub(super) logical_output: PathBuf,
     pub(super) inputs: Vec<Input>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Input {
+    /// Preserved for producer conversion into a schema logical path and origin.
     pub(super) logical_path: PathBuf,
     pub(super) sha256: String,
     pub(super) byte_length: u64,
 }
 
-/// Maps a linker's sandbox-visible path to a non-symlink host backing path.
+/// Maps a sandbox-visible path to a non-symlink host backing path.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Root<'a> {
     pub(super) logical: &'a Path,
     pub(super) backing: &'a Path,
 }
 
-/// Reads the dependency file emitted by the final GNU-style linker invocation.
-/// Every recorded input must be a non-writable, non-linked regular file below a
-/// caller-supplied trusted root. A missing or malformed depfile is an error.
-pub(super) fn capture(depfile: &Path, roots: &[Root<'_>]) -> Result<DependencyFile, String> {
-    if roots.is_empty() {
-        return Err("link dependency capture has no trusted roots".to_owned());
-    }
+/// Reads the final linker depfile and requires its target to be the exact
+/// sandbox-logical binary. Every dependency maps through one unambiguous,
+/// longest trusted root to a hardened host backing file.
+pub(super) fn capture(
+    depfile: &Path,
+    expected_output: &Path,
+    roots: &[Root<'_>],
+) -> Result<DependencyFile, String> {
+    validate_expected_output(expected_output)?;
+    validate_roots(roots)?;
     let authority = authority::read(depfile, MAX_DEPFILE_BYTES, "link dependency file")?;
-    let paths = parse(&authority.bytes)?;
-    if paths.is_empty() || paths.len() > MAX_INPUTS {
+    let rule = parse(&authority.bytes)?;
+    if rule.output != expected_output {
+        return Err(format!(
+            "link dependency output must be exactly {}",
+            expected_output.display()
+        ));
+    }
+    if rule.inputs.is_empty() || rule.inputs.len() > MAX_INPUTS {
         return Err(format!(
             "link dependency input count is outside bounds: {}",
-            paths.len()
+            rule.inputs.len()
         ));
     }
     let mut seen = BTreeSet::new();
-    let mut inputs = Vec::with_capacity(paths.len());
-    for logical_path in paths {
-        if !logical_path.is_absolute() {
-            return Err("link dependency path is not absolute".to_owned());
-        }
+    let mut inputs = Vec::with_capacity(rule.inputs.len());
+    for logical_path in rule.inputs {
         if !seen.insert(logical_path.clone()) {
             return Err(format!(
                 "duplicate link dependency path {}",
                 logical_path.display()
             ));
         }
-        let root = roots
-            .iter()
-            .find(|root| logical_path.starts_with(root.logical))
-            .ok_or_else(|| {
-                format!(
-                    "link dependency path escapes trusted roots: {}",
-                    logical_path.display()
-                )
-            })?;
+        let root = longest_root(&logical_path, roots)?;
         let relative = logical_path
             .strip_prefix(root.logical)
             .map_err(|_| "link dependency root mapping changed".to_owned())?;
+        if relative.as_os_str().is_empty() {
+            return Err("link dependency path cannot equal a trusted root".to_owned());
+        }
         let backing = root.backing.join(relative);
         authority::validate_beneath(root.backing, &backing, "link dependency")?;
         let (sha256, byte_length) =
@@ -82,31 +86,74 @@ pub(super) fn capture(depfile: &Path, roots: &[Root<'_>]) -> Result<DependencyFi
     Ok(DependencyFile {
         sha256: authority.sha256,
         byte_length: authority.size,
+        logical_output: rule.output,
         inputs,
     })
 }
 
-fn parse(bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
-    let colon = first_unescaped_colon(bytes)?;
-    let target = words(&bytes[..colon])?;
-    if target.len() != 1 {
-        return Err("link dependency file must contain exactly one output target".to_owned());
+fn validate_roots(roots: &[Root<'_>]) -> Result<(), String> {
+    if roots.is_empty() {
+        return Err("link dependency capture has no trusted roots".to_owned());
     }
-    words(&bytes[colon + 1..]).and_then(|values| {
-        values
-            .into_iter()
-            .map(|value| {
-                if value.is_empty()
-                    || value.len() > 16 * 1024
-                    || value.bytes().any(|byte| byte.is_ascii_control())
-                {
-                    Err("invalid link dependency path".to_owned())
-                } else {
-                    Ok(PathBuf::from(value))
-                }
-            })
-            .collect()
+    for root in roots {
+        validate_logical(root.logical, "trusted link root")?;
+        if !root.backing.is_absolute() {
+            return Err("trusted link root backing path must be absolute".to_owned());
+        }
+        authority::validate_directory(root.backing, "trusted link root backing")?;
+    }
+    Ok(())
+}
+
+fn validate_expected_output(path: &Path) -> Result<(), String> {
+    validate_logical(path, "expected link output")?;
+    Ok(())
+}
+
+fn longest_root<'a>(logical_path: &Path, roots: &'a [Root<'a>]) -> Result<&'a Root<'a>, String> {
+    let mut best: Option<(&Root<'_>, usize)> = None;
+    for root in roots
+        .iter()
+        .filter(|root| logical_path.starts_with(root.logical))
+    {
+        let length = root.logical.components().count();
+        match best {
+            None => best = Some((root, length)),
+            Some((_, best_length)) if length > best_length => best = Some((root, length)),
+            Some((_, best_length)) if length == best_length => {
+                return Err(format!(
+                    "link dependency path has ambiguous trusted roots: {}",
+                    logical_path.display()
+                ));
+            }
+            _ => {}
+        }
+    }
+    best.map(|(root, _)| root).ok_or_else(|| {
+        format!(
+            "link dependency path escapes trusted roots: {}",
+            logical_path.display()
+        )
     })
+}
+
+struct Rule {
+    output: PathBuf,
+    inputs: Vec<PathBuf>,
+}
+
+fn parse(bytes: &[u8]) -> Result<Rule, String> {
+    let colon = first_unescaped_colon(bytes)?;
+    let targets = words(&bytes[..colon])?;
+    let [target] = targets.as_slice() else {
+        return Err("link dependency file must contain exactly one output target".to_owned());
+    };
+    let output = logical_path(target, "link dependency output")?;
+    let inputs = words(&bytes[colon + 1..])?
+        .into_iter()
+        .map(|value| logical_path(&value, "link dependency input"))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Rule { output, inputs })
 }
 
 fn first_unescaped_colon(bytes: &[u8]) -> Result<usize, String> {
@@ -171,26 +218,85 @@ fn finish(bytes: &mut Vec<u8>) -> Result<String, String> {
     }
 }
 
+fn logical_path(value: &str, label: &str) -> Result<PathBuf, String> {
+    if value.is_empty()
+        || value.len() > 16 * 1024
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(format!("invalid {label}"));
+    }
+    let path = PathBuf::from(value);
+    if !path.is_absolute()
+        || value.contains("//")
+        || value.contains('\\')
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        Err(format!("invalid {label}"))
+    } else {
+        Ok(path)
+    }
+}
+
+fn validate_logical(path: &Path, label: &str) -> Result<(), String> {
+    let value = path.to_str().ok_or_else(|| format!("invalid {label}"))?;
+    if logical_path(value, label)? != path {
+        return Err(format!("invalid {label}"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_gnu_style_continuations_and_escapes() {
-        let values = parse(b"/tmp/out: /tmp/first \\\n /tmp/with\\ space\n").unwrap();
+    fn retains_output_and_parses_gnu_continuations() {
+        let rule = parse(
+            b"/target/x86_64-unknown-linux-gnu/release/semantic-fabric: /target/one \\\n+ /target/with\\ space\n",
+        )
+        .unwrap();
         assert_eq!(
-            values,
+            rule.output,
+            Path::new("/target/x86_64-unknown-linux-gnu/release/semantic-fabric")
+        );
+        assert_eq!(
+            rule.inputs,
             [
-                PathBuf::from("/tmp/first"),
-                PathBuf::from("/tmp/with space")
+                PathBuf::from("/target/one"),
+                PathBuf::from("/target/with space")
             ]
         );
     }
 
     #[test]
-    fn rejects_ambiguous_or_malformed_rules() {
-        assert!(parse(b"/tmp/out /tmp/input\n").is_err());
-        assert!(parse(b"/tmp/a /tmp/b: /tmp/input\n").is_err());
-        assert!(parse(b"/tmp/out: /tmp/input # comment\n").is_err());
+    fn rejects_bad_targets_and_paths() {
+        assert!(parse(b"/target/a /target/b: /target/input\n").is_err());
+        assert!(parse(b"relative: /target/input\n").is_err());
+        assert!(parse(b"/target/out: /target/../escape\n").is_err());
+    }
+
+    #[test]
+    fn longest_trusted_root_wins_and_ties_fail() {
+        let top = Root {
+            logical: Path::new("/target"),
+            backing: Path::new("/a"),
+        };
+        let nested = Root {
+            logical: Path::new("/target/build"),
+            backing: Path::new("/b"),
+        };
+        assert_eq!(
+            longest_root(Path::new("/target/build/x"), &[top, nested])
+                .unwrap()
+                .logical,
+            Path::new("/target/build")
+        );
+        let tie = Root {
+            logical: Path::new("/target/build"),
+            backing: Path::new("/c"),
+        };
+        assert!(longest_root(Path::new("/target/build/x"), &[nested, tie]).is_err());
     }
 }

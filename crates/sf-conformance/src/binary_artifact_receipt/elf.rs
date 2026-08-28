@@ -23,18 +23,15 @@ pub(super) struct ReadelfIdentity {
 pub(super) struct Observation {
     pub(super) artifact_sha256: String,
     pub(super) artifact_size: u64,
+    pub(super) unix_mode: u32,
     pub(super) elf_class: String,
     pub(super) data: String,
+    pub(super) os_abi: String,
     pub(super) file_type: String,
     pub(super) machine: String,
     pub(super) interpreter: String,
     pub(super) needed: Vec<String>,
     pub(super) build_id: String,
-    pub(super) comment: Vec<String>,
-    pub(super) header_sha256: String,
-    pub(super) dynamic_sha256: String,
-    pub(super) notes_sha256: String,
-    pub(super) program_headers_sha256: String,
 }
 
 pub(super) fn inspect(
@@ -49,6 +46,7 @@ pub(super) fn inspect(
         .ok_or_else(|| "artifact binary path is not UTF-8".to_owned())?;
     let (artifact_sha256, artifact_size) =
         authority::digest(binary_path, MAX_BINARY_BYTES, "artifact binary")?;
+    let unix_mode = artifact_mode(binary_path)?;
     let (tool_sha256, tool_size) = authority::digest(readelf, MAX_BINARY_BYTES, "readelf tool")?;
     let version = utf8(&invoke(readelf, &["--version"])?, "readelf version")?;
     let headers = utf8(
@@ -67,10 +65,6 @@ pub(super) fn inspect(
         &invoke(readelf, &["-n", "-W", artifact_argument])?,
         "ELF notes",
     )?;
-    let comment = utf8(
-        &invoke(readelf, &["-p", ".comment", artifact_argument])?,
-        "ELF comment",
-    )?;
     reject_runtime_search_paths(&dynamic)?;
     let (artifact_sha256_after, artifact_size_after) =
         authority::digest(binary_path, MAX_BINARY_BYTES, "artifact binary")?;
@@ -78,6 +72,9 @@ pub(super) fn inspect(
         authority::digest(readelf, MAX_BINARY_BYTES, "readelf tool")?;
     if artifact_sha256 != artifact_sha256_after || artifact_size != artifact_size_after {
         return Err("artifact binary changed during ELF inspection".to_owned());
+    }
+    if unix_mode != artifact_mode(binary_path)? {
+        return Err("artifact binary mode changed during ELF inspection".to_owned());
     }
     if tool_sha256 != tool_sha256_after || tool_size != tool_size_after {
         return Err("readelf tool changed during ELF inspection".to_owned());
@@ -88,13 +85,21 @@ pub(super) fn inspect(
         size: tool_size,
         version: first_line(&version, "readelf version")?,
     };
+    let elf_class = required_field(&headers, "Class:", "ELF class")?;
+    let data = required_field(&headers, "Data:", "ELF data encoding")?;
+    let os_abi = required_field(&headers, "OS/ABI:", "ELF OS/ABI")?;
+    let file_type = required_field(&headers, "Type:", "ELF type")?;
+    let machine = required_field(&headers, "Machine:", "ELF machine")?;
+    enforce_fixed_facts(unix_mode, &elf_class, &data, &os_abi, &machine)?;
     let observation = Observation {
         artifact_sha256,
         artifact_size,
-        elf_class: required_field(&headers, "Class:", "ELF class")?,
-        data: required_field(&headers, "Data:", "ELF data encoding")?,
-        file_type: required_field(&headers, "Type:", "ELF type")?,
-        machine: required_field(&headers, "Machine:", "ELF machine")?,
+        unix_mode,
+        elf_class,
+        data,
+        os_abi,
+        file_type,
+        machine,
         interpreter: program
             .lines()
             .find_map(|line| {
@@ -106,11 +111,6 @@ pub(super) fn inspect(
             .to_owned(),
         needed: needed(&dynamic)?,
         build_id: build_id(&notes)?,
-        comment: comments(&comment)?,
-        header_sha256: digest(&headers),
-        dynamic_sha256: digest(&dynamic),
-        notes_sha256: digest(&notes),
-        program_headers_sha256: digest(&program),
     };
     Ok((identity, observation))
 }
@@ -157,6 +157,44 @@ fn required_field(input: &str, prefix: &str, label: &str) -> Result<String, Stri
         [value] if !value.is_empty() && value.len() <= 4096 => Ok((*value).to_owned()),
         _ => Err(format!("{label} has no unique value")),
     }
+}
+
+fn artifact_mode(path: &Path) -> Result<u32, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect artifact binary mode {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("artifact binary is not a regular non-symlink file".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(metadata.mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        Err("ELF observation requires Unix mode bits".to_owned())
+    }
+}
+
+fn enforce_fixed_facts(
+    unix_mode: u32,
+    elf_class: &str,
+    data: &str,
+    os_abi: &str,
+    machine: &str,
+) -> Result<(), String> {
+    if unix_mode != 0o755 {
+        return Err("artifact binary mode must be exactly 0755".to_owned());
+    }
+    if elf_class != "ELF64"
+        || data != "2's complement, little endian"
+        || os_abi != "UNIX - System V"
+        || machine != "Advanced Micro Devices X86-64"
+    {
+        return Err("artifact ELF facts must be ELF64/little/x86-64/System-V".to_owned());
+    }
+    Ok(())
 }
 
 fn needed(input: &str) -> Result<Vec<String>, String> {
@@ -207,30 +245,8 @@ fn build_id(input: &str) -> Result<String, String> {
         {
             Ok((*value).to_owned())
         }
-        _ => Err("ELF notes have no unique SHA-1 build ID".to_owned()),
+        _ => Err("ELF notes have no unique hexadecimal build ID".to_owned()),
     }
-}
-
-fn comments(input: &str) -> Result<Vec<String>, String> {
-    let values: Vec<_> = input
-        .lines()
-        .filter_map(|line| line.split_once(']').map(|(_, value)| value.trim()))
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect();
-    if values.is_empty()
-        || values
-            .iter()
-            .any(|value| value.len() > 4096 || value.bytes().any(|byte| byte.is_ascii_control()))
-    {
-        return Err("ELF comment section is empty or invalid".to_owned());
-    }
-    Ok(values)
-}
-
-fn digest(input: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(input.as_bytes()))
 }
 
 #[cfg(test)]
@@ -260,5 +276,29 @@ mod tests {
     fn rejects_rpath_and_runpath() {
         assert!(reject_runtime_search_paths("0x1 (RPATH) Library rpath: [/tmp]\n").is_err());
         assert!(reject_runtime_search_paths("0x1 (RUNPATH) Library runpath: [/tmp]\n").is_err());
+    }
+
+    #[test]
+    fn enforces_the_fixed_receipt_elf_facts() {
+        assert!(
+            enforce_fixed_facts(
+                0o755,
+                "ELF64",
+                "2's complement, little endian",
+                "UNIX - System V",
+                "Advanced Micro Devices X86-64"
+            )
+            .is_ok()
+        );
+        assert!(
+            enforce_fixed_facts(
+                0o755,
+                "ELF64",
+                "2's complement, big endian",
+                "UNIX - System V",
+                "Advanced Micro Devices X86-64"
+            )
+            .is_err()
+        );
     }
 }
