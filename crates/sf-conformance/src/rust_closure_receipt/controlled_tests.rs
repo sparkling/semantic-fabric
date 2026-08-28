@@ -19,6 +19,7 @@ fn fixture() -> (PathBuf, ControlledCheckRequest<'static>) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         for directory in ["toolchain", "toolchain/bin"] {
             fs::set_permissions(root.join(directory), fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -162,6 +163,33 @@ fn rejects_writable_toolchain_path_component() {
         .err()
         .expect("group-writable toolchain bin must be rejected");
     assert!(error.contains("writable"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_world_writable_toolchain_ancestor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, request) = fixture();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o777)).unwrap();
+    let error = Context::new(&request)
+        .err()
+        .expect("world-writable non-sticky ancestor must be rejected");
+    assert!(error.contains("ancestor"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_toolchain_ancestor_mutation_after_binding() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, request) = fixture();
+    let context = Context::new(&request).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o777)).unwrap();
+    let error = context.ensure_tools_bound().unwrap_err();
+    assert!(error.contains("ancestor"), "{error}");
     fs::remove_dir_all(root).unwrap();
 }
 
