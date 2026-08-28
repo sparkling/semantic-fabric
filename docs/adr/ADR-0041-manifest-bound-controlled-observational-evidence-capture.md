@@ -23,6 +23,23 @@ claim that a controlled runner, canonical runner profile, baseline, or capture
 receipt exists. The current development host fails the required profile and
 cannot produce admissible measurements.
 
+The controller now has a bounded, fixed `/proc`/`sysfs` observer, a conservative
+byte-canonical decoder for the product's runner-profile format, and a
+negative-only non-admission record. This slice can return only `ineligible` or
+`unproven`; both outcomes terminal-fail an input-attested claim with zero
+attempts. The protected current source uses an AST-walked, exact-import allowlist
+and fixed `openSync` call shape; mutation sentinels reject known command, provider,
+socket-creating, dynamic-loader, write-flag, and ambient transport forms. This is
+static regression evidence, not an OS capability sandbox. The gate snapshots profile bytes through
+typed-array intrinsics without input iteration, property access, or species
+construction. Its fixed collector has no injected callback and receives local
+controller classification through captured module-private provenance operations;
+records built from the separately labelled injected collector retain diagnostic
+classification. The durable parser/verifier proves canonical self-consistency,
+not independently witnessed collector provenance; positive capture must add that witness.
+This remains partial fail-closed
+implementation, not acceptance of this ADR or proof of a controlled runner.
+
 The `implements: ADR-0038` relationship denotes a subordinate proposed design
 lock. It is not implementation completion or M0 evidence.
 
@@ -215,6 +232,32 @@ successful capture record can be formed.
 
 ### 5. Bind the controlled execution envelope
 
+The first host-control implementation tranche is intentionally one-way. It
+observes two bounded snapshots through fixed read-only kernel surfaces and can
+only reject or leave control unproven. Raw source hashes remain auditable while
+a separate normalized-control digest prevents irrelevant `/proc` churn from
+faking control drift. Profile input is copied through captured typed-array
+intrinsics, so hostile iterators, proxies, or species constructors cannot run at
+the gate. Node architecture names are translated into the Rust
+profile vocabulary; an unknown translation leaves control unproven. Even a
+legacy profile match remains `unproven` because microcode, NUMA, cgroup/quota,
+filesystem, thermal, runner/lease, binary, affinity, quiescence, and
+measurement-boundary closure are not yet positive authority. The verifier
+rederives profile observation and reasons from immutable profile bytes and
+binds the exact before-state to the returned zero-attempt terminal fail. This
+module never emits `pass-host-preflight`; the future evidence-aware positive
+authority/replay boundary must authenticate evidence kind before asking the
+generic state machine for that transition, immediately before the sole attempt.
+An AST-based test recursively resolves runtime imports, permits only exact
+read/hash/parser bindings and the fixed read-only open call, and mutation-tests
+static, namespace, default, import-equals, dynamic, worker, datagram,
+process-loader, write-flag, dynamic-constructor, and ambient-fetch escape forms.
+It is a mutation sentinel over protected source, not independent runtime isolation.
+Missing CPU-list evidence does not suppress independently observed governor,
+turbo, swap, or load disqualifiers. Allowed, online, and isolated CPU lists are
+parsed independently, so one malformed list cannot hide relations between the
+remaining valid lists.
+
 The runtime executes the existing `sf-performance-receipt capture-baseline`
 producer from a unique, regular, non-hard-linked release binary built from the
 attested commit. It runs offline, without a shell, under the exact profile CPU
@@ -296,17 +339,20 @@ marginal provider-API charge, not a spend cap or a capacity claim.
 ## Implementation and acceptance sequence
 
 1. Implement and mutation-test the closed task parser and policy state machine.
-2. Implement controller attestation, private runtime, receipt, and provider-free
-   replay while characterizing historical V4/V5/V6 outputs as byte-stable.
-3. Provision a dedicated controlled runner and create its canonical tracked
+2. Implement exact input attestation and the negative-only host non-admission
+   boundary before any positive runner claim.
+3. Implement private runtime, receipt, provider-free replay, and the complete
+   positive host/capture preflights while characterizing historical V4/V5/V6
+   outputs as byte-stable.
+4. Provision a dedicated controlled runner and create its canonical tracked
    profile; do not derive that profile from this unsuitable development host.
-4. Register and protect the task/launcher/parser/test controller closure in the
+5. Register and protect the task/launcher/parser/test controller closure in the
    global manifest and controller build. Bind the profile, scenarios, lock, and
    product-source closure as task-scoped immutable commit blobs so existing
    patch transactions may still modify product implementation paths.
-5. Run one fresh-ID capture with native Codex and Claude review outside the
+6. Run one fresh-ID capture with native Codex and Claude review outside the
    measurement interval; seal and replay the private receipt.
-6. Import only replay-verified bytes, protect the baseline, add CI
+7. Import only replay-verified bytes, protect the baseline, add CI
    `check-baseline`, and update ADR-0038/programme status with exact evidence.
 
 Acceptance requires parser mutation coverage, dirty/pre-existing/path/identity

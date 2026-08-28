@@ -50,20 +50,26 @@ import {
 } from './candidate-fixtures.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '295048e3b63c8468d34e75f0075175bdfd4ebe0754667417073864e06e884b4e';
-const ACCEPTANCE_DIGEST = 'c82f94c361b1911d8a227b77f631e6f0128d7557d2e4a587acf3eedb806439c9';
-const ENVELOPE_DIGEST = 'ce5052335b5686917480ae713b2d3063626591ef5d64f366ab5671efe6f0d5d3';
+const POLICY_FINGERPRINT = 'fcf4b9f46f4f221ca01ca699408458ef3987553456ced7fe6164a7b7d87b303e';
+const ACCEPTANCE_DIGEST = 'a59d031399dc0b53daf73d2b80a02a62ccd31b67c3e2211dd1162fc11b7343fe';
+const ENVELOPE_DIGEST = '031188094bdef7be720b15322f3af702c588d48e78a676f365f57fb670235c30';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
 const CAPTURE_PATHS = new Set([
   'coding-harness/__tests__/programme-capture-git-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
   'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
   'coding-harness/__tests__/programme-capture-state-v1.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/src/programme-capture-config-v1.ts',
   'coding-harness/src/programme-capture-git-v1.ts',
+  'coding-harness/src/programme-capture-host-observation-v1.ts',
+  'coding-harness/src/programme-capture-host-preflight-v1.ts',
+  'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
   'coding-harness/src/programme-capture-input-attestation-v1.ts',
+  'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
   'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
@@ -485,11 +491,9 @@ function rehashEnvelope(value: any): void {
   const { envelopeDigest: _old, ...body } = value;
   value.envelopeDigest = digestValue(body);
 }
-
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
-
 function digest(character: string): string {
   return character.repeat(64);
 }

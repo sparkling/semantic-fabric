@@ -63,6 +63,18 @@ export interface TaskContract {
 
 const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]*$/;
 const SHELL_METACHARACTERS = /[;&|`$<>\r\n\0]/;
+const INTRINSIC_UINT8_ARRAY = Uint8Array;
+const INTRINSIC_UINT8_ARRAY_SET = Uint8Array.prototype.set;
+const INTRINSIC_REFLECT_APPLY = Reflect.apply;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const TYPED_ARRAY_BUFFER_GETTER =
+  Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'buffer')?.get;
+const TYPED_ARRAY_BYTE_OFFSET_GETTER =
+  Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'byteOffset')?.get;
+const TYPED_ARRAY_BYTE_LENGTH_GETTER =
+  Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'byteLength')?.get;
+const TYPED_ARRAY_TAG_GETTER =
+  Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag)?.get;
 
 export function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -128,6 +140,34 @@ export function asInteger(value: unknown, label: string, minimum = 0): number {
     throw new TypeError(`${label} must be a safe integer >= ${minimum}`);
   }
   return value as number;
+}
+
+/** Copy bytes without consulting input properties, iteration, or species constructors. */
+export function snapshotUint8Array(
+  value: unknown,
+  label: string,
+  maximumBytes: number,
+): Uint8Array {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0
+    || !TYPED_ARRAY_BUFFER_GETTER || !TYPED_ARRAY_BYTE_OFFSET_GETTER
+    || !TYPED_ARRAY_BYTE_LENGTH_GETTER || !TYPED_ARRAY_TAG_GETTER) {
+    throw new TypeError(`${label} has an invalid byte bound`);
+  }
+  try {
+    if (INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_TAG_GETTER, value, []) !== 'Uint8Array') {
+      throw new TypeError();
+    }
+    const buffer = INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_BUFFER_GETTER, value, []);
+    const offset = INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_BYTE_OFFSET_GETTER, value, []);
+    const length = INTRINSIC_REFLECT_APPLY(TYPED_ARRAY_BYTE_LENGTH_GETTER, value, []);
+    if (length > maximumBytes) throw new TypeError();
+    const source = new INTRINSIC_UINT8_ARRAY(buffer, offset, length);
+    const snapshot = new INTRINSIC_UINT8_ARRAY(length);
+    INTRINSIC_REFLECT_APPLY(INTRINSIC_UINT8_ARRAY_SET, snapshot, [source]);
+    return snapshot;
+  } catch {
+    throw new TypeError(`${label} must be a Uint8Array within its byte bound`);
+  }
 }
 
 export function asUniqueStrings(value: unknown, label: string, allowEmpty = false): string[] {
