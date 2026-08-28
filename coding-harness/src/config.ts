@@ -278,6 +278,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'crates/sf-conformance/src/rust_closure_receipt/authority.rs',
     'crates/sf-conformance/src/rust_closure_receipt/controlled.rs',
     'crates/sf-conformance/src/rust_closure_receipt/controlled_tests.rs',
+    'crates/sf-conformance/src/rust_closure_receipt/controlled_tool.rs',
     'crates/sf-conformance/src/rust_closure_receipt/features.rs',
     'crates/sf-conformance/src/rust_closure_receipt/format.rs',
     'crates/sf-conformance/src/rust_closure_receipt/metadata.rs',
