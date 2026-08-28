@@ -325,13 +325,13 @@ impl Profile {
 mod tests {
     use super::*;
 
-    const PACKAGE: &str = "path+file:///workspace/crates/sf-cli#sf-cli@0.0.0";
+    const PACKAGE: &str = "path+file:///workspace/crates/sf-cli#0.0.0";
 
     #[test]
     fn selects_exact_logical_artifact_and_sorts_build_scripts() {
         let stream = concat!(
             "{\"reason\":\"build-script-executed\",\"package_id\":\"z\",\"out_dir\":\"/target/build/z/out\"}\n",
-            "{\"reason\":\"compiler-artifact\",\"package_id\":\"path+file:///workspace/crates/sf-cli#sf-cli@0.0.0\",\"target\":{\"name\":\"semantic-fabric\",\"kind\":[\"bin\"]},\"profile\":{\"opt_level\":\"3\",\"debug\":false,\"test\":false},\"executable\":\"/target/x86_64-unknown-linux-gnu/release/semantic-fabric\"}\n",
+            "{\"reason\":\"compiler-artifact\",\"package_id\":\"path+file:///workspace/crates/sf-cli#0.0.0\",\"target\":{\"name\":\"semantic-fabric\",\"kind\":[\"bin\"]},\"profile\":{\"opt_level\":\"3\",\"debug\":false,\"test\":false},\"executable\":\"/target/x86_64-unknown-linux-gnu/release/semantic-fabric\"}\n",
             "{\"reason\":\"build-script-executed\",\"package_id\":\"a\",\"out_dir\":\"/target/build/a/out\"}\n"
         );
         let parsed = parse_sandbox_stdout(stream.as_bytes(), PACKAGE).unwrap();
