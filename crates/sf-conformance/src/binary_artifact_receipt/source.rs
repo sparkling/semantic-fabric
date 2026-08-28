@@ -1,6 +1,6 @@
 //! Clean Git authority, materialization, and controlled Cargo-input digests.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use super::{authority, process, source_tree};
+use super::{authority, process, source_blobs, source_tree};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_GIT_OUTPUT: u64 = 64 * 1024 * 1024;
@@ -39,6 +39,13 @@ pub(super) fn materialize(
     if materialized.files != before.files || materialized.directories != before.directories {
         return Err("materialized source files do not exactly match the Git authority".to_owned());
     }
+    source_blobs::validate(
+        git,
+        repository,
+        destination,
+        &before.blobs,
+        hardened_git_command,
+    )?;
     let after = clean_state(git, repository)?;
     if before != after {
         return Err("Git authority changed during materialization".to_owned());
@@ -148,6 +155,7 @@ struct GitState {
     committer_epoch: u64,
     files: BTreeSet<source_tree::FileRecord>,
     directories: BTreeSet<String>,
+    blobs: BTreeMap<String, String>,
 }
 
 fn validate_inputs(git: &Path, repository: &Path, destination: &Path) -> Result<String, String> {
@@ -201,12 +209,13 @@ fn clean_state(git: &Path, repository: &Path) -> Result<GitState, String> {
         repository,
         ["ls-tree", "-r", "-z", "--full-tree", "HEAD"],
     )?;
-    let (files, directories) = validate_git_tree(&tree_listing)?;
+    let tree = validate_git_tree(&tree_listing)?;
     Ok(GitState {
         revision,
         committer_epoch,
-        files,
-        directories,
+        files: tree.files,
+        directories: tree.directories,
+        blobs: tree.blobs,
     })
 }
 
@@ -215,14 +224,7 @@ fn checkout_index(git: &Path, repository: &Path, destination: &Path) -> Result<(
     git_success(
         git,
         repository,
-        [
-            "checkout-index",
-            "--all",
-            "--force",
-            "--no-filters",
-            "--prefix",
-            &prefix,
-        ],
+        ["checkout-index", "--all", "--force", "--prefix", &prefix],
     )
 }
 
@@ -273,10 +275,23 @@ fn git_run<const N: usize>(
     repository: &Path,
     args: [&str; N],
 ) -> Result<process::Output, String> {
+    let mut command = hardened_git_command(git, repository);
+    command.args(args);
+    process::run(
+        command,
+        "bound Git",
+        MAX_GIT_OUTPUT,
+        MAX_GIT_OUTPUT,
+        GIT_TIMEOUT,
+    )
+}
+
+fn hardened_git_command(git: &Path, repository: &Path) -> Command {
     let mut command = Command::new(git);
     command
         .current_dir(repository)
         .env_clear()
+        .env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -299,22 +314,21 @@ fn git_run<const N: usize>(
             "filter.lfs.process=",
             "-c",
             "filter.lfs.required=false",
-        ])
-        .args(args);
-    process::run(
-        command,
-        "bound Git",
-        MAX_GIT_OUTPUT,
-        MAX_GIT_OUTPUT,
-        GIT_TIMEOUT,
-    )
+        ]);
+    command
 }
 
-fn validate_git_tree(
-    bytes: &[u8],
-) -> Result<(BTreeSet<source_tree::FileRecord>, BTreeSet<String>), String> {
+#[derive(Debug)]
+struct GitTree {
+    files: BTreeSet<source_tree::FileRecord>,
+    directories: BTreeSet<String>,
+    blobs: BTreeMap<String, String>,
+}
+
+fn validate_git_tree(bytes: &[u8]) -> Result<GitTree, String> {
     let mut records = BTreeSet::new();
     let mut directories = BTreeSet::new();
+    let mut blobs = BTreeMap::new();
     for record in bytes
         .split(|byte| *byte == 0)
         .filter(|record| !record.is_empty())
@@ -334,10 +348,12 @@ fn validate_git_tree(
         let path =
             std::str::from_utf8(path).map_err(|_| "Git tree path is not UTF-8".to_owned())?;
         validate_relative(path)?;
-        validate_hex(
-            std::str::from_utf8(object).map_err(|_| "Git object is not UTF-8".to_owned())?,
-            "Git object",
-        )?;
+        if path == ".gitattributes" || path.ends_with("/.gitattributes") {
+            return Err("Git attributes are forbidden in source materialization v1".to_owned());
+        }
+        let object =
+            std::str::from_utf8(object).map_err(|_| "Git object is not UTF-8".to_owned())?;
+        validate_hex(object, "Git object")?;
         let mode = match *mode {
             b"100644" => 0o644,
             b"100755" => 0o755,
@@ -348,6 +364,9 @@ fn validate_git_tree(
             path: path.to_owned(),
         }) {
             return Err("Git tree paths are not unique".to_owned());
+        }
+        if blobs.insert(path.to_owned(), object.to_owned()).is_some() {
+            return Err("Git tree blob paths are not unique".to_owned());
         }
         let mut parent = Path::new(path).parent();
         while let Some(directory) = parent {
@@ -364,7 +383,11 @@ fn validate_git_tree(
     if records.is_empty() {
         Err("Git tree is empty".to_owned())
     } else {
-        Ok((records, directories))
+        Ok(GitTree {
+            files: records,
+            directories,
+            blobs,
+        })
     }
 }
 
@@ -404,10 +427,19 @@ mod tests {
     use super::*;
     #[test]
     fn rejects_gitlinks() {
-        assert!(
-            validate_git_tree(b"160000 commit 0123456789012345678901234567890123456789\tchild\0")
-                .is_err()
-        );
+        assert!(validate_git_tree(
+            b"160000 commit 0123456789012345678901234567890123456789\tchild\0"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_attribute_driven_checkout_transforms() {
+        assert!(validate_git_tree(
+            b"100644 blob 0123456789012345678901234567890123456789\t.gitattributes\0"
+        )
+        .unwrap_err()
+        .contains("attributes"));
     }
     #[test]
     fn empty_config_digest_is_domain_separated() {

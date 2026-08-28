@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
-use super::authority;
+use super::{authority, producer_paths::SandboxPathMap};
 
 const MAX_DEPFILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_INPUTS: usize = 16_384;
@@ -26,23 +26,15 @@ pub(super) struct Input {
     pub(super) byte_length: u64,
 }
 
-/// Maps a sandbox-visible path to a non-symlink host backing path.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct Root<'a> {
-    pub(super) logical: &'a Path,
-    pub(super) backing: &'a Path,
-}
-
 /// Reads the final linker depfile and requires its target to be the exact
 /// sandbox-logical binary. Every dependency maps through one unambiguous,
 /// longest trusted root to a hardened host backing file.
 pub(super) fn capture(
     depfile: &Path,
     expected_output: &Path,
-    roots: &[Root<'_>],
+    path_map: &SandboxPathMap,
 ) -> Result<DependencyFile, String> {
     validate_expected_output(expected_output)?;
-    validate_roots(roots)?;
     let authority = authority::read(depfile, MAX_DEPFILE_BYTES, "link dependency file")?;
     let rule = parse(&authority.bytes)?;
     if rule.output != expected_output {
@@ -66,17 +58,9 @@ pub(super) fn capture(
                 logical_path.display()
             ));
         }
-        let root = longest_root(&logical_path, roots)?;
-        let relative = logical_path
-            .strip_prefix(root.logical)
-            .map_err(|_| "link dependency root mapping changed".to_owned())?;
-        if relative.as_os_str().is_empty() {
-            return Err("link dependency path cannot equal a trusted root".to_owned());
-        }
-        let backing = root.backing.join(relative);
-        authority::validate_beneath(root.backing, &backing, "link dependency")?;
+        let mapped = path_map.map(&logical_path)?;
         let (sha256, byte_length) =
-            authority::digest(&backing, MAX_INPUT_BYTES, "link dependency")?;
+            authority::digest(&mapped.backing, MAX_INPUT_BYTES, "link dependency")?;
         inputs.push(Input {
             logical_path,
             sha256,
@@ -91,50 +75,9 @@ pub(super) fn capture(
     })
 }
 
-fn validate_roots(roots: &[Root<'_>]) -> Result<(), String> {
-    if roots.is_empty() {
-        return Err("link dependency capture has no trusted roots".to_owned());
-    }
-    for root in roots {
-        validate_logical(root.logical, "trusted link root")?;
-        if !root.backing.is_absolute() {
-            return Err("trusted link root backing path must be absolute".to_owned());
-        }
-        authority::validate_directory(root.backing, "trusted link root backing")?;
-    }
-    Ok(())
-}
-
 fn validate_expected_output(path: &Path) -> Result<(), String> {
     validate_logical(path, "expected link output")?;
     Ok(())
-}
-
-fn longest_root<'a>(logical_path: &Path, roots: &'a [Root<'a>]) -> Result<&'a Root<'a>, String> {
-    let mut best: Option<(&Root<'_>, usize)> = None;
-    for root in roots
-        .iter()
-        .filter(|root| logical_path.starts_with(root.logical))
-    {
-        let length = root.logical.components().count();
-        match best {
-            None => best = Some((root, length)),
-            Some((_, best_length)) if length > best_length => best = Some((root, length)),
-            Some((_, best_length)) if length == best_length => {
-                return Err(format!(
-                    "link dependency path has ambiguous trusted roots: {}",
-                    logical_path.display()
-                ));
-            }
-            _ => {}
-        }
-    }
-    best.map(|(root, _)| root).ok_or_else(|| {
-        format!(
-            "link dependency path escapes trusted roots: {}",
-            logical_path.display()
-        )
-    })
 }
 
 struct Rule {
@@ -254,7 +197,7 @@ mod tests {
     #[test]
     fn retains_output_and_parses_gnu_continuations() {
         let rule = parse(
-            b"/target/x86_64-unknown-linux-gnu/release/semantic-fabric: /target/one \\\n+ /target/with\\ space\n",
+            b"/target/x86_64-unknown-linux-gnu/release/semantic-fabric: /target/one \\\n /target/with\\ space\n",
         )
         .unwrap();
         assert_eq!(
@@ -275,28 +218,5 @@ mod tests {
         assert!(parse(b"/target/a /target/b: /target/input\n").is_err());
         assert!(parse(b"relative: /target/input\n").is_err());
         assert!(parse(b"/target/out: /target/../escape\n").is_err());
-    }
-
-    #[test]
-    fn longest_trusted_root_wins_and_ties_fail() {
-        let top = Root {
-            logical: Path::new("/target"),
-            backing: Path::new("/a"),
-        };
-        let nested = Root {
-            logical: Path::new("/target/build"),
-            backing: Path::new("/b"),
-        };
-        assert_eq!(
-            longest_root(Path::new("/target/build/x"), &[top, nested])
-                .unwrap()
-                .logical,
-            Path::new("/target/build")
-        );
-        let tie = Root {
-            logical: Path::new("/target/build"),
-            backing: Path::new("/c"),
-        };
-        assert!(longest_root(Path::new("/target/build/x"), &[nested, tie]).is_err());
     }
 }

@@ -7,11 +7,11 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use super::{authority, cargo, process};
+use super::{authority, cargo, process, sandbox_environment::ExactBuildEnvironment};
 
-const LINKER: &str = "/usr/bin/x86_64-linux-gnu-gcc-13";
+pub(super) const LINKER: &str = "/usr/bin/x86_64-linux-gnu-gcc-13";
 
-const SYSTEM_ROOTS: &[(&str, bool)] = &[
+pub(super) const SYSTEM_ROOTS: &[(&str, bool)] = &[
     ("/usr/bin", true),
     ("/usr/lib", true),
     ("/usr/libexec", false),
@@ -35,23 +35,30 @@ pub(super) struct Request<'a> {
 pub(super) struct Plan {
     pub(super) executable: PathBuf,
     pub(super) argv: Vec<OsString>,
+    pub(super) environment: ExactBuildEnvironment,
+    pub(super) system_mounts: Vec<Mount>,
     pub(super) bwrap_version: String,
     pub(super) bwrap_sha256: String,
     pub(super) bwrap_byte_length: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Mount {
-    source: PathBuf,
-    destination: &'static str,
+pub(super) struct Mount {
+    pub(super) source: PathBuf,
+    pub(super) destination: &'static str,
 }
 
 pub(super) fn plan(request: &Request<'_>) -> Result<Plan, String> {
     validate_request(request)?;
     let executable = cargo::identify(request.bwrap, "bubblewrap executable")?;
+    let environment = ExactBuildEnvironment::new(request.source_date_epoch)?;
+    let system_mounts = system_mounts()?;
+    let argv = arguments(request, &system_mounts, &environment);
     Ok(Plan {
         executable: request.bwrap.to_path_buf(),
-        argv: arguments(request, &system_mounts()?),
+        argv,
+        environment,
+        system_mounts,
         bwrap_version: executable.version,
         bwrap_sha256: executable.sha256,
         bwrap_byte_length: executable.byte_length,
@@ -119,7 +126,11 @@ fn validate_request(request: &Request<'_>) -> Result<(), String> {
     Ok(())
 }
 
-fn arguments(request: &Request<'_>, system: &[Mount]) -> Vec<OsString> {
+fn arguments(
+    request: &Request<'_>,
+    system: &[Mount],
+    environment: &ExactBuildEnvironment,
+) -> Vec<OsString> {
     let mounts = [
         Mount {
             source: request.source.to_path_buf(),
@@ -169,22 +180,7 @@ fn arguments(request: &Request<'_>, system: &[Mount]) -> Vec<OsString> {
     for mount in system {
         push_mount(&mut argv, "--ro-bind", mount);
     }
-    for (name, value) in [
-        ("CARGO_HOME", "/cargo-home".to_owned()),
-        ("CARGO_INCREMENTAL", "0".to_owned()),
-        ("CARGO_NET_OFFLINE", "true".to_owned()),
-        ("HOME", "/home/harness".to_owned()),
-        ("LC_ALL", "C".to_owned()),
-        ("PATH", "/toolchain/bin:/usr/bin".to_owned()),
-        ("RUSTC", "/toolchain/bin/rustc".to_owned()),
-        ("RUSTUP_HOME", "/toolchain".to_owned()),
-        ("SOURCE_DATE_EPOCH", request.source_date_epoch.to_string()),
-        ("TMPDIR", "/tmp".to_owned()),
-        ("TZ", "UTC".to_owned()),
-    ] {
-        argv.extend(strings(&["--setenv", name]));
-        argv.push(value.into());
-    }
+    environment.append_bwrap_arguments(&mut argv);
     argv.extend(strings(&[
         "--chdir",
         "/workspace",
@@ -212,7 +208,7 @@ fn arguments(request: &Request<'_>, system: &[Mount]) -> Vec<OsString> {
     argv
 }
 
-fn system_mounts() -> Result<Vec<Mount>, String> {
+pub(super) fn system_mounts() -> Result<Vec<Mount>, String> {
     let mut mounts = Vec::new();
     for (value, required) in SYSTEM_ROOTS {
         let path = Path::new(value);
@@ -383,7 +379,8 @@ mod tests {
                 destination: "/lib",
             },
         ];
-        let argv = text(&arguments(&request, &system));
+        let environment = ExactBuildEnvironment::new(request.source_date_epoch).unwrap();
+        let argv = text(&arguments(&request, &system, &environment));
         assert_eq!(argv[..9].join("\0"),
             "--die-with-parent\0--new-session\0--unshare-all\0--unshare-net\0--clearenv\0--tmpfs\0/\0--cap-drop\0ALL");
         assert_eq!(argv[argv.len() - 22..].join("\0"),
@@ -420,7 +417,8 @@ mod tests {
             source: source.into(),
             destination,
         });
-        let argv = text(&arguments(&request, &system));
+        let environment = ExactBuildEnvironment::new(request.source_date_epoch).unwrap();
+        let argv = text(&arguments(&request, &system, &environment));
         let mounts: Vec<_> = argv
             .windows(3)
             .filter(|window| window[0] == "--ro-bind" || window[0] == "--bind")

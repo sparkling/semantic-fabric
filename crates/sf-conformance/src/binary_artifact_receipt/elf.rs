@@ -280,25 +280,21 @@ mod tests {
 
     #[test]
     fn enforces_the_fixed_receipt_elf_facts() {
-        assert!(
-            enforce_fixed_facts(
-                0o755,
-                "ELF64",
-                "2's complement, little endian",
-                "UNIX - System V",
-                "Advanced Micro Devices X86-64"
-            )
-            .is_ok()
-        );
-        assert!(
-            enforce_fixed_facts(
-                0o755,
-                "ELF64",
-                "2's complement, big endian",
-                "UNIX - System V",
-                "Advanced Micro Devices X86-64"
-            )
-            .is_err()
-        );
+        assert!(enforce_fixed_facts(
+            0o755,
+            "ELF64",
+            "2's complement, little endian",
+            "UNIX - System V",
+            "Advanced Micro Devices X86-64"
+        )
+        .is_ok());
+        assert!(enforce_fixed_facts(
+            0o755,
+            "ELF64",
+            "2's complement, big endian",
+            "UNIX - System V",
+            "Advanced Micro Devices X86-64"
+        )
+        .is_err());
     }
 }

@@ -52,58 +52,55 @@ pub(super) fn inventory(
         return Err("inventory byte bound must be non-zero".to_owned());
     }
     authority::validate_directory(root, "inventory root")?;
-    let mut records = Vec::new();
-    let mut bytes = 0u64;
-    let mut entries = 0usize;
-    let mut directories = BTreeSet::new();
-    walk(
-        root,
-        root,
+    let mut state = WalkState {
         tracked_source,
-        &mut records,
-        &mut bytes,
-        &mut entries,
-        &mut directories,
+        records: Vec::new(),
+        bytes: 0,
+        entries: 0,
+        directories: BTreeSet::new(),
         max_bytes,
-    )?;
-    records.sort();
+    };
+    walk(root, root, &mut state)?;
+    state.records.sort();
     let mut digest = Sha256::new();
     digest.update(domain);
-    for record in &records {
+    for record in &state.records {
         digest.update(record.as_bytes());
         digest.update([0]);
     }
-    let files = records
+    let files = state
+        .records
         .iter()
         .filter_map(|record| FileRecord::parse(record))
         .collect();
     Ok(TreeDigest {
         sha256: format!("{:x}", digest.finalize()),
         files,
-        directories,
+        directories: state.directories,
     })
 }
 
-fn walk(
-    root: &Path,
-    directory: &Path,
+struct WalkState {
     tracked_source: bool,
-    records: &mut Vec<String>,
-    bytes: &mut u64,
-    entries: &mut usize,
-    directories: &mut BTreeSet<String>,
+    records: Vec<String>,
+    bytes: u64,
+    entries: usize,
+    directories: BTreeSet<String>,
     max_bytes: u64,
-) -> Result<(), String> {
+}
+
+fn walk(root: &Path, directory: &Path, state: &mut WalkState) -> Result<(), String> {
     let mut children: Vec<_> = fs::read_dir(directory)
         .map_err(|error| format!("read inventory directory {}: {error}", directory.display()))?
         .collect::<Result<_, _>>()
         .map_err(|error| format!("enumerate inventory directory: {error}"))?;
     children.sort_by_key(|entry| entry.file_name());
     for entry in children {
-        *entries = entries
+        state.entries = state
+            .entries
             .checked_add(1)
             .ok_or_else(|| "inventory entry count overflow".to_owned())?;
-        if *entries > MAX_FILES {
+        if state.entries > MAX_FILES {
             return Err(format!("inventory exceeds {MAX_FILES} entries"));
         }
         let path = entry.path();
@@ -117,29 +114,23 @@ fn walk(
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| format!("inspect inventory entry: {error}"))?;
         if metadata.is_dir() {
-            directories.insert(relative.to_owned());
-            if !tracked_source {
-                records.push(format!("d\t{:o}\t{relative}", mode(&metadata)?));
+            state.directories.insert(relative.to_owned());
+            if !state.tracked_source {
+                state
+                    .records
+                    .push(format!("d\t{:o}\t{relative}", mode(&metadata)?));
             }
-            walk(
-                root,
-                &path,
-                tracked_source,
-                records,
-                bytes,
-                entries,
-                directories,
-                max_bytes,
-            )?;
+            walk(root, &path, state)?;
         } else {
-            let (sha, size) = authority::digest(&path, max_bytes, "inventory file")?;
-            *bytes = bytes
+            let (sha, size) = authority::digest(&path, state.max_bytes, "inventory file")?;
+            state.bytes = state
+                .bytes
                 .checked_add(size)
                 .ok_or_else(|| "inventory byte count overflow".to_owned())?;
-            if *bytes > max_bytes {
-                return Err(format!("inventory exceeds {max_bytes} bytes"));
+            if state.bytes > state.max_bytes {
+                return Err(format!("inventory exceeds {} bytes", state.max_bytes));
             }
-            records.push(format!(
+            state.records.push(format!(
                 "f\t{:o}\t{relative}\t{size}\t{sha}",
                 mode(&metadata)?
             ));

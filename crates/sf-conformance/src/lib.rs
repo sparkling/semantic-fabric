@@ -21,6 +21,8 @@
 
 use std::path::Path;
 
+#[cfg(feature = "evidence-receipts")]
+pub mod binary_artifact_receipt;
 pub mod capability_catalog;
 pub mod capability_model;
 pub mod capability_render;

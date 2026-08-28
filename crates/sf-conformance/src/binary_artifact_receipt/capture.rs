@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::{authority, cargo};
+use super::{authority, cargo, producer_paths::SandboxPathMap};
 
 const MAX_BUILD_SCRIPT_FILES: usize = 20_000;
 const MAX_BUILD_SCRIPT_BYTES: u64 = 512 * 1024 * 1024;
@@ -27,12 +27,13 @@ pub(super) struct BuildScriptInventory {
 
 pub(super) fn inventory(
     target_dir: &Path,
+    path_map: &SandboxPathMap,
     scripts: &[cargo::BuildScript],
 ) -> Result<Vec<BuildScriptInventory>, String> {
     authority::validate_directory(target_dir, "fresh target directory")?;
     let mut inventories = Vec::with_capacity(scripts.len());
     for script in scripts {
-        inventories.push(one(target_dir, script)?);
+        inventories.push(one(target_dir, path_map, script)?);
     }
     inventories.sort_by(|left, right| {
         left.package_id
@@ -48,11 +49,15 @@ pub(super) fn inventory(
     Ok(inventories)
 }
 
-fn one(target_dir: &Path, script: &cargo::BuildScript) -> Result<BuildScriptInventory, String> {
-    authority::validate_beneath(target_dir, &script.out_dir, "build-script OUT_DIR")?;
-    authority::validate_directory(&script.out_dir, "build-script OUT_DIR")?;
-    let build_dir = script
-        .out_dir
+fn one(
+    target_dir: &Path,
+    path_map: &SandboxPathMap,
+    script: &cargo::BuildScript,
+) -> Result<BuildScriptInventory, String> {
+    let out_dir = path_map.map_target(&script.logical_out_dir)?;
+    authority::validate_beneath(target_dir, &out_dir, "build-script OUT_DIR")?;
+    authority::validate_directory(&out_dir, "build-script OUT_DIR")?;
+    let build_dir = out_dir
         .parent()
         .ok_or_else(|| "build-script OUT_DIR has no parent".to_owned())?;
     authority::validate_beneath(target_dir, build_dir, "build-script directory")?;
@@ -66,10 +71,10 @@ fn one(target_dir: &Path, script: &cargo::BuildScript) -> Result<BuildScriptInve
         MAX_SCRIPT_OUTPUT_BYTES,
         "build-script stderr",
     )?;
-    let tree = tree(&script.out_dir)?;
+    let tree = tree(&out_dir)?;
     Ok(BuildScriptInventory {
         package_id: checked_package_id(&script.package_id)?,
-        out_dir: script.out_dir.clone(),
+        out_dir,
         directives_sha256: canonical_directives_sha256(&directives.bytes)?,
         directives_bytes: directives.size,
         stderr_sha256: stderr.sha256,
@@ -200,8 +205,10 @@ fn visit(
 
 fn checked_package_id(value: &str) -> Result<String, String> {
     if value.is_empty()
-        || value.len() > 16 * 1024
-        || value.bytes().any(|byte| byte.is_ascii_control())
+        || value.len() > 512
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || !byte.is_ascii())
     {
         Err("invalid Cargo build-script package ID".to_owned())
     } else {
@@ -215,12 +222,21 @@ mod tests {
 
     #[test]
     fn tree_digest_is_stable_over_directory_order() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
         let root =
             std::env::temp_dir().join(format!("semantic-fabric-out-tree-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(root.join("z"), b"z").unwrap();
         fs::write(root.join("a"), b"a").unwrap();
+        #[cfg(unix)]
+        for path in [root.join("z"), root.join("a")] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let first = tree(&root).unwrap();
         let second = tree(&root).unwrap();
         assert_eq!(first.sha256, second.sha256);

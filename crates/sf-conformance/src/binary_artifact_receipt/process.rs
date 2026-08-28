@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
+#[derive(Debug)]
 pub(super) struct Output {
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,
@@ -29,6 +30,15 @@ pub(super) fn run(
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
+        // SAFETY: `umask(2)` is async-signal-safe and mutates only the child
+        // between fork and exec. Capture outputs must not inherit a permissive
+        // operator umask.
+        unsafe {
+            command.pre_exec(|| {
+                libc::umask(0o022);
+                Ok(())
+            });
+        }
     }
     let mut child = command
         .spawn()
@@ -116,7 +126,7 @@ enum Stream {
 }
 
 fn read_limited<R: Read + Send + 'static>(
-    mut reader: R,
+    reader: R,
     limit: u64,
     label: String,
     stream: &'static str,
@@ -153,8 +163,11 @@ fn collect(
         match receiver.try_recv() {
             Ok((stream, result)) => set_result(stream, result, stdout, stderr)?,
             Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Disconnected) if stdout.is_some() && stderr.is_some() => {
+                return Ok(())
+            }
             Err(TryRecvError::Disconnected) => {
-                return Err("subprocess output reader stopped unexpectedly".to_owned())
+                return Err("subprocess output reader stopped unexpectedly".to_owned());
             }
         }
     }
@@ -181,9 +194,7 @@ fn first_error(
     stderr: Option<Result<Vec<u8>, String>>,
 ) -> Result<Output, String> {
     for result in [stdout, stderr].into_iter().flatten() {
-        if let Err(error) = result {
-            return Err(error);
-        }
+        result?;
     }
     Err("subprocess output capture failed without an error".to_owned())
 }
@@ -234,6 +245,15 @@ mod tests {
         let output = run(command, "fixture", 16, 16, Duration::from_secs(1)).unwrap();
         assert_eq!(output.stdout, b"out");
         assert_eq!(output.stderr, b"err");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixes_the_child_umask() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "umask"]);
+        let output = run(command, "fixture", 16, 16, Duration::from_secs(1)).unwrap();
+        assert_eq!(output.stdout, b"0022\n");
     }
 
     #[cfg(unix)]

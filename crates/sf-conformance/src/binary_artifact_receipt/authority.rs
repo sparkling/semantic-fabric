@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 const MAX_PATH_COMPONENTS: usize = 128;
 
 /// A regular, immutable-enough file opened without following a final symlink.
+#[derive(Debug)]
 pub(super) struct AuthorityFile {
     pub(super) bytes: Vec<u8>,
     pub(super) sha256: String,
@@ -17,7 +18,7 @@ pub(super) struct AuthorityFile {
 
 pub(super) fn read(path: &Path, max_bytes: u64, label: &str) -> Result<AuthorityFile, String> {
     let before = inspect_file(path, label)?;
-    let mut file =
+    let file =
         File::open(path).map_err(|error| format!("open {label} {}: {error}", path.display()))?;
     let opened = file
         .metadata()
@@ -198,14 +199,28 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         path
+    }
+
+    fn write_private(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
     }
 
     #[test]
     fn reads_regular_immutable_file() {
         let root = fixture("read");
         let file = root.join("input");
-        fs::write(&file, b"input").unwrap();
+        write_private(&file, b"input");
         let authority = read(&file, 16, "fixture").unwrap();
         assert_eq!(authority.bytes, b"input");
         assert_eq!(authority.size, 5);
@@ -221,7 +236,7 @@ mod tests {
         let file = root.join("input");
         let alias = root.join("alias");
         let link = root.join("link");
-        fs::write(&file, b"input").unwrap();
+        write_private(&file, b"input");
         fs::hard_link(&file, &alias).unwrap();
         assert!(read(&file, 16, "fixture")
             .unwrap_err()
@@ -237,14 +252,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn refuses_escapes_and_symlink_components() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{symlink, PermissionsExt};
 
         let root = fixture("beneath");
         let outside = fixture("outside");
         let nested = root.join("nested");
         fs::create_dir(&nested).unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
         let file = nested.join("file");
-        fs::write(&file, b"input").unwrap();
+        write_private(&file, b"input");
         assert_eq!(validate_beneath(&root, &file, "fixture").unwrap(), file);
         assert!(validate_beneath(&root, &outside.join("x"), "fixture")
             .unwrap_err()
