@@ -71,6 +71,36 @@ export function asRecord(value: unknown, label: string): Record<string, unknown>
   return value as Record<string, unknown>;
 }
 
+export function asClosedRecord(value: unknown, label: string): Record<string, unknown> {
+  const record = asRecord(value, label);
+  const prototype = Object.getPrototypeOf(record);
+  const keys = Reflect.ownKeys(record);
+  const invalidKey = keys.some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    return typeof key !== 'string' || descriptor?.enumerable !== true
+      || !Object.hasOwn(descriptor, 'value');
+  });
+  if ((prototype !== Object.prototype && prototype !== null) || invalidKey) {
+    throw new TypeError(`${label} must be a plain own-key object`);
+  }
+  return Object.assign(Object.create(null), record) as Record<string, unknown>;
+}
+
+export function asDenseArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Array.prototype
+    || Reflect.ownKeys(value).length !== value.length + 1) {
+    throw new TypeError(`${label} must be a dense array without extra properties`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (descriptor?.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError(`${label} must be a dense array without extra properties`);
+    }
+  }
+  return value;
+}
+
 export function assertExactKeys(
   value: Record<string, unknown>,
   keys: readonly string[],

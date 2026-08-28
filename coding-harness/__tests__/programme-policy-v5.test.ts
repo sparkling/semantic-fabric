@@ -8,6 +8,7 @@ import {
   parseAcceptanceTask,
 } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
+import { parseHarnessConfig, type HarnessConfig } from '../src/contracts.js';
 import { HARNESS_MANIFEST_PATH } from '../src/controller-attestation.js';
 import { CONTROLLER_BUILD_PATH } from '../src/controller-build.js';
 import {
@@ -33,7 +34,18 @@ import type { RustOfflineProfile } from '../src/rust-sandbox.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
+  '9df4546065eb74b2b9e089db226e017fb85919515f9ca5608b72d005ce73eea2';
+const HISTORICAL_POLICY_FINGERPRINT =
   '7888d16a81b048d2bd1a436047cac8ebd13d61050daeff670371140383526c3c';
+const HISTORICAL_MANIFEST_DIGEST =
+  'f1dbcaf5c49c45b84e0c4bb09f305b9787eaa2493f659e445eeced60324cf104';
+const CAPTURE_PATHS = new Set([
+  'coding-harness/__tests__/programme-capture-state-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-task-v1.test.ts',
+  'coding-harness/src/programme-capture-state-v1.ts',
+  'coding-harness/src/programme-capture-task-v1.ts',
+  'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
+]);
 const manifestUrl = new URL('../.harness/manifest.json', import.meta.url);
 const taskUrl = new URL('../config/issue-8-acceptance.json', import.meta.url);
 
@@ -57,6 +69,16 @@ describe('frozen schema-v5 programme policy', () => {
       parsed.snapshot.execution, parsed.manifest, parsed.task, parsed.boundTask,
       parsed.build, parsed.evidencePlan,
     ]) expect(Object.isFrozen(value)).toBe(true);
+  });
+
+  it('preserves the pre-capture V5 policy fingerprint as a historical anchor', () => {
+    const { manifestBlob, harnessConfig } = historicalManifest();
+    expect(sha256(manifestBlob)).toBe(HISTORICAL_MANIFEST_DIGEST);
+    const input = policyInput(manifestBlob, harnessConfig);
+    const policy = historicalPolicy(input, harnessConfig);
+    expect(programmePolicyFingerprint(policy)).toBe(HISTORICAL_POLICY_FINGERPRINT);
+    expect(verifyFrozenProgrammePolicyV1(policy, HISTORICAL_POLICY_FINGERPRINT).fingerprint)
+      .toBe(HISTORICAL_POLICY_FINGERPRINT);
   });
 
   it('keeps the declaration digest invariant across Rust runtime binding', () => {
@@ -290,8 +312,10 @@ describe('frozen schema-v5 programme policy', () => {
   });
 });
 
-function policyInput(): ControllerPolicyInputs {
-  const manifestBlob = readFileSync(manifestUrl, 'utf8');
+function policyInput(
+  manifestBlob = readFileSync(manifestUrl, 'utf8'),
+  harnessConfig: HarnessConfig = SECURE_HARNESS_CONFIG,
+): ControllerPolicyInputs {
   const task = JSON.parse(readFileSync(taskUrl, 'utf8')) as Record<string, any>;
   task.schemaVersion = 3;
   task.taskId = 'verifier_only_task_0001';
@@ -317,13 +341,13 @@ function policyInput(): ControllerPolicyInputs {
     }],
   };
   const taskBlob = `${JSON.stringify(task, null, 2)}\n`;
-  const parsedTask = parseAcceptanceTask(JSON.parse(taskBlob), SECURE_HARNESS_CONFIG);
+  const parsedTask = parseAcceptanceTask(JSON.parse(taskBlob), harnessConfig);
   const boundTask = bindProgrammeTaskRuntimeV1(parsedTask);
   const evidencePlan = resolveTaskEvidencePlanV1({ task: boundTask, taskPath });
   const manifestBlobDigest = sha256(manifestBlob);
   const taskBlobDigest = sha256(taskBlob);
   const protectedInputs = Object.fromEntries([...new Set([
-    ...SECURE_HARNESS_CONFIG.requiredProtectedPaths,
+    ...harnessConfig.requiredProtectedPaths,
     ...parsedTask.evaluatorPaths,
     'Cargo.lock',
   ])].sort().map((path, index) => [path, sha256(`${index}:${path}`)]));
@@ -387,6 +411,36 @@ function policyInput(): ControllerPolicyInputs {
     taskEvidencePlanDigest: evidencePlan.declarationDigest,
     maxRepairs: 2,
   };
+}
+
+function historicalManifest(): { manifestBlob: string; harnessConfig: HarnessConfig } {
+  const manifest = JSON.parse(readFileSync(manifestUrl, 'utf8')) as Record<string, any>;
+  manifest.protectedPaths = manifest.protectedPaths.filter((path: string) => !CAPTURE_PATHS.has(path));
+  const manifestBlob = `${JSON.stringify(manifest, null, 2)}\n`;
+  const harnessConfig = parseHarnessConfig({
+    ...structuredClone(SECURE_HARNESS_CONFIG),
+    requiredProtectedPaths: SECURE_HARNESS_CONFIG.requiredProtectedPaths
+      .filter((path) => !CAPTURE_PATHS.has(path)),
+  });
+  return { manifestBlob, harnessConfig };
+}
+
+function historicalPolicy(
+  input: ControllerPolicyInputs,
+  harnessConfig: HarnessConfig,
+): ReturnType<typeof createFrozenProgrammePolicyV1> {
+  const policy = structuredClone(createFrozenProgrammePolicyV1(policyInput())) as any;
+  policy.harnessConfig = harnessConfig;
+  Object.assign(policy.controller, {
+    manifestBlob: input.controller.manifestBlob,
+    manifestBlobDigest: input.controller.manifestBlobDigest,
+    buildManifestBlob: input.controller.buildManifestBlob,
+    buildManifestBlobDigest: input.controller.buildManifestBlobDigest,
+    runtimeTreeDigest: input.controller.build.runtimeTreeDigest,
+    lockfileDigest: input.controller.build.lockfileDigest,
+  });
+  policy.execution.protectedInputs = input.execution.protectedInputs;
+  return verifyFrozenProgrammePolicyV1(policy, HISTORICAL_POLICY_FINGERPRINT).snapshot;
 }
 
 function sha256(value: string): string {

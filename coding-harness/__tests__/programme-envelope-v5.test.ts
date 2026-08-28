@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseAcceptanceTask } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
+import { parseHarnessConfig, type HarnessConfig } from '../src/contracts.js';
 import { HARNESS_MANIFEST_PATH } from '../src/controller-attestation.js';
 import { CONTROLLER_BUILD_PATH } from '../src/controller-build.js';
 import type { ProgrammeV5RufloEvidence } from '../src/evidence.js';
@@ -23,6 +24,7 @@ import {
 import {
   createFrozenProgrammePolicyV1,
   programmePolicyFingerprint,
+  verifyFrozenProgrammePolicyV1,
   type ControllerPolicyInputs,
   type FrozenProgrammePolicyV1,
 } from '../src/programme-policy-v5.js';
@@ -48,9 +50,19 @@ import {
 } from './candidate-fixtures.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
-const ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
-const ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
+const POLICY_FINGERPRINT = '97123279ce29debcd76a953f8d44228e07a4da2d00540e57d09704a19100101b';
+const ACCEPTANCE_DIGEST = '91415b666d2a5f56ee5391b37dc91d680307391b8795ebc287612d1097aba2d2';
+const ENVELOPE_DIGEST = 'e21479b69e1c6632b67e398e82434dbdd112d2eefa269356cac865076baffe4f';
+const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
+const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
+const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
+const CAPTURE_PATHS = new Set([
+  'coding-harness/__tests__/programme-capture-state-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-task-v1.test.ts',
+  'coding-harness/src/programme-capture-state-v1.ts',
+  'coding-harness/src/programme-capture-task-v1.ts',
+  'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
+]);
 
 describe('strict schema-v5 programme envelope', () => {
   it('round-trips one receipt against independent policy and envelope anchors', () => {
@@ -80,6 +92,20 @@ describe('strict schema-v5 programme envelope', () => {
       parsed, parsed.policy, parsed.rufloEvidence, parsed.receiptChain,
       parsed.receiptChain.receipts, parsed.programmeAcceptance,
     ]) expect(Object.isFrozen(value)).toBe(true);
+  });
+
+  it('preserves the pre-capture V5 policy, acceptance, and envelope anchors', () => {
+    const { manifestBlob, harnessConfig } = historicalManifest();
+    const policy = policyFixture(manifestBlob, harnessConfig);
+    const fixture = envelopeFixture('pass', true, policy);
+    expect(programmePolicyFingerprint(policy)).toBe(HISTORICAL_POLICY_FINGERPRINT);
+    const envelope = createProgrammeEnvelopeV5(fixture.input, HISTORICAL_POLICY_FINGERPRINT);
+    expect(envelope.programmeAcceptanceDigest).toBe(HISTORICAL_ACCEPTANCE_DIGEST);
+    expect(envelope.envelopeDigest).toBe(HISTORICAL_ENVELOPE_DIGEST);
+    expect(parseProgrammeEnvelopeV5(
+      serializeProgrammeEnvelopeV5(envelope, HISTORICAL_POLICY_FINGERPRINT),
+      HISTORICAL_POLICY_FINGERPRINT,
+    )).toEqual(envelope);
   });
 
   it('requires the external fingerprint on create, parse, serialize, and finalize', () => {
@@ -206,8 +232,11 @@ describe('strict schema-v5 programme envelope', () => {
   });
 });
 
-function envelopeFixture(status: ReceiptStatus, gateValid = true) {
-  const policy = policyFixture();
+function envelopeFixture(
+  status: ReceiptStatus,
+  gateValid = true,
+  policy = policyFixture(),
+) {
   const rufloEvidence = programmeV5RufloFixture({
     taskId: 'verifier_only_task_0001', runId: 'programme-run-0001',
     swarmId: 'swarm-0001', coordinationTaskId: 'coordination-task-0001',
@@ -353,8 +382,10 @@ function toolFixture(
   return tools;
 }
 
-function policyFixture(): FrozenProgrammePolicyV1 {
-  const manifestBlob = readFileSync(new URL('../.harness/manifest.json', import.meta.url), 'utf8');
+function policyFixture(
+  manifestBlob = readFileSync(new URL('../.harness/manifest.json', import.meta.url), 'utf8'),
+  harnessConfig: HarnessConfig = SECURE_HARNESS_CONFIG,
+): FrozenProgrammePolicyV1 {
   const raw = JSON.parse(readFileSync(new URL('../config/issue-8-acceptance.json', import.meta.url), 'utf8')) as any;
   Object.assign(raw, {
     schemaVersion: 3, taskId: 'verifier_only_task_0001',
@@ -374,12 +405,12 @@ function policyFixture(): FrozenProgrammePolicyV1 {
   });
   delete raw.qeProfiles;
   const taskBlob = `${JSON.stringify(raw, null, 2)}\n`;
-  const task = parseAcceptanceTask(JSON.parse(taskBlob), SECURE_HARNESS_CONFIG);
+  const task = parseAcceptanceTask(JSON.parse(taskBlob), harnessConfig);
   if (task.schemaVersion !== 3) throw new Error('test task must be schema v3');
   const manifestDigest = sha256(manifestBlob);
   const taskDigest = sha256(taskBlob);
   const protectedInputs = Object.fromEntries([...new Set([
-    ...SECURE_HARNESS_CONFIG.requiredProtectedPaths, ...task.evaluatorPaths, 'Cargo.lock',
+    ...harnessConfig.requiredProtectedPaths, ...task.evaluatorPaths, 'Cargo.lock',
   ])].sort().map((path, index) => [path, sha256(`${index}:${path}`)]));
   const buildBody = {
     schemaVersion: 1, authority: 'development-only-no-promotion',
@@ -417,7 +448,32 @@ function policyFixture(): FrozenProgrammePolicyV1 {
     },
     taskEvidencePlanDigest: plan.declarationDigest, maxRepairs: 2,
   };
-  return createFrozenProgrammePolicyV1(input);
+  if (harnessConfig === SECURE_HARNESS_CONFIG) return createFrozenProgrammePolicyV1(input);
+  const policy = structuredClone(policyFixture()) as any;
+  policy.harnessConfig = harnessConfig;
+  Object.assign(policy.controller, {
+    manifestBlob: input.controller.manifestBlob,
+    manifestBlobDigest: input.controller.manifestBlobDigest,
+    buildManifestBlob: input.controller.buildManifestBlob,
+    buildManifestBlobDigest: input.controller.buildManifestBlobDigest,
+    runtimeTreeDigest: input.controller.build.runtimeTreeDigest,
+    lockfileDigest: input.controller.build.lockfileDigest,
+  });
+  policy.execution.protectedInputs = input.execution.protectedInputs;
+  return verifyFrozenProgrammePolicyV1(policy, HISTORICAL_POLICY_FINGERPRINT).snapshot;
+}
+
+function historicalManifest(): { manifestBlob: string; harnessConfig: HarnessConfig } {
+  const manifest = JSON.parse(readFileSync(
+    new URL('../.harness/manifest.json', import.meta.url), 'utf8',
+  )) as Record<string, any>;
+  manifest.protectedPaths = manifest.protectedPaths.filter((path: string) => !CAPTURE_PATHS.has(path));
+  const manifestBlob = `${JSON.stringify(manifest, null, 2)}\n`;
+  return { manifestBlob, harnessConfig: parseHarnessConfig({
+    ...structuredClone(SECURE_HARNESS_CONFIG),
+    requiredProtectedPaths: SECURE_HARNESS_CONFIG.requiredProtectedPaths
+      .filter((path) => !CAPTURE_PATHS.has(path)),
+  }) };
 }
 
 function rehashEnvelope(value: any): void {

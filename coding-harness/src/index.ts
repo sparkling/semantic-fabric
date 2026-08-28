@@ -43,6 +43,8 @@ export * from './network.js';
 export * from './policy.js';
 export * from './parallel.js';
 export * from './programme-acceptance.js';
+export * from './programme-capture-state-v1.js';
+export * from './programme-capture-task-v1.js';
 export * from './programme-envelope.js';
 export * from './programme-envelope-v5.js';
 export * from './programme-envelope-v6.js';
