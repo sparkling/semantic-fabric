@@ -3,6 +3,11 @@ use std::path::{Component, Path};
 
 use sha2::{Digest, Sha256};
 
+#[path = "model/link.rs"]
+mod link;
+
+pub use link::{LinkInput, LinkInputAlias, LinkInputOrigin};
+
 pub const HEADER: &str = "semantic-fabric-current-sf-cli-artifact-observation-v1";
 pub const ARTIFACT_CLASS: &str = "current-sf-cli-all-in-one-development";
 pub const ATTESTATION_SCOPE: &str =
@@ -24,7 +29,7 @@ pub const ENVIRONMENT_DIGEST_FORMAT: &str =
 pub const SOURCE_DATE_EPOCH_LAW: &str = "git-commit-committer-timestamp-seconds-v1";
 pub const NOT_ATTESTED: &str = "not-attested";
 
-pub const NONCLAIM_KEYS: [&str; 17] = [
+pub const NONCLAIM_KEYS: [&str; 19] = [
     "production-minimality",
     "reproducibility",
     "sbom",
@@ -39,6 +44,8 @@ pub const NONCLAIM_KEYS: [&str; 17] = [
     "linker-tool-closure",
     "tool-execution-closure",
     "final-link-depfile-authorship",
+    "link-input-time-of-use",
+    "link-input-path-resolution-race-resistance",
     "same-principal-authority-race-resistance",
     "signing",
     "slsa-provenance",
@@ -114,46 +121,6 @@ pub struct BuildScriptEvent {
     pub out_tree_sha256: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LinkInputOrigin {
-    Workspace,
-    CargoRegistry,
-    RustSysroot,
-    BuildOutput,
-    HostSystem,
-}
-
-impl LinkInputOrigin {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Workspace => "workspace",
-            Self::CargoRegistry => "cargo-registry",
-            Self::RustSysroot => "rust-sysroot",
-            Self::BuildOutput => "build-output",
-            Self::HostSystem => "host-system",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "workspace" => Some(Self::Workspace),
-            "cargo-registry" => Some(Self::CargoRegistry),
-            "rust-sysroot" => Some(Self::RustSysroot),
-            "build-output" => Some(Self::BuildOutput),
-            "host-system" => Some(Self::HostSystem),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LinkInput {
-    pub origin: LinkInputOrigin,
-    pub logical_path: String,
-    pub byte_length: u64,
-    pub sha256: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactObservation {
     pub byte_length: u64,
@@ -174,6 +141,7 @@ pub struct HostObservation {
     pub tools: Vec<ToolIdentity>,
     pub build_script_events: Vec<BuildScriptEvent>,
     pub final_link_inputs: Vec<LinkInput>,
+    pub final_link_input_aliases: Vec<LinkInputAlias>,
     pub artifact: ArtifactObservation,
     pub dynamic_libraries: Vec<String>,
 }
@@ -268,6 +236,7 @@ impl HostObservation {
         validate_link_output_path(&self.link_output_logical_path)?;
         if self.build_script_events.len() > super::format::MAX_BUILD_SCRIPT_EVENTS
             || self.final_link_inputs.len() > super::format::MAX_FINAL_LINK_INPUTS
+            || self.final_link_input_aliases.len() > super::format::MAX_FINAL_LINK_INPUT_ALIASES
             || self.dynamic_libraries.len() > super::format::MAX_DYNAMIC_LIBRARIES
         {
             return Err("host observation inventory count exceeds bounds".to_owned());
@@ -275,12 +244,14 @@ impl HostObservation {
         validate_tools(&self.tools)?;
         validate_sorted(&self.build_script_events, "build-script events")?;
         validate_sorted(&self.final_link_inputs, "final link inputs")?;
+        validate_sorted(&self.final_link_input_aliases, "final link input aliases")?;
         if self.build_script_events.is_empty() || self.final_link_inputs.is_empty() {
             return Err("build-script events and final link inputs must be observed".to_owned());
         }
         if self.raw_link_input_count == 0
             || self.raw_link_input_count > super::linker::MAX_INPUTS as u64
             || self.raw_link_input_count < self.final_link_inputs.len() as u64
+            || self.raw_link_input_count < self.final_link_input_aliases.len() as u64
         {
             return Err("raw final-link input count is outside bounds".to_owned());
         }
@@ -307,10 +278,42 @@ impl HostObservation {
             }
             validate_sha256("build-script OUT tree", &event.out_tree_sha256)?;
         }
+        let mut link_input_identities = BTreeSet::new();
+        let mut host_terminals = BTreeSet::new();
         for input in &self.final_link_inputs {
             validate_logical_path(&input.logical_path)?;
+            if !input.logical_path.starts_with(input.origin.path_prefix()) {
+                return Err("final link input origin does not match its logical path".to_owned());
+            }
+            if !link_input_identities.insert((input.origin, input.logical_path.as_str())) {
+                return Err("duplicate final link input identity".to_owned());
+            }
+            if input.origin == LinkInputOrigin::HostSystem {
+                host_terminals.insert(input.logical_path.as_str());
+            }
             validate_nonempty_file(input.byte_length, "final link input")?;
             validate_sha256("final link input", &input.sha256)?;
+        }
+        let mut aliases = BTreeSet::new();
+        for alias in &self.final_link_input_aliases {
+            validate_logical_path(&alias.alias_logical_path)?;
+            validate_logical_path(&alias.terminal_logical_path)?;
+            if !alias.alias_logical_path.starts_with("host-system-alias/")
+                || !alias.terminal_logical_path.starts_with("host-system/")
+                || alias.hop_count != 1
+            {
+                return Err("invalid final link input alias identity".to_owned());
+            }
+            if !aliases.insert(alias.alias_logical_path.as_str()) {
+                return Err("duplicate final link input alias identity".to_owned());
+            }
+            if !host_terminals.contains(alias.terminal_logical_path.as_str()) {
+                return Err("final link input alias terminal is not inventoried".to_owned());
+            }
+            validate_sha256(
+                "final link input alias resolution",
+                &alias.resolution_sha256,
+            )?;
         }
         self.artifact.validate()?;
         validate_dynamic_libraries(&self.dynamic_libraries)

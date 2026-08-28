@@ -10,6 +10,7 @@ mod capture;
 mod cargo;
 mod elf;
 mod format;
+mod host_link_authority;
 mod linker;
 mod model;
 mod process;
@@ -26,8 +27,8 @@ mod tests;
 
 pub use format::{parse, render, MAX_RECEIPT_BYTES};
 pub use model::{
-    ArtifactObservation, BuildScriptEvent, HostObservation, LinkInput, LinkInputOrigin,
-    PortableAuthority, Receipt, ToolIdentity, ToolRole,
+    ArtifactObservation, BuildScriptEvent, HostObservation, LinkInput, LinkInputAlias,
+    LinkInputOrigin, PortableAuthority, Receipt, ToolIdentity, ToolRole,
 };
 pub use producer::{capture, CaptureRequest};
 pub use receipt_file::{load_external, write_new_external};

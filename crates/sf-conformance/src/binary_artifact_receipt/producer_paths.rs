@@ -6,6 +6,11 @@ use std::path::{Component, Path, PathBuf};
 
 use super::{authority, authority_guard::DirectoryGuard, model::LinkInputOrigin, sandbox};
 
+#[path = "producer_paths/link_input.rs"]
+mod link_input;
+
+pub(super) use link_input::{HostAliasMapping, LinkMappedPath};
+
 #[derive(Debug)]
 pub(super) struct Workspace {
     pub(super) source: PathBuf,
@@ -149,6 +154,10 @@ impl SandboxPathMap {
         }
         let backing = root.backing.join(relative);
         authority::validate_beneath(&root.backing, &backing, "sandbox path mapping")?;
+        self.mapped(root, relative, backing)
+    }
+
+    fn mapped(&self, root: &Root, relative: &Path, backing: PathBuf) -> Result<MappedPath, String> {
         let (origin, receipt_path) = match root.kind {
             Kind::Workspace => (LinkInputOrigin::Workspace, prefixed("workspace", relative)?),
             Kind::CargoRegistry => (

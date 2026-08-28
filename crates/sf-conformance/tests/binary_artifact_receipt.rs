@@ -107,6 +107,7 @@ fn receipt() -> Receipt {
             byte_length: 64,
             sha256: digest('f'),
         }],
+        final_link_input_aliases: Vec::new(),
         artifact: ArtifactObservation {
             byte_length: 1024,
             sha256: digest('0'),

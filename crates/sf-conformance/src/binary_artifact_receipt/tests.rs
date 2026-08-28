@@ -29,7 +29,7 @@ fn observation() -> HostObservation {
         link_output_logical_path:
             "build-output/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-0123456789abcdef"
                 .to_owned(),
-        raw_link_input_count: 1,
+        raw_link_input_count: 2,
         tools: vec![
             ToolIdentity {
                 role: ToolRole::GitMaterializer,
@@ -90,6 +90,12 @@ fn observation() -> HostObservation {
             logical_path: "host-system/usr/lib/crt1.o".to_owned(),
             byte_length: 64,
             sha256: digest('f'),
+        }],
+        final_link_input_aliases: vec![LinkInputAlias {
+            alias_logical_path: "host-system-alias/lib/crt1.o".to_owned(),
+            terminal_logical_path: "host-system/usr/lib/crt1.o".to_owned(),
+            hop_count: 1,
+            resolution_sha256: digest('1'),
         }],
         artifact: ArtifactObservation {
             byte_length: 1024,
@@ -413,4 +419,36 @@ fn rejects_invalid_link_output_identity_and_raw_input_count() {
     assert!(Receipt::new(authority(), no_raw_inputs)
         .unwrap_err()
         .contains("raw final-link input count"));
+}
+
+#[test]
+fn binds_link_input_origins_identities_and_alias_terminals() {
+    let mut wrong_origin = observation();
+    wrong_origin.final_link_inputs[0].origin = LinkInputOrigin::Workspace;
+    assert!(Receipt::new(authority(), wrong_origin)
+        .unwrap_err()
+        .contains("origin does not match"));
+
+    let mut duplicate_input = observation();
+    let mut changed = duplicate_input.final_link_inputs[0].clone();
+    changed.sha256 = digest('e');
+    duplicate_input.final_link_inputs.push(changed);
+    duplicate_input.final_link_inputs.sort();
+    duplicate_input.raw_link_input_count = 3;
+    assert!(Receipt::new(authority(), duplicate_input)
+        .unwrap_err()
+        .contains("duplicate final link input identity"));
+
+    let mut missing_terminal = observation();
+    missing_terminal.final_link_input_aliases[0].terminal_logical_path =
+        "host-system/usr/lib/missing.so".to_owned();
+    assert!(Receipt::new(authority(), missing_terminal)
+        .unwrap_err()
+        .contains("terminal is not inventoried"));
+
+    let mut multiple_hops = observation();
+    multiple_hops.final_link_input_aliases[0].hop_count = 2;
+    assert!(Receipt::new(authority(), multiple_hops)
+        .unwrap_err()
+        .contains("invalid final link input alias identity"));
 }

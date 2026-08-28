@@ -1,13 +1,18 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+#[path = "format/records.rs"]
+mod records;
+
+pub(super) use records::{authority_records, observation_records};
+
 use super::model::{
     validate_sha256, validate_text, ArtifactObservation, BuildScriptEvent, HostObservation,
-    LinkInput, LinkInputOrigin, PortableAuthority, Receipt, ToolIdentity, ToolRole, ARTIFACT_CLASS,
-    ARTIFACT_PATH, ATTESTATION_SCOPE, AUTHORITY_MODEL, BUILD_SCRIPT_DIRECTIVES_FORMAT,
-    BUILD_SCRIPT_OUT_TREE_FORMAT, COMMAND_TEMPLATE, ENVIRONMENT_DIGEST_FORMAT, ENVIRONMENT_POLICY,
-    HEADER, NONCLAIM_KEYS, NOT_ATTESTED, PROFILE, ROOT_BINARY, ROOT_MANIFEST, ROOT_PACKAGE,
-    SOURCE_DATE_EPOCH_LAW, TARGET,
+    LinkInput, LinkInputAlias, LinkInputOrigin, PortableAuthority, Receipt, ToolIdentity, ToolRole,
+    ARTIFACT_CLASS, ARTIFACT_PATH, ATTESTATION_SCOPE, AUTHORITY_MODEL,
+    BUILD_SCRIPT_DIRECTIVES_FORMAT, BUILD_SCRIPT_OUT_TREE_FORMAT, COMMAND_TEMPLATE,
+    ENVIRONMENT_DIGEST_FORMAT, ENVIRONMENT_POLICY, HEADER, NONCLAIM_KEYS, NOT_ATTESTED, PROFILE,
+    ROOT_BINARY, ROOT_MANIFEST, ROOT_PACKAGE, SOURCE_DATE_EPOCH_LAW, TARGET,
 };
 
 pub const MAX_RECEIPT_BYTES: usize = 4 * 1024 * 1024;
@@ -15,6 +20,7 @@ const MAX_LINE_BYTES: usize = 4096;
 pub(super) const MAX_BUILD_SCRIPT_EVENTS: usize = 2048;
 pub(super) const MAX_BUILD_SCRIPT_TREE_FILES: u64 = 65_536;
 pub(super) const MAX_FINAL_LINK_INPUTS: usize = 16_384;
+pub(super) const MAX_FINAL_LINK_INPUT_ALIASES: usize = 256;
 pub(super) const MAX_DYNAMIC_LIBRARIES: usize = 256;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,6 +29,7 @@ enum Stage {
     Tool,
     BuildScript,
     LinkInput,
+    LinkInputAlias,
     Artifact,
     DynamicLibrary,
 }
@@ -57,6 +64,7 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
     let mut tools = Vec::new();
     let mut build_script_events = Vec::new();
     let mut final_link_inputs = Vec::new();
+    let mut final_link_input_aliases = Vec::new();
     let mut artifact = None;
     let mut dynamic_libraries = Vec::new();
     for (index, line) in lines {
@@ -133,6 +141,21 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
                     sha256: (*digest).to_owned(),
                 });
             }
+            ["link-input-alias", alias, terminal, hops, digest] => {
+                advance(&mut stage, Stage::LinkInputAlias, number)?;
+                if final_link_input_aliases.len() == MAX_FINAL_LINK_INPUT_ALIASES {
+                    return Err(format!("line {number}: too many final link input aliases"));
+                }
+                let hop_count = hops
+                    .parse::<u8>()
+                    .map_err(|_| format!("line {number}: invalid link input alias hop count"))?;
+                final_link_input_aliases.push(LinkInputAlias {
+                    alias_logical_path: (*alias).to_owned(),
+                    terminal_logical_path: (*terminal).to_owned(),
+                    hop_count,
+                    resolution_sha256: (*digest).to_owned(),
+                });
+            }
             ["artifact", path, length, digest, "0755", "elf64", "little", "x86-64", "system-v", interpreter, build_id] =>
             {
                 advance(&mut stage, Stage::Artifact, number)?;
@@ -197,6 +220,7 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
         tools,
         build_script_events,
         final_link_inputs,
+        final_link_input_aliases,
         artifact: artifact.ok_or_else(|| "missing artifact observation".to_owned())?,
         dynamic_libraries,
     };
@@ -209,6 +233,10 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
         (
             "final-link-input-count",
             observation.final_link_inputs.len(),
+        ),
+        (
+            "final-link-input-alias-count",
+            observation.final_link_input_aliases.len(),
         ),
         ("dynamic-library-count", observation.dynamic_libraries.len()),
     ];
@@ -242,87 +270,6 @@ pub fn parse(input: &str) -> Result<Receipt, String> {
         return Err("receipt is valid but not in canonical generated form".to_owned());
     }
     Ok(receipt)
-}
-
-pub(super) fn authority_records(authority: &PortableAuthority) -> String {
-    format!(
-        "git-revision\t{}\nsource-date-epoch\t{}\nsource-inputs-sha256\t{}\ncargo-lock-sha256\t{}\nrust-toolchain-sha256\t{}\ncargo-home-inputs-sha256\t{}\ncargo-config-set-sha256\t{}\nclosure-receipt-sha256\t{}\ncurrent-closure-sha256\t{}\n",
-        authority.git_revision,
-        authority.source_date_epoch,
-        authority.source_inputs_sha256,
-        authority.cargo_lock_sha256,
-        authority.rust_toolchain_sha256,
-        authority.cargo_home_inputs_sha256,
-        authority.cargo_config_set_sha256,
-        authority.closure_receipt_sha256,
-        authority.current_closure_sha256,
-    )
-}
-
-pub(super) fn observation_records(observation: &HostObservation) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "host\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        observation.host_triple,
-        observation.os_release_sha256,
-        observation.environment_sha256,
-        observation.link_dependency_file_byte_length,
-        observation.link_dependency_file_sha256,
-        observation.link_output_logical_path,
-        observation.raw_link_input_count,
-    )
-    .expect("String writes cannot fail");
-    for tool in &observation.tools {
-        writeln!(
-            output,
-            "tool\t{}\t{}\t{}\t{}\t{}",
-            tool.role.name(),
-            tool.logical_path,
-            tool.version,
-            tool.byte_length,
-            tool.sha256
-        )
-        .expect("String writes cannot fail");
-    }
-    for item in &observation.build_script_events {
-        writeln!(
-            output,
-            "build-script-event\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            item.package_id,
-            item.logical_out_dir,
-            item.directives_source_byte_length,
-            item.directives_sha256,
-            item.stderr_byte_length,
-            item.stderr_sha256,
-            item.out_tree_file_count,
-            item.out_tree_byte_length,
-            item.out_tree_sha256
-        )
-        .expect("String writes cannot fail");
-    }
-    for item in &observation.final_link_inputs {
-        writeln!(
-            output,
-            "link-input\t{}\t{}\t{}\t{}",
-            item.origin.name(),
-            item.logical_path,
-            item.byte_length,
-            item.sha256
-        )
-        .expect("String writes cannot fail");
-    }
-    let artifact = &observation.artifact;
-    writeln!(
-        output,
-        "artifact\t{ARTIFACT_PATH}\t{}\t{}\t0755\telf64\tlittle\tx86-64\tsystem-v\t{}\t{}",
-        artifact.byte_length, artifact.sha256, artifact.elf_interpreter, artifact.elf_build_id
-    )
-    .expect("String writes cannot fail");
-    for library in &observation.dynamic_libraries {
-        writeln!(output, "dynamic-library\t{library}").expect("String writes cannot fail");
-    }
-    output
 }
 
 fn metadata(receipt: &Receipt) -> Vec<(&'static str, String)> {
@@ -391,6 +338,10 @@ fn metadata(receipt: &Receipt) -> Vec<(&'static str, String)> {
         (
             "final-link-input-count",
             observation.final_link_inputs.len().to_string(),
+        ),
+        (
+            "final-link-input-alias-count",
+            observation.final_link_input_aliases.len().to_string(),
         ),
         (
             "dynamic-library-count",

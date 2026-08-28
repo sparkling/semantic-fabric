@@ -3,16 +3,22 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{authority, model::LinkInputOrigin, producer_paths::SandboxPathMap};
+use super::{
+    authority,
+    host_link_authority::HostLinkAuthority,
+    model::LinkInputOrigin,
+    producer_paths::{LinkMappedPath, SandboxPathMap},
+};
 
 const MAX_DEPFILE_BYTES: u64 = 2 * 1024 * 1024;
 pub(super) const MAX_INPUTS: usize = 16_384;
+const MAX_ALIASES: usize = 256;
 const MAX_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 16 * 1024;
 const MAX_PATH_COMPONENTS: usize = 128;
 const OUTPUT_PREFIX: &str = "/target/x86_64-unknown-linux-gnu/release/deps/semantic_fabric-";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) struct DependencyFile {
     pub(super) sha256: String,
     pub(super) byte_length: u64,
@@ -24,6 +30,9 @@ pub(super) struct DependencyFile {
     /// Canonical, unique inventory; raw order and multiplicity remain bound by
     /// `sha256` and `raw_input_count`.
     pub(super) inputs: Vec<Input>,
+    pub(super) aliases: Vec<InputAlias>,
+    depfile_path: PathBuf,
+    alias_authorities: Vec<HostLinkAuthority>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,37 +43,111 @@ pub(super) struct Input {
     pub(super) byte_length: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InputAlias {
+    pub(super) alias_receipt_path: String,
+    pub(super) terminal_receipt_path: String,
+    pub(super) hop_count: u8,
+    pub(super) resolution_sha256: String,
+}
+
+impl DependencyFile {
+    pub(super) fn assert_current(&self, path_map: &SandboxPathMap) -> Result<(), String> {
+        for authority in &self.alias_authorities {
+            authority.assert_current()?;
+        }
+        let current = capture(&self.depfile_path, path_map)?;
+        if self.sha256 != current.sha256
+            || self.byte_length != current.byte_length
+            || self.raw_input_count != current.raw_input_count
+            || self.output_path != current.output_path
+            || self.receipt_output != current.receipt_output
+            || self.inputs != current.inputs
+            || self.aliases != current.aliases
+        {
+            return Err("final link dependency observation changed during capture".to_owned());
+        }
+        for authority in &current.alias_authorities {
+            authority.assert_current()?;
+        }
+        for authority in &self.alias_authorities {
+            authority.assert_current()?;
+        }
+        Ok(())
+    }
+}
+
 /// Reads the complete GNU ld depfile. The accepted grammar is exactly one
 /// continued primary rule followed by one empty phony rule per primary input,
 /// in the same normalized order (GNU `--dependency-file` output).
 pub(super) fn capture(depfile: &Path, path_map: &SandboxPathMap) -> Result<DependencyFile, String> {
-    let authority = authority::read(depfile, MAX_DEPFILE_BYTES, "link dependency file")?;
-    let rule = parse(&authority.bytes)?;
+    let depfile_authority = authority::read(depfile, MAX_DEPFILE_BYTES, "link dependency file")?;
+    let rule = parse(&depfile_authority.bytes)?;
     let output = path_map.map(&rule.output)?;
     if output.origin != LinkInputOrigin::BuildOutput {
         return Err("link dependency output is not inside logical /target".to_owned());
     }
 
     let mut unique = BTreeMap::<String, ObservedInput>::new();
+    let mut aliases = BTreeMap::<String, InputAlias>::new();
+    let mut alias_authorities = Vec::new();
     for logical_path in &rule.inputs {
-        let mapped = path_map.map(logical_path)?;
-        if let Some(prior) = unique.get(&mapped.receipt_path) {
-            if prior.backing != mapped.backing || prior.origin != mapped.origin {
-                return Err("link input aliases disagree on backing authority".to_owned());
+        let (receipt_path, observed) = match path_map.map_link_input(logical_path)? {
+            LinkMappedPath::Direct(mapped) => {
+                let (sha256, byte_length) =
+                    authority::digest(&mapped.backing, MAX_INPUT_BYTES, "link dependency")?;
+                let receipt_path = mapped.receipt_path;
+                (
+                    receipt_path,
+                    ObservedInput {
+                        backing: mapped.backing,
+                        origin: mapped.origin,
+                        sha256,
+                        byte_length,
+                    },
+                )
             }
-            continue;
+            LinkMappedPath::Alias(mapping) => {
+                let is_new = !aliases.contains_key(&mapping.alias_receipt_path);
+                if is_new && aliases.len() == MAX_ALIASES {
+                    return Err("host link alias count exceeds bounds".to_owned());
+                }
+                let authority = HostLinkAuthority::bind(mapping, MAX_INPUT_BYTES)?;
+                let alias = InputAlias {
+                    alias_receipt_path: authority.alias_receipt_path.clone(),
+                    terminal_receipt_path: authority.terminal_receipt_path.clone(),
+                    hop_count: 1,
+                    resolution_sha256: authority.resolution_sha256.clone(),
+                };
+                let terminal_receipt_path = authority.terminal_receipt_path.clone();
+                let observed = ObservedInput {
+                    backing: authority.terminal_backing.clone(),
+                    origin: LinkInputOrigin::HostSystem,
+                    sha256: authority.terminal_sha256.clone(),
+                    byte_length: authority.terminal_byte_length,
+                };
+                match aliases.get(&alias.alias_receipt_path) {
+                    Some(prior) if prior != &alias => {
+                        return Err("host link alias receipt identity collision".to_owned());
+                    }
+                    Some(_) => {}
+                    None => {
+                        aliases.insert(alias.alias_receipt_path.clone(), alias);
+                        alias_authorities.push(authority);
+                    }
+                }
+                (terminal_receipt_path, observed)
+            }
+        };
+        match unique.get(&receipt_path) {
+            Some(prior) if prior != &observed => {
+                return Err("link input receipt identity collision".to_owned());
+            }
+            Some(_) => {}
+            None => {
+                unique.insert(receipt_path, observed);
+            }
         }
-        let (sha256, byte_length) =
-            authority::digest(&mapped.backing, MAX_INPUT_BYTES, "link dependency")?;
-        unique.insert(
-            mapped.receipt_path.clone(),
-            ObservedInput {
-                backing: mapped.backing,
-                origin: mapped.origin,
-                sha256,
-                byte_length,
-            },
-        );
     }
     let inputs = unique
         .into_iter()
@@ -76,15 +159,19 @@ pub(super) fn capture(depfile: &Path, path_map: &SandboxPathMap) -> Result<Depen
         })
         .collect();
     Ok(DependencyFile {
-        sha256: authority.sha256,
-        byte_length: authority.size,
+        sha256: depfile_authority.sha256,
+        byte_length: depfile_authority.size,
         raw_input_count: rule.inputs.len(),
         output_path: output.backing,
         receipt_output: output.receipt_path,
         inputs,
+        aliases: aliases.into_values().collect(),
+        depfile_path: depfile.to_path_buf(),
+        alias_authorities,
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct ObservedInput {
     backing: PathBuf,
     origin: LinkInputOrigin,
@@ -115,7 +202,7 @@ fn parse(bytes: &[u8]) -> Result<Rule, String> {
         .iter()
         .map(|value| normalized_path(value, "link dependency input"))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut phony = Vec::with_capacity(inputs.len());
+    let mut phony_words = Vec::with_capacity(inputs.len());
     for pair in lines[1..].chunks_exact(2) {
         if !pair[0].is_empty() {
             return Err("link dependency phony rules require one empty separator".to_owned());
@@ -124,11 +211,18 @@ fn parse(bytes: &[u8]) -> Result<Rule, String> {
         if !prerequisites.is_empty() {
             return Err("link dependency phony rule has prerequisites".to_owned());
         }
-        phony.push(normalized_path(&target, "link dependency phony target")?);
-        if phony.len() > MAX_INPUTS {
+        phony_words.push(target);
+        if phony_words.len() > MAX_INPUTS {
             return Err("link dependency phony rule count is outside bounds".to_owned());
         }
     }
+    if phony_words != input_words {
+        return Err("link dependency raw phony rules do not match primary inputs".to_owned());
+    }
+    let phony = phony_words
+        .iter()
+        .map(|value| normalized_path(value, "link dependency phony target"))
+        .collect::<Result<Vec<_>, _>>()?;
     if phony != inputs {
         return Err("link dependency phony rules do not match primary inputs".to_owned());
     }
@@ -354,6 +448,7 @@ mod tests {
             b"/target/a: /target/b\n".iter().copied(),
         );
         assert!(parse(&malformed).is_err());
+        assert!(parse(&depfile(&["/target/a/../b"], &["/target/b"])).is_err());
     }
 
     #[test]
@@ -376,3 +471,7 @@ mod tests {
         assert!(words(b"/target/a\\").is_err());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "linker/capture_tests.rs"]
+mod capture_tests;

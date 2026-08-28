@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use crate::rust_closure_receipt::{self, ControlledCheckRequest};
 
 use super::model::{
-    ArtifactObservation, BuildScriptEvent, HostObservation, LinkInput, PortableAuthority, Receipt,
-    ToolIdentity, ToolRole,
+    ArtifactObservation, BuildScriptEvent, HostObservation, LinkInput, LinkInputAlias,
+    PortableAuthority, Receipt, ToolIdentity, ToolRole,
 };
 use super::{
     artifact_pair::ArtifactPair,
@@ -113,10 +113,12 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
     let dependency_file = linker::capture(&workspace.target.join("final-link.d"), &path_map)?;
     let artifact_pair = ArtifactPair::bind(&artifact_path, &dependency_file.output_path)?;
     let link_inputs = link_inputs(&dependency_file.inputs)?;
+    let link_input_aliases = link_input_aliases(&dependency_file.aliases);
     let (readelf_identity, elf_observation) = elf::inspect(&artifact_pair, request.readelf)?;
     tools.require_readelf_identity(&readelf_identity)?;
     workspace.assert_current()?;
     artifact_pair.assert_current()?;
+    dependency_file.assert_current(&path_map)?;
 
     stabilize(
         request,
@@ -129,6 +131,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
     )?;
     workspace.assert_current()?;
     artifact_pair.assert_current()?;
+    dependency_file.assert_current(&path_map)?;
 
     Receipt::new(
         PortableAuthority {
@@ -153,6 +156,7 @@ pub fn capture(request: &CaptureRequest<'_>) -> Result<Receipt, String> {
             tools: tools.receipt_identities(),
             build_script_events: build_scripts,
             final_link_inputs: link_inputs,
+            final_link_input_aliases: link_input_aliases,
             artifact: ArtifactObservation {
                 byte_length: elf_observation.artifact_size,
                 sha256: elf_observation.artifact_sha256,
@@ -372,6 +376,18 @@ fn link_inputs(inputs: &[linker::Input]) -> Result<Vec<LinkInput>, String> {
     }
     observed.sort();
     Ok(observed)
+}
+
+fn link_input_aliases(aliases: &[linker::InputAlias]) -> Vec<LinkInputAlias> {
+    aliases
+        .iter()
+        .map(|alias| LinkInputAlias {
+            alias_logical_path: alias.alias_receipt_path.clone(),
+            terminal_logical_path: alias.terminal_receipt_path.clone(),
+            hop_count: alias.hop_count,
+            resolution_sha256: alias.resolution_sha256.clone(),
+        })
+        .collect()
 }
 
 fn validate_bound_file(path: &Path, label: &str) -> Result<PathBuf, String> {
