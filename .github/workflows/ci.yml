@@ -101,28 +101,28 @@ jobs:
       # confirmed unfixable without an upstream crate's own version bump) and fails
       # the build on anything not on it — a real gate, not `|| true`.
       - name: install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
       - name: cargo audit
-        run: cargo audit
+        run: cargo --locked audit
       - name: rustfmt
         run: cargo fmt --all --check
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: build
-        run: cargo build --workspace --all-targets
+        run: cargo build --locked --workspace --all-targets
       - name: test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
       # DuckDB backend (embedded, `bundled` feature — no external service needed).
-      # `cargo test --workspace` above doesn't enable `duckdb-backend` and no other
+      # `cargo test --locked --workspace` above doesn't enable `duckdb-backend` and no other
       # crate in the dependency graph turns it on, so these tests never ran in CI
       # until this dedicated step was added.
       - name: test (sf-sql duckdb-backend)
-        run: cargo test -p sf-sql --features duckdb-backend
+        run: cargo test --locked -p sf-sql --features duckdb-backend
       # SAP HANA marshalling/quoting unit tests only (backend::hana::tests::with_driver) —
       # pure value-marshalling logic with no connection, safe to run here. The rest of
       # the hana-backend surface needs a live SAP HANA server, so it's excluded.
       - name: test (sf-sql hana-backend marshalling)
-        run: cargo test -p sf-sql --features hana-backend backend::hana::tests::with_driver
+        run: cargo test --locked -p sf-sql --features hana-backend backend::hana::tests::with_driver
       # ODBC quote-escaping unit tests only (backend::odbc::real::tests) — pure string
       # logic, no live driver/DSN needed. `odbc-api` links against the SYSTEM unixODBC
       # library at COMPILE time even for this (confirmed: the feature fails to link
@@ -132,13 +132,13 @@ jobs:
       - name: install unixODBC (odbc-backend link dependency)
         run: sudo apt-get update && sudo apt-get install -y unixodbc-dev
       - name: test (sf-sql odbc-backend quote-escaping)
-        run: cargo test -p sf-sql --features odbc-backend backend::odbc::real::tests
+        run: cargo test --locked -p sf-sql --features odbc-backend backend::odbc::real::tests
       # W3C RDB2RDF conformance gate (ADR-0005) — verified 2026-07-05: 82 adjudicated,
       # 0 unexpected failures, 1 documented deviation (ADR-0015). The conformance run
       # regenerates the EARL report files with non-deterministic bnode labels; that
       # diff is expected and not committed.
       - name: conformance (W3C RDB2RDF)
-        run: cargo run -p sf-cli -- conformance
+        run: cargo run --locked -p sf-cli -- conformance
 
   readiness:
     name: meta-harness readiness telemetry (ADR-0026)

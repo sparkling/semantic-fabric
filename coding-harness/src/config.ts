@@ -28,6 +28,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'BENCHMARKS.md',
     'CLAUDE.md',
     'COMPARISON.md',
+    'Cargo.lock',
     'Cargo.toml',
     'LICENSE-APACHE',
     'LICENSE-MIT',

@@ -20,6 +20,140 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(readFileSync(resolve(root, '.harness/manifest.json'), 'utf8')) as unknown;
 
+interface WorkflowRunScript {
+  line: number;
+  script: string;
+}
+
+interface CargoCommand {
+  line: number;
+  command: string;
+  words: string[];
+  subcommand: string;
+}
+
+const DEPENDENCY_RESOLVING_CARGO_SUBCOMMANDS = new Set([
+  'add',
+  'audit',
+  'bench',
+  'build',
+  'check',
+  'clippy',
+  'doc',
+  'fetch',
+  'fix',
+  'generate-lockfile',
+  'install',
+  'metadata',
+  'package',
+  'publish',
+  'remove',
+  'run',
+  'rustc',
+  'rustdoc',
+  'test',
+  'tree',
+  'update',
+  'vendor',
+]);
+const NON_RESOLVING_CARGO_SUBCOMMANDS = new Set(['fmt']);
+const CARGO_GLOBAL_OPTIONS_WITH_VALUE = new Set(['--color', '--config', '-C', '-Z']);
+
+function workflowRunScripts(source: string): WorkflowRunScript[] {
+  const lines = source.split(/\r?\n/);
+  const scripts: WorkflowRunScript[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const match = /^(\s*)(?:-\s+)?run:\s*(.*?)\s*$/.exec(line);
+    if (!match) continue;
+
+    const value = match[2] ?? '';
+    const blockHeader = /^[|>](?:[+-][1-9]?|[1-9][+-]?)?\s*(?:#.*)?$/.exec(value);
+    if (blockHeader) {
+      const keyIndent = (match[1] ?? '').length;
+      const blockLines: string[] = [];
+      let blockIndex = index + 1;
+      while (blockIndex < lines.length) {
+        const blockLine = lines[blockIndex] ?? '';
+        const indentation = /^\s*/.exec(blockLine)?.[0].length ?? 0;
+        if (blockLine.trim() !== '' && indentation <= keyIndent) break;
+        blockLines.push(blockLine);
+        blockIndex += 1;
+      }
+      scripts.push({
+        line: index + 1,
+        script: value.startsWith('>') ? blockLines.join(' ') : blockLines.join('\n'),
+      });
+      index = blockIndex - 1;
+      continue;
+    }
+
+    if (value.startsWith('|') || value.startsWith('>') || value === '') {
+      throw new Error(`CI_WORKFLOW_RUN_SCALAR_UNSUPPORTED at line ${index + 1}: ${line.trim()}`);
+    }
+    scripts.push({ line: index + 1, script: value });
+  }
+
+  return scripts;
+}
+
+function shellWords(command: string): string[] {
+  return (command.match(/"(?:\\.|[^"])*"|'[^']*'|[^\s]+/g) ?? []).map((word) => {
+    if ((word.startsWith('"') && word.endsWith('"'))
+      || (word.startsWith("'") && word.endsWith("'"))) {
+      return word.slice(1, -1);
+    }
+    return word;
+  });
+}
+
+function cargoSubcommand(words: string[], line: number, command: string): string {
+  let index = 1;
+  if (words[index]?.startsWith('+')) index += 1;
+
+  while (index < words.length) {
+    const word = words[index] ?? '';
+    const option = word.split('=', 1)[0] ?? word;
+    if (!word.startsWith('-')) return word;
+    if (CARGO_GLOBAL_OPTIONS_WITH_VALUE.has(option) && !word.includes('=')) index += 1;
+    index += 1;
+  }
+
+  throw new Error(`CI_WORKFLOW_CARGO_SUBCOMMAND_MISSING at line ${line}: ${command}`);
+}
+
+function workflowCargoCommands(source: string): CargoCommand[] {
+  return workflowRunScripts(source).flatMap(({ line, script }) => {
+    const logicalScript = script.replace(/\\\r?\n[ \t]*/g, ' ');
+    return logicalScript.split(/\r?\n/).flatMap((physicalLine) => {
+      const trimmed = physicalLine.trim();
+      if (trimmed === '' || trimmed.startsWith('#')) return [];
+
+      const cargoMentions = [...trimmed.matchAll(/(?:^|[\s;&|])cargo(?=\s|$)/g)].length;
+      if (cargoMentions === 0) return [];
+      if (/\s#/.test(trimmed)) {
+        throw new Error(`CI_WORKFLOW_CARGO_COMMENT_UNSUPPORTED at line ${line}: ${trimmed}`);
+      }
+
+      const commands = trimmed
+        .split(/\s*(?:&&|\|\||[;|])\s*/)
+        .filter((command) => command.startsWith('cargo '));
+      if (commands.length !== cargoMentions) {
+        throw new Error(
+          `CI_WORKFLOW_CARGO_COMMAND_SHAPE_UNSUPPORTED at line ${line}: ${trimmed}; `
+          + 'Cargo invocations must be direct shell commands separated by a newline, &&, ||, ;, or |',
+        );
+      }
+
+      return commands.map((command) => {
+        const words = shellWords(command);
+        return { line, command, words, subcommand: cargoSubcommand(words, line, command) };
+      });
+    });
+  });
+}
+
 describe('canonical harness manifest', () => {
   it('matches the protected runtime config and exposes the actual coordination surface', () => {
     const parsed = parseHarnessManifest(manifest, SECURE_HARNESS_CONFIG);
@@ -107,7 +241,8 @@ describe('canonical harness manifest', () => {
     expect(listed.status, listed.stderr).toBe(0);
     const paths = listed.stdout.split('\0').filter(Boolean);
     const governed = paths.filter((path) =>
-      path === 'Cargo.toml'
+      path === 'Cargo.lock'
+      || path === 'Cargo.toml'
       || path.endsWith('/Cargo.toml')
       || (path.startsWith('docs/adr/') && path.endsWith('.md'))
       || path.startsWith('.github/workflows/'));
@@ -118,5 +253,73 @@ describe('canonical harness manifest', () => {
     expect(SECURE_HARNESS_CONFIG.requiredProtectedPaths).toEqual(
       expect.arrayContaining(governed),
     );
+  });
+
+  it('tracks, does not ignore, and protects the root Cargo.lock', () => {
+    const repository = resolve(root, '..');
+    const tracked = spawnSync(
+      'git',
+      ['-C', repository, 'ls-files', '--error-unmatch', '--', 'Cargo.lock'],
+      { encoding: 'utf8' },
+    );
+    expect(
+      tracked.status,
+      `Cargo.lock must be tracked by git: ${tracked.stderr.trim() || 'not present in the index'}`,
+    ).toBe(0);
+
+    const ignored = spawnSync(
+      'git',
+      ['-C', repository, 'check-ignore', '--no-index', '--quiet', '--', 'Cargo.lock'],
+      { encoding: 'utf8' },
+    );
+    expect(
+      ignored.status,
+      `Cargo.lock must not match a git ignore rule: ${ignored.stderr.trim() || 'matched an ignore rule'}`,
+    ).toBe(1);
+    expect(
+      SECURE_HARNESS_CONFIG.requiredProtectedPaths,
+      'Cargo.lock must be inside the canonical protected boundary',
+    ).toContain('Cargo.lock');
+  });
+
+  it('locks every dependency-resolving Cargo command and pins cargo-audit exactly', () => {
+    const repository = resolve(root, '..');
+    const workflowPath = resolve(repository, '.github/workflows/ci.yml');
+    const commands = workflowCargoCommands(readFileSync(workflowPath, 'utf8'));
+    const unclassified = commands.filter(({ subcommand }) =>
+      !DEPENDENCY_RESOLVING_CARGO_SUBCOMMANDS.has(subcommand)
+      && !NON_RESOLVING_CARGO_SUBCOMMANDS.has(subcommand));
+    expect(
+      unclassified.map(({ line, command }) => `line ${line}: ${command}`),
+      'Every Cargo command in ci.yml must be explicitly classified as dependency-resolving or lock-exempt',
+    ).toEqual([]);
+
+    const resolving = commands.filter(({ subcommand }) =>
+      DEPENDENCY_RESOLVING_CARGO_SUBCOMMANDS.has(subcommand));
+    const unlocked = resolving.filter(({ words }) => {
+      const separator = words.indexOf('--');
+      const cargoArguments = separator === -1 ? words : words.slice(0, separator);
+      return !cargoArguments.includes('--locked');
+    });
+    expect(
+      unlocked.map(({ line, command }) => `line ${line}: ${command}`),
+      'Every dependency-resolving Cargo command in ci.yml must pass --locked before any `--` separator',
+    ).toEqual([]);
+
+    const auditInstallers = commands.filter(({ subcommand, words }) =>
+      subcommand === 'install' && words.includes('cargo-audit'));
+    expect(
+      auditInstallers.map(({ line, command }) => `line ${line}: ${command}`),
+      'ci.yml must contain exactly one cargo-audit installation command',
+    ).toHaveLength(1);
+    const auditVersions = auditInstallers.flatMap(({ words }) => words.flatMap((word, index) => {
+      if (word === '--version') return [words[index + 1] ?? '<missing>'];
+      if (word.startsWith('--version=')) return [word.slice('--version='.length)];
+      return [];
+    }));
+    expect(
+      auditVersions,
+      'cargo-audit must be pinned with exactly one --version value of 0.22.2',
+    ).toEqual(['0.22.2']);
   });
 });
