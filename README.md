@@ -83,15 +83,15 @@ Key properties:
 Prerequisite: the pinned Rust toolchain in `rust-toolchain.toml`.
 
 ```bash
-cargo build --workspace
-cargo run -p sf-cli -- --help
+cargo build --locked --workspace
+cargo run --locked -p sf-cli -- --help
 ```
 
 The binary has three commands:
 
 | Command | Purpose |
 |---|---|
-| `serve` | Governed SPARQL 1.2 Protocol endpoint over a live relational source |
+| `serve` | Governed read-only SPARQL query endpoint over a live relational source |
 | `conformance` | W3C RDB2RDF suite over SQLite with EARL reporting |
 | `bench` | GTFS-Madrid OBDA workload over SQLite |
 
@@ -99,17 +99,17 @@ Start the endpoint with an R2RML mapping:
 
 ```bash
 # SQLite
-cargo run -p sf-cli -- serve \
+cargo run --locked -p sf-cli -- serve \
   --source sqlite:/path/to/app.db \
   --mapping /path/to/mapping.ttl
 
 # PostgreSQL
-cargo run -p sf-cli -- serve \
+cargo run --locked -p sf-cli -- serve \
   --source 'pg:host=localhost dbname=app' \
   --mapping /path/to/mapping.ttl
 
 # MySQL; prefer an environment-expanded secret rather than a literal in history
-cargo run -p sf-cli -- serve \
+cargo run --locked -p sf-cli -- serve \
   --source "mysql://user:${MYSQL_PASSWORD}@127.0.0.1/app" \
   --mapping /path/to/mapping.ttl
 ```
@@ -126,7 +126,8 @@ curl -s 'http://127.0.0.1:7878/sparql' \
     SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }'
 ```
 
-`GET` and `POST /sparql` are read-only and content-negotiated. SELECT/ASK can
+`GET` and `POST /sparql` implement the read-only query subset of the draft
+SPARQL 1.2 Protocol and are content-negotiated. SELECT/ASK can
 return SPARQL Results JSON, XML, CSV, or TSV. CONSTRUCT/DESCRIBE can return
 Turtle, N-Triples, or JSON-LD. Requests are bounded by timeout, query-size,
 pool, and cancellation controls from
@@ -162,6 +163,11 @@ harness score:
   87 case identities (63 R2RML and 24 Direct Mapping), 189 case-tree files,
   every SHA-256 digest, and the per-backend allowed-outcome policy. It is mapping
   fixture evidence, not a SPARQL query/protocol conformance claim.
+- SQLite and PostgreSQL runners consume that inventory in canonical order;
+  per-ID policy rejects count-neutral skip/deviation drift, missing sealed input
+  is fatal, and PostgreSQL provider absence fails in required CI mode. SQLite's
+  87-case execution was replayed locally; a current live PostgreSQL receipt is
+  still an M0 gate.
 - Differential suites compare flat and operator-tree planners with native
   materialized RDF and spareval across ordinary queries, paths, graphs, and
   RDF-star.
@@ -169,7 +175,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 626 tests across 90 files; two
+- The versioned engineering harness passes 628 tests across 90 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -195,8 +201,10 @@ federated physical plan so the accepted cross-RDBMS charter becomes real.
 The first release blockers are silent 256-hop property-path truncation,
 source-sized Rust state in some global sort/group/dedup paths, incomplete total
 request governance, and a broad production dependency closure. M0 now tracks
-and locks the application graph and pins reviewed CI inputs; exact release
-closure, tooling provenance, and two-clean-checkout proof remain open.
+and locks the application graph, pins reviewed CI inputs and local MetaHarness
+readiness tools, and makes RDB2RDF execution consume the sealed suite. Exact
+release closure, durable execution/capability/baseline receipts, current
+required-live evidence, and two-clean-checkout proof remain open.
 A hardened single-source build is an interim release profile; it is not the
 charter-complete application while cross-RDBMS federation remains in scope.
 
@@ -265,9 +273,10 @@ or repair. Receipt `d9d244ef…0216`, candidate evidence `a1dc3071…ac7f`, enve
 `02c30ed3…9a06`, and provider-free replay receipt `f1bcf0fe…bf02` form the
 replayable evidence chain. H0c is complete. M0 is in progress through the
 tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
-RDB2RDF input seal (`1c9bb61`), and proposed protected design locks ADR-0039/0040
-(`401c1bb`). M1–M7 remain gated, and the 44/100 application-readiness baseline
-has not been formally rescored.
+RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
+(`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
+inventory-authoritative execution runners (`a3efb32`). M1–M7 remain gated, and
+the 44/100 application-readiness baseline has not been formally rescored.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build
@@ -343,7 +352,7 @@ claim. It is a small localhost workload, not a production sizing result.
 
 | Area | Honest status |
 |---|---|
-| Serving | Working read-only SPARQL 1.2 Protocol endpoint over SQLite, PostgreSQL, and MySQL |
+| Serving | Working read-only GET/POST query subset of the draft SPARQL 1.2 Protocol over SQLite, PostgreSQL, and MySQL; full Protocol conformance is not claimed |
 | Cloud/REST adapters | Prototype/library-only; Databricks, AWS Athena, Snowflake, BigQuery, Trino/Presto and other adapters are not admitted to `serve` |
 | Property paths | Broad support; explicit `501` residuals remain for bound-endpoint, nested-closure, shape-mismatched, and some reflexive composite forms |
 | Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
@@ -352,7 +361,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, reviewed actions and service images are immutable references, and two clean exports reproduced lock/controller bytes. `cargo audit` passes its configured gate; six documented advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive pinning, exact MetaHarness installation, and release SBOM/provenance remain debt |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, reviewed actions and service images are immutable references, local MetaHarness/Darwin readiness tools are npm-integrity-locked, and two clean exports reproduced lock/controller bytes. `cargo audit` passes its configured gate; six documented advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
@@ -367,14 +376,16 @@ truncation violates that invariant and is release-blocking until fixed.
 | `sf-sparql` | SPARQL algebra unfolding, normalization, SQL emission, execution |
 | `sf-conformance` | W3C, differential, mutation, and EARL evidence |
 | `sf-bench` | GTFS-Madrid and constant-memory benchmarks |
-| `sf-serve` | Governed SPARQL 1.2 Protocol HTTP endpoint |
+| `sf-serve` | Governed read-only SPARQL query HTTP endpoint |
 | `sf-cli` | `serve`, `conformance`, and `bench` binary |
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 35 records: 33 accepted, one
-proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md)), and one
-superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
+The canonical [ADR corpus](docs/adr/) contains 37 records: 33 accepted, three
+proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
+[ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), and
+[ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md)),
+and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
 and direct evidence say whether it has shipped.
@@ -385,7 +396,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md), [ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md), [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative

@@ -215,17 +215,24 @@ replay receipt are
 `d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
 `02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
 and `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
-H0c is complete. M0 is now in progress through four verified product slices:
+H0c is complete. M0 is now in progress through six verified product slices:
 `93ae3c2` tracks the root lockfile and freezes dependency resolution;
 `374ca99` pins the reviewed CI action, service-image and selected tool inputs;
 `1c9bb61` adds a fail-closed, per-file-digested RDB2RDF inventory for 1 suite
 manifest, 26 scenarios, 87 exact cases and 189 case-tree files; and `401c1bb`
 adds proposed subordinate ADR-0039/0040 while extending the harness-protected
-ADR boundary. Proposed status is deliberate: neither packaging nor federation
-is accepted or implemented by writing its design lock.
+ADR boundary. `31a1164` removes floating readiness execution by installing
+MetaHarness 0.3.0 and Darwin 0.2.8 from the committed npm integrity graph and
+invoking only local binaries. `a3efb32` makes the SQLite and PostgreSQL runners
+consume the sealed inventory in canonical order, rejects count-neutral
+per-identity outcome drift, distinguishes local untested PostgreSQL from
+CI-required provider failure, and treats missing or malformed sealed inputs as
+fatal. Proposed ADR status is deliberate: neither packaging nor federation is
+accepted or implemented by writing its design lock.
 
-M0 is not complete until its runners consume the inventory, generated status
-and baseline receipts exist, public claims reconcile, and the complete gate
+M0 is not complete until canonical execution/status and baseline receipts
+exist, the generated capability/backend/standards matrix reconciles every
+public claim, required live backend evidence is current, and the complete gate
 passes in two clean checkouts. M1–M7 remain gated. These incremental closures do
 not by themselves rescore the 44/100 application-readiness baseline.
 

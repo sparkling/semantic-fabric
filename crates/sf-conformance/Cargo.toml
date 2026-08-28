@@ -22,9 +22,9 @@ oxttl.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
 thiserror.workspace = true
 sha2.workspace = true
-# Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway schema per
-# case loaded over a real server, executed via the PgRowStream cursor. Skips
-# gracefully when no server is reachable (probe / SF_PG_URL), so CI stays green.
+# Live PostgreSQL conformance run (ADR-0005/0010/0015): a throwaway database per
+# sealed suite run, executed via the PgRowStream cursor. Local provider absence
+# is typed untested; required CI mode fails when the provider is unavailable.
 tokio = { version = "1", features = ["rt", "macros"] }
 tokio-postgres = "0.7"
 # Live MySQL differential (ADR-0024 M4): a throwaway database per run over a real
