@@ -176,9 +176,11 @@ harness score:
   fixture evidence, not a SPARQL query/protocol conformance claim.
 - SQLite and PostgreSQL runners consume that inventory in canonical order;
   per-ID policy rejects count-neutral skip/deviation drift, missing sealed input
-  is fatal, and PostgreSQL provider absence fails in required CI mode. A sealed
-  SQLite outcome baseline binds all 87 case identities, kinds and statuses to
-  the inventory digest; a current live PostgreSQL receipt is still an M0 gate.
+  is fatal, and PostgreSQL provider absence fails required-live replay. Their
+  backend-aware v3 receipts bind all 87 ordered identities, kinds, statuses and
+  typed outcome causes: SQLite records 81/1/5 pass/deviation/skip and PostgreSQL
+  80/1/6. This is mapping evidence, not runner/toolchain/host/provider provenance,
+  SPARQL Query/Protocol conformance, or production admission.
 - Per-test expected SQLite query and Protocol regression baselines are now
   receipt-bound. They are product regression oracles, not evidence of W3C SPARQL
   Query/Protocol conformance, runtime provenance, or backend admission.
@@ -193,7 +195,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 628 tests across 90 files; two
+- The versioned engineering harness passes 635 tests across 91 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -219,8 +221,9 @@ federated physical plan so the accepted cross-RDBMS charter becomes real.
 The first release blockers are silent 256-hop property-path truncation,
 source-sized Rust state in some global sort/group/dedup paths, incomplete total
 request governance, and a broad production dependency closure. M0 now also has
-per-test expected SQLite query/protocol baselines and a receipt for the default
-`sf-cli` package dependency closure. The first exact current-`sf-cli` host
+backend-aware v3 receipts for all 87 SQLite and required-live PostgreSQL mapping
+outcomes, per-test expected SQLite query/protocol baselines, and a receipt for
+the default `sf-cli` package dependency closure. The first exact current-`sf-cli` host
 observation was also captured externally from clean commit `5a06eac` and replayed:
 363 raw final-link inputs normalize to 357 canonical terminals plus three
 one-hop HostSystem aliases. Its `0600` receipt remains private, external,
@@ -230,9 +233,9 @@ time-of-use, SBOM, reproducibility, minimal-production packaging, or admission.
 Controlled performance producer and comparison machinery exists, but no
 controlled profile, baseline, candidate, or measured numbers exist. The clean-
 release first baseline still requires clean committed source on the exact
-controlled runner/profile. M0 remains open for current required-live PostgreSQL
-evidence, complete binary/tool/system closure, that controlled performance
-baseline, and a final two-builder release replay after those authorities exist.
+controlled runner/profile. M0 remains open for complete binary/tool/system
+closure, SBOM/reproducibility and production minimality/admission, that controlled
+performance baseline, and a final two-builder release replay after those authorities exist.
 Current-tranche repeatability is proven: exact commit
 `ad94cdb` rebuilt and replayed byte-identically in two clean, no-hard-link
 checkouts under hardened-builder `umask 0022`, with both trees remaining clean.
@@ -307,12 +310,12 @@ replayable evidence chain. H0c is complete. M0 is in progress through the
 tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
 RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
-inventory-authoritative execution runners (`a3efb32`), plus the sealed SQLite
-execution-outcome receipt (`33e202b`). The evidence matrix now contains 74
-exact cells with zero production-admitted backends (`a1a6dc9`), and the SQLite
-v2 receipt binds immutable captured inputs to typed outcome causes (`81caec2`)
-without claiming runner/toolchain provenance. CI and the controller now protect
-and replay those authorities read-only (`4ff81b3`). M1–M7 remain gated, and the
+inventory-authoritative execution runners (`a3efb32`), plus the sealed mapping
+receipt lineage (`33e202b`, `81caec2`, `a84aa05`). The evidence matrix now contains
+74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
+v3 receipts bind immutable captured inputs to typed SQLite and required-live
+PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
+CI and the controller protect and replay those authorities read-only. M1–M7 remain gated, and the
 44/100 application-readiness baseline has not been formally rescored.
 
 The current M0 tranche adds per-test expected SQLite query/Protocol baselines,
@@ -326,6 +329,11 @@ external current-`sf-cli` artifact observation now also replays from clean
 and structured GNU build ID are bounded current-host evidence only; complete
 tool execution, linker time-of-use, runtime resolution, SBOM, reproducibility,
 production minimality, and admission remain explicit nonclaims.
+
+The PostgreSQL mapping receipt records 80 pass, one documented deviation and six
+exact skips; its file/outcome/inventory digests are `c04e6f86…0f52`,
+`63eb3bdc…b2ac` and `4d2eb56e…c96`. It closes only the current required-live M0
+mapping-evidence item; MySQL mapping, backend admission, and later milestones remain open.
 
 The passing transaction also measured about 35 GiB of ephemeral isolated Rust
 verifier outputs before successful cleanup. Content-addressed read-only build

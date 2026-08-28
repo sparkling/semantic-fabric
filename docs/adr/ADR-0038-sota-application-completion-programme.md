@@ -233,7 +233,7 @@ CI-required provider failure, and treats missing or malformed sealed inputs as
 fatal. `33e202b` introduced the ordered 87-case SQLite outcome baseline;
 `a1a6dc9` generates 74 exact capability/backend cells (38 implemented, 34
 planned, 2 unsupported, and zero production-admitted); and `81caec2` replaces
-the v1 outcome representation with an immutable-snapshot v2 receipt whose
+the v1 outcome representation with an immutable-snapshot receipt whose
 typed status/cause records, bounded parser, read-only production replay, and
 atomic generator have mutation coverage. That receipt explicitly does not
 attest runner, lockfile, or toolchain provenance. `4ff81b3` runs the inventory,
@@ -241,6 +241,18 @@ receipt, and generated-claim checks read-only in CI, protects their complete
 authority closure in the controller, and proves generic MetaHarness-fit scores
 cannot decide programme acceptance. Proposed ADR status is deliberate: neither
 packaging nor federation is accepted or implemented by writing its design lock.
+
+Commit `a84aa05` generalizes that authority to backend-aware v3 receipts and
+adds the durable required-live PostgreSQL baseline: 80 pass, one documented
+deviation, and six exact skips across all 87 ordered cases. Its receipt, outcome,
+and inventory digests are respectively
+`c04e6f86f5330ac0534d9c62de6a0cb1cfa12ad3bf1249960a1052ebabc30f52`,
+`63eb3bdcd9e7ca172edbb3ef271af8a69d0a4099af0be25a4f95f6a0d4fcb2ac`, and
+`4d2eb56e25920c4b8488b47d971cf887902b4e4178257420bf3a7ea44c504c96`.
+Required-live replay fails on provider absence, CI checks but cannot regenerate,
+and the receipt attests sealed mapping inputs/outcomes—not runner, toolchain,
+host, provider, Query/Protocol conformance, or production admission. The SQLite
+receipt is regenerated as the same v3 contract with unchanged outcomes.
 
 The current M0 tranche also adds per-test expected SQLite query and Protocol
 regression baselines. Those receipts do not attest W3C SPARQL Query/Protocol
@@ -278,8 +290,8 @@ attest the complete execution closure of any tool or sole configured-linker
 authorship of that dependency file. Complete tool-execution, build-script-input,
 system and `strace`-grade closure; loader-policy runtime resolution and dynamic-
 library closure; SBOM and release provenance; independent reproducibility; the
-proposed minimal production artifact and backend admission; current required-
-live PostgreSQL evidence; and controlled performance evidence all remain open.
+proposed minimal production artifact and backend admission; and controlled
+performance evidence all remain open.
 The observation also explicitly leaves linker time-of-use and link-path race
 resistance unattested; it is empirical current-artifact evidence, not gates 1–3
 of proposed ADR-0039.
@@ -288,9 +300,9 @@ runner profile, baseline, candidate, or measured numbers exist. The clean-
 release first baseline still requires clean committed source and the exact
 controlled runner/profile.
 
-M0 is not complete until current required-live PostgreSQL evidence, actual
-complete binary artifact closure, and the controlled performance baseline have
-been performed. Exact commit `ad94cdb` did replay the current deterministic
+M0 is not complete until actual complete binary artifact closure, SBOM and
+reproducibility/minimality/admission evidence, and the controlled performance
+baseline have been performed. Exact commit `ad94cdb` did replay the then-current deterministic
 tranche byte-identically in two clean, no-hard-link checkouts under the hardened-builder
 `umask 0022`: each rebuilt the controller, passed all 91 harness files, replayed
 every current deterministic authority, and remained Git-clean. An initial
@@ -298,9 +310,9 @@ every current deterministic authority, and remained Git-clean. An initial
 check was relaxed. This proves current-tranche repeatability, not actual binary
 reproducibility; the complete M0 release gate must run again in two clean
 builders after the remaining authorities exist. The generated matrix,
-SQLite v2 mapping receipt, query/protocol regression receipts, and package
-dependency receipt are deterministic scoped authorities, not release or backend-
-admission proof. M1–M7 remain gated. These incremental closures do not by
+SQLite/PostgreSQL v3 mapping receipts, query/protocol regression receipts, and
+package dependency receipt are deterministic scoped authorities, not release or
+backend-admission proof. M1–M7 remain gated. These incremental closures do not by
 themselves rescore the 44/100 application-readiness baseline.
 
 The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before

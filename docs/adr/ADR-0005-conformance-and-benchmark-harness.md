@@ -16,12 +16,14 @@ implements:
 > **Implementation status (2026-08-28): partially implemented.** The canonical
 > RDB2RDF input authority now seals 1 suite manifest, 26 scenarios, 87 exact
 > cases, and 189 case-tree files. SQLite and PostgreSQL runners consume that
-> authority in canonical order; PostgreSQL provider absence is fatal in CI.
-> SQLite has an immutable-snapshot v2 receipt binding per-case status and typed
-> outcome cause, while a durable current PostgreSQL
-> receipt, MySQL mapping matrix, complete `M ⋈ T` execution, and the full M0
-> performance/release baseline envelope remain open. Mapping conformance does
-> not establish SPARQL Query, Protocol, or production-backend admission.
+> authority in canonical order. Backend-aware v3 receipts bind the inventory and
+> all 87 ordered identity/kind/status/cause records: SQLite records 81 pass, one
+> documented deviation, and five skips; required-live PostgreSQL records 80 pass,
+> one documented deviation, and six skips. PostgreSQL provider absence is fatal
+> on receipt replay. The current seal contains no per-DBMS fork files; any future
+> fork must enter the canonical inventory before execution. MySQL mapping, complete
+> `M ⋈ T`, and the M0 performance/release envelope remain open. Mapping evidence
+> does not establish SPARQL Query, Protocol, or production-backend admission.
 
 ## Context and Problem Statement
 

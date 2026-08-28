@@ -365,12 +365,12 @@ Darwin/GEPA fitness, promotion, or repair reward.
 ## Implementation status
 
 Accepted architecture, framework, and H0c activation implemented. Harness
-commits through `c8e3f68` establish the private supply chain, dual-host routing,
+commits through `a84aa05` establish the private supply chain, dual-host routing,
 patched-candidate transaction, exact-origin and filesystem/resource isolation,
 bounded retry/cancellation, provider-free QE/SAST, frozen dependency closure,
-schema-V6 evidence law, trusted execution/replay, and protected dormant
-retrieval-flywheel controls. The harness builds and passes 623 provider-free
-tests across 90 files with two expected skips. It has no publication or
+schema-V6 evidence law, trusted execution/replay, protected dormant retrieval
+tuning, and the PostgreSQL receipt authority. The harness passes 635 provider-
+free tests across 91 files with two expected skips. It has no publication or
 evolution path, and all harness source files remain under 500 lines.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
@@ -453,9 +453,12 @@ milestones remain gated. The run cleaned about 35 GiB of ephemeral verifier
 outputs, leaving immutable build reuse and digest manifests as a constrained
 efficiency target. Neither run enabled the retrieval flywheel.
 
-The repository's `.mcp.json` is tracked and protected. Diagnostics that still
-cannot inspect its effective surface remain `INCONCLUSIVE`, not clean and not a
-substitute for direct controls.
+The repository's `.mcp.json` is tracked and protected. Root
+`.harness/mcp-policy.json` is static input to the exact pinned MetaHarness scanner,
+whose clean/info result is a blocking harness test. That scanner evidence is not
+runtime tool authority: task `PolicyGate`, native isolation, and direct controls
+remain authoritative; a diagnostic unable to inspect the effective root surface
+is still `INCONCLUSIVE`.
 
 Its dependency-scoped Rust closure pins the historical lock, target package
 set, verified crate archives, and minimized exact sparse-index records while

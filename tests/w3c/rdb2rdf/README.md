@@ -56,22 +56,27 @@ behind unchanged aggregate counts. It writes
 `earl-semantic-fabric-{r2rml,direct}.ttl`.
 
 PostgreSQL uses the same sealed order and per-ID policy. A local run without a
-provider returns typed `untested` evidence; when `CI` is present, provider
-absence is an error rather than a successful skip.
+provider may return typed `untested` evidence, but receipt generation and replay
+always select explicit required-live mode; provider absence is fatal regardless
+of ambient `CI`.
 
 Run the primary checks:
 
 ```bash
 cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check
+cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
+cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check
 cargo test --locked -p sf-conformance --test rdb2rdf_runner_seal
 cargo test --locked -p sf-conformance --test w3c_suite -- --nocapture
 cargo test --locked -p sf-conformance --test w3c_pg_suite -- --nocapture
 ```
 
-The sealed SQLite result is 81 passes, one declared deviation
-(`R2RMLTC0002f`), and five declared dialect-fixture skips. The current
-PostgreSQL policy is 80 passes, the same declared deviation, and six declared
-skips; a current live execution receipt is still required before release.
+Backend-aware v3 receipts bind every ordered case identity, kind, status and
+typed cause to this inventory: SQLite records 81 passes, one declared deviation
+(`R2RMLTC0002f`), and five exact skips; required-live PostgreSQL records 80
+passes, the same deviation, and six exact skips. They attest mapping inputs and
+outcomes only—not runner/toolchain/host/provider provenance, SPARQL Query or
+Protocol conformance, release readiness, or production admission.
 
 ### Known non-passing outcomes (honest, per-ID and fail-closed)
 

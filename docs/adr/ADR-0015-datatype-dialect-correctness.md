@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-07-20
+updated: 2026-08-28
 tags: [datatype, dialect, r2rml-section-10, canonicalization, oxsdatatypes, sqlite-affinity, correctness]
 supersedes: []
 depends-on:
@@ -75,6 +75,14 @@ R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) ide
 ### Confirmation
 
 A `(SQL source type × dialect) → expected RDF literal` matrix, realised as **per-DBMS forked golden N-Triples fixtures** (the RML-community layout; ADR-0012) run against real PostgreSQL/SQLite, plus: **cross-dialect** byte-identity (the §10 consistency clause), Rust canonicalization unit tests over the raw dialect renderings, and SQLite affinity-violation + STRICT tests. The W3C RDB2RDF suite (ADR-0005) is the floor.
+
+> **Implementation boundary (2026-08-28).** The current exact RDB2RDF inventory
+> contains only the canonical fixture names; it has no per-DBMS fork files yet.
+> PostgreSQL now executes only bytes captured by that seal and records them in a
+> backend-aware v3 outcome receipt. A future `*.postgres.*` or other dialect fork
+> must be added to the canonical inventory and captured before execution; runtime
+> filesystem discovery or rereading after the sealing barrier is prohibited.
+> This closes snapshot immutability, not the full per-dialect golden matrix above.
 
 > **Amendment (2026-07-16, impl-verified).** This ADR's Confirmation clause calls
 > for "Rust canonicalization unit tests over the raw dialect renderings" per
