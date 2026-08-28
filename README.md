@@ -251,6 +251,14 @@ local admission/state views. Those reproducible bytes are not provenance: the
 host consumer and verifier reopen the rooted claim and reject absent, deleted,
 replaced or caller-forged authority. The root remains owner-deletable and proves
 neither an external witness nor rollback resistance. No real claim was minted.
+The claim now has a first non-authorizing source consumer. It reopens and
+re-attests the rooted claim, materializes only the exact claimed commit from an
+exact primary or bare controller store through a private Git index, seals the
+tree, and binds path, mode, Git-object, SHA-256, index, controller, claim and
+output-absence checks in an opaque local view. Mutation tests reject ambient
+worktree drift, unsupported modes, links, extras, replacement and output
+injection. This does not admit a host or authorize a build, attempt, capture,
+receipt, baseline, or measurement; same-UID rollback and path ABA remain open.
 Current-tranche repeatability is proven: exact commit
 `ad94cdb` rebuilt and replayed byte-identically in two clean, no-hard-link
 checkouts under hardened-builder `umask 0022`, with both trees remaining clean.
@@ -437,7 +445,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation now binds one current binary and its observed final-link inputs, but not complete build-script/tool/system execution, linker time-of-use, SBOM, reproducibility, production minimality, or admission. Six advisory exceptions, three unmaintained-crate warnings, complete artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, and a same-UID non-authorizing run-claim reservation exist. There is still no external append-only witness, positive runner admission, controlled profile, baseline, candidate, capture receipt, or measured number; this host is ineligible |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID non-authorizing run claim, and claim-rooted exact-commit private source materialization exist. There is still no external append-only witness, positive runner admission, controlled profile, build/attempt authority, baseline, candidate, capture receipt, or measured number; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.

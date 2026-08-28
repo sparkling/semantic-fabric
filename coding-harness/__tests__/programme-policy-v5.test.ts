@@ -34,7 +34,7 @@ import type { RustOfflineProfile } from '../src/rust-sandbox.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
-  'c6afa21e06e109611d08824df2d747f4fa0adac36be741ad72dfe149400a5ce4';
+  '7d67a31282e3f251d0cfa8206ef16c6441605e7048d72b4a941dda3f20ef69c4';
 const HISTORICAL_POLICY_FINGERPRINT =
   '7888d16a81b048d2bd1a436047cac8ebd13d61050daeff670371140383526c3c';
 const HISTORICAL_MANIFEST_DIGEST =
@@ -46,6 +46,7 @@ const CAPTURE_PATHS = new Set([
   'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
   'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
   'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
   'coding-harness/__tests__/programme-capture-state-v1.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
@@ -57,6 +58,8 @@ const CAPTURE_PATHS = new Set([
   'coding-harness/src/programme-capture-host-preflight-v1.ts',
   'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
   'coding-harness/src/programme-capture-input-attestation-v1.ts',
+  'coding-harness/src/programme-capture-private-source-fs-v1.ts',
+  'coding-harness/src/programme-capture-private-source-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-task-v1.ts',

@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-08-28
+updated: 2026-08-29
 tags: [metaharness, evidence, performance, benchmark, reproducibility, ruflo, codex, claude]
 supersedes: []
 depends-on:
@@ -58,6 +58,26 @@ An identical claim is spent rather than idempotent. This proves cooperative
 concurrent exclusion within that one root only: it is owner-deletable, has no
 external append-only witness or rollback resistance, and is not the future
 runner lease. No real project claim has been minted on this ineligible host.
+
+The first claim consumer before host admission is now implemented: it
+materializes the exact claimed commit, from either an exact primary or bare
+controller store, into a claim-keyed private source root disjoint from both
+claim and controller authority. A private Git index
+is read from the immutable commit and checked against the controller tree.
+Includes, filters, attributes, and group/world-writable Git control or object
+authority fail before checkout; the protected object walk is bounded at one
+million nodes. Materialized paths, Git modes, Git object IDs, SHA-256 digests,
+byte counts,
+directories, index bytes, Git executable, claim, input attestation, controller,
+expected runner identity, and output absence are bound in a deterministic local
+view. Directories are sealed `0500`, ordinary files and the index `0400`, and
+tracked executable files `0500`. Prepare, verify, and pristine-only disposal
+reopen the rooted claim and re-attest the controller. Unsupported modes,
+symlinks, gitlinks, hard links, `.git` paths, extras, replacements, and output
+injection fail closed. This opaque in-process handle and view grant no host,
+lease, attempt, build, execution, capture, persistence, or receipt authority;
+same-UID/root mutation, rollback, and path ABA remain explicit nonclaims. Tests use synthetic
+stores and roots, so no project source tree or measurement was materialized.
 
 The `implements: ADR-0038` relationship denotes a subordinate proposed design
 lock. It is not implementation completion or M0 evidence.
@@ -168,6 +188,23 @@ Materialize that commit into a private clean worktree. Reject dirty or
 untracked source, symlink/hardlink substitution, a pre-existing output, path
 traversal, non-canonical Git identities, changed protected blobs, or a build
 whose source/toolchain identity cannot be bound to the commit.
+
+The implemented partial boundary stops at a sealed, exact-commit source tree.
+It uses `read-tree` plus `checkout-index` with an isolated private index. Branch
+and ambient-index state is inspected only to reject attribute authority and is
+never source or materialization authority; no shell, worktree mutation, remote,
+build tool, or producer is invoked.
+Before checkout it rejects local include/filter/config and attribute authority,
+foreign-owned or cross-UID-writable control/object nodes, and an oversized
+object-authority walk; it then preflights every blob size and the path-counted
+5 GB aggregate. It validates the
+full path set and streams every file through native Git-object and SHA-256
+hashing before returning an opaque local handle. Verification
+reopens the claim on both sides of the check and repeats tree, index, inventory,
+output-absence, controller-store, and pinned filesystem-identity checks.
+Cleanup is available only through the still-pristine module-issued handle; a
+poisoned tree is preserved for operator inspection. This is source preparation,
+not the future execution worktree, attempt lease, durable record, or evidence.
 
 Before materialization, a replay-safe object attestation verifies manifest
 membership and records each task-scoped input as
@@ -373,9 +410,10 @@ marginal provider-API charge, not a spend cap or a capacity claim.
 1. Implement and mutation-test the closed task parser and policy state machine.
 2. Implement exact input attestation and the negative-only host non-admission
    boundary before any positive runner claim.
-3. Implement private runtime, receipt, provider-free replay, and the complete
-   positive host/capture preflights while characterizing historical V4/V5/V6
-   outputs as byte-stable.
+3. Extend the implemented claim-rooted exact-commit private source boundary
+   into the execution runtime, receipt, provider-free replay, and complete
+   positive host/capture preflights while keeping historical V4/V5/V6 outputs
+   byte-stable.
 4. Provision a dedicated controlled runner and create its canonical tracked
    profile; do not derive that profile from this unsuitable development host.
 5. Register and protect the task/launcher/parser/test controller closure in the

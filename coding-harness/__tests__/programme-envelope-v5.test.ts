@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -17,10 +16,7 @@ import {
   serializeProgrammeEnvelopeV5,
   type ProgrammeEnvelopeV5,
 } from '../src/programme-envelope-v5.js';
-import {
-  parseProgrammeEnvelope,
-  serializeProgrammeEnvelope,
-} from '../src/programme-envelope.js';
+import { parseProgrammeEnvelope, serializeProgrammeEnvelope } from '../src/programme-envelope.js';
 import {
   createFrozenProgrammePolicyV1,
   programmePolicyFingerprint,
@@ -43,16 +39,12 @@ import {
 } from '../src/programme-task-runtime-v1.js';
 import { digestValue, ReceiptChain, type Receipt, type ReceiptStatus } from '../src/receipts.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
-import {
-  diagnosticBlob,
-  diagnosticBlobDigest,
-  programmeV5RufloFixture,
-} from './candidate-fixtures.js';
-
+import { diagnosticBlob, diagnosticBlobDigest, programmeV5RufloFixture }
+  from './candidate-fixtures.js';
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '1f3073cb96343682d89d756783dc279e0fd1fd3c074b9537c78da0905f62b5b0';
-const ACCEPTANCE_DIGEST = '8fc09cc7fc9ab925931b16bf72b1c3f520312fdd2f20138cf7bbcafda1389df4';
-const ENVELOPE_DIGEST = '422eae7e01cec2f804bce6b6ce3b1482c318cdb610ce4d96c449408dd5b71a22';
+const POLICY_FINGERPRINT = 'b9964691cdf7c4cf80748e7f4faecc104739a50a1c1a1175a2cb7ad30570c979';
+const ACCEPTANCE_DIGEST = '62e0dc493f1177c7ac6a9bae22a75a35dfce795172d499cc3aaece4eae6e66dc';
+const ENVELOPE_DIGEST = '5a4eb844b3a9a168aa1b4cdb7112436c4a560317b8afd77e73a5d526f277cad4';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
@@ -63,6 +55,7 @@ const CAPTURE_PATHS = new Set([
   'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
   'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
   'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
   'coding-harness/__tests__/programme-capture-state-v1.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
@@ -74,6 +67,8 @@ const CAPTURE_PATHS = new Set([
   'coding-harness/src/programme-capture-host-preflight-v1.ts',
   'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
   'coding-harness/src/programme-capture-input-attestation-v1.ts',
+  'coding-harness/src/programme-capture-private-source-fs-v1.ts',
+  'coding-harness/src/programme-capture-private-source-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-task-v1.ts',

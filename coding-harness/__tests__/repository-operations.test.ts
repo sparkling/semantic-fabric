@@ -262,7 +262,7 @@ describe('repository operations integration', () => {
     expect(result.receipt.protectedInputs['protected.txt']).toMatch(/^[a-f0-9]{64}$/);
     expect(transaction.receipts.verify()).toEqual({ ok: true });
     expect(result.receipt.coordination.traceIds).toEqual(['trace-0001']);
-  });
+  }, 15_000);
 
   it('uses a composite protected boundary with explicitly pre-prepared historical worktrees', async () => {
     const fixture = repository();

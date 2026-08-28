@@ -9,10 +9,11 @@ import {
   lstatSync,
   openSync,
   readSync,
+  readdirSync,
   realpathSync,
   type BigIntStats,
 } from 'node:fs';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { normalizeWorkspacePath } from './contracts.js';
 import { runGitCommand } from './git-process.js';
 import { resolveWorkspacePath } from './workspace.js';
@@ -20,8 +21,9 @@ import { resolveWorkspacePath } from './workspace.js';
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/;
 const INDEX_ENTRY = /^(100644|100755) ([a-f0-9]{40}|[a-f0-9]{64}) 0\t(.+)$/;
 const DANGEROUS_CONFIG =
-  '^(include(\\..*)?$|extensions\\.worktreeconfig$|filter\\.|diff\\..*\\.(command|textconv)$|merge\\..*\\.driver$|gpg\\.|commit\\.gpgsign$|user\\.signingkey$|core\\.(attributesfile|autocrlf|eol|safecrlf)$)';
+  '^(include(\\..*)?$|includeif(\\..*)?$|extensions\\.worktreeconfig$|filter\\.|diff\\..*\\.(command|textconv)$|merge\\..*\\.driver$|gpg\\.|commit\\.gpgsign$|user\\.signingkey$|core\\.(attributesfile|autocrlf|eol|safecrlf)$)';
 const MAX_INDEX_BYTES = 20_000_000;
+const MAX_OBJECT_AUTHORITY_NODES = 1_000_000;
 const MAX_TRACKED_FILES = 100_000;
 const MAX_TRACKED_BYTES = 5_000_000_000;
 const FORBIDDEN_GIT_FILES = Object.freeze([
@@ -33,9 +35,42 @@ const FORBIDDEN_GIT_FILES = Object.freeze([
 export async function assertGitMaterializationSafe(input: Readonly<{
   repositoryRoot: string;
   commits?: readonly string[];
+  requireProtectedAuthority?: boolean;
   signal?: AbortSignal;
 }>): Promise<void> {
-  const root = canonicalDirectory(input.repositoryRoot);
+  const protectedAuthority = input.requireProtectedAuthority === true;
+  const root = protectedAuthority
+    ? canonicalProtectedDirectory(input.repositoryRoot)
+    : canonicalDirectory(input.repositoryRoot);
+  const commonPath = (await gitChecked(
+    root,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    input.signal,
+    4096,
+  )).trim();
+  const commonRoot = protectedAuthority
+    ? canonicalProtectedDirectory(commonPath)
+    : canonicalDirectory(commonPath);
+  if (protectedAuthority) {
+    const gitDirectory = canonicalProtectedDirectory((await gitChecked(
+      root,
+      ['rev-parse', '--path-format=absolute', '--absolute-git-dir'],
+      input.signal,
+      4096,
+    )).trim());
+    const objectRoot = canonicalProtectedDirectory((await gitChecked(
+      root,
+      ['rev-parse', '--path-format=absolute', '--git-path', 'objects'],
+      input.signal,
+      4096,
+    )).trim());
+    if (objectRoot !== join(commonRoot, 'objects')) {
+      throw new Error('HARNESS_GIT_MATERIALIZATION_OBJECT_AUTHORITY_UNPROTECTED');
+    }
+    assertProtectedObjectAuthority(objectRoot);
+    assertProtectedControlFile(join(commonRoot, 'config'), true);
+    assertProtectedControlFile(join(gitDirectory, 'config.worktree'), false);
+  }
   const config = await runGitCommand(
     root,
     ['config', '--null', '--get-regexp', DANGEROUS_CONFIG],
@@ -50,15 +85,10 @@ export async function assertGitMaterializationSafe(input: Readonly<{
     1_000_000,
   );
   if (replacements.trim() !== '') throw new Error('HARNESS_GIT_REPLACEMENT_REF_FORBIDDEN');
-  const common = await gitChecked(
-    root,
-    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
-    input.signal,
-    4096,
-  );
-  const commonRoot = canonicalDirectory(common.trim());
   for (const parts of FORBIDDEN_GIT_FILES) {
-    if (existsSync(join(commonRoot, ...parts))) {
+    const forbidden = join(commonRoot, ...parts);
+    if (protectedAuthority) assertProtectedCreationParent(forbidden);
+    if (existsSync(forbidden)) {
       throw new Error(`HARNESS_GIT_MATERIALIZATION_FILE_FORBIDDEN:${parts.join('/')}`);
     }
   }
@@ -194,6 +224,89 @@ function canonicalDirectory(value: string): string {
     throw new Error('HARNESS_GIT_MATERIALIZATION_ROOT_INVALID');
   }
   return value;
+}
+
+function canonicalProtectedDirectory(value: string): string {
+  const path = canonicalDirectory(value);
+  const stat = lstatSync(path);
+  const uid = currentUid(stat.uid);
+  if ((stat.mode & 0o022) !== 0 || (stat.uid !== 0 && stat.uid !== uid)) {
+    throw new Error('HARNESS_GIT_MATERIALIZATION_AUTHORITY_UNPROTECTED');
+  }
+  assertProtectedParentChain(path, uid);
+  return path;
+}
+
+function assertProtectedControlFile(path: string, required: boolean): void {
+  assertProtectedCreationParent(path);
+  if (!existsSync(path)) {
+    if (required) throw new Error('HARNESS_GIT_MATERIALIZATION_AUTHORITY_UNPROTECTED');
+    return;
+  }
+  const stat = lstatSync(path);
+  const uid = currentUid(stat.uid);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+    || realpathSync(path) !== path || (stat.mode & 0o022) !== 0
+    || (stat.uid !== 0 && stat.uid !== uid)) {
+    throw new Error('HARNESS_GIT_MATERIALIZATION_AUTHORITY_UNPROTECTED');
+  }
+}
+
+function assertProtectedObjectAuthority(root: string): void {
+  const pending = [root];
+  let visited = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    for (const name of readdirSync(directory)) {
+      visited += 1;
+      if (visited > MAX_OBJECT_AUTHORITY_NODES) {
+        throw new Error('HARNESS_GIT_MATERIALIZATION_OBJECT_AUTHORITY_LIMIT');
+      }
+      const path = join(directory, name);
+      const stat = lstatSync(path);
+      const uid = currentUid(stat.uid);
+      if (stat.isSymbolicLink() || realpathSync(path) !== path
+        || (stat.mode & 0o022) !== 0 || (stat.uid !== 0 && stat.uid !== uid)) {
+        throw new Error('HARNESS_GIT_MATERIALIZATION_OBJECT_AUTHORITY_UNPROTECTED');
+      }
+      if (stat.isDirectory()) pending.push(path);
+      else if (!stat.isFile()) {
+        throw new Error('HARNESS_GIT_MATERIALIZATION_OBJECT_AUTHORITY_UNPROTECTED');
+      }
+    }
+  }
+}
+
+function assertProtectedCreationParent(path: string): void {
+  let parent = dirname(path);
+  while (!existsSync(parent)) {
+    const next = dirname(parent);
+    if (next === parent) {
+      throw new Error('HARNESS_GIT_MATERIALIZATION_AUTHORITY_UNPROTECTED');
+    }
+    parent = next;
+  }
+  canonicalProtectedDirectory(parent);
+}
+
+function assertProtectedParentChain(path: string, uid: number): void {
+  let current = dirname(path);
+  while (true) {
+    const stat = lstatSync(current);
+    const writable = (stat.mode & 0o022) !== 0;
+    const sticky = (stat.mode & 0o1000) !== 0;
+    if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync(current) !== current
+      || (stat.uid !== 0 && stat.uid !== uid) || (writable && !sticky)) {
+      throw new Error('HARNESS_GIT_MATERIALIZATION_AUTHORITY_UNPROTECTED');
+    }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+function currentUid(fallback: number): number {
+  return typeof process.getuid === 'function' ? process.getuid() : fallback;
 }
 
 function sameIdentity(left: BigIntStats, right: BigIntStats) {

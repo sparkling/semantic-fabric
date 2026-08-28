@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "authority": "development-only-no-promotion",
   "runtimeEntry": "coding-harness/dist/issue-8-program.js",
-  "harnessManifestDigest": "48bedcde723019a830971742131f596a5fba549732d61006d49a65ed1d18e4d1",
+  "harnessManifestDigest": "32516b6dcc511cf453c57a1090945c3559e43a8dcf0ae5a95d3e14f4f289a631",
   "lockfileDigest": "e823a5f73776c46a33934574dbca8248755bf04924f80b49a9aa5445cb3a4f1b",
   "outputs": {
     "coding-harness/dist/acceptance-runner.js": "4a7719db6ffd1dc33a7e3323714fa60fb636c8236c0e740449e53351629c7946",
@@ -27,7 +27,7 @@
     "coding-harness/dist/candidate-transaction-evidence-v1.js": "57607137ece682ce483cb457b07b4c553d2386901676cf9703ddaf647979691c",
     "coding-harness/dist/candidate-types.js": "cb9807bbbf566a3f3864690d59613b9bbfd7d1c5f2028d670650653501ceeb1b",
     "coding-harness/dist/candidate.js": "4e6ae0a39bcd8d56373d00b32ade5ba50898a58e5b47c91ea42d84e5008f74d3",
-    "coding-harness/dist/config.js": "fca3b09bf62997e263aa00976f201781fc420d79a91c0a432127488d32e557e3",
+    "coding-harness/dist/config.js": "3cb27326210fd7d8e632b00ba469f347e80d113343b44dd1f8c551fd4ed24fbf",
     "coding-harness/dist/contracts.js": "36144d64c65feb03d26e52b57135d9b7a8c8197d3e3110259a9fec0fe355b32e",
     "coding-harness/dist/controller-attestation.js": "1960feb9419a37bb1fc52dcca9f30d2ca2ab694bec86ab3ef1764cff0722dec5",
     "coding-harness/dist/controller-build.js": "037a9366736d0ad846d238ddabf573926a000e209e78c1a4c2689af3b64053c2",
@@ -42,13 +42,13 @@
     "coding-harness/dist/frozen-cargo-lock-fixture.js": "14f6cd43463d6143dfea22315028fa2bd5d8b1119457fa805e9f0832f224e053",
     "coding-harness/dist/frozen-cargo-lock.js": "e57400321bab08815f104f0804ec7d498a9739a8bba2981f100ccf85f68eb1f4",
     "coding-harness/dist/frozen-cargo-metadata.js": "a9fd9219e7eb4fd86a2de8827acfa4e27618b2905afe4591ef808600c1c1b6af",
-    "coding-harness/dist/git-materialization.js": "f6b0469327f9d667a3bbc664fb083b1ba6e056b6e752189530d23028e089ea2b",
+    "coding-harness/dist/git-materialization.js": "f56e23399731b9631d3cf85cb0b7fef336762c4b81a783bff28ad78417aee2eb",
     "coding-harness/dist/git-process.js": "ff16cdae6d9f6de86ed2fad4215ff8635a6b2ce23444faee5ce2084cdb406f0b",
     "coding-harness/dist/git-protected-boundary.js": "5f0d9f9b285894ce45a0f2efd397c23f93c711dc13cf7bbd487df74f2ffea186",
     "coding-harness/dist/git-worktrees.js": "ab7b880d08eff6102cfed53bdc9021d6ffdbc01cf7a86aeec20c92d00f8fd88a",
     "coding-harness/dist/immutable-private-runtime.js": "c2f78b6017a933cc642654b1a2001e45fe161addf71ff135757e6cf16b3eee40",
     "coding-harness/dist/independent-rust-lcov.js": "e35e70840bf82ca98ab3538c80d234e305c4782ae8d4ecaadfea993c949b187b",
-    "coding-harness/dist/index.js": "c08bba5ca0c32c1b6468ab7e73eee991b575eddc1130d68661b514a0bbaefaae",
+    "coding-harness/dist/index.js": "be5ad976af629e7e7a90ab1ef4fb9c3a285e3156c63f911b547f6dcbb481ec29",
     "coding-harness/dist/issue-8-driver.js": "2d6f5fb5a289d8c0237211da77e2e9ab02183a061bf185d7ec7c7af8b08900ea",
     "coding-harness/dist/issue-8-native-session.js": "a9f34fb2abfbe1b3269ebb212961db2c5ab933eca86fe71cb31f7c38ea41f9c0",
     "coding-harness/dist/issue-8-program.js": "4d1f7e22d681d10ecf88cf25bdbc17c7cef944a649d402c812dcc403441cc10e",
@@ -98,6 +98,8 @@
     "coding-harness/dist/programme-capture-host-preflight-v1.js": "30fafd7c4ee7e458694b39f3fd0c5433e89e17517f889e169d553b755e835bfb",
     "coding-harness/dist/programme-capture-input-attestation-record-v1.js": "6b631cfb64cea6eb6cf5313282b3a81934470fd3549d7c26025797757670531f",
     "coding-harness/dist/programme-capture-input-attestation-v1.js": "c5b540bb9f0bf24dcdc8ffc5425d3c338c8132eb4aaf747c293d36a91f518688",
+    "coding-harness/dist/programme-capture-private-source-fs-v1.js": "d5827fc76829e8b01ee71c7cb38035cf76dec70adaa3ea22031952a5f16e1dfa",
+    "coding-harness/dist/programme-capture-private-source-v1.js": "017a9460306d9270e987d76295ea0dbaab027e4d8d29d37791993dde3fa4810e",
     "coding-harness/dist/programme-capture-runner-profile-v1.js": "61c4b076b28c2ce5544978df15083969ca45e1e732909c4a81a01dadc062df26",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
     "coding-harness/dist/programme-capture-task-v1.js": "ece43b8a53106fad09d20a3a5a8c45643ca6862d35c170511883573fa7ac2781",
@@ -272,5 +274,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "d68770615153ea5c4a37080b6c9f9304a82c71b08d4719bf185552563aafd664"
+  "runtimeTreeDigest": "63057b3f0362881553e2dc57c5d2430f3c6e4b411a389e4ead3994f4d2a94c64"
 }

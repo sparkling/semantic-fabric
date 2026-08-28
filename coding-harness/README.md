@@ -114,6 +114,16 @@ or controlled profile is registered yet. Neither patch task is an evolution
 suite or promotion signal. Darwin/GEPA remains disabled until five training
 tasks and five sealed holdouts satisfy the independent evaluator gate.
 
+That capture plane now includes a non-authorizing, claim-rooted private-source
+boundary. It checks out only the claimed commit through an isolated Git index,
+after rejecting include/filter/attribute authority, cross-UID-writable Git
+controls, and an unprotected bounded object store. It seals and re-verifies the
+full tree, and returns an opaque local view with every
+lease, attempt, and capture authority field false, host admission unevaluated,
+and no build or execution API. Its tests use synthetic
+primary and bare stores; no controlled profile, project run, source tree,
+receipt, or measurement is created by the repository test suite.
+
 ## Retrieval flywheel boundary
 
 Ruflo's retrieval-policy flywheel is governed outside the candidate transaction.

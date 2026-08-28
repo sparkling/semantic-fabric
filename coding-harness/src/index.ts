@@ -49,6 +49,7 @@ export * from './programme-capture-config-v1.js';
 export * from './programme-capture-host-authority-v1.js';
 export * from './programme-capture-host-preflight-v1.js';
 export * from './programme-capture-input-attestation-v1.js';
+export * from './programme-capture-private-source-v1.js';
 export * from './programme-capture-runner-profile-v1.js';
 export * from './programme-capture-state-v1.js';
 export * from './programme-capture-task-v1.js';
