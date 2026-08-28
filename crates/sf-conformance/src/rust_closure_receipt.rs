@@ -1,6 +1,7 @@
 //! Deterministic M0 dependency-resolution and current binary-closure receipt.
 
 mod authority;
+mod controlled;
 mod features;
 mod format;
 mod metadata;
@@ -18,6 +19,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+
+pub use controlled::{check_with_tools, ControlledCheckRequest};
 
 pub const RECEIPT_PATH: &str = "tests/rust-dependency-closure.tsv";
 pub const ROOT_MANIFEST: &str = "crates/sf-cli/Cargo.toml";
