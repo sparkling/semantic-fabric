@@ -18,35 +18,51 @@ struct TempSuite(PathBuf);
 
 impl TempSuite {
     fn copy() -> Self {
-        let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "semantic-fabric-rdb2rdf-runner-{}-{serial}",
-            std::process::id()
-        ));
-        if path.exists() {
-            fs::remove_dir_all(&path).expect("remove stale suite copy");
-        }
-        copy_tree(&source_suite(), &path);
+        let path = loop {
+            let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            let candidate = std::env::temp_dir().join(format!(
+                "semantic-fabric-rdb2rdf-runner-{}-{serial}",
+                std::process::id()
+            ));
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create isolated suite directory: {error}"),
+            }
+        };
+        copy_tree_contents(&source_suite(), &path);
         Self(path)
+    }
+}
+
+fn copy_tree_contents(source: &Path, target: &Path) {
+    for entry in fs::read_dir(source).expect("read suite directory") {
+        let entry = entry.expect("read suite entry");
+        let destination = target.join(entry.file_name());
+        let kind = entry.file_type().expect("read entry type");
+        if kind.is_dir() {
+            fs::create_dir(&destination).expect("create suite subdirectory");
+            copy_tree_contents(&entry.path(), &destination);
+        } else if kind.is_file() {
+            fs::copy(entry.path(), destination).expect("copy suite file");
+        } else {
+            panic!(
+                "suite copy refuses non-file entry {}",
+                entry.path().display()
+            );
+        }
     }
 }
 
 impl Drop for TempSuite {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).expect("remove suite copy");
-    }
-}
-
-fn copy_tree(source: &Path, target: &Path) {
-    fs::create_dir_all(target).expect("create suite directory");
-    for entry in fs::read_dir(source).expect("read suite directory") {
-        let entry = entry.expect("read suite entry");
-        let destination = target.join(entry.file_name());
-        if entry.file_type().expect("read entry type").is_dir() {
-            copy_tree(&entry.path(), &destination);
-        } else {
-            fs::copy(entry.path(), destination).expect("copy suite file");
-        }
     }
 }
 
@@ -161,6 +177,27 @@ fn sqlite_entrypoint_rejects_drift_before_execution() {
         .unwrap();
     let error = sf_conformance::run_suite(&suite.0).unwrap_err();
     assert!(error.contains("digest mismatch"), "{error}");
+}
+
+#[test]
+fn sealed_sqlite_execution_uses_captured_bytes_after_source_mutation() {
+    let suite = TempSuite::copy();
+    let sealed = SealedSuite::load(&suite.0).expect("capture sealed suite");
+    fs::write(
+        suite.0.join("cases/D000-1table1column0rows/create.sql"),
+        "this is not valid SQLite",
+    )
+    .expect("mutate source after the sealing barrier");
+
+    let report = sf_conformance::runner::run_sealed_suite(&sealed)
+        .expect("execution uses the immutable captured snapshot");
+    assert_eq!(report.cases.len(), 87);
+    let mutated_source_case = report
+        .cases
+        .iter()
+        .find(|case| case.id == "DirectGraphTC0000")
+        .expect("mutated source case remains in the classified report");
+    assert_eq!(mutated_source_case.status, Status::Passed);
 }
 
 #[test]

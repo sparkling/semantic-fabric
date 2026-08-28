@@ -156,6 +156,13 @@ pub fn generate(suite_root: &Path) -> Result<String, String> {
     Ok(format::render(&build(suite_root)?))
 }
 
+/// Canonical bytes for an already validated inventory. Sealed execution uses
+/// this to prove the inventory file did not change between validation and
+/// capture, without reopening any case input after the sealing barrier.
+pub(crate) fn canonical_text(inventory: &Inventory) -> String {
+    format::render(inventory)
+}
+
 /// Mechanically replace an inventory after the local snapshot passes all fixed
 /// identity and structure checks. Normal verification should use [`check`].
 pub fn write_generated(suite_root: &Path, inventory_path: &Path) -> Result<(), String> {

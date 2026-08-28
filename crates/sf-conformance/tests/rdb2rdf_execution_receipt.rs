@@ -1,14 +1,13 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
 
 use sf_conformance::execution_receipt;
-use sf_conformance::{Report, Status};
+use sf_conformance::Status;
 use sha2::{Digest, Sha256};
 
 static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
-static ACTUAL_REPORT: OnceLock<Report> = OnceLock::new();
 
 fn source_suite() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/w3c/rdb2rdf")
@@ -18,27 +17,51 @@ fn source_receipt() -> PathBuf {
     source_suite().join("sqlite-execution-receipt.tsv")
 }
 
-fn actual_report() -> &'static Report {
-    ACTUAL_REPORT.get_or_init(|| sf_conformance::run_suite(&source_suite()).expect("suite runs"))
-}
+struct TempDir(PathBuf);
 
-struct TempReceipt(PathBuf);
-
-impl TempReceipt {
-    fn copy() -> Self {
-        let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "semantic-fabric-rdb2rdf-receipt-{}-{serial}.tsv",
-            std::process::id()
-        ));
-        fs::copy(source_receipt(), &path).expect("copy execution receipt");
-        Self(path)
+impl TempDir {
+    fn new() -> Self {
+        loop {
+            let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "semantic-fabric-rdb2rdf-receipt-{}-{serial}",
+                std::process::id()
+            ));
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create isolated receipt directory: {error}"),
+            }
+        }
     }
 }
 
-impl Drop for TempReceipt {
+impl Drop for TempDir {
     fn drop(&mut self) {
-        fs::remove_file(&self.0).expect("remove temporary receipt");
+        fs::remove_dir_all(&self.0).expect("remove isolated receipt directory");
+    }
+}
+
+struct TempReceipt {
+    path: PathBuf,
+    _directory: TempDir,
+}
+
+impl TempReceipt {
+    fn copy() -> Self {
+        let directory = TempDir::new();
+        let path = directory.0.join("receipt.tsv");
+        fs::copy(source_receipt(), &path).expect("copy execution receipt");
+        Self {
+            path,
+            _directory: directory,
+        }
     }
 }
 
@@ -46,6 +69,15 @@ fn replace_once(path: &Path, from: &str, to: &str) {
     let original = fs::read_to_string(path).expect("read mutation target");
     assert_eq!(original.matches(from).count(), 1, "unique mutation token");
     fs::write(path, original.replacen(from, to, 1)).expect("write mutation target");
+}
+
+fn metadata_value(path: &Path, key: &str) -> String {
+    let prefix = format!("meta\t{key}\t");
+    fs::read_to_string(path)
+        .expect("read receipt metadata")
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix).map(str::to_owned))
+        .unwrap_or_else(|| panic!("missing receipt metadata {key}"))
 }
 
 fn make_metadata_self_consistent(path: &Path) {
@@ -59,7 +91,7 @@ fn make_metadata_self_consistent(path: &Path) {
     let mut outcome_records = String::new();
     for line in text.lines().filter(|line| line.starts_with("case\t")) {
         let fields: Vec<_> = line.split('\t').collect();
-        assert_eq!(fields.len(), 4, "canonical case record");
+        assert_eq!(fields.len(), 5, "canonical typed case record");
         case_count += 1;
         match fields[2] {
             "r2rml" => r2rml_count += 1,
@@ -98,15 +130,47 @@ fn make_metadata_self_consistent(path: &Path) {
     fs::write(path, format!("{}\n", lines.join("\n"))).expect("write repaired metadata");
 }
 
-#[test]
-fn tracked_receipt_replays_exact_sqlite_outcomes_without_writes() {
-    let receipt_before = fs::read(source_receipt()).expect("read tracked receipt");
-    let inventory_path = source_suite().join("inventory.tsv");
-    let inventory_before = fs::read(&inventory_path).expect("read inventory");
+#[derive(Debug, PartialEq, Eq)]
+enum TreeNode {
+    Directory,
+    File(Vec<u8>),
+    Symlink(PathBuf),
+}
 
-    let receipt =
-        execution_receipt::check_report(&source_suite(), &source_receipt(), actual_report())
-            .expect("receipt matches replay");
+fn suite_snapshot(root: &Path) -> BTreeMap<PathBuf, TreeNode> {
+    let mut snapshot = BTreeMap::new();
+    snapshot_directory(root, root, &mut snapshot);
+    snapshot
+}
+
+fn snapshot_directory(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, TreeNode>) {
+    let mut entries: Vec<_> = fs::read_dir(directory)
+        .expect("read snapshot directory")
+        .map(|entry| entry.expect("read snapshot entry"))
+        .collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap().to_owned();
+        let kind = entry.file_type().expect("read snapshot entry type");
+        if kind.is_dir() {
+            snapshot.insert(relative, TreeNode::Directory);
+            snapshot_directory(root, &path, snapshot);
+        } else if kind.is_file() {
+            snapshot.insert(relative, TreeNode::File(fs::read(path).unwrap()));
+        } else if kind.is_symlink() {
+            snapshot.insert(relative, TreeNode::Symlink(fs::read_link(path).unwrap()));
+        } else {
+            panic!("unsupported suite node {}", path.display());
+        }
+    }
+}
+
+#[test]
+fn production_check_replays_exact_outcomes_and_is_whole_suite_neutral() {
+    let before = suite_snapshot(&source_suite());
+    let receipt = execution_receipt::check(&source_suite(), &source_receipt())
+        .expect("production check matches replay");
 
     assert_eq!(receipt.cases().len(), 87);
     assert_eq!(receipt.count(Status::Passed), 81);
@@ -114,107 +178,106 @@ fn tracked_receipt_replays_exact_sqlite_outcomes_without_writes() {
     assert_eq!(receipt.count(Status::Skipped), 5);
     assert_eq!(
         receipt.inventory_sha256(),
-        format!("{:x}", Sha256::digest(&inventory_before))
+        format!(
+            "{:x}",
+            Sha256::digest(fs::read(source_suite().join("inventory.tsv")).unwrap())
+        )
     );
-    assert_eq!(
-        fs::read(source_receipt()).expect("reread tracked receipt"),
-        receipt_before,
-        "check path must not rewrite the receipt"
-    );
-    assert_eq!(
-        fs::read(inventory_path).expect("reread inventory"),
-        inventory_before,
-        "check path must not rewrite the inventory"
-    );
+    assert_eq!(suite_snapshot(&source_suite()), before);
 }
 
 #[test]
 fn inventory_digest_substitution_fails_closed() {
     let receipt = TempReceipt::copy();
-    let inventory_sha256 =
-        execution_receipt::check_report(&source_suite(), &receipt.0, actual_report())
-            .expect("baseline receipt")
-            .inventory_sha256()
-            .to_owned();
+    let inventory_sha256 = metadata_value(&receipt.path, "inventory-sha256");
     let replacement = if inventory_sha256.starts_with('0') {
         "f".repeat(64)
     } else {
         "0".repeat(64)
     };
-    replace_once(&receipt.0, &inventory_sha256, &replacement);
+    replace_once(&receipt.path, &inventory_sha256, &replacement);
 
-    let error =
-        execution_receipt::check_report(&source_suite(), &receipt.0, actual_report()).unwrap_err();
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
     assert!(error.contains("inventory digest mismatch"), "{error}");
 }
 
 #[test]
-fn count_neutral_per_id_outcome_mutation_fails_self_verification() {
+fn count_neutral_per_id_status_mutation_fails_self_verification() {
     let receipt = TempReceipt::copy();
     replace_once(
-        &receipt.0,
-        "case\tR2RMLTC0002f\tr2rml\tfailed",
-        "case\tR2RMLTC0002f\tr2rml\tpassed",
+        &receipt.path,
+        "case\tR2RMLTC0002f\tr2rml\tfailed\tunexpected-output",
+        "case\tR2RMLTC0002f\tr2rml\tpassed\texecution-error",
     );
     replace_once(
-        &receipt.0,
-        "case\tR2RMLTC0002g\tr2rml\tpassed",
-        "case\tR2RMLTC0002g\tr2rml\tfailed",
+        &receipt.path,
+        "case\tR2RMLTC0002g\tr2rml\tpassed\texecution-error",
+        "case\tR2RMLTC0002g\tr2rml\tfailed\tunexpected-output",
     );
 
-    let error =
-        execution_receipt::check_report(&source_suite(), &receipt.0, actual_report()).unwrap_err();
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
     assert!(error.contains("outcomes digest mismatch"), "{error}");
 }
 
 #[test]
-fn self_consistent_allowed_improvement_still_requires_receipt_regeneration() {
+fn self_consistent_allowed_improvement_requires_receipt_regeneration() {
     let receipt = TempReceipt::copy();
     replace_once(
-        &receipt.0,
-        "case\tR2RMLTC0002f\tr2rml\tfailed",
-        "case\tR2RMLTC0002f\tr2rml\tpassed",
+        &receipt.path,
+        "case\tR2RMLTC0002f\tr2rml\tfailed\tunexpected-output",
+        "case\tR2RMLTC0002f\tr2rml\tpassed\texecution-error",
     );
-    make_metadata_self_consistent(&receipt.0);
+    make_metadata_self_consistent(&receipt.path);
 
-    let error =
-        execution_receipt::check_report(&source_suite(), &receipt.0, actual_report()).unwrap_err();
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
     assert!(error.contains("R2RMLTC0002f"), "{error}");
     assert!(error.contains("outcome mismatch"), "{error}");
 }
 
 #[test]
+fn self_consistent_same_status_outcome_code_drift_is_rejected() {
+    let receipt = TempReceipt::copy();
+    replace_once(
+        &receipt.path,
+        "case\tDirectGraphTC0001\tdirect-mapping\tpassed\tgraph-matched",
+        "case\tDirectGraphTC0001\tdirect-mapping\tpassed\tdataset-matched",
+    );
+    make_metadata_self_consistent(&receipt.path);
+
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
+    assert!(error.contains("DirectGraphTC0001"), "{error}");
+    assert!(error.contains("graph-matched"), "{error}");
+    assert!(error.contains("dataset-matched"), "{error}");
+}
+
+#[test]
+fn self_consistent_known_deviation_cause_drift_fails_policy() {
+    let receipt = TempReceipt::copy();
+    replace_once(
+        &receipt.path,
+        "case\tR2RMLTC0002f\tr2rml\tfailed\tunexpected-output",
+        "case\tR2RMLTC0002f\tr2rml\tfailed\tgraph-mismatch",
+    );
+    make_metadata_self_consistent(&receipt.path);
+
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
+    assert!(error.contains("R2RMLTC0002f"), "{error}");
+    assert!(error.contains("outcome code mismatch"), "{error}");
+}
+
+#[test]
 fn count_neutral_case_order_mutation_fails_inventory_binding() {
     let receipt = TempReceipt::copy();
-    let text = fs::read_to_string(&receipt.0).expect("read receipt");
+    let text = fs::read_to_string(&receipt.path).expect("read receipt");
     let mut lines: Vec<_> = text.lines().map(str::to_owned).collect();
     let first = lines
         .iter()
         .position(|line| line.starts_with("case\t"))
         .expect("first case");
     lines.swap(first, first + 1);
-    fs::write(&receipt.0, format!("{}\n", lines.join("\n"))).expect("write swapped receipt");
-    make_metadata_self_consistent(&receipt.0);
+    fs::write(&receipt.path, format!("{}\n", lines.join("\n"))).unwrap();
+    make_metadata_self_consistent(&receipt.path);
 
-    let error =
-        execution_receipt::check_report(&source_suite(), &receipt.0, actual_report()).unwrap_err();
+    let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();
     assert!(error.contains("order/identity mismatch"), "{error}");
-}
-
-#[test]
-fn report_with_allowed_status_drift_is_rejected_per_identifier() {
-    let mut improved = actual_report().clone();
-    let case = improved
-        .cases
-        .iter_mut()
-        .find(|case| case.id == "R2RMLTC0002f")
-        .expect("documented deviation");
-    assert_eq!(case.status, Status::Failed);
-    case.status = Status::Passed;
-
-    let error =
-        execution_receipt::check_report(&source_suite(), &source_receipt(), &improved).unwrap_err();
-    assert!(error.contains("R2RMLTC0002f"), "{error}");
-    assert!(error.contains("expected r2rml failed"), "{error}");
-    assert!(error.contains("observed r2rml passed"), "{error}");
 }
