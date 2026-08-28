@@ -90,7 +90,7 @@
     "coding-harness/dist/process.js": "75ecf658c55defbfb6006e2668f48319078fe9dd226238bc1e94bc06fc7f1497",
     "coding-harness/dist/programme-acceptance.js": "cd81658e6681c9752216a24fdf914f68f8fd0980c94b174165c40b271cb84293",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
-    "coding-harness/dist/programme-capture-task-v1.js": "176f6328db727a1460b18280f86e547d31e452efc42a4ea0653a1aee253118e3",
+    "coding-harness/dist/programme-capture-task-v1.js": "7f4137d3e7df49a35df7eb051de4296839ed3ca4dbc69dbb8f1c32b1fbffb2cf",
     "coding-harness/dist/programme-envelope-v5.js": "66ea7715cf420a6c97631a38030e8a88f3af31f17d4144105a1acd86f203511c",
     "coding-harness/dist/programme-envelope-v6.js": "c67e68619e1fe8d6b173c5a7cd69c624dc66bad2c0e8ab1e11f95a9a08a55b5b",
     "coding-harness/dist/programme-envelope.js": "9a6237aac426354b574677f5a65a20ec6d91f0026240906ff5e6d0dcc275eb2f",
@@ -262,5 +262,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "7c96190534fad01475e434dcee6295ab47ed162c79aec73bc510626549f4e1c7"
+  "runtimeTreeDigest": "49f8684e03a48a89b7306a3d7cbebb41263bd09a9cc6896d38c0c321ebe663d4"
 }

@@ -116,9 +116,11 @@ commit, push, release, publication, or promotion authority.
 ### 3. Freeze inputs at one clean controller commit
 
 Before capture, attest one exact commit and tree containing the task, canonical
-runner profile, scenario/workload authority, root `Cargo.lock`, source paths,
-trusted capture sources/scripts, and controller build manifest. The output path
-must be absent from the commit and worktree.
+runner profile, scenario/workload authority, root `Cargo.lock`, every tracked
+source in the reachable local Cargo package closure, trusted capture
+sources/scripts, and controller build manifest. Bind the resolved external
+Cargo/toolchain closure separately. The output path must be absent from the
+commit and worktree.
 
 Materialize that commit into a private clean worktree. Reject dirty or
 untracked source, symlink/hardlink substitution, a pre-existing output, path
@@ -236,8 +238,10 @@ marginal provider-API charge, not a spend cap or a capacity claim.
    replay while characterizing historical V4/V5/V6 outputs as byte-stable.
 3. Provision a dedicated controlled runner and create its canonical tracked
    profile; do not derive that profile from this unsuitable development host.
-4. Register and protect the exact task/profile/source/launcher/test closure in
-   the manifest and controller build.
+4. Register and protect the task/launcher/parser/test controller closure in the
+   global manifest and controller build. Bind the profile, scenarios, lock, and
+   product-source closure as task-scoped immutable commit blobs so existing
+   patch transactions may still modify product implementation paths.
 5. Run one fresh-ID capture with native Codex and Claude review outside the
    measurement interval; seal and replay the private receipt.
 6. Import only replay-verified bytes, protect the baseline, add CI

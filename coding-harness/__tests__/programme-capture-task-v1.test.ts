@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { dirname, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseAcceptanceTask } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
@@ -16,10 +19,11 @@ import {
 const digest = (character: string): string => character.repeat(64);
 const CAPTURE_HARNESS_CONFIG = parseHarnessConfig({
   ...structuredClone(SECURE_HARNESS_CONFIG),
-  requiredProtectedPaths: [
+  requiredProtectedPaths: [...new Set([
     ...SECURE_HARNESS_CONFIG.requiredProtectedPaths,
     PROGRAMME_CAPTURE_PROFILE_PATH,
-  ].sort(),
+    ...PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS,
+  ])].sort(),
 });
 
 function taskInput(): Record<string, any> {
@@ -109,7 +113,62 @@ function visitObjects(value: unknown, visit: (value: object) => void): void {
   for (const child of Object.values(value)) visitObjects(child, visit);
 }
 
+interface CargoMetadataPackage {
+  readonly name: string;
+  readonly manifest_path: string;
+  readonly dependencies: readonly Readonly<{ path?: string }>[];
+}
+
+function discoverCaptureLocalSourceClosure(): string[] {
+  const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const metadata = JSON.parse(execFileSync('cargo', [
+    'metadata', '--locked', '--offline', '--format-version', '1', '--no-deps',
+  ], { cwd: repositoryRoot, encoding: 'utf8' })) as {
+    readonly packages: readonly CargoMetadataPackage[];
+  };
+  const packageByDirectory = new Map(metadata.packages.map((pkg) => [
+    dirname(pkg.manifest_path),
+    pkg,
+  ]));
+  const root = metadata.packages.find((pkg) => pkg.name === 'sf-bench');
+  if (root === undefined) throw new Error('sf-bench is absent from Cargo metadata');
+
+  const queue = [root];
+  const reachable = new Map<string, CargoMetadataPackage>();
+  while (queue.length > 0) {
+    const pkg = queue.pop();
+    if (pkg === undefined || reachable.has(pkg.manifest_path)) continue;
+    reachable.set(pkg.manifest_path, pkg);
+    for (const dependency of pkg.dependencies) {
+      if (dependency.path === undefined) continue;
+      const localPackage = packageByDirectory.get(dependency.path);
+      if (localPackage === undefined) {
+        throw new Error(`local Cargo dependency has no package metadata: ${dependency.path}`);
+      }
+      queue.push(localPackage);
+    }
+  }
+
+  expect([...reachable.values()].map((pkg) => pkg.name).sort()).toEqual([
+    'sf-bench', 'sf-core', 'sf-mapping', 'sf-sparql', 'sf-sql',
+  ]);
+  const packagePaths = [...reachable.values()].flatMap((pkg) => {
+    const packageDirectory = dirname(relative(repositoryRoot, pkg.manifest_path));
+    return execFileSync('git', ['ls-files', '--',
+      `${packageDirectory}/Cargo.toml`,
+      `${packageDirectory}/build.rs`,
+      `${packageDirectory}/src`,
+    ], { cwd: repositoryRoot, encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+  });
+  return ['Cargo.toml', ...packagePaths, 'rust-toolchain.toml'].sort();
+}
+
 describe('programme capture V1 task', () => {
+  it('binds every tracked source in the reachable local Cargo package closure', () => {
+    expect([...PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS])
+      .toEqual(discoverCaptureLocalSourceClosure());
+  });
+
   it('parses the exact capture contract and deeply freezes it', () => {
     expect(() => parseProgrammeCaptureTaskV1(taskInput(), SECURE_HARNESS_CONFIG))
       .toThrow(/protected controller inputs/);
