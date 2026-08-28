@@ -15,7 +15,8 @@ import { DEVELOPMENT_AUTHORITY } from '../src/contracts.js';
 import { HARNESS_MANIFEST_PATH } from '../src/controller-attestation.js';
 import { CONTROLLER_BUILD_PATH, parseControllerBuildManifest } from '../src/controller-build.js';
 import {
-  parseMetaHarnessDiagnosticSnapshot, type MetaHarnessDiagnosticSnapshot,
+  METAHARNESS_DIAGNOSTICS_PATH, parseMetaHarnessDiagnosticSnapshot,
+  type MetaHarnessDiagnosticSnapshot,
 } from '../src/metaharness-diagnostics.js';
 import type { NativeRuntimeEvidenceV2 } from '../src/native-runtime-evidence-v2.js';
 import {
@@ -39,7 +40,7 @@ import {
   type ReceiptDraft,
 } from '../src/receipts.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
-import { diagnosticSnapshot, programmeV5RufloFixture } from './candidate-fixtures.js';
+import { diagnosticBlobDigest, diagnosticSnapshot, programmeV5RufloFixture } from './candidate-fixtures.js';
 export type RepairDisposition = 'none' | 'not-started' | 'failed' | 'passed';
 export interface ProgrammeV6Fixture {
   readonly policy: ParsedProgrammePolicyV2;
@@ -144,6 +145,7 @@ function basePolicyFixture() {
   protectedInputs[HARNESS_MANIFEST_PATH] = sha256(manifestBlob);
   protectedInputs[TASK_PATH] = sha256(taskBlob);
   protectedInputs[CONTROLLER_BUILD_PATH] = sha256(buildManifestBlob);
+  protectedInputs[METAHARNESS_DIAGNOSTICS_PATH] = diagnosticBlobDigest;
   protectedInputs['coding-harness/package-lock.json'] = build.lockfileDigest;
   protectedInputs['Cargo.lock'] = task.rust.frozenLockSha256;
   const input: ControllerPolicyInputs = {
@@ -470,7 +472,6 @@ function toolFixture(policy: typeof POLICY_V2.base): Record<string, string> {
   });
   return tools;
 }
-
 function rufloEvidenceFor(receipt: Receipt): ProgrammeV5RufloEvidence {
   return programmeV5RufloFixture({
     taskId: receipt.taskId,

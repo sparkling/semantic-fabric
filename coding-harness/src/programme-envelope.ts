@@ -11,12 +11,18 @@ import {
   serializeProgrammeEnvelopeV5,
   type ProgrammeEnvelopeV5,
 } from './programme-envelope-v5.js';
+import {
+  parseProgrammeEnvelopeV6,
+  serializeProgrammeEnvelopeV6,
+  type ProgrammeEnvelopeV6,
+} from './programme-envelope-v6.js';
 import { inspectJsonRoot, parseJsonDocument } from './strict-json.js';
 
-export type ProgrammeEnvelope = Issue8ProgrammeEnvelope | ProgrammeEnvelopeV5;
+export type ProgrammeEnvelope = Issue8ProgrammeEnvelope | ProgrammeEnvelopeV5 | ProgrammeEnvelopeV6;
 export type ProgrammeEnvelopeExpectation =
   | Readonly<{ schemaVersion: 4 }>
-  | Readonly<{ schemaVersion: 5; policyFingerprint: string }>;
+  | Readonly<{ schemaVersion: 5; policyFingerprint: string }>
+  | Readonly<{ schemaVersion: 6; policyFingerprint: string }>;
 
 export function parseProgrammeEnvelope(serialized: string): Issue8ProgrammeEnvelope;
 export function parseProgrammeEnvelope(
@@ -27,6 +33,10 @@ export function parseProgrammeEnvelope(
   serialized: string,
   expectation: Readonly<{ schemaVersion: 5; policyFingerprint: string }>,
 ): ProgrammeEnvelopeV5;
+export function parseProgrammeEnvelope(
+  serialized: string,
+  expectation: Readonly<{ schemaVersion: 6; policyFingerprint: string }>,
+): ProgrammeEnvelopeV6;
 export function parseProgrammeEnvelope(
   serialized: string,
   expectation?: ProgrammeEnvelopeExpectation,
@@ -42,7 +52,7 @@ export function parseProgrammeEnvelope(
   }
   const [version] = inspected.topLevelNumberValues.schemaVersion;
   if (version === 4) {
-    if (expected?.schemaVersion === 5) {
+    if (expected?.schemaVersion === 5 || expected?.schemaVersion === 6) {
       throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_DOWNGRADE');
     }
     return parseIssue8ProgrammeEnvelope(serialized);
@@ -51,10 +61,22 @@ export function parseProgrammeEnvelope(
     if (expected === undefined) {
       throw new Error('HARNESS_PROGRAMME_ENVELOPE_V5_POLICY_ANCHOR_REQUIRED');
     }
+    if (expected.schemaVersion === 6) {
+      throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_DOWNGRADE');
+    }
     if (expected.schemaVersion !== 5) {
       throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_MISMATCH');
     }
     return parseProgrammeEnvelopeV5(serialized, expected.policyFingerprint);
+  }
+  if (version === 6) {
+    if (expected === undefined) {
+      throw new Error('HARNESS_PROGRAMME_ENVELOPE_V6_POLICY_ANCHOR_REQUIRED');
+    }
+    if (expected.schemaVersion !== 6) {
+      throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_MISMATCH');
+    }
+    return parseProgrammeEnvelopeV6(serialized, expected.policyFingerprint);
   }
   asRecord(parseJsonDocument(serialized, 'programme envelope'), 'programme envelope');
   throw new TypeError('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_UNSUPPORTED');
@@ -70,13 +92,17 @@ export function serializeProgrammeEnvelope(
   expectation: Readonly<{ schemaVersion: 5; policyFingerprint: string }>,
 ): string;
 export function serializeProgrammeEnvelope(
+  envelope: ProgrammeEnvelopeV6,
+  expectation: Readonly<{ schemaVersion: 6; policyFingerprint: string }>,
+): string;
+export function serializeProgrammeEnvelope(
   envelope: ProgrammeEnvelope,
   expectation?: ProgrammeEnvelopeExpectation,
 ): string {
   const expected = parseExpectation(expectation);
   const input = asRecord(envelope, 'programme envelope');
   if (input.schemaVersion === 4) {
-    if (expected?.schemaVersion === 5) {
+    if (expected?.schemaVersion === 5 || expected?.schemaVersion === 6) {
       throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_DOWNGRADE');
     }
     return serializeIssue8ProgrammeEnvelope(envelope as Issue8ProgrammeEnvelope);
@@ -85,11 +111,26 @@ export function serializeProgrammeEnvelope(
     if (expected === undefined) {
       throw new Error('HARNESS_PROGRAMME_ENVELOPE_V5_POLICY_ANCHOR_REQUIRED');
     }
+    if (expected.schemaVersion === 6) {
+      throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_DOWNGRADE');
+    }
     if (expected.schemaVersion !== 5) {
       throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_MISMATCH');
     }
     return serializeProgrammeEnvelopeV5(
       envelope as ProgrammeEnvelopeV5,
+      expected.policyFingerprint,
+    );
+  }
+  if (input.schemaVersion === 6) {
+    if (expected === undefined) {
+      throw new Error('HARNESS_PROGRAMME_ENVELOPE_V6_POLICY_ANCHOR_REQUIRED');
+    }
+    if (expected.schemaVersion !== 6) {
+      throw new Error('HARNESS_PROGRAMME_ENVELOPE_SCHEMA_MISMATCH');
+    }
+    return serializeProgrammeEnvelopeV6(
+      envelope as ProgrammeEnvelopeV6,
       expected.policyFingerprint,
     );
   }
@@ -103,7 +144,7 @@ function parseExpectation(value: unknown): ProgrammeEnvelopeExpectation | undefi
     assertExactKeys(input, ['schemaVersion'], 'programme envelope expectation');
     return deepFreeze({ schemaVersion: 4 });
   }
-  if (input.schemaVersion === 5) {
+  if (input.schemaVersion === 5 || input.schemaVersion === 6) {
     assertExactKeys(
       input,
       ['schemaVersion', 'policyFingerprint'],
@@ -114,7 +155,10 @@ function parseExpectation(value: unknown): ProgrammeEnvelopeExpectation | undefi
       || input.policyFingerprint === '0'.repeat(64)) {
       throw new TypeError('HARNESS_PROGRAMME_ENVELOPE_EXPECTATION_INVALID');
     }
-    return deepFreeze({ schemaVersion: 5, policyFingerprint: input.policyFingerprint });
+    return deepFreeze({
+      schemaVersion: input.schemaVersion,
+      policyFingerprint: input.policyFingerprint,
+    });
   }
   throw new TypeError('HARNESS_PROGRAMME_ENVELOPE_EXPECTATION_INVALID');
 }
