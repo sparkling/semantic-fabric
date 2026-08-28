@@ -112,10 +112,17 @@ pub(super) fn parse_sandbox_stdout(
         }
         let message: Message = serde_json::from_str(line)
             .map_err(|error| format!("parse sandbox Cargo JSON line {line_number}: {error}"))?;
-        match message.reason.as_str() {
-            "compiler-artifact" if message.is_root_binary(expected_package_id) => {
-                let executable = message
-                    .executable
+        match message {
+            Message::CompilerArtifact {
+                package_id: message_package_id,
+                target,
+                executable,
+                profile,
+            } if target.is_root_binary()
+                && message_package_id == expected_package_id
+                && profile.is_release() =>
+            {
+                let executable = executable
                     .ok_or_else(|| "root binary compiler-artifact has no executable".to_owned())?;
                 let executable = logical_path(&executable, "root binary executable")?;
                 if executable != Path::new(LOGICAL_ARTIFACT) {
@@ -128,13 +135,13 @@ pub(super) fn parse_sandbox_stdout(
                         "sandbox Cargo stdout has multiple root binary artifacts".to_owned()
                     );
                 }
-                package_id = Some(message.package_id);
+                package_id = Some(message_package_id);
             }
-            "build-script-executed" => {
-                validate_build_script_package_id(&message.package_id)?;
-                let out_dir = message
-                    .out_dir
-                    .ok_or_else(|| "build-script-executed message has no out_dir".to_owned())?;
+            Message::BuildScriptExecuted {
+                package_id: message_package_id,
+                out_dir,
+            } => {
+                validate_build_script_package_id(&message_package_id)?;
                 let logical_out_dir = logical_path(&out_dir, "build-script OUT_DIR")?;
                 if !logical_out_dir.starts_with(LOGICAL_TARGET_DIR)
                     || logical_out_dir == Path::new(LOGICAL_TARGET_DIR)
@@ -147,7 +154,7 @@ pub(super) fn parse_sandbox_stdout(
                     ));
                 }
                 build_scripts.push(BuildScript {
-                    package_id: message.package_id,
+                    package_id: message_package_id,
                     logical_out_dir,
                 });
             }
@@ -275,26 +282,22 @@ fn validate_build_script_package_id(value: &str) -> Result<(), String> {
 }
 
 #[derive(Deserialize)]
-struct Message {
-    reason: String,
-    package_id: String,
-    #[serde(default)]
-    target: Target,
-    #[serde(default)]
-    executable: Option<String>,
-    #[serde(default)]
-    out_dir: Option<String>,
-    #[serde(default)]
-    profile: Profile,
-}
-
-impl Message {
-    fn is_root_binary(&self, expected_package_id: &str) -> bool {
-        self.target.name == ROOT_BINARY
-            && self.target.kind.iter().any(|kind| kind == "bin")
-            && self.package_id == expected_package_id
-            && self.profile.is_release()
-    }
+#[serde(tag = "reason")]
+enum Message {
+    #[serde(rename = "compiler-artifact")]
+    CompilerArtifact {
+        package_id: String,
+        #[serde(default)]
+        target: Target,
+        #[serde(default)]
+        executable: Option<String>,
+        #[serde(default)]
+        profile: Profile,
+    },
+    #[serde(rename = "build-script-executed")]
+    BuildScriptExecuted { package_id: String, out_dir: String },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Default, Deserialize)]
@@ -303,6 +306,12 @@ struct Target {
     name: String,
     #[serde(default)]
     kind: Vec<String>,
+}
+
+impl Target {
+    fn is_root_binary(&self) -> bool {
+        self.name == ROOT_BINARY && self.kind.iter().any(|kind| kind == "bin")
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -331,6 +340,7 @@ mod tests {
     fn selects_exact_logical_artifact_and_sorts_build_scripts() {
         let stream = concat!(
             "{\"reason\":\"build-script-executed\",\"package_id\":\"z\",\"out_dir\":\"/target/build/z/out\"}\n",
+            "{\"reason\":\"build-finished\",\"success\":true}\n",
             "{\"reason\":\"compiler-artifact\",\"package_id\":\"path+file:///workspace/crates/sf-cli#0.0.0\",\"target\":{\"name\":\"semantic-fabric\",\"kind\":[\"bin\"]},\"profile\":{\"opt_level\":\"3\",\"debug\":false,\"test\":false},\"executable\":\"/target/x86_64-unknown-linux-gnu/release/semantic-fabric\"}\n",
             "{\"reason\":\"build-script-executed\",\"package_id\":\"a\",\"out_dir\":\"/target/build/a/out\"}\n"
         );
@@ -354,5 +364,14 @@ mod tests {
     fn bounds_build_script_package_ids_to_receipt_schema() {
         assert!(validate_build_script_package_id(&"a".repeat(512)).is_ok());
         assert!(validate_build_script_package_id(&"a".repeat(513)).is_err());
+    }
+
+    #[test]
+    fn rejects_relevant_messages_missing_required_fields() {
+        let missing_package = concat!(
+            "{\"reason\":\"build-script-executed\",\"out_dir\":\"/target/build/a/out\"}\n",
+            "{\"reason\":\"build-finished\",\"success\":true}\n"
+        );
+        assert!(parse_sandbox_stdout(missing_package.as_bytes(), PACKAGE).is_err());
     }
 }
