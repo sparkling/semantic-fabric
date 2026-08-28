@@ -61,6 +61,7 @@ docs/handover/
 /.claude-flow/intelligence/
 /.claude-flow/security/
 /.claude-flow/daemon-state.json
+/.claude-flow/daemon-queue/
 /.claude-flow/daemon.pid
 /.claude-flow/daemon.sock
 /.claude-flow/agents/store.json

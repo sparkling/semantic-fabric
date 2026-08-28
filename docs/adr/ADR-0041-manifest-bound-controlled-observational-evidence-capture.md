@@ -98,6 +98,12 @@ The V1 task has exact, closed keys for:
 Unknown keys, task kinds, schemas, paths, commands, modes, or digest algorithms
 fail before any model or benchmark process starts.
 
+The capture parser uses one non-overridable configuration derived from frozen
+capture constants. The global harness manifest is always parsed against the
+ordinary secure harness configuration; only the observational transaction uses
+the task-scoped profile, scenario, lock, and product-source boundary. A caller
+cannot supply a weaker protected-path set.
+
 ### 2. Separate roles and authority
 
 | Role | Authority |
@@ -126,6 +132,30 @@ Materialize that commit into a private clean worktree. Reject dirty or
 untracked source, symlink/hardlink substitution, a pre-existing output, path
 traversal, non-canonical Git identities, changed protected blobs, or a build
 whose source/toolchain identity cannot be bound to the commit.
+
+Before materialization, a replay-safe object attestation verifies manifest
+membership and records each task-scoped input as
+`{path, gitBlobId, sha256, byteLength}` in its fixed semantic order. It binds
+the exact commit/tree and raw task bytes, rejects non-blob Git modes, and proves
+that the output path is absent from the commit. It does not depend on the
+ambient branch or working-tree contents.
+
+The controller store must be either its exact bare repository root or an exact
+primary non-bare repository root; ancestor discovery and linked worktrees are
+rejected. The controller pins and rechecks the store, Git/common directories,
+and object directory, rejects unsafe parent rename authority, queries the
+storage object format, and independently rehashes every admitted commit, tree,
+and blob body as its native Git object. All protected files use mode `100644`;
+tree size and entry count are bounded. This does not claim continuous rollback
+resistance against root or a hostile same-UID actor able to swap and restore
+paths between checks; the independent bootstrap-store digest and append-only
+supervisor remain the authority for that stronger threat model.
+
+The attestation parser is a closed self-consistency codec, not external
+authority. Admission and replay receive the controller-store authority
+independently, re-attest the pinned commit and task, and require an exact record
+match. A syntactically valid record with recomputed self-hashes cannot select
+its own authoritative store or commit.
 
 Existing patch tasks read Cargo input as exact raw bytes from their declared
 ancestor baseline. The capture task instead binds the tracked root `Cargo.lock`
@@ -162,12 +192,26 @@ can prove only the controller-observed history inside that lease. It cannot
 prove that a person discarded an out-of-band measurement outside the lease;
 that remains an explicit nonclaim.
 
+The authority uniqueness key is the project authority plus run ID; controller,
+task, profile, and runner identities are immutable claim-body fields, not parts
+of the uniqueness key. An existing identical claim is already spent, never an
+idempotent launch authorization. A same-UID create-new file prevents concurrent
+claims but is owner-deletable; hostile rollback resistance requires a pinned
+signing key and a separately administered append-only supervisor.
+
 Within the leased runner and controller process boundary, model processes and
 model-network brokers must not exist during the measured interval. Pre-review
 may assess the frozen plan; post-review assesses the digest-frozen capture
 record before the final envelope is sealed. Neither review may supply
 measurement values. Process census does not prove absence on another host or
 outside the enforced lease boundary.
+
+A rejected pre-review terminates without consuming an attempt-start
+authorization; the run claim remains spent. A rejected or missing post-review
+preserves the witnessed attempt as a verified
+but import-ineligible terminal outcome; it may not relabel or discard the
+measurement. Every started run produces terminal/failure evidence even when no
+successful capture record can be formed.
 
 ### 5. Bind the controlled execution envelope
 
@@ -199,6 +243,11 @@ Only explicitly ancillary evidence, such as additional thermal or firmware
 detail outside the accepted profile, may be recorded as a nonclaim. Self-
 reported host text alone is not control evidence.
 
+The build attestation also binds resolved registry archives, proc macros, build
+scripts, the exact Rust toolchain, native C compiler/linker inputs, runtime
+libraries, and the read-only mount manifest. A broad host `/usr` mount or an
+unattested successful build is insufficient.
+
 ### 6. Keep output private until replayed import
 
 The private clean capture worktree is the producer's repository layout. Its
@@ -208,12 +257,25 @@ After deterministic verification, freeze the exact bytes and evidence as the
 immutable capture record; after post-review, seal that record and the reviews in
 a canonical, bounded, mode-`0600` final envelope.
 
+The producer output is created with mode `0600`, remains a regular single-link
+controller-owned file, and is descriptor-reverified before a frozen copy is
+made. The record binds the state head before its freeze event; the freeze event
+then binds the record digest. The envelope binds the later sealed state, and a
+detached authority witness binds the envelope digest and raw file digest last.
+No digest-bearing object contains its own digest or a later state head.
+
 Provider-free replay verifies schemas, canonical serialization, digests,
 identities, ordering, protected inputs, command results, state transitions,
 the one controller-observed attempt for this run ID, and the receipt chain.
 Replay proves integrity of the recorded capture; it does not remeasure the host,
 exclude out-of-band measurements, or prove that opaque hardware claims were
 physically true.
+
+Replay receives the authority key fingerprint independently, verifies the
+append-only claim/lease/attempt/terminal/final-witness sequence, and never calls
+a provider, probe, or capture command. Portability is limited to hosts able to
+reconstruct the pinned controller and product checker closure; verified
+integrity is not a claim that another host would reproduce the same timings.
 
 Only the integration owner may import the exact replayed bytes. After import,
 the baseline becomes a tracked protected input and ordinary CI runs the

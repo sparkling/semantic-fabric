@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseAcceptanceTask } from '../src/acceptance-task.js';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
-import { parseHarnessConfig } from '../src/contracts.js';
 import { assertProgrammeV5ControllerTask } from '../src/programme-v5-driver-support.js';
+import { PROGRAMME_CAPTURE_HARNESS_CONFIG_V1 } from '../src/programme-capture-config-v1.js';
 import {
   PROGRAMME_CAPTURE_PROFILE_PATH,
   PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS,
@@ -17,14 +17,7 @@ import {
 } from '../src/programme-capture-task-v1.js';
 
 const digest = (character: string): string => character.repeat(64);
-const CAPTURE_HARNESS_CONFIG = parseHarnessConfig({
-  ...structuredClone(SECURE_HARNESS_CONFIG),
-  requiredProtectedPaths: [...new Set([
-    ...SECURE_HARNESS_CONFIG.requiredProtectedPaths,
-    PROGRAMME_CAPTURE_PROFILE_PATH,
-    ...PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS,
-  ])].sort(),
-});
+const CAPTURE_HARNESS_CONFIG = PROGRAMME_CAPTURE_HARNESS_CONFIG_V1;
 
 function taskInput(): Record<string, any> {
   return {
@@ -171,7 +164,7 @@ describe('programme capture V1 task', () => {
 
   it('parses the exact capture contract and deeply freezes it', () => {
     expect(() => parseProgrammeCaptureTaskV1(taskInput(), SECURE_HARNESS_CONFIG))
-      .toThrow(/protected controller inputs/);
+      .toThrow(/protected capture-task inputs/);
     const task = parseProgrammeCaptureTaskV1(taskInput(), CAPTURE_HARNESS_CONFIG);
 
     expect(task).toMatchObject({

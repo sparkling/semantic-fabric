@@ -25,7 +25,7 @@ export const PROGRAMME_CAPTURE_SCENARIOS_PATH =
 export const PROGRAMME_CAPTURE_OUTPUT_PATH =
   'crates/sf-bench/config/performance-baseline-v1.tsv' as const;
 export const PROGRAMME_CAPTURE_MAXIMUM_BYTES = 1_048_576 as const;
-export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = [
+export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'Cargo.toml',
   'crates/sf-bench/Cargo.toml',
   'crates/sf-bench/src/bin/sf-performance-receipt.rs',
@@ -123,7 +123,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = [
   'crates/sf-sql/src/schema.rs',
   'crates/sf-sql/src/stream.rs',
   'rust-toolchain.toml',
-] as const;
+] as const);
 
 const CAPTURE_TIMEOUT_MS = 1_800_000 as const;
 const VERIFY_TIMEOUT_MS = 60_000 as const;
@@ -284,7 +284,7 @@ function parseInputs(value: unknown, config: HarnessConfig): ProgrammeCaptureTas
   );
   const protectedInputs = [runnerProfile.path, scenarios.path, cargoLock.path, ...sourcePaths];
   if (protectedInputs.some((path) => !config.requiredProtectedPaths.includes(path))) {
-    throw new TypeError('programme capture task inputs must be protected controller inputs');
+    throw new TypeError('programme capture task inputs must be protected capture-task inputs');
   }
   return {
     runnerProfile,
