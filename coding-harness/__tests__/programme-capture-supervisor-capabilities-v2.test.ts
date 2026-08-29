@@ -11,6 +11,25 @@ const CONFIG_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-authorit
 const TRANSITION_ENTRY = resolve(
   SOURCE_ROOT, 'programme-capture-supervisor-authority-transition-v2.ts',
 );
+const RUN_EVENT_CONTRACTS_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-run-event-contracts-v2.ts',
+);
+const RUN_EVENT_BODY_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-run-event-body-v2.ts',
+);
+const RUN_EVENT_CODEC_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-run-event-codec-v2.ts',
+);
+const RUN_EVENT_TRANSITION_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-run-event-transition-v2.ts',
+);
+const RUN_EVENT_VERIFIER_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-run-event-verifier-v2.ts',
+);
+const V2_ENTRIES = Object.freeze([
+  CONFIG_ENTRY, TRANSITION_ENTRY, RUN_EVENT_CONTRACTS_ENTRY, RUN_EVENT_BODY_ENTRY,
+  RUN_EVENT_CODEC_ENTRY, RUN_EVENT_TRANSITION_ENTRY, RUN_EVENT_VERIFIER_ENTRY,
+]);
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
   [CONFIG_ENTRY, new Map([
     ['node:util/types', 'isProxy:isProxy'],
@@ -35,16 +54,100 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
     ['./receipts.js', 'digestValue:digestValue'],
     ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
   ])],
+  [RUN_EVENT_CONTRACTS_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    ['./acceptance-task-v3.js', 'parseTaskOpaqueId:parseTaskOpaqueId'],
+    [
+      './contracts.js',
+      'SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asDenseArray:asDenseArray',
+    ],
+  ])],
+  [RUN_EVENT_BODY_ENTRY, new Map([
+    ['./contracts.js', 'assertExactKeys:assertExactKeys,deepFreeze:deepFreeze'],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'PROGRAMME_CAPTURE_SUPERVISOR_RESOURCE_CONFLICT_SET_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RESOURCE_CONFLICT_SET_DOMAIN_V2,assertProgrammeCaptureSupervisorAttemptOutcomeDispositionsV2:assertProgrammeCaptureSupervisorAttemptOutcomeDispositionsV2,closedRunEventRecordV2:closedRunEventRecordV2,denseRunEventArrayV2:denseRunEventArrayV2,parseRunEventDigestV2:parseRunEventDigestV2,parseRunEventOpaqueIdV2:parseRunEventOpaqueIdV2,parseRunEventTimestampV2:parseRunEventTimestampV2,parseRunEventUint64V2:parseRunEventUint64V2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
+  [RUN_EVENT_CODEC_ENTRY, new Map([
+    ['@metaharness/harness', 'canonical:canonical'],
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
+    ],
+    [
+      './programme-capture-supervisor-run-event-body-v2.js',
+      'parseProgrammeCaptureSupervisorAuthorityHeadRefV2:parseProgrammeCaptureSupervisorAuthorityHeadRefV2,parseProgrammeCaptureSupervisorPreviousGlobalV2:parseProgrammeCaptureSupervisorPreviousGlobalV2,parseProgrammeCaptureSupervisorPreviousRunV2:parseProgrammeCaptureSupervisorPreviousRunV2,parseProgrammeCaptureSupervisorResourceTransitionV2:parseProgrammeCaptureSupervisorResourceTransitionV2,parseProgrammeCaptureSupervisorRunEventBodyV2:parseProgrammeCaptureSupervisorRunEventBodyV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_DIGEST_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_DIGEST_DOMAIN_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_KINDS_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_KINDS_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_MAX_BYTES_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_MAX_BYTES_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_SIGNING_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_SIGNING_DOMAIN_V2,closedRunEventRecordV2:closedRunEventRecordV2,parseRunEventDigestV2:parseRunEventDigestV2,parseRunEventOpaqueIdV2:parseRunEventOpaqueIdV2,parseRunEventUint64V2:parseRunEventUint64V2',
+    ],
+    [
+      './programme-capture-supervisor-crypto-v1.js',
+      'parseProgrammeCaptureSupervisorEd25519SignatureV1:parseProgrammeCaptureSupervisorEd25519SignatureV1',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [RUN_EVENT_TRANSITION_ENTRY, new Map([
+    ['./contracts.js', 'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,deepFreeze:deepFreeze'],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'PROGRAMME_CAPTURE_SUPERVISOR_CONTROLLER_STATE_HEAD_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_CONTROLLER_STATE_HEAD_DOMAIN_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_STATE_DIGEST_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_STATE_DIGEST_DOMAIN_V2,denseRunEventArrayV2:denseRunEventArrayV2,parseRunEventDigestV2:parseRunEventDigestV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-codec-v2.js',
+      'parseProgrammeCaptureSupervisorRunEventV2:parseProgrammeCaptureSupervisorRunEventV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
+  [RUN_EVENT_VERIFIER_ENTRY, new Map([
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze,snapshotUint8Array:snapshotUint8Array',
+    ],
+    [
+      './programme-capture-supervisor-authority-config-v2.js',
+      'parseProgrammeCaptureSupervisorAuthorityConfigurationBlobV2:parseProgrammeCaptureSupervisorAuthorityConfigurationBlobV2,parseProgrammeCaptureSupervisorAuthorityConfigurationV2:parseProgrammeCaptureSupervisorAuthorityConfigurationV2,programmeCaptureSupervisorAuthorityGenesisHeadDigestV2:programmeCaptureSupervisorAuthorityGenesisHeadDigestV2',
+    ],
+    [
+      './programme-capture-supervisor-authority-transition-v2.js',
+      'verifyProgrammeCaptureSupervisorAuthorityTransitionV2:verifyProgrammeCaptureSupervisorAuthorityTransitionV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-body-v2.js',
+      'parseProgrammeCaptureSupervisorPreviousGlobalV2:parseProgrammeCaptureSupervisorPreviousGlobalV2,parseProgrammeCaptureSupervisorPreviousRunV2:parseProgrammeCaptureSupervisorPreviousRunV2,parseProgrammeCaptureSupervisorPriorResourceStateV2:parseProgrammeCaptureSupervisorPriorResourceStateV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-codec-v2.js',
+      'parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2:parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2,programmeCaptureSupervisorRunEventSigningPayloadV2:programmeCaptureSupervisorRunEventSigningPayloadV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_MAX_BYTES_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_MAX_BYTES_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_VALIDATION_DIGEST_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_VALIDATION_DIGEST_DOMAIN_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_HISTORY_DIGEST_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_HISTORY_DIGEST_DOMAIN_V2,PROGRAMME_CAPTURE_SUPERVISOR_RUN_HISTORY_VALIDATION_DIGEST_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_HISTORY_VALIDATION_DIGEST_DOMAIN_V2,closedRunEventRecordV2:closedRunEventRecordV2,denseRunEventArrayV2:denseRunEventArrayV2,parseRunEventDigestV2:parseRunEventDigestV2,parseRunEventOpaqueIdV2:parseRunEventOpaqueIdV2,parseRunEventUint64V2:parseRunEventUint64V2',
+    ],
+    [
+      './programme-capture-supervisor-crypto-v1.js',
+      'programmeCaptureSupervisorUtf8Sha256V1:programmeCaptureSupervisorUtf8Sha256V1,verifyProgrammeCaptureSupervisorEd25519SignatureV1:verifyProgrammeCaptureSupervisorEd25519SignatureV1',
+    ],
+    [
+      './programme-capture-supervisor-run-event-transition-v2.js',
+      'deriveProgrammeCaptureSupervisorRunStateV2:deriveProgrammeCaptureSupervisorRunStateV2,programmeCaptureSupervisorControllerStateHeadDigestV2:programmeCaptureSupervisorControllerStateHeadDigestV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
 ]);
 const FORBIDDEN_AMBIENT = new Set([
-  'Bun', 'Date', 'Deno', 'Function', 'Math', 'WebSocket', 'Worker', 'createRequire',
+  'Bun', 'Deno', 'Function', 'Math', 'WebSocket', 'Worker', 'createRequire',
   'crypto', 'eval', 'fetch', 'generateKeyPair', 'global', 'globalThis', 'module',
   'performance', 'privateKey', 'process', 'require', 'setInterval', 'setTimeout', 'sign',
 ]);
 
 describe('programme capture supervisor capability closure V2', () => {
   it('allows only closed parsing, normalization, freezing, and digest imports', () => {
-    for (const path of [CONFIG_ENTRY, TRANSITION_ENTRY]) {
+    for (const path of V2_ENTRIES) {
       expect(() => verifyCapabilityClosure(path, readFileSync(path, 'utf8'))).not.toThrow();
     }
   });
@@ -55,6 +158,7 @@ describe('programme capture supervisor capability closure V2', () => {
       "import * as net from 'node:net'; void net;",
       "import { execFileSync } from 'node:child_process'; void execFileSync;",
       "import { sign } from 'node:crypto'; void sign;",
+      "import { verify } from 'node:crypto'; void verify;",
       "await import('node:http');", "require('node:https');",
       "createRequire(import.meta.url)('node:fs');", "process.getBuiltinModule('fs');",
       "globalThis.fetch('https://example.invalid');", "Function('return fetch')();",
@@ -62,7 +166,7 @@ describe('programme capture supervisor capability closure V2', () => {
       'Date.now();', 'Math.random();', 'crypto.getRandomValues(new Uint8Array(1));',
       "export { readFileSync } from 'node:fs';",
     ];
-    for (const path of [CONFIG_ENTRY, TRANSITION_ENTRY]) {
+    for (const path of V2_ENTRIES) {
       const source = readFileSync(path, 'utf8');
       for (const mutant of mutants) {
         expect(() => verifyCapabilityClosure(path, `${source}\n${mutant}\n`)).toThrow();
@@ -108,6 +212,8 @@ function verifyCapabilityClosure(path: string, source: string): void {
     if (ts.isElementAccessExpression(node) && node.argumentExpression
       && staticString(node.argumentExpression) === 'constructor') fail('constructor');
     if (ts.isIdentifier(node) && FORBIDDEN_AMBIENT.has(node.text)) fail(`ambient ${node.text}`);
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+      && node.expression.text === 'Date' && node.name.text === 'now') fail('clock');
     ts.forEachChild(node, visit);
   };
   visit(tree);

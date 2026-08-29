@@ -19,6 +19,17 @@ const ED25519_SPKI_BYTES = 44;
 const ED25519_SIGNATURE_BYTES = 64;
 const MAX_SIGNING_PAYLOAD_BYTES = 131_072;
 
+export function programmeCaptureSupervisorUtf8Sha256V1(
+  value: unknown,
+  maximumBytes = MAX_SIGNING_PAYLOAD_BYTES,
+): string {
+  if (typeof value !== 'string' || !Number.isSafeInteger(maximumBytes)
+    || maximumBytes < 1 || Buffer.byteLength(value, 'utf8') > maximumBytes) {
+    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_UTF8_HASH_INPUT_INVALID');
+  }
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
 export function parseProgrammeCaptureSupervisorEd25519SignatureV1(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{86}$/.test(value)) {
     throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_SIGNATURE_INVALID');

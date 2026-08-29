@@ -3,6 +3,7 @@
 import { APPROVED_NPM_REGISTRY, parseHarnessConfig } from './contracts.js';
 import {
   PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1,
+  PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
   PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
 } from './programme-capture-protected-paths-v1.js';
 
@@ -41,6 +42,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'README.md',
     'coding-harness/__tests__/m0-authority.test.ts',
     ...PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
+    ...PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
     'coding-harness/__tests__/programme-envelope-v5.test.ts',
     'coding-harness/__tests__/programme-policy-v5.test.ts',
     'coding-harness/__tests__/programme-v5-post-historical-paths.ts',

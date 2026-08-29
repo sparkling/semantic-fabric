@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import { PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 } from
   '../src/programme-capture-protected-paths-v1.js';
+import { PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1 } from
+  '../src/programme-capture-protected-paths-v1.js';
 import { PROGRAMME_V5_POST_HISTORICAL_PATHS } from './programme-v5-post-historical-paths.js';
 
 const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,6 +27,7 @@ const M0_AUTHORITY_PATHS = [
   '.harness/mcp-policy.json',
   'coding-harness/__tests__/m0-authority.test.ts',
   ...PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
+  ...PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
   'coding-harness/__tests__/programme-envelope-v5.test.ts',
   'coding-harness/__tests__/programme-policy-v5.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
@@ -47,6 +50,11 @@ const M0_AUTHORITY_PATHS = [
   'coding-harness/src/programme-capture-supervisor-log-proof-codec-v1.ts',
   'coding-harness/src/programme-capture-supervisor-log-proof-v1.ts',
   'coding-harness/src/programme-capture-supervisor-merkle-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-run-event-body-v2.ts',
+  'coding-harness/src/programme-capture-supervisor-run-event-codec-v2.ts',
+  'coding-harness/src/programme-capture-supervisor-run-event-contracts-v2.ts',
+  'coding-harness/src/programme-capture-supervisor-run-event-transition-v2.ts',
+  'coding-harness/src/programme-capture-supervisor-run-event-verifier-v2.ts',
   'crates/sf-bench/config/performance-scenarios-v1.tsv',
   'crates/sf-bench/src/bin/sf-performance-receipt.rs',
   'crates/sf-bench/src/driver.rs',

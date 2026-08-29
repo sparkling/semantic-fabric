@@ -31,10 +31,11 @@ receiving those bytes. Predicting that index would create a circular or
 crash-sensitive contract. V2 separates the service's canonical decimal event
 sequence from the transparency log's canonical decimal leaf index.
 
-This is an additive evidence/control-plane decision. It does not rewrite the
-semantic-fabric compiler, query runtime, federation architecture, product goals,
-or historical harness meanings. Local protocol fixtures remain development
-evidence and can never stand in for independently administered deployment.
+The committed provider-free V2 configuration, configuration-adjacency, signed
+event, and complete-run-history modules implement canonical structural,
+signature, supplied-reference, lifecycle, and resource-adjacency checks only.
+They remain nonauthorizing. This additive evidence/control-plane decision does
+not rewrite product goals, runtime architecture, or historical harness meanings.
 
 ## Context and threat model
 
@@ -128,11 +129,11 @@ One serializable operation must atomically:
 6. update both run and resource state before any bytes are returned or published.
 
 Database uniqueness constrains both the project/run key and every active member
-of the runner's enrolled conflict set. Enrollment binds one canonical physical-
-parent identity and the exact CPU, NUMA, thermal, storage, and other shared
-resource overlap keys that must be exclusive. Aliases, multiple enrollments, or
-nominally distinct partitions cannot establish concurrency safety unless their
-signed conflict sets intersect and every intersection is locked. Preventing
+of the runner's enrolled conflict set. Each closed set contains 1–64 sorted,
+unique resource IDs, includes its canonical physical parent, and binds the exact
+runner-enrollment-record digest before its domain-separated conflict-set digest.
+Aliases or nominally distinct partitions cannot establish concurrency safety
+unless their signed sets intersect and every intersection is locked. Preventing
 duplicate run IDs or one resource digest alone is insufficient. Signing before
 durable state, using best-effort deduplication, or updating run/event/resource
 rows in separate transactions is nonconforming.
@@ -292,15 +293,14 @@ claim-registered-v2                     runSequence 0
   -> capture-final-witness-v2             runSequence 4 (required for success)
 ```
 
-Before attempt start, an authenticated failure uses the distinct
-`capture-run-terminal-v2` event at the next run sequence and ends the run. Its
-closed body requires `terminalStage` (`registration`, `pre-lease`, or
-`leased-pre-start`), a domain-separated enumerated `outcomeCode`, current state
-head and prior-event digest, and explicit nullable lease/fence references. It
-requires null attempt, capture, output, and cleanup fields and forbids start-only
-payload. Only the same authenticated and authorized project principal can spend
-a registered run; invalid or cross-namespace requests fail without revealing or
-mutating it. A post-start failure never uses this type.
+Before attempt start, an authenticated failure uses `capture-run-terminal-v2` at
+the next run sequence and ends the run. Registration admits only changed-replay
+or authenticated-denial; pre-lease admits admission, pre-review, runner,
+policy, or internal failure; leased-pre-start admits expiry, admission revocation,
+preflight, or internal failure, with every wire code carrying the `-v2` suffix.
+The closed body binds current state/prior event, nullable lease/fence references,
+and, only after lease, `released-unstarted` or `quarantined` evidence. Attempt,
+capture, output, and cleanup remain null; post-start failure never uses this type.
 
 Before a lease, the service verifies a one-use admission challenge, enrolled
 runner key/session/boot possession, fresh typed positive host evidence, exact
@@ -313,7 +313,7 @@ An authenticated denial, changed replay, admission/pre-review failure, or lease
 expiry may append that pre-start terminal event and permanently spend the run.
 A lease grant binds the exact project principal,
 claim/registration, runner enrollment/session/resource, admission, pre-review,
-lease ID, resource-scoped fence, service-issued/not-after times,
+lease ID, resource-scoped fence, chronologically ordered canonical service-issued/not-after instants,
 `maxAttempts: 1`, and explicit `renew: false`, `releaseForReuse: false`,
 `reassign: false`, `reclaim: false`, and `retry: false` policy.
 
@@ -332,14 +332,14 @@ executing. A token merely present in a record is not fencing. Without durable
 launcher and output-sink enforcement, `resourceFencingVerified` remains false
 and no launch capability exists.
 
-Every committed start has exactly one `capture-attempt-terminal-v2`, including
-timeout, runner loss, missing output, or cleanup failure. That closed body
-requires the start/attempt/fence, process/egress/lease/resource disposition,
-and explicit nullable output/capture/final-state fields. A successful sealed or
-import-eligible run requires the next `capture-final-witness-v2`, binding the
-terminal event, exact frozen envelope, replay and post-review digests. A failed
-run may also carry one but never needs it to remain terminal. Neither form
-grants import, promotion, or release authority.
+Every committed start has exactly one `capture-attempt-terminal-v2`. Its closed
+outcome-to-disposition matrix binds timeout, runner loss, missing output,
+cleanup failure, egress violation, and fence invalidation to compatible
+process/egress/output/cleanup/resource evidence. Unsafe or incomplete cleanup
+cannot release a resource. A successful sealed or import-eligible run requires
+the next `capture-final-witness-v2`, binding the terminal event, exact frozen
+envelope, replay, and post-review digests. A failed run may carry one but never
+needs it to remain terminal; neither form grants import, promotion, or release.
 
 ### 5. Admit positive controller transitions only through typed composites
 
