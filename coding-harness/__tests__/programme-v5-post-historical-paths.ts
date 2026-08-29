@@ -11,6 +11,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-state-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-capabilities-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-kat-v1.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',

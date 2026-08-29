@@ -46,6 +46,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/__tests__/programme-capture-state-v1.test.ts',
     'coding-harness/__tests__/programme-capture-supervisor-capabilities-v1.test.ts',
     'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
+    'coding-harness/__tests__/programme-capture-supervisor-kat-v1.test.ts',
     'coding-harness/__tests__/programme-capture-task-v1.test.ts',
     'coding-harness/__tests__/programme-envelope-v5.test.ts',
     'coding-harness/__tests__/programme-policy-v5.test.ts',

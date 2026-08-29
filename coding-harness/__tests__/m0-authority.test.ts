@@ -28,6 +28,7 @@ const M0_AUTHORITY_PATHS = [
   'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-capabilities-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-kat-v1.test.ts',
   'coding-harness/__tests__/programme-envelope-v5.test.ts',
   'coding-harness/__tests__/programme-policy-v5.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
