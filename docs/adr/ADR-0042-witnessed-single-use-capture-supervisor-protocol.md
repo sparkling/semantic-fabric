@@ -204,8 +204,8 @@ truncated, or stale recovery state fails closed and can never reset to genesis.
 A consumed tuple remains permanently ineligible under every future anchor. The
 canonical authority-configuration history starts at the independently pinned
 genesis configuration, not at the first rotation. Every closed configuration
-record contains a canonical uint64-decimal `configurationEpoch` and the complete
-service, log, witness, initialization-anchor, runner, key, roster, policy, and
+record contains a canonical uint64-decimal `configurationEpoch`, the sole roster
+epoch for every identity it binds, plus the complete service, log, witness, initialization-anchor, runner, key, roster, policy, and
 deployment-attestation identities. Genesis alone has typed empty predecessor
 sentinels. Its nonzero head digest is derived under
 `semantic-fabric/programme-capture/supervisor-authority-genesis-head-v2` from its
@@ -234,8 +234,8 @@ the final checkpoint and semantic receipt, complete run/resource high-water
 digest, new anchor root/policy and roster, and replacement deployment attestation.
 
 The successor configuration digest is computed first from the exact predecessor
-head. The transition event then binds that successor digest, its own fixed global
-sequence, and the same predecessor head. The successor configuration never embeds
+head. The transition event then binds that successor digest, the fixed global
+sequence allocated by that transaction, and the same predecessor head. The successor configuration never embeds
 the digest of the transition event that activates it. The published event plus its quorum receipt is the
 sole activation record; only then does `{successor configuration digest,
 transition-event digest}` become the new head. Exact read-only recovery by
@@ -418,6 +418,9 @@ This ADR remains proposed, and no positive transition is admissible, until:
 
 ## Explicit nonclaims
 
+A provider-free transition codec proves only exact configuration adjacency. It
+does not prove prior global semantic state, full historical roster freshness,
+old-policy quorum, publication, or activation.
 Even after implementation, evidence is limited to the configured principals,
 policies, keys, service transaction, log, witnesses, runner agent, and proved
 checkpoint. It does not prove secure or accurate service time; physical host,
