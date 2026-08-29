@@ -80,10 +80,28 @@ executing a process or consulting the filesystem, network, model, or provider.
 The exact-host smoke renders, parses, and replays the record only in memory; no
 durable writer or importer exists.
 
+Commit `9282e60` adds a caller-supplied expectation for the existing closed
+runtime-ELF dynamic-tag/search/flag policy. The holder captures ID
+`elf64-le-x86_64-closed-dynamic-tags-safe-search-flags-v1` and implementation-
+source digest
+`cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a`
+only after all sealed objects and their static dependency graph validate. Exact
+equality is required before prepared-probe construction and again immediately
+before the runner; ID or digest drift returns without invoking it. The exact
+native diagnostic maintains a separate literal, but the API authenticates no
+reviewer. The actual pair remains private in-memory holder/observation metadata
+and is not serialized. Receipt V1's schema and canonical serialization remain
+unchanged with `runtime-elf-policy-replay=not-attested`, so this satisfies no artifact,
+replay, provenance, admission or release gate.
+
 This does not accept this ADR. Discovery remains prior and unauthorized; the
 artifact is not executed; relocation, symbol/version, initialization, `dlopen`,
-NSS, VDSO and closure completeness remain unproven. The loader consumes tmpfs
-copies sourced from sealed memfds, not the original held inode capabilities.
+NSS, VDSO and closure completeness remain unproven. The digest detects byte drift
+in five embedded policy sources; it does not classify changes, prove review, or
+bind compiled bytes, configuration, dependencies or toolchain. Opaque GNU-
+property, hash, symbol, relocation, version, TLS and cross-table payload semantics
+remain unproved. The loader
+consumes tmpfs copies sourced from sealed memfds, not the original held inode capabilities.
 Bubblewrap's host PT_INTERP/DSO/cache/preload/LSM closure is unbound, and kernel,
 bubblewrap, glibc, copy and mount semantics are trusted. There is no final FD
 inventory, target seccomp/syscall trace, aggregate cgroup process/memory bound or

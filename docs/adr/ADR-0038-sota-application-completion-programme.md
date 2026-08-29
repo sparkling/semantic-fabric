@@ -325,11 +325,32 @@ new view to equal the recorded view. It performs no process, filesystem,
 network, model, or provider call, and it never recreates the live probe event.
 The exact-host workflow renders, parses, and replays this record in memory only.
 
+Commit `9282e60` checks that live path against a caller-supplied expectation for
+the closed runtime-ELF dynamic-tag/search/flag policy without adding a second
+allowlist or reparsing the immutable object bytes.
+Only after every role-specific object and the static `DT_NEEDED` graph validate,
+the holder records policy ID
+`elf64-le-x86_64-closed-dynamic-tags-safe-search-flags-v1` and the exact five-
+source implementation digest
+`cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a`.
+The exact native diagnostic maintains a separate literal for that pair; the API
+authenticates no reviewer and accepts caller-provided expectations. Drift rejects
+before probe construction and is checked again during the immediate pre-run
+validation phase. The actual pair remains private in-memory holder/observation
+metadata and is not serialized. Receipt V1's schema and canonical serialization
+are unchanged and continue to record
+`runtime-elf-policy-replay=not-attested`.
+
 This is loader-resolution observation only. Candidate discovery remains prior and
 unauthorized; the artifact is not executed, and main-program, relocation,
 symbol/version, initialization, `dlopen`, NSS, VDSO and closure completeness are
-unproven. Bubblewrap copies from sealed memfds, so the loader does not consume the
-original held inode capabilities. Bubblewrap's own host PT_INTERP, DSO, cache,
+unproven. The digest detects any byte drift in five embedded policy sources; it
+does not classify a change, prove review, or bind compiled bytes, configuration,
+dependencies or toolchain. It also does not prove the opaque GNU-property, hash,
+symbol, relocation, version, TLS or cross-table payloads outside complete
+semantic validation. Bubblewrap copies from sealed
+memfds, so the loader does not consume the original held inode capabilities.
+Bubblewrap's own host PT_INTERP, DSO, cache,
 preload and LSM closure is not bound; the kernel, bubblewrap, glibc, copy and mount
 semantics remain trusted. There is no post-exec final-FD inventory, target seccomp
 or syscall trace, nor aggregate cgroup `pids.max`, memory or control-group kill;
