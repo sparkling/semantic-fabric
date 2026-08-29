@@ -204,11 +204,16 @@ truncated, or stale recovery state fails closed and can never reset to genesis.
 A consumed tuple remains permanently ineligible under every future anchor. The
 canonical authority-configuration history starts at the independently pinned
 genesis configuration, not at the first rotation. Every closed configuration
-record contains a canonical uint64-decimal `configurationEpoch`, predecessor-
-configuration and predecessor-transition digests (typed empty sentinels only at
-genesis), and the complete service, log, witness, initialization-anchor, runner,
-key, roster, policy, and deployment-attestation identities. A transition advances
-the epoch by exactly one and is itself a published, semantically witnessed event.
+record contains a canonical uint64-decimal `configurationEpoch` and the complete
+service, log, witness, initialization-anchor, runner, key, roster, policy, and
+deployment-attestation identities. Genesis alone has typed empty predecessor
+sentinels. Its nonzero head digest is derived under
+`semantic-fabric/programme-capture/supervisor-authority-genesis-head-v2` from its
+epoch and configuration digest. Every successor's `predecessor.configurationDigest`
+and `predecessor.headDigest` embed the exact active predecessor head; `headDigest`
+is that derived genesis head or the event digest that activated the predecessor.
+It never embeds the event that will activate itself. A transition advances the epoch by
+exactly one and is itself a published, semantically witnessed event.
 
 An anchor root, artifact, or policy cannot be replaced for an existing witness
 identity/key/roster epoch. V2 never migrates an old tuple or consumed-set snapshot
@@ -228,11 +233,15 @@ authorize another. The required old-policy quorum receipt binds those markers,
 the final checkpoint and semantic receipt, complete run/resource high-water
 digest, new anchor root/policy and roster, and replacement deployment attestation.
 
-The published transition event plus that quorum receipt is the sole activation
-record. Its digest and fixed global sequence define the new head. Exact read-only
-recovery by transition-request digest is mandatory; gathering the same signatures,
-storing the receipt, and materializing a local head are idempotent. A crash after
-one marker or a complete quorum can therefore finish only the bound successor.
+The successor configuration digest is computed first from the exact predecessor
+head. The transition event then binds that successor digest, its own fixed global
+sequence, and the same predecessor head. The successor configuration never embeds
+the digest of the transition event that activates it. The published event plus its quorum receipt is the
+sole activation record; only then does `{successor configuration digest,
+transition-event digest}` become the new head. Exact read-only recovery by
+transition-request digest is mandatory; gathering the same signatures, storing
+the receipt, and materializing that pair are idempotent. A crash after one marker
+or a complete quorum can therefore finish only the bound successor.
 There is no second controller-write authority and no alternate-successor recovery.
 A permanently unavailable successor leaves authority frozen by design.
 If a malicious service equivocates before quorum, intersection still prevents

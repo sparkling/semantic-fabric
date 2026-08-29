@@ -17,6 +17,8 @@ import { parseJsonWithoutDuplicateKeys } from './strict-json.js';
 export const PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_CONFIG_MAX_BYTES_V2 = 131_072;
 export const PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_CONFIG_DIGEST_DOMAIN_V2 =
   'semantic-fabric/programme-capture/supervisor-authority-configuration-digest-v2';
+export const PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_GENESIS_HEAD_DOMAIN_V2 =
+  'semantic-fabric/programme-capture/supervisor-authority-genesis-head-v2';
 
 const UINT64_DECIMAL_PATTERN = /^(?:0|[1-9][0-9]{0,19})$/;
 const MAX_UINT64 = 18_446_744_073_709_551_615n;
@@ -39,8 +41,8 @@ export interface ProgrammeCaptureSupervisorWitnessPolicyV2 {
 }
 
 type ConfigurationPredecessorV2 = Readonly<
-  | { kind: 'genesis'; configurationDigest: null; transitionDigest: null }
-  | { kind: 'transition'; configurationDigest: string; transitionDigest: string }
+  | { kind: 'genesis'; configurationDigest: null; headDigest: null }
+  | { kind: 'configuration-head'; configurationDigest: string; headDigest: string }
 >;
 
 export interface ProgrammeCaptureSupervisorAuthorityConfigurationV2 {
@@ -195,6 +197,20 @@ export function parseProgrammeCaptureSupervisorAuthorityConfigurationBlobV2(
   return parsed;
 }
 
+export function programmeCaptureSupervisorAuthorityGenesisHeadDigestV2(
+  value: unknown,
+): string {
+  const configuration = parseProgrammeCaptureSupervisorAuthorityConfigurationV2(value);
+  if (configuration.configurationEpoch !== '0' || configuration.predecessor.kind !== 'genesis') {
+    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_AUTHORITY_GENESIS_CONFIG_REQUIRED');
+  }
+  return digestValue({
+    domain: PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_GENESIS_HEAD_DOMAIN_V2,
+    configurationEpoch: configuration.configurationEpoch,
+    configurationDigest: configuration.configurationDigest,
+  });
+}
+
 function parseProject(value: unknown) {
   const input = closedRecord(value, 'supervisor project authority');
   assertExactKeys(input, [
@@ -304,24 +320,24 @@ function parsePrincipal(
 function parsePredecessor(value: unknown, configurationEpoch: string): ConfigurationPredecessorV2 {
   const input = closedRecord(value, 'supervisor authority configuration predecessor');
   assertExactKeys(input, [
-    'kind', 'configurationDigest', 'transitionDigest',
+    'kind', 'configurationDigest', 'headDigest',
   ], 'supervisor authority configuration predecessor');
   if (configurationEpoch === '0') {
     if (input.kind !== 'genesis' || input.configurationDigest !== null
-      || input.transitionDigest !== null) {
+      || input.headDigest !== null) {
       throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_PREDECESSOR_INVALID');
     }
-    return Object.freeze({ kind: 'genesis', configurationDigest: null, transitionDigest: null });
+    return Object.freeze({ kind: 'genesis', configurationDigest: null, headDigest: null });
   }
-  if (input.kind !== 'transition') {
+  if (input.kind !== 'configuration-head') {
     throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_PREDECESSOR_INVALID');
   }
   return Object.freeze({
-    kind: 'transition',
+    kind: 'configuration-head',
     configurationDigest: parseDigest(
       input.configurationDigest, 'predecessor configuration digest',
     ),
-    transitionDigest: parseDigest(input.transitionDigest, 'predecessor transition digest'),
+    headDigest: parseDigest(input.headDigest, 'predecessor authority head digest'),
   });
 }
 

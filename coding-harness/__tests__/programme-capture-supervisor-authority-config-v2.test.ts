@@ -5,8 +5,10 @@ import { describe, expect, it } from 'vitest';
 import {
   PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_CONFIG_DIGEST_DOMAIN_V2,
   PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_CONFIG_MAX_BYTES_V2,
+  PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_GENESIS_HEAD_DOMAIN_V2,
   parseProgrammeCaptureSupervisorAuthorityConfigurationBlobV2,
   parseProgrammeCaptureSupervisorAuthorityConfigurationV2,
+  programmeCaptureSupervisorAuthorityGenesisHeadDigestV2,
   serializeProgrammeCaptureSupervisorAuthorityConfigurationV2,
 } from '../src/programme-capture-supervisor-authority-config-v2.js';
 import { digestValue } from '../src/receipts.js';
@@ -19,14 +21,25 @@ describe('programme capture V2 provider-free supervisor authority configuration'
       configuration: body,
     }));
     expect(configurationDigest)
-      .toBe('58db018b7b0d1c20572cc4b586b1c4548ee6a1136c2c589d9258b1233c6f25db');
+      .toBe('19c06ca5059572bd5373679ad64fca5e7f90062d0f5962d5c2e0f43dcdb61433');
 
     const serialized = serializeProgrammeCaptureSupervisorAuthorityConfigurationV2({
       ...body, configurationDigest,
     });
-    expect(Buffer.byteLength(serialized, 'utf8')).toBe(7_237);
+    expect(Buffer.byteLength(serialized, 'utf8')).toBe(7_231);
     expect(digest(serialized))
-      .toBe('c29109f29525a6e42db72ce4604d448e0a28e20ad46d49764ccad0d38a717454');
+      .toBe('709a04a025a10b25739f02b806d5a87e6cb4921469f7af2d6b13d6ae4c906708');
+    const genesisHeadDigest = digest(canonicalOracle({
+      domain: 'semantic-fabric/programme-capture/supervisor-authority-genesis-head-v2',
+      configurationEpoch: '0', configurationDigest,
+    }));
+    expect(PROGRAMME_CAPTURE_SUPERVISOR_AUTHORITY_GENESIS_HEAD_DOMAIN_V2)
+      .toBe('semantic-fabric/programme-capture/supervisor-authority-genesis-head-v2');
+    expect(programmeCaptureSupervisorAuthorityGenesisHeadDigestV2({
+      ...body, configurationDigest,
+    })).toBe(genesisHeadDigest);
+    expect(genesisHeadDigest)
+      .toBe('24c22899e78b41d5e58151971e9a44e5dda0148428f6f4c4bba350f63f36d17d');
   });
 
   it('canonicalizes exact trust pins without granting runtime authority', () => {
@@ -92,27 +105,29 @@ describe('programme capture V2 provider-free supervisor authority configuration'
     }
     expect(() => validConfiguration({
       configurationEpoch: '1',
-      predecessor: { kind: 'genesis', configurationDigest: null, transitionDigest: null },
+      predecessor: { kind: 'genesis', configurationDigest: null, headDigest: null },
     })).toThrow(/PREDECESSOR_INVALID/);
-    expect(() => validConfiguration({
+    const successor = validConfiguration({
       configurationEpoch: '1',
       predecessor: {
-        kind: 'transition', configurationDigest: digest('prior-config'),
-        transitionDigest: digest('prior-transition'),
+        kind: 'configuration-head', configurationDigest: digest('prior-config'),
+        headDigest: digest('prior-head'),
       },
-    })).not.toThrow();
+    });
+    expect(() => programmeCaptureSupervisorAuthorityGenesisHeadDigestV2(successor))
+      .toThrow(/GENESIS_CONFIG_REQUIRED/);
     expect(() => validConfiguration({
       configurationEpoch: '0',
       predecessor: {
-        kind: 'transition', configurationDigest: digest('prior-config'),
-        transitionDigest: digest('prior-transition'),
+        kind: 'configuration-head', configurationDigest: digest('prior-config'),
+        headDigest: digest('prior-head'),
       },
     })).toThrow(/PREDECESSOR_INVALID/);
     expect(() => validConfiguration({
       configurationEpoch: '18446744073709551615',
       predecessor: {
-        kind: 'transition', configurationDigest: digest('prior-config'),
-        transitionDigest: digest('prior-transition'),
+        kind: 'configuration-head', configurationDigest: digest('prior-config'),
+        headDigest: digest('prior-head'),
       },
     })).not.toThrow();
   });
@@ -229,7 +244,7 @@ function validBody(overrides: Record<string, unknown> = {}): any {
     recordKind: 'supervisor-authority-configuration-v2',
     authority: 'development-only-no-promotion',
     configurationEpoch: '0',
-    predecessor: { kind: 'genesis', configurationDigest: null, transitionDigest: null },
+    predecessor: { kind: 'genesis', configurationDigest: null, headDigest: null },
     project: {
       projectAuthorityDigest: digest('project-authority'),
       principal: principal('project_client_20260829'),
