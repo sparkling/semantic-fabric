@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 const SOURCE_ROOT = fileURLToPath(new URL('../src/', import.meta.url));
 const CLAIM_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-claim-v1.ts');
 const CODEC_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-codec-v1.ts');
+const MERKLE_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-merkle-v1.ts');
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
   [CLAIM_ENTRY, new Map([
     ['@metaharness/harness', 'canonical:canonical'],
@@ -26,6 +27,11 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
     ['./receipts.js', 'digestValue:digestValue'],
     ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
   ])],
+  [MERKLE_ENTRY, new Map([
+    ['node:crypto', 'createHash:createHash'],
+    ['node:util/types', 'isProxy:isProxy'],
+    ['./contracts.js', 'SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asDenseArray:asDenseArray,assertExactKeys:assertExactKeys,snapshotUint8Array:snapshotUint8Array'],
+  ])],
 ]);
 const FORBIDDEN_AMBIENT = new Set([
   'Bun', 'Deno', 'Function', 'WebSocket', 'Worker', 'createRequire', 'eval', 'fetch',
@@ -34,7 +40,7 @@ const FORBIDDEN_AMBIENT = new Set([
 
 describe('programme capture supervisor capability closure V1', () => {
   it('allows only exact parser, digest, read, and detached-verification imports', () => {
-    for (const path of [CLAIM_ENTRY, CODEC_ENTRY]) {
+    for (const path of [CLAIM_ENTRY, CODEC_ENTRY, MERKLE_ENTRY]) {
       expect(() => verifyCapabilityClosure(path, readFileSync(path, 'utf8'))).not.toThrow();
     }
     const source = readFileSync(CLAIM_ENTRY, 'utf8');
@@ -53,7 +59,7 @@ describe('programme capture supervisor capability closure V1', () => {
       "Function('return fetch')();", "(async()=>{})['con' + 'structor']('return fetch')();",
       "export { readFileSync } from 'node:fs';",
     ];
-    for (const path of [CLAIM_ENTRY, CODEC_ENTRY]) {
+    for (const path of [CLAIM_ENTRY, CODEC_ENTRY, MERKLE_ENTRY]) {
       const source = readFileSync(path, 'utf8');
       for (const mutant of mutants) {
         expect(() => verifyCapabilityClosure(path, `${source}\n${mutant}\n`)).toThrow();
