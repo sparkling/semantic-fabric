@@ -59,16 +59,14 @@ concurrent exclusion within that one root only: it is owner-deletable, has no
 external append-only witness or rollback resistance, and is not the future
 runner lease. No real project claim has been minted on this ineligible host.
 
-Commit `99fa2e1` adds the next development-only seam: a bounded canonical claim-registration request and acknowledgement with a detached Ed25519 signature in a
-canonical envelope. Verification receives the trusted key/fingerprint,
-supervisor/log identities, epoch, sequence, previous checkpoint, and rooted claim authority independently of the envelope. It rejects a bad key or
-signature before Git re-attestation, then reads the rooted claim, checks every
-binding, rereads it, and requires byte identity. Signature-verified validation creation and provider-free replay rerun that verifier and bind the exact envelope bytes.
-This proves only trusted-key/message/rooted-claim/reference binding. The modules
-have no signer, transport, writer, lease, runner, attempt, state, or capture
-capability; rollback, append-only/fork/global-order resistance, and independent
-administration remain unproved. No real acknowledgement was issued. The rebuild was byte-identical, 102 harness files passed (741 tests, two expected skips), and
-independent native Codex and Claude reviews found no P0/P1 issue.
+Commit `99fa2e1` adds the development-only bounded canonical registration request, detached-signature acknowledgement, validation, and replay seam.
+Commit `92f5376` freezes RFC 8032 section 7.1 Test 1 with a public test-only seed that is never a runtime key. Fixed claim/request fields and digest,
+acknowledgement fields/digest, exact signing bytes/digest/signature, and exact canonical envelope bytes/digest are pinned.
+The fixed SPKI and envelope traverse the production verifier code path; wrong request/ack digest domains, empty or changed payloads, and changed signatures fail.
+Verification still receives the trust/log/checkpoint and rooted-claim authority independently, rejects bad keys/signatures before Git work, and rereads the exact claim.
+This proves only trusted-key/message/rooted-claim/reference binding. Receipt `97ca5d7…c36606f` is deterministic; 103 harness files pass (742 tests, two skips).
+The modules have no production signer, transport, writer, persistence/log, lease, runner, attempt, state, or capture capability; append-only/fork/global-order and independent administration remain unproved.
+No real acknowledgement was issued. The next critical boundary is independently administered append-only registration/lease authority plus controlled-runner provisioning and admission.
 
 The first claim consumer before host admission is now implemented: it materializes the exact claimed commit, from either an exact primary or bare
 controller store, into a claim-keyed private source root disjoint from both

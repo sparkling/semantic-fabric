@@ -419,14 +419,12 @@ Performance production and comparison machinery exists, but no controlled
 runner profile, baseline, candidate, or measured numbers exist. Commit
 `f2cc800` makes future V5/V6 patch tasks consume exact tracked `Cargo.lock` bytes
 while retaining a task-blob-bound exception for two historical fixtures. It creates no
-measurement authority. Commit `99fa2e1` adds a bounded canonical registration
-request and acknowledgement with a detached Ed25519 signature. Signature-
-verified validation and replay receive trust/log references independently of the envelope, reverify the signature and
-rooted claim, and bind the exact envelope bytes. It has no signer, persistence,
-lease, runner, attempt, state, or capture capability; rollback, append-only/fork/global-order resistance and independent administration remain unproved. Proposed
-[ADR-0041](ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
-keeps capture in a sibling transaction; no real acknowledgement, controlled
-runner/profile, receipt, replayed capture, baseline, or measurement exists.
+measurement authority. Commit `99fa2e1` adds the non-authorizing registration verifier; `92f5376` freezes RFC 8032 section 7.1 Test 1 and static request, acknowledgement, signing-payload, signature, and envelope vectors.
+The public test-only seed is never a runtime key. The fixed SPKI and envelope traverse the production verifier code path; digest-domain substitutions and payload/signature mutations fail.
+The deterministic controller receipt is `97ca5d7…c36606f`; 103 harness files pass (742 tests, two expected skips).
+There is no production signer, persistence/log, independent administration, lease, runner, attempt, state, or capture authority; rollback, append-only/fork/global-order resistance remain unproved.
+Proposed [ADR-0041](ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) owns the positive-authority implementation and keeps capture in a sibling transaction.
+No real acknowledgement, controlled runner/profile, receipt, replayed capture, baseline, or measurement exists.
 
 M0 is not complete until actual binary-artifact closure, SBOM, reproducibility/minimality/admission, and controlled performance evidence exist. Exact commit
 `ad94cdb` replayed the then-current deterministic tranche byte-identically in

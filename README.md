@@ -195,7 +195,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 741 tests across 102 files; two
+- The versioned engineering harness passes 742 tests across 103 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -256,15 +256,15 @@ tests reject links, extras, replacement, worktree drift and output injection.
 These local views prove no external witness, rollback resistance, provenance,
 host admission, build, receipt, baseline, or measurement.
 
-Commit `99fa2e1` adds a bounded canonical claim-registration request and an
-acknowledgement with a detached Ed25519 signature in a canonical envelope,
-signature-verified validation creation, and provider-free replay. The trusted
-key, supervisor/log identities, epoch, sequence, checkpoint, and claim root are
-supplied independently of the envelope; key/signature failure precedes Git work,
-then exact rooted-claim bindings are checked across two reads. The exact envelope
-bytes are digest-bound. There is no signer, transport, durable log, independent
-administration, lease/attempt/capture authority, or rollback/fork/global-order
-proof, and no real acknowledgement. All 102 harness files pass (741 tests, two expected skips) with independent native Codex and Claude PASS reviews.
+Commits `99fa2e1` and `92f5376` add the non-authorizing supervisor verifier and
+freeze RFC 8032 section 7.1 Test 1 with a public test-only seed that is never a
+runtime key. Static vectors pin fixed claim/request fields and digest,
+acknowledgement fields/digest, exact signing bytes/digest/signature, and exact
+canonical envelope bytes/digest. The fixed SPKI and envelope traverse the
+production verifier; wrong request/ack digest domains, empty or changed payloads,
+and changed signatures fail. Receipt `97ca5d7…c36606f` is deterministic; 103 files
+pass (742 tests, two skips). There is no production signer, transport, durable
+persistence/log, independent administration, lease/attempt/state/capture authority, or real acknowledgement.
 
 Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
 reproducibility. Final two-builder agreement must pre-register distinct trust
@@ -327,7 +327,7 @@ RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
 inventory-authoritative execution runners (`a3efb32`), plus the sealed mapping
 receipt lineage (`33e202b`, `81caec2`, `a84aa05`) and the non-authorizing
-supervisor-registration seam (`99fa2e1`). The evidence matrix now contains
+supervisor registration and fixed wire KAT (`99fa2e1`, `92f5376`). The evidence matrix now contains
 74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
 v3 receipts bind immutable captured inputs to typed SQLite and required-live
 PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
@@ -446,7 +446,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID claim, claim-rooted source, and canonical signed-envelope supervisor-registration verifier exist. The verifier proves key/message/claim/reference binding only. There is still no independently administered append-only witness, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID claim, claim-rooted source, canonical signed-envelope supervisor verifier, and fixed wire KAT exist. The verifier proves key/message/claim/reference binding only. There is still no independently administered append-only witness, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next is independently administered append-only registration/lease authority plus controlled-runner admission |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
