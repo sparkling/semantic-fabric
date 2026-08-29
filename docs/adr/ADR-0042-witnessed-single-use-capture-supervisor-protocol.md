@@ -172,8 +172,10 @@ view. It does not understand lease semantics and could cosign a consistent tree
 containing two conflicting starts. Authoritative mode therefore pins one fixed
 checkpoint-witness roster and one fixed semantic-witness roster with explicit
 Byzantine threshold `f`. Each uses at least `3f+1` separately administered
-witnesses and requires at least `2f+1` signatures, so any two valid quorums
-intersect in more than `f` members. The supervisor is not a roster member. A
+witnesses. For roster size `N` and quorum `Q`, it requires `Q >= 2f+1` and
+`2Q > N+f`; the latter condition remains mandatory when `N` exceeds `3f+1`, so
+any two valid quorums intersect in more than `f` members. The supervisor is not
+a roster member. A
 semantic witness privately verifies the service signature, public commitment
 proof, prior semantic receipt, state transition, run and every overlapping-
 resource high-water mark, runner identity, and fence, then atomically persists
