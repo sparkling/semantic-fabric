@@ -284,7 +284,7 @@ fn parses_a_closed_root_view_and_preserves_needed_order() {
     let policy = runtime_elf_policy_sha256();
     assert_eq!(
         policy,
-        "b59a0e71b6885be8ed1fb06f751955398274b675eee9d612f239d19f99ed9deb"
+        "cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a"
     );
     assert_eq!(policy.len(), 64);
     assert!(policy

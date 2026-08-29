@@ -53,6 +53,29 @@ pub fn runtime_elf_policy_sha256() -> String {
     format!("{:x}", digest.finalize())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeElfPolicyIdentity {
+    id: &'static str,
+    sha256: String,
+}
+
+impl RuntimeElfPolicyIdentity {
+    pub(crate) fn id(&self) -> &'static str {
+        self.id
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
+pub(crate) fn runtime_elf_policy_identity() -> RuntimeElfPolicyIdentity {
+    RuntimeElfPolicyIdentity {
+        id: RUNTIME_ELF_POLICY,
+        sha256: runtime_elf_policy_sha256(),
+    }
+}
+
 const MAX_ELF_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const MAX_PROGRAM_HEADERS: usize = 128;
 const MAX_DYNAMIC_ENTRIES: usize = 256;

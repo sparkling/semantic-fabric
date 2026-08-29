@@ -1,5 +1,5 @@
 use super::{PreparedRuntimeObservation, PREPARED_LOADER_POLICY};
-use crate::binary_artifact_receipt::runtime_elf::RuntimeElfRole;
+use crate::binary_artifact_receipt::runtime_elf::{runtime_elf_policy_identity, RuntimeElfRole};
 use crate::binary_artifact_receipt::runtime_linkage::prepared_receipt::{
     PreparedRuntimeReceipt, RecordedBindingIdentity, RecordedObjectIdentity,
     RecordedPreparedRuntimeObservation, RecordedRuntimeRole,
@@ -11,6 +11,12 @@ impl PreparedRuntimeObservation {
     ) -> Result<PreparedRuntimeReceipt, String> {
         if self.loader_policy != PREPARED_LOADER_POLICY {
             return Err("prepared observation loader policy drift".to_owned());
+        }
+        let runtime_elf_policy = runtime_elf_policy_identity();
+        if self.runtime_elf_policy != runtime_elf_policy.id()
+            || self.runtime_elf_policy_sha256 != runtime_elf_policy.sha256()
+        {
+            return Err("prepared observation runtime ELF policy drift".to_owned());
         }
         let bwrap_path = self
             .bwrap_path

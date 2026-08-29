@@ -10,10 +10,16 @@ use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_
     ExpectedBwrapIdentity, PreparedRuntimeProbe, PREPARED_LOADER_POLICY,
 };
 use crate::binary_artifact_receipt::runtime_linkage::prepared_receipt::{parse, render};
+use crate::binary_artifact_receipt::RUNTIME_ELF_POLICY;
 
 fn prepare_fixture(fixture: &Fixture) -> PreparedRuntimeProbe<'_> {
     let held = hold_runtime_inputs(&fixture.pair, &fixture.plan, &fixture.view).unwrap();
-    PreparedRuntimeProbe::prepare_with_test_tool(held, fixture_tool_identity(fixture)).unwrap()
+    PreparedRuntimeProbe::prepare_with_test_tool(
+        held,
+        fixture_tool_identity(fixture),
+        fixture_runtime_elf_policy(),
+    )
+    .unwrap()
 }
 
 fn fixture_tool_identity(fixture: &Fixture) -> ExpectedBwrapIdentity {
@@ -216,7 +222,12 @@ fn prepared_probe_requires_an_independent_exact_tool_expectation() {
         "test-fixture-static-bytes-v1",
     )
     .unwrap();
-    let error = PreparedRuntimeProbe::prepare_with_test_tool(held, wrong_digest).unwrap_err();
+    let error = PreparedRuntimeProbe::prepare_with_test_tool(
+        held,
+        wrong_digest,
+        fixture_runtime_elf_policy(),
+    )
+    .unwrap_err();
     assert!(error.contains("authorized identity"), "{error}");
 
     let path_fixture = Fixture::new("prepared-tool-path-expectation");
@@ -229,7 +240,12 @@ fn prepared_probe_requires_an_independent_exact_tool_expectation() {
         "test-fixture-static-bytes-v1",
     )
     .unwrap();
-    let error = PreparedRuntimeProbe::prepare_with_test_tool(held, wrong_path).unwrap_err();
+    let error = PreparedRuntimeProbe::prepare_with_test_tool(
+        held,
+        wrong_path,
+        fixture_runtime_elf_policy(),
+    )
+    .unwrap_err();
     assert!(error.contains("path differs"), "{error}");
 
     assert!(ExpectedBwrapIdentity::new(
@@ -258,6 +274,8 @@ fn prepared_observation_binds_policy_tool_inputs_and_raw_output() {
     let observation = probe.finish_for_test(stdout.clone(), Vec::new()).unwrap();
 
     assert_eq!(observation.loader_policy, PREPARED_LOADER_POLICY);
+    assert_eq!(observation.runtime_elf_policy, RUNTIME_ELF_POLICY);
+    assert_eq!(observation.runtime_elf_policy_sha256.len(), 64);
     assert_eq!(observation.view.resolved_objects().len(), 1);
     assert_eq!(observation.bindings.len(), 3);
     assert_eq!(observation.bwrap_byte_length, 29);
@@ -433,10 +451,22 @@ fn prepared_probe_observes_the_current_release_profile_binary_from_sealed_source
         "ubuntu-24.04-bubblewrap-0.9.0-main-elf-only-host-dynamic-closure-unbound-v1",
     )
     .unwrap();
-    let observation = held.execute_prepared(expected_bwrap).unwrap();
+    let expected_runtime_elf_policy = ExpectedRuntimeElfPolicy::new(
+        "elf64-le-x86_64-closed-dynamic-tags-safe-search-flags-v1",
+        "cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a",
+    )
+    .unwrap();
+    let observation = held
+        .execute_prepared(expected_bwrap, expected_runtime_elf_policy)
+        .unwrap();
 
     assert_eq!(observation.view, view);
     assert_eq!(observation.loader_policy, PREPARED_LOADER_POLICY);
+    assert_eq!(observation.runtime_elf_policy, RUNTIME_ELF_POLICY);
+    assert_eq!(
+        observation.runtime_elf_policy_sha256,
+        "cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a"
+    );
     assert_eq!(
         observation.bindings.len(),
         view.resolved_objects().len() + 2

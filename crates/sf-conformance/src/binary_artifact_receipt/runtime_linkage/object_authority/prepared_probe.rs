@@ -21,10 +21,12 @@ use super::{HeldRuntimeInputs, HeldRuntimeObject, RuntimeObjectIdentity};
 use crate::binary_artifact_receipt::runtime_linkage::MAX_PREPARED_SET_BYTES;
 use crate::binary_artifact_receipt::{process, runtime_elf::RuntimeElfRole};
 
+mod policy;
 mod receipt;
 mod tool;
 
 pub(super) use crate::binary_artifact_receipt::runtime_linkage::PREPARED_LOADER_POLICY;
+pub(super) use policy::{ExpectedBwrapIdentity, ExpectedRuntimeElfPolicy};
 
 const ARTIFACT_DESTINATION: &str = "/artifact";
 const FILE_MODE: u32 = 0o444;
@@ -32,42 +34,6 @@ const EXECUTABLE_MODE: u32 = 0o555;
 const ROOT_TMPFS_BYTES_TEXT: &str = "134217728";
 const MIN_TRANSFER_FD: libc::c_int = 64;
 const MAX_TRANSFER_FD: libc::c_int = 1023;
-const MAX_EXECUTABLE_POLICY_BYTES: usize = 128;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ExpectedBwrapIdentity {
-    path: PathBuf,
-    sha256: String,
-    byte_length: u64,
-    executable_policy: String,
-}
-
-impl ExpectedBwrapIdentity {
-    pub(super) fn new(
-        path: &Path,
-        sha256: &str,
-        byte_length: u64,
-        executable_policy: &str,
-    ) -> Result<Self, String> {
-        super::super::validate_absolute_path(path, "expected bubblewrap executable")?;
-        super::super::validate_sha256(sha256)?;
-        if byte_length == 0
-            || executable_policy.is_empty()
-            || executable_policy.len() > MAX_EXECUTABLE_POLICY_BYTES
-            || !executable_policy.bytes().all(|byte| {
-                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-._".contains(&byte)
-            })
-        {
-            return Err("expected bubblewrap identity is outside policy".to_owned());
-        }
-        Ok(Self {
-            path: path.to_path_buf(),
-            sha256: sha256.to_owned(),
-            byte_length,
-            executable_policy: executable_policy.to_owned(),
-        })
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PreparedBindingIdentity {
@@ -87,6 +53,7 @@ pub(super) struct PreparedRuntimeProbe<'a> {
     held: HeldRuntimeInputs<'a>,
     bwrap: tool::HeldBwrap,
     expected_bwrap: ExpectedBwrapIdentity,
+    expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
     bindings: Vec<ProbeBinding>,
     pub(super) arguments: Vec<OsString>,
 }
@@ -94,6 +61,8 @@ pub(super) struct PreparedRuntimeProbe<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PreparedRuntimeObservation {
     pub(super) loader_policy: &'static str,
+    pub(super) runtime_elf_policy: &'static str,
+    pub(super) runtime_elf_policy_sha256: String,
     pub(super) view: super::super::RuntimeLinkageView,
     pub(super) bindings: Vec<PreparedBindingIdentity>,
     pub(super) bwrap_sha256: String,
@@ -107,15 +76,18 @@ pub(super) struct PreparedRuntimeObservation {
 pub(super) fn execute(
     held: HeldRuntimeInputs<'_>,
     expected_bwrap: ExpectedBwrapIdentity,
+    expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
 ) -> Result<PreparedRuntimeObservation, String> {
-    PreparedRuntimeProbe::prepare(held, expected_bwrap)?.execute()
+    PreparedRuntimeProbe::prepare(held, expected_bwrap, expected_runtime_elf_policy)?.execute()
 }
 
 impl<'a> PreparedRuntimeProbe<'a> {
     pub(super) fn prepare(
         held: HeldRuntimeInputs<'a>,
         expected_bwrap: ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
     ) -> Result<Self, String> {
+        expected_runtime_elf_policy.assert_matches(held.runtime_elf_policy())?;
         held.assert_current()?;
         if held.total_bytes == 0 || held.total_bytes > MAX_PREPARED_SET_BYTES {
             return Err("prepared runtime set exceeds the execution byte budget".to_owned());
@@ -124,14 +96,16 @@ impl<'a> PreparedRuntimeProbe<'a> {
             return Err("prepared bubblewrap path differs from authorized identity".to_owned());
         }
         let bwrap = tool::HeldBwrap::bind(&expected_bwrap)?;
-        Self::assemble(held, bwrap, expected_bwrap)
+        Self::assemble(held, bwrap, expected_bwrap, expected_runtime_elf_policy)
     }
 
     #[cfg(test)]
     pub(super) fn prepare_with_test_tool(
         held: HeldRuntimeInputs<'a>,
         expected_bwrap: ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
     ) -> Result<Self, String> {
+        expected_runtime_elf_policy.assert_matches(held.runtime_elf_policy())?;
         held.assert_current()?;
         if held.total_bytes == 0 || held.total_bytes > MAX_PREPARED_SET_BYTES {
             return Err("prepared runtime set exceeds the execution byte budget".to_owned());
@@ -140,13 +114,14 @@ impl<'a> PreparedRuntimeProbe<'a> {
             return Err("prepared bubblewrap path differs from authorized identity".to_owned());
         }
         let bwrap = tool::HeldBwrap::bind_fixture(&expected_bwrap)?;
-        Self::assemble(held, bwrap, expected_bwrap)
+        Self::assemble(held, bwrap, expected_bwrap, expected_runtime_elf_policy)
     }
 
     fn assemble(
         held: HeldRuntimeInputs<'a>,
         bwrap: tool::HeldBwrap,
         expected_bwrap: ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
     ) -> Result<Self, String> {
         let mut bindings = Vec::with_capacity(held.objects.len() + 2);
         bindings.push(binding(&held.artifact, ARTIFACT_DESTINATION, FILE_MODE)?);
@@ -165,6 +140,7 @@ impl<'a> PreparedRuntimeProbe<'a> {
             held,
             bwrap,
             expected_bwrap,
+            expected_runtime_elf_policy,
             bindings,
             arguments,
         };
@@ -236,6 +212,8 @@ impl<'a> PreparedRuntimeProbe<'a> {
         let stdout_sha256 = format!("{:x}", Sha256::digest(&output.stdout));
         Ok(PreparedRuntimeObservation {
             loader_policy: PREPARED_LOADER_POLICY,
+            runtime_elf_policy: self.held.runtime_elf_policy().id(),
+            runtime_elf_policy_sha256: self.held.runtime_elf_policy().sha256().to_owned(),
             view,
             bindings: self
                 .bindings
@@ -261,6 +239,8 @@ impl<'a> PreparedRuntimeProbe<'a> {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.expected_runtime_elf_policy
+            .assert_matches(self.held.runtime_elf_policy())?;
         self.held.assert_current()?;
         self.bwrap.assert_current()?;
         validate_bindings(&self.bindings, &self.held)?;
@@ -297,6 +277,14 @@ impl<'a> PreparedRuntimeProbe<'a> {
             (&mut after[0].transfer, &mut before[right].transfer)
         };
         std::mem::swap(left, right);
+    }
+
+    #[cfg(test)]
+    pub(super) fn replace_expected_runtime_elf_policy_for_test(
+        &mut self,
+        expected: ExpectedRuntimeElfPolicy,
+    ) {
+        self.expected_runtime_elf_policy = expected;
     }
 }
 

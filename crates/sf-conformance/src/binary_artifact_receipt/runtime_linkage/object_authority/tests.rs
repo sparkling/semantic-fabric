@@ -2,6 +2,7 @@ use super::*;
 mod adversarial;
 mod prepared_probe;
 mod prepared_receipt;
+mod runtime_elf_policy;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -9,9 +10,11 @@ use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::binary_artifact_receipt::runtime_elf::tests::{
-    libc_fixture, loader_fixture, root_fixture, root_fixture_with_needed, shared_fixture,
+use crate::binary_artifact_receipt::runtime_elf::{
+    runtime_elf_policy_identity,
+    tests::{libc_fixture, loader_fixture, root_fixture, root_fixture_with_needed, shared_fixture},
 };
+use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_probe::ExpectedRuntimeElfPolicy;
 use crate::binary_artifact_receipt::runtime_linkage::{
     build_plan, ResolvedRuntimeObject, RuntimeReadOnlyMount, VirtualRuntimeObject,
 };
@@ -21,6 +24,11 @@ const LIBC_PATH: &str = "/lib/x86_64-linux-gnu/libc.so.6";
 const LOADER_TERMINAL: &str = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
 static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+fn fixture_runtime_elf_policy() -> ExpectedRuntimeElfPolicy {
+    let actual = runtime_elf_policy_identity();
+    ExpectedRuntimeElfPolicy::new(actual.id(), actual.sha256()).unwrap()
+}
 
 struct Fixture {
     root: PathBuf,

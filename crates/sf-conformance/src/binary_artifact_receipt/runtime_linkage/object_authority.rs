@@ -21,7 +21,10 @@ use super::{
 };
 use crate::binary_artifact_receipt::{
     artifact_pair::ArtifactPair,
-    runtime_elf::{parse_runtime_elf, RuntimeElfRole, RuntimeElfView},
+    runtime_elf::{
+        parse_runtime_elf, runtime_elf_policy_identity, RuntimeElfPolicyIdentity, RuntimeElfRole,
+        RuntimeElfView,
+    },
 };
 
 mod linux;
@@ -69,6 +72,7 @@ pub(super) struct HeldRuntimeInputs<'a> {
     loader: HeldRuntimeObject,
     objects: Vec<HeldRuntimeObject>,
     identities: Vec<RuntimeObjectIdentity>,
+    runtime_elf_policy: RuntimeElfPolicyIdentity,
     total_bytes: u64,
     effective_uid: u32,
 }
@@ -200,6 +204,7 @@ pub(super) fn hold_runtime_inputs<'a>(
             .chain(objects.iter().map(|object| &object.identity)),
     )?;
     validate_static_needed_graph(&artifact_object, &loader_object, &objects)?;
+    let runtime_elf_policy = runtime_elf_policy_identity();
     let identities = std::iter::once(&artifact_object)
         .chain(std::iter::once(&loader_object))
         .chain(objects.iter())
@@ -214,6 +219,7 @@ pub(super) fn hold_runtime_inputs<'a>(
         loader: loader_object,
         objects,
         identities,
+        runtime_elf_policy,
         total_bytes,
         effective_uid: effective_uid(),
     };
@@ -230,6 +236,10 @@ impl HeldRuntimeInputs<'_> {
         self.total_bytes
     }
 
+    pub(super) fn runtime_elf_policy(&self) -> &RuntimeElfPolicyIdentity {
+        &self.runtime_elf_policy
+    }
+
     pub(super) fn assert_current(&self) -> Result<(), String> {
         self.assert_current_with_phase_hook(|| {})
     }
@@ -237,8 +247,9 @@ impl HeldRuntimeInputs<'_> {
     fn execute_prepared(
         self,
         expected_bwrap: prepared_probe::ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: prepared_probe::ExpectedRuntimeElfPolicy,
     ) -> Result<prepared_probe::PreparedRuntimeObservation, String> {
-        prepared_probe::execute(self, expected_bwrap)
+        prepared_probe::execute(self, expected_bwrap, expected_runtime_elf_policy)
     }
 
     fn assert_current_with_phase_hook(

@@ -16,7 +16,7 @@ fn observation(name: &str) -> PreparedRuntimeObservation {
         "test-fixture-static-bytes-v1",
     )
     .unwrap();
-    PreparedRuntimeProbe::prepare_with_test_tool(held, expected)
+    PreparedRuntimeProbe::prepare_with_test_tool(held, expected, fixture_runtime_elf_policy())
         .unwrap()
         .finish_for_test(synthetic_output(), Vec::new())
         .unwrap()
@@ -49,4 +49,15 @@ fn live_conversion_rejects_prepared_policy_detachment() {
     let mut observation = observation("receipt-policy-drift");
     observation.loader_policy = "drifted-prepared-policy-v1";
     assert!(observation.to_non_admission_receipt().is_err());
+}
+
+#[test]
+fn live_conversion_rejects_runtime_elf_policy_detachment() {
+    let mut policy_observation = observation("receipt-runtime-elf-policy-drift");
+    policy_observation.runtime_elf_policy = "drifted-runtime-elf-policy-v1";
+    assert!(policy_observation.to_non_admission_receipt().is_err());
+
+    let mut digest_observation = observation("receipt-runtime-elf-digest-drift");
+    digest_observation.runtime_elf_policy_sha256 = "0".repeat(64);
+    assert!(digest_observation.to_non_admission_receipt().is_err());
 }
