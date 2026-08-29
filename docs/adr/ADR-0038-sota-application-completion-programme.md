@@ -283,12 +283,31 @@ The producer still trusts UID 0 and its effective UID and requires that builder
 principal to be exclusive and quiescent: resistance to same-principal/root ABA
 replacement is an explicit nonclaim, not evidence supplied by this tooling.
 
-An additive runtime-linkage contract now describes the exact host-input-read-
-only, network-isolated, environment-cleared loader plan and canonicalizes strict,
-bounded glibc `ld.so --list` output. It exports no executor or receipt path. No
-loader was invoked, and no runtime-object bytes or closure receipt was captured;
-artifact/tool identity and loader-active dynamic-tag rejection remain future
-collector gates.
+An additive runtime-linkage contract describes the exact host-input-read-only,
+network-isolated, environment-cleared loader plan and canonicalizes strict,
+bounded glibc `ld.so --list` output. Commit `863a058` extends that staged boundary
+with a private Linux-only holder for one discovered input set. It duplicates the
+already-bound `ArtifactPair` descriptor, holds guarded mount roots, walks every
+runtime path component descriptor-relatively with `openat2`/`NO_XDEV`, permits
+only the canonical one-hop loader alias, copies twice-verified bytes into exactly
+sealed close-on-exec memfds, and binds canonical order, source identities, byte
+digests, size/count budgets, ELF roles, interpreter/SONAME facts and static
+`DT_NEEDED` provider equality/reachability. Start/end authority fences detect
+persistent artifact, mount, alias and runtime-source replacement. Twenty-two
+focused tests include exact identity, nonregular-leaf, collision, mutation,
+phase-injection, nested-mount, graph and descriptor-lifecycle mutants; the full
+feature-gated Rust and 735-test harness suites passed.
+
+The holder remains private, dead-code-staged and nonexecuting. Discovery still
+precedes holding and is not authorized by it; no production loader/bubblewrap
+process was invoked, no real current-artifact runtime byte set was captured, and
+no loader is proven to have consumed the sealed bytes. Static ELF and
+`DT_NEEDED` checks do not prove executed resolution, symbol/version/relocation
+semantics or a complete glibc closure; no VDSO bytes are held. There is no
+executor, deliberate child-FD allowlist, receipt, canonical serialization,
+external witness, provider-free replay, admission or release claim. Same-
+principal/root ABA, rollback and hostile-kernel/filesystem resistance remain
+explicit nonclaims under the exclusive, quiescent builder assumption.
 
 This observation tooling advances M0 without closing the actual binary-artifact
 boundary. It records configured tool identities and a post-build final-link-

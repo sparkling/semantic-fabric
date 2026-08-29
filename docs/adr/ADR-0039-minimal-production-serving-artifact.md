@@ -48,12 +48,25 @@ sequences must agree before normalization, and GNU build IDs are accepted only
 from one structurally valid `.note.gnu.build-id` record whose owner, type,
 declared size, and lowercase digest agree.
 
-An additive runtime-linkage contract now fixes a host-input-read-only, network-
+An additive runtime-linkage contract fixes a host-input-read-only, network-
 isolated, environment-cleared bubblewrap plan and a strict parser for glibc
-`ld.so --list`. It is explicitly non-authorizing and exports no executor or
-receipt path. No loader was invoked, and no runtime-object bytes or dynamic-
-closure receipt was captured. Exact artifact/tool identity and rejection of
-loader-active dynamic tags remain mandatory gates for any future collector.
+`ld.so --list`. Commit `863a058` adds a private, nonexecuting Linux holder that
+duplicates the bound artifact descriptor, resolves the discovered loader and
+objects through guarded descriptor roots, rejects nested mount crossings and
+noncanonical aliases, snapshots twice-verified source bytes into exactly sealed
+close-on-exec memfds, reparses those bytes by ELF role, and checks canonical
+identity plus static `DT_NEEDED` provider equality/reachability. Its 22 focused
+tests cover authority, mutation, graph, budget, nonregular-input, phase-fence
+and lifecycle mutants.
+
+That module has no production caller, executor, receipt or descriptor export.
+Discovery remains prior and unauthorized; no production loader was invoked, no
+real current-artifact runtime set was captured, and no process is proven to have
+consumed the sealed bytes. It does not establish executed loader semantics,
+complete runtime/build/tool/system closure, VDSO bytes, replay, provenance,
+admission, reproducibility or release. Exact loader/bubblewrap authority,
+deliberate child-FD inheritance, process/output controls and a versioned
+externally witnessed receipt remain mandatory future collector gates.
 
 This observation is about the artifact which exists today, not this proposal's
 `sf-server`, and it is not a complete binary closure, SBOM, reproducibility
