@@ -60,8 +60,8 @@ as the accepted route to a charter-complete release.
 
 This decision was accepted on 2026-08-27 by maintainer instruction to complete
 the programme with its retained cross-RDBMS federation charter. Acceptance does
-not claim implementation: the reusable-harness prerequisite and M0 foundation
-are in progress, and M1–M7 remain gated by their executable evidence.
+not claim implementation: the reusable-harness prerequisite is complete, the M0
+foundation remains in progress, and M1–M7 remain gated by executable evidence.
 
 ### 1. Definition of complete
 
@@ -210,12 +210,14 @@ verified that failure. It remains immutable historical evidence.
 Fresh V6 run `programme_v6_h0c_20260828_02`, under controller `c8e3f68`, then
 passed the transaction and every programme gate at 100/100 with six bound
 commands, seven native-evidence digests, two final native reviews, and no retry
-or repair. Its policy, candidate evidence, receipt, envelope, and provider-free
-replay receipt are
+or repair. Its policy, candidate evidence, receipt, acceptance, envelope,
+execution claim, and provider-free replay receipt are
 `e71107e522342e1b19206c88d861549d00f9df87f27ed4293b0cc36139b2ae34`,
 `a1dc307130c6d3efb42354e0c464fcc66095d016564d5227e6259dc71998ac7f`,
 `d9d244ef42c4a914b4b2bec52844b1ddc58a46d1b99759453cde7b34a5940216`,
+`1cf36b1d9bcb2c4e6d2c81525baead859b2b62ed9042bfd33991bed8367430f7`,
 `02c30ed3bb8f0b0b5a5c10320d64308934ee8438df051626e68e661589939a06`,
+`578799eff72dd84cc3b5601754654d1bce33a7b4b1fa56666271fe6833979c86`,
 and `f1bcf0fe0720d2851dff219cf9b27563bcf6ff4da317ac9ec259b1fcd505bf02`.
 H0c is complete. M0 is now in progress through the verified product/evidence
 slices listed below:
@@ -341,6 +343,22 @@ metadata and is not serialized. Receipt V1's schema and canonical serialization
 are unchanged and continue to record
 `runtime-elf-policy-replay=not-attested`.
 
+Commit `73e9864` adds exact late syscall confinement for the prepared observation:
+policy `x86_64-prepared-loader-late-cbpf-default-kill-v1` is 55 classic-BPF
+instructions (440 bytes), with SHA-256
+`0092c69f902c071515f2f82c5aff75bf63f065148f1c0fb51af414787338e80a`.
+The holder rechecks a separately sealed, close-on-exec high-numbered policy FD
+before and after transfer and requires exactly one `--seccomp <fd>` immediately
+before `--`. Bubblewrap installs that late filter for both its namespace PID 1
+reaper and the copied loader child. Unknown and forbidden syscalls kill the
+process; the narrow allowlist constrains loader I/O, read-only file opening,
+non-W+X mapping, PID 1 eventfd signalling, and loader stdout. A native identical-
+layout `fstat` control succeeds while a `socket` canary dies by `SIGSYS`, and the
+private live observation binds the policy identity. Receipt V1 remains byte-
+compatible and deliberately records
+`target-seccomp-or-syscall-trace=not-attested`: it contains neither a syscall
+trace nor a final-FD inventory and does not replay the live policy proof.
+
 This is loader-resolution observation only. Candidate discovery remains prior and
 unauthorized; the artifact is not executed, and main-program, relocation,
 symbol/version, initialization, `dlopen`, NSS, VDSO and closure completeness are
@@ -352,9 +370,10 @@ semantic validation. Bubblewrap copies from sealed
 memfds, so the loader does not consume the original held inode capabilities.
 Bubblewrap's own host PT_INTERP, DSO, cache,
 preload and LSM closure is not bound; the kernel, bubblewrap, glibc, copy and mount
-semantics remain trusted. There is no post-exec final-FD inventory, target seccomp
-or syscall trace, nor aggregate cgroup `pids.max`, memory or control-group kill;
-the implemented limits are per process. Same-principal/root ABA, rollback and a
+semantics remain trusted. The exact late filter is live observation only: there
+is no post-exec final-FD inventory or syscall trace, and Receipt V1 does not
+attest it. There is no aggregate cgroup `pids.max`, memory or control-group kill;
+the other implemented limits are per process. Same-principal/root ABA, rollback and a
 hostile kernel/filesystem remain out of scope under the exclusive, quiescent
 builder assumption. The module has no production caller, durable writer/importer,
 signature, external witness, authenticated execution/output provenance, SBOM,

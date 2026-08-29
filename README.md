@@ -17,7 +17,7 @@ live in the engine; source rows are streamed on demand and discarded.
 <!-- capability-matrix:start -->
 ## Evidence-scoped capability status
 
-As of 2026-08-28, the generated catalog records:
+As of 2026-08-29, the generated catalog records:
 
 - **Current:** DESCRIBE CBD compilation has required compiler-only tests; this does not establish backend or endpoint execution.
 - **Limitation:** Full SPARQL 1.2 Query or Protocol conformance is not claimed.
@@ -238,9 +238,14 @@ and an expected bubblewrap inode; `805f413` maps its result to a private canonic
 `authority=none` record and reparses its stdout provider-free. Commit `9282e60`
 checks a caller-supplied expected ID and exact five-source byte digest for the closed
 dynamic-tag/search/flag policy before construction and during immediate pre-run validation;
-the native diagnostic keeps a separate literal. Receipt V1's schema and canonical serialization
-are unchanged and still record policy replay as `not-attested`. There is no durable writer/importer, product caller,
-witness, provenance, admission, performance or release authority. M0 remains open.
+the native diagnostic keeps a separate literal. Commit `73e9864` binds separately
+sealed policy `x86_64-prepared-loader-late-cbpf-default-kill-v1` (55 cBPF
+instructions/440 bytes; SHA-256 `0092c69f…e80a`) to bubblewrap's namespace PID 1/reaper and copied loader child, requires one exact FD/argv placement,
+and proves a same-layout `fstat` control against a `socket`/`SIGSYS` canary. Receipt
+V1 remains byte-compatible and records both `runtime-elf-policy-replay` and
+`target-seccomp-or-syscall-trace` as `not-attested`; it contains no syscall trace
+or final-FD inventory. There is no durable writer/importer, product caller, witness,
+provenance, admission, performance or release authority. M0 remains open.
 The capture control plane now also has a closed, non-authorizing run-claim
 record and a local same-UID create-new adapter. Its slot varies only by an
 independently supplied project-authority digest and run ID; the body binds the
@@ -310,30 +315,14 @@ safety controls. The harness has no commit, push,
 publication, deployment, or promotion authority and never uses provider API
 keys or OpenRouter.
 
-The frozen issue-#8 path remains a schema-v2 `exact-reference` transaction. The
-reusable foundation now also parses schema-v3 `verifier-only` tasks and derives
-their admitted paths, generated outputs, commands and QE evidence from protected
-task data through a versioned Rust runtime binding. Commit `b40dbc6` adds the
-strict, externally anchored schema-v5 replay-policy foundation while preserving
-the frozen v4 parser and delegating unambiguous schema-v4 bytes to it unchanged.
-Commit `7a1fa24` completes H0b with a replay-complete gate evaluator, canonical
-all-or-zero scorer, strict externally anchored envelope, and expectation-aware
-v4/v5 dispatch. V5 run `programme_v5_h0c_20260828_05` passed its candidate
-transaction after one patch-admission repair, then was honestly rejected at
-85/100 by its frozen prior-attempt law; its provider-free replay preserves that
-decision. The additive V6 path through `c8e3f68` binds full transaction/native
-evidence and derives `not-started`, `failed`, or `passed` prior-build semantics
-without reinterpreting V4/V5.
-Commit `f2cc800` generalizes frozen-lock authority for future V5/V6 patch tasks,
-while exact task-blob bindings preserve the two historical embedded fixtures.
-
-V6 run `programme_v6_h0c_20260828_01` failed closed at the native-origin gate
-and replay verified the failure. Fresh run `programme_v6_h0c_20260828_02`, on
-the same controller commit, then passed with 100/100 acceptance, six bound
-commands, seven native-evidence digests, two final native reviews, and no retry
-or repair. Receipt `d9d244ef…0216`, candidate evidence `a1dc3071…ac7f`, envelope
-`02c30ed3…9a06`, and provider-free replay receipt `f1bcf0fe…bf02` form the
-replayable evidence chain. H0c is complete. M0 is in progress through the
+The frozen issue-#8 path remains schema V2; the reusable V3–V5 foundation derives
+admitted paths, commands, QE evidence, replay law, scoring, and envelopes from
+protected inputs. Historical V5 `_05` remains honestly rejected at 85/100, and
+V6 `_01` remains failed closed at native-origin policy. Additive V6 does not
+reinterpret them. Fresh V6 `_02` passed at 100/100 with six bound commands, seven
+native-evidence digests, two native reviews, no retry or repair, and provider-free
+replay (`d9d244ef…0216`, `a1dc3071…ac7f`, `02c30ed3…9a06`,
+`f1bcf0fe…bf02`). H0c is complete. M0 is in progress through the
 tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
 RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
@@ -345,6 +334,15 @@ PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
 CI and the controller protect and replay those authorities read-only. M1–M7 remain gated, and the
 44/100 application-readiness baseline has not been formally rescored.
 
+The latest generic MetaHarness diagnostic is 75 (fit 75, compile 100, task
+coverage 65, tool safety 90, memory usefulness 46); it is structurally
+misaligned with this monorepo and is not the ADR-0037 acceptance score. Darwin's
+security diagnostic passed 9/12 checks but failed statistical gates (fitness
+0.6585, TPR 0.5, FPR 0.666667). Direct native Claude and Codex reviews passed;
+the combined native coordinator hit the host's `E2BIG` launch boundary, so it is
+not represented as a pass. Product tests remain authoritative and the flywheel
+remains off.
+
 The current M0 tranche adds query/Protocol regression baselines, the scoped `sf-cli`
 dependency receipt, performance machinery, a non-authorizing run claim, and a strict
 runtime-linkage parser plus private Linux observation. After unauthorized discovery, the
@@ -355,7 +353,7 @@ checks the expected closed tag/search/flag policy ID/five-source digest at const
 the immediate pre-run validation phase. Only the native diagnostic maintains a separate
 literal; the API authenticates no reviewer. The actual pair remains private in-memory holder/observation metadata and is not serialized by receipt V1.
 The manual path has no writer/importer, signature, witness, product caller or execution provenance. It does not execute the artifact or prove opaque hash/symbol/relocation/version/
-GNU-property payloads, initialization, `dlopen`/NSS, complete runtime or bubblewrap-host closure, final FD/syscall/cgroup state, VDSO bytes, SBOM, reproducibility, admission or release.
+GNU-property payloads, initialization, `dlopen`/NSS, complete runtime or bubblewrap-host closure, final-FD inventory, syscall trace, cgroup state, VDSO bytes, SBOM, reproducibility, admission or release. Commit `73e9864` adds the exact late filter and comparative native canary described above, but Receipt V1 deliberately does not attest or replay that live proof.
 
 The PostgreSQL mapping receipt records 80 pass, one documented deviation and six
 exact skips; its file/outcome/inventory digests are `c04e6f86…0f52`,
@@ -384,7 +382,7 @@ The separate Ruflo retrieval-policy flywheel is also **off by default**. A
 halves and a canonical SHA-256 pin is tracked under `.claude/eval/` and protected
 by the harness. It still requires maintainer label review and calibration against
 a live retrieval baseline before activation. The 2026-08-28 operational check
-found no flywheel opt-in variables or `harness` worker in the live daemon; that
+found no flywheel opt-in variables or enabled `harness` worker in the live daemon; that
 runtime fact must be rechecked after every restart. The explicit evaluation path
 validates the anchor but currently reports `store too small to harvest a corpus`:
 Ruflo's flywheel-visible `neural_patterns` store is empty even though older
@@ -408,7 +406,7 @@ and its decision over sealed scores—it does **not** re-run the benchmark.
 
 GitHub-hosted CI runs the portable harness contract on its pinned Node 20
 baseline. Native integration remains fail-closed and is run only by the manually dispatched
-`harness-native` workflow on a labelled `self-hosted`, `bwrap`, `systemd-user`
+`harness-native` workflow on a labelled `self-hosted`, `linux`, `x64`, `bwrap`, `systemd-user`
 runner; hosted runners cannot create the network namespace the production
 isolation contract requires.
 
@@ -445,7 +443,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the manual sealed-source loader smoke round-trips an in-memory `authority=none` record and checks the closed ELF tag/search/flag policy ID plus five-source byte digest against a separate test literal. This detects source drift, not review, compiled code or toolchain identity. Receipt V1's schema and canonical serialization remain unchanged and mark policy replay `not-attested`. Neither establishes authenticated execution or complete build/tool/system/runtime closure, opaque ELF semantics, linker time-of-use, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record and checks the closed ELF policy identity. Digest checks detect source drift; private native tests prove narrow late cBPF enforcement against a comparative canary. Neither proves review, compiled code or toolchain identity. Receipt V1 remains byte-compatible and marks `runtime-elf-policy-replay` plus `target-seccomp-or-syscall-trace` `not-attested`; it has no final-FD inventory. Neither establishes authenticated execution or complete build/tool/system/runtime closure, opaque ELF semantics, linker time-of-use, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
 | M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID non-authorizing run claim, and claim-rooted exact-commit private source materialization exist. There is still no external append-only witness, positive runner admission, controlled profile, build/attempt authority, baseline, candidate, capture receipt, or measured number; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path

@@ -86,13 +86,27 @@ runtime-ELF dynamic-tag/search/flag policy. The holder captures ID
 source digest
 `cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a`
 only after all sealed objects and their static dependency graph validate. Exact
-equality is required before prepared-probe construction and again immediately
-before the runner; ID or digest drift returns without invoking it. The exact
+equality is required before prepared-probe construction and again during the
+immediate pre-run validation phase; ID or digest drift returns without invoking
+the runner. The exact
 native diagnostic maintains a separate literal, but the API authenticates no
 reviewer. The actual pair remains private in-memory holder/observation metadata
 and is not serialized. Receipt V1's schema and canonical serialization remain
 unchanged with `runtime-elf-policy-replay=not-attested`, so this satisfies no artifact,
 replay, provenance, admission or release gate.
+
+Commit `73e9864` adds exact late syscall confinement to that prepared observation.
+Policy `x86_64-prepared-loader-late-cbpf-default-kill-v1` contains 55 classic-BPF
+instructions (440 bytes) and has SHA-256
+`0092c69f902c071515f2f82c5aff75bf63f065148f1c0fb51af414787338e80a`.
+A separately sealed, close-on-exec high-numbered FD is checked before and after
+transfer and appears exactly once as `--seccomp <fd>` immediately before `--`.
+The same late default-kill filter confines bubblewrap's namespace PID 1/reaper
+and the copied loader child. A native identical-layout `fstat` control succeeds
+while a `socket` canary dies by `SIGSYS`; the private live observation binds the
+policy identity. Receipt V1 remains byte-compatible and records
+`target-seccomp-or-syscall-trace=not-attested`, so it contains no syscall trace or
+final-FD inventory and does not convert this diagnostic into replay authority.
 
 This does not accept this ADR. Discovery remains prior and unauthorized; the
 artifact is not executed; relocation, symbol/version, initialization, `dlopen`,
@@ -103,9 +117,10 @@ property, hash, symbol, relocation, version, TLS and cross-table payload semanti
 remain unproved. The loader
 consumes tmpfs copies sourced from sealed memfds, not the original held inode capabilities.
 Bubblewrap's host PT_INTERP/DSO/cache/preload/LSM closure is unbound, and kernel,
-bubblewrap, glibc, copy and mount semantics are trusted. There is no final FD
-inventory, target seccomp/syscall trace, aggregate cgroup process/memory bound or
-control-group kill. Same-principal/root ABA, rollback and hostile kernel/filesystem
+bubblewrap, glibc, copy and mount semantics are trusted. The exact late filter is
+live observation only: there is no final-FD inventory or syscall trace, and
+Receipt V1 does not attest it. There is no aggregate cgroup process/memory bound
+or control-group kill. Same-principal/root ABA, rollback and hostile kernel/filesystem
 resistance remain out of scope. There is no production caller or canonical
 public/durable receipt path, signature, external witness, authenticated
 execution/output provenance, SBOM, reproducibility, minimality, performance,
