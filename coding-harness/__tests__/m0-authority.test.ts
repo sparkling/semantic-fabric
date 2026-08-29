@@ -40,6 +40,7 @@ const M0_AUTHORITY_PATHS = [
   'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
   'coding-harness/src/programme-capture-private-source-fs-v1.ts',
   'coding-harness/src/programme-capture-private-source-v1.ts',
+  'coding-harness/src/programme-capture-protected-paths-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
   'coding-harness/src/programme-capture-supervisor-codec-v1.ts',

@@ -25,6 +25,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-input-attestation-v1.ts',
   'coding-harness/src/programme-capture-private-source-fs-v1.ts',
   'coding-harness/src/programme-capture-private-source-v1.ts',
+  'coding-harness/src/programme-capture-protected-paths-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',

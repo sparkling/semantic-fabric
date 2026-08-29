@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: MIT
+
+export const PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 = Object.freeze([
+  'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-git-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-state-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-capabilities-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-kat-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-task-v1.test.ts',
+] as const);
+
+export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
+  'coding-harness/src/programme-capture-claim-io-v1.ts',
+  'coding-harness/src/programme-capture-claim-record-v1.ts',
+  'coding-harness/src/programme-capture-config-v1.ts',
+  'coding-harness/src/programme-capture-git-v1.ts',
+  'coding-harness/src/programme-capture-host-authority-v1.ts',
+  'coding-harness/src/programme-capture-host-observation-v1.ts',
+  'coding-harness/src/programme-capture-host-preflight-v1.ts',
+  'coding-harness/src/programme-capture-input-attestation-record-v1.ts',
+  'coding-harness/src/programme-capture-input-attestation-v1.ts',
+  'coding-harness/src/programme-capture-private-source-fs-v1.ts',
+  'coding-harness/src/programme-capture-private-source-v1.ts',
+  'coding-harness/src/programme-capture-protected-paths-v1.ts',
+  'coding-harness/src/programme-capture-runner-profile-v1.ts',
+  'coding-harness/src/programme-capture-state-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-codec-v1.ts',
+  'coding-harness/src/programme-capture-task-v1.ts',
+] as const);
