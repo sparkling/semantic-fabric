@@ -31,6 +31,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
   'coding-harness/src/programme-capture-supervisor-codec-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-crypto-v1.ts',
   'coding-harness/src/programme-capture-supervisor-merkle-v1.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
   'crates/sf-conformance/src/binary_artifact_receipt/process/capture.rs',

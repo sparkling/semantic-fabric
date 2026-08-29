@@ -9,15 +9,17 @@ import { describe, expect, it } from 'vitest';
 const SOURCE_ROOT = fileURLToPath(new URL('../src/', import.meta.url));
 const CLAIM_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-claim-v1.ts');
 const CODEC_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-codec-v1.ts');
+const CRYPTO_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-crypto-v1.ts');
 const MERKLE_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-merkle-v1.ts');
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
   [CLAIM_ENTRY, new Map([
     ['@metaharness/harness', 'canonical:canonical'],
-    ['node:crypto', 'createHash:createHash,createPublicKey:createPublicKey,verify:verifyDetachedSignature'],
-    ['./contracts.js', 'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asInteger:asInteger,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze,snapshotUint8Array:snapshotUint8Array'],
+    ['node:crypto', 'createHash:createHash'],
+    ['./contracts.js', 'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asInteger:asInteger,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze'],
     ['./acceptance-task-v3.js', 'parseTaskOpaqueId:parseTaskOpaqueId'],
     ['./programme-capture-claim-io-v1.js', 'readProgrammeCaptureRunClaimV1:readProgrammeCaptureRunClaimV1'],
     ['./programme-capture-claim-record-v1.js', 'parseProgrammeCaptureRunClaimV1:parseProgrammeCaptureRunClaimV1,programmeCaptureRunClaimKeyDigestV1:programmeCaptureRunClaimKeyDigestV1,serializeProgrammeCaptureRunClaimV1:serializeProgrammeCaptureRunClaimV1'],
+    ['./programme-capture-supervisor-crypto-v1.js', 'parseProgrammeCaptureSupervisorEd25519SignatureV1:parseProgrammeCaptureSupervisorEd25519SignatureV1,verifyProgrammeCaptureSupervisorEd25519SignatureV1:verifyProgrammeCaptureSupervisorEd25519SignatureV1'],
     ['./receipts.js', 'digestValue:digestValue'],
     ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
   ])],
@@ -26,6 +28,11 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
     ['./programme-capture-supervisor-claim-v1.js', 'PROGRAMME_CAPTURE_SUPERVISOR_VALIDATION_DIGEST_DOMAIN_V1:PROGRAMME_CAPTURE_SUPERVISOR_VALIDATION_DIGEST_DOMAIN_V1,parseProgrammeCaptureSupervisorClaimAcknowledgementV1:parseProgrammeCaptureSupervisorClaimAcknowledgementV1,parseProgrammeCaptureSupervisorClaimRequestV1:parseProgrammeCaptureSupervisorClaimRequestV1,verifyProgrammeCaptureSupervisorClaimAcknowledgementV1:verifyProgrammeCaptureSupervisorClaimAcknowledgementV1'],
     ['./receipts.js', 'digestValue:digestValue'],
     ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [CRYPTO_ENTRY, new Map([
+    ['node:crypto', 'createHash:createHash,createPublicKey:createPublicKey,verify:verifyDetachedSignature'],
+    ['node:util/types', 'isProxy:isProxy'],
+    ['./contracts.js', 'SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,snapshotUint8Array:snapshotUint8Array'],
   ])],
   [MERKLE_ENTRY, new Map([
     ['node:crypto', 'createHash:createHash'],
@@ -40,7 +47,7 @@ const FORBIDDEN_AMBIENT = new Set([
 
 describe('programme capture supervisor capability closure V1', () => {
   it('allows only exact parser, digest, read, and detached-verification imports', () => {
-    for (const path of [CLAIM_ENTRY, CODEC_ENTRY, MERKLE_ENTRY]) {
+    for (const path of [CLAIM_ENTRY, CODEC_ENTRY, CRYPTO_ENTRY, MERKLE_ENTRY]) {
       expect(() => verifyCapabilityClosure(path, readFileSync(path, 'utf8'))).not.toThrow();
     }
     const source = readFileSync(CLAIM_ENTRY, 'utf8');
@@ -59,7 +66,7 @@ describe('programme capture supervisor capability closure V1', () => {
       "Function('return fetch')();", "(async()=>{})['con' + 'structor']('return fetch')();",
       "export { readFileSync } from 'node:fs';",
     ];
-    for (const path of [CLAIM_ENTRY, CODEC_ENTRY, MERKLE_ENTRY]) {
+    for (const path of [CLAIM_ENTRY, CODEC_ENTRY, CRYPTO_ENTRY, MERKLE_ENTRY]) {
       const source = readFileSync(path, 'utf8');
       for (const mutant of mutants) {
         expect(() => verifyCapabilityClosure(path, `${source}\n${mutant}\n`)).toThrow();
@@ -122,13 +129,14 @@ function assertVerifierOrder(source: string): void {
   const one = (name: string) => calls.get(name)?.[0] ?? Number.MAX_SAFE_INTEGER;
   const reads = calls.get('readRootedClaim') ?? [];
   const required = [
-    'parseProgrammeCaptureSupervisorClaimEnvelopeBlobV1', 'trustedEd25519Key',
-    'verifyDetachedSignature', 'assertAcknowledgementBindings', 'assertSameClaim',
+    'parseProgrammeCaptureSupervisorClaimEnvelopeBlobV1',
+    'verifyProgrammeCaptureSupervisorEd25519SignatureV1',
+    'assertAcknowledgementBindings', 'assertSameClaim',
   ];
   if (reads.length !== 2 || required.some((name) => calls.get(name)?.length !== 1)
     || !(one('parseProgrammeCaptureSupervisorClaimEnvelopeBlobV1')
-    < one('trustedEd25519Key') && one('trustedEd25519Key') < one('verifyDetachedSignature')
-    && one('verifyDetachedSignature') < reads[0]
+    < one('verifyProgrammeCaptureSupervisorEd25519SignatureV1')
+    && one('verifyProgrammeCaptureSupervisorEd25519SignatureV1') < reads[0]
     && reads[0] < one('assertAcknowledgementBindings')
     && one('assertAcknowledgementBindings') < reads[1]
     && reads[1] < one('assertSameClaim'))) {

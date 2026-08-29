@@ -33,6 +33,7 @@ export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
   'coding-harness/src/programme-capture-supervisor-codec-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-crypto-v1.ts',
   'coding-harness/src/programme-capture-supervisor-merkle-v1.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
 ] as const);

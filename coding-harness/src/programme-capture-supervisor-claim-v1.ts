@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 import { canonical } from '@metaharness/harness';
-import { createHash, createPublicKey, verify as verifyDetachedSignature,
-  type KeyObject } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
   DEVELOPMENT_AUTHORITY, SHA256_PATTERN, asClosedRecord, asInteger,
-  assertExactKeys, deepFreeze, snapshotUint8Array,
+  assertExactKeys, deepFreeze,
 } from './contracts.js';
 import { parseTaskOpaqueId } from './acceptance-task-v3.js';
 import { readProgrammeCaptureRunClaimV1,
@@ -15,6 +14,10 @@ import {
   type ProgrammeCaptureRunClaimV1,
 } from './programme-capture-claim-record-v1.js';
 import { digestValue } from './receipts.js';
+import {
+  parseProgrammeCaptureSupervisorEd25519SignatureV1,
+  verifyProgrammeCaptureSupervisorEd25519SignatureV1,
+} from './programme-capture-supervisor-crypto-v1.js';
 import { parseJsonWithoutDuplicateKeys } from './strict-json.js';
 export const PROGRAMME_CAPTURE_SUPERVISOR_CLAIM_MAX_BYTES_V1 = 16_384;
 export const PROGRAMME_CAPTURE_SUPERVISOR_ACK_DIGEST_DOMAIN_V1 =
@@ -26,9 +29,6 @@ const REQUEST_DIGEST_DOMAIN = 'semantic-fabric/programme-capture/'
 export const PROGRAMME_CAPTURE_SUPERVISOR_VALIDATION_DIGEST_DOMAIN_V1 =
   'semantic-fabric/programme-capture/'
   + 'supervisor-claim-validation-digest-v1';
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const ED25519_SPKI_BYTES = 44;
-const ED25519_SIGNATURE_BYTES = 64;
 interface NonAuthorityFieldsV1 {
   readonly externalAppendOnlyWitness: false; readonly appendOnlyPersistenceVerified: false;
   readonly rollbackResistance: 'not-proven'; readonly supervisorAdministration: 'not-attested';
@@ -258,7 +258,9 @@ export function parseProgrammeCaptureSupervisorClaimEnvelopeV1(
   if (signatureInput.algorithm !== 'ed25519') {
     throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_SIGNATURE_ALGORITHM_INVALID');
   }
-  const valueBase64Url = parseSignature(signatureInput.valueBase64Url);
+  const valueBase64Url = parseProgrammeCaptureSupervisorEd25519SignatureV1(
+    signatureInput.valueBase64Url,
+  );
   return deepFreeze({
     schemaVersion: 1,
     transactionKind: 'programme-capture-v1',
@@ -321,12 +323,12 @@ export async function verifyProgrammeCaptureSupervisorClaimAcknowledgementV1(
   const acknowledgement = envelope.acknowledgement;
   const expectations = parseExpectations(input);
   assertAcknowledgementReferences(acknowledgement, expectations);
-  const trustedKey = trustedEd25519Key(input.trustedPublicKeySpkiDer, expectations.keyFingerprint);
-  const signature = Buffer.from(envelope.signature.valueBase64Url, 'base64url');
-  if (!verifyDetachedSignature(
-    null, programmeCaptureSupervisorClaimSigningPayloadV1(acknowledgement),
-    trustedKey, signature,
-  )) throw new Error('HARNESS_CAPTURE_SUPERVISOR_SIGNATURE_INVALID');
+  verifyProgrammeCaptureSupervisorEd25519SignatureV1({
+    payload: programmeCaptureSupervisorClaimSigningPayloadV1(acknowledgement),
+    signatureBase64Url: envelope.signature.valueBase64Url,
+    trustedPublicKeySpkiDer: input.trustedPublicKeySpkiDer,
+    expectedAuthorityKeyFingerprint: expectations.keyFingerprint,
+  });
   const before = await readRootedClaim(authority);
   const request = requestFromClaim(before);
   assertAcknowledgementBindings(request, acknowledgement);
@@ -433,24 +435,6 @@ function parseExpectations(input: Record<string, unknown>) {
     ),
   });
 }
-function trustedEd25519Key(value: unknown, expectedFingerprint: string): KeyObject {
-  const bytes = Buffer.from(snapshotUint8Array(value, 'trusted Ed25519 SPKI', 1_024));
-  if (bytes.length !== ED25519_SPKI_BYTES
-    || !bytes.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)) {
-    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_PUBLIC_KEY_INVALID');
-  }
-  let key: KeyObject;
-  try { key = createPublicKey({ key: bytes, format: 'der', type: 'spki' }); }
-  catch (error) {
-    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_PUBLIC_KEY_INVALID', { cause: error });
-  }
-  const canonicalBytes = key.export({ format: 'der', type: 'spki' }) as Buffer;
-  if (key.asymmetricKeyType !== 'ed25519' || !canonicalBytes.equals(bytes)
-    || createHash('sha256').update(bytes).digest('hex') !== expectedFingerprint) {
-    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_PUBLIC_KEY_INVALID');
-  }
-  return key;
-}
 function assertIdentity(input: Record<string, unknown>, kindName: string, expectedKind: string,
   requireAuthority = true): void {
   if (input.schemaVersion !== 1 || input.transactionKind !== 'programme-capture-v1'
@@ -473,17 +457,6 @@ function acknowledgementDigest(value: unknown): string {
 function parseDigest(value: unknown, label: string): string {
   if (typeof value !== 'string' || !SHA256_PATTERN.test(value) || /^0+$/.test(value)) {
     throw new TypeError(`${label} must be a non-zero lowercase SHA-256 digest`);
-  }
-  return value;
-}
-
-function parseSignature(value: unknown): string {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{86}$/.test(value)) {
-    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_SIGNATURE_INVALID');
-  }
-  const bytes = Buffer.from(value, 'base64url');
-  if (bytes.length !== ED25519_SIGNATURE_BYTES || bytes.toString('base64url') !== value) {
-    throw new TypeError('HARNESS_CAPTURE_SUPERVISOR_SIGNATURE_INVALID');
   }
   return value;
 }

@@ -45,6 +45,7 @@ const M0_AUTHORITY_PATHS = [
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
   'coding-harness/src/programme-capture-supervisor-codec-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-crypto-v1.ts',
   'coding-harness/src/programme-capture-supervisor-merkle-v1.ts',
   'crates/sf-bench/config/performance-scenarios-v1.tsv',
   'crates/sf-bench/src/bin/sf-performance-receipt.rs',
