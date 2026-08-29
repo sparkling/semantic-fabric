@@ -16,10 +16,15 @@ fn observation(name: &str) -> PreparedRuntimeObservation {
         "test-fixture-static-bytes-v1",
     )
     .unwrap();
-    PreparedRuntimeProbe::prepare_with_test_tool(held, expected, fixture_runtime_elf_policy())
-        .unwrap()
-        .finish_for_test(synthetic_output(), Vec::new())
-        .unwrap()
+    PreparedRuntimeProbe::prepare_with_test_tool(
+        held,
+        expected,
+        fixture_runtime_elf_policy(),
+        fixture_seccomp_policy(),
+    )
+    .unwrap()
+    .finish_for_test(synthetic_output(), Vec::new())
+    .unwrap()
 }
 
 fn synthetic_output() -> Vec<u8> {
@@ -60,4 +65,19 @@ fn live_conversion_rejects_runtime_elf_policy_detachment() {
     let mut digest_observation = observation("receipt-runtime-elf-digest-drift");
     digest_observation.runtime_elf_policy_sha256 = "0".repeat(64);
     assert!(digest_observation.to_non_admission_receipt().is_err());
+}
+
+#[test]
+fn live_conversion_rejects_seccomp_policy_detachment_without_serializing_it() {
+    let mut id_observation = observation("receipt-seccomp-id-drift");
+    id_observation.seccomp_policy = "drifted-seccomp-policy-v1";
+    assert!(id_observation.to_non_admission_receipt().is_err());
+
+    let mut digest_observation = observation("receipt-seccomp-digest-drift");
+    digest_observation.seccomp_policy_sha256 = "0".repeat(64);
+    assert!(digest_observation.to_non_admission_receipt().is_err());
+
+    let mut length_observation = observation("receipt-seccomp-length-drift");
+    length_observation.seccomp_policy_byte_length += 8;
+    assert!(length_observation.to_non_admission_receipt().is_err());
 }

@@ -18,6 +18,13 @@ impl PreparedRuntimeObservation {
         {
             return Err("prepared observation runtime ELF policy drift".to_owned());
         }
+        let seccomp_policy = super::seccomp::canonical_identity()?;
+        if self.seccomp_policy != seccomp_policy.id()
+            || self.seccomp_policy_sha256 != seccomp_policy.sha256()
+            || self.seccomp_policy_byte_length != seccomp_policy.byte_length()
+        {
+            return Err("prepared observation seccomp policy drift".to_owned());
+        }
         let bwrap_path = self
             .bwrap_path
             .to_str()

@@ -1,52 +1,44 @@
 //! One-shot loader observation over read-only copies sourced from sealed memfds.
 //!
 //! Bubblewrap is executed from a held, digest-fenced root-owned inode. It copies
-//! only the already sealed artifact, loader, and DSO bytes into a fresh tmpfs
-//! root. Matching `ld.so --list` output confirms only that this held byte set
-//! reproduces the candidate resolution under the fixed policy; it does not prove
-//! artifact execution, relocations, a complete closure, direct memfd consumption,
-//! or admission, provenance, minimality, or release authority. A completed
-//! observation may be converted into a private non-admission record whose
-//! provider-free semantic replay never re-executes this boundary.
+//! only already sealed artifact, loader, and DSO bytes into a fresh tmpfs root,
+//! then applies an exact late seccomp policy to its PID-1 reaper and loader child.
+//! Matching `ld.so --list` output confirms only that this held byte set reproduces
+//! candidate resolution under those fixed policies. It proves neither artifact
+//! execution nor syscall trace, host-tool closure, provenance, or admission.
 
-use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs::File;
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::path::{Path, PathBuf};
+use std::os::fd::AsRawFd;
+#[cfg(test)]
+use std::os::fd::FromRawFd;
+use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 
-use super::{HeldRuntimeInputs, HeldRuntimeObject, RuntimeObjectIdentity};
+use super::HeldRuntimeInputs;
+use crate::binary_artifact_receipt::process;
 use crate::binary_artifact_receipt::runtime_linkage::MAX_PREPARED_SET_BYTES;
-use crate::binary_artifact_receipt::{process, runtime_elf::RuntimeElfRole};
 
+mod bindings;
 mod policy;
 mod receipt;
+mod seccomp;
 mod tool;
 
 pub(super) use crate::binary_artifact_receipt::runtime_linkage::PREPARED_LOADER_POLICY;
-pub(super) use policy::{ExpectedBwrapIdentity, ExpectedRuntimeElfPolicy};
-
-const ARTIFACT_DESTINATION: &str = "/artifact";
-const FILE_MODE: u32 = 0o444;
-const EXECUTABLE_MODE: u32 = 0o555;
-const ROOT_TMPFS_BYTES_TEXT: &str = "134217728";
+pub(super) use bindings::PreparedBindingIdentity;
+use bindings::ProbeBinding;
+pub(super) use policy::{
+    ExpectedBwrapIdentity, ExpectedPreparedSeccompPolicy, ExpectedRuntimeElfPolicy,
+};
+#[cfg(test)]
+pub(super) use seccomp::{
+    canonical_bytes_for_test as seccomp_bytes_for_test,
+    policy_identity_for_test as seccomp_identity_for_test,
+    validate_bytes_for_test as validate_seccomp_bytes_for_test, PREPARED_SECCOMP_POLICY,
+};
 const MIN_TRANSFER_FD: libc::c_int = 64;
 const MAX_TRANSFER_FD: libc::c_int = 1023;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PreparedBindingIdentity {
-    pub(super) object: RuntimeObjectIdentity,
-    pub(super) destination: String,
-    pub(super) mode: u32,
-}
-
-#[derive(Debug)]
-pub(super) struct ProbeBinding {
-    identity: PreparedBindingIdentity,
-    transfer: File,
-}
 
 #[derive(Debug)]
 pub(super) struct PreparedRuntimeProbe<'a> {
@@ -54,7 +46,9 @@ pub(super) struct PreparedRuntimeProbe<'a> {
     bwrap: tool::HeldBwrap,
     expected_bwrap: ExpectedBwrapIdentity,
     expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
+    expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
     bindings: Vec<ProbeBinding>,
+    seccomp: seccomp::PreparedSeccompPolicy,
     pub(super) arguments: Vec<OsString>,
 }
 
@@ -63,6 +57,9 @@ pub(super) struct PreparedRuntimeObservation {
     pub(super) loader_policy: &'static str,
     pub(super) runtime_elf_policy: &'static str,
     pub(super) runtime_elf_policy_sha256: String,
+    pub(super) seccomp_policy: &'static str,
+    pub(super) seccomp_policy_sha256: String,
+    pub(super) seccomp_policy_byte_length: u64,
     pub(super) view: super::super::RuntimeLinkageView,
     pub(super) bindings: Vec<PreparedBindingIdentity>,
     pub(super) bwrap_sha256: String,
@@ -77,8 +74,93 @@ pub(super) fn execute(
     held: HeldRuntimeInputs<'_>,
     expected_bwrap: ExpectedBwrapIdentity,
     expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
+    expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
 ) -> Result<PreparedRuntimeObservation, String> {
-    PreparedRuntimeProbe::prepare(held, expected_bwrap, expected_runtime_elf_policy)?.execute()
+    PreparedRuntimeProbe::prepare(
+        held,
+        expected_bwrap,
+        expected_runtime_elf_policy,
+        expected_seccomp_policy,
+    )?
+    .execute()
+}
+
+#[cfg(test)]
+pub(super) fn execute_seccomp_canary_for_test(
+    expected_bwrap: ExpectedBwrapIdentity,
+    expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
+    canary: std::fs::File,
+) -> Result<process::Output, String> {
+    let bwrap = tool::HeldBwrap::bind(&expected_bwrap)?;
+    let seccomp = seccomp::PreparedSeccompPolicy::new(&expected_seccomp_policy)?;
+    // Match production's descriptor topology. The original low descriptor
+    // remains CLOEXEC while only this high, sealed duplicate crosses exec.
+    // Otherwise a low canary FD can shift bubblewrap's PID-1 eventfd away
+    // from the policy's exact write descriptor and create a false SIGSYS.
+    // SAFETY: F_DUPFD_CLOEXEC returns a new independently owned descriptor.
+    let canary_transfer_fd =
+        unsafe { libc::fcntl(canary.as_raw_fd(), libc::F_DUPFD_CLOEXEC, MIN_TRANSFER_FD) };
+    if !(MIN_TRANSFER_FD..=MAX_TRANSFER_FD).contains(&canary_transfer_fd) {
+        if canary_transfer_fd >= 0 {
+            // SAFETY: this branch owns the just-created descriptor.
+            unsafe { libc::close(canary_transfer_fd) };
+        }
+        return Err("prepared seccomp canary descriptor is outside its fixed range".to_owned());
+    }
+    // SAFETY: ownership of the duplicated descriptor transfers to File.
+    let canary_transfer = unsafe { std::fs::File::from_raw_fd(canary_transfer_fd) };
+    let canary_fd = canary_transfer.as_raw_fd();
+    let seccomp_fd = seccomp.raw_fd();
+    if canary_fd == seccomp_fd {
+        return Err("prepared seccomp canary aliases the policy descriptor".to_owned());
+    }
+    let arguments: Vec<OsString> = [
+        "bwrap".into(),
+        "--die-with-parent".into(),
+        "--unshare-all".into(),
+        "--unshare-user".into(),
+        "--unshare-net".into(),
+        "--disable-userns".into(),
+        "--assert-userns-disabled".into(),
+        "--clearenv".into(),
+        "--size".into(),
+        "1048576".into(),
+        "--tmpfs".into(),
+        "/".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--perms".into(),
+        "0555".into(),
+        "--ro-bind-data".into(),
+        canary_fd.to_string().into(),
+        "/canary".into(),
+        "--remount-ro".into(),
+        "/".into(),
+        "--chdir".into(),
+        "/".into(),
+        "--seccomp".into(),
+        seccomp_fd.to_string().into(),
+        "--".into(),
+        "/canary".into(),
+    ]
+    .to_vec();
+    seccomp.rewind()?;
+    let output = process::run_execveat(
+        process::ExecveatRequest {
+            executable_fd: bwrap.raw_fd(),
+            argv: arguments,
+            data_fds: vec![canary_fd, seccomp_fd],
+        },
+        "prepared seccomp forbidden-syscall canary",
+        1,
+        1024,
+        super::super::LOADER_TIMEOUT,
+    );
+    let tool_current = bwrap.assert_current();
+    let seccomp_current = seccomp.assert_current(&expected_seccomp_policy);
+    tool_current?;
+    seccomp_current?;
+    output
 }
 
 impl<'a> PreparedRuntimeProbe<'a> {
@@ -86,6 +168,7 @@ impl<'a> PreparedRuntimeProbe<'a> {
         held: HeldRuntimeInputs<'a>,
         expected_bwrap: ExpectedBwrapIdentity,
         expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
+        expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
     ) -> Result<Self, String> {
         expected_runtime_elf_policy.assert_matches(held.runtime_elf_policy())?;
         held.assert_current()?;
@@ -96,7 +179,13 @@ impl<'a> PreparedRuntimeProbe<'a> {
             return Err("prepared bubblewrap path differs from authorized identity".to_owned());
         }
         let bwrap = tool::HeldBwrap::bind(&expected_bwrap)?;
-        Self::assemble(held, bwrap, expected_bwrap, expected_runtime_elf_policy)
+        Self::assemble(
+            held,
+            bwrap,
+            expected_bwrap,
+            expected_runtime_elf_policy,
+            expected_seccomp_policy,
+        )
     }
 
     #[cfg(test)]
@@ -104,6 +193,7 @@ impl<'a> PreparedRuntimeProbe<'a> {
         held: HeldRuntimeInputs<'a>,
         expected_bwrap: ExpectedBwrapIdentity,
         expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
+        expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
     ) -> Result<Self, String> {
         expected_runtime_elf_policy.assert_matches(held.runtime_elf_policy())?;
         held.assert_current()?;
@@ -114,7 +204,13 @@ impl<'a> PreparedRuntimeProbe<'a> {
             return Err("prepared bubblewrap path differs from authorized identity".to_owned());
         }
         let bwrap = tool::HeldBwrap::bind_fixture(&expected_bwrap)?;
-        Self::assemble(held, bwrap, expected_bwrap, expected_runtime_elf_policy)
+        Self::assemble(
+            held,
+            bwrap,
+            expected_bwrap,
+            expected_runtime_elf_policy,
+            expected_seccomp_policy,
+        )
     }
 
     fn assemble(
@@ -122,26 +218,24 @@ impl<'a> PreparedRuntimeProbe<'a> {
         bwrap: tool::HeldBwrap,
         expected_bwrap: ExpectedBwrapIdentity,
         expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
+        expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
     ) -> Result<Self, String> {
-        let mut bindings = Vec::with_capacity(held.objects.len() + 2);
-        bindings.push(binding(&held.artifact, ARTIFACT_DESTINATION, FILE_MODE)?);
-        bindings.push(binding(
-            &held.loader,
-            &held.loader.identity.logical_path,
-            EXECUTABLE_MODE,
-        )?);
-        for object in &held.objects {
-            bindings.push(binding(object, &object.identity.logical_path, FILE_MODE)?);
-        }
-        bindings.sort_by(|left, right| left.identity.destination.cmp(&right.identity.destination));
-        validate_bindings(&bindings, &held)?;
-        let arguments = arguments(&bindings, held.candidate.elf_interpreter());
+        let bindings = bindings::create(&held)?;
+        let seccomp = seccomp::PreparedSeccompPolicy::new(&expected_seccomp_policy)?;
+        bindings::validate(&bindings, &held, seccomp.raw_fd())?;
+        let arguments = bindings::arguments(
+            &bindings,
+            seccomp.raw_fd(),
+            held.candidate.elf_interpreter(),
+        );
         let probe = Self {
             held,
             bwrap,
             expected_bwrap,
             expected_runtime_elf_policy,
+            expected_seccomp_policy,
             bindings,
+            seccomp,
             arguments,
         };
         probe.validate()?;
@@ -167,6 +261,7 @@ impl<'a> PreparedRuntimeProbe<'a> {
         self.validate()?;
         self.held.assert_current()?;
         self.bwrap.assert_current()?;
+        self.seccomp.rewind()?;
         let request = process::ExecveatRequest {
             executable_fd: self.bwrap.raw_fd(),
             argv: self.arguments.clone(),
@@ -174,14 +269,18 @@ impl<'a> PreparedRuntimeProbe<'a> {
                 .bindings
                 .iter()
                 .map(|binding| binding.transfer.as_raw_fd())
+                .chain(std::iter::once(self.seccomp.raw_fd()))
                 .collect(),
         };
         let output = runner(request);
         let tool_current = self.bwrap.assert_current();
         let inputs_current = self.held.assert_current();
-        let bindings_current = validate_bindings(&self.bindings, &self.held);
+        let seccomp_current = self.seccomp.assert_current(&self.expected_seccomp_policy);
+        let bindings_current =
+            bindings::validate(&self.bindings, &self.held, self.seccomp.raw_fd());
         tool_current?;
         inputs_current?;
+        seccomp_current?;
         bindings_current?;
         let output = output?;
         self.finish(output)
@@ -214,6 +313,9 @@ impl<'a> PreparedRuntimeProbe<'a> {
             loader_policy: PREPARED_LOADER_POLICY,
             runtime_elf_policy: self.held.runtime_elf_policy().id(),
             runtime_elf_policy_sha256: self.held.runtime_elf_policy().sha256().to_owned(),
+            seccomp_policy: self.seccomp.identity().id(),
+            seccomp_policy_sha256: self.seccomp.identity().sha256().to_owned(),
+            seccomp_policy_byte_length: self.seccomp.identity().byte_length(),
             view,
             bindings: self
                 .bindings
@@ -243,7 +345,11 @@ impl<'a> PreparedRuntimeProbe<'a> {
             .assert_matches(self.held.runtime_elf_policy())?;
         self.held.assert_current()?;
         self.bwrap.assert_current()?;
-        validate_bindings(&self.bindings, &self.held)?;
+        self.seccomp.assert_current(&self.expected_seccomp_policy)?;
+        if self.bwrap.raw_fd() == self.seccomp.raw_fd() {
+            return Err("prepared executable aliases the seccomp policy".to_owned());
+        }
+        bindings::validate(&self.bindings, &self.held, self.seccomp.raw_fd())?;
         if self.arguments.is_empty() || self.arguments.len() > process::MAX_EXECVEAT_ARGUMENTS {
             return Err("prepared runtime loader argument count exceeds policy".to_owned());
         }
@@ -255,7 +361,13 @@ impl<'a> PreparedRuntimeProbe<'a> {
         if argument_bytes > process::MAX_EXECVEAT_ARGUMENT_BYTES {
             return Err("prepared runtime loader argument bytes exceed policy".to_owned());
         }
-        if self.arguments != arguments(&self.bindings, self.held.candidate.elf_interpreter()) {
+        if self.arguments
+            != bindings::arguments(
+                &self.bindings,
+                self.seccomp.raw_fd(),
+                self.held.candidate.elf_interpreter(),
+            )
+        {
             return Err("prepared runtime loader argument policy drift".to_owned());
         }
         Ok(())
@@ -286,177 +398,22 @@ impl<'a> PreparedRuntimeProbe<'a> {
     ) {
         self.expected_runtime_elf_policy = expected;
     }
-}
 
-fn binding(
-    object: &HeldRuntimeObject,
-    destination: &str,
-    mode: u32,
-) -> Result<ProbeBinding, String> {
-    super::linux::assert_sealed_current(&object.sealed)?;
-    // SAFETY: the sealed source descriptor is live; F_DUPFD_CLOEXEC returns a
-    // new independently owned descriptor that shares only the read offset.
-    let descriptor = unsafe {
-        libc::fcntl(
-            object.sealed.file.as_raw_fd(),
-            libc::F_DUPFD_CLOEXEC,
-            MIN_TRANSFER_FD,
-        )
-    };
-    if !(MIN_TRANSFER_FD..=MAX_TRANSFER_FD).contains(&descriptor) {
-        if descriptor >= 0 {
-            // SAFETY: this branch owns the just-created descriptor.
-            unsafe { libc::close(descriptor) };
-        }
-        return Err("prepared transfer descriptor is outside its fixed range".to_owned());
+    #[cfg(test)]
+    pub(super) fn replace_expected_seccomp_policy_for_test(
+        &mut self,
+        expected: ExpectedPreparedSeccompPolicy,
+    ) {
+        self.expected_seccomp_policy = expected;
     }
-    // SAFETY: ownership of the new descriptor transfers to File.
-    let transfer = unsafe { File::from_raw_fd(descriptor) };
-    Ok(ProbeBinding {
-        identity: PreparedBindingIdentity {
-            object: object.identity.clone(),
-            destination: destination.to_owned(),
-            mode,
-        },
-        transfer,
-    })
-}
 
-fn validate_bindings(
-    bindings: &[ProbeBinding],
-    held: &HeldRuntimeInputs<'_>,
-) -> Result<(), String> {
-    if bindings.len() != held.identities.len() || bindings.len() < 3 {
-        return Err("prepared runtime binding count differs from held inputs".to_owned());
+    #[cfg(test)]
+    pub(super) fn replace_seccomp_transfer_for_test(&mut self, replacement: std::fs::File) {
+        self.seccomp.replace_transfer_for_test(replacement);
     }
-    let mut destinations = BTreeSet::new();
-    let mut descriptors = BTreeSet::new();
-    let mut artifact = 0;
-    let mut loader = 0;
-    for binding in bindings {
-        let destination = binding.identity.destination.as_str();
-        match binding.identity.object.role {
-            RuntimeElfRole::RootPie => {
-                artifact += 1;
-                if destination != ARTIFACT_DESTINATION || binding.identity.mode != FILE_MODE {
-                    return Err("prepared artifact binding is outside policy".to_owned());
-                }
-            }
-            RuntimeElfRole::Loader => {
-                loader += 1;
-                super::super::validate_runtime_file_path(destination, "prepared loader")?;
-                if destination != held.candidate.elf_interpreter()
-                    || binding.identity.mode != EXECUTABLE_MODE
-                {
-                    return Err("prepared loader binding is outside policy".to_owned());
-                }
-            }
-            RuntimeElfRole::Libc | RuntimeElfRole::SharedObject => {
-                super::super::validate_runtime_file_path(destination, "prepared runtime object")?;
-                if binding.identity.mode != FILE_MODE {
-                    return Err("prepared runtime object mode is outside policy".to_owned());
-                }
-            }
-        }
-        let descriptor = binding.transfer.as_raw_fd();
-        if !destinations.insert(destination)
-            || !descriptors.insert(descriptor)
-            || !(MIN_TRANSFER_FD..=MAX_TRANSFER_FD).contains(&descriptor)
-        {
-            return Err("prepared runtime binding is ambiguous".to_owned());
-        }
-        let sealed = object_for(held, &binding.identity.object)?;
-        super::linux::assert_sealed_current(sealed)?;
-        super::linux::assert_sealed_duplicate_current(&binding.transfer, sealed)?;
-    }
-    if artifact != 1 || loader != 1 {
-        return Err("prepared runtime binding roles are incomplete".to_owned());
-    }
-    let bound: Vec<_> = bindings
-        .iter()
-        .map(|binding| binding.identity.object.clone())
-        .collect();
-    let mut expected = held.identities.clone();
-    expected.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
-    let mut bound_sorted = bound;
-    bound_sorted.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
-    if bound_sorted != expected {
-        return Err("prepared runtime bindings differ from held identities".to_owned());
-    }
-    Ok(())
-}
 
-fn object_for<'a>(
-    held: &'a HeldRuntimeInputs<'_>,
-    identity: &RuntimeObjectIdentity,
-) -> Result<&'a super::linux::SealedBytes, String> {
-    std::iter::once(&held.artifact)
-        .chain(std::iter::once(&held.loader))
-        .chain(held.objects.iter())
-        .find(|object| object.identity == *identity)
-        .map(|object| &object.sealed)
-        .ok_or_else(|| "prepared binding has no held sealed source".to_owned())
-}
-
-fn arguments(bindings: &[ProbeBinding], interpreter: &str) -> Vec<OsString> {
-    // `--new-session` is deliberately absent: stdio is non-TTY and process-group
-    // teardown depends on bubblewrap remaining in the controller-created group.
-    let mut values = strings(&[
-        "bwrap",
-        "--die-with-parent",
-        "--unshare-all",
-        "--unshare-user",
-        "--unshare-net",
-        "--disable-userns",
-        "--assert-userns-disabled",
-        "--clearenv",
-        "--size",
-        ROOT_TMPFS_BYTES_TEXT,
-        "--tmpfs",
-        "/",
-        "--cap-drop",
-        "ALL",
-    ]);
-    for parent in binding_parents(bindings) {
-        values.extend(["--dir".into(), parent.into_os_string()]);
+    #[cfg(test)]
+    pub(super) fn seccomp_fd_for_test(&self) -> libc::c_int {
+        self.seccomp.raw_fd()
     }
-    for binding in bindings {
-        values.extend([
-            "--perms".into(),
-            format!("{:04o}", binding.identity.mode).into(),
-            "--ro-bind-data".into(),
-            binding.transfer.as_raw_fd().to_string().into(),
-            binding.identity.destination.as_str().into(),
-        ]);
-    }
-    values.extend(strings(&[
-        "--remount-ro",
-        "/",
-        "--setenv",
-        "LC_ALL",
-        "C",
-        "--chdir",
-        "/",
-        "--",
-        interpreter,
-        "--inhibit-cache",
-        "--glibc-hwcaps-mask",
-        "",
-        "--list",
-        ARTIFACT_DESTINATION,
-    ]));
-    values
-}
-
-fn binding_parents(bindings: &[ProbeBinding]) -> BTreeSet<PathBuf> {
-    bindings
-        .iter()
-        .flat_map(|binding| Path::new(&binding.identity.destination).ancestors().skip(1))
-        .filter(|parent| *parent != Path::new("/"))
-        .map(Path::to_path_buf)
-        .collect()
-}
-
-fn strings(values: &[&str]) -> Vec<OsString> {
-    values.iter().map(OsString::from).collect()
 }

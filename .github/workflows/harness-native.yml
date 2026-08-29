@@ -9,7 +9,7 @@ jobs:
     # Hosted GitHub runners cannot create the network namespace required by the
     # production bwrap contract. This job is intentionally dispatched only to a
     # provisioned runner whose labels attest that it can enforce both boundaries.
-    runs-on: [self-hosted, linux, bwrap, systemd-user]
+    runs-on: [self-hosted, linux, x64, bwrap, systemd-user]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -23,6 +23,7 @@ jobs:
         run: rustup show
       - name: preflight native isolation capabilities
         run: |
+          test "$(uname -m)" = x86_64
           test -x /usr/bin/bwrap
           test "$(stat -c %s /usr/bin/bwrap)" = 72160
           echo '52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712  /usr/bin/bwrap' |
@@ -50,13 +51,19 @@ jobs:
         run: npm --prefix coding-harness test
       - name: build release-profile sf-cli binary for sealed runtime observation
         run: cargo build --locked --release -p sf-cli
-      # This private one-shot test establishes only that sealed-source copies
-      # reproduce the prior loader view, then verifies a canonical record by
-      # provider-free semantic replay in memory. It emits no durable receipt and
-      # grants no execution provenance, admission, performance, or release authority.
-      - name: test sealed-source-copy runtime observation
+      # These private one-shot tests establish that the exact late seccomp
+      # policy kills a forbidden socket syscall and still permits sealed-source
+      # copies to reproduce the prior loader view. They emit no durable receipt
+      # and grant no syscall trace, execution provenance, admission, performance,
+      # or release authority.
+      - name: test sealed-source-copy runtime observation and seccomp canary
+        timeout-minutes: 20
         run: |
           test_name='binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies'
           listed="$(cargo test --locked -p sf-conformance --features evidence-receipts --lib "$test_name" -- --ignored --exact --list)"
           test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
           cargo test --locked -p sf-conformance --features evidence-receipts --lib "$test_name" -- --ignored --exact --test-threads=1
+          canary_name='binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_seccomp::prepared_seccomp_native_canary_kills_a_forbidden_socket_syscall'
+          canary_listed="$(cargo test --locked -p sf-conformance --features evidence-receipts --lib "$canary_name" -- --ignored --exact --list)"
+          test "$(printf '%s\n' "$canary_listed" | grep -Fxc "$canary_name: test")" = 1
+          cargo test --locked -p sf-conformance --features evidence-receipts --lib "$canary_name" -- --ignored --exact --test-threads=1

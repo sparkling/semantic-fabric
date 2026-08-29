@@ -2,7 +2,10 @@ use super::*;
 mod adversarial;
 mod prepared_probe;
 mod prepared_receipt;
+mod prepared_seccomp;
+mod prepared_seccomp_canary;
 mod runtime_elf_policy;
+mod support;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -10,25 +13,19 @@ use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::binary_artifact_receipt::runtime_elf::{
-    runtime_elf_policy_identity,
-    tests::{libc_fixture, loader_fixture, root_fixture, root_fixture_with_needed, shared_fixture},
+use crate::binary_artifact_receipt::runtime_elf::tests::{
+    libc_fixture, loader_fixture, root_fixture, root_fixture_with_needed, shared_fixture,
 };
-use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_probe::ExpectedRuntimeElfPolicy;
 use crate::binary_artifact_receipt::runtime_linkage::{
-    build_plan, ResolvedRuntimeObject, RuntimeReadOnlyMount, VirtualRuntimeObject,
+    build_plan, ResolvedRuntimeObject, VirtualRuntimeObject,
 };
+use support::{directory, fixture_runtime_elf_policy, fixture_seccomp_policy, mount, regular};
 
 const INTERPRETER: &str = "/lib64/ld-linux-x86-64.so.2";
 const LIBC_PATH: &str = "/lib/x86_64-linux-gnu/libc.so.6";
 const LOADER_TERMINAL: &str = "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2";
 
 static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
-
-fn fixture_runtime_elf_policy() -> ExpectedRuntimeElfPolicy {
-    let actual = runtime_elf_policy_identity();
-    ExpectedRuntimeElfPolicy::new(actual.id(), actual.sha256()).unwrap()
-}
 
 struct Fixture {
     root: PathBuf,
@@ -487,21 +484,4 @@ fn dropping_the_holder_closes_every_sealed_descriptor() {
             );
         }
     }
-}
-
-fn mount(source: &Path, destination: &str) -> RuntimeReadOnlyMount {
-    RuntimeReadOnlyMount {
-        source: source.to_path_buf(),
-        destination: destination.to_owned(),
-    }
-}
-
-fn directory(path: &Path, mode: u32) {
-    fs::create_dir(path).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
-}
-
-fn regular(path: &Path, bytes: &[u8], mode: u32) {
-    fs::write(path, bytes).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }

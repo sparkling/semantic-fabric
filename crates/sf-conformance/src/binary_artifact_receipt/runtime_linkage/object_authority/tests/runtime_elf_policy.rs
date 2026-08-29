@@ -40,9 +40,13 @@ fn runtime_elf_policy_id_or_digest_drift_rejects_before_probe_construction() {
     for (field, expected) in stale_policies() {
         let fixture = Fixture::new(&format!("runtime-elf-policy-prepare-{field}"));
         let held = hold_runtime_inputs(&fixture.pair, &fixture.plan, &fixture.view).unwrap();
-        let error =
-            PreparedRuntimeProbe::prepare_with_test_tool(held, tool_identity(&fixture), expected)
-                .unwrap_err();
+        let error = PreparedRuntimeProbe::prepare_with_test_tool(
+            held,
+            tool_identity(&fixture),
+            expected,
+            fixture_seccomp_policy(),
+        )
+        .unwrap_err();
         assert!(error.contains("pinned expectation"), "{field}: {error}");
     }
 }
@@ -56,6 +60,7 @@ fn runtime_elf_policy_id_or_digest_drift_rejects_before_runner_invocation() {
             held,
             tool_identity(&fixture),
             fixture_runtime_elf_policy(),
+            fixture_seccomp_policy(),
         )
         .unwrap();
         probe.replace_expected_runtime_elf_policy_for_test(expected);

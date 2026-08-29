@@ -248,8 +248,14 @@ impl HeldRuntimeInputs<'_> {
         self,
         expected_bwrap: prepared_probe::ExpectedBwrapIdentity,
         expected_runtime_elf_policy: prepared_probe::ExpectedRuntimeElfPolicy,
+        expected_seccomp_policy: prepared_probe::ExpectedPreparedSeccompPolicy,
     ) -> Result<prepared_probe::PreparedRuntimeObservation, String> {
-        prepared_probe::execute(self, expected_bwrap, expected_runtime_elf_policy)
+        prepared_probe::execute(
+            self,
+            expected_bwrap,
+            expected_runtime_elf_policy,
+            expected_seccomp_policy,
+        )
     }
 
     fn assert_current_with_phase_hook(

@@ -3,13 +3,11 @@ use super::*;
 use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::process::Command;
 
 use crate::binary_artifact_receipt::process;
 use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_probe::{
     ExpectedBwrapIdentity, PreparedRuntimeProbe, PREPARED_LOADER_POLICY,
 };
-use crate::binary_artifact_receipt::runtime_linkage::prepared_receipt::{parse, render};
 use crate::binary_artifact_receipt::RUNTIME_ELF_POLICY;
 
 fn prepare_fixture(fixture: &Fixture) -> PreparedRuntimeProbe<'_> {
@@ -18,6 +16,7 @@ fn prepare_fixture(fixture: &Fixture) -> PreparedRuntimeProbe<'_> {
         held,
         fixture_tool_identity(fixture),
         fixture_runtime_elf_policy(),
+        fixture_seccomp_policy(),
     )
     .unwrap()
 }
@@ -87,6 +86,8 @@ fn prepared_policy_uses_only_canonical_sealed_source_copy_bindings() {
             "C",
             "--chdir",
             "/",
+            "--seccomp",
+            "<seccomp-fd>",
             "--",
             INTERPRETER,
             "--inhibit-cache",
@@ -123,6 +124,7 @@ fn prepared_policy_uses_only_canonical_sealed_source_copy_bindings() {
         "--dev",
         "--new-session",
         "--share-net",
+        "--add-seccomp-fd",
     ] {
         assert!(
             !arguments.iter().any(|value| value == forbidden),
@@ -137,6 +139,22 @@ fn prepared_policy_uses_only_canonical_sealed_source_copy_bindings() {
             .count(),
         3
     );
+    let seccomp = arguments
+        .iter()
+        .position(|value| value == "--seccomp")
+        .unwrap();
+    assert_eq!(
+        arguments
+            .iter()
+            .filter(|value| *value == "--seccomp")
+            .count(),
+        1
+    );
+    assert_eq!(
+        arguments[seccomp + 1],
+        probe.seccomp_fd_for_test().to_string()
+    );
+    assert_eq!(arguments[seccomp + 2], "--");
     let mut descriptors = BTreeSet::new();
     for index in arguments
         .iter()
@@ -226,6 +244,7 @@ fn prepared_probe_requires_an_independent_exact_tool_expectation() {
         held,
         wrong_digest,
         fixture_runtime_elf_policy(),
+        fixture_seccomp_policy(),
     )
     .unwrap_err();
     assert!(error.contains("authorized identity"), "{error}");
@@ -244,6 +263,7 @@ fn prepared_probe_requires_an_independent_exact_tool_expectation() {
         held,
         wrong_path,
         fixture_runtime_elf_policy(),
+        fixture_seccomp_policy(),
     )
     .unwrap_err();
     assert!(error.contains("path differs"), "{error}");
@@ -395,96 +415,7 @@ fn prepared_execution_fences_before_and_after_the_runner() {
 #[test]
 #[ignore = "requires labelled self-hosted Linux bubblewrap and a release-profile binary"]
 fn prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies() {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/release/semantic-fabric");
-    assert!(
-        source.is_file(),
-        "build the release-profile binary before this gate"
-    );
-    let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!(
-        "semantic-fabric-prepared-native-{}-{id}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    directory(&root, 0o700);
-    let selected = root.join("selected");
-    let linked = root.join("linked");
-    fs::copy(&source, &selected).unwrap();
-    fs::set_permissions(&selected, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::hard_link(&selected, &linked).unwrap();
-    let pair = ArtifactPair::bind(&selected, &linked).unwrap();
-    let bytes = fs::read(&selected).unwrap();
-    let elf = parse_runtime_elf(&bytes, RuntimeElfRole::RootPie).unwrap();
-    let interpreter = elf.interpreter().unwrap().to_owned();
-    let mut needed = elf.needed().to_vec();
-    needed.sort();
-    let plan = crate::binary_artifact_receipt::runtime_linkage::plan_runtime_linkage(
-        Path::new("/usr/bin/bwrap"),
-        &selected,
-        &interpreter,
-    )
-    .unwrap();
-    assert!(plan.clears_parent_environment());
-    let mut discovery = Command::new(plan.executable());
-    discovery.env_clear().args(plan.arguments());
-    let output = crate::binary_artifact_receipt::process::run(
-        discovery,
-        "unauthorized candidate runtime discovery",
-        plan.max_stdout_bytes(),
-        plan.max_stderr_bytes(),
-        plan.timeout(),
-    )
-    .unwrap();
-    assert!(output.stderr.is_empty());
-    let view = crate::binary_artifact_receipt::runtime_linkage::parse_runtime_linkage_view(
-        pair.sha256(),
-        &interpreter,
-        &needed,
-        &output.stdout,
-    )
-    .unwrap();
-    let held = hold_runtime_inputs(&pair, &plan, &view).unwrap();
-    let expected_bwrap = ExpectedBwrapIdentity::new(
-        Path::new("/usr/bin/bwrap"),
-        "52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712",
-        72_160,
-        "ubuntu-24.04-bubblewrap-0.9.0-main-elf-only-host-dynamic-closure-unbound-v1",
-    )
-    .unwrap();
-    let expected_runtime_elf_policy = ExpectedRuntimeElfPolicy::new(
-        "elf64-le-x86_64-closed-dynamic-tags-safe-search-flags-v1",
-        "cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a",
-    )
-    .unwrap();
-    let observation = held
-        .execute_prepared(expected_bwrap, expected_runtime_elf_policy)
-        .unwrap();
-
-    assert_eq!(observation.view, view);
-    assert_eq!(observation.loader_policy, PREPARED_LOADER_POLICY);
-    assert_eq!(observation.runtime_elf_policy, RUNTIME_ELF_POLICY);
-    assert_eq!(
-        observation.runtime_elf_policy_sha256,
-        "cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a"
-    );
-    assert_eq!(
-        observation.bindings.len(),
-        view.resolved_objects().len() + 2
-    );
-    assert_eq!(observation.stdout_sha256.len(), 64);
-    assert_eq!(
-        observation.bwrap_executable_policy,
-        "ubuntu-24.04-bubblewrap-0.9.0-main-elf-only-host-dynamic-closure-unbound-v1"
-    );
-    let receipt = observation.to_non_admission_receipt().unwrap();
-    let canonical = render(&receipt).unwrap();
-    let replayed = parse(&canonical).unwrap();
-    assert_eq!(render(&replayed).unwrap(), canonical);
-    assert_eq!(replayed.semantic_replay().unwrap(), view);
-    assert!(canonical.contains("meta\tauthority\tnone\n"));
-    assert!(canonical.contains("meta\tadmission-result\tnot-evaluated\n"));
-    drop(pair);
-    fs::remove_dir_all(root).unwrap();
+    super::prepared_seccomp::run_native_prepared_probe();
 }
 
 fn synthetic_output(libc_path: &str) -> Vec<u8> {
@@ -501,6 +432,8 @@ fn normalize_transfer_fds(arguments: &[String]) -> Vec<String> {
     for index in 0..normalized.len().saturating_sub(1) {
         if normalized[index] == "--ro-bind-data" {
             normalized[index + 1] = "<sealed-fd>".to_owned();
+        } else if normalized[index] == "--seccomp" {
+            normalized[index + 1] = "<seccomp-fd>".to_owned();
         }
     }
     normalized

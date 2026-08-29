@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,14 +96,19 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/logical_path.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/sealed.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/bindings.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/policy.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/receipt.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/seccomp.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/tool.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/adversarial.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_probe.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_receipt.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_seccomp.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_seccomp_canary.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/runtime_elf_policy.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/support.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/format.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/format/tests.rs',
@@ -190,6 +196,12 @@ const REQUIRED_ARTIFACT_OBSERVATION_TEST =
 
 const NATIVE_PREPARED_OBSERVATION_TEST =
   'binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies';
+
+const NATIVE_PREPARED_SECCOMP_CANARY_TEST =
+  'binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_seccomp::prepared_seccomp_native_canary_kills_a_forbidden_socket_syscall';
+
+const NATIVE_WORKFLOW_SHA256 =
+  '4431a4bea94f782b6fb21b7a214ea8d4ee54a85cb466846b7b0fab9719378bc4';
 
 describe('M0 protected authority and CI contract', () => {
   it('protects every tracked authority in both config and manifest', () => {
@@ -302,15 +314,86 @@ describe('M0 protected authority and CI contract', () => {
       resolve(repository, '.github/workflows/harness-native.yml'),
       'utf8',
     );
-    expect(workflow).toContain('workflow_dispatch:');
-    expect(workflow.split(NATIVE_PREPARED_OBSERVATION_TEST)).toHaveLength(2);
-    expect(workflow).toContain('grep -Fxc "$test_name: test"');
-    expect(workflow).toContain('-- --ignored --exact --test-threads=1');
-    expect(workflow).toContain('provider-free semantic replay in memory');
-    expect(workflow).toContain('grants no');
-    expect(workflow).toContain(
-      'execution provenance, admission, performance, or release authority',
-    );
+    const lines = workflow.split(/\r?\n/);
+    expect(createHash('sha256').update(workflow).digest('hex')).toBe(NATIVE_WORKFLOW_SHA256);
+    const stepLines = (name: string): string[] => {
+      const marker = `      - name: ${name}`;
+      expect(lines.filter((line) => line === marker)).toHaveLength(1);
+      const start = lines.indexOf(marker);
+      const next = lines.slice(start + 1).findIndex((line) => /^      - /.test(line));
+      const end = next < 0 ? lines.length : start + next + 1;
+      return lines.slice(start, end);
+    };
+    const active = (command: string): string => `          ${command}`;
+    const observationName = `test_name='${NATIVE_PREPARED_OBSERVATION_TEST}'`;
+    const observationList =
+      'listed="$(cargo test --locked -p sf-conformance --features evidence-receipts --lib "$test_name" -- --ignored --exact --list)"';
+    const observationCount =
+      'test "$(printf \'%s\\n\' "$listed" | grep -Fxc "$test_name: test")" = 1';
+    const observationRun =
+      'cargo test --locked -p sf-conformance --features evidence-receipts --lib "$test_name" -- --ignored --exact --test-threads=1';
+    const canaryName = `canary_name='${NATIVE_PREPARED_SECCOMP_CANARY_TEST}'`;
+    const canaryList =
+      'canary_listed="$(cargo test --locked -p sf-conformance --features evidence-receipts --lib "$canary_name" -- --ignored --exact --list)"';
+    const canaryCount =
+      'test "$(printf \'%s\\n\' "$canary_listed" | grep -Fxc "$canary_name: test")" = 1';
+    const canaryRun =
+      'cargo test --locked -p sf-conformance --features evidence-receipts --lib "$canary_name" -- --ignored --exact --test-threads=1';
+    const preflight = stepLines('preflight native isolation capabilities');
+    const native = stepLines('test sealed-source-copy runtime observation and seccomp canary');
+    expect(lines.filter((line) => /^\S/.test(line))).toEqual([
+      'name: harness-native',
+      'on:',
+      'jobs:',
+    ]);
+    expect(lines.filter((line) => /^  \S/.test(line))).toEqual([
+      '  workflow_dispatch:',
+      '  native-isolation:',
+    ]);
+    expect(lines.filter((line) => /^    (?!#)\S/.test(line))).toEqual([
+      '    name: native isolation · node 24.14.1 · required capability gate',
+      '    runs-on: [self-hosted, linux, x64, bwrap, systemd-user]',
+      '    steps:',
+    ]);
+    expect(lines.filter((line) => line === '  workflow_dispatch:')).toHaveLength(1);
+    expect(lines.filter((line) => /^\s+['"]?if['"]?:/.test(line))).toHaveLength(0);
+    expect(lines.filter((line) => /^\s+['"]?continue-on-error['"]?:/.test(line)))
+      .toHaveLength(0);
+    expect(lines.filter((line) => /^\s+['"]?(defaults|shell)['"]?:/.test(line)))
+      .toHaveLength(0);
+    expect(lines.filter((line) =>
+      line === '    runs-on: [self-hosted, linux, x64, bwrap, systemd-user]')).toHaveLength(1);
+    expect(preflight).toContain('        run: |');
+    expect(preflight.filter((line) => line === active('test "$(uname -m)" = x86_64')))
+      .toHaveLength(1);
+    expect(native).toContain('        timeout-minutes: 20');
+    expect(native).toContain('        run: |');
+    const commands = [
+      observationName,
+      observationList,
+      observationCount,
+      observationRun,
+      canaryName,
+      canaryList,
+      canaryCount,
+      canaryRun,
+    ];
+    expect(native.filter((line) => line.length > 0)).toEqual([
+      '      - name: test sealed-source-copy runtime observation and seccomp canary',
+      '        timeout-minutes: 20',
+      '        run: |',
+      ...commands.map(active),
+    ]);
+    for (const command of commands) {
+      expect(native.filter((line) => line === active(command))).toHaveLength(1);
+    }
+    expect(native.filter((line) => line.startsWith('          ')))
+      .toEqual(commands.map(active));
+    const ordered = commands.map((command) => native.indexOf(active(command)));
+    expect(ordered).toEqual([...ordered].sort((left, right) => left - right));
+    expect(workflow).toContain('grant no syscall trace');
+    expect(workflow).toContain('execution provenance, admission, performance');
+    expect(workflow).toContain('or release authority');
   });
 
   it('keeps the minimal production artifact planned until its release gates close', () => {
