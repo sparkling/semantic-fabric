@@ -256,15 +256,13 @@ tests reject links, extras, replacement, worktree drift and output injection.
 These local views prove no external witness, rollback resistance, provenance,
 host admission, build, receipt, baseline, or measurement.
 
-Commits `99fa2e1` and `92f5376` add the non-authorizing supervisor verifier and
-freeze RFC 8032 section 7.1 Test 1 with a public test-only seed that is never a
-runtime key. Static vectors pin fixed claim/request fields and digest,
-acknowledgement fields/digest, exact signing bytes/digest/signature, and exact
-canonical envelope bytes/digest. The fixed SPKI and envelope traverse the
-production verifier; wrong request/ack digest domains, empty or changed payloads,
-and changed signatures fail. Receipt `97ca5d7…c36606f` is deterministic; 103 files
-pass (742 tests, two skips). There is no production signer, transport, durable
-persistence/log, independent administration, lease/attempt/state/capture authority, or real acknowledgement.
+Commits `99fa2e1` and `92f5376` add and freeze the non-authorizing signed registration seam; `7139b05`, `1d33638`, `3ee0ed6`, and `d54518f` add RFC 9162 proof verification, shared Ed25519 verification, signed checkpoints, and registration inclusion/consistency replay.
+The leaf is reconstructed from the reverified canonical registration envelope; the prior checkpoint is canonical and independently digest-pinned, while only the new checkpoint is signature-verified.
+Sequence/tree bounds, exact proof consumption, key/log/supervisor/epoch substitution, async key/proof mutation, zero-trap proxy rejection, and conflicting signed extensions are covered.
+Evidence distinguishes unsigned prior from signed new checkpoint and keeps fork, rollback, persistence, global order, admission, lease, attempt, and capture authority unproved or false.
+The independent KAT pins leaf, tree, proof, checkpoint, signature, and validation bytes (`eca1b7e1…1ee6`).
+The hardened build and all 108 files pass (760 tests, two expected skips), with no remaining P0/P1 from independent adversarial review.
+There is no production signer, transport, durable log/service, independent administration, lease/attempt/state/capture authority, or real supervisor event.
 
 Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
 reproducibility. Final two-builder agreement must pre-register distinct trust
@@ -327,7 +325,7 @@ RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
 inventory-authoritative execution runners (`a3efb32`), plus the sealed mapping
 receipt lineage (`33e202b`, `81caec2`, `a84aa05`) and the non-authorizing
-supervisor registration and fixed wire KAT (`99fa2e1`, `92f5376`). The evidence matrix now contains
+supervisor registration, checkpoint, and log-proof lineage (`99fa2e1`, `92f5376`, `7139b05`, `3ee0ed6`, `d54518f`). The evidence matrix now contains
 74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
 v3 receipts bind immutable captured inputs to typed SQLite and required-live
 PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
@@ -344,7 +342,7 @@ not represented as a pass. Product tests remain authoritative and the flywheel
 remains off.
 
 The current M0 tranche adds query/Protocol regression baselines, the scoped `sf-cli`
-dependency receipt, performance machinery, a non-authorizing run claim and signed-envelope supervisor-registration verifier, and a strict
+dependency receipt, performance machinery, a non-authorizing run claim and signed registration/checkpoint/Merkle verifier, and a strict
 runtime-linkage parser plus private Linux observation. After unauthorized discovery, the
 prepared boundary holds sealed source bytes, pins and `execveat`s an expected bubblewrap
 inode, and requires exact `ld.so --list` equality inside a fresh read-only tmpfs. Commit
@@ -446,7 +444,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID claim, claim-rooted source, canonical signed-envelope supervisor verifier, and fixed wire KAT exist. The verifier proves key/message/claim/reference binding only. There is still no independently administered append-only witness, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next is independently administered append-only registration/lease authority plus controlled-runner admission |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID claim, claim-rooted source, signed registration/checkpoint verification, RFC 9162 inclusion/consistency replay, and independent wire KATs exist. These prove exact key/message/claim/checkpoint/proof binding but not append-only persistence or split-view resistance. There is still no independently administered log/service, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next is external append-only registration/lease authority plus controlled-runner admission |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.

@@ -59,14 +59,14 @@ concurrent exclusion within that one root only: it is owner-deletable, has no
 external append-only witness or rollback resistance, and is not the future
 runner lease. No real project claim has been minted on this ineligible host.
 
-Commit `99fa2e1` adds the development-only bounded canonical registration request, detached-signature acknowledgement, validation, and replay seam.
-Commit `92f5376` freezes RFC 8032 section 7.1 Test 1 with a public test-only seed that is never a runtime key. Fixed claim/request fields and digest,
-acknowledgement fields/digest, exact signing bytes/digest/signature, and exact canonical envelope bytes/digest are pinned.
-The fixed SPKI and envelope traverse the production verifier code path; wrong request/ack digest domains, empty or changed payloads, and changed signatures fail.
-Verification still receives the trust/log/checkpoint and rooted-claim authority independently, rejects bad keys/signatures before Git work, and rereads the exact claim.
-This proves only trusted-key/message/rooted-claim/reference binding. Receipt `97ca5d7…c36606f` is deterministic; 103 harness files pass (742 tests, two skips).
-The modules have no production signer, transport, writer, persistence/log, lease, runner, attempt, state, or capture capability; append-only/fork/global-order and independent administration remain unproved.
-No real acknowledgement was issued. The next critical boundary is independently administered append-only registration/lease authority plus controlled-runner provisioning and admission.
+Commits `99fa2e1` and `92f5376` add the bounded canonical registration request, detached-signature acknowledgement, validation/replay seam, and fixed RFC 8032 wire vector.
+Commits `7139b05`, `1d33638`, `3ee0ed6`, and `d54518f` add RFC 9162 Merkle verification, shared detached-signature verification, signed checkpoints, and registration inclusion plus checkpoint-consistency replay.
+The verifier reconstructs the leaf from the reverified canonical registration envelope, receives the key/log/checkpoint/rooted-claim anchors independently, and snapshots key and proof inputs before its first asynchronous read.
+It digest-pins the canonical prior checkpoint, signature-verifies only the new checkpoint, checks one-based sequence to zero-based leaf bounds, consumes the exact inclusion/consistency paths, and rejects key/log/supervisor/epoch substitution.
+Its evidence distinguishes `priorCheckpointSignatureVerified: false` from `newCheckpointSignatureVerified: true`; two conflicting signed extensions can both validate while fork, rollback, persistence, global order, admission, lease, attempt, and capture authority remain explicitly unproved or false.
+The fixed vector pins leaf, tree, proof, checkpoint, signature, and validation bytes; the validation digest is `eca1b7e1…1ee6`. Capability closure rejects transport, write, signing, process, and dynamic-loader mutants.
+The hardened build and all 108 harness files pass (760 tests, two expected skips), and an independent adversarial review found no remaining P0/P1 issue.
+There is still no production signer, transport, writer, persistent log, independently administered service, real acknowledgement/checkpoint, lease, runner, attempt, or capture. The next critical boundary remains external append-only registration/lease authority plus controlled-runner provisioning and admission.
 
 The first claim consumer before host admission is now implemented: it materializes the exact claimed commit, from either an exact primary or bare
 controller store, into a claim-keyed private source root disjoint from both
