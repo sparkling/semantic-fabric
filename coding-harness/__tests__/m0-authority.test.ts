@@ -7,6 +7,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
+import { PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 } from
+  '../src/programme-capture-protected-paths-v1.js';
+import { PROGRAMME_V5_POST_HISTORICAL_PATHS } from './programme-v5-post-historical-paths.js';
 
 const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repository = resolve(harnessRoot, '..');
@@ -21,21 +24,7 @@ const M0_AUTHORITY_PATHS = [
   '.cargo/audit.toml',
   '.harness/mcp-policy.json',
   'coding-harness/__tests__/m0-authority.test.ts',
-  'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-host-capabilities-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-host-preflight-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-authority-config-v2.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-capabilities-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-capabilities-v2.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-checkpoint-kat-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-checkpoint-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-kat-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-log-proof-kat-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-log-proof-v1.test.ts',
-  'coding-harness/__tests__/programme-capture-supervisor-merkle-v1.test.ts',
+  ...PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
   'coding-harness/__tests__/programme-envelope-v5.test.ts',
   'coding-harness/__tests__/programme-policy-v5.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
@@ -224,6 +213,31 @@ const NATIVE_WORKFLOW_SHA256 =
   '4431a4bea94f782b6fb21b7a214ea8d4ee54a85cb466846b7b0fab9719378bc4';
 
 describe('M0 protected authority and CI contract', () => {
+  it('keeps one exact registry of every tracked programme capture test', () => {
+    const listed = spawnSync(
+      'git', [
+        '-C', repository, 'ls-files',
+        'coding-harness/__tests__/programme-capture-*.test.ts',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(listed.status, listed.stderr).toBe(0);
+    const captureTest = /^coding-harness\/__tests__\/programme-capture-.*\.test\.ts$/;
+    const tracked = listed.stdout.split(/\r?\n/).filter(Boolean).sort();
+    const registry = [...PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1].sort();
+    const reflectedRegistries = [
+      SECURE_HARNESS_CONFIG.requiredProtectedPaths.filter((path) => captureTest.test(path)),
+      manifest.protectedPaths.filter((path) => captureTest.test(path)),
+      M0_AUTHORITY_PATHS.filter((path) => captureTest.test(path)),
+      [...PROGRAMME_V5_POST_HISTORICAL_PATHS].filter((path) => captureTest.test(path)),
+    ];
+
+    expect(registry).toEqual(tracked);
+    for (const reflected of reflectedRegistries) {
+      expect([...reflected].sort()).toEqual(registry);
+    }
+  });
+
   it('protects every tracked authority in both config and manifest', () => {
     expect(SECURE_HARNESS_CONFIG.requiredProtectedPaths)
       .toEqual(expect.arrayContaining([
