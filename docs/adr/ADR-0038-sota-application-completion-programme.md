@@ -359,6 +359,14 @@ compatible and deliberately records
 `target-seccomp-or-syscall-trace=not-attested`: it contains neither a syscall
 trace nor a final-FD inventory and does not replay the live policy proof.
 
+On 2026-08-29, commit `50adc0a` added a pre-construction check over the exact
+bounded bubblewrap bytes used for the authorized length and SHA-256: those same
+bytes must parse as `RootPie` under the existing expected runtime-ELF policy,
+and the held inode, digest, and policy are fenced around the native observation
+and canary. Both exact native controls pass. This is static preflight only:
+Receipt V1 is unchanged and non-attesting, and bubblewrap host runtime closure
+remains unbound.
+
 This is loader-resolution observation only. Candidate discovery remains prior and
 unauthorized; the artifact is not executed, and main-program, relocation,
 symbol/version, initialization, `dlopen`, NSS, VDSO and closure completeness are
@@ -368,9 +376,9 @@ dependencies or toolchain. It also does not prove the opaque GNU-property, hash,
 symbol, relocation, version, TLS or cross-table payloads outside complete
 semantic validation. Bubblewrap copies from sealed
 memfds, so the loader does not consume the original held inode capabilities.
-Bubblewrap's own host PT_INTERP, DSO, cache,
-preload and LSM closure is not bound; the kernel, bubblewrap, glibc, copy and mount
-semantics remain trusted. The exact late filter is live observation only: there
+Although the exact held bytes now pass static `RootPie` preflight, bubblewrap's
+actual host PT_INTERP, DSO, cache, preload and LSM resolution remains unbound;
+the kernel, bubblewrap, glibc, copy and mount semantics remain trusted. The exact late filter is live observation only: there
 is no post-exec final-FD inventory or syscall trace, and Receipt V1 does not
 attest it. There is no aggregate cgroup `pids.max`, memory or control-group kill;
 the other implemented limits are per process. Same-principal/root ABA, rollback and a

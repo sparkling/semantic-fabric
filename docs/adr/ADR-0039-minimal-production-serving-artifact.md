@@ -108,6 +108,14 @@ policy identity. Receipt V1 remains byte-compatible and records
 `target-seccomp-or-syscall-trace=not-attested`, so it contains no syscall trace or
 final-FD inventory and does not convert this diagnostic into replay authority.
 
+On 2026-08-29, commit `50adc0a` added a pre-construction check over the exact
+bounded bubblewrap bytes used for the authorized length and SHA-256: those same
+bytes must parse as `RootPie` under the existing expected runtime-ELF policy,
+and the held inode, digest, and policy are fenced around the native observation
+and canary. Both exact native controls pass. This is static preflight only:
+Receipt V1 is unchanged and non-attesting, and bubblewrap host runtime closure
+remains unbound.
+
 This does not accept this ADR. Discovery remains prior and unauthorized; the
 artifact is not executed; relocation, symbol/version, initialization, `dlopen`,
 NSS, VDSO and closure completeness remain unproven. The digest detects byte drift
@@ -116,7 +124,8 @@ bind compiled bytes, configuration, dependencies or toolchain. Opaque GNU-
 property, hash, symbol, relocation, version, TLS and cross-table payload semantics
 remain unproved. The loader
 consumes tmpfs copies sourced from sealed memfds, not the original held inode capabilities.
-Bubblewrap's host PT_INTERP/DSO/cache/preload/LSM closure is unbound, and kernel,
+Although the exact held bytes now pass static `RootPie` preflight, bubblewrap's
+actual host PT_INTERP/DSO/cache/preload/LSM resolution remains unbound; kernel,
 bubblewrap, glibc, copy and mount semantics are trusted. The exact late filter is
 live observation only: there is no final-FD inventory or syscall trace, and
 Receipt V1 does not attest it. There is no aggregate cgroup process/memory bound
