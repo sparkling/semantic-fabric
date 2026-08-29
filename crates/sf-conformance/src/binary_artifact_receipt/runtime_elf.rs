@@ -436,4 +436,4 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

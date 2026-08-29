@@ -36,6 +36,13 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_elf/versioning.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/loader_output.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/component.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/logical_path.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/sealed.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/adversarial.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/tests.rs',
   'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
 ]);

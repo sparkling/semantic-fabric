@@ -11,6 +11,14 @@ use std::time::Duration;
 use super::sandbox;
 
 mod loader_output;
+// This is a staged capability boundary: tests exercise it now, while a later
+// prepared-probe slice will become its sole production caller.
+#[cfg(target_os = "linux")]
+#[allow(
+    dead_code,
+    reason = "sealed runtime authority is not wired to execution yet"
+)]
+mod object_authority;
 #[cfg(test)]
 mod tests;
 

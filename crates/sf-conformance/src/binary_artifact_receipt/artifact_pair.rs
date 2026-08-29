@@ -99,6 +99,26 @@ impl ArtifactPair {
     pub(super) fn unix_mode(&self) -> u32 {
         self.identity.mode
     }
+
+    /// Duplicates the already-held selected artifact without reopening its path.
+    #[cfg(unix)]
+    pub(super) fn duplicate_selected(&self) -> Result<File, String> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        self.assert_current()?;
+        // SAFETY: `self.selected` is a live descriptor and F_DUPFD_CLOEXEC
+        // returns a new independently owned descriptor on success.
+        let descriptor =
+            unsafe { libc::fcntl(self.selected.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if descriptor < 0 {
+            return Err(format!(
+                "duplicate held artifact descriptor: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: ownership of the newly duplicated descriptor transfers here.
+        Ok(unsafe { File::from_raw_fd(descriptor) })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

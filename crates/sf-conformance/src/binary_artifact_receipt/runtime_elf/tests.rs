@@ -176,7 +176,7 @@ fn fixture(needed: &[&str], soname: Option<&str>, interpreter: Option<&str>) -> 
     bytes
 }
 
-fn loader_fixture() -> Vec<u8> {
+pub(crate) fn loader_fixture() -> Vec<u8> {
     let mut bytes = fixture(&[], Some("ld-linux-x86-64.so.2"), None);
     replace_tag(&mut bytes, 0x6fff_fffe, 0x6fff_fffc);
     replace_tag(&mut bytes, 0x6fff_ffff, 0x6fff_fffd);
@@ -214,7 +214,7 @@ fn write_verdef(bytes: &mut [u8], name: u64) {
     put_u32(bytes, 0x518, 0);
 }
 
-fn libc_fixture() -> Vec<u8> {
+pub(crate) fn libc_fixture() -> Vec<u8> {
     let mut bytes = fixture(
         &["ld-linux-x86-64.so.2"],
         Some("libc.so.6"),
@@ -227,10 +227,18 @@ fn libc_fixture() -> Vec<u8> {
     bytes
 }
 
-fn root_fixture() -> Vec<u8> {
-    let bytes = fixture(&["libc.so.6"], None, Some(INTERPRETER));
+pub(crate) fn root_fixture() -> Vec<u8> {
+    root_fixture_with_needed(&["libc.so.6"])
+}
+
+pub(crate) fn root_fixture_with_needed(needed: &[&str]) -> Vec<u8> {
+    let bytes = fixture(needed, None, Some(INTERPRETER));
     parse_runtime_elf(&bytes, RuntimeElfRole::RootPie).unwrap();
     bytes
+}
+
+pub(crate) fn shared_fixture(needed: &[&str], soname: &str) -> Vec<u8> {
+    fixture(needed, Some(soname), None)
 }
 
 fn replace_tag(bytes: &mut [u8], old: u64, new: u64) {
@@ -276,7 +284,7 @@ fn parses_a_closed_root_view_and_preserves_needed_order() {
     let policy = runtime_elf_policy_sha256();
     assert_eq!(
         policy,
-        "c7ecfcd739f76e6e4ea1f1b84e92ab342f6a436e0342f9217420544d79669ea6"
+        "b59a0e71b6885be8ed1fb06f751955398274b675eee9d612f239d19f99ed9deb"
     );
     assert_eq!(policy.len(), 64);
     assert!(policy
