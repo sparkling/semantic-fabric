@@ -182,6 +182,14 @@ fn final_phase_fences_detect_post_object_mount_and_artifact_replacement() {
         .is_err());
 }
 
+#[test]
+fn rejects_zero_device_or_inode_before_record_conversion() {
+    let zero_device = synthetic_identity(0, 1, 1, "a");
+    let zero_inode = synthetic_identity(1, 0, 2, "b");
+    assert!(validate_unique_authorities([&zero_device]).is_err());
+    assert!(validate_unique_authorities([&zero_inode]).is_err());
+}
+
 fn synthetic_identity(
     device: u64,
     inode: u64,

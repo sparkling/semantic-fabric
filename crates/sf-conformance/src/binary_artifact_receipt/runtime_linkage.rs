@@ -1,9 +1,11 @@
 //! Non-authorizing runtime-linkage contract for the current artifact observer.
 //!
 //! The public surface only describes and parses a capability-minimal loader
-//! probe. A private Linux boundary can independently prepare and execute a
-//! one-shot sealed-source-copy observation, but no producer, receipt, admission,
-//! replay, provenance, performance, or release path can call it.
+//! probe. A private Linux boundary can prepare and execute a one-shot sealed-
+//! source-copy observation, then map it into a private canonical non-admission
+//! record. Provider-free semantic replay checks only that record; no durable
+//! writer/importer, product, admission, provenance, performance, or release path
+//! can call it.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -13,8 +15,14 @@ use std::time::Duration;
 use super::sandbox;
 
 mod loader_output;
-// This remains a private capability boundary: tests exercise sealed preparation
-// and execution, but no producer, receipt, admission, or release path calls it.
+#[allow(
+    dead_code,
+    reason = "private non-admission receipts are exercised by tests and the manual Linux probe only"
+)]
+mod prepared_receipt;
+// This remains a private capability boundary: tests exercise sealed preparation,
+// execution, and conversion to a non-authorizing record, but no product,
+// admission, or release path calls it.
 #[cfg(target_os = "linux")]
 #[allow(
     dead_code,
@@ -30,6 +38,12 @@ pub const MAX_LOADER_OUTPUT_BYTES: usize = 512 * 1024;
 pub const MAX_RESOLVED_OBJECTS: usize = 256;
 pub const MAX_LOADER_STDERR_BYTES: u64 = 16 * 1024;
 pub const LOADER_TIMEOUT: Duration = Duration::from_secs(10);
+
+const MAX_BWRAP_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_RUNTIME_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_PREPARED_SET_BYTES: u64 = 64 * 1024 * 1024;
+pub(super) const PREPARED_LOADER_POLICY: &str =
+    "glibc-ldso-list-sealed-source-copies-bwrap-inode-execveat-v1";
 
 const ARTIFACT_DESTINATION: &str = "/artifact";
 const RUNTIME_DESTINATIONS: [&str; 4] = ["/lib", "/lib64", "/usr/lib", "/usr/lib64"];
@@ -119,10 +133,8 @@ pub fn parse_runtime_linkage_view(
         return Err("loader output does not name the exact ELF interpreter".to_owned());
     }
 
-    let loader_name = Path::new(elf_interpreter)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "ELF interpreter has no UTF-8 file name".to_owned())?;
+    let loader_name = linux_basename(elf_interpreter)
+        .ok_or_else(|| "ELF interpreter has no file name".to_owned())?;
     for needed in direct_needed {
         let resolution_count = parsed
             .resolved_objects
@@ -388,17 +400,24 @@ fn validate_soname(value: &str) -> Result<(), String> {
 }
 
 fn validate_runtime_path(value: &str, label: &str) -> Result<(), String> {
-    let path = Path::new(value);
-    validate_absolute_path(path, label)?;
-    if value.len() > 4096
+    if !value.starts_with('/')
+        || value.len() > 4096
+        || value.ends_with('/')
         || value.contains("//")
         || value.contains('\\')
+        || value
+            .split('/')
+            .skip(1)
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"/._+-".contains(&byte))
-        || !RUNTIME_DESTINATIONS
-            .iter()
-            .any(|root| path.starts_with(root))
+        || !RUNTIME_DESTINATIONS.iter().any(|root| {
+            value == *root
+                || value
+                    .strip_prefix(root)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        })
     {
         Err(format!(
             "{label} is outside normalized runtime library roots"
@@ -406,6 +425,10 @@ fn validate_runtime_path(value: &str, label: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+fn linux_basename(value: &str) -> Option<&str> {
+    value.rsplit('/').next().filter(|name| !name.is_empty())
 }
 
 fn validate_runtime_file_path(value: &str, label: &str) -> Result<(), String> {

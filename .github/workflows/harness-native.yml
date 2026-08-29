@@ -51,8 +51,9 @@ jobs:
       - name: build release-profile sf-cli binary for sealed runtime observation
         run: cargo build --locked --release -p sf-cli
       # This private one-shot test establishes only that sealed-source copies
-      # reproduce the prior loader view. It emits no receipt and grants no
-      # admission, provenance, replay, performance, or release authority.
+      # reproduce the prior loader view, then verifies a canonical record by
+      # provider-free semantic replay in memory. It emits no durable receipt and
+      # grants no execution provenance, admission, performance, or release authority.
       - name: test sealed-source-copy runtime observation
         run: |
           test_name='binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies'

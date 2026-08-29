@@ -10,8 +10,7 @@ use sha2::{Digest, Sha256};
 use super::super::linux::{self, FileIdentity};
 use super::ExpectedBwrapIdentity;
 use crate::binary_artifact_receipt::authority_guard::DirectoryGuard;
-
-const MAX_BWRAP_BYTES: u64 = 16 * 1024 * 1024;
+use crate::binary_artifact_receipt::runtime_linkage::MAX_BWRAP_BYTES;
 
 #[derive(Debug)]
 pub(super) struct HeldBwrap {

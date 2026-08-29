@@ -5,7 +5,9 @@
 //! root. Matching `ld.so --list` output confirms only that this held byte set
 //! reproduces the candidate resolution under the fixed policy; it does not prove
 //! artifact execution, relocations, a complete closure, direct memfd consumption,
-//! or receipt, replay, admission, provenance, minimality, or release authority.
+//! or admission, provenance, minimality, or release authority. A completed
+//! observation may be converted into a private non-admission record whose
+//! provider-free semantic replay never re-executes this boundary.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -16,17 +18,17 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::{HeldRuntimeInputs, HeldRuntimeObject, RuntimeObjectIdentity};
+use crate::binary_artifact_receipt::runtime_linkage::MAX_PREPARED_SET_BYTES;
 use crate::binary_artifact_receipt::{process, runtime_elf::RuntimeElfRole};
 
+mod receipt;
 mod tool;
 
-pub(super) const PREPARED_LOADER_POLICY: &str =
-    "glibc-ldso-list-sealed-source-copies-bwrap-inode-execveat-v1";
+pub(super) use crate::binary_artifact_receipt::runtime_linkage::PREPARED_LOADER_POLICY;
 
 const ARTIFACT_DESTINATION: &str = "/artifact";
 const FILE_MODE: u32 = 0o444;
 const EXECUTABLE_MODE: u32 = 0o555;
-const MAX_PREPARED_SET_BYTES: u64 = 64 * 1024 * 1024;
 const ROOT_TMPFS_BYTES_TEXT: &str = "134217728";
 const MIN_TRANSFER_FD: libc::c_int = 64;
 const MAX_TRANSFER_FD: libc::c_int = 1023;

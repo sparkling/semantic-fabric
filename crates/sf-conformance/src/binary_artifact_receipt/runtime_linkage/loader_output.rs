@@ -1,7 +1,6 @@
 //! Strict semantic parser for glibc `ld.so --list` output.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use super::{
     validate_runtime_file_path, validate_soname, ResolvedRuntimeObject, VirtualRuntimeObject,
@@ -47,9 +46,7 @@ pub(super) fn parse(output: &[u8]) -> Result<ParsedLoaderOutput, String> {
             }
             validate_soname(soname)?;
             validate_runtime_file_path(path, "resolved runtime object path")?;
-            let basename = Path::new(path)
-                .file_name()
-                .and_then(|name| name.to_str())
+            let basename = super::linux_basename(path)
                 .ok_or_else(|| "resolved runtime object path has no file name".to_owned())?;
             if basename != soname {
                 return Err("runtime object name and resolved-path basename differ".to_owned());
@@ -77,10 +74,8 @@ pub(super) fn parse(output: &[u8]) -> Result<ParsedLoaderOutput, String> {
     if resolved_paths.contains(&loader_path) {
         return Err("runtime loader path duplicates a resolved object path".to_owned());
     }
-    let loader_name = Path::new(&loader_path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "runtime loader path has no UTF-8 file name".to_owned())?;
+    let loader_name = super::linux_basename(&loader_path)
+        .ok_or_else(|| "runtime loader path has no file name".to_owned())?;
     if resolved.contains_key(VIRTUAL_OBJECT) || resolved.contains_key(loader_name) {
         return Err("runtime loader object identity sets overlap".to_owned());
     }

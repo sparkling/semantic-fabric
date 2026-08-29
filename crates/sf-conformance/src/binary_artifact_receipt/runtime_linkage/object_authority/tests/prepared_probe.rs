@@ -9,6 +9,7 @@ use crate::binary_artifact_receipt::process;
 use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_probe::{
     ExpectedBwrapIdentity, PreparedRuntimeProbe, PREPARED_LOADER_POLICY,
 };
+use crate::binary_artifact_receipt::runtime_linkage::prepared_receipt::{parse, render};
 
 fn prepare_fixture(fixture: &Fixture) -> PreparedRuntimeProbe<'_> {
     let held = hold_runtime_inputs(&fixture.pair, &fixture.plan, &fixture.view).unwrap();
@@ -445,6 +446,13 @@ fn prepared_probe_observes_the_current_release_profile_binary_from_sealed_source
         observation.bwrap_executable_policy,
         "ubuntu-24.04-bubblewrap-0.9.0-main-elf-only-host-dynamic-closure-unbound-v1"
     );
+    let receipt = observation.to_non_admission_receipt().unwrap();
+    let canonical = render(&receipt).unwrap();
+    let replayed = parse(&canonical).unwrap();
+    assert_eq!(render(&replayed).unwrap(), canonical);
+    assert_eq!(replayed.semantic_replay().unwrap(), view);
+    assert!(canonical.contains("meta\tauthority\tnone\n"));
+    assert!(canonical.contains("meta\tadmission-result\tnot-evaluated\n"));
     drop(pair);
     fs::remove_dir_all(root).unwrap();
 }

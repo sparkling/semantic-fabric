@@ -3,8 +3,10 @@
 //! Immutable snapshot bytes are sealed in memfds copied from descriptor-rooted
 //! sources. The private executor transfers read-only copies from those memfds
 //! into a fresh bubblewrap tmpfs and checks that the loader view is unchanged.
-//! It does not expose descriptors, serialize a receipt, or make direct-memfd,
-//! admission, provenance, replay, performance, minimality, or release claims.
+//! It does not expose descriptors. A finished observation can be converted into
+//! a private canonical self-consistency record, but that mapping makes no direct-
+//! memfd, execution-provenance, admission, performance, minimality, or release
+//! claim and cannot recreate live authority.
 //! Discovery necessarily precedes the holder and is not authorized by it.
 //! Same-principal/root ABA, rollback, and hostile-kernel or hostile-filesystem
 //! resistance remain explicitly out of scope.
@@ -13,7 +15,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
 use std::path::Path;
 
-use super::{validate_plan, RuntimeLinkageView, RuntimeLoaderPlan, MAX_RESOLVED_OBJECTS};
+use super::{
+    validate_plan, RuntimeLinkageView, RuntimeLoaderPlan, MAX_RESOLVED_OBJECTS,
+    MAX_RUNTIME_OBJECT_BYTES,
+};
 use crate::binary_artifact_receipt::{
     artifact_pair::ArtifactPair,
     runtime_elf::{parse_runtime_elf, RuntimeElfRole, RuntimeElfView},
@@ -24,7 +29,6 @@ mod prepared_probe;
 #[cfg(test)]
 mod tests;
 
-const MAX_RUNTIME_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RUNTIME_SET_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,7 +347,9 @@ fn validate_unique_authorities<'a>(
     let mut files = BTreeSet::new();
     let mut bytes = BTreeSet::new();
     for identity in identities {
-        if !files.insert((identity.device, identity.inode))
+        if identity.device == 0
+            || identity.inode == 0
+            || !files.insert((identity.device, identity.inode))
             || !bytes.insert((identity.byte_length, identity.sha256.as_str()))
         {
             return Err("runtime set contains a duplicate source or byte identity".to_owned());

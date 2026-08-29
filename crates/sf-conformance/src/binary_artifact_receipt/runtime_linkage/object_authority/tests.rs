@@ -1,15 +1,13 @@
 use super::*;
-
 mod adversarial;
 mod prepared_probe;
-
+mod prepared_receipt;
+use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use sha2::{Digest, Sha256};
 
 use crate::binary_artifact_receipt::runtime_elf::tests::{
     libc_fixture, loader_fixture, root_fixture, root_fixture_with_needed, shared_fixture,

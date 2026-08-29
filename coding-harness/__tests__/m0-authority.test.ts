@@ -95,10 +95,16 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/logical_path.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/sealed.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/receipt.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/tool.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/adversarial.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_probe.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_receipt.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/format.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/format/tests.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/sandbox.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/sandbox_environment.rs',
@@ -298,8 +304,11 @@ describe('M0 protected authority and CI contract', () => {
     expect(workflow.split(NATIVE_PREPARED_OBSERVATION_TEST)).toHaveLength(2);
     expect(workflow).toContain('grep -Fxc "$test_name: test"');
     expect(workflow).toContain('-- --ignored --exact --test-threads=1');
+    expect(workflow).toContain('provider-free semantic replay in memory');
     expect(workflow).toContain('grants no');
-    expect(workflow).toContain('admission, provenance, replay, performance, or release authority');
+    expect(workflow).toContain(
+      'execution provenance, admission, performance, or release authority',
+    );
   });
 
   it('keeps the minimal production artifact planned until its release gates close', () => {
