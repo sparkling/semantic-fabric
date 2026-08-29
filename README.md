@@ -238,14 +238,14 @@ and an expected bubblewrap inode; `805f413` maps its result to a private canonic
 `authority=none` record and reparses its stdout provider-free. Commit `9282e60`
 checks a caller-supplied expected ID and exact five-source byte digest for the closed
 dynamic-tag/search/flag policy before construction and during immediate pre-run validation;
-the native diagnostic keeps a separate literal. Commit `73e9864` binds separately
-sealed policy `x86_64-prepared-loader-late-cbpf-default-kill-v1` (55 cBPF
-instructions/440 bytes; SHA-256 `0092c69f…e80a`) to bubblewrap's namespace PID 1/reaper and copied loader child, requires one exact FD/argv placement,
-and proves a same-layout `fstat` control against a `socket`/`SIGSYS` canary. Receipt V1 remains byte-compatible. Commit `50adc0a` hashes and parses the same exact held
-bubblewrap bytes as `RootPie` under the expected runtime-ELF policy before construction, then
-rechecks policy around both exact native controls; host runtime closure stays unbound.
-Receipt V1 keeps `runtime-elf-policy-replay` and `target-seccomp-or-syscall-trace` `not-attested`; there is no syscall trace, final-FD inventory,
-provenance, admission, performance or release authority. M0 remains open.
+the native diagnostic keeps a separate literal. Commit `73e9864` binds separately sealed policy
+`x86_64-prepared-loader-late-cbpf-default-kill-v1` (55 cBPF instructions/440 bytes;
+SHA-256 `0092c69f…e80a`) to bubblewrap's namespace PID 1/reaper and copied loader child and proves a same-layout `fstat` control against a `socket`/`SIGSYS` canary.
+Commit `50adc0a` hashes and parses the same held bubblewrap bytes as `RootPie`; commit `b34b6d7` adds a separate canonical private
+`authority=none` counterfactual inventory of the derived interpreter, direct names, and bounded `ld.so --list` name/path output with held bwrap identity/policy fences.
+It does not execute bubblewrap: the interpreter, reported DSOs, and path-passed target are unheld and undigested, so actual byte consumption, time-of-use, and host runtime closure stay unbound.
+Receipt V1 remains byte-compatible and keeps `runtime-elf-policy-replay` and `target-seccomp-or-syscall-trace` `not-attested`; the separate replay proves only inventory self-consistency.
+There is no syscall trace, final-FD inventory, provenance, admission, performance or release authority. M0 remains open.
 The capture control plane now also has a closed, non-authorizing run-claim
 record and a local same-UID create-new adapter. Its slot varies only by an
 independently supplied project-authority digest and run ID; the body binds the
@@ -348,14 +348,14 @@ dependency receipt, performance machinery, a non-authorizing run claim, and a st
 runtime-linkage parser plus private Linux observation. After unauthorized discovery, the
 prepared boundary holds sealed source bytes, pins and `execveat`s an expected bubblewrap
 inode, and requires exact `ld.so --list` equality inside a fresh read-only tmpfs. Commit
-`50adc0a` also hashes and parses the same held bytes as `RootPie` under the expected
-runtime-ELF policy before preparation, with inode/digest/policy fences and native coverage.
-`805f413` records the exact view, tool/bindings, stdout and 34 nonclaims with domain-separated record/receipt digests; `9282e60` also
-checks the expected closed tag/search/flag policy ID/five-source digest at construction and
-the immediate pre-run validation phase. Only the native diagnostic maintains a separate
-literal; the API authenticates no reviewer. The actual pair remains private in-memory holder/observation metadata and is not serialized by receipt V1.
-The manual path has no writer/importer, signature, witness, product caller or execution provenance. It does not execute the artifact or prove opaque hash/symbol/relocation/version/
-GNU-property payloads, initialization, `dlopen`/NSS, complete runtime or bubblewrap-host resolution/closure, final-FD inventory, syscall trace, cgroup state, VDSO bytes, SBOM, reproducibility, admission or release. Receipt V1 deliberately does not attest or replay the static bwrap preflight or live late-filter proof.
+`50adc0a` hashes and parses the same held bytes as `RootPie` under the expected runtime-ELF
+policy before preparation, with inode/digest/policy fences and native coverage. `b34b6d7`
+separately inventories counterfactual `ld.so --list` names/paths under `authority=none`; its interpreter, DSOs, and path target remain unheld/undigested and it does not execute bubblewrap.
+`805f413` records the prepared view and 34 nonclaims; `9282e60` checks the closed policy ID/five-source digest. Only native diagnostics keep separate literals; the API authenticates no reviewer.
+The actual checks stay private in-memory metadata, and Receipt V1 remains unchanged with its runtime-policy and syscall fields `not-attested`.
+The manual path has no writer/importer, signature, witness, product caller or execution provenance. Provider-free inventory replay proves only canonical self-consistency.
+Counterfactual names/paths are now inventoried, but actual host byte consumption and runtime closure, opaque ELF payloads, initialization, `dlopen`/NSS, final-FD inventory, syscall trace,
+cgroup state, VDSO bytes, SBOM, reproducibility, admission, and release remain unproved.
 
 The PostgreSQL mapping receipt records 80 pass, one documented deviation and six
 exact skips; its file/outcome/inventory digests are `c04e6f86…0f52`,
@@ -445,7 +445,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. Digest checks detect source drift; private native tests prove that preflight and narrow late cBPF enforcement against a comparative canary. Neither proves review, compiled code or toolchain identity. Receipt V1 remains byte-compatible, does not attest the static RootPie preflight or the live late-filter proof, and has no final-FD inventory. Neither establishes authenticated execution or complete build/tool/system/runtime closure—including bwrap host PT_INTERP/DSO/cache/preload/LSM resolution—opaque ELF semantics, linker time-of-use, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
 | M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID non-authorizing run claim, and claim-rooted exact-commit private source materialization exist. There is still no external append-only witness, positive runner admission, controlled profile, build/attempt authority, baseline, candidate, capture receipt, or measured number; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path

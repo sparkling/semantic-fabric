@@ -367,6 +367,17 @@ and canary. Both exact native controls pass. This is static preflight only:
 Receipt V1 is unchanged and non-attesting, and bubblewrap host runtime closure
 remains unbound.
 
+On 2026-08-29, commit `b34b6d7` added a separate canonical private
+`authority=none` inventory under relation
+`counterfactual-controlled-name-resolution-not-actual-exec`. The interpreter
+path and sorted direct `DT_NEEDED` names derive from the held `RootPie` bytes;
+an environment-cleared `LC_ALL=C` process at `/` uses `--inhibit-cache`, an empty
+`--glibc-hwcaps-mask`, and `--list <authorized-bwrap-path>`. Pre/post checks revalidate the held bwrap identity,
+runtime-ELF policy, and fixed process plan. A domain-separated inventory digest binds that identity/policy metadata,
+bounded raw stdout and replayed SONAME/path bindings. The interpreter, reported DSOs, and path-passed target are
+unheld and undigested; bwrap is not executed, and provider-free replay proves
+only record self-consistency. Receipt V1 remains byte-compatible and unchanged.
+
 This is loader-resolution observation only. Candidate discovery remains prior and
 unauthorized; the artifact is not executed, and main-program, relocation,
 symbol/version, initialization, `dlopen`, NSS, VDSO and closure completeness are
@@ -376,9 +387,10 @@ dependencies or toolchain. It also does not prove the opaque GNU-property, hash,
 symbol, relocation, version, TLS or cross-table payloads outside complete
 semantic validation. Bubblewrap copies from sealed
 memfds, so the loader does not consume the original held inode capabilities.
-Although the exact held bytes now pass static `RootPie` preflight, bubblewrap's
-actual host PT_INTERP, DSO, cache, preload and LSM resolution remains unbound;
-the kernel, bubblewrap, glibc, copy and mount semantics remain trusted. The exact late filter is live observation only: there
+Although counterfactual names and paths are now inventoried, the interpreter,
+DSOs, and target-path bytes actually consumed by a bwrap launch remain unbound,
+as do time-of-use, default cache/hwcaps equivalence, preload and LSM state; the
+kernel, bubblewrap, glibc, copy and mount semantics remain trusted. The exact late filter is live observation only: there
 is no post-exec final-FD inventory or syscall trace, and Receipt V1 does not
 attest it. There is no aggregate cgroup `pids.max`, memory or control-group kill;
 the other implemented limits are per process. Same-principal/root ABA, rollback and a

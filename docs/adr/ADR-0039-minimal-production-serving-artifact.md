@@ -116,6 +116,19 @@ and canary. Both exact native controls pass. This is static preflight only:
 Receipt V1 is unchanged and non-attesting, and bubblewrap host runtime closure
 remains unbound.
 
+Commit `b34b6d7` adds a mutually separate canonical private `authority=none`
+inventory under relation
+`counterfactual-controlled-name-resolution-not-actual-exec`. It derives the
+interpreter path and sorted direct `DT_NEEDED` names from the held `RootPie`
+bytes, then clears the environment, sets `LC_ALL=C` and `/`, and runs that host
+interpreter with `--inhibit-cache`, an empty `--glibc-hwcaps-mask`, and
+`--list <authorized-bwrap-path>`. Pre/post checks revalidate held bwrap identity,
+runtime policy, and the fixed process plan. A domain-separated inventory digest binds that identity/policy metadata,
+bounded raw stdout and replayed SONAME/path bindings. The
+interpreter, reported DSOs, and path-passed target are unheld and undigested;
+bwrap is not executed, and provider-free replay proves only record consistency.
+Receipt V1 remains unchanged. This does not accept this ADR or satisfy gates 1–3.
+
 This does not accept this ADR. Discovery remains prior and unauthorized; the
 artifact is not executed; relocation, symbol/version, initialization, `dlopen`,
 NSS, VDSO and closure completeness remain unproven. The digest detects byte drift
@@ -124,9 +137,10 @@ bind compiled bytes, configuration, dependencies or toolchain. Opaque GNU-
 property, hash, symbol, relocation, version, TLS and cross-table payload semantics
 remain unproved. The loader
 consumes tmpfs copies sourced from sealed memfds, not the original held inode capabilities.
-Although the exact held bytes now pass static `RootPie` preflight, bubblewrap's
-actual host PT_INTERP/DSO/cache/preload/LSM resolution remains unbound; kernel,
-bubblewrap, glibc, copy and mount semantics are trusted. The exact late filter is
+Although counterfactual names and paths are now inventoried, actual interpreter,
+DSO, and target-path byte consumption, time-of-use, default cache/hwcaps
+equivalence, preload and LSM state remain unbound; kernel, bubblewrap, glibc,
+copy and mount semantics are trusted. The exact late filter is
 live observation only: there is no final-FD inventory or syscall trace, and
 Receipt V1 does not attest it. There is no aggregate cgroup process/memory bound
 or control-group kill. Same-principal/root ABA, rollback and hostile kernel/filesystem
