@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "authority": "development-only-no-promotion",
   "runtimeEntry": "coding-harness/dist/issue-8-program.js",
-  "harnessManifestDigest": "d3b0161e5abdfc62119989f99b77f65e0fbf09aa53cc3709c22484884bc6be9c",
+  "harnessManifestDigest": "720e9ab9c99b810c0707aa045e6f7726f2eb6354e33b05e566b45f80361e8517",
   "lockfileDigest": "e823a5f73776c46a33934574dbca8248755bf04924f80b49a9aa5445cb3a4f1b",
   "outputs": {
     "coding-harness/dist/acceptance-runner.js": "4a7719db6ffd1dc33a7e3323714fa60fb636c8236c0e740449e53351629c7946",
@@ -100,7 +100,7 @@
     "coding-harness/dist/programme-capture-input-attestation-v1.js": "c5b540bb9f0bf24dcdc8ffc5425d3c338c8132eb4aaf747c293d36a91f518688",
     "coding-harness/dist/programme-capture-private-source-fs-v1.js": "d5827fc76829e8b01ee71c7cb38035cf76dec70adaa3ea22031952a5f16e1dfa",
     "coding-harness/dist/programme-capture-private-source-v1.js": "017a9460306d9270e987d76295ea0dbaab027e4d8d29d37791993dde3fa4810e",
-    "coding-harness/dist/programme-capture-protected-paths-v1.js": "d0ea93f6659e1c5c1e564f0f9d442e0477a6e99294d16b0df06b8a64167b7027",
+    "coding-harness/dist/programme-capture-protected-paths-v1.js": "5dae64cba5d3694c63bdf9159d69e8f82239640bc7a1fe283407ee28ef61dfc7",
     "coding-harness/dist/programme-capture-runner-profile-v1.js": "61c4b076b28c2ce5544978df15083969ca45e1e732909c4a81a01dadc062df26",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
     "coding-harness/dist/programme-capture-supervisor-authority-config-v2.js": "29ea6c4caa028535220d3f04bc79f7f36e2112530a3fd89f409aebd191a4ced3",
@@ -112,11 +112,15 @@
     "coding-harness/dist/programme-capture-supervisor-log-proof-codec-v1.js": "b18e84b972ed26590821d5f517053d0b32b46f011193022d52c629b6cd0a7961",
     "coding-harness/dist/programme-capture-supervisor-log-proof-v1.js": "edb211990c917d9d75db2f8dc53fa29bd8618647de530b036794e39134abd613",
     "coding-harness/dist/programme-capture-supervisor-merkle-v1.js": "50b4de9d91a36887ccc6462d4d63e800412cf63583ae3bbc749c9ae34fd706de",
+    "coding-harness/dist/programme-capture-supervisor-registration-request-v2.js": "025d447fa52530ecdfcea2a2ea18bcd02cba947c154dda19ee67ae4391d176e6",
     "coding-harness/dist/programme-capture-supervisor-run-event-body-v2.js": "d516c8aa0f07510ebbfcddc50dfbaf9c8c79de3a1c60443e0d9c08e1aeb71780",
+    "coding-harness/dist/programme-capture-supervisor-run-event-builder-v2.js": "847f3bb6f83fd4e58652fa30a3310fa111ad9a56687e63a42d266420746e6afe",
     "coding-harness/dist/programme-capture-supervisor-run-event-codec-v2.js": "0593a9904e4a9d6421446e1b3b5d6ccd4eae71e3ce88bcce5806d5803aaf9f8f",
     "coding-harness/dist/programme-capture-supervisor-run-event-contracts-v2.js": "5d3a09f80c61cb315385b37bdda8469fc42c005d745b4d252b69624e946d2490",
     "coding-harness/dist/programme-capture-supervisor-run-event-transition-v2.js": "9d0252a874358e1948bac71a4ec87606bf1de5ae034e38fd1a525dae3ce7bd76",
     "coding-harness/dist/programme-capture-supervisor-run-event-verifier-v2.js": "eb3942a3c6f61e31427627ef1fd44d7979f82cc7791862ee0411d408c9977d35",
+    "coding-harness/dist/programme-capture-supervisor-service-client-v2.js": "b0d64b595b90de4b53a539bfe91d26ec90472d86cc7938ff3afbc1b329cddcf1",
+    "coding-harness/dist/programme-capture-supervisor-service-result-v2.js": "e8ebf006ae0411f2017dd33bd5ae50a86b0e46b586d934d92a212bd9e914616a",
     "coding-harness/dist/programme-capture-task-v1.js": "ece43b8a53106fad09d20a3a5a8c45643ca6862d35c170511883573fa7ac2781",
     "coding-harness/dist/programme-envelope-v5.js": "66ea7715cf420a6c97631a38030e8a88f3af31f17d4144105a1acd86f203511c",
     "coding-harness/dist/programme-envelope-v6.js": "c67e68619e1fe8d6b173c5a7cd69c624dc66bad2c0e8ab1e11f95a9a08a55b5b",
@@ -289,5 +293,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "4f9aba9ecf735cfee69c1d195407f0034906c54bcb529e32761c3de496f3ba74"
+  "runtimeTreeDigest": "73f452f2553daa72036b90cf0e9f815cf9a75cc111f6b4d1f099081d818cb9d4"
 }

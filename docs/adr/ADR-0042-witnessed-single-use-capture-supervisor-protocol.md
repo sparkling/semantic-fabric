@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-29
-updated: 2026-08-29
+updated: 2026-08-30
 tags: [metaharness, evidence, supervisor, transparency, witness, lease, runner, security]
 supersedes: []
 depends-on:
@@ -32,8 +32,8 @@ crash-sensitive contract. V2 separates the service's canonical decimal event
 sequence from the transparency log's canonical decimal leaf index.
 
 The committed provider-free V2 configuration, configuration-adjacency, signed
-event, and complete-run-history modules implement canonical structural,
-signature, supplied-reference, lifecycle, and resource-adjacency checks only.
+event, complete-run-history, registration-request, event-builder, structural-
+result, and supplied-reference client modules implement bounded checks only.
 They remain nonauthorizing. This additive evidence/control-plane decision does
 not rewrite product goals, runtime architecture, or historical harness meanings.
 
@@ -128,24 +128,18 @@ One serializable operation must atomically:
 5. append the next immutable semantic event and signed response identity; and
 6. update both run and resource state before any bytes are returned or published.
 
-Database uniqueness constrains both the project/run key and every active member
-of the runner's enrolled conflict set. Each closed set contains 1–64 sorted,
-unique resource IDs, includes its canonical physical parent, and binds the exact
-runner-enrollment-record digest before its domain-separated conflict-set digest.
-Aliases or nominally distinct partitions cannot establish concurrency safety
-unless their signed sets intersect and every intersection is locked. Preventing
-duplicate run IDs or one resource digest alone is insufficient. Signing before
-durable state, using best-effort deduplication, or updating run/event/resource
-rows in separate transactions is nonconforming.
+Database uniqueness constrains the project/run key and every active conflict-set
+member. Each closed set contains 1–64 sorted unique resource IDs, includes its
+canonical physical parent, and binds the exact runner-enrollment-record digest
+before its domain-separated conflict-set digest. Aliases cannot establish safety
+unless their signed sets intersect and every intersection is locked. Signer invocation follows locked validation, but a database rollback is never assumed to roll back an HSM or sidecar operation.
+A post-sign/pre-commit orphan is nonauthorizing and must never be returned, published, or recovered as a result. Only the database transaction commits the exact envelope/result bytes, raw hashes, status, content type, outbox, run, resources, and counters together.
+Signer placement is adapter-specific; crash injection covers every post-sign/pre-commit boundary. Best-effort deduplication or split run/event/resource updates are nonconforming.
 
-An exact duplicate request may retrieve the exact committed response bytes by
-request digest without appending an event. A changed duplicate fails and
-terminal-spends the run. Response recovery is not launch idempotency. Mutating
-requests receive no automatic transport retry; after an ambiguous response the
-client uses a read-only result endpoint keyed by the canonical request digest.
-That lookup reauthenticates the same project principal and namespace policy,
-does not reveal whether another namespace has a matching digest, and never
-treats the digest as a bearer credential.
+After transport authentication maps the caller to one project, an exact project-scoped duplicate may recover exact committed response bytes without appending another event, even after the active authority head advances.
+On a lookup miss, the service verifies the current authority head and authenticated principal before comparing run state or classifying changed replay. The first changed registration terminal-spends through `registration-changed-replay-v2`.
+Its evidence digest binds the original request/event digests, changed canonical request digest, authenticated project identity, and active authority head. A later distinct changed request against that closed run receives an eventless closed-run conflict and no semantic result; it never reuses the first terminal result.
+No mutating request is accepted or classified while its predecessor lacks the required receipt. Later operation endpoints stay disabled until their changed-replay terminal outcomes exist. Mutations are never transport-retried after ambiguity; request digests are not bearer credentials.
 
 ### 3. Publish committed events without conflating order domains
 

@@ -26,9 +26,23 @@ const RUN_EVENT_TRANSITION_ENTRY = resolve(
 const RUN_EVENT_VERIFIER_ENTRY = resolve(
   SOURCE_ROOT, 'programme-capture-supervisor-run-event-verifier-v2.ts',
 );
+const REGISTRATION_REQUEST_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-registration-request-v2.ts',
+);
+const RUN_EVENT_BUILDER_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-run-event-builder-v2.ts',
+);
+const SERVICE_RESULT_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-service-result-v2.ts',
+);
+const SERVICE_CLIENT_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-service-client-v2.ts',
+);
 const V2_ENTRIES = Object.freeze([
   CONFIG_ENTRY, TRANSITION_ENTRY, RUN_EVENT_CONTRACTS_ENTRY, RUN_EVENT_BODY_ENTRY,
   RUN_EVENT_CODEC_ENTRY, RUN_EVENT_TRANSITION_ENTRY, RUN_EVENT_VERIFIER_ENTRY,
+  REGISTRATION_REQUEST_ENTRY, RUN_EVENT_BUILDER_ENTRY, SERVICE_RESULT_ENTRY,
+  SERVICE_CLIENT_ENTRY,
 ]);
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
   [CONFIG_ENTRY, new Map([
@@ -135,6 +149,83 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
     [
       './programme-capture-supervisor-run-event-transition-v2.js',
       'deriveProgrammeCaptureSupervisorRunStateV2:deriveProgrammeCaptureSupervisorRunStateV2,programmeCaptureSupervisorControllerStateHeadDigestV2:programmeCaptureSupervisorControllerStateHeadDigestV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
+  [REGISTRATION_REQUEST_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
+    ],
+    [
+      './programme-capture-claim-record-v1.js',
+      'programmeCaptureRunClaimKeyDigestV1:programmeCaptureRunClaimKeyDigestV1',
+    ],
+    [
+      './programme-capture-supervisor-run-event-body-v2.js',
+      'parseProgrammeCaptureSupervisorAuthorityHeadRefV2:parseProgrammeCaptureSupervisorAuthorityHeadRefV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'parseRunEventDigestV2:parseRunEventDigestV2,parseRunEventOpaqueIdV2:parseRunEventOpaqueIdV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [RUN_EVENT_BUILDER_ENTRY, new Map([
+    ['./contracts.js', 'assertExactKeys:assertExactKeys'],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_DIGEST_DOMAIN_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_DIGEST_DOMAIN_V2,closedRunEventRecordV2:closedRunEventRecordV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-codec-v2.js',
+      'PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_NON_AUTHORITY_V2:PROGRAMME_CAPTURE_SUPERVISOR_RUN_EVENT_NON_AUTHORITY_V2,parseProgrammeCaptureSupervisorRunEventEnvelopeV2:parseProgrammeCaptureSupervisorRunEventEnvelopeV2,parseProgrammeCaptureSupervisorRunEventV2:parseProgrammeCaptureSupervisorRunEventV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
+  [SERVICE_RESULT_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
+    ],
+    [
+      './programme-capture-supervisor-run-event-codec-v2.js',
+      'parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2:parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'parseRunEventDigestV2:parseRunEventDigestV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [SERVICE_CLIENT_ENTRY, new Map([
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
+    ],
+    [
+      './programme-capture-supervisor-registration-request-v2.js',
+      'parseProgrammeCaptureSupervisorRegistrationRequestBlobV2:parseProgrammeCaptureSupervisorRegistrationRequestBlobV2,programmeCaptureSupervisorRegistrationChangedReplayEvidenceDigestV2:programmeCaptureSupervisorRegistrationChangedReplayEvidenceDigestV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-codec-v2.js',
+      'parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2:parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-contracts-v2.js',
+      'closedRunEventRecordV2:closedRunEventRecordV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-verifier-v2.js',
+      'verifyProgrammeCaptureSupervisorRunEventEnvelopeV2:verifyProgrammeCaptureSupervisorRunEventEnvelopeV2',
+    ],
+    [
+      './programme-capture-supervisor-service-result-v2.js',
+      'parseProgrammeCaptureSupervisorServiceResultBlobV2:parseProgrammeCaptureSupervisorServiceResultBlobV2',
     ],
     ['./receipts.js', 'digestValue:digestValue'],
   ])],
