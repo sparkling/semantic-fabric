@@ -48,25 +48,39 @@ sequences must agree before normalization, and GNU build IDs are accepted only
 from one structurally valid `.note.gnu.build-id` record whose owner, type,
 declared size, and lowercase digest agree.
 
-An additive runtime-linkage contract fixes a host-input-read-only, network-
-isolated, environment-cleared bubblewrap plan and a strict parser for glibc
-`ld.so --list`. Commit `863a058` adds a private, nonexecuting Linux holder that
-duplicates the bound artifact descriptor, resolves the discovered loader and
-objects through guarded descriptor roots, rejects nested mount crossings and
-noncanonical aliases, snapshots twice-verified source bytes into exactly sealed
-close-on-exec memfds, reparses those bytes by ELF role, and checks canonical
-identity plus static `DT_NEEDED` provider equality/reachability. Its 22 focused
-tests cover authority, mutation, graph, budget, nonregular-input, phase-fence
-and lifecycle mutants.
+An additive runtime-linkage contract fixes a strict bounded parser for glibc
+`ld.so --list`. Commit `863a058` added a private Linux holder that descriptor-
+resolves the discovered artifact, loader and DSOs through guarded roots, rejects
+nested mount crossings and noncanonical aliases, snapshots twice-verified bytes
+into exactly sealed close-on-exec memfds, reparses them by ELF role, and checks
+canonical identity plus static `DT_NEEDED` provider equality/reachability.
 
-That module has no production caller, executor, receipt or descriptor export.
-Discovery remains prior and unauthorized; no production loader was invoked, no
-real current-artifact runtime set was captured, and no process is proven to have
-consumed the sealed bytes. It does not establish executed loader semantics,
-complete runtime/build/tool/system closure, VDSO bytes, replay, provenance,
-admission, reproducibility or release. Exact loader/bubblewrap authority,
-deliberate child-FD inheritance, process/output controls and a versioned
-externally witnessed receipt remain mandatory future collector gates.
+Commit `c8305c3` adds a private one-shot prepared executor. An independent
+expectation binds exact bubblewrap path, digest, length and executable policy; the
+root-owned inode is held and rechecked. Exact sealed-source duplicates are
+identity-, seal-, digest-, length- and byte-checked before being passed through an
+explicit FD allowlist. The child `execveat`s only the held bubblewrap inode with
+an empty environment, per-process limits, parent-death signalling, pidfd/direct-
+child and process-group cleanup, timeouts, and bounded cancellable output.
+Bubblewrap unshares user/network/all namespaces, drops capabilities, constructs a
+fresh bounded tmpfs with no host binds, copies only the sealed artifact/loader/DSO
+bytes to fixed paths, remounts it read-only and runs the copied loader. Strict
+`ld.so --inhibit-cache --glibc-hwcaps-mask "" --list /artifact` output must equal
+prior discovery before the private in-memory observation is returned. The manual
+workflow-dispatch smoke pins the exact host labels, test identity and bubblewrap
+digest; it emits no receipt and is not a merge or release gate.
+
+This does not accept this ADR. Discovery remains prior and unauthorized; the
+artifact is not executed; relocation, symbol/version, initialization, `dlopen`,
+NSS, VDSO and closure completeness remain unproven. The loader consumes tmpfs
+copies sourced from sealed memfds, not the original held inode capabilities.
+Bubblewrap's host PT_INTERP/DSO/cache/preload/LSM closure is unbound, and kernel,
+bubblewrap, glibc, copy and mount semantics are trusted. There is no final FD
+inventory, target seccomp/syscall trace, aggregate cgroup process/memory bound or
+control-group kill. Same-principal/root ABA, rollback and hostile kernel/filesystem
+resistance remain out of scope. There is no production caller, canonical
+serialization, external witness, replay, provenance, SBOM, reproducibility,
+minimality, performance, admission or release authority.
 
 This observation is about the artifact which exists today, not this proposal's
 `sf-server`, and it is not a complete binary closure, SBOM, reproducibility
@@ -76,11 +90,11 @@ execution evidence or proof of exclusive linker authorship. Link-input bytes are
 observed after linking, so linker time-of-use and path-resolution race resistance
 remain explicitly unattested. Authority ancestry and held-directory checks fail
 closed on untrusted or persistent replacement, while same-principal/root ABA
-resistance still requires an exclusive, quiescent builder principal. CI
-exercises only the parser/contract on its mutable hosted runner and does not
-capture or publish an observation. This advances the implementation baseline
-without accepting this ADR, satisfying gates 1–3, or resolving the proposed
-packaging decision.
+resistance still requires an exclusive, quiescent builder principal. Hosted CI
+exercises parser/contract mutants; the exact prepared smoke is manual and private.
+Neither captures nor publishes an authoritative observation. This advances the
+implementation baseline without accepting this ADR, satisfying gates 1–3, or
+resolving the proposed packaging decision.
 
 ## Context and problem statement
 

@@ -233,12 +233,12 @@ one-hop HostSystem aliases. Its `0600` receipt remains private, external,
 uncommitted, unpublished, and noncanonical. It binds current binary and observed
 build/link provenance without claiming complete tool/system closure, linker
 time-of-use, SBOM, reproducibility, minimal-production packaging, or admission.
-Controlled performance machinery exists, and `f2cc800` removes issue-8 lock
-hardcoding from future V5/V6 patch tasks. ADR-0041 keeps measurement in a sibling
-single-attempt transaction rather than weakening V6 patch semantics. No controlled
-profile, baseline, candidate, capture receipt, or measured numbers exist. M0 remains open for complete binary/tool/system
-closure, SBOM/reproducibility and production minimality/admission, that controlled
-performance baseline, and a final two-builder release replay after those authorities exist.
+Commit `c8305c3` adds a private Linux one-shot that rechecks sealed-source duplicates
+and an independently expected bubblewrap inode before requiring strict `ld.so --list` view equality; it
+emits no receipt or authority. Controlled performance machinery exists, and `f2cc800`
+removes issue-8 lock hardcoding from future V5/V6 patch tasks. ADR-0041 keeps measurement
+in a sibling transaction; no controlled profile, receipt, or number exists. M0 remains
+open for complete closure, SBOM/reproducibility, admission, performance, and two-builder replay.
 The capture control plane now also has a closed, non-authorizing run-claim
 record and a local same-UID create-new adapter. Its slot varies only by an
 independently supplied project-authority digest and run ID; the body binds the
@@ -343,18 +343,18 @@ PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
 CI and the controller protect and replay those authorities read-only. M1–M7 remain gated, and the
 44/100 application-readiness baseline has not been formally rescored.
 
-The current M0 tranche adds per-test SQLite query/Protocol baselines, the scoped
-`sf-cli` dependency receipt, controlled performance machinery, a non-authorizing
-local run claim, and a strict runtime-linkage plan/parser. Query/Protocol receipts
-do not claim conformance, runtime provenance, or backend admission; the dependency
-receipt does not claim artifact or supply-chain closure; and no controlled
-performance profile, receipt, or numbers exist. The first private current-`sf-cli`
-artifact observation also replays from clean `5a06eac`. Its 363 raw inputs, 357
-canonical terminals, three aliases, and GNU build ID are bounded current-host
-evidence only. The linkage contract fixes a host-input-read-only, networkless,
-environment-cleared `ld.so --list` plan and parser, but executes nothing and captures
-no runtime bytes or receipt. Complete tool execution, linker time-of-use, dynamic
-closure, SBOM, reproducibility, production minimality, and admission remain nonclaims.
+The current M0 tranche adds per-test SQLite query/Protocol baselines, the scoped `sf-cli`
+dependency receipt, controlled-performance machinery, a non-authorizing local run claim,
+and a strict runtime-linkage plan/parser plus private Linux one-shot observation. Query/
+Protocol receipts claim neither conformance nor admission; the dependency receipt claims
+no artifact closure; and no controlled performance receipt or number exists. The first
+private current-`sf-cli` observation from clean `5a06eac` remains bounded host evidence:
+363 raw inputs, 357 canonical terminals, three aliases, and one GNU build ID.
+After unauthorized discovery, the prepared boundary holds descriptor-rooted source bytes
+in sealed CLOEXEC memfds, independently pins a root-owned bubblewrap inode, verifies exact
+transfer duplicates, and `execveat`s that inode with empty environment and bounded process/
+output controls. A fresh read-only tmpfs receives only sealed-source copies; strict
+`ld.so --list` output must equal the candidate view. The exact-host manual workflow is diagnostic only: it has no product caller, receipt, serialization, witness, replay, provenance, admission, performance, or release authority; it does not execute the artifact or prove relocations, symbols/versions, initialization, `dlopen`/NSS, complete closure, direct original-memfd consumption, bubblewrap's host dynamic closure, final FD/syscall inventory, aggregate cgroup containment, VDSO bytes, SBOM, reproducibility, or minimality.
 
 The PostgreSQL mapping receipt records 80 pass, one documented deviation and six
 exact skips; its file/outcome/inventory digests are `c04e6f86…0f52`,
@@ -444,7 +444,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
-| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation now binds one current binary and its observed final-link inputs, but not complete build-script/tool/system execution, linker time-of-use, SBOM, reproducibility, production minimality, or admission. Six advisory exceptions, three unmaintained-crate warnings, complete artifact closure, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
+| Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; a separate manual sealed-source loader smoke reproduces candidate resolution. Neither establishes complete build/tool/system/runtime closure, linker time-of-use, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
 | M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID non-authorizing run claim, and claim-rooted exact-commit private source materialization exist. There is still no external append-only witness, positive runner admission, controlled profile, build/attempt authority, baseline, candidate, capture receipt, or measured number; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path

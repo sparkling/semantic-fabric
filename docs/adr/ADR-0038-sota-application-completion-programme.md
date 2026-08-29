@@ -283,41 +283,59 @@ The producer still trusts UID 0 and its effective UID and requires that builder
 principal to be exclusive and quiescent: resistance to same-principal/root ABA
 replacement is an explicit nonclaim, not evidence supplied by this tooling.
 
-An additive runtime-linkage contract describes the exact host-input-read-only,
-network-isolated, environment-cleared loader plan and canonicalizes strict,
-bounded glibc `ld.so --list` output. Commit `863a058` extends that staged boundary
-with a private Linux-only holder for one discovered input set. It duplicates the
-already-bound `ArtifactPair` descriptor, holds guarded mount roots, walks every
-runtime path component descriptor-relatively with `openat2`/`NO_XDEV`, permits
-only the canonical one-hop loader alias, copies twice-verified bytes into exactly
-sealed close-on-exec memfds, and binds canonical order, source identities, byte
-digests, size/count budgets, ELF roles, interpreter/SONAME facts and static
-`DT_NEEDED` provider equality/reachability. Start/end authority fences detect
-persistent artifact, mount, alias and runtime-source replacement. Twenty-two
-focused tests include exact identity, nonregular-leaf, collision, mutation,
-phase-injection, nested-mount, graph and descriptor-lifecycle mutants; the full
-feature-gated Rust and 735-test harness suites passed.
+An additive runtime-linkage contract canonicalizes strict, bounded glibc
+`ld.so --list` output. Commit `863a058` added a private Linux holder for one
+discovered input set: descriptor-relative `openat2`/`NO_XDEV` walks, guarded mount
+roots, one canonical loader alias, twice-verified source bytes copied into exactly
+sealed close-on-exec memfds, canonical identity/order/budgets, ELF roles,
+interpreter/SONAME facts, and static `DT_NEEDED` provider equality/reachability.
+Start/end fences detect persistent artifact, mount, alias and source replacement.
 
-The holder remains private, dead-code-staged and nonexecuting. Discovery still
-precedes holding and is not authorized by it; no production loader/bubblewrap
-process was invoked, no real current-artifact runtime byte set was captured, and
-no loader is proven to have consumed the sealed bytes. Static ELF and
-`DT_NEEDED` checks do not prove executed resolution, symbol/version/relocation
-semantics or a complete glibc closure; no VDSO bytes are held. There is no
-executor, deliberate child-FD allowlist, receipt, canonical serialization,
-external witness, provider-free replay, admission or release claim. Same-
-principal/root ABA, rollback and hostile-kernel/filesystem resistance remain
-explicit nonclaims under the exclusive, quiescent builder assumption.
+Commit `c8305c3` adds a private one-shot prepared executor. It independently
+requires an exact bubblewrap path, SHA-256, byte length and executable-policy ID,
+holds the root-owned non-capability-bearing inode through a guarded descriptor
+root, and verifies it before and after execution. Exact CLOEXEC duplicates of the
+sealed artifact, loader and DSO sources are identity-, seal-, length-, digest- and
+byte-checked at every phase. The child executes only the held bubblewrap inode via
+`execveat(AT_EMPTY_PATH)` with an empty environment, `no_new_privs`, dump/core and
+per-process resource limits, parent-death signalling, an exact data-FD allowlist,
+pidfd/direct-child and process-group cleanup, timeouts, and bounded cancellable
+stdout/stderr capture.
+
+Bubblewrap receives no host bind, `/proc`, `/dev` or writable host path. It creates
+a fresh size-bounded tmpfs, drops capabilities, unshares user/network/all other
+namespaces, copies only the sealed-source bytes into fixed paths, remounts the root
+read-only, and invokes the copied loader as `ld.so --inhibit-cache
+--glibc-hwcaps-mask "" --list /artifact`. Strict parser output must equal the
+candidate view before an in-memory observation is returned. Focused process,
+descriptor, policy, phase-fence and substitution mutants pass. The manual
+workflow-dispatch lane additionally names the exact test, release-profile binary,
+host labels and bubblewrap digest; it is private diagnostic validation, not a
+merge, performance, admission or release gate.
+
+This is loader-resolution observation only. Candidate discovery remains prior and
+unauthorized; the artifact is not executed, and main-program, relocation,
+symbol/version, initialization, `dlopen`, NSS, VDSO and closure completeness are
+unproven. Bubblewrap copies from sealed memfds, so the loader does not consume the
+original held inode capabilities. Bubblewrap's own host PT_INTERP, DSO, cache,
+preload and LSM closure is not bound; the kernel, bubblewrap, glibc, copy and mount
+semantics remain trusted. There is no post-exec final-FD inventory, target seccomp
+or syscall trace, nor aggregate cgroup `pids.max`, memory or control-group kill;
+the implemented limits are per process. Same-principal/root ABA, rollback and a
+hostile kernel/filesystem remain out of scope under the exclusive, quiescent
+builder assumption. The module has no production caller, canonical serialization,
+receipt, external witness, provider-free replay, provenance, SBOM,
+reproducibility, minimality, admission, performance or release authority.
 
 This observation tooling advances M0 without closing the actual binary-artifact
 boundary. It records configured tool identities and a post-build final-link-
 dependency-file snapshot with hashes of its listed, mapped inputs; it does not
 attest the complete execution closure of any tool or sole configured-linker
 authorship of that dependency file. Complete tool-execution, build-script-input,
-system and `strace`-grade closure; execution of the fixed loader policy and
-dynamic-library byte closure; SBOM and release provenance; independent reproducibility; the
-proposed minimal production artifact and backend admission; and controlled
-performance evidence all remain open.
+system and `strace`-grade closure; production-grade collector/containment and
+runtime-completeness authority; SBOM and release provenance; independent
+reproducibility; the proposed minimal production artifact and backend admission;
+and controlled performance evidence all remain open.
 The observation also explicitly leaves linker time-of-use and link-path race
 resistance unattested; it is empirical current-artifact evidence, not gates 1–3
 of proposed ADR-0039.
