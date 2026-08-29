@@ -407,6 +407,7 @@ fn prepared_execution_fences_before_and_after_the_runner() {
 #[test]
 #[ignore = "requires labelled self-hosted Linux bubblewrap and a release-profile binary"]
 fn prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies() {
+    super::bwrap_resolution::run_native_inventory();
     super::prepared_seccomp::run_native_prepared_probe();
 }
 

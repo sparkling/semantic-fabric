@@ -1,5 +1,6 @@
 use super::*;
 mod adversarial;
+mod bwrap_resolution;
 mod prepared_probe;
 mod prepared_receipt;
 mod prepared_seccomp;

@@ -22,6 +22,7 @@ use crate::binary_artifact_receipt::runtime_linkage::MAX_PREPARED_SET_BYTES;
 mod bindings;
 mod policy;
 mod receipt;
+mod resolution;
 mod seccomp;
 mod tool;
 
@@ -31,6 +32,9 @@ use bindings::ProbeBinding;
 pub(super) use policy::{
     ExpectedBwrapIdentity, ExpectedPreparedSeccompPolicy, ExpectedRuntimeElfPolicy,
 };
+#[cfg(test)]
+pub(super) use resolution::observe_bwrap_host_resolution_with_test_tool;
+pub(super) use resolution::{observe_bwrap_host_resolution, BwrapHostResolutionObservation};
 #[cfg(test)]
 pub(super) use seccomp::{
     canonical_bytes_for_test as seccomp_bytes_for_test,

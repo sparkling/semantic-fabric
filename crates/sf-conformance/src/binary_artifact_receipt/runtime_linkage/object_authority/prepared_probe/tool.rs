@@ -101,7 +101,6 @@ impl HeldBwrap {
         &self.runtime_elf_policy
     }
 
-    #[cfg(test)]
     pub(super) fn elf(&self) -> &RuntimeElfView {
         &self.elf
     }

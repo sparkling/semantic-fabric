@@ -14,6 +14,11 @@ use std::time::Duration;
 
 use super::sandbox;
 
+#[allow(
+    dead_code,
+    reason = "private bubblewrap host-resolution inventory is diagnostic only"
+)]
+mod bwrap_resolution_inventory;
 mod loader_output;
 #[allow(
     dead_code,

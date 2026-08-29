@@ -227,6 +227,13 @@ pub(super) fn hold_runtime_inputs<'a>(
     Ok(held)
 }
 
+fn observe_bwrap_host_resolution(
+    expected_bwrap: prepared_probe::ExpectedBwrapIdentity,
+    expected_runtime_elf_policy: prepared_probe::ExpectedRuntimeElfPolicy,
+) -> Result<prepared_probe::BwrapHostResolutionObservation, String> {
+    prepared_probe::observe_bwrap_host_resolution(expected_bwrap, expected_runtime_elf_policy)
+}
+
 impl HeldRuntimeInputs<'_> {
     pub(super) fn identities(&self) -> &[RuntimeObjectIdentity] {
         &self.identities
