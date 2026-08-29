@@ -216,7 +216,7 @@ governed by accepted
 the remaining work from the charter, source, accepted ADRs, tests, CI, standards,
 and measured benchmarks. Proposed
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
-describes the sibling controlled-capture transaction. The programme is
+defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. The programme is
 evolutionary, not a compiler rewrite:
 make every advertised global operator bounded, then add source identity and a
 federated physical plan so the accepted cross-RDBMS charter becomes real.
@@ -464,11 +464,12 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 38 records: 33 accepted, four
+The canonical [ADR corpus](docs/adr/) contains 39 records: 33 accepted, five
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
 [ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), and
 [ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
-and [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)),
+[ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), and
+[ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md)),
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -480,7 +481,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative
