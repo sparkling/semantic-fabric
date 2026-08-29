@@ -11,6 +11,10 @@ const CHECKPOINT_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-chec
 const CLAIM_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-claim-v1.ts');
 const CODEC_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-codec-v1.ts');
 const CRYPTO_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-crypto-v1.ts');
+const LOG_PROOF_CODEC_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-log-proof-codec-v1.ts',
+);
+const LOG_PROOF_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-log-proof-v1.ts');
 const MERKLE_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-merkle-v1.ts');
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
   [CHECKPOINT_ENTRY, new Map([
@@ -44,6 +48,23 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
     ['node:util/types', 'isProxy:isProxy'],
     ['./contracts.js', 'SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,snapshotUint8Array:snapshotUint8Array'],
   ])],
+  [LOG_PROOF_CODEC_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    ['./contracts.js', 'asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys'],
+    ['./programme-capture-supervisor-log-proof-v1.js', 'PROGRAMME_CAPTURE_SUPERVISOR_LOG_PROOF_INPUT_KEYS_V1:PROGRAMME_CAPTURE_SUPERVISOR_LOG_PROOF_INPUT_KEYS_V1,verifyProgrammeCaptureSupervisorRegistrationLogProofV1:verifyProgrammeCaptureSupervisorRegistrationLogProofV1'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [LOG_PROOF_ENTRY, new Map([
+    ['@metaharness/harness', 'canonical:canonical'],
+    ['node:crypto', 'createHash:createHash'],
+    ['node:util/types', 'isProxy:isProxy'],
+    ['./contracts.js', 'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asDenseArray:asDenseArray,asInteger:asInteger,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze,snapshotUint8Array:snapshotUint8Array'],
+    ['./acceptance-task-v3.js', 'parseTaskOpaqueId:parseTaskOpaqueId'],
+    ['./programme-capture-supervisor-claim-v1.js', 'parseProgrammeCaptureSupervisorClaimEnvelopeBlobV1:parseProgrammeCaptureSupervisorClaimEnvelopeBlobV1,verifyProgrammeCaptureSupervisorClaimAcknowledgementV1:verifyProgrammeCaptureSupervisorClaimAcknowledgementV1'],
+    ['./programme-capture-supervisor-checkpoint-v1.js', 'parseProgrammeCaptureSupervisorCheckpointBlobV1:parseProgrammeCaptureSupervisorCheckpointBlobV1,verifyProgrammeCaptureSupervisorCheckpointEnvelopeV1:verifyProgrammeCaptureSupervisorCheckpointEnvelopeV1'],
+    ['./programme-capture-supervisor-merkle-v1.js', 'programmeCaptureSupervisorMerkleLeafHashV1:programmeCaptureSupervisorMerkleLeafHashV1,verifyProgrammeCaptureSupervisorMerkleConsistencyProofV1:verifyProgrammeCaptureSupervisorMerkleConsistencyProofV1,verifyProgrammeCaptureSupervisorMerkleInclusionProofV1:verifyProgrammeCaptureSupervisorMerkleInclusionProofV1'],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
   [MERKLE_ENTRY, new Map([
     ['node:crypto', 'createHash:createHash'],
     ['node:util/types', 'isProxy:isProxy'],
@@ -57,7 +78,10 @@ const FORBIDDEN_AMBIENT = new Set([
 
 describe('programme capture supervisor capability closure V1', () => {
   it('allows only exact parser, digest, read, and detached-verification imports', () => {
-    for (const path of [CHECKPOINT_ENTRY, CLAIM_ENTRY, CODEC_ENTRY, CRYPTO_ENTRY, MERKLE_ENTRY]) {
+    for (const path of [
+      CHECKPOINT_ENTRY, CLAIM_ENTRY, CODEC_ENTRY, CRYPTO_ENTRY,
+      LOG_PROOF_CODEC_ENTRY, LOG_PROOF_ENTRY, MERKLE_ENTRY,
+    ]) {
       expect(() => verifyCapabilityClosure(path, readFileSync(path, 'utf8'))).not.toThrow();
     }
     const source = readFileSync(CLAIM_ENTRY, 'utf8');
@@ -76,7 +100,10 @@ describe('programme capture supervisor capability closure V1', () => {
       "Function('return fetch')();", "(async()=>{})['con' + 'structor']('return fetch')();",
       "export { readFileSync } from 'node:fs';",
     ];
-    for (const path of [CHECKPOINT_ENTRY, CLAIM_ENTRY, CODEC_ENTRY, CRYPTO_ENTRY, MERKLE_ENTRY]) {
+    for (const path of [
+      CHECKPOINT_ENTRY, CLAIM_ENTRY, CODEC_ENTRY, CRYPTO_ENTRY,
+      LOG_PROOF_CODEC_ENTRY, LOG_PROOF_ENTRY, MERKLE_ENTRY,
+    ]) {
       const source = readFileSync(path, 'utf8');
       for (const mutant of mutants) {
         expect(() => verifyCapabilityClosure(path, `${source}\n${mutant}\n`)).toThrow();

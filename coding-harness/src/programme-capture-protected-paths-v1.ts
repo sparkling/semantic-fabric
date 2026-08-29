@@ -14,6 +14,8 @@ export const PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/__tests__/programme-capture-supervisor-checkpoint-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-kat-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-log-proof-kat-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-log-proof-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-merkle-v1.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
 ] as const);
@@ -37,6 +39,8 @@ export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
   'coding-harness/src/programme-capture-supervisor-codec-v1.ts',
   'coding-harness/src/programme-capture-supervisor-crypto-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-log-proof-codec-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-log-proof-v1.ts',
   'coding-harness/src/programme-capture-supervisor-merkle-v1.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
 ] as const);
