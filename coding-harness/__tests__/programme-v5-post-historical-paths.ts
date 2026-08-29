@@ -9,7 +9,9 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-input-attestation-v1.test.ts',
   'coding-harness/__tests__/programme-capture-private-source-v1.test.ts',
   'coding-harness/__tests__/programme-capture-state-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-authority-config-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-capabilities-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-capabilities-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-checkpoint-kat-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-checkpoint-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-claim-v1.test.ts',
@@ -33,6 +35,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-protected-paths-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-authority-config-v2.ts',
   'coding-harness/src/programme-capture-supervisor-checkpoint-v1.ts',
   'coding-harness/src/programme-capture-supervisor-claim-v1.ts',
   'coding-harness/src/programme-capture-supervisor-codec-v1.ts',
@@ -84,4 +87,5 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/tests.rs',
   'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
+  'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
 ]);

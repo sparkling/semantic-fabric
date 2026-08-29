@@ -406,6 +406,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'docs/adr/ADR-0039-minimal-production-serving-artifact.md',
     'docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md',
     'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
+    'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
     'docs/capability-matrix.json',
     'docs/capability-matrix.md',
     'docs/plans/open-issues-ruflo-metaharness-implementation-plan.md',
