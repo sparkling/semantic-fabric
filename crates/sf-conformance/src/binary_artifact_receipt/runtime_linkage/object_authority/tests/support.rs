@@ -2,11 +2,33 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use crate::binary_artifact_receipt::runtime_elf::runtime_elf_policy_identity;
+use sha2::{Digest, Sha256};
+
+use crate::binary_artifact_receipt::runtime_elf::{
+    runtime_elf_policy_identity, tests::root_fixture_with_needed,
+};
 use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_probe::{
-    seccomp_identity_for_test, ExpectedPreparedSeccompPolicy, ExpectedRuntimeElfPolicy,
+    seccomp_identity_for_test, ExpectedBwrapIdentity, ExpectedPreparedSeccompPolicy,
+    ExpectedRuntimeElfPolicy,
 };
 use crate::binary_artifact_receipt::runtime_linkage::RuntimeReadOnlyMount;
+
+pub(super) const FIXTURE_BWRAP_NEEDED: [&str; 3] = ["libselinux.so.1", "libcap.so.2", "libc.so.6"];
+
+pub(super) fn fixture_bwrap_bytes() -> Vec<u8> {
+    root_fixture_with_needed(&FIXTURE_BWRAP_NEEDED)
+}
+
+pub(super) fn fixture_bwrap_identity(path: &Path) -> ExpectedBwrapIdentity {
+    let bytes = fixture_bwrap_bytes();
+    ExpectedBwrapIdentity::new(
+        path,
+        &format!("{:x}", Sha256::digest(&bytes)),
+        bytes.len() as u64,
+        "test-fixture-root-pie-v1",
+    )
+    .unwrap()
+}
 
 pub(super) fn fixture_runtime_elf_policy() -> ExpectedRuntimeElfPolicy {
     let actual = runtime_elf_policy_identity();

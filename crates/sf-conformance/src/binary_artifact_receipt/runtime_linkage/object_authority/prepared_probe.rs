@@ -88,10 +88,11 @@ pub(super) fn execute(
 #[cfg(test)]
 pub(super) fn execute_seccomp_canary_for_test(
     expected_bwrap: ExpectedBwrapIdentity,
+    expected_runtime_elf_policy: ExpectedRuntimeElfPolicy,
     expected_seccomp_policy: ExpectedPreparedSeccompPolicy,
     canary: std::fs::File,
 ) -> Result<process::Output, String> {
-    let bwrap = tool::HeldBwrap::bind(&expected_bwrap)?;
+    let bwrap = tool::HeldBwrap::bind(&expected_bwrap, &expected_runtime_elf_policy)?;
     let seccomp = seccomp::PreparedSeccompPolicy::new(&expected_seccomp_policy)?;
     // Match production's descriptor topology. The original low descriptor
     // remains CLOEXEC while only this high, sealed duplicate crosses exec.
@@ -157,8 +158,11 @@ pub(super) fn execute_seccomp_canary_for_test(
         super::super::LOADER_TIMEOUT,
     );
     let tool_current = bwrap.assert_current();
+    let tool_policy_current =
+        expected_runtime_elf_policy.assert_matches(bwrap.runtime_elf_policy());
     let seccomp_current = seccomp.assert_current(&expected_seccomp_policy);
     tool_current?;
+    tool_policy_current?;
     seccomp_current?;
     output
 }
@@ -178,7 +182,7 @@ impl<'a> PreparedRuntimeProbe<'a> {
         if held.bwrap_path != expected_bwrap.path {
             return Err("prepared bubblewrap path differs from authorized identity".to_owned());
         }
-        let bwrap = tool::HeldBwrap::bind(&expected_bwrap)?;
+        let bwrap = tool::HeldBwrap::bind(&expected_bwrap, &expected_runtime_elf_policy)?;
         Self::assemble(
             held,
             bwrap,
@@ -203,7 +207,7 @@ impl<'a> PreparedRuntimeProbe<'a> {
         if held.bwrap_path != expected_bwrap.path {
             return Err("prepared bubblewrap path differs from authorized identity".to_owned());
         }
-        let bwrap = tool::HeldBwrap::bind_fixture(&expected_bwrap)?;
+        let bwrap = tool::HeldBwrap::bind_fixture(&expected_bwrap, &expected_runtime_elf_policy)?;
         Self::assemble(
             held,
             bwrap,
@@ -343,6 +347,8 @@ impl<'a> PreparedRuntimeProbe<'a> {
     fn validate(&self) -> Result<(), String> {
         self.expected_runtime_elf_policy
             .assert_matches(self.held.runtime_elf_policy())?;
+        self.expected_runtime_elf_policy
+            .assert_matches(self.bwrap.runtime_elf_policy())?;
         self.held.assert_current()?;
         self.bwrap.assert_current()?;
         self.seccomp.assert_current(&self.expected_seccomp_policy)?;
@@ -376,6 +382,13 @@ impl<'a> PreparedRuntimeProbe<'a> {
     #[cfg(test)]
     pub(super) fn validate_for_test(&self) -> Result<(), String> {
         self.validate()
+    }
+
+    #[cfg(test)]
+    pub(super) fn bwrap_elf_for_test(
+        &self,
+    ) -> &crate::binary_artifact_receipt::runtime_elf::RuntimeElfView {
+        self.bwrap.elf()
     }
 
     #[cfg(test)]

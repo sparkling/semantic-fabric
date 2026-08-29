@@ -1,24 +1,16 @@
 use super::*;
 
 use crate::binary_artifact_receipt::runtime_linkage::object_authority::prepared_probe::{
-    ExpectedBwrapIdentity, PreparedRuntimeObservation, PreparedRuntimeProbe,
+    PreparedRuntimeObservation, PreparedRuntimeProbe,
 };
 use crate::binary_artifact_receipt::runtime_linkage::prepared_receipt::{parse, render};
 
 fn observation(name: &str) -> PreparedRuntimeObservation {
     let fixture = Fixture::new(name);
     let held = hold_runtime_inputs(&fixture.pair, &fixture.plan, &fixture.view).unwrap();
-    let tool_bytes = b"fixture bubblewrap executable";
-    let expected = ExpectedBwrapIdentity::new(
-        fixture.plan.executable(),
-        &format!("{:x}", Sha256::digest(tool_bytes)),
-        tool_bytes.len() as u64,
-        "test-fixture-static-bytes-v1",
-    )
-    .unwrap();
     PreparedRuntimeProbe::prepare_with_test_tool(
         held,
-        expected,
+        fixture_bwrap_identity(fixture.plan.executable()),
         fixture_runtime_elf_policy(),
         fixture_seccomp_policy(),
     )

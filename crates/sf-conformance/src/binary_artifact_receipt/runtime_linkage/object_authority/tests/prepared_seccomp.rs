@@ -365,17 +365,9 @@ pub(super) fn run_native_prepared_probe() {
 
 fn prepare(fixture: &Fixture) -> PreparedRuntimeProbe<'_> {
     let held = hold_runtime_inputs(&fixture.pair, &fixture.plan, &fixture.view).unwrap();
-    let tool = b"fixture bubblewrap executable";
-    let expected = ExpectedBwrapIdentity::new(
-        fixture.plan.executable(),
-        &format!("{:x}", Sha256::digest(tool)),
-        tool.len() as u64,
-        "test-fixture-static-bytes-v1",
-    )
-    .unwrap();
     PreparedRuntimeProbe::prepare_with_test_tool(
         held,
-        expected,
+        fixture_bwrap_identity(fixture.plan.executable()),
         fixture_runtime_elf_policy(),
         fixture_seccomp_policy(),
     )
@@ -400,7 +392,7 @@ pub(super) fn native_bwrap() -> ExpectedBwrapIdentity {
     .unwrap()
 }
 
-fn native_runtime_elf() -> ExpectedRuntimeElfPolicy {
+pub(super) fn native_runtime_elf() -> ExpectedRuntimeElfPolicy {
     ExpectedRuntimeElfPolicy::new(
         "elf64-le-x86_64-closed-dynamic-tags-safe-search-flags-v1",
         "cd23f2d883c1e99b655395284e7d803e6d00b9eaf90a417560efca7ffde50b0a",

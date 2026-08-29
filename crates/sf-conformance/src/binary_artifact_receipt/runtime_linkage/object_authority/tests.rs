@@ -19,7 +19,10 @@ use crate::binary_artifact_receipt::runtime_elf::tests::{
 use crate::binary_artifact_receipt::runtime_linkage::{
     build_plan, ResolvedRuntimeObject, VirtualRuntimeObject,
 };
-use support::{directory, fixture_runtime_elf_policy, fixture_seccomp_policy, mount, regular};
+use support::{
+    directory, fixture_bwrap_bytes, fixture_bwrap_identity, fixture_runtime_elf_policy,
+    fixture_seccomp_policy, mount, regular, FIXTURE_BWRAP_NEEDED,
+};
 
 const INTERPRETER: &str = "/lib64/ld-linux-x86-64.so.2";
 const LIBC_PATH: &str = "/lib/x86_64-linux-gnu/libc.so.6";
@@ -74,7 +77,7 @@ impl Fixture {
         )
         .unwrap();
         let bwrap = root.join("test-bwrap");
-        regular(&bwrap, b"fixture bubblewrap executable", 0o755);
+        regular(&bwrap, &fixture_bwrap_bytes(), 0o755);
 
         let mounts = vec![
             mount(&lib, "/lib"),

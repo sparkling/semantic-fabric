@@ -14,20 +14,9 @@ fn prepare_fixture(fixture: &Fixture) -> PreparedRuntimeProbe<'_> {
     let held = hold_runtime_inputs(&fixture.pair, &fixture.plan, &fixture.view).unwrap();
     PreparedRuntimeProbe::prepare_with_test_tool(
         held,
-        fixture_tool_identity(fixture),
+        fixture_bwrap_identity(fixture.plan.executable()),
         fixture_runtime_elf_policy(),
         fixture_seccomp_policy(),
-    )
-    .unwrap()
-}
-
-fn fixture_tool_identity(fixture: &Fixture) -> ExpectedBwrapIdentity {
-    let bytes = b"fixture bubblewrap executable";
-    ExpectedBwrapIdentity::new(
-        fixture.plan.executable(),
-        &format!("{:x}", Sha256::digest(bytes)),
-        bytes.len() as u64,
-        "test-fixture-static-bytes-v1",
     )
     .unwrap()
 }
@@ -236,8 +225,8 @@ fn prepared_probe_requires_an_independent_exact_tool_expectation() {
     let wrong_digest = ExpectedBwrapIdentity::new(
         digest_fixture.plan.executable(),
         &"0".repeat(64),
-        b"fixture bubblewrap executable".len() as u64,
-        "test-fixture-static-bytes-v1",
+        fixture_bwrap_bytes().len() as u64,
+        "test-fixture-root-pie-v1",
     )
     .unwrap();
     let error = PreparedRuntimeProbe::prepare_with_test_tool(
@@ -254,9 +243,9 @@ fn prepared_probe_requires_an_independent_exact_tool_expectation() {
         hold_runtime_inputs(&path_fixture.pair, &path_fixture.plan, &path_fixture.view).unwrap();
     let wrong_path = ExpectedBwrapIdentity::new(
         &path_fixture.root.join("other-bwrap"),
-        &format!("{:x}", Sha256::digest(b"fixture bubblewrap executable")),
-        b"fixture bubblewrap executable".len() as u64,
-        "test-fixture-static-bytes-v1",
+        &format!("{:x}", Sha256::digest(fixture_bwrap_bytes())),
+        fixture_bwrap_bytes().len() as u64,
+        "test-fixture-root-pie-v1",
     )
     .unwrap();
     let error = PreparedRuntimeProbe::prepare_with_test_tool(
@@ -298,15 +287,18 @@ fn prepared_observation_binds_policy_tool_inputs_and_raw_output() {
     assert_eq!(observation.runtime_elf_policy_sha256.len(), 64);
     assert_eq!(observation.view.resolved_objects().len(), 1);
     assert_eq!(observation.bindings.len(), 3);
-    assert_eq!(observation.bwrap_byte_length, 29);
+    assert_eq!(
+        observation.bwrap_byte_length,
+        fixture_bwrap_bytes().len() as u64
+    );
     assert_eq!(
         observation.bwrap_sha256,
-        format!("{:x}", Sha256::digest(b"fixture bubblewrap executable"))
+        format!("{:x}", Sha256::digest(fixture_bwrap_bytes()))
     );
     assert_eq!(observation.bwrap_path, fixture.plan.executable());
     assert_eq!(
         observation.bwrap_executable_policy,
-        "test-fixture-static-bytes-v1"
+        "test-fixture-root-pie-v1"
     );
     assert_eq!(observation.stdout, stdout);
     assert_eq!(

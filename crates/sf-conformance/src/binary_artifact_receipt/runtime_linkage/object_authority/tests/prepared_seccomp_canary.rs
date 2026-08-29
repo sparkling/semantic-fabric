@@ -1,4 +1,4 @@
-use super::prepared_seccomp::{native_bwrap, native_seccomp};
+use super::prepared_seccomp::{native_bwrap, native_runtime_elf, native_seccomp};
 
 use std::fs::File;
 use std::io::Write;
@@ -16,14 +16,24 @@ pub(super) fn run_native_canary() {
     // It proves PID-1 survives the fixed descriptor topology before the sole
     // syscall-number delta below is expected to trigger SIGSYS.
     let control = sealed_memfd(&syscall_canary_elf(ALLOWED_CONTROL_SYSCALL));
-    let output =
-        execute_seccomp_canary_for_test(native_bwrap(), native_seccomp(), control).unwrap();
+    let output = execute_seccomp_canary_for_test(
+        native_bwrap(),
+        native_runtime_elf(),
+        native_seccomp(),
+        control,
+    )
+    .unwrap();
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 
     let forbidden = sealed_memfd(&syscall_canary_elf(FORBIDDEN_SOCKET_SYSCALL));
-    let error =
-        execute_seccomp_canary_for_test(native_bwrap(), native_seccomp(), forbidden).unwrap_err();
+    let error = execute_seccomp_canary_for_test(
+        native_bwrap(),
+        native_runtime_elf(),
+        native_seccomp(),
+        forbidden,
+    )
+    .unwrap_err();
     assert!(error.contains("exit status: 159"), "{error}");
 }
 

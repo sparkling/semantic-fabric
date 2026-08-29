@@ -8,8 +8,12 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::super::linux::{self, FileIdentity};
-use super::ExpectedBwrapIdentity;
+use super::{ExpectedBwrapIdentity, ExpectedRuntimeElfPolicy};
 use crate::binary_artifact_receipt::authority_guard::DirectoryGuard;
+use crate::binary_artifact_receipt::runtime_elf::{
+    parse_runtime_elf, runtime_elf_policy_identity, RuntimeElfPolicyIdentity, RuntimeElfRole,
+    RuntimeElfView,
+};
 use crate::binary_artifact_receipt::runtime_linkage::MAX_BWRAP_BYTES;
 
 #[derive(Debug)]
@@ -19,22 +23,31 @@ pub(super) struct HeldBwrap {
     file: File,
     identity: FileIdentity,
     sha256: String,
+    runtime_elf_policy: RuntimeElfPolicyIdentity,
+    elf: RuntimeElfView,
     effective_uid: u32,
     require_root: bool,
 }
 
 impl HeldBwrap {
-    pub(super) fn bind(expected: &ExpectedBwrapIdentity) -> Result<Self, String> {
-        Self::bind_with_policy(expected, true)
+    pub(super) fn bind(
+        expected: &ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: &ExpectedRuntimeElfPolicy,
+    ) -> Result<Self, String> {
+        Self::bind_with_policy(expected, expected_runtime_elf_policy, true)
     }
 
     #[cfg(test)]
-    pub(super) fn bind_fixture(expected: &ExpectedBwrapIdentity) -> Result<Self, String> {
-        Self::bind_with_policy(expected, false)
+    pub(super) fn bind_fixture(
+        expected: &ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: &ExpectedRuntimeElfPolicy,
+    ) -> Result<Self, String> {
+        Self::bind_with_policy(expected, expected_runtime_elf_policy, false)
     }
 
     fn bind_with_policy(
         expected: &ExpectedBwrapIdentity,
+        expected_runtime_elf_policy: &ExpectedRuntimeElfPolicy,
         require_root: bool,
     ) -> Result<Self, String> {
         let path = &expected.path;
@@ -49,16 +62,22 @@ impl HeldBwrap {
         if before != opened {
             return Err("bubblewrap executable changed while opening".to_owned());
         }
-        let sha256 = digest(&file, opened.size)?;
+        let bytes = read_exact_bytes(&file, opened.size)?;
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
         if sha256 != expected.sha256 || opened.size != expected.byte_length {
             return Err("bubblewrap executable differs from authorized identity".to_owned());
         }
+        let runtime_elf_policy = runtime_elf_policy_identity();
+        expected_runtime_elf_policy.assert_matches(&runtime_elf_policy)?;
+        let elf = parse_runtime_elf(&bytes, RuntimeElfRole::RootPie)?;
         let held = Self {
             path: path.to_path_buf(),
             parent,
             file,
             identity: opened,
             sha256,
+            runtime_elf_policy,
+            elf,
             effective_uid: effective_uid(),
             require_root,
         };
@@ -78,9 +97,21 @@ impl HeldBwrap {
         self.identity.size
     }
 
+    pub(super) fn runtime_elf_policy(&self) -> &RuntimeElfPolicyIdentity {
+        &self.runtime_elf_policy
+    }
+
+    #[cfg(test)]
+    pub(super) fn elf(&self) -> &RuntimeElfView {
+        &self.elf
+    }
+
     pub(super) fn assert_current(&self) -> Result<(), String> {
         if effective_uid() != self.effective_uid {
             return Err("effective UID changed while holding bubblewrap".to_owned());
+        }
+        if self.elf.interpreter().is_none() {
+            return Err("held bubblewrap RootPie view has no interpreter".to_owned());
         }
         self.parent.assert_current()?;
         linux::require_cloexec(&self.file, "held bubblewrap executable")?;
@@ -199,6 +230,33 @@ fn digest(file: &File, size: u64) -> Result<String, String> {
         return Err("held bubblewrap executable grew while reading".to_owned());
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn read_exact_bytes(file: &File, size: u64) -> Result<Vec<u8>, String> {
+    let length =
+        usize::try_from(size).map_err(|_| "bubblewrap byte length conversion failed".to_owned())?;
+    let mut bytes = vec![0u8; length];
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let read = file
+            .read_at(&mut bytes[offset..], offset as u64)
+            .map_err(|error| format!("read held bubblewrap executable: {error}"))?;
+        if read == 0 {
+            return Err("held bubblewrap executable became shorter".to_owned());
+        }
+        offset = offset
+            .checked_add(read)
+            .ok_or_else(|| "bubblewrap read offset overflow".to_owned())?;
+    }
+    let mut extra = [0u8; 1];
+    if file
+        .read_at(&mut extra, size)
+        .map_err(|error| format!("probe held bubblewrap length: {error}"))?
+        != 0
+    {
+        return Err("held bubblewrap executable grew while reading".to_owned());
+    }
+    Ok(bytes)
 }
 
 fn effective_uid() -> u32 {
