@@ -9,6 +9,7 @@ depends-on:
   - ADR-0006
   - ADR-0037
   - ADR-0038
+  - ADR-0039
 implements:
   - ADR-0038
 ---
@@ -37,8 +38,7 @@ controller classification through captured module-private provenance operations;
 records built from the separately labelled injected collector retain diagnostic
 classification. The durable parser/verifier proves canonical self-consistency,
 not independently witnessed collector provenance; positive capture must add that witness.
-This remains partial fail-closed
-implementation, not acceptance of this ADR or proof of a controlled runner.
+This remains partial fail-closed implementation, not acceptance of this ADR or proof of a controlled runner.
 
 The controller also now has a capture-specific run-claim codec and a cooperative
 same-UID create-new authority adapter. Claim-slot selection varies only with an
@@ -59,16 +59,25 @@ concurrent exclusion within that one root only: it is owner-deletable, has no
 external append-only witness or rollback resistance, and is not the future
 runner lease. No real project claim has been minted on this ineligible host.
 
-The first claim consumer before host admission is now implemented: it
-materializes the exact claimed commit, from either an exact primary or bare
+Commit `99fa2e1` adds the next development-only seam: a bounded canonical claim-registration request and acknowledgement with a detached Ed25519 signature in a
+canonical envelope. Verification receives the trusted key/fingerprint,
+supervisor/log identities, epoch, sequence, previous checkpoint, and rooted claim authority independently of the envelope. It rejects a bad key or
+signature before Git re-attestation, then reads the rooted claim, checks every
+binding, rereads it, and requires byte identity. Signature-verified validation creation and provider-free replay rerun that verifier and bind the exact envelope bytes.
+This proves only trusted-key/message/rooted-claim/reference binding. The modules
+have no signer, transport, writer, lease, runner, attempt, state, or capture
+capability; rollback, append-only/fork/global-order resistance, and independent
+administration remain unproved. No real acknowledgement was issued. The rebuild was byte-identical, 102 harness files passed (741 tests, two expected skips), and
+independent native Codex and Claude reviews found no P0/P1 issue.
+
+The first claim consumer before host admission is now implemented: it materializes the exact claimed commit, from either an exact primary or bare
 controller store, into a claim-keyed private source root disjoint from both
-claim and controller authority. A private Git index
-is read from the immutable commit and checked against the controller tree.
+claim and controller authority. A private Git index is read from the immutable
+commit and checked against the controller tree.
 Includes, filters, attributes, and group/world-writable Git control or object
 authority fail before checkout; the protected object walk is bounded at one
 million nodes. Materialized paths, Git modes, Git object IDs, SHA-256 digests,
-byte counts,
-directories, index bytes, Git executable, claim, input attestation, controller,
+byte counts, directories, index bytes, Git executable, claim, input attestation, controller,
 expected runner identity, and output absence are bound in a deterministic local
 view. Directories are sealed `0500`, ordinary files and the index `0400`, and
 tracked executable files `0500`. Prepare, verify, and pristine-only disposal
@@ -76,8 +85,7 @@ reopen the rooted claim and re-attest the controller. Unsupported modes,
 symlinks, gitlinks, hard links, `.git` paths, extras, replacements, and output
 injection fail closed. This opaque in-process handle and view grant no host,
 lease, attempt, build, execution, capture, persistence, or receipt authority;
-same-UID/root mutation, rollback, and path ABA remain explicit nonclaims. Tests use synthetic
-stores and roots, so no project source tree or measurement was materialized.
+same-UID/root mutation, rollback, and path ABA remain explicit nonclaims. Tests use synthetic stores and roots, so no project source tree or measurement was materialized.
 
 The `implements: ADR-0038` relationship denotes a subordinate proposed design
 lock. It is not implementation completion or M0 evidence.
@@ -165,6 +173,7 @@ cannot supply a weaker protected-path set.
 | Role | Authority |
 |---|---|
 | Controller | Attest the exact clean commit, task, inputs, tools, build, run ID, and state transitions. |
+| External supervisor | Bind a pre-existing claim to an independently administered key/log; later own append-only lease and attempt ordering. |
 | Codex and Claude | Review deterministic inputs and the immutable capture record through native subscriptions; never generate or edit measurement bytes. |
 | Measurement runtime | Execute the exact release binary once under the admitted profile and write only a controller-owned private output. |
 | Product checker | Parse and verify canonical scenarios, workload identity, profile identity, and baseline invariants. |
@@ -183,6 +192,16 @@ source in the reachable local Cargo package closure, trusted capture
 sources/scripts, and controller build manifest. Bind the resolved external
 Cargo/toolchain closure separately. The output path must be absent from the
 commit and worktree.
+
+The transaction consumes one verified two-builder pair receipt and its exact
+release-artifact binding from [ADR-0039](ADR-0039-minimal-production-serving-artifact.md)'s
+reproducibility track; it does not manufacture agreement. That agreement pre-
+registers distinct trust roots/run IDs, commits both complete results before
+reveal, binds identical deterministic inputs, and accepts only byte-identical
+artifacts. Missing, failed, mismatched, retried, selected, or tiebroken results
+fail the pair. Directional comparison and clean-checkout repeatability are not
+independent agreement. This extends the evidence plane, not runtime architecture
+or the application charter.
 
 Materialize that commit into a private clean worktree. Reject dirty or
 untracked source, symlink/hardlink substitution, a pre-existing output, path
@@ -285,6 +304,12 @@ reconstruct exact state; the first host-rejection boundary does so and rejects
 missing, deleted, replaced or self-authored authority. There is no local API to acquire
 a lease, authorize an attempt, delete, release, renew, reclaim, or retry a claim.
 
+The acknowledgement is claim registration only. Its signature and supplied log
+references prove no append-only, monotonic, global-order, fork, or rollback
+property and do not create a lease. Positive authority needs a separate service
+that durably orders registration, lease, attempt start, terminal outcome, and
+final witness transitions.
+
 Within the leased runner and controller process boundary, model processes and
 model-network brokers must not exist during the measured interval. Pre-review
 may assess the frozen plan; post-review assesses the digest-frozen capture
@@ -327,18 +352,21 @@ turbo, swap, or load disqualifiers. Allowed, online, and isolated CPU lists are
 parsed independently, so one malformed list cannot hide relations between the
 remaining valid lists.
 
-The runtime executes the existing `sf-performance-receipt capture-baseline`
-producer from a unique, regular, non-hard-linked release binary built from the
-attested commit. It runs offline, without a shell, under the exact profile CPU
-set, with a fresh `/proc`, read-only CPU-control `/sys` surfaces, no generic CPU
-quota, bounded memory/files/processes/output, and parent-controlled timeout and
-process-group cleanup.
+The runtime executes `sf-performance-receipt capture-baseline` from a unique,
+regular, non-hard-linked binary whose bytes, length, and SHA-256 exactly equal
+the artifact binding in the verified ADR-0039 pair receipt. It imports source,
+toolchain, closure, and build attestation from that pair rather than rebuilding.
+The held artifact is revalidated immediately before and after capture; a local
+same-commit rebuild is ineligible unless it is one of the agreed artifacts. The
+run is offline and shell-free under the exact CPU profile, fresh `/proc`, read-
+only CPU-control `/sys`, no generic CPU quota, bounded resources/output, and
+parent-controlled timeout/process-group cleanup.
 
 Preflight is repeated immediately before capture and stable controls are
 checked afterward. Evidence binds at least:
 
-- controller commit/tree, task/profile/scenario/workload/source/lock digests;
-- Rust toolchain, compiler, target, release binary, and build-command digests;
+- verified pair receipt; controller commit/tree; task/profile/scenario/workload/source/lock digests;
+- imported Rust toolchain/compiler/target/build/closure bindings and exact artifact length/SHA-256;
 - kernel, CPU model/microcode, isolated/allowed CPU sets, affinity, governor,
   turbo observability/state, NUMA, cgroup, swap, filesystem, thermal/load
   limits, and runner identity/lease;
@@ -410,19 +438,20 @@ marginal provider-API charge, not a spend cap or a capacity claim.
 1. Implement and mutation-test the closed task parser and policy state machine.
 2. Implement exact input attestation and the negative-only host non-admission
    boundary before any positive runner claim.
-3. Extend the implemented claim-rooted exact-commit private source boundary
-   into the execution runtime, receipt, provider-free replay, and complete
-   positive host/capture preflights while keeping historical V4/V5/V6 outputs
-   byte-stable.
+3. Extend the implemented claim, exact-commit source, and non-authorizing
+   acknowledgement seams with independently administered append-only
+   registration/lease authority and its provider-free replay.
 4. Provision a dedicated controlled runner and create its canonical tracked
    profile; do not derive that profile from this unsuitable development host.
-5. Register and protect the task/launcher/parser/test controller closure in the
+5. Complete positive host/capture preflights and execution runtime; consume only
+   an ADR-0039 two-builder-agreed artifact digest and keep V4/V5/V6 byte-stable.
+6. Register and protect the task/launcher/parser/test controller closure in the
    global manifest and controller build. Bind the profile, scenarios, lock, and
    product-source closure as task-scoped immutable commit blobs so existing
    patch transactions may still modify product implementation paths.
-6. Run one fresh-ID capture with native Codex and Claude review outside the
+7. Run one fresh-ID capture with native Codex and Claude review outside the
    measurement interval; seal and replay the private receipt.
-7. Import only replay-verified bytes, protect the baseline, add CI
+8. Import only replay-verified bytes, protect the baseline, add CI
    `check-baseline`, and update ADR-0038/programme status with exact evidence.
 
 Acceptance requires parser mutation coverage, dirty/pre-existing/path/identity
@@ -466,4 +495,5 @@ feature tests and clippy gates.
 - Performance model and boundedness: [ADR-0006](ADR-0006-crate-layout-and-performance-model.md)
 - Patch transaction and native-host controls: [ADR-0037](ADR-0037-dual-host-ruflo-engineering-metaharness.md)
 - Completion programme and M0 gate: [ADR-0038](ADR-0038-sota-application-completion-programme.md)
+- Minimal artifact and two-builder release track: [ADR-0039](ADR-0039-minimal-production-serving-artifact.md)
 - Programme plan: [SOTA application-completion programme](../plans/sota-application-completion-programme.md)

@@ -21,6 +21,11 @@ This ADR is a **proposal**, not an acceptance or implementation claim. Its
 `implements` relationship means that it is the subordinate design lock requested
 by ADR-0038 M0; no release is conformant until the acceptance gates below pass.
 
+The clean-checkout repeatability run at `ad94cdb` and the current directional
+artifact comparator are useful diagnostics, but they do not satisfy the two-
+builder gate below. No pre-registered builder pair, commit-before-reveal record,
+independent trust-root witness, exact-artifact agreement, or pair receipt exists.
+
 Interim M0 tooling records and verifies a host-observed non-closure observation
 of the current all-in-one `sf-cli` executable. On 2026-08-28 the first exact
 observation was captured from clean source commit
@@ -297,9 +302,15 @@ reviewed against one immutable candidate:
    the excluded crates, features, native libraries, or prototype transports.
 4. A mutation that adds `sf-conformance`, `sf-bench`, SHACL, SQL Server, REST,
    cloud, or prototype reachability makes the closure gate fail.
-5. Two isolated clean builders using the same tracked lockfile and toolchain
-   produce the same closure digest and byte-identical packed artifact; any
-   documented platform-signing envelope is applied only after that comparison.
+5. One agreement is pre-registered with fixed builder A/B roles, distinct
+   independently administered trust roots, and unique run IDs. Both builders
+   bind the same source, lockfile, toolchain, target, flags, dependency policy,
+   and closure inputs; each seals and commits its complete result digest before
+   either result is revealed. Both complete histories and artifacts then verify
+   independently and the packed artifact bytes must be identical. A missing,
+   failed, mismatched, selected, tiebroken, or retried result terminates the
+   agreement; a fresh attempt requires a new agreement and two new run IDs. Any
+   documented platform-signing envelope is applied only after exact agreement.
 6. The binary and every bound release document report the same non-zero SemVer.
 7. SQLite, PostgreSQL, and MySQL clean-machine smoke and backend admission tests
    pass against the artifact checksum named in the provenance.
@@ -310,7 +321,8 @@ reviewed against one immutable candidate:
    developer/evidence lane, proving that separation did not delete evidence.
 
 Passing only `cargo build`, or building a different artifact than the one
-checked, is not acceptance evidence.
+checked, is not acceptance evidence. A one-sided directional comparison or two
+same-principal checkouts is not independently witnessed builder agreement.
 
 ## Consequences
 

@@ -14,7 +14,7 @@
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | Backend-aware v3 receipts bind all 87 SQLite and required-live PostgreSQL mapping outcomes; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; the first external current-`sf-cli` host observation was captured and replayed from clean `5a06eac`; performance machinery, capture-input attestation, a negative-only host gate, a same-UID run claim, claim-rooted exact-commit source, bounded runtime linkage, sealed input holding, and `c8305c3`'s private one-shot observation exist; `805f413` adds a canonical private `authority=none` record and provider-free semantic reparse; `9282e60` checks a caller-supplied closed ELF tag/search/flag policy ID/five-source digest; `73e9864` binds a separately sealed exact late cBPF policy to the bubblewrap PID 1/reaper and loader child with a comparative native canary; `50adc0a` hashes and parses the same exact held bwrap bytes as `RootPie`; `b34b6d7` separately inventories controlled counterfactual loader names/paths under `authority=none` and `4b14635` protects its five authority files in the harness; Receipt V1 remains byte-compatible and non-attesting; and `ad94cdb` replayed byte-identically in two clean checkouts. The records stay in memory with no writer/importer, product caller, signature, witness, or execution provenance. Positive runner admission, authenticated held/digested actual-consumption bwrap host closure, final-FD/syscall-trace evidence, aggregate containment, complete tool/system/runtime closure, SBOM/reproducibility, production minimality/admission, and a controlled performance baseline remain open |
+| M0 — architectural truth and deterministic foundation | In progress | Backend-aware v3 receipts bind all 87 SQLite and required-live PostgreSQL mapping outcomes; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; the first external current-`sf-cli` host observation was captured and replayed from clean `5a06eac`; performance machinery, capture-input attestation, a negative-only host gate, a same-UID run claim, claim-rooted exact-commit source, bounded runtime linkage, sealed input holding, and `c8305c3`'s private one-shot observation exist; `805f413` adds a canonical private `authority=none` record and provider-free semantic reparse; `9282e60` checks a caller-supplied closed ELF tag/search/flag policy ID/five-source digest; `73e9864` binds a separately sealed exact late cBPF policy to the bubblewrap PID 1/reaper and loader child with a comparative native canary; `50adc0a` hashes and parses the same exact held bwrap bytes as `RootPie`; `b34b6d7` separately inventories controlled counterfactual loader names/paths under `authority=none`; `99fa2e1` adds a canonical detached-signature supervisor-registration seam without lease/capture authority; and `ad94cdb` replayed byte-identically in two clean checkouts. Receipt V1 remains byte-compatible and non-attesting. Positive independently administered supervision, runner admission, actual-consumption bwrap closure, final-FD/syscall evidence, aggregate containment, complete tool/system/runtime closure, SBOM/reproducibility, production admission, and controlled performance remain open |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03`, `_04`, V5 `_05`, and V6 `_01` remain immutable honest failures; `_05`
@@ -44,16 +44,42 @@ Because no canonical tracked profile or capture task exists, this is diagnostic 
 The capture control plane now has a local single-use run claim and its first pre-admission consumer. The claim slot is keyed only by independently supplied project authority and run ID; its immutable body binds controller, task, input attestation, runner profile and expected runner identity. The consumer reopens that rooted claim, re-attests an exact primary or bare controller store, rejects include/filter/config and attribute authority plus foreign-owned or cross-UID-writable Git control/object nodes, bounds the object-authority walk, preflights path-counted blob sizes before checkout, materializes only the claimed commit through a private Git index, seals the source tree, and returns a digest-bound opaque local view. Full path/index/tree inventories reject unsupported modes, symlinks, gitlinks, hard links, `.git`, extras, replacements, output injection and ambient branch/worktree changes; pristine-only cleanup preserves poisoned trees. Host admission remains unevaluated and all lease, attempt, build, execution and capture authority stays false.
 The owner-only claim and source roots remain same-UID cooperative controls: they prove neither external append-only durability, rollback resistance nor path-ABA resistance. There is no lease, launch, TTL, reclaim or retry API, and the source view is not persistence proof or a receipt. Tests use temporary synthetic primary/bare stores and roots; no real project claim, source tree, profile, build, receipt or measurement was created on this host.
 
+Commit `99fa2e1` adds the non-authorizing supervisor-registration wire seam. It
+serializes a bounded request and acknowledgement with a detached Ed25519
+signature in a canonical envelope. The trusted key, supervisor/log identities,
+epoch, sequence, checkpoint, and rooted claim authority are supplied independently
+of the envelope; key/signature failure precedes Git work, then the exact claim is
+re-attested and reread. Signature-verified validation
+creation and provider-free replay rerun the verifier and bind the exact envelope
+bytes. All lease, runner, attempt, state, and capture fields remain false. There
+is no signer, transport, durable log, external administration, rollback/fork/
+global-order proof, or real acknowledgement. The controller rebuilt identically;
+102 harness files passed (741 tests, two expected skips), with independent native
+Codex and Claude PASS reviews.
+
 On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links under the hardened-builder
 `umask 0022`. Each checkout rebuilt the controller, passed all 91 harness files (627 tests passed and 8 environment-
 intentional skips), replayed the RDB2RDF, query, Protocol, dependency-closure, performance-scenario, and capability
 authorities, remained Git-clean, and produced byte-identical authority and controller digests. The harness correctly
 rejected an earlier pair created under `umask 0002` because tracked inputs were group-writable; no trust check was
-relaxed. This closes current-tranche checkout repeatability, not binary reproducibility or the final release proof.
+relaxed. This closes current-tranche checkout repeatability, not binary reproducibility or final agreement.
 
 M0 remains open for complete binary artifact closure, SBOM/reproducibility and production minimality/admission,
 plus controlled performance evidence.
-The complete gate must then run in two clean builders; M1–M7 remain gated.
+Its two-builder gate must pre-register distinct roles/trust roots and run IDs,
+commit both complete results before reveal, bind identical inputs, and require
+byte-identical artifacts. Missing, failed, mismatched, selected, tiebroken, or
+retried results fail the pair; the existing directional comparator is not
+agreement. This extends the evidence plane without changing application goals.
+
+The current M0 critical path is:
+
+1. deploy independently administered append-only registration/lease authority;
+2. provision and admit the canonical controlled-runner profile;
+3. produce one two-builder-agreed exact artifact under ADR-0039; and
+4. run one fresh-ID attempt, seal/replay it, then import only the verified bytes.
+
+M1–M7 remain gated until the full M0 gate passes.
 
 ## Outcome
 

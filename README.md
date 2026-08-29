@@ -195,7 +195,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 734 tests across 100 files; two
+- The versioned engineering harness passes 741 tests across 102 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -246,32 +246,31 @@ Commit `50adc0a` hashes and parses the same held bubblewrap bytes as `RootPie`; 
 It does not execute bubblewrap: the interpreter, reported DSOs, and path-passed target are unheld and undigested, so actual byte consumption, time-of-use, and host runtime closure stay unbound.
 Receipt V1 remains byte-compatible and keeps `runtime-elf-policy-replay` and `target-seccomp-or-syscall-trace` `not-attested`; the separate replay proves only inventory self-consistency.
 There is no syscall trace, final-FD inventory, provenance, admission, performance or release authority. M0 remains open.
-The capture control plane now also has a closed, non-authorizing run-claim
-record and a local same-UID create-new adapter. Its slot varies only by an
-independently supplied project-authority digest and run ID; the body binds the
-controller, task, input attestation, runner profile and expected runner identity
-while keeping host admission unevaluated and lease/attempt/capture authority
-false. Reserve and replay re-attest the pinned controller store, commit and task.
-A pre-existing owner-only authority directory is descriptor-pinned, the derived
-claim uses `O_EXCL`/`O_NOFOLLOW`, and successful fsync plus exact readback returns
-local admission/state views. Those reproducible bytes are not provenance: the
-host consumer and verifier reopen the rooted claim and reject absent, deleted,
-replaced or caller-forged authority. The root remains owner-deletable and proves
-neither an external witness nor rollback resistance. No real claim was minted.
-The claim now has a first non-authorizing source consumer. It reopens and
-re-attests the rooted claim, materializes only the exact claimed commit from an
-exact primary or bare controller store through a private Git index, seals the
-tree, and binds path, mode, Git-object, SHA-256, index, controller, claim and
-output-absence checks in an opaque local view. Mutation tests reject ambient
-worktree drift, unsupported modes, links, extras, replacement and output
-injection. This does not admit a host or authorize a build, attempt, capture,
-receipt, baseline, or measurement; same-UID rollback and path ABA remain open.
-Current-tranche repeatability is proven: exact commit
-`ad94cdb` rebuilt and replayed byte-identically in two clean, no-hard-link
-checkouts under hardened-builder `umask 0022`, with both trees remaining clean.
-That proof does not attest actual binary reproducibility. M1–M7 remain gated.
-A hardened single-source build is an interim release profile; it is not the
-charter-complete application while cross-RDBMS federation remains in scope.
+The capture plane has a closed non-authorizing run claim and local same-UID
+create-new adapter. Its independently selected slot binds controller, task,
+inputs, profile and expected runner while all lease/attempt/capture authority
+stays false. Reserve, replay and the first source consumer reopen the claim and
+re-attest the pinned controller. The consumer materializes only the exact commit
+through a private Git index, seals it, and binds its full inventory; mutation
+tests reject links, extras, replacement, worktree drift and output injection.
+These local views prove no external witness, rollback resistance, provenance,
+host admission, build, receipt, baseline, or measurement.
+
+Commit `99fa2e1` adds a bounded canonical claim-registration request and an
+acknowledgement with a detached Ed25519 signature in a canonical envelope,
+signature-verified validation creation, and provider-free replay. The trusted
+key, supervisor/log identities, epoch, sequence, checkpoint, and claim root are
+supplied independently of the envelope; key/signature failure precedes Git work,
+then exact rooted-claim bindings are checked across two reads. The exact envelope
+bytes are digest-bound. There is no signer, transport, durable log, independent
+administration, lease/attempt/capture authority, or rollback/fork/global-order
+proof, and no real acknowledgement. All 102 harness files pass (741 tests, two expected skips) with independent native Codex and Claude PASS reviews.
+
+Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
+reproducibility. Final two-builder agreement must pre-register distinct trust
+roots/run IDs, commit both complete results before reveal, and accept only byte-
+identical artifacts without retry, selection, or tiebreaking. M1–M7 stay gated.
+A hardened single-source build remains an interim, not charter-complete, profile.
 
 ## Open-issue remediation closeout
 
@@ -327,7 +326,8 @@ tracked/locked dependency graph (`93ae3c2`), pinned CI inputs (`374ca99`), exact
 RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
 inventory-authoritative execution runners (`a3efb32`), plus the sealed mapping
-receipt lineage (`33e202b`, `81caec2`, `a84aa05`). The evidence matrix now contains
+receipt lineage (`33e202b`, `81caec2`, `a84aa05`) and the non-authorizing
+supervisor-registration seam (`99fa2e1`). The evidence matrix now contains
 74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
 v3 receipts bind immutable captured inputs to typed SQLite and required-live
 PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
@@ -344,7 +344,7 @@ not represented as a pass. Product tests remain authoritative and the flywheel
 remains off.
 
 The current M0 tranche adds query/Protocol regression baselines, the scoped `sf-cli`
-dependency receipt, performance machinery, a non-authorizing run claim, and a strict
+dependency receipt, performance machinery, a non-authorizing run claim and signed-envelope supervisor-registration verifier, and a strict
 runtime-linkage parser plus private Linux observation. After unauthorized discovery, the
 prepared boundary holds sealed source bytes, pins and `execveat`s an expected bubblewrap
 inode, and requires exact `ld.so --list` equality inside a fresh read-only tmpfs. Commit
@@ -446,7 +446,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID non-authorizing run claim, and claim-rooted exact-commit private source materialization exist. There is still no external append-only witness, positive runner admission, controlled profile, build/attempt authority, baseline, candidate, capture receipt, or measured number; this host is ineligible |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID claim, claim-rooted source, and canonical signed-envelope supervisor-registration verifier exist. The verifier proves key/message/claim/reference binding only. There is still no independently administered append-only witness, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.

@@ -418,28 +418,28 @@ of proposed ADR-0039.
 Performance production and comparison machinery exists, but no controlled
 runner profile, baseline, candidate, or measured numbers exist. Commit
 `f2cc800` makes future V5/V6 patch tasks consume exact tracked `Cargo.lock` bytes
-from their attested ancestor baseline while retaining an exact task-blob-bound
-exception for the two historical fixtures. It does not create measurement
-authority. Proposed
+while retaining a task-blob-bound exception for two historical fixtures. It creates no
+measurement authority. Commit `99fa2e1` adds a bounded canonical registration
+request and acknowledgement with a detached Ed25519 signature. Signature-
+verified validation and replay receive trust/log references independently of the envelope, reverify the signature and
+rooted claim, and bind the exact envelope bytes. It has no signer, persistence,
+lease, runner, attempt, state, or capture capability; rollback, append-only/fork/global-order resistance and independent administration remain unproved. Proposed
 [ADR-0041](ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
-keeps the clean-release baseline in a sibling single-attempt observational
-transaction rather than weakening V6 patch semantics. A dedicated controlled
-runner/profile, capture receipt, replay, and imported baseline remain open.
+keeps capture in a sibling transaction; no real acknowledgement, controlled
+runner/profile, receipt, replayed capture, baseline, or measurement exists.
 
-M0 is not complete until actual complete binary artifact closure, SBOM and
-reproducibility/minimality/admission evidence, and the controlled performance
-baseline have been performed. Exact commit `ad94cdb` did replay the then-current deterministic
-tranche byte-identically in two clean, no-hard-link checkouts under the hardened-builder
-`umask 0022`: each rebuilt the controller, passed all 91 harness files, replayed
-every current deterministic authority, and remained Git-clean. An initial
-`umask 0002` pair was correctly rejected for group-writable inputs, and no trust
-check was relaxed. This proves current-tranche repeatability, not actual binary
-reproducibility; the complete M0 release gate must run again in two clean
-builders after the remaining authorities exist. The generated matrix,
-SQLite/PostgreSQL v3 mapping receipts, query/protocol regression receipts, and
-package dependency receipt are deterministic scoped authorities, not release or
-backend-admission proof. M1–M7 remain gated. These incremental closures do not by
-themselves rescore the 44/100 application-readiness baseline.
+M0 is not complete until actual binary-artifact closure, SBOM, reproducibility/minimality/admission, and controlled performance evidence exist. Exact commit
+`ad94cdb` replayed the then-current deterministic tranche byte-identically in
+two clean no-hard-link checkouts under `umask 0022`; each rebuilt the controller, passed all 91 harness files, replayed every current deterministic authority, and
+remained clean. An earlier `umask 0002` pair failed safely. This proves checkout
+repeatability, not binary reproducibility. Final agreement must pre-register two
+independently administered builder roles/trust roots and run IDs, commit both
+complete results before reveal, bind identical inputs, and accept only byte-
+identical artifacts; missing, failed, mismatched, selected, tiebroken, or retried
+results fail the pair. Directional comparison is not agreement. This extends the evidence plane without rewriting runtime architecture or application goals. The
+complete M0 gate must run again after the remaining authorities exist. Current
+scoped receipts prove neither release nor backend admission; M1–M7 stay gated,
+and these slices do not silently rescore the 44/100 readiness baseline.
 
 The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before
 successful cleanup. Future harness optimisation may use immutable
