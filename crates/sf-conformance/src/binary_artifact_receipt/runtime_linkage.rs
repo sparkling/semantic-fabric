@@ -1,7 +1,9 @@
 //! Non-authorizing runtime-linkage contract for the current artifact observer.
 //!
-//! This module only describes and parses one capability-minimal loader probe. It
-//! neither executes that probe nor writes, imports, or upgrades a receipt.
+//! The public surface only describes and parses a capability-minimal loader
+//! probe. A private Linux boundary can independently prepare and execute a
+//! one-shot sealed-source-copy observation, but no producer, receipt, admission,
+//! replay, provenance, performance, or release path can call it.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -11,12 +13,12 @@ use std::time::Duration;
 use super::sandbox;
 
 mod loader_output;
-// This is a staged capability boundary: tests exercise it now, while a later
-// prepared-probe slice will become its sole production caller.
+// This remains a private capability boundary: tests exercise sealed preparation
+// and execution, but no producer, receipt, admission, or release path calls it.
 #[cfg(target_os = "linux")]
 #[allow(
     dead_code,
-    reason = "sealed runtime authority is not wired to execution yet"
+    reason = "prepared runtime observation is not wired to a production authority"
 )]
 mod object_authority;
 #[cfg(test)]

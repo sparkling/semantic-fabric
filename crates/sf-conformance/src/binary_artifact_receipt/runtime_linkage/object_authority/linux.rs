@@ -17,7 +17,9 @@ mod sealed;
 
 #[cfg(test)]
 pub(super) use sealed::snapshot_source_with_phase_hook;
-pub(super) use sealed::{assert_sealed_current, snapshot_source, SealedBytes};
+pub(super) use sealed::{
+    assert_sealed_current, assert_sealed_duplicate_current, snapshot_source, SealedBytes,
+};
 
 const RESOLVE_NO_XDEV: u64 = 0x01;
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
@@ -50,7 +52,7 @@ pub(super) struct FileIdentity {
 }
 
 impl FileIdentity {
-    fn from_metadata(metadata: &Metadata) -> Self {
+    pub(super) fn from_metadata(metadata: &Metadata) -> Self {
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -455,7 +457,7 @@ fn read_link_fd(file: &File) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn require_cloexec(file: &File, label: &str) -> Result<(), String> {
+pub(super) fn require_cloexec(file: &File, label: &str) -> Result<(), String> {
     // SAFETY: fcntl operates on a live owned descriptor.
     let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
     if flags < 0 || flags & libc::FD_CLOEXEC == 0 {

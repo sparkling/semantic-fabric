@@ -105,6 +105,30 @@ pub(in super::super) fn assert_sealed_current(sealed: &SealedBytes) -> Result<()
     Ok(())
 }
 
+pub(in super::super) fn assert_sealed_duplicate_current(
+    duplicate: &File,
+    sealed: &SealedBytes,
+) -> Result<(), String> {
+    require_cloexec(duplicate, "sealed runtime transfer")?;
+    require_exact_seals(duplicate)?;
+    let source_identity = FileIdentity::from_metadata(
+        &sealed
+            .file
+            .metadata()
+            .map_err(|error| format!("inspect sealed runtime source: {error}"))?,
+    );
+    let transfer_identity = FileIdentity::from_metadata(
+        &duplicate
+            .metadata()
+            .map_err(|error| format!("inspect sealed runtime transfer: {error}"))?,
+    );
+    let (digest, bytes) = read_exact(duplicate, sealed.byte_length, "sealed runtime transfer")?;
+    if transfer_identity != source_identity || digest != sealed.sha256 || bytes != sealed.bytes {
+        return Err("sealed runtime transfer differs from its bound source".to_owned());
+    }
+    Ok(())
+}
+
 pub(super) fn read_exact(file: &File, size: u64, label: &str) -> Result<(String, Vec<u8>), String> {
     let capacity =
         usize::try_from(size).map_err(|_| format!("{label} size does not fit memory"))?;

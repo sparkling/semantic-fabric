@@ -1,12 +1,13 @@
-//! Opaque, nonexecuting holder for one discovered runtime input set.
+//! Opaque holder and private one-shot executor for one discovered runtime set.
 //!
 //! Immutable snapshot bytes are sealed in memfds copied from descriptor-rooted
-//! sources. This module does not expose descriptors, invoke a loader, serialize
-//! a receipt, or make admission, provenance, replay, or loader-consumption
-//! claims. Discovery necessarily precedes this holder; only a future in-process
-//! prepared probe could consume the held descriptors. The initial discovery run
-//! is not authorized by this capability. Same-principal/root ABA, rollback, and
-//! hostile-kernel or hostile-filesystem resistance are explicitly out of scope.
+//! sources. The private executor transfers read-only copies from those memfds
+//! into a fresh bubblewrap tmpfs and checks that the loader view is unchanged.
+//! It does not expose descriptors, serialize a receipt, or make direct-memfd,
+//! admission, provenance, replay, performance, minimality, or release claims.
+//! Discovery necessarily precedes the holder and is not authorized by it.
+//! Same-principal/root ABA, rollback, and hostile-kernel or hostile-filesystem
+//! resistance remain explicitly out of scope.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
@@ -19,6 +20,7 @@ use crate::binary_artifact_receipt::{
 };
 
 mod linux;
+mod prepared_probe;
 #[cfg(test)]
 mod tests;
 
@@ -56,6 +58,8 @@ struct HeldRuntimeObject {
 #[derive(Debug)]
 pub(super) struct HeldRuntimeInputs<'a> {
     artifact_pair: &'a ArtifactPair,
+    bwrap_path: std::path::PathBuf,
+    candidate: RuntimeLinkageView,
     roots: Vec<linux::HeldMount>,
     artifact: HeldRuntimeObject,
     loader: HeldRuntimeObject,
@@ -199,6 +203,8 @@ pub(super) fn hold_runtime_inputs<'a>(
         .collect();
     let held = HeldRuntimeInputs {
         artifact_pair: artifact,
+        bwrap_path: plan.executable.clone(),
+        candidate: discovered.clone(),
         roots,
         artifact: artifact_object,
         loader: loader_object,
@@ -222,6 +228,13 @@ impl HeldRuntimeInputs<'_> {
 
     pub(super) fn assert_current(&self) -> Result<(), String> {
         self.assert_current_with_phase_hook(|| {})
+    }
+
+    fn execute_prepared(
+        self,
+        expected_bwrap: prepared_probe::ExpectedBwrapIdentity,
+    ) -> Result<prepared_probe::PreparedRuntimeObservation, String> {
+        prepared_probe::execute(self, expected_bwrap)
     }
 
     fn assert_current_with_phase_hook(

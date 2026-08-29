@@ -19,9 +19,14 @@ jobs:
           node-version: '24.14.1'
           cache: npm
           cache-dependency-path: coding-harness/package-lock.json
+      - name: Rust toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
       - name: preflight native isolation capabilities
         run: |
           test -x /usr/bin/bwrap
+          test "$(stat -c %s /usr/bin/bwrap)" = 72160
+          echo '52231e1caf55bcbc667b269f49c63599a6f7db4767ae6a039580d0ff853db712  /usr/bin/bwrap' |
+            sha256sum --check --strict
           test -x /usr/bin/systemd-run
           test -n "${XDG_RUNTIME_DIR:-}"
           test -n "${DBUS_SESSION_BUS_ADDRESS:-}"
@@ -43,3 +48,14 @@ jobs:
         env:
           HARNESS_REQUIRE_NATIVE_INTEGRATION: '1'
         run: npm --prefix coding-harness test
+      - name: build release-profile sf-cli binary for sealed runtime observation
+        run: cargo build --locked --release -p sf-cli
+      # This private one-shot test establishes only that sealed-source copies
+      # reproduce the prior loader view. It emits no receipt and grants no
+      # admission, provenance, replay, performance, or release authority.
+      - name: test sealed-source-copy runtime observation
+        run: |
+          test_name='binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies'
+          listed="$(cargo test --locked -p sf-conformance --features evidence-receipts --lib "$test_name" -- --ignored --exact --list)"
+          test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          cargo test --locked -p sf-conformance --features evidence-receipts --lib "$test_name" -- --ignored --exact --test-threads=1

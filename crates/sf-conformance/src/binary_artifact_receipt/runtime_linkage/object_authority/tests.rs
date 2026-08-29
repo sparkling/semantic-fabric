@@ -1,6 +1,7 @@
 use super::*;
 
 mod adversarial;
+mod prepared_probe;
 
 use std::fs::{self, File};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -69,6 +70,8 @@ impl Fixture {
             &loader_alias,
         )
         .unwrap();
+        let bwrap = root.join("test-bwrap");
+        regular(&bwrap, b"fixture bubblewrap executable", 0o755);
 
         let mounts = vec![
             mount(&lib, "/lib"),
@@ -76,7 +79,7 @@ impl Fixture {
             mount(&lib, "/usr/lib"),
             mount(&lib64, "/usr/lib64"),
         ];
-        let plan = build_plan(Path::new("/usr/bin/bwrap"), &selected, INTERPRETER, mounts).unwrap();
+        let plan = build_plan(&bwrap, &selected, INTERPRETER, mounts).unwrap();
         let artifact_sha256 = format!("{:x}", Sha256::digest(&root_bytes));
         let view = RuntimeLinkageView {
             artifact_sha256,

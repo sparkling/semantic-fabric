@@ -72,6 +72,8 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/binary_artifact_receipt/model.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/model/link.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/process.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/process/capture.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/process/execveat.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/producer.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/producer_paths.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/producer_paths/link_input.rs',
@@ -92,8 +94,11 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/component.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/logical_path.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/linux/sealed.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/prepared_probe/tool.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/adversarial.rs',
+  'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/object_authority/tests/prepared_probe.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/sandbox.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/sandbox_environment.rs',
@@ -174,6 +179,9 @@ const REQUIRED_FEATURE_CLIPPY = [
 
 const REQUIRED_ARTIFACT_OBSERVATION_TEST =
   'cargo test --locked -p sf-conformance --features evidence-receipts --lib --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1';
+
+const NATIVE_PREPARED_OBSERVATION_TEST =
+  'binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies';
 
 describe('M0 protected authority and CI contract', () => {
   it('protects every tracked authority in both config and manifest', () => {
@@ -279,6 +287,19 @@ describe('M0 protected authority and CI contract', () => {
     expect(workflow.indexOf(REQUIRED_FEATURE_CLIPPY[1])).toBeLessThan(
       workflow.indexOf('cargo test --locked -p sf-bench --features performance-receipts'),
     );
+  });
+
+  it('keeps the private native observation exact, manual, and non-authorizing', () => {
+    const workflow = readFileSync(
+      resolve(repository, '.github/workflows/harness-native.yml'),
+      'utf8',
+    );
+    expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow.split(NATIVE_PREPARED_OBSERVATION_TEST)).toHaveLength(2);
+    expect(workflow).toContain('grep -Fxc "$test_name: test"');
+    expect(workflow).toContain('-- --ignored --exact --test-threads=1');
+    expect(workflow).toContain('grants no');
+    expect(workflow).toContain('admission, provenance, replay, performance, or release authority');
   });
 
   it('keeps the minimal production artifact planned until its release gates close', () => {
