@@ -6,33 +6,50 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-const SOURCE_ENTRY = resolve(
-  fileURLToPath(new URL('../src/', import.meta.url)),
-  'programme-capture-supervisor-authority-config-v2.ts',
+const SOURCE_ROOT = fileURLToPath(new URL('../src/', import.meta.url));
+const CONFIG_ENTRY = resolve(SOURCE_ROOT, 'programme-capture-supervisor-authority-config-v2.ts');
+const TRANSITION_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-authority-transition-v2.ts',
 );
-const EXPECTED_IMPORTS = new Map([
-  ['node:util/types', 'isProxy:isProxy'],
-  ['./acceptance-task-v3.js', 'parseTaskOpaqueId:parseTaskOpaqueId'],
-  [
-    './contracts.js',
-    'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asDenseArray:asDenseArray,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze,normalizePublicHttpsOrigin:normalizePublicHttpsOrigin',
-  ],
-  ['./receipts.js', 'digestValue:digestValue'],
-  ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
+  [CONFIG_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    ['./acceptance-task-v3.js', 'parseTaskOpaqueId:parseTaskOpaqueId'],
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,asDenseArray:asDenseArray,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze,normalizePublicHttpsOrigin:normalizePublicHttpsOrigin',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [TRANSITION_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    [
+      './contracts.js',
+      'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
+    ],
+    [
+      './programme-capture-supervisor-authority-config-v2.js',
+      'parseProgrammeCaptureSupervisorAuthorityConfigurationV2:parseProgrammeCaptureSupervisorAuthorityConfigurationV2,programmeCaptureSupervisorAuthorityGenesisHeadDigestV2:programmeCaptureSupervisorAuthorityGenesisHeadDigestV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
 ]);
 const FORBIDDEN_AMBIENT = new Set([
-  'Bun', 'Deno', 'Function', 'WebSocket', 'Worker', 'createRequire', 'eval', 'fetch',
-  'generateKeyPair', 'global', 'globalThis', 'module', 'privateKey', 'process', 'require',
-  'sign',
+  'Bun', 'Date', 'Deno', 'Function', 'Math', 'WebSocket', 'Worker', 'createRequire',
+  'crypto', 'eval', 'fetch', 'generateKeyPair', 'global', 'globalThis', 'module',
+  'performance', 'privateKey', 'process', 'require', 'setInterval', 'setTimeout', 'sign',
 ]);
 
 describe('programme capture supervisor capability closure V2', () => {
   it('allows only closed parsing, normalization, freezing, and digest imports', () => {
-    expect(() => verifyCapabilityClosure(readFileSync(SOURCE_ENTRY, 'utf8'))).not.toThrow();
+    for (const path of [CONFIG_ENTRY, TRANSITION_ENTRY]) {
+      expect(() => verifyCapabilityClosure(path, readFileSync(path, 'utf8'))).not.toThrow();
+    }
   });
 
   it('rejects transport, write, signing, process, and dynamic-loader mutants', () => {
-    const source = readFileSync(SOURCE_ENTRY, 'utf8');
     const mutants = [
       "import fs from 'node:fs'; void fs;",
       "import * as net from 'node:net'; void net;",
@@ -42,22 +59,27 @@ describe('programme capture supervisor capability closure V2', () => {
       "createRequire(import.meta.url)('node:fs');", "process.getBuiltinModule('fs');",
       "globalThis.fetch('https://example.invalid');", "Function('return fetch')();",
       "(async()=>{})['con' + 'structor']('return fetch')();",
+      'Date.now();', 'Math.random();', 'crypto.getRandomValues(new Uint8Array(1));',
       "export { readFileSync } from 'node:fs';",
     ];
-    for (const mutant of mutants) {
-      expect(() => verifyCapabilityClosure(`${source}\n${mutant}\n`)).toThrow();
+    for (const path of [CONFIG_ENTRY, TRANSITION_ENTRY]) {
+      const source = readFileSync(path, 'utf8');
+      for (const mutant of mutants) {
+        expect(() => verifyCapabilityClosure(path, `${source}\n${mutant}\n`)).toThrow();
+      }
     }
   });
 });
 
-function verifyCapabilityClosure(source: string): void {
+function verifyCapabilityClosure(path: string, source: string): void {
   const fail = (detail: string): never => {
     throw new Error(`HARNESS_CAPTURE_SUPERVISOR_CAPABILITY_CLOSURE_V2_INVALID:${detail}`);
   };
   const tree = ts.createSourceFile(
-    SOURCE_ENTRY, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS,
+    path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS,
   );
   if (tree.parseDiagnostics.length) fail('syntax');
+  const expected = EXPECTED_IMPORTS.get(path)!;
   const seen = new Set<string>();
   const visit = (node: ts.Node): void => {
     if (ts.isImportEqualsDeclaration(node)) fail('import equals');
@@ -75,7 +97,7 @@ function verifyCapabilityClosure(source: string): void {
       if (runtime.length === 0) return;
       const bindings = runtime.map((item) =>
         `${(item.propertyName ?? item.name).text}:${item.name.text}`).sort().join(',');
-      if (bindings !== EXPECTED_IMPORTS.get(specifier)) fail(`binding ${specifier}`);
+      if (bindings !== expected.get(specifier)) fail(`binding ${specifier}`);
       seen.add(specifier);
     }
     if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
@@ -89,7 +111,7 @@ function verifyCapabilityClosure(source: string): void {
     ts.forEachChild(node, visit);
   };
   visit(tree);
-  if (seen.size !== EXPECTED_IMPORTS.size) fail('missing import');
+  if (seen.size !== expected.size) fail('missing import');
 }
 
 function staticString(node: ts.Expression): string | undefined {
