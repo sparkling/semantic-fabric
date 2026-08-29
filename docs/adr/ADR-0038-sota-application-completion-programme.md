@@ -178,7 +178,7 @@ implemented. Each affected ADR must gain a dated implementation-status note as
 its increment lands. ADR-0014's previously deferred areas graduate into this
 programme, but this ADR does not itself mark them implemented.
 
-### 7. Implementation status (2026-08-28)
+### 7. Implementation status (2026-08-29)
 
 The H0a reusable-harness foundation is implemented in `b40dbc6`: frozen v5 gate
 law and task/runtime derivation, strict schema dispatch, an externally anchored
@@ -313,6 +313,18 @@ workflow-dispatch lane additionally names the exact test, release-profile binary
 host labels and bubblewrap digest; it is private diagnostic validation, not a
 merge, performance, admission or release gate.
 
+Commit `805f413` converts only a completed prepared observation into a distinct
+private canonical non-admission record. Fixed `authority=none`,
+`admission-result=not-evaluated`, and `non-admission-only` metadata plus 34
+`not-attested` fields prevent the record from being read as authority. Separate
+domain-separated digests bind the record and receipt bytes; the canonical format
+binds the exact semantic view, bubblewrap path/digest/length/policy, ordered
+source and destination identities, modes, and bounded raw stdout in lowercase-
+hex chunks. Provider-free semantic replay reparses that stdout and requires the
+new view to equal the recorded view. It performs no process, filesystem,
+network, model, or provider call, and it never recreates the live probe event.
+The exact-host workflow renders, parses, and replays this record in memory only.
+
 This is loader-resolution observation only. Candidate discovery remains prior and
 unauthorized; the artifact is not executed, and main-program, relocation,
 symbol/version, initialization, `dlopen`, NSS, VDSO and closure completeness are
@@ -323,9 +335,12 @@ semantics remain trusted. There is no post-exec final-FD inventory, target secco
 or syscall trace, nor aggregate cgroup `pids.max`, memory or control-group kill;
 the implemented limits are per process. Same-principal/root ABA, rollback and a
 hostile kernel/filesystem remain out of scope under the exclusive, quiescent
-builder assumption. The module has no production caller, canonical serialization,
-receipt, external witness, provider-free replay, provenance, SBOM,
-reproducibility, minimality, admission, performance or release authority.
+builder assumption. The module has no production caller, durable writer/importer,
+signature, external witness, authenticated execution/output provenance, SBOM,
+reproducibility, minimality, admission, performance or release authority. Its
+provider-free semantic replay validates a self-consistent record without
+executing anything; a fully reminted self-consistent alternative remains only a
+different unauthenticated `authority=none` record.
 
 This observation tooling advances M0 without closing the actual binary-artifact
 boundary. It records configured tool identities and a post-build final-link-
@@ -333,9 +348,10 @@ dependency-file snapshot with hashes of its listed, mapped inputs; it does not
 attest the complete execution closure of any tool or sole configured-linker
 authorship of that dependency file. Complete tool-execution, build-script-input,
 system and `strace`-grade closure; production-grade collector/containment and
-runtime-completeness authority; SBOM and release provenance; independent
-reproducibility; the proposed minimal production artifact and backend admission;
-and controlled performance evidence all remain open.
+runtime-completeness authority; durable authenticated receipt publication; SBOM
+and release provenance; independent reproducibility; the proposed minimal
+production artifact and backend admission; and controlled performance evidence
+all remain open.
 The observation also explicitly leaves linker time-of-use and link-path race
 resistance unattested; it is empirical current-artifact evidence, not gates 1–3
 of proposed ADR-0039.

@@ -68,7 +68,17 @@ bytes to fixed paths, remounts it read-only and runs the copied loader. Strict
 `ld.so --inhibit-cache --glibc-hwcaps-mask "" --list /artifact` output must equal
 prior discovery before the private in-memory observation is returned. The manual
 workflow-dispatch smoke pins the exact host labels, test identity and bubblewrap
-digest; it emits no receipt and is not a merge or release gate.
+digest; it is not a merge or release gate.
+
+Commit `805f413` maps a completed observation into a private canonical
+`authority=none`, `non-admission-only` record. Domain-separated record and
+receipt digests cover the exact semantic view, bubblewrap identity and policy,
+ordered source/destination bindings, and bounded raw stdout. Thirty-four fixed
+`not-attested` fields preserve the missing authorities. Provider-free semantic
+replay reparses the embedded stdout and requires semantic equality without
+executing a process or consulting the filesystem, network, model, or provider.
+The exact-host smoke renders, parses, and replays the record only in memory; no
+durable writer or importer exists.
 
 This does not accept this ADR. Discovery remains prior and unauthorized; the
 artifact is not executed; relocation, symbol/version, initialization, `dlopen`,
@@ -78,9 +88,12 @@ Bubblewrap's host PT_INTERP/DSO/cache/preload/LSM closure is unbound, and kernel
 bubblewrap, glibc, copy and mount semantics are trusted. There is no final FD
 inventory, target seccomp/syscall trace, aggregate cgroup process/memory bound or
 control-group kill. Same-principal/root ABA, rollback and hostile kernel/filesystem
-resistance remain out of scope. There is no production caller, canonical
-serialization, external witness, replay, provenance, SBOM, reproducibility,
-minimality, performance, admission or release authority.
+resistance remain out of scope. There is no production caller or canonical
+public/durable receipt path, signature, external witness, authenticated
+execution/output provenance, SBOM, reproducibility, minimality, performance,
+admission or release authority. Semantic replay is self-consistency validation,
+not execution replay or authenticity; a fully reminted self-consistent record
+remains a different unauthenticated non-admission record.
 
 This observation is about the artifact which exists today, not this proposal's
 `sf-server`, and it is not a complete binary closure, SBOM, reproducibility
@@ -92,7 +105,7 @@ remain explicitly unattested. Authority ancestry and held-directory checks fail
 closed on untrusted or persistent replacement, while same-principal/root ABA
 resistance still requires an exclusive, quiescent builder principal. Hosted CI
 exercises parser/contract mutants; the exact prepared smoke is manual and private.
-Neither captures nor publishes an authoritative observation. This advances the
+Neither publishes an authoritative observation. This advances the
 implementation baseline without accepting this ADR, satisfying gates 1–3, or
 resolving the proposed packaging decision.
 
