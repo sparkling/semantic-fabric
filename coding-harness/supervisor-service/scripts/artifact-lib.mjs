@@ -47,6 +47,7 @@ export const BUILD_INPUT_PATHS = Object.freeze([
   'src/registration-postgresql-materializer-contract-v1.ts',
   'src/registration-postgresql-materializer-rows-v1.ts',
   'src/registration-postgresql-materializer-v1.ts',
+  'src/registration-postgresql-migration-json-v1.ts',
   'src/registration-postgresql-row-codecs-v1.ts',
   'src/registration-transaction-admission-v1.ts',
   'src/registration-transaction-boundary-v1.ts',

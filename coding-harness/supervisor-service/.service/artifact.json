@@ -17,7 +17,7 @@
     "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "815ed2758147c9da5b659bfa1c655d133a296e64376eb7ecd983993dfbd6199d",
+    "scripts/artifact-lib.mjs": "ad504a6a7bb9b284d4266c0e4156b5730199067fd092709e4671590b166387cd",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
@@ -36,6 +36,7 @@
     "src/registration-postgresql-materializer-contract-v1.ts": "8208047885052cc3b21949ef3a436283cbb31bed34187dde4261601ce0bdb3d1",
     "src/registration-postgresql-materializer-rows-v1.ts": "b6cc68f31cbe2fc4e7eb27694ed85a804dcc168d055b7dbd7439306d8099f203",
     "src/registration-postgresql-materializer-v1.ts": "8b627ff4129aec7715f43cac430505762cc794660321da2503e1beacd5e72314",
+    "src/registration-postgresql-migration-json-v1.ts": "7004424dc19a02adf732b3711f8259c8cd42aa81d35ba69e6bdeca7f7c4b85be",
     "src/registration-postgresql-row-codecs-v1.ts": "333c5cceaaea8cef2a3f33456b29870e37d04b0a2756ce4e863ec031fc0b8738",
     "src/registration-transaction-admission-v1.ts": "a210f4b78cdad053592a74ac7eded63d2385a81a25140c0dcfaedc945cdb956f",
     "src/registration-transaction-boundary-v1.ts": "58c38f972d5d9f10165c6e285f195fe50c2989f79549c61d13984fa6545b2de6",
@@ -51,5 +52,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "0a5e1c111f9e21148f5c30e08ab8654c8387b46936f08f236bfa73db8a9beae7"
+  "artifactDigest": "e296eabc2480d10b5bcb1ea8629e1855f82a1695891a0e96958de2b81e65b358"
 }

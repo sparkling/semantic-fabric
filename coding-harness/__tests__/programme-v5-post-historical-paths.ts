@@ -123,4 +123,5 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md',
   'docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md',
   'docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md',
+  'docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md',
 ]);

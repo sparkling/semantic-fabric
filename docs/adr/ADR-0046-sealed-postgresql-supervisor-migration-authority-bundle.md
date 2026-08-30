@@ -72,10 +72,11 @@ Exact hard ceilings are:
 |---|---:|---:|---:|---:|---:|---:|---:|
 | provisioning | 65,536 | 8 | 2,048 | 512 | 64 | 16 | 4,096 |
 | manifest | 16,384 | 5 | 256 | 16 | 2 | 11 | 1,024 |
-| seed | 262,144 | 4 | 64 | 3 | 0 | 14 | 196,608 |
+| seed | 262,144 | 4 | 56 | 3 | 0 | 14 | 196,608 |
 
-Root depth is one; objects, arrays and primitives are nodes, not keys. Records are non-root objects;
-seed array width is zero. Exact maximum and maximum-plus-one cases are required.
+Root depth is one; objects, arrays and primitives are nodes, not keys. Records are non-root objects.
+Seed width zero makes 57 nodes structurally valid, so its 56 ceiling has an isolated plus-one case.
+Exact maximum and maximum-plus-one cases are required.
 
 ### 3. Freeze the provisioning contract
 
