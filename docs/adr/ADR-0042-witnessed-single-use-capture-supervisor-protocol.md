@@ -4,13 +4,8 @@ date: 2026-08-29
 updated: 2026-08-30
 tags: [metaharness, evidence, supervisor, transparency, witness, lease, runner, security]
 supersedes: []
-depends-on:
-  - ADR-0037
-  - ADR-0038
-  - ADR-0039
-  - ADR-0041
-implements:
-  - ADR-0041
+depends-on: [ADR-0037, ADR-0038, ADR-0039, ADR-0041]
+implements: [ADR-0041]
 ---
 
 # Witnessed single-use capture supervisor protocol
@@ -31,9 +26,10 @@ receiving those bytes. Predicting that index would create a circular or
 crash-sensitive contract. V2 separates the service's canonical decimal event
 sequence from the transparency log's canonical decimal leaf index.
 
-The committed provider-free V2 configuration, configuration-adjacency, signed
-event, complete-run-history, registration-request, event-builder, structural-
-result, and supplied-reference client modules implement bounded checks only.
+The committed provider-free V2 configuration, adjacency, signed-event, complete-
+history, registration-request, event-builder, public-commitment, non-semantic-
+transport-response, structural-result, and supplied-reference client modules
+implement bounded checks only.
 They remain nonauthorizing. This additive evidence/control-plane decision does
 not rewrite product goals, runtime architecture, or historical harness meanings.
 
@@ -141,18 +137,39 @@ On a lookup miss, the service verifies the current authority head and authentica
 Its evidence digest binds the original request/event digests, changed canonical request digest, authenticated project identity, and active authority head. A later distinct changed request against that closed run receives an eventless closed-run conflict and no semantic result; it never reuses the first terminal result.
 No mutating request is accepted or classified while its predecessor lacks the required receipt. Later operation endpoints stay disabled until their changed-replay terminal outcomes exist. Mutations are never transport-retried after ambiguity; request digests are not bearer credentials.
 
+Application-layer preclassification denial collapses malformed credentials,
+unmapped projects, and stale heads to identical `403 registration-not-admitted-v2`
+bytes; mTLS handshake rejection occurs before this codec.
+Receipt pending is `503 registration-authority-pending-v2`; a closed run is
+`409 registration-closed-v2`; unknown commit resolution is fixed
+`500 transaction-resolution-unknown-v2`. Their fixed
+directives respectively require a new authority-bound request, a new such
+request after readiness, a new run, or exact-result lookup only. These canonical
+unsigned responses contain only protocol/response/outcome/status/content-type/
+directive fields, disclose no identity or digest, carry no `Retry-After`, and
+must never be parsed as a signed semantic result. Mutating clients disable
+automatic transport retries.
+Pending is emitted only after project mapping and exact-recovery miss, never as
+a namespace oracle. `registration-authenticated-denial-v2` remains a distinct,
+signed semantic terminal after a committed registration predecessor.
+
 ### 3. Publish committed events without conflating order domains
 
-The full signed event stays authenticated and private. Its transactional outbox
-publishes only a domain-separated, privacy-minimized commitment containing the
-protocol/leaf kind, log identity, and event digest. A public leaf must contain
-no project/run/runner/session identity, credential, raw host or process
-evidence, source/command/output detail, nonce, time, lease, fence, or reusable
-capability. A sole-purpose personality submits that commitment to Tessera and
-waits until a public checkpoint commits the selected leaf. The private
-publication receipt records a log-assigned `leafIndex` separately from the
-service-assigned `globalSequence` and per-run `runSequence`; all are canonical
-unsigned-64 decimal strings.
+The full signed event stays authenticated and private. Exact public leaf bytes
+are canonical `{domain, commitment}` under
+`semantic-fabric/programme-capture/supervisor-public-event-commitment-v2`; the
+closed commitment contains only schema/protocol, leaf kind, log-identity digest,
+and event digest and has no trailing newline. The log identity is derived under
+`semantic-fabric/programme-capture/supervisor-transparency-log-identity-digest-v2`
+from the parsed configuration's
+complete transparency-log block; the builder accepts canonical configuration
+and event-envelope bytes, never caller-selected digests. The stored commitment
+digest is the raw SHA-256 of those exact leaf bytes. No public leaf contains
+project/run/runner/session identity, credential, raw host/process evidence,
+source/command/output detail, nonce, time, lease, fence, or reusable capability.
+A sole-purpose personality submits it to Tessera. The private receipt keeps the
+log `leafIndex` separate from service `globalSequence` and run `runSequence`;
+all are canonical unsigned-64 decimal strings.
 
 The log layer uses Tessera's synchronous publication support and a configured
 C2SP witness policy. Tessera's optional antispam is only best-effort and is not
@@ -464,30 +481,18 @@ frozen train/holdout gate produces a replayable strict-promotion receipt.
 - Cost: safety-first crash handling can spend a run or quarantine a runner and
   require a fresh run ID or operator remediation.
 
-- **R1** — service sequence, log leaf index, run sequence, and fencing token are
-  separate canonical uint64-decimal domains.
-- **R2** — one transaction owns per-run state, every overlapping-resource state,
-  the signed event, and response identity; no reply or publication precedes commit.
+- **R1** — service sequence, log leaf index, run sequence, and fencing token are separate canonical uint64-decimal domains.
+- **R2** — one transaction owns per-run state, every overlapping-resource state, the signed event, and response identity; no reply or publication precedes commit.
 - **R3** — no same-run renewal, retry, reclaim, reassignment, or second attempt.
-- **R4** — a started resource is released only after proved cleanup, otherwise
-  quarantined; TTL never releases it.
-- **R5** — positive local transitions require typed composite evidence and an
-  opaque one-shot capability; raw digests and booleans are insufficient.
-- **R6** — C2SP checkpoint witnessing and semantic high-water witnessing are
-  separate, fixed, intersecting-quorum requirements rooted at canonical genesis.
-- **R7** — repository fixtures, current-host observations, and V1 records stay
-  nonauthorizing.
-- **R8** — the public log contains only domain-separated event commitments;
-  private evidence and reusable capability material never enter a public leaf.
+- **R4** — a started resource is released only after proved cleanup, otherwise quarantined; TTL never releases it.
+- **R5** — positive local transitions require typed composite evidence and an opaque one-shot capability; raw digests and booleans are insufficient.
+- **R6** — C2SP checkpoint witnessing and semantic high-water witnessing are separate, fixed, intersecting-quorum requirements rooted at canonical genesis.
+- **R7** — repository fixtures, current-host observations, and V1 records stay nonauthorizing.
+- **R8** — the public log contains only domain-separated event commitments; private evidence and reusable capability material never enter a public leaf.
 
 ## Primary references
 
-- [Tessera](https://github.com/transparency-dev/tessera) — current tile-log
-  appender, publication lifecycle, storage backends, witness integration, and
-  explicitly best-effort antispam.
-- [C2SP transparency-log witness protocol](https://c2sp.org/tlog-witness) —
-  checkpoint consistency verification and atomic persist-before-cosign rules.
-- [Transparency witness implementation](https://github.com/transparency-dev/witness)
-  — interoperable C2SP witness service and monitoring surface.
-- [Trillian](https://github.com/google/trillian) — maintained legacy log whose
-  project guidance recommends Tessera for new deployments.
+- [Tessera](https://github.com/transparency-dev/tessera) — tile-log publication and witness integration; antispam is explicitly best-effort.
+- [C2SP witness protocol](https://c2sp.org/tlog-witness) — consistency and atomic persist-before-cosign rules.
+- [Transparency witness](https://github.com/transparency-dev/witness) — interoperable C2SP service.
+- [Trillian](https://github.com/google/trillian) — maintained legacy log recommending Tessera for new deployments.

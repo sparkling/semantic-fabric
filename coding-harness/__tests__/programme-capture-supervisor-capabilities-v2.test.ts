@@ -38,6 +38,12 @@ const RUN_EVENT_BUILDER_ENTRY = resolve(
 const SERVICE_RESULT_ENTRY = resolve(
   SOURCE_ROOT, 'programme-capture-supervisor-service-result-v2.ts',
 );
+const PUBLIC_COMMITMENT_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-public-commitment-v2.ts',
+);
+const TRANSPORT_RESPONSE_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-supervisor-transport-response-v2.ts',
+);
 const SERVICE_CLIENT_ENTRY = resolve(
   SOURCE_ROOT, 'programme-capture-supervisor-service-client-v2.ts',
 );
@@ -45,7 +51,7 @@ const V2_ENTRIES = Object.freeze([
   CONFIG_ENTRY, TRANSITION_ENTRY, RUN_EVENT_CONTRACTS_ENTRY, RUN_EVENT_BODY_ENTRY,
   RUN_EVENT_CODEC_ENTRY, RUN_EVENT_TRANSITION_ENTRY, RUN_EVENT_VERIFIER_ENTRY,
   CLAIM_KEY_ENTRY, REGISTRATION_REQUEST_ENTRY, RUN_EVENT_BUILDER_ENTRY, SERVICE_RESULT_ENTRY,
-  SERVICE_CLIENT_ENTRY,
+  PUBLIC_COMMITMENT_ENTRY, TRANSPORT_RESPONSE_ENTRY, SERVICE_CLIENT_ENTRY,
 ]);
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
   [CONFIG_ENTRY, new Map([
@@ -211,6 +217,32 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
       'parseRunEventDigestV2:parseRunEventDigestV2',
     ],
     ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [PUBLIC_COMMITMENT_ENTRY, new Map([
+    ['@metaharness/harness', 'canonical:canonical'],
+    ['node:util/types', 'isProxy:isProxy'],
+    [
+      './contracts.js',
+      'SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze,snapshotUint8Array:snapshotUint8Array',
+    ],
+    [
+      './programme-capture-supervisor-authority-config-v2.js',
+      'parseProgrammeCaptureSupervisorAuthorityConfigurationBlobV2:parseProgrammeCaptureSupervisorAuthorityConfigurationBlobV2,parseProgrammeCaptureSupervisorAuthorityConfigurationV2:parseProgrammeCaptureSupervisorAuthorityConfigurationV2',
+    ],
+    [
+      './programme-capture-supervisor-run-event-codec-v2.js',
+      'parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2:parseProgrammeCaptureSupervisorRunEventEnvelopeBlobV2',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+    ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
+  ])],
+  [TRANSPORT_RESPONSE_ENTRY, new Map([
+    ['node:util/types', 'isProxy:isProxy'],
+    [
+      './contracts.js',
+      'asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
+    ],
     ['./strict-json.js', 'parseJsonWithoutDuplicateKeys:parseJsonWithoutDuplicateKeys'],
   ])],
   [SERVICE_CLIENT_ENTRY, new Map([

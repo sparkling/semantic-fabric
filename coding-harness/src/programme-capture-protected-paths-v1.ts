@@ -26,6 +26,7 @@ export const PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/__tests__/programme-capture-supervisor-run-event-verifier-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-service-client-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-service-codecs-v2.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-transport-v2.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
 ] as const);
 
@@ -58,6 +59,7 @@ export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-supervisor-log-proof-codec-v1.ts',
   'coding-harness/src/programme-capture-supervisor-log-proof-v1.ts',
   'coding-harness/src/programme-capture-supervisor-merkle-v1.ts',
+  'coding-harness/src/programme-capture-supervisor-public-commitment-v2.ts',
   'coding-harness/src/programme-capture-supervisor-registration-request-v2.ts',
   'coding-harness/src/programme-capture-supervisor-run-event-builder-v2.ts',
   'coding-harness/src/programme-capture-supervisor-run-event-body-v2.ts',
@@ -67,5 +69,6 @@ export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-supervisor-run-event-verifier-v2.ts',
   'coding-harness/src/programme-capture-supervisor-service-client-v2.ts',
   'coding-harness/src/programme-capture-supervisor-service-result-v2.ts',
+  'coding-harness/src/programme-capture-supervisor-transport-response-v2.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
 ] as const);
