@@ -261,7 +261,7 @@ The leaf is reconstructed from the reverified canonical envelope; the prior chec
 The protected private PostgreSQL materializer exact-key checks roots before traversal, snapshots bounded trap-free graphs, exposes a frozen one-use signing surface, verifies the pinned Ed25519 SPKI/signature, and emits every exact DB-shaped 201/409 row for genesis/non-genesis and adjacent/interleaved histories.
 Its KATs cover exact envelopes, results, state heads, public leaves, expected-old fences, signature/key substitution, authority/configuration joins, status-specific run bindings, aggregate bytes, depth/nodes, and fail-fast container width.
 The hardened build passes all 121 files (889 tests, two expected skips) on Node 20 and 24; the private artifact is byte-identical (`0a5831bf…b9a5`), the public bundle remains `90e21e7c…f7c3a`, scoped deep security is clean, and three independent final Codex reviews report no P0/P1.
-ADR-0042/0043/0044 remain proposed; migrations, the live adapter, independent administration/witnessing, deployed signer, transport, lease/fence/outbox delivery, runner, attempt, capture authority, and real supervisor events remain absent.
+ADR-0042/0043/0044/0045 remain proposed; ADR-0045 freezes the catalogue wire grammar, catalogue/provisioning authority split, stable normalization, exact query topology, and resource limits, but the catalogue JSON, migrations, live adapter, independent administration/witnessing, deployed signer, transport, lease/fence/outbox delivery, runner, attempt, capture authority, and real supervisor events remain absent.
 
 Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
 reproducibility. Final two-builder agreement must pre-register distinct trust
@@ -443,7 +443,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, same-UID claim/rooted source, signed registration/checkpoint verification, RFC 9162 proof replay, and a sealed exact-row PostgreSQL materializer exist. These prove deterministic nonauthorizing structure, not persistence, append-only history, split-view resistance, or database authority. There is still no exact catalogue JSON, migration/manifest, driver-free runner/verifier, live adapter, exact-pinned PostgreSQL 16.15 required-live evidence, independently administered log/service, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next are the catalogue, migration and verifier chain, then the dormant adapter and PostgreSQL 16.15 evidence before external append-only registration/lease authority and controlled-runner admission |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, same-UID claim/rooted source, signed registration/checkpoint verification, RFC 9162 proof replay, a sealed exact-row PostgreSQL materializer, and ADR-0045's closed catalogue-oracle representation exist. These prove deterministic nonauthorizing structure, not persistence, append-only history, split-view resistance, or database authority. There is still no exact catalogue JSON, migration/manifest, driver-free runner/verifier, live adapter, exact-pinned PostgreSQL 16.15 required-live evidence, independently administered log/service, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next are the catalogue, migration and verifier chain, then the dormant adapter and PostgreSQL 16.15 evidence before external append-only registration/lease authority and controlled-runner admission |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
@@ -463,11 +463,11 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 41 records: 33 accepted, seven
+The canonical [ADR corpus](docs/adr/) contains 42 records: 33 accepted, eight
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
 [ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), [ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md),
-[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), and [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md)),
+[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), and [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md)),
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -479,7 +479,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative
