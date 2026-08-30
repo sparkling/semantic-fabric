@@ -120,7 +120,7 @@ exactQueries
 `1048576`, `16`, `16384`, `4096`, `1024`, `32`, `196608`, and `63`.
 Those values are both encoded authority and hard parser ceilings; a file cannot
 raise its parser limits.
-The lower `8192` proposal was rejected when the complete explicit M0 inventory measured `9121` nodes; no required fact was removed to fit a guessed ceiling.
+The lower `8192` proposal was rejected when the complete explicit M0 inventory measured `9125` nodes; no required fact was removed to fit a guessed ceiling.
 
 The token scanner defines root depth as one; each nested array or object adds
 one. A node is any JSON object, array, or primitive value; object keys are not
