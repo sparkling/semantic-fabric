@@ -57,9 +57,11 @@ describe('sealed supervisor-service artifact', () => {
     expect(artifact.authority).toBe('nonoperational-proposed-adr-0042');
     expect(artifact.bundle).toEqual({
       path: 'dist/supervisor-service.mjs',
-      bytes: bundle.byteLength,
-      sha256: createHash('sha256').update(bundle).digest('hex'),
+      bytes: 49_106,
+      sha256: '90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a',
     });
+    expect(bundle.byteLength).toBe(artifact.bundle.bytes);
+    expect(createHash('sha256').update(bundle).digest('hex')).toBe(artifact.bundle.sha256);
     expect(artifact.sourceInputs).toEqual({
       'src/closed-json.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
       'src/index.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -70,6 +72,7 @@ describe('sealed supervisor-service artifact', () => {
     });
     const privateBuildInputs = [
       'src/registration-ports-v1.ts',
+      'src/registration-postgresql-row-codecs-v1.ts',
       'src/registration-transaction-admission-v1.ts',
       'src/registration-transaction-boundary-v1.ts',
       'src/registration-transaction-checkout-v1.ts',

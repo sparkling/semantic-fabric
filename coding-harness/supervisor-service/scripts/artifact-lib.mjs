@@ -32,6 +32,7 @@ export const BUILD_INPUT_PATHS = Object.freeze([
   'scripts/deny-publish.mjs',
   'scripts/verify-artifact.mjs',
   'src/registration-ports-v1.ts',
+  'src/registration-postgresql-row-codecs-v1.ts',
   'src/registration-transaction-admission-v1.ts',
   'src/registration-transaction-boundary-v1.ts',
   'src/registration-transaction-checkout-v1.ts',

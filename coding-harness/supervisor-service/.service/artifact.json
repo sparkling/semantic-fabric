@@ -16,11 +16,12 @@
     "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "9dfb3eb898cb379bc3b4e56eab6127e18aea1cd6a4bbafa1ea4d3c56ccdaa0d4",
+    "scripts/artifact-lib.mjs": "72ff73955be38e01da839550ac835313c8350040a5318a0476195feb5c540310",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
     "src/registration-ports-v1.ts": "6524cab16a519829bbebfd6906184c9ab5606196c0d5ce45516d1596f1d14abc",
+    "src/registration-postgresql-row-codecs-v1.ts": "361499900d762d7a0581f0a54dd92dfcf540d0391f62a58fa7bd2249a88a0d19",
     "src/registration-transaction-admission-v1.ts": "a210f4b78cdad053592a74ac7eded63d2385a81a25140c0dcfaedc945cdb956f",
     "src/registration-transaction-boundary-v1.ts": "447d663449c9d198668992571ccdcf53a981a73947d57edbaaab5f4cc21cba60",
     "src/registration-transaction-checkout-v1.ts": "278aec51ffaa4ebbfc8d7a94e3ef1788151864495c70c29930877ea52957eafe",
@@ -35,5 +36,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "e3ad1e3363b9fe5252b59bc26cb7652c7b9b86310718c90581837732e88b27f9"
+  "artifactDigest": "3d901637561184621e1a91d625dfde9b22b0eaaf03fc9e5406415958d758a8a3"
 }
