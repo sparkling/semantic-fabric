@@ -128,10 +128,11 @@ separate ADR.
 
 The authority state is one singleton row for that database project. Every
 project-scoped row still carries the project authority digest and scope-role
-name, and every project-scoped primary key, foreign key, join, policy, and
-expected-old-state update includes that scope. This redundancy makes
-cross-wiring and foreign-row injection detectable rather than turning the
-single-project topology into implicit ambient authority.
+name. Every project-scoped primary key, foreign key, join predicate, and
+expected-old-state update includes both columns. RLS policies bind the literal
+scope role; the singleton and composite foreign keys bind the project digest.
+This redundancy makes cross-wiring and foreign-row injection detectable rather
+than turning the single-project topology into implicit ambient authority.
 
 The first migration creates a dedicated owner-controlled schema and exact
 domains:
@@ -212,9 +213,11 @@ One fresh writer attempt has this externally observable order:
 3. issue fixed `SET LOCAL` statements, in order, for search path, 5-second lock
    timeout, 30-second statement timeout, 30-second idle-in-transaction timeout,
    `synchronous_commit=on`, and `row_security=on`, then query and verify all six
-   actual settings plus isolation and read-only state;
+   actual settings plus isolation, read-only state, and
+   `session_replication_role=origin`;
 4. map the authenticated peer and perform the first joined exact lookup;
-5. on a miss, lock the singleton authority state and active configuration;
+5. on a miss, lock the singleton authority state and snapshot-read its active
+   configuration under that lock;
 6. validate the exact project and asserted authority head;
 7. read the required genesis or semantic predecessor receipt;
 8. lock the run row, with the authority lock and named uniqueness constraints
@@ -222,7 +225,9 @@ One fresh writer attempt has this externally observable order:
 9. prepare immutable signing bytes, sign only those bytes, verify the signature,
    and independently finalize the complete candidate;
 10. insert the event, exact result, run transition, and immutable pending outbox;
-11. advance authority state with an exact expected-old-state predicate;
+11. advance only the event-chain last/next sequence and last-event fields with
+    an exact expected-old-state predicate; the authority-configuration head is
+    unchanged by a registration event;
 12. map the same authenticated peer again and perform the sole post-stage joined
     exact reread, which must observe the transaction's uncommitted rows;
 13. commit, release the client, and only then release the exact reread response.
@@ -230,7 +235,7 @@ One fresh writer attempt has this externally observable order:
 The coordinator's `stageCandidate` call owns steps 9--11; its two decision phases
 own the two mapper/exact reads. An exact hit performs steps 1--4 and 13 only.
 The recovery path uses a fresh direct-login client and exactly `acquire -> verify
-principal and membership -> BEGIN SERIALIZABLE READ ONLY -> fixed SET LOCAL ->
+principal and membership -> BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY -> fixed SET LOCAL ->
 verify transaction state -> map -> joined exact lookup -> COMMIT -> release`.
 
 Every data-bearing statement is fixed and schema-qualified, and every data value
@@ -274,7 +279,10 @@ privileged runtime logins:
 
 - schema owner;
 - deployment-only migration login;
-- fixed registration-writer and exact-recovery capability roles;
+- fixed readiness, registration-writer, and exact-recovery capability roles;
+- one immutable project-scope role;
+- one direct readiness login bound only to the readiness capability and project
+  scope roles;
 - one direct registration-writer login and one direct exact-recovery login for
   the project, each bound to its capability and project scope roles;
 - future receipt ingestor;
@@ -283,11 +291,20 @@ privileged runtime logins:
 
 The nonoperational live-test fixture pins the literal roles
 `sf_supervisor_owner_v1`, `sf_supervisor_migration_login_v1`,
+`sf_supervisor_readiness_login_v1`,
+`sf_supervisor_readiness_capability_v1`,
 `sf_supervisor_writer_capability_v1`, `sf_supervisor_recovery_capability_v1`,
 `sf_supervisor_project_scope_v1`, `sf_supervisor_writer_login_v1`, and
 `sf_supervisor_recovery_login_v1`. A later activation profile must seal any
 deployment-specific names and their derivation; the dormant migration never
 constructs identifiers from request data.
+
+ADR-0044 refines this proposal with the exact M0 schema, finalized row contract,
+direct column ACL and 38-policy inventory, separate readiness login/capability, bootstrap
+boundary, seed point, raw-byte migration manifest, and normalized catalogue
+oracle. Where this ADR states a broad policy rule, ADR-0044's least-authority
+table/command inventory is the exact interpretation: denied commands receive no
+dummy policy.
 
 Runtime roles are not owners, superusers, members of the owner role, or
 BYPASSRLS. The scope and capability roles are identity-only and have zero object
@@ -300,19 +317,26 @@ membership edges, and the complete transitive graph before beginning a
 transaction. Shared generic logins and `SET SESSION AUTHORIZATION` are forbidden.
 Project rows bind the scope-role name. Each admitted command has one minimal
 permissive policy and one restrictive policy; the restrictive expression requires
-both membership in the corresponding literal
-`sf_supervisor_writer_capability_v1` or
-`sf_supervisor_recovery_capability_v1` role via `pg_has_role(..., 'MEMBER')` and
+both membership in the corresponding literal readiness, writer, or recovery
+capability role via `pg_has_role(..., 'MEMBER')` and
 `pg_has_role(session_user, project_scope_role, 'MEMBER')` in every clause the
-command supports: SELECT and DELETE use `USING`, INSERT uses `WITH CHECK`, and
-UPDATE uses both. The catalog verifier rejects missing or extra policies,
+command supports: SELECT uses `USING`, INSERT uses `WITH CHECK`, and UPDATE uses
+both. M0 admits no DELETE command or DELETE policy. ADR-0044 separately pins the
+no-login owner's two read-only
+seed-verification policy pairs. The catalog verifier rejects missing or extra policies,
 including any additional `PUBLIC` permissive policy. Custom
 transaction settings may provide redundant equality inputs but are never an
 authorization source: a connected role can select arbitrary custom-setting
-values. Revoke public schema, object, and default privileges. Enable and force
-row security on every project-scoped table with both read and write policies.
+values. The external bootstrap revokes `PUBLIC` privileges on the database and
+`public` schema; migrations revoke public object and default privileges only in
+the dedicated schema. Enable and force row security on every project-scoped
+table, with policy pairs only for the commands admitted by ADR-0044's exact
+matrix.
 Grant no DDL, membership administration, runtime role switching, temporary-
-object creation, sequence mutation, COPY, TRUNCATE, or broad function execution.
+object creation, sequence mutation, TRUNCATE, or broad function execution. The
+adapter never issues `COPY`; PostgreSQL 16.15 applies SELECT ACL/RLS to `COPY TO`
+and rejects `COPY FROM` on an RLS-enabled table, while server-file/program
+predefined roles remain forbidden.
 
 The writer cannot create semantic receipts or update or delete immutable events,
 results, or outbox payloads; its updates are column-limited to the run projection
@@ -358,7 +382,7 @@ The dormant adapter slice is complete only when:
    `supervisor-run-event-signing-v2` canonical payload and Ed25519 signature
    under the pinned SPKI, reject wrong key/bytes/signature, and bind the exact
    ADR-0042 public-leaf bytes and digest;
-5. migrations apply once to an empty PostgreSQL 16 database, serialize concurrent
+5. migrations apply once to an empty PostgreSQL 16.15 database, serialize concurrent
    migrators, and reject digest drift, gaps, future versions, partial failure,
    wrong ownership, policy, and privileges;
 6. required-live tests cover 201, exact replay, changed-replay 409, post-close
@@ -373,9 +397,9 @@ The dormant adapter slice is complete only when:
    500 with no retry, after which exact recovery returns the committed bytes and
    one atomic row set; a paired pre-send termination leaves zero rows. Project
    isolation includes a positive same-project direct-login case plus rejection of
-   foreign mapper/row/custom-setting inputs and a foreign project's direct login
-   in the one admitted-project database, never a two-project-in-one-database
-   fixture;
+   foreign mapper/row/custom-setting inputs. Provider-free provisioning mutations
+   prove an additional project login or membership edge keeps readiness false;
+   there is never a two-project-in-one-database fixture;
 7. event, result, run, head, and outbox cardinalities prove atomicity after every
    injected fault;
 8. service and parent suites, audits, hardened builds, protected registries,
@@ -415,6 +439,10 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
   explicitly seed a nonauthorizing receipt fixture; this is not operational
   multi-event evidence.
 - Pending outbox rows prove atomic staging only. No publisher or log exists.
+- A sealed external test-cluster administrator may insert an independently
+  computed predecessor-receipt fixture and read post-transaction cardinalities.
+  It is outside the service role graph, never enters application code, and is
+  recorded as nonauthorizing test setup rather than receipt-ingestion evidence.
 - ADR-0042 remains proposed and all records remain
   development-only-no-promotion with positive authority flags false.
 
@@ -448,3 +476,4 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
 - [ADR-0038](ADR-0038-sota-application-completion-programme.md)
 - [ADR-0039](ADR-0039-minimal-production-serving-artifact.md)
 - [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md)
+- [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md)
