@@ -32,7 +32,11 @@ export const BUILD_INPUT_PATHS = Object.freeze([
   'scripts/deny-publish.mjs',
   'scripts/verify-artifact.mjs',
   'src/registration-ports-v1.ts',
+  'src/registration-transaction-admission-v1.ts',
   'src/registration-transaction-boundary-v1.ts',
+  'src/registration-transaction-checkout-v1.ts',
+  'src/registration-transaction-contract-v1.ts',
+  'src/registration-transaction-retry-v1.ts',
   'src/registration-transaction-v1.ts',
 ]);
 const MAX_SEALED_FILE_BYTES = 16 * 1024 * 1024;

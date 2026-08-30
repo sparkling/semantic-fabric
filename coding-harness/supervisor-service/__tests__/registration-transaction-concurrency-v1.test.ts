@@ -15,9 +15,7 @@ import {
   type SupervisorRegistrationTransactionStoreV1,
   type SupervisorRegistrationTransactionV1,
 } from '../src/registration-transaction-v1.js';
-import {
-  CANONICAL_REQUEST, PROJECT, exactStoredResult,
-} from './registration-fixtures.js';
+import { CANONICAL_REQUEST, PROJECT, exactStoredResult } from './registration-fixtures.js';
 
 const WRITE_A = Symbol('write-a') as AuthenticatedTransportPeerV1;
 const WRITE_B = Symbol('write-b') as AuthenticatedTransportPeerV1;
@@ -144,6 +142,7 @@ describe('registration transaction concurrent capability closure V1', () => {
       }
     },
   );
+
 });
 
 function recoveryFixture() {

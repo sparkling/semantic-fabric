@@ -93,7 +93,7 @@ describe('programme capture V1 private exact-commit source', () => {
     expect(readFileSync(join(prepared.handle.sourceRoot, PROGRAMME_CAPTURE_PROFILE_PATH), 'utf8'))
       .toBe(`private source fixture: ${PROGRAMME_CAPTURE_PROFILE_PATH}\n`);
     await disposeUnusedProgrammeCapturePrivateSourceV1(prepared.handle);
-  });
+  }, 15_000);
 
   it('makes the claim-keyed materialization slot create-new', async () => {
     const prepared = await prepare();

@@ -122,7 +122,7 @@ export function createTrustedNativeRuntime(
           relativePath: 'node', executable: true },
         { key: 'proxyLauncher',
           sourcePath: canonicalFile(options.executables.proxyLauncher, 'PROXY_LAUNCHER'),
-          relativePath: 'native-proxy-launcher.js', executable: false },
+          relativePath: 'native-proxy-launcher.cjs', executable: false },
       ],
     });
     const claudeRuntimePath = options.executables.claude === options.executables.codex

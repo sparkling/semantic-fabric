@@ -35,6 +35,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-supervisor-transport-v2.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
+  'coding-harness/src/native-proxy-launcher.cts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
   'coding-harness/src/programme-capture-claim-key-v1.ts',
   'coding-harness/src/programme-capture-claim-record-v1.ts',
@@ -116,4 +117,5 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/tests.rs',
   'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
   'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
+  'docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md',
 ]);

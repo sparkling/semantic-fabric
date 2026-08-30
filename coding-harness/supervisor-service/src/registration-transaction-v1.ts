@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-
-import { ClosedJsonHashError, deepFreeze } from './closed-json.js';
+import { deepFreeze } from './closed-json.js';
 import {
   decideSupervisorRegistrationExactPhaseV1,
   decideSupervisorRegistrationV1,
@@ -13,7 +12,6 @@ import type {
 } from './registration-ports-v1.js';
 import {
   fixedRegistrationTransportResponseV2,
-  parseCanonicalRegistrationRequestV2,
   type FixedRegistrationTransportResponseV2,
 } from './registration-protocol-v2.js';
 import {
@@ -22,71 +20,52 @@ import {
   closeRegistrationAdapterOperationV1,
   stagedResponseMatchesCandidateV1,
 } from './registration-transaction-boundary-v1.js';
+import {
+  captureRegistrationPeerConsumerV1,
+  consumeRegistrationPeerV1,
+  preclassifyRegistrationRequestV1,
+} from './registration-transaction-admission-v1.js';
+import {
+  captureExactRecoveryCheckoutV1,
+  captureRegistrationCheckoutV1,
+  openExactRecoveryCheckoutV1,
+  openRegistrationCheckoutV1,
+} from './registration-transaction-checkout-v1.js';
+import type {
+  AuthenticatedExactRecoveryPeerRegistryV1,
+  AuthenticatedExactRecoveryPeerV1,
+  AuthenticatedRegistrationPeerRegistryV1,
+  SupervisorRegistrationRecoveryPortsV1,
+  SupervisorRegistrationRecoveryStoreV1,
+  SupervisorRegistrationTransactionStoreV1,
+} from './registration-transaction-contract-v1.js';
+import {
+  commitSupervisorRegistrationAttemptV1,
+  isSupervisorRegistrationRetryableAbortV1,
+  rollbackSupervisorRegistrationAttemptV1,
+  runBoundedSupervisorRegistrationAttemptsV1,
+  type SupervisorRegistrationCommitResolutionV1,
+  type SupervisorRegistrationRetryAttemptV1,
+} from './registration-transaction-retry-v1.js';
 
 type AppendDecisionV1 = Extract<SupervisorRegistrationDecisionV1, Readonly<{
   decisionKind: 'append-registration-candidate' | 'append-changed-replay-candidate';
 }>>;
 type ExactResponseDecisionV1 = Extract<SupervisorRegistrationExactPhaseDecisionV1,
   Readonly<{ decisionKind: 'exact-response' }>>;
-export type SupervisorRegistrationCommitResolutionV1 = 'committed' | 'unknown';
-declare const AUTHENTICATED_EXACT_RECOVERY_PEER_BRAND: unique symbol;
-export type AuthenticatedExactRecoveryPeerV1 = symbol & Readonly<{
-  readonly [AUTHENTICATED_EXACT_RECOVERY_PEER_BRAND]: 'authenticated-exact-recovery-peer-v1';
-}>;
-
-export interface AuthenticatedRegistrationPeerRegistryV1 {
-  consumeRegistration(peer: AuthenticatedTransportPeerV1): boolean;
-}
-
-export interface AuthenticatedExactRecoveryPeerRegistryV1 {
-  consumeExactRecovery(peer: AuthenticatedExactRecoveryPeerV1): boolean;
-}
-
-export interface SupervisorRegistrationTransactionV1 {
-  readonly ports: SupervisorRegistrationDecisionPortsV1;
-  stageCandidate(candidate: AppendDecisionV1['candidate']): Promise<void>;
-  commit(): Promise<SupervisorRegistrationCommitResolutionV1>;
-  rollback(): Promise<void>;
-  quarantine(): Promise<void>;
-}
-
-export interface SupervisorRegistrationTransactionCheckoutV1 {
-  /** The sole transaction-opening operation; checkout acquisition is allocation-free. */
-  open(): Promise<SupervisorRegistrationTransactionV1>;
-  discardMalformed(): Promise<void>;
-}
-
-export interface SupervisorRegistrationTransactionStoreV1 {
-  checkoutRegistration(): Promise<SupervisorRegistrationTransactionCheckoutV1>;
-}
-
-export interface SupervisorRegistrationRecoveryPortsV1 {
-  mapAuthenticatedRecoveryPeer(
-    peer: AuthenticatedExactRecoveryPeerV1,
-  ): ReturnType<SupervisorRegistrationDecisionPortsV1['mapAuthenticatedPeer']>;
-  lookupExactCommittedResult(
-    input: Parameters<SupervisorRegistrationDecisionPortsV1[
-      'lookupExactCommittedResult'
-    ]>[0],
-  ): ReturnType<SupervisorRegistrationDecisionPortsV1['lookupExactCommittedResult']>;
-}
-
-export interface SupervisorRegistrationRecoveryTransactionV1 {
-  readonly ports: SupervisorRegistrationRecoveryPortsV1;
-  commit(): Promise<SupervisorRegistrationCommitResolutionV1>;
-  rollback(): Promise<void>;
-  quarantine(): Promise<void>;
-}
-
-export interface SupervisorRegistrationRecoveryCheckoutV1 {
-  /** The sole transaction-opening operation; checkout acquisition is allocation-free. */
-  open(): Promise<SupervisorRegistrationRecoveryTransactionV1>;
-  discardMalformed(): Promise<void>;
-}
-
-export interface SupervisorRegistrationRecoveryStoreV1 {
-  checkoutExactRecovery(): Promise<SupervisorRegistrationRecoveryCheckoutV1>;
-}
+export type {
+  AuthenticatedExactRecoveryPeerRegistryV1,
+  AuthenticatedExactRecoveryPeerV1,
+  AuthenticatedRegistrationPeerRegistryV1,
+  SupervisorRegistrationCommitResolutionV1,
+  SupervisorRegistrationRecoveryCheckoutV1,
+  SupervisorRegistrationRecoveryPortsV1,
+  SupervisorRegistrationRecoveryStoreV1,
+  SupervisorRegistrationRecoveryTransactionV1,
+  SupervisorRegistrationTransactionCheckoutV1,
+  SupervisorRegistrationTransactionStoreV1,
+  SupervisorRegistrationTransactionV1,
+} from './registration-transaction-contract-v1.js';
 
 type RegistrationResponseV1 =
   | FixedRegistrationTransportResponseV2
@@ -105,6 +84,7 @@ type BoundTransactionV1 = Readonly<{
   rollback(): Promise<void>;
   quarantine(): Promise<void>;
   lastExactRead(): unknown;
+  retryRequested(): boolean;
 }>;
 
 type BoundRecoveryTransactionV1 = Readonly<{
@@ -112,7 +92,12 @@ type BoundRecoveryTransactionV1 = Readonly<{
   commit(): Promise<SupervisorRegistrationCommitResolutionV1>;
   rollback(): Promise<void>;
   quarantine(): Promise<void>;
+  retryRequested(): boolean;
 }>;
+
+type TransactionAttemptResultV1 =
+  | SupervisorRegistrationTransactionResultV1
+  | SupervisorRegistrationRetryAttemptV1;
 
 export async function executeSupervisorRegistrationTransactionV1(
   serializedRequest: string,
@@ -120,15 +105,33 @@ export async function executeSupervisorRegistrationTransactionV1(
   peerRegistry: AuthenticatedRegistrationPeerRegistryV1,
   store: SupervisorRegistrationTransactionStoreV1,
 ): Promise<SupervisorRegistrationTransactionResultV1> {
-  const requestAdmission = await preclassifyRequest(serializedRequest);
+  const consumePeer = captureRegistrationPeerConsumerV1(
+    peerRegistry, 'consumeRegistration', 'registration peer registry',
+  );
+  const checkoutRegistration = captureRegistrationCheckoutV1(store);
+  const requestAdmission = await preclassifyRegistrationRequestV1(serializedRequest);
   if (requestAdmission === false) return notAdmitted();
   if (requestAdmission === null) return indeterminate();
-  const admission = consumePeer(
-    authenticatedPeer, peerRegistry, 'consumeRegistration', 'registration peer registry',
-  );
+  if (consumePeer === null || checkoutRegistration === null) return indeterminate();
+  const admission = consumeRegistrationPeerV1(authenticatedPeer, consumePeer);
   if (admission === false) return notAdmitted();
   if (admission === null) return indeterminate();
-  const transaction = await beginRegistration(store);
+  return runBoundedSupervisorRegistrationAttemptsV1(
+    () => executeRegistrationAttempt(
+      serializedRequest, authenticatedPeer, checkoutRegistration,
+    ),
+    indeterminate,
+  );
+}
+
+async function executeRegistrationAttempt(
+  serializedRequest: string,
+  authenticatedPeer: AuthenticatedTransportPeerV1,
+  checkoutRegistration: SupervisorRegistrationTransactionStoreV1['checkoutRegistration'],
+): Promise<TransactionAttemptResultV1> {
+  const transaction = await openRegistrationCheckoutV1(
+    checkoutRegistration, bindTransaction,
+  );
   if (transaction === null) return indeterminate();
 
   let decision: SupervisorRegistrationDecisionV1;
@@ -136,17 +139,22 @@ export async function executeSupervisorRegistrationTransactionV1(
     decision = await decideSupervisorRegistrationV1(
       serializedRequest, authenticatedPeer, transaction.ports,
     );
-  } catch {
-    return rollbackIndeterminate(transaction);
+  } catch (error) {
+    return rollbackIndeterminate(
+      transaction, isSupervisorRegistrationRetryableAbortV1(error),
+    );
   }
+  if (transaction.retryRequested()) return rollbackIndeterminate(transaction, true);
   if (!isAppendDecision(decision)) {
     return commitResponse(transaction, responseOf(decision));
   }
 
   try {
     await transaction.stageCandidate(decision.candidate);
-  } catch {
-    return rollbackIndeterminate(transaction);
+  } catch (error) {
+    return rollbackIndeterminate(
+      transaction, isSupervisorRegistrationRetryableAbortV1(error),
+    );
   }
 
   let staged: SupervisorRegistrationExactPhaseDecisionV1;
@@ -154,9 +162,12 @@ export async function executeSupervisorRegistrationTransactionV1(
     staged = await decideSupervisorRegistrationExactPhaseV1(
       serializedRequest, authenticatedPeer, transaction.ports,
     );
-  } catch {
-    return rollbackIndeterminate(transaction);
+  } catch (error) {
+    return rollbackIndeterminate(
+      transaction, isSupervisorRegistrationRetryableAbortV1(error),
+    );
   }
+  if (transaction.retryRequested()) return rollbackIndeterminate(transaction, true);
   const expectedStatus = decision.decisionKind === 'append-registration-candidate' ? 201 : 409;
   if (staged.decisionKind !== 'exact-response'
     || staged.response.status !== expectedStatus
@@ -174,15 +185,33 @@ export async function recoverExactSupervisorRegistrationV1(
   peerRegistry: AuthenticatedExactRecoveryPeerRegistryV1,
   store: SupervisorRegistrationRecoveryStoreV1,
 ): Promise<SupervisorRegistrationTransactionResultV1> {
-  const requestAdmission = await preclassifyRequest(serializedRequest);
+  const consumePeer = captureRegistrationPeerConsumerV1(
+    peerRegistry, 'consumeExactRecovery', 'exact recovery peer registry',
+  );
+  const checkoutExactRecovery = captureExactRecoveryCheckoutV1(store);
+  const requestAdmission = await preclassifyRegistrationRequestV1(serializedRequest);
   if (requestAdmission === false) return notAdmitted();
   if (requestAdmission === null) return indeterminate();
-  const admission = consumePeer(
-    authenticatedPeer, peerRegistry, 'consumeExactRecovery', 'exact recovery peer registry',
-  );
+  if (consumePeer === null || checkoutExactRecovery === null) return indeterminate();
+  const admission = consumeRegistrationPeerV1(authenticatedPeer, consumePeer);
   if (admission === false) return notAdmitted();
   if (admission === null) return indeterminate();
-  const transaction = await beginExactRecovery(store);
+  return runBoundedSupervisorRegistrationAttemptsV1(
+    () => executeRecoveryAttempt(
+      serializedRequest, authenticatedPeer, checkoutExactRecovery,
+    ),
+    indeterminate,
+  );
+}
+
+async function executeRecoveryAttempt(
+  serializedRequest: string,
+  authenticatedPeer: AuthenticatedExactRecoveryPeerV1,
+  checkoutExactRecovery: SupervisorRegistrationRecoveryStoreV1['checkoutExactRecovery'],
+): Promise<TransactionAttemptResultV1> {
+  const transaction = await openExactRecoveryCheckoutV1(
+    checkoutExactRecovery, bindRecoveryTransaction,
+  );
   if (transaction === null) return indeterminate();
 
   let decision: SupervisorRegistrationExactPhaseDecisionV1;
@@ -195,87 +224,17 @@ export async function recoverExactSupervisorRegistrationV1(
         lookupExactCommittedResult: transaction.ports.lookupExactCommittedResult,
       }),
     );
-  } catch {
-    return rollbackIndeterminate(transaction);
+  } catch (error) {
+    return rollbackIndeterminate(
+      transaction, isSupervisorRegistrationRetryableAbortV1(error),
+    );
   }
+  if (transaction.retryRequested()) return rollbackIndeterminate(transaction, true);
   return commitResponse(
     transaction,
     decision.decisionKind === 'exact-response' ? decision.response
       : fixedRegistrationTransportResponseV2('transaction-resolution-unknown-v2'),
   );
-}
-
-async function preclassifyRequest(serializedRequest: string): Promise<boolean | null> {
-  try { await parseCanonicalRegistrationRequestV2(serializedRequest); return true; }
-  catch (error) {
-    return error instanceof ClosedJsonHashError || !(error instanceof TypeError) ? null : false;
-  }
-}
-
-function consumePeer(
-  peer: unknown,
-  registry: unknown,
-  operation: 'consumeRegistration' | 'consumeExactRecovery',
-  label: string,
-): boolean | null {
-  if (typeof peer !== 'symbol') return false;
-  try {
-    const consume = captureCapabilityMethodV1(registry, [operation], label, operation);
-    const admitted = consume(peer);
-    return typeof admitted === 'boolean' ? admitted : null;
-  } catch {
-    return null;
-  }
-}
-
-async function beginRegistration(
-  store: SupervisorRegistrationTransactionStoreV1,
-): Promise<BoundTransactionV1 | null> {
-  try {
-    const keys = ['checkoutRegistration'] as const;
-    const begin = captureCapabilityMethodV1(store, keys, 'transaction store', keys[0]);
-    const checkout = capabilityRecordV1(
-      await begin(), ['open', 'discardMalformed'], 'registration checkout',
-    );
-    const open = captureCapabilityMethodV1(
-      checkout, ['open', 'discardMalformed'], 'registration checkout', 'open',
-    );
-    const discard = captureCapabilityMethodV1(
-      checkout, ['open', 'discardMalformed'], 'registration checkout', 'discardMalformed',
-    );
-    try { return bindTransaction(await open()); }
-    catch {
-      try { await discard(); } catch { /* fixed indeterminate remains the only result */ }
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-
-async function beginExactRecovery(
-  store: SupervisorRegistrationRecoveryStoreV1,
-): Promise<BoundRecoveryTransactionV1 | null> {
-  try {
-    const keys = ['checkoutExactRecovery'] as const;
-    const begin = captureCapabilityMethodV1(store, keys, 'recovery store', keys[0]);
-    const checkout = capabilityRecordV1(
-      await begin(), ['open', 'discardMalformed'], 'recovery checkout',
-    );
-    const open = captureCapabilityMethodV1(
-      checkout, ['open', 'discardMalformed'], 'recovery checkout', 'open',
-    );
-    const discard = captureCapabilityMethodV1(
-      checkout, ['open', 'discardMalformed'], 'recovery checkout', 'discardMalformed',
-    );
-    try { return bindRecoveryTransaction(await open()); }
-    catch {
-      try { await discard(); } catch { /* fixed indeterminate remains the only result */ }
-      return null;
-    }
-  } catch {
-    return null;
-  }
 }
 
 function bindTransaction(value: unknown): BoundTransactionV1 {
@@ -299,7 +258,13 @@ function bindTransaction(value: unknown): BoundTransactionV1 {
     'registration transaction', 'quarantine',
   );
   const bestEffortQuarantine = async () => { try { await quarantine(); } catch { /* closed */ } };
+  const requiredRetryQuarantine = async (error: unknown) => {
+    try { await quarantine(); }
+    catch { return 'unknown' as const; }
+    throw error;
+  };
   let lastExactRead: unknown = null;
+  let retryRequested = false;
   let state: 'open' | 'operation' | 'staged' | 'terminal' = 'open';
   const invokePort = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = state;
@@ -308,6 +273,11 @@ function bindTransaction(value: unknown): BoundTransactionV1 {
     }
     state = 'operation';
     try { return await closeRegistrationAdapterOperationV1(operation); }
+    catch (error) {
+      if (!isSupervisorRegistrationRetryableAbortV1(error)) throw error;
+      retryRequested = true;
+      return Object.freeze({ kind: 'indeterminate' }) as T;
+    }
     finally { if (state === 'operation') state = previous; }
   };
   return Object.freeze({
@@ -325,7 +295,13 @@ function bindTransaction(value: unknown): BoundTransactionV1 {
       state = 'terminal';
       let resolution: unknown;
       try { resolution = await commit(); }
-      catch (error) { await bestEffortQuarantine(); throw error; }
+      catch (error) {
+        if (isSupervisorRegistrationRetryableAbortV1(error)) {
+          return requiredRetryQuarantine(error);
+        }
+        await bestEffortQuarantine();
+        throw error;
+      }
       if (resolution === 'committed') return 'committed';
       await bestEffortQuarantine();
       return 'unknown';
@@ -340,6 +316,7 @@ function bindTransaction(value: unknown): BoundTransactionV1 {
     },
     quarantine: bestEffortQuarantine,
     lastExactRead: () => lastExactRead,
+    retryRequested: () => retryRequested,
   });
 }
 
@@ -356,11 +333,22 @@ function bindRecoveryTransaction(value: unknown): BoundRecoveryTransactionV1 {
     record, keys, 'registration recovery transaction', 'quarantine',
   );
   const bestEffortQuarantine = async () => { try { await quarantine(); } catch { /* closed */ } };
+  const requiredRetryQuarantine = async (error: unknown) => {
+    try { await quarantine(); }
+    catch { return 'unknown' as const; }
+    throw error;
+  };
+  let retryRequested = false;
   let state: 'open' | 'operation' | 'terminal' = 'open';
   const invokePort = async <T>(operation: () => Promise<T>): Promise<T> => {
     if (state !== 'open') throw new TypeError('registration recovery is busy or closed');
     state = 'operation';
     try { return await closeRegistrationAdapterOperationV1(operation); }
+    catch (error) {
+      if (!isSupervisorRegistrationRetryableAbortV1(error)) throw error;
+      retryRequested = true;
+      return Object.freeze({ kind: 'indeterminate' }) as T;
+    }
     finally { if (state === 'operation') state = 'open'; }
   };
   return Object.freeze({
@@ -370,7 +358,13 @@ function bindRecoveryTransaction(value: unknown): BoundRecoveryTransactionV1 {
       state = 'terminal';
       let resolution: unknown;
       try { resolution = await commit(); }
-      catch (error) { await bestEffortQuarantine(); throw error; }
+      catch (error) {
+        if (isSupervisorRegistrationRetryableAbortV1(error)) {
+          return requiredRetryQuarantine(error);
+        }
+        await bestEffortQuarantine();
+        throw error;
+      }
       if (resolution === 'committed') return 'committed';
       await bestEffortQuarantine();
       return 'unknown';
@@ -382,6 +376,7 @@ function bindRecoveryTransaction(value: unknown): BoundRecoveryTransactionV1 {
       catch (error) { await bestEffortQuarantine(); throw error; }
     },
     quarantine: bestEffortQuarantine,
+    retryRequested: () => retryRequested,
   });
 }
 
@@ -458,21 +453,19 @@ async function commitResponse(
     commit(): Promise<SupervisorRegistrationCommitResolutionV1>;
   }>,
   response: RegistrationResponseV1,
-): Promise<SupervisorRegistrationTransactionResultV1> {
-  try {
-    if (await transaction.commit() !== 'committed') return indeterminate();
-    return result(response);
-  } catch {
-    return indeterminate();
-  }
+): Promise<TransactionAttemptResultV1> {
+  return commitSupervisorRegistrationAttemptV1(
+    transaction, response, result, indeterminate,
+  );
 }
 
 async function rollbackIndeterminate(
   transaction: Readonly<{ rollback(): Promise<void> }>,
-): Promise<SupervisorRegistrationTransactionResultV1> {
-  try { await transaction.rollback(); }
-  catch { /* the only safe external result remains the fixed indeterminate response */ }
-  return indeterminate();
+  retry = false,
+): Promise<TransactionAttemptResultV1> {
+  return rollbackSupervisorRegistrationAttemptV1(
+    transaction, retry, indeterminate,
+  );
 }
 
 function responseOf(decision: Exclude<SupervisorRegistrationDecisionV1, AppendDecisionV1>) {

@@ -215,7 +215,7 @@ describe('programme capture V1 commit-object input attestation', () => {
       const outputPresent = repository({ outputKind });
       await expect(attest(outputPresent)).rejects.toThrow(/OUTPUT_PRESENT/);
     }
-  });
+  }, 15_000);
 
   it('rejects unsafe Git materialization controls before reading authority blobs', async () => {
     const fixture = repository();

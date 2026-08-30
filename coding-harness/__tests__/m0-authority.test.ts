@@ -183,6 +183,7 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-serve/tests/endpoint.rs',
   'crates/sf-sparql/tests/e2e.rs',
   'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
+  'docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md',
   'docs/capability-matrix.json',
   'docs/capability-matrix.md',
   'docs/plans/sota-application-completion-programme.md',

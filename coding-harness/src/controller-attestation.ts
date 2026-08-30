@@ -143,9 +143,11 @@ export async function attestController(input: Readonly<{
       throw new Error(`HARNESS_CONTROLLER_SOURCE_MISMATCH:${path}`);
     }
     sources[path] = blob.digest;
-    if (path.startsWith('coding-harness/src/') && path.endsWith('.ts')) {
+    if (path.startsWith('coding-harness/src/')
+      && (path.endsWith('.ts') || path.endsWith('.cts'))) {
       const outputPath = path
         .replace('coding-harness/src/', 'coding-harness/dist/')
+        .replace(/\.cts$/, '.cjs')
         .replace(/\.ts$/, '.js');
       outputs[outputPath] = build.outputs[outputPath] ?? '';
     }

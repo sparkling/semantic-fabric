@@ -148,7 +148,7 @@ describe.runIf(bwrapAvailable())('system native filesystem boundary', () => {
 
     try {
       const node = realpathSync(process.execPath);
-      const launcher = realpathSync(join(harnessRoot, 'dist/native-proxy-launcher.js'));
+      const launcher = realpathSync(join(harnessRoot, 'dist/native-proxy-launcher.cjs'));
       const boundary = new SystemNativeFilesystemBoundary({
         bwrapExecutable: realpathSync('/usr/bin/bwrap'),
         brokerRoot,

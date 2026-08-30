@@ -25,13 +25,14 @@ if (!Array.isArray(harnessManifest.protectedPaths)) {
 }
 const outputPaths = harnessManifest.protectedPaths
   .filter((path) => typeof path === 'string'
-    && path.startsWith('coding-harness/src/') && path.endsWith('.ts'))
+    && path.startsWith('coding-harness/src/')
+    && (path.endsWith('.ts') || path.endsWith('.cts')))
   .map((path) => path.replace('coding-harness/src/', 'coding-harness/dist/')
-    .replace(/\.ts$/, '.js'))
+    .replace(/\.cts$/, '.cjs').replace(/\.ts$/, '.js'))
   .sort();
 const actualOutputs = walkFiles(resolve(projectRoot, 'dist'))
   .map(repositoryPath)
-  .filter((path) => path.endsWith('.js'))
+  .filter((path) => path.endsWith('.js') || path.endsWith('.cjs'))
   .sort();
 assertExactPaths(actualOutputs, outputPaths, 'HARNESS_BUILD_OUTPUT_SET_MISMATCH');
 if (!outputPaths.includes(RUNTIME_ENTRY)) throw new Error('HARNESS_BUILD_RUNTIME_ENTRY_MISSING');

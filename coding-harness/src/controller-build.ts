@@ -84,7 +84,8 @@ function runtimePath(value: unknown, label: string, kind: 'output' | 'production
     throw new TypeError(`HARNESS_CONTROLLER_BUILD_${kind.toUpperCase()}_PATH_INVALID`);
   }
   const valid = kind === 'output'
-    ? path.startsWith('coding-harness/dist/') && path.endsWith('.js')
+    ? path.startsWith('coding-harness/dist/')
+      && (path.endsWith('.js') || path.endsWith('.cjs'))
     : path.startsWith('coding-harness/node_modules/');
   if (!valid || Buffer.byteLength(path, 'utf8') > 500) {
     throw new TypeError(`HARNESS_CONTROLLER_BUILD_${kind.toUpperCase()}_PATH_INVALID`);

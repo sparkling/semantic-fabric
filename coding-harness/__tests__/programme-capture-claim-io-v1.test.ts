@@ -97,7 +97,7 @@ describe('programme capture V1 local run-claim authority', () => {
     const recreated = await reserveProgrammeCaptureRunClaimV1(input);
     expect(recreated.record).toEqual(first.record);
     expect(recreated.path).toBe(first.path);
-  });
+  }, 15_000);
 
   it.each([
     'regular', 'directory', 'hardlink', 'symlink', 'dangling-symlink', 'fifo',

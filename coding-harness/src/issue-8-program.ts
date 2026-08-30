@@ -169,7 +169,7 @@ async function executeIssue8(
   const cargoExtensionRoot = prepareCargoExtension(scratch);
   const rust = prepareIssue8RustRuntimeFactory({ scratchRoot: scratch, cargoExtensionRoot });
   const systemTools = { ...attestIssue8SystemTools(), ...rust.bootstrapEvidence };
-  const proxyLauncher = join(dirname(fileURLToPath(import.meta.url)), 'native-proxy-launcher.js');
+  const proxyLauncher = join(dirname(fileURLToPath(import.meta.url)), 'native-proxy-launcher.cjs');
   return await runIssue8Transaction({
     repositoryRoot: transactionRepository,
     controllerSourceRoot: invocation.repositoryRoot,

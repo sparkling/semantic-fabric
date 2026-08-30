@@ -68,15 +68,24 @@ describe('sealed supervisor-service artifact', () => {
       'src/registration-event-envelope-v2.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
       'src/registration-protocol-v2.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(artifact.buildInputs['src/registration-ports-v1.ts'])
-      .toMatch(/^[a-f0-9]{64}$/);
-    expect(artifact.buildInputs['src/registration-transaction-boundary-v1.ts'])
-      .toMatch(/^[a-f0-9]{64}$/);
-    expect(artifact.buildInputs['src/registration-transaction-v1.ts'])
-      .toMatch(/^[a-f0-9]{64}$/);
-    expect(artifact.sourceInputs)
-      .not.toHaveProperty('src/registration-transaction-boundary-v1.ts');
-    expect(artifact.sourceInputs).not.toHaveProperty('src/registration-transaction-v1.ts');
+    const privateBuildInputs = [
+      'src/registration-ports-v1.ts',
+      'src/registration-transaction-admission-v1.ts',
+      'src/registration-transaction-boundary-v1.ts',
+      'src/registration-transaction-checkout-v1.ts',
+      'src/registration-transaction-contract-v1.ts',
+      'src/registration-transaction-retry-v1.ts',
+      'src/registration-transaction-v1.ts',
+    ];
+    expect(Object.keys(artifact.buildInputs).sort()).toEqual([
+      'package.json', 'scripts/artifact-lib.mjs', 'scripts/build.mjs',
+      'scripts/deny-publish.mjs', 'scripts/verify-artifact.mjs',
+      ...privateBuildInputs, 'tsconfig.json', 'vitest.config.ts',
+    ].sort());
+    for (const path of privateBuildInputs) {
+      expect(artifact.buildInputs[path]).toMatch(/^[a-f0-9]{64}$/);
+      expect(artifact.sourceInputs).not.toHaveProperty(path);
+    }
     expect(artifact.buildInputs['vitest.config.ts']).toMatch(/^[a-f0-9]{64}$/);
     expect(artifact.externalImports).toEqual([]);
     expect(artifact.runtimePackages).toEqual([]);
@@ -156,6 +165,20 @@ describe('sealed supervisor-service artifact', () => {
         expect(verified.status).not.toBe(0);
         expect(verified.stderr)
           .toMatch(/SUPERVISOR_SERVICE_PACKAGE_[A-Z_]*(?:CONTRACT|KEYS)_INVALID/);
+      }
+      writeFileSync(fixturePackage, packageBytes);
+      for (const path of [
+        'src/registration-transaction-admission-v1.ts',
+        'src/registration-transaction-checkout-v1.ts',
+        'src/registration-transaction-contract-v1.ts',
+        'src/registration-transaction-retry-v1.ts',
+      ]) {
+        const input = resolve(fixture, path);
+        const bytes = readFileSync(input);
+        writeFileSync(input, Buffer.concat([bytes, Buffer.from('\n')]));
+        expect(runScript('scripts/verify-artifact.mjs', fixture).stderr, path)
+          .toContain('SUPERVISOR_SERVICE_ARTIFACT_BINDING_MISMATCH');
+        writeFileSync(input, bytes);
       }
     } finally {
       rmSync(fixture, { recursive: true, force: true });
