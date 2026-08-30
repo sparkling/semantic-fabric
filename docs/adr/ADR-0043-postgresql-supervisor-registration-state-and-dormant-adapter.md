@@ -41,10 +41,20 @@ interpret a lost commit acknowledgement as an abort.
 PostgreSQL SERIALIZABLE can abort a transaction with SQLSTATE 40001.
 PostgreSQL requires the application to rerun the complete transaction, including
 the logic which chose statements and values. Retrying only COMMIT, a write, or
-a previously staged candidate is nonconforming. A deadlock 40P01, or a named
-uniqueness/exclusion conflict proven to represent the same race, may use the same
-bounded whole-transaction path. All other errors and any connection-loss or
-commit ambiguity remain fixed indeterminate outcomes.
+a previously staged candidate is nonconforming. The first adapter's retry
+allowlist is exactly serialization failure 40001 and deadlock 40P01 when they
+come from a trusted driver error caught at a query or commit boundary. No
+uniqueness, exclusion, message, result value, or plain object can request retry.
+All other errors and any connection-loss or commit ambiguity remain fixed
+indeterminate outcomes.
+
+The marker bridge is driver-bearing and composition-owned. It may invoke the
+private retry-marker thrower only while catching an exact pinned `pg`
+`DatabaseError` thrown by the query it just awaited, with exact prototype and an
+allowlisted SQLSTATE. Tests obtain real driver errors from PostgreSQL. Plain
+`{code: '40001'}` data, messages, results, subclasses, proxies, every 23505, and
+errors thrown by mapper, materializer, signer, or cleanup code cannot cross this
+bridge.
 
 The programme needs executable PostgreSQL evidence without weakening the sealed
 dependency-free public bundle or pretending that tests provision independently
@@ -87,7 +97,12 @@ The adapter depends on narrow injected capabilities:
 - parameterized query execution and explicit connection release/destruction;
 - a closure-owned authenticated peer-to-project mapper;
 - pinned service/configuration identity; and
-- a prepare/sign/finalize materializer.
+- a signer which receives exact signing bytes and returns signature bytes only.
+
+Prepare and finalize are sealed local functions, not injectable capabilities.
+They independently revalidate the candidate and locked snapshots before and
+after signing. Finalize verifies the returned Ed25519 signature against the
+pinned public key before constructing any row value.
 
 No PostgreSQL driver type enters a service interface. Adapter source and
 migrations are sealed artifact build inputs but are not source inputs of
@@ -101,7 +116,22 @@ dependencies. This proves PostgreSQL behavior but does not make the built servic
 deployable. Adding a runtime driver, exporting an adapter, or setting
 databaseAccessEnabled to true requires a separate reviewed activation slice.
 
-### 3. Use a dedicated schema with exact domains
+### 3. Use one project namespace per database and exact domains
+
+The first service/database instance admits exactly one immutable project
+authority digest and one project scope role. The authenticated peer mapper is a
+closure-owned capability; it performs no database lookup and its result must
+equal that pinned database project. The database does not multiplex project
+namespaces. A future multi-project global chain, sharded authority head, or
+shared login pool changes ordering and authorization semantics and requires a
+separate ADR.
+
+The authority state is one singleton row for that database project. Every
+project-scoped row still carries the project authority digest and scope-role
+name, and every project-scoped primary key, foreign key, join, policy, and
+expected-old-state update includes that scope. This redundancy makes
+cross-wiring and foreign-row injection detectable rather than turning the
+single-project topology into implicit ambient authority.
 
 The first migration creates a dedicated owner-controlled schema and exact
 domains:
@@ -109,9 +139,23 @@ domains:
 - SHA-256 values are 32-byte bytea;
 - canonical bytes are bounded bytea, decoded as fatal UTF-8 and re-encoded
   byte-identically at the adapter boundary;
-- protocol sequences use numeric(20,0) constrained to
-  0..18446744073709551615; and
+- protocol sequences use unconstrained numeric with `scale(VALUE) = 0` and a
+  range constraint of 0..18446744073709551615, preventing PostgreSQL from
+  rounding fractional input before the constraint observes it; and
 - opaque identifiers use the protocol's ASCII length and alphabet.
+
+All numeric values cross the adapter boundary as canonical unsigned decimal
+strings and are selected with an explicit text cast. On writes, JavaScript number
+and bigint values, exponent notation, signs, whitespace, leading zeroes, and
+fractional lexical forms are rejected before a query is issued. On reads, the
+row codec applies the same lexical checks to selected text and treats malformed
+database values as damage rather than absence.
+
+All semantic ASCII identifiers and exact textual constants use
+`text COLLATE pg_catalog."C"` (or a domain with that collation); canonical JSON
+and digest-bearing protocol payloads remain bounded bytea. Default or
+nondeterministic collation cannot participate in identity, uniqueness, joins,
+or ordering.
 
 PostgreSQL bigint, serial, identity columns, sequences, and JavaScript numbers
 are not used for semantic event, run, or fence order. Transactional counters
@@ -122,8 +166,8 @@ The registration slice owns these minimum tables:
 | Table | Purpose |
 |---|---|
 | schema_migrations | Ordered version and exact script digest; runtime verifies but never applies. |
-| authority_configurations | Immutable pinned configuration, project binding, service identity, genesis receipt, and active-head inputs. |
-| authority_state | Singleton global semantic head and next sequence; write path locks it first. |
+| authority_configurations | Immutable canonical configuration bytes, project binding, service identity, exact Ed25519 SPKI DER, genesis receipt, and active-head inputs. |
+| authority_state | Singleton project semantic head and next sequence; write path locks it first. |
 | semantic_events | Immutable event/envelope chain with unique global and per-run order. |
 | semantic_receipts | Independently supplied predecessor receipts; supervisor writer has read only. |
 | registration_runs | Current run projection with immutable original-registration pointers. |
@@ -160,32 +204,63 @@ capabilities.
 
 ### 5. Lock, validate, materialize, and persist in one attempt
 
-After an exact miss, the write transaction:
+One fresh writer attempt has this externally observable order:
 
-1. locks the singleton authority state and active configuration;
-2. validates the exact project and asserted authority head;
-3. reads the required genesis or semantic predecessor receipt;
-4. locks the run row, with the authority lock protecting absent-run creation;
-5. revalidates the complete candidate against the locked snapshots;
-6. prepares immutable signing bytes from pinned service identity;
-7. signs only those bytes and verifies the returned signature under the pinned
-   public key;
-8. inserts the event, exact result, run transition, and pending outbox;
-9. advances the authority state with an expected-old-state predicate;
-10. rereads the exact joined row in the same transaction; and
-11. releases response bytes only after a literal acknowledged commit.
+1. acquire a new direct-login client and verify its exact principal, attributes,
+   and membership graph;
+2. issue `BEGIN ISOLATION LEVEL SERIALIZABLE READ WRITE`;
+3. issue fixed `SET LOCAL` statements, in order, for search path, 5-second lock
+   timeout, 30-second statement timeout, 30-second idle-in-transaction timeout,
+   `synchronous_commit=on`, and `row_security=on`, then query and verify all six
+   actual settings plus isolation and read-only state;
+4. map the authenticated peer and perform the first joined exact lookup;
+5. on a miss, lock the singleton authority state and active configuration;
+6. validate the exact project and asserted authority head;
+7. read the required genesis or semantic predecessor receipt;
+8. lock the run row, with the authority lock and named uniqueness constraints
+   protecting absent-run creation;
+9. prepare immutable signing bytes, sign only those bytes, verify the signature,
+   and independently finalize the complete candidate;
+10. insert the event, exact result, run transition, and immutable pending outbox;
+11. advance authority state with an exact expected-old-state predicate;
+12. map the same authenticated peer again and perform the sole post-stage joined
+    exact reread, which must observe the transaction's uncommitted rows;
+13. commit, release the client, and only then release the exact reread response.
 
-Every statement is fixed, schema-qualified, and parameterized. Request data
-never selects an identifier, relation, role, policy, or SQL fragment. Every
-affected-row count is exact.
+The coordinator's `stageCandidate` call owns steps 9--11; its two decision phases
+own the two mapper/exact reads. An exact hit performs steps 1--4 and 13 only.
+The recovery path uses a fresh direct-login client and exactly `acquire -> verify
+principal and membership -> BEGIN SERIALIZABLE READ ONLY -> fixed SET LOCAL ->
+verify transaction state -> map -> joined exact lookup -> COMMIT -> release`.
 
-The materializer has three capabilities:
+Every data-bearing statement is fixed and schema-qualified, and every data value
+is parameterized. Transaction-control, local-setting, and state-check statements
+are exact fixed literals with no request-derived token. Request data never
+selects an identifier, relation, role, policy, or SQL fragment. Every affected-
+row count is exact.
 
-- prepare(candidate, locked snapshots) performs closed-schema equality checks
+Each transaction checks its actual isolation and read-only state, uses a fixed
+safe search path, requires `synchronous_commit=on`, and pins `lock_timeout` to
+5 seconds plus `statement_timeout` and `idle_in_transaction_session_timeout` to
+30 seconds. An activation must additionally attest `fsync=on`. Only the literal
+driver acknowledgement for PostgreSQL `COMMIT` is committed. A timeout,
+connection loss, malformed completion, or other uncertainty after commit is
+sent is unknown: destroy the client, never retry, and release no response bytes.
+
+The materialization boundary has three operations:
+
+- sealed local prepare(candidate, locked snapshots) performs closed-schema equality checks
   and constructs exact signing bytes;
-- sign(bytes) returns signature bytes only; and
-- finalize(prepared, signature) verifies the signature and constructs the exact
+- injected sign(bytes) returns signature bytes only; and
+- sealed local finalize(prepared, signature) verifies the signature and constructs the exact
   envelope, response, state head, public leaf, and database row values.
+
+The active configuration stores exact canonical configuration bytes and the
+exact Ed25519 SubjectPublicKeyInfo DER bytes. The configuration bytes must parse
+canonically and reproduce the protocol's domain-separated configuration digest;
+the raw SPKI DER SHA-256 must equal the pinned key fingerprint. The materializer
+never accepts a project-selected key, database client, retry marker, clock,
+random source, or network capability.
 
 Database rollback does not roll back an HSM. A post-sign/pre-commit orphan has no
 event, result, outbox, or recovery path and is never returned. A real HSM
@@ -193,38 +268,73 @@ invocation journal and reconciliation protocol are deferred to activation.
 
 ### 6. Separate ownership and runtime roles
 
-Use distinct no-login owner/migrator roles, one immutable no-login database scope
-role per project, and narrowly privileged login roles:
+Use distinct no-login owner and capability roles, one immutable no-login database
+scope role for the admitted project, one migration-only login, and narrowly
+privileged runtime logins:
 
 - schema owner;
-- deployment-only migrator;
-- one registration writer per project scope;
-- one exact-recovery reader per project scope;
+- deployment-only migration login;
+- fixed registration-writer and exact-recovery capability roles;
+- one direct registration-writer login and one direct exact-recovery login for
+  the project, each bound to its capability and project scope roles;
 - future receipt ingestor;
 - future outbox publisher; and
 - sanitized monitor.
 
-Runtime roles are not owners, superusers, role members of owners/migrators, or
-BYPASSRLS. Each runtime login is a member of exactly one immutable project scope
-role. Project rows bind that scope role, and row-security policies authorize only
-when the nonspoofable session_user is a member of the bound role. Custom
+The nonoperational live-test fixture pins the literal roles
+`sf_supervisor_owner_v1`, `sf_supervisor_migration_login_v1`,
+`sf_supervisor_writer_capability_v1`, `sf_supervisor_recovery_capability_v1`,
+`sf_supervisor_project_scope_v1`, `sf_supervisor_writer_login_v1`, and
+`sf_supervisor_recovery_login_v1`. A later activation profile must seal any
+deployment-specific names and their derivation; the dormant migration never
+constructs identifiers from request data.
+
+Runtime roles are not owners, superusers, members of the owner role, or
+BYPASSRLS. The scope and capability roles are identity-only and have zero object
+privileges. Each runtime login has disjoint direct object grants and direct
+membership in exactly one project scope role plus its one capability role, with
+`ADMIN FALSE`, `INHERIT FALSE`, and `SET FALSE` on both edges. Runtime role
+switching is entirely forbidden. Writer and recovery use distinct pools; every
+new client verifies exact `session_user = current_user`, role attributes, direct
+membership edges, and the complete transitive graph before beginning a
+transaction. Shared generic logins and `SET SESSION AUTHORIZATION` are forbidden.
+Project rows bind the scope-role name. Each admitted command has one minimal
+permissive policy and one restrictive policy; the restrictive expression requires
+both membership in the corresponding literal
+`sf_supervisor_writer_capability_v1` or
+`sf_supervisor_recovery_capability_v1` role via `pg_has_role(..., 'MEMBER')` and
+`pg_has_role(session_user, project_scope_role, 'MEMBER')` in every clause the
+command supports: SELECT and DELETE use `USING`, INSERT uses `WITH CHECK`, and
+UPDATE uses both. The catalog verifier rejects missing or extra policies,
+including any additional `PUBLIC` permissive policy. Custom
 transaction settings may provide redundant equality inputs but are never an
 authorization source: a connected role can select arbitrary custom-setting
 values. Revoke public schema, object, and default privileges. Enable and force
 row security on every project-scoped table with both read and write policies.
-Grant no DDL, membership administration, role switching beyond the one bound
-scope, temporary-object creation, sequence mutation, COPY, TRUNCATE, or broad
-function execution.
+Grant no DDL, membership administration, runtime role switching, temporary-
+object creation, sequence mutation, COPY, TRUNCATE, or broad function execution.
 
 The writer cannot create semantic receipts or update or delete immutable events,
-results, or outbox payloads. The recovery role can select only the mapping and
-exact joined-row inputs. No security-definer function is introduced.
+results, or outbox payloads; its updates are column-limited to the run projection
+and authority state. The recovery role can select only exact joined-row inputs;
+mapping remains closure-owned. No owner-rights view or security-definer function
+is introduced.
 
 ### 7. Version migrations explicitly
 
-Migration files and a canonical digest manifest are protected build inputs.
-Deployment applies them with the migrator role in strict order and records their
-exact SHA-256 values. Runtime startup only verifies the exact supported set.
+Migration files and a canonical raw-byte digest manifest are protected build
+inputs. Role and login provisioning is a separate deployment input: migrations
+never create activation credentials or dynamic project roles. Deployment takes
+a fixed transaction-scoped advisory lock before schema creation. The canonical
+fixture uses a non-superuser migration login whose sole membership is the
+no-login schema owner with `ADMIN FALSE`, `INHERIT FALSE`, and `SET TRUE`; it
+connects directly, enters the migration transaction, takes the lock, and uses
+`SET LOCAL ROLE` to create owner-owned objects. Runtime logins have no membership
+in either role. The migration login applies scripts in strict order and records
+their externally computed exact SHA-256 values in the same transaction. Runtime
+startup only verifies the
+exact supported set and the exact catalog owners, domains, constraints, indexes,
+policies, ACLs, default ACLs, and membership shape.
 Missing versions, gaps, future versions, checksum drift, partial application, or
 ownership, policy, or grant drift keep readiness false.
 
@@ -242,20 +352,35 @@ The dormant adapter slice is complete only when:
    connection destruction;
 3. row-codec mutations distinguish absence from damaged joined provenance and
    cover uint64 minimum, maximum, noncanonical, negative, fractional, and
-   overflow values;
+   overflow values plus collation-equivalent but byte-distinct identifiers;
 4. materializer KATs and mutations pass the already committed event and result
-   validators for 201 and 409;
+   validators for 201 and 409, independently verify the exact
+   `supervisor-run-event-signing-v2` canonical payload and Ed25519 signature
+   under the pinned SPKI, reject wrong key/bytes/signature, and bind the exact
+   ADR-0042 public-leaf bytes and digest;
 5. migrations apply once to an empty PostgreSQL 16 database, serialize concurrent
    migrators, and reject digest drift, gaps, future versions, partial failure,
    wrong ownership, policy, and privileges;
 6. required-live tests cover 201, exact replay, changed-replay 409, post-close
-   recovery, concurrent identical and different requests, rollback, known abort,
-   commit ambiguity, connection cleanup, project isolation, direct-login
-   cross-project custom-setting attacks, and role denial;
+   recovery, rollback, known abort, connection cleanup, and role denial. Two
+   identical concurrent requests return identical stored bytes with one semantic
+   row set; two distinct request bodies yield one semantic 201 winner and one
+   fixed receipt-pending 503 after complete-transaction retry, with no second
+   event or outbox. After the winner's predecessor receipt is independently
+   seeded, replaying the loser commits and returns the semantic changed-replay
+   409. A wrapper
+   that completes real `COMMIT` then suppresses its acknowledgement yields fixed
+   500 with no retry, after which exact recovery returns the committed bytes and
+   one atomic row set; a paired pre-send termination leaves zero rows. Project
+   isolation includes a positive same-project direct-login case plus rejection of
+   foreign mapper/row/custom-setting inputs and a foreign project's direct login
+   in the one admitted-project database, never a two-project-in-one-database
+   fixture;
 7. event, result, run, head, and outbox cardinalities prove atomicity after every
    injected fault;
 8. service and parent suites, audits, hardened builds, protected registries,
-   historical anchors, and Node 20 and 24 byte-determinism gates remain green;
+   historical anchors, and required Node 20.0.0 and Node 24.14.1
+   byte-determinism lanes remain green;
    and
 9. the public export set, runtime package set, readiness result, manifest flags,
    and public bundle digest remain byte-identical.
@@ -315,10 +440,10 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
 
 ## Primary references
 
-- [PostgreSQL serialization failure handling](https://www.postgresql.org/docs/18/mvcc-serialization-failure-handling.html)
-- [PostgreSQL transaction isolation](https://www.postgresql.org/docs/18/transaction-iso.html)
-- [PostgreSQL explicit locking](https://www.postgresql.org/docs/17/explicit-locking.html)
-- [PostgreSQL row security policies](https://www.postgresql.org/docs/17/ddl-rowsecurity.html)
+- [PostgreSQL 16 serialization failure handling](https://www.postgresql.org/docs/16/mvcc-serialization-failure-handling.html)
+- [PostgreSQL 16 transaction isolation](https://www.postgresql.org/docs/16/transaction-iso.html)
+- [PostgreSQL 16 explicit locking](https://www.postgresql.org/docs/16/explicit-locking.html)
+- [PostgreSQL 16 row security policies](https://www.postgresql.org/docs/16/ddl-rowsecurity.html)
 - [ADR-0037](ADR-0037-dual-host-ruflo-engineering-metaharness.md)
 - [ADR-0038](ADR-0038-sota-application-completion-programme.md)
 - [ADR-0039](ADR-0039-minimal-production-serving-artifact.md)
