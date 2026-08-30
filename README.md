@@ -463,11 +463,11 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 42 records: 33 accepted, eight
+The canonical [ADR corpus](docs/adr/) contains 43 records: 33 accepted, nine
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
 [ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), [ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md),
-[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), and [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md)),
+[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), and [ADR-0046](docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md)),
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -479,7 +479,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0046](docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative

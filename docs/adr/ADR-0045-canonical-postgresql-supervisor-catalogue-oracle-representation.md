@@ -375,10 +375,10 @@ request digest parameter. Parameters are base `bytea` values, never private
 domain OIDs. The maximum returned rows is `2`: zero means absent, one is decoded,
 and two fails indeterminate.
 
-The 27 projections are ordered and literal. Every domain is cast to its base
-type; uint64 and response status are cast to text. The output aliases must equal
-the private `POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1` tuple byte-for-byte. The
-tuple is exported only from its private module, never from `src/index.ts`.
+The 27 materialized inner projections are ordered/literal; domains use base types and uint64/status
+use text. Their envelope alias vector equals private `POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1`
+byte-for-byte; the outer driver projection is exactly `payload,oversize`. The tuple is exported only
+from its private module, never `src/index.ts`.
 
 Using each nested record's field order from section 3, the complete normalized
 query fragment is:
@@ -406,10 +406,10 @@ depth/node/key/string/collection ceilings, parses, reconstructs the closed
 schema, validates cross-references and ordering, re-encodes, hashes, and deep
 freezes independent storage.
 
-All catalogue/provisioning observation queries use a server-side
-`expected cardinality + 1` limit before result allocation. Total observation
-rows are bounded by the contract maxima. Each driver value is synchronously
-snapshotted before another await.
+Every observation query materializes at most `expected cardinality + 1` rows server-side. Each
+variable expression is evaluated once behind its `octet_length` value/oversize guard; materialized
+rows become one byte envelope only below the aggregate ceiling, otherwise only a sentinel returns.
+Excess never reaches the driver; each admitted envelope is snapshotted before another await.
 
 Role traversal is provisioning-only, cycle-safe, and bounded to the nine named
 roles plus one excess sentinel. It records direct incident edges first and
@@ -434,9 +434,9 @@ This decision is implemented only when:
 4. coherent OID renumbering with unchanged resolved identities, generated-`tgname`-only churn, and raw ACL reorder mutants normalize identically, while unresolved OID,
    PUBLIC/role, null/empty/default ACL, grantor/grantee/grantable, ordered tuple,
    expression, RLS, policy, and immediate/deferred trigger linkage/parent/type/internal/function/deferral/bitmask/filter/argument/qualifier/transition-table/`tgenabled` (`O` to `D`, `R`, or `A`) mutants fail;
-5. the query topology and 27 aliases match an independent literal and the
-   private row decoder, while weakened joins, scope predicates, casts, order,
-   or cardinality fail;
+5. query topology, 27 inner aliases, outer `payload,oversize`, value sentinels and
+   bounds match independent literals/decoders; weakened joins, scope, casts,
+   order, cardinality, max-plus-one values, or sentinels fail;
 6. the JSON and parser are sealed private build inputs and protected paths,
    while the public exports, public bundle bytes, empty runtime dependencies,
    and all false authority flags remain unchanged; and
