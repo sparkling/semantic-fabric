@@ -2,7 +2,7 @@
 
 - **Status:** In progress
 - **Date:** 2026-08-26
-- **Updated:** 2026-08-29
+- **Updated:** 2026-08-30
 - **Decision records:** [ADR-0038](../adr/ADR-0038-sota-application-completion-programme.md) (accepted), [ADR-0039](../adr/ADR-0039-minimal-production-serving-artifact.md) (proposed artifact design), [ADR-0041](../adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) (proposed capture design), and [ADR-0042](../adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) (proposed witnessed supervisor protocol)
 
 **Scope:** Repository source, tests, accepted ADRs, CI, and measured benchmark evidence; GitHub issues and pull requests are deliberately not programme inputs.
@@ -14,7 +14,7 @@
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0 — architectural truth and deterministic foundation | In progress | Backend-aware v3 receipts bind all 87 SQLite and required-live PostgreSQL mapping outcomes; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; the first external current-`sf-cli` host observation was captured and replayed from clean `5a06eac`; performance machinery, capture-input attestation, a negative-only host gate, a same-UID run claim, claim-rooted exact-commit source, bounded runtime linkage, sealed input holding, and `c8305c3`'s private one-shot observation exist; `805f413` adds a canonical private `authority=none` record and provider-free semantic reparse; `9282e60` checks a caller-supplied closed ELF tag/search/flag policy ID/five-source digest; `73e9864` binds a separately sealed exact late cBPF policy to the bubblewrap PID 1/reaper and loader child with a comparative native canary; `50adc0a` hashes and parses the same exact held bwrap bytes as `RootPie`; `b34b6d7` separately inventories controlled counterfactual name/path resolution; `99fa2e1` and `92f5376` add and freeze the signed registration seam; `7139b05`, `3ee0ed6`, and `d54518f` verify RFC 9162 proofs, signed checkpoints, and registration inclusion/consistency without claiming persistence or lease authority; ADR-0042 now separates semantic run/resource ordering from log inclusion and requires independent semantic witnessing plus enforced resource fencing; and `ad94cdb` replayed byte-identically in two clean checkouts. Receipt V1 remains byte-compatible and non-attesting. Positive independently administered supervision, runner admission, actual-consumption bwrap closure, final-FD/syscall evidence, aggregate containment, complete tool/system/runtime closure, SBOM/reproducibility, production admission, and controlled performance remain open |
+| M0 — architectural truth and deterministic foundation | In progress | Backend-aware v3 receipts bind all 87 SQLite and required-live PostgreSQL mapping outcomes; SQLite query/protocol baselines and the default `sf-cli` package closure have provider-free receipts; the first external current-`sf-cli` host observation was captured and replayed from clean `5a06eac`; performance machinery, capture-input attestation, a negative-only host gate, a same-UID run claim, claim-rooted exact-commit source, bounded runtime linkage, sealed input holding, and `c8305c3`'s private one-shot observation exist; `805f413` adds a canonical private `authority=none` record and provider-free semantic reparse; `9282e60` checks a caller-supplied closed ELF tag/search/flag policy ID/five-source digest; `73e9864` binds a separately sealed exact late cBPF policy to the bubblewrap PID 1/reaper and loader child with a comparative native canary; `50adc0a` hashes and parses the same exact held bwrap bytes as `RootPie`; `b34b6d7` separately inventories controlled counterfactual name/path resolution; `99fa2e1` and `92f5376` freeze the signed registration seam; `7139b05`, `3ee0ed6`, and `d54518f` verify RFC 9162 inclusion/consistency and signed checkpoints; `f1a3a48` adds the sealed private registration decision kernel with exact first/duplicate recovery, provenance and monotonic-order checks, without persistence or authority; ADR-0042 remains proposed and requires independent semantic witnessing plus enforced resource fencing; and `ad94cdb` replayed byte-identically in two clean checkouts. Receipt V1 remains byte-compatible and non-attesting. Positive independently administered supervision, runner admission, actual-consumption bwrap closure, final-FD/syscall evidence, aggregate containment, complete tool/system/runtime closure, SBOM/reproducibility, production admission, and controlled performance remain open |
 | M1–M7 — application completion | Gated | Existing product evidence remains valid, but no later milestone starts merely because an M0 slice lands; each milestone still requires its own executable QA gate |
 
 Runs `_03`, `_04`, V5 `_05`, and V6 `_01` remain immutable honest failures; `_05`
@@ -44,18 +44,18 @@ Because no canonical tracked profile or capture task exists, this is diagnostic 
 The capture control plane now has a local single-use run claim and its first pre-admission consumer. The claim slot is keyed only by independently supplied project authority and run ID; its immutable body binds controller, task, input attestation, runner profile and expected runner identity. The consumer reopens that rooted claim, re-attests an exact primary or bare controller store, rejects include/filter/config and attribute authority plus foreign-owned or cross-UID-writable Git control/object nodes, bounds the object-authority walk, preflights path-counted blob sizes before checkout, materializes only the claimed commit through a private Git index, seals the source tree, and returns a digest-bound opaque local view. Full path/index/tree inventories reject unsupported modes, symlinks, gitlinks, hard links, `.git`, extras, replacements, output injection and ambient branch/worktree changes; pristine-only cleanup preserves poisoned trees. Host admission remains unevaluated and all lease, attempt, build, execution and capture authority stays false.
 The owner-only claim and source roots remain same-UID cooperative controls: they prove neither external append-only durability, rollback resistance nor path-ABA resistance. There is no lease, launch, TTL, reclaim or retry API, and the source view is not persistence proof or a receipt. Tests use temporary synthetic primary/bare stores and roots; no real project claim, source tree, profile, build, receipt or measurement was created on this host.
 
-Commits `99fa2e1` and `92f5376` add and freeze the non-authorizing signed registration seam.
-Commits `7139b05`, `1d33638`, `3ee0ed6`, and `d54518f` add RFC 9162 proof verification,
-shared Ed25519 verification, signed checkpoint parsing, and registration inclusion plus
-checkpoint-consistency replay. The leaf is reconstructed from the reverified canonical
-registration envelope; the prior checkpoint is canonical and independently digest-pinned,
-while only the new checkpoint is signature-verified. Sequence/tree bounds, exact proof
-consumption, key/log/supervisor/epoch substitution, async key/proof mutation, proxy traps,
-and conflicting signed extensions are covered. The validation KAT digest is `eca1b7e1…1ee6`;
-the hardened build and all 108 files pass (760 tests, two expected skips), with no P0/P1
-from independent adversarial review. There is still no production signer, transport,
-durable log/service, external administration, lease, runner, attempt, capture authority,
-rollback/fork/global-order proof, or real supervisor event.
+Commits `99fa2e1` and `92f5376` freeze the non-authorizing signed registration seam; `7139b05`,
+`1d33638`, `3ee0ed6`, and `d54518f` add RFC 9162 proof verification, shared Ed25519 verification,
+signed checkpoint parsing, and registration inclusion/consistency replay. Commit `f1a3a48` adds a sealed, private, nonoperational decision kernel. It discloses
+mapping, exact row, global head, predecessor receipt and run state in fixed order; returns
+canonical first-write or exact duplicate bytes; binds original event/global/prior-state
+provenance; rejects rollback, interleaving-order violations, changed replay and malformed
+adapter data; and exposes no execution authority. Service tests pass 140/140 under Node 20
+and 24 with identical artifact `e3abc93d…8b31` and bundle `3b028cd8…b690`; the parent build
+passes 829 tests with two expected skips, including a cross-package exact-byte KAT. npm
+audits and the deep Ruflo scan report zero findings; independent Codex and native Claude
+reviews both returned COMMIT. ADR-0042 remains proposed: no PostgreSQL adapter, writer,
+signer, network, external administrator, lease/fence/outbox, runner, attempt, capture authority, or real supervisor event exists.
 
 On 2026-08-28, exact commit `ad94cdb` was cloned twice without local hard links under the hardened-builder
 `umask 0022`. Each checkout rebuilt the controller, passed all 91 harness files (627 tests passed and 8 environment-
@@ -74,10 +74,10 @@ agreement. This extends the evidence plane without changing application goals.
 
 The current M0 critical path is:
 
-1. deploy independently administered append-only registration/lease authority;
+1. implement the joined-row PostgreSQL adapter, serializable registration transaction, leases, resource fencing and outbox, then deploy it under independent administration;
 2. provision and admit the canonical controlled-runner profile;
 3. produce one two-builder-agreed exact artifact under ADR-0039; and
-4. run one fresh-ID attempt, seal/replay it, then import only the verified bytes.
+4. run one fresh-ID attempt, seal/replay it, then admit only the verified artifact bytes.
 
 M1–M7 remain gated until the full M0 gate passes.
 
@@ -445,14 +445,15 @@ must retain separate writable targets, verifier independence, exact input
 bindings, fail-closed cache validation, and replayable receipts; speed or disk
 savings cannot weaken those controls.
 
-The 2026-08-29 generic MetaHarness diagnostic scores the repository root 75:
+The 2026-08-30 generic MetaHarness diagnostic scores the repository root 75:
 fit 75, compile 100, task coverage 65, tool safety 90, and memory usefulness 46.
 The private nested score is separately contaminated by monorepo classification;
 the generic scorer is uncalibrated for this repository shape and is not a product
 or promotion gate. Darwin's security benchmark passed 9/12 checks but failed its
 statistical gates (fitness 0.6585, TPR 0.5, FPR 0.666667). Product tests and the
 ADR-0037 seven-dimension acceptance gate remain authoritative; no dummy files or
-keywords are added to game diagnostics, and the flywheel remains off.
+keywords are added to game diagnostics. Its valid ledger remains empty, with no champion
+or serving epoch; the retrieval-policy flywheel remains off.
 
 ## Non-goals unless the charter changes
 
