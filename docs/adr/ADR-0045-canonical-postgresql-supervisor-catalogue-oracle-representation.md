@@ -139,7 +139,9 @@ identifiers. Qualified names are never packed into a single string.
 
 Every set-like collection is strictly increasing by its identity tuple and
 rejects duplicate identity. Ordered tuple fields preserve their declared
-order.
+order. The total comparator is type-aware: strings use unsigned-ASCII-byte lexicographic
+order with a proper prefix first, numbers ascend, `null` precedes strings, and `false`
+precedes `true`; tuples compare left-to-right. Locale, coercion, serialized JSON, and insertion order never compare.
 
 | Collection | Exact record-key order | Identity/order |
 |---|---|---|
@@ -151,7 +153,7 @@ order.
 | `constraints` | `schema, relation, name, kind, columns, referencedSchema, referencedRelation, referencedColumns, matchType, updateAction, deleteAction, deferrable, initiallyDeferred, validated, definition, checkTemplate, expression` | `schema, relation, name` |
 | `indexes` | `schema, name, relationSchema, relation, constraintName, accessMethod, unique, primary, immediate, nullsNotDistinct, clustered, replicaIdentity, valid, ready, live, keys, includedColumns, predicateTemplate, predicateExpression` | `schema, name` |
 | index `keys` | `position, column, expression, collationSchema, collationName, opclassSchema, opclassName, direction, nulls` | ascending `position` |
-| `foreignKeyTriggers` | `constraintSchema, constraintName, side, event, timing, orientation, triggerType, enabled` | all fields except `enabled` |
+| `foreignKeyTriggers` | `constraintSchema, constraintName, side, event, timing, orientation, triggerType, internal, functionSchema, functionName, deferrable, initiallyDeferred, enabled` | `constraintSchema, constraintName, side, event` |
 | `policies` | `schema, relation, name, permissive, command, roles, usingTemplate, usingArguments, usingExpression, withCheckTemplate, withCheckArguments, withCheckExpression` | `schema, relation, name` |
 | `objectAcls` | `objectKind, schema, object, owner, aclState, privileges` | `objectKind, schema, object` |
 | `columnAcls` | `schema, relation, column, aclState, privileges` | `schema, relation, column` |
@@ -178,21 +180,25 @@ only scope, `scope-capability-v1` requires scope plus capability, and
 template requires null arguments and expression.
 
 `implicitObjects.rules` has keys `arrayTypes, compositeRowTypes,
-constraintIndexes, foreignKeyTriggers, toastObjects`. Its values are fixed
-literal rule enums, not executable expressions. `allowedDerivedKinds` and
-`forbiddenOwnedKinds` are sorted unique enum strings.
+constraintIndexes, foreignKeyTriggers, toastObjects` and exact values
+`raw-null-effective-element-acl-v1`, `explicit-owner-only-acl-v1`, `enumerated-constraint-index-v1`,
+`four-internal-ri-triggers-v1`, and `parent-linked-unnamed-v1`. `allowedDerivedKinds` is exactly
+`[array-type, composite-row-type, constraint-index, foreign-key-trigger, toast-index, toast-relation]`;
+`forbiddenOwnedKinds` is exactly `[aggregate, cast, collation, conversion, extension, foreign-table,
+function, materialized-view, operator, partition, procedure, publication, rule, sequence,
+subscription, text-search-object, user-trigger, view]`. These are sorted literal enums.
 
 All string leaves are ASCII. Scalars and enums are closed as follows:
 
 | Family | Exact grammar |
 |---|---|
 | relation | `kind=table`, `persistence=permanent`, `accessMethod=heap`, `replicaIdentity=default`, `toastState=absent|linked`; options are sorted ASCII |
-| domain/column | base/type names are qualified identifiers; projection is `bytea|text|boolean|integer`; modifier is null or safe integer; identity/generated kinds are empty; collation is both-null or qualified |
+| domain/column | base/type names are qualified identifiers; projection is `bytea|text|boolean|integer`; PostgreSQL typmod `-1` maps to JSON null and every other modifier is a nonnegative safe integer; identity/generated kinds are empty; collation is both-null or qualified |
 | constraint | `primary-key|unique|foreign-key|check`; non-FK reference/action fields are null; FK is `simple/restrict/restrict`; definition is ASCII, check template/expression are both-null or both-string |
 | index | `btree`; immediate is true; nulls-not-distinct/clustered/replica-identity are false; a key has exactly one of column/expression; `asc/nulls-last`; collation is both-null or qualified; opclass is qualified; M0 predicate template/expression are null |
-| trigger | side `referencing|referenced`, event `insert|update|delete`, `after/row`, type `foreign-key-check|foreign-key-action`, enabled `origin` |
+| trigger | `after/row`, internal true, function schema `pg_catalog`, enabled `origin`; referencing insert/update are `foreign-key-check`, use `RI_FKey_check_ins|RI_FKey_check_upd`, and mirror owning-FK deferral; referenced delete/update are `foreign-key-action`, use `RI_FKey_restrict_del|RI_FKey_restrict_upd`, and are never deferrable/initially deferred |
 | policy | command `select|insert|update`; tagged role set; template/expression pairs are both-null or both-string |
-| ACL | object kind `table|domain|type`; class `function|type|table|sequence|schema`; privilege `USAGE|CREATE|SELECT|INSERT|UPDATE|DELETE|TRUNCATE|REFERENCES|TRIGGER|EXECUTE`; booleans are JSON booleans |
+| ACL | object kind `table|domain|type`; class `function|type|table|sequence|schema`; default-ACL schema is identifier-or-null and is null for all five M0 global expectations (two explicit, three absent); privilege `USAGE|CREATE|SELECT|INSERT|UPDATE|DELETE|TRUNCATE|REFERENCES|TRIGGER|EXECUTE`; booleans are JSON booleans |
 | query | join `left`; operator `equals`; operand `parameter|literal`; base type/cast `bytea|text`; identifiers only |
 
 Generator templates are fixed code enums, never interpolated SQL. Domain and
@@ -332,13 +338,19 @@ verification. No CHECK constraint may claim to recompute a digest.
 `implicitObjects` has keys `allowedDerivedKinds`, `forbiddenOwnedKinds`, and
 `rules`. It permits only:
 
-1. one composite row type and its array type for each table, each with an exact
-   `objectAcls` owner/raw-state/effective-atom record;
-2. one array type for each domain, also with an exact `objectAcls` record;
+1. one composite row type and its array type for each table: the composite has
+   explicit owner-only ACL state, while its array has raw-null ACL state and
+   owner-only effective atoms inherited from that exact composite;
+2. one array type for each explicit owner-only domain, likewise raw-null with
+   effective atoms inherited from that exact domain;
 3. each exact constraint-backed index already represented in `indexes`;
 4. TOAST relations/indexes linked to an enumerated eligible table, represented
    by that table's `toastState` rather than volatile names; and
 5. the normalized generated trigger records for enumerated FKs.
+
+PostgreSQL 16.15 rejects direct array-type ACL changes. Observation therefore
+requires raw array `typacl` null and resolves effective atoms through the exact
+element type; applying `acldefault` directly to an array is a comparison error.
 
 Every other owner-created table, view, materialized view, sequence, partition,
 foreign table, function, procedure, aggregate, operator, cast, collation,
@@ -421,7 +433,7 @@ This decision is implemented only when:
    key/FK/index/trigger/expression/ACL fact without code-supplied defaults;
 4. OID-renumbering and raw ACL reorder mutants normalize, while unresolved OID,
    PUBLIC/role, null/empty/default ACL, grantor/grantee/grantable, ordered tuple,
-   expression, RLS, and policy mutants fail;
+   expression, RLS, policy, and immediate/deferred trigger type/internal/function/deferral mutants fail;
 5. the query topology and 27 aliases match an independent literal and the
    private row decoder, while weakened joins, scope predicates, casts, order,
    or cardinality fail;
