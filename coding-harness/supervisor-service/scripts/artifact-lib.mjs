@@ -24,6 +24,7 @@ export const SOURCE_INPUT_PATHS = Object.freeze([
   'src/registration-protocol-v2.ts',
 ]);
 export const BUILD_INPUT_PATHS = Object.freeze([
+  'migrations/catalog-contract-v1.json',
   'package.json',
   'tsconfig.json',
   'vitest.config.ts',
@@ -34,6 +35,14 @@ export const BUILD_INPUT_PATHS = Object.freeze([
   'src/registration-ports-v1.ts',
   'src/registration-postgresql-authority-configuration-v1.ts',
   'src/registration-postgresql-canonical-v1.ts',
+  'src/registration-postgresql-catalogue-contract-v1.ts',
+  'src/registration-postgresql-catalogue-core-v1.ts',
+  'src/registration-postgresql-catalogue-query-v1.ts',
+  'src/registration-postgresql-catalogue-scanner-v1.ts',
+  'src/registration-postgresql-catalogue-security-v1.ts',
+  'src/registration-postgresql-catalogue-shape-v1.ts',
+  'src/registration-postgresql-catalogue-templates-v1.ts',
+  'src/registration-postgresql-catalogue-values-v1.ts',
   'src/registration-postgresql-locked-snapshots-v1.ts',
   'src/registration-postgresql-materializer-contract-v1.ts',
   'src/registration-postgresql-materializer-rows-v1.ts',

@@ -21,7 +21,7 @@ import {
 } from './registration-protocol-v2.js';
 
 const EVENT_ENVELOPE_MAX_BYTES_V2 = 65_536;
-const RAW_ROW_KEYS = Object.freeze([
+export const POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1 = Object.freeze([
   'result_project_authority_digest',
   'result_semantic_request_digest',
   'result_run_id',
@@ -51,7 +51,7 @@ const RAW_ROW_KEYS = Object.freeze([
   'original_event_serialized_envelope_sha256',
 ] as const);
 
-type RawRowKey = typeof RAW_ROW_KEYS[number];
+type RawRowKey = typeof POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1[number];
 type SnapshotRow = Readonly<Record<RawRowKey, unknown>>;
 
 interface EventRefsV1 {
@@ -236,14 +236,14 @@ function snapshotRow(value: unknown): SnapshotRow {
     throw new TypeError('joined row must be a plain record');
   }
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  assertExactKeys(descriptors, RAW_ROW_KEYS, 'joined row');
-  for (const key of RAW_ROW_KEYS) {
+  assertExactKeys(descriptors, POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1, 'joined row');
+  for (const key of POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1) {
     const descriptor = descriptors[key];
     if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
       throw new TypeError('joined row fields must be enumerable data');
     }
   }
-  return Object.freeze(Object.fromEntries(RAW_ROW_KEYS.map((key) => {
+  return Object.freeze(Object.fromEntries(POSTGRES_EXACT_RESULT_RAW_ROW_KEYS_V1.map((key) => {
     const descriptor = descriptors[key]!;
     return [key, snapshotValue(descriptor.value)];
   }))) as SnapshotRow;

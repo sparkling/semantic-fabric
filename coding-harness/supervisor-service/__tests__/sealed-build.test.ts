@@ -24,8 +24,8 @@ function runScript(path: string, packageRoot = root) {
 function copySealedPackage(): string {
   const target = mkdtempSync(resolve(tmpdir(), 'sf-supervisor-seal-'));
   for (const path of [
-    '.service', 'dist', 'scripts', 'src', 'package.json', 'package-lock.json', 'tsconfig.json',
-    'vitest.config.ts',
+    '.service', 'dist', 'migrations', 'scripts', 'src', 'package.json', 'package-lock.json',
+    'tsconfig.json', 'vitest.config.ts',
   ]) {
     cpSync(resolve(root, path), resolve(target, path), { recursive: true });
   }
@@ -71,9 +71,18 @@ describe('sealed supervisor-service artifact', () => {
       'src/registration-protocol-v2.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     const privateBuildInputs = [
+      'migrations/catalog-contract-v1.json',
       'src/registration-ports-v1.ts',
       'src/registration-postgresql-authority-configuration-v1.ts',
       'src/registration-postgresql-canonical-v1.ts',
+      'src/registration-postgresql-catalogue-contract-v1.ts',
+      'src/registration-postgresql-catalogue-core-v1.ts',
+      'src/registration-postgresql-catalogue-query-v1.ts',
+      'src/registration-postgresql-catalogue-scanner-v1.ts',
+      'src/registration-postgresql-catalogue-security-v1.ts',
+      'src/registration-postgresql-catalogue-shape-v1.ts',
+      'src/registration-postgresql-catalogue-templates-v1.ts',
+      'src/registration-postgresql-catalogue-values-v1.ts',
       'src/registration-postgresql-locked-snapshots-v1.ts',
       'src/registration-postgresql-materializer-contract-v1.ts',
       'src/registration-postgresql-materializer-rows-v1.ts',
@@ -179,8 +188,17 @@ describe('sealed supervisor-service artifact', () => {
       }
       writeFileSync(fixturePackage, packageBytes);
       for (const path of [
+        'migrations/catalog-contract-v1.json',
         'src/registration-postgresql-authority-configuration-v1.ts',
         'src/registration-postgresql-canonical-v1.ts',
+        'src/registration-postgresql-catalogue-contract-v1.ts',
+        'src/registration-postgresql-catalogue-core-v1.ts',
+        'src/registration-postgresql-catalogue-query-v1.ts',
+        'src/registration-postgresql-catalogue-scanner-v1.ts',
+        'src/registration-postgresql-catalogue-security-v1.ts',
+        'src/registration-postgresql-catalogue-shape-v1.ts',
+        'src/registration-postgresql-catalogue-templates-v1.ts',
+        'src/registration-postgresql-catalogue-values-v1.ts',
         'src/registration-postgresql-locked-snapshots-v1.ts',
         'src/registration-postgresql-materializer-contract-v1.ts',
         'src/registration-postgresql-materializer-rows-v1.ts',
