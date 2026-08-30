@@ -24,6 +24,9 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-supervisor-log-proof-kat-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-log-proof-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-merkle-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-postgresql-materializer-fixtures-v1.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-postgresql-materializer-input-boundary-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-postgresql-materializer-interop-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-run-event-kat-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-run-event-transition-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-run-event-v2-fixtures.ts',
@@ -118,4 +121,5 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
   'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
   'docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md',
+  'docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md',
 ]);

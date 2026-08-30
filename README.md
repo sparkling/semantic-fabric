@@ -195,7 +195,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 742 tests across 103 files; two
+- The versioned engineering harness passes 889 tests across 121 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -256,13 +256,12 @@ tests reject links, extras, replacement, worktree drift and output injection.
 These local views prove no external witness, rollback resistance, provenance,
 host admission, build, receipt, baseline, or measurement.
 
-Commits `99fa2e1` and `92f5376` add and freeze the non-authorizing signed registration seam; `7139b05`, `1d33638`, `3ee0ed6`, and `d54518f` add RFC 9162 proof verification, shared Ed25519 verification, signed checkpoints, and registration inclusion/consistency replay.
-The leaf is reconstructed from the reverified canonical registration envelope; the prior checkpoint is canonical and independently digest-pinned, while only the new checkpoint is signature-verified.
-Sequence/tree bounds, exact proof consumption, key/log/supervisor/epoch substitution, async key/proof mutation, zero-trap proxy rejection, and conflicting signed extensions are covered.
-Evidence distinguishes unsigned prior from signed new checkpoint and keeps fork, rollback, persistence, global order, admission, lease, attempt, and capture authority unproved or false.
-The independent KAT pins leaf, tree, proof, checkpoint, signature, and validation bytes (`eca1b7e1…1ee6`).
-The hardened build and all 108 files pass (760 tests, two expected skips), with no remaining P0/P1 from independent adversarial review.
-There is no production signer, transport, durable log/service, independent administration, lease/attempt/state/capture authority, or real supervisor event.
+Commits `99fa2e1` and `92f5376` freeze the non-authorizing signed registration seam; `7139b05`, `1d33638`, `3ee0ed6`, and `d54518f` add RFC 9162 proof verification, shared Ed25519 verification, signed checkpoints, and registration inclusion/consistency replay.
+The leaf is reconstructed from the reverified canonical envelope; the prior checkpoint is independently digest-pinned, while only the new checkpoint is signature-verified.
+The protected private PostgreSQL materializer exact-key checks roots before traversal, snapshots bounded trap-free graphs, exposes a frozen one-use signing surface, verifies the pinned Ed25519 SPKI/signature, and emits every exact DB-shaped 201/409 row for genesis/non-genesis and adjacent/interleaved histories.
+Its KATs cover exact envelopes, results, state heads, public leaves, expected-old fences, signature/key substitution, authority/configuration joins, status-specific run bindings, aggregate bytes, depth/nodes, and fail-fast container width.
+The hardened build passes all 121 files (889 tests, two expected skips) on Node 20 and 24; the private artifact is byte-identical (`0a5831bf…b9a5`), the public bundle remains `90e21e7c…f7c3a`, scoped deep security is clean, and three independent final Codex reviews report no P0/P1.
+ADR-0042/0043/0044 remain proposed; migrations, the live adapter, independent administration/witnessing, deployed signer, transport, lease/fence/outbox delivery, runner, attempt, capture authority, and real supervisor events remain absent.
 
 Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
 reproducibility. Final two-builder agreement must pre-register distinct trust
@@ -325,7 +324,7 @@ RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
 inventory-authoritative execution runners (`a3efb32`), plus the sealed mapping
 receipt lineage (`33e202b`, `81caec2`, `a84aa05`) and the non-authorizing
-supervisor registration, checkpoint, and log-proof lineage (`99fa2e1`, `92f5376`, `7139b05`, `3ee0ed6`, `d54518f`). The evidence matrix now contains
+supervisor registration, checkpoint, and log-proof lineage (`99fa2e1`, `92f5376`, `7139b05`, `3ee0ed6`, `d54518f`). The protected private PostgreSQL materializer now extends that lineage without persistence authority. The evidence matrix now contains
 74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
 v3 receipts bind immutable captured inputs to typed SQLite and required-live
 PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
@@ -336,13 +335,13 @@ The latest generic MetaHarness diagnostic is 75 (fit 75, compile 100, task
 coverage 65, tool safety 90, memory usefulness 46); it is structurally
 misaligned with this monorepo and is not the ADR-0037 acceptance score. Darwin's
 security diagnostic passed 9/12 checks but failed statistical gates (fitness
-0.6585, TPR 0.5, FPR 0.666667). Direct native Claude and Codex reviews passed;
-the combined native coordinator hit the host's `E2BIG` launch boundary, so it is
-not represented as a pass. Product tests remain authoritative and the flywheel
-remains off.
+0.6585, TPR 0.5, FPR 0.666667). Native Claude found one exact-row test gap;
+the repaired exact KATs and three independent Codex lanes now pass, without a
+second Claude call. The combined coordinator's historical `E2BIG` launch is not
+a pass. Product tests remain authoritative and the flywheel remains off.
 
 The current M0 tranche adds query/Protocol regression baselines, the scoped `sf-cli`
-dependency receipt, performance machinery, a non-authorizing run claim and signed registration/checkpoint/Merkle verifier, and a strict
+dependency receipt, performance machinery, a non-authorizing run claim, signed registration/checkpoint/Merkle verifier, protected private PostgreSQL materializer, and a strict
 runtime-linkage parser plus private Linux observation. After unauthorized discovery, the
 prepared boundary holds sealed source bytes, pins and `execveat`s an expected bubblewrap
 inode, and requires exact `ld.so --list` equality inside a fresh read-only tmpfs. Commit
@@ -444,7 +443,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, a same-UID claim, claim-rooted source, signed registration/checkpoint verification, RFC 9162 inclusion/consistency replay, and independent wire KATs exist. These prove exact key/message/claim/checkpoint/proof binding but not append-only persistence or split-view resistance. There is still no independently administered log/service, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next is external append-only registration/lease authority plus controlled-runner admission |
+| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, a negative-only host gate, same-UID claim/rooted source, signed registration/checkpoint verification, RFC 9162 proof replay, and a sealed exact-row PostgreSQL materializer exist. These prove deterministic nonauthorizing structure, not persistence, append-only history, split-view resistance, or database authority. There is still no exact catalogue JSON, migration/manifest, driver-free runner/verifier, live adapter, exact-pinned PostgreSQL 16.15 required-live evidence, independently administered log/service, positive runner admission, controlled profile, lease/build/attempt/capture authority, two-builder-agreed artifact, baseline, receipt, or measured number; this host is ineligible. Next are the catalogue, migration and verifier chain, then the dormant adapter and PostgreSQL 16.15 evidence before external append-only registration/lease authority and controlled-runner admission |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
@@ -464,12 +463,11 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 39 records: 33 accepted, five
+The canonical [ADR corpus](docs/adr/) contains 41 records: 33 accepted, seven
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
-[ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), and
-[ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
-[ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), and
-[ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md)),
+[ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), [ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
+[ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md),
+[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), and [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md)),
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -481,7 +479,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative

@@ -413,6 +413,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
     'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
     'docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md',
+    'docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md',
     'docs/capability-matrix.json',
     'docs/capability-matrix.md',
     'docs/plans/open-issues-ruflo-metaharness-implementation-plan.md',

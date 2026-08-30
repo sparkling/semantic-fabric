@@ -16,11 +16,17 @@
     "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "72ff73955be38e01da839550ac835313c8350040a5318a0476195feb5c540310",
+    "scripts/artifact-lib.mjs": "250077be3799847a5099a888295ed7c86dc5d742f176dc40404480956deed0b8",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
     "src/registration-ports-v1.ts": "6524cab16a519829bbebfd6906184c9ab5606196c0d5ce45516d1596f1d14abc",
+    "src/registration-postgresql-authority-configuration-v1.ts": "f8776eb7e1e7dcce928da7d58a1fcc801c1e633e236227f8a0612a3e5b62cf31",
+    "src/registration-postgresql-canonical-v1.ts": "c8bfcc45fd52196563fe097361a0ae5e96c520dcd34de0a084d0486e63427669",
+    "src/registration-postgresql-locked-snapshots-v1.ts": "2aed59934d8b7567ca71fb20a52d31c3e6cea8ee285b11c0ebccbbe1c3d4af45",
+    "src/registration-postgresql-materializer-contract-v1.ts": "8208047885052cc3b21949ef3a436283cbb31bed34187dde4261601ce0bdb3d1",
+    "src/registration-postgresql-materializer-rows-v1.ts": "b6cc68f31cbe2fc4e7eb27694ed85a804dcc168d055b7dbd7439306d8099f203",
+    "src/registration-postgresql-materializer-v1.ts": "8b627ff4129aec7715f43cac430505762cc794660321da2503e1beacd5e72314",
     "src/registration-postgresql-row-codecs-v1.ts": "361499900d762d7a0581f0a54dd92dfcf540d0391f62a58fa7bd2249a88a0d19",
     "src/registration-transaction-admission-v1.ts": "a210f4b78cdad053592a74ac7eded63d2385a81a25140c0dcfaedc945cdb956f",
     "src/registration-transaction-boundary-v1.ts": "447d663449c9d198668992571ccdcf53a981a73947d57edbaaab5f4cc21cba60",
@@ -36,5 +42,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "3d901637561184621e1a91d625dfde9b22b0eaaf03fc9e5406415958d758a8a3"
+  "artifactDigest": "0a5831bf229e0ccead956fb6df46c5a700c7f78c0a32268b9e81c76b198eb9a5"
 }

@@ -17,10 +17,10 @@ does not activate the supervisor, accept ADR-0042/0043, provision credentials,
 or grant database, signer, network, publication, witness, runner, capture,
 import, promotion, or release authority.
 
-The migration set, catalogue verifier, materializer, and adapter remain sealed
-private build inputs outside the public bundle. Production deployment identity,
-TLS, credentials, pools, HSM reconciliation, receipt ingestion, outbox delivery,
-and activation remain later decisions.
+The exact-row prepare/finalize materializer is implemented and protected as a
+private build input outside the public bundle. Migrations, catalogue verifier,
+adapter, deployment identity, TLS, credentials, pools, HSM reconciliation,
+receipt ingestion, outbox delivery, and activation remain later work.
 
 ## Context
 
@@ -55,13 +55,12 @@ Implementation order is fixed:
 6. dormant transaction adapter; and
 7. exact-pinned PostgreSQL 16.15 required-live evidence.
 
-Prepare accepts only a decision candidate plus locked configuration, authority,
-receipt, and run snapshots. It reconstructs the closed event and exact signing
-payload under
-`semantic-fabric/programme-capture/supervisor-run-event-signing-v2`. Finalize
-accepts only that prepared value and a 64-byte Ed25519 signature, verifies it
-against the locked 44-byte canonical SPKI DER and fingerprint, and returns all
-rows. No caller can inject an envelope, response, resulting state head, public
+Prepare exact-key checks both roots before traversal and snapshots a decision candidate plus the full locked configuration, authority-state, predecessor-receipt, and keyed absent/full run rows before its first await.
+Each graph rejects proxies, accessors, cycles, and excess beyond 32 levels, 8,192 nodes, or 1,048,576 cumulative byte-leaf bytes; wide arrays fail before key enumeration and wide records before descriptor expansion.
+It closes every deterministic equality before constructing the exact signing payload under `semantic-fabric/programme-capture/supervisor-run-event-signing-v2`, then returns a
+module-private WeakMap-backed one-use identity plus an independent signing-byte copy.
+Finalize consumes that identity before parsing the exact 64-byte signature, rederives the private snapshots, verifies the locked 44-byte canonical SPKI/fingerprint and signature,
+then returns all rows. No caller can inject an envelope, response, resulting state head, public
 leaf, database value, clock, random value, retry marker, or project-selected key;
 the run-genesis prior head remains a caller assertion carried as unverified.
 
@@ -76,9 +75,10 @@ bytes for:
 }
 ```
 
-It preserves the locked authority-configuration head, advances only the
-event-chain last/next sequence and last-event fields, creates the exact
-status-specific result, and creates the privacy-minimized ADR-0042 public leaf.
+It preserves the locked authority-configuration head, advances only the event-chain
+last/next sequence and last-event fields, creates the exact status-specific result and
+privacy-minimized ADR-0042 public leaf, and returns independent DB-shaped expected-old
+snapshots: all nine authority-state fields, all eleven 409 run fields, or the keyed absent run.
 The stored public commitment digest is the raw SHA-256 of those exact leaf
 bytes. All byte hashes are raw SHA-256; no timestamp, generated identifier,
 sequence object, or database-derived default enters a semantic row.

@@ -27,11 +27,14 @@ export const PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/__tests__/programme-capture-supervisor-service-client-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-service-codecs-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-service-interop-v2.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-postgresql-materializer-input-boundary-v1.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-postgresql-materializer-interop-v1.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-transport-v2.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
 ] as const);
 
 export const PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1 = Object.freeze([
+  'coding-harness/__tests__/programme-capture-supervisor-postgresql-materializer-fixtures-v1.ts',
   'coding-harness/__tests__/programme-capture-supervisor-run-event-v2-fixtures.ts',
 ] as const);
 
@@ -105,6 +108,12 @@ export const PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1 = O
   'coding-harness/supervisor-service/src/registration-decision-v1.ts',
   'coding-harness/supervisor-service/src/registration-event-envelope-v2.ts',
   'coding-harness/supervisor-service/src/registration-ports-v1.ts',
+  'coding-harness/supervisor-service/src/registration-postgresql-authority-configuration-v1.ts',
+  'coding-harness/supervisor-service/src/registration-postgresql-canonical-v1.ts',
+  'coding-harness/supervisor-service/src/registration-postgresql-locked-snapshots-v1.ts',
+  'coding-harness/supervisor-service/src/registration-postgresql-materializer-contract-v1.ts',
+  'coding-harness/supervisor-service/src/registration-postgresql-materializer-rows-v1.ts',
+  'coding-harness/supervisor-service/src/registration-postgresql-materializer-v1.ts',
   'coding-harness/supervisor-service/src/registration-postgresql-row-codecs-v1.ts',
   'coding-harness/supervisor-service/src/registration-protocol-v2.ts',
   'coding-harness/supervisor-service/src/registration-transaction-admission-v1.ts',

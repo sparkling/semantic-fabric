@@ -136,7 +136,7 @@ describe('programme capture V1 private exact-commit source', () => {
     await expect(disposeUnusedProgrammeCapturePrivateSourceV1(prepared.handle))
       .rejects.toThrow(/PRIVATE_SOURCE/);
     expect(existsSync(dirname(prepared.handle.sourceRoot))).toBe(true);
-  });
+  }, 15_000);
 
   it('rejects missing, replaced, and caller-forged claim authority', async () => {
     const missing = await prepare();

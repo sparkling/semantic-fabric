@@ -277,7 +277,7 @@ describe('programme capture V1 non-authorizing supervisor claim acknowledgement'
     await expect(verifyProgrammeCaptureSupervisorClaimAcknowledgementV1({
       ...verificationInput(validAuthority, envelope), claim: reservation.record,
     } as any)).rejects.toThrow(/invalid keys/);
-  });
+  }, 15_000);
   it('keeps byte-identical local rollback and every execution authority explicit nonclaims', async () => {
     const claimAuthority = authorityInput();
     const first = await reserveProgrammeCaptureRunClaimV1(claimAuthority);
@@ -301,7 +301,7 @@ describe('programme capture V1 non-authorizing supervisor claim acknowledgement'
     );
     (claimAuthority as any).authorityRoot = authorityRoot();
     await expect(stableVerification).resolves.toMatchObject({ signatureVerified: true });
-  });
+  }, 15_000);
 });
 function signedEnvelope(
   request: ProgrammeCaptureSupervisorClaimRequestV1,

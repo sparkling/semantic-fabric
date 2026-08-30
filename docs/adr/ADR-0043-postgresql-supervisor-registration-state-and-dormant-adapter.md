@@ -17,12 +17,12 @@ ADR-0042, but does not accept that ADR, enable the supervisor, or grant database
 signer, network, publication, witness, runner, capture, import, promotion, or
 release authority.
 
-The first implementation remains sealed, build-only, and absent from the public
-supervisor bundle. The existing service manifest and readiness result remain
-nonoperational with every capability flag false. A driver may be present only as
-an exact-pinned development dependency for required-live tests. The runtime
-dependency, transport composition root, credentials, TLS, pool, signer, and
-deployment belong to a later activation decision and artifact profile.
+The retry/coordinator, row-codec, and prepare/finalize materializer slices are
+implemented as sealed, build-only inputs absent from the public supervisor
+bundle. The manifest and readiness result remain nonoperational with every
+capability flag false. Migrations, the live adapter, driver, transport root,
+credentials, TLS, pool, signer, and deployment remain later activation work;
+development-only required-live tests may use an exact-pinned driver.
 
 ## Context
 
@@ -100,9 +100,15 @@ The adapter depends on narrow injected capabilities:
 - a signer which receives exact signing bytes and returns signature bytes only.
 
 Prepare and finalize are sealed local functions, not injectable capabilities.
-They independently revalidate the candidate and locked snapshots before and
-after signing. Finalize verifies the returned Ed25519 signature against the
-pinned public key before constructing any row value.
+Prepare exact-key checks both roots before traversal, snapshots all deterministic
+inputs before its first await, and bounds each closed graph to 32 levels, 8,192
+nodes, and 1,048,576 cumulative byte-leaf bytes. Wide arrays fail before key
+enumeration; wide records fail before descriptor expansion; proxies, accessors,
+cycles, and excess fail closed. It returns a
+module-private WeakMap-backed, one-use identity with only an independent signing-
+byte copy exposed. Finalize consumes that identity before signature parsing,
+rederives the private snapshots, and verifies the returned Ed25519 signature
+against the pinned public key before constructing any row value.
 
 No PostgreSQL driver type enters a service interface. Adapter source and
 migrations are sealed artifact build inputs but are not source inputs of
@@ -254,11 +260,12 @@ sent is unknown: destroy the client, never retry, and release no response bytes.
 
 The materialization boundary has three operations:
 
-- sealed local prepare(candidate, locked snapshots) performs closed-schema equality checks
-  and constructs exact signing bytes;
-- injected sign(bytes) returns signature bytes only; and
-- sealed local finalize(prepared, signature) verifies the signature and constructs the exact
-  envelope, response, state head, public leaf, and database row values.
+- sealed local prepare(candidate, locked snapshots) snapshots before its first await,
+  closes every deterministic equality, and returns a one-use identity plus copied signing bytes;
+- injected sign(bytes) receives one fresh byte copy and returns signature bytes only; and
+- sealed local finalize(prepared, signature) consumes the identity before parsing a copied
+  signature, rederives and verifies it, then constructs the exact envelope, response,
+  state head, public leaf, database rows, and full DB-shaped expected-old mutations.
 
 The active configuration stores exact canonical configuration bytes and the
 exact Ed25519 SubjectPublicKeyInfo DER bytes. The configuration bytes must parse

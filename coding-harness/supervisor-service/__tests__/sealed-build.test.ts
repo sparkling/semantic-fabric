@@ -72,6 +72,12 @@ describe('sealed supervisor-service artifact', () => {
     });
     const privateBuildInputs = [
       'src/registration-ports-v1.ts',
+      'src/registration-postgresql-authority-configuration-v1.ts',
+      'src/registration-postgresql-canonical-v1.ts',
+      'src/registration-postgresql-locked-snapshots-v1.ts',
+      'src/registration-postgresql-materializer-contract-v1.ts',
+      'src/registration-postgresql-materializer-rows-v1.ts',
+      'src/registration-postgresql-materializer-v1.ts',
       'src/registration-postgresql-row-codecs-v1.ts',
       'src/registration-transaction-admission-v1.ts',
       'src/registration-transaction-boundary-v1.ts',
@@ -105,6 +111,8 @@ describe('sealed supervisor-service artifact', () => {
     ]);
     expect(built).not.toHaveProperty('executeSupervisorRegistrationTransactionV1');
     expect(built).not.toHaveProperty('recoverExactSupervisorRegistrationV1');
+    expect(built).not.toHaveProperty('preparePostgresRegistrationMaterializationV1');
+    expect(built).not.toHaveProperty('finalizePostgresRegistrationMaterializationV1');
     expect(built.supervisorServiceReadinessV1()).toMatchObject({
       operational: false,
       authority: 'none',
@@ -171,6 +179,12 @@ describe('sealed supervisor-service artifact', () => {
       }
       writeFileSync(fixturePackage, packageBytes);
       for (const path of [
+        'src/registration-postgresql-authority-configuration-v1.ts',
+        'src/registration-postgresql-canonical-v1.ts',
+        'src/registration-postgresql-locked-snapshots-v1.ts',
+        'src/registration-postgresql-materializer-contract-v1.ts',
+        'src/registration-postgresql-materializer-rows-v1.ts',
+        'src/registration-postgresql-materializer-v1.ts',
         'src/registration-transaction-admission-v1.ts',
         'src/registration-transaction-checkout-v1.ts',
         'src/registration-transaction-contract-v1.ts',
