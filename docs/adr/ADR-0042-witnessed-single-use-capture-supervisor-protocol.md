@@ -26,12 +26,12 @@ receiving those bytes. Predicting that index would create a circular or
 crash-sensitive contract. V2 separates the service's canonical decimal event
 sequence from the transparency log's canonical decimal leaf index.
 
-The committed provider-free V2 configuration, adjacency, signed-event, complete-
-history, registration-request, event-builder, public-commitment, non-semantic-
-transport-response, structural-result, and supplied-reference client modules
-implement bounded checks only.
-They remain nonauthorizing. This additive evidence/control-plane decision does
-not rewrite product goals, runtime architecture, or historical harness meanings.
+The committed provider-free V2 configuration, adjacency, event, history,
+registration, commitment, transport, result and supplied-reference client
+modules, plus the private supervisor package's codecs and duplicate-first read/
+decision kernel, implement bounded checks only. The sealed service manifest has
+no writer, signer, network or database capability. All remain nonauthorizing;
+this decision does not rewrite product goals or historical harness meanings.
 
 ## Context and threat model
 
@@ -106,10 +106,10 @@ there is no grace window or stale-attestation fallback. A replacement attestatio
 alone can never reset or transfer witness-initialization state.
 
 Controller verifiers stay under `coding-harness/src/`, with their existing
-read/hash/verification capability closure. A writer/signer/network personality
-belongs in a private, independently deployable
-`coding-harness/supervisor-service/` package with its own manifest and tests. A
-runner agent belongs in `coding-harness/runner-agent/` under a third principal.
+read/hash/verification capability closure. The private, independently deployable
+`coding-harness/supervisor-service/` package has its own manifest and tests, but
+its committed kernel is nonoperational; its future writer/signer/network adapter
+must remain there. A runner agent belongs under a third principal.
 
 ### 2. Use one linearizable semantic state transaction
 
@@ -132,8 +132,8 @@ unless their signed sets intersect and every intersection is locked. Signer invo
 A post-sign/pre-commit orphan is nonauthorizing and must never be returned, published, or recovered as a result. Only the database transaction commits the exact envelope/result bytes, raw hashes, status, content type, outbox, run, resources, and counters together.
 Signer placement is adapter-specific; crash injection covers every post-sign/pre-commit boundary. Best-effort deduplication or split run/event/resource updates are nonconforming.
 
-After transport authentication maps the caller to one project, an exact project-scoped duplicate may recover exact committed response bytes without appending another event, even after the active authority head advances.
-On a lookup miss, the service verifies the current authority head and authenticated principal before comparing run state or classifying changed replay. The first changed registration terminal-spends through `registration-changed-replay-v2`.
+After transport authentication maps the caller to one project, an exact project-scoped duplicate may recover exact committed response bytes without appending another event, even after the active authority head advances or reviewed policy rotates the admitted principal while preserving that project mapping. Recovery validates the stored project, current and original request/event/global provenance, canonical request bytes, raw request/response hashes, and canonical status-specific request-bound event envelope; original event digest/global position and changed-replay prior state come from one immutable joined event/run row, never independently synthesized. It then returns the original status, content type and bytes before any current-head, receipt or run read; it never rebuilds or substitutes a response and does not thereby claim signature verification.
+On a lookup miss, the service verifies the current authority head and authenticated principal, reads the required predecessor receipt, and then reads run state. If the receipt is pending, the run read is consistency-only: it cannot classify or authorize a mutation; an absent or distinct valid state yields fixed `503`, while a missing exact-result row, malformed state or read ambiguity yields fixed `500`. The locked active head identifies the required global predecessor: authority genesis iff the next global sequence is one, otherwise the immediately prior semantic-event receipt; run state binds the last run event and its global position so a rolled-back or inconsistent head fails closed. The first changed registration terminal-spends through `registration-changed-replay-v2`.
 Its evidence digest binds the original request/event digests, changed canonical request digest, authenticated project identity, and active authority head. A later distinct changed request against that closed run receives an eventless closed-run conflict and no semantic result; it never reuses the first terminal result.
 No mutating request is accepted or classified while its predecessor lacks the required receipt. Later operation endpoints stay disabled until their changed-replay terminal outcomes exist. Mutations are never transport-retried after ambiguity; request digests are not bearer credentials.
 
@@ -147,10 +147,9 @@ directives respectively require a new authority-bound request, a new such
 request after readiness, a new run, or exact-result lookup only. These canonical
 unsigned responses contain only protocol/response/outcome/status/content-type/
 directive fields, disclose no identity or digest, carry no `Retry-After`, and
-must never be parsed as a signed semantic result. Mutating clients disable
+must never be parsed as a signed semantic result. Adapter exceptions and malformed, multiple, inconsistent or indeterminate reads use the same internal indeterminate path and fixed `500`; only an explicit valid receipt-pending state uses `503`. A run that records the submitted request digest while its exact committed response row is missing is also indeterminate, never changed replay or a generic closed conflict. Mutating clients disable
 automatic transport retries.
-Pending is emitted only after project mapping and exact-recovery miss, never as
-a namespace oracle. `registration-authenticated-denial-v2` remains a distinct,
+Pending is emitted only after authenticated project mapping, exact-recovery miss, current-head validation and one consistency-only run read, never as a namespace oracle. `registration-authenticated-denial-v2` remains a distinct,
 signed semantic terminal after a committed registration predecessor.
 
 ### 3. Publish committed events without conflating order domains

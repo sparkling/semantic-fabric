@@ -16,16 +16,22 @@ export const SERVICE_KIND = 'programme-capture-supervisor-service-v1';
 export const SERVICE_AUTHORITY = 'nonoperational-proposed-adr-0042';
 export const BUNDLE_PATH = 'dist/supervisor-service.mjs';
 export const SOURCE_INPUT_PATHS = Object.freeze([
+  'src/closed-json.ts',
   'src/index.ts',
   'src/readiness.ts',
+  'src/registration-decision-v1.ts',
+  'src/registration-event-envelope-v2.ts',
+  'src/registration-protocol-v2.ts',
 ]);
 export const BUILD_INPUT_PATHS = Object.freeze([
   'package.json',
   'tsconfig.json',
+  'vitest.config.ts',
   'scripts/artifact-lib.mjs',
   'scripts/build.mjs',
   'scripts/deny-publish.mjs',
   'scripts/verify-artifact.mjs',
+  'src/registration-ports-v1.ts',
 ]);
 const MAX_SEALED_FILE_BYTES = 16 * 1024 * 1024;
 

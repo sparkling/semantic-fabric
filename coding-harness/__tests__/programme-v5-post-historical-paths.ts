@@ -31,6 +31,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-supervisor-run-event-verifier-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-service-client-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-service-codecs-v2.test.ts',
+  'coding-harness/__tests__/programme-capture-supervisor-service-interop-v2.test.ts',
   'coding-harness/__tests__/programme-capture-supervisor-transport-v2.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',

@@ -5,23 +5,29 @@
   "serviceManifestDigest": "65364989858ff3b2151e97e0a58cd689f4aa7d6e30acf4a1454646d7eec654f5",
   "packageLockDigest": "13bc52fd364fa55f0230715a719179fa554a344d537066cf504c8eb09ae516b6",
   "sourceInputs": {
-    "src/index.ts": "60f693ff482d8e6595e29d7a2232f9ff942b9b3865265ffc01f5e8acde5f785f",
-    "src/readiness.ts": "a370c078d60a56394cbf11d1bdcae6b36f71e2ac21220d3a480c8c8021a861d6"
+    "src/closed-json.ts": "bc65ae11b5fc19e5247db53f53e680b1d5358394188761ab4559915135f316df",
+    "src/index.ts": "5209206c6f346687f800ec8e500e5c2564bcea7ed91e29d0dade1adb81407e2b",
+    "src/readiness.ts": "a370c078d60a56394cbf11d1bdcae6b36f71e2ac21220d3a480c8c8021a861d6",
+    "src/registration-decision-v1.ts": "25764c145643d3ac086cc7d4eded9c930cd7d9166cfa944f01f30c5ad3638a73",
+    "src/registration-event-envelope-v2.ts": "df6636ba5b3ba4703a53902692cb80bda580be272e862c8fe1979164fe79668f",
+    "src/registration-protocol-v2.ts": "85e93b74ed18be47e3696c64eedf5b0854a2b33a12f8ee7354e7a33c412da2cd"
   },
   "buildInputs": {
     "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
-    "scripts/artifact-lib.mjs": "cc2acd1f854bf1141e13b3a75c19b904d47b337bff3ef3a75e30f241921c1170",
+    "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
+    "scripts/artifact-lib.mjs": "4ebd45943f938e06b489626853d3449ee17c653977112c2b1d89e912f01e2477",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
-    "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06"
+    "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
+    "src/registration-ports-v1.ts": "6524cab16a519829bbebfd6906184c9ab5606196c0d5ce45516d1596f1d14abc"
   },
   "bundle": {
     "path": "dist/supervisor-service.mjs",
-    "bytes": 534,
-    "sha256": "24954e51d51d2adf9693545165d5f053b3e97d67e37172d478711e08e1054b0e"
+    "bytes": 48632,
+    "sha256": "3b028cd8928457eaabb6b337084f64e4fb79ebef921d8423d0a8b72ea0e3b690"
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "cd5a6282b89fe0af8141330a4f5c97171913e14100236b73318c9cdeb6065abf"
+  "artifactDigest": "e3abc93d7c3dc730b3a5663526d657c31c772394243ed54fbd2306147a908b31"
 }

@@ -25,6 +25,7 @@ function copySealedPackage(): string {
   const target = mkdtempSync(resolve(tmpdir(), 'sf-supervisor-seal-'));
   for (const path of [
     '.service', 'dist', 'scripts', 'src', 'package.json', 'package-lock.json', 'tsconfig.json',
+    'vitest.config.ts',
   ]) {
     cpSync(resolve(root, path), resolve(target, path), { recursive: true });
   }
@@ -44,6 +45,7 @@ describe('sealed supervisor-service artifact', () => {
       authority: string;
       bundle: { path: string; bytes: number; sha256: string };
       sourceInputs: Record<string, string>;
+      buildInputs: Record<string, string>;
       externalImports: string[];
       runtimePackages: string[];
       artifactDigest: string;
@@ -59,9 +61,16 @@ describe('sealed supervisor-service artifact', () => {
       sha256: createHash('sha256').update(bundle).digest('hex'),
     });
     expect(artifact.sourceInputs).toEqual({
+      'src/closed-json.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
       'src/index.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
       'src/readiness.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
+      'src/registration-decision-v1.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
+      'src/registration-event-envelope-v2.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
+      'src/registration-protocol-v2.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
     });
+    expect(artifact.buildInputs['src/registration-ports-v1.ts'])
+      .toMatch(/^[a-f0-9]{64}$/);
+    expect(artifact.buildInputs['vitest.config.ts']).toMatch(/^[a-f0-9]{64}$/);
     expect(artifact.externalImports).toEqual([]);
     expect(artifact.runtimePackages).toEqual([]);
     expect(artifact.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
