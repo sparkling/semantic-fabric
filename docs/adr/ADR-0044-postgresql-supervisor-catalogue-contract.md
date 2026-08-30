@@ -17,10 +17,10 @@ does not activate the supervisor, accept ADR-0042/0043, provision credentials,
 or grant database, signer, network, publication, witness, runner, capture,
 import, promotion, or release authority.
 
-The exact-row prepare/finalize materializer is implemented and protected as a
-private build input outside the public bundle. Migrations, catalogue verifier,
-adapter, deployment identity, TLS, credentials, pools, HSM reconciliation,
-receipt ingestion, outbox delivery, and activation remain later work.
+The exact-row materializer, exact catalogue JSON, and bounded private catalogue
+parser/digest binder are implemented outside the public bundle. Migration
+SQL/manifest, driver-free runner, live catalogue/provisioning verifier, adapter,
+deployment identity, credentials, delivery, and activation remain later work.
 
 ## Context
 

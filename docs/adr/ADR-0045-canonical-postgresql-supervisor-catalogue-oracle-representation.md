@@ -18,10 +18,10 @@ accept ADR-0042 through ADR-0044, activate the supervisor, create SQL, provision
 a database or credential, contact PostgreSQL, or grant migration, readiness,
 network, signer, publication, repair, or release authority.
 
-The catalogue remains reviewed repository input. Model-assisted source edits
-are permitted, but no edit becomes authority before explicit independent
-review and commit. Observed state, fixtures, generators, verifiers, and
-unreviewed automation may never self-authorize, refresh, or replace it.
+The reviewed catalogue is committed at `28addbc` with exact SHA-256
+`e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69`;
+`c586973` adds its bounded parser, digest binder, KATs, and PostgreSQL 16.15
+deparse oracle. Observations and automation cannot refresh or self-authorize it.
 
 ## Context
 
