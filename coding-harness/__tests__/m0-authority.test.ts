@@ -11,6 +11,8 @@ import { PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 } from
   '../src/programme-capture-protected-paths-v1.js';
 import { PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1 } from
   '../src/programme-capture-protected-paths-v1.js';
+import { PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1 } from
+  '../src/programme-capture-protected-paths-v1.js';
 import { PROGRAMME_V5_POST_HISTORICAL_PATHS } from './programme-v5-post-historical-paths.js';
 
 const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,6 +64,7 @@ const M0_AUTHORITY_PATHS = [
   'coding-harness/src/programme-capture-supervisor-service-client-v2.ts',
   'coding-harness/src/programme-capture-supervisor-service-result-v2.ts',
   'coding-harness/src/programme-capture-supervisor-transport-response-v2.ts',
+  ...PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
   'crates/sf-bench/config/performance-scenarios-v1.tsv',
   'crates/sf-bench/src/bin/sf-performance-receipt.rs',
   'crates/sf-bench/src/driver.rs',
@@ -274,6 +277,43 @@ describe('M0 protected authority and CI contract', () => {
       { encoding: 'utf8' },
     );
     expect(tracked.status, tracked.stderr).toBe(0);
+  });
+
+  it('protects exactly the private service package without absorbing its runtime', () => {
+    const prefix = 'coding-harness/supervisor-service/';
+    const listed = spawnSync(
+      'git', ['-C', repository, 'ls-files', prefix], { encoding: 'utf8' },
+    );
+    expect(listed.status, listed.stderr).toBe(0);
+    const tracked = listed.stdout.split(/\r?\n/).filter(Boolean).sort();
+    const registry = [...PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1].sort();
+    expect(tracked).toEqual(registry);
+    expect(SECURE_HARNESS_CONFIG.requiredProtectedPaths)
+      .toEqual(expect.arrayContaining(registry));
+    expect(manifest.protectedPaths).toEqual(expect.arrayContaining(registry));
+
+    const build = JSON.parse(readFileSync(
+      resolve(harnessRoot, '.harness/controller-build.json'), 'utf8',
+    )) as { outputs: Record<string, string>; productionFiles: Record<string, string> };
+    expect([...Object.keys(build.outputs), ...Object.keys(build.productionFiles)])
+      .not.toEqual(expect.arrayContaining([expect.stringMatching(/^coding-harness\/supervisor-service\//)]));
+
+    const discovered = spawnSync(
+      resolve(harnessRoot, 'node_modules/.bin/vitest'), ['list', '--filesOnly'],
+      { cwd: harnessRoot, encoding: 'utf8' },
+    );
+    expect(discovered.status, discovered.stderr).toBe(0);
+    expect(discovered.stdout).not.toContain('supervisor-service/');
+
+    const workflow = readFileSync(resolve(repository, '.github/workflows/ci.yml'), 'utf8');
+    for (const command of [
+      'npm --prefix coding-harness/supervisor-service ci --ignore-scripts',
+      'npm --prefix coding-harness/supervisor-service run verify',
+      'git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json',
+    ]) {
+      expect(workflow.split(command)).toHaveLength(2);
+    }
+    expect(workflow.split('  supervisor-service:')).toHaveLength(2);
   });
 
   it('automatically protects every tracked capability and receipt authority', () => {

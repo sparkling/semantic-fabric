@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "serviceKind": "programme-capture-supervisor-service-v1",
+  "authority": "nonoperational-proposed-adr-0042",
+  "serviceManifestDigest": "65364989858ff3b2151e97e0a58cd689f4aa7d6e30acf4a1454646d7eec654f5",
+  "packageLockDigest": "13bc52fd364fa55f0230715a719179fa554a344d537066cf504c8eb09ae516b6",
+  "sourceInputs": {
+    "src/index.ts": "60f693ff482d8e6595e29d7a2232f9ff942b9b3865265ffc01f5e8acde5f785f",
+    "src/readiness.ts": "a370c078d60a56394cbf11d1bdcae6b36f71e2ac21220d3a480c8c8021a861d6"
+  },
+  "buildInputs": {
+    "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
+    "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
+    "scripts/artifact-lib.mjs": "cc2acd1f854bf1141e13b3a75c19b904d47b337bff3ef3a75e30f241921c1170",
+    "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
+    "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
+    "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06"
+  },
+  "bundle": {
+    "path": "dist/supervisor-service.mjs",
+    "bytes": 534,
+    "sha256": "24954e51d51d2adf9693545165d5f053b3e97d67e37172d478711e08e1054b0e"
+  },
+  "externalImports": [],
+  "runtimePackages": [],
+  "artifactDigest": "cd5a6282b89fe0af8141330a4f5c97171913e14100236b73318c9cdeb6065abf"
+}

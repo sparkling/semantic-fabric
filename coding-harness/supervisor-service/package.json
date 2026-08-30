@@ -1,0 +1,25 @@
+{
+  "name": "semantic-fabric-supervisor-service",
+  "version": "0.1.0",
+  "description": "Private, independently deployable ADR-0042 supervisor service",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && node scripts/build.mjs",
+    "test": "vitest run",
+    "verify": "npm run build && npm test && node scripts/verify-artifact.mjs",
+    "prepublishOnly": "node scripts/deny-publish.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vitest": "3.2.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -72,3 +72,21 @@ export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-supervisor-transport-response-v2.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
 ] as const);
+
+export const PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1 = Object.freeze([
+  'coding-harness/supervisor-service/.gitignore',
+  'coding-harness/supervisor-service/.service/artifact.json',
+  'coding-harness/supervisor-service/.service/manifest.json',
+  'coding-harness/supervisor-service/__tests__/package-boundary.test.ts',
+  'coding-harness/supervisor-service/__tests__/readiness.test.ts',
+  'coding-harness/supervisor-service/__tests__/sealed-build.test.ts',
+  'coding-harness/supervisor-service/package-lock.json',
+  'coding-harness/supervisor-service/package.json',
+  'coding-harness/supervisor-service/scripts/artifact-lib.mjs',
+  'coding-harness/supervisor-service/scripts/build.mjs',
+  'coding-harness/supervisor-service/scripts/deny-publish.mjs',
+  'coding-harness/supervisor-service/scripts/verify-artifact.mjs',
+  'coding-harness/supervisor-service/src/index.ts',
+  'coding-harness/supervisor-service/src/readiness.ts',
+  'coding-harness/supervisor-service/tsconfig.json',
+] as const);

@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: MIT
+
+throw new Error('SUPERVISOR_SERVICE_PRIVATE_PACKAGE_PUBLICATION_DENIED');

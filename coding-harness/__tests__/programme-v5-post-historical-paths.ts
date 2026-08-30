@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 
+import {
+  PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
+} from '../src/programme-capture-protected-paths-v1.js';
+
 export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
   'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
@@ -66,6 +70,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-supervisor-service-result-v2.ts',
   'coding-harness/src/programme-capture-supervisor-transport-response-v2.ts',
   'coding-harness/src/programme-capture-task-v1.ts',
+  ...PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
   'crates/sf-conformance/src/binary_artifact_receipt/process/capture.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/process/execveat.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_elf.rs',

@@ -38,6 +38,23 @@ jobs:
           HARNESS_REQUIRE_NATIVE_INTEGRATION: ${{ matrix.native_required }}
         run: npm --prefix coding-harness test
 
+  supervisor-service:
+    name: supervisor service · node 20.0.0 · sealed build · test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20.0.0'
+          cache: npm
+          cache-dependency-path: coding-harness/supervisor-service/package-lock.json
+      - name: install pinned supervisor-service dependencies
+        run: npm --prefix coding-harness/supervisor-service ci --ignore-scripts
+      - name: verify sealed supervisor-service artifact
+        run: npm --prefix coding-harness/supervisor-service run verify
+      - name: verify committed supervisor-service attestation is current
+        run: git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json
+
   build:
     name: fmt · clippy · build · test
     runs-on: ubuntu-24.04

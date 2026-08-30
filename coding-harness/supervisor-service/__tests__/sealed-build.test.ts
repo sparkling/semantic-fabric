@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: MIT
+
+import { createHash } from 'node:crypto';
+import {
+  chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { describe, expect, it } from 'vitest';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const bundlePath = resolve(root, 'dist/supervisor-service.mjs');
+const artifactPath = resolve(root, '.service/artifact.json');
+
+function runScript(path: string, packageRoot = root) {
+  return spawnSync(process.execPath, [resolve(packageRoot, path)], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+  });
+}
+
+function copySealedPackage(): string {
+  const target = mkdtempSync(resolve(tmpdir(), 'sf-supervisor-seal-'));
+  for (const path of [
+    '.service', 'dist', 'scripts', 'src', 'package.json', 'package-lock.json', 'tsconfig.json',
+  ]) {
+    cpSync(resolve(root, path), resolve(target, path), { recursive: true });
+  }
+  return target;
+}
+
+describe('sealed supervisor-service artifact', () => {
+  it('builds one dependency-free bundle bound to exact source and lock bytes', async () => {
+    const build = runScript('scripts/build.mjs');
+    expect(build.status, build.stderr).toBe(0);
+    const verify = runScript('scripts/verify-artifact.mjs');
+    expect(verify.status, verify.stderr).toBe(0);
+
+    const artifact = JSON.parse(readFileSync(artifactPath, 'utf8')) as {
+      schemaVersion: number;
+      serviceKind: string;
+      authority: string;
+      bundle: { path: string; bytes: number; sha256: string };
+      sourceInputs: Record<string, string>;
+      externalImports: string[];
+      runtimePackages: string[];
+      artifactDigest: string;
+    };
+    const bundle = readFileSync(bundlePath);
+
+    expect(artifact.schemaVersion).toBe(1);
+    expect(artifact.serviceKind).toBe('programme-capture-supervisor-service-v1');
+    expect(artifact.authority).toBe('nonoperational-proposed-adr-0042');
+    expect(artifact.bundle).toEqual({
+      path: 'dist/supervisor-service.mjs',
+      bytes: bundle.byteLength,
+      sha256: createHash('sha256').update(bundle).digest('hex'),
+    });
+    expect(artifact.sourceInputs).toEqual({
+      'src/index.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
+      'src/readiness.ts': expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(artifact.externalImports).toEqual([]);
+    expect(artifact.runtimePackages).toEqual([]);
+    expect(artifact.artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(bundle.toString('utf8')).not.toMatch(/sourceMappingURL|\.\.\/|file:|workspace:/);
+
+    const built = await import(`${pathToFileURL(bundlePath).href}?digest=${artifact.bundle.sha256}`);
+    expect(built.supervisorServiceReadinessV1()).toMatchObject({
+      operational: false,
+      authority: 'none',
+    });
+  });
+
+  it('rejects exact-bundle mutation and unsafe file mode', () => {
+    expect(runScript('scripts/build.mjs').status).toBe(0);
+    const original = readFileSync(bundlePath);
+    try {
+      chmodSync(bundlePath, 0o644);
+      writeFileSync(bundlePath, Buffer.concat([original, Buffer.from('\n')]));
+      expect(runScript('scripts/verify-artifact.mjs').status).not.toBe(0);
+      writeFileSync(bundlePath, original);
+      chmodSync(bundlePath, 0o664);
+      expect(runScript('scripts/verify-artifact.mjs').status).not.toBe(0);
+    } finally {
+      writeFileSync(bundlePath, original);
+      chmodSync(bundlePath, 0o444);
+    }
+    expect(runScript('scripts/verify-artifact.mjs').status).toBe(0);
+  });
+
+  it('rejects capability escalation and package drift before digest replay', () => {
+    expect(runScript('scripts/build.mjs').status).toBe(0);
+    const fixture = copySealedPackage();
+    const fixtureManifest = resolve(fixture, '.service/manifest.json');
+    const fixturePackage = resolve(fixture, 'package.json');
+    const manifestBytes = readFileSync(fixtureManifest);
+    const packageBytes = readFileSync(fixturePackage);
+    try {
+      for (const key of [
+        'operational', 'externallyReachable', 'registrationMutationsEnabled',
+        'databaseAccessEnabled', 'signerAccessEnabled', 'publicationAccessEnabled',
+        'parentRuntimeDependencyAllowed',
+      ]) {
+        const attack = JSON.parse(manifestBytes.toString('utf8')) as Record<string, unknown>;
+        attack[key] = true;
+        writeFileSync(fixtureManifest, `${JSON.stringify(attack, null, 2)}\n`);
+        const verified = runScript('scripts/verify-artifact.mjs', fixture);
+        expect(verified.status, key).not.toBe(0);
+        expect(verified.stderr, key).toContain('SUPERVISOR_SERVICE_MANIFEST_CONTRACT_INVALID');
+      }
+      const extra = JSON.parse(manifestBytes.toString('utf8')) as Record<string, unknown>;
+      extra.unreviewedCapability = false;
+      writeFileSync(fixtureManifest, `${JSON.stringify(extra, null, 2)}\n`);
+      expect(runScript('scripts/verify-artifact.mjs', fixture).stderr)
+        .toContain('SUPERVISOR_SERVICE_MANIFEST_KEYS_INVALID');
+      writeFileSync(fixtureManifest, manifestBytes);
+
+      for (const mutate of [
+        (value: any) => { value.private = false; },
+        (value: any) => { value.dependencies.pg = '8.23.0'; },
+        (value: any) => { value.scripts.verify = 'true'; },
+        (value: any) => { value.exports = './dist/supervisor-service.mjs'; },
+      ]) {
+        const attack = JSON.parse(packageBytes.toString('utf8'));
+        mutate(attack);
+        writeFileSync(fixturePackage, `${JSON.stringify(attack, null, 2)}\n`);
+        const verified = runScript('scripts/verify-artifact.mjs', fixture);
+        expect(verified.status).not.toBe(0);
+        expect(verified.stderr)
+          .toMatch(/SUPERVISOR_SERVICE_PACKAGE_[A-Z_]*(?:CONTRACT|KEYS)_INVALID/);
+      }
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+    expect(runScript('scripts/verify-artifact.mjs').status).toBe(0);
+  });
+});

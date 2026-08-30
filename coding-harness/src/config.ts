@@ -3,6 +3,7 @@
 import { APPROVED_NPM_REGISTRY, parseHarnessConfig } from './contracts.js';
 import {
   PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1,
+  PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
   PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
   PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
 } from './programme-capture-protected-paths-v1.js';
@@ -199,6 +200,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'coding-harness/src/verifier-failure.ts',
     'coding-harness/src/workspace.ts',
     'coding-harness/src/writable-overlays.ts',
+    ...PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
     'coding-harness/tsconfig.json',
     'coding-harness/vitest.config.ts',
     'crates/sf-bench/Cargo.toml',

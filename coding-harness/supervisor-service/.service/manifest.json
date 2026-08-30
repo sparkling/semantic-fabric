@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "serviceKind": "programme-capture-supervisor-service-v1",
+  "authority": "nonoperational-proposed-adr-0042",
+  "sourceEntrypoint": "src/index.ts",
+  "bundlePath": "dist/supervisor-service.mjs",
+  "operational": false,
+  "externallyReachable": false,
+  "registrationMutationsEnabled": false,
+  "databaseAccessEnabled": false,
+  "signerAccessEnabled": false,
+  "publicationAccessEnabled": false,
+  "parentRuntimeDependencyAllowed": false
+}
