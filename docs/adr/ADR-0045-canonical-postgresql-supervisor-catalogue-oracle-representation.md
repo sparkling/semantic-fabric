@@ -246,8 +246,7 @@ It additionally applies these exact rules:
   stable tagged atoms;
 - membership transitivity is never inferred into the catalogue; it belongs to
   provisioning;
-- generated FK trigger names and OIDs are discarded, but constraint, side,
-  event, timing, orientation, type, and `tgenabled='O'` remain exact; and
+- generated FK trigger names and OIDs are discarded, but each `tgconstraint` resolves the owning FK, `tgrelid`/`tgconstrrelid` resolve the exact side/counterpart relations, `tgconstrindid` resolves that FK's supporting PK/UQ index, and `tgparentid=0`; side, event, timing, orientation, type, function, internal/deferral flags, and `tgenabled='O'` remain exact; raw `tgtype` has exactly one event plus AFTER/ROW, `tgattr`/`tgargs` are empty, argument count is zero, and qualifier/transition-table fields are null; and
 - raw password, physical, activity, timestamp, statistics, freeze, tuple, and
   transaction state never enters either contract.
 
@@ -431,9 +430,9 @@ This decision is implemented only when:
 3. the independently reviewed JSON proves ten domains, eight relations, 88
    columns, 19 principal/command admissions, 38 policies, and every literal
    key/FK/index/trigger/expression/ACL fact without code-supplied defaults;
-4. OID-renumbering and raw ACL reorder mutants normalize, while unresolved OID,
+4. coherent OID renumbering with unchanged resolved identities, generated-`tgname`-only churn, and raw ACL reorder mutants normalize identically, while unresolved OID,
    PUBLIC/role, null/empty/default ACL, grantor/grantee/grantable, ordered tuple,
-   expression, RLS, policy, and immediate/deferred trigger type/internal/function/deferral mutants fail;
+   expression, RLS, policy, and immediate/deferred trigger linkage/parent/type/internal/function/deferral/bitmask/filter/argument/qualifier/transition-table/`tgenabled` (`O` to `D`, `R`, or `A`) mutants fail;
 5. the query topology and 27 aliases match an independent literal and the
    private row decoder, while weakened joins, scope predicates, casts, order,
    or cardinality fail;
