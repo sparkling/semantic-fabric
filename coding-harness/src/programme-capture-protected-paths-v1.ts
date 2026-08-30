@@ -85,6 +85,9 @@ export const PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1 = O
   'coding-harness/supervisor-service/__tests__/registration-exact-integrity-v1.test.ts',
   'coding-harness/supervisor-service/__tests__/registration-fixtures.ts',
   'coding-harness/supervisor-service/__tests__/registration-protocol-v2.test.ts',
+  'coding-harness/supervisor-service/__tests__/registration-transaction-adversarial-v1.test.ts',
+  'coding-harness/supervisor-service/__tests__/registration-transaction-concurrency-v1.test.ts',
+  'coding-harness/supervisor-service/__tests__/registration-transaction-v1.test.ts',
   'coding-harness/supervisor-service/__tests__/readiness.test.ts',
   'coding-harness/supervisor-service/__tests__/sealed-build.test.ts',
   'coding-harness/supervisor-service/package-lock.json',
@@ -100,6 +103,8 @@ export const PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1 = O
   'coding-harness/supervisor-service/src/registration-event-envelope-v2.ts',
   'coding-harness/supervisor-service/src/registration-ports-v1.ts',
   'coding-harness/supervisor-service/src/registration-protocol-v2.ts',
+  'coding-harness/supervisor-service/src/registration-transaction-boundary-v1.ts',
+  'coding-harness/supervisor-service/src/registration-transaction-v1.ts',
   'coding-harness/supervisor-service/tsconfig.json',
   'coding-harness/supervisor-service/vitest.config.ts',
 ] as const);

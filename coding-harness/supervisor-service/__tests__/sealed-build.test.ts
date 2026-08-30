@@ -70,6 +70,13 @@ describe('sealed supervisor-service artifact', () => {
     });
     expect(artifact.buildInputs['src/registration-ports-v1.ts'])
       .toMatch(/^[a-f0-9]{64}$/);
+    expect(artifact.buildInputs['src/registration-transaction-boundary-v1.ts'])
+      .toMatch(/^[a-f0-9]{64}$/);
+    expect(artifact.buildInputs['src/registration-transaction-v1.ts'])
+      .toMatch(/^[a-f0-9]{64}$/);
+    expect(artifact.sourceInputs)
+      .not.toHaveProperty('src/registration-transaction-boundary-v1.ts');
+    expect(artifact.sourceInputs).not.toHaveProperty('src/registration-transaction-v1.ts');
     expect(artifact.buildInputs['vitest.config.ts']).toMatch(/^[a-f0-9]{64}$/);
     expect(artifact.externalImports).toEqual([]);
     expect(artifact.runtimePackages).toEqual([]);
@@ -77,6 +84,15 @@ describe('sealed supervisor-service artifact', () => {
     expect(bundle.toString('utf8')).not.toMatch(/sourceMappingURL|\.\.\/|file:|workspace:/);
 
     const built = await import(`${pathToFileURL(bundlePath).href}?digest=${artifact.bundle.sha256}`);
+    expect(Object.keys(built).sort()).toEqual([
+      'decideSupervisorRegistrationV1',
+      'fixedRegistrationTransportResponseV2',
+      'parseCanonicalRegistrationRequestV2',
+      'registrationChangedReplayEvidenceDigestV2',
+      'supervisorServiceReadinessV1',
+    ]);
+    expect(built).not.toHaveProperty('executeSupervisorRegistrationTransactionV1');
+    expect(built).not.toHaveProperty('recoverExactSupervisorRegistrationV1');
     expect(built.supervisorServiceReadinessV1()).toMatchObject({
       operational: false,
       authority: 'none',

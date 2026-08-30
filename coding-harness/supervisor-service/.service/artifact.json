@@ -8,7 +8,7 @@
     "src/closed-json.ts": "bc65ae11b5fc19e5247db53f53e680b1d5358394188761ab4559915135f316df",
     "src/index.ts": "5209206c6f346687f800ec8e500e5c2564bcea7ed91e29d0dade1adb81407e2b",
     "src/readiness.ts": "a370c078d60a56394cbf11d1bdcae6b36f71e2ac21220d3a480c8c8021a861d6",
-    "src/registration-decision-v1.ts": "25764c145643d3ac086cc7d4eded9c930cd7d9166cfa944f01f30c5ad3638a73",
+    "src/registration-decision-v1.ts": "8f3f5d7e28fc7a5d22ded0c882f22a4a6bff6f2cf84baa3336cc92f22b4cf9c0",
     "src/registration-event-envelope-v2.ts": "df6636ba5b3ba4703a53902692cb80bda580be272e862c8fe1979164fe79668f",
     "src/registration-protocol-v2.ts": "85e93b74ed18be47e3696c64eedf5b0854a2b33a12f8ee7354e7a33c412da2cd"
   },
@@ -16,18 +16,20 @@
     "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "4ebd45943f938e06b489626853d3449ee17c653977112c2b1d89e912f01e2477",
+    "scripts/artifact-lib.mjs": "c6555367b11f6dfd6a89189c8e72221ab9a1ab1525cbf83e2703cf0f484f205c",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
-    "src/registration-ports-v1.ts": "6524cab16a519829bbebfd6906184c9ab5606196c0d5ce45516d1596f1d14abc"
+    "src/registration-ports-v1.ts": "6524cab16a519829bbebfd6906184c9ab5606196c0d5ce45516d1596f1d14abc",
+    "src/registration-transaction-boundary-v1.ts": "447d663449c9d198668992571ccdcf53a981a73947d57edbaaab5f4cc21cba60",
+    "src/registration-transaction-v1.ts": "d0553552decdeccb30d62eadc4923dd290e855e1dd27a13701425846bc9a4359"
   },
   "bundle": {
     "path": "dist/supervisor-service.mjs",
-    "bytes": 48632,
-    "sha256": "3b028cd8928457eaabb6b337084f64e4fb79ebef921d8423d0a8b72ea0e3b690"
+    "bytes": 49106,
+    "sha256": "90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a"
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "e3abc93d7c3dc730b3a5663526d657c31c772394243ed54fbd2306147a908b31"
+  "artifactDigest": "8a7ee5504212dbbafb1fbd693a0d852b0a61d00d7d830aeffc7f0a014132009b"
 }

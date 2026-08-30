@@ -27,11 +27,13 @@ crash-sensitive contract. V2 separates the service's canonical decimal event
 sequence from the transparency log's canonical decimal leaf index.
 
 The committed provider-free V2 configuration, adjacency, event, history,
-registration, commitment, transport, result and supplied-reference client
-modules, plus the private supervisor package's codecs and duplicate-first read/
-decision kernel, implement bounded checks only. The sealed service manifest has
-no writer, signer, network or database capability. All remain nonauthorizing;
-this decision does not rewrite product goals or historical harness meanings.
+registration, commitment, transport, result and supplied-reference client modules,
+private-package codecs, duplicate-first full/exact-only decisions, and dormant
+coordinator implement bounded checks only. Registration/recovery use disjoint roots;
+checkout acquisition must reserve/open nothing, while validated per-checkout open/discard closures provide cleanup, full candidate/provenance binding, and commit-gated replies.
+One-shot peer consumption is only a contract/test double, not closure-owned enforcement.
+The coordinator is build-only; public exports, dependency closure, and manifest stay
+unchanged. With no writer, signer, network, or database, it remains nonauthorizing and preserves product goals and historical harness meanings.
 
 ## Context and threat model
 

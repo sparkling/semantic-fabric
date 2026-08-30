@@ -24,7 +24,8 @@ import type {
 } from './registration-ports-v1.js';
 type ExactResponseDecision = Readonly<{
   decisionKind: 'exact-response'; authority: 'none'; mutationAuthorized: false;
-  response: Readonly<{ status: 201 | 409; contentType: string; body: string }>;
+  response: Readonly<{ status: 201 | 409;
+    contentType: typeof REGISTRATION_CONTENT_TYPE_V2; body: string }>;
 }>;
 type FixedResponseDecision = Readonly<{
   decisionKind: 'fixed-response'; authority: 'none'; mutationAuthorized: false;
@@ -40,34 +41,25 @@ type CandidateDecision = Readonly<{
 }>;
 export type SupervisorRegistrationDecisionV1 =
   | ExactResponseDecision | FixedResponseDecision | IndeterminateDecision | CandidateDecision;
+export type SupervisorRegistrationExactPhaseDecisionV1 =
+  | ExactResponseDecision | FixedResponseDecision | IndeterminateDecision
+  | Readonly<{
+    decisionKind: 'exact-miss'; authority: 'none'; mutationAuthorized: false;
+    request: CanonicalRegistrationRequestV2; project: TrustedProjectBindingV1;
+  }>;
+type ExactPhasePortsV1 = Pick<SupervisorRegistrationDecisionPortsV1,
+  'mapAuthenticatedPeer' | 'lookupExactCommittedResult'>;
+
 export async function decideSupervisorRegistrationV1(
   serializedRequest: string,
   authenticatedPeer: AuthenticatedTransportPeerV1,
   ports: SupervisorRegistrationDecisionPortsV1,
 ): Promise<SupervisorRegistrationDecisionV1> {
-  if (!immutableAuthenticatedPeer(authenticatedPeer)) {
-    return fixed('registration-not-admitted-v2');
-  }
-  let request: CanonicalRegistrationRequestV2;
-  try { request = await parseCanonicalRegistrationRequestV2(serializedRequest); }
-  catch (error) {
-    return error instanceof ClosedJsonHashError || !(error instanceof TypeError)
-      ? indeterminate() : fixed('registration-not-admitted-v2');
-  }
-
-  const mapping = await read(() => ports.mapAuthenticatedPeer(authenticatedPeer));
-  const project = parseMapping(mapping);
-  if (project === 'not-admitted') return fixed('registration-not-admitted-v2');
-  if (project === null) return indeterminate();
-
-  const exactRead = await read(() => ports.lookupExactCommittedResult(deepFreeze({
-    projectAuthorityDigest: project.projectAuthorityDigest,
-    semanticRequestDigest: request.semanticRequestDigest,
-  })));
-  const exact = await parseExactRead(exactRead, request, project);
-  if (exact.kind === 'found') return exact.decision;
-  if (exact.kind === 'indeterminate') return indeterminate();
-
+  const exactPhase = await decideSupervisorRegistrationExactPhaseV1(
+    serializedRequest, authenticatedPeer, ports,
+  );
+  if (exactPhase.decisionKind !== 'exact-miss') return exactPhase;
+  const { request, project } = exactPhase;
   if (request.assertedProject.projectAuthorityDigest !== project.projectAuthorityDigest) {
     return fixed('registration-not-admitted-v2');
   }
@@ -82,23 +74,19 @@ export async function decideSupervisorRegistrationV1(
     || !sameHead(head.authorityHead, request.authorityHead)) {
     return fixed('registration-not-admitted-v2');
   }
-
   const receiptRead = await read(() => ports.readRequiredPredecessorReceipt(deepFreeze({
     projectAuthorityDigest: project.projectAuthorityDigest,
     requiredPredecessor: head.requiredPredecessor,
   })));
   const receipt = parseReceiptRead(receiptRead, head.requiredPredecessor);
   if (receipt === null) return indeterminate();
-
   const runRead = await read(() => ports.readRunState(deepFreeze({
     projectAuthorityDigest: project.projectAuthorityDigest,
     runId: request.runId,
   })));
   const run = parseRunRead(runRead, project.projectAuthorityDigest, request.runId);
   if (run === null) return indeterminate();
-  if (!runAndGlobalHeadAgree(run, head)) {
-    return indeterminate();
-  }
+  if (!runAndGlobalHeadAgree(run, head)) return indeterminate();
   if (receipt === 'pending') {
     if (run.kind !== 'absent' && (
       run.originalRegistrationRequestDigest === request.semanticRequestDigest
@@ -107,12 +95,10 @@ export async function decideSupervisorRegistrationV1(
     return fixed('registration-authority-pending-v2');
   }
   const common = {
-    transactionScope: 'same-serializable-transaction-required',
-    project,
+    transactionScope: 'same-serializable-transaction-required', project,
     authorityHead: head.authorityHead,
     expectedNextGlobalSequence: head.expectedNextGlobalSequence,
-    previousGlobal: receipt.previousGlobal,
-    request,
+    previousGlobal: receipt.previousGlobal, request,
   };
   if (run.kind === 'absent') {
     return candidate('append-registration-candidate', {
@@ -137,8 +123,7 @@ export async function decideSupervisorRegistrationV1(
         originalRegistrationEventDigest: run.registrationEventDigest,
         changedRegistrationRequestDigest: request.semanticRequestDigest,
         project: {
-          projectAuthorityDigest: project.projectAuthorityDigest,
-          principalId: project.principalId,
+          projectAuthorityDigest: project.projectAuthorityDigest, principalId: project.principalId,
         },
         authorityHead: head.authorityHead,
       });
@@ -173,25 +158,51 @@ export async function decideSupervisorRegistrationV1(
   }
   return fixed('registration-closed-v2');
 }
-
+export async function decideSupervisorRegistrationExactPhaseV1(
+  serializedRequest: string,
+  authenticatedPeer: AuthenticatedTransportPeerV1,
+  ports: ExactPhasePortsV1,
+): Promise<SupervisorRegistrationExactPhaseDecisionV1> {
+  if (!immutableAuthenticatedPeer(authenticatedPeer)) {
+    return fixed('registration-not-admitted-v2');
+  }
+  let request: CanonicalRegistrationRequestV2;
+  try { request = await parseCanonicalRegistrationRequestV2(serializedRequest); }
+  catch (error) {
+    return error instanceof ClosedJsonHashError || !(error instanceof TypeError)
+      ? indeterminate() : fixed('registration-not-admitted-v2');
+  }
+  const mapping = await read(() => ports.mapAuthenticatedPeer(authenticatedPeer));
+  const project = parseMapping(mapping);
+  if (project === 'not-admitted') return fixed('registration-not-admitted-v2');
+  if (project === null) return indeterminate();
+  const exactRead = await read(() => ports.lookupExactCommittedResult(deepFreeze({
+    projectAuthorityDigest: project.projectAuthorityDigest,
+    semanticRequestDigest: request.semanticRequestDigest,
+  })));
+  const exact = await parseExactRead(exactRead, request, project);
+  if (exact.kind === 'found') return exact.decision;
+  if (exact.kind === 'indeterminate') return indeterminate();
+  return deepFreeze({
+    decisionKind: 'exact-miss', authority: 'none', mutationAuthorized: false,
+    request, project,
+  });
+}
 function immutableAuthenticatedPeer(peer: AuthenticatedTransportPeerV1): boolean {
   return typeof peer === 'symbol';
 }
-
 function fixed(outcome: RegistrationTransportOutcomeV2): FixedResponseDecision {
   return deepFreeze({
     decisionKind: 'fixed-response', authority: 'none', mutationAuthorized: false,
     response: fixedRegistrationTransportResponseV2(outcome),
   });
 }
-
 function indeterminate(): IndeterminateDecision {
   return deepFreeze({
     decisionKind: 'indeterminate', authority: 'none', mutationAuthorized: false,
     response: fixedRegistrationTransportResponseV2('transaction-resolution-unknown-v2'),
   });
 }
-
 function candidate(
   decisionKind: CandidateDecision['decisionKind'],
   value: Record<string, unknown>,
@@ -201,12 +212,10 @@ function candidate(
     candidate: deepFreeze(value),
   });
 }
-
 async function read(operation: () => Promise<unknown>): Promise<unknown> {
   try { return cloneClosedRecord(await operation(), 'registration adapter result'); }
   catch { return null; }
 }
-
 function parseMapping(value: unknown): TrustedProjectBindingV1 | 'not-admitted' | null {
   try {
     const input = asRecord(value, 'project mapping');
@@ -300,7 +309,6 @@ async function parseExactRead(
     }) };
   } catch { return { kind: 'indeterminate' }; }
 }
-
 interface ActiveHeadRead {
   readonly project: TrustedProjectBindingV1;
   readonly authorityHead: AuthorityHeadRefV2;
@@ -309,7 +317,6 @@ interface ActiveHeadRead {
     kind: 'authority-genesis' | 'semantic-event'; eventDigest: string | null;
   }>;
 }
-
 function parseHeadRead(value: unknown): ActiveHeadRead | 'not-admitted' | null {
   try {
     const input = asRecord(value, 'active authority head read');
@@ -338,7 +345,6 @@ function parseHeadRead(value: unknown): ActiveHeadRead | 'not-admitted' | null {
     });
   } catch { return null; }
 }
-
 function parseReceiptRead(
   value: unknown,
   expected: ActiveHeadRead['requiredPredecessor'],
@@ -359,7 +365,6 @@ function parseReceiptRead(
     return deepFreeze({ previousGlobal });
   } catch { return null; }
 }
-
 type RunRead = Readonly<Record<string, unknown>> & {
   readonly kind: 'absent' | 'registered' | 'advanced-or-closed';
   readonly originalRegistrationRequestDigest?: string;
@@ -369,7 +374,6 @@ type RunRead = Readonly<Record<string, unknown>> & {
   readonly lastRunGlobalSequence?: string;
   readonly currentControllerStateHeadDigest?: string;
 };
-
 function parseRunRead(value: unknown, project: string, runId: string): RunRead | null {
   try {
     const input = asRecord(value, 'registration run read');
@@ -427,7 +431,6 @@ function parseRunRead(value: unknown, project: string, runId: string): RunRead |
     return deepFreeze(input) as RunRead;
   } catch { return null; }
 }
-
 function runAndGlobalHeadAgree(run: RunRead, head: ActiveHeadRead): boolean {
   if (run.kind === 'absent') return true;
   const nextGlobal = BigInt(head.expectedNextGlobalSequence);
