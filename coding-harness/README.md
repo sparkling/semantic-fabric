@@ -124,6 +124,13 @@ and no build or execution API. Its tests use synthetic
 primary and bare stores; no controlled profile, project run, source tree,
 receipt, or measurement is created by the repository test suite.
 
+Supervisor-service verification also protects the PostgreSQL 16.15 baseline
+fixture, independent completeness oracle, hostile tests, and receipt binding
+matching captures from two distinct fresh volumes. These are test evidence only:
+they are excluded from supervisor-service source and build inputs and authorize
+neither migration nor runtime activation. Harness and supervisor-service CI run
+the relevant gates on exact Node.js 20.0.0 and 24.14.1.
+
 ## Retrieval flywheel boundary
 
 Ruflo's retrieval-policy flywheel is governed outside the candidate transaction.

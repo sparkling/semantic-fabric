@@ -1,0 +1,127 @@
+{
+  "schemaVersion": "semantic-fabric.postgresql-public-acl-capture-receipt/v1",
+  "authority": "test-only-non-runtime",
+  "captureDate": "2026-08-31",
+  "image": {
+    "reference": "postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8",
+    "manifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+    "platformManifestDigest": "sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8",
+    "configurationDigest": "sha256:80f4c7a5e91618546dce5b4fe60cf03b14c0f9efa7e40157278d122772ced8d2",
+    "platform": "linux/amd64",
+    "serverVersion": "16.15 (Debian 16.15-1.pgdg13+2)"
+  },
+  "database": {
+    "name": "sf_public_baseline",
+    "owner": "postgres",
+    "template": "template0",
+    "encoding": "UTF8",
+    "localeProvider": "c",
+    "collation": "C",
+    "ctype": "C",
+    "initdbArguments": "--locale=C --encoding=UTF8"
+  },
+  "sources": {
+    "projection": {
+      "path": "__tests__/fixtures/postgresql-16.15-public-acl-projection-v1.sql",
+      "bytes": 6859,
+      "sha256": "0e3ad724f4ce85191564c245c51dd7665b6d9aa704c355067a0056cdbfe95232"
+    },
+    "rawOracle": {
+      "path": "__tests__/fixtures/postgresql-16.15-public-acl-completeness-oracle-v1.sql",
+      "bytes": 16037,
+      "sha256": "6a1cf204ca8c5a3aa7a70da4f5c8c46cd15998b745d2eb648b77568e6c912722"
+    },
+    "captureRunner": {
+      "path": "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+      "bytes": 19469,
+      "sha256": "2b4266f7bbf8813026f3435f2fa90c05c8f59e47f2d95dc1a8fe9d9718b5229c"
+    },
+    "oracleWire": {
+      "path": "scripts/postgresql-public-acl-oracle-wire-v1.mjs",
+      "bytes": 4012,
+      "sha256": "14f02467c27632d68bcb910b054c67db035fe64ac942ff6534682ebad76b742e"
+    },
+    "oracleDeriver": {
+      "path": "scripts/postgresql-public-acl-oracle-v1.mjs",
+      "bytes": 21815,
+      "sha256": "7eb72f7cf0a509feaf8f2fe0731f6dad5e59111b9ebdcee6472809d2c1ee8529"
+    },
+    "oracleRunner": {
+      "path": "scripts/verify-postgresql-public-acl-oracle-v1.mjs",
+      "bytes": 6646,
+      "sha256": "130e018860cfe6c7a0c9e107cf4337ca96ed862185e248e574792451e2bbfea2"
+    },
+    "replayRunner": {
+      "path": "scripts/replay-postgresql-public-acl-baseline-v1.mjs",
+      "bytes": 26662,
+      "sha256": "8c624596bd228d62e9ec01c2d700996371ec0cce25a78badcaa92d826e4fddbc"
+    }
+  },
+  "profile": {
+    "sha256": "15d6ff996e0cf5cec2fd269898c6ec470f35d2b8e25da6f2535daa95324f92c7",
+    "defaultAclRows": 0,
+    "parameterAclRows": 0,
+    "foreignDataWrappers": 0,
+    "foreignServers": 0,
+    "userMappings": 0,
+    "largeObjects": 0,
+    "dedicatedSchemaRows": 0,
+    "publicDependentObjects": 0
+  },
+  "result": {
+    "fixturePath": "__tests__/fixtures/postgresql-16.15-clean-template0-public-object-acl-v1.json",
+    "records": 4059,
+    "nodes": 36532,
+    "bytes": 860988,
+    "sha256": "a108e05f9cfd6d6485a86fe198a87b3800e21986b5c62e6251519de6577d05be"
+  },
+  "runs": [
+    {
+      "sequence": 1,
+      "networkMode": "none",
+      "publishedPorts": false,
+      "dataVolumeNameSha256": "db15f954a83d7aba040cf24ccdf3ba9ffa05350ddd152317e03f6baf87ecd625",
+      "profileSha256": "15d6ff996e0cf5cec2fd269898c6ec470f35d2b8e25da6f2535daa95324f92c7",
+      "rawTranscriptBytes": 1124407,
+      "rawTranscriptSha256": "e1f9f698c9778f3e80eec44346e5f76305831783c8f28cd7d465cb5a5065b463",
+      "sessionTranscriptBytes": 2078806,
+      "sessionTranscriptSha256": "2ef4061ee541352db821b16540220a9c356bd117b8921df866d1d783387b95ad",
+      "recordCount": 4059,
+      "recordsBytes": 860988,
+      "recordsSha256": "a108e05f9cfd6d6485a86fe198a87b3800e21986b5c62e6251519de6577d05be"
+    },
+    {
+      "sequence": 2,
+      "networkMode": "none",
+      "publishedPorts": false,
+      "dataVolumeNameSha256": "259a34c30dc8d63229dc63913a43de2dba129984da984ce480330a5b4383583d",
+      "profileSha256": "15d6ff996e0cf5cec2fd269898c6ec470f35d2b8e25da6f2535daa95324f92c7",
+      "rawTranscriptBytes": 1124407,
+      "rawTranscriptSha256": "e1f9f698c9778f3e80eec44346e5f76305831783c8f28cd7d465cb5a5065b463",
+      "sessionTranscriptBytes": 2078806,
+      "sessionTranscriptSha256": "2ef4061ee541352db821b16540220a9c356bd117b8921df866d1d783387b95ad",
+      "recordCount": 4059,
+      "recordsBytes": 860988,
+      "recordsSha256": "a108e05f9cfd6d6485a86fe198a87b3800e21986b5c62e6251519de6577d05be"
+    }
+  ],
+  "replay": {
+    "minimumRuns": 2,
+    "requiresDistinctAnonymousDataVolumes": true,
+    "requiresNoPublishedPorts": true,
+    "runnerArgv": [
+      "node",
+      "scripts/replay-postgresql-public-acl-baseline-v1.mjs"
+    ],
+    "captureArgv": [
+      "node",
+      "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+      "CONTAINER_NAME"
+    ],
+    "oracleArgv": [
+      "node",
+      "scripts/verify-postgresql-public-acl-oracle-v1.mjs",
+      "CONTAINER_NAME"
+    ]
+  }
+}

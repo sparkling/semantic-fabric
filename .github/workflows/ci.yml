@@ -16,6 +16,8 @@ jobs:
         include:
           - node: '20.0.0'
             native_required: '0'
+          - node: '24.14.1'
+            native_required: '0'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -39,13 +41,19 @@ jobs:
         run: npm --prefix coding-harness test
 
   supervisor-service:
-    name: supervisor service · node 20.0.0 · sealed build · test
+    name: supervisor service · node ${{ matrix.node }} · sealed build · test
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '20.0.0'
+          - node: '24.14.1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20.0.0'
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: coding-harness/supervisor-service/package-lock.json
       - name: install pinned supervisor-service dependencies
@@ -54,6 +62,26 @@ jobs:
         run: npm --prefix coding-harness/supervisor-service run verify
       - name: verify committed supervisor-service attestation is current
         run: git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json
+
+  postgresql-public-acl-replay:
+    name: PostgreSQL ACL replay · node ${{ matrix.node }} · two isolated runs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '20.0.0'
+          - node: '24.14.1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: pull exact PostgreSQL 16.15 platform manifest
+        run: docker pull postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
+      - name: replay candidate fixture twice from owned isolated containers
+        run: node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs
 
   build:
     name: fmt · clippy · build · test

@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-08-30
+updated: 2026-08-31
 tags: [postgresql, supervisor, migrations, provisioning, canonical-json]
 supersedes: []
 depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045]
@@ -308,11 +308,11 @@ A private source constant pins the manifest SHA-256 independently of input; the
 service artifact and parent manifest bind the constant and file. Coherent
 replacement fails before checkout; pin changes require explicit byte review.
 
-Loading starts at fixed `migrations/manifest-v1.json`; size is at most 16,384 before allocation,
-then its snapshot is parsed/pin-checked. Its four paths alone map to regular-file descriptors whose
-sizes equal the manifest and compiled maxima: catalogue/each SQL 1,048,576; provisioning 65,536.
-Root/file symlinks, hardlinks, non-regular files, group/world-writable modes, aliases, or before/after
-descriptor-identity changes fail. Each file is read once; that snapshot is checked/decoded/executed.
+Loading starts at fixed `migrations/manifest-v1.json`; size is at most 16,384 before allocation, then its snapshot is parsed/pin-checked.
+Its four fixed paths alone map to regular-file descriptors. Each descriptor size equals its manifest `bytes`
+and is no greater than its compiled ceiling: catalogue/each SQL 1,048,576; provisioning 65,536. Unrelated
+directory entries are inert and ignored; authority never comes from enumeration. Root/file symlinks, hardlinks,
+non-regular files, group/world-writable modes, aliases, or descriptor-identity changes fail; each file is read once, checked and executed.
 
 ### 6. Define SQL authority and empty state
 
@@ -466,9 +466,9 @@ This decision is implemented only when:
 4. PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
    value sentinels, acknowledged-versus-uncertain rollback/commit, pre-send termination,
    unknown-commit reclassification, no retry/partial repair, and every ADR-0044/0045 denial;
-5. all new files are private build inputs and parent protected paths, source and
-   tests remain under 500 lines, security/ADR/frozen-harness gates pass, and the
-   public bundle SHA-256 remains
+5. runtime source and sealed data are private build inputs; test fixtures and
+   capture evidence are parent/harness protected but outside service `BUILD_INPUT_PATHS`.
+   Source and tests remain under 500 lines, security/ADR/frozen-harness gates pass, and the public bundle SHA-256 remains
    `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
 
 ## Consequences
@@ -496,4 +496,4 @@ This decision is implemented only when:
 
 ## Links
 
-[ADR-0038](ADR-0038-sota-application-completion-programme.md), [ADR-0039](ADR-0039-minimal-production-serving-artifact.md), [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md), [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md), and [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md).
+[ADR-0038](ADR-0038-sota-application-completion-programme.md), [ADR-0039](ADR-0039-minimal-production-serving-artifact.md), [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md), [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), and [ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md).

@@ -416,6 +416,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md',
     'docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md',
     'docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md',
+    'docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md',
     'docs/capability-matrix.json',
     'docs/capability-matrix.md',
     'docs/plans/open-issues-ruflo-metaharness-implementation-plan.md',
