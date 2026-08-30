@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
 import {
-  SHA256_PATTERN,
   asClosedRecord,
   asInteger,
   assertExactKeys,
@@ -10,6 +9,10 @@ import {
 } from './contracts.js';
 import { parseTaskOpaqueId } from './acceptance-task-v3.js';
 import { normalizeAcceptanceTaskPath } from './manifest.js';
+import {
+  parseProgrammeCaptureDigestV1 as parseDigest,
+  programmeCaptureRunClaimKeyDigestV1,
+} from './programme-capture-claim-key-v1.js';
 import {
   PROGRAMME_CAPTURE_MAX_JSON_BLOB_BYTES_V1,
   parseProgrammeCaptureGitObjectV1,
@@ -21,6 +24,7 @@ import { digestValue } from './receipts.js';
 import { parseJsonWithoutDuplicateKeys } from './strict-json.js';
 
 export const PROGRAMME_CAPTURE_RUN_CLAIM_MAX_BYTES_V1 = 100_000;
+export { programmeCaptureRunClaimKeyDigestV1 } from './programme-capture-claim-key-v1.js';
 
 interface ClaimBlobIdentityV1 {
   readonly path: string;
@@ -65,25 +69,6 @@ const CLAIM_KEYS = [
   'hostAdmission', 'runnerLeaseAcquired', 'attemptStartAuthorized', 'captureAuthorized',
   'claimKeyDigest', 'claimDigest',
 ] as const;
-
-export function programmeCaptureRunClaimKeyDigestV1(value: Readonly<{
-  projectAuthorityDigest: string;
-  runId: string;
-}>): string {
-  const input = asClosedRecord(value, 'programme capture run-claim key input');
-  assertExactKeys(
-    input, ['projectAuthorityDigest', 'runId'], 'programme capture run-claim key input',
-  );
-  return digestValue({
-    schemaVersion: 1,
-    transactionKind: 'programme-capture-v1',
-    keyKind: 'run-claim-key-v1',
-    projectAuthorityDigest: parseDigest(
-      input.projectAuthorityDigest, 'programme capture project authority digest',
-    ),
-    runId: parseTaskOpaqueId(input.runId, 'programme capture run-claim runId'),
-  });
-}
 
 export function createProgrammeCaptureRunClaimV1(value: Readonly<{
   projectAuthorityDigest: string;
@@ -297,13 +282,6 @@ function parseBlobIdentity(
     throw new TypeError(`${label} identity is invalid`);
   }
   return { path, gitBlobId, sha256: parseDigest(input.sha256, `${label}.sha256`), byteLength };
-}
-
-function parseDigest(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !SHA256_PATTERN.test(value) || /^0+$/.test(value)) {
-    throw new TypeError(`${label} must be a non-zero lowercase SHA-256 digest`);
-  }
-  return value;
 }
 
 function decodeCanonicalUtf8(value: string): string {

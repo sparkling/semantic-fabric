@@ -32,6 +32,7 @@ const M0_AUTHORITY_PATHS = [
   'coding-harness/__tests__/programme-policy-v5.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
+  'coding-harness/src/programme-capture-claim-key-v1.ts',
   'coding-harness/src/programme-capture-claim-record-v1.ts',
   'coding-harness/src/programme-capture-host-authority-v1.ts',
   'coding-harness/src/programme-capture-host-observation-v1.ts',

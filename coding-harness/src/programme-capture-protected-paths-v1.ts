@@ -35,6 +35,7 @@ export const PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1 = Object.freeze([
 
 export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-claim-io-v1.ts',
+  'coding-harness/src/programme-capture-claim-key-v1.ts',
   'coding-harness/src/programme-capture-claim-record-v1.ts',
   'coding-harness/src/programme-capture-config-v1.ts',
   'coding-harness/src/programme-capture-git-v1.ts',

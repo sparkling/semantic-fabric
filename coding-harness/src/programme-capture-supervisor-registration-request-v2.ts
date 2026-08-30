@@ -9,7 +9,7 @@ import {
 } from './contracts.js';
 import {
   programmeCaptureRunClaimKeyDigestV1,
-} from './programme-capture-claim-record-v1.js';
+} from './programme-capture-claim-key-v1.js';
 import {
   parseProgrammeCaptureSupervisorAuthorityHeadRefV2,
 } from './programme-capture-supervisor-run-event-body-v2.js';

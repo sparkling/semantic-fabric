@@ -26,6 +26,9 @@ const RUN_EVENT_TRANSITION_ENTRY = resolve(
 const RUN_EVENT_VERIFIER_ENTRY = resolve(
   SOURCE_ROOT, 'programme-capture-supervisor-run-event-verifier-v2.ts',
 );
+const CLAIM_KEY_ENTRY = resolve(
+  SOURCE_ROOT, 'programme-capture-claim-key-v1.ts',
+);
 const REGISTRATION_REQUEST_ENTRY = resolve(
   SOURCE_ROOT, 'programme-capture-supervisor-registration-request-v2.ts',
 );
@@ -41,7 +44,7 @@ const SERVICE_CLIENT_ENTRY = resolve(
 const V2_ENTRIES = Object.freeze([
   CONFIG_ENTRY, TRANSITION_ENTRY, RUN_EVENT_CONTRACTS_ENTRY, RUN_EVENT_BODY_ENTRY,
   RUN_EVENT_CODEC_ENTRY, RUN_EVENT_TRANSITION_ENTRY, RUN_EVENT_VERIFIER_ENTRY,
-  REGISTRATION_REQUEST_ENTRY, RUN_EVENT_BUILDER_ENTRY, SERVICE_RESULT_ENTRY,
+  CLAIM_KEY_ENTRY, REGISTRATION_REQUEST_ENTRY, RUN_EVENT_BUILDER_ENTRY, SERVICE_RESULT_ENTRY,
   SERVICE_CLIENT_ENTRY,
 ]);
 const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
@@ -152,6 +155,14 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
     ],
     ['./receipts.js', 'digestValue:digestValue'],
   ])],
+  [CLAIM_KEY_ENTRY, new Map([
+    ['./acceptance-task-v3.js', 'parseTaskOpaqueId:parseTaskOpaqueId'],
+    [
+      './contracts.js',
+      'SHA256_PATTERN:SHA256_PATTERN,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys',
+    ],
+    ['./receipts.js', 'digestValue:digestValue'],
+  ])],
   [REGISTRATION_REQUEST_ENTRY, new Map([
     ['node:util/types', 'isProxy:isProxy'],
     [
@@ -159,7 +170,7 @@ const EXPECTED_IMPORTS = new Map<string, ReadonlyMap<string, string>>([
       'DEVELOPMENT_AUTHORITY:DEVELOPMENT_AUTHORITY,asClosedRecord:asClosedRecord,assertExactKeys:assertExactKeys,deepFreeze:deepFreeze',
     ],
     [
-      './programme-capture-claim-record-v1.js',
+      './programme-capture-claim-key-v1.js',
       'programmeCaptureRunClaimKeyDigestV1:programmeCaptureRunClaimKeyDigestV1',
     ],
     [
