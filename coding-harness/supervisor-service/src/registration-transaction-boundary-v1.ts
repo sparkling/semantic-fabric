@@ -111,7 +111,8 @@ export function capabilityRecordV1(
     throw new TypeError(`${label} capability is invalid`);
   }
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (JSON.stringify(Object.keys(descriptors).sort())
+  if (Reflect.ownKeys(descriptors).some((key) => typeof key !== 'string')
+    || JSON.stringify(Object.keys(descriptors).sort())
     !== JSON.stringify([...expected].sort())) {
     throw new TypeError(`${label} capability keys are invalid`);
   }

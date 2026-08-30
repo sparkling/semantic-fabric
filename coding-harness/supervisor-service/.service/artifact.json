@@ -38,7 +38,7 @@
     "src/registration-postgresql-materializer-v1.ts": "8b627ff4129aec7715f43cac430505762cc794660321da2503e1beacd5e72314",
     "src/registration-postgresql-row-codecs-v1.ts": "333c5cceaaea8cef2a3f33456b29870e37d04b0a2756ce4e863ec031fc0b8738",
     "src/registration-transaction-admission-v1.ts": "a210f4b78cdad053592a74ac7eded63d2385a81a25140c0dcfaedc945cdb956f",
-    "src/registration-transaction-boundary-v1.ts": "447d663449c9d198668992571ccdcf53a981a73947d57edbaaab5f4cc21cba60",
+    "src/registration-transaction-boundary-v1.ts": "58c38f972d5d9f10165c6e285f195fe50c2989f79549c61d13984fa6545b2de6",
     "src/registration-transaction-checkout-v1.ts": "278aec51ffaa4ebbfc8d7a94e3ef1788151864495c70c29930877ea52957eafe",
     "src/registration-transaction-contract-v1.ts": "c209fd24068f55f10692109f340d5dd314eabad1356616bde29aa257e20f6ca9",
     "src/registration-transaction-retry-v1.ts": "3fa72178b0cfc1a9da9dd79cc78d98843d5a5c3e3f515ed618fbd68ceab6522e",
@@ -51,5 +51,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "5aff413e1a33574c4a85e27997502139e306e02bd934b0fd7414987a2682ef53"
+  "artifactDigest": "0a5e1c111f9e21148f5c30e08ab8654c8387b46936f08f236bfa73db8a9beae7"
 }

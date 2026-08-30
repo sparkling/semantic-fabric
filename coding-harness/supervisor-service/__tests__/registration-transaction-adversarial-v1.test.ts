@@ -415,6 +415,18 @@ describe('registration transaction adversarial closure V1', () => {
     expect(run.calls).toEqual([]);
   });
 
+  it('rejects an extra symbol-keyed capability before invoking any method', async () => {
+    const run = scenario();
+    Object.defineProperty(run.registry, Symbol('hidden-capability'), {
+      enumerable: true, value: async () => undefined,
+    });
+    const result = await executeSupervisorRegistrationTransactionV1(
+      CANONICAL_REQUEST, PEER, run.registry, run.store,
+    );
+    expect(result.response.status).toBe(500);
+    expect(run.calls).toEqual([]);
+  });
+
   it('keeps registration and exact recovery capability roots disjoint', async () => {
     const write = scenario();
     const recovery = scenario();
