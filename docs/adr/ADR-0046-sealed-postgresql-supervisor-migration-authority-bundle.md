@@ -450,8 +450,8 @@ Every result is deeply frozen, contains `authority:none` and `readinessAuthorize
 ### Implemented dormant representation evidence
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Eleven focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
-The full private service suite passes 659 tests, and its public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
-This evidence closes only the dormant load-and-bind slice; quoted-identifier callable-policy hardening, driver/store contracts, deadlines, terminal runner semantics and live PostgreSQL 16.15 evidence remain open.
+Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. The full private service suite passes 661 tests, and its public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
+This evidence closes the dormant load-and-bind and quoted-callable policy slices; driver/store contracts, receipt string/key byte bounds before untrusted exposure, concurrent replacement stress, deadlines, terminal runner semantics and live PostgreSQL 16.15 evidence remain open.
 
 ## Acceptance gates
 

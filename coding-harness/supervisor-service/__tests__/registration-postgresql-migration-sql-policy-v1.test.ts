@@ -209,6 +209,10 @@ describe('PostgreSQL migration SQL policy V1', () => {
     'GRANT SELECT, DELETE ON TABLE sf_supervisor_v1.x TO hostile;\n',
     'REVOKE ALL PRIVILEGES ON SCHEMA public, sf_supervisor_v1 FROM PUBLIC;\n',
     'CREATE DOMAIN sf_supervisor_v1.hostile AS pg_catalog.int4 CHECK (evil(VALUE));\n',
+    'CREATE DOMAIN sf_supervisor_v1.hostile AS pg_catalog.text '
+      + 'CONSTRAINT hostile_check CHECK ("evil"(VALUE));\n',
+    'CREATE DOMAIN sf_supervisor_v1.hostile AS pg_catalog.text '
+      + 'CONSTRAINT hostile_check CHECK (pg_catalog."octet_length"(VALUE));\n',
   ])('rejects widened DDL, privileges, public mutation, and callables: %s', (source) => {
     expect(() => inspectPostgresMigrationSqlCandidateV1(sqlBytes(source)))
       .toThrow('PostgreSQL migration SQL is invalid');

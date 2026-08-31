@@ -45,7 +45,7 @@
     "src/registration-postgresql-migration-manifest-v1.ts": "03dbc1e00051e69600e3054e7c8775f4f727f1c9093f01a799b2446677034782",
     "src/registration-postgresql-migration-plan-v1.ts": "c4ad1f9e58270636ba954d679fb4fc0885cd05bf858868524a5cb6538d42e6bc",
     "src/registration-postgresql-migration-reader-v1.ts": "0ed4028bb9fcfb8a34f409007f9fd666126e7d297839e5753514aa59e5b82f36",
-    "src/registration-postgresql-migration-sql-policy-v1.ts": "12f753b9e1b7fd3637b0b4528f00bd49a4448e33decd791e271374db4edfd4b2",
+    "src/registration-postgresql-migration-sql-policy-v1.ts": "ed5a1c8e61241857f7e5ef09c530ff1e812f54ee09a574aaa3ad24323ec6fa5a",
     "src/registration-postgresql-migration-sql-scanner-v1.ts": "72bf4e135510d328318a97a1bc9289d03915e6718446009cba62848cd9b32190",
     "src/registration-postgresql-provisioning-contract-v1.ts": "df1c25f107d73cd0b528b399cb7483eba666f873a0eafc92887e9479cc862cbb",
     "src/registration-postgresql-row-codecs-v1.ts": "333c5cceaaea8cef2a3f33456b29870e37d04b0a2756ce4e863ec031fc0b8738",
@@ -63,5 +63,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "766600f78f6384fdc5cdfb8eec871c33f0d0b6b6224ae08c56a1603592dabde9"
+  "artifactDigest": "e254f621c3dfc9f7cfb46cd869cc88f97f7ec60b1033a8346e7dfe8205abd9a1"
 }

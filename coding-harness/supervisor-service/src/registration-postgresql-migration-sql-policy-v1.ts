@@ -339,7 +339,9 @@ function validateCallableTokens(tokens: readonly PostgresMigrationSqlTokenV1[]):
   const callables = new Set(['OCTET_LENGTH', 'PG_HAS_ROLE', 'SCALE', 'SUBSTRING']);
   for (let index = 0; index + 1 < tokens.length; index += 1) {
     const current = tokens[index];
-    if (current?.kind !== 'word' || tokens[index + 1]?.value !== '(') continue;
+    if (tokens[index + 1]?.value !== '(') continue;
+    if (current?.kind === 'quoted-identifier') throw new TypeError();
+    if (current?.kind !== 'word') continue;
     if (tokens[index - 1]?.value !== '.') {
       if (!grouping.has(current.value)) throw new TypeError();
       continue;
