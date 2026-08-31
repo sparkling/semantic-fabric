@@ -281,8 +281,11 @@ The recorded reproduction establishes candidate test-fixture values only. The
 tracked replay orchestrator owns two fresh networkless containers, anonymous
 data volumes and `template0` databases, then binds the projection and independent
 raw-catalogue cross-check for each run. Matching projection runs or client
-reserializations prove determinism, never completeness; until every Section 7
-gate passes, the candidate must not enter provisioning or manifest bytes.
+reserializations prove determinism, never completeness. The candidate must not
+enter provisioning or manifest bytes until Section 7's explicitly enumerated,
+fail-closed pre-sealing predicate passes. That predicate contains no
+post-bundle gate; item 6 cannot be a prerequisite for constructing the bundle
+that it tests.
 
 ### 6. Make runtime comparison bounded and independent
 
@@ -306,6 +309,18 @@ tablespace or database checks in ADR-0046.
 ### 7. Require independent replay and hostile evidence
 
 Future runtime admission requires all of:
+
+The pre-sealing predicate is exactly: items 1–5 in full; item 7's candidate
+fixture/capture-pin and fixture/capture-KAT half; item 8 in full; and item 9's
+fixture/capture protection and service-build-exclusion half. No evidence can be
+treated as implicitly applicable. Item 6, item 7's bundle/runtime-pin and
+live-observation-KAT half, and item 9's private implementation/sealed-data
+build-input half run only after ADR-0046 constructs the immutable bundle. Each
+pre-sealing proof is then rerun unchanged and independently under its original
+authority. A separate bundle-consistency check compares its result with the
+sealed bundle; neither the bundle nor observed database state supplies an
+oracle to those proofs. This split prevents a circular requirement without
+weakening runtime admission.
 
 1. two newly initialized containers from the exact pinned platform manifest produce identical raw
    transcripts, ordered records, count, bytes and digest without a shared data
@@ -331,8 +346,12 @@ Future runtime admission requires all of:
    but fails compiled-pin `Plan` creation with zero checkout access; fixture as
    live observation, structural/proxy/accessor brands and stale/cross-session/
    wrong-ordinal observations fail, with post-checkout failures rolling back;
-7. Node 20.0.0 and 24.14.1 produce identical pins and pass exact/max/+1,
-   literal/escaped/multibyte, hostile-carrier, private-brand and copy-alias KATs;
+7. before sealing, Node 20.0.0 and 24.14.1 produce identical candidate
+   fixture/capture pins and pass the fixture/capture exact/max/+1,
+   literal/escaped/multibyte, hostile-carrier, private-brand and copy-alias
+   KATs; after bundling, those versions produce identical bundle/runtime pins
+   and pass the corresponding live-observation private-brand and copy-alias
+   KATs;
 8. capture receipts bind the OCI Linux/amd64 platform manifest/config, initdb and database
    creation facts, projection and independent-oracle source digests, distinct
    volume identities, raw multiset transcript and final pins; and
@@ -347,14 +366,54 @@ specified decoded-key and allocation ceilings before its sole `JSON.parse`,
 replays exact canonical bytes, and retains a private copy behind an opaque
 `authority=none` handle. Its 92 hostile/limit/private-brand KATs plus five
 exact-fixture baseline tests pass on exact Node 20.0.0 and 24.14.1. Unpublished
-developer-local runs report both V1 and V2 live replay, 585/585 supervisor
-tests, and 889 parent-harness tests with two intentional skips. The test-only
-reader remains outside service build inputs and exports, so it creates no
-runtime or migration dependency. Those run results are not bound by a
-versioned test-run receipt. Projection/oracle mutation closure, the sealed
-runtime parser and compiled-pin `Plan`, live-observation brands and rollback,
-and a passing GitHub-hosted live matrix remain open. The current test receipts
-and KATs therefore do not satisfy runtime admission.
+developer-local runs report both V1 and V2 live replay, 602/602 supervisor
+tests, and 892 parent-harness tests with two intentional skips.
+
+The parent harness uses explicit non-recursive root and discovered-directory
+watches, requires setup/cooperative/settled metadata digests to agree, and
+fails closed at 8,192 watchers while closing every partially opened watcher.
+This avoids Node 20's recursive-watcher teardown race without changing digest bytes.
+
+An additive protected pure mutator, extracted fail-closed replay support and 17
+focused KATs identify the exact eight top-level `UNION ALL` class branches,
+construct one deletion per branch, and construct four scanner-positioned
+record-set mutants without editing the pinned projection. The latter return
+zero rows, omit the first canonical atom, add one typed canonically last
+sentinel atom, or replace the first atom with that sentinel while preserving
+the count. Held-root and held-file `O_NOFOLLOW` descriptors plus pre/post
+identity checks reject absolute/parent, symlink, hardlink, directory and
+oversized sources. Exact frozen process arguments and mutated container
+snapshots make identifier, image, environment, network, port and mount
+predicates load-bearing before PostgreSQL execution.
+
+The test-only live verifier uses two fresh networkless anonymous-volume
+containers. Within one serializable rollback-only transaction per run it seeds
+PUBLIC `USAGE` on one foreign-data wrapper and server, proves all eight classes
+are positive, and requires original and explicit-column normalized projections
+to equal the independently derived raw-catalogue bag. Every mutant executes
+and parses. A branch deletion must preserve the exact seven-class survivor bag;
+zero, omission, addition and substitution must equal their mutation-specific
+exact output, with the sentinel independently pinned by a KAT. The full oracle
+then rejects the first eleven mutants
+with `ORACLE_RECORD_BAG_KEYS_MISMATCH` and the count-neutral substitution with
+`ORACLE_RECORD_BAG_MULTIPLICITY_MISMATCH`. Postflight proves the seed absent and
+owned cleanup is checked. Exact Node 20.0.0 and 24.14.1 produce the same
+12,584,275-byte deterministic transcript and kill all 12 mutants in both runs.
+The 60-second session and 15-second probe/inspection ceilings consume at most
+120 seconds beneath the 300-second parent, leaving 180 seconds for bounded
+local analysis and termination; CI allows 120 minutes for the conservative
+110-minute sum of all six isolated replay and cleanup ceilings.
+
+This closes only item 5's delete-any-top-level-class-branch, return-zero,
+single-atom omission/addition and count-neutral-substitution subsets. Item 4
+and the remaining item 5 predicate, value, nullability, order, duplicate,
+array/element and `UNION ALL` replacement mutations remain open, as do item
+6's sealed runtime parser/compiled-pin `Plan` and live-observation brands. The
+test-only reader, mutator, replay support and verifier remain outside service
+build inputs and exports, so they create no runtime or migration dependency.
+These developer runs are not bound by a versioned test-run receipt, and a
+passing GitHub-hosted live matrix remains open. The current evidence therefore
+does not satisfy runtime admission.
 
 ### 8. Record the reproduced test-only candidate
 
@@ -390,9 +449,10 @@ omitted classes.
 The reproduced candidate fixture is **4,059 records**, **36,532 JSON nodes** and **860,988
 bytes**, with raw SHA-256
 `a108e05f9cfd6d6485a86fe198a87b3800e21986b5c62e6251519de6577d05be`.
-These values may become provisioning inputs only after every Section 7 gate
-passes and ADR-0046's later sealed bundle pins them; their presence here or in
-test evidence grants no runtime authority.
+These values may become provisioning inputs only after the Section 7
+pre-sealing gates pass and ADR-0046's later sealed bundle pins them. Item 6 then
+tests that bundle before admission; presence here or in test evidence grants no
+runtime authority.
 
 ## Consequences
 

@@ -135,11 +135,27 @@ no-membership-role checks across six populated classes; FDW/server remain
 explicit zero classes. It also binds matching captures from two distinct fresh
 volumes. These are test evidence only: they are excluded from
 supervisor-service source and build inputs and authorize neither migration nor
-runtime activation. Unpublished developer-local Node.js 20.0.0 and 24.14.1 runs
-report 585 supervisor tests, both V1/V2 live replays, and the 889-test parent
-harness with two intentional skips. No version-bound run receipt is tracked; CI
-is configured to run the same gates, but hosted evidence, projection/oracle
-mutation closure, runtime `Plan` and live-observation brands remain open.
+runtime activation. A pure lexical mutator, extracted fail-closed replay support
+and 17 KATs protect the exact eight top-level class branches plus return-zero,
+one-atom omission, one typed-sentinel addition and count-neutral substitution.
+Its live verifier uses one rollback-only serializable transaction to populate
+FDW/server, match original and normalized projection bags to the independent
+raw-catalogue oracle, execute all 12 mutants, prove every exact mutant output,
+and require the full-bag key or multiplicity rejection. Held-descriptor
+`O_NOFOLLOW` reads, exact process arguments and mutated container predicates
+protect the local boundary; 60-second sessions and 15-second probes/inspections
+leave 180 seconds beneath the 300-second parent ceiling. Two fresh networkless
+runs prove deterministic evidence and owned cleanup. Unpublished developer-local
+Node.js 20.0.0 and 24.14.1 runs report 602 supervisor tests, V1/V2 plus the
+12-mutant live replay, and the 892-test parent harness with two intentional
+skips. No version-bound run receipt is tracked; CI is configured to run the same
+gates, but hosted evidence and the remaining predicate/value/nullability/order/
+duplicate/array/`UNION ALL` mutation cases, runtime `Plan` and live-observation
+brands remain open.
+
+The parent harness replaces Node 20's asynchronous recursive watcher with
+explicit root/nested directory watches, three agreeing tree digests and an
+8,192-watcher fail-closed ceiling that closes every partially opened watcher.
 
 ## Retrieval flywheel boundary
 

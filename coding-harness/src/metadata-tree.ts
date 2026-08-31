@@ -22,6 +22,8 @@ export interface MetadataTreeOptions {
   readonly yieldEvery?: number;
 }
 
+const MAX_METADATA_WATCHERS = 8_192;
+
 export function metadataTreeDigest(
   sources: readonly MetadataTreeSource[],
   options: MetadataTreeOptions,
@@ -75,14 +77,30 @@ async function observedMetadataTreeDigest(
   changedCode: string,
 ): Promise<string> {
   const watchers: FSWatcher[] = [];
+  const watchedDirectories = new Set<string>();
   let changed = false;
   let watcherFailure: unknown;
+  const roots = new Set(sources.map(({ source }) => source));
+  const watcherLimit = Math.min(
+    MAX_METADATA_WATCHERS,
+    positiveInteger(options.maxEntries, 'maxEntries') + roots.size,
+  );
+  const watchDirectory = (directory: string): void => {
+    if (watchedDirectories.has(directory)) return;
+    if (watchers.length >= watcherLimit) throw new Error(changedCode);
+    const watcher = watch(directory, { recursive: false }, () => { changed = true; });
+    watcher.on('error', (error) => { watcherFailure ??= error; });
+    watchers.push(watcher);
+    watchedDirectories.add(directory);
+  };
   try {
-    for (const source of new Set(sources.map(({ source }) => source))) {
-      const watcher = watch(source, { recursive: true }, () => { changed = true; });
-      watcher.on('error', (error) => { watcherFailure ??= error; });
-      watchers.push(watcher);
+    for (const root of roots) watchDirectory(root);
+    const setupHash = createHash('sha256');
+    for (const entry of metadataEntries(sources, options)) {
+      if (entry.kind === 'd') watchDirectory(entry.absolutePath);
+      updateDigest(setupHash, entry);
     }
+    const setupDigest = setupHash.digest('hex');
     const digest = await cooperativeMetadataTreeDigest(sources, options);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -91,9 +109,10 @@ async function observedMetadataTreeDigest(
     // the cooperative scan is still a hard failure, not a timing-dependent
     // clean result.
     const settledDigest = metadataTreeDigest(sources, options);
-    if (changed || watcherFailure !== undefined || digest !== settledDigest) throw new Error(changedCode, {
-      cause: watcherFailure,
-    });
+    if (changed || watcherFailure !== undefined
+      || setupDigest !== digest || digest !== settledDigest) {
+      throw new Error(changedCode, { cause: watcherFailure });
+    }
     return digest;
   } finally {
     for (const watcher of watchers) watcher.close();
@@ -101,6 +120,7 @@ async function observedMetadataTreeDigest(
 }
 
 interface MetadataEntry {
+  readonly absolutePath: string;
   readonly kind: 'd' | 'f';
   readonly path: string;
   readonly stat: BigIntStats;
@@ -122,10 +142,10 @@ function* metadataEntries(
         entries += 1;
         if (entries > maxEntries) throw new Error(options.invalidCode);
         if (stat.isDirectory() && !stat.isSymbolicLink() && realpathSync(path) === path) {
-          yield { kind: 'd', path: virtual, stat };
+          yield { absolutePath: path, kind: 'd', path: virtual, stat };
           yield* visit(path);
         } else if (stat.isFile() && !stat.isSymbolicLink() && realpathSync(path) === path) {
-          yield { kind: 'f', path: virtual, stat };
+          yield { absolutePath: path, kind: 'f', path: virtual, stat };
         } else {
           throw new Error(options.invalidCode);
         }
