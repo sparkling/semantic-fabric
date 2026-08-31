@@ -4,6 +4,10 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  copyPostgresPublicAclFixtureBytesV1,
+  parsePostgresPublicAclFixtureV1,
+} from './registration-postgresql-public-acl-fixture-reader-v1.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const FIXTURE = resolve(
@@ -40,17 +44,19 @@ interface PublicAclRecordV1 {
 }
 
 describe('PostgreSQL 16.15 PUBLIC ACL baseline', () => {
-  const fixture = readFileSync(FIXTURE);
-  const text = new TextDecoder('utf-8', { fatal: true }).decode(fixture);
-  const rows = JSON.parse(text) as unknown;
+  const fixture = new Uint8Array(readFileSync(FIXTURE));
+  const fixtureHandle = parsePostgresPublicAclFixtureV1(fixture);
+  const fixtureBytes = copyPostgresPublicAclFixtureBytesV1(fixtureHandle);
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(fixtureBytes);
+  const rows = fixtureHandle.records;
 
   it('pins the independently replayed compact fixture bytes', () => {
-    expect(fixture.byteLength).toBe(EXPECTED.bytes);
-    expect(sha256(fixture)).toBe(EXPECTED.sha256);
+    expect(fixtureBytes.byteLength).toBe(EXPECTED.bytes);
+    expect(sha256(fixtureBytes)).toBe(EXPECTED.sha256);
     expect(text.startsWith('[')).toBe(true);
     expect(text.endsWith(']\n')).toBe(true);
     expect(text.includes('\r')).toBe(false);
-    expect(Buffer.from(text, 'utf8').equals(fixture)).toBe(true);
+    expect(Buffer.from(text, 'utf8').equals(fixtureBytes)).toBe(true);
     expect(Array.isArray(rows)).toBe(true);
     expect(rows).toHaveLength(EXPECTED.records);
     expect(`${JSON.stringify(rows)}\n`).toBe(text);
@@ -125,6 +131,10 @@ describe('PostgreSQL 16.15 PUBLIC ACL baseline', () => {
     const evidencePaths = [
       '__tests__/registration-postgresql-public-acl-baseline-v1.test.ts',
       '__tests__/registration-postgresql-public-acl-completeness-oracle-v1.test.ts',
+      '__tests__/registration-postgresql-public-acl-fixture-hostile-v1.test.ts',
+      '__tests__/registration-postgresql-public-acl-fixture-limits-v1.test.ts',
+      '__tests__/registration-postgresql-public-acl-fixture-reader-v1.ts',
+      '__tests__/registration-postgresql-public-acl-fixture-scanner-v1.ts',
       '__tests__/fixtures/postgresql-16.15-clean-template0-public-object-acl-v1.json',
       '__tests__/fixtures/postgresql-16.15-public-acl-projection-v1.sql',
       '__tests__/fixtures/postgresql-16.15-public-acl-completeness-oracle-v1.sql',

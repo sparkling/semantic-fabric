@@ -17,10 +17,11 @@ ordering, capture profile and candidate replay evidence for ADR-0046's stock PUB
 baseline. It does not accept ADR-0042 through ADR-0046, provision PostgreSQL,
 authorize migrations or readiness, refresh a pin, or make a deployment.
 
-The fixture is a protected test oracle, not a deployed input. Runtime code owns
-the independently reviewed projection but never embeds, learns or supplies the
-expected baseline count, length or digest. Those values enter only through the
-reviewed provisioning contract selected by the independently pinned manifest.
+The fixture is a protected test oracle, not a deployed input. Any admitted
+runtime implementation will own the independently reviewed projection but must
+never embed, learn or supply the expected baseline count, length or digest.
+Those values enter only through the reviewed provisioning contract selected by
+the independently pinned manifest.
 The current receipts are test-fixture evidence only. Receipt V1 remains an
 immutable, non-attesting predecessor; additive receipt V2 binds its exact bytes
 before adding the OID/attribute-aware candidate matrix and effective-privilege
@@ -340,13 +341,20 @@ Future runtime admission requires all of:
    provisioning/manifest data are private build inputs and never public exports.
 
 Owned fresh replay orchestration and the no-membership `has_*` witness are
-implemented and have reproduced the candidate locally. Unpublished
-developer-local Node 20.0.0/24.14.1 runs report both V1 and V2 live replay,
-493/493 supervisor tests, and 889 parent-harness tests with two intentional
-skips. Those run results are not bound by a versioned test-run receipt. Existing
-scanner, runtime, mutation and private-brand KATs are not yet exhaustive, and
-the configured GitHub-hosted live matrix has not yet passed for this change.
-The current test receipts and KATs therefore do not satisfy runtime admission.
+implemented and have reproduced the candidate locally. A protected test-only
+reader now snapshots an intrinsic non-resizable byte carrier, enforces the
+specified decoded-key and allocation ceilings before its sole `JSON.parse`,
+replays exact canonical bytes, and retains a private copy behind an opaque
+`authority=none` handle. Its 92 hostile/limit/private-brand KATs plus five
+exact-fixture baseline tests pass on exact Node 20.0.0 and 24.14.1. Unpublished
+developer-local runs report both V1 and V2 live replay, 585/585 supervisor
+tests, and 889 parent-harness tests with two intentional skips. The test-only
+reader remains outside service build inputs and exports, so it creates no
+runtime or migration dependency. Those run results are not bound by a
+versioned test-run receipt. Projection/oracle mutation closure, the sealed
+runtime parser and compiled-pin `Plan`, live-observation brands and rollback,
+and a passing GitHub-hosted live matrix remain open. The current test receipts
+and KATs therefore do not satisfy runtime admission.
 
 ### 8. Record the reproduced test-only candidate
 

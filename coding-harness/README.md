@@ -125,17 +125,21 @@ primary and bare stores; no controlled profile, project run, source tree,
 receipt, or measurement is created by the repository test suite.
 
 Supervisor-service verification also protects the PostgreSQL 16.15 baseline
-fixture, independent completeness oracle, hostile tests, immutable V1 receipt,
-and additive V2 OID/attribute-aware candidate-matrix/effective-privilege witness
-receipt. V1's raw oracle independently expands direct ACL atoms. V2 binds 13,603 fresh
+fixture, its test-only bounded scanner/one-parse reader and opaque
+non-authorizing byte brand, independent completeness oracle, immutable V1
+receipt, and additive V2 OID/attribute-aware candidate-matrix/effective-privilege
+witness receipt. The reader's 92 hostile/limit/private-brand KATs plus five
+exact-fixture baseline tests reject noncanonical or forged fixture authority.
+V1's raw oracle independently expands direct ACL atoms. V2 binds 13,603 fresh
 no-membership-role checks across six populated classes; FDW/server remain
 explicit zero classes. It also binds matching captures from two distinct fresh
 volumes. These are test evidence only: they are excluded from
 supervisor-service source and build inputs and authorize neither migration nor
 runtime activation. Unpublished developer-local Node.js 20.0.0 and 24.14.1 runs
-report 493 supervisor tests, both V1/V2 live replays, and the 889-test parent
+report 585 supervisor tests, both V1/V2 live replays, and the 889-test parent
 harness with two intentional skips. No version-bound run receipt is tracked; CI
-is configured to run the same gates, but hosted evidence for this change is open.
+is configured to run the same gates, but hosted evidence, projection/oracle
+mutation closure, runtime `Plan` and live-observation brands remain open.
 
 ## Retrieval flywheel boundary
 
