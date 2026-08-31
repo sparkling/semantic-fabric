@@ -58,6 +58,8 @@ export const BUILD_INPUT_PATHS = Object.freeze([
   'src/registration-postgresql-migration-reader-v1.ts',
   'src/registration-postgresql-migration-sql-policy-v1.ts',
   'src/registration-postgresql-migration-sql-scanner-v1.ts',
+  'src/registration-postgresql-migration-store-contract-v1.ts',
+  'src/registration-postgresql-migration-terminal-results-v1.ts',
   'src/registration-postgresql-provisioning-contract-v1.ts',
   'src/registration-postgresql-row-codecs-v1.ts',
   'src/registration-transaction-admission-v1.ts',
