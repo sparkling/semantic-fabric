@@ -21,7 +21,7 @@
     "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "d02d6235588d9669131f80ffa78b2f027f98d0979ecfedc959090e363d092ca6",
+    "scripts/artifact-lib.mjs": "d92735f22a0ded187bf0cdfc3050057209f0770c1ac0f5787c60360ddf065feb",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
@@ -43,6 +43,8 @@
     "src/registration-postgresql-materializer-v1.ts": "8b627ff4129aec7715f43cac430505762cc794660321da2503e1beacd5e72314",
     "src/registration-postgresql-migration-json-v1.ts": "7004424dc19a02adf732b3711f8259c8cd42aa81d35ba69e6bdeca7f7c4b85be",
     "src/registration-postgresql-migration-manifest-v1.ts": "03dbc1e00051e69600e3054e7c8775f4f727f1c9093f01a799b2446677034782",
+    "src/registration-postgresql-migration-plan-v1.ts": "c4ad1f9e58270636ba954d679fb4fc0885cd05bf858868524a5cb6538d42e6bc",
+    "src/registration-postgresql-migration-reader-v1.ts": "0ed4028bb9fcfb8a34f409007f9fd666126e7d297839e5753514aa59e5b82f36",
     "src/registration-postgresql-migration-sql-policy-v1.ts": "12f753b9e1b7fd3637b0b4528f00bd49a4448e33decd791e271374db4edfd4b2",
     "src/registration-postgresql-migration-sql-scanner-v1.ts": "72bf4e135510d328318a97a1bc9289d03915e6718446009cba62848cd9b32190",
     "src/registration-postgresql-provisioning-contract-v1.ts": "df1c25f107d73cd0b528b399cb7483eba666f873a0eafc92887e9479cc862cbb",
@@ -61,5 +63,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "bb8e98b2b1918a721e2e12d642f2509520619efb631c911586b2dcfb78f4a80a"
+  "artifactDigest": "766600f78f6384fdc5cdfb8eec871c33f0d0b6b6224ae08c56a1603592dabde9"
 }

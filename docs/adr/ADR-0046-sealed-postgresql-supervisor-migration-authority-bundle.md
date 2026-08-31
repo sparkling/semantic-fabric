@@ -12,12 +12,9 @@ implements: [ADR-0044, ADR-0045]
 
 ## Status boundary
 
-This ADR is **proposed**. It closes provisioning, manifest, seed, empty-state and migration-runner
-representation gaps left by ADR-0044/0045. It does not accept them, activate the supervisor,
-provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
+This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader and opaque dormant `Plan` described below are implemented, but the store, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
 
-The bundle remains private and dormant. Runtime startup/readiness may verify but never apply or
-repair migrations. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
+The bundle remains private and dormant. Runtime startup/readiness may verify but never apply or repair migrations. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
 
 ## Context
 
@@ -304,15 +301,16 @@ Migration keys are `version,path,bytes,sha256`, exactly versions 1/2 and paths
 Lengths, server version, migration version and bytes are positive safe-integer numbers; only the
 lock key is decimal text. Digests are lowercase nonzero raw SHA-256.
 
-A private source constant pins the manifest SHA-256 independently of input; the
-service artifact and parent manifest bind the constant and file. Coherent
-replacement fails before checkout; pin changes require explicit byte review.
+A private source constant pins the manifest SHA-256 independently of input; the service artifact and parent manifest bind the constant and file. Coherent replacement fails before checkout; pin changes require explicit byte review.
 
-Loading starts at fixed `migrations/manifest-v1.json`; size is at most 16,384 before allocation, then its snapshot is parsed/pin-checked.
-Its four fixed paths alone map to regular-file descriptors. Each descriptor size equals its manifest `bytes`
-and is no greater than its compiled ceiling: catalogue/each SQL 1,048,576; provisioning 65,536. Unrelated
-directory entries are inert and ignored; authority never comes from enumeration. Root/file symlinks, hardlinks,
-non-regular files, group/world-writable modes, aliases, or descriptor-identity changes fail; each file is read once, checked and executed.
+Loading starts at fixed `migrations/manifest-v1.json`. The reader opens that file first and checks its compiled exact length and digest before opening the other four files; the semantic layer then parses the manifest and atomically cross-checks all six handles. No parsed path is ever opened.
+The five compiled basenames alone map to regular-file descriptors and each descriptor must have its compiled exact size and digest before bytes escape the reader. Unrelated directory entries are inert and ignored; authority never comes from enumeration.
+
+The reader is Linux-only and fail-closed: `O_NOFOLLOW`, `O_NONBLOCK`, `O_DIRECTORY` and `/proc/self/fd` must exist. It walks every absolute root component from a held `/` descriptor, keeps the root, service, migrations and five file descriptors open through validation, and never calls `realpath` as an authority.
+Root/component/file symlinks, hardlinks, non-regular files, group/world-writable service or migrations directories/files, cross-owner inputs, inode aliases, size/digest changes, unstable descriptor identity and any close failure reject the whole bundle. A deployed service root and its `migrations` directory therefore require same-owner mode `0755` or stricter; the group-writable source checkout is an authoring location, not an executable migration root.
+
+`loadSealedPostgresMigrationPlanV1()` takes no path or bytes. Its root is fixed relative to its own module, and it creates a frozen WeakMap-branded `authority=none` Plan only after manifest, catalogue, provisioning, in-memory seed and both SQL policies agree. Clones, proxies and semantic handles cannot forge the Plan.
+The only byte projection returns fresh copies in exact `0001 -> seed -> 0002` order. The pathless preflight receipt is pinned at `2ff788e1d5af841ea6be0f1d22635a0a584e176d2c17537b9c0533afeebd434d`; creating it performs no I/O, while replay reopens only the fixed bundle and still grants neither database access nor migration-apply authority.
 
 ### 6. Define SQL authority and empty state
 
@@ -446,11 +444,14 @@ completion self-quarantines the client/shell; no second terminal is invoked.
 | COMMIT thrown/malformed/transport-uncertain | `destroy` | `commit-resolution-unknown`, regardless of destroy outcome |
 | COMMIT exact command-complete | `release` | `applied` or `exact-no-op`; `committed-cleanup-failed` if release is not acknowledged |
 
-No same-invocation migration retry exists. A fresh operator invocation may try
-to acquire the lock and reclassify; it fails closed on lock timeout and never
-assumes a prior failed cleanup released the lock. Every result is deeply frozen,
-contains `authority:none` and `readinessAuthorized:false`, and exposes no SQL,
-seed, row, receipt, credential, or connection detail.
+No same-invocation migration retry exists. A fresh operator invocation may try to acquire the lock and reclassify; it fails closed on lock timeout and never assumes a prior failed cleanup released the lock.
+Every result is deeply frozen, contains `authority:none` and `readinessAuthorized:false`, and exposes no SQL, seed, row, receipt, credential, or connection detail.
+
+### Implemented dormant representation evidence
+
+The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Eleven focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
+The full private service suite passes 659 tests, and its public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
+This evidence closes only the dormant load-and-bind slice; quoted-identifier callable-policy hardening, driver/store contracts, deadlines, terminal runner semantics and live PostgreSQL 16.15 evidence remain open.
 
 ## Acceptance gates
 
@@ -466,8 +467,7 @@ This decision is implemented only when:
 4. PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
    value sentinels, acknowledged-versus-uncertain rollback/commit, pre-send termination,
    unknown-commit reclassification, no retry/partial repair, and every ADR-0044/0045 denial;
-5. runtime source and sealed data are private build inputs; test fixtures and
-   capture evidence are parent/harness protected but outside service `BUILD_INPUT_PATHS`.
+5. runtime source and sealed data are private build inputs; test fixtures and capture evidence are parent/harness protected but outside service `BUILD_INPUT_PATHS`.
    Source and tests remain under 500 lines, security/ADR/frozen-harness gates pass, and the public bundle SHA-256 remains
    `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
 
