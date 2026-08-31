@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-08-31
+updated: 2026-09-01
 tags: [postgresql, supervisor, migrations, provisioning, canonical-json]
 supersedes: []
 depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045]
@@ -18,9 +18,7 @@ The bundle remains private and dormant. Runtime startup/readiness may verify but
 
 ## Context
 
-The reviewed catalogue/parser provide exact dedicated-schema truth. Three independent audits found
-five accidental-authority risks: input schemas/limits, independent byte pinning, empty/ledger order,
-commit versus cleanup uncertainty, and exhaustive predefined-role closure.
+The reviewed catalogue/parser provide exact dedicated-schema truth. Three independent audits found five accidental-authority risks: input schemas/limits, independent byte pinning, empty/ledger order, commit versus cleanup uncertainty, and exhaustive predefined-role closure.
 
 These are representation closures inside the architecture, not reasons to replace it.
 
@@ -28,8 +26,7 @@ These are representation closures inside the architecture, not reasons to replac
 
 ### 1. Keep four disjoint authorities
 
-The committed bundle contains exactly these files under
-`coding-harness/supervisor-service/migrations/`:
+The committed bundle contains exactly these files under `coding-harness/supervisor-service/migrations/`:
 
 ```text
 0001-registration-state-v1.sql
@@ -39,29 +36,17 @@ provisioning-contract-v1.json
 manifest-v1.json
 ```
 
-The parameterized authority seed is a sixth sealed in-memory input, not a migration file, request,
-SQL fragment, or observation. One reviewed nonoperational seed is private source bytes derived from
-canonical fixtures; the manifest binds domain, length and raw SHA-256. Callers cannot substitute it.
-Activation requires a deployment-specific reviewed seed, manifest pin, artifact rebuild and evidence.
+The parameterized authority seed is a sixth sealed in-memory input, not a migration file, request, SQL fragment, or observation. One reviewed nonoperational seed is private source bytes derived from canonical fixtures; the manifest binds domain, length and raw SHA-256. Callers cannot substitute it. Activation requires a deployment-specific reviewed seed, manifest pin, artifact rebuild and evidence.
 
-Catalogue alone owns dedicated-schema truth; provisioning owns database, roles, membership and
-cluster-wide negative authority; manifest selects versions/bytes. Readiness may record observations
-but never update authority. SQL is generated only from reviewed data, then committed/executed as
-sealed bytes; observed state is never generator input.
+Catalogue alone owns dedicated-schema truth; provisioning owns database, roles, membership and cluster-wide negative authority; manifest selects versions/bytes. Readiness may record observations but never update authority. SQL is generated only from reviewed data, then committed/executed as sealed bytes; observed state is never generator input.
 
 ### 2. Use one hostile-boundary grammar for the three smaller JSON inputs
 
-Provisioning, manifest and seed use exact `JSON.stringify(value, null, 2)` plus LF: fatal UTF-8 with
-no BOM, CR, trailing data, alternate whitespace, unsafe/negative-zero/non-finite numbers, unpaired
-surrogates, sparse arrays or duplicate decoded keys. All member order is normative.
+Provisioning, manifest and seed use exact `JSON.stringify(value, null, 2)` plus LF: fatal UTF-8 with no BOM, CR, trailing data, alternate whitespace, unsafe/negative-zero/non-finite numbers, unpaired surrogates, sparse arrays or duplicate decoded keys. All member order is normative.
 
-Each parser performs: intrinsic non-proxy `Uint8Array` admission; synchronous copy; fixed pre-decode
-ceiling; fatal UTF-8 decode/re-encode; bounded duplicate/token scan; one `JSON.parse`; closed-schema,
-semantic and cross-reference validation; byte replay; raw SHA-256; private brand. File limits never
-raise compiled ceilings.
+Each parser performs: intrinsic non-proxy `Uint8Array` admission; synchronous copy; fixed pre-decode ceiling; fatal UTF-8 decode/re-encode; bounded duplicate/token scan; one `JSON.parse`; closed-schema, semantic and cross-reference validation; byte replay; raw SHA-256; private brand. File limits never raise compiled ceilings.
 
-Mutable bytes live in module-private storage; unconstructable prepared handles return fresh copies.
-No parser error contains input bytes, SQL, parameters, credentials, or connection strings.
+Mutable bytes live in module-private storage; unconstructable prepared handles return fresh copies. No parser error contains input bytes, SQL, parameters, credentials, or connection strings.
 
 Exact hard ceilings are:
 
@@ -71,15 +56,11 @@ Exact hard ceilings are:
 | manifest | 16,384 | 5 | 256 | 16 | 2 | 11 | 1,024 |
 | seed | 262,144 | 4 | 56 | 3 | 0 | 14 | 196,608 |
 
-Root depth is one; objects, arrays and primitives are nodes, not keys. Records are non-root objects.
-Seed width zero makes 57 nodes structurally valid, so its 56 ceiling has an isolated plus-one case.
-Exact maximum and maximum-plus-one cases are required.
+Root depth is one; objects, arrays and primitives are nodes, not keys. Records are non-root objects. Seed width zero makes 57 nodes structurally valid, so its 56 ceiling has an isolated plus-one case. Exact maximum and maximum-plus-one cases are required.
 
 ### 3. Freeze the provisioning contract
 
-The provisioning domain is
-`semantic-fabric/programme-capture/supervisor-postgresql-provisioning-contract-v1`
-and `schemaVersion` is the JSON number `1`. Root keys are exactly:
+The provisioning domain is `semantic-fabric/programme-capture/supervisor-postgresql-provisioning-contract-v1` and `schemaVersion` is the JSON number `1`. Root keys are exactly:
 
 ```text
 domain
@@ -96,14 +77,9 @@ runtimeCredentialAbsence
 limits
 ```
 
-`authority` is `none`; `readinessAuthorized` is false. `limits` repeats the
-provisioning row above with keys `maximumBytes, maximumDepth, maximumNodes,
-maximumRecords, maximumCollectionWidth, maximumObjectKeys,
-maximumStringBytes, maximumIdentifierBytes`; the final value is `63`.
+`authority` is `none`; `readinessAuthorized` is false. `limits` repeats the provisioning row above with keys `maximumBytes, maximumDepth, maximumNodes, maximumRecords, maximumCollectionWidth, maximumObjectKeys, maximumStringBytes, maximumIdentifierBytes`; the final value is `63`.
 
-The nonoperational profile fixes database/schema `sf_supervisor_v1`, owner
-`sf_supervisor_owner_v1`, bootstrap grantor `sf_supervisor_bootstrap_admin_v1`, and public schema
-`public` owned by `pg_database_owner`.
+The nonoperational profile fixes database/schema `sf_supervisor_v1`, owner `sf_supervisor_owner_v1`, bootstrap grantor `sf_supervisor_bootstrap_admin_v1`, and public schema `public` owned by `pg_database_owner`.
 
 Record key order is:
 
@@ -128,11 +104,7 @@ IDs and settings compare by their string value. Every set is strictly increasing
 under ADR-0045's typed comparator: unsigned ASCII strings, `null` before strings,
 `false` before `true`, and tuple fields left-to-right. Duplicates fail.
 
-The nine role records are the ADR-0044 roles, sorted by literal name. Every
-boolean attribute is false except `login` for migration, readiness, writer and
-recovery logins. Every role has `NOINHERIT`, connection limit `-1`, null
-validity, and `settings=[]`; this requires absence of both global role settings
-and every role-in-database setting.
+The nine role records are the ADR-0044 roles, sorted by literal name. Every boolean attribute is false except `login` for migration, readiness, writer and recovery logins. Every role has `NOINHERIT`, connection limit `-1`, null validity, and `settings=[]`; this requires absence of both global role settings and every role-in-database setting.
 
 The seven membership records are:
 
@@ -312,6 +284,8 @@ Root/component/file symlinks, hardlinks, non-regular files, group/world-writable
 `loadSealedPostgresMigrationPlanV1()` takes no path or bytes. Its root is fixed relative to its own module, and it creates a frozen WeakMap-branded `authority=none` Plan only after manifest, catalogue, provisioning, in-memory seed and both SQL policies agree. Clones, proxies and semantic handles cannot forge the Plan.
 The only byte projection returns fresh copies in exact `0001 -> seed -> 0002` order. The pathless preflight receipt is pinned at `2ff788e1d5af841ea6be0f1d22635a0a584e176d2c17537b9c0533afeebd434d`; creating it performs no I/O, while replay reopens only the fixed bundle and still grants neither database access nor migration-apply authority.
 
+Receipt replay uses a receipt-specific descriptor visitor before equality comparison. It rejects proxies before traps, requires intrinsic `Object.prototype` records, exact ordered enumerable string data keys and primitive leaves, and forbids accessors, symbols, arrays, typed arrays, exotic prototypes and extras. Root keys are exactly `schemaVersion,receiptKind,planKind,authority,readinessAuthorized,databaseAccessAuthorized,migrationApplyAuthorized,postgresqlServerVersion,postgresqlServerVersionNumber,advisoryLockKey,artifacts,receiptSha256`; artifact keys are `manifest,catalogueContract,provisioningContract,authoritySeed,migration0001,migration0002`; every pin is `bytes,sha256`. It never canonicalizes, encodes or hashes the candidate; one `Reflect.ownKeys` allocation per admitted intrinsic record is the unavoidable JavaScript limit. The exact pins are `maximumKeysPerRecord=12`, `maximumTotalKeys=30`, `maximumKeyUtf8Bytes=29`, `maximumStringValueUtf8Bytes=64`, `maximumRecords=7` (non-root; eight objects including root), `maximumNodes=31`, `maximumRecordDepth=3`, `maximumLeafDepth=4`, `maximumAggregateKeyBytes=347`, `maximumAggregateStringValueBytes=548`, `maximumAggregateKeyPlusStringBytes=895`, `exactCanonicalReceiptBytes=1098`, and `exactCanonicalBodyBytes=1015`, with root depth one. These pins and the receipt/artifact digests are one review unit; generic canonical-graph limits are unchanged. Successful replay returns the frozen singleton.
+
 ### 6. Define SQL authority and empty state
 
 `0001` contains only the dedicated schema, default ACLs, ten domains with ten named checks, eight tables, sixty
@@ -323,7 +297,8 @@ Static KATs allowlist only those constructs and reject every `forbiddenOwnedKind
 control, role/database/credential creation, dynamic SQL/psql, `IF NOT EXISTS`, `CREATE OR REPLACE`,
 `ON CONFLICT`, `COPY`, `SECURITY DEFINER`, session authorization and `public` mutation. Callable
 functions are only required `pg_catalog.octet_length`, `substring`, `scale`, and `pg_has_role` uses.
-Seed SQL is fixed, separate and parameterized with base PostgreSQL types.
+The static policy scanner's splitter is analysis-only and never feeds `execute()`; no execution-time
+splitter exists. Seed SQL is fixed, separate and parameterized with base PostgreSQL types.
 
 After provisioning preflight and the advisory lock, `empty` means the dedicated
 schema is absent and the database-observable provisioning projection is exact.
@@ -425,6 +400,24 @@ takes the fixed advisory transaction lock, issues
 `SESSION_USER=sf_supervisor_migration_login_v1` and
 `CURRENT_USER=sf_supervisor_owner_v1` before classification.
 
+All time authority is compiled and module-private. `process.hrtime.bigint()` is observed at entry, every operation settlement and every synchronous boundary; expiry is `now >= deadline`. There is no caller clock, timer, signal, lease or renewal. A referenced timer is cleared on settlement, re-arms if it fires early, and cannot win or lose by callback ordering: settlement is accepted only while `now < effectiveDeadline` and the session/operation/ordinal latch is live.
+
+| Boundary | Compiled ceiling |
+|---|---:|
+| checkout / open | 10,000 ms each |
+| ordinary execute / advisory-lock execute | 40,000 / 15,000 ms |
+| whole `migration-0001` / `migration-0002` simple query | 1,570,000 / 2,200,000 ms |
+| COMMIT / ROLLBACK | 60,000 / 40,000 ms |
+| release, destroy or discardMalformed | 10,000 ms |
+| inter-step synchronous processing | 5,000 ms |
+| normal-work cutoff / whole invocation | 5,390,000 / 5,400,000 ms |
+
+The exhaustive lifecycle union has 35 names: the successful empty-apply schedule below plus `rollback`, `destroy`, and `discard-malformed`. Its 32-step time-maximizing successful schedule is `checkout, open, preflight-identity, preflight-role-attributes, preflight-role-membership, begin, set-search-path, set-row-security, set-lock-timeout, set-statement-timeout, set-idle-in-transaction-session-timeout, set-synchronous-commit, verify-settings, advisory-lock, set-local-role, reverify-settings, observe-dedicated-schema-absence, observe-provisioning-projection, observe-public-acl-baseline, observe-default-acl-absence, migration-0001, seed-authority-configuration-insert, seed-authority-state-insert, migration-0002, ledger-insert-version-1, ledger-insert-version-2, replay-authority-configuration-row, replay-authority-state-row, compare-catalogue-projection, compare-provisioning-projection, commit, release`. It has 25 ordinary executes and 33 bounded synchronous gaps (entry, between operations and result); the latest rejected path adds bounded ROLLBACK in place of COMMIT and can use 26 ordinary/rollback ceilings. The successful maximum is 5,040,000 ms, leaving 360,000 ms before both normal cutoff (excluding terminal) and whole invocation. Normal work clamps to `min(step, cutoff-elapsed)`; terminal work clamps to `min(10000, whole-elapsed)`.
+
+PostgreSQL 16 applies the 30,000 ms `statement_timeout` to each statement in a simple-Query message and 5,000 ms `lock_timeout` to each lock wait; the script ceilings are `52*30000+10000` and `73*30000+10000`. The extra 10,000 ms is protocol policy margin, not a preemption guarantee. COMMIT and ROLLBACK ceilings are host policy because transaction finalization can hold interrupts; expiry therefore keeps the conservative uncertainty outcomes below. Live 16.15 KATs must prove per-statement re-arm and hung rollback behavior before implementation acceptance.
+
+Every raced promise receives permanent fulfilment and rejection handlers in the arming tick. On timeout the latch and WeakMap token are atomically spent before classification; late results are never traversed, branded, copied, decoded, returned or allowed to trigger a second terminal. Only a late checkout/open capability gets best-effort disposal: reject proxies without traps, require `Object.prototype`, obtain only the own enumerable data descriptor for `discardMalformed`/`destroy`, capture its function value and invoke once under a separate 10,000 ms referenced timer. Accessors, exotic records, throws, rejections and hangs are drained and cannot alter the selected singleton result.
+
 `release()`, `destroy()`, and `discardMalformed()` take no arguments and are
 one-use. Their sole successes are primitive `released`, `destroyed`, and
 `discarded`. A throw or any missing, accessor-bearing, widened, or wrong-literal
@@ -438,20 +431,21 @@ completion self-quarantines the client/shell; no second terminal is invoked.
 | known decoded failure after BEGIN | exact `ROLLBACK`, then `release` | `rejected`, or `rejected-cleanup-failed` if release is not acknowledged |
 | post-BEGIN throw/malformed/unexpected status | `destroy` | `resolution-unknown`, regardless of destroy outcome |
 | ROLLBACK server-rejected/thrown/malformed | `destroy` | `resolution-unknown`, regardless of destroy outcome |
-| authenticated COMMIT rejection with `idle` | `release` | known `rejected` cleanup outcomes; never retry |
-| authenticated COMMIT rejection with `failed` | exact `ROLLBACK`, then `release` | known `rejected` cleanup outcomes; never retry |
-| COMMIT rejection with other status | `destroy` | `commit-resolution-unknown` |
-| COMMIT thrown/malformed/transport-uncertain | `destroy` | `commit-resolution-unknown`, regardless of destroy outcome |
-| COMMIT exact command-complete | `release` | `applied` or `exact-no-op`; `committed-cleanup-failed` if release is not acknowledged |
+| any COMMIT ErrorResponse, Notice/Warning, malformed protocol, transport uncertainty, deadline, or settlement before complete acknowledgement | `destroy` | `commit-resolution-unknown`, regardless of destroy outcome |
+| clean COMMIT CommandComplete plus ReadyForQuery `idle`, with no Notice/Warning/Error | `release` | `applied` or `exact-no-op`; `committed-cleanup-failed` if release is not acknowledged |
+| deadline before BEGIN / after BEGIN / during ROLLBACK | `destroy` as phase permits | `rejected` only after acknowledged pre-BEGIN destruction; otherwise `rejected-cleanup-failed` / `resolution-unknown` |
+| checkout or open deadline | late capability disposal only | `rejected-cleanup-failed`; no client capability is trusted or returned |
 
 No same-invocation migration retry exists. A fresh operator invocation may try to acquire the lock and reclassify; it fails closed on lock timeout and never assumes a prior failed cleanup released the lock.
-Every result is deeply frozen, contains `authority:none` and `readinessAuthorized:false`, and exposes no SQL, seed, row, receipt, credential, or connection detail.
+Results are seven module-level deeply frozen intrinsic singleton records, one for each `applied|exact-no-op|committed-cleanup-failed|rejected|rejected-cleanup-failed|resolution-unknown|commit-resolution-unknown`. Their exact ordered keys are `resultKind,outcome,authority,readinessAuthorized,databaseAccessAuthorized,migrationApplyAuthorized`; values fix `resultKind=postgresql-migration-runner-result-v1`, `authority=none`, and all three authorization booleans false. There is no `schemaVersion`, digest, SQL, seed, row, receipt, credential or connection detail. The flags describe authority conferred by the returned object, never the observed migration history.
 
 ### Implemented dormant representation evidence
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Eleven focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
 Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. The full private service suite passes 661 tests, and its public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
-This evidence closes the dormant load-and-bind and quoted-callable policy slices; driver/store contracts, receipt string/key byte bounds before untrusted exposure, concurrent replacement stress, deadlines, terminal runner semantics and live PostgreSQL 16.15 evidence remain open.
+This evidence closes the dormant load-and-bind and quoted-callable policy slices. Receipt bounds,
+deadlines and terminal semantics are now specified but unimplemented; driver/store contracts,
+concurrent replacement stress and live PostgreSQL 16.15 evidence also remain open.
 
 ## Acceptance gates
 
@@ -463,10 +457,14 @@ This decision is implemented only when:
    membership, seed-cross-wire and script mutant fails before checkout or rolls back by phase;
 3. transcripts prove null/max/max+1/multibyte/payload-plus-true/missing/cross-wired cell and aggregate
    sentinels; rejected bytes never reach the driver. Brand replay, cross-session/wrong ordinal,
-   missing/wrong ReadyForQuery and ErrorResponse/error mismatch fail closed;
+   missing/wrong ReadyForQuery and ErrorResponse/error mismatch fail closed. Receipt descriptor bounds,
+   all seven singleton shapes, every deadline at minus-one/exact/plus-one, delayed timer callbacks,
+   host suspension, late fulfilment/rejection/disposal, zero unhandled rejection and zero live timer
+   handle after normal settlement are pinned;
 4. PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
    value sentinels, acknowledged-versus-uncertain rollback/commit, pre-send termination,
-   unknown-commit reclassification, no retry/partial repair, and every ADR-0044/0045 denial;
+   unknown-commit reclassification, per-statement simple-query timeout re-arm, hung ROLLBACK,
+   no retry/partial repair, and every ADR-0044/0045 denial;
 5. runtime source and sealed data are private build inputs; test fixtures and capture evidence are parent/harness protected but outside service `BUILD_INPUT_PATHS`.
    Source and tests remain under 500 lines, security/ADR/frozen-harness gates pass, and the public bundle SHA-256 remains
    `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
