@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,7 +19,6 @@ import type {
 } from '../src/network.js';
 import { fakeResourceBoundary, TEST_RESOURCE_LIMITS, TEST_RESOURCE_SCOPE } from './helpers.js';
 import { bwrapAvailable } from './native-test-prerequisites.js';
-
 const candidateCommand: BoundaryCommand = Object.freeze({
   executable: '/usr/bin/node',
   args: Object.freeze(['--test', 'candidate.test.mjs']),
@@ -28,7 +26,6 @@ const candidateCommand: BoundaryCommand = Object.freeze({
   env: Object.freeze({ PATH: '/usr/bin' }),
   writablePaths: Object.freeze([]),
 });
-
 const offlineRequest = Object.freeze({
   mode: 'offline',
   channel: 'candidate-command',
@@ -37,7 +34,6 @@ const offlineRequest = Object.freeze({
   allowedOrigins: Object.freeze([]),
   command: candidateCommand,
 });
-
 const fakeOfflineIsolator: OfflineProcessIsolator = Object.freeze({
   assertStable() {},
   async terminateAndVerify() {},

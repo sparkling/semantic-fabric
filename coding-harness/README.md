@@ -91,6 +91,10 @@ operational safety controls.
   use the embedded legacy fixture.
 - `metaharness-diagnostics.ts` parses the protected native Ruflo score snapshot;
   its exact Git blob digest must match the candidate receipt.
+- `effective-config-command.ts` gives the two tracked project launcher files a
+  strict, scoped admission gate; it does not claim to resolve ambient host config.
+- `programme-v5-ruflo-runtime.ts` copies the two exact coordination-status files
+  into a private networkless runtime instead of mounting live Ruflo directories.
 - `.harness/manifest.json` is the canonical tracked control-plane manifest and
   identifies the repository's actual `.mcp.json` coordination surface.
 
@@ -147,7 +151,7 @@ protect the local boundary; 60-second sessions and 15-second probes/inspections
 leave 180 seconds beneath the 300-second parent ceiling. Two fresh networkless
 runs prove deterministic evidence and owned cleanup. Unpublished developer-local
 Node.js 20.0.0 and 24.14.1 runs report 602 supervisor tests, V1/V2 plus the
-12-mutant live replay, and the 892-test parent harness with two intentional
+12-mutant live replay, and the 905-test parent harness with two intentional
 skips. No version-bound run receipt is tracked; CI is configured to run the same
 gates, but hosted evidence and the remaining predicate/value/nullability/order/
 duplicate/array/`UNION ALL` mutation cases, runtime `Plan` and live-observation
@@ -156,6 +160,18 @@ brands remain open.
 The parent harness replaces Node 20's asynchronous recursive watcher with
 explicit root/nested directory watches, three agreeing tree digests and an
 8,192-watcher fail-closed ceiling that closes every partially opened watcher.
+
+## Local Ruflo status boundary
+
+Tracked `.mcp.json` is exact-empty and `.agents/config.toml` declares no project
+MCP launcher. Both files and their current-state KAT are protected inputs. The
+collector snapshots only `tasks/store.json` and `swarm/swarm-state.json` into
+`0400` files beneath `0500` directories, then starts the exact pinned Ruflo MCP
+package under bubblewrap with `--unshare-net`. Tests distinguish the sealed path
+from shared-network and whole-directory mutants using network-namespace, TCP,
+local-DNS, and AF_UNIX canaries. Hardlinks, symlinks, sockets, FIFOs, world-write,
+and concurrent source mutation fail closed. Same-euid/same-gid `0664` inputs are
+accepted only as cooperative, non-authoritative status evidence.
 
 ## Retrieval flywheel boundary
 
@@ -180,3 +196,6 @@ sealed scores. Replay does not re-run retrieval. The separate daemon generation
 path is not approved until it uses the same confirmed promotion transaction.
 Production receipts will also require durable retention outside the ignored
 local state directories.
+
+A fixed-seed 2×1 generic Darwin Shield diagnostic passed only 9/12 gates. It is
+not project retrieval evidence and cannot activate or promote the flywheel.

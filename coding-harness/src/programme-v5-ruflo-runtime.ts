@@ -29,6 +29,7 @@ const ZOD_DIGEST = '9605ce9ccc2d0fe5f8d87cde90fb4ce9d9c8e8c8515ce9857825a54eab56
 const PASSWD_DIGEST = '1673047aafa580b5f9b444ab097e43fcca2df7418d71e579f059abd9b4c2a738';
 const GROUP_DIGEST = 'ef41ce1d713e984f66052cc15402503708ecfeadd7762068ef5b90d18e7361bf';
 const RUNTIME_PARENT = '/home/claude/.cache/semantic-fabric-harness';
+const MAX_LEDGER_FILE_BYTES = 32 * 1024 * 1024;
 
 export interface ProgrammeV5RufloPrivateRuntime {
   readonly executable: string;
@@ -42,6 +43,8 @@ export function createProgrammeV5RufloPrivateRuntime(
   repositoryRoot: string,
 ): ProgrammeV5RufloPrivateRuntime {
   const repository = canonicalDirectory(repositoryRoot, 'REPOSITORY');
+  const taskStore = join(repository, '.claude-flow', 'tasks', 'store.json');
+  const swarmState = join(repository, '.claude-flow', 'swarm', 'swarm-state.json');
   assertRootOnlyBwrapParent();
   mkdirSync(RUNTIME_PARENT, { recursive: true, mode: 0o700 });
   const runtime = createImmutablePrivateRuntime({
@@ -70,6 +73,18 @@ export function createProgrammeV5RufloPrivateRuntime(
       {
         key: 'group', sourcePath: '/etc/group', relativePath: 'etc/group',
         executable: false, expectedDigest: GROUP_DIGEST, maxBytes: 65_536,
+      },
+      {
+        key: 'taskStore', sourcePath: taskStore,
+        relativePath: 'ledger/tasks/store.json', executable: false,
+        maxBytes: MAX_LEDGER_FILE_BYTES,
+        sourcePolicy: 'same-principal-cooperative-snapshot',
+      },
+      {
+        key: 'swarmState', sourcePath: swarmState,
+        relativePath: 'ledger/swarm/swarm-state.json', executable: false,
+        maxBytes: MAX_LEDGER_FILE_BYTES,
+        sourcePolicy: 'same-principal-cooperative-snapshot',
       },
     ],
     trees: [
@@ -106,15 +121,14 @@ export function createProgrammeV5RufloPrivateRuntime(
   try {
     assertPackageSource(runtime);
     const libraries = systemNativeRuntimeLibraryMounts();
-    const tasks = canonicalDirectory(join(repository, '.claude-flow', 'tasks'), 'TASKS');
-    const swarm = canonicalDirectory(join(repository, '.claude-flow', 'swarm'), 'SWARM');
     const directories = [
       '/runtime', '/runtime/package', '/workspace', '/workspace/.claude-flow',
+      '/workspace/.claude-flow/tasks', '/workspace/.claude-flow/swarm',
       '/usr', '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/etc', '/etc/ssl',
       '/etc/ssl/certs', '/home', '/home/harness',
     ];
     const args = [
-      '--die-with-parent', '--new-session', '--unshare-all', '--share-net',
+      '--die-with-parent', '--new-session', '--unshare-all', '--unshare-net',
       '--clearenv', '--tmpfs', '/',
       '--hostname', 'semantic-fabric-ruflo', '--cap-drop', 'ALL',
       ...directories.flatMap((path) => ['--dir', path]),
@@ -124,8 +138,8 @@ export function createProgrammeV5RufloPrivateRuntime(
       '--ro-bind', join(runtime.root, 'package'), '/runtime/package',
       '--ro-bind', runtime.files.passwd.path, '/etc/passwd',
       '--ro-bind', runtime.files.group.path, '/etc/group',
-      '--ro-bind', tasks, '/workspace/.claude-flow/tasks',
-      '--ro-bind', swarm, '/workspace/.claude-flow/swarm',
+      '--ro-bind', join(runtime.root, 'ledger/tasks'), '/workspace/.claude-flow/tasks',
+      '--ro-bind', join(runtime.root, 'ledger/swarm'), '/workspace/.claude-flow/swarm',
       '--tmpfs', '/workspace/.claude-flow/policy',
       '--setenv', 'CLAUDE_FLOW_CWD', '/workspace',
       '--setenv', 'HOME', '/home/harness',

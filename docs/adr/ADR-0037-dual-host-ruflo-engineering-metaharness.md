@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-28
+updated: 2026-08-31
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -365,14 +365,14 @@ Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture, framework, and H0c activation implemented. Harness
-commits through `a84aa05` establish the private supply chain, dual-host routing,
-patched-candidate transaction, exact-origin and filesystem/resource isolation,
-bounded retry/cancellation, provider-free QE/SAST, frozen dependency closure,
-schema-V6 evidence law, trusted execution/replay, protected dormant retrieval
-tuning, and the PostgreSQL receipt authority. The harness passes 635 provider-
-free tests across 91 files with two expected skips. It has no publication or
-evolution path, and all harness source files remain under 500 lines.
+Accepted architecture, framework, and H0c activation are implemented. Commits
+through `a84aa05` establish the private supply chain, dual-host transaction,
+exact-origin and filesystem/resource isolation, bounded retry/cancellation,
+provider-free QE/SAST, schema-V6 evidence law, trusted execution/replay,
+protected dormant retrieval tuning, and PostgreSQL receipt authority. The
+2026-08-31 integrated M0 hardening candidate passes 905 provider-free tests across
+122 files on exact Node 20.0.0 and 24.14.1, with two expected skips and one
+byte-identical controller build. It has no publication or evolution path.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
 `f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate
@@ -454,21 +454,21 @@ milestones remain gated. The run cleaned about 35 GiB of ephemeral verifier
 outputs, leaving immutable build reuse and digest manifests as a constrained
 efficiency target. Neither run enabled the retrieval flywheel.
 
-The repository's `.mcp.json` is tracked and protected. Root
-`.harness/mcp-policy.json` is static input to the exact pinned MetaHarness scanner,
-whose clean/info result is a blocking harness test. That scanner evidence is not
-runtime tool authority: task `PolicyGate`, native isolation, and direct controls
-remain authoritative; a diagnostic unable to inspect the effective root surface
-is still `INCONCLUSIVE`.
-
-Its dependency-scoped Rust closure pins the historical lock, target package
-set, verified crate archives, and minimized exact sparse-index records while
-excluding the mutable shared registry source tree. Upstream MetaHarness
-diagnostics classify the repository/harness at 75/67 and
-the genome as `needs-work`; those values are non-authoritative for the reasons in
-section 8. Darwin/GEPA stays disabled. No receipt is semantic acceptance until
-a later explicitly authorized dual-host transaction passes every hard gate and
-the project-owned score threshold.
+**Implementation amendment (2026-08-31).** The tracked `.mcp.json` is exact-empty,
+and tracked `.agents/config.toml` declares no project MCP launcher; both are protected.
+A project-owned strict JSON/TOML admission rejects non-empty/duplicate/extra JSON,
+changed agent configuration, MCP sections/dotted keys, quoted keys and Unicode escapes.
+It covers only tracked project launcher surfaces, never the full effective host config.
+The local Ruflo collector snapshots only `.claude-flow/tasks/store.json` and
+`.claude-flow/swarm/swarm-state.json` into private `0400` files under `0500` dirs,
+mounts no live coordination directory, and runs the exact pinned package with `--unshare-net`.
+Sensitive controls prove namespace separation and block host TCP, local DNS and AF_UNIX,
+while shared-network and whole-directory mutants connect. Source changes and alternate
+file types fail closed. Same-euid/same-gid, non-world-writable `0664` state is cooperative,
+non-authoritative evidence—not atomic cross-file authority or hostile same-principal safety.
+MetaHarness OIA remains clean/info with score 75 and a ready genome, but cannot inspect
+these actual launchers and is `INCONCLUSIVE`; WAL refusal must not be bypassed by bulk import.
+A fixed-seed 2×1 Darwin Shield run passed only 9/12 gates; evolution stays disabled.
 
 ## Consequences
 

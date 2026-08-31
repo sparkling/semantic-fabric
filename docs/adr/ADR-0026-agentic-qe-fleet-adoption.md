@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-16
-updated: 2026-08-25
+updated: 2026-08-31
 ratified: 2026-07-16
 tags: [testing, coverage, quality-engineering, ci, agentic-qe, sql-server, correctness]
 supersedes: []
@@ -39,8 +39,8 @@ isn't misled into thinking this ADR relates to harness-evolution — it does not
   `scripts/run_ontop_bench.sh`, `scripts/compare/`) is **out of scope** here and
   stays fully owned by `ADR-0005`. This ADR is about *finding untested code*, not
   performance benchmarking.
-* Should generalize beyond this one pass — a standing MCP-wired tool the project
-  can reach for again, not a one-shot script.
+* Should generalize beyond this one pass through a protected, task-bound runner
+  the project can reach for again, not a one-shot or ambient launcher.
 
 ## Considered Options
 
@@ -71,6 +71,12 @@ task-bound profiles are real-LCOV gap analysis and provider-free SAST.
 labels, but issue #8 has no collectors or runners for them. This supersedes the
 executable version recorded above without changing this ADR's direct-evidence
 authority.
+
+**Launcher amendment (2026-08-31).** The original hand-wired project MCP entry is
+retired: tracked `.mcp.json` is exact-empty and protected. Agentic-QE remains the
+real QE implementation, but the harness invokes its exact attested tree only for
+declared provider-free task profiles inside the bounded offline runtime. This
+supersedes ambient standing MCP wiring, not the evidence or tool-selection decision.
 
 ### What the coverage-gap pass found and closed
 
@@ -127,9 +133,9 @@ proven to close the moment CI's live-DB services are up.
 
 ### What gets easier
 
-* A standing, MCP-wired tool (`qe_coverage_gaps`, `test_generate_enhanced`,
-  `security_scan_comprehensive`, and more) the project can reach for again
-  without re-installing or re-deriving risk-ranking logic.
+* A reusable, task-bound Agentic-QE tool (`qe_coverage_gaps`,
+  `test_generate_enhanced`, `security_scan_comprehensive`, and more) without
+  re-installing, ambient launch authority, or re-derived risk-ranking logic.
 * CI now genuinely exercises the Postgres/MySQL/SQL Server integration paths that
   were previously silent no-ops — a real correctness gate, not an illusory one.
 
@@ -139,9 +145,8 @@ proven to close the moment CI's live-DB services are up.
   `build` job run.
 * One new dev-dependency (`wiremock`, `sf-sql`) — test-only, no production
   runtime impact.
-* `agentic-qe`'s own MCP wiring has a real, confirmed bug (`aqe init`'s
-  `--with-mcp` default doesn't write `.mcp.json`) — worth re-checking on any
-  future `agentic-qe` upgrade rather than assuming it's fixed upstream.
+* `agentic-qe`'s historical MCP initializer bug remains recorded, but upgrades
+  must not restore a project launcher; exact task-bound invocation is the gate.
 
 ### Explicitly out of scope (do not conflate with this ADR)
 
@@ -159,9 +164,9 @@ proven to close the moment CI's live-DB services are up.
   > that axis. See `ADR-0027`, which also found that one of `ADR-0010`'s
   > concurrency-governance clauses (the stream-lane pool / `503` shedding) is
   > accepted in name but not actually implemented in `sf-serve`'s source.
-* Security scanning (`security_scan_comprehensive`) — not yet run; a reasonable
-  next step given this codebase's dynamic per-dialect SQL emission, but tracked
-  as future work, not part of this ADR's decision.
+* Provider-free task-bound SAST now runs in the engineering harness. That is not
+  the broader `security_scan_comprehensive` application assessment, which remains
+  future work for the dynamic per-dialect SQL surface.
 * `BigQueryBackend`'s hardcoded endpoint — a real, small, deliberately-deferred
   gap (see item 3 above).
 

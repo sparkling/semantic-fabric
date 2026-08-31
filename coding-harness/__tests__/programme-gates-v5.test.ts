@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -43,23 +42,19 @@ import {
 } from '../src/receipts.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
 import { programmeV5RufloFixture } from './candidate-fixtures.js';
-
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const taskUrl = new URL('../config/issue-8-acceptance.json', import.meta.url);
 const manifestUrl = new URL('../.harness/manifest.json', import.meta.url);
 const diagnosticsUrl = new URL('../config/metaharness-diagnostics.json', import.meta.url);
-
 interface GateInput {
   policy: ParsedProgrammePolicyV1;
   receipt: Receipt;
   diagnostics: MetaHarnessDiagnosticSnapshot;
   rufloEvidence: ProgrammeV5RufloEvidence;
 }
-
 describe('schema-v5 programme gate evaluator', () => {
   it('accepts exact replay evidence and returns one frozen digest per hard gate', () => {
     const result = evaluateProgrammeGatesV5(fixture());
-
     expect(result.dimensions.map(({ id }) => id)).toEqual([
       'policy-and-supply-chain-safety', 'evaluator-integrity',
       'evolution-containment', 'patched-candidate-verification',
@@ -74,7 +69,6 @@ describe('schema-v5 programme gate evaluator', () => {
     for (const value of [result, result.dimensions, ...result.dimensions,
       result.diagnostics, ...result.diagnostics]) expect(Object.isFrozen(value)).toBe(true);
   });
-
   const receiptCases: ReadonlyArray<readonly [string, string, (input: any) => void]> = [
     ['protected input binding', 'policy-and-supply-chain-safety', (x) => {
       x.receipt.protectedInputs[Object.keys(x.receipt.protectedInputs)[0]] = 'e'.repeat(64);
@@ -129,7 +123,6 @@ describe('schema-v5 programme gate evaluator', () => {
       x.receipt.toolVersions.rufloHive = 'mesh';
     }],
   ];
-
   it.each(receiptCases)('fails closed on %s', (_name, dimension, mutate) => {
     const input = mutableFixture();
     mutate(input);
@@ -137,7 +130,6 @@ describe('schema-v5 programme gate evaluator', () => {
     const result = evaluateProgrammeGatesV5(input);
     expect(result.dimensions.find(({ id }) => id === dimension)?.passed).toBe(false);
   });
-
   it('binds the embedded Ruflo evidence to route, run, task, and coordination', () => {
     const input = mutableFixture();
     input.receipt.runId = 'different_run'; input.receipt = rehashReceipt(input.receipt);
@@ -148,7 +140,6 @@ describe('schema-v5 programme gate evaluator', () => {
     replay.receipt = rehashReceipt(replay.receipt);
     expect(evaluateProgrammeGatesV5(replay).dimensions.at(-1)?.passed).toBe(false);
   });
-
   it('rejects an over-policy repair count before attempt-key expansion', () => {
     for (const repairCount of [3, Number.MAX_SAFE_INTEGER]) {
       const input = mutableFixture();
@@ -158,7 +149,6 @@ describe('schema-v5 programme gate evaluator', () => {
         .toThrow('HARNESS_PROGRAMME_REPAIR_COUNT_EXCEEDS_POLICY');
     }
   });
-
   it('binds every dimension digest to the receipt and Ruflo evidence', () => {
     const original = evaluateProgrammeGatesV5(mutableFixture());
     const changedReceipt = mutableFixture();
@@ -185,7 +175,6 @@ describe('schema-v5 programme gate evaluator', () => {
     const result = evaluateProgrammeGatesV5(input);
     expect(result.dimensions.every(({ passed }) => passed)).toBe(true);
   });
-
   it.each([
     ['stale attempt-zero verifier substitution', (input: any) => {
       delete input.receipt.verifierDigests[receiptVerifierKey(1, 'public')];

@@ -5,6 +5,9 @@ import {
 } from '../src/programme-capture-protected-paths-v1.js';
 
 export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
+  '.agents/config.toml',
+  'coding-harness/__tests__/effective-config-current-state.test.ts',
+  'coding-harness/__tests__/native-test-prerequisites.ts',
   'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
   'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
   'coding-harness/__tests__/programme-capture-git-v1.test.ts',
@@ -38,6 +41,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/programme-capture-supervisor-transport-v2.test.ts',
   'coding-harness/__tests__/programme-capture-task-v1.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
+  'coding-harness/__tests__/programme-v5-ruflo.test.ts',
   'coding-harness/src/native-proxy-launcher.cts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
   'coding-harness/src/programme-capture-claim-key-v1.ts',

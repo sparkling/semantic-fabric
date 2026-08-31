@@ -7,12 +7,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
-import { PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1 } from
-  '../src/programme-capture-protected-paths-v1.js';
-import { PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1 } from
-  '../src/programme-capture-protected-paths-v1.js';
-import { PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1 } from
-  '../src/programme-capture-protected-paths-v1.js';
+import {
+  PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
+  PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
+  PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
+} from '../src/programme-capture-protected-paths-v1.js';
 import { PROGRAMME_V5_POST_HISTORICAL_PATHS } from './programme-v5-post-historical-paths.js';
 
 const harnessRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,13 +24,17 @@ const capabilityCatalog = JSON.parse(
 ) as { cells: Array<{ id: string; status: string; verification: string }> };
 
 const M0_AUTHORITY_PATHS = [
+  '.agents/config.toml',
   '.cargo/audit.toml',
   '.harness/mcp-policy.json',
+  'coding-harness/__tests__/effective-config-current-state.test.ts',
   'coding-harness/__tests__/m0-authority.test.ts',
+  'coding-harness/__tests__/native-test-prerequisites.ts',
   ...PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
   ...PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
   'coding-harness/__tests__/programme-envelope-v5.test.ts',
   'coding-harness/__tests__/programme-policy-v5.test.ts',
+  'coding-harness/__tests__/programme-v5-ruflo.test.ts',
   'coding-harness/__tests__/programme-v5-post-historical-paths.ts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
   'coding-harness/src/programme-capture-claim-key-v1.ts',

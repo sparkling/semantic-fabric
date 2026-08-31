@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-26
-updated: 2026-08-29
+updated: 2026-08-31
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -178,7 +178,7 @@ implemented. Each affected ADR must gain a dated implementation-status note as
 its increment lands. ADR-0014's previously deferred areas graduate into this
 programme, but this ADR does not itself mark them implemented.
 
-### 7. Implementation status (2026-08-29)
+### 7. Implementation status (2026-08-31)
 
 The H0a reusable-harness foundation is implemented in `b40dbc6`: frozen v5 gate
 law and task/runtime derivation, strict schema dispatch, an externally anchored
@@ -439,11 +439,13 @@ complete M0 gate must run again after the remaining authorities exist. Current
 scoped receipts prove neither release nor backend admission; M1–M7 stay gated,
 and these slices do not silently rescore the 44/100 readiness baseline.
 
-The pass measured roughly 35 GiB of ephemeral isolated verifier outputs before
-successful cleanup. Future harness optimisation may use immutable
-content-addressed build reuse and digest manifests, but only with separate
-writable lane targets and unchanged isolation, independence, fail-closed cache
-validation, evidence binding, and replay semantics.
+The 2026-08-31 integrated M0 hardening candidate makes tracked project MCP launchers
+default-empty and protected, then adds a strict scoped current-state admission gate.
+Its pinned local Ruflo collector copies only the two exact coordination-status files,
+mounts private `0400` snapshots rather than live directories, and uses `--unshare-net`.
+The cooperative `0664` source policy stays explicitly non-authoritative. Exact Node
+20.0.0/24.14.1 runs pass 122 files and 905 tests plus two intentional skips with controller
+`622526ab…630`; OIA is inconclusive and fixed-seed Darwin Shield passes only 9/12 gates.
 
 ## Acceptance
 

@@ -29,6 +29,7 @@ export interface ImmutablePrivateFileSpec {
   readonly executable: boolean;
   readonly expectedDigest?: string;
   readonly maxBytes?: number;
+  readonly sourcePolicy?: 'immutable' | 'same-principal-cooperative-snapshot';
 }
 
 export interface ImmutablePrivateTreeSpec {
@@ -100,14 +101,20 @@ export function createImmutablePrivateRuntime(input: Readonly<{
   try {
     const occupied = new Set<string>();
     const fileIdentities: Record<string, ImmutablePrivateFileIdentity> = {};
+    const copiedFiles: Array<Readonly<{
+      spec: ImmutablePrivateFileSpec;
+      sourcePolicy: NonNullable<ImmutablePrivateFileSpec['sourcePolicy']>;
+    }>> = [];
     for (const spec of input.files ?? []) {
       uniqueKey(spec.key, fileIdentities);
       const target = targetPath(root, spec.relativePath, occupied);
       mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      const sourcePolicy = fileSourcePolicy(spec.sourcePolicy);
       const expectedDigest = spec.expectedDigest ?? stableFileDigest(
         spec.sourcePath,
         spec.executable,
         spec.maxBytes ?? DEFAULT_MAX_FILE_BYTES,
+        sourcePolicy,
       );
       fileIdentities[spec.key] = copyStableFile(
         spec.sourcePath,
@@ -115,7 +122,9 @@ export function createImmutablePrivateRuntime(input: Readonly<{
         spec.executable,
         spec.maxBytes ?? DEFAULT_MAX_FILE_BYTES,
         expectedDigest,
+        sourcePolicy,
       );
+      copiedFiles.push({ spec, sourcePolicy });
     }
     const treeIdentities: Record<string, ImmutablePrivateTreeIdentity> = {};
     for (const spec of input.trees ?? []) {
@@ -147,6 +156,16 @@ export function createImmutablePrivateRuntime(input: Readonly<{
         fileCount: before.files.length,
         totalBytes: before.totalBytes,
       });
+    }
+    for (const { spec, sourcePolicy } of copiedFiles) {
+      const copied = fileIdentities[spec.key];
+      const currentDigest = stableFileDigest(
+        spec.sourcePath, spec.executable,
+        spec.maxBytes ?? DEFAULT_MAX_FILE_BYTES, sourcePolicy,
+      );
+      if (copied === undefined || currentDigest !== copied.digest) {
+        throw new Error('HARNESS_IMMUTABLE_RUNTIME_SOURCE_CHANGED');
+      }
     }
     for (const directory of input.directories ?? []) {
       mkdirSync(targetPath(root, directory, occupied), { recursive: true, mode: 0o700 });
@@ -187,12 +206,13 @@ function copyStableFile(
   executable: boolean,
   maxBytes: number,
   expectedDigest?: string,
+  sourcePolicy: NonNullable<ImmutablePrivateFileSpec['sourcePolicy']> = 'immutable',
 ): ImmutablePrivateFileIdentity {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > DEFAULT_MAX_FILE_BYTES
     || (expectedDigest !== undefined && !SHA256_PATTERN.test(expectedDigest))) {
     throw new Error('HARNESS_IMMUTABLE_RUNTIME_FILE_LIMIT_INVALID');
   }
-  const before = trustedFile(sourcePath, executable, maxBytes);
+  const before = trustedFile(sourcePath, executable, maxBytes, sourcePolicy);
   const descriptor = openSync(sourcePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = fstatSync(descriptor, { bigint: true });
@@ -205,11 +225,11 @@ function copyStableFile(
       || targetStat.size !== opened.size || realpathSync(target) !== target) {
       throw new Error('HARNESS_IMMUTABLE_RUNTIME_COPY_INVALID');
     }
+    chmodSync(target, executable ? 0o500 : 0o400);
     const digest = stableFileDigest(target, executable, maxBytes);
     if (expectedDigest !== undefined && digest !== expectedDigest) {
       throw new Error('HARNESS_IMMUTABLE_RUNTIME_DIGEST_MISMATCH');
     }
-    chmodSync(target, executable ? 0o500 : 0o400);
     return Object.freeze({ sourcePath, path: target, digest });
   } finally {
     closeSync(descriptor);
@@ -279,8 +299,13 @@ function descriptorDigest(descriptor: number): string {
   return hash.digest('hex');
 }
 
-function stableFileDigest(path: string, executable: boolean, maxBytes: number): string {
-  const before = trustedFile(path, executable, maxBytes);
+function stableFileDigest(
+  path: string,
+  executable: boolean,
+  maxBytes: number,
+  sourcePolicy: NonNullable<ImmutablePrivateFileSpec['sourcePolicy']> = 'immutable',
+): string {
+  const before = trustedFile(path, executable, maxBytes, sourcePolicy);
   const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = fstatSync(descriptor, { bigint: true });
@@ -294,17 +319,33 @@ function stableFileDigest(path: string, executable: boolean, maxBytes: number): 
   }
 }
 
-function trustedFile(path: string, executable: boolean, maxBytes: number) {
+function trustedFile(
+  path: string,
+  executable: boolean,
+  maxBytes: number,
+  sourcePolicy: NonNullable<ImmutablePrivateFileSpec['sourcePolicy']> = 'immutable',
+) {
   const value = canonicalPath(path, 'SOURCE');
   const stat = lstatSync(value, { bigint: true });
   const uid = BigInt(process.getuid?.() ?? Number(stat.uid));
+  const gid = BigInt(process.getgid?.() ?? Number(stat.gid));
+  const ownershipInvalid = sourcePolicy === 'same-principal-cooperative-snapshot'
+    ? stat.uid !== uid || stat.gid !== gid || (stat.mode & 0o002n) !== 0n
+    : (stat.mode & 0o022n) !== 0n || (stat.uid !== 0n && stat.uid !== uid);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n
-    || stat.size < 1n || stat.size > BigInt(maxBytes) || (stat.mode & 0o022n) !== 0n
-    || (executable && (stat.mode & 0o111n) === 0n)
-    || (stat.uid !== 0n && stat.uid !== uid)) {
+    || stat.size < 1n || stat.size > BigInt(maxBytes) || ownershipInvalid
+    || (executable && (stat.mode & 0o111n) === 0n)) {
     throw new Error('HARNESS_IMMUTABLE_RUNTIME_SOURCE_UNTRUSTED');
   }
   return stat;
+}
+
+function fileSourcePolicy(
+  value: ImmutablePrivateFileSpec['sourcePolicy'],
+): NonNullable<ImmutablePrivateFileSpec['sourcePolicy']> {
+  if (value === undefined || value === 'immutable') return 'immutable';
+  if (value === 'same-principal-cooperative-snapshot') return value;
+  throw new Error('HARNESS_IMMUTABLE_RUNTIME_SOURCE_POLICY_INVALID');
 }
 
 function trustedDirectory(path: string): void {
