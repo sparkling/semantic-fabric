@@ -21,8 +21,12 @@ The fixture is a protected test oracle, not a deployed input. Runtime code owns
 the independently reviewed projection but never embeds, learns or supplies the
 expected baseline count, length or digest. Those values enter only through the
 reviewed provisioning contract selected by the independently pinned manifest.
-The current receipt is test-fixture evidence only. It is replay-checkable against
-the owned fresh-initialization procedure, but neither authenticates its historical run event nor admits a runtime fixture.
+The current receipts are test-fixture evidence only. Receipt V1 remains an
+immutable, non-attesting predecessor; additive receipt V2 binds its exact bytes
+before adding the OID/attribute-aware candidate matrix and effective-privilege
+witness. They are replay-checkable against the owned fresh-initialization
+procedure, but neither authenticates its historical run event nor admits a
+runtime fixture.
 
 ## Context
 
@@ -335,15 +339,18 @@ Future runtime admission requires all of:
    outside service `BUILD_INPUT_PATHS`; implementation source and sealed
    provisioning/manifest data are private build inputs and never public exports.
 
-Owned fresh replay orchestration is implemented and has reproduced the candidate
-locally. The no-membership `has_*` witness remains unimplemented; existing
-scanner, runtime, mutation and private-brand KATs are not yet exhaustive; and
-the configured live Node 20.0.0/24.14.1 pin-equality CI gate has not yet passed.
-The current test receipt and KATs therefore do not satisfy runtime admission.
+Owned fresh replay orchestration and the no-membership `has_*` witness are
+implemented and have reproduced the candidate locally. Unpublished
+developer-local Node 20.0.0/24.14.1 runs report both V1 and V2 live replay,
+493/493 supervisor tests, and 889 parent-harness tests with two intentional
+skips. Those run results are not bound by a versioned test-run receipt. Existing
+scanner, runtime, mutation and private-brand KATs are not yet exhaustive, and
+the configured GitHub-hosted live matrix has not yet passed for this change.
+The current test receipts and KATs therefore do not satisfy runtime admission.
 
 ### 8. Record the reproduced test-only candidate
 
-The reviewed test-only receipt records two orchestrator-owned runs. Each uses the
+The frozen V1 test-only receipt records two orchestrator-owned runs. Each uses the
 exact platform manifest/configuration, default command/environment plus the two
 pinned PostgreSQL variables, network mode `none`, no published ports and exactly
 one fresh anonymous `PGDATA` volume. The runner proves the database absent before
@@ -356,6 +363,21 @@ and the same projection. The independent oracle source is 16,037 bytes with
 SHA-256 `6a1cf204ca8c5a3aa7a70da4f5c8c46cd15998b745d2eb648b77568e6c912722`;
 the projection source is 6,859 bytes with SHA-256
 `0e3ad724f4ce85191564c245c51dd7665b6d9aa704c355067a0056cdbfe95232`.
+
+Additive receipt V2 is 8,816 bytes with SHA-256
+`48d54b635ff6bafc6bdb4ffcb1bb9d74c8357e932e22f7b6453bb54cb0d698e8`.
+It first pins the 4,835-byte V1 receipt at
+`14fbd3ff2d2b50d3a8adbe0b51dc921eb926cd644a4a765183723518ec4fd08b`,
+then binds an OID/attribute-aware candidate matrix and an effective-privilege
+`has_*` witness over the closed eight-class matrix. V1's raw oracle independently
+expands the direct ACL atoms. A fresh no-membership role performs 13,603 checks
+across its six populated classes:
+5,958 true, 7,645 false and zero true grant-option results. It corroborates all
+4,059 projected atoms, including 16 column-local atoms and 294 true-array atoms,
+and binds the inventory, observation, raw-oracle, session and per-run transcript
+digests plus every witness/replay source. FDW and server remain explicit
+zero-check/zero-atom class counts under this exact clean profile rather than
+omitted classes.
 
 The reproduced candidate fixture is **4,059 records**, **36,532 JSON nodes** and **860,988
 bytes**, with raw SHA-256
@@ -398,6 +420,7 @@ test evidence grants no runtime authority.
 [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md),
 [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md),
 [ADR-0046](ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md),
-[capture receipt](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v1.json),
+[capture receipt V1](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v1.json),
+[capture receipt V2](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v2.json),
 [PostgreSQL 16 privileges](https://www.postgresql.org/docs/16/ddl-priv.html), and
 [PostgreSQL 16.15 `pg_type_aclmask`](https://github.com/postgres/postgres/blob/REL_16_15/src/backend/catalog/aclchk.c#L3483-L3552).

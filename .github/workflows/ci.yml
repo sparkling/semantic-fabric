@@ -64,9 +64,9 @@ jobs:
         run: git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json
 
   postgresql-public-acl-replay:
-    name: PostgreSQL ACL replay · node ${{ matrix.node }} · two isolated runs
+    name: PostgreSQL ACL V1 + V2 replay · node ${{ matrix.node }} · four isolated runs
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -80,8 +80,10 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: pull exact PostgreSQL 16.15 platform manifest
         run: docker pull postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
-      - name: replay candidate fixture twice from owned isolated containers
-        run: node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs
+      - name: replay V1 baseline and V2 witness from owned isolated containers
+        run: |
+          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs
+          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v2.mjs
 
   build:
     name: fmt · clippy · build · test
