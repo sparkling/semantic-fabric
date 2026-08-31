@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-08-31
+updated: 2026-09-01
 tags: [postgresql, supervisor, privileges, canonical-json, verification]
 supersedes: []
 depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046]
@@ -412,7 +412,9 @@ and 24 under a 150-minute ceiling for the conservative 140-minute sum.
 This closes item 5's branch, final-`WHERE`, zero, single-atom omission/addition
 and count-neutral-substitution subsets. Item 4 and the remaining value,
 nullability, order, duplicate, array/element and `UNION ALL` replacements remain
-open, as do item 6's sealed parser/compiled-pin `Plan` and observation brands.
+open. ADR-0046's sealed reader, compiled-pin `Plan`, and descriptor-first receipt
+parser are implemented; item 6's live observation brand and PostgreSQL adapter
+remain open.
 All mutation machinery remains outside service build inputs and exports. These
 developer runs lack a versioned test-run receipt; hosted evidence and runtime
 admission remain open.
