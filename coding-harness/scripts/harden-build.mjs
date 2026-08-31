@@ -16,6 +16,11 @@ const BUILD_MANIFEST = 'coding-harness/.harness/controller-build.json';
 const HARNESS_MANIFEST = 'coding-harness/.harness/manifest.json';
 const LOCKFILE = 'coding-harness/package-lock.json';
 const RUNTIME_ENTRY = 'coding-harness/dist/issue-8-program.js';
+const RUNTIME_RESOURCES = Object.freeze([
+  'coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json',
+]);
 const projectRoot = canonicalDirectory(resolve('.'), 'HARNESS_BUILD_PROJECT_INVALID');
 const repositoryRoot = canonicalDirectory(resolve(projectRoot, '..'), 'HARNESS_BUILD_REPOSITORY_INVALID');
 
@@ -49,8 +54,8 @@ const packageRoots = Object.entries(lockfile.packages)
   .map(([path]) => `coding-harness/${path}`)
   .sort();
 if (packageRoots.length === 0) throw new Error('HARNESS_BUILD_PRODUCTION_PACKAGES_MISSING');
-const productionPaths = packageRoots.flatMap((path) =>
-  walkFiles(repositoryFile(path, true)).map(repositoryPath)).sort();
+const productionPaths = [...RUNTIME_RESOURCES, ...packageRoots.flatMap((path) =>
+  walkFiles(repositoryFile(path, true)).map(repositoryPath))].sort();
 
 const outputs = digestFiles(outputPaths);
 const productionFiles = digestFiles(productionPaths);

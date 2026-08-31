@@ -37,6 +37,7 @@ export const HARNESS_MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 export const PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS = Object.freeze([
   ISSUE_8_FROZEN_LOCK_FIXTURE_PATH,
   'coding-harness/__tests__/immutable-private-tree-overlay.test.ts',
+  'coding-harness/__tests__/packed-controller-overlay-assets.test.ts',
   'coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz',
   'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz',
   'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json',

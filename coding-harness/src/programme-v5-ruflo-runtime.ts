@@ -49,9 +49,9 @@ export function createProgrammeV5RufloPrivateRuntime(
   const taskStore = join(repository, '.claude-flow', 'tasks', 'store.json');
   const swarmState = join(repository, '.claude-flow', 'swarm', 'swarm-state.json');
   assertRootOnlyBwrapParent();
-  mkdirSync(RUNTIME_PARENT, { recursive: true, mode: 0o700 });
+  const runtimeParent = trustedRuntimeParent();
   const runtime = createImmutablePrivateRuntime({
-    parent: canonicalDirectory(RUNTIME_PARENT, 'PARENT'),
+    parent: runtimeParent,
     prefix: 'ruflo-',
     files: [
       {
@@ -223,4 +223,15 @@ function assertRootOnlyBwrapParent(): void {
   if (stat.uid !== 0 || (stat.mode & 0o022) !== 0) {
     throw new Error('HARNESS_PROGRAMME_V5_RUFLO_RUNTIME_BWRAP_PARENT_INVALID');
   }
+}
+
+function trustedRuntimeParent(): string {
+  mkdirSync(RUNTIME_PARENT, { recursive: true, mode: 0o700 });
+  const parent = canonicalDirectory(RUNTIME_PARENT, 'PARENT');
+  const stat = lstatSync(parent);
+  const uid = process.getuid?.() ?? stat.uid;
+  if (stat.uid !== uid || (stat.mode & 0o077) !== 0) {
+    throw new Error('HARNESS_PROGRAMME_V5_RUFLO_RUNTIME_PARENT_UNTRUSTED');
+  }
+  return parent;
 }

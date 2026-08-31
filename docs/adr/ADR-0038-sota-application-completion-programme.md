@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-26
-updated: 2026-08-31
+updated: 2026-09-01
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -441,11 +441,11 @@ and these slices do not silently rescore the 44/100 readiness baseline.
 
 The 2026-08-31 integrated M0 hardening candidate makes tracked project MCP launchers
 default-empty and protected, then adds a strict scoped current-state admission gate.
-Its pinned local Ruflo collector materializes the already-attested schema-v2 CLI from an
-exact protected two-file historical gzip overlay, with no ambient read, identity, export, fetch or authority change.
-It then mounts only private status snapshots under `--unshare-net`; cooperative `0664` ledger input stays non-authoritative. Exact Node
-20.0.0/24.14.1 runs pass 122 files and 905 tests plus two intentional skips with controller
-`622526ab…630`; OIA is inconclusive and fixed-seed Darwin Shield passes only 9/12 gates.
+Its pinned local Ruflo collector materializes the already-attested schema-v2 CLI from an exact
+protected two-file historical gzip overlay; its opaque decoded snapshot and three Git-backed
+packed-runtime resources add no ambient read, identity, export, fetch or authority. It mounts
+only private status snapshots under `--unshare-net`; cooperative `0664` ledger input stays non-authoritative.
+The earlier 122-file/905-test receipt predates this overlay and is not evidence for it; current protected binary, opacity and three-launcher KATs pass within a 124-file/941-test run with two intentional skips. OIA remains inconclusive and fixed-seed Darwin Shield passes only 9/12 gates.
 
 ## Acceptance
 

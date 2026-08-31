@@ -13,7 +13,7 @@ const GIT = '/usr/bin/git';
 const NODE = '/usr/bin/node';
 const PRIMARY_ENTRY = 'coding-harness/dist/issue-8-program.js';
 const V6_ENTRY = 'coding-harness/dist/programme-v6-program.js';
-const DEFAULT_TASK = 'coding-harness/config/programme-v5-acceptance.json';
+const DEFAULT_TASK = 'coding-harness/config/programme-v5-acceptance.json'; const ASSET_PATHS = ['coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz', 'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz', 'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json'];
 const BASE_GATE = { schemaVersion: 1 };
 const BASE_POLICY = { authority: 'development-only-no-promotion', gateContract: BASE_GATE,
   policyId: 'semantic-fabric-programme-v5-policy-v1', schemaVersion: 1 };
@@ -26,7 +26,7 @@ const POLICY = canonical({ authority: 'development-only-no-promotion', basePolic
 const RECEIPT_DIGEST = 'a'.repeat(64), ACCEPTANCE_DIGEST = 'b'.repeat(64);
 const ENVELOPE_DIGEST = 'c'.repeat(64), CLAIM_DIGEST = 'd'.repeat(64);
 const REPLAY_DIGEST = 'e'.repeat(64), CANDIDATE_DIGEST = 'f'.repeat(64);
-const LEGACY_LAUNCHER_DIGEST = 'b6be487acfd45c5e947f1cf7b2a1fdbbf789b46918a79f2fdb3724bf8904b660';
+const LEGACY_LAUNCHER_DIGEST = 'aba08d20344ef7abfdd77a9cd390b3a5b01602f1f24fe1b4a5d97e5b48094759';
 const roots: string[] = [];
 interface Behavior { readonly policyBlob: string; readonly changingPolicy?: boolean;
   readonly executeThrows?: boolean; readonly wrongReviewFingerprint?: boolean;
@@ -249,15 +249,15 @@ function controllerFixture(behavior: Behavior): Fixture {
     [PRIMARY_ENTRY, 'export const legacyEntry = true;\n'],
     [V6_ENTRY, controllerModule(behavior)],
     ['coding-harness/node_modules/bootstrap-fixture/package.json', '{"name":"bootstrap-fixture","version":"1.0.0"}\n'],
+    ...ASSET_PATHS.map((path) => [path, `fixture:${path}\n`] as const),
   ]);
   for (const [path, contents] of files) write(repository, path, contents);
   const outputs = Object.fromEntries(
     [PRIMARY_ENTRY, V6_ENTRY].sort().map((path) => [path, sha256(files.get(path)!)]),
   );
-  const productionFiles = {
-    'coding-harness/node_modules/bootstrap-fixture/package.json':
-      sha256(files.get('coding-harness/node_modules/bootstrap-fixture/package.json')!),
-  };
+  const productionFiles = Object.fromEntries([
+    'coding-harness/node_modules/bootstrap-fixture/package.json', ...ASSET_PATHS,
+  ].sort().map((path) => [path, sha256(files.get(path)!)]));
   const buildBody = {
     schemaVersion: 1,
     authority: 'development-only-no-promotion',

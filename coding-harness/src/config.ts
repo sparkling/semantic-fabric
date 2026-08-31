@@ -43,7 +43,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'LICENSE-MIT',
     'README.md',
     'coding-harness/__tests__/effective-config-current-state.test.ts',
-    'coding-harness/__tests__/immutable-private-tree-overlay.test.ts',
+    'coding-harness/__tests__/immutable-private-tree-overlay.test.ts', 'coding-harness/__tests__/packed-controller-overlay-assets.test.ts',
     'coding-harness/__tests__/m0-authority.test.ts',
     'coding-harness/__tests__/native-test-prerequisites.ts',
     ...PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,

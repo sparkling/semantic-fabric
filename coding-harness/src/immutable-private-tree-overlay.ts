@@ -29,7 +29,7 @@ export interface ImmutablePrivateTreeOverrideBounds {
   readonly maxBytes: number;
 }
 
-export interface ImmutablePrivateTreeOverrideFile {
+interface ImmutablePrivateTreeOverrideFile {
   readonly relativePath: string;
   readonly digest: string;
   readonly executable: false;
@@ -37,7 +37,19 @@ export interface ImmutablePrivateTreeOverrideFile {
   readonly bytes: Buffer;
 }
 
+declare const overrideSnapshotBrand: unique symbol;
 export interface ImmutablePrivateTreeOverrideSnapshot {
+  readonly [overrideSnapshotBrand]: never;
+}
+
+export interface ImmutablePrivateTreeOverrideMetadata {
+  readonly relativePath: string;
+  readonly digest: string;
+  readonly executable: false;
+  readonly size: number;
+}
+
+interface ImmutablePrivateTreeOverrideSnapshotState {
   readonly files: ReadonlyMap<string, ImmutablePrivateTreeOverrideFile>;
   readonly sourceDigest: string;
 }
@@ -72,12 +84,16 @@ const FILE_KEYS = [
   'targetPath', 'blobPath', 'compression', 'compressedSha256', 'compressedBytes',
   'decodedSha256', 'decodedBytes', 'executable',
 ] as const;
+const OVERRIDE_SNAPSHOTS = new WeakMap<
+  ImmutablePrivateTreeOverrideSnapshot,
+  ImmutablePrivateTreeOverrideSnapshotState
+>();
 
 export function captureImmutablePrivateTreeOverrides(
   spec: ImmutablePrivateTreeOverrideManifestSpec | undefined,
   bounds: ImmutablePrivateTreeOverrideBounds,
 ): ImmutablePrivateTreeOverrideSnapshot {
-  if (spec === undefined) return Object.freeze({ files: new Map(), sourceDigest: '' });
+  if (spec === undefined) return createOverrideSnapshot(new Map(), '');
   validateManifestSpec(spec);
   validateBounds(bounds);
   const manifestSource = readProtectedSource(spec.sourcePath, spec.expectedBytes);
@@ -127,10 +143,10 @@ export function captureImmutablePrivateTreeOverrides(
       bytes: decoded,
     }));
   }
-  return Object.freeze({
+  return createOverrideSnapshot(
     files,
-    sourceDigest: sha256(Buffer.from(JSON.stringify(identities))),
-  });
+    sha256(Buffer.from(JSON.stringify(identities))),
+  );
 }
 
 function validateBounds(bounds: ImmutablePrivateTreeOverrideBounds): void {
@@ -144,15 +160,45 @@ export function assertImmutablePrivateTreeOverridesStable(
   before: ImmutablePrivateTreeOverrideSnapshot,
   after: ImmutablePrivateTreeOverrideSnapshot,
 ): void {
-  if (before.sourceDigest !== after.sourceDigest) {
+  if (overrideSnapshotState(before).sourceDigest !== overrideSnapshotState(after).sourceDigest) {
     throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_SOURCE_CHANGED');
   }
 }
 
+export function immutablePrivateTreeOverrideMetadata(
+  snapshot: ImmutablePrivateTreeOverrideSnapshot,
+  relativePath: string,
+): ImmutablePrivateTreeOverrideMetadata | undefined {
+  const file = overrideSnapshotState(snapshot).files.get(relativePath);
+  return file === undefined ? undefined : Object.freeze({
+    relativePath: file.relativePath,
+    digest: file.digest,
+    executable: false,
+    size: file.size,
+  });
+}
+
+export function immutablePrivateTreeOverrideCount(
+  snapshot: ImmutablePrivateTreeOverrideSnapshot,
+): number {
+  return overrideSnapshotState(snapshot).files.size;
+}
+
+export function immutablePrivateTreeOverridePaths(
+  snapshot: ImmutablePrivateTreeOverrideSnapshot,
+): readonly string[] {
+  return Object.freeze([...overrideSnapshotState(snapshot).files.keys()]);
+}
+
 export function writeImmutablePrivateTreeOverride(
   target: string,
-  file: ImmutablePrivateTreeOverrideFile,
+  snapshot: ImmutablePrivateTreeOverrideSnapshot,
+  relativePath: string,
 ): void {
+  const file = overrideSnapshotState(snapshot).files.get(relativePath);
+  if (file === undefined) {
+    throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_SNAPSHOT_INVALID');
+  }
   const descriptor = openSync(
     target,
     constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
@@ -187,6 +233,27 @@ export function writeImmutablePrivateTreeOverride(
     || targetStat.size !== BigInt(file.size) || realpathSync(target) !== target) {
     throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_COPY_INVALID');
   }
+}
+
+function createOverrideSnapshot(
+  files: ReadonlyMap<string, ImmutablePrivateTreeOverrideFile>,
+  sourceDigest: string,
+): ImmutablePrivateTreeOverrideSnapshot {
+  const snapshot = Object.freeze({}) as ImmutablePrivateTreeOverrideSnapshot;
+  OVERRIDE_SNAPSHOTS.set(snapshot, Object.freeze({ files, sourceDigest }));
+  return snapshot;
+}
+
+function overrideSnapshotState(
+  snapshot: ImmutablePrivateTreeOverrideSnapshot,
+): ImmutablePrivateTreeOverrideSnapshotState {
+  const state = typeof snapshot === 'object' && snapshot !== null
+    ? OVERRIDE_SNAPSHOTS.get(snapshot)
+    : undefined;
+  if (state === undefined) {
+    throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_SNAPSHOT_INVALID');
+  }
+  return state;
 }
 
 function validateManifestSpec(spec: ImmutablePrivateTreeOverrideManifestSpec): void {

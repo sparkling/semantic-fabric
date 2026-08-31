@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process'; import { createHash } from 'node:crypto';
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync,
   openSync, readSync, readdirSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -10,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const NODE = realpathSync(process.execPath); const GIT = realpathSync('/usr/bin/git');
 const BUILD_PATH = 'coding-harness/.harness/controller-build.json';
 const MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
-const LOCK_PATH = 'coding-harness/package-lock.json'; const PACKAGE_PATH = 'coding-harness/package.json';
+const LOCK_PATH = 'coding-harness/package-lock.json'; const PACKAGE_PATH = 'coding-harness/package.json'; const RUNTIME_RESOURCES = Object.freeze(['coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz', 'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz', 'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json']);
 const RUNTIME_ENTRY = 'coding-harness/dist/issue-8-program.js';
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/; const DIGEST = /^[a-f0-9]{64}$/;
 const DEFAULT_TASK_PATH = 'coding-harness/config/issue-8-acceptance.json'; const TASK_PATH = /^coding-harness\/config\/[a-z0-9]+(?:[-_][a-z0-9]+)*-acceptance\.json$/;
@@ -42,8 +41,8 @@ try {
   privateRuntime = mkdtempSync(join(runtimeParent, 'semantic-fabric-controller-'));
   chmodSync(privateRuntime, 0o700);
   writeCommittedFile(privateRuntime, PACKAGE_PATH, packageBytes);
-  for (const [path, expected] of [...Object.entries(build.outputs), ...Object.entries(build.productionFiles)])
-    copyCurrentFile(invocation.repositoryRoot, privateRuntime, path, expected);
+  for (const [path, expected] of Object.entries(build.outputs)) copyCurrentFile(invocation.repositoryRoot, privateRuntime, path, expected);
+  for (const [path, expected] of Object.entries(build.productionFiles)) RUNTIME_RESOURCES.includes(path) ? writeCommittedFile(privateRuntime, path, committedBuildFile(controllerStore, commit, path, expected)) : copyCurrentFile(invocation.repositoryRoot, privateRuntime, path, expected);
   hardenRuntime(privateRuntime);
   installResolutionBoundary(privateRuntime);
   const entry = safePath(privateRuntime, build.runtimeEntry);
@@ -243,7 +242,7 @@ function parseBuildManifest(bytes) {
     productionFiles: digestMap(input.productionFiles, 'production'),
   };
   const runtimeTreeDigest = digest(input.runtimeTreeDigest);
-  if (!(RUNTIME_ENTRY in body.outputs)
+  if (!(RUNTIME_ENTRY in body.outputs) || RUNTIME_RESOURCES.some((path) => !(path in body.productionFiles))
     || sha256(Buffer.from(JSON.stringify(body), 'utf8')) !== runtimeTreeDigest) {
     throw new Error('HARNESS_BOOTSTRAP_BUILD_TREE_INVALID');
   }
@@ -277,7 +276,7 @@ function runtimePath(value, kind) {
   }
   const valid = kind === 'output'
     ? value.startsWith('coding-harness/dist/') && value.endsWith('.js')
-    : value.startsWith('coding-harness/node_modules/');
+    : value.startsWith('coding-harness/node_modules/') || RUNTIME_RESOURCES.includes(value);
   if (!valid) throw new Error('HARNESS_BOOTSTRAP_RUNTIME_PATH_INVALID');
   return value;
 }
@@ -315,6 +314,7 @@ function copyCurrentFile(repositoryRoot, runtimeRoot, path, expected) {
   }
   chmodSync(target, (Number(pathStat.mode) & 0o111) === 0 ? 0o400 : 0o500);
 }
+function committedBuildFile(root, commit, path, expected) { const bytes = gitBytes(root, commit, path); if (sha256(bytes) !== expected) throw new Error('HARNESS_BOOTSTRAP_BUILD_INPUT_MISMATCH'); return bytes; }
 function writeCommittedFile(runtimeRoot, path, bytes) {
   if (bytes.length < 1 || bytes.length > 1_000_000) {
     throw new Error('HARNESS_BOOTSTRAP_COMMITTED_FILE_INVALID');

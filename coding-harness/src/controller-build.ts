@@ -12,6 +12,11 @@ import {
 } from './contracts.js';
 
 export const CONTROLLER_BUILD_PATH = 'coding-harness/.harness/controller-build.json' as const;
+const CONTROLLER_RUNTIME_RESOURCES = new Set([
+  'coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json',
+]);
 
 export interface ControllerBuildManifest {
   readonly schemaVersion: 1;
@@ -86,7 +91,8 @@ function runtimePath(value: unknown, label: string, kind: 'output' | 'production
   const valid = kind === 'output'
     ? path.startsWith('coding-harness/dist/')
       && (path.endsWith('.js') || path.endsWith('.cjs'))
-    : path.startsWith('coding-harness/node_modules/');
+    : path.startsWith('coding-harness/node_modules/')
+      || CONTROLLER_RUNTIME_RESOURCES.has(path);
   if (!valid || Buffer.byteLength(path, 'utf8') > 500) {
     throw new TypeError(`HARNESS_CONTROLLER_BUILD_${kind.toUpperCase()}_PATH_INVALID`);
   }

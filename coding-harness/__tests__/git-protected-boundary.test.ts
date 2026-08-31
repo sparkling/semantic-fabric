@@ -2,7 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -50,28 +50,67 @@ describe('Git-backed composite protected boundary', () => {
     expect(decision.allow).toBe(false);
     expect(decision.reasons.join(' ')).toContain('tests/evaluator.txt');
   });
+
+  it('hashes an exact non-UTF8 gzip Git blob without string re-encoding', async () => {
+    const fixture = repository();
+    const path = 'controller-payload.gz';
+    const config = createTestConfig([path]);
+    const task = parseTaskContract({
+      schemaVersion: 1,
+      taskId: 'task-protected-binary-0001',
+      runId: 'run-protected-binary-0001',
+      workspaceRoot: fixture.evaluatorRoot,
+      readablePaths: [], mutablePaths: ['src/implementation.txt'],
+      protectedPaths: [path], tools: ['git'], commands: [],
+      network: { mode: 'offline', allowedOrigins: [] },
+      authority: 'development-only-no-promotion',
+    }, config);
+    const boundary = new GitProtectedInputBoundary({
+      repositoryRoot: fixture.repositoryRoot,
+      controllerCommit: fixture.commit,
+      evaluatorRoot: fixture.evaluatorRoot,
+      evaluatorPaths: [],
+    });
+
+    expect(() => new TextDecoder('utf-8', { fatal: true }).decode(fixture.binary)).toThrow();
+    const snapshot = await boundary.capture(task, config);
+    expect(snapshot).toEqual({
+      [path]: sha256(fixture.binary),
+    });
+    await expect(boundary.verify(task, config, snapshot)).resolves.toEqual({
+      allow: true,
+      reasons: ['protected controller blobs and evaluator files match'],
+    });
+  });
 });
 
 function repository(): Readonly<{
   repositoryRoot: string;
   evaluatorRoot: string;
   commit: string;
+  binary: Buffer;
 }> {
   const repositoryRoot = mkdtempSync(join(tmpdir(), 'harness-protected-repository-'));
   const evaluatorRoot = mkdtempSync(join(tmpdir(), 'harness-protected-evaluator-'));
   roots.push(repositoryRoot, evaluatorRoot);
   mkdirSync(join(repositoryRoot, 'src'));
   writeFileSync(join(repositoryRoot, 'controller.txt'), 'trusted controller\n');
+  const binary = readFileSync(new URL(
+    '../config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz', import.meta.url,
+  ));
+  writeFileSync(join(repositoryRoot, 'controller-payload.gz'), binary);
   writeFileSync(join(repositoryRoot, 'src/implementation.txt'), 'before\n');
   git(repositoryRoot, ['init', '--quiet']);
-  git(repositoryRoot, ['add', '--', 'controller.txt', 'src/implementation.txt']);
+  git(repositoryRoot, [
+    'add', '--', 'controller.txt', 'controller-payload.gz', 'src/implementation.txt',
+  ]);
   git(repositoryRoot, ['commit', '--quiet', '-m', 'controller'], identityEnvironment());
   const commit = git(repositoryRoot, ['rev-parse', 'HEAD']).trim();
   mkdirSync(join(evaluatorRoot, 'src'));
   mkdirSync(join(evaluatorRoot, 'tests'));
   writeFileSync(join(evaluatorRoot, 'src/implementation.txt'), 'before\n');
   writeFileSync(join(evaluatorRoot, 'tests/evaluator.txt'), 'sealed evaluator\n');
-  return { repositoryRoot, evaluatorRoot, commit };
+  return { repositoryRoot, evaluatorRoot, commit, binary };
 }
 
 function git(cwd: string, args: readonly string[], environment = process.env): string {
@@ -92,6 +131,6 @@ function identityEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-function sha256(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+function sha256(value: string | Buffer): string {
+  return createHash('sha256').update(value).digest('hex');
 }

@@ -8,6 +8,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   '.agents/config.toml',
   'coding-harness/__tests__/effective-config-current-state.test.ts',
   'coding-harness/__tests__/immutable-private-tree-overlay.test.ts',
+  'coding-harness/__tests__/packed-controller-overlay-assets.test.ts',
   'coding-harness/__tests__/native-test-prerequisites.ts',
   'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
   'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',

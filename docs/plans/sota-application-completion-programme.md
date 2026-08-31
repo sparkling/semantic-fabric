@@ -447,9 +447,9 @@ clean/info without reading the actual tracked `.mcp.json` and `.agents/config.to
 so those results are `INCONCLUSIVE`. The project-owned admission gate instead
 requires exact-empty MCP JSON, an exact agent-config digest, and rejects TOML,
 Unicode, duplicate-key and extra-key launcher indirection. The pinned local Ruflo
-reader reconstructs only its already-attested schema-v2 CLI closure from a protected
-two-file gzip overlay without opening ambient targets; it changes no identity, export,
-fetch/provider authority or application goal. It copies only exact status files and runs
+reader reconstructs only its already-attested schema-v2 CLI closure from a protected two-file
+gzip overlay without opening ambient targets; an opaque snapshot and three exact Git-backed
+packed-runtime resources change no identity, export, fetch/provider authority or application goal. Earlier 905-test evidence predates this overlay; the current run passes 124 files/941 tests with two intentional skips. It copies only exact status files and runs
 under `--unshare-net`; network/type/link/mode/race KATs keep `0664` evidence non-authoritative.
 Cross-project recall refused a live-WAL store; no unsafe import or copy occurred.
 A fixed-seed Darwin Shield run passed only 9/12 gates; no valid champion or serving

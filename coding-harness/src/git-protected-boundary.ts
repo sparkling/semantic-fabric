@@ -5,7 +5,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import type { HarnessConfig, TaskContract } from './contracts.js';
 import { deepFreeze, normalizeWorkspacePath } from './contracts.js';
-import { runGitCommand } from './git-process.js';
+import { runGitCommandBytes } from './git-process.js';
 import {
   assertProtectedInputSnapshot,
   type GateDecision,
@@ -103,12 +103,12 @@ export class GitProtectedInputBoundary implements ProtectedInputBoundary {
     if (!Number.isSafeInteger(size) || size < 0 || size > MAX_PROTECTED_BLOB_BYTES) {
       throw new Error(`HARNESS_PROTECTED_CONTROLLER_BLOB_SIZE_INVALID:${path}`);
     }
-    const value = await gitChecked(
+    const value = await gitCheckedBytes(
       this.#repositoryRoot,
       ['show', object],
       MAX_PROTECTED_BLOB_BYTES + 1,
     );
-    if (Buffer.byteLength(value, 'utf8') !== size) {
+    if (value.byteLength !== size) {
       throw new Error(`HARNESS_PROTECTED_CONTROLLER_BLOB_CHANGED:${path}`);
     }
     return sha256(value);
@@ -134,7 +134,20 @@ async function gitChecked(
   args: readonly string[],
   maxOutputBytes: number,
 ): Promise<string> {
-  const result = await runGitCommand(cwd, args, { maxOutputBytes });
+  const value = await gitCheckedBytes(cwd, args, maxOutputBytes);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(value);
+  } catch {
+    throw new Error(`HARNESS_PROTECTED_GIT_TEXT_INVALID:${args[0] ?? 'unknown'}`);
+  }
+}
+
+async function gitCheckedBytes(
+  cwd: string,
+  args: readonly string[],
+  maxOutputBytes: number,
+): Promise<Buffer> {
+  const result = await runGitCommandBytes(cwd, args, { maxOutputBytes });
   if (result.exitCode !== 0) {
     throw new Error(`HARNESS_PROTECTED_GIT_FAILED:${args[0] ?? 'unknown'}`);
   }
@@ -160,6 +173,6 @@ function canonicalDirectory(value: string, label: string): string {
   return value;
 }
 
-function sha256(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+function sha256(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
 }

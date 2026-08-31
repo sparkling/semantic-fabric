@@ -12,6 +12,7 @@ import { createImmutablePrivateRuntime } from '../src/immutable-private-runtime.
 import {
   assertImmutablePrivateTreeOverridesStable,
   captureImmutablePrivateTreeOverrides,
+  immutablePrivateTreeOverridePaths,
 } from '../src/immutable-private-tree-overlay.js';
 
 interface OverlayEntry {
@@ -129,9 +130,9 @@ describe('immutable private tree exact overlays', () => {
     await addManifestEntry(ordered, 'src/memory/ä.js', 'umlaut.js.gz');
     ordered.manifest.files.shift();
     await repinManifest(ordered);
-    expect([...captureImmutablePrivateTreeOverrides(
+    expect(immutablePrivateTreeOverridePaths(captureImmutablePrivateTreeOverrides(
       manifestSpec(ordered), fixtureBounds(),
-    ).files.keys()]).toEqual(['src/memory/z.js', 'src/memory/ä.js']);
+    ))).toEqual(['src/memory/z.js', 'src/memory/ä.js']);
 
     const reordered = await makeFixture();
     await addManifestEntry(reordered, 'src/memory/ä.js', 'umlaut.js.gz');
@@ -272,6 +273,28 @@ describe('immutable private tree exact overlays', () => {
       maxFiles: 1,
       maxBytes: fixture.decoded.byteLength - 1,
     })).toThrow('HARNESS_IMMUTABLE_RUNTIME_TREE_LIMIT_EXCEEDED');
+  });
+
+  it('keeps mutable maps and decoded buffers opaque outside the materializer', async () => {
+    const fixture = await makeFixture();
+    const snapshot = captureImmutablePrivateTreeOverrides(
+      manifestSpec(fixture), fixtureBounds(),
+    );
+    const paths = immutablePrivateTreeOverridePaths(snapshot);
+    expect(Object.keys(snapshot)).toEqual([]);
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect((snapshot as unknown as { files?: unknown }).files).toBeUndefined();
+    expect(paths).toEqual(['src/memory/entry.js']);
+    expect(Object.isFrozen(paths)).toBe(true);
+    expect(Reflect.set(snapshot, 'files', new Map())).toBe(false);
+    const forged = Object.freeze({}) as typeof snapshot;
+    expect(() => assertImmutablePrivateTreeOverridesStable(snapshot, forged))
+      .toThrow('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_SNAPSHOT_INVALID');
+    let trapped = false;
+    const proxy = new Proxy(forged, { get() { trapped = true; throw new Error('trap'); } });
+    expect(() => immutablePrivateTreeOverridePaths(proxy))
+      .toThrow('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_SNAPSHOT_INVALID');
+    expect(trapped).toBe(false);
   });
 
   it.each([

@@ -175,10 +175,15 @@ accepted only as cooperative, non-authoritative status evidence.
 The private package snapshot reconstructs two historical Ruflo memory files from
 protected deterministic gzip assets. A canonical manifest pins compressed and
 decoded size/digest, exact target, compression and non-executable mode; bounded
-descriptor-stable reads reject writable sources, links, swaps, traversal and
-drift. Ambient target bytes are never opened or copied, regardless of their mode.
-This is execution materialization of the already-attested schema-v2
-CLI identity, not a new identity, runtime export, fetch path or authority.
+descriptor-stable reads reject group/world-writable or executable protected
+sources, links, swaps, traversal and drift, and bind each accepted source mode
+and object across captures. Ambient target bytes are never opened or copied,
+regardless of mode. Decoded buffers remain inside an opaque materializer snapshot;
+the manifest and both blobs are exact Git-backed runtime-tree resources for the
+Issue 8, V5 and V6 packed launchers. This executes the already-attested schema-v2
+CLI identity; it creates no new identity, runtime export, fetch path or authority.
+The Linux-only reader has byte/count bounds but no compressed aggregate or
+decompression deadline, and its descriptor fallback still assumes `O_NOFOLLOW`.
 
 ## Retrieval flywheel boundary
 

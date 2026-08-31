@@ -24,6 +24,8 @@ import { SHA256_PATTERN, deepFreeze } from './contracts.js';
 import {
   assertImmutablePrivateTreeOverridesStable,
   captureImmutablePrivateTreeOverrides,
+  immutablePrivateTreeOverrideCount,
+  immutablePrivateTreeOverrideMetadata,
   writeImmutablePrivateTreeOverride,
   type ImmutablePrivateTreeOverrideManifestSpec,
   type ImmutablePrivateTreeOverrideSnapshot,
@@ -149,7 +151,9 @@ export function createImmutablePrivateRuntime(input: Readonly<{
         const target = join(treeTarget, file.relativePath);
         occupied.add(relative(root, target));
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-        const override = overridesBefore.files.get(file.relativePath);
+        const override = immutablePrivateTreeOverrideMetadata(
+          overridesBefore, file.relativePath,
+        );
         if (override === undefined) {
           copyStableFile(
             join(spec.sourceRoot, file.relativePath),
@@ -159,7 +163,7 @@ export function createImmutablePrivateRuntime(input: Readonly<{
             file.digest,
           );
         } else {
-          writeImmutablePrivateTreeOverride(target, override);
+          writeImmutablePrivateTreeOverride(target, overridesBefore, file.relativePath);
         }
       }
       const overridesAfter = captureImmutablePrivateTreeOverrides(spec.overrideManifest, bounds);
@@ -281,7 +285,7 @@ function captureTree(
       .sort((left, right) => left.name.localeCompare(right.name))) {
       const path = join(directory, entry.name);
       const relativePath = relative(root, path).split(sep).join('/');
-      const override = overrides.files.get(relativePath);
+      const override = immutablePrivateTreeOverrideMetadata(overrides, relativePath);
       if (override !== undefined) {
         if (!entry.isFile() || entry.isSymbolicLink()) {
           throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_TARGET_NOT_REGULAR');
@@ -319,7 +323,7 @@ function captureTree(
     }
   };
   visit(root);
-  if (consumedOverrides.size !== overrides.files.size) {
+  if (consumedOverrides.size !== immutablePrivateTreeOverrideCount(overrides)) {
     throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_TARGET_MISSING');
   }
   const body = { directories, files };
