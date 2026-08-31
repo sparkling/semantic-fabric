@@ -64,10 +64,10 @@ jobs:
         run: git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json
 
   postgresql-public-acl-replay:
-    name: PostgreSQL ACL V1 + V2 + projection mutations · node ${{ matrix.node }} · six isolated runs
+    name: PostgreSQL ACL V1 + V2 + projection mutations · node ${{ matrix.node }} · eight isolated runs
     runs-on: ubuntu-24.04
-    # Covers the conservative 110-minute sum of all six isolated replay/cleanup ceilings.
-    timeout-minutes: 120
+    # Covers the conservative 140-minute sum of all eight isolated replay/cleanup ceilings.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +86,7 @@ jobs:
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v2.mjs
           node coding-harness/supervisor-service/scripts/verify-postgresql-public-acl-projection-branch-mutations-v1.mjs
+          node coding-harness/supervisor-service/scripts/verify-postgresql-public-acl-projection-final-where-mutations-v1.mjs
 
   build:
     name: fmt · clippy · build · test

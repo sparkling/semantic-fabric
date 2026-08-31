@@ -139,23 +139,22 @@ no-membership-role checks across six populated classes; FDW/server remain
 explicit zero classes. It also binds matching captures from two distinct fresh
 volumes. These are test evidence only: they are excluded from
 supervisor-service source and build inputs and authorize neither migration nor
-runtime activation. A pure lexical mutator, extracted fail-closed replay support
-and 17 KATs protect the exact eight top-level class branches plus return-zero,
-one-atom omission, one typed-sentinel addition and count-neutral substitution.
-Its live verifier uses one rollback-only serializable transaction to populate
-FDW/server, match original and normalized projection bags to the independent
-raw-catalogue oracle, execute all 12 mutants, prove every exact mutant output,
-and require the full-bag key or multiplicity rejection. Held-descriptor
-`O_NOFOLLOW` reads, exact process arguments and mutated container predicates
-protect the local boundary; 60-second sessions and 15-second probes/inspections
-leave 180 seconds beneath the 300-second parent ceiling. Two fresh networkless
-runs prove deterministic evidence and owned cleanup. Unpublished developer-local
-Node.js 20.0.0 and 24.14.1 runs report 602 supervisor tests, V1/V2 plus the
-12-mutant live replay, and the 905-test parent harness with two intentional
-skips. No version-bound run receipt is tracked; CI is configured to run the same
-gates, but hosted evidence and the remaining predicate/value/nullability/order/
-duplicate/array/`UNION ALL` mutation cases, runtime `Plan` and live-observation
-brands remain open.
+runtime activation. A pure lexical mutator and fail-closed replay support protect
+eight branch deletions plus four record-set mutants. A separate source-pinned
+quartet freezes 19 final-`WHERE` deletions and two batches of ten and nine. Each
+rollback-only batch derives its expected bag from the unchanged raw oracle,
+adds 15 independently counted hidden predicate witnesses, and proves the
+unchanged projection is still equal before executing every mutant through a
+loose closed eight-field decoder. The result is exactly 19 executed, 15/15
+non-equivalent killed, four independently proved guard-equivalent, and zero
+unresolved; two fresh networkless runs reproduced deterministic 11,963,849-
+and 11,608,234-byte transcripts and complete rollback/cleanup. The sealed
+service artifact and public bundle remain byte-identical, so no runtime input or
+export changed. The exact Node 20/24 CI matrix now runs eight isolated
+V1/V2/branch/final-`WHERE` replays under a 150-minute ceiling. No version-bound
+run receipt is tracked; hosted evidence and the remaining value, nullability,
+order, duplicate, array/element and `UNION ALL` mutations, runtime `Plan` and
+live-observation brands remain open.
 
 The parent harness replaces Node 20's asynchronous recursive watcher with
 explicit root/nested directory watches, three agreeing tree digests and an

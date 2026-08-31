@@ -415,7 +415,6 @@ describe('PostgreSQL PUBLIC ACL projection branch mutation catalogue V1', () => 
     expect(runner).not.toMatch(/\bwriteFile(?:Sync)?\b|\bappendFile(?:Sync)?\b/u);
     expect(runner).not.toContain("['run', '--detach'");
   });
-
   it('gates the live mutation proof after V1 and V2 on exact Node 20 and 24', () => {
     const workflow = readFileSync(resolve(ROOT, '../../.github/workflows/ci.yml'), 'utf8');
     const start = workflow.indexOf('  postgresql-public-acl-replay:');
@@ -428,8 +427,9 @@ describe('PostgreSQL PUBLIC ACL projection branch mutation catalogue V1', () => 
       'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs',
       'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v2.mjs',
       `node coding-harness/supervisor-service/${RUNNER_PATH}`,
+      'node coding-harness/supervisor-service/scripts/verify-postgresql-public-acl-projection-final-where-mutations-v1.mjs',
     ];
-    expect(job.match(/timeout-minutes: 120/gu)).toHaveLength(1);
+    expect(job.match(/timeout-minutes: 150/gu)).toHaveLength(1);
     const step = job.slice(job.indexOf('      - name: replay V1, V2, and projection mutations'))
       .trimEnd();
     expect(step).toBe([

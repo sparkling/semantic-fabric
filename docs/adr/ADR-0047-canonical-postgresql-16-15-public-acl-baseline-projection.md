@@ -366,8 +366,8 @@ specified decoded-key and allocation ceilings before its sole `JSON.parse`,
 replays exact canonical bytes, and retains a private copy behind an opaque
 `authority=none` handle. Its 92 hostile/limit/private-brand KATs plus five
 exact-fixture baseline tests pass on exact Node 20.0.0 and 24.14.1. Unpublished
-developer-local runs report both V1 and V2 live replay, 602/602 supervisor
-tests, and 892 parent-harness tests with two intentional skips.
+developer-local runs report both V1 and V2 live replay, 611/611 supervisor
+tests, and 905 parent-harness tests with two intentional skips.
 
 The parent harness uses explicit non-recursive root and discovered-directory
 watches, requires setup/cooperative/settled metadata digests to agree, and
@@ -386,34 +386,36 @@ oversized sources. Exact frozen process arguments and mutated container
 snapshots make identifier, image, environment, network, port and mount
 predicates load-bearing before PostgreSQL execution.
 
-The test-only live verifier uses two fresh networkless anonymous-volume
-containers. Within one serializable rollback-only transaction per run it seeds
-PUBLIC `USAGE` on one foreign-data wrapper and server, proves all eight classes
-are positive, and requires original and explicit-column normalized projections
-to equal the independently derived raw-catalogue bag. Every mutant executes
-and parses. A branch deletion must preserve the exact seven-class survivor bag;
-zero, omission, addition and substitution must equal their mutation-specific
-exact output, with the sentinel independently pinned by a KAT. The full oracle
-then rejects the first eleven mutants
-with `ORACLE_RECORD_BAG_KEYS_MISMATCH` and the count-neutral substitution with
-`ORACLE_RECORD_BAG_MULTIPLICITY_MISMATCH`. Postflight proves the seed absent and
-owned cleanup is checked. Exact Node 20.0.0 and 24.14.1 produce the same
-12,584,275-byte deterministic transcript and kill all 12 mutants in both runs.
-The 60-second session and 15-second probe/inspection ceilings consume at most
-120 seconds beneath the 300-second parent, leaving 180 seconds for bounded
-local analysis and termination; CI allows 120 minutes for the conservative
-110-minute sum of all six isolated replay and cleanup ceilings.
+The branch verifier uses two fresh networkless anonymous-volume containers. A
+serializable rollback-only transaction seeds PUBLIC FDW/server `USAGE`, proves
+all eight classes positive, binds original and normalized projections to the
+independent raw bag, executes all 12 branch/record-set mutants, and proves their
+exact survivor/output bags before the full oracle rejects them. Exact Node
+20.0.0 and 24.14.1 previously produced one deterministic 12,584,275-byte
+transcript per run.
 
-This closes only item 5's delete-any-top-level-class-branch, return-zero,
-single-atom omission/addition and count-neutral-substitution subsets. Item 4
-and the remaining item 5 predicate, value, nullability, order, duplicate,
-array/element and `UNION ALL` replacement mutations remain open, as do item
-6's sealed runtime parser/compiled-pin `Plan` and live-observation brands. The
-test-only reader, mutator, replay support and verifier remain outside service
-build inputs and exports, so they create no runtime or migration dependency.
-These developer runs are not bound by a versioned test-run receipt, and a
-passing GitHub-hosted live matrix remains open. The current evidence therefore
-does not satisfy runtime admission.
+A second protected quartet pins all 19 final-`WHERE` deletion spans and their
+mutant digests against the exact 6,859-byte source. Two serializable rollback-
+only batches of ten and nine first derive the expected bag from the unchanged
+raw oracle, then add 15 independently counted hidden predicate witnesses. The
+unchanged projection must still equal the pre-hidden bag. Every mutant executes
+and parses through a separate loose closed eight-field bag decoder: all 15
+non-equivalent mutants differ, while supported relation/column/routine/type
+guards each independently prove zero candidates and their four mutants remain
+bag-equivalent. Two fresh runs reproduced deterministic 11,963,849-byte and
+11,608,234-byte transcripts with SHA-256 `2df643f9…c50f` and `688a5ed3…522`.
+The receipt is exactly **19 executed; 15/15 non-equivalent killed; four guard-
+equivalent; zero unresolved**. Postflight proves both transactions per run rolled back.
+CI runs all eight isolated V1/V2/branch/final-`WHERE` replays on exact Node 20
+and 24 under a 150-minute ceiling for the conservative 140-minute sum.
+
+This closes item 5's branch, final-`WHERE`, zero, single-atom omission/addition
+and count-neutral-substitution subsets. Item 4 and the remaining value,
+nullability, order, duplicate, array/element and `UNION ALL` replacements remain
+open, as do item 6's sealed parser/compiled-pin `Plan` and observation brands.
+All mutation machinery remains outside service build inputs and exports. These
+developer runs lack a versioned test-run receipt; hosted evidence and runtime
+admission remain open.
 
 ### 8. Record the reproduced test-only candidate
 
