@@ -12,7 +12,7 @@ implements: [ADR-0044, ADR-0045]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan` and descriptor-first receipt parser described below are implemented, but the store, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
+This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture and seven terminal singleton representations described below are implemented; adapter-owned brands, executable store, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
 
 The bundle remains private and dormant. Runtime startup/readiness may verify but never apply or repair migrations. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
 
@@ -437,10 +437,8 @@ Results are seven module-level deeply frozen intrinsic singleton records, one fo
 ### Implemented dormant representation evidence
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Thirteen focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, ordered descriptor parsing without candidate serialization, hostile accessors/proxies without invocation, UTF-8 bounds, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
-Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. The full private service suite passes 663 tests, and its public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
-This evidence closes the dormant load-and-bind, quoted-callable policy and descriptor-first receipt slices.
-Deadlines and terminal semantics are now specified but unimplemented; driver/store contracts,
-concurrent replacement stress and live PostgreSQL 16.15 evidence also remain open.
+Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. Fourteen capability/terminal KATs prove ordered descriptor capture without invocation, thenable assimilation or inherited setters; proxy/accessor/symbol/exotic/revoked-proxy rejection; captured-intrinsic and receiver-free behavior; and seven pairwise-distinct exact frozen non-authorizing terminal identities. The Node 24.14.1 private suite passes 677 tests; exact Node 20.0.0 passes the 17 changed/sealed gates plus TypeScript and artifact replay; both pass 65 focused parent protection/overlay gates. Sealed artifact SHA-256 is `ce67c466475309ead7da5bfa78de2a6716237472714a86f30a1f026b677a45e0`; the public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
+This closes the dormant load/bind, quoted-callable, descriptor-first receipt, unbranded capability-capture and terminal-singleton representation slices only. Exact statement/result pins, adapter-owned store/Promise/protocol brands, deadlines, coordinator, concurrent replacement stress and live PostgreSQL 16.15 evidence remain open.
 
 ## Acceptance gates
 
