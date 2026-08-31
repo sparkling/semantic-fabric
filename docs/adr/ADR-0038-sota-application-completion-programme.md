@@ -441,9 +441,9 @@ and these slices do not silently rescore the 44/100 readiness baseline.
 
 The 2026-08-31 integrated M0 hardening candidate makes tracked project MCP launchers
 default-empty and protected, then adds a strict scoped current-state admission gate.
-Its pinned local Ruflo collector copies only the two exact coordination-status files,
-mounts private `0400` snapshots rather than live directories, and uses `--unshare-net`.
-The cooperative `0664` source policy stays explicitly non-authoritative. Exact Node
+Its pinned local Ruflo collector materializes the already-attested schema-v2 CLI from an
+exact protected two-file historical gzip overlay, with no ambient read, identity, export, fetch or authority change.
+It then mounts only private status snapshots under `--unshare-net`; cooperative `0664` ledger input stays non-authoritative. Exact Node
 20.0.0/24.14.1 runs pass 122 files and 905 tests plus two intentional skips with controller
 `622526ab…630`; OIA is inconclusive and fixed-seed Darwin Shield passes only 9/12 gates.
 

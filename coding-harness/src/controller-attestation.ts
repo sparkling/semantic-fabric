@@ -20,7 +20,7 @@ import {
 } from './controller-build.js';
 import { deepFreeze } from './contracts.js';
 import { ISSUE_8_FROZEN_LOCK_FIXTURE_PATH } from './frozen-cargo-lock-fixture.js';
-import { runGitCommand } from './git-process.js';
+import { runGitCommand, runGitCommandBytes } from './git-process.js';
 import {
   normalizeAcceptanceTaskPath,
   parseHarnessManifest,
@@ -36,10 +36,15 @@ export const PROGRAMME_V5_ACCEPTANCE_TASK_PATH =
 export const HARNESS_MANIFEST_PATH = 'coding-harness/.harness/manifest.json';
 export const PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS = Object.freeze([
   ISSUE_8_FROZEN_LOCK_FIXTURE_PATH,
+  'coding-harness/__tests__/immutable-private-tree-overlay.test.ts',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz',
+  'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json',
   'coding-harness/scripts/launch-programme-v5.mjs',
   'coding-harness/scripts/programme-v5-operator-support.mjs',
   'coding-harness/scripts/run-programme-v5.mjs',
   'coding-harness/src/immutable-private-runtime.ts',
+  'coding-harness/src/immutable-private-tree-overlay.ts',
   'coding-harness/src/programme-v5-driver-support.ts',
   'coding-harness/src/programme-v5-driver.ts',
   'coding-harness/src/programme-v5-policy-anchor.ts',
@@ -50,6 +55,7 @@ export const PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS = Object.freeze([
   'coding-harness/src/programme-v5-replay.ts',
   'coding-harness/src/programme-v5-ruflo-contract.ts',
   'coding-harness/src/programme-v5-ruflo-runtime.ts',
+  'coding-harness/src/programme-v5-ruflo-schema-v2-materialization.ts',
   'coding-harness/src/programme-v5-ruflo.ts',
   'coding-harness/src/programme-v5-system.ts',
 ] as const);
@@ -136,7 +142,7 @@ export async function attestController(input: Readonly<{
   const sources: Record<string, string> = {};
   const outputs: Record<string, string> = {};
   for (const path of executionPaths) {
-    const blob = await readControllerBlob(controllerRepositoryRoot, commit, path, input.signal);
+    const blob = await readControllerBlobBytes(controllerRepositoryRoot, commit, path, input.signal);
     const absolute = trustedFile(repositoryRoot, path, 'CONTROLLER_SOURCE');
     const currentDigest = sha256FileBounded(absolute);
     if (currentDigest !== blob.digest) {
@@ -202,6 +208,12 @@ export async function attestIssue8Controller(input: Readonly<{
 }
 
 export function controllerExecutionPaths(paths: readonly string[], taskPath: string): string[] {
+  const required: readonly string[] = taskPath === PROGRAMME_V5_ACCEPTANCE_TASK_PATH
+    ? PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS
+    : [
+        'coding-harness/scripts/launch-issue-8.mjs',
+        'coding-harness/src/issue-8-driver.ts',
+      ];
   const selected = paths.filter((path) =>
     path.startsWith('coding-harness/src/')
     || path.startsWith('coding-harness/scripts/')
@@ -211,13 +223,8 @@ export function controllerExecutionPaths(paths: readonly string[], taskPath: str
     || path === ISSUE_8_FROZEN_LOCK_FIXTURE_PATH
     || path === taskPath
     || path === HARNESS_MANIFEST_PATH
-    || path === CONTROLLER_BUILD_PATH);
-  const required = taskPath === PROGRAMME_V5_ACCEPTANCE_TASK_PATH
-    ? PROGRAMME_V5_CONTROLLER_REQUIRED_PATHS
-    : [
-        'coding-harness/scripts/launch-issue-8.mjs',
-        'coding-harness/src/issue-8-driver.ts',
-      ];
+    || path === CONTROLLER_BUILD_PATH
+    || required.includes(path));
   if (!selected.includes(taskPath) || !selected.includes(HARNESS_MANIFEST_PATH)
     || !selected.includes('coding-harness/src/controller-attestation.ts')
     || !selected.includes(CONTROLLER_BUILD_PATH)
@@ -233,6 +240,22 @@ async function readControllerBlob(
   path: string,
   signal?: AbortSignal,
 ): Promise<Readonly<{ value: string; digest: string }>> {
+  const blob = await readControllerBlobBytes(root, commit, path, signal);
+  let value: string;
+  try {
+    value = new TextDecoder('utf-8', { fatal: true }).decode(blob.value);
+  } catch {
+    throw new Error(`HARNESS_CONTROLLER_BLOB_TEXT_INVALID:${path}`);
+  }
+  return Object.freeze({ value, digest: blob.digest });
+}
+
+async function readControllerBlobBytes(
+  root: string,
+  commit: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<Readonly<{ value: Buffer; digest: string }>> {
   const object = `${commit}:${path}`;
   const type = await gitValue(root, ['cat-file', '-t', object], signal, 128);
   if (type !== 'blob') throw new Error(`HARNESS_CONTROLLER_BLOB_INVALID:${path}`);
@@ -240,11 +263,11 @@ async function readControllerBlob(
   if (!Number.isSafeInteger(size) || size < 1 || size > MAX_CONTROLLER_BLOB_BYTES) {
     throw new Error(`HARNESS_CONTROLLER_BLOB_SIZE_INVALID:${path}`);
   }
-  const result = await runGitCommand(root, ['show', object], {
+  const result = await runGitCommandBytes(root, ['show', object], {
     signal,
     maxOutputBytes: MAX_CONTROLLER_BLOB_BYTES + 1,
   });
-  if (result.exitCode !== 0 || Buffer.byteLength(result.stdout, 'utf8') !== size) {
+  if (result.exitCode !== 0 || result.stdout.byteLength !== size) {
     throw new Error(`HARNESS_CONTROLLER_BLOB_READ_FAILED:${path}`);
   }
   return Object.freeze({ value: result.stdout, digest: sha256(result.stdout) });
@@ -294,8 +317,8 @@ function parseJson(value: string, path: string): unknown {
   }
 }
 
-function sha256(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+function sha256(value: string | Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function sha256FileBounded(path: string): string {

@@ -21,6 +21,13 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { SHA256_PATTERN, deepFreeze } from './contracts.js';
+import {
+  assertImmutablePrivateTreeOverridesStable,
+  captureImmutablePrivateTreeOverrides,
+  writeImmutablePrivateTreeOverride,
+  type ImmutablePrivateTreeOverrideManifestSpec,
+  type ImmutablePrivateTreeOverrideSnapshot,
+} from './immutable-private-tree-overlay.js';
 
 export interface ImmutablePrivateFileSpec {
   readonly key: string;
@@ -38,6 +45,7 @@ export interface ImmutablePrivateTreeSpec {
   readonly relativePath: string;
   readonly maxFiles: number;
   readonly maxBytes: number;
+  readonly overrideManifest?: ImmutablePrivateTreeOverrideManifestSpec;
 }
 
 export interface ImmutablePrivateLinkSpec {
@@ -130,7 +138,9 @@ export function createImmutablePrivateRuntime(input: Readonly<{
     for (const spec of input.trees ?? []) {
       uniqueKey(spec.key, treeIdentities);
       const treeTarget = targetPath(root, spec.relativePath, occupied);
-      const before = captureTree(spec);
+      const bounds = { maxFiles: spec.maxFiles, maxBytes: spec.maxBytes };
+      const overridesBefore = captureImmutablePrivateTreeOverrides(spec.overrideManifest, bounds);
+      const before = captureTree(spec, overridesBefore);
       mkdirSync(treeTarget, { recursive: true, mode: 0o700 });
       for (const directory of before.directories) {
         mkdirSync(join(treeTarget, directory), { recursive: true, mode: 0o700 });
@@ -139,16 +149,32 @@ export function createImmutablePrivateRuntime(input: Readonly<{
         const target = join(treeTarget, file.relativePath);
         occupied.add(relative(root, target));
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-        copyStableFile(
-          join(spec.sourceRoot, file.relativePath),
-          target,
-          file.executable,
-          Math.max(1, file.size),
-          file.digest,
-        );
+        const override = overridesBefore.files.get(file.relativePath);
+        if (override === undefined) {
+          copyStableFile(
+            join(spec.sourceRoot, file.relativePath),
+            target,
+            file.executable,
+            Math.max(1, file.size),
+            file.digest,
+          );
+        } else {
+          writeImmutablePrivateTreeOverride(target, override);
+        }
       }
-      const after = captureTree(spec);
+      const overridesAfter = captureImmutablePrivateTreeOverrides(spec.overrideManifest, bounds);
+      const after = captureTree(spec, overridesAfter);
       if (after.digest !== before.digest) throw new Error('HARNESS_IMMUTABLE_RUNTIME_TREE_CHANGED');
+      assertImmutablePrivateTreeOverridesStable(overridesBefore, overridesAfter);
+      const materialized = captureTree(
+        { ...spec, sourceRoot: treeTarget, overrideManifest: undefined },
+        captureImmutablePrivateTreeOverrides(undefined, bounds),
+      );
+      if (materialized.digest !== before.digest
+        || materialized.totalBytes !== before.totalBytes
+        || materialized.files.length !== before.files.length) {
+        throw new Error('HARNESS_IMMUTABLE_RUNTIME_COPY_INVALID');
+      }
       treeIdentities[spec.key] = Object.freeze({
         sourceRoot: spec.sourceRoot,
         path: treeTarget,
@@ -236,7 +262,10 @@ function copyStableFile(
   }
 }
 
-function captureTree(spec: ImmutablePrivateTreeSpec): TreeSnapshot {
+function captureTree(
+  spec: ImmutablePrivateTreeSpec,
+  overrides: ImmutablePrivateTreeOverrideSnapshot,
+): TreeSnapshot {
   if (!Number.isSafeInteger(spec.maxFiles) || spec.maxFiles < 1
     || !Number.isSafeInteger(spec.maxBytes) || spec.maxBytes < 1) {
     throw new Error('HARNESS_IMMUTABLE_RUNTIME_TREE_LIMIT_INVALID');
@@ -244,6 +273,7 @@ function captureTree(spec: ImmutablePrivateTreeSpec): TreeSnapshot {
   const root = canonicalDirectory(spec.sourceRoot, 'TREE_ROOT');
   const directories: string[] = [];
   const files: TreeFile[] = [];
+  const consumedOverrides = new Set<string>();
   let totalBytes = 0;
   const visit = (directory: string) => {
     trustedDirectory(directory);
@@ -251,7 +281,23 @@ function captureTree(spec: ImmutablePrivateTreeSpec): TreeSnapshot {
       .sort((left, right) => left.name.localeCompare(right.name))) {
       const path = join(directory, entry.name);
       const relativePath = relative(root, path).split(sep).join('/');
-      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      const override = overrides.files.get(relativePath);
+      if (override !== undefined) {
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_TARGET_NOT_REGULAR');
+        }
+        consumedOverrides.add(relativePath);
+        totalBytes += override.size;
+        files.push({
+          relativePath,
+          digest: override.digest,
+          executable: override.executable,
+          size: override.size,
+        });
+        if (files.length > spec.maxFiles || totalBytes > spec.maxBytes) {
+          throw new Error('HARNESS_IMMUTABLE_RUNTIME_TREE_LIMIT_EXCEEDED');
+        }
+      } else if (entry.isDirectory() && !entry.isSymbolicLink()) {
         directories.push(relativePath);
         visit(path);
       } else if (entry.isFile() && !entry.isSymbolicLink()) {
@@ -273,6 +319,9 @@ function captureTree(spec: ImmutablePrivateTreeSpec): TreeSnapshot {
     }
   };
   visit(root);
+  if (consumedOverrides.size !== overrides.files.size) {
+    throw new Error('HARNESS_IMMUTABLE_RUNTIME_OVERLAY_TARGET_MISSING');
+  }
   const body = { directories, files };
   return Object.freeze({
     ...body,

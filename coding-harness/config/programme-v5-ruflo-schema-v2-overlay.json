@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "targetPath": "src/memory/memory-bridge.js",
+      "blobPath": "programme-v5-ruflo-schema-v2-memory-bridge.js.gz",
+      "compression": "gzip",
+      "compressedSha256": "14edc87c5ef1ebf060911270cfd6bb4937847e2251dd6dfb88b134b38c7be215",
+      "compressedBytes": 31787,
+      "decodedSha256": "e6096b21de788a98676052f575982bea360d2f824f4327af4a66a4a36a0377db",
+      "decodedBytes": 132036,
+      "executable": false
+    },
+    {
+      "targetPath": "src/memory/memory-initializer.js",
+      "blobPath": "programme-v5-ruflo-schema-v2-memory-initializer.js.gz",
+      "compression": "gzip",
+      "compressedSha256": "e3804b997eaa420150acbc3e4824ea03d6e3bf4f3cf0710fe10a9fbdc5b10cf2",
+      "compressedBytes": 37076,
+      "decodedSha256": "08de815874c3613f2b4042ac5dda335a8a69ce1d9235de874930202141c08ea6",
+      "decodedBytes": 147515,
+      "executable": false
+    }
+  ]
+}

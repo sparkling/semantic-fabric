@@ -9,6 +9,9 @@ import {
   PROGRAMME_V5_RUFLO_CLI_IDENTITY,
   PROGRAMME_V5_RUFLO_NODE_IDENTITY,
 } from './programme-v5-ruflo-contract.js';
+import {
+  PROGRAMME_V5_RUFLO_SCHEMA_V2_OVERRIDE_MANIFEST,
+} from './programme-v5-ruflo-schema-v2-materialization.js';
 import { systemNativeRuntimeLibraryMounts } from './native-system-filesystem.js';
 
 const PACKAGE_ROOT = dirname(dirname(PROGRAMME_V5_RUFLO_CLI_IDENTITY.entryPath));
@@ -95,6 +98,7 @@ export function createProgrammeV5RufloPrivateRuntime(
       {
         key: 'dist', sourceRoot: PACKAGE_DIST, relativePath: 'package/dist',
         maxFiles: 1_024, maxBytes: 20_000_000,
+        overrideManifest: PROGRAMME_V5_RUFLO_SCHEMA_V2_OVERRIDE_MANIFEST,
       },
       {
         key: 'cliCore', sourceRoot: CLI_CORE_ROOT,

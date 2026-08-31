@@ -172,6 +172,14 @@ local-DNS, and AF_UNIX canaries. Hardlinks, symlinks, sockets, FIFOs, world-writ
 and concurrent source mutation fail closed. Same-euid/same-gid `0664` inputs are
 accepted only as cooperative, non-authoritative status evidence.
 
+The private package snapshot reconstructs two historical Ruflo memory files from
+protected deterministic gzip assets. A canonical manifest pins compressed and
+decoded size/digest, exact target, compression and non-executable mode; bounded
+descriptor-stable reads reject writable sources, links, swaps, traversal and
+drift. Ambient target bytes are never opened or copied, regardless of their mode.
+This is execution materialization of the already-attested schema-v2
+CLI identity, not a new identity, runtime export, fetch path or authority.
+
 ## Retrieval flywheel boundary
 
 Ruflo's retrieval-policy flywheel is governed outside the candidate transaction.
