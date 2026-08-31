@@ -1,0 +1,38 @@
+{
+  "domain": "semantic-fabric/programme-capture/supervisor-postgresql-migration-manifest-v1",
+  "schemaVersion": 1,
+  "authority": "none",
+  "readinessAuthorized": false,
+  "postgresqlServerVersion": "16.15",
+  "postgresqlServerVersionNumber": 160015,
+  "advisoryLockKey": "800874507948546278",
+  "catalogContract": {
+    "path": "migrations/catalog-contract-v1.json",
+    "bytes": 232822,
+    "sha256": "e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69"
+  },
+  "provisioningContract": {
+    "path": "migrations/provisioning-contract-v1.json",
+    "bytes": 8657,
+    "sha256": "71e4bafda6f97f44b54f28903363fe4ff88f3199a2d08b4dc4bc9060c33e55a9"
+  },
+  "authoritySeed": {
+    "domain": "semantic-fabric/programme-capture/supervisor-postgresql-authority-seed-v1",
+    "bytes": 11303,
+    "sha256": "b6d3b0f77a2b71cb10782152cb74a3f37320e220131a2d3ef29cc455c9a26e4c"
+  },
+  "migrations": [
+    {
+      "version": 1,
+      "path": "migrations/0001-registration-state-v1.sql",
+      "bytes": 26438,
+      "sha256": "c923f0f725c009a65ef85bc1881b7ae5717a1eca148bbf5316aeee60bb4a31c1"
+    },
+    {
+      "version": 2,
+      "path": "migrations/0002-registration-rls-v1.sql",
+      "bytes": 21661,
+      "sha256": "1d620d95f630997785d0d3adf724e5befe458c0c41e0746f45713cb584b58765"
+    }
+  ]
+}

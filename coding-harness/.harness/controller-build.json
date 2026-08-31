@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "authority": "development-only-no-promotion",
   "runtimeEntry": "coding-harness/dist/issue-8-program.js",
-  "harnessManifestDigest": "99b5f7be44906f9a3f4b78fba8ae726cc05579dd0f59670d11ac1a85e0984ba1",
+  "harnessManifestDigest": "1470eeefc1f5916aca5939cccdc31df073f94cb7add526e7aa5f0fa99c59b623",
   "lockfileDigest": "e823a5f73776c46a33934574dbca8248755bf04924f80b49a9aa5445cb3a4f1b",
   "outputs": {
     "coding-harness/dist/acceptance-runner.js": "4a7719db6ffd1dc33a7e3323714fa60fb636c8236c0e740449e53351629c7946",
@@ -102,7 +102,7 @@
     "coding-harness/dist/programme-capture-input-attestation-v1.js": "c5b540bb9f0bf24dcdc8ffc5425d3c338c8132eb4aaf747c293d36a91f518688",
     "coding-harness/dist/programme-capture-private-source-fs-v1.js": "d5827fc76829e8b01ee71c7cb38035cf76dec70adaa3ea22031952a5f16e1dfa",
     "coding-harness/dist/programme-capture-private-source-v1.js": "017a9460306d9270e987d76295ea0dbaab027e4d8d29d37791993dde3fa4810e",
-    "coding-harness/dist/programme-capture-protected-paths-v1.js": "e97c27c7ad8226d7eaea2a6d203791d90d9e297c7690204a7c3ef2915e0d08c5",
+    "coding-harness/dist/programme-capture-protected-paths-v1.js": "eb5b51f02c12b8c1c11bf00f359757ed21f3b3e6bf092bf7f3f4079501443f10",
     "coding-harness/dist/programme-capture-runner-profile-v1.js": "61c4b076b28c2ce5544978df15083969ca45e1e732909c4a81a01dadc062df26",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
     "coding-harness/dist/programme-capture-supervisor-authority-config-v2.js": "29ea6c4caa028535220d3f04bc79f7f36e2112530a3fd89f409aebd191a4ced3",
@@ -297,5 +297,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "c1e145a56f5a407a2cab0e6122c448e1100ddfec23b3e8c117836abc6f29d8c8"
+  "runtimeTreeDigest": "ef71fd3a5f0571d6a8da5e5e38e415e4d2cd163ebd882150f4bd4801d59a57f5"
 }
