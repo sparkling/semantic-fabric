@@ -43,7 +43,7 @@
     "src/registration-postgresql-materializer-v1.ts": "8b627ff4129aec7715f43cac430505762cc794660321da2503e1beacd5e72314",
     "src/registration-postgresql-migration-json-v1.ts": "7004424dc19a02adf732b3711f8259c8cd42aa81d35ba69e6bdeca7f7c4b85be",
     "src/registration-postgresql-migration-manifest-v1.ts": "03dbc1e00051e69600e3054e7c8775f4f727f1c9093f01a799b2446677034782",
-    "src/registration-postgresql-migration-plan-v1.ts": "c4ad1f9e58270636ba954d679fb4fc0885cd05bf858868524a5cb6538d42e6bc",
+    "src/registration-postgresql-migration-plan-v1.ts": "d082bcdcb900ff65cef082554d2f631f9bff5c14f728306edece2761078fda4e",
     "src/registration-postgresql-migration-reader-v1.ts": "0ed4028bb9fcfb8a34f409007f9fd666126e7d297839e5753514aa59e5b82f36",
     "src/registration-postgresql-migration-sql-policy-v1.ts": "ed5a1c8e61241857f7e5ef09c530ff1e812f54ee09a574aaa3ad24323ec6fa5a",
     "src/registration-postgresql-migration-sql-scanner-v1.ts": "72bf4e135510d328318a97a1bc9289d03915e6718446009cba62848cd9b32190",
@@ -63,5 +63,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "e254f621c3dfc9f7cfb46cd869cc88f97f7ec60b1033a8346e7dfe8205abd9a1"
+  "artifactDigest": "112d76d8192382be1da4b971a4d99032d9364e61dbffe1902740088d724c6803"
 }

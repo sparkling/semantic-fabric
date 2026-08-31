@@ -137,24 +137,183 @@ describe('sealed PostgreSQL migration Plan V1', () => {
       .toMatchObject({ preflightReceiptSha256: plan.preflightReceiptSha256 });
   });
 
-  it('parses only the exact closed receipt and rejects hostile values', async () => {
+  it('parses exact cloned receipts without candidate serialization', async () => {
     const { module } = await bundledPlanFixture(true);
     const plan = module.loadSealedPostgresMigrationPlanV1();
     const receipt = module.postgresMigrationPlanPreflightReceiptV1(plan);
     const clone = structuredClone(receipt);
+    const frozenClone = freezeGraph(structuredClone(receipt));
 
+    expect(module.parsePostgresMigrationPlanPreflightReceiptV1(receipt)).toBe(receipt);
     expect(module.parsePostgresMigrationPlanPreflightReceiptV1(clone)).toBe(receipt);
+    expect(module.parsePostgresMigrationPlanPreflightReceiptV1(frozenClone)).toBe(receipt);
+
+    const stringify = JSON.stringify;
+    const ownKeys = Reflect.ownKeys;
+    const getPrototypeOf = Object.getPrototypeOf;
+    const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+    let replacementCalls = 0;
+    const failSerialization = (): never => {
+      replacementCalls += 1;
+      throw new Error('candidate serialization');
+    };
+    let parsed: Record<string, unknown> | undefined;
+    try {
+      JSON.stringify = failSerialization;
+      Reflect.ownKeys = failSerialization;
+      Object.getPrototypeOf = failSerialization;
+      Object.getOwnPropertyDescriptor = failSerialization;
+      parsed = module.parsePostgresMigrationPlanPreflightReceiptV1(clone);
+    } finally {
+      JSON.stringify = stringify;
+      Reflect.ownKeys = ownKeys;
+      Object.getPrototypeOf = getPrototypeOf;
+      Object.getOwnPropertyDescriptor = getOwnPropertyDescriptor;
+    }
+    expect(parsed).toBe(receipt);
+    expect(replacementCalls).toBe(0);
+  });
+
+  it('rejects reordered records and bounded primitive substitutions', async () => {
+    const { module } = await bundledPlanFixture(true);
+    const receipt = module.postgresMigrationPlanPreflightReceiptV1(
+      module.loadSealedPostgresMigrationPlanV1(),
+    );
+    const clone = structuredClone(receipt);
+    const artifacts = clone.artifacts as Record<string, unknown>;
+    const reorderedArtifacts = structuredClone(clone);
+    reorderedArtifacts.artifacts = reverseRecord(
+      reorderedArtifacts.artifacts as Record<string, unknown>,
+    );
+    const reorderedPin = structuredClone(clone);
+    const reorderedPins = reorderedPin.artifacts as Record<string, unknown>;
+    reorderedPins.manifest = reverseRecord(
+      reorderedPins.manifest as Record<string, unknown>,
+    );
+    const pinArray = structuredClone(clone);
+    (pinArray.artifacts as Record<string, unknown>).manifest = [
+      1_299,
+      '72782ecae7d33a0149fb2ceb0a3219254fcd68137e499b811260f77b5cd70478',
+    ];
+
     for (const hostile of [
+      reverseRecord(clone),
+      reorderedArtifacts,
+      reorderedPin,
+      replaceOwnKey(clone, 'receiptSha256', 'x'.repeat(30)),
       { ...clone, authority: 'migration' },
+      { ...clone, authority: 'a'.repeat(65) },
+      { ...clone, authority: 'é'.repeat(33) },
+      { ...clone, schemaVersion: Number.MAX_SAFE_INTEGER + 1 },
       { ...clone, extra: true },
       { ...clone, receiptSha256: '0'.repeat(64) },
-      new Proxy(clone, { ownKeys: () => { throw new Error('trap'); } }),
+      { ...clone, artifacts: Object.values(artifacts) },
+      { ...clone, artifacts: new Uint8Array(0) },
+      pinArray,
     ]) {
       expect(() => module.parsePostgresMigrationPlanPreflightReceiptV1(hostile))
         .toThrow('PostgreSQL migration preflight receipt is invalid');
     }
   });
+
+  it('rejects hostile identities and descriptors without invoking traps or getters', async () => {
+    const { module } = await bundledPlanFixture(true);
+    const receipt = module.postgresMigrationPlanPreflightReceiptV1(
+      module.loadSealedPostgresMigrationPlanV1(),
+    );
+    const clone = structuredClone(receipt);
+    let getterCalls = 0;
+    let trapCalls = 0;
+    const accessor = structuredClone(clone);
+    Object.defineProperty(accessor, 'authority', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        getterCalls += 1;
+        throw new Error('getter');
+      },
+    });
+    const nestedAccessor = structuredClone(clone);
+    const nestedManifest = (nestedAccessor.artifacts as Record<string, unknown>)
+      .manifest as Record<string, unknown>;
+    Object.defineProperty(nestedManifest, 'bytes', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        getterCalls += 1;
+        throw new Error('nested getter');
+      },
+    });
+    const nonEnumerable = structuredClone(clone);
+    Object.defineProperty(nonEnumerable, 'authority', {
+      value: 'none', enumerable: false, configurable: true, writable: true,
+    });
+    const symbol = structuredClone(clone);
+    Object.defineProperty(symbol, Symbol('extra'), { value: true, enumerable: true });
+    const traps = {
+      get: () => { trapCalls += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor: () => {
+        trapCalls += 1;
+        throw new Error('descriptor trap');
+      },
+      getPrototypeOf: () => { trapCalls += 1; throw new Error('prototype trap'); },
+      ownKeys: () => { trapCalls += 1; throw new Error('ownKeys trap'); },
+    };
+    const rootProxy = new Proxy(clone, traps);
+    const nestedProxy = structuredClone(clone);
+    nestedProxy.artifacts = new Proxy(
+      nestedProxy.artifacts as Record<string, unknown>, traps,
+    );
+    const revoked = Proxy.revocable(clone, traps);
+    revoked.revoke();
+
+    for (const hostile of [
+      accessor,
+      nestedAccessor,
+      nonEnumerable,
+      symbol,
+      rootProxy,
+      nestedProxy,
+      revoked.proxy,
+      Object.assign(Object.create(null), clone),
+      Object.assign(Object.create({ inherited: true }), clone),
+      Object.assign([], clone),
+      Object.assign(new String('receipt'), clone),
+      Object.assign(() => undefined, clone),
+    ]) {
+      expect(() => module.parsePostgresMigrationPlanPreflightReceiptV1(hostile))
+        .toThrow('PostgreSQL migration preflight receipt is invalid');
+    }
+    expect(getterCalls).toBe(0);
+    expect(trapCalls).toBe(0);
+  });
 });
+
+function freezeGraph(value: unknown): unknown {
+  if (value !== null && typeof value === 'object') {
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor && 'value' in descriptor) freezeGraph(descriptor.value);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function reverseRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).reverse());
+}
+
+function replaceOwnKey(
+  value: Record<string, unknown>,
+  current: string,
+  replacement: string,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key === current ? replacement : key,
+    item,
+  ]));
+}
 
 async function bundledPlanFixture(withMigrations: boolean): Promise<{
   root: string;

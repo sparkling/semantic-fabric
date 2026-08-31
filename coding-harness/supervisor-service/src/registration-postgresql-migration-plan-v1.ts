@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+import { Buffer } from 'node:buffer';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isProxy } from 'node:util/types';
@@ -7,7 +8,6 @@ import {
   canonicalDigestHexV1,
   canonicalJsonV1,
   deepFreezeV1,
-  snapshotClosedGraphV1,
 } from './registration-postgresql-canonical-v1.js';
 import {
   assertPostgresCatalogueDigestV1,
@@ -40,6 +40,37 @@ import {
 const INVALID_PLAN = 'PostgreSQL migration Plan is invalid';
 const INVALID_RECEIPT = 'PostgreSQL migration preflight receipt is invalid';
 const SERVICE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const BYTE_LENGTH = Buffer.byteLength;
+const GET_OWN_PROPERTY_DESCRIPTOR = Object.getOwnPropertyDescriptor;
+const GET_PROTOTYPE_OF = Object.getPrototypeOf;
+const NUMBER_IS_SAFE_INTEGER = Number.isSafeInteger;
+const OBJECT_IS = Object.is;
+const OWN_KEYS = Reflect.ownKeys;
+const PLAIN_OBJECT_PROTOTYPE = Object.prototype;
+const RECEIPT_ROOT_KEYS = Object.freeze([
+  'schemaVersion', 'receiptKind', 'planKind', 'authority',
+  'readinessAuthorized', 'databaseAccessAuthorized', 'migrationApplyAuthorized',
+  'postgresqlServerVersion', 'postgresqlServerVersionNumber',
+  'advisoryLockKey', 'artifacts', 'receiptSha256',
+]);
+const RECEIPT_ARTIFACT_KEYS = Object.freeze([
+  'manifest', 'catalogueContract', 'provisioningContract',
+  'authoritySeed', 'migration0001', 'migration0002',
+] as const);
+const RECEIPT_PIN_KEYS = Object.freeze(['bytes', 'sha256']);
+const RECEIPT_LIMITS = Object.freeze({
+  maximumRecordKeys: 12,
+  maximumKeys: 30,
+  maximumKeyBytes: 29,
+  maximumStringBytes: 64,
+  maximumNonRootRecords: 7,
+  maximumNodes: 31,
+  maximumRecordDepth: 3,
+  maximumLeafDepth: 4,
+  maximumAggregateKeyBytes: 347,
+  maximumAggregateStringBytes: 548,
+  maximumCombinedBytes: 895,
+});
 declare const PLAN_IDENTITY: unique symbol;
 
 export interface SealedPostgresMigrationPlanV1 {
@@ -137,15 +168,36 @@ const RECEIPT_BODY = deepFreezeV1({
 });
 export const POSTGRES_MIGRATION_PLAN_PREFLIGHT_SHA256_V1 =
   '2ff788e1d5af841ea6be0f1d22635a0a584e176d2c17537b9c0533afeebd434d';
-if (canonicalDigestHexV1(RECEIPT_BODY)
-  !== POSTGRES_MIGRATION_PLAN_PREFLIGHT_SHA256_V1) {
+const RECEIPT_BODY_CANONICAL = canonicalJsonV1(RECEIPT_BODY);
+if (BYTE_LENGTH(RECEIPT_BODY_CANONICAL, 'utf8') !== 1_015
+  || canonicalDigestHexV1(RECEIPT_BODY)
+    !== POSTGRES_MIGRATION_PLAN_PREFLIGHT_SHA256_V1) {
   throw new TypeError('PostgreSQL migration preflight receipt pin is invalid');
 }
 const RECEIPT: PostgresMigrationPlanPreflightReceiptV1 = deepFreezeV1({
   ...RECEIPT_BODY,
   receiptSha256: POSTGRES_MIGRATION_PLAN_PREFLIGHT_SHA256_V1,
 });
-const RECEIPT_CANONICAL = canonicalJsonV1(RECEIPT);
+if (BYTE_LENGTH(canonicalJsonV1(RECEIPT), 'utf8') !== 1_098) {
+  throw new TypeError('PostgreSQL migration preflight receipt size is invalid');
+}
+type ReceiptPrimitiveV1 = string | number | boolean;
+const RECEIPT_ROOT_LEAVES: readonly ReceiptPrimitiveV1[] = Object.freeze([
+  RECEIPT.schemaVersion,
+  RECEIPT.receiptKind,
+  RECEIPT.planKind,
+  RECEIPT.authority,
+  RECEIPT.readinessAuthorized,
+  RECEIPT.databaseAccessAuthorized,
+  RECEIPT.migrationApplyAuthorized,
+  RECEIPT.postgresqlServerVersion,
+  RECEIPT.postgresqlServerVersionNumber,
+  RECEIPT.advisoryLockKey,
+  RECEIPT.receiptSha256,
+]);
+const RECEIPT_ROOT_LEAF_INDEXES = Object.freeze([
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11,
+] as const);
 const PLANS = new WeakMap<object, PlanStateV1>();
 
 /** Load, bind, and brand the fixed dormant migration inputs. No database is opened. */
@@ -244,11 +296,145 @@ export function parsePostgresMigrationPlanPreflightReceiptV1(
   value: unknown,
 ): PostgresMigrationPlanPreflightReceiptV1 {
   try {
-    const snapshot = snapshotClosedGraphV1(value, 'PostgreSQL migration receipt');
-    if (canonicalJsonV1(snapshot) !== RECEIPT_CANONICAL) throw new TypeError();
+    assertExactReceiptCandidateV1(value);
     return RECEIPT;
   } catch {
     throw new TypeError(INVALID_RECEIPT);
+  }
+}
+
+interface ReceiptScanStateV1 {
+  readonly seen: WeakSet<object>;
+  readonly actualLeaves: ReceiptPrimitiveV1[];
+  readonly expectedLeaves: ReceiptPrimitiveV1[];
+  records: number;
+  nonRootRecords: number;
+  nodes: number;
+  keys: number;
+  keyBytes: number;
+  stringBytes: number;
+}
+
+function assertExactReceiptCandidateV1(value: unknown): void {
+  const state: ReceiptScanStateV1 = {
+    seen: new WeakSet(),
+    actualLeaves: [],
+    expectedLeaves: [],
+    records: 0,
+    nonRootRecords: 0,
+    nodes: 0,
+    keys: 0,
+    keyBytes: 0,
+    stringBytes: 0,
+  };
+  const root = scanReceiptRecordV1(value, RECEIPT_ROOT_KEYS, 1, state);
+  for (let index = 0; index < RECEIPT_ROOT_LEAF_INDEXES.length; index += 1) {
+    scanReceiptLeafV1(
+      root[RECEIPT_ROOT_LEAF_INDEXES[index]!],
+      RECEIPT_ROOT_LEAVES[index]!,
+      2,
+      state,
+    );
+  }
+  const artifacts = scanReceiptRecordV1(
+    root[10], RECEIPT_ARTIFACT_KEYS, 2, state,
+  );
+  for (let index = 0; index < RECEIPT_ARTIFACT_KEYS.length; index += 1) {
+    const pin = scanReceiptRecordV1(
+      artifacts[index], RECEIPT_PIN_KEYS, 3, state,
+    );
+    const expected = RECEIPT.artifacts[RECEIPT_ARTIFACT_KEYS[index]!];
+    scanReceiptLeafV1(pin[0], expected.bytes, 4, state);
+    scanReceiptLeafV1(pin[1], expected.sha256, 4, state);
+  }
+  if (state.records !== RECEIPT_LIMITS.maximumNonRootRecords + 1
+    || state.nonRootRecords !== RECEIPT_LIMITS.maximumNonRootRecords
+    || state.nodes !== RECEIPT_LIMITS.maximumNodes
+    || state.keys !== RECEIPT_LIMITS.maximumKeys
+    || state.keyBytes !== RECEIPT_LIMITS.maximumAggregateKeyBytes
+    || state.stringBytes !== RECEIPT_LIMITS.maximumAggregateStringBytes
+    || state.actualLeaves.length !== 23
+    || state.actualLeaves.length !== state.expectedLeaves.length) throw new TypeError();
+  for (let index = 0; index < state.actualLeaves.length; index += 1) {
+    if (!OBJECT_IS(state.actualLeaves[index], state.expectedLeaves[index])) {
+      throw new TypeError();
+    }
+  }
+}
+
+function scanReceiptRecordV1(
+  value: unknown,
+  expectedKeys: readonly string[],
+  depth: number,
+  state: ReceiptScanStateV1,
+): unknown[] {
+  if (isProxy(value) || value === null || typeof value !== 'object') {
+    throw new TypeError();
+  }
+  if (GET_PROTOTYPE_OF(value) !== PLAIN_OBJECT_PROTOTYPE || state.seen.has(value)) {
+    throw new TypeError();
+  }
+  state.seen.add(value);
+  state.records += 1;
+  state.nodes += 1;
+  if (depth > RECEIPT_LIMITS.maximumRecordDepth
+    || state.nodes > RECEIPT_LIMITS.maximumNodes) throw new TypeError();
+  if (depth > 1) {
+    state.nonRootRecords += 1;
+    if (state.nonRootRecords > RECEIPT_LIMITS.maximumNonRootRecords) {
+      throw new TypeError();
+    }
+  }
+  const keys = OWN_KEYS(value);
+  if (keys.length > RECEIPT_LIMITS.maximumRecordKeys
+    || keys.length !== expectedKeys.length) throw new TypeError();
+  const values: unknown[] = [];
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (typeof key !== 'string') throw new TypeError();
+    const keyBytes = BYTE_LENGTH(key, 'utf8');
+    state.keys += 1;
+    state.keyBytes += keyBytes;
+    assertReceiptByteBoundsV1(state);
+    if (keyBytes > RECEIPT_LIMITS.maximumKeyBytes
+      || key !== expectedKeys[index]) throw new TypeError();
+    const descriptor = GET_OWN_PROPERTY_DESCRIPTOR(value, key);
+    if (descriptor === undefined || descriptor.enumerable !== true
+      || !('value' in descriptor)) throw new TypeError();
+    values.push(descriptor.value);
+  }
+  return values;
+}
+
+function scanReceiptLeafV1(
+  value: unknown,
+  expected: ReceiptPrimitiveV1,
+  depth: number,
+  state: ReceiptScanStateV1,
+): void {
+  state.nodes += 1;
+  if (depth > RECEIPT_LIMITS.maximumLeafDepth
+    || state.nodes > RECEIPT_LIMITS.maximumNodes) throw new TypeError();
+  if (typeof value === 'string') {
+    const stringBytes = BYTE_LENGTH(value, 'utf8');
+    state.stringBytes += stringBytes;
+    assertReceiptByteBoundsV1(state);
+    if (stringBytes > RECEIPT_LIMITS.maximumStringBytes) throw new TypeError();
+  } else if (typeof value === 'number') {
+    if (!NUMBER_IS_SAFE_INTEGER(value)) throw new TypeError();
+  } else if (typeof value !== 'boolean') {
+    throw new TypeError();
+  }
+  state.actualLeaves.push(value);
+  state.expectedLeaves.push(expected);
+}
+
+function assertReceiptByteBoundsV1(state: ReceiptScanStateV1): void {
+  if (state.keys > RECEIPT_LIMITS.maximumKeys
+    || state.keyBytes > RECEIPT_LIMITS.maximumAggregateKeyBytes
+    || state.stringBytes > RECEIPT_LIMITS.maximumAggregateStringBytes
+    || state.keyBytes + state.stringBytes > RECEIPT_LIMITS.maximumCombinedBytes) {
+    throw new TypeError();
   }
 }
 
