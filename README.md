@@ -23,13 +23,13 @@ As of 2026-09-01, the generated catalog records:
 - **Qualified:** PostgreSQL and MySQL have live query and endpoint evidence, but those suites can still skip and do not establish production admission.
 - **Qualified:** Sealed required-live PostgreSQL RDB2RDF execution records 57 passes, one documented deviation and five exact skips across 63 R2RML cases, plus 23 passes and one exact skip across 24 Direct Mapping cases; this is mapping evidence only and does not establish production admission.
 - **Qualified:** Sealed SQLite RDB2RDF execution records 62/63 R2RML cases passing with one documented deviation and 19/24 Direct Mapping cases passing with five exact skips; this is mapping evidence only.
-- **Limitation:** Total-resource-qualified recursive property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
-- **Qualified:** The canonical product-mock development KAT seals all 139 gold artifacts and 171 admitted source files, then qualifies one narrow ProductDesign/Style R2RML vertical against live PostgreSQL; it proves no image/source provenance or production admission.
+- **Limitation:** Graph-scoped generated blank nodes, stale-constraint safety, total-resource-qualified recursive paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
+- **Qualified:** The canonical product-mock development KAT seals all 139 gold artifacts and 171 development source files, then qualifies one narrow ProductDesign/Style R2RML vertical against live PostgreSQL; it proves no image/source provenance or production admission.
 - **Limitation:** The separate 11-database/112-table/598-column table-and-column inventory currently fails closed on observed drift and grants no qualification.
 - **Limitation:** None of SQLite, PostgreSQL or MySQL is production-admitted under ADR-0038 R3.
 - **Qualified:** SQLite, PostgreSQL and MySQL compilers use exact finite-pair fixed points for recursive P+/P*; hostile required execution is SQLite-only, while live PostgreSQL/MySQL qualification and total resource governance remain open.
 - **Current:** Pre-response HTTP failures and startup CLI surfaces are redacted; correlation IDs have no telemetry sink and post-200 stream failures cannot become atomic RFC 9457 responses.
-- **Qualified:** The runtime contains SQLite, PostgreSQL and MySQL source-selector paths; reachability is not production admission.
+- **Qualified:** SQLite, PostgreSQL and MySQL source selectors feed one immutable source/backend/compiler/cache binding; reachability is not admission. PostgreSQL introspection and unqualified base-table resolution are `public`-scoped and fail on schema/catalogue identity ambiguity; trusted raw `rr:sqlQuery` is not schema-confined, and constraint-sensitive plans have no later-DDL drift/reload proof.
 - **Qualified:** External SERVICE and named non-enabled source forms are rejected before query execution or connector construction.
 - **Current:** Credential-bearing PostgreSQL/MySQL source specifications can be supplied through a bounded environment reference; parsed inline passwords fail before runtime, file or network I/O. TLS, layered configuration, telemetry and external secret-store integration remain open.
 - **Current:** Known source-sized Rust fallback plans are rejected before backend selection or source I/O; bounded physical implementations remain planned.
@@ -199,7 +199,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- With its explicit verified Ruflo package-root cache, the engineering harness passes 942 tests across 124 files; two tests skip intentionally. The mutable ambient source fails closed.
+- The last accepted full engineering-harness checkpoint passed 942 tests across 124 files with two intentional skips; it has not been rerun after the current Rust slices. The mutable ambient Ruflo source fails closed.
 
 Reproduce the primary gates:
 
@@ -221,7 +221,7 @@ and measured benchmarks. Proposed
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
 defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. The programme is
 evolutionary, not a compiler rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service Rust.
-The revision-pinned 14-category product-mock gold and narrow qualified ProductDesign/Style live vertical are development oracles; the separately inspected 11-database inventory is red. Rust KATs seal all 139 gold artifacts and 171 admitted source files, compare the Style R2RML map in a rolled-back read-only snapshot, and recount 11 stores/112 tables/598 columns using one read-only transaction per database. The inventory fails on ten sets of infrastructure additions, empty `Style360`, and one `ProductDesign` column drift. It covers no keys, constraints, defaults, indexes, views or privileges; proves no global snapshot or image/source provenance; and grants no production admission. The bundle has 4,501 mapping quads total. Its Source Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter; the admitted relational-R2RML slice covers one table/two columns.
+The canonical `semantic-builder` gold comprises `expected-ontology.json`, the Turtle `categories/` tree and `candidate-manifest.json`; `.metaharness` copies are evidence only. It is separate from sealed `semantic-product-mock` revision `7c45292…e18573` and mutable live ProductDesign PostgreSQL. Rust KATs seal all 139 gold artifacts and 171 development source files, compare the narrow Style R2RML map in a rolled-back read-only snapshot, and recount 11 stores/112 tables/598 columns using one read-only transaction per database. The inventory is red on ten infrastructure additions, empty `Style360`, and one `ProductDesign` column drift; it proves no provenance or admission. The bundle has 30,696 ontology, 3,617 shape, 4,501 mapping and 900 provenance quads. Its 134 generic RML TriplesMaps/492 predicate-object maps are outside the charter; the in-charter qualified development KAT covers one table/two columns.
 
 Exact recursive property-path fixed points replace the former 256-hop prefix, and serving rejects known source-sized Rust sort/group/dedup fallbacks before backend selection or I/O. Pre-response HTTP failures use redacted RFC 9457 problem details, startup/CLI errors are opaque, and one ingress-to-serialization deadline is integrated; post-commit stream failures only terminate the body. Bounded physical alternatives, full QueryBudget, federation and the production dependency closure remain release blockers. M0 also has
 backend-aware v3 receipts for all 87 SQLite and required-live PostgreSQL mapping
@@ -360,8 +360,9 @@ exact skips; its file/outcome/inventory digests are `c04e6f86…0f52`,
 `63eb3bdc…b2ac` and `4d2eb56e…c96`. It closes only the current required-live M0
 mapping-evidence item; MySQL mapping, backend admission, and later milestones remain open.
 
-The passing transaction also measured about 35 GiB of ephemeral isolated Rust
-verifier output; content-addressed read-only reuse remains an efficiency target.
+The passing V6 transaction used three isolated Cargo/link targets and about 35 GiB.
+It must not fan out on this host with 8.6 GiB free; a receipt-bound V7 profile will
+serialize those lanes locally while hosted CI parallelizes independently selected gates.
 The tracked project MCP surface now defaults empty and has a strict scoped audit.
 The pinned Ruflo reader mounts only private `0400` snapshots of two exact status
 files beneath `0500` directories and runs under `--unshare-net`; cooperative
@@ -442,8 +443,8 @@ claim. It is a small localhost workload, not a production sizing result.
 | Serving | Working read-only GET/POST query subset of the draft SPARQL 1.2 Protocol over SQLite, PostgreSQL, and MySQL; full Protocol conformance is not claimed |
 | Cloud/REST adapters | Prototype/library-only; Databricks, AWS Athena, Snowflake, BigQuery, Trino/Presto and other adapters are not admitted to `serve` |
 | Property paths | Broad support; explicit `501` residuals remain for bound-endpoint, nested-closure, shape-mismatched, and some reflexive composite forms |
-| Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
-| Federation | Cross-RDBMS planning is in scope but not implemented: bounded `SourceId`/pre-admission `SourceMapping` exist, but the runtime still owns one source and has no immutable binding, source-aware cache, registry or semi-join caller. External SPARQL `SERVICE` remains excluded |
+| Named graphs | `GRAPH <g>` and `GRAPH ?g` work in the evidenced profile; a path under dynamic `GRAPH ?g` remains unsupported, and generated R2RML blank nodes are not yet graph-scoped across target graphs |
+| Federation | Cross-RDBMS planning is in scope but not implemented. Source affinity, neutral schema DTOs and an enforcing immutable single-source backend/compiler/cache binding exist; stable snapshot digests, drift/reload, registry, federated plan and coordinator do not. External SPARQL `SERVICE` remains excluded |
 | Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
 | Exactness and boundedness | Recursive closures now use exact finite-pair fixed points on evidenced dialects and reject unproved dialects; known source-sized ORDER/GROUP/DISTINCT/CONSTRUCT fallbacks reject before I/O. Bounded physical alternatives and total QueryBudget remain release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
@@ -458,8 +459,8 @@ pre-I/O fallback admission now enforce that invariant for their evidenced scope.
 
 | Crate | Role |
 |---|---|
-| `sf-core` | Shared mapping IR, RDF terms, graph-map semantics, datatypes |
-| `sf-sql` | Dialects, source adapters, typed binding, schema introspection |
+| `sf-core` | Shared mapping/source-affinity IR, neutral relational schema DTOs, RDF terms, graph-map semantics, datatypes |
+| `sf-sql` | Dialects, native source adapters, typed binding, schema introspection; re-exports core schema DTOs for compatibility |
 | `sf-mapping` | R2RML and Direct-Mapping parsing into the core IR |
 | `sf-sparql` | SPARQL algebra unfolding, normalization, SQL emission, execution |
 | `sf-conformance` | W3C, differential, mutation, and EARL evidence |

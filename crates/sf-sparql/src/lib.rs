@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! parse (spargebra)                                            — caller / parse_query
-//!   → [opt] algebra optimise (sparopt — opt-in, bypassable)    — ADR-0007 step 2 (deferred-on by default)
+//!   → algebra pre-optimizer intentionally unwired (sparopt reference only) — ADR-0007 step 2
 //!   → T-saturation (subclass/subproperty/inverse UNION-fold)   — saturate (ADR-0008 tier-1)
 //!   → unfold each triple pattern against the mapping IR        — unfold  (ISWC-2018 base translation)
 //!   → tier-0 elimination + the 6-pass optimizer cascade        — cascade (ADR-0007 order is load-bearing)
@@ -210,8 +210,8 @@ pub fn translate(query: &Query, maps: &[TriplesMap], dialect: Dialect) -> Result
 
 /// Translate with a pre-classified T-Box (tier-1 saturation, ADR-0008) and source
 /// schema (the constraint-driven cascade passes, ADR-0007). Routes through the
-/// operator-tree (IQ) pipeline — the default since ADR-0023 M8. `sparopt` algebra
-/// optimisation (pipeline step 2) is opt-in and bypassed by default (ADR-0007).
+/// operator-tree (IQ) pipeline — the default since ADR-0023 M8. `sparopt` is not
+/// wired into the product pipeline; the characterized cascade is the optimizer.
 pub fn translate_with(
     query: &Query,
     maps: &[TriplesMap],

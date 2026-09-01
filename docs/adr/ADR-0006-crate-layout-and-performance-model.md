@@ -32,20 +32,22 @@ The load-bearing execution decision: semantic-fabric serves an **OLTP-shaped run
 
 | Crate | Responsibility | Key deps |
 |---|---|---|
-| `sf-core` | Mapping IR; term generation; R2RML §10 datatype canonicalization (ADR-0015); `oxrdf` re-exports. No I/O. | `oxrdf`, `oxsdatatypes` |
-| `sf-sql` | Source/SQL layer: native connectors, dialect SQL emission, schema introspection, cursor-streamed result iteration, cross-source semi-join planning | `tokio-postgres`, `deadpool-postgres`, `rusqlite`, `sqlparser` |
-| `sf-mapping` | R2RML/Direct-Mapping parser (Turtle → IR) | `oxttl`, `sf-core`; current transitional debt: `sf-sql::TableSchema` for Direct Mapping |
-| `sf-sparql` | The virtualizer: SPARQL 1.2 → SQL rewriting + cascade (ADR-0007); streaming result serialization | `spargebra`, `sparopt`, `sparesults`, `oxjsonld`, `sqlparser`, `sf-*` |
+| `sf-core` | Mapping/source-affinity IR; neutral relational schema DTOs; term generation; R2RML §10 datatype canonicalization (ADR-0015); `oxrdf` re-exports. No I/O. | `oxrdf`, `oxsdatatypes` |
+| `sf-sql` | Source/SQL layer: native connectors, dialect SQL emission, schema introspection, cursor-streamed result iteration, cross-source semi-join planning | `tokio-postgres`, `deadpool-postgres`, `rusqlite`, `mysql_async`, `sqlparser` |
+| `sf-mapping` | R2RML/Direct-Mapping parser (Turtle → IR), including Direct Mapping from neutral core schema DTOs | `oxttl`, `sf-core` |
+| `sf-sparql` | The virtualizer: SPARQL 1.2 → SQL rewriting + cascade (ADR-0007); streaming result serialization | `spargebra`, `sparesults`, `oxjsonld`, `sqlparser`, `quick_cache`, `sf-*` |
 | `sf-serve` | HTTP/SPARQL Protocol boundary, source selection, backend pools and streamed responses | `axum`, `tokio`, native database drivers, `sf-*` |
 | `sf-conformance` | W3C RDB2RDF harness (via CONSTRUCT), EARL, graph-iso, in-memory oracle, `M ⋈ T` hook (ADR-0005) | `oxrdf`, `oxttl`, `shacl`, `sf-*` |
 | `sf-bench` | GTFS-Madrid OBDA-track driver | `criterion`, `sf-*` |
 | `sf-cli` | Single binary: `serve · conformance · bench` | all `sf-*` |
 
-The target product flow is **core/source/mapping → virtualizer → serve → cli**; conformance and bench are sibling development consumers. `sf-mapping → sf-sql::TableSchema` is current layering debt, not the target architecture. Move that neutral schema DTO to `sf-core` (optionally re-export from `sf-sql`) and remove the edge. `sf-core`/`sf-sql`/`sf-mapping` never depend on the virtualizer or serving frontends (checkable via `cargo tree`).
+The product flow is **core → {mapping, SQL/source} → virtualizer → serve → cli**; conformance and bench are sibling development consumers. The neutral schema DTO now lives in `sf-core`, `sf-sql` re-exports it for compatibility, and `sf-mapping` no longer depends on `sf-sql`. `sf-core`/`sf-sql`/`sf-mapping` never depend on the virtualizer or serving frontends (checkable via `cargo tree`).
 
 ### Relational execution — push down to the source, stream back
 
-* **Single-source (the common case): push the work into the source SQL.** For admitted, fully pushed-down shapes, the rewriter (ADR-0007) emits one `SELECT … FROM … [JOIN …] [WHERE …] [GROUP BY …] [ORDER BY …]` and runs it via the source's **native driver** (`tokio-postgres` + `deadpool`; `rusqlite`). The source does scan + join + DISTINCT + aggregation + sort + spill + parallelism; the engine streams rows, generates terms (`sf-core`), and serialises. This dissolves the multi-join / N:M cliff (the source has indexes and a real optimizer).
+* **Single-source (the common case): push the work into the source SQL.** For admitted, fully pushed-down shapes, the rewriter (ADR-0007) emits one `SELECT … FROM … [JOIN …] [WHERE …] [GROUP BY …] [ORDER BY …]` and runs it via the source's **native driver** (`rusqlite`, `tokio-postgres` + `deadpool`, or `mysql_async`). The source does scan + join + DISTINCT + aggregation + sort + spill + parallelism; the engine streams rows, generates terms (`sf-core`), and serialises. This dissolves the multi-join / N:M cliff (the source has indexes and a real optimizer).
+* **Current binding boundary.** One immutable `CompilerBinding` owns its `SourceMapping`, dialect, T-box, observed schema and private plan cache; `sf-serve` pairs it with one backend and verifies the bound plan before backend selection or I/O. This prevents cross-binding cache/backend reuse, but it is not the proposed digest-addressed `RuntimeSnapshot`: schema generation, drift detection, atomic reload, registry and federation remain open.
+* **PostgreSQL relation scope.** Introspection and unqualified `rr:tableName` resolution are explicitly `public`-only. Startup observes one read-only repeatable-read catalogue snapshot; pool creation/recycle pins `search_path=pg_catalog,public,pg_temp`, every request verifies it, and cross-schema foreign keys or `public` relation names shadowed by the earlier `pg_catalog` scope fail closed because the neutral DTO cannot represent qualified identity. Trusted raw `rr:sqlQuery` text is emitted verbatim and can name a qualified relation; neither `search_path` nor this guard confines it. This is coherent startup identity for catalogued base tables, not later-DDL detection, an SQL-query sandbox, or arbitrary-schema support.
 * **Cross-source (rare; tables in *different* relational databases): bounded semi-join reduction for admitted reducible shapes.** Ship a bounded representation of one side's join keys as a fixed-size Bloom filter or bounded `IN`-list/temp-table batch, then use a proven bounded merge. This is a reducer, not a general N:M join answer. Shapes needing an unimplemented global operator reject before I/O; accepting ADR-0040 would replace only this semi-join/merge-only clause with its quota-bounded external layer.
 * **No columnar/OLAP engine on the relational path.** DataFusion, `connector_arrow`, and DuckDB are **not** used to mediate between the rewriter and relational sources: a columnar engine in-process would buffer instance data and break the bounded-memory invariant; only the source DB does blocking set-work (it spills natively). Relational execution = native drivers + push-down + bounded semi-join reduction.
 
@@ -182,7 +184,7 @@ For admitted execution shapes, results stream end to end: a **server-side cursor
   > invariants green flipped. The plain streaming path now dispatches
   > (`parallel_term_gen: true`); constants unchanged. Full verdict in the
   > gate's own doc comment.
-* First-class source dialects: **PostgreSQL** (primary production), **SQLite** (embedded / W3C-suite CI); **MySQL** follows. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
+* First-class source dialects: **PostgreSQL**, **SQLite**, and **MySQL** have reachable development serving paths; zero are production-admitted under ADR-0038 R3. PostgreSQL is the primary target and SQLite is the embedded/W3C-suite CI source. DuckDB may appear only as a *SQL source you push down to* like any other relational source — never a columnar intermediary, never a file reader; heterogeneous/file sources are out of scope (ADR-0002).
 * Crate pins + 1.2 feature flags: ADR-0004 / ADR-0019. Toolchain pinned via `rust-toolchain.toml`.
 
 ### Term generation — allocation discipline

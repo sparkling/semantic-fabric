@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-28
+updated: 2026-09-01
 tags: [rdf-1.2, sparql-1.2, shacl, oxigraph, rudof, jena-replacement, conformance, gap-register, feature-flags, upstream-contribution]
 depends-on:
   - ADR-0001
@@ -87,9 +87,9 @@ The configuration record is:
 | oxjsonld | Wired in `sf-sparql` and `sf-serve` | `rdf-12` |
 | oxrdfio, oxrdfxml | Not required by the current application profile | add only with a tested profile |
 
-Two traps the sweep surfaced: **`sparql-12` alone is not full 1.2** — `ADJUST` is gated behind `sep-0002`, and strict whole-string `\u` unescaping behind `standard-unicode-escaping`. **`LATERAL` (`sep-0006`) is enabled** as a documented opt-in extension (it maps directly to SQL `LATERAL`/`CROSS APPLY` and unlocks top-N-per-group; ADR-0007) — but it is a non-standard SPARQL extension (absent from the SPARQL 1.2 Query WD), so it is **kept out of, and reported as outside, the 1.2 conformance surface**.
+Two traps the sweep surfaced: **`sparql-12` alone is not full 1.2** — `ADJUST` is gated behind `sep-0002`, and strict whole-string `\u` unescaping behind `standard-unicode-escaping`. The **`LATERAL` (`sep-0006`) parser feature is enabled**, but both semantic-fabric compiler paths return `501` for that algebra variant. It is a non-standard SPARQL extension (absent from the SPARQL 1.2 Query WD), so it is **kept out of, and reported as outside, the 1.2 conformance surface**.
 
-> **Reconciliation note (2026-06-28 — corrected; supersedes an earlier same-day claim).** An earlier version of this note asserted `sparopt` "cannot be wired with the 1.2 feature set / fails to compile against `spargebra` with `sparql-12`/`sep-0006`." That is **empirically false** (verified via `cargo build -p sparopt` + `cargo tree -e features`): `sparopt` 0.3.6 compiles cleanly with `spargebra` 0.4.6 + `sparql-12`/`sep-0002`/`sep-0006` and is already a live transitive dependency (pulled by the `spareval` oracle → `oxigraph`/`rudof`). Corrected status for the matrix row "`sparopt` … wire … current": `sparopt` is **not wired into the engine optimizer by choice** — the ADR-0007 order-disciplined cascade is the sole optimiser, so the opt-in pre-rewrite stage is unnecessary (no loss). It is not a compatibility block. Companion notes: ADR-0007 §pipeline step 2, ADR-0004 §substrate matrix.
+> **Reconciliation note (2026-09-01; supersedes an earlier 2026-06-28 claim).** `sparopt` 0.3.6 compiles cleanly with `spargebra` 0.4.6 + `sparql-12`/`sep-0002`/`sep-0006` and is already a live transitive dependency (pulled by the `spareval` oracle → `oxigraph`/`rudof`). It is **not wired into the engine optimizer by choice**: the ADR-0007 order-disciplined cascade is the sole product optimiser, so the transitive `sparopt` crate is a reference rather than an opt-in product stage. It is not a compatibility block. Companion notes: ADR-0007 §pipeline step 2, ADR-0004 §substrate matrix.
 
 ### Gap register
 

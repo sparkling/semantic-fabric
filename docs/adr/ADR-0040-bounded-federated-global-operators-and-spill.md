@@ -23,8 +23,10 @@ does not accept a spill substrate, claim federation exists, or weaken the
 exact-or-reject rule. Acceptance waits for the comparison evidence and explicit
 maintainer decisions listed below. Its `implements` relationship identifies the
 ADR-0038 design lock, not implementation completion.
-The current `sf-core::SourceId` and pre-admission `SourceMapping` are preparatory:
-they bind no registry, schema, backend, capability, plan cache or runtime snapshot.
+`sf-core::SourceId`/`SourceMapping` and the current immutable single-source runtime
+binding now join one backend, dialect, T-box, observed schema and plan cache and
+reject a detached plan before I/O. They still provide no digest-addressed runtime
+snapshot, registry, drift/reload lifecycle, federation or `ConsistencyVector`.
 Accepting this ADR would explicitly amend ADR-0006's cross-source rule: bounded
 semi-join reduction and streaming merge alone cannot implement every exact N:M
 join/operator listed here. The source-pushdown and no-general-OLAP decisions
@@ -46,11 +48,12 @@ or dedup over rows owned by several independent sources. The coordinator needs
 typed global semantics and bounded external-memory algorithms without becoming
 a second semantic compiler or treating a Bloom filter as an answer authority.
 
-The revision-pinned canonical gold/source snapshot and separately observed
-mutable live development PostgreSQL instance are the initial prototype corpus.
-Each run seals the gold manifest/source revision and records live version/schema
+The revision-pinned canonical gold in `semantic-builder`—machine bundle,
+14-category Turtle tree and manifest—and the separately revision-pinned source
+snapshot plus mutable live development PostgreSQL instance are the initial
+prototype corpus. Each run seals the gold manifest/source revision and records live version/schema
 observations separately; no source-to-container provenance link is implied. Semantic
-Fabric's admitted relational R2RML KAT covers one of 112 tables/two columns. The
+Fabric's in-charter qualified development R2RML KAT covers one of 112 tables/two columns. The
 gold has 4,501 mapping quads total; its Source Mapping facet declares 134 generic
 RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter.
 Wider federation evidence requires explicit maps or independent generated
@@ -135,7 +138,7 @@ fallback.
 Spill keys are a versioned binary semantic encoding, never display strings,
 source-native collation bytes, or SQL NULL equality. The encoding contains the
 variable schema, a bound-domain bit mask, and typed RDF terms: term kind,
-lexical form, datatype or normalized language tag, request-scoped blank-node
+lexical form, datatype or normalized language tag, graph-scoped blank-node
 identity, and recursively encoded RDF 1.2 triple terms.
 
 Operator equality and order remain operator-specific:
@@ -149,8 +152,13 @@ Operator equality and order remain operator-specific:
 - grouping, aggregate expression evaluation, and ORDER use the same SPARQL
   value/error/comparator law as the characterized single-source path, not a byte
   sort of the spill encoding; and
-- blank-node identity is scoped by the query/runtime snapshot so equal labels
-  from unrelated sources cannot collide accidentally.
+- an R2RML-generated blank-node identity is derived from `(result-dataset or
+  request scope, target graph identity, natural RDF lexical form through a
+  versioned bijection)`. Equal generated identifiers in one graph share even
+  across rows or term maps, while the same identifier in different graphs is a
+  distinct node (R2RML §9.1/§11.2). `SourceId`, triples-map identity and
+  term-map identity are therefore not identity components. SPARQL CONSTRUCT
+  template blank nodes follow the separate fresh-per-solution rule.
 
 Hashing is permitted only after the semantic key is constructed. Hash equality
 always requires a full semantic equality check.

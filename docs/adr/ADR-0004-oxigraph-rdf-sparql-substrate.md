@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-09-01
 tags: [substrate, oxigraph, oxrdf, spargebra, oxjsonld, rust, rdf-1.2, sparql-1.2, dependencies, licensing, intensional-graphs]
 supersedes: []
 depends-on:
@@ -15,11 +16,15 @@ implements:
 
 The virtualiser (ADR-0003) needs an RDF 1.2 term system, Turtle/JSON-LD I/O, a SPARQL 1.2 parser + algebra, and a place to hold the small intensional graphs `⟨T, M⟩` (ontology + mapping graph) in memory. Reimplementing these against the mature, dual-licensed (MIT OR Apache-2.0) Oxigraph crate family is wasted effort. The questions: which crates, and how much.
 
-`spargebra` (parser → algebra) and `sparopt` (optimizer) carry zero dependency on any evaluator or store, so we consume their AST and feed our own SQL-rewriting engine (ADR-0007). Instance data is never stored (ADR-0002), so we take no persistent triplestore.
+`spargebra` (parser → algebra) carries zero dependency on an evaluator or
+store, so we consume its AST and feed our own SQL-rewriting engine (ADR-0007).
+`sparopt` is retained only as an oracle-transitive reference and is deliberately
+unwired from the product optimizer. Instance data is never stored (ADR-0002),
+so we take no persistent triplestore.
 
 ## Considered Options
 
-* **Reuse the Oxigraph sub-crates as substrate; own the SQL-rewriting evaluator; hold `⟨T, M⟩` in memory** — consume `oxrdf`/`oxttl`/`oxjsonld`/`spargebra`/`sparopt`/`sparesults`/`oxsdatatypes` and feed the algebra into our own SQL rewriter.
+* **Reuse the Oxigraph sub-crates as substrate; own the SQL-rewriting evaluator; hold `⟨T, M⟩` in memory** — consume `oxrdf`/`oxttl`/`oxjsonld`/`spargebra`/`sparesults`/`oxsdatatypes`, retain `sparopt` only through the oracle dependency, and feed the algebra into our own SQL rewriter.
 * **Reimplement the RDF 1.2 terms, Turtle/JSON-LD I/O, and SPARQL 1.2 parser + algebra from scratch** — wasted effort against the mature, dual-licensed (MIT OR Apache-2.0) Oxigraph crate family.
 * **Use the `oxigraph` store crate** — bundles RocksDB / `librocksdb-sys`, for which the virtualiser has no use (instance data is never stored, ADR-0002).
 * **Use `spareval` on the OBDA path** — its triple-at-a-time pull model is the wrong execution model for SQL-rewriting OBDA (the whole query is pushed into the DB as one SQL statement, ADR-0007); permitted only for the in-memory `⟨T, M⟩` queries.
@@ -37,13 +42,16 @@ The virtualiser (ADR-0003) needs an RDF 1.2 term system, Turtle/JSON-LD I/O, a S
 | `oxttl` | 0.2 | `rdf-12` (+`async-tokio`) | Turtle/N-Triples/TriG/N-Quads 1.2 parse + serialize — mapping/ontology ingest + N-Triples output |
 | `oxjsonld` | 0.2 (≥ 0.2.5) | `rdf-12` | Streaming JSON-LD serialize — CONSTRUCT/DESCRIBE output (ADR-0019) |
 | `spargebra` | 0.4 | `sparql-12`, `sep-0002`, `sep-0006` | SPARQL 1.2 parser → algebra (rewriter entry; `ADJUST` needs `sep-0002`; `sep-0006` enables the LATERAL extension) |
-| `sparopt` | 0.3 | — | SPARQL algebra optimizer — opt-in pre-rewrite stage |
+| `sparopt` | 0.3 | — | Oracle-transitive reference only; deliberately unwired from the product optimizer |
 | `sparesults` | 0.3 | `sparql-12` (+`async-tokio`) | SPARQL 1.2 Results (JSON/XML/CSV/TSV) — SELECT/ASK responses |
 | `oxsdatatypes` | 0.2 | — | XSD datatype canonicalization (ADR-0015) + residual FILTER arithmetic |
 
-Enable `standard-unicode-escaping` (strict 1.2 `\u`) where wanted. **`sep-0006` (LATERAL) is enabled** as a documented opt-in extension, kept out of the 1.2 conformance surface (ADR-0007 / ADR-0019).
+Enable `standard-unicode-escaping` (strict 1.2 `\u`) where wanted. The
+`sep-0006` parser feature recognizes `LATERAL`, but both semantic-fabric
+compiler paths reject that algebra variant with `501`; it is outside the 1.2
+conformance surface (ADR-0007 / ADR-0019).
 
-> **Reconciliation note (2026-06-28 — corrected; supersedes an earlier same-day claim).** An earlier version of this note said `sparopt` 0.3.6 "does not compile against `spargebra` with `sparql-12`/`sep-0006`." That is **empirically false** (verified via `cargo build -p sparopt` + `cargo tree`): `sparopt` 0.3.6 compiles with `spargebra` 0.4.6 + `sparql-12`/`sep-0002`/`sep-0006` and is a live transitive dependency here (via the `spareval` oracle → `oxigraph`/`rudof` → `sf-conformance`). Corrected status: `sparopt` is **not wired into the engine optimizer by choice** — the ADR-0007 cascade is the sole optimiser (no loss; the pre-rewrite stage is opt-in). The dead `[workspace.dependencies]` `sparopt` line was removed as hygiene (it was unreferenced; `sparopt` still resolves transitively). Companion notes: ADR-0007 §pipeline step 2, ADR-0019 §config matrix.
+> **Reconciliation note (2026-09-01; supersedes an earlier 2026-06-28 claim).** `sparopt` 0.3.6 compiles with `spargebra` 0.4.6 + `sparql-12`/`sep-0002`/`sep-0006` and is a live transitive dependency here (via the `spareval` oracle → `oxigraph`/`rudof` → `sf-conformance`). It is **not wired into the engine optimizer**: the ADR-0007 cascade is the sole product optimiser, and `sparopt` is reference material rather than an opt-in current stage. The dead `[workspace.dependencies]` line was removed while the oracle-transitive dependency remains. Companion notes: ADR-0007 §pipeline step 2, ADR-0019 §config matrix.
 
 ### Hold `⟨T, M⟩` in memory (this absorbs the former serving-store decision)
 

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-08-31
+updated: 2026-09-01
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -97,7 +97,7 @@ review; absence of either host fails closed.
 CI uses fake native executables and never calls a model provider.
 
 **CI capability amendment (2026-08-26).** GitHub-hosted Ubuntu runners cannot
-create the network namespace required by the production `bwrap --unshare-net`
+create the network namespace required by the native-harness `bwrap --unshare-net`
 contract. The hosted Node 20 baseline therefore runs only portable,
 provider-free unit and contract coverage with native integration explicitly disabled. The
 same native tests remain fail-closed when required and are dispatched through
@@ -370,9 +370,10 @@ through `a84aa05` establish the private supply chain, dual-host transaction,
 exact-origin and filesystem/resource isolation, bounded retry/cancellation,
 provider-free QE/SAST, schema-V6 evidence law, trusted execution/replay,
 protected dormant retrieval tuning, and PostgreSQL receipt authority. The
-2026-08-31 integrated M0 hardening candidate passes 905 provider-free tests across
-122 files on exact Node 20.0.0 and 24.14.1, with two expected skips and one
-byte-identical controller build. It has no publication or evolution path.
+2026-08-31 checkpoint historically passed 905 tests/122 files. The last accepted
+full relocatable Ruflo checkpoint passed 942 tests/124 files with two skips; it
+predates the current Rust slices and has not been rerun. Neither checkpoint grants
+product, publication, promotion, or evolution authority.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
 `f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate
@@ -450,9 +451,8 @@ transaction and every gate at 100/100 with six bound commands, seven native-
 evidence digests, two final native reviews, and no retry or repair. Its policy,
 receipt, envelope, and provider-free replay receipt are `e71107e5…ae34`,
 `d9d244ef…0216`, `02c30ed3…9a06`, and `f1bcf0fe…bf02`. H0c is complete; product
-milestones remain gated. The run cleaned about 35 GiB of ephemeral verifier
-outputs, leaving immutable build reuse and digest manifests as a constrained
-efficiency target. Neither run enabled the retrieval flywheel.
+milestones remain gated. Its three Cargo targets used about 35 GiB. V6 must not
+fan out on this low-disk host; V7 may serialize Cargo/link lanes without changing verifier coverage, isolation or receipts. Neither run enabled the flywheel.
 
 **Implementation amendment (2026-08-31).** The tracked `.mcp.json` is exact-empty,
 and tracked `.agents/config.toml` declares no project MCP launcher; both are protected.

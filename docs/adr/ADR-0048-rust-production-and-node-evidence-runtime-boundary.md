@@ -42,7 +42,7 @@ live vertical provide a faster development path; the separately inspected
 11-database inventory is red. The gold contains 30,696 ontology, 3,617 shape,
 4,501 total mapping and 900 provenance quads across 14 categories. Its Source
 Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps;
-the admitted relational-R2RML slice covers only one table/two columns. It is a
+the in-charter qualified development KAT slice covers only one table/two columns. It is a
 deterministic development oracle, not standards qualification or production
 admission.
 
@@ -115,14 +115,21 @@ gates.
 
 ### 5. Use the gold corpus without copying its authority
 
-The canonical gold remains in `semantic-builder` at
-`docs/reviews/semantic-product-mock-gold-candidate-v0.1.0/artifacts/`.
+The canonical gold remains in `semantic-builder` under
+`docs/reviews/semantic-product-mock-gold-candidate-v0.1.0/artifacts/`, specifically:
+
+- `expected-ontology.json`, the machine-readable bundle;
+- `categories/`, the reviewable Turtle split across all 14 categories; and
+- `candidate-manifest.json`, the bundle manifest.
+
 Generated `.metaharness` copies are run evidence only. Semantic Fabric records
 the manifest/source revision and digests it consumes; it does not fork or
-silently refresh the gold.
+silently refresh the gold. The sealed development source snapshot is the exact committed
+tree of `semantic-product-mock` revision
+`7c45292fccb8b88afe263e18de6806667ae18573`.
 
 The live PostgreSQL instance is a development integration/differential source.
-Tests separately verify every byte in the admitted 171-file source snapshot
+Tests separately verify every byte in the sealed 171-file development source snapshot
 and the live server/version/schema posture. They do not attest the source Git
 worktree, OCI image bytes, build process, or a source-to-container provenance
 link; SQL observations cannot prove the container was built from that source.
@@ -130,8 +137,8 @@ Its operational rows are not gold, and mutable volume, trust authentication,
 lack of TLS and partial R2RML coverage prohibit backend admission or release
 claims.
 
-Semantic Fabric continues to support R2RML, not generic RML. The one admitted
-relational R2RML map may seed an end-to-end vertical slice. Coverage of the
+Semantic Fabric continues to support R2RML, not generic RML. The one in-charter
+qualified development R2RML map may seed an end-to-end vertical slice. Coverage of the
 remaining relational schema is an upstream mapping workstream, not permission
 to expand this application's charter or infer mappings.
 
@@ -159,9 +166,9 @@ metadata while preserving the dependency-free Node oracle. Commits `13b8187`,
 `8c6181b` and `9b60dc2` add Rust-only development KATs that:
 
 - seal the 38,321-byte candidate manifest and all 139 transitive artifacts;
-- verify all 171 admitted source files plus the two required migration pins;
+- verify all 171 sealed development source files plus two required migration pins;
 - preserve the exact one-table/two-column R2RML coverage and its explicit gaps;
-- admit only literal-loopback PostgreSQL 16.9 with the expected Style schema;
+- qualify only literal-loopback PostgreSQL 16.9 with the expected Style schema;
 - compare direct SQL with parse-to-translate-to-execute results inside one
   read-only, repeatable-read transaction and explicitly roll it back.
 
@@ -197,6 +204,20 @@ columns, `Style360` lacked three tables/21 columns, and `ProductDesign` had one
 changed column. The gate compares table identity plus ordered column name, type
 and nullability only—not keys, constraints, defaults, indexes, views or privileges.
 It infers no mapping, mutates no database and grants no production authority.
+
+Commits `9d228dd` and `67a779a` move neutral schema ownership into `sf-core` and
+centralize compiler dialect capabilities without adding Node to Cargo. Commit
+`faee07a` adds an enforcing immutable single-source compiler/backend/cache
+binding and rejects a foreign bound plan before source I/O. Commit `9d0da85`
+then fixes PostgreSQL to one coherent read-only repeatable-read `public`
+catalogue snapshot and pins, recycles and verifies the unqualified execution
+`search_path`; the follow-up relation-identity guard also rejects a `public`
+base table shadowed by an earlier `pg_catalog` relation. Hostile same-name
+schema/temp relations and cross-schema foreign keys fail closed for catalogued
+base tables. Trusted raw `rr:sqlQuery` remains verbatim and can explicitly name
+other schemas, so this is not a public-only SQL sandbox. These changes do not
+provide snapshot digests, later-DDL drift detection, atomic reload, federation,
+production admission or release authority.
 
 ## Consequences
 

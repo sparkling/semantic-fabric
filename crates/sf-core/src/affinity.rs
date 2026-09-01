@@ -2,10 +2,11 @@
 //!
 //! [`TriplesMap`](crate::ir::TriplesMap) remains a source-local semantic model:
 //! its [`LogicalSource`](crate::ir::LogicalSource) names a relation, not a
-//! connection. [`SourceMapping`] is a pre-admission sidecar that associates one
-//! immutable mapping bundle with one opaque [`SourceId`]. It deliberately does
-//! not claim the schema, backend, registry membership, or cache ownership that a
-//! future runtime `BoundMapping` must make inseparable.
+//! connection. [`SourceMapping`] is a source-affinity sidecar that associates one
+//! immutable mapping bundle with one opaque [`SourceId`]. It does not itself own
+//! schema, backend or cache state; the current single-source serve lane composes
+//! those through `sf_serve::RuntimeBinding`. Digest-addressed snapshots, registry
+//! membership and federation remain future runtime work.
 
 use std::fmt;
 

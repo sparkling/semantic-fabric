@@ -14,13 +14,12 @@
 | H0a — frozen replay-policy foundation | Complete | `b40dbc6`; schema-v4 surfaces unchanged; schema-v5 policy fingerprint `11c17544e97c1509456f6efb88081a55bd56c93ac306a9b05c2da7102e5f755b`; 381 tests passed and 2 expected skips |
 | H0b — schema-v5 evaluator, scorer and envelope | Complete | `7a1fa24`; accepted golden policy/assessment/envelope `0d5505e4…61bb` / `4f4fe45c…a977` / `fdab0843…65e7`; hardened build; 430 tests passed and 2 expected skips; independent Codex and Claude COMMIT verdicts |
 | H0c — trusted-launcher activation | Complete | V6 run `programme_v6_h0c_20260828_02` passed the candidate transaction and every hard gate at 100/100, with seven native-evidence digests, two final native reviews, no retry or repair, a sealed schema-V6 envelope, and provider-free verified replay. V4/V5 remain frozen |
-| M0A — Rust application foundation | Active; gold vertical implemented | ADR-0048 fixes a Rust-only product closure. `5c379f6`/`639134d` close path/fallback correctness; `13b8187`/`8c6181b`/`9b60dc2` seal the gold/source/live vertical; `484a4b4` adds Rust environment-secret references; `89a97a7`/`a86af7d` decompose characterized executor/compiler seams. ADR-0039 remains proposed. The gold has 4,501 mapping quads total; its Source Mapping facet's 134 generic RML TriplesMaps/492 predicate-object maps are outside the charter, while the admitted relational-R2RML slice covers one table/two columns |
+| M0A — Rust application foundation | Active; single-source binding implemented | ADR-0048 fixes a Rust-only product closure. `9d228dd` moves neutral schema DTOs to `sf-core`; `67a779a` centralizes dialect capabilities; `faee07a` binds source/backend/compiler/cache; `9d0da85` plus its collision guard bind PostgreSQL `public` catalogue identity and unqualified base-relation resolution. Raw `rr:sqlQuery` is not schema-confined. Gold/source/live KATs remain development evidence. Constraint-sensitive serving needs a P0 DDL-exclusion or generation/drift fix; federation and production admission are open; ADR-0039 remains proposed |
 | M0E — evidence authority | Parallel; not product-blocking | Existing Node 20/24 supervisor work is frozen as a non-deployable executable oracle. Commits `0d5d09e`/`e37cce7` close INSERT values/results and structural DDL coupling; Node 24 passes 705 tests, exact Node 20 passes 23 focused tests/artifact replay, artifact `715c72fd…0552`, and the 49,106-byte dependency-free public bundle remains `90e21e7c…f7c3a`. Production bridge/store/runner work is Rust-only; controlled capture and exact-artifact evidence still gate authoritative performance and M7 |
 | M0 — ADR-0047 final-`WHERE` mutation slice | Complete locally; hosted gate pending | A protected source-specific quartet freezes all 19 final-`WHERE` deletion spans against the 6,859-byte projection. Two ten/nine-mutant serializable rollback-only batches preserve the unchanged raw-derived control bag, prove 15 hidden seed families and four zero-candidate guards independently, and produce exactly 19 executed, 15/15 non-equivalent killed, four guard-equivalent and zero unresolved. Two fresh networkless runs reproduce 11,963,849-byte (`2df643f9…c50f`) and 11,608,234-byte (`688a5ed3…522`) transcripts with cleanup. Its historical service verification is 611/611; the later ADR-0046 Plan slice leaves the public bundle unchanged. Exact Node 20/24 CI runs eight isolated replays under 150 minutes. CASE/JOIN/value/nullability/order/duplicate/array/element and `UNION ALL` replacements, hosted evidence, a versioned run receipt, live observations and admission remain open |
-| M1–M6 — application completion | Active in parallel | Exact paths, pre-I/O resource admission, redacted public errors, environment-secret references and one ingress-to-serialization absolute deadline are integrated. TLS/config/telemetry and total QueryBudget remain open; bounded physical operators, federation and operations start at typed seams without waiting for M0E |
+| M1–M6 — application completion | Active in parallel | Exact paths, fallback admission, redacted errors, environment-secret references, one absolute deadline and an enforcing single-source binding are integrated. Next: digest/generation/drift/reload and close unchecked public construction; in parallel: QueryBudget, bounded operators, operations, then registry/federation. M0E does not block feature work |
 | M7 — release and SOTA proof | Gated | Final release still requires all product, controlled-performance, two-builder, supply-chain and operational-evidence gates |
-Runs `_03`, `_04`, V5 `_05`, and V6 `_01` remain immutable honest failures; `_05` was rejected at 85/100 by frozen prior-attempt law, and `_01` failed closed on
-native-origin policy. The additive V6 contract never reinterprets V4/V5 evidence.
+Runs `_03`, `_04`, V5 `_05`, and V6 `_01` remain immutable honest failures; `_05` was rejected at 85/100 by frozen prior-attempt law, and `_01` failed closed on native-origin policy. The additive V6 contract never reinterprets V4/V5 evidence.
 Fresh V6 run `programme_v6_h0c_20260828_02` passed every gate at 100/100 with no
 retry or repair. Its policy, candidate, receipt, envelope, execution-claim, and
 provider-free replay digests are `e71107e5…ae34`, `a1dc3071…ac7f`,
@@ -67,12 +66,12 @@ selected, tiebroken or retried results fail; directional comparison is not agree
 
 The corrected programme runs four parallel lanes:
 
-1. **Rust product:** bounded snapshot-local `SourceId`/pre-admission `SourceMapping` and a pure deadline-only `QueryControl` port have landed. Finish neutral schema DTOs and an immutable runtime binding with inseparable source/backend/capability/cache ownership; then fan out budgets, one reusable bounded physical layer, federation, operations and packaging in isolated worktrees. ADR-0039 gates only its binary split.
-2. **Gold/live vertical:** the KAT seals all 139 artifacts and 171 source files plus one narrow live query differential. A separate read-only differential now recounts 11 stores, 112 tables and 598 columns, but the current live gate fails closed on recorded drift; it infers no missing mapping and proves no source/image provenance.
+1. **Rust product:** source affinity, neutral schema DTOs, `QueryControl`, an immutable single-source compiler/backend/cache binding and coherent PostgreSQL `public` catalogue/unqualified-resolution scope have landed. First close the P0 stale-constraint hazard with DDL exclusion or race-safe generation/drift; then run QueryBudget, bounded operators, operations, federation and packaging as isolated trains. One integration owner closes safe APIs and shared contracts. ADR-0039 gates only its binary split.
+2. **Gold/live vertical:** seal the canonical `semantic-builder` machine bundle/14-category Turtle/manifest, exact `semantic-product-mock` revision `7c45292…e18573`, and mutable live PostgreSQL separately. The narrow Style differential passes; the 11-store inventory fails closed on drift and proves no source/image provenance.
 3. **Rust evidence service:** reuse language-neutral SQL/vectors while independently implementing isolated pools, roles, transport and state; Node remains the reference oracle. Estimate 3–5 calendar weeks in parallel.
 4. **Operational evidence:** controlled runner, exact builders, transparency/witnesses and fresh capture proceed independently, approximately 4–8 weeks, and gate authoritative performance/M7.
 
-With five product trains plus two evidence lanes, the planning range remains 6–10 weeks for M1–M6 feature completion and 10–16 weeks for charter-complete M7 proof until measured velocity supports a narrower claim. Current acceleration uses the dependency-ordered Rust critical path, one integration writer, parallel independent tests/reviews, affected-crate feedback, and the explicit content-verified 1,552-file Ruflo development closure. Heavy full Rust and harness gates use separate runners when parallel or run sequentially on one host; they are not contention-co-scheduled. Protected-input CI selection and content-addressed Rust reuse remain planned. Before product merge, run the full Rust plus applicable boundedness/security gates; for changed protected harness inputs, run that package's Node gates; live-provider and exact-artifact gates block only the claims they qualify. M7/release requires the complete gate set.
+With five staffed product trains plus two evidence lanes and isolated hosted runners, target 4–7 weeks for M1–M6 and 8–12 weeks for M7; without that capacity the prior 6–10/10–16-week range still applies. Acceleration changes scheduling, never scope or gates: a base-commit-controlled fail-closed CI selector skips only provably irrelevant jobs, hosted jobs parallelize, this low-disk host keeps one Cargo/link owner, model/review work overlaps builds, and V7 will serialize heavy local verifier lanes with receipt-bound resource order. Unknown paths/events, release/main authority and selector failure run the full set. M7 still requires every gate.
 
 ## Outcome
 
@@ -112,7 +111,9 @@ Material gaps found directly in the current tree:
 |---|---|---|---|
 | P1 | Recursive-path resource qualification | `5c379f6` computes an exact finite-pair fixed point beyond 256 and rejects unproved dialects; it has no total work/cancellation budget | Charge closure work to `QueryBudget`; add live/cancellation qualification before backend admission |
 | P0 | Bounded global operators are unavailable | `639134d` classifies global order, Rust grouping and solution/triple dedup and rejects source-reading fallbacks before backend selection or I/O | Composite SQL or bounded spill/merge behind the same classifier; retain `501` until proved |
-| P0 | Cross-source charter is not delivered | One `ServeConfig.backend`; preparatory `SourceId`/`SourceMapping` exist, but no runtime binding, registry, source-aware cache or production caller | Neutral schema DTO, immutable source/backend/capability/cache binding, federated plan and coordinator |
+| P0 | Generated blank-node identity is not graph-scoped | Current reconstruction mints R2RML blank nodes from lexical value alone, so equal identifiers can be shared across different target graphs contrary to R2RML §9.1; the corrected ADR-0040 key preserves same-graph cross-map merging | Add two-graph adversarial coverage and graph-scope generated blank nodes without changing CONSTRUCT template freshness; keep unsupported dynamic scopes at `501` until sound |
+| P0 | Constraint-sensitive plans can outlive their schema facts | Startup PK/FK/uniqueness/FD facts actively drive the cascade; no DDL exclusion, drift watcher or atomic generation swap prevents cached and newly compiled plans from using stale facts | Disable those passes in serving or enforce a race-safe DDL-exclusion plus schema-generation/drift/reload contract before admission |
+| P0 | Cross-source charter is not delivered | `faee07a` provides one enforcing source/backend/compiler/cache binding; `9d0da85` coheres PostgreSQL `public` catalogue identity and unqualified relation resolution. Raw `rr:sqlQuery` remains trusted and schema-unconfined. There is no digest generation, registry, federated plan or caller | Close safe construction and snapshot digests/lifecycle; then source registry, federated plan and bounded coordinator |
 | P0 | Reproducibility closure is incomplete | `93ae3c2` tracks `Cargo.lock`; `374ca99` pins actions, images and selected tools; `31a1164` installs MetaHarness/Darwin from the npm lock; the package receipt closes resolution/features/edges; external observation `173d0698…51ca` binds one current binary plus observed build/link inputs; the private prepared one-shot holds exact sealed sources and bubblewrap inode and reproduces candidate loader resolution; `805f413` adds only a canonical in-memory non-admission record and semantic reparse; `9282e60` checks caller-supplied live ELF policy identity; `73e9864` adds exact late default-kill cBPF confinement and a comparative native canary; `50adc0a` adds same-byte static bwrap `RootPie` preflight; `b34b6d7` adds a separately replayable counterfactual name/path inventory, but Receipt V1 attests or replays none of those three diagnostics | Accept a production collector design before promotion; bind authenticated held/digested exact interpreter, DSO and target bytes actually consumed by bwrap plus complete dynamic host closure, final-FD inventory, syscall-trace evidence and aggregate cgroup/process containment; add durable authenticated witness/provenance and replay authority plus build-script, tool, linker and system closure; produce SBOM and reproducibility/admission evidence; close hosted-runner, apt-transitive and release-toolchain residuals; repeat the complete M0 gate in two clean builders |
 | P0 | Standards evidence is not yet release-complete | `a84aa05` binds all 87 ordered SQLite and required-live PostgreSQL mapping outcomes in backend-aware v3 receipts; mapping-only scope and zero production admission remain explicit. Per-test SQLite query/protocol baselines detect regression without claiming W3C conformance | Add MySQL mapping coverage and the pinned supported-surface SPARQL/Protocol manifests; keep mapping/query/protocol and backend-admission evidence disjoint |
 | P1 | Governance covers only part of a request | Compiler admission is capped at four and one absolute deadline spans admission, execution and serialization; compiler CPU is non-cooperative and rows, bytes, source work, recursion and native cancellation lack one total budget | Extend the elapsed-time boundary into one `QueryBudget` for every backend |
@@ -120,8 +121,8 @@ Material gaps found directly in the current tree:
 | P1 | Accepted runtime ADRs are not fully delivered | ADR-0011 is partial (redacted errors and bounded environment source references); ADR-0017/0018 remain undelivered | Implement or supersede with dated status/evidence |
 | P1 | Test strategy is incomplete | no `proptest`, fuzz target, `insta`, durable coverage or mutation gate | Generated, fuzz, snapshot, mutation and LCOV trains |
 | P1 | Serving artifact is too broad | `sf-cli` imports conformance/bench; conformance enables REST and SQL Server | Minimal serve artifact; opt-in evidence/developer features |
-| P2 | Lifecycle and admission are absent | immutable-in-practice epoch; no reload/drift; `M ⋈ T` not a startup gate | Validated immutable snapshot, atomic swap, drift detection and readiness |
-| P2 | Maintainability risk | `exec_core` and `build` are characterized/decomposed; `iq/lower.rs`, `iq/normalize.rs`, `unfold.rs`, `emit.rs` and `sf-sql/introspect.rs` remain shared-lane hotspots | Split only lane-blocking stages, preserving test identities/evidence selectors |
+| P1 | Remaining lifecycle and admission work | no atomic reload/readiness path; `M ⋈ T` not a startup gate after the P0 constraint-safety fix | Validated immutable snapshot, atomic swap and readiness |
+| P2 | Maintainability risk | `exec_core`, `build`, and PostgreSQL introspection are characterized/decomposed; `iq/lower.rs`, `iq/normalize.rs`, `unfold.rs` and `emit.rs` remain shared-lane hotspots | Split only lane-blocking stages, preserving test identities/evidence selectors |
 
 `cargo audit` passes with six configured advisory exceptions and three
 unmaintained crates: `paste 1.0.15` (`RUSTSEC-2024-0436`),
@@ -166,10 +167,10 @@ Evidence plane: standards + differential + QE + load + release receipts
 Engineering plane: Ruflo + native Codex/Claude MetaHarness (no promotion authority)
 ```
 
-The first shared-contract gate is partially landed: opaque `SourceId`, a
-pre-admission `SourceMapping`, and a pure deadline-only `QueryControl` port exist.
-Neutral schema DTOs plus an immutable runtime source/backend/capability/cache
-binding remain prerequisites; decomposition targets only modules blocking lanes.
+The first shared-contract gate has landed: opaque `SourceId`/`SourceMapping`,
+neutral schema DTOs, pure deadline-only `QueryControl`, and one immutable source/
+backend/capability/cache binding. Next add stable digests/generations, drift/reload
+and safe construction; decomposition targets only modules blocking lanes.
 
 ## Programme dependency graph
 
@@ -430,14 +431,13 @@ Small documentation/status-only corrections use the same truth and review rules
 without paying for an irrelevant full harness transaction. Product behavior,
 security boundaries, evaluator law, or release controls always use the full lane.
 
-The H0c V6 pass also exposed an engineering-efficiency target: its isolated Rust
-verifier outputs peaked at about 35 GiB and the controller spent material time
-rehashing them before sealing, although cleanup completed and all resource gates
-held. A subsequent harness slice should benchmark and introduce immutable,
-content-addressed Rust closure/build reuse plus per-lane digest manifests. It
-must retain separate writable targets, verifier independence, exact input
-bindings, fail-closed cache validation, and replayable receipts; speed or disk
-savings cannot weaken those controls.
+H0c V6 used three isolated Rust target/link lanes and about 35 GiB. It must not
+fan out on this host with only 8.6 GiB free. The immediate accelerator is a
+base-commit-controlled, fail-closed CI impact selector: unknown/empty/invalid
+diffs and non-PR authority events run all gates; selected hosted jobs run in
+parallel. V7 then records a resource profile and serial verifier order locally.
+Separate writable targets, verifier independence, exact bindings and receipts
+remain mandatory; content-addressed reuse follows only after cache proof.
 
 The 2026-08-31 generic MetaHarness diagnostic scores the repository root 75:
 fit 75, compile 100, task coverage 65, tool safety 90, and memory usefulness 46.
@@ -449,7 +449,7 @@ requires exact-empty MCP JSON, an exact agent-config digest, and rejects TOML,
 Unicode, duplicate-key and extra-key launcher indirection. The pinned local Ruflo
 reader privately copies an explicitly selected exact historical CLI closure,
 replacing two files from protected gzip overlays without trusting a mutable ambient source; an opaque snapshot and three exact Git-backed
-packed-runtime resources change no identity, export, fetch/provider authority or application goal. Earlier 905-test evidence predates this overlay. With the explicit verified package-root cache, the current run passes 124 files/942 tests with two intentional skips; the default mutable ambient source still fails closed and a portable materializer remains open. The selected root is resolved once. V2 keeps its original physical-source `entryPath` and remains replayable but is not emitted for relocation; V3 binds the content-addressed source policy and private executed `/runtime` entry. It copies only exact status files and runs
+packed-runtime resources change no identity, export, fetch/provider authority or application goal. Earlier 905-test evidence predates this overlay. The last accepted full checkpoint passes 124 files/942 tests with two intentional skips; it was not rerun after current Rust slices. The default mutable ambient source still fails closed and a portable materializer remains open. The selected root is resolved once. V2 keeps its original physical-source `entryPath` and remains replayable but is not emitted for relocation; V3 binds the content-addressed source policy and private executed `/runtime` entry. It copies only exact status files and runs
 under `--unshare-net`; network/type/link/mode/race KATs keep `0664` evidence non-authoritative.
 The 2026-09-01 ADR-plugin `--help` incident may have partially upserted the live project ADR namespaces; no copy, reconciliation, rollback, or later reliance occurred, and Git remains canonical.
 A fixed-seed Darwin Shield run passed only 9/12 gates; no valid champion or serving

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-07-19
+updated: 2026-09-01
 tags: [obda, virtualization, sparql-to-sql, rewriting, intermediate-query, optional, null-semantics, optimizer-cascade, correctness, term-construction-lifting, plan-cache, cost-driven]
 supersedes: []
 depends-on:
@@ -24,7 +24,7 @@ The deep difficulty is a semantic mismatch: **SPARQL solution mappings are parti
 
 * Correctness first — a sound, complete base translation (Chebotko/Pérez semantics) with OPTIONAL/NULL handled exactly.
 * Performance — an Ontop-style structural + semantic optimizer cascade is where the real-world speed lives.
-* Reuse — `spargebra` (parse/algebra), `sqlparser` (dialect emission, ADR-0004), `tokio-postgres` (execution, ADR-0006).
+* Reuse — `spargebra` (parse/algebra), `sqlparser` (dialect emission, ADR-0004), and the shared native SQLite/PostgreSQL/MySQL driver layer (execution, ADR-0006).
 
 ## Considered Options
 
@@ -49,12 +49,12 @@ NULL / left-join rules the base translation obeys:
 ### Pipeline (`sf-sparql`)
 
 1. **Parse** — `spargebra::SparqlParser` → `GraphPattern`.
-2. **Algebra optimize (opt-in)** — `sparopt` (filter pushdown, join reorder); bypassable if it regresses. *(Reconciliation, 2026-06-28 — **supersedes an earlier same-day note**, empirically re-verified via `cargo build -p sparopt` + `cargo tree`: this step is **unwired**, but NOT because of a compile failure. The earlier note claimed `sparopt` 0.3.6 "fails to compile against `spargebra` with `sparql-12`/`sep-0006`" — that is **false**: `sparopt` 0.3.6 compiles cleanly with `spargebra` 0.4.6 + `sparql-12`/`sep-0002`/`sep-0006` and is in fact a live transitive dependency here (via the `spareval` in-memory oracle → `oxigraph`/`rudof` → `sf-conformance`). The real status: `sparopt`'s optimizer is simply **not wired into `sf-sparql`'s pipeline** by choice — the order-disciplined cascade below is the sole optimiser (filter-pushdown = cascade pass 5; join-elimination = passes 2/4), so the opt-in pre-stage adds nothing we need and there is no correctness/perf loss. Wiring it (path A) was not pursued; whether its API integrates at our use-site is unproven. The dead `[workspace.dependencies]` catalog entry was removed (hygiene; `sparopt` remains in the tree transitively via `spareval`). Companion notes: ADR-0004 §substrate matrix, ADR-0019 §config matrix.)*
+2. **Algebra pre-optimizer — unwired.** `sparopt` compiles as a transitive evidence dependency, but `sf-sparql` neither depends on nor invokes it. The order-disciplined cascade below is the sole product optimizer; `sparopt` is reference material, not an opt-in current stage.
 3. **Unfold** — replace each triple pattern with the SQL sub-expressions of the matching mapping-IR entries → an IQ-style relational tree (the ISWC-2018 base translation).
 4. **Tier-0 elimination (up front)** — a refObjectMap with no `rr:joinCondition` ⇒ inline the parent's subject IRI (no join); parent == child triples-map on a PK ⇒ collapse to a scan (redundant self-join elimination).
 5. **Optimizer cascade — order is load-bearing:** (i) IRI-template-mismatch pruning → (ii) self-join / self-left-join elimination → (iii) functional-dependency inference (transitive closure, through unions) → (iv) FK/PK join elimination → (v) selection pushdown → (vi) distinct removal.
 6. **Emit** — translate the optimized tree to a `sqlparser` AST and render the target dialect; values are bound parameters only (ADR-0010).
-7. **Execute & reconstruct** — run via `tokio-postgres`; map rows to bindings; serialise with `sparesults` (streamed, ADR-0010).
+7. **Execute & reconstruct** — run through the shared `SqlBackend` over the native SQLite/PostgreSQL/MySQL adapters; map rows to bindings; serialize with `sparesults`/RDF writers under the evidenced result profile (streamed where admitted, ADR-0010).
 
 ### Cascade order is load-bearing (invariants)
 
@@ -68,11 +68,20 @@ IRI/literal construction (`concat`/`cast` over `rr:template` segments) is **lift
 
 ### v1 SPARQL coverage
 
-**Supported:** BGP, `JOIN`, `FILTER`, `OPTIONAL` (null-safe), `UNION`, `BIND`, `VALUES`, projection, `DISTINCT`/`REDUCED`, `LIMIT`/`OFFSET`, `ORDER BY` (NULLS ordering pinned per dialect — SPARQL orders unbound first; never rely on the dialect default, e.g. PostgreSQL's `NULLS LAST`), aggregates (with the empty-group `SUM` NULL-vs-0 reconciliation), `GRAPH`, `MINUS`, transitive property paths `P+`/`P*`, and the **`LATERAL`** correlated-join extension (SEP-0006 → SQL `LATERAL` / `CROSS APPLY`; enables top-N-per-group; a documented opt-in extension, **out of the 1.2 conformance surface** — ADR-0019). Recursive paths compile to source-dialect recursive CTEs — PostgreSQL depth-counter + `CYCLE` (PG14+); a DuckDB *source* uses `USING KEY` (bounded-memory settled-set). **Deferred → `501`:** the `?` path operator, `SERVICE`, and OWL 2 QL tier-2 entailment (ADR-0008).
+**Supported:** BGP, `JOIN`, `FILTER`, `OPTIONAL` (null-safe), `UNION`, `BIND`, `VALUES`, projection, `DISTINCT`/`REDUCED`, `LIMIT`/`OFFSET`, `ORDER BY` (with explicit SPARQL NULL/UNBOUND ordering), aggregates, `GRAPH`, `MINUS`, and the characterized variable-endpoint property-path profile: `P+`/`P*`, single-predicate `p?`, negated property sets, inverse, sequence and alternative. Recursive paths use exact finite-pair fixed points under ADR-0049. Residual bound-endpoint, nested-closure, shape-mismatched and multi-mapping/refObjectMap path shapes return `501`, as do the parsed `LATERAL` extension, `SERVICE`, and OWL 2 QL tier-2 entailment.
 
 ### Performance
 
-**Plan cache (hot path).** Cache the compiled plan keyed on a **structural hash of the SPARQL algebra** (not the query string), invalidated by a monotonic **`⟨T, M⟩` + source-schema epoch** bumped on ontology reload, mapping reload, or a source-schema change — the cache is sized by `⟨T, M⟩`, never by data, so it cannot go stale against the live sources. Sharp keying rule: **parameterise *data* constants but key on *schema-selecting* constants** (predicate IRIs and IRI-template constants — the ones that decide which mapping entries and columns to unfold); otherwise a plan compiled for `:a` would wrongly serve a `:b` query. Implementation: a bounded `quick_cache` for compiled plans + `deadpool`'s `prepare_cached()` for source-side prepared statements. Declare available constraints (PK/FK/uniqueness from `sf-sql` introspection) so the source optimizer can finish the job — but never rely on it for template-aware pruning (databases cannot see through IRI-template structure; see *Term-construction lifting* above).
+**Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, observed schema and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope, dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability digests and atomic generation changes.
+
+**Current P0 correctness hazard.** The cascade actively consumes startup PK,
+FK, uniqueness and functional-dependency facts. There is no live schema watcher,
+DDL exclusion proof or atomic reload path, so both cached and newly compiled
+plans can continue using stale constraints after DDL and can return a wrong
+answer. An operator-side immutable-schema assumption is not enforced and grants
+no admission. Serving must either disable these constraint-sensitive passes or
+establish a race-safe schema generation plus DDL-exclusion/drift contract before
+production admission.
 
 ### Correctness anchor
 
@@ -86,7 +95,11 @@ Chebotko/Pérez relational-algebra semantics is the soundness/completeness refer
 
 ### Confirmation
 
-Verified by the layered strategy in ADR-0012 — the native in-memory Oxigraph oracle for rewriter correctness (the virtualiser's answer vs the expected graph loaded in-memory and queried), a NoREC-style internal differential (unoptimized vs optimized IQ) that pinpoints a faulty cascade rule, an MR1 constraint-toggling metamorphic test for unsound constraint-driven optimizations, and per-rule bounded equivalence checking (VeriEQL).
+The implemented fixed native-oracle and NoREC differentials provide regression
+evidence. ADR-0012 defines the broader verification target: generated MR1
+constraint toggling for unsound rewrites and per-rule bounded equivalence
+checking remain planned; no VeriEQL integration or generated MR1 gate is
+currently claimed.
 
 ## More Information
 
