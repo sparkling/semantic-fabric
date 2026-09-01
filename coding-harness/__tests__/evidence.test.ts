@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   bindExternalEvidence,
@@ -161,6 +162,10 @@ describe('external coordination evidence', () => {
   });
 
   it('preserves schemas 1 and 2 while admitting relocatable-source schema 3', () => {
+    const serializedV2Identity = JSON.stringify(PROGRAMME_V5_RUFLO_CLI_IDENTITY);
+    expect(Buffer.byteLength(serializedV2Identity)).toBe(734);
+    expect(createHash('sha256').update(serializedV2Identity).digest('hex'))
+      .toBe('d7902a35334465624120fa16a35c62f88ceea01694b1f4262cb4023fd373d582');
     expect(parseRufloEvidence(rufloEvidence)).toEqual(rufloEvidence);
     expect(parseRufloEvidence(rufloEvidenceV2).schemaVersion).toBe(2);
     expect(parseRufloEvidence(rufloEvidenceV3).schemaVersion).toBe(3);
