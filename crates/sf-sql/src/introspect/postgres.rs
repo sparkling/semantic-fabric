@@ -10,6 +10,15 @@ const RUNTIME_SCHEMA: &str = "public";
 const TABLES_SQL: &str = "SELECT table_name FROM information_schema.tables \
      WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name";
 
+// Generated base-table SQL is intentionally unqualified under the runtime's
+// exact `pg_catalog,public,pg_temp` search path. A `public` base table that has
+// the same name as any `pg_catalog` relation would therefore be introspected
+// from `public` but executed from the earlier catalogue namespace. Until the IR
+// carries qualified relation identity, reject that database at introspection.
+const EARLIER_RELATION_COLLISIONS_SQL: &str = "SELECT c.relname FROM pg_catalog.pg_class c \
+     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+     WHERE c.relname = ANY($1) AND n.nspname = $2 ORDER BY c.relname";
+
 const COLUMNS_SQL: &str = "SELECT table_name, column_name, data_type, is_nullable \
      FROM information_schema.columns \
      WHERE table_name = ANY($1) AND table_schema = $2 \
@@ -72,7 +81,7 @@ pub async fn introspect_postgres(
 }
 
 /// Introspect named tables from the runtime-supported PostgreSQL `public`
-/// schema in five set-based catalogue round trips.
+/// schema in six set-based catalogue round trips.
 pub async fn introspect_postgres_all(
     client: &tokio_postgres::Client,
     tables: &[String],
@@ -83,7 +92,7 @@ pub async fn introspect_postgres_all(
 /// Capture every PostgreSQL `public` base table from one coherent catalogue
 /// snapshot.
 ///
-/// Enumeration plus five set-based metadata queries execute in a single
+/// Enumeration plus six set-based metadata queries execute in a single
 /// `REPEATABLE READ READ ONLY` transaction. This prevents concurrent DDL from
 /// mixing catalogue states. Arbitrary schema-qualified identities remain
 /// unsupported by the runtime data model.
@@ -124,6 +133,7 @@ where
         ));
     }
 
+    reject_earlier_relation_collisions(client, tables).await?;
     load_columns(client, schema_name, tables, &mut schemas).await?;
     load_keys(client, schema_name, tables, &mut schemas).await?;
     load_foreign_keys(client, schema_name, tables, &mut schemas).await?;
@@ -137,6 +147,27 @@ where
             })
         })
         .collect()
+}
+
+async fn reject_earlier_relation_collisions<C>(client: &C, tables: &[String]) -> Result<()>
+where
+    C: tokio_postgres::GenericClient + Sync,
+{
+    let earlier_schema = "pg_catalog";
+    let collisions: Vec<String> = client
+        .query(EARLIER_RELATION_COLLISIONS_SQL, &[&tables, &earlier_schema])
+        .await?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Introspection(format!(
+        "PostgreSQL public relation name(s) collide with the earlier pg_catalog \
+         execution scope: {}; qualified relation identity is not yet supported",
+        collisions.join(", ")
+    )))
 }
 
 async fn load_columns<C>(
@@ -330,6 +361,8 @@ mod tests {
             assert!(sql.contains(schema_identity));
         }
         assert!(TABLES_SQL.contains("table_schema = $1"));
+        assert!(EARLIER_RELATION_COLLISIONS_SQL.contains("c.relname = ANY($1)"));
+        assert!(EARLIER_RELATION_COLLISIONS_SQL.contains("n.nspname = $2"));
         assert!(KEYS_SQL.contains("tc.table_name = kcu.table_name"));
         assert!(KEYS_SQL.contains("tc.table_catalog = kcu.table_catalog"));
     }
@@ -340,5 +373,14 @@ mod tests {
         let error = require_same_schema("public", "private", "child", "fk")
             .expect_err("unrepresentable qualified parent must fail closed");
         assert!(error.to_string().contains("schema-qualified"));
+    }
+
+    #[test]
+    fn earlier_relation_collision_message_is_non_ambiguous() {
+        let error = Error::Introspection(
+            "PostgreSQL public relation name(s) collide with the earlier pg_catalog execution scope: pg_class; qualified relation identity is not yet supported".into(),
+        );
+        assert!(error.to_string().contains("pg_catalog"));
+        assert!(error.to_string().contains("qualified relation identity"));
     }
 }

@@ -217,8 +217,8 @@ pub fn introspect_sqlite_all(conn: &rusqlite::Connection) -> Result<Vec<TableSch
 }
 
 /// Introspect every PostgreSQL public base table in one coherent read-only
-/// snapshot: one enumeration plus 5 set-based catalogue round trips, rather
-/// than 5 **per table** (M4 wave-2 finding 4 — the N+1 this function used to
+/// snapshot: one enumeration plus 6 set-based catalogue round trips, rather
+/// than 6 **per table** (M4 wave-2 finding 4 — the N+1 this function used to
 /// drive via a per-table [`sf_sql::introspect::introspect_postgres`] loop).
 pub async fn introspect_pg_all(
     client: &mut tokio_postgres::Client,

@@ -4,9 +4,9 @@ use sf_sql::introspect::{
     introspect_postgres, introspect_postgres_all, introspect_postgres_public_snapshot,
 };
 
-/// M4 wave-2 finding 4 RECEIPT: batched (`introspect_postgres_all`, 5 round
+/// M4 wave-2 finding 4 RECEIPT: batched (`introspect_postgres_all`, 6 round
 /// trips total) vs a per-table loop (`introspect_postgres` called once per
-/// table, 5*N round trips) over 20 real tables — timed, and asserted
+/// table, 6*N round trips) over 20 real tables — timed, and asserted
 /// byte-identical. Gate-skips cleanly when no PostgreSQL server is reachable
 /// (matches the crate's live-PG test convention, e.g. `backend::pg::tests`).
 #[tokio::test]
@@ -94,7 +94,7 @@ async fn introspect_postgres_all_matches_per_table_loop_and_is_faster() {
     }
     let old_elapsed = start.elapsed();
 
-    // NEW shape: 5 set-based round trips total, regardless of N.
+    // NEW shape: 6 set-based round trips total, regardless of N.
     let start = std::time::Instant::now();
     let new_schemas = introspect_postgres_all(&client2, &names)
         .await
@@ -114,6 +114,23 @@ async fn introspect_postgres_all_matches_per_table_loop_and_is_faster() {
         new_schemas, snapshot_schemas,
         "public snapshot must exclude the hostile same-name relation"
     );
+
+    client2
+        .batch_execute(
+            "CREATE TABLE public.pg_class (hostile_id INTEGER PRIMARY KEY); \
+             INSERT INTO public.pg_class VALUES (1);",
+        )
+        .await
+        .expect("create public/catalogue name-collision fixture");
+    let error = introspect_postgres(&client2, "pg_class")
+        .await
+        .expect_err("public relation shadowed by pg_catalog must fail closed");
+    assert!(error.to_string().contains("pg_catalog"));
+    assert!(error.to_string().contains("qualified relation identity"));
+    client2
+        .batch_execute("DROP TABLE public.pg_class")
+        .await
+        .expect("remove public/catalogue name-collision fixture");
 
     client2
         .batch_execute(

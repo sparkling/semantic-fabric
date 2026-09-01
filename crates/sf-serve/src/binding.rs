@@ -3,9 +3,10 @@
 //! The serve lane compiles and executes only through this owner, so a plan
 //! cannot be detached from the backend, source identity, dialect, mapping,
 //! T-Box, observed schema, or cache that produced it. This is the enforcing
-//! single-source precursor to the proposed multi-source `RuntimeSnapshot`; it
-//! does not claim coherent catalogue introspection, live drift detection,
-//! federation, or production capability admission.
+//! single-source precursor to the proposed multi-source `RuntimeSnapshot`.
+//! PostgreSQL supplies a coherent startup catalogue snapshot; the abstraction
+//! does not claim that for every backend, nor live drift detection, federation,
+//! or production capability admission.
 
 use std::fmt;
 
@@ -21,9 +22,10 @@ const PLAN_CACHE_CAP: usize = 64;
 /// A backend paired with the schema observation made through that backend.
 ///
 /// Pairing prevents later constructors from independently mixing a handle and
-/// unrelated schema vector. The current PostgreSQL/MySQL observers are not yet
-/// transactionally coherent snapshots, so this type deliberately says
-/// `Introspected`, not `VerifiedSnapshot`.
+/// unrelated schema vector. PostgreSQL observes one coherent read-only,
+/// repeatable-read `public` catalogue snapshot; SQLite and MySQL do not yet
+/// observe a whole catalogue in one explicit transaction. No path detects later
+/// drift, so this type deliberately says `Introspected`, not `VerifiedSnapshot`.
 pub struct IntrospectedSource {
     backend: Backend,
     schema: Vec<TableSchema>,
