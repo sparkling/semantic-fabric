@@ -12,7 +12,7 @@ implements: [ADR-0044, ADR-0045]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture and seven terminal singleton representations described below are implemented; adapter-owned brands, executable store, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
+This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture, seven terminal singleton representations, and exact lifecycle/control/deadline representation described below are implemented; adapter-owned brands, executable statement/result catalogue, store, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
 
 The bundle remains private and dormant. Runtime startup/readiness may verify but never apply or repair migrations. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
 
@@ -353,14 +353,19 @@ null, boolean, safe integer, string, or copied intrinsic `Uint8Array`. The union
 - `{kind:'server-rejected',operation,sqlstate,transactionStatus}` with the exact
   in-flight operation, five-character code, and `idle|transaction|failed` state.
 
-Every observation step fixes columns, `maximumRows`, per-alias ceilings and
-`maximumResultValueBytes`; catalogue/provisioning/seed/baseline totals are at most
-1,048,576/65,536/262,144/1,048,576 bytes, baseline rows 8,192, strings 196,608,
-identifiers 63, and typed values their domain maximum.
+Every observation step must separately pin semantic `acceptedCardinality`, the
+max-plus-one admission probe, and a compiled `hardMaximumRows`; none may be
+silently reused as another. It must likewise distinguish raw semantic-cell,
+encoded-cell, complete encoded inner-dataset, and outer-payload byte ceilings.
+The existing catalogue/provisioning/seed/baseline totals, 8,192 baseline rows,
+196,608-byte strings and 63-byte identifiers are semantic/parser ceilings, not
+transport pins. Exact aliases, row grammar, serializer bytes and operation-specific
+transport ceilings remain unsealed until PostgreSQL 16.15 transcripts and
+exact/max/max-plus-one KATs prove them.
 Each variable expression is evaluated once into `(value,oversize)`: null is `(null,false)`, admitted
-is `(value,false)`, excess `(null,true)` after `pg_catalog.octet_length`. A MATERIALIZED bounded-row
-CTE returns one driver row with exact columns `payload,oversize`: admitted payload is bytea holding
-the pinned PostgreSQL-16.15 UTF-8 JSON array `[aliases,denseRowArrays]` (bytea fields are lowercase
+is `(value,false)`, excess `(null,true)` after `pg_catalog.octet_length`. The eventual bounded-row
+query returns one driver row with exact columns `payload,oversize`: admitted payload is bytea holding
+the reviewed PostgreSQL-16.15 UTF-8 inner form `[aliases,denseRowArrays]` (bytea fields are lowercase
 even hex), while any cell/row/aggregate excess returns only `(null,true)`. Data may lower but never
 raise limits; truncation, hash substitution, missing/cross-wired sentinels, or payload with true fails.
 Before copying/decoding, the bridge checks columns/types, intrinsic length and sentinel. No rejected
@@ -390,6 +395,7 @@ statements in order:
 
 One fixed query reads `pg_catalog.pg_settings.setting/unit` for `5000/30000/30000` and `ms`, and verifies READ COMMITTED, read-write, `session_replication_role=origin`, `fsync=on`, and `full_page_writes=on`; the runner never sets the last three. It then takes the fixed advisory transaction lock, issues `SET LOCAL ROLE sf_supervisor_owner_v1`, and reverifies all settings plus `SESSION_USER=sf_supervisor_migration_login_v1` and `CURRENT_USER=sf_supervisor_owner_v1` before classification.
 The statement/result catalogue is not executable authority until one reviewed unit pins, for every execute operation, the exact SQL bytes, parameter order and base PostgreSQL types, expected command tag and row count or exact outer/inner alias vectors, row and per-alias ceilings, reconstruction schema, and maximum result bytes. That unit also pins the ordered 52- and 73-element CommandComplete tag vectors for the scripts without using the analysis-only splitter at runtime. Until then, source may represent reviewed control literals but must not claim a complete statement catalogue, classifier or runnable coordinator.
+The dormant service remains dependency-free. A future pinned-`pg` protocol bridge is a disjoint, composition-owned and separately attested artifact, or an explicit reviewed activation transition; it may not silently widen this private bundle's dependencies or authority.
 
 All time authority is compiled and module-private. `process.hrtime.bigint()` is observed at entry, every operation settlement and every synchronous boundary; expiry is `now >= deadline`. There is no caller clock, timer, signal, lease or renewal. A referenced timer is cleared on settlement, re-arms if it fires early, and cannot win or lose by callback ordering: settlement is accepted only while `now < effectiveDeadline` and the session/operation/ordinal latch is live.
 
@@ -437,8 +443,9 @@ Results are seven module-level deeply frozen intrinsic singleton records, one fo
 ### Implemented dormant representation evidence
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Thirteen focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, ordered descriptor parsing without candidate serialization, hostile accessors/proxies without invocation, UTF-8 bounds, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
-Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. Fourteen capability/terminal KATs prove ordered descriptor capture without invocation, thenable assimilation or inherited setters; proxy/accessor/symbol/exotic/revoked-proxy rejection; captured-intrinsic and receiver-free behavior; and seven pairwise-distinct exact frozen non-authorizing terminal identities. The Node 24.14.1 private suite passes 677 tests; exact Node 20.0.0 passes the 17 changed/sealed gates plus TypeScript and artifact replay; both pass 65 focused parent protection/overlay gates. Sealed artifact SHA-256 is `ce67c466475309ead7da5bfa78de2a6716237472714a86f30a1f026b677a45e0`; the public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
-This closes the dormant load/bind, quoted-callable, descriptor-first receipt, unbranded capability-capture and terminal-singleton representation slices only. Exact statement/result pins, adapter-owned store/Promise/protocol brands, deadlines, coordinator, concurrent replacement stress and live PostgreSQL 16.15 evidence remain open.
+Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. Fourteen capability/terminal KATs prove ordered descriptor capture without invocation, thenable assimilation or inherited setters; proxy/accessor/symbol/exotic/revoked-proxy rejection; captured-intrinsic and receiver-free behavior; and seven pairwise-distinct exact frozen non-authorizing terminal identities.
+Commit `1e2d88d` adds eight lifecycle KATs that seal all 36 lifecycle names, 31 execute operations, exact 32/24-step schedules, ten LF-terminated semicolonless control literals, script-count-derived 52/73 deadlines, the 5,030,000/5,040,000 ms successful totals and both 360,000 ms margins. Node 24.14.1 now passes 685 private-service tests; exact Node 20.0.0 passes TypeScript, 11 focused lifecycle/seal tests, artifact replay, the parent build and 39 focused parent protection/overlay gates. Sealed artifact SHA-256 is `e426c4957196ca2507edb30de67203cbd787d79ecb75a78fc23c027c7007fdc1`; the dependency-free public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
+This closes the dormant load/bind, quoted-callable, descriptor-first receipt, unbranded capability-capture, terminal-singleton and lifecycle/control/deadline representation slices only. Exact inserts, SELECT aliases/serializer/transport bounds, script tag-vector evidence, adapter-owned store/Promise/protocol brands, deadline execution, coordinator, concurrent replacement stress and live PostgreSQL 16.15 evidence remain open.
 
 ## Acceptance gates
 

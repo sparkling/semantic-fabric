@@ -445,7 +445,7 @@ Its pinned local Ruflo collector materializes the already-attested schema-v2 CLI
 protected two-file historical gzip overlay; its opaque decoded snapshot and three Git-backed
 packed-runtime resources add no ambient read, identity, export, fetch or authority. It mounts
 only private status snapshots under `--unshare-net`; cooperative `0664` ledger input stays non-authoritative.
-The earlier 122-file/905-test receipt predates this overlay and is not evidence for it; current protected binary, opacity and three-launcher KATs pass within a 124-file/941-test run with two intentional skips. OIA remains inconclusive and fixed-seed Darwin Shield passes only 9/12 gates.
+The earlier 122-file/905-test receipt predates this overlay and is not evidence for it; current protected binary, opacity and three-launcher KATs pass within a 124-file/941-test run with two intentional skips. OIA remains inconclusive and fixed-seed Darwin Shield passes only 9/12 gates. On 2026-09-01, commit `1e2d88d` sealed ADR-0046's private non-executable 36-name lifecycle, 31 operations, 32/24 schedules, control literals and deadline arithmetic; Node 24 passes 685 private-service tests, exact Node 20 passes the focused lifecycle/seal and parent gates, artifact `e426c495…fdc1` preserves the dependency-free public bundle, and ADR-0046 remains proposed with statement/result, adapter, runner and live PostgreSQL authority still open.
 
 ## Acceptance
 
