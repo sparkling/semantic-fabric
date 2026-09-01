@@ -15,6 +15,7 @@ mod r2rml;
 mod schema;
 
 pub use fixture::SyntheticFixture;
+#[allow(unused_imports)]
 pub use r2rml::extract_r2rml;
 #[allow(unused_imports)]
 pub use schema::{StyleColumn, StyleForeignKey, StyleSchema};
