@@ -31,11 +31,14 @@ pub use oxrdf::{
     NamedNodeRef, NamedOrBlankNode, Quad, Term, TermRef, Triple,
 };
 
+pub mod affinity;
 pub mod datatype;
 pub mod graph_map;
 pub mod ir;
 pub mod query_control;
 pub mod term;
+
+pub use affinity::{SourceId, SourceIdError, SourceMapping};
 
 /// Errors raised by the shared core.
 #[derive(Debug, thiserror::Error)]
