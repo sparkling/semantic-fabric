@@ -4,7 +4,7 @@
 //! (ADR-0005/0006); `serve` runs the live SPARQL 1.2 Protocol endpoint over the
 //! OBDA virtualiser (ADR-0019 G8, ADR-0010/0011; `sf-serve`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -141,7 +141,12 @@ fn suite_root() -> PathBuf {
 /// as failures; skips are untested, not failures (ADR-0005 honesty contract).
 fn conformance() -> ExitCode {
     let root = suite_root();
-    let report = match run_and_report(&root, &root) {
+    conformance_to(&root)
+}
+
+fn conformance_to(out_dir: &Path) -> ExitCode {
+    let root = suite_root();
+    let report = match run_and_report(&root, out_dir) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("semantic-fabric: conformance suite failed to run: {e}");
@@ -177,8 +182,8 @@ fn conformance() -> ExitCode {
 
     println!(
         "\nEARL written:\n  {}\n  {}",
-        root.join("earl-semantic-fabric-r2rml.ttl").display(),
-        root.join("earl-semantic-fabric-direct.ttl").display(),
+        out_dir.join("earl-semantic-fabric-r2rml.ttl").display(),
+        out_dir.join("earl-semantic-fabric-direct.ttl").display(),
     );
 
     if unexpected.is_empty() {
@@ -261,10 +266,20 @@ mod tests {
         // Drives the real vendored W3C RDB2RDF suite (tests/w3c/rdb2rdf, checked
         // into the repo) — no live DB or network needed. This is this crate's own
         // responsibility per the module doc above: surface a clean SUCCESS/FAILURE
-        // exit code, not just delegate correctly. Side effect: like the dedicated
-        // CI conformance step, this regenerates the two EARL report files with
-        // non-deterministic bnode labels — that diff is expected and not committed
-        // (same convention as ci.yml's own conformance step).
-        assert_eq!(conformance(), ExitCode::SUCCESS);
+        // exit code, not just delegate correctly. Evidence is written outside the
+        // source tree so a test run cannot mutate tracked EARL baselines.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let out_dir = std::env::temp_dir().join(format!(
+            "sf_cli_conformance_{}_{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&out_dir).expect("create isolated evidence directory");
+        assert_eq!(conformance_to(&out_dir), ExitCode::SUCCESS);
+        assert!(out_dir.join("earl-semantic-fabric-r2rml.ttl").is_file());
+        assert!(out_dir.join("earl-semantic-fabric-direct.ttl").is_file());
+        std::fs::remove_dir_all(out_dir).expect("remove isolated evidence directory");
     }
 }
