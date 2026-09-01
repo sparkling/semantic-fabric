@@ -1,6 +1,7 @@
 # semantic-fabric
 
-> Multi-agent orchestration project (Claude Flow / ruflo).
+> Rust semantic-data application with Ruflo/MetaHarness development and evidence
+> orchestration.
 >
 > **This file (`AGENTS.md`) is the single CANONICAL, shared instruction source for
 > BOTH OpenAI Codex and Claude Code.** Codex reads it directly; Claude Code imports
@@ -117,9 +118,15 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`.
 ## Build & Test
 
 - ALWAYS run tests after code changes; ALWAYS verify the build before committing
+- The product runtime and every deployable dependency are Rust/Cargo artefacts
+- Node/npm is development and evidence infrastructure only; run it only for a
+  changed package under `coding-harness/` or another explicitly non-deployable
+  harness boundary
 
 ```bash
-npm run build && npm test
+cargo fmt --all --check
+cargo test --workspace --locked
+cargo build --workspace --locked
 ```
 
 ## Codex platform notes
