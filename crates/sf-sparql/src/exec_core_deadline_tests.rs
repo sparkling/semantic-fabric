@@ -1,8 +1,15 @@
 //! Pull-side cooperative-checkpoint proof for the absolute request deadline.
 
-use super::*;
-use crate::iq::Scan;
-use sf_core::ir::{LogicalSource, TermSpec};
+use std::future::Future;
+
+use sf_core::ir::{LogicalSource, TermMap, TermSpec};
+use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
+
+use crate::iq::{Branch, Scan, TermDef};
+use crate::{Plan, PlanForm};
+
+use super::batch::TERM_GEN_FIRST_BATCH_SIZE;
+use super::select_each_async;
 
 struct ReadyBackend {
     rows: Vec<RawTuple>,
