@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-08-29
+updated: 2026-09-01
 tags: [metaharness, evidence, performance, benchmark, reproducibility, ruflo, codex, claude]
 supersedes: []
 depends-on:
@@ -10,6 +10,7 @@ depends-on:
   - ADR-0037
   - ADR-0038
   - ADR-0039
+  - ADR-0048
 implements:
   - ADR-0038
 ---
@@ -86,11 +87,12 @@ lease, attempt, build, execution, capture, persistence, or receipt authority;
 same-UID/root mutation, rollback, and path ABA remain explicit nonclaims. Tests use synthetic stores and roots, so no project source tree or measurement was materialized.
 
 The `implements: ADR-0038` relationship denotes a subordinate proposed design
-lock. It is not implementation completion or M0 evidence.
-
-This is an additive harness decision. It does not change the semantic-fabric
-runtime architecture, application goals, historical V4/V5/V6 meanings, or the
-product authority of Cargo tests and benchmark checkers.
+lock, not implementation or M0 evidence. [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) governs
+this additive harness decision: committed Node/TypeScript observers and
+controllers are non-deployable evidence, while any production supervisor or
+runner component is Rust. This high-assurance lane runs in parallel with M1–M6
+and gates authoritative performance and M7 release claims, not product feature
+implementation or the authority of direct Cargo tests.
 
 ## Context and problem statement
 

@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-08-29
+updated: 2026-09-01
 tags: [production, packaging, release, cargo, reproducibility, sbom, provenance, supply-chain]
 supersedes: []
 depends-on:
@@ -9,6 +9,7 @@ depends-on:
   - ADR-0010
   - ADR-0012
   - ADR-0038
+  - ADR-0048
 implements:
   - ADR-0038
 ---
@@ -25,6 +26,12 @@ The clean-checkout repeatability run at `ad94cdb` and the current directional
 artifact comparator are useful diagnostics, but they do not satisfy the two-
 builder gate below. No pre-registered builder pair, commit-before-reveal record,
 independent trust-root witness, exact-artifact agreement, or pair receipt exists.
+
+[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) fixes
+the product closure as Rust-only. Node, npm, MetaHarness and every
+`coding-harness/` package are excluded from `sf-server` and its release image. A
+future Rust supervisor is a separately packaged evidence service with no
+product-crate dependency; it is not another feature of `semantic-fabric`.
 
 Interim M0 tooling records and verifies a host-observed non-closure observation
 of the current all-in-one `sf-cli` executable. On 2026-08-28 the first exact
@@ -170,6 +177,25 @@ Neither publishes an authoritative observation. This advances the
 implementation baseline without accepting this ADR, satisfying gates 1–3, or
 resolving the proposed packaging decision.
 
+### Transition from immutable V1 evidence
+
+The existing `rust_closure_receipt` and
+`current-sf-cli-artifact-observation` V1 contracts permanently identify the
+current `sf-cli` package, `crates/sf-cli/src/main.rs`, `semantic-fabric` binary,
+build command and output path. They must never be retargeted or reinterpreted as
+evidence for `sf-server`.
+
+Before any package rename, an additive V2 closure/artifact contract must name
+the proposed `sf-server` identities and keep its receipts domain-separated from
+V1. If this ADR is accepted, new V1 capture stops and V1 remains verify-only for
+historical evidence; CI and native workflows move to V2 only after its parser,
+negative tests and replay are protected. Until explicit acceptance, ADR-0006's
+all-in-one package remains authoritative and no split is implemented.
+
+An implementation candidate may retain workspace version `0.0.0` only while it
+is explicitly non-release evidence. The immutable candidate used to complete
+this ADR must meet the non-zero version gate below.
+
 ## Context and problem statement
 
 ADR-0006 fixed one `sf-cli` package and one `semantic-fabric` binary containing
@@ -288,21 +314,26 @@ No compiler or execution architecture changes: `sf-core`, `sf-mapping`,
 term reconstruction remain intact. Until this proposal is accepted, ADR-0006's
 historical text and status are unchanged.
 
-## Exact acceptance gates
+## Exact implementation gates
 
-This proposal may move to `accepted` only when all of the following evidence is
-reviewed against one immutable candidate:
+If the maintainer accepts this packaging direction, implementation is complete
+only when all of the following evidence is reviewed against one immutable
+candidate. Acceptance adopts the decision; it does not reinterpret V1 or claim
+that these gates already pass.
 
-1. `cargo metadata` identifies distinct `sf-server` and `sf-dev-cli` packages,
+1. V1 capture is disabled but V1 verification remains byte-compatible; a
+   domain-separated V2 contract binds the exact `sf-server` package, source,
+   binary, build command and output path and rejects V1/V2 substitution.
+2. `cargo metadata` identifies distinct `sf-server` and `sf-dev-cli` packages,
    and only `sf-server` produces the public `semantic-fabric` binary.
-2. `semantic-fabric --help` exposes serving only, while
+3. `semantic-fabric --help` exposes serving only, while
    `semantic-fabric-dev --help` owns the evidence commands.
-3. A package-specific, target-specific `cargo tree --locked -e normal,build`
+4. A package-specific, target-specific `cargo tree --locked -e normal,build`
    receipt has exactly the SQLite/PostgreSQL/MySQL backend features and none of
    the excluded crates, features, native libraries, or prototype transports.
-4. A mutation that adds `sf-conformance`, `sf-bench`, SHACL, SQL Server, REST,
+5. A mutation that adds `sf-conformance`, `sf-bench`, SHACL, SQL Server, REST,
    cloud, or prototype reachability makes the closure gate fail.
-5. One agreement is pre-registered with fixed builder A/B roles, distinct
+6. One agreement is pre-registered with fixed builder A/B roles, distinct
    independently administered trust roots, and unique run IDs. Both builders
    bind the same source, lockfile, toolchain, target, flags, dependency policy,
    and closure inputs; each seals and commits its complete result digest before
@@ -311,13 +342,13 @@ reviewed against one immutable candidate:
    failed, mismatched, selected, tiebroken, or retried result terminates the
    agreement; a fresh attempt requires a new agreement and two new run IDs. Any
    documented platform-signing envelope is applied only after exact agreement.
-6. The binary and every bound release document report the same non-zero SemVer.
-7. SQLite, PostgreSQL, and MySQL clean-machine smoke and backend admission tests
+7. The binary and every bound release document report the same non-zero SemVer.
+8. SQLite, PostgreSQL, and MySQL clean-machine smoke and backend admission tests
    pass against the artifact checksum named in the provenance.
-8. SBOM completeness, checksum, signature, provenance, licence, source,
+9. SBOM completeness, checksum, signature, provenance, licence, source,
    duplicate, and reachable-vulnerability verification all pass with no
    unwaived critical/high finding.
-9. Existing semantic, conformance, and benchmark gates still run through the
+10. Existing semantic, conformance, and benchmark gates still run through the
    developer/evidence lane, proving that separation did not delete evidence.
 
 Passing only `cargo build`, or building a different artifact than the one
@@ -354,3 +385,4 @@ same-principal checkouts is not independently witnessed builder agreement.
 - Existing packaging/performance decision amended only if accepted: ADR-0006.
 - Serving security and resource boundary: ADR-0010.
 - Deterministic evidence authority: ADR-0012.
+- Rust/Node runtime boundary: ADR-0048.

@@ -1,10 +1,10 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-08-30
+updated: 2026-09-01
 tags: [postgresql, supervisor, catalog, migrations, rls, least-privilege]
 supersedes: []
-depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043]
+depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0048]
 implements: [ADR-0043]
 ---
 
@@ -17,10 +17,9 @@ does not activate the supervisor, accept ADR-0042/0043, provision credentials,
 or grant database, signer, network, publication, witness, runner, capture,
 import, promotion, or release authority.
 
-The exact-row materializer, exact catalogue JSON, and bounded private catalogue
-parser/digest binder are implemented outside the public bundle. Migration
-SQL/manifest, driver-free runner, live catalogue/provisioning verifier, adapter,
-deployment identity, credentials, delivery, and activation remain later work.
+The exact-row materializer, catalogue JSON and bounded parser/digest binder are
+Node reference-oracle inputs outside the public bundle; migration SQL is portable
+contract evidence. Live verification and activation belong to ADR-0048's Rust service.
 
 ## Context
 
@@ -55,11 +54,11 @@ Implementation order is fixed:
 6. dormant transaction adapter; and
 7. exact-pinned PostgreSQL 16.15 required-live evidence.
 
-Prepare exact-key checks both roots before traversal and snapshots a decision candidate plus the full locked configuration, authority-state, predecessor-receipt, and keyed absent/full run rows before its first await.
+Node-oracle Prepare exact-key checks both roots before traversal and snapshots a decision candidate plus the full locked configuration, authority-state, predecessor-receipt, and keyed absent/full run rows before its first await.
 Each graph rejects proxies, accessors, cycles, and excess beyond 32 levels, 8,192 nodes, or 1,048,576 cumulative byte-leaf bytes; wide arrays fail before key enumeration and wide records before descriptor expansion.
 It closes every deterministic equality before constructing the exact signing payload under `semantic-fabric/programme-capture/supervisor-run-event-signing-v2`, then returns a
 module-private WeakMap-backed one-use identity plus an independent signing-byte copy.
-Finalize consumes that identity before parsing the exact 64-byte signature, rederives the private snapshots, verifies the locked 44-byte canonical SPKI/fingerprint and signature,
+Node-oracle Finalize consumes that identity before parsing the exact 64-byte signature, rederives the private snapshots, verifies the locked 44-byte canonical SPKI/fingerprint and signature,
 then returns all rows. No caller can inject an envelope, response, resulting state head, public
 leaf, database value, clock, random value, retry marker, or project-selected key;
 the run-genesis prior head remains a caller assertion carried as unverified.
@@ -419,8 +418,8 @@ or overwrites its oracle from observed state.
 
 This contract is implemented only when:
 
-1. prepare/finalize and independent seed KATs on both Node lanes reproduce every
-   event, signature, result, state, public-leaf, row, seed byte, and digest;
+1. both Node oracle lanes reproduce every event, signature, result, state,
+   public-leaf, row, seed byte and digest; Rust reproduces the normative bytes;
 2. manifest/provisioning/catalogue tests reject malformed bytes, traversal,
    reorder/gap/future/duplicate entries, mutation, drift, substitution, any
    non-expanded tuple/expression, or identifier longer than 63 bytes;
@@ -431,7 +430,7 @@ This contract is implemented only when:
    disabled/relinked FK trigger, parameter ACL, other-database access, mandatory
    null, partial/mixed predecessor tuple, wrong receipt, and independently valid
    result/run/current/original-event cross-wire;
-5. PostgreSQL 16.15 live tests prove exact-version preflight plus provider-free
+5. Rust PostgreSQL 16.15 live tests prove exact-version preflight plus provider-free
    mismatch rejection; empty apply and replay; positive readiness/owner seed
    replay; 201/409 writer and recovery query rows passed directly to the
    untouched 27-key decoder; external-admin receipt/cardinality fixtures;
@@ -440,9 +439,9 @@ This contract is implemented only when:
    success with forbidden column-update denial, `COPY`, and least-authority
    denials; otherwise-valid deferred-constraint mutants failing
    at `COMMIT` with zero rows; and every non-deferred ADR-0043 fault outcome; and
-6. Node 20.0.0 and 24.14.1 suites, protected registries, hardened builds,
-   security review, public exports, empty runtime dependencies, nonoperational
-   readiness/manifest flags, and public bundle bytes remain unchanged.
+6. Node 20.0.0/24.14.1 suites, protected inputs, empty dependencies, false flags
+   and oracle bundle remain unchanged; the separate Rust closure passes its own
+   security, mutation, live and packaging gates.
 
 ## Consequences
 
@@ -491,6 +490,7 @@ This contract is implemented only when:
 
 - [ADR-0038](ADR-0038-sota-application-completion-programme.md) and [ADR-0039](ADR-0039-minimal-production-serving-artifact.md)
 - [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) and [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md)
+- [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md)
 - [PostgreSQL 16 row security](https://www.postgresql.org/docs/16/ddl-rowsecurity.html) and [`CREATE POLICY`](https://www.postgresql.org/docs/16/sql-createpolicy.html)
 - [PostgreSQL 16 role grants](https://www.postgresql.org/docs/16/sql-grant.html)
 - [PostgreSQL 16 `pg_auth_members`](https://www.postgresql.org/docs/16/catalog-pg-auth-members.html)

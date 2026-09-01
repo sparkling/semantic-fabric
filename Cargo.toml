@@ -1,5 +1,5 @@
 # semantic-fabric — Rust data-fabric workspace (ADR-0001).
-# Shared core + the virtualiser frontend (ADR-0003), realised as 7 crates (ADR-0006).
+# Shared core + the virtualiser frontend (ADR-0003), realised as 8 crates (ADR-0006).
 [workspace]
 resolver = "2"
 members = [
@@ -59,8 +59,8 @@ rusqlite = "0.40.2"
 # Execution stack — wired per-crate when engine logic lands (ADR-0006 / ADR-0015);
 # versions validated latest on crates.io 2026-06-27:
 #   tokio 1.52, tokio-postgres 0.7.18, deadpool-postgres 0.14, duckdb 1.10504
-#   (cross-source + embedded out-of-core executor), sqlparser 0.62, rayon 1.12,
+#   (optional cross-source/out-of-core prototype; ADR-0040 remains proposed), sqlparser 0.62, rayon 1.12,
 #   lasso 0.7, rustc-hash 2.1, smallvec 1.15, oxttl 0.2, criterion 0.8;
 #   virtualizer streaming (ADR-0010): async-stream 0.3, tokio-util 0.7, axum 0.8.
 #   SHACL gate (sf-conformance, ADR-0005): shacl 0.3.
-#   (DataFusion / Arrow / connector_arrow / polars dropped — source push-down + DuckDB, ADR-0015.)
+#   (DataFusion / Arrow / connector_arrow / polars dropped; DuckDB is not a selected coordinator/spill architecture.)

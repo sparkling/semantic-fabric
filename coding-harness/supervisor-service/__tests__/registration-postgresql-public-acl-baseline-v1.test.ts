@@ -123,7 +123,7 @@ describe('PostgreSQL 16.15 PUBLIC ACL baseline', () => {
     expect(capture).not.toContain(EXPECTED.sha256);
   });
 
-  it('keeps capture evidence outside the deployed service artifact', () => {
+  it('keeps capture evidence outside the non-deployable Node oracle artifact', () => {
     const artifact = JSON.parse(
       readFileSync(resolve(ROOT, '.service/artifact.json'), 'utf8'),
     ) as { buildInputs: Record<string, string>; sourceInputs: Record<string, string> };

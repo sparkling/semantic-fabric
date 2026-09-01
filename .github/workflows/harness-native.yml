@@ -7,7 +7,7 @@ jobs:
   native-isolation:
     name: native isolation · node 24.14.1 · required capability gate
     # Hosted GitHub runners cannot create the network namespace required by the
-    # production bwrap contract. This job is intentionally dispatched only to a
+    # native harness bwrap contract. This job is intentionally dispatched only to a
     # provisioned runner whose labels attest that it can enforce both boundaries.
     runs-on: [self-hosted, linux, x64, bwrap, systemd-user]
     steps:

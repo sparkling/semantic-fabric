@@ -1,10 +1,10 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-08-30
+updated: 2026-09-01
 tags: [postgresql, supervisor, serializable, persistence, outbox, security]
 supersedes: []
-depends-on: [ADR-0037, ADR-0038, ADR-0039, ADR-0042]
+depends-on: [ADR-0037, ADR-0038, ADR-0039, ADR-0042, ADR-0048]
 implements: [ADR-0042]
 ---
 
@@ -18,11 +18,12 @@ signer, network, publication, witness, runner, capture, import, promotion, or
 release authority.
 
 The retry/coordinator, row-codec, and prepare/finalize materializer slices are
-implemented as sealed, build-only inputs absent from the public supervisor
+implemented as sealed Node reference-oracle inputs absent from the public
 bundle. The manifest and readiness result remain nonoperational with every
-capability flag false. Migrations, the live adapter, driver, transport root,
-credentials, TLS, pool, signer, and deployment remain later activation work;
-development-only required-live tests may use an exact-pinned driver.
+capability flag false. Migrations and language-neutral contracts may feed a
+future Rust implementation; a live adapter, transport root, credentials, TLS,
+pool, signer and deployment do not exist. Development-only tests may use an
+exact-pinned Node driver without creating runtime authority.
 
 ## Context
 
@@ -48,13 +49,13 @@ uniqueness, exclusion, message, result value, or plain object can request retry.
 All other errors and any connection-loss or commit ambiguity remain fixed
 indeterminate outcomes.
 
-The marker bridge is driver-bearing and composition-owned. It may invoke the
-private retry-marker thrower only while catching an exact pinned `pg`
-`DatabaseError` thrown by the query it just awaited, with exact prototype and an
-allowlisted SQLSTATE. Tests obtain real driver errors from PostgreSQL. Plain
-`{code: '40001'}` data, messages, results, subclasses, proxies, every 23505, and
-errors thrown by mapper, materializer, signer, or cleanup code cannot cross this
-bridge.
+Node tests may model the marker bridge with an exact-pinned development `pg`
+`DatabaseError` from the query just awaited, exact prototype and allowlisted
+SQLSTATE; no driver-bearing bridge enters the Node oracle artifact. Production
+Rust must independently classify
+the corresponding trusted `tokio-postgres` error/`SqlState` at the awaited
+driver boundary. Plain code/message data, foreign errors, every 23505, and
+mapper, materializer, signer or cleanup failures cannot request retry.
 
 The programme needs executable PostgreSQL evidence without weakening the sealed
 dependency-free public bundle or pretending that tests provision independently
@@ -110,17 +111,17 @@ byte copy exposed. Finalize consumes that identity before signature parsing,
 rederives the private snapshots, and verifies the returned Ed25519 signature
 against the pinned public key before constructing any row value.
 
-No PostgreSQL driver type enters a service interface. Adapter source and
-migrations are sealed artifact build inputs but are not source inputs of
-src/index.ts. Test sources are protected harness-policy inputs and are bound by
-the programme's test and review receipts rather than by the deployable artifact
-digest. Runtime packages remain empty and the public bundle digest must remain
-byte-identical.
+No PostgreSQL driver type enters a normative service interface. Node adapter
+source is protected oracle input; language-neutral migrations are reusable by
+the Rust service. Neither is a source input of `src/index.ts`. Test sources are
+bound by harness receipts rather than a production-artifact digest. Node runtime
+packages remain empty and the public oracle bundle stays byte-identical.
 
-Required-live tests use exact-pinned pg and type declarations as development
-dependencies. This proves PostgreSQL behavior but does not make the built service
-deployable. Adding a runtime driver, exporting an adapter, or setting
-databaseAccessEnabled to true requires a separate reviewed activation slice.
+Required-live Node tests may use exact-pinned `pg` and type declarations as
+development dependencies. They prove PostgreSQL behavior but do not make the
+oracle deployable. Production activation requires the separate Rust service,
+its own pools/roles/TLS/signer ports, differential vectors, live tests and
+reviewed deployment evidence under ADR-0048.
 
 ### 3. Use one project namespace per database and exact domains
 
@@ -466,10 +467,10 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
   produces nontransactional gaps.
 - **Use inner joins for exact recovery** — damaged provenance becomes a false
   miss and could authorize another append.
-- **Add pg as a runtime dependency now** — changes the operational artifact
-  before the transport, signer, attestation, and deployment gates exist.
-- **Reuse the Rust product PostgreSQL lane** — crosses the independently
-  deployable supervisor boundary and would be an architecture rewrite.
+- **Add `pg` as a runtime dependency** — violates the evidence-only Node boundary.
+- **Reuse `sf-serve` pools or query execution** — crosses product and evidence
+  credentials, authority and failure domains. A separate Rust supervisor using
+  generic Rust PostgreSQL crates is the selected boundary, not a product rewrite.
 - **Auto-migrate at startup** — gives a runtime principal DDL authority and makes
   deployment drift harder to attest.
 
@@ -484,3 +485,4 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
 - [ADR-0039](ADR-0039-minimal-production-serving-artifact.md)
 - [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md)
 - [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md)
+- [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md)

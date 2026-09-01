@@ -4,7 +4,7 @@ date: 2026-08-30
 updated: 2026-09-01
 tags: [postgresql, supervisor, migrations, provisioning, canonical-json]
 supersedes: []
-depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045]
+depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0048]
 implements: [ADR-0044, ADR-0045]
 ---
 
@@ -12,9 +12,9 @@ implements: [ADR-0044, ADR-0045]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture, seven terminal singleton representations, exact lifecycle/control/deadline representation, and incomplete non-executable catalogue of ten controls plus four INSERT statement/provenance descriptors described below are implemented; value constructors, result contracts, adapter-owned brands, complete/executable statement catalogue, store, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
+This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture, seven terminal singleton representations, exact lifecycle/control/deadline representation, and non-executable catalogue/INSERT contracts described below are implemented as Node executable-specification evidence. A complete executable catalogue, store, bridge, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
 
-The bundle remains private and dormant. Runtime startup/readiness may verify but never apply or repair migrations. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
+The bundle remains a private, dormant and non-deployable Node oracle. A future Rust supervisor may independently verify equivalent sealed migrations at startup/readiness but never apply or repair them. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
 
 ## Context
 
@@ -44,7 +44,7 @@ Catalogue alone owns dedicated-schema truth; provisioning owns database, roles, 
 
 Provisioning, manifest and seed use exact `JSON.stringify(value, null, 2)` plus LF: fatal UTF-8 with no BOM, CR, trailing data, alternate whitespace, unsafe/negative-zero/non-finite numbers, unpaired surrogates, sparse arrays or duplicate decoded keys. All member order is normative.
 
-Each parser performs: intrinsic non-proxy `Uint8Array` admission; synchronous copy; fixed pre-decode ceiling; fatal UTF-8 decode/re-encode; bounded duplicate/token scan; one `JSON.parse`; closed-schema, semantic and cross-reference validation; byte replay; raw SHA-256; private brand. File limits never raise compiled ceilings.
+The Node oracle parser performs: intrinsic non-proxy `Uint8Array` admission; synchronous copy; fixed pre-decode ceiling; fatal UTF-8 decode/re-encode; bounded duplicate/token scan; one `JSON.parse`; closed-schema, semantic and cross-reference validation; byte replay; raw SHA-256; private brand. These carrier defenses are oracle hardening; Rust independently enforces the normative byte, schema and limit contract. File limits never raise compiled ceilings.
 
 Mutable bytes live in module-private storage; unconstructable prepared handles return fresh copies. No parser error contains input bytes, SQL, parameters, credentials, or connection strings.
 
@@ -237,8 +237,9 @@ byte digests, genesis head, project binding and Ed25519 SPKI fingerprint.
 
 `configurationEpoch` is `"0"`; state project/scope/active-epoch/configuration/head fields equal their
 configuration counterparts with no defaults/omissions. Reviewed derivation alone creates the fixture
-copied into private storage; the runner accepts a plan, not seed bytes. Deployment replacement reviews
-and rebuilds seed source, manifest pin, private artifact and exact-byte receipts together.
+copied into private oracle storage; the Node oracle accepts only its sealed Plan handle, never seed
+bytes. A future Rust runner independently binds equivalent reviewed bytes. Deployment replacement
+reviews and rebuilds seed source, manifest pin, Rust artifact and exact-byte receipts together.
 
 Insertion separately supplies `last_global_sequence=0`, `next_global_sequence=1`, and
 `last_event_digest=NULL`; those mutable fields are forbidden in the preimage. After RLS activation
@@ -273,13 +274,13 @@ Migration keys are `version,path,bytes,sha256`, exactly versions 1/2 and paths
 Lengths, server version, migration version and bytes are positive safe-integer numbers; only the
 lock key is decimal text. Digests are lowercase nonzero raw SHA-256.
 
-A private source constant pins the manifest SHA-256 independently of input; the service artifact and parent manifest bind the constant and file. Coherent replacement fails before checkout; pin changes require explicit byte review.
+A private source constant pins the manifest SHA-256 independently of input; the Node oracle artifact and parent manifest bind the constant and file. A future Rust deployment bundle binds an independently reviewed copy. Coherent replacement fails before checkout; pin changes require explicit byte review.
 
 Loading starts at fixed `migrations/manifest-v1.json`. The reader opens that file first and checks its compiled exact length and digest before opening the other four files; the semantic layer then parses the manifest and atomically cross-checks all six handles. No parsed path is ever opened.
 The five compiled basenames alone map to regular-file descriptors and each descriptor must have its compiled exact size and digest before bytes escape the reader. Unrelated directory entries are inert and ignored; authority never comes from enumeration.
 
 The reader is Linux-only and fail-closed: `O_NOFOLLOW`, `O_NONBLOCK`, `O_DIRECTORY` and `/proc/self/fd` must exist. It walks every absolute root component from a held `/` descriptor, keeps the root, service, migrations and five file descriptors open through validation, and never calls `realpath` as an authority.
-Root/component/file symlinks, hardlinks, non-regular files, group/world-writable service or migrations directories/files, cross-owner inputs, inode aliases, size/digest changes, unstable descriptor identity and any close failure reject the whole bundle. A deployed service root and its `migrations` directory therefore require same-owner mode `0755` or stricter; the group-writable source checkout is an authoring location, not an executable migration root.
+Root/component/file symlinks, hardlinks, non-regular files, group/world-writable service or migrations directories/files, cross-owner inputs, inode aliases, size/digest changes, unstable descriptor identity and any close failure reject the whole bundle. This constrains Node oracle replay only. A future Rust deployment owns separately attested migration bytes; the group-writable source checkout is never an executable migration root.
 
 `loadSealedPostgresMigrationPlanV1()` takes no path or bytes. Its root is fixed relative to its own module, and it creates a frozen WeakMap-branded `authority=none` Plan only after manifest, catalogue, provisioning, in-memory seed and both SQL policies agree. Clones, proxies and semantic handles cannot forge the Plan.
 The only byte projection returns fresh copies in exact `0001 -> seed -> 0002` order. The pathless preflight receipt is pinned at `2ff788e1d5af841ea6be0f1d22635a0a584e176d2c17537b9c0533afeebd434d`; creating it performs no I/O, while replay reopens only the fixed bundle and still grants neither database access nor migration-apply authority.
@@ -326,21 +327,23 @@ later readiness transaction. Readiness separately uses `SERIALIZABLE READ ONLY
 DEFERRABLE`, external-profile evidence, and a separately frozen receipt after
 commit; this runner never returns ready.
 
-### 7. Use a closed, driver-independent terminal state machine
+### 7. Specify the future Rust state machine and retain a Node oracle
 
-The live private entrypoint accepts only exact `{plan,store}`, both privately branded; the store is composition-owned by the pinned PostgreSQL adapter. Malformed/unbranded input throws synchronously before checkout. Structural stores exist only through a test factory excluded from the service artifact. The store's sole `checkoutMigration` method is captured before await; its exact client-free shell is `{open,discardMalformed}`, captured before `open`, and the exact session is `{execute,release,destroy}`, captured before execute. Failed/malformed open uses only `discardMalformed`.
-No capability result is admitted through bare `await` or `Promise.resolve`: the pinned adapter privately brands a same-realm intrinsic `Promise` before return; the runner rejects a proxy before traps, requires that brand and the captured intrinsic `Promise.prototype`, and attaches permanent handlers only through captured `Promise.prototype.then`. Caller promises, synchronous values, subclasses, foreign-realm promises, proxies, revoked proxies and getter-bearing thenables are never assimilated. A disjoint test-only promise brand/factory is excluded from service build inputs.
+The future Rust entrypoint accepts only privately owned plan/store types from its
+isolated PostgreSQL adapter. It captures owned checkout/open/session capability before
+await; malformed input/discard is bounded, and no caller SQL, driver or product pool crosses.
 
-Capability records are intrinsic plain records with exact string data keys.
-Accessors, symbols, proxies, exotic/subclassed record prototypes, and extras
-fail without invocation; function values may be native async functions. No
-driver type, path, classifier, verifier, repair/retry callback, or caller SQL
-enters the API.
+The Node oracle models ownership with private-brand, Promise and proxy/accessor KATs;
+test doubles stay outside its artifact. Rust independently proves Future/session state,
+cancellation and cleanup; no Node `pg` dependency, bridge, live store or runner is authorized.
 
-Execute accepts exact `{operation,text,values}`. `operation` is a primitive ASCII
-string from the exhaustive private plan-step enum; `text` is a copied sealed
-script or fixed statement; `values` is a fresh dense intrinsic array of only
-null, boolean, safe integer, string, or copied intrinsic `Uint8Array`. The union is:
+Node capability records are exact-key, trap-free oracle inputs; Rust uses closed enums/private
+types. Neither admits a driver, path, classifier, verifier, repair callback or caller SQL.
+
+The closed execute descriptor is `{operation,text,values}`: an ASCII plan-step enum,
+sealed script/fixed statement, and null/boolean/safe-integer/string/byte values.
+Node uses dense arrays and copied intrinsic `Uint8Array`; Rust uses owned enums/bytes.
+The result union is:
 
 - `{kind:'command-complete',commandTag,rowCount,rows:[]}` with an exact per-step
   tag and `rowCount` of null or the exact safe integer;
@@ -368,20 +371,18 @@ query returns one driver row with exact columns `payload,oversize`: admitted pay
 the reviewed PostgreSQL-16.15 UTF-8 inner form `[aliases,denseRowArrays]` (bytea fields are lowercase
 even hex), while any cell/row/aggregate excess returns only `(null,true)`. Data may lower but never
 raise limits; truncation, hash substitution, missing/cross-wired sentinels, or payload with true fails.
-Before copying/decoding, the bridge checks columns/types, intrinsic length and sentinel. No rejected
-bytes or driver-side clone/slice/`Buffer.from`/encoding reaches the row codec; excess rolls back.
+Before copying/decoding, the future Rust bridge checks columns/types, length and sentinel. No rejected
+bytes or driver-side conversion reaches the row codec; excess rolls back. Node tests retain the
+`Buffer`/typed-array rejection vectors solely as an independent oracle.
 
-All records are structurally untrusted and exact-key/type checked. Each live result also has
-private single-use WeakMap metadata containing its branded session, operation and ordinal.
-The composition bridge emits it only after the exact CommandComplete/ErrorResponse sequence and
-required ReadyForQuery state (`transaction` in-transaction; `idle` after COMMIT/ROLLBACK).
-A rejection additionally requires the exact non-proxy/non-subclassed pinned-`pg` `DatabaseError`
-caught from that awaited operation and matched to its ErrorResponse; `I|T|E` map only to
-`idle|transaction|failed`. Plain/foreign/stale errors and caller code/status cannot obtain a brand.
-Missing, replayed, cross-session, mismatched, or protocol-incomplete COMMIT evidence is uncertain. The
-artifact excludes the disjoint test transcript brand/factory; no splitter or partial tag exists.
+All observations are untrusted and exact-key/type checked. The future Rust bridge owns
+single-use session/operation/ordinal evidence and emits it only after exact
+CommandComplete/ErrorResponse plus ReadyForQuery (`transaction` in-transaction; `idle`
+after COMMIT/ROLLBACK). Rejection matches native Rust protocol; `I|T|E` map to
+`idle|transaction|failed`. Missing/replayed/mismatched COMMIT evidence is uncertain.
+Node may exercise equivalent pinned-`pg` error/transcript vectors only in tests.
 
-Preflight before `BEGIN` verifies exact `SESSION_USER=CURRENT_USER` migration
+Future Rust preflight before `BEGIN` verifies exact `SESSION_USER=CURRENT_USER` migration
 identity, role attributes, sole membership edge with grantor/options, and server
 version. It issues `BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE`, then these
 statements in order:
@@ -394,10 +395,13 @@ statements in order:
 6. `SET LOCAL synchronous_commit TO on`.
 
 One fixed query reads `pg_catalog.pg_settings.setting/unit` for `5000/30000/30000` and `ms`, and verifies READ COMMITTED, read-write, `session_replication_role=origin`, `fsync=on`, and `full_page_writes=on`; the runner never sets the last three. It then takes the fixed advisory transaction lock, issues `SET LOCAL ROLE sf_supervisor_owner_v1`, and reverifies all settings plus `SESSION_USER=sf_supervisor_migration_login_v1` and `CURRENT_USER=sf_supervisor_owner_v1` before classification.
-Commit `7d5af51`'s incomplete metadata catalogue pins the ten control operations and four INSERT statement bytes plus parameter position/base-type/source/representation vectors from the branded Plan. It intentionally carries no parameter values or result/tag contracts and fixes `executableAuthority`, `statementCatalogueComplete`, and `resultContractsSealed` false. The catalogue is not executable authority until one reviewed unit pins, for every execute operation, the exact SQL bytes, parameter order and base PostgreSQL types, expected command tag and row count or exact outer/inner alias vectors, row and per-alias ceilings, reconstruction schema, and maximum result bytes. That unit also pins the ordered 52- and 73-element CommandComplete tag vectors for the scripts without using the analysis-only splitter at runtime. Before any completeness or execution flag changes, a structural DDL cross-check must fail on same-base-type column reorder; independent source/test byte pins are insufficient. Until then, source may represent reviewed metadata but must not claim a complete statement catalogue, classifier or runnable coordinator.
-The dormant service remains dependency-free. A future pinned-`pg` protocol bridge is a disjoint, composition-owned and separately attested artifact, or an explicit reviewed activation transition; it may not silently widen this private bundle's dependencies or authority.
+Commit `7d5af51` pins ten controls and four INSERT statement/provenance descriptors. Commits `0d5d09e` and `e37cce7` add evidence-only INSERT value/result contracts plus an independent structural DDL/column-order oracle. The contracts remain non-executable, perform no I/O, and keep `executableAuthority`, `statementCatalogueComplete`, and all runtime flags false. Observation SELECT bytes/aliases/bounds, 52/73 tag vectors and live execution remain unsealed; under ADR-0048 they belong to Rust, not an expanded Node coordinator.
+The dependency-free Node oracle may gain no `pg` bridge, live store, coordinator
+or runner. A separately attested Rust service may reuse vectors, never authority.
 
-All time authority is compiled and module-private. `process.hrtime.bigint()` is observed at entry, every operation settlement and every synchronous boundary; expiry is `now >= deadline`. There is no caller clock, timer, signal, lease or renewal. A referenced timer is cleared on settlement, re-arms if it fires early, and cannot win or lose by callback ordering: settlement is accepted only while `now < effectiveDeadline` and the session/operation/ordinal latch is live.
+Node reference time uses compiled `process.hrtime.bigint()` and the Promise/latch
+rules below. Rust uses a private monotonic clock and owned async state while
+preserving phase, deadline, uncertainty and cleanup outcomes.
 
 | Boundary | Compiled ceiling |
 |---|---:|
@@ -444,15 +448,14 @@ Results are seven module-level deeply frozen intrinsic singleton records, one fo
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Thirteen focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, ordered descriptor parsing without candidate serialization, hostile accessors/proxies without invocation, UTF-8 bounds, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
 Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. Fourteen capability/terminal KATs prove ordered descriptor capture without invocation, thenable assimilation or inherited setters; proxy/accessor/symbol/exotic/revoked-proxy rejection; captured-intrinsic and receiver-free behavior; and seven pairwise-distinct exact frozen non-authorizing terminal identities.
-Commit `1e2d88d` adds eight lifecycle KATs that seal all 36 lifecycle names, 31 execute operations, exact 32/24-step schedules, ten LF-terminated semicolonless control literals, script-count-derived 52/73 deadlines, the 5,030,000/5,040,000 ms successful totals and both 360,000 ms margins. Commit `7d5af51` adds seven command-catalogue KATs and a private copied descriptor graph: those ten controls plus four INSERT operations, exact 801/500/245/245 UTF-8 bytes with SHA-256 pins `0c94d380…d2a6`, `34d377aa…e16`, and shared ledger `362a5285…3d03`, exact tables/columns/casts and parameter provenance, all bound to the Plan receipt/source pins with no values or results and every authority/completeness flag false. Node 24.14.1 passes 692 private-service tests; exact Node 20.0.0 passes TypeScript, 10 focused catalogue/seal tests, artifact replay, the parent build and 40 focused parent protection/overlay gates. Sealed artifact SHA-256 is `25b564a9b1075c7a3a94d9345d093ddc2ff71a47069fd6f6652552ba66ed8050`; the dependency-free public bundle remains exactly 49,106 bytes with SHA-256 `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
-This closes the dormant load/bind, quoted-callable, descriptor-first receipt, unbranded capability-capture, terminal-singleton, lifecycle/control/deadline and exact non-executable command-metadata slices only. INSERT value construction, raw `INSERT 0 1` versus normalized `INSERT` result semantics, the structural DDL cross-check, SELECT aliases/serializer/transport bounds, script tag-vector evidence, adapter-owned store/Promise/protocol brands, deadline execution, coordinator, concurrent replacement stress and live PostgreSQL 16.15 evidence remain open. A standalone value-free vocabulary remains rejected as unfalsifiable scaffolding; this catalogue is instead falsifiable through its pinned statement bytes, tables, columns, casts, positions and provenance, while execution semantics enter code only with reviewed values/results and KATs.
+Commits `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` close only the Node oracle's lifecycle/control/deadline, command metadata, INSERT value/result and DDL-coupling slices. Node 24.14.1 passes 705 tests; exact Node 20.0.0 passes TypeScript, 23 focused tests, artifact replay and parent focused gates. Oracle artifact SHA-256 is `715c72fdd096d638fa54bbb2504d8f95559a7daca99988b8573bdf666ce40552`; the dependency-free public bundle remains 49,106 bytes at `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`. SELECT/transport/tag-vector/live execution remains open for Rust; Node execution expansion is closed.
 
 ## Acceptance gates
 
 This decision is implemented only when:
 
-1. independent Node 20.0.0 and 24.14.1 KATs pin every JSON/SQL byte, length,
-   digest, order, final LF, round trip, limit and private brand;
+1. Node 20.0.0/24.14.1 KATs pin every oracle byte, order, limit and private brand;
+   Rust independently reproduces every normative byte and outcome vector;
 2. every malformed/reordered/over-limit path, buffer, PUBLIC/column/default-ACL/baseline, role,
    membership, seed-cross-wire and script mutant fails before checkout or rolls back by phase;
 3. transcripts prove null/max/max+1/multibyte/payload-plus-true/missing/cross-wired cell and aggregate
@@ -461,25 +464,24 @@ This decision is implemented only when:
    all seven singleton shapes, every deadline at minus-one/exact/plus-one, delayed timer callbacks,
    host suspension, late fulfilment/rejection/disposal, zero unhandled rejection and zero live timer
    handle after normal settlement are pinned;
-4. PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
+4. the Rust adapter against PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
    value sentinels, acknowledged-versus-uncertain rollback/commit, pre-send termination,
    unknown-commit reclassification, per-statement simple-query timeout re-arm, hung ROLLBACK,
    no retry/partial repair, and every ADR-0044/0045 denial;
-5. runtime source and sealed data are private build inputs; test fixtures and capture evidence are parent/harness protected but outside service `BUILD_INPUT_PATHS`.
-   Source and tests remain under 500 lines, security/ADR/frozen-harness gates pass, and the public bundle SHA-256 remains
+5. Rust runtime/sealed data are separate production inputs; protected Node
+   evidence stays outside that closure, files stay under 500 lines, gates pass,
+   and the public oracle bundle SHA-256 remains
    `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`.
 
 ## Consequences
 
 - **Positive:** Deployment bytes and uncertainty gain one replayable meaning;
-  coherent substitution fails; disjoint authorities cannot silently replace
-  one another; and the private supervisor gains migrations without public API
-  or runtime-dependency changes.
+  coherent substitution fails, and the Node oracle preserves migration vectors.
 - **Trade-off:** The initial profile is tied to one literal role layout and
   PostgreSQL 16.15. Changes require reviewed bytes, digests, tests, and live
   evidence; cleanup uncertainty requires operator reclassification, not retry.
 - **Boundary:** This proposed contract is not an independently administered
-  production deployment.
+  production deployment; its committed implementation is a Node oracle only.
 
 ## Alternatives rejected
 
@@ -494,4 +496,4 @@ This decision is implemented only when:
 
 ## Links
 
-[ADR-0038](ADR-0038-sota-application-completion-programme.md), [ADR-0039](ADR-0039-minimal-production-serving-artifact.md), [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md), [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), and [ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md).
+[ADR-0038](ADR-0038-sota-application-completion-programme.md), [ADR-0039](ADR-0039-minimal-production-serving-artifact.md), [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md), [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), [ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md), and [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md).

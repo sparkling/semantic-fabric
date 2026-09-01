@@ -207,7 +207,7 @@ export function validatePackageContract(packageJson) {
   assertExactKeys(packageJson.engines, ['node'], 'PACKAGE_ENGINES');
   if (packageJson.name !== 'semantic-fabric-supervisor-service'
     || packageJson.version !== '0.1.0'
-    || packageJson.description !== 'Private, independently deployable ADR-0042 supervisor service'
+    || packageJson.description !== 'Private, non-deployable ADR-0042 development/evidence oracle'
     || packageJson.private !== true || packageJson.license !== 'MIT'
     || packageJson.type !== 'module'
     || packageJson.scripts.build !== 'tsc --noEmit && node scripts/build.mjs'

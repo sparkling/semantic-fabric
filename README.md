@@ -217,9 +217,9 @@ the remaining work from the charter, source, accepted ADRs, tests, CI, standards
 and measured benchmarks. Proposed
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
 defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. The programme is
-evolutionary, not a compiler rewrite:
-make every advertised global operator bounded, then add source identity and a
-federated physical plan so the accepted cross-RDBMS charter becomes real.
+evolutionary, not a compiler rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service Rust.
+The exact-revision product-mock gold/live database is a 14-category development
+oracle, but admitted relational R2RML covers only one of 112 tables. Completion makes every advertised global operator bounded, then adds source identity and a federated physical plan so the accepted cross-RDBMS charter becomes real.
 
 The first release blockers are silent 256-hop property-path truncation,
 source-sized Rust state in some global sort/group/dedup paths, incomplete total
@@ -261,13 +261,13 @@ The leaf is reconstructed from the reverified canonical envelope; the prior chec
 The protected private PostgreSQL materializer exact-key checks roots before traversal, snapshots bounded trap-free graphs, exposes a frozen one-use signing surface, verifies the pinned Ed25519 SPKI/signature, and emits every exact DB-shaped 201/409 row for genesis/non-genesis and adjacent/interleaved histories.
 Commits `28addbc` and `c586973` add the reviewed 232,822-byte catalogue oracle (`e7ce3572…e69`, 9,125 nodes/963 records), a pre-allocation scanner, one-parse closed validator, caller-pinned digest binder, 123 hostile/limit/semantic/deparse KATs, and 85 PostgreSQL 16.15 deparse facts with zero fixture mismatch. These private build inputs add no runtime dependency or public export.
 [ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md) records an independently reproduced, test-only candidate from exact OCI Linux/amd64 platform manifest `postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8`: 4,059 records/860,988 bytes (`a108e05f9cfd6d6485a86fe198a87b3800e21986b5c62e6251519de6577d05be`). An owned networkless replay creates two fresh anonymous-volume containers and `template0` databases, binds each full profile/result to the independent raw-SQL cross-check, and verifies cleanup. Additive V2 receipt `48d54b63…98e8` pins immutable V1, an OID/attribute-aware candidate matrix, and a fresh no-membership role's 13,603 effective-privilege `has_*` checks across the six populated classes; FDW/server remain explicit zero classes. V1's raw oracle independently expands the direct ACL atoms. V2 corroborates all 4,059 atoms, including 16 column-local and 294 true-array atoms.
-The protected test-only fixture path snapshots exact intrinsic bytes, enforces decoded-key/allocation ceilings before one closed parse and canonical replay, and retains a private non-authorizing copy; its 97 hostile/limit/private-brand/baseline KATs pass on exact Node 20.0.0 and 24.14.1. Two protected mutator/replay tranches freeze and execute 12 branch/record-set mutants plus all 19 final-`WHERE` deletions against independent expectations; fresh networkless rollback-only runs kill every non-equivalent mutant, independently classify four guard-equivalent cases, and leave zero unresolved. CI runs all eight isolated V1/V2/branch/final-`WHERE` replays on exact Node 20/24 under 150 minutes. Historical exact-node service verification is 611/611. ADR-0046 adds a Linux-only component-walked held-descriptor reader and fixed-root WeakMap-branded Plan: manifest/catalogue/provisioning/in-memory seed/two SQL handles bind atomically, only fresh `0001 -> seed -> 0002` bytes escape, and pathless preflight receipt `2ff788e1…434d` grants neither database nor apply authority. Descriptor-first receipt replay, unbranded capability captures, seven exact terminal singletons and commit `1e2d88d`'s private 36-name/31-operation/32-and-24-step lifecycle, control literals and deadline arithmetic remain non-executable and non-authorizing. Commit `7d5af51` adds an incomplete private catalogue for those ten controls and four exact INSERT statement/provenance descriptors; it contains no values/results and keeps every authority/completeness flag false. Node 24.14.1 passes 692 private-service tests; exact Node 20.0.0 passes TypeScript, 10 focused catalogue/seal tests, artifact replay, the parent build and 40 focused parent protection gates. The sealed private artifact is `25b564a9b1075c7a3a94d9345d093ddc2ff71a47069fd6f6652552ba66ed8050`; the dependency-free public bundle stays `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`. No version-bound or passing hosted receipt is carried. INSERT values/results and DDL coupling, SELECT aliases/cardinality/serializer/transport bounds, protocol tag evidence, adapter brands, driver bridge/runner, live observations and admission remain open. Ruflo's generic scans remain `INCONCLUSIVE`; the project-specific gate remains authoritative and the retrieval-policy flywheel remains off.
-ADR-0042–0047 remain proposed. The sealed migration inputs, semantic parsers, fixed reader, opaque Plan, capability/terminal forms, lifecycle/control/deadline contract and incomplete command metadata exist only as dormant private representations. The complete/executable statement-and-result catalogue and coordinator, live catalogue/provisioning verifier, database adapter/writer connection, independent administration/witnessing, deployed signer, transport, lease/fence/outbox delivery, attempt/capture authority and real supervisor events remain absent.
+The protected PostgreSQL fixtures, readers and mutation replays remain non-authorizing Node oracles. Commits `1e2d88d`/`7d5af51` freeze lifecycle and command metadata; `0d5d09e`/`e37cce7` add INSERT value/result and DDL-coupling oracles. Node 24 passes 705 tests; exact Node 20 passes TypeScript, 23 focused tests and artifact replay. Oracle artifact `715c72fd…0552` preserves the dependency-free 49,106-byte public bundle `90e21e7c…f7c3a`. No Node driver/store/runner may be added. ADR-0042–0047 remain proposed; production SELECT/transport, adapter, verifier, credentials, witness and deployment work belongs to a separate Rust service. Ruflo generic scans remain `INCONCLUSIVE`, the project gate decides only harness/config integrity, and the flywheel is off.
 
 Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
 reproducibility. Final two-builder agreement must pre-register distinct trust
 roots/run IDs, commit both complete results before reveal, and accept only byte-
-identical artifacts without retry, selection, or tiebreaking. M1–M7 stay gated.
+identical artifacts without retry, selection, or tiebreaking. M1–M6 product work
+may proceed behind direct gates; authoritative performance and M7 stay gated.
 A hardened single-source build remains an interim, not charter-complete, profile.
 
 ## Open-issue remediation closeout
@@ -298,7 +298,7 @@ exist.
 ## Engineering MetaHarness status
 
 `coding-harness/` is a private, development-only Ruflo MetaHarness control
-plane governed by
+plane—including `supervisor-service/`—governed by
 [ADR-0037](docs/adr/ADR-0037-dual-host-ruflo-engineering-metaharness.md). It
 uses native ChatGPT/Codex and Claude Code subscriptions, isolated candidate and
 evaluator worktrees, frozen inputs, exact-origin egress, bounded repair,
@@ -329,14 +329,14 @@ supervisor registration, checkpoint, and log-proof lineage (`99fa2e1`, `92f5376`
 74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
 v3 receipts bind immutable captured inputs to typed SQLite and required-live
 PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
-CI and the controller protect and replay those authorities read-only. M1–M7 remain gated, and the
+CI/controller replay those authorities read-only; M1–M6 are unblocked behind their own gates, M7 remains gated, and the
 44/100 application-readiness baseline has not been formally rescored.
 
 The 2026-08-31 generic MetaHarness diagnostic is 75 (fit 75, compile 100, task
 coverage 65, tool safety 90, memory usefulness 46); it is not the ADR-0037
 acceptance score. Generic clean/info launcher scans are `INCONCLUSIVE` because
 they do not inspect the tracked `.mcp.json` and `.agents/config.toml` surfaces.
-The exact project gate and network-sensitive native KATs are authoritative.
+The exact project gate and network-sensitive native KATs decide only harness and configuration integrity.
 An ADR-plugin `--help` probe on 2026-09-01 unexpectedly entered the live project importer and may have partially upserted ADR rows before exit; its scope is untrusted. No database copy, reconciliation, rollback, or later memory-backed ADR verification was attempted; Git remains canonical.
 Independent exact-candidate review remains required, the affected AgentDB state is non-authoritative,
 and the retrieval-policy flywheel remains off.
@@ -406,10 +406,10 @@ prohibited because Ruflo 3.38.20 does not route that daemon path through the sam
 transaction. A replayable receipt verifies signatures, lineage, the frozen gate,
 and its decision over sealed scores—it does **not** re-run the benchmark.
 
-GitHub-hosted CI runs the portable parent harness and supervisor service on exact
+GitHub-hosted CI runs the portable parent harness and supervisor oracle on exact
 Node 20.0.0 and 24.14.1. Native integration remains fail-closed and is run only by the manually dispatched
 `harness-native` workflow on a labelled `self-hosted`, `linux`, `x64`, `bwrap`, `systemd-user`
-runner; hosted runners cannot create the network namespace the production
+runner; hosted runners cannot create the network namespace the native harness
 isolation contract requires.
 
 ## Benchmarks
@@ -446,7 +446,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
 | Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate manifest-bound, single-attempt capture transaction. Exact input attestation, negative-only host gating, signed registration/checkpoint verification, RFC 9162 proof replay, a sealed exact-row PostgreSQL materializer, the reviewed catalogue, and ADR-0047's independently replayed PostgreSQL 16.15 PUBLIC-ACL candidate exist as non-authorizing evidence. ADR-0046's immutable private migration inputs, semantic parsers, quoted-callable closure, fixed held-descriptor reader, opaque pathless-receipt Plan, capability/terminal forms, exact lifecycle/control/deadline representation and exact metadata for ten controls plus four INSERTs are implemented without values/results, database/apply authority, runtime dependencies or a public export. No version-bound passing hosted receipt exists. Remaining gates include INSERT values/results and DDL coupling, observation SELECT/cardinality/transport/tag evidence, ADR-0047 mutation closure, the separately attested driver/adapter/store/runner and live verifier, credentials, independent administration, positive runner admission, controlled performance, leases/fencing/outbox, two-builder agreement, baseline and measured results |
+| M0 performance evidence | ADR-0041 proposes a separate single-attempt capture transaction. Node 20/24 supplies only protected non-deployable oracles; INSERT values/results and DDL coupling are sealed at `0d5d09e`/`e37cce7`, with 705 Node-24 tests and an unchanged dependency-free public bundle. Remaining SELECT/transport/tag, adapter/store/runner/live-verifier, credentials, witnessing, controlled performance and two-builder work is Rust/operational evidence. It runs in parallel with M1–M6 but gates authoritative performance and M7 |
 
 Unsupported shapes are designed to fail explicitly. The current 256-hop path
 truncation violates that invariant and is release-blocking until fixed.
@@ -466,11 +466,11 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 44 records: 33 accepted, ten
+The canonical [ADR corpus](docs/adr/) contains 45 records: 34 accepted, ten
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
 [ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), [ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md),
-[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), [ADR-0046](docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md), and [ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md)),
+[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), [ADR-0046](docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md), and [ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md)); accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) fixes the Rust/Node boundary,
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -482,7 +482,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative

@@ -21,6 +21,7 @@ describe('private supervisor-service package boundary', () => {
     expect(packageJson).toMatchObject({
       name: 'semantic-fabric-supervisor-service',
       version: '0.1.0',
+      description: 'Private, non-deployable ADR-0042 development/evidence oracle',
       private: true,
       type: 'module',
       engines: { node: '>=20.0.0' },

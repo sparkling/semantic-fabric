@@ -233,7 +233,7 @@ const NATIVE_PREPARED_SECCOMP_CANARY_TEST =
   'binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_seccomp::prepared_seccomp_native_canary_kills_a_forbidden_socket_syscall';
 
 const NATIVE_WORKFLOW_SHA256 =
-  '4431a4bea94f782b6fb21b7a214ea8d4ee54a85cb466846b7b0fab9719378bc4';
+  '8fa123a9d3aa9c5a681341b51a88356d7af09b2136b305a09fd2812e17b024fb';
 
 describe('M0 protected authority and CI contract', () => {
   it('keeps one exact registry of every tracked programme capture test', () => {

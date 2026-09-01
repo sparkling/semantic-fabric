@@ -4,6 +4,11 @@ Private, development-only control plane for verified repository changes. It
 coordinates native Codex/ChatGPT and Claude Code subscriptions, but direct
 repository evaluators decide whether a candidate passes.
 
+All Node/TypeScript here—including the historically named
+`supervisor-service/` package—is non-deployable evidence/oracle infrastructure.
+The product runtime is Rust; any future production supervisor is a separately
+packaged Rust service under ADR-0048.
+
 The package has no CLI, MCP server, publication path, commit/push authority, or
 evolution command. It returns evidence and a patch to an explicit integration
 owner.
@@ -137,9 +142,9 @@ exact-fixture baseline tests reject noncanonical or forged fixture authority.
 V1's raw oracle independently expands direct ACL atoms. V2 binds 13,603 fresh
 no-membership-role checks across six populated classes; FDW/server remain
 explicit zero classes. It also binds matching captures from two distinct fresh
-volumes. These are test evidence only: they are excluded from
-supervisor-service source and build inputs and authorize neither migration nor
-runtime activation. A pure lexical mutator and fail-closed replay support protect
+volumes. These are test evidence only: they are excluded from the Node oracle's
+source and build inputs and authorize neither migration nor runtime activation.
+A pure lexical mutator and fail-closed replay support protect
 eight branch deletions plus four record-set mutants. A separate source-pinned
 quartet freezes 19 final-`WHERE` deletions and two batches of ten and nine. Each
 rollback-only batch derives its expected bag from the unchanged raw oracle,
@@ -148,13 +153,12 @@ unchanged projection is still equal before executing every mutant through a
 loose closed eight-field decoder. The result is exactly 19 executed, 15/15
 non-equivalent killed, four independently proved guard-equivalent, and zero
 unresolved; two fresh networkless runs reproduced deterministic 11,963,849-
-and 11,608,234-byte transcripts and complete rollback/cleanup. The sealed
-service artifact and public bundle remain byte-identical, so no runtime input or
+and 11,608,234-byte transcripts and complete rollback/cleanup. The sealed Node
+oracle and public bundle remain byte-identical, so no product runtime input or
 export changed. The exact Node 20/24 CI matrix now runs eight isolated
 V1/V2/branch/final-`WHERE` replays under a 150-minute ceiling. No version-bound
-run receipt is tracked; hosted evidence and the remaining value, nullability,
-order, duplicate, array/element and `UNION ALL` mutations, runtime `Plan` and
-live-observation brands remain open.
+run receipt is tracked; hosted and remaining mutation evidence stays open. Live
+bridge/store/runner work belongs to Rust; Node execution expansion is closed.
 
 The parent harness replaces Node 20's asynchronous recursive watcher with
 explicit root/nested directory watches, three agreeing tree digests and an
@@ -206,7 +210,7 @@ production readiness. If a future trial emits a signed receipt, replay verifies
 receipt integrity, lineage, the gate fingerprint, and the gate decision over
 sealed scores. Replay does not re-run retrieval. The separate daemon generation
 path is not approved until it uses the same confirmed promotion transaction.
-Production receipts will also require durable retention outside the ignored
+Promotion/operational receipts will also require durable retention outside the ignored
 local state directories.
 
 A fixed-seed 2×1 generic Darwin Shield diagnostic passed only 9/12 gates. It is

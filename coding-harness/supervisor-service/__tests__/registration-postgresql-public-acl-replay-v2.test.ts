@@ -227,7 +227,7 @@ describe('PostgreSQL 16.15 PUBLIC ACL additive V2 replay receipt', () => {
     expect(job.indexOf(v1Command)).toBeLessThan(job.indexOf(v2Command));
   });
 
-  it('keeps every V2 evidence file outside the deployable service artifact', () => {
+  it('keeps every V2 evidence file outside the non-deployable oracle artifact', () => {
     const artifact = JSON.parse(
       readFileSync(resolve(ROOT, '.service/artifact.json'), 'utf8'),
     ) as { buildInputs: Record<string, string>; sourceInputs: Record<string, string> };

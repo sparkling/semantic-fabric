@@ -41,7 +41,7 @@ jobs:
         run: npm --prefix coding-harness test
 
   supervisor-service:
-    name: supervisor service · node ${{ matrix.node }} · sealed build · test
+    name: supervisor evidence oracle · node ${{ matrix.node }} · sealed build · test
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

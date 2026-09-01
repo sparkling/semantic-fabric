@@ -1,7 +1,7 @@
 {
   "name": "semantic-fabric-supervisor-service",
   "version": "0.1.0",
-  "description": "Private, independently deployable ADR-0042 supervisor service",
+  "description": "Private, non-deployable ADR-0042 development/evidence oracle",
   "private": true,
   "license": "MIT",
   "type": "module",

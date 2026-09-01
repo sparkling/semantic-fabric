@@ -1,10 +1,10 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-08-30
+updated: 2026-09-01
 tags: [postgresql, supervisor, catalogue, canonical-json, verification]
 supersedes: []
-depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044]
+depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0048]
 implements: [ADR-0044]
 ---
 
@@ -18,10 +18,10 @@ accept ADR-0042 through ADR-0044, activate the supervisor, create SQL, provision
 a database or credential, contact PostgreSQL, or grant migration, readiness,
 network, signer, publication, repair, or release authority.
 
-The reviewed catalogue is committed at `28addbc` with exact SHA-256
-`e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69`;
-`c586973` adds its bounded parser, digest binder, KATs, and PostgreSQL 16.15
-deparse oracle. Observations and automation cannot refresh or self-authorize it.
+Catalogue `28addbc` has SHA-256 `e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69`;
+`c586973` adds the Node parser/KAT/deparse oracle. Its proxy/accessor/`Uint8Array`
+defenses are not a production JavaScript API; Rust implements the normative
+grammar independently. Observations cannot refresh or self-authorize it.
 
 ## Context
 
@@ -423,8 +423,8 @@ connection strings.
 
 This decision is implemented only when:
 
-1. independent KATs pin exact byte length, raw SHA-256, root order, final LF,
-   round-trip bytes, and deep immutability on Node 20.0.0 and 24.14.1;
+1. Node 20.0.0/24.14.1 KATs pin length, SHA-256, order, final LF and round trip;
+   Rust reproduces those normative bytes through independent private types;
 2. invalid UTF-8, BOM/CRLF, duplicate/reordered/unknown keys, unsafe numbers,
    over-limit graphs, sparse arrays, proxies, accessors, symbols, exotic
    prototypes, and count-neutral substitutions fail without invoking traps;
@@ -437,9 +437,8 @@ This decision is implemented only when:
 5. query topology, 27 inner aliases, outer `payload,oversize`, value sentinels and
    bounds match independent literals/decoders; weakened joins, scope, casts,
    order, cardinality, max-plus-one values, or sentinels fail;
-6. the JSON and parser are sealed private build inputs and protected paths,
-   while the public exports, public bundle bytes, empty runtime dependencies,
-   and all false authority flags remain unchanged; and
+6. JSON/parser stay sealed Node-oracle inputs with unchanged exports, bytes,
+   empty dependencies and false flags; Rust production gates remain separate; and
 7. the manifest alone selects PostgreSQL 16.15 and binds both digests; later
    evidence compares catalogue and provisioning separately and proves no
    observed-state write path exists.
@@ -492,6 +491,7 @@ This decision is implemented only when:
 - [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md)
 - [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md)
 - [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md)
+- [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md)
 - [PostgreSQL 16 system catalogues](https://www.postgresql.org/docs/16/catalogs.html)
 - [`pg_constraint`](https://www.postgresql.org/docs/16/catalog-pg-constraint.html)
 - [`pg_policy`](https://www.postgresql.org/docs/16/catalog-pg-policy.html)

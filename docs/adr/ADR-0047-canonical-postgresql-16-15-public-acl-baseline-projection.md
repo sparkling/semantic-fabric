@@ -4,7 +4,7 @@ date: 2026-08-30
 updated: 2026-09-01
 tags: [postgresql, supervisor, privileges, canonical-json, verification]
 supersedes: []
-depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046]
+depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0048]
 implements: [ADR-0046]
 ---
 
@@ -17,9 +17,10 @@ ordering, capture profile and candidate replay evidence for ADR-0046's stock PUB
 baseline. It does not accept ADR-0042 through ADR-0046, provision PostgreSQL,
 authorize migrations or readiness, refresh a pin, or make a deployment.
 
-The fixture is a protected test oracle, not a deployed input. Any admitted
-runtime implementation will own the independently reviewed projection but must
-never embed, learn or supply the expected baseline count, length or digest.
+The fixture and every committed Node reader/replay are protected development
+oracles, not deployed inputs. Any admitted Rust implementation owns the
+independently reviewed projection but must never embed, learn or supply the
+expected baseline count, length or digest.
 Those values enter only through the reviewed provisioning contract selected by
 the independently pinned manifest.
 The current receipts are test-fixture evidence only. Receipt V1 remains an
@@ -58,22 +59,22 @@ separate sealed-source/plan brand proves reviewed provenance. Coherently
 substituted records, fixture and provisioning bytes may parse, but cannot obtain
 the latter brand or reach checkout.
 
-Three module-private brands are pairwise disjoint and have no conversion API:
+Three representations are pairwise disjoint and have no conversion API:
 
-1. a fixture-semantic handle exists only in test code and is absent from the
-   service build graph;
-2. a live-observation handle is minted only by ADR-0046's authenticated
-   session/operation/ordinal and protocol bridge after checkout; and
+1. a fixture-semantic handle exists only in test code, absent from the Node oracle build graph;
+2. a future Rust live-observation type is minted only by ADR-0046's authenticated
+   session/operation/ordinal bridge after checkout; no such live Node handle exists; and
 3. a sealed `Plan` is minted only by the fixed no-caller-bytes loader after the
-   compiled manifest pin admits its provisioning bytes.
+   manifest pin admits its bytes; this is Node oracle evidence until Rust binds them independently.
 
-The runtime normalizer accepts only an already admitted `Plan` plus its live
+The future Rust normalizer accepts only an admitted plan plus its live
 observation. It accepts no raw bytes, records, fixture handle, digest tuple,
 query, parser handle, callback or structural substitute. Coherent fixture,
 provisioning and manifest replacements may all be semantically valid but must
-fail the compiled pin with zero `checkoutMigration` property access. A forged
-or substituted live observation can exist only after checkout and must cause
-rollback before COMMIT; it is not misreported as a pre-checkout rejection.
+fail the compiled pin before database checkout. Node uses only structural test
+doubles. A forged or substituted Rust live observation can exist only after
+checkout and must cause rollback before COMMIT; it is not misreported as a
+pre-checkout rejection.
 
 ### 2. Define the clean capture profile
 
@@ -287,9 +288,9 @@ fail-closed pre-sealing predicate passes. That predicate contains no
 post-bundle gate; item 6 cannot be a prerequisite for constructing the bundle
 that it tests.
 
-### 6. Make runtime comparison bounded and independent
+### 6. Make Rust runtime comparison bounded and independent
 
-The later live verifier executes the same semantic projection in one
+The later Rust live verifier executes the same semantic projection in one
 `SERIALIZABLE READ ONLY DEFERRABLE` snapshot. Its fixed query returns only a
 bounded ADR-0046 `[aliases,denseRowArrays]` UTF-8 payload plus an
 oversize/invalid sentinel; the driver bridge checks the exact
@@ -343,15 +344,14 @@ weakening runtime admission.
    changing `UNION ALL`, swapping array/element ACLs, reordering, or a
    count-neutral substitution is caught by the independent multiset oracle;
 6. coherent fixture + provisioning + manifest substitution parses semantically
-   but fails compiled-pin `Plan` creation with zero checkout access; fixture as
-   live observation, structural/proxy/accessor brands and stale/cross-session/
-   wrong-ordinal observations fail, with post-checkout failures rolling back;
-7. before sealing, Node 20.0.0 and 24.14.1 produce identical candidate
+   but fails Node-oracle `Plan` creation before its checkout test double;
+   structural/proxy/accessor substitution fails, while stale/cross-session/
+   wrong-ordinal Rust observations fail after checkout and roll back;
+7. before sealing, Node 20.0.0 and 24.14.1 produce identical reference candidate
    fixture/capture pins and pass the fixture/capture exact/max/+1,
    literal/escaped/multibyte, hostile-carrier, private-brand and copy-alias
-   KATs; after bundling, those versions produce identical bundle/runtime pins
-   and pass the corresponding live-observation private-brand and copy-alias
-   KATs;
+   KATs; after bundling, Rust independently reproduces the normative pins and
+   passes live-observation, private-brand, copy-alias and PostgreSQL gates;
 8. capture receipts bind the OCI Linux/amd64 platform manifest/config, initdb and database
    creation facts, projection and independent-oracle source digests, distinct
    volume identities, raw multiset transcript and final pins; and
@@ -412,10 +412,10 @@ and 24 under a 150-minute ceiling for the conservative 140-minute sum.
 This closes item 5's branch, final-`WHERE`, zero, single-atom omission/addition
 and count-neutral-substitution subsets. Item 4 and the remaining value,
 nullability, order, duplicate, array/element and `UNION ALL` replacements remain
-open. ADR-0046's sealed reader, compiled-pin `Plan`, and descriptor-first receipt
-parser are implemented; item 6's live observation brand and PostgreSQL adapter
-remain open.
-All mutation machinery remains outside service build inputs and exports. These
+open. ADR-0046's Node sealed reader, compiled-pin `Plan`, and descriptor-first
+receipt parser are oracle evidence; item 6's Rust live observation and
+PostgreSQL adapter remain open.
+All mutation machinery remains outside Node-oracle build inputs and exports. These
 developer runs lack a versioned test-run receipt; hosted evidence and runtime
 admission remain open.
 
@@ -492,6 +492,7 @@ runtime authority.
 [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md),
 [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md),
 [ADR-0046](ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md),
+[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md),
 [capture receipt V1](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v1.json),
 [capture receipt V2](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v2.json),
 [PostgreSQL 16 privileges](https://www.postgresql.org/docs/16/ddl-priv.html), and

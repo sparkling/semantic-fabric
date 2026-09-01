@@ -1,10 +1,10 @@
 ---
 status: proposed
 date: 2026-08-29
-updated: 2026-08-30
+updated: 2026-09-01
 tags: [metaharness, evidence, supervisor, transparency, witness, lease, runner, security]
 supersedes: []
-depends-on: [ADR-0037, ADR-0038, ADR-0039, ADR-0041]
+depends-on: [ADR-0037, ADR-0038, ADR-0039, ADR-0041, ADR-0048]
 implements: [ADR-0041]
 ---
 
@@ -12,11 +12,11 @@ implements: [ADR-0041]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines the authority protocol and deployable
-boundaries needed by ADR-0041; it does not claim that an authority service,
+This ADR is **proposed**. It defines ADR-0041's authority protocol and bounded-context boundaries; it does not claim that an authority service,
 transparency log, witness, project principal, controlled runner, lease, attempt,
 or measurement exists. Moving this ADR or ADR-0041 to `accepted` requires
 maintainer review of real operational evidence, not only repository tests.
+The full profile gates authoritative capture and M7, not M1–M6 implementation.
 
 The committed V1 registration, checkpoint, Merkle-proof, rooted-claim, and
 negative host records remain byte-compatible and nonauthorizing. Production
@@ -107,11 +107,11 @@ unattested or mismatched live epoch immediately stops authoritative operation;
 there is no grace window or stale-attestation fallback. A replacement attestation
 alone can never reset or transfer witness-initialization state.
 
-Controller verifiers stay under `coding-harness/src/`, with their existing
-read/hash/verification capability closure. The private, independently deployable
-`coding-harness/supervisor-service/` package has its own manifest and tests, but
-its committed kernel is nonoperational; its future writer/signer/network adapter
-must remain there. A runner agent belongs under a third principal.
+Controller verifiers stay under `coding-harness/src/` with their existing read/hash/verification capability closure. The historically named
+`coding-harness/supervisor-service/` package is a non-deployable Node
+development/evidence oracle. Production writer, signer, network, store and
+runner adapters are forbidden there. If activated, the supervisor and runner
+are separate Rust artefacts and principals under ADR-0048.
 
 ### 2. Use one linearizable semantic state transaction
 

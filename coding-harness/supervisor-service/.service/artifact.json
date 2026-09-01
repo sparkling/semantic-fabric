@@ -18,10 +18,10 @@
     "migrations/catalog-contract-v1.json": "e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69",
     "migrations/manifest-v1.json": "72782ecae7d33a0149fb2ceb0a3219254fcd68137e499b811260f77b5cd70478",
     "migrations/provisioning-contract-v1.json": "71e4bafda6f97f44b54f28903363fe4ff88f3199a2d08b4dc4bc9060c33e55a9",
-    "package.json": "1b046ebb8897f24af3d008d4ff55f87912024d8e3d4fc533996be37b43d5370f",
+    "package.json": "ab0399aa9d05fd7f98f54b7251320de8446dfb544883271de932616d5d24f8f3",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "fd19ded934aa5e3da4a632e14d5aef379febb59de661ac45ca8222b9d589504a",
+    "scripts/artifact-lib.mjs": "7c59a4d1a677b7b00fba047482fe23ff86ff2dc0dad5d154d67e14f3168ad363",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
@@ -69,5 +69,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "ea43df3e96abde5e6d473fb6de57ebce038658d6303f1cdc53d031b0f8d4daaf"
+  "artifactDigest": "715c72fdd096d638fa54bbb2504d8f95559a7daca99988b8573bdf666ce40552"
 }

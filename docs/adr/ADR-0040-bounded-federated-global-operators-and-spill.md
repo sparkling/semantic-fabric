@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-08-28
+updated: 2026-09-01
 tags: [federation, physical-plan, bounded-memory, spill, external-memory, sparql, consistency, cancellation]
 supersedes: []
 depends-on:
@@ -9,6 +9,7 @@ depends-on:
   - ADR-0010
   - ADR-0012
   - ADR-0038
+  - ADR-0048
 implements:
   - ADR-0038
 ---
@@ -37,6 +38,13 @@ cross-RDBMS charter. No one source can perform a join, global order, aggregate,
 or dedup over rows owned by several independent sources. The coordinator needs
 typed global semantics and bounded external-memory algorithms without becoming
 a second semantic compiler or treating a Bloom filter as an answer authority.
+
+The exact-revision semantic-product-mock PostgreSQL instance and canonical gold
+are the initial development corpus for the prototype comparison. Each run pins
+their manifest/source/schema identities and remains non-authorizing. Because the
+gold admits relational R2RML for only one of 112 tables, it exercises the first
+vertical and schema-introspection path; wider federation evidence requires
+explicit mappings or independent generated fixtures, never inferred mappings.
 
 ## Considered options
 
