@@ -2,8 +2,9 @@
 //!
 //! The serve lane compiles and executes only through this owner, so a plan
 //! cannot be detached from the backend, source identity, dialect, mapping,
-//! T-Box, observed schema, or cache that produced it. This is the enforcing
-//! single-source precursor to the proposed multi-source `RuntimeSnapshot`.
+//! T-Box, constraint-quarantined compiler schema, or cache that produced it.
+//! This is the enforcing single-source precursor to the proposed multi-source
+//! `RuntimeSnapshot`.
 //! PostgreSQL supplies a coherent startup catalogue snapshot; the abstraction
 //! does not claim that for every backend, nor live drift detection, federation,
 //! or production capability admission.
@@ -11,7 +12,7 @@
 use std::fmt;
 
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::{CompileScope, CompilerBinding, Plan, Tbox};
+use sf_sparql::{CompileScope, CompilerBinding, CompilerSchema, Plan, Tbox};
 use sf_sql::{Dialect, TableSchema};
 
 use crate::backend::{Backend, BackendKind};
@@ -103,6 +104,8 @@ impl BackendProfile {
 }
 
 /// One inseparable source/compiler/backend binding for the current serve lane.
+/// Raw catalogue observations become a constraint-quarantined compiler view
+/// before the binding or cache exists.
 pub(crate) struct RuntimeBinding {
     backend: Backend,
     profile: BackendProfile,
@@ -113,8 +116,13 @@ impl RuntimeBinding {
     pub(crate) fn new(source: IntrospectedSource, mapping: SourceMapping, tbox: Tbox) -> Self {
         let (backend, schema) = source.into_parts();
         let profile = BackendProfile::from_kind(backend.kind());
-        let compiler =
-            CompilerBinding::new(mapping, profile.dialect(), tbox, schema, PLAN_CACHE_CAP);
+        let compiler = CompilerBinding::new(
+            mapping,
+            profile.dialect(),
+            tbox,
+            CompilerSchema::from_unverified_observation(schema),
+            PLAN_CACHE_CAP,
+        );
         Self {
             backend,
             profile,
@@ -193,7 +201,7 @@ impl fmt::Debug for BoundPlan {
     }
 }
 
-/// A verified backend/plan pair ready for form dispatch.
+/// An ownership-checked backend/plan pair ready for form dispatch.
 pub(crate) struct ExecutablePlan {
     backend: Backend,
     plan: Plan,
@@ -273,8 +281,22 @@ mod tests {
 
         assert!(debug.contains("binding_id"));
         assert!(debug.contains("triples_map_count"));
+        assert!(debug.contains("Unverified"));
         assert!(!debug.contains(SECRET));
         assert!(!debug.contains("private_items"));
         assert!(!debug.contains("SELECT"));
+    }
+
+    #[test]
+    fn runtime_binding_quarantines_catalogue_constraint_authority() {
+        let binding = binding(0);
+        assert_eq!(
+            binding.compiler.constraint_authority(),
+            sf_sparql::ConstraintAuthority::Unverified
+        );
+        assert_eq!(
+            binding.scope().constraint_authority(),
+            sf_sparql::ConstraintAuthority::Unverified
+        );
     }
 }

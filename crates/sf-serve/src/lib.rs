@@ -3,12 +3,13 @@
 //! 1.1 server binary). Read-only (query operation only; no update).
 //!
 //! Per request: extract the query (GET `?query=`, POST form `query=`, or a raw
-//! `application/sparql-query` body) → [`parse_and_translate_with`] against the
-//! configured mapping `M` + T-Box `T` + dialect (the rewriter, off the async
-//! runtime via `spawn_blocking`, ADR-0006) → execute over the configured backend →
-//! serialise the negotiated form, **streaming** the bytes into the response body
-//! (ADR-0010 §C; [`stream`]). Values stay bound parameters end to end — the
-//! rewriter/executors never interpolate (ADR-0010 R1).
+//! `application/sparql-query` body) → compile through the source-bound cached
+//! [`sf_sparql::CompilerBinding`] against mapping `M`, T-Box `T`, dialect, and a
+//! constraint-quarantined compiler schema (off the async runtime via
+//! `spawn_blocking`, ADR-0006/0007) → ownership-check and execute over the bound
+//! backend → serialise the negotiated form, **streaming** the bytes into the
+//! response body (ADR-0010 §C; [`stream`]). Values stay bound parameters end to
+//! end—the rewriter/executors never interpolate (ADR-0010 R1).
 //!
 //! Governance (ADR-0010): one configurable absolute request deadline spans body
 //! extraction, admitted compilation, pool wait, async execution, and serialisation;

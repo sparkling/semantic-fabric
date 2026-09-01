@@ -2,22 +2,17 @@
 //! [`CompilerBinding`] and keyed on both its opaque compile scope and a
 //! **structural hash of the SPARQL algebra**.
 //!
-//! The scope binds one source ID, mapping, T-Box, observed schema, dialect, and
-//! cache. A new binding gets a new process-unique identity; its epoch is an
-//! explicit generation marker. No live schema watcher or reload path exists in
-//! the current server, so this module does **not** claim that later database DDL
-//! bumps the epoch or invalidates an already-running binding.
+//! The scope binds one source ID, mapping, T-Box, compiler-safe schema, dialect,
+//! and cache. A new binding gets a process-unique identity and explicit epoch.
+//! No live reload path exists; later DDL does not advance an existing binding.
 //!
 //! **Sharp keying rule (ADR-0007):** parameterise *data* constants but key on
 //! *schema-selecting* constants (predicate IRIs and IRI-template constants — the
 //! ones that decide which mapping entries/columns to unfold), so a plan compiled
 //! for `:a` never serves a `:b` query.
 //!
-//! v1 keying is **conservative**: the structural key is the full canonical
-//! algebra string (via `Display`), so *every* constant — including data ones — is
-//! in the key. This is strictly safe (it can only cause extra misses, never a
-//! wrong hit); the data/schema split that lets two `FILTER(?x = <data>)` queries
-//! share one plan is the documented refinement (ADR-0007), tracked here.
+//! v1 keys use the full canonical algebra string, so every constant is keyed.
+//! This safely causes only extra misses; data-constant sharing remains deferred.
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -27,6 +22,7 @@ use sf_core::{SourceId, SourceMapping};
 use sf_sql::{Dialect, TableSchema};
 use spargebra::Query;
 
+use crate::compiler_schema::{CompilerSchema, ConstraintAuthority};
 use crate::{Plan, Result, Tbox};
 
 /// A compile-binding generation marker.
@@ -82,14 +78,21 @@ pub struct CompileScope {
     binding: CompileBindingId,
     dialect: Dialect,
     epoch: Epoch,
+    constraint_authority: ConstraintAuthority,
 }
 
 impl CompileScope {
-    fn new(binding: CompileBindingId, dialect: Dialect, epoch: Epoch) -> Self {
+    fn new(
+        binding: CompileBindingId,
+        dialect: Dialect,
+        epoch: Epoch,
+        constraint_authority: ConstraintAuthority,
+    ) -> Self {
         Self {
             binding,
             dialect,
             epoch,
+            constraint_authority,
         }
     }
 
@@ -106,6 +109,10 @@ impl CompileScope {
     pub const fn epoch(self) -> Epoch {
         self.epoch
     }
+
+    pub const fn constraint_authority(self) -> ConstraintAuthority {
+        self.constraint_authority
+    }
 }
 
 /// Immutable semantic inputs and cache for one source-local compiler.
@@ -117,7 +124,7 @@ pub struct CompilerBinding {
     mapping: SourceMapping,
     dialect: Dialect,
     tbox: Tbox,
-    schema: Vec<TableSchema>,
+    schema: CompilerSchema,
     cache: PlanCache<CachedPlan>,
     scope: CompileScope,
 }
@@ -127,11 +134,16 @@ impl CompilerBinding {
         mapping: SourceMapping,
         dialect: Dialect,
         tbox: Tbox,
-        schema: Vec<TableSchema>,
+        schema: CompilerSchema,
         cache_capacity: usize,
     ) -> Self {
         assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
-        let scope = CompileScope::new(CompileBindingId::mint(), dialect, Epoch::default());
+        let scope = CompileScope::new(
+            CompileBindingId::mint(),
+            dialect,
+            Epoch::default(),
+            schema.constraint_authority(),
+        );
         Self {
             mapping,
             dialect,
@@ -159,6 +171,10 @@ impl CompilerBinding {
         self.scope
     }
 
+    pub const fn constraint_authority(&self) -> ConstraintAuthority {
+        self.schema.constraint_authority()
+    }
+
     pub(crate) fn triples_maps(&self) -> &[sf_core::ir::TriplesMap] {
         self.mapping.triples_maps()
     }
@@ -168,7 +184,7 @@ impl CompilerBinding {
     }
 
     pub(crate) fn schema(&self) -> &[TableSchema] {
-        &self.schema
+        self.schema.tables()
     }
 
     pub(crate) fn cache(&self) -> &PlanCache<CachedPlan> {
@@ -211,7 +227,7 @@ impl fmt::Debug for CompilerBinding {
             .field("source_id", &self.source_id())
             .field("dialect", &self.dialect)
             .field("triples_map_count", &self.mapping.len())
-            .field("schema_table_count", &self.schema.len())
+            .field("schema", &self.schema)
             .field("tbox_empty", &self.tbox.is_empty())
             .field("cache_entries", &self.cache.len())
             .finish()
@@ -302,7 +318,12 @@ mod tests {
     }
 
     fn scope(dialect: Dialect, epoch: Epoch) -> CompileScope {
-        CompileScope::new(CompileBindingId::mint(), dialect, epoch)
+        CompileScope::new(
+            CompileBindingId::mint(),
+            dialect,
+            epoch,
+            ConstraintAuthority::Unverified,
+        )
     }
 
     #[test]
@@ -353,8 +374,24 @@ mod tests {
         let q = parse("SELECT * WHERE { ?s ?p ?o }");
         let binding = CompileBindingId::mint();
         assert_ne!(
-            plan_key(&q, CompileScope::new(binding, Dialect::Sqlite, Epoch(1))),
-            plan_key(&q, CompileScope::new(binding, Dialect::Sqlite, Epoch(2)))
+            plan_key(
+                &q,
+                CompileScope::new(
+                    binding,
+                    Dialect::Sqlite,
+                    Epoch(1),
+                    ConstraintAuthority::Unverified,
+                ),
+            ),
+            plan_key(
+                &q,
+                CompileScope::new(
+                    binding,
+                    Dialect::Sqlite,
+                    Epoch(2),
+                    ConstraintAuthority::Unverified,
+                ),
+            )
         );
     }
 
@@ -369,8 +406,18 @@ mod tests {
     fn dialect_and_binding_identity_are_part_of_the_key() {
         let q = parse("SELECT * WHERE { ?s ?p ?o }");
         let binding = CompileBindingId::mint();
-        let sqlite = CompileScope::new(binding, Dialect::Sqlite, Epoch(0));
-        let postgres = CompileScope::new(binding, Dialect::Postgres, Epoch(0));
+        let sqlite = CompileScope::new(
+            binding,
+            Dialect::Sqlite,
+            Epoch(0),
+            ConstraintAuthority::Unverified,
+        );
+        let postgres = CompileScope::new(
+            binding,
+            Dialect::Postgres,
+            Epoch(0),
+            ConstraintAuthority::Unverified,
+        );
         let other_binding = scope(Dialect::Sqlite, Epoch(0));
 
         assert_ne!(plan_key(&q, sqlite), plan_key(&q, postgres));

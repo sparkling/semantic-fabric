@@ -65,6 +65,7 @@ use spargebra::Query;
 pub mod build;
 pub mod cache;
 pub mod cascade;
+mod compiler_schema;
 pub mod dump;
 pub mod emit;
 pub mod exec;
@@ -85,6 +86,7 @@ pub mod unify;
 mod cache_binding_tests;
 
 pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
+pub use compiler_schema::{CompilerSchema, ConstraintAuthority};
 pub use iq::Branch;
 pub use saturate::Tbox;
 
@@ -717,11 +719,11 @@ pub fn parse_and_translate_tree_with(
     translate_tree(&query, maps, tbox, dialect, schema)
 }
 
-/// Parse `sparql` and translate it against a T-Box and source `schema`
-/// (convenience over [`translate_with`]). This is the live entry point: passing a
-/// real introspected `schema` is what makes the constraint-driven cascade passes
-/// (self-join, FD, FK/PK join elimination, redundant-DISTINCT) actually *fire* —
-/// with `&[]` they are sound no-ops (ADR-0007).
+/// Parse `sparql` and translate it against a T-Box and caller-authorized source
+/// `schema` (convenience over [`translate_with`]). This explicit API can enable
+/// constraint-driven rewrites and is therefore suitable only for a frozen or
+/// otherwise verified schema lifecycle. Product serving uses [`CompilerBinding`]
+/// with a constraint-quarantined [`CompilerSchema`] instead (ADR-0007).
 pub fn parse_and_translate_with(
     sparql: &str,
     maps: &[TriplesMap],
