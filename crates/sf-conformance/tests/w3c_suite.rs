@@ -15,7 +15,16 @@ fn suite_root() -> PathBuf {
 #[test]
 fn w3c_rdb2rdf_construct_conformance() {
     let root = suite_root();
-    let report = run_and_report(&root, &root).expect("suite runs");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let out_dir = std::env::temp_dir().join(format!(
+        "sf_conformance_w3c_{}_{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&out_dir).expect("create isolated evidence directory");
+    let report = run_and_report(&root, &out_dir).expect("suite runs");
 
     let r2rml_pass = report.passed(Some(Kind::R2rml));
     let r2rml_total = report.adjudicated(Some(Kind::R2rml));
@@ -44,9 +53,10 @@ fn w3c_rdb2rdf_construct_conformance() {
         eprintln!("  SKIP {s}");
     }
 
-    // EARL reports were written beside the suite.
-    assert!(root.join("earl-semantic-fabric-r2rml.ttl").exists());
-    assert!(root.join("earl-semantic-fabric-direct.ttl").exists());
+    // Validation output is evidence, not a mutation of the tracked suite.
+    assert!(out_dir.join("earl-semantic-fabric-r2rml.ttl").exists());
+    assert!(out_dir.join("earl-semantic-fabric-direct.ttl").exists());
+    std::fs::remove_dir_all(out_dir).expect("remove isolated evidence directory");
 
     // Primary gate: NO unexpected failures. Tighter than a pass-count baseline — it
     // also catches a pass↔fail swap at constant count. The one documented deviation
