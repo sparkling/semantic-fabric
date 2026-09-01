@@ -19,6 +19,8 @@ pub mod ontology;
 pub mod run;
 pub mod stream;
 
+mod admission;
+
 pub use run::{serve_blocking, ServeOptions};
 
 use std::sync::{Arc, Mutex};
@@ -298,6 +300,15 @@ async fn process(cfg: Arc<ServeConfig>, query: String, accept: Option<String>) -
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if let Err(error) = admission::admit(&plan) {
+        return err_text(
+            StatusCode::NOT_IMPLEMENTED,
+            format!(
+                "unsupported resource shape: source-sized-state={} requires bounded physical execution (ADR-0038 M1)",
+                error.state().code()
+            ),
+        );
+    }
     let accept = accept.as_deref();
 
     match &plan.form {

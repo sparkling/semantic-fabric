@@ -153,7 +153,7 @@ struct PlanCtx<'a> {
 /// itself, never for the scan it wraps. The flat engine never wraps anything
 /// (`alias_sources` alone always finds it there), so this only recurses on
 /// tree output.
-fn dedup_group_alias(branch: &Branch) -> Option<usize> {
+pub(crate) fn dedup_group_alias(branch: &Branch) -> Option<usize> {
     if let Some((alias, _)) = branch.alias_sources().into_iter().next() {
         return Some(alias);
     }

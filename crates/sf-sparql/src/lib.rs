@@ -75,6 +75,7 @@ mod graph_map;
 pub mod iq;
 pub mod leftjoin;
 pub mod path;
+pub mod resource_profile;
 pub mod saturate;
 pub mod star;
 pub mod unfold;
