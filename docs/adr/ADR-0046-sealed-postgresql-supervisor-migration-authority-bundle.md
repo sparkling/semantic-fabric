@@ -12,7 +12,7 @@ implements: [ADR-0044, ADR-0045]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture, seven terminal singleton representations, exact lifecycle/control/deadline representation, and non-executable catalogue/INSERT contracts described below are implemented as Node executable-specification evidence. A complete executable catalogue, store, bridge, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
+This ADR is **proposed**. Its `implements` edges record only subordinate proposed design relationships and are neither shipped implementation nor capability evidence while any linked ADR remains proposed. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture, seven terminal singleton representations, exact lifecycle/control/deadline representation, and non-executable catalogue/INSERT contracts described below are implemented as Node executable-specification evidence. A complete executable catalogue, store, bridge, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
 
 The bundle remains a private, dormant and non-deployable Node oracle. Future Rust supervisor startup/readiness is verify-only and never applies or repairs migrations. A separately packaged deployment-only Rust migrator, absent from `sf-server` and readiness credentials, may implement exact empty/no-op apply but never drift repair. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
 
@@ -165,7 +165,7 @@ arrays, and a system-baseline record. Its profile is
 
 The baseline preimage is protected test fixture
 `coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-clean-template0-public-object-acl-v1.json`,
-excluded from deployed artifacts. Its bytes are exactly `JSON.stringify(records) + "\n"`; record keys
+excluded from the sealed Node oracle export bundle and every future Rust deployment closure. Its bytes are exactly `JSON.stringify(records) + "\n"`; record keys
 are `objectClass,schemaName,objectName,subobjectName,objectKind,routineIdentityArguments,privilege,grantable`.
 Explicit nulls, stable names/16.15 identity arguments and ADR-0045 typed tuple order are mandatory;
 duplicates fail. Limits are 1,048,576 bytes, 8,192 records and 65,536 nodes. The clean profile is a
@@ -378,7 +378,8 @@ single-use session/operation/ordinal evidence and emits it only after exact
 CommandComplete/ErrorResponse plus ReadyForQuery (`transaction` in-transaction; `idle`
 after COMMIT/ROLLBACK). Rejection matches native Rust protocol; `I|T|E` map to
 `idle|transaction|failed`. Missing/replayed/mismatched COMMIT evidence is uncertain.
-Node may exercise equivalent pinned-`pg` error/transcript vectors only in tests.
+Node may exercise only provider-free recorded PostgreSQL error/transcript vectors
+in tests; no `pg` package, driver prototype, bridge, or live client is admitted.
 
 Future Rust preflight before `BEGIN` verifies exact `SESSION_USER=CURRENT_USER` migration
 identity, role attributes, sole membership edge with grantor/options, and server
@@ -446,7 +447,7 @@ Results are seven module-level deeply frozen intrinsic singleton records, one fo
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Thirteen focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, ordered descriptor parsing without candidate serialization, hostile accessors/proxies without invocation, UTF-8 bounds, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
 Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. Fourteen capability/terminal KATs prove ordered descriptor capture without invocation, thenable assimilation or inherited setters; proxy/accessor/symbol/exotic/revoked-proxy rejection; captured-intrinsic and receiver-free behavior; and seven pairwise-distinct exact frozen non-authorizing terminal identities.
-Commits `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` close only the Node oracle's lifecycle/control/deadline, command metadata, INSERT value/result and DDL-coupling slices. Node 24.14.1 passes 705 tests; exact Node 20.0.0 passes TypeScript, 23 focused tests, artifact replay and parent focused gates. Oracle artifact SHA-256 is `715c72fdd096d638fa54bbb2504d8f95559a7daca99988b8573bdf666ce40552`; the dependency-free public bundle remains 49,106 bytes at `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`. SELECT/transport/tag-vector/live execution remains open for Rust; Node execution expansion is closed.
+Commits `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` close only the Node oracle's lifecycle/control/deadline, command metadata, INSERT value/result and DDL-coupling slices. Node 24.14.1 passes 705 tests; exact Node 20.0.0 passes TypeScript, 23 focused tests, artifact replay and parent focused gates. Oracle artifact SHA-256 is `715c72fdd096d638fa54bbb2504d8f95559a7daca99988b8573bdf666ce40552`; the dependency-free public bundle remains 49,106 bytes at `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`. Supervisor catalogue-observation SELECT, PostgreSQL wire-transport/tag vectors and future separately packaged Rust-supervisor live execution remain open; Node execution expansion is closed.
 
 ## Acceptance gates
 

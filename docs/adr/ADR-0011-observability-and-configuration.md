@@ -18,11 +18,16 @@ implements:
 > `3e0f920`/`c9e6c53` add a closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
 > `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
-> `6cd85eb` routes every pre-response absolute-deadline expiry through it. Raw
+> `6cd85eb` routes every pre-response absolute-deadline expiry through it, and
+> `484a4b4` adds a bounded redacted `SourceRef`: the CLI accepts exactly one
+> credential-free inline source or environment reference, and typed PostgreSQL/
+> MySQL parsing rejects inline passwords before runtime, file, or network I/O. Raw
 > generated SQL, driver text, mapping details and source specifications cannot
 > enter that public boundary. A SELECT/CONSTRUCT failure after committing `200`
 > can only terminate the stream; this does not turn it into a problem response or
-> prove an atomic no-prefix contract. Correlation IDs currently reach the response
+> prove an atomic no-prefix contract. Environment injection is not the layered
+> TOML/config/secret-store model and remote PostgreSQL still uses `NoTls`.
+> Correlation IDs currently reach the response
 > only, not a log sink. The production crates still contain no tracing/metrics/OTLP
 > stack or layered validated configuration model, and expose no metrics/readiness
 > lifecycle. ADR-0038 retains those M3/M5 gates.
@@ -62,7 +67,10 @@ Limit-hit / timeout / rejection / injection-attempt emit **both** a `tracing` wa
 Layered precedence: **defaults < config file (TOML) < env vars < secret injection** (via `figment`/`config` + `serde`, validated at startup, fail-fast). Sections: `[source]` (connections, dialect — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level, OTLP endpoint, metrics port), `[serve]` (endpoint config). **Secrets** are referenced, never inline (e.g. `password_env = "PG_PASSWORD"`).
 
 ### Redaction discipline
-Credentials never logged at any level; result-data/PII never logged; **generated SQL only at `DEBUG`** (it carries bound-param values).
+Credentials, result data, PII and bound-parameter values are never logged at any
+level. `DEBUG` may record only a parameterized SQL template/AST with placeholders
+and bounded structural metadata. SQL text from any adapter that interpolates
+values is never loggable.
 
 ### Consequences
 * Good, because observable + OTel-ready from day one; governance is visible (trace + metric); per-stage latency attributable.
@@ -72,7 +80,9 @@ Credentials never logged at any level; result-data/PII never logged; **generated
 ### Confirmation
 * A query produces a span tree + the metric set; governance actions appear as **both** a trace event and a counter.
 * An invalid config **fails fast** at startup.
-* **No secret appears in any log at any level** (redaction test + lint); generated SQL appears only at `DEBUG`.
+* **No secret, PII, result value or bound parameter appears in any log at any
+  level** (redaction test + lint); only parameterized SQL templates may appear at
+  `DEBUG`.
 
 ## More Information
 * **Governance events / secret handling:** ADR-0010. **Exec model the hooks instrument:** ADR-0006. **Intensional graphs:** ADR-0004. **Architecture:** ADR-0003.
@@ -80,5 +90,7 @@ Credentials never logged at any level; result-data/PII never logged; **generated
 ## Rules
 * **R1** — one `tracing` span tree per request; every pipeline stage is a span.
 * **R2** — metrics via the `metrics` facade only; **bounded cardinality** (no unbounded labels).
-* **R3** — secrets via injection only, never inline, never logged; generated SQL at `DEBUG` only.
+* **R3** — secrets via injection only, never inline or logged; bound values and
+  PII are never logged; only placeholder-bearing parameterized SQL templates may
+  appear at `DEBUG`.
 * **R4** — every ADR-0010 governance action emits both a trace event and a metric.

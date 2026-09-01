@@ -66,7 +66,7 @@ The verifier reconstructs the leaf from the reverified canonical registration en
 It digest-pins the canonical prior checkpoint, signature-verifies only the new checkpoint, checks one-based sequence to zero-based leaf bounds, consumes the exact inclusion/consistency paths, and rejects key/log/supervisor/epoch substitution.
 Its evidence distinguishes `priorCheckpointSignatureVerified: false` from `newCheckpointSignatureVerified: true`; two conflicting signed extensions can both validate while fork, rollback, persistence, global order, admission, lease, attempt, and capture authority remain explicitly unproved or false.
 The fixed vector pins leaf, tree, proof, checkpoint, signature, and validation bytes; the validation digest is `eca1b7e1…1ee6`. Capability closure rejects transport, write, signing, process, and dynamic-loader mutants.
-The hardened build and all 108 harness files pass (760 tests, two expected skips), and an independent adversarial review found no remaining P0/P1 issue.
+At that checkpointed tranche, the hardened build and all 108 harness files passed (760 tests, two expected skips), and an independent adversarial review found no remaining P0/P1 issue.
 There is still no production signer, transport, writer, persistent log, independently administered service, real acknowledgement/checkpoint, lease, runner, attempt, or capture. Proposed [ADR-0042](ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) now defines the next boundary: witnessed transactional run/resource authority plus controlled-runner provisioning and admission.
 
 The first claim consumer before host admission is now implemented: it materializes the exact claimed commit, from either an exact primary or bare

@@ -1,7 +1,6 @@
 # semantic-fabric
 
-**A uniform query layer over systems of record, at OLTP speed—the live data
-foundation for agents, applications, analytics, and compliance.**
+**A uniform query layer over systems of record—the live data foundation for agents, applications, analytics, and compliance.**
 
 [![CI](https://github.com/sparkling/semantic-fabric/actions/workflows/ci.yml/badge.svg)](https://github.com/sparkling/semantic-fabric/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#contributing-and-license)
@@ -31,6 +30,7 @@ As of 2026-09-01, the generated catalog records:
 - **Current:** Pre-response HTTP failures and startup CLI surfaces are redacted; correlation IDs have no telemetry sink and post-200 stream failures cannot become atomic RFC 9457 responses.
 - **Qualified:** The runtime contains SQLite, PostgreSQL and MySQL source-selector paths; reachability is not production admission.
 - **Qualified:** External SERVICE and named non-enabled source forms are rejected before query execution or connector construction.
+- **Current:** Credential-bearing PostgreSQL/MySQL source specifications can be supplied through a bounded environment reference; parsed inline passwords fail before runtime, file or network I/O. TLS, layered configuration, telemetry and external secret-store integration remain open.
 - **Current:** Known source-sized Rust fallback plans are rejected before backend selection or source I/O; bounded physical implementations remain planned.
 - **Current:** SQLite has required evidence for GET/raw/form POST, ASK JSON, SELECT JSON/XML/CSV/TSV and CONSTRUCT Turtle/N-Triples/JSON-LD within the tested read-only endpoint subset.
 - **Current:** The simple SQLite streaming-CONSTRUCT profile has a required growing-source constant-memory benchmark; this does not cover global operators.
@@ -113,7 +113,7 @@ The binary has three commands:
 
 | Command | Purpose |
 |---|---|
-| `serve` | Governed read-only SPARQL query endpoint over a live relational source |
+| `serve` | Read-only SPARQL query endpoint over a live relational source |
 | `conformance` | W3C RDB2RDF suite over SQLite with EARL reporting |
 | `bench` | GTFS-Madrid OBDA workload over SQLite |
 
@@ -130,14 +130,14 @@ cargo run --locked -p sf-cli -- serve \
   --source 'pg:host=localhost dbname=app' \
   --mapping /path/to/mapping.ttl
 
-# MySQL; prefer an environment-expanded secret rather than a literal in history
+# MySQL; SF_MYSQL_SOURCE is injected by the process manager or secret store
 cargo run --locked -p sf-cli -- serve \
-  --source "mysql://user:${MYSQL_PASSWORD}@127.0.0.1/app" \
+  --source-env SF_MYSQL_SOURCE \
   --mapping /path/to/mapping.ttl
 ```
 
-Optional flags include `--ontology`, `--bind`, `--timeout-secs`,
-`--max-query-len`, `--pg-pool-size`, `--pg-pool-wait-secs`, and
+Choose exactly one source selector. `--source` accepts only credential-free values; credential-bearing PostgreSQL/MySQL values must use bounded `--source-env` resolution, and parsed inline passwords fail before runtime, file, or network I/O.
+Optional flags include `--ontology`, `--bind`, `--timeout-secs`, `--max-query-len`, `--pg-pool-size`, `--pg-pool-wait-secs`, and
 `--sqlite-pool-size`. The default endpoint is
 `http://127.0.0.1:7878/sparql`.
 
@@ -151,7 +151,7 @@ curl -s 'http://127.0.0.1:7878/sparql' \
 `GET` and `POST /sparql` implement the read-only query subset of the draft SPARQL
 1.2 Protocol and are content-negotiated. SELECT/ASK can return SPARQL Results
 JSON, XML, CSV, or TSV. CONSTRUCT/DESCRIBE can return Turtle, N-Triples, or
-JSON-LD. Requests are bounded by timeout, query-size, pool and cancellation controls from [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
+JSON-LD. Requests have query-size, pool and one elapsed-time deadline boundary; native cancellation and a total `QueryBudget` remain open under [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
 
 ## What works today
 
@@ -198,7 +198,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 905 tests across 122 files; two
+- The versioned engineering harness passes 941 tests across 124 files; two
   environment-specific tests are skipped by this provider-free run.
 
 Reproduce the primary gates:
@@ -325,8 +325,8 @@ RDB2RDF input seal (`1c9bb61`), proposed protected design locks ADR-0039/0040
 (`401c1bb`), integrity-locked local MetaHarness readiness tools (`31a1164`), and
 inventory-authoritative execution runners (`a3efb32`), plus the sealed mapping
 receipt lineage (`33e202b`, `81caec2`, `a84aa05`) and the non-authorizing
-supervisor registration, checkpoint, and log-proof lineage (`99fa2e1`, `92f5376`, `7139b05`, `3ee0ed6`, `d54518f`). The protected private PostgreSQL materializer now extends that lineage without persistence authority. The evidence matrix now contains
-74 exact cells with zero production-admitted backends (`a1a6dc9`); backend-aware
+supervisor registration, checkpoint, and log-proof lineage (`99fa2e1`, `92f5376`, `7139b05`, `3ee0ed6`, `d54518f`). The protected private PostgreSQL materializer now extends that lineage without persistence authority. The generated evidence matrix now contains
+79 evidence-scoped cells—45 implemented, 32 planned and two unsupported—with zero production-admitted backends; backend-aware
 v3 receipts bind immutable captured inputs to typed SQLite and required-live
 PostgreSQL outcomes without claiming runner/toolchain/host/provider provenance.
 CI/controller replay those authorities read-only; M1–M6 are unblocked behind their own gates, M7 remains gated, and the
@@ -444,9 +444,9 @@ claim. It is a small localhost workload, not a production sizing result.
 | Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
 | Exactness and boundedness | Recursive closures now use exact finite-pair fixed points on evidenced dialects and reject unproved dialects; known source-sized ORDER/GROUP/DISTINCT/CONSTRUCT fallbacks reject before I/O. Bounded physical alternatives and total QueryBudget remain release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
-| Accepted designs not fully wired | ADR-0011 has redacted errors but not telemetry/configuration; property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) remain incomplete |
+| Accepted designs not fully wired | ADR-0011 has redacted errors and bounded environment source references, but no layered configuration, telemetry, or verified TLS; property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) remain incomplete |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
-| M0 performance evidence | ADR-0041 proposes a separate single-attempt capture transaction. Node 20/24 supplies only protected non-deployable oracles; INSERT values/results and DDL coupling are sealed at `0d5d09e`/`e37cce7`, with 705 Node-24 tests and an unchanged dependency-free public bundle. Remaining SELECT/transport/tag, adapter/store/runner/live-verifier, credentials, witnessing, controlled performance and two-builder work is Rust/operational evidence. It runs in parallel with M1–M6 but gates authoritative performance and M7 |
+| M0 performance evidence | ADR-0041 proposes a separate single-attempt capture transaction. Node 20/24 supplies only protected non-deployable oracles; INSERT values/results and DDL coupling are sealed at `0d5d09e`/`e37cce7`, with 705 Node-24 tests and an unchanged dependency-free public bundle. Supervisor PostgreSQL catalogue-observation SELECT, PostgreSQL wire-transport/tag vectors, and the future separately packaged Rust supervisor store/runner/live verifier, credentials, witnessing, controlled performance and two-builder work remain Rust/operational evidence. They run in parallel with M1–M6 but gate authoritative performance and M7 |
 
 Unsupported shapes are designed to fail explicitly. Exact path fixed points and
 pre-I/O fallback admission now enforce that invariant for their evidenced scope.
@@ -461,7 +461,7 @@ pre-I/O fallback admission now enforce that invariant for their evidenced scope.
 | `sf-sparql` | SPARQL algebra unfolding, normalization, SQL emission, execution |
 | `sf-conformance` | W3C, differential, mutation, and EARL evidence |
 | `sf-bench` | GTFS-Madrid and constant-memory benchmarks |
-| `sf-serve` | Governed read-only SPARQL query HTTP endpoint |
+| `sf-serve` | Read-only SPARQL query HTTP endpoint with bounded ingress controls |
 | `sf-cli` | `serve`, `conformance`, and `bench` binary |
 
 ## Architecture decisions

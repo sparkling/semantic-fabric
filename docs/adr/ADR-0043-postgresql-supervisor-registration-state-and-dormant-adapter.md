@@ -12,10 +12,12 @@ implements: [ADR-0042]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines the first PostgreSQL persistence slice for
-ADR-0042, but does not accept that ADR, enable the supervisor, or grant database,
-signer, network, publication, witness, runner, capture, import, promotion, or
-release authority.
+This ADR is **proposed**. Its `implements` edge records only a subordinate
+proposed design relationship; while either ADR is proposed it is neither shipped
+implementation nor capability evidence. It defines the first PostgreSQL
+persistence slice for ADR-0042, but does not accept that ADR, enable the
+supervisor, or grant database, signer, network, publication, witness, runner,
+capture, import, promotion, or release authority.
 
 The retry/coordinator, row-codec, and prepare/finalize materializer slices are
 implemented as sealed Node reference-oracle inputs absent from the public
@@ -113,8 +115,8 @@ against the pinned public key before constructing any row value.
 No PostgreSQL driver type enters a normative service interface. Node adapter
 source is protected oracle input; language-neutral migrations are reusable by
 the Rust service. Neither is a source input of `src/index.ts`. Test sources are
-bound by harness receipts rather than a production-artifact digest. Node runtime
-packages remain empty and the public oracle bundle stays byte-identical.
+bound by harness receipts rather than a production-artifact digest. The Node
+oracle's package dependencies remain empty and its public bundle stays byte-identical.
 
 Node evidence dependencies remain empty. Live PostgreSQL apply, concurrency,
 cleanup, role-denial and fault evidence belongs to Rust/`tokio-postgres` tests.
@@ -425,14 +427,16 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
 ### Positive
 
 - The existing product and semantic compiler architecture do not change.
-- PostgreSQL semantics become executable behind the verified coordinator.
+- PostgreSQL semantics would become executable only after its acceptance gates pass.
 - Exact recovery remains independent of current authority head and run state.
 - Database races have one bounded, documented, whole-transaction retry path.
 - Public bundle and runtime dependency closure remain frozen.
 
 ### Negative
 
-- Node evidence packages remain dependency-free; PostgreSQL is a Rust test/runtime concern.
+- Node evidence packages remain dependency-free; live PostgreSQL belongs to Rust
+  tests and a future separately packaged supervisor, never `sf-serve` or the
+  Semantic Fabric product runtime.
 - Rust migrations, row codecs, materialization, privileges, and live concurrency add a
   substantial independently sealed surface.
 - Safety-first ambiguity may permanently spend availability and require exact

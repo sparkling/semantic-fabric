@@ -12,11 +12,12 @@ implements: [ADR-0044]
 
 ## Status boundary
 
-This ADR is **proposed**. It closes representation and authority ambiguities in
-ADR-0044 so its dormant catalogue artefact can be implemented. It does not
-accept ADR-0042 through ADR-0044, activate the supervisor, create SQL, provision
-a database or credential, contact PostgreSQL, or grant migration, readiness,
-network, signer, publication, repair, or release authority.
+This ADR is **proposed**. Its `implements` edge is only a subordinate proposed
+design relationship; while either decision is proposed it is neither shipped
+implementation nor capability evidence. It closes representation ambiguities in
+ADR-0044 but does not accept ADR-0042 through ADR-0044, activate the supervisor,
+create SQL, provision a database or credential, contact PostgreSQL, or grant
+migration, readiness, network, signer, publication, repair, or release authority.
 
 Catalogue `28addbc` has SHA-256 `e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69`;
 `c586973` adds the Node parser/KAT/deparse oracle. Its proxy/accessor/`Uint8Array`
@@ -464,9 +465,7 @@ This decision is implemented only when:
 
 ### Neutral
 
-- This completes ADR-0044's representation; it does not change the product
-  architecture, application goals, public API, or activation state.
-- The non-authorizing Node provisioning representation is implemented; Rust live provisioning and migration remain the separate open slice.
+- The sealed Node oracle completes only the proposed representation fixture. ADR-0044/0045 remain proposed and unimplemented for runtime, deployment, and release until independent Rust/live gates pass.
 
 ## Alternatives rejected
 

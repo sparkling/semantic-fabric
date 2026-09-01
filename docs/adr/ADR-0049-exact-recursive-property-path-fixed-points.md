@@ -30,8 +30,9 @@ a normal but incomplete result.
 
 A numeric depth limit cannot simultaneously guarantee exact SPARQL reachability
 and authorize successful completion. Once the limit is reached, the engine must
-either prove that the fixed point was already complete or fail the whole query.
-Returning the accumulated prefix is never valid.
+either prove that the fixed point was already complete or abort semantic
+completion. An observable prefix in a failed post-`200` transport is never a
+valid successful answer.
 
 For a finite relational hop relation, the reachable `(subject, object)` pair set
 is finite. Its transitive closure can therefore terminate by eliminating pairs
@@ -72,10 +73,13 @@ finite reachable pair set, at worst quadratic in the reachable node count. It is
 not a constant-memory or total-resource proof.
 
 Resource controls may impose cost, work, time, row, byte, spill, or admission
-limits only if exceeding one fails the entire query. They may never convert the
-current prefix into success. Production admission remains blocked until one
-absolute ingress-to-serialization budget, source-native statement controls,
-cancellation, and backend-specific load evidence govern this CTE.
+limits only if exceeding one aborts semantic completion. The engine may never
+label the accumulated path prefix complete. Current HTTP streaming is not
+atomic: after `200`, already-sent bytes can remain observable when the body
+terminates. That is a failed transport, not a successful semantic answer;
+atomic no-prefix delivery remains open under ADR-0010/0011. Production admission
+also requires one absolute ingress-to-serialization budget, source-native
+statement controls, cancellation, and backend-specific load evidence.
 
 ### 4. Keep the evidence adversarial
 
@@ -121,7 +125,8 @@ still open and no admission follows from SQL-string inspection.
 
 - **R1** — successful `P+`/`P*` results are exact finite-pair fixed points.
 - **R2** — walk depth never participates in recursive row identity.
-- **R3** — every resource-limit breach fails the whole query; no prefix succeeds.
+- **R3** — a resource-limit breach never marks a path prefix semantically
+  complete; post-`200` transport atomicity remains an explicit nonclaim.
 - **R4** — unproved recursive dialects reject before SQL emission or source I/O.
 - **R5** — compiler support never implies backend production admission.
 - **R6** — live MySQL and total resource governance remain explicit open gates.
