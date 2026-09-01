@@ -120,9 +120,9 @@ operator layer carries substantial correctness and maintenance cost.
 
 ### 3. Exactness and evidence precede feature breadth
 
-Silent partial results are severity-zero release blockers. The first increment
-fixes or rejects path closure beyond the current bound and makes every supported
-blocking operator meet the memory invariant. Property, metamorphic, differential,
+Silent partial results are severity-zero release blockers. Commit `5c379f6` and ADR-0049
+replace the 256-hop prefix with an exact pair fixed point and reject unproved dialects. Next, every
+supported blocking operator must meet the memory invariant. Property, metamorphic, differential,
 fuzz, mutation, exact-suite-inventory, coverage, load, and soak evidence then
 become durable CI/release gates under ADR-0012.
 

@@ -496,7 +496,7 @@ impl HopExpr {
 }
 
 /// A property-path closure (ADR-0007 *recursive paths compile to source-dialect
-/// recursive CTEs*, ADR-0008 `owl:TransitiveProperty` served live, ADR-0038
+/// recursive CTEs*, ADR-0008 `owl:TransitiveProperty` served live, ADR-0049
 /// exact-or-explicit behavior). ADR-0010's remaining resource-governance contract
 /// is separate from semantic closure exactness.
 ///

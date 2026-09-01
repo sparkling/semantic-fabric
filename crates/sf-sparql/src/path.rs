@@ -1,5 +1,5 @@
 //! Property-path compilation (ADR-0007 *recursive paths compile to source-dialect
-//! recursive CTEs*; ADR-0008 transitive properties served live; ADR-0010 cycle
+//! recursive CTEs*; ADR-0008 transitive properties served live; ADR-0049 cycle
 //! governance). Translates a `?s PATH ?o` pattern into a [`PathClosure`] branch whose
 //! one-hop relation ([`HopExpr`]) is a predicate leaf or a sequence/alternative/
 //! inverse/negated composite over **raw key columns** (term-construction lifting):
@@ -89,7 +89,7 @@ impl<'a> Unfolder<'a> {
         // particular, SQL Server does not accept the generic `WITH RECURSIVE`
         // form. Reject during
         // translation rather than emit unproven SQL or risk a non-terminating /
-        // incomplete closure on a scaffolded backend (ADR-0038 R1).
+        // incomplete closure on a scaffolded backend (ADR-0049 R4).
         if matches!(kind, PathKind::OneOrMore | PathKind::ZeroOrMore)
             && !matches!(
                 self.dialect,

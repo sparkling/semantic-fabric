@@ -1,4 +1,4 @@
-//! Adversarial exactness tests for recursive property paths (ADR-0038 R1).
+//! Adversarial exactness tests for recursive property paths (ADR-0049 R1).
 //!
 //! A supported closure must reach a true finite-pair fixed point. A numeric walk
 //! limit may fail explicitly, but must never be returned as a successful prefix.

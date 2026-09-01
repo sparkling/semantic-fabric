@@ -606,7 +606,7 @@ fn property_path_oneormore_is_transitive_closure() {
     let q = format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>+ ?o }}");
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
 
-    // The closure compiles to an exact finite-pair recursive CTE (ADR-0038 R1).
+    // The closure compiles to an exact finite-pair recursive CTE (ADR-0049 R1).
     let sql = &plan.emitted().unwrap()[0].sql;
     let up = sql.to_uppercase();
     assert!(up.contains("WITH RECURSIVE"), "recursive CTE: {sql}");

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-26
+updated: 2026-09-01
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -30,7 +30,7 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 * **The mapping is the reachability allow-list:** generated SQL can reference only the tables/columns the R2RML mapping IR exposes; identifiers come from the *trusted mapping*, never user input — so neither table/column injection nor access to un-mapped data is expressible. *This bounds what is reachable; it is not authorization (ADR-0018).*
 
 ### B. Resource governance (DoS controls)
-* **Bounded recursion:** every `P+`/`P*` recursive CTE carries a depth limit **and** cycle detection (`CYCLE` on PG14+ / `USING KEY` on a DuckDB source).
+* **Exact governed recursion:** every supported `P+`/`P*` recursive CTE collapses cycles on semantic node-pair identity. A work/deadline limit may fail the whole query but may never return a successful prefix (ADR-0049).
 * **Statement timeout + result-size cap + pre-execution cost check + admission control** on every generated query — the source DB is never taken down.
 
 ### C. Result streaming (bounded memory + backpressure)
@@ -43,13 +43,13 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 ### Consequences
 * Good, because neither table/column injection nor access to un-mapped data is expressible (user values are bound parameters; identifiers derive only from the trusted mapping IR).
 * Good, because the source DB is never taken down (statement timeout, result-size cap, pre-execution cost check, admission control on every generated query).
-* Good, because bounded recursion makes `P+`/`P*` terminate within a depth bound with cycle detection rather than OOM/hang.
+* Good, because pair-fixed recursion terminates on finite sources without authorizing a depth-truncated answer; total work must be governed fail-closed under ADR-0049.
 * Good, because client memory is bounded and TCP backpressure propagates to the backend (`RowStream`), and slow/abandoned clients cannot pin a connection indefinitely (DB-bounded stream lifetime, stream-lane pool, cancel-on-drop).
 * Neutral, because authorization / RLS / tenancy / sensitivity is delegated to ADR-0018 and TLS / secrets store / rate-limiting / audit transport / deployment packaging to ADR-0014.
 
 ### Confirmation
 * Fuzzing the rewriter (ADR-0012) surfaces no injection (always parameterised; identifiers always from the mapping).
-* A `P+` query over a cyclic fixture terminates within the depth bound; a pathological query hits cost-reject or timeout — not OOM/hang.
+* A `P+` query over a cyclic fixture reaches the exact pair fixed point; a pathological query must fail as a whole at cost admission or timeout — never partial success.
 * A million-row `SELECT` streams with bounded memory; a slow/abandoned client is bounded by `transaction_timeout` and does not exhaust the stream-lane pool.
 
 > **Status correction (2026-07-16, measured, `ADR-0027`).** The "stream-lane
@@ -94,23 +94,22 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > conformance evidence exist. Issue #6's optional fallible/early-exit quad sink
 > is an API refinement and does not change this ADR's accepted status.
 
-> **Status correction, part 4 (2026-08-26, completion audit).** R3/R4 remain
-> partially implemented on the admitted serving surface. Recursive closures
-> silently stop at a hard-coded depth of 256 without cycle collapse; compilation
-> is outside the request timeout and has no admission budget; there is no common
-> result-row/result-byte cap, cost pre-check, or source-native statement timeout
-> across all three backends. Proposed ADR-0038 makes exact-or-explicit path
-> behavior and a single ingress-to-serialization `QueryBudget` the first product
-> gates. Do not infer those guarantees from this ADR's accepted status today.
+> **Status correction, part 4 (2026-09-01, completion audit).** ADR-0049 removes
+> the successful hard-coded 256-hop prefix: evidenced compiler targets now use an
+> exact finite-pair fixed point and unproved dialects reject before emission.
+> R4 remains incomplete: compilation is outside the request timeout and there is
+> no common result-row/result-byte cap, cost pre-check, source-native statement
+> timeout, or cancellation contract across all three backend paths. No production-
+> admission claim follows from pair exactness or the current timeout/pool controls.
 
 ## More Information
-* **Rewriter / `P+`:** ADR-0007. **Exec / pooling:** ADR-0006. **Closure backstop:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
+* **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
 
 ## Rules
 * **R1** — user values are bound parameters, never concatenated or textually interpolated, even with escaping.
 * **R2** — SQL identifiers derive only from the mapping IR (the reachability floor; authorization is ADR-0018).
-* **R3** — every recursive CTE carries a depth limit + cycle detection.
+* **R3** — every supported recursive CTE collapses semantic cycles; any work or deadline ceiling fails the complete query and never returns a successful depth prefix (ADR-0049).
 * **R4** — every generated query is governed (statement timeout, result cap, cost pre-check, admission control).
 * **R5** — `open_branch` returns without first collecting the complete result, and results stream with bounded memory **and** DB-bounded lifetime (`transaction_timeout`, stream-lane pool, cancel-on-drop).
 * **R6** — an adapter that fails R1 or R5 is excluded from `sf-serve`; an admission test locks the supported serving set until the adapter passes those rules.

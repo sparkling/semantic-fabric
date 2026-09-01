@@ -32,7 +32,7 @@
 //! `exec`), `rr:class` / refObjectMap unfolding, and the
 //! property paths with variable endpoints (`WITH RECURSIVE` / non-recursive CTE,
 //! ADR-0007; `owl:TransitiveProperty` served live, ADR-0008; finite-pair cycle
-//! collapse, ADR-0010/0038): `P+`/`P*` over a single predicate, the `?` (ZeroOrOne), `!` (NPS),
+//! collapse, ADR-0049): `P+`/`P*` over a single predicate, the `?` (ZeroOrOne), `!` (NPS),
 //! and `^`/`/`/`|` (inverse / sequence / alternative) operators, and `P+`/`P*`
 //! over such composites (see [`path`] for the per-shape soundness gates — raw-key
 //! equality requires matching node shapes; `P*`/`p?` reflexive requires a
