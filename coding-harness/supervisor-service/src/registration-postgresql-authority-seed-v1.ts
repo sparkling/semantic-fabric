@@ -7,6 +7,7 @@ import {
   closedRecordV1,
   deepFreezeV1,
   exactKeysV1,
+  POSTGRES_PROJECT_SCOPE_ROLE_V1,
   parseCanonicalPrettyJsonBytesV1,
   parseDigestV1,
   parseOpaqueIdV1,
@@ -60,7 +61,44 @@ const SEALED_TEXT = `{
 }
 `;
 const EXPECTED_RECORD = deepFreezeV1(JSON.parse(SEALED_TEXT) as Record<string, unknown>);
-const HANDLES = new WeakMap<object, Readonly<{ bytes: Uint8Array }>>();
+
+export interface PostgresAuthoritySeedConfigurationInsertProjectionV1 {
+  readonly projectAuthorityDigest: string;
+  readonly projectScopeRole: typeof POSTGRES_PROJECT_SCOPE_ROLE_V1;
+  readonly configurationEpoch: string;
+  readonly configurationDigest: string;
+  readonly genesisAuthorityHeadDigest: string;
+  readonly serializedConfiguration: string;
+  readonly serializedConfigurationSha256: string;
+  readonly projectPrincipalId: string;
+  readonly projectAuthenticationPolicyDigest: string;
+  readonly servicePrincipalId: string;
+  readonly serviceKeyEpoch: string;
+  readonly serviceKeyFingerprint: string;
+  readonly serviceSigningSpkiDer: string;
+  readonly genesisSemanticReceiptDigest: string;
+}
+
+export interface PostgresAuthoritySeedStateInsertProjectionV1 {
+  readonly projectAuthorityDigest: string;
+  readonly projectScopeRole: typeof POSTGRES_PROJECT_SCOPE_ROLE_V1;
+  readonly singletonKey: true;
+  readonly activeConfigurationEpoch: string;
+  readonly activeConfigurationDigest: string;
+  readonly authorityHeadDigest: string;
+}
+
+export interface PostgresAuthoritySeedInsertProjectionV1 {
+  readonly authorityConfiguration: PostgresAuthoritySeedConfigurationInsertProjectionV1;
+  readonly authorityStateIdentity: PostgresAuthoritySeedStateInsertProjectionV1;
+}
+
+interface AuthoritySeedStateV1 {
+  readonly bytes: Uint8Array;
+  readonly insertProjection: PostgresAuthoritySeedInsertProjectionV1;
+}
+
+const HANDLES = new WeakMap<object, Readonly<AuthoritySeedStateV1>>();
 
 export interface ParsedPostgresAuthoritySeedV1 {
   readonly seedKind: 'postgresql-authority-seed-v1';
@@ -86,7 +124,7 @@ export function parsePostgresAuthoritySeedCandidateV1(
     const parsed = parsePostgresMigrationJsonBytesV1(bytes, 'seed');
     if (parsed.sha256 !== POSTGRES_AUTHORITY_SEED_SHA256_V1
       || JSON.stringify(parsed.record) !== JSON.stringify(EXPECTED_RECORD)) throw new TypeError();
-    validateSeed(parsed.record);
+    const insertProjection = validateSeed(parsed.record);
     const handle = Object.freeze({
       seedKind: 'postgresql-authority-seed-v1' as const,
       rawByteLength: POSTGRES_AUTHORITY_SEED_BYTES_V1,
@@ -94,7 +132,7 @@ export function parsePostgresAuthoritySeedCandidateV1(
       authority: 'none' as const,
       readinessAuthorized: false as const,
     });
-    HANDLES.set(handle, Object.freeze({ bytes }));
+    HANDLES.set(handle, Object.freeze({ bytes, insertProjection }));
     return handle;
   } catch {
     throw new TypeError(INVALID);
@@ -117,7 +155,16 @@ export function copyPostgresAuthoritySeedBytesV1(value: unknown): Uint8Array {
   return Uint8Array.from(HANDLES.get(value)!.bytes);
 }
 
-function validateSeed(root: Readonly<Record<string, unknown>>): void {
+export function postgresAuthoritySeedInsertProjectionV1(
+  value: unknown,
+): PostgresAuthoritySeedInsertProjectionV1 {
+  assertPostgresAuthoritySeedHandleV1(value);
+  return HANDLES.get(value)!.insertProjection;
+}
+
+function validateSeed(
+  root: Readonly<Record<string, unknown>>,
+): PostgresAuthoritySeedInsertProjectionV1 {
   exactKeysV1(root, [
     'domain', 'schemaVersion', 'authorityConfiguration', 'authorityStateIdentity',
   ], 'authority seed');
@@ -138,14 +185,20 @@ function validateSeed(root: Readonly<Record<string, unknown>>): void {
     'activeConfigurationEpoch', 'activeConfigurationDigest', 'authorityHeadDigest',
   ], 'authority seed state');
 
-  const configurationBytes = decodeBase64Url(
+  const serializedConfiguration = decodeBase64Url(
     configurationRow.serializedConfiguration, 131_072,
   );
   const configuration = parseCanonicalPrettyJsonBytesV1(
-    configurationBytes, 'sealed authority configuration', 131_072,
+    serializedConfiguration.bytes, 'sealed authority configuration', 131_072,
   );
   const configurationDigest = parseDigestV1(
     configurationRow.configurationDigest, 'seed configuration digest',
+  );
+  const serializedConfigurationSha256 = parseDigestV1(
+    configurationRow.serializedConfigurationSha256, 'config byte digest',
+  );
+  const configurationEpoch = parseUint64V1(
+    configurationRow.configurationEpoch, 'seed epoch',
   );
   const claimedConfigurationDigest = parseDigestV1(
     configuration.configurationDigest, 'configuration digest',
@@ -158,9 +211,8 @@ function validateSeed(root: Readonly<Record<string, unknown>>): void {
       domain: CONFIGURATION_DIGEST_DOMAIN,
       configuration: configurationBody,
     })
-    || rawSha256HexV1(configurationBytes)
-      !== parseDigestV1(configurationRow.serializedConfigurationSha256, 'config byte digest')
-    || parseUint64V1(configurationRow.configurationEpoch, 'seed epoch') !== '0') {
+    || rawSha256HexV1(serializedConfiguration.bytes) !== serializedConfigurationSha256
+    || configurationEpoch !== '0') {
     throw new TypeError();
   }
 
@@ -171,22 +223,38 @@ function validateSeed(root: Readonly<Record<string, unknown>>): void {
   const projectDigest = parseDigestV1(
     configurationRow.projectAuthorityDigest, 'seed project digest',
   );
+  const projectPrincipalId = parseOpaqueIdV1(
+    configurationRow.projectPrincipalId, 'seed project principal',
+  );
+  const projectAuthenticationPolicyDigest = parseDigestV1(
+    configurationRow.projectAuthenticationPolicyDigest, 'seed auth policy',
+  );
+  const servicePrincipalId = parseOpaqueIdV1(
+    configurationRow.servicePrincipalId, 'seed service principal',
+  );
+  const serviceKeyEpoch = parseUint64V1(
+    configurationRow.serviceKeyEpoch, 'seed service epoch', 1n,
+  );
   const serviceFingerprint = parseDigestV1(
     configurationRow.serviceKeyFingerprint, 'seed service fingerprint',
   );
-  validateEd25519SpkiV1(
-    decodeBase64Url(configurationRow.serviceSigningSpkiDer, 44, 44),
-    serviceFingerprint,
+  const serviceSigningSpkiDer = decodeBase64Url(
+    configurationRow.serviceSigningSpkiDer, 44, 44,
   );
-  parseDigestV1(configurationRow.genesisSemanticReceiptDigest, 'seed genesis receipt');
+  validateEd25519SpkiV1(
+    serviceSigningSpkiDer.bytes, serviceFingerprint,
+  );
+  const genesisSemanticReceiptDigest = parseDigestV1(
+    configurationRow.genesisSemanticReceiptDigest, 'seed genesis receipt',
+  );
   if (projectDigest !== parseDigestV1(project.projectAuthorityDigest, 'configuration project')
-    || parseOpaqueIdV1(configurationRow.projectPrincipalId, 'seed project principal')
+    || projectPrincipalId
       !== parseOpaqueIdV1(principal.principalId, 'configuration project principal')
-    || parseDigestV1(configurationRow.projectAuthenticationPolicyDigest, 'seed auth policy')
+    || projectAuthenticationPolicyDigest
       !== parseDigestV1(project.authenticationPolicyDigest, 'configuration auth policy')
-    || parseOpaqueIdV1(configurationRow.servicePrincipalId, 'seed service principal')
+    || servicePrincipalId
       !== parseOpaqueIdV1(servicePrincipal.principalId, 'configuration service principal')
-    || parseUint64V1(configurationRow.serviceKeyEpoch, 'seed service epoch', 1n)
+    || serviceKeyEpoch
       !== parseUint64V1(servicePrincipal.keyEpoch, 'configuration service epoch', 1n)
     || serviceFingerprint
       !== parseDigestV1(servicePrincipal.keyFingerprint, 'configuration service fingerprint')) {
@@ -198,21 +266,70 @@ function validateSeed(root: Readonly<Record<string, unknown>>): void {
     configurationEpoch: '0',
     configurationDigest,
   });
-  if (head !== parseDigestV1(configurationRow.genesisAuthorityHeadDigest, 'seed head')
-    || state.singletonKey !== true
-    || state.projectScopeRole !== 'sf_supervisor_project_scope_v1'
-    || configurationRow.projectScopeRole !== state.projectScopeRole
-    || state.projectAuthorityDigest !== projectDigest
-    || state.activeConfigurationEpoch !== '0'
-    || state.activeConfigurationDigest !== configurationDigest
-    || state.authorityHeadDigest !== head) throw new TypeError();
+  const genesisAuthorityHeadDigest = parseDigestV1(
+    configurationRow.genesisAuthorityHeadDigest, 'seed head',
+  );
+  const stateProjectDigest = parseDigestV1(
+    state.projectAuthorityDigest, 'seed state project digest',
+  );
+  const stateActiveConfigurationEpoch = parseUint64V1(
+    state.activeConfigurationEpoch, 'seed state active epoch',
+  );
+  const stateActiveConfigurationDigest = parseDigestV1(
+    state.activeConfigurationDigest, 'seed state active configuration digest',
+  );
+  const stateAuthorityHeadDigest = parseDigestV1(
+    state.authorityHeadDigest, 'seed state authority head digest',
+  );
+  const projectScopeRole = configurationRow.projectScopeRole;
+  const stateProjectScopeRole = state.projectScopeRole;
+  const singletonKey = state.singletonKey;
+  if (head !== genesisAuthorityHeadDigest
+    || singletonKey !== true
+    || projectScopeRole !== POSTGRES_PROJECT_SCOPE_ROLE_V1
+    || stateProjectScopeRole !== POSTGRES_PROJECT_SCOPE_ROLE_V1
+    || stateProjectDigest !== projectDigest
+    || stateActiveConfigurationEpoch !== '0'
+    || stateActiveConfigurationDigest !== configurationDigest
+    || stateAuthorityHeadDigest !== head) throw new TypeError();
+
+  return deepFreezeV1({
+    authorityConfiguration: {
+      projectAuthorityDigest: projectDigest,
+      projectScopeRole,
+      configurationEpoch,
+      configurationDigest,
+      genesisAuthorityHeadDigest,
+      serializedConfiguration: serializedConfiguration.text,
+      serializedConfigurationSha256,
+      projectPrincipalId,
+      projectAuthenticationPolicyDigest,
+      servicePrincipalId,
+      serviceKeyEpoch,
+      serviceKeyFingerprint: serviceFingerprint,
+      serviceSigningSpkiDer: serviceSigningSpkiDer.text,
+      genesisSemanticReceiptDigest,
+    },
+    authorityStateIdentity: {
+      projectAuthorityDigest: stateProjectDigest,
+      projectScopeRole: stateProjectScopeRole,
+      singletonKey,
+      activeConfigurationEpoch: stateActiveConfigurationEpoch,
+      activeConfigurationDigest: stateActiveConfigurationDigest,
+      authorityHeadDigest: stateAuthorityHeadDigest,
+    },
+  });
 }
 
-function decodeBase64Url(value: unknown, maximum: number, exact?: number): Uint8Array {
+function decodeBase64Url(
+  value: unknown,
+  maximum: number,
+  exact?: number,
+): Readonly<{ text: string; bytes: Uint8Array }> {
   if (typeof value !== 'string' || value.length === 0
     || !/^[A-Za-z0-9_-]+$/.test(value)) throw new TypeError();
   const decoded = Uint8Array.from(Buffer.from(value, 'base64url'));
   if (decoded.byteLength > maximum || (exact !== undefined && decoded.byteLength !== exact)
     || Buffer.from(decoded).toString('base64url') !== value) throw new TypeError();
-  return decoded;
+  return Object.freeze({ text: value, bytes: decoded });
 }
