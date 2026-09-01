@@ -112,7 +112,7 @@ async fn mysql_stream_releases_connection_on_early_drop() {
         .into();
     let pool = Pool::new(db_opts);
 
-    let cfg = Arc::new(ServeConfig::new(
+    let cfg = Arc::new(ServeConfig::new_unchecked(
         Backend::Mysql(pool.clone()),
         maps,
         Tbox::default(),

@@ -15,6 +15,7 @@ use sparesults::QueryResultsFormat;
 
 use crate::admission;
 use crate::backend::{Backend, PgConn};
+use crate::binding::BoundPlan;
 use crate::config::ServeConfig;
 use crate::deadline::{self, CompilerRunError, JoinedTaskError, RequestDeadline};
 use crate::problem::{self, ProblemCode};
@@ -108,20 +109,25 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let plan = match compile(cfg.clone(), query, deadline).await {
+    let bound = match compile(cfg.clone(), query, deadline).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    if let Err(error) = admission::admit(&plan) {
+    if let Err(error) = admission::admit(bound.plan()) {
         let _internal_state = error.state();
         return problem::response(ProblemCode::UnsupportedQuery);
     }
+    let execution = match cfg.prepare_execution(bound) {
+        Ok(execution) => execution,
+        Err(_) => return problem::response(ProblemCode::Internal),
+    };
+    let (backend, plan) = execution.into_parts();
     let accept = accept.as_deref();
 
     match &plan.form {
-        PlanForm::Select { .. } => respond_select(cfg, plan, accept, deadline).await,
-        PlanForm::Ask => respond_ask(cfg, plan, accept, deadline).await,
-        PlanForm::Construct { .. } => respond_construct(cfg, plan, accept, deadline).await,
+        PlanForm::Select { .. } => respond_select(backend, plan, accept, deadline).await,
+        PlanForm::Ask => respond_ask(backend, plan, accept, deadline).await,
+        PlanForm::Construct { .. } => respond_construct(backend, plan, accept, deadline).await,
     }
 }
 
@@ -134,21 +140,9 @@ async fn compile(
     cfg: Arc<ServeConfig>,
     query: String,
     deadline: RequestDeadline,
-) -> Result<Plan, Response> {
-    let dialect = cfg.backend.dialect();
+) -> Result<BoundPlan, Response> {
     let permits = cfg.compiler_permits();
-    let compiled = deadline::run_compiler(deadline, permits, move || {
-        sf_sparql::parse_and_translate_cached(
-            &query,
-            &cfg.mapping,
-            dialect,
-            &cfg.tbox,
-            &cfg.schema,
-            cfg.plan_cache(),
-            cfg.epoch(),
-        )
-    })
-    .await;
+    let compiled = deadline::run_compiler(deadline, permits, move || cfg.compile(&query)).await;
     match compiled {
         Err(CompilerRunError::Deadline(_)) => Err(timeout_response()),
         Err(CompilerRunError::AdmissionClosed | CompilerRunError::Join(_)) => {
@@ -165,7 +159,7 @@ async fn compile(
 /// body mid-stream (same posture as the SQLite CONSTRUCT path). HTTP 200 is already
 /// committed then, so this slice does not claim an atomic/no-prefix result body.
 async fn respond_select(
-    cfg: Arc<ServeConfig>,
+    backend: Backend,
     plan: Plan,
     accept: Option<&str>,
     deadline: RequestDeadline,
@@ -178,7 +172,7 @@ async fn respond_select(
     // Uniform lane (ADR-0024 M5): every backend drives the generic streamer via a
     // thin concrete `exec_*::select_each_*` closure. SQLite's blocking now lives in
     // the adapter's cap-1 bridge (no sf-serve spawn_blocking special-case).
-    let body = match cfg.backend.clone() {
+    let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
             stream::select_body_streaming(
@@ -223,13 +217,13 @@ async fn respond_select(
 }
 
 async fn respond_ask(
-    cfg: Arc<ServeConfig>,
+    backend: Backend,
     plan: Plan,
     accept: Option<&str>,
     deadline: RequestDeadline,
 ) -> Response {
     let fmt = negotiate_results(accept);
-    let value = match cfg.backend.clone() {
+    let value = match backend {
         Backend::Sqlite(pool) => {
             // Uniform lane (ADR-0024 M5): SQLite ASK spawns the owned cap-1-bridge
             // backend onto the runtime like the MySQL arm — no `spawn_blocking`
@@ -296,13 +290,13 @@ async fn respond_ask(
 /// Stream a CONSTRUCT (ADR-0010 §C) — triples flow from the executor sink through
 /// the RDF serialiser into the body, never collected, on **both** backends.
 async fn respond_construct(
-    cfg: Arc<ServeConfig>,
+    backend: Backend,
     plan: Plan,
     accept: Option<&str>,
     deadline: RequestDeadline,
 ) -> Response {
     let fmt = negotiate_rdf(accept);
-    let body = match cfg.backend.clone() {
+    let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
             stream::construct_body_streaming(

@@ -24,6 +24,7 @@ pub mod stream;
 
 mod admission;
 mod backend;
+mod binding;
 mod config;
 mod deadline;
 mod http;
@@ -32,7 +33,8 @@ mod problem;
 #[cfg(test)]
 mod deadline_tests;
 
-pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, SqlitePool};
+pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
+pub use binding::{BackendProfile, IntrospectedSource};
 pub use config::ServeConfig;
 pub use http::router;
 pub use ontology::tbox_from_turtle;

@@ -36,7 +36,7 @@ fn config_with_stale_schema() -> ServeConfig {
         "ALTER TABLE items RENAME COLUMN \"{SECRET_COLUMN}\" TO public_value"
     ))
     .expect("drift live schema");
-    ServeConfig::new(Backend::sqlite(conn), mapping, Tbox::default(), schema)
+    ServeConfig::new_unchecked(Backend::sqlite(conn), mapping, Tbox::default(), schema)
 }
 
 fn request(query: &str, content_type: &str) -> Request<Body> {

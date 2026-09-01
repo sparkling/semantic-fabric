@@ -26,18 +26,21 @@ use crate::error::{Error, Result};
 
 /// A SQL dialect target for emission, parsing, and introspection (ADR-0006 / ADR-0024 M8).
 ///
-/// The three original dialects (Postgres, Sqlite, MySql) are production-wired. Every
-/// other variant has an associated [`Dialect::placeholder`], [`Dialect::quote_char`],
-/// and [`Dialect::parser_dialect`] implementation, so SQL can be emitted for all of
-/// them today. Live driver wiring is tiered:
+/// PostgreSQL, SQLite, and MySQL are wired into the current serve adapter, but
+/// adapter wiring is not production release admission: the current capability
+/// catalogue admits zero production backends. Every other variant has an associated
+/// [`Dialect::placeholder`], [`Dialect::quote_char`], and
+/// [`Dialect::parser_dialect`] implementation, so SQL can be emitted for all of
+/// them today. Driver support is tiered:
 ///
-/// * **Live-wired**: Postgres, Sqlite, MySql, DuckDb (embedded, requires `duckdb-backend` feature)
+/// * **Serve-wired**: Postgres, Sqlite, MySql
+/// * **Feature-gated adapter**: DuckDb (embedded, requires `duckdb-backend` feature)
 /// * **Wire-compatible**: Redshift (thin alias over PG wire)
 /// * **Scaffolded**: all others (compile + return `Error::Unsupported` at runtime)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dialect {
-    // --- original three (production-wired) ------------------------------------
-    /// PostgreSQL — primary production source; `$n` placeholders, `"`-quoted idents.
+    // --- current serve-adapter targets -----------------------------------------
+    /// PostgreSQL — primary serve target; `$n` placeholders, `"`-quoted idents.
     Postgres,
     /// SQLite — embedded / CI source; `?` placeholders, `"`-quoted idents.
     Sqlite,

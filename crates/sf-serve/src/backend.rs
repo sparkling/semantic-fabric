@@ -96,6 +96,27 @@ pub enum Backend {
     Mysql(mysql_async::Pool),
 }
 
+/// Concrete backend implementation wired into the serve adapter.
+///
+/// This is an implementation identity, not a release-capability admission. The
+/// current capability catalogue admits zero production backends.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum BackendKind {
+    Sqlite,
+    Postgres,
+    MySql,
+}
+
+impl BackendKind {
+    pub const fn dialect(self) -> Dialect {
+        match self {
+            Self::Sqlite => Dialect::Sqlite,
+            Self::Postgres => Dialect::Postgres,
+            Self::MySql => Dialect::MySql,
+        }
+    }
+}
+
 impl Backend {
     /// Wrap a single open SQLite connection as a backend (a pool of one — the
     /// shape every `:memory:` source and most test fixtures want).
@@ -139,13 +160,18 @@ impl Backend {
         Ok((Backend::Sqlite(SqlitePool::new(conns)), schema))
     }
 
-    /// The SQL dialect this backend speaks (drives emission/introspection).
-    pub fn dialect(&self) -> Dialect {
+    /// The concrete serve-adapter implementation kind.
+    pub const fn kind(&self) -> BackendKind {
         match self {
-            Backend::Sqlite(_) => Dialect::Sqlite,
-            Backend::Pg(_) => Dialect::Postgres,
-            Backend::Mysql(_) => Dialect::MySql,
+            Backend::Sqlite(_) => BackendKind::Sqlite,
+            Backend::Pg(_) => BackendKind::Postgres,
+            Backend::Mysql(_) => BackendKind::MySql,
         }
+    }
+
+    /// The SQL dialect this backend speaks (drives emission/introspection).
+    pub const fn dialect(&self) -> Dialect {
+        self.kind().dialect()
     }
 }
 

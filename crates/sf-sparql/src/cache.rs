@@ -1,8 +1,12 @@
-//! Plan cache (ADR-0007 *Performance*) — keyed on a **structural hash of the
-//! SPARQL algebra**, invalidated by a monotonic `⟨T, M⟩` + source-schema
-//! **epoch** (bumped on ontology reload, mapping reload, or a schema change). The
-//! cache is sized by `⟨T, M⟩`, never by data, so it cannot go stale against the
-//! live sources.
+//! Plan cache (ADR-0007 *Performance*) — owned by one immutable
+//! [`CompilerBinding`] and keyed on both its opaque compile scope and a
+//! **structural hash of the SPARQL algebra**.
+//!
+//! The scope binds one source ID, mapping, T-Box, observed schema, dialect, and
+//! cache. A new binding gets a new process-unique identity; its epoch is an
+//! explicit generation marker. No live schema watcher or reload path exists in
+//! the current server, so this module does **not** claim that later database DDL
+//! bumps the epoch or invalidates an already-running binding.
 //!
 //! **Sharp keying rule (ADR-0007):** parameterise *data* constants but key on
 //! *schema-selecting* constants (predicate IRIs and IRI-template constants — the
@@ -15,50 +19,236 @@
 //! wrong hit); the data/schema split that lets two `FILTER(?x = <data>)` queries
 //! share one plan is the documented refinement (ADR-0007), tracked here.
 
+use std::fmt;
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use sf_core::{SourceId, SourceMapping};
+use sf_sql::{Dialect, TableSchema};
 use spargebra::Query;
 
-/// A monotonic `⟨T, M⟩` + schema epoch. Bump it whenever the ontology, the
-/// mappings, or a source schema changes; all plans from an older epoch are dead.
+use crate::{Plan, Result, Tbox};
+
+/// A compile-binding generation marker.
+///
+/// The current server constructs one immutable generation and has no live
+/// reload/drift detector. A future reload path must build a new binding or bump
+/// this marker after observing a coherent replacement snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Epoch(pub u64);
 
 impl Epoch {
+    /// Advance the generation, failing closed rather than wrapping to an old
+    /// cache namespace.
     pub fn bump(&mut self) {
-        self.0 += 1;
+        self.0 = self.0.checked_add(1).expect("compile epoch exhausted");
     }
 }
 
-/// The structural cache key: `(epoch, algebra-hash)` plus the **canonical algebra
-/// string** that disambiguates a 64-bit hash collision. `Eq` compares the
+static NEXT_BINDING_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A process-unique, non-secret identity for one immutable compiler binding.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct CompileBindingId(NonZeroU64);
+
+impl CompileBindingId {
+    fn mint() -> Self {
+        let value = NEXT_BINDING_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .expect("compiler binding identity exhausted");
+        Self(NonZeroU64::new(value).expect("binding IDs start at one"))
+    }
+
+    const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl fmt::Debug for CompileBindingId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "binding[{}]", self.get())
+    }
+}
+
+/// Exact cache namespace for one compiler binding and generation.
+///
+/// Construction is private so callers cannot accidentally reuse an identity for
+/// a different mapping/schema/T-Box/backend context. Obtain it from
+/// [`CompilerBinding::scope`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompileScope {
+    binding: CompileBindingId,
+    dialect: Dialect,
+    epoch: Epoch,
+}
+
+impl CompileScope {
+    fn new(binding: CompileBindingId, dialect: Dialect, epoch: Epoch) -> Self {
+        Self {
+            binding,
+            dialect,
+            epoch,
+        }
+    }
+
+    /// Process-local binding identity. This is diagnostic metadata, not a
+    /// persistent source identifier or release receipt.
+    pub const fn binding_id(self) -> u64 {
+        self.binding.get()
+    }
+
+    pub const fn dialect(self) -> Dialect {
+        self.dialect
+    }
+
+    pub const fn epoch(self) -> Epoch {
+        self.epoch
+    }
+}
+
+/// Immutable semantic inputs and cache for one source-local compiler.
+///
+/// Grouping these values makes dialect/context mismatch unrepresentable on the
+/// cached translation path. Creating a replacement mapping, ontology, schema,
+/// or backend requires a new binding and therefore a fresh cache namespace.
+pub struct CompilerBinding {
+    mapping: SourceMapping,
+    dialect: Dialect,
+    tbox: Tbox,
+    schema: Vec<TableSchema>,
+    cache: PlanCache<CachedPlan>,
+    scope: CompileScope,
+}
+
+impl CompilerBinding {
+    pub fn new(
+        mapping: SourceMapping,
+        dialect: Dialect,
+        tbox: Tbox,
+        schema: Vec<TableSchema>,
+        cache_capacity: usize,
+    ) -> Self {
+        assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
+        let scope = CompileScope::new(CompileBindingId::mint(), dialect, Epoch::default());
+        Self {
+            mapping,
+            dialect,
+            tbox,
+            schema,
+            cache: PlanCache::new(cache_capacity),
+            scope,
+        }
+    }
+
+    /// Parse and compile against this binding's inseparable semantic context.
+    pub fn compile(&self, sparql: &str) -> Result<Plan> {
+        crate::parse_and_translate_cached(sparql, self)
+    }
+
+    pub const fn source_id(&self) -> SourceId {
+        self.mapping.source_id()
+    }
+
+    pub const fn dialect(&self) -> Dialect {
+        self.dialect
+    }
+
+    pub const fn scope(&self) -> CompileScope {
+        self.scope
+    }
+
+    pub(crate) fn triples_maps(&self) -> &[sf_core::ir::TriplesMap] {
+        self.mapping.triples_maps()
+    }
+
+    pub(crate) fn tbox(&self) -> &Tbox {
+        &self.tbox
+    }
+
+    pub(crate) fn schema(&self) -> &[TableSchema] {
+        &self.schema
+    }
+
+    pub(crate) fn cache(&self) -> &PlanCache<CachedPlan> {
+        &self.cache
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cache_len(&self) -> usize {
+        self.cache.len()
+    }
+}
+
+/// Cached artifact carrying its own scope as a second fail-closed check against
+/// a wrongly inserted value. Kept crate-private so no unverified plan escapes.
+#[derive(Clone)]
+pub(crate) struct CachedPlan {
+    scope: CompileScope,
+    plan: Plan,
+}
+
+impl CachedPlan {
+    pub(crate) const fn new(scope: CompileScope, plan: Plan) -> Self {
+        Self { scope, plan }
+    }
+
+    pub(crate) const fn scope(&self) -> CompileScope {
+        self.scope
+    }
+
+    pub(crate) const fn plan(&self) -> &Plan {
+        &self.plan
+    }
+}
+
+impl fmt::Debug for CompilerBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerBinding")
+            .field("scope", &self.scope)
+            .field("source_id", &self.source_id())
+            .field("dialect", &self.dialect)
+            .field("triples_map_count", &self.mapping.len())
+            .field("schema_table_count", &self.schema.len())
+            .field("tbox_empty", &self.tbox.is_empty())
+            .field("cache_entries", &self.cache.len())
+            .finish()
+    }
+}
+
+/// The structural cache key: `(compile-scope, algebra-hash)` plus the **canonical
+/// algebra string** that disambiguates a 64-bit hash collision. `Eq` compares the
 /// canonical string, so two distinct queries that happen to share a
-/// `structural_hash` at the same epoch can never collide onto one plan — closing
+/// `structural_hash` in the same scope can never collide onto one plan — closing
 /// the hazard ADR-0007 *sharp keying* warns about (a plan for `:a` serving `:b`).
-/// `Hash` uses only the fast `(epoch, structural_hash)` pre-hash.
+/// `Hash` uses only the fast `(scope, structural_hash)` pre-hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanKey {
-    pub epoch: u64,
-    pub structural_hash: u64,
-    pub canonical: String,
+    scope: CompileScope,
+    structural_hash: u64,
+    canonical: String,
 }
 
 impl std::hash::Hash for PlanKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.epoch.hash(state);
+        self.scope.hash(state);
         self.structural_hash.hash(state);
     }
 }
 
-/// Compute the structural key for `query` at `epoch` (ADR-0007). Conservative:
+/// Compute the structural key for `query` in `scope` (ADR-0007). Conservative:
 /// the canonical algebra rendering retains the schema-selecting constants
 /// (predicate IRIs, template constants) — and, for now, data constants too — and
 /// is also stored verbatim so equality is exact, never hash-only.
-pub fn plan_key(query: &Query, epoch: Epoch) -> PlanKey {
+pub fn plan_key(query: &Query, scope: CompileScope) -> PlanKey {
     use std::hash::{Hash, Hasher};
     let canonical = query.to_string();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     canonical.hash(&mut h);
     PlanKey {
-        epoch: epoch.0,
+        scope,
         structural_hash: h.finish(),
         canonical,
     }
@@ -111,11 +301,15 @@ mod tests {
         SparqlParser::new().parse_query(q).unwrap()
     }
 
+    fn scope(dialect: Dialect, epoch: Epoch) -> CompileScope {
+        CompileScope::new(CompileBindingId::mint(), dialect, epoch)
+    }
+
     #[test]
     fn same_query_same_key() {
-        let e = Epoch(3);
-        let a = plan_key(&parse("SELECT * WHERE { ?s ?p ?o }"), e);
-        let b = plan_key(&parse("SELECT * WHERE { ?s ?p ?o }"), e);
+        let scope = scope(Dialect::Sqlite, Epoch(3));
+        let a = plan_key(&parse("SELECT * WHERE { ?s ?p ?o }"), scope);
+        let b = plan_key(&parse("SELECT * WHERE { ?s ?p ?o }"), scope);
         assert_eq!(a, b);
     }
 
@@ -123,9 +317,9 @@ mod tests {
     fn schema_selecting_constant_changes_key() {
         // A different predicate IRI selects different mapping entries → must not
         // share a plan (ADR-0007 sharp keying).
-        let e = Epoch(0);
-        let a = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/a> ?y }"), e);
-        let b = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/b> ?y }"), e);
+        let scope = scope(Dialect::Sqlite, Epoch(0));
+        let a = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/a> ?y }"), scope);
+        let b = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/b> ?y }"), scope);
         assert_ne!(a, b);
     }
 
@@ -135,8 +329,9 @@ mod tests {
         // same epoch: equality must still distinguish them (ADR-0007 sharp keying),
         // so the cache returns a miss for the second, never `:a`'s plan for `:b`.
         let cache: PlanCache<u32> = PlanCache::new(8);
-        let mut ka = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/a> ?y }"), Epoch(0));
-        let mut kb = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/b> ?y }"), Epoch(0));
+        let scope = scope(Dialect::Sqlite, Epoch(0));
+        let mut ka = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/a> ?y }"), scope);
+        let mut kb = plan_key(&parse("SELECT ?x WHERE { ?x <http://ex/b> ?y }"), scope);
         // Pin both to the same pre-hash bucket (a forced collision).
         ka.structural_hash = 42;
         kb.structural_hash = 42;
@@ -156,32 +351,50 @@ mod tests {
     #[test]
     fn epoch_bump_invalidates() {
         let q = parse("SELECT * WHERE { ?s ?p ?o }");
-        assert_ne!(plan_key(&q, Epoch(1)), plan_key(&q, Epoch(2)));
+        let binding = CompileBindingId::mint();
+        assert_ne!(
+            plan_key(&q, CompileScope::new(binding, Dialect::Sqlite, Epoch(1))),
+            plan_key(&q, CompileScope::new(binding, Dialect::Sqlite, Epoch(2)))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "compile epoch exhausted")]
+    fn epoch_exhaustion_fails_instead_of_wrapping() {
+        let mut epoch = Epoch(u64::MAX);
+        epoch.bump();
+    }
+
+    #[test]
+    fn dialect_and_binding_identity_are_part_of_the_key() {
+        let q = parse("SELECT * WHERE { ?s ?p ?o }");
+        let binding = CompileBindingId::mint();
+        let sqlite = CompileScope::new(binding, Dialect::Sqlite, Epoch(0));
+        let postgres = CompileScope::new(binding, Dialect::Postgres, Epoch(0));
+        let other_binding = scope(Dialect::Sqlite, Epoch(0));
+
+        assert_ne!(plan_key(&q, sqlite), plan_key(&q, postgres));
+        assert_ne!(plan_key(&q, sqlite), plan_key(&q, other_binding));
     }
 
     #[test]
     fn cache_round_trips_and_is_bounded() {
         let cache: PlanCache<u32> = PlanCache::new(2);
-        let k1 = plan_key(&parse("SELECT * WHERE { ?a ?b ?c }"), Epoch(0));
+        let scope = scope(Dialect::Sqlite, Epoch(0));
+        let k1 = plan_key(&parse("SELECT * WHERE { ?a ?b ?c }"), scope);
         cache.put(k1.clone(), 10);
         assert_eq!(cache.get(&k1), Some(10));
         // Overflow evicts approximately-LRU, never wholesale (quick_cache).
-        cache.put(
-            plan_key(&parse("SELECT * WHERE { ?d ?e ?f }"), Epoch(0)),
-            20,
-        );
-        cache.put(
-            plan_key(&parse("SELECT * WHERE { ?g ?h ?i }"), Epoch(0)),
-            30,
-        );
+        cache.put(plan_key(&parse("SELECT * WHERE { ?d ?e ?f }"), scope), 20);
+        cache.put(plan_key(&parse("SELECT * WHERE { ?g ?h ?i }"), scope), 30);
         assert!(cache.len() <= 2);
     }
 
     /// A synthetic key distinguished only by `canonical` (real `plan_key` overkill
     /// for a hit-rate workload of thousands of accesses).
-    fn synth_key(id: usize) -> PlanKey {
+    fn synth_key(scope: CompileScope, id: usize) -> PlanKey {
         PlanKey {
-            epoch: 0,
+            scope,
             structural_hash: id as u64,
             canonical: format!("synthetic-plan-{id}"),
         }
@@ -206,6 +419,7 @@ mod tests {
         const ITERS: usize = 3000;
 
         let cache: PlanCache<u32> = PlanCache::new(CAPACITY);
+        let scope = scope(Dialect::Sqlite, Epoch(0));
         let mut hits = 0u32;
         let mut accesses = 0u32;
         for i in 0..ITERS {
@@ -213,9 +427,9 @@ mod tests {
             // much larger cold set that churns through far more distinct keys than
             // fit in `capacity`, forcing the cache to evict repeatedly.
             let key = if i % 3 != 0 {
-                synth_key(i % HOT)
+                synth_key(scope, i % HOT)
             } else {
-                synth_key(HOT + (i / 3) % COLD)
+                synth_key(scope, HOT + (i / 3) % COLD)
             };
             accesses += 1;
             if cache.get(&key).is_some() {

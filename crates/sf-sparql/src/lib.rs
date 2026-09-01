@@ -81,7 +81,10 @@ pub mod star;
 pub mod unfold;
 pub mod unify;
 
-pub use cache::{Epoch, PlanCache, PlanKey};
+#[cfg(test)]
+mod cache_binding_tests;
+
+pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
 pub use iq::Branch;
 pub use saturate::Tbox;
 
@@ -650,26 +653,31 @@ fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
     }
 }
 
-/// Translate through the compiled-plan cache (ADR-0007 *Plan cache, hot path*):
-/// a repeated query at the same `⟨T, M⟩` + schema `epoch` reuses its plan instead
-/// of recompiling. Keying is collision-safe — the canonical algebra disambiguates
-/// a hash collision, so `:a`'s plan can never serve `:b` (see [`cache`]). Bump
-/// `epoch` on ontology/mapping/schema reload to invalidate.
-pub fn translate_cached(
-    query: &Query,
-    maps: &[TriplesMap],
-    dialect: Dialect,
-    tbox: &Tbox,
-    schema: &[TableSchema],
-    cache: &PlanCache<Plan>,
-    epoch: Epoch,
-) -> Result<Plan> {
-    let key = cache::plan_key(query, epoch);
-    if let Some(plan) = cache.get(&key) {
-        return Ok(plan);
+/// Translate through one immutable [`CompilerBinding`]'s compiled-plan cache
+/// (ADR-0007 *Plan cache, hot path*). A repeated query in the same opaque scope
+/// reuses its plan; replacing any source-local semantic input requires a new
+/// binding and therefore a new namespace. Keying remains collision-safe because
+/// the canonical algebra disambiguates equal 64-bit hashes (see [`cache`]).
+pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan> {
+    let key = cache::plan_key(query, binding.scope());
+    if let Some(cached) = binding.cache().get(&key) {
+        if cached.scope() != binding.scope() {
+            return Err(Error::Mapping(
+                "compiled-plan cache scope mismatch".to_owned(),
+            ));
+        }
+        return Ok(cached.plan().clone());
     }
-    let plan = translate_with(query, maps, dialect, tbox, schema)?;
-    cache.put(key, plan.clone());
+    let plan = translate_with(
+        query,
+        binding.triples_maps(),
+        binding.dialect(),
+        binding.tbox(),
+        binding.schema(),
+    )?;
+    binding
+        .cache()
+        .put(key, cache::CachedPlan::new(binding.scope(), plan.clone()));
     Ok(plan)
 }
 
@@ -678,19 +686,11 @@ pub fn translate_cached(
 /// returns a 400 without touching the cache, then hit the cache before the
 /// full rewrite. Callers that already have a parsed `Query` call
 /// [`translate_cached`] directly.
-pub fn parse_and_translate_cached(
-    sparql: &str,
-    maps: &[TriplesMap],
-    dialect: Dialect,
-    tbox: &Tbox,
-    schema: &[TableSchema],
-    cache: &PlanCache<Plan>,
-    epoch: Epoch,
-) -> Result<Plan> {
+pub fn parse_and_translate_cached(sparql: &str, binding: &CompilerBinding) -> Result<Plan> {
     let query = spargebra::SparqlParser::new()
         .parse_query(sparql)
         .map_err(|e| Error::Parse(e.to_string()))?;
-    translate_cached(&query, maps, dialect, tbox, schema, cache, epoch)
+    translate_cached(&query, binding)
 }
 
 /// Parse `sparql` and translate it (convenience over [`translate`]).
@@ -938,29 +938,6 @@ mod tests {
             matches!(result.unwrap().form, PlanForm::Construct { .. }),
             "DESCRIBE * should produce a Construct form"
         );
-    }
-
-    #[test]
-    fn translate_cached_reuses_and_invalidates() {
-        // The cache is consulted on the compile path (not dead infrastructure): a
-        // second call at the same epoch is a hit; an epoch bump recompiles.
-        let q = spargebra::SparqlParser::new()
-            .parse_query("SELECT * WHERE { ?s ?p ?o }")
-            .unwrap();
-        let cache: PlanCache<Plan> = PlanCache::new(8);
-        let e = Epoch(1);
-        assert!(cache.is_empty());
-        let _ =
-            translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e).unwrap();
-        assert_eq!(cache.len(), 1, "first compile populates the cache");
-        let _ =
-            translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e).unwrap();
-        assert_eq!(cache.len(), 1, "second call is a hit, no new entry");
-        let mut e2 = e;
-        e2.bump();
-        let _ =
-            translate_cached(&q, &[], Dialect::Sqlite, &Tbox::default(), &[], &cache, e2).unwrap();
-        assert_eq!(cache.len(), 2, "a new epoch recompiles under a fresh key");
     }
 
     #[test]

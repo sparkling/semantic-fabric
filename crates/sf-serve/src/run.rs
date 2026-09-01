@@ -9,7 +9,9 @@ use tokio_postgres::NoTls;
 
 use crate::problem::StartupCause;
 use crate::source::PreparedSource;
-use crate::{introspect_pg_all, router, Backend, ServeConfig, ServeError, SourceRef};
+use crate::{
+    introspect_pg_all, router, Backend, IntrospectedSource, ServeConfig, ServeError, SourceRef,
+};
 
 /// Options resolved from the `serve` CLI flags. The runner reads the mapping /
 /// ontology files itself so the CLI stays a thin argument parser.
@@ -59,7 +61,8 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
             error: error.to_string(),
         })
     })?;
-    let mapping = sf_mapping::parse_r2rml(&mapping_ttl).map_err(|error| {
+    let source_id = sf_core::SourceId::new(0).expect("single-source slot zero is representable");
+    let mapping = sf_mapping::parse_r2rml_for_source(&mapping_ttl, source_id).map_err(|error| {
         ServeError::new(StartupCause::MappingParse {
             error: error.to_string(),
         })
@@ -79,7 +82,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
         None => sf_sparql::Tbox::default(),
     };
 
-    let (backend, schema) = open_backend(
+    let source = open_backend(
         source,
         opts.pg_pool_size,
         opts.pg_pool_wait,
@@ -87,7 +90,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
     )
     .await?;
 
-    let mut cfg = ServeConfig::new(backend, mapping, tbox, schema);
+    let mut cfg = ServeConfig::new(source, mapping, tbox);
     cfg.timeout = opts.timeout;
     cfg.max_query_len = opts.max_query_len;
 
@@ -113,7 +116,8 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
     })
 }
 
-/// Open the prepared backend and introspect its base-table schema.
+/// Open the prepared backend and pair it with the base-table schema observed
+/// through that handle. This pairing is not yet a coherent/live snapshot claim.
 /// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
 /// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
 /// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
@@ -122,15 +126,17 @@ async fn open_backend(
     pg_pool_size: usize,
     pg_pool_wait: Duration,
     sqlite_pool_size: usize,
-) -> Result<(Backend, Vec<sf_sql::TableSchema>), ServeError> {
+) -> Result<IntrospectedSource, ServeError> {
     match source {
         PreparedSource::Sqlite { path, label } => {
-            Backend::sqlite_pool_from_path(&path, sqlite_pool_size).map_err(|error| {
-                ServeError::new(StartupCause::SourceConnect {
-                    spec: label.to_owned(),
-                    error,
+            Backend::sqlite_pool_from_path(&path, sqlite_pool_size)
+                .map(|(backend, schema)| IntrospectedSource::observed(backend, schema))
+                .map_err(|error| {
+                    ServeError::new(StartupCause::SourceConnect {
+                        spec: label.to_owned(),
+                        error,
+                    })
                 })
-            })
         }
         PreparedSource::Postgres { config, label } => {
             // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
@@ -163,7 +169,7 @@ async fn open_backend(
                 })
             })?;
             drop(conn);
-            Ok((Backend::Pg(pool), schema))
+            Ok(IntrospectedSource::observed(Backend::Pg(pool), schema))
         }
         PreparedSource::Mysql { options, label } => {
             let pool = mysql_async::Pool::new(options);
@@ -180,7 +186,7 @@ async fn open_backend(
                 })
             })?;
             drop(conn);
-            Ok((Backend::Mysql(pool), schema))
+            Ok(IntrospectedSource::observed(Backend::Mysql(pool), schema))
         }
     }
 }
@@ -254,7 +260,7 @@ mod tests {
         let source = prepare_inline(spec).expect("valid SQLite source");
         let result = open_backend(source, 16, Duration::from_secs(5), 4).await;
 
-        let (backend, schema) = result.expect("valid sqlite spec should open");
+        let (backend, schema) = result.expect("valid sqlite spec should open").into_parts();
         assert!(matches!(backend, Backend::Sqlite(_)));
         assert!(
             !schema.is_empty(),
@@ -273,7 +279,8 @@ mod tests {
         let source = prepare_inline(spec).expect("valid SQLite source");
         let (_backend, schema) = open_backend(source, 16, Duration::from_secs(5), 4)
             .await
-            .expect("valid sqlite spec should open");
+            .expect("valid sqlite spec should open")
+            .into_parts();
 
         let widgets = schema
             .iter()
@@ -404,7 +411,8 @@ mod tests {
             .expect("environment-injected pg source should prepare");
         let (backend, _schema) = open_backend(source, 3, Duration::from_secs(2), 4)
             .await
-            .expect("reachable pg spec should open");
+            .expect("reachable pg spec should open")
+            .into_parts();
 
         let Backend::Pg(pool) = backend else {
             panic!("pg: spec should open a Backend::Pg");

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
+use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig, SqlitePool};
 use sf_sparql::Tbox;
 use tower::ServiceExt;
 
@@ -27,11 +27,23 @@ const MAPPING_TTL: &str = r#"
 "#;
 
 fn config() -> ServeConfig {
+    config_and_pool().0
+}
+
+fn config_and_pool() -> (ServeConfig, SqlitePool) {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
     conn.execute_batch(CREATE_SQL).expect("seed fixture");
     let schema = introspect_sqlite_all(&conn).expect("introspect fixture");
     let maps = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse fixture mapping");
-    ServeConfig::new(Backend::sqlite(conn), maps, Tbox::default(), schema)
+    let backend = Backend::sqlite(conn);
+    let Backend::Sqlite(pool) = &backend else {
+        unreachable!("fixture is SQLite")
+    };
+    let pool = pool.clone();
+    (
+        ServeConfig::new_unchecked(backend, maps, Tbox::default(), schema),
+        pool,
+    )
 }
 
 fn query_request(query: &str) -> Request<Body> {
@@ -65,10 +77,7 @@ async fn plain_streaming_plan_remains_admitted() {
 
 #[tokio::test]
 async fn global_order_is_typed_501_before_a_missing_live_table_is_touched() {
-    let cfg = config();
-    let Backend::Sqlite(pool) = &cfg.backend else {
-        unreachable!("fixture is SQLite")
-    };
+    let (cfg, pool) = config_and_pool();
     pool.pick()
         .lock()
         .expect("lock fixture")

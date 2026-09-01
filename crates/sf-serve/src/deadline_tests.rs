@@ -16,7 +16,7 @@ use crate::{router, Backend, ServeConfig};
 #[tokio::test(start_paused = true)]
 async fn request_clock_starts_before_body_extraction() {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
-    let mut cfg = ServeConfig::new(
+    let mut cfg = ServeConfig::new_unchecked(
         Backend::sqlite(conn),
         Vec::new(),
         sf_sparql::Tbox::default(),

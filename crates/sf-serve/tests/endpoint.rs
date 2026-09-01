@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
+use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig, SqlitePool};
 use sf_sparql::Tbox;
 use tower::ServiceExt;
 
@@ -28,11 +28,23 @@ const MAPPING_TTL: &str = r#"
 "#;
 
 fn sqlite_config() -> ServeConfig {
+    sqlite_config_with_pool().0
+}
+
+fn sqlite_config_with_pool() -> (ServeConfig, SqlitePool) {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(CREATE_SQL).unwrap();
     let schema = introspect_sqlite_all(&conn).unwrap();
     let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
-    ServeConfig::new(Backend::sqlite(conn), maps, Tbox::default(), schema)
+    let backend = Backend::sqlite(conn);
+    let Backend::Sqlite(pool) = &backend else {
+        unreachable!("fixture is SQLite")
+    };
+    let pool = pool.clone();
+    (
+        ServeConfig::new_unchecked(backend, maps, Tbox::default(), schema),
+        pool,
+    )
 }
 
 /// A fixture with `n` generated People rows, for exercising the bounded-memory
@@ -47,7 +59,7 @@ fn big_sqlite_config(n: usize) -> ServeConfig {
     .unwrap();
     let schema = introspect_sqlite_all(&conn).unwrap();
     let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
-    ServeConfig::new(Backend::sqlite(conn), maps, Tbox::default(), schema)
+    ServeConfig::new_unchecked(Backend::sqlite(conn), maps, Tbox::default(), schema)
 }
 
 /// POST a raw `application/sparql-query` body, asking for `accept`.
@@ -388,7 +400,7 @@ mod pg {
         // Same conninfo as the admin connection (no dbname override) so the pool's
         // connections see the table the admin connection just created.
         let pool = pg_pool(&conn_str);
-        let cfg = Arc::new(ServeConfig::new(
+        let cfg = Arc::new(ServeConfig::new_unchecked(
             Backend::Pg(pool),
             maps,
             Tbox::default(),
@@ -485,7 +497,7 @@ mod pg {
             n: usize,
             rows: i64,
         ) -> std::time::Duration {
-            let cfg = Arc::new(ServeConfig::new(
+            let cfg = Arc::new(ServeConfig::new_unchecked(
                 Backend::Pg(pool),
                 maps,
                 Tbox::default(),
@@ -596,7 +608,7 @@ mod pg {
             .runtime(deadpool_postgres::Runtime::Tokio1)
             .build()
             .unwrap();
-        let cfg = Arc::new(ServeConfig::new(
+        let cfg = Arc::new(ServeConfig::new_unchecked(
             Backend::Pg(pool),
             maps,
             Tbox::default(),
@@ -739,7 +751,12 @@ async fn sqlite_pool_concurrency_receipt() {
         let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
         let (backend, schema) = Backend::sqlite_pool_from_path(path.to_str().unwrap(), pool_size)
             .expect("open sqlite pool");
-        let cfg = Arc::new(ServeConfig::new(backend, maps, Tbox::default(), schema));
+        let cfg = Arc::new(ServeConfig::new_unchecked(
+            backend,
+            maps,
+            Tbox::default(),
+            schema,
+        ));
         let start = std::time::Instant::now();
         let mut handles = Vec::with_capacity(n);
         for _ in 0..n {
@@ -919,11 +936,8 @@ async fn ask_query_exceeding_timeout_returns_504() {
     // any deadline is ever checked mid-body — why ASK is the clean way to
     // reach 504 here). A workload-dependent "make the SQL itself slow" query
     // is inherently flaky across machines; this is not.
-    let mut cfg = sqlite_config();
+    let (mut cfg, pool) = sqlite_config_with_pool();
     cfg.timeout = std::time::Duration::from_millis(20);
-    let Backend::Sqlite(pool) = &cfg.backend else {
-        unreachable!()
-    };
     let conn = pool.pick();
     let hold = std::thread::spawn(move || {
         let _guard = conn.lock().unwrap();
@@ -947,19 +961,17 @@ async fn ask_query_exceeding_timeout_returns_504() {
 #[tokio::test]
 async fn ask_query_backend_sql_error_returns_500() {
     // A genuine runtime SQL failure (not a compile-time / translate-time one):
-    // the ServeConfig's `schema` still declares the "age" column (so translate
+    // the runtime binding's observed schema still declares the "age" column (so translate
     // succeeds), but the LIVE connection's table no longer has it — a schema
     // drift between compile-time metadata and the actual DB state, exactly the
     // shape `SparqlError::Sql` -> 500 exists to cover. Cleaner than any hack:
     // it's a real, reachable production scenario (concurrent DDL change).
-    let cfg = sqlite_config();
-    if let Backend::Sqlite(pool) = &cfg.backend {
-        pool.pick()
-            .lock()
-            .unwrap()
-            .execute_batch("ALTER TABLE \"People\" RENAME COLUMN \"age\" TO \"age_renamed\";")
-            .unwrap();
-    }
+    let (cfg, pool) = sqlite_config_with_pool();
+    pool.pick()
+        .lock()
+        .unwrap()
+        .execute_batch("ALTER TABLE \"People\" RENAME COLUMN \"age\" TO \"age_renamed\";")
+        .unwrap();
     let cfg = Arc::new(cfg);
     let req = post_query(
         "PREFIX ex: <http://ex/> ASK { ?p ex:age ?a }",
