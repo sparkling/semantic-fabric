@@ -1,6 +1,6 @@
 ---
 status: accepted
-date: 2026-08-26
+date: 2026-08-27
 updated: 2026-09-01
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
@@ -63,12 +63,13 @@ acceptance does not claim implementation. [ADR-0048](ADR-0048-rust-production-an
 accepted on 2026-09-01, keeps the product Rust-only and Node/TypeScript strictly
 non-deployable evidence. M1–M6 may proceed beside the evidence-authority lane;
 authoritative performance and M7 still require controlled exact-artifact proof.
-ADR-0039 remains proposed: ADR-0006 and immutable V1 `sf-cli` receipts stay
-authoritative until explicit adoption and a domain-separated V2 contract.
-The revision-pinned 14-category product-mock gold and separately qualified live
-development vertical are evidence only: relational R2RML covers one of 112
-tables, generic RML stays out of scope, and no source-to-container provenance is
-claimed.
+ADR-0039 remains proposed: ADR-0006 stays controlling; immutable V1 `sf-cli`
+receipts are canonical current-path evidence with `authority=none` and grant no admission or release authority.
+The revision-pinned 14-category product-mock gold and narrow qualified ProductDesign/Style
+live development vertical are evidence only. A Rust table/column inventory gate recounts
+11 stores, 112 tables and 598 columns; its 2026-09-01 read-only live run failed
+closed on recorded database drift. The bundle has 4,501 mapping quads in total. Its Source Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter; the admitted relational-R2RML slice covers one table/two columns.
+Keys, constraints, defaults, indexes, views, privileges, a global snapshot and source/image provenance remain unclaimed.
 
 ### 1. Definition of complete
 
@@ -105,8 +106,8 @@ Add five explicit domain contracts:
   identity policy, and cancellation hooks;
 - `QueryBudget`: one deadline and work/result/byte/admission budget spanning
   ingress through serialization;
-- `FederatedPlan`: per-source SQL fragments plus typed global operators,
-  reducers, failure policy, and provenance; and
+- `FederatedPlan`: per-source SQL fragments, typed global operators, reducers, failure policy, and immutable compile provenance only: runtime/configuration
+  epoch plus ontology, mapping, schema, and capability digests; and
 - `CapabilityProfile`: generated from executable evidence and bound to the
   release, standards snapshot, and backend matrix.
 
@@ -116,9 +117,9 @@ use a separately decided bounded spill/merge substrate. Until a shape has such a
 proof, it returns a resource-aware unsupported response; source-sized in-memory
 collections are not an acceptable production fallback.
 
-The coordinator substrate requires its own design-lock ADR because adopting an
-embedded analytical engine would amend ADR-0006, while a purpose-built external
-operator layer carries substantial correctness and maintenance cost.
+Any authoritative external global-operator layer amends ADR-0006's
+semi-join/merge-only clause; an embedded analytical coordinator additionally
+amends its no-OLAP-intermediary clause. Either requires its own design-lock ADR.
 
 ### 3. Exactness and evidence precede feature breadth
 
@@ -162,11 +163,11 @@ and five sealed holdouts exist.
 ### 6. Programme governance
 
 Run each non-trivial increment through SPARC specification, architecture,
-refinement, and completion gates. Independent work uses a hierarchical,
-specialized Ruflo swarm, isolated writer worktrees, native Codex/ChatGPT and
-Claude Code subscriptions, bounded critique/repair, independent verification,
-and digest-chained receipts. One integration owner promotes verified slices in
-dependency order. No OpenRouter or indirect provider transport is permitted.
+refinement, and completion gates. Shared-state/handoff work uses a tracked
+hierarchical specialized Ruflo swarm; bounded independent work may use one-shot
+native agents. Isolated writers, native Codex/ChatGPT and Claude Code subscriptions,
+bounded critique/repair, independent verification and digest-chained receipts
+remain required. One integration owner promotes slices in dependency order; OpenRouter and indirect transport are prohibited.
 
 Native subscription invocations have no project-imposed provider-dollar spend
 ceiling. `subscriptionCostUsd: 0` records zero marginal provider-API charge in
@@ -444,7 +445,7 @@ commit-before-reveal and byte identity; missing, failed, mismatched, selected,
 tiebroken or retried results fail. Current receipts neither block M1–M6 nor
 authorize M7, backend admission or a readiness rescore.
 
-The 2026-08-31 integrated M0 hardening candidate protects default-empty project MCP launchers and a pinned local Ruflo reader; its opaque historical overlay and private status snapshots add no product authority. The current 124-file/941-test harness has two intentional skips; OIA remains inconclusive and fixed-seed Darwin Shield passes 9/12 gates. On 2026-09-01, `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` sealed ADR-0046 Node-oracle contracts; exact Node 20/24 gates preserve the dependency-free oracle, but ADR-0046 stays proposed and no Node adapter, runner or live authority may be added. Rust commits `5c379f6`/`639134d` close silent recursive-path prefixes and reject known source-sized fallback plans. `3e0f920`/`c9e6c53` add the redacted RFC 9457 boundary, and `6cd85eb` carries one ingress deadline through compiler admission, execution and serialization without claiming a full QueryBudget or atomic streamed response. `13b8187`/`8c6181b`/`9b60dc2` seal all 139 canonical gold artifacts, every admitted byte in the 171-file source snapshot, and a read-only live PostgreSQL Style differential. This is development evidence without image/source provenance, generic RML, production admission or release authority; ADR-0048 remains the controlling Rust/Node boundary. Commit `484a4b4` adds the narrow Rust `SourceRef` environment-secret boundary while leaving TLS, layered configuration and telemetry open. Commits `89a97a7`/`a86af7d` decompose the characterized SPARQL executor and operator builder without changing public behavior or evidence scope.
+The 2026-08-31 integrated M0 hardening candidate protects default-empty project MCP launchers and a pinned local Ruflo reader; its opaque historical overlay and private status snapshots add no product authority. The Node/MetaHarness tree remains development/evidence infrastructure. The native reader rejects the locally patched ambient Ruflo source, but may consume an explicit canonical package root only after the same 1,552-file materialized closure and aggregate digest/count/byte pins pass; that locator is not forwarded into its networkless sandbox. Relocated captures now emit schema V3 with a content-addressed source policy and the private executed path; V2 keeps its original physical-source meaning for strict historical replay. Against an 18 MiB content-equivalent dev closure, the full harness passes 942 tests with two intentional skips across 124 files. OIA remains inconclusive, fixed-seed Darwin Shield passes only 9/12 gates, and the retrieval flywheel stays off. On 2026-09-01, `1e2d88d`/`7d5af51`/`0d5d09e`/`e37cce7` sealed dependency-free Node-oracle contracts; ADR-0042–0047 stay proposed and no deployable Node adapter, runner or live authority may be added. Rust commits `5c379f6`/`639134d` close silent recursive-path prefixes and reject known source-sized fallback plans; `3e0f920`/`c9e6c53` add the redacted RFC 9457 boundary; `6cd85eb` carries one ingress deadline without claiming a full QueryBudget or atomic streamed response; and `484a4b4` adds a narrow `SourceRef` boundary while leaving TLS, layered configuration and telemetry open. `d1d9c08` adds a pure deadline-only `QueryControl` port, not executor-wide budget enforcement. `0464293` adds a bounded snapshot-local `SourceId` and pre-admission `SourceMapping`, not an enforcing runtime binding, source-aware cache, registry or federation caller. `13b8187`/`8c6181b`/`9b60dc2` seal 139 gold artifacts, 171 source files and the narrow live Style differential. `cbb63ab` adds a sealed 11-store/112-table/598-column table-and-column inventory plus one read-only repeatable-read transaction per database; the 2026-09-01 live gate failed closed on five unexpected infrastructure tables/45 columns in each of ten populated databases, empty `Style360` (3 tables/21 columns missing), and one changed `ProductDesign` column. It does not cover keys, constraints, indexes, views or privileges, infer mappings, claim a globally atomic snapshot, mutate a database, or establish image/source provenance, production admission or release authority. ADR-0048 remains the controlling Rust/Node boundary; `89a97a7`/`a86af7d` only decompose characterized Rust hotspots.
 
 ## Acceptance
 

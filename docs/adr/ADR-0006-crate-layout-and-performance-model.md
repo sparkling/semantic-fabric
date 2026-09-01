@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-26
+updated: 2026-09-01
 tags: [crate-layout, cargo-workspace, execution, performance, push-down, semi-join, semi-join-cost, term-generation, cost-driven, streaming, bounded-memory, rayon, tokio]
 supersedes: []
 depends-on:
@@ -18,11 +18,11 @@ implements:
 
 ADR-0003 fixed the virtualiser architecture; this ADR realises it as a Cargo workspace and fixes the execution & performance model that makes ADR-0001's "SOTA, fast, scalable" charter concrete over relational sources (ADR-0002).
 
-The load-bearing execution decision: semantic-fabric serves an **OLTP-shaped runtime path** — the live virtualizer (ADR-0007) — over **live relational source databases**. Relational data is never routed through a columnar/OLAP intermediary. **The source database does the set-work (scan, join, DISTINCT, sort, spill); the engine generates SQL, generates RDF terms, and streams.** Engine memory is bounded by `⟨T, M⟩` + a fixed streaming budget, **independent of source size**.
+The load-bearing execution decision: semantic-fabric serves an **OLTP-shaped runtime path** — the live virtualizer (ADR-0007) — over **live relational source databases**. Relational data is never routed through a columnar/OLAP intermediary. **For admitted, fully pushed-down single-source shapes, the source database does the set-work (scan, join, DISTINCT, sort, spill); the engine generates SQL, generates RDF terms, and streams.** Engine memory is bounded by `⟨T, M⟩` plus a fixed streaming budget, **independent of source size**. Unsupported composite shapes reject before I/O unless a separately accepted bounded physical operator proves the same invariant.
 
 ## Considered Options
 
-* **Push down to the source DB + bounded semi-join reduction (chosen)** — the rewriter emits SQL run via native drivers; the source does scan/join/DISTINCT/aggregation/sort/spill/parallelism, the engine streams rows and generates terms, with cross-source joins handled by bounded semi-join reduction + streaming k-way merge. Memory bounded by `⟨T, M⟩` independent of source size.
+* **Push down to the source DB + bounded semi-join reduction (chosen baseline)** — the rewriter emits SQL run via native drivers; the source does scan/join/DISTINCT/aggregation/sort/spill/parallelism and the engine streams rows and generates terms. Bounded semi-join reduction plus streaming merge admits only shapes for which exactness and source-independent memory are proved; other composite shapes reject. Accepting ADR-0040 would explicitly amend this cross-source clause with quota-bounded external operators.
 * **Columnar/OLAP intermediary (DataFusion / `connector_arrow` / DuckDB)** — rejected: an in-process columnar engine buffers instance data and breaks the bounded-memory invariant; only the source DB does blocking set-work (it spills natively).
 * **Pulled-in in-process join engine for cross-source tables** — rejected in favor of bounded semi-join reduction (fixed-size Bloom filter / bounded `IN`-list / temp-table batch) plus streaming k-way merge, kept inside the fixed memory budget.
 
@@ -34,18 +34,19 @@ The load-bearing execution decision: semantic-fabric serves an **OLTP-shaped run
 |---|---|---|
 | `sf-core` | Mapping IR; term generation; R2RML §10 datatype canonicalization (ADR-0015); `oxrdf` re-exports. No I/O. | `oxrdf`, `oxsdatatypes` |
 | `sf-sql` | Source/SQL layer: native connectors, dialect SQL emission, schema introspection, cursor-streamed result iteration, cross-source semi-join planning | `tokio-postgres`, `deadpool-postgres`, `rusqlite`, `sqlparser` |
-| `sf-mapping` | R2RML/Direct-Mapping parser (Turtle → IR) | `oxttl`, `sf-core` |
+| `sf-mapping` | R2RML/Direct-Mapping parser (Turtle → IR) | `oxttl`, `sf-core`; current transitional debt: `sf-sql::TableSchema` for Direct Mapping |
 | `sf-sparql` | The virtualizer: SPARQL 1.2 → SQL rewriting + cascade (ADR-0007); streaming result serialization | `spargebra`, `sparopt`, `sparesults`, `oxjsonld`, `sqlparser`, `sf-*` |
+| `sf-serve` | HTTP/SPARQL Protocol boundary, source selection, backend pools and streamed responses | `axum`, `tokio`, native database drivers, `sf-*` |
 | `sf-conformance` | W3C RDB2RDF harness (via CONSTRUCT), EARL, graph-iso, in-memory oracle, `M ⋈ T` hook (ADR-0005) | `oxrdf`, `oxttl`, `shacl`, `sf-*` |
 | `sf-bench` | GTFS-Madrid OBDA-track driver | `criterion`, `sf-*` |
 | `sf-cli` | Single binary: `serve · conformance · bench` | all `sf-*` |
 
-Dependencies flow **core → virtualizer → cli**; `sf-core`/`sf-sql`/`sf-mapping` never depend on the virtualizer frontend (checkable via `cargo tree`).
+The target product flow is **core/source/mapping → virtualizer → serve → cli**; conformance and bench are sibling development consumers. `sf-mapping → sf-sql::TableSchema` is current layering debt, not the target architecture. Move that neutral schema DTO to `sf-core` (optionally re-export from `sf-sql`) and remove the edge. `sf-core`/`sf-sql`/`sf-mapping` never depend on the virtualizer or serving frontends (checkable via `cargo tree`).
 
 ### Relational execution — push down to the source, stream back
 
-* **Single-source (the common case): push the work into the source SQL.** The rewriter (ADR-0007) emits one `SELECT … FROM … [JOIN …] [WHERE …] [GROUP BY …] [ORDER BY …]` and runs it via the source's **native driver** (`tokio-postgres` + `deadpool`; `rusqlite`). The source does scan + join + DISTINCT + aggregation + sort + spill + parallelism; the engine streams rows, generates terms (`sf-core`), and serialises. This dissolves the multi-join / N:M cliff (the source has indexes and a real optimizer).
-* **Cross-source (rare; tables in *different* relational databases): bounded semi-join reduction, never a pulled-in join engine.** Ship the smaller side's join keys to the larger source as a **fixed-size Bloom filter or a bounded `IN`-list / temp-table batch** (never the full key set), then combine the reduced inputs in-process via a **streaming k-way merge**. The reduction is **cost-driven** — side selection, reducer form/sizing, and a skip-if-unselective gate (see *Cross-source semi-join cost* below) — kept **bounded-memory** (ADR-0010); this is the Teiid dependent-join / Trino dynamic-filtering family.
+* **Single-source (the common case): push the work into the source SQL.** For admitted, fully pushed-down shapes, the rewriter (ADR-0007) emits one `SELECT … FROM … [JOIN …] [WHERE …] [GROUP BY …] [ORDER BY …]` and runs it via the source's **native driver** (`tokio-postgres` + `deadpool`; `rusqlite`). The source does scan + join + DISTINCT + aggregation + sort + spill + parallelism; the engine streams rows, generates terms (`sf-core`), and serialises. This dissolves the multi-join / N:M cliff (the source has indexes and a real optimizer).
+* **Cross-source (rare; tables in *different* relational databases): bounded semi-join reduction for admitted reducible shapes.** Ship a bounded representation of one side's join keys as a fixed-size Bloom filter or bounded `IN`-list/temp-table batch, then use a proven bounded merge. This is a reducer, not a general N:M join answer. Shapes needing an unimplemented global operator reject before I/O; accepting ADR-0040 would replace only this semi-join/merge-only clause with its quota-bounded external layer.
 * **No columnar/OLAP engine on the relational path.** DataFusion, `connector_arrow`, and DuckDB are **not** used to mediate between the rewriter and relational sources: a columnar engine in-process would buffer instance data and break the bounded-memory invariant; only the source DB does blocking set-work (it spills natively). Relational execution = native drivers + push-down + bounded semi-join reduction.
 
 ### Cross-source semi-join cost
@@ -59,7 +60,7 @@ The cross-source semi-join is the engine's one genuinely in-process join decisio
 
 ### Streaming & bounded memory (the invariant)
 
-Results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw()` → `RowStream`; never the buffer-all `query()`), per-row term generation, and a streamed serializer — **SPARQL 1.2 Results** (SELECT/ASK) or **JSON-LD** (CONSTRUCT/DESCRIBE; expanded/incremental, never framed — ADR-0019). No operator buffers instance data unbounded; blocking operators (sort/group/distinct) are pushed to the source. Governance (timeouts, caps, backpressure, cancel-on-drop) is ADR-0010.
+For admitted execution shapes, results stream end to end: a **server-side cursor** (`tokio-postgres` `query_raw()` → `RowStream`; never the buffer-all `query()`), per-row term generation, and a streamed serializer — **SPARQL 1.2 Results** (SELECT/ASK) or **JSON-LD** (CONSTRUCT/DESCRIBE; expanded/incremental, never framed — ADR-0019). No admitted operator buffers instance data unbounded; blocking operators are pushed to the source or require a separately accepted bounded implementation. Governance (timeouts, caps, backpressure, cancel-on-drop) is ADR-0010.
 
 ### Parallelism & dialects
 
@@ -198,7 +199,7 @@ Term generation runs once per result row, and its dominant cost is **small-objec
 
 * Good, because memory-bounded by construction (the source spills); minimal data movement; a light dependency set with no columnar engine and no triplestore on the data plane; coherent with the OLTP runtime path and the single-binary ethos.
 * Good, because crate boundaries enforce the architecture; perf decisions grounded in measured prior art.
-* Bad, because cross-source joins need an in-engine bounded semi-join / k-way-merge planner; cross-source cardinality estimation remains the hardest input (catalogs can be stale or thin), now mitigated by the cost model above — sketch-based distinct counts, a cached leaf `EXPLAIN` probe, and the skip-if-unselective gate — rather than left open.
+* Bad, because admitted reducible cross-source joins need an in-engine bounded semi-join / k-way-merge planner; cross-source cardinality estimation remains the hardest input (catalogs can be stale or thin), now mitigated by the cost model above — sketch-based distinct counts, a cached leaf `EXPLAIN` probe, and the skip-if-unselective gate — rather than left open. Irreducible shapes reject unless and until the authoritative bounded global-operator layer proposed by ADR-0040 is accepted and implemented.
 * Bad, because the rayon/tokio pool separation is a standing latency/correctness discipline.
 
 ### Confirmation
@@ -207,7 +208,7 @@ Term generation runs once per result row, and its dominant cost is **small-objec
 * `sf-cli --help` lists `serve · conformance · bench` (no `materialize`).
 * GTFS-Madrid OBDA-track scenarios complete with **constant engine memory** under growing scale factor, measured via `sf-bench` (ADR-0005).
 * Term generation emits constants by reference and writes via `generate_into` — an allocation-count test over a fixed result size shows no per-row owned `Term` on the CONSTRUCT path.
-* The cross-source semi-join planner selects side, reducer form, and skip-vs-reduce from catalog/sketch estimates — unit-tested against synthetic cardinalities (small, large, and ≈ 1-reduction).
+* For admitted reducible shapes, the cross-source semi-join planner selects side, reducer form, and skip-vs-reduce from catalog/sketch estimates — unit-tested against synthetic cardinalities (small, large, and ≈ 1-reduction).
 
 > **Implementation reconciliation (2026-08-26).** The last confirmation item is
 > unit-tested design, not a production execution path: the public server has one

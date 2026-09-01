@@ -37,12 +37,12 @@ dependencies and every database, network, signer, publication and readiness
 flag is false. Calling it deployable would turn evidence infrastructure into a
 second production runtime without a reviewed reason.
 
-The canonical semantic-product-mock gold and a separately qualified live
-PostgreSQL development instance provide a faster development path, but their
-authority and coverage must remain honest. The gold candidate contains 30,696 ontology,
-3,617 shape, 4,501 mapping and 900 provenance quads across 14 categories. Its
-relational inventory covers 112 tables and 598 columns, while its admitted
-relational R2RML currently covers only one table and two columns. It is a
+The canonical semantic-product-mock gold and narrow qualified ProductDesign/Style
+live vertical provide a faster development path; the separately inspected
+11-database inventory is red. The gold contains 30,696 ontology, 3,617 shape,
+4,501 total mapping and 900 provenance quads across 14 categories. Its Source
+Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps;
+the admitted relational-R2RML slice covers only one table/two columns. It is a
 deterministic development oracle, not standards qualification or production
 admission.
 
@@ -172,14 +172,41 @@ authority. ADR-0042 through ADR-0047 were reviewed against this boundary: their
 committed Node code remains explicitly non-deployable oracle evidence, and each
 future production implementation is assigned to a separate Rust service.
 
+The native Ruflo reader also remains development-only. Its optional
+`SF_HARNESS_RUFLO_PACKAGE_ROOT` is a source locator, not trust: the path must be
+absolute and canonical; every non-overlaid selected source plus each protected
+replacement must produce the pinned 1,552-file materialized execution closure;
+and the value is omitted from the networkless child environment. This permits
+an exact sealed cache to remain usable when a shared global Ruflo installation
+is intentionally patched, without trusting that patch, mutating the shared
+installation or adding a Cargo/product dependency.
+The root is resolved once for pre/post source inspection and private-runtime
+construction; execution occurs only at `/runtime/package/bin/mcp-server.js`.
+Schema V2 retains its original meaning: its global `entryPath` names the
+physical source used by historical captures. V2 remains strictly replayable but
+is never emitted for relocated-source execution. Schema V3 instead binds
+`content-addressed-relocatable-package-root-v1`, the aggregate digest/count/bytes
+and the private executed `entryPath`; V2 and V3 identities cannot cross-parse.
+
+Commit `cbb63ab` adds a separate development-only table/column inventory gate.
+It recounts the sealed 11 stores, 112 tables and 598 columns, then inspects each
+explicit live database in its own read-only repeatable-read transaction; it does
+not claim one globally atomic snapshot. The 2026-09-01 live run failed closed:
+each of ten populated databases had five unexpected infrastructure tables and 45
+columns, `Style360` lacked three tables/21 columns, and `ProductDesign` had one
+changed column. The gate compares table identity plus ordered column name, type
+and nullability only—not keys, constraints, defaults, indexes, views or privileges.
+It infers no mapping, mutates no database and grants no production authority.
+
 ## Consequences
 
 - **Positive:** the application retains one production language and dependency
   ecosystem while preserving the substantial TypeScript oracle investment.
 - **Positive:** product features can progress in parallel with high-assurance
   evidence infrastructure without relaxing the final gates.
-- **Positive:** the gold/live corpus removes synthetic setup work and exposes a
-  measurable upstream R2RML coverage gap.
+- **Positive:** the gold/live corpus removes synthetic setup work and exposes
+  Semantic Fabric's measurable relational-R2RML admission gap without implying
+  that the gold's generic RML evidence is absent.
 - **Cost:** production supervisor semantics must be implemented independently in
   Rust and checked differentially rather than activated from the prototype.
 - **Cost:** high-assurance operational evidence remains a separate deployment

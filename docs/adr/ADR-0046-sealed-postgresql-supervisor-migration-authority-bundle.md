@@ -378,8 +378,9 @@ single-use session/operation/ordinal evidence and emits it only after exact
 CommandComplete/ErrorResponse plus ReadyForQuery (`transaction` in-transaction; `idle`
 after COMMIT/ROLLBACK). Rejection matches native Rust protocol; `I|T|E` map to
 `idle|transaction|failed`. Missing/replayed/mismatched COMMIT evidence is uncertain.
-Node may exercise only provider-free recorded PostgreSQL error/transcript vectors
-in tests; no `pg` package, driver prototype, bridge, or live client is admitted.
+The TypeScript oracle runtime module/public bundle may exercise only provider-free recorded PostgreSQL
+vectors and admits no `pg` package, driver, bridge or live client. Development-only Node scripts in the same private package may orchestrate frozen Docker/`psql` against isolated networkless test containers,
+but remain nonauthorizing and outside the runtime module, imports/exports, public bundle and every deployable closure under ADR-0048.
 
 Future Rust preflight before `BEGIN` verifies exact `SESSION_USER=CURRENT_USER` migration
 identity, role attributes, sole membership edge with grantor/options, and server

@@ -24,7 +24,8 @@ As of 2026-09-01, the generated catalog records:
 - **Qualified:** Sealed required-live PostgreSQL RDB2RDF execution records 57 passes, one documented deviation and five exact skips across 63 R2RML cases, plus 23 passes and one exact skip across 24 Direct Mapping cases; this is mapping evidence only and does not establish production admission.
 - **Qualified:** Sealed SQLite RDB2RDF execution records 62/63 R2RML cases passing with one documented deviation and 19/24 Direct Mapping cases passing with five exact skips; this is mapping evidence only.
 - **Limitation:** Total-resource-qualified recursive property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
-- **Qualified:** The canonical product-mock development KAT seals all 139 gold artifacts and 171 admitted source files, then compares one Style R2RML map with live PostgreSQL; it proves no image/source provenance or production admission.
+- **Qualified:** The canonical product-mock development KAT seals all 139 gold artifacts and 171 admitted source files, then qualifies one narrow ProductDesign/Style R2RML vertical against live PostgreSQL; it proves no image/source provenance or production admission.
+- **Limitation:** The separate 11-database/112-table/598-column table-and-column inventory currently fails closed on observed drift and grants no qualification.
 - **Limitation:** None of SQLite, PostgreSQL or MySQL is production-admitted under ADR-0038 R3.
 - **Qualified:** SQLite, PostgreSQL and MySQL compilers use exact finite-pair fixed points for recursive P+/P*; hostile required execution is SQLite-only, while live PostgreSQL/MySQL qualification and total resource governance remain open.
 - **Current:** Pre-response HTTP failures and startup CLI surfaces are redacted; correlation IDs have no telemetry sink and post-200 stream failures cannot become atomic RFC 9457 responses.
@@ -198,8 +199,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The versioned engineering harness passes 941 tests across 124 files; two
-  environment-specific tests are skipped by this provider-free run.
+- With its explicit verified Ruflo package-root cache, the engineering harness passes 942 tests across 124 files; two tests skip intentionally. The mutable ambient source fails closed.
 
 Reproduce the primary gates:
 
@@ -221,7 +221,7 @@ and measured benchmarks. Proposed
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
 defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. The programme is
 evolutionary, not a compiler rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service Rust.
-The revision-pinned product-mock gold and separately qualified live database are a 14-category development oracle. Rust KATs seal all 139 gold artifacts and 171 admitted source files, then compare the one Style R2RML map with live PostgreSQL in a rolled-back read-only snapshot. This proves neither image/source provenance nor production admission; relational R2RML covers only one of 112 tables.
+The revision-pinned 14-category product-mock gold and narrow qualified ProductDesign/Style live vertical are development oracles; the separately inspected 11-database inventory is red. Rust KATs seal all 139 gold artifacts and 171 admitted source files, compare the Style R2RML map in a rolled-back read-only snapshot, and recount 11 stores/112 tables/598 columns using one read-only transaction per database. The inventory fails on ten sets of infrastructure additions, empty `Style360`, and one `ProductDesign` column drift. It covers no keys, constraints, defaults, indexes, views or privileges; proves no global snapshot or image/source provenance; and grants no production admission. The bundle has 4,501 mapping quads total. Its Source Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter; the admitted relational-R2RML slice covers one table/two columns.
 
 Exact recursive property-path fixed points replace the former 256-hop prefix, and serving rejects known source-sized Rust sort/group/dedup fallbacks before backend selection or I/O. Pre-response HTTP failures use redacted RFC 9457 problem details, startup/CLI errors are opaque, and one ingress-to-serialization deadline is integrated; post-commit stream failures only terminate the body. Bounded physical alternatives, full QueryBudget, federation and the production dependency closure remain release blockers. M0 also has
 backend-aware v3 receipts for all 87 SQLite and required-live PostgreSQL mapping
@@ -261,7 +261,7 @@ The leaf is reconstructed from the reverified canonical envelope; the prior chec
 The protected private PostgreSQL materializer exact-key checks roots before traversal, snapshots bounded trap-free graphs, exposes a frozen one-use signing surface, verifies the pinned Ed25519 SPKI/signature, and emits every exact DB-shaped 201/409 row for genesis/non-genesis and adjacent/interleaved histories.
 Commits `28addbc` and `c586973` add the reviewed 232,822-byte catalogue oracle (`e7ce3572…e69`, 9,125 nodes/963 records), a pre-allocation scanner, one-parse closed validator, caller-pinned digest binder, 123 hostile/limit/semantic/deparse KATs, and 85 PostgreSQL 16.15 deparse facts with zero fixture mismatch. These private build inputs add no runtime dependency or public export.
 [ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md) records an independently reproduced, test-only candidate from exact OCI Linux/amd64 platform manifest `postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8`: 4,059 records/860,988 bytes (`a108e05f9cfd6d6485a86fe198a87b3800e21986b5c62e6251519de6577d05be`). An owned networkless replay creates two fresh anonymous-volume containers and `template0` databases, binds each full profile/result to the independent raw-SQL cross-check, and verifies cleanup. Additive V2 receipt `48d54b63…98e8` pins immutable V1, an OID/attribute-aware candidate matrix, and a fresh no-membership role's 13,603 effective-privilege `has_*` checks across the six populated classes; FDW/server remain explicit zero classes. V1's raw oracle independently expands the direct ACL atoms. V2 corroborates all 4,059 atoms, including 16 column-local and 294 true-array atoms.
-The protected PostgreSQL fixtures, readers and mutation replays remain non-authorizing Node oracles. Commits `1e2d88d`/`7d5af51` freeze lifecycle and command metadata; `0d5d09e`/`e37cce7` add INSERT value/result and DDL-coupling oracles. Node 24 passes 705 tests; exact Node 20 passes TypeScript, 23 focused tests and artifact replay. Oracle artifact `715c72fd…0552` preserves the dependency-free 49,106-byte public bundle `90e21e7c…f7c3a`. No Node driver/store/runner may be added. ADR-0042–0047 remain proposed; production SELECT/transport, adapter, verifier, credentials, witness and deployment work belongs to a separate Rust service. Ruflo generic scans remain `INCONCLUSIVE`, the project gate decides only harness/config integrity, and the flywheel is off.
+The protected PostgreSQL fixtures, readers and mutation replays remain non-authorizing Node oracles. Commits `1e2d88d`/`7d5af51` freeze lifecycle and command metadata; `0d5d09e`/`e37cce7` add INSERT value/result and DDL-coupling oracles. Node 24 passes 705 tests; exact Node 20 passes TypeScript, 23 focused tests and artifact replay. Oracle artifact `715c72fd…0552` preserves the dependency-free 49,106-byte public bundle `90e21e7c…f7c3a`. No deployable or production Node driver, store, supervisor or controlled runner may enter the runtime module, public bundle or release closure. ADR-0042–0047 remain proposed; production SELECT/transport, adapter, verifier, credentials, witness and deployment work belongs to a separate Rust service. Ruflo generic scans remain `INCONCLUSIVE`, the project gate decides only harness/config integrity, and the flywheel is off.
 
 Commit `ad94cdb` proved current-tranche clean-checkout repeatability, not binary
 reproducibility. Final two-builder agreement must pre-register distinct trust
@@ -366,6 +366,9 @@ The tracked project MCP surface now defaults empty and has a strict scoped audit
 The pinned Ruflo reader mounts only private `0400` snapshots of two exact status
 files beneath `0500` directories and runs under `--unshare-net`; cooperative
 same-principal `0664` source state remains explicitly non-authoritative.
+An optional `SF_HARNESS_RUFLO_PACKAGE_ROOT` can select a canonical development
+source when the shared global package is patched. Every non-overlaid source plus the protected replacements must produce the pinned 1,552-file materialized execution closure, and the locator is stripped from the child. The current cache has no portable materializer yet.
+This adds no Node dependency to Cargo, product runtime, release image or deployed service. V2 retains its historical physical-source `entryPath` and is replay-only for relocated runs; the collector now emits V3, binding the content-addressed source policy and private `/runtime` entry.
 
 The first sealed issue-#8 programme transaction was **honestly rejected**. Run
 `issue8_dual_native_20260826_29` admitted the model patch only to `unfold.rs`,
@@ -440,7 +443,7 @@ claim. It is a small localhost workload, not a production sizing result.
 | Cloud/REST adapters | Prototype/library-only; Databricks, AWS Athena, Snowflake, BigQuery, Trino/Presto and other adapters are not admitted to `serve` |
 | Property paths | Broad support; explicit `501` residuals remain for bound-endpoint, nested-closure, shape-mismatched, and some reflexive composite forms |
 | Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
-| Federation | Cross-RDBMS planning is in scope but not implemented: the current runtime owns one source and the semi-join planner has no production caller. External SPARQL `SERVICE` remains excluded |
+| Federation | Cross-RDBMS planning is in scope but not implemented: bounded `SourceId`/pre-admission `SourceMapping` exist, but the runtime still owns one source and has no immutable binding, source-aware cache, registry or semi-join caller. External SPARQL `SERVICE` remains excluded |
 | Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
 | Exactness and boundedness | Recursive closures now use exact finite-pair fixed points on evidenced dialects and reject unproved dialects; known source-sized ORDER/GROUP/DISTINCT/CONSTRUCT fallbacks reject before I/O. Bounded physical alternatives and total QueryBudget remain release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
@@ -484,16 +487,11 @@ and direct evidence say whether it has shipped.
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
 | Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0049](docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md) |
 
-Research grounding and prior-art reviews are under
-[`docs/research/`](docs/research/). RDF-star has a normative
-[specification](docs/rdf-star/specification.html) and practical
-[guide](docs/rdf-star/guide.html).
+Research grounding and prior-art reviews are under [`docs/research/`](docs/research/). RDF-star has a normative [specification](docs/rdf-star/specification.html) and practical [guide](docs/rdf-star/guide.html).
 
 ## Contributing and license
 
-Before opening a pull request, run the primary gates from
-[Correctness and verification](#correctness-and-verification). Architectural
-changes must update or add an ADR in the same commit.
+Before opening a pull request, run [Correctness and verification](#correctness-and-verification). Architectural changes must update or add an ADR in the same commit.
 
 semantic-fabric is dual-licensed under [MIT](LICENSE-MIT) or
 [Apache-2.0](LICENSE-APACHE), at your option.

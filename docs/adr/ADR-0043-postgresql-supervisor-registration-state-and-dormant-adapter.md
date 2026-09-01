@@ -126,7 +126,7 @@ deployment evidence under ADR-0048.
 
 ### 3. Use one project namespace per database and exact domains
 
-The first service/database instance admits exactly one immutable project
+The first Rust service/database instance admits exactly one immutable project
 authority digest and one project scope role. The authenticated peer mapper is a
 closure-owned capability; it performs no database lookup and its result must
 equal that pinned database project. The database does not multiplex project

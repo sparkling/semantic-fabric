@@ -27,11 +27,11 @@ artifact comparator are useful diagnostics, but they do not satisfy the two-
 builder gate below. No pre-registered builder pair, commit-before-reveal record,
 independent trust-root witness, exact-artifact agreement, or pair receipt exists.
 
-[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) fixes
-the product closure as Rust-only. Node, npm, MetaHarness and every
-`coding-harness/` package are excluded from `sf-server` and its release image. A
-future Rust supervisor is a separately packaged evidence service with no
-product-crate dependency; it is not another feature of `semantic-fabric`.
+[ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) requires
+any future `sf-server` closure and release image to be Rust-only, excluding Node,
+npm, MetaHarness and every `coding-harness/` package. The current all-in-one
+`sf-cli` remains the only product binary; a future Rust supervisor is separately
+packaged evidence infrastructure with no product-crate dependency.
 
 Interim M0 tooling records and verifies a host-observed non-closure observation
 of the current all-in-one `sf-cli` executable. On 2026-08-28 the first exact

@@ -12,10 +12,10 @@ implements: [ADR-0041]
 
 ## Status boundary
 
-This ADR is **proposed**. It defines ADR-0041's authority protocol and bounded-context boundaries; it does not claim that an authority service,
-transparency log, witness, project principal, controlled runner, lease, attempt,
-or measurement exists. Moving this ADR or ADR-0041 to `accepted` requires
-maintainer review of real operational evidence, not only repository tests.
+This ADR is **proposed**. It defines ADR-0041's authority protocol and bounded-context boundaries; it does not claim that an authority service, transparency log, witness, project principal, controlled runner, lease, attempt, or measurement exists.
+A maintainer may accept the design after architectural review without activating
+it. Operational activation and authoritative positive transitions additionally
+require the live qualification gates below; qualification remains nonauthorizing.
 The full profile gates authoritative capture and M7, not M1–M6 implementation.
 
 The committed V1 registration, checkpoint, Merkle-proof, rooted-claim, and
@@ -115,7 +115,7 @@ are separate Rust artefacts and principals under ADR-0048.
 
 ### 2. Use one linearizable semantic state transaction
 
-The first service implementation uses a transactional PostgreSQL state store.
+The first Rust service implementation uses a transactional PostgreSQL state store.
 One serializable operation must atomically:
 
 1. authenticate the project principal and exact canonical request digest;
@@ -385,11 +385,11 @@ capture must consume a distinct two-builder agreement for that exact producer
 and its runtime closure, or a reviewed successor bundle that explicitly binds
 both artifacts. An ADR-0039 application receipt alone is not producer authority.
 
-## Acceptance gates
+## Activation and admission gates
 
-This ADR remains proposed, and no positive transition is admissible, until:
+No production-authorizing positive transition is admissible until:
 
-1. ADR-0041 and this record are reviewed and accepted by a maintainer.
+1. ADR-0041 and this record are maintainer-accepted; acceptance creates no operational authority.
 2. Project, service, log, checkpoint-witness, semantic-witness, deletion-
    resistant witness-initialization-anchor, runner, and administratively
    separate deployment-attestor roots/epochs, intersecting-quorum policies, and

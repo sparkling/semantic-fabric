@@ -278,15 +278,9 @@ maximum/+1; six strings containing `5 × 196,608 + 65,516` bytes then one more
 byte for exact input maximum/+1; 8,192/+1 root primitives for width; 8/+1
 decoded keys for object width; and one nested object then one deeper for depth.
 
-The recorded reproduction establishes candidate test-fixture values only. The
-tracked replay orchestrator owns two fresh networkless containers, anonymous
-data volumes and `template0` databases, then binds the projection and independent
-raw-catalogue cross-check for each run. Matching projection runs or client
-reserializations prove determinism, never completeness. The candidate must not
-enter provisioning or manifest bytes until Section 7's explicitly enumerated,
-fail-closed pre-sealing predicate passes. That predicate contains no
-post-bundle gate; item 6 cannot be a prerequisite for constructing the bundle
-that it tests.
+The recorded reproduction establishes candidate test-fixture values only.
+Development-only Node replay scripts in the same private package—but outside its TypeScript runtime module, imports/exports, public bundle and every deployable closure—invoke frozen Docker/`psql` for two fresh networkless containers,
+anonymous volumes and `template0` databases, then bind the projection and raw-catalogue cross-check. No Node `pg` driver, live client or store enters the oracle. Matching runs prove determinism, never completeness. The candidate cannot enter provisioning or manifest bytes until Section 7's enumerated fail-closed pre-sealing predicate passes; its item 6 is not a prerequisite for constructing the bundle it tests.
 
 ### 6. Make Rust runtime comparison bounded and independent
 

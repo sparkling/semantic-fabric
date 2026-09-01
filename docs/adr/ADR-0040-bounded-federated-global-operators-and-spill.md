@@ -23,6 +23,13 @@ does not accept a spill substrate, claim federation exists, or weaken the
 exact-or-reject rule. Acceptance waits for the comparison evidence and explicit
 maintainer decisions listed below. Its `implements` relationship identifies the
 ADR-0038 design lock, not implementation completion.
+The current `sf-core::SourceId` and pre-admission `SourceMapping` are preparatory:
+they bind no registry, schema, backend, capability, plan cache or runtime snapshot.
+Accepting this ADR would explicitly amend ADR-0006's cross-source rule: bounded
+semi-join reduction and streaming merge alone cannot implement every exact N:M
+join/operator listed here. The source-pushdown and no-general-OLAP decisions
+remain; the proposed amendment admits only the irreducible, quota-bounded
+external operators below.
 
 ## Context and problem statement
 
@@ -39,12 +46,15 @@ or dedup over rows owned by several independent sources. The coordinator needs
 typed global semantics and bounded external-memory algorithms without becoming
 a second semantic compiler or treating a Bloom filter as an answer authority.
 
-The exact-revision semantic-product-mock PostgreSQL instance and canonical gold
-are the initial development corpus for the prototype comparison. Each run pins
-their manifest/source/schema identities and remains non-authorizing. Because the
-gold admits relational R2RML for only one of 112 tables, it exercises the first
-vertical and schema-introspection path; wider federation evidence requires
-explicit mappings or independent generated fixtures, never inferred mappings.
+The revision-pinned canonical gold/source snapshot and separately observed
+mutable live development PostgreSQL instance are the initial prototype corpus.
+Each run seals the gold manifest/source revision and records live version/schema
+observations separately; no source-to-container provenance link is implied. Semantic
+Fabric's admitted relational R2RML KAT covers one of 112 tables/two columns. The
+gold has 4,501 mapping quads total; its Source Mapping facet declares 134 generic
+RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter.
+Wider federation evidence requires explicit maps or independent generated
+fixtures, never inferred mappings.
 
 ## Considered options
 
@@ -55,8 +65,8 @@ explicit mappings or independent generated fixtures, never inferred mappings.
   production closure before correctness, cancellation, and spill controls are
   proven.
 - **Purpose-built bounded external-memory operators.** Recommended current
-  default. This directly realizes ADR-0006's bounded semi-join/streaming-merge
-  clause and owns only the irreducible cross-source work.
+  default. This is the narrow proposed amendment to ADR-0006's semi-join-only
+  cross-source clause and owns only the irreducible cross-source work.
 - **Tightly scoped embedded analytical coordinator.** Retained only as a measured
   alternative. A pinned candidate such as DuckDB may receive reduced source
   fragments, but may not replace the compiler, connect to systems of record, or
@@ -74,10 +84,20 @@ boundaries. Add source affinity without cloning those stages:
   `RuntimeSnapshot`; it never contains a DSN or credential.
 - Every logical table/mapping and backend capability record is bound to one
   `SourceId` before query admission.
-- A `SourceFragment` contains `SourceId`, the existing per-source `Plan`, its
-  typed output variables, source capability proof, and snapshot handle.
-- `FederatedPlan` contains source fragments, one typed global-operator tree, one
-  `QueryBudget`, failure policy, and a per-source snapshot vector.
+- A `SourceFragment` contains `SourceId`, the existing per-source `Plan`, typed
+  output variables, and immutable capability/schema/mapping digests. It contains
+  no transaction or snapshot handle.
+- A cacheable `FederatedPlan` contains source fragments, one typed
+  global-operator tree, failure policy, required reservation shape, and the
+  runtime/configuration epoch plus immutable ontology, mapping, schema, and
+  capability digests. It contains no request budget, acquired token, timing,
+  execution provenance, or database handle.
+- A request-scoped `FederatedExecution` owns the `QueryBudget`, cancellation
+  state, admitted reservations, acquired source sessions/transactions, timing,
+  and execution provenance/receipt.
+- A `ConsistencyVector` is captured only after acquisition and records each
+  source snapshot/epoch token for receipt and provenance; it is never cached as
+  part of the plan.
 
 The federation lowering step partitions an already characterized semantic plan
 at source boundaries. It may push a semantically equivalent subtree or
@@ -91,7 +111,7 @@ The only initially admissible coordinator nodes are:
 
 | Node | Required behavior |
 |---|---|
-| `Fragment` | Stream one admitted per-source `Plan` under its snapshot and budget. |
+| `Fragment` | Stream one admitted per-source `Plan` under the execution's acquired snapshot and budget. |
 | `UnionAll` | Concatenate input multisets; preserve every multiplicity. |
 | `InnerJoin` | Emit every compatible merged solution, including full N:M multiplicity. |
 | `LeftJoin` | SPARQL OPTIONAL: emit all compatible extensions or exactly one unchanged left solution when none matches. |
@@ -176,9 +196,9 @@ to the shared budget and cancellation tree.
 
 ### 6. Admission, backpressure, cancellation, and failure
 
-Before opening source work, admission reserves bounded memory, spill bytes,
+Before opening source work, each execution admission reserves bounded memory, spill bytes,
 files/descriptors, operator tasks, source connections, and serializer/result
-allowance. A plan that cannot reserve its minimum is rejected. Global and
+allowance. A request that cannot reserve its minimum is rejected. Global and
 per-query high-water marks prevent disk exhaustion; a low-free-space watermark
 stops new admission.
 
@@ -222,8 +242,9 @@ MySQL consistent-snapshot semantics, and a stable SQLite read transaction. The
 backend contract proves acquisition, retention, timeout, cancellation, and
 cleanup before that backend is admitted to federation.
 
-`FederatedPlan` records a vector of `(SourceId, backend snapshot/epoch token,
-acquired-at, schema/mapping digest)`. This gives repeatability per source. It is
+The request-scoped `ConsistencyVector` records `(SourceId, backend
+snapshot/epoch token, acquired-at, schema/mapping digest)` only after all
+required handles are acquired. This gives repeatability per source. It is
 **not** a globally atomic point-in-time snapshot, two-phase commit, or serializable
 transaction across systems. The response capability/provenance record states
 that limitation. If a required per-source snapshot cannot be obtained or held,
@@ -246,9 +267,9 @@ advisories, and implementation/maintenance surface. A fast happy-path benchmark
 alone is not decision evidence.
 
 The recommendation remains the purpose-built substrate because it is the
-narrowest extension of ADR-0006. An embedded candidate can win only after the
-maintainer explicitly authorizes the corresponding ADR-0006 amendment and all
-hard gates below pass.
+narrowest explicit amendment of ADR-0006's cross-source clause. An embedded
+candidate can win only after the maintainer separately authorizes a further
+ADR-0006 amendment and all hard gates below pass.
 
 ## Open maintainer decisions
 
@@ -257,10 +278,12 @@ hard gates below pass.
    The maintainer must decide whether an explicitly attested encrypted ephemeral
    volume may satisfy confidentiality without application-layer encryption, and
    define the threat model and key-erasure evidence for either policy.
-2. **Embedded coordination and ADR-0006.** Recommended: do not amend ADR-0006;
-   choose the purpose-built substrate. If benchmark/design evidence favors an
-   embedded coordinator, the maintainer must explicitly amend ADR-0006 to allow
-   that tightly scoped role. Silence or an optional Cargo feature is not consent.
+2. **Cross-source amendment to ADR-0006.** Recommended: explicitly replace only
+   ADR-0006's semi-join/streaming-merge-only clause with the purpose-built,
+   quota-bounded operator substrate in this ADR. If evidence instead favors an
+   embedded coordinator, the maintainer must separately amend ADR-0006's
+   no-OLAP-intermediary clause to allow that tightly scoped role. Silence or an
+   optional Cargo feature is not consent.
 
 Until both decisions and the substrate comparison are recorded, this ADR stays
 `proposed` and no coordinator is production-admitted.
@@ -269,9 +292,10 @@ Until both decisions and the substrate comparison are recorded, this ADR stays
 
 Acceptance requires one immutable evidence bundle satisfying every gate:
 
-1. The typed `SourceId`/`SourceFragment`/`FederatedPlan` model and the exact node
-   set above serialize canonically, reject unknown versions/nodes, and preserve
-   the existing single-source `Plan` path unchanged.
+1. The typed `SourceId`/`SourceFragment`/`FederatedPlan` model and exact node set
+   serialize canonically, while request-scoped `FederatedExecution` and
+   `ConsistencyVector` cannot enter the plan cache; unknown versions/nodes are
+   rejected and the existing single-source `Plan` path remains unchanged.
 2. Two-source and three-source differential tests equal a trusted materialized
    reference for every admitted node and composition across SQLite, PostgreSQL,
    and MySQL, including duplicates, UNBOUND masks, incompatible RDF terms,

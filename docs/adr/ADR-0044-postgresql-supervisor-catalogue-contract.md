@@ -19,7 +19,7 @@ import, promotion, or release authority.
 
 The exact-row materializer, catalogue JSON and bounded parser/digest binder are
 Node reference-oracle inputs outside the public bundle; migration SQL is portable
-contract evidence. Live verification and activation belong to ADR-0048's Rust service.
+contract evidence. Live verification and any activation belong to a future separately packaged Rust service required by ADR-0048, after the relevant ADRs are accepted.
 
 ## Context
 
