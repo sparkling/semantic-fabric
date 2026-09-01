@@ -115,6 +115,7 @@ pub(crate) fn response(code: ProblemCode) -> Response {
         .status(code.status())
         .header(header::CONTENT_TYPE, "application/problem+json")
         .header(header::CACHE_CONTROL, "no-store")
+        .header("x-content-type-options", "nosniff")
         .header("x-correlation-id", correlation_id)
         .body(Body::from(body))
         .expect("static problem response builder")

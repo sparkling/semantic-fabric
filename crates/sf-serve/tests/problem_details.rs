@@ -68,6 +68,10 @@ async fn assert_problem(
         response.headers().get(header::CACHE_CONTROL).unwrap(),
         "no-store"
     );
+    assert_eq!(
+        response.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
     let correlation = response
         .headers()
         .get("x-correlation-id")
