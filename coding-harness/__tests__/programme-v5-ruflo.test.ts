@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+  PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3,
   PROGRAMME_V5_RUFLO_NODE_IDENTITY,
   collectProgrammeV5RufloEvidence,
   stableProgrammeV5RufloFileDigest,
@@ -110,11 +110,12 @@ describe('programme v5 local Ruflo MCP collector', () => {
         timeoutMs: 20_000,
       });
 
-      expect(evidence.schemaVersion).toBe(2);
+      expect(evidence.schemaVersion).toBe(3);
       expect(evidence.captureNonce).toBe('b'.repeat(64));
       expect(evidence.transactionStartedAt).toBe(now);
       expect(evidence.captureBindingDigest).toMatch(/^[a-f0-9]{64}$/);
-      expect(evidence.cli).toEqual(PROGRAMME_V5_RUFLO_CLI_IDENTITY);
+      expect(evidence.cli).toEqual(PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3);
+      expect(evidence.cli.entryPath).toBe('/runtime/package/bin/mcp-server.js');
       expect(evidence.cli).toMatchObject({
         nodePath: PROGRAMME_V5_RUFLO_NODE_IDENTITY.path,
         nodeDigest: PROGRAMME_V5_RUFLO_NODE_IDENTITY.digest,

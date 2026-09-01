@@ -12,6 +12,7 @@ import {
 } from './contracts.js';
 import {
   PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+  PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3,
   PROGRAMME_V5_RUFLO_MCP_IDENTITY,
   PROGRAMME_V5_RUFLO_NODE_IDENTITY,
   parseProgrammeV5RufloEvidence,
@@ -29,8 +30,9 @@ import {
 } from './programme-v5-ruflo-runtime.js';
 import { parseJsonWithoutDuplicateKeys } from './strict-json.js';
 
-export { PROGRAMME_V5_RUFLO_CLI_IDENTITY, PROGRAMME_V5_RUFLO_MCP_IDENTITY,
-  PROGRAMME_V5_RUFLO_NODE_IDENTITY, parseProgrammeV5RufloEvidence,
+export { PROGRAMME_V5_RUFLO_CLI_IDENTITY, PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3,
+  PROGRAMME_V5_RUFLO_MCP_IDENTITY, PROGRAMME_V5_RUFLO_NODE_IDENTITY,
+  parseProgrammeV5RufloEvidence,
   validProgrammeV5RufloBinding, type ProgrammeV5RufloEvidence,
 } from './programme-v5-ruflo-contract.js';
 
@@ -59,9 +61,7 @@ const DEFAULT_OUTPUT_BYTES = 1_048_576;
 const MAX_OUTPUT_BYTES = 4_194_304;
 const DEFAULT_TERMINATION_GRACE_MS = 500;
 
-interface SessionResult {
-  taskStatus: ProgrammeV5RufloTaskStatus; swarmStatus: ProgrammeV5RufloSwarmStatus;
-}
+interface SessionResult { taskStatus: ProgrammeV5RufloTaskStatus; swarmStatus: ProgrammeV5RufloSwarmStatus }
 
 export async function collectProgrammeV5RufloEvidence(
   input: ProgrammeV5RufloCollectorInput,
@@ -94,7 +94,7 @@ export async function collectProgrammeV5RufloEvidence(
     throw new Error('HARNESS_PROGRAMME_V5_RUFLO_ENTRY_CHANGED');
   }
   return parseProgrammeV5RufloEvidence({
-    schemaVersion: 2,
+    schemaVersion: 3,
     source: 'ruflo-coordination-ledger',
     taskId: bindings.taskId,
     runId: bindings.runId,
@@ -152,7 +152,7 @@ function parseCollectorInput(input: ProgrammeV5RufloCollectorInput): Readonly<{
   });
 }
 
-function inspectPinnedCliIdentity(packageRoot: string): typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY {
+function inspectPinnedCliIdentity(packageRoot: string): typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3 {
   const entryPath = join(packageRoot, 'bin', 'mcp-server.js');
   const entryDigest = stableProgrammeV5RufloFileDigest(
     entryPath, true,
@@ -171,7 +171,7 @@ function inspectPinnedCliIdentity(packageRoot: string): typeof PROGRAMME_V5_RUFL
     || bins['claude-flow-mcp'] !== 'bin/mcp-server.js') {
     throw new Error('HARNESS_PROGRAMME_V5_RUFLO_PACKAGE_IDENTITY_MISMATCH');
   }
-  return PROGRAMME_V5_RUFLO_CLI_IDENTITY;
+  return PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3;
 }
 
 function inspectPinnedNodeIdentity(): typeof PROGRAMME_V5_RUFLO_NODE_IDENTITY {

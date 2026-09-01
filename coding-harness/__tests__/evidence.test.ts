@@ -10,6 +10,7 @@ import {
 } from '../src/evidence.js';
 import {
   PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+  PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3,
   PROGRAMME_V5_RUFLO_MCP_IDENTITY,
   programmeV5RufloCaptureBindingDigest,
   programmeV5RufloRequests,
@@ -114,6 +115,11 @@ const rufloEvidenceV2 = {
   authoritative: false,
   capturedAt: '2026-08-25T12:00:01.000Z',
 };
+const rufloEvidenceV3 = {
+  ...rufloEvidenceV2,
+  schemaVersion: 3,
+  cli: PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3,
+};
 
 describe('external coordination evidence', () => {
   it('accepts strict, non-authoritative Ruflo and task-bound QE evidence', () => {
@@ -154,19 +160,28 @@ describe('external coordination evidence', () => {
     })).toThrow(/profile/);
   });
 
-  it('preserves schema 1 while requiring replayable local status evidence for schema 2', () => {
+  it('preserves schemas 1 and 2 while admitting relocatable-source schema 3', () => {
     expect(parseRufloEvidence(rufloEvidence)).toEqual(rufloEvidence);
     expect(parseRufloEvidence(rufloEvidenceV2).schemaVersion).toBe(2);
+    expect(parseRufloEvidence(rufloEvidenceV3).schemaVersion).toBe(3);
     const parsed = parseProgrammeV5RufloEvidence(rufloEvidenceV2);
     expect(parsed.taskStatus.taskId).toBe('coordination-0001');
     expect(parsed.swarmStatus.config).toMatchObject({
       topology: 'hierarchical', strategy: 'specialized', consensusMechanism: 'raft',
     });
     expect(Object.isFrozen(parsed.taskStatus)).toBe(true);
+    expect(parseProgrammeV5RufloEvidence(rufloEvidenceV3).cli.entryPath)
+      .toBe('/runtime/package/bin/mcp-server.js');
+    expect(() => parseProgrammeV5RufloEvidence({
+      ...rufloEvidenceV2, cli: PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3,
+    })).toThrow(/invalid keys/);
+    expect(() => parseProgrammeV5RufloEvidence({
+      ...rufloEvidenceV3, cli: PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+    })).toThrow(/invalid keys/);
     expect(() => parseProgrammeV5RufloEvidence(rufloEvidence)).toThrow(/invalid keys/);
   });
 
-  it('rejects synthetic, stale, misbound, and structurally loose schema-2 evidence', () => {
+  it('rejects synthetic, stale, misbound, and structurally loose schema-2/3 evidence', () => {
     expect(() => parseProgrammeV5RufloEvidence({
       ...rufloEvidenceV2, taskStatus: { ...taskStatus, status: 'pending' },
     })).toThrow(/TASK_STATUS/);

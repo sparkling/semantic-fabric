@@ -138,9 +138,9 @@ const NATIVE_ORIGINS: Readonly<Record<NativeHost, readonly string[]>> = Object.f
 
 export function parseRufloEvidence(value: unknown): RufloEvidence {
   const input = asRecord(value, 'ruflo evidence');
-  if (input.schemaVersion === 2) return parseProgrammeV5RufloEvidence(input);
+  if (input.schemaVersion === 2 || input.schemaVersion === 3) return parseProgrammeV5RufloEvidence(input);
   assertExactKeys(input, RUFLO_KEYS, 'ruflo evidence');
-  if (input.schemaVersion !== 1) throw new TypeError('ruflo evidence schemaVersion must be 1');
+  if (input.schemaVersion !== 1) throw new TypeError('ruflo evidence schemaVersion must be 1, 2, or 3');
   if (input.source !== 'ruflo-coordination-ledger') throw new TypeError('ruflo evidence source is invalid');
   if (input.authoritative !== false) throw new TypeError('Ruflo evidence must remain non-authoritative');
   return deepFreeze({

@@ -21,7 +21,6 @@ export const PROGRAMME_V5_RUFLO_MCP_IDENTITY = Object.freeze({
 export const PROGRAMME_V5_RUFLO_CLI_IDENTITY = Object.freeze({
   packageName: '@claude-flow/cli' as const,
   packageVersion: '3.38.20' as const,
-  // Frozen schema-V2 identity label; actual source identity is the sealed aggregate below.
   entryPath: '/home/claude/.npm-global/lib/node_modules/@claude-flow/cli/bin/mcp-server.js' as const,
   entryDigest: 'b2baccea433793c53ec1f7638134ea76ee7516c8e4808dda92fc6f6948ee43fa' as const,
   nodePath: '/usr/bin/node' as const,
@@ -33,6 +32,11 @@ export const PROGRAMME_V5_RUFLO_CLI_IDENTITY = Object.freeze({
   packageSourceBytes: 14_036_904 as const,
   executionIsolation: 'immutable-private-node-package-closure-bwrap-v1' as const,
   dependencyClosure: 'exact-static-closure-immutable-private-v1' as const,
+});
+export const PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3 = Object.freeze({
+  ...PROGRAMME_V5_RUFLO_CLI_IDENTITY,
+  entryPath: '/runtime/package/bin/mcp-server.js' as const,
+  sourceBinding: 'content-addressed-relocatable-package-root-v1' as const,
 });
 
 export const PROGRAMME_V5_RUFLO_NODE_IDENTITY = Object.freeze({
@@ -46,55 +50,36 @@ export const PROGRAMME_V5_RUFLO_BWRAP_IDENTITY = Object.freeze({
 export const PROGRAMME_V5_RUFLO_CAPTURE_WINDOW_MS = 60_000;
 
 export interface ProgrammeV5RufloTaskStatus {
-  taskId: string;
-  type: string;
-  description: string;
+  taskId: string; type: string; description: string;
   status: 'in_progress';
-  progress: number;
-  priority: 'low' | 'normal' | 'high' | 'critical';
-  assignedTo: string[];
-  tags: string[];
-  createdAt: string;
-  startedAt: string;
-  completedAt: null;
-  result: null;
+  progress: number; priority: 'low' | 'normal' | 'high' | 'critical';
+  assignedTo: string[]; tags: string[];
+  createdAt: string; startedAt: string;
+  completedAt: null; result: null;
 }
 
 export interface ProgrammeV5RufloSwarmStatus {
-  swarmId: string;
-  status: 'running';
-  topology: 'hierarchical';
-  maxAgents: number;
-  agentCount: number;
-  taskCount: number;
+  swarmId: string; status: 'running'; topology: 'hierarchical';
+  maxAgents: number; agentCount: number; taskCount: number;
   config: {
-    topology: 'hierarchical';
-    maxAgents: number;
-    strategy: 'specialized';
-    communicationProtocol: 'message-bus';
-    autoScaling: boolean;
-    consensusMechanism: 'raft';
+    topology: 'hierarchical'; maxAgents: number; strategy: 'specialized';
+    communicationProtocol: 'message-bus'; autoScaling: boolean; consensusMechanism: 'raft';
   };
-  createdAt: string;
-  updatedAt: string;
+  createdAt: string; updatedAt: string;
 }
 
 export interface ProgrammeV5RufloTaskStatusRequest {
-  jsonrpc: '2.0';
-  id: 2;
-  method: 'tools/call';
+  jsonrpc: '2.0'; id: 2; method: 'tools/call';
   params: { name: 'task_status'; arguments: { taskId: string } };
 }
 
 export interface ProgrammeV5RufloSwarmStatusRequest {
-  jsonrpc: '2.0';
-  id: 3;
-  method: 'tools/call';
+  jsonrpc: '2.0'; id: 3; method: 'tools/call';
   params: { name: 'swarm_status'; arguments: { swarmId: string } };
 }
 
-export interface ProgrammeV5RufloEvidence {
-  schemaVersion: 2;
+interface ProgrammeV5RufloEvidenceSchema<Version extends 2 | 3, CliIdentity> {
+  schemaVersion: Version;
   source: 'ruflo-coordination-ledger';
   taskId: string;
   runId: string;
@@ -107,7 +92,7 @@ export interface ProgrammeV5RufloEvidence {
   transactionStartedAt: string;
   captureBindingDigest: string;
   mcp: typeof PROGRAMME_V5_RUFLO_MCP_IDENTITY;
-  cli: typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY;
+  cli: CliIdentity;
   taskStatusRequest: ProgrammeV5RufloTaskStatusRequest;
   swarmStatusRequest: ProgrammeV5RufloSwarmStatusRequest;
   taskStatus: ProgrammeV5RufloTaskStatus;
@@ -118,6 +103,9 @@ export interface ProgrammeV5RufloEvidence {
   authoritative: false;
   capturedAt: string;
 }
+export type ProgrammeV5RufloEvidence =
+  | ProgrammeV5RufloEvidenceSchema<2, typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY>
+  | ProgrammeV5RufloEvidenceSchema<3, typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3>;
 
 const EVIDENCE_KEYS = [
   'schemaVersion', 'source', 'taskId', 'runId', 'swarmId', 'coordinationTaskId',
@@ -138,6 +126,12 @@ const SWARM_CONFIG_KEYS = [
   'topology', 'maxAgents', 'strategy', 'communicationProtocol', 'autoScaling',
   'consensusMechanism',
 ] as const;
+const CLI_IDENTITY_KEYS_V2 = [
+  'packageName', 'packageVersion', 'entryPath', 'entryDigest', 'nodePath', 'nodeDigest',
+  'bwrapPath', 'bwrapDigest', 'packageSourceDigest', 'packageSourceFileCount',
+  'packageSourceBytes', 'executionIsolation', 'dependencyClosure',
+] as const;
+const CLI_IDENTITY_KEYS_V3 = [...CLI_IDENTITY_KEYS_V2, 'sourceBinding'] as const;
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,160}$/;
 
 export function programmeV5RufloRequests(
@@ -253,7 +247,9 @@ export function parseProgrammeV5RufloSwarmStatus(
 
 export function parseProgrammeV5RufloEvidence(value: unknown): ProgrammeV5RufloEvidence {
   const input = exactRecord(value, EVIDENCE_KEYS, 'programme v5 Ruflo evidence');
-  if (input.schemaVersion !== 2 || input.source !== 'ruflo-coordination-ledger') {
+  const schemaVersion = input.schemaVersion;
+  if ((schemaVersion !== 2 && schemaVersion !== 3)
+    || input.source !== 'ruflo-coordination-ledger') {
     throw new TypeError('programme v5 Ruflo evidence provenance is invalid');
   }
   if (input.providerVariablesStripped !== true || input.authoritative !== false) {
@@ -278,7 +274,7 @@ export function parseProgrammeV5RufloEvidence(value: unknown): ProgrammeV5RufloE
     swarmId, coordinationTaskId,
   })) throw new Error('HARNESS_PROGRAMME_V5_RUFLO_CAPTURE_BINDING_MISMATCH');
   const mcp = parseMcpIdentity(input.mcp);
-  const cli = parseCliIdentity(input.cli);
+  const cli = parseCliIdentity(input.cli, schemaVersion);
   const requests = parseRequests(input.taskStatusRequest, input.swarmStatusRequest,
     coordinationTaskId, swarmId);
   const taskStatus = parseProgrammeV5RufloTaskStatus(input.taskStatus, coordinationTaskId);
@@ -299,7 +295,7 @@ export function parseProgrammeV5RufloEvidence(value: unknown): ProgrammeV5RufloE
     throw new Error('HARNESS_PROGRAMME_V5_RUFLO_FRESHNESS_INVALID');
   }
   return deepFreeze({
-    schemaVersion: 2,
+    schemaVersion,
     source: 'ruflo-coordination-ledger',
     taskId,
     runId,
@@ -321,7 +317,7 @@ export function parseProgrammeV5RufloEvidence(value: unknown): ProgrammeV5RufloE
     providerVariablesStripped: true,
     authoritative: false,
     capturedAt,
-  });
+  }) as ProgrammeV5RufloEvidence;
 }
 
 export function validProgrammeV5RufloBinding(
@@ -381,17 +377,16 @@ function parseMcpIdentity(value: unknown): typeof PROGRAMME_V5_RUFLO_MCP_IDENTIT
   return PROGRAMME_V5_RUFLO_MCP_IDENTITY;
 }
 
-function parseCliIdentity(value: unknown): typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY {
-  const input = exactRecord(value, [
-    'packageName', 'packageVersion', 'entryPath', 'entryDigest', 'nodePath', 'nodeDigest',
-    'bwrapPath', 'bwrapDigest',
-    'packageSourceDigest', 'packageSourceFileCount', 'packageSourceBytes',
-    'executionIsolation', 'dependencyClosure',
-  ], 'programme v5 Ruflo CLI identity');
-  if (!sameRecord(input, PROGRAMME_V5_RUFLO_CLI_IDENTITY)) {
+function parseCliIdentity(value: unknown, schemaVersion: 2 | 3):
+typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY | typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3 {
+  const expected = schemaVersion === 2
+    ? PROGRAMME_V5_RUFLO_CLI_IDENTITY : PROGRAMME_V5_RUFLO_CLI_IDENTITY_V3;
+  const keys = schemaVersion === 2 ? CLI_IDENTITY_KEYS_V2 : CLI_IDENTITY_KEYS_V3;
+  const input = exactRecord(value, keys, 'programme v5 Ruflo CLI identity');
+  if (!sameRecord(input, expected)) {
     throw new Error('HARNESS_PROGRAMME_V5_RUFLO_CLI_IDENTITY_MISMATCH');
   }
-  return PROGRAMME_V5_RUFLO_CLI_IDENTITY;
+  return expected;
 }
 
 function parseRequests(
