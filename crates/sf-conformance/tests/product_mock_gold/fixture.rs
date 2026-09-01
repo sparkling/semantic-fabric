@@ -121,23 +121,70 @@ fn pin_json(entry: &Pin) -> serde_json::Value {
 fn synthetic_coverage() -> Vec<u8> {
     serde_json::to_vec(&json!({
         "sourceRevision": SOURCE_REVISION,
-        "relationalSchema": {"summary": {"tables": 112, "columns": 598}, "stores": [{
-            "store": "ProductDesign", "relations": [{"name": "style", "columns": [
-                {"name":"style_number","storeType":"text","nullable":false},
-                {"name":"season_code","storeType":"text","nullable":false},
-                {"name":"design_brief_id","storeType":"uuid","nullable":false},
-                {"name":"status","storeType":"text","nullable":false},
-                {"name":"version","storeType":"integer","nullable":false}
-            ], "primaryKey":{"columns":["style_number"]}, "foreignKeyDefinitions":[
-                {"name":"FK_style_season_ref","childColumns":["season_code"],"parentTable":"season_ref","parentColumns":["season_code"]},
-                {"name":"FK_style_design_brief","childColumns":["design_brief_id"],"parentTable":"design_brief","parentColumns":["id"]}
-            ]}]
-        }]},
+        "relationalSchema": {"summary": {"tables": 112, "columns": 598},
+            "stores": synthetic_stores()},
         "relationalR2rml": {"status":"partial","mappedTables":1,"mappedColumns":2,
             "unmappedTables":111,"unmappedColumns":596,"bindings":[{"store":"ProductDesign",
             "table":"style","sourcePath":INITIAL_MIGRATION,"columns":[{"column":"style_number"},{"column":"version"}]}]}
     }))
     .expect("synthetic coverage serializes")
+}
+
+fn synthetic_stores() -> Vec<Value> {
+    let stores = [
+        ("ProductDesign", 11),
+        ("CostingPricing", 10),
+        ("FinanceCostAccounting", 13),
+        ("LogisticsAllocation", 10),
+        ("MaterialsBom", 12),
+        ("MerchandisingAssortment", 12),
+        ("ProductionManufacturing", 8),
+        ("QualityCompliance", 10),
+        ("SamplingFit", 9),
+        ("Style360", 3),
+        ("SupplierSourcing", 14),
+    ];
+    let mut six_column_relations = 38;
+    stores
+        .into_iter()
+        .map(|(store, table_count)| {
+            let relations = (0..table_count)
+                .map(|index| {
+                    if store == "ProductDesign" && index == 0 {
+                        return synthetic_style();
+                    }
+                    let column_count = if six_column_relations > 0 {
+                        six_column_relations -= 1;
+                        6
+                    } else {
+                        5
+                    };
+                    json!({
+                        "name": format!("synthetic_relation_{index}"),
+                        "columns": (0..column_count).map(|column| json!({
+                            "name": format!("column_{column}"),
+                            "storeType": "text",
+                            "nullable": false
+                        })).collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({"store": store, "relations": relations})
+        })
+        .collect()
+}
+
+fn synthetic_style() -> Value {
+    json!({"name": "style", "columns": [
+        {"name":"style_number","storeType":"text","nullable":false},
+        {"name":"season_code","storeType":"text","nullable":false},
+        {"name":"design_brief_id","storeType":"uuid","nullable":false},
+        {"name":"status","storeType":"text","nullable":false},
+        {"name":"version","storeType":"integer","nullable":false}
+    ], "primaryKey":{"columns":["style_number"]}, "foreignKeyDefinitions":[
+        {"name":"FK_style_season_ref","childColumns":["season_code"],"parentTable":"season_ref","parentColumns":["season_code"]},
+        {"name":"FK_style_design_brief","childColumns":["design_brief_id"],"parentTable":"design_brief","parentColumns":["id"]}
+    ]})
 }
 
 fn synthetic_mapping() -> &'static str {

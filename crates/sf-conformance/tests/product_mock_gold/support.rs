@@ -18,7 +18,10 @@ pub use fixture::SyntheticFixture;
 #[allow(unused_imports)]
 pub use r2rml::extract_r2rml;
 #[allow(unused_imports)]
-pub use schema::{StyleColumn, StyleForeignKey, StyleSchema};
+pub use schema::{
+    RelationSchema, RelationalColumn, RelationalInventory, StoreSchema, StyleColumn,
+    StyleForeignKey, StyleSchema,
+};
 
 pub const GOLD_ROOT_ENV: &str = "SF_PRODUCT_MOCK_GOLD_ROOT";
 pub const SOURCE_ROOT_ENV: &str = "SF_PRODUCT_MOCK_SOURCE_ROOT";
@@ -61,6 +64,7 @@ pub struct SealPolicy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldVertical {
     pub r2rml: String,
+    pub inventory: RelationalInventory,
     pub style: StyleSchema,
 }
 
@@ -214,12 +218,16 @@ where
     let coverage = selected
         .remove(COVERAGE_PATH)
         .ok_or("relational coverage artifact is missing")?;
-    let style = validate_coverage(&coverage)?;
+    let (inventory, style) = validate_coverage(&coverage)?;
     let mapping = selected
         .remove(MAPPING_PATH)
         .ok_or("source mapping artifact is missing")?;
     let r2rml = r2rml::validate_mapping(&mapping)?;
-    Ok(GoldVertical { r2rml, style })
+    Ok(GoldVertical {
+        r2rml,
+        inventory,
+        style,
+    })
 }
 
 fn exact_manifest_claims(manifest: &Value) -> Result<(), &'static str> {
@@ -300,7 +308,7 @@ where
     Ok(())
 }
 
-fn validate_coverage(bytes: &[u8]) -> Result<StyleSchema, &'static str> {
+fn validate_coverage(bytes: &[u8]) -> Result<(RelationalInventory, StyleSchema), &'static str> {
     let coverage: Value =
         serde_json::from_slice(bytes).map_err(|_| "relational coverage is invalid")?;
     expect_str(&coverage, "/sourceRevision", SOURCE_REVISION)?;
@@ -338,7 +346,21 @@ fn validate_coverage(bytes: &[u8]) -> Result<StyleSchema, &'static str> {
         .iter()
         .find(|value| value.pointer("/name").and_then(Value::as_str) == Some("style"))
         .ok_or("Style relation is missing")?;
-    schema::parse_style_schema(style)
+    let style = schema::parse_style_schema(style)?;
+    let inventory = schema::parse_inventory(&coverage)?;
+    let inventory_style = inventory
+        .store("ProductDesign")
+        .and_then(|store| {
+            store
+                .relations
+                .iter()
+                .find(|relation| relation.name == "style")
+        })
+        .ok_or("Style relation is missing from inventory")?;
+    if inventory_style.columns != style.columns {
+        return Err("Style inventory and detailed schema differ");
+    }
+    Ok((inventory, style))
 }
 
 fn string<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, &'static str> {
