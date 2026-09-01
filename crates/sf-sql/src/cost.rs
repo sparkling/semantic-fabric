@@ -26,6 +26,8 @@
 //! probe — are deferred (ADR-0006 *Cross-source semi-join cost*); this module
 //! consumes the resulting [`SideStats`] estimates and owns the *decision*.
 
+pub use sf_core::schema::SideStats;
+
 /// Which input of the cross-source join a [`Plan`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -39,28 +41,6 @@ impl Side {
         match self {
             Side::Left => Side::Right,
             Side::Right => Side::Left,
-        }
-    }
-}
-
-/// Cardinality estimates for one join input, on its join key.
-///
-/// `distinct_keys` (distinct values of the join key) drives both side selection
-/// and the survival-ratio estimate; `rows` is retained for context/diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SideStats {
-    /// Distinct values of the join key on this side (the selectivity driver).
-    pub distinct_keys: u64,
-    /// Total rows on this side.
-    pub rows: u64,
-}
-
-impl SideStats {
-    /// A side with `distinct_keys` distinct join-key values over `rows` rows.
-    pub fn new(distinct_keys: u64, rows: u64) -> Self {
-        Self {
-            distinct_keys,
-            rows,
         }
     }
 }

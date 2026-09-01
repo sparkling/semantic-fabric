@@ -36,9 +36,11 @@ pub mod datatype;
 pub mod graph_map;
 pub mod ir;
 pub mod query_control;
+pub mod schema;
 pub mod term;
 
 pub use affinity::{SourceId, SourceIdError, SourceMapping};
+pub use schema::{Column, ForeignKey, FunctionalDep, SideStats, TableSchema};
 
 /// Errors raised by the shared core.
 #[derive(Debug, thiserror::Error)]

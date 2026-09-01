@@ -6,11 +6,11 @@
 //! * [`dialect`] — per-DBMS [`Dialect`] selection, identifier quoting, and SQL
 //!   emission through the `sqlparser` AST; injection-safe by construction
 //!   (bound-parameter placeholders only, ADR-0010 §A/R1).
-//! * [`schema`] — the dialect-neutral schema model (PK/FK/uniqueness) and
-//!   distinct-key cardinality used by the optimizer (ADR-0007) and the
-//!   cross-source cost planner.
+//! * [`schema`] — a compatibility facade over the dialect-neutral schema model
+//!   owned by `sf-core` (PK/FK/uniqueness and distinct-key cardinality), used by
+//!   the optimizer (ADR-0007) and cross-source cost planner.
 //! * [`introspect`] — per-DBMS catalog introspection (SQLite fully; PostgreSQL
-//!   integration-tested) that fills [`schema::TableSchema`].
+//!   integration-tested) that fills [`sf_core::schema::TableSchema`].
 //! * [`stream`] — bounded-memory, server-side-cursor result streaming (ADR-0006
 //!   invariant; ADR-0010 §C).
 //! * [`cost`] — the cross-source semi-join cost planner (a foundational,

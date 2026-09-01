@@ -13,8 +13,7 @@ pub mod r2rml;
 pub use direct_mapping::direct_mapping;
 pub use r2rml::parse_r2rml;
 
-use sf_core::{Result, SourceId, SourceMapping};
-use sf_sql::TableSchema;
+use sf_core::{Result, SourceId, SourceMapping, TableSchema};
 
 /// Parse R2RML and associate the unchanged IR with one pre-admission source ID.
 pub fn parse_r2rml_for_source(turtle: &str, source_id: SourceId) -> Result<SourceMapping> {

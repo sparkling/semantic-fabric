@@ -4760,7 +4760,6 @@ version = "0.0.0"
 dependencies = [
  "oxttl",
  "sf-core",
- "sf-sql",
  "thiserror 2.0.20",
 ]
 

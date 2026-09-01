@@ -11,19 +11,19 @@
 //! hand-written R2RML produces, and the virtualiser keeps a single rewrite target
 //! (ADR-0003 R1) — there is no second mapping model.
 //!
-//! Schema introspection (the input) lives in `sf-sql` (the source/SQL layer,
-//! ADR-0006); the caller (the conformance harness / executor) introspects and
-//! passes [`sf_sql::TableSchema`] in — this module does no I/O. Column SQL types
-//! drive the R2RML §10 natural datatype mapping, which is applied downstream in
-//! term generation (`sf_core::datatype`, centralised per ADR-0015 / ADR-0003 R3),
-//! so the column object maps here carry no explicit `rr:datatype`.
+//! Per-DBMS schema introspection lives in `sf-sql` (the source/SQL layer,
+//! ADR-0006), while the dialect-neutral input model is owned by `sf-core`. The
+//! caller introspects and passes [`sf_core::TableSchema`] in — this module does
+//! no I/O. Column SQL types drive the R2RML §10 natural datatype mapping, which
+//! is applied downstream in term generation (`sf_core::datatype`, centralised
+//! per ADR-0015 / ADR-0003 R3), so column object maps carry no explicit
+//! `rr:datatype`.
 
 use sf_core::ir::{
     Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, Segment, SubjectMap,
     Template, TermMap, TermSpec, TriplesMap,
 };
-use sf_core::{NamedNode, Result, Term};
-use sf_sql::TableSchema;
+use sf_core::{NamedNode, Result, TableSchema, Term};
 
 /// Generate the Direct-Mapping IR for a relational schema (W3C Direct Mapping §2),
 /// as auto-generated R2RML. `base_iri` is the document base (the test suite fixes
@@ -196,7 +196,7 @@ mod tests {
     use super::*;
     use sf_core::ir::TermType;
     use sf_core::term::generate_into;
-    use sf_sql::{Column, ForeignKey};
+    use sf_core::{Column, ForeignKey};
 
     const BASE: &str = "http://example.com/base/";
 

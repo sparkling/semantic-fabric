@@ -8,6 +8,5 @@ description = "semantic-fabric R2RML/Direct-Mapping parser (Turtle -> sf-core IR
 
 [dependencies]
 sf-core.workspace = true
-sf-sql.workspace = true   # Direct Mapping consumes introspected TableSchema (ADR-0003 DM-as-auto-R2RML; ADR-0006)
 oxttl.workspace = true
 thiserror.workspace = true
