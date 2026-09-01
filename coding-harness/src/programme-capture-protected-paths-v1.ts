@@ -53,6 +53,7 @@ export const PROGRAMME_CAPTURE_SOURCE_PROTECTED_PATHS_V1 = Object.freeze([
   'coding-harness/src/programme-capture-private-source-v1.ts',
   'coding-harness/src/programme-capture-protected-paths-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
+  'coding-harness/src/programme-capture-source-paths-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-supervisor-authority-config-v2.ts',
   'coding-harness/src/programme-capture-supervisor-authority-transition-v2.ts',
