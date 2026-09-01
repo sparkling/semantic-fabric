@@ -91,10 +91,7 @@ impl<'a> Unfolder<'a> {
         // translation rather than emit unproven SQL or risk a non-terminating /
         // incomplete closure on a scaffolded backend (ADR-0049 R4).
         if matches!(kind, PathKind::OneOrMore | PathKind::ZeroOrMore)
-            && !matches!(
-                self.dialect,
-                sf_sql::Dialect::Sqlite | sf_sql::Dialect::Postgres | sf_sql::Dialect::MySql
-            )
+            && !self.dialect.supports_recursive_paths()
         {
             return Err(Error::Unsupported(
                 "recursive P+/P* requires a proven finite-pair fixed point; this SQL dialect \

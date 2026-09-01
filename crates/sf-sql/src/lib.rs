@@ -30,7 +30,7 @@ pub mod schema;
 pub mod stream;
 
 pub use backend::{BranchStream, RawTuple, SqlBackend};
-pub use cost::{plan_semijoin, CostConfig, Plan, ReducerForm, Side, SideStats};
+pub use cost::{plan_semijoin, CostConfig, ReducerForm, SemiJoinPlan, Side, SideStats};
 pub use dialect::Dialect;
 pub use error::{Error, Result};
 pub use schema::{Column, ForeignKey, FunctionalDep, TableSchema};

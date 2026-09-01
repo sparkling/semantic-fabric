@@ -28,7 +28,7 @@
 
 pub use sf_core::schema::SideStats;
 
-/// Which input of the cross-source join a [`Plan`] refers to.
+/// Which input of the cross-source join a [`SemiJoinPlan`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -59,9 +59,12 @@ pub enum ReducerForm {
     Bloom { keys: u64, bits: u64, hashes: u8 },
 }
 
-/// The planner's decision for a cross-source join.
+/// The cost planner's decision for a cross-source semi-join.
+///
+/// The explicit name avoids confusion with `sf_sparql::Plan`, which is the
+/// semantic query plan that a future federated plan will contain.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Plan {
+pub enum SemiJoinPlan {
     /// The reducer would eliminate almost nothing (survival ratio ≈ 1): skip it
     /// and stream-merge the inputs directly (ADR-0006 skip-if-unselective gate).
     SkipMerge {
@@ -114,9 +117,9 @@ impl Default for CostConfig {
 /// Plan a cross-source semi-join from the two sides' cardinality estimates.
 ///
 /// Side selection ships the smaller distinct-key side; the survival-ratio gate
-/// may turn the plan into [`Plan::SkipMerge`]; otherwise the reducer form is
+/// may turn the plan into [`SemiJoinPlan::SkipMerge`]; otherwise the reducer form is
 /// chosen by the shipped distinct-key count.
-pub fn plan_semijoin(left: SideStats, right: SideStats, cfg: &CostConfig) -> Plan {
+pub fn plan_semijoin(left: SideStats, right: SideStats, cfg: &CostConfig) -> SemiJoinPlan {
     // Side selection (ADR-0006): build = the smaller distinct-key side — we ship
     // the fewer keys, and by containment its keys sit inside the probe's domain.
     let (build, build_stats, probe_stats) = if left.distinct_keys <= right.distinct_keys {
@@ -134,11 +137,11 @@ pub fn plan_semijoin(left: SideStats, right: SideStats, cfg: &CostConfig) -> Pla
 
     // Skip-if-unselective: ≈ 1 means the reducer earns nothing.
     if survival_ratio >= cfg.skip_ratio {
-        return Plan::SkipMerge { survival_ratio };
+        return SemiJoinPlan::SkipMerge { survival_ratio };
     }
 
     let reducer = choose_reducer(build_stats.distinct_keys, cfg);
-    Plan::SemiJoin {
+    SemiJoinPlan::SemiJoin {
         build,
         probe,
         reducer,
@@ -201,7 +204,7 @@ mod tests {
             &cfg,
         );
         match small {
-            Plan::SemiJoin {
+            SemiJoinPlan::SemiJoin {
                 build,
                 probe,
                 reducer,
@@ -226,7 +229,7 @@ mod tests {
             &cfg,
         );
         match large {
-            Plan::SemiJoin {
+            SemiJoinPlan::SemiJoin {
                 build,
                 reducer,
                 survival_ratio,
@@ -259,7 +262,7 @@ mod tests {
             &cfg,
         );
         match near_one {
-            Plan::SkipMerge { survival_ratio } => {
+            SemiJoinPlan::SkipMerge { survival_ratio } => {
                 assert!(
                     survival_ratio >= cfg.skip_ratio,
                     "≈1 survival → skip: {survival_ratio}"
@@ -281,7 +284,7 @@ mod tests {
             &cfg,
         );
         match plan {
-            Plan::SemiJoin {
+            SemiJoinPlan::SemiJoin {
                 build,
                 probe,
                 reducer,
@@ -309,7 +312,7 @@ mod tests {
             &cfg,
         );
         match plan {
-            Plan::SemiJoin { reducer, .. } => {
+            SemiJoinPlan::SemiJoin { reducer, .. } => {
                 assert_eq!(reducer, ReducerForm::TempTable { keys: 10_000 });
             }
             other => panic!("expected SemiJoin/TempTable, got {other:?}"),
@@ -325,7 +328,7 @@ mod tests {
             SideStats::new(1_000, 9_000),
             &cfg,
         );
-        assert!(matches!(plan, Plan::SkipMerge { .. }));
+        assert!(matches!(plan, SemiJoinPlan::SkipMerge { .. }));
     }
 
     /// Bloom sizing is bounded: arbitrarily many keys never exceed the bit cap,

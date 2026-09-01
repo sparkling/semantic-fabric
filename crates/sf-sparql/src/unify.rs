@@ -670,7 +670,7 @@ fn str_match(
             // connection PRAGMA is not self-contained in the emitted SQL (ADR-0010).
             // So push down only on PostgreSQL; on other dialects leave the FILTER
             // un-rewritten (Unsupported → fall back; correctness over coverage).
-            if dialect != Dialect::Postgres {
+            if !dialect.like_is_case_sensitive() {
                 return Err(format!(
                     "case-sensitive {f:?} pushdown unsupported on {dialect:?}: \
                      only PostgreSQL LIKE is case-sensitive (never silently wrong)"

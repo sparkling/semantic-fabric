@@ -90,6 +90,24 @@ pub enum Dialect {
 }
 
 impl Dialect {
+    /// Whether this dialect has a proven exact finite-pair implementation for
+    /// recursive `P+`/`P*` property paths (ADR-0049 R4).
+    ///
+    /// This is a compiler capability fact, not production backend admission.
+    /// `sf-sparql::path` remains the enforcement site.
+    pub const fn supports_recursive_paths(self) -> bool {
+        matches!(self, Self::Postgres | Self::Sqlite | Self::MySql)
+    }
+
+    /// Whether `LIKE` is case-sensitive under the dialect contract used by the
+    /// runtime, allowing sound SPARQL `CONTAINS`/`STRSTARTS`/`STRENDS` pushdown.
+    ///
+    /// This is a compiler capability fact, not production backend admission.
+    /// `sf-sparql::unify` remains the enforcement site.
+    pub const fn like_is_case_sensitive(self) -> bool {
+        matches!(self, Self::Postgres)
+    }
+
     /// The identifier quote character.
     pub fn quote_char(self) -> char {
         match self {
@@ -266,6 +284,46 @@ mod tests {
         assert_eq!(Dialect::Sqlite.placeholder(1), "?");
         assert_eq!(Dialect::MySql.placeholder(3), "?");
         assert_eq!(Dialect::Snowflake.placeholder(5), "?");
+    }
+
+    #[test]
+    fn compiler_capability_facts_are_exhaustive_and_conservative() {
+        let expected = [
+            (Dialect::Postgres, true, true),
+            (Dialect::Sqlite, true, false),
+            (Dialect::MySql, true, false),
+            (Dialect::Redshift, false, false),
+            (Dialect::DuckDb, false, false),
+            (Dialect::SqlServer, false, false),
+            (Dialect::Oracle, false, false),
+            (Dialect::SapHana, false, false),
+            (Dialect::MonetDb, false, false),
+            (Dialect::Snowflake, false, false),
+            (Dialect::BigQuery, false, false),
+            (Dialect::Athena, false, false),
+            (Dialect::Databricks, false, false),
+            (Dialect::Trino, false, false),
+            (Dialect::PrestoDB, false, false),
+            (Dialect::Db2, false, false),
+            (Dialect::H2, false, false),
+            (Dialect::Spark, false, false),
+            (Dialect::Dremio, false, false),
+            (Dialect::Denodo, false, false),
+            (Dialect::Teiid, false, false),
+        ];
+
+        for (dialect, recursive_paths, case_sensitive_like) in expected {
+            assert_eq!(
+                dialect.supports_recursive_paths(),
+                recursive_paths,
+                "unexpected recursive-path capability for {dialect:?}"
+            );
+            assert_eq!(
+                dialect.like_is_case_sensitive(),
+                case_sensitive_like,
+                "unexpected LIKE capability for {dialect:?}"
+            );
+        }
     }
 
     #[test]
