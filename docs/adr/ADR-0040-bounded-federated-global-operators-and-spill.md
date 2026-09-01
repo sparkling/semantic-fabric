@@ -24,9 +24,11 @@ exact-or-reject rule. Acceptance waits for the comparison evidence and explicit
 maintainer decisions listed below. Its `implements` relationship identifies the
 ADR-0038 design lock, not implementation completion.
 `sf-core::SourceId`/`SourceMapping` and the current immutable single-source runtime
-binding now join one backend, dialect, T-box, observed schema and plan cache and
-reject a detached plan before I/O. They still provide no digest-addressed runtime
-snapshot, registry, drift/reload lifecycle, federation or `ConsistencyVector`.
+binding now join one backend, dialect, T-box, constraint-quarantined compiler
+schema, explicit `ConstraintAuthority::Unverified` and plan cache, and reject a
+detached plan before I/O. Its cache scope includes that authority. They still
+provide no digest-addressed runtime snapshot, structural/type drift/reload
+lifecycle, verified-constraint lease, federation or `ConsistencyVector`.
 Accepting this ADR would explicitly amend ADR-0006's cross-source rule: bounded
 semi-join reduction and streaming merge alone cannot implement every exact N:M
 join/operator listed here. The source-pushdown and no-general-OLAP decisions
@@ -88,13 +90,14 @@ boundaries. Add source affinity without cloning those stages:
 - Every logical table/mapping and backend capability record is bound to one
   `SourceId` before query admission.
 - A `SourceFragment` contains `SourceId`, the existing per-source `Plan`, typed
-  output variables, and immutable capability/schema/mapping digests. It contains
-  no transaction or snapshot handle.
+  output variables, explicit constraint authority, and immutable
+  capability/schema/mapping/policy digests. It contains no transaction or
+  snapshot handle.
 - A cacheable `FederatedPlan` contains source fragments, one typed
   global-operator tree, failure policy, required reservation shape, and the
   runtime/configuration epoch plus immutable ontology, mapping, schema, and
-  capability digests. It contains no request budget, acquired token, timing,
-  execution provenance, or database handle.
+  capability/constraint-policy digests. It contains no request budget, acquired
+  token, timing, execution provenance, or database handle.
 - A request-scoped `FederatedExecution` owns the `QueryBudget`, cancellation
   state, admitted reservations, acquired source sessions/transactions, timing,
   and execution provenance/receipt.
@@ -107,6 +110,17 @@ at source boundaries. It may push a semantically equivalent subtree or
 composite SQL into one source, but it may not reparse SPARQL or invent weaker
 semantics. Single-source queries continue to execute the existing `Plan`
 directly.
+
+The current serving policy contributes only structural/type facts and unverified
+constraint authority; constraint-driven rewrites remain disabled in every
+fragment. A future verified mode must hold a source-specific, unforgeable lease
+from coherent constraint revalidation through the complete streamed fragment
+execution and bind that authority into the snapshot/cache namespace. A
+fingerprint checked before execution is insufficient. Direct Mapping is also a
+mapping lifecycle, not a compiler shortcut: because its PK/FK-derived mapping can
+change across DDL, any future live Direct-Mapping fragment must be generated from
+and execute under the same verified source generation. Current `sf-serve`
+accepts authored R2RML and performs no such generation.
 
 ### 2. Exact global operator algebra
 
@@ -325,8 +339,9 @@ Acceptance requires one immutable evidence bundle satisfying every gate:
 
 1. The typed `SourceId`/`SourceFragment`/`FederatedPlan` model and exact node set
    serialize canonically, while request-scoped `FederatedExecution` and
-   `ConsistencyVector` cannot enter the plan cache; unknown versions/nodes are
-   rejected and the existing single-source `Plan` path remains unchanged.
+   `ConsistencyVector` cannot enter the plan cache; constraint authority and its
+   policy digest must enter it; unknown versions/nodes are rejected and the
+   existing single-source `Plan` path remains unchanged.
 2. Two-source and three-source differential tests equal a trusted materialized
    reference for every admitted node and composition across SQLite, PostgreSQL,
    and MySQL, including duplicates, UNBOUND masks, incompatible RDF terms,

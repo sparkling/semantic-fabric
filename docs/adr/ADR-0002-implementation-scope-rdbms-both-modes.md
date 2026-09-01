@@ -58,9 +58,11 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 - **Correctness** — the **W3C RDB2RDF test cases** (Direct Mapping + R2RML), executed as CONSTRUCT through the rewriter and compared to the expected output; the **Ontop** offline differential oracle on a shared R2RML set (ADR-0005); NoREC internal-differential + MR1 metamorphic (ADR-0012).
 - **Performance** — the **GTFS-Madrid-Bench OBDA track**: query latency, first-result latency, and **constant engine memory under growing source data** (ADR-0005). Materialisation benchmarks (KROWN) do not apply.
 - The engine is exercised against those standard suites/benchmarks, fixed
-  differentials, and the sealed product-mock gold/source/live development KAT.
-  That KAT covers one narrow relational R2RML slice and grants neither
-  production-mapping coverage nor backend admission.
+  differentials, and a development KAT that keeps three authorities separate:
+  canonical `semantic-builder` gold, a sealed `semantic-product-mock` source
+  revision, and mutable live product-mock PostgreSQL evidence. The KAT covers
+  one narrow relational R2RML slice and grants neither production-mapping
+  coverage nor backend admission.
 
 ### Consequences
 

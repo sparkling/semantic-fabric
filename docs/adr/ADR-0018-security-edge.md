@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-26
+updated: 2026-09-01
 tags: [security, authorization, row-level-security, abac, multi-tenancy, sensitivity, data-sensitivity]
 supersedes: []
 depends-on:
@@ -12,9 +12,9 @@ implements:
 
 # Security edge — authorization, RLS, ABAC, sensitivity
 
-> **Implementation status (2026-08-26): accepted, not implemented.** The public
+> **Implementation status (2026-09-01): accepted, not implemented.** The public
 > endpoint has no authenticated request context, PostgreSQL `SET LOCAL` RLS,
-> portable ABAC/sensitivity enforcement, or access-decision audit path. Proposed
+> portable ABAC/sensitivity enforcement, or access-decision audit path. Accepted
 > ADR-0038 milestone M5 first introduces a provider-neutral `SecurityContext` and
 > reference noninterference contract so platform identity/taxonomy details do not
 > leak into the semantic compiler.

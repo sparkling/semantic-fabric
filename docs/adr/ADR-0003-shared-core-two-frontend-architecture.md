@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
+updated: 2026-09-01
 tags: [architecture, virtualizer, obda, mapping-ir, sparql-to-sql, oxigraph, pipeline]
 supersedes: []
 depends-on:
@@ -46,10 +47,18 @@ SPARQL 1.2 query
 
 1. **Mapping IR** — R2RML (+ Direct Mapping as auto-generated R2RML) parsed (Turtle, via `oxttl`) into one typed model. R2RML-only — no RML-readiness (ADR-0002).
 2. **Term generation** — given a row + a term map, produce an `oxrdf` (RDF 1.2) term applying the R2RML §10 SQL→XSD datatype mapping (ADR-0015).
-3. **Source / SQL layer** — connection management, dialect SQL emission, schema introspection (PK/FK/uniqueness for the optimiser), cursor-streamed result iteration, and cross-source semi-join planning (ADR-0006).
+3. **Source / SQL layer** — connection management, dialect SQL emission, structural/type schema introspection, raw PK/FK/uniqueness observation, cursor-streamed result iteration, and cross-source semi-join planning (ADR-0006). Raw integrity observations are inputs to frozen conformance/development workflows and a future verified authority; current serving quarantines them before they can authorize optimiser rewrites.
 4. **RDF / results I/O** — `oxrdf` terms end-to-end; streaming SPARQL Results + JSON-LD serialisers (ADR-0019).
 
 A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` streamed through this same pipeline — a query, not a second mode.
+
+Current `sf-serve` loads an authored R2RML mapping before it opens the source; it
+does not generate Direct Mapping from the live catalogue. Direct Mapping remains
+an explicit conformance/development lifecycle over a frozen schema. Because PK
+and FK facts change the generated mapping itself—not merely its optimisation—any
+future live Direct-Mapping serving path must bind mapping generation and streamed
+execution to one verified schema generation. The serving optimiser's constraint
+quarantine alone cannot make a stale generated mapping sound.
 
 ### Consequences
 

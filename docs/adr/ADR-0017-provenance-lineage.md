@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-26
+updated: 2026-09-01
 tags: [provenance, lineage, prov-o, query-time, rdf-1.2, source-mapping]
 supersedes: []
 depends-on:
@@ -12,8 +12,8 @@ implements:
 
 # Provenance & lineage — query-time
 
-> **Implementation status (2026-08-26): accepted, not implemented.** No
-> production query path emits mapping/source/row-key lineage or PROV-O. Proposed
+> **Implementation status (2026-09-01): accepted, not implemented.** No
+> production query path emits mapping/source/row-key lineage or PROV-O. Accepted
 > ADR-0038 milestone M5 retains query-time, non-persisted provenance but binds it
 > to immutable runtime snapshots, source identity, security policy, and request
 > budgets before it is advertised.
@@ -30,8 +30,14 @@ Operators need to know which mapping / source / row produced each result triple 
 
 ## Decision Outcome
 
+> **Accepted-decision amendment (2026-09-01).** The original decision assumed
+> that an observed source primary key could become row identity. Commit
+> `24a0e20` makes mutable catalogue constraints non-authoritative in serving.
+> This amendment retains query-time provenance but requires an explicitly
+> declared lineage key or a verified execution-scoped authority for row keys.
+
 ### Query-time where/how-provenance
-The rewriter already knows, per solution, which triples-map produced it and which source columns/row it read — that is how it built the SQL. Recompute provenance from that: project the source primary key and tag the mapping IRI, so each result binding/triple can carry its `{mappingId, sourceId, row-key}` lineage on demand. This answers the source-mapping question "which mapping/source produced this" plus coverage and impact, computed from `⟨T, M⟩` + the query, with **nothing stored**.
+The rewriter already knows, per solution, which triples-map produced it and which source columns it read — that is how it built the SQL. Recompute mapping/source provenance from that and tag the mapping IRI. A `{mappingId, sourceId, row-key}` lineage may project a row key only when the runtime snapshot carries an explicitly declared lineage key or a verified constraint authority held through streamed execution. Current serving deliberately quarantines catalogue PK/UNIQUE facts, so it cannot silently promote an observed primary key to provenance identity. Where no authorized stable row key exists, expose mapping/source lineage without a row key or reject a requested row-key profile before execution. This answers the source-mapping question "which mapping/source produced this" plus coverage and impact, computed from `⟨T, M⟩` + the query, with **nothing stored**.
 
 ### Exposure
 Provenance is materialised-on-demand only for the rows a query returns — never for the whole graph:
@@ -46,7 +52,13 @@ Triple-level metadata rides RDF 1.2 reification; keep it out of any SHACL-valida
 
 ### Confirmation
 
-Verified via the ADR-0012 test strategy and ADR-0005 conformance/bench gates: provenance is recomputed from `⟨T, M⟩` + the query with nothing stored, and is materialised only for returned rows (graph results as RDF 1.2 reifying triples, per-solution PROV-O bundles).
+When implemented, the ADR-0012 strategy must verify that provenance is
+recomputed from `⟨T, M⟩` + the query with nothing stored and materialised only for
+returned rows (graph results as RDF 1.2 reifying triples, per-solution PROV-O
+bundles). It must also prove that unverified PK/UNIQUE observations never create a
+row key, while an explicitly authorized lineage key survives mapping, cache and
+streamed-execution boundaries. The implementation-status note above remains the
+current truth; no existing conformance or benchmark gate proves this feature.
 
 ## More Information
 * **Architecture / rewriter:** ADR-0003, ADR-0007. **Reasoning (provenance must survive saturation):** ADR-0008. **Security (sensitivity composes with provenance tags):** ADR-0018. **RDF 1.2 reification:** ADR-0019.

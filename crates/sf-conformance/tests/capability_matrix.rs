@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 79);
+    assert_eq!(loaded.catalog.cells.len(), 80);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&45));
+    assert_eq!(counts.get(&Status::Implemented), Some(&46));
     assert_eq!(counts.get(&Status::Planned), Some(&32));
     assert_eq!(counts.get(&Status::Unsupported), Some(&2));
     assert!(loaded
@@ -49,6 +49,55 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
         .standards
         .iter()
         .all(|standard| standard.url.contains("/TR/") && standard.byte_length > 0));
+}
+
+#[test]
+fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
+    let loaded = capability_catalog::load(&root()).expect("load catalog");
+    let static_cell = loaded
+        .catalog
+        .cells
+        .iter()
+        .find(|cell| cell.id == "mapping-semantic-builder-gold-sealed-source-generic")
+        .expect("static gold/source cell");
+    assert_eq!(static_cell.backend_id, "generic");
+    assert_eq!(static_cell.verification, Verification::SourceOnly);
+    assert_eq!(
+        static_cell.evidence_ids,
+        [
+            "e-semantic-builder-gold-external",
+            "e-semantic-builder-gold-loader"
+        ]
+    );
+
+    let live_cell = loaded
+        .catalog
+        .cells
+        .iter()
+        .find(|cell| cell.id == "mapping-product-mock-live-postgresql")
+        .expect("mutable PostgreSQL cell");
+    assert_eq!(live_cell.backend_id, "postgresql");
+    assert_eq!(live_cell.verification, Verification::LiveOptional);
+    assert_eq!(
+        live_cell.evidence_ids,
+        ["e-product-mock-live-pg", "e-product-mock-schema-live-pg"]
+    );
+
+    let external = loaded
+        .catalog
+        .evidence
+        .iter()
+        .find(|evidence| evidence.id == "e-semantic-builder-gold-external")
+        .expect("external KAT evidence");
+    assert_eq!(external.verification, Verification::SourceOnly);
+    assert!(!external.required);
+    let command = loaded
+        .catalog
+        .commands
+        .iter()
+        .find(|command| command.id == "cmd-semantic-builder-gold-external")
+        .expect("external KAT command");
+    assert_eq!(command.mode, CommandMode::Diagnostic);
 }
 
 #[test]

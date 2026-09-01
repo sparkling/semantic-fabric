@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-28
+updated: 2026-09-01
 tags: [testing, unit, integration, property-based, fuzzing, snapshot, ci, security]
 supersedes: []
 depends-on:
@@ -14,11 +14,11 @@ implements:
 
 # Test strategy — the inner layers below conformance
 
-> **Implementation status (2026-08-26): partially implemented.** Unit,
+> **Implementation status (2026-09-01): partially implemented.** Unit,
 > integration, fixed differential/adversarial, W3C, and benchmark coverage are
 > substantial. The required `proptest`, continuous `cargo-fuzz`, `insta` SQL
 > snapshots, generated MR1/NoREC corpus, durable LCOV, mutation threshold, and
-> benchmark regression gates are absent. Proposed ADR-0038 milestone M4 turns
+> benchmark regression gates are absent. Accepted ADR-0038 milestone M4 turns
 > these accepted rules into fail-closed product/release evidence.
 > M0 now also has deterministic mutation sentinels for the sealed RDB2RDF
 > inventory, outcome receipt, generated capability matrix, and read-only CI
@@ -63,7 +63,14 @@ Atop these sit the ADR-0005 outer layers: conformance (W3C via CONSTRUCT + EARL)
 * Neutral, because meaningful test-code volume (expected for a translator).
 
 ### Confirmation
-* The pyramid runs in CI; the rewriter-vs-oracle property holds over generated cases; fuzzing finds no panic/injection over the corpus; snapshots gate SQL changes.
+
+Confirmation requires the complete pyramid to run in CI, generated
+rewriter-vs-oracle properties to hold, fuzzing to find no panic/injection over a
+persisted corpus, and reviewed snapshots to gate SQL changes. Current CI proves
+substantial fixed unit, integration, differential, adversarial, conformance and
+benchmark cases only; as the implementation-status note records, the generated
+property, continuous fuzz, snapshot, durable coverage, mutation-threshold and
+benchmark-regression requirements are not yet satisfied.
 
 ## More Information
 * **Outer layers this extends:** ADR-0005. **Fuzz target + the security controls it verifies:** ADR-0007, ADR-0010. **CI baseline:** ADR-0006. **Datatype fixtures:** ADR-0015.

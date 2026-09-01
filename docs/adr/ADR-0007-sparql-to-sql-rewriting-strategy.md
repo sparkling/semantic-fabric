@@ -56,11 +56,18 @@ NULL / left-join rules the base translation obeys:
 6. **Emit** — translate the optimized tree to a `sqlparser` AST and render the target dialect; values are bound parameters only (ADR-0010).
 7. **Execute & reconstruct** — run through the shared `SqlBackend` over the native SQLite/PostgreSQL/MySQL adapters; map rows to bindings; serialize with `sparesults`/RDF writers under the evidenced result profile (streamed where admitted, ADR-0010).
 
+Steps 4–5 describe compiler capability, not unconditional serving behaviour.
+Explicit frozen-schema/conformance callers may exercise the constraint-driven
+rules through the raw translation APIs. Current `sf-serve` instead compiles only
+through an immutable `CompilerBinding` whose `ConstraintAuthority::Unverified`
+schema has PK, UNIQUE, FK, functional-dependency and NOT-NULL facts removed;
+those rules are therefore conservative no-ops while structural rules continue.
+
 ### Cascade order is load-bearing (invariants)
 
 * IRI-template-mismatch pruning **must precede** self-join elimination — empty branches are pruned, and the IRI-term equalities that license a self-join merge are established first.
 * FD inference (with transitive closure) **must precede** FK/PK join elimination — eliminating a join is sound only when uniqueness *and* match-guarantee hold; firing earlier drops rows and violates bag semantics.
-* Every rule preserves `=_bag` w.r.t. the base translation; preserves the COALESCE/compatibility semantics; fires only when its integrity-constraint precondition is already established; left-join elimination preserves the right-side-bound provenance marker; the cascade runs to a fixpoint whose result is order-independent among commuting rules.
+* Every rule preserves `=_bag` w.r.t. the base translation; preserves the COALESCE/compatibility semantics; fires only when its integrity-constraint precondition is already established by an explicit frozen/verified authority; left-join elimination preserves the right-side-bound provenance marker; the cascade runs to a fixpoint whose result is order-independent among commuting rules. A mutable startup catalogue observation is not such authority.
 
 ### Term-construction lifting (translation discipline)
 
@@ -72,16 +79,29 @@ IRI/literal construction (`concat`/`cast` over `rr:template` segments) is **lift
 
 ### Performance
 
-**Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, observed schema and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope, dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability digests and atomic generation changes.
+**Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, compiler-safe schema, constraint authority and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope (including the authority), dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding/policy reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability/policy digests and atomic generation changes.
 
-**Current P0 correctness hazard.** The cascade actively consumes startup PK,
-FK, uniqueness and functional-dependency facts. There is no live schema watcher,
-DDL exclusion proof or atomic reload path, so both cached and newly compiled
-plans can continue using stale constraints after DDL and can return a wrong
-answer. An operator-side immutable-schema assumption is not enforced and grants
-no admission. Serving must either disable these constraint-sensitive passes or
-establish a race-safe schema generation plus DDL-exclusion/drift contract before
-production admission.
+**Implemented serving quarantine (`24a0e20`).** `sf-serve` converts every startup observation
+to `CompilerSchema::from_unverified_observation`. Both fresh and cached plans see
+names, SQL types and estimates but no PK, UNIQUE, FK, functional dependency or
+NOT-NULL proof, so later constraint DDL cannot make a constraint-sensitive pass
+change a serving answer. Duplicate safety consequently keeps its conservative
+deduplication path. This closes the earlier stale-constraint P0 without claiming
+a watcher, fingerprint, reload, or verified-constraint mode.
+
+Structural/type drift remains open: retained table, column and SQL-type
+observations can still age, and there is no atomic replacement path. A future
+verified-constraint mode requires an unforgeable backend lease that covers a
+coherent revalidation, compilation, and the entire streamed cursor; a digest
+precheck alone has a time-of-check/time-of-use gap. Replacement activates a new
+runtime binding and cache namespace rather than mutating the current one; no
+automatic replacement path exists yet.
+
+Direct Mapping is a separate lifecycle. Current serving accepts authored R2RML
+and does not generate it. Frozen conformance/development callers may derive a
+mapping from an explicit schema, but a future live generator must bind the
+PK/FK-dependent mapping generation to the same verified execution generation;
+redacting optimiser facts after generation is insufficient.
 
 ### Correctness anchor
 

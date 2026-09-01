@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-06-30
+updated: 2026-09-01
 tags: [ontop-parity, ir, architecture, optimizer, operator-tree, iq, substitution-lifting, normalization, t-mappings, saturation, aggregation, charter]
 supersedes: []
 depends-on:
@@ -30,7 +31,7 @@ The program goal (ADR-0021, owner directive) is **maximal Ontop parity within ch
 ## Decision Drivers
 
 * **Charter (ADR-0004/0006/0007).** Own the rewriter in Rust, no JVM; stream / push down / bounded memory; `=_bag` is absolute; term-construction is lifted. Any IR must preserve all of these.
-* **Division of optimization labour with the backend DB (corrected).** sf emits one SQL query that PostgreSQL/SQLite re-plan with their own statistics. Therefore: **physical optimization (join order, access paths, join algorithms) is the DB's job — sf must NOT do cost-based physical planning** (no stats; redundant). But **semantic/logical optimization is sf's job and is high-value** — the DB cannot perform OBDA-specific rewrites (self-join elimination via R2RML unique keys, redundant-FK-join elimination, empty/true propagation, union reduction, provable-`DISTINCT` removal, aggregation-through-union), and simpler emitted SQL plans faster and avoids pathological plans. Aggressive *logical* rewriting is exactly what a rich operator-tree IR enables.
+* **Division of optimization labour with the backend DB (corrected).** sf emits one SQL query that PostgreSQL/SQLite re-plan with their own statistics. Therefore: **physical optimization (join order, access paths, join algorithms) is the DB's job — sf must NOT do cost-based physical planning** (no stats; redundant). But **semantic/logical optimization is sf's job and is high-value** — the DB cannot perform OBDA-specific rewrites (self-join elimination via authorized R2RML unique keys, redundant-FK-join elimination, empty/true propagation, union reduction, provable-`DISTINCT` removal, aggregation-through-union), and simpler emitted SQL plans faster and avoids pathological plans. Aggressive *logical* rewriting is exactly what a rich operator-tree IR enables, but integrity facts may authorize a rule only under an explicit frozen/verified constraint authority; the current serving authority is unverified.
 * **Maximal parity is the goal, built directly.** Time/effort phasing is not a constraint. The architecture must make the full in-charter optimizer set and the full SPARQL surface *expressible*, not merely approachable by accretion.
 * **Correctness is non-negotiable and is not "incrementalism."** Every rewrite holds the ADR-0005/0012/0013 gates (`=_bag` differential + W3C RDB2RDF floor + clippy + fmt). Verification checkpoints during the build are correctness, not timidity.
 
@@ -52,7 +53,7 @@ The program goal (ADR-0021, owner directive) is **maximal Ontop parity within ch
 
 ### Normalization (the engine)
 
-Substitution-lifting to a fixpoint (compose `ConstructionNode` substitutions toward the root → "union of CQs with term constructors" normal form), plus the structural rewrites as tree-pattern rules, each carrying a `=_bag` soundness argument: self-join elimination (PK/UC/composite/FD), redundant-FK-join elimination, LeftJoin→InnerJoin downgrade (nullability + ancestor-filter null-rejection), aggregation-through-union, filter push-down/up across operator boundaries, Empty/True propagation, `DISTINCT` removal under proven uniqueness, union-branch merging, FD transitive closure. The existing cascade passes are re-expressed as these rules (not discarded — their `=_bag` arguments transfer).
+Substitution-lifting to a fixpoint (compose `ConstructionNode` substitutions toward the root → "union of CQs with term constructors" normal form), plus the structural rewrites as tree-pattern rules, each carrying a `=_bag` soundness argument: self-join elimination (PK/UC/composite/FD), redundant-FK-join elimination, LeftJoin→InnerJoin downgrade (nullability + ancestor-filter null-rejection), aggregation-through-union, filter push-down/up across operator boundaries, Empty/True propagation, `DISTINCT` removal under proven uniqueness, union-branch merging, FD transitive closure. The existing cascade passes are re-expressed as these rules (not discarded — their `=_bag` arguments transfer). Constraint-driven members remain compiler capabilities exercised by explicit frozen-schema tests; `sf-serve` supplies a constraint-quarantined schema, so they do not fire there.
 
 ### Lowering
 
@@ -60,7 +61,17 @@ Normalized IR → SQL: a leaf CQ (Construction over a join/filter of Extensional
 
 ### Offline stage — T-mappings (ontology saturation + mapping consolidation)
 
-In scope, matching Ontop §2.1. At startup: (1) fold the class/property hierarchy (subclass/subproperty, domain/range — sf's tier-1 entailment, today done per-query in `saturate.rs`) into the mapping set so a query over a class need not consult the ontology at runtime; (2) prune redundant union branches using integrity constraints (PK/FK/UC). This narrows per-query union width *before* unfolding, amortising what per-query normalization would otherwise redo on every query. It is **separable from the IR** (a mapping-preprocessing stage, not an IQ node), so it is built alongside the tree but does not gate the IR core. Tier-2 tree-witness entailment stays excluded (ADR-0008; Ontop ships it off by default).
+The target offline stage, matching Ontop §2.1, does two things at startup: (1)
+fold the class/property hierarchy (subclass/subproperty, domain/range) into the
+mapping set so a query over a class need not consult the ontology at runtime;
+and (2), under a verified/frozen constraint authority only, prune redundant
+union branches using integrity constraints (PK/FK/UC). Current saturation logic
+still runs per compile/cache miss rather than living in an immutable startup
+snapshot, and the unverified serving schema must skip (2). The target narrows
+per-query union width *before* unfolding, amortising work otherwise repeated on
+every query. It is **separable from the IR** (a mapping-preprocessing stage, not
+an IQ node), so it does not gate the IR core. Tier-2 tree-witness entailment stays
+excluded (ADR-0008; Ontop ships it off by default).
 
 ### Execution model (the build)
 
@@ -68,9 +79,9 @@ Built directly on a dedicated branch, correctness-gated continuously — **not**
 
 ### Alignment with Ontop (recorded point-by-point)
 
-**Same (deliberate — the goal):** the IQ node set (§3), substitution-lifting normalization, the rule-based structural + semantic constraint-driven optimizations (§5), unfolding, SQL generation, and — now in scope — the offline T-mapping stage (§2.1).
+**Same (deliberate — the goal):** the IQ node set (§3), substitution-lifting normalization, the rule-based structural + authority-gated semantic constraint-driven optimizations (§5), unfolding, SQL generation, and — now in scope — the offline T-mapping stage (§2.1).
 
-**Deliberate deltas (charter / substrate, not oversights):** OWL 2 QL **tree-witness rewriting** (§4) excluded by ADR-0008 / ODR-0030 — Ontop ships it *off by default* and the research notes call it rarely exercised; **FlattenNode / JSON lenses** out of charter unless nested-data sources are targeted; **Rust-native DB drivers** (SQLite / PostgreSQL / MySQL) rather than Ontop's JDBC dialect universe (ADR-0006); **Rust `enum` + `match`** with `Branch`/`emit` lowering rather than Ontop's JVM class hierarchy + Guice DI + separate SQL-IQ / `NativeNode` stage (ADR-0004 — same behaviour). With T-mappings in scope, the only remaining *functional* gap vs Ontop is tier-2 tree-witness entailment — which Ontop itself disables by default.
+**Deliberate deltas (charter / substrate, not oversights):** OWL 2 QL **tree-witness rewriting** (§4) excluded by ADR-0008 / ODR-0030 — Ontop ships it *off by default* and the research notes call it rarely exercised; **FlattenNode / JSON lenses** out of charter unless nested-data sources are targeted; **Rust-native DB drivers** (SQLite / PostgreSQL / MySQL) rather than Ontop's JDBC dialect universe (ADR-0006); **Rust `enum` + `match`** with `Branch`/`emit` lowering rather than Ontop's JVM class hierarchy + Guice DI + separate SQL-IQ / `NativeNode` stage (ADR-0004 — same behaviour). At decision time, the intended end-state delta after all in-charter stages was tier-2 tree-witness entailment, which Ontop itself disables by default. That is an architecture target, not a claim that today's serving profile has implemented or admitted every Ontop capability; the generated capability matrix and ADR-0038 gates control current claims.
 
 ### Consequences
 

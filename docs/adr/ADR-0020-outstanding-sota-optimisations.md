@@ -19,14 +19,14 @@ Six non-blocking SOTA levers for the virtualiser were deep-researched (2026-06-2
 
 **Recurring lens:** every item is judged by whether it honours the defining invariant — *the source does the set-work; engine memory is bounded by `⟨T, M⟩` + a fixed streaming budget, not by data* (ADR-0006/0010). That single test kills in-engine result caching and live `SERVICE`, and shapes the FTS surface.
 
-**Promotion (updated 2026-09-01):** four foundational items are **binding in the load-bearing ADRs**, not roadmap here — IRI-template / term-construction **lifting** and the **plan cache** into **ADR-0007**; the **term-gen allocation discipline** and the **cross-source semi-join cost** model into **ADR-0006**. The single-source binding/cache namespace is implemented; digest-addressed snapshot invalidation, reload/drift handling and a federation caller are not. This register keeps the rationale; the binding decisions and current truth live in 0006/0007/0038.
+**Promotion (updated 2026-09-01):** four foundational items are **binding in the load-bearing ADRs**, not roadmap here — IRI-template / term-construction **lifting** and the **plan cache** into **ADR-0007**; the **term-gen allocation discipline** and the **cross-source semi-join cost** model into **ADR-0006**. The single-source binding/cache namespace and its unverified-constraint policy are implemented; digest-addressed snapshot invalidation, structural/type reload/drift handling, a verified-constraint lifecycle and a federation caller are not. This register keeps the rationale; the binding decisions and current truth live in 0006/0007/0038.
 
 ## Considered Options
 
 * **Cost-driven OBDA** — partly baked in (IRI-template lifting → ADR-0007, cross-source semi-join cost → ADR-0006); shape cardinality oracle and JUCQ-cover factoring stay *pursue*, gated by `sf-bench`.
 * **Full-text search** — pursue when a search requirement appears; start from the narrow current PostgreSQL string-predicate pushdown and add a jena-text-style `text:search` property function.
 * **Fast term-generation** — reframed as an allocation discipline (baked into ADR-0006); SIMD stays profile-gated rather than the load-bearing technique.
-* **Caching** — a binding-scoped plan/rewrite cache is implemented (ADR-0007); digest-addressed reload invalidation remains open. Result cache stays out-of-engine via HTTP validators to preserve the bounded-memory invariant.
+* **Caching** — a binding- and constraint-authority-scoped plan/rewrite cache is implemented (ADR-0007); current serving uses only a constraint-quarantined schema, while digest-addressed reload invalidation remains open. Result cache stays out-of-engine via HTTP validators to preserve the bounded-memory invariant.
 * **GeoSPARQL / spatial** — defer but stay design-ready (PostGIS push-down), reserving the extension-function registry and `geo:wktLiteral` datatype seams; no evidenced spatial requirement yet.
 * **External `SERVICE` federation** — out of scope (stays ADR-0002): it is the one feature that cannot honour the bounded-memory/governance invariant and has no spec pressure.
 
@@ -39,7 +39,7 @@ Six non-blocking SOTA levers for the virtualiser were deep-researched (2026-06-2
 | 1 | **Cost-driven OBDA** | **Partly baked in** — IRI-template lifting → ADR-0007, cross-source semi-join cost → ADR-0006; rest (shape cardinality oracle, JUCQ) stays *pursue* | S–H (staged) | foundational half landed; remainder gated by `sf-bench` |
 | 2 | **Full-text search** | **Pursue when a search requirement appears** (baseline near-free) | XS→M | a query/UX needs FTS |
 | 3 | **Fast term-gen** (reframed: *allocation*, not SIMD) | **Baked in → ADR-0006** (allocation discipline); SIMD stays profile-gated | S–M | landed with the term-gen spec |
-| 4 | **Caching** | **Binding-scoped plan cache implemented → ADR-0007**; snapshot digests/reload invalidation open · Result-cache: out-of-engine | S→L | lifecycle work plus any deployment need |
+| 4 | **Caching** | **Binding/policy-scoped plan cache and unverified-constraint quarantine implemented → ADR-0007**; snapshot digests/reload invalidation open · Result-cache: out-of-engine | S→L | lifecycle work plus any deployment need |
 | 5 | **GeoSPARQL / spatial** | **Defer, design-ready** | ~2–4 wk when built | a spatial source/query appears |
 | 6 | **External `SERVICE` federation** | **Out of scope** (stays ADR-0002) | 5–7 wk if ever | a cross-endpoint requirement + an ADR superseding 0002 |
 
@@ -69,8 +69,8 @@ The hot path's dominant cost is **small-object allocation, not byte-level SIMD**
 
 ### 4. Caching — plan-cache early, result-cache out-of-engine
 
-- **Plan/rewrite cache (implemented first stage):** one immutable compiler binding owns mapping, dialect, T-box, observed schema and `quick_cache`; the exact scope plus full canonical algebra and structural hash prevent cross-binding reuse. The desired data/schema-constant split, digest-addressed `⟨T,M,schema,capability⟩` generation, drift detection and atomic reload remain open. PostgreSQL uses native client preparation; no `deadpool` prepared-statement cache is claimed. **→ ADR-0007** (*Performance*).
-- **T-mapping / saturation cache (S–M):** already computed once at startup (Ontop-identical) → formalise as an `arc_swap::ArcSwap` hot-swap on the same epoch + a per-predicate unfold index; defer disk persistence until startup is *measured* slow.
+- **Plan/rewrite cache (implemented first stage):** one immutable compiler binding owns mapping, dialect, T-box, compiler-safe schema, explicit constraint authority and `quick_cache`; the exact scope plus full canonical algebra and structural hash prevent cross-binding/policy reuse. Current serving strips PK, UNIQUE, FK, functional-dependency and NOT-NULL claims while retaining names, types and estimates. The desired data/schema-constant split, digest-addressed `⟨T,M,schema,capability,policy⟩` generation, structural/type drift detection, verified-constraint lease and atomic reload remain open. PostgreSQL uses native client preparation; no `deadpool` prepared-statement cache is claimed. **→ ADR-0007** (*Performance*).
+- **T-mapping / saturation cache (S–M):** saturation logic exists, but it is not materialized once at startup: the flat path expands a non-empty T-box on each cache miss and the tree path consults it during each compile. Move that work into an immutable startup snapshot with a per-predicate unfold index, then formalise atomic replacement on the same generation boundary; defer disk persistence until startup is *measured* slow. Constraint-based offline branch pruning remains disabled for unverified serving schemas.
 - **Result cache (last; out-of-engine):** an in-engine result store **violates the bounded-memory invariant** (instance data in RAM) and the live-freshness guarantee. Recommend the endpoint emit **HTTP validators** instead — `ETag = hash(epoch ⊕ touched-table version watermarks)`, `Cache-Control: max-age` from a declared staleness SLA — and delegate byte-storage to an external cache/proxy; the engine stores zero instance data. An in-engine `moka` cache (TTL + byte-weigher + table-dependency invalidation) only if a deployment demands it: opt-in, default-off, result-size-capped.
 
 ### 5. GeoSPARQL / spatial — defer, design-ready

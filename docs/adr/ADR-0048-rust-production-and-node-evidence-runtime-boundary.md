@@ -37,7 +37,8 @@ dependencies and every database, network, signer, publication and readiness
 flag is false. Calling it deployable would turn evidence infrastructure into a
 second production runtime without a reviewed reason.
 
-The canonical semantic-product-mock gold and narrow qualified ProductDesign/Style
+The canonical `semantic-builder` gold for product-mock, the sealed
+`semantic-product-mock` source revision and the narrow mutable ProductDesign/Style
 live vertical provide a faster development path; the separately inspected
 11-database inventory is red. The gold contains 30,696 ontology, 3,617 shape,
 4,501 total mapping and 900 provenance quads across 14 categories. Its Source
@@ -124,8 +125,11 @@ The canonical gold remains in `semantic-builder` under
 
 Generated `.metaharness` copies are run evidence only. Semantic Fabric records
 the manifest/source revision and digests it consumes; it does not fork or
-silently refresh the gold. The sealed development source snapshot is the exact committed
-tree of `semantic-product-mock` revision
+silently refresh the gold. Ordinary CI requires the in-repo seal-policy,
+mutation and loader tests but supplies neither external root, so the exact
+external KAT remains diagnostic unless a controlled job explicitly provides
+both roots. The sealed development source snapshot is the exact committed tree
+of `semantic-product-mock` revision
 `7c45292fccb8b88afe263e18de6806667ae18573`.
 
 The live PostgreSQL instance is a development integration/differential source.
@@ -215,9 +219,26 @@ catalogue snapshot and pins, recycles and verifies the unqualified execution
 base table shadowed by an earlier `pg_catalog` relation. Hostile same-name
 schema/temp relations and cross-schema foreign keys fail closed for catalogued
 base tables. Trusted raw `rr:sqlQuery` remains verbatim and can explicitly name
-other schemas, so this is not a public-only SQL sandbox. These changes do not
-provide snapshot digests, later-DDL drift detection, atomic reload, federation,
-production admission or release authority.
+other schemas, so this is not a public-only SQL sandbox.
+
+Commit `24a0e20` converts each raw serving observation to a
+`CompilerSchema` with `ConstraintAuthority::Unverified`. It retains table/column
+names, SQL types and estimates, removes PK, UNIQUE, FK, functional-dependency and
+NOT-NULL claims, and includes the authority in `CompileScope`; cache hits and
+misses therefore cannot use mutable startup constraints to change an answer.
+Constraint-driven optimiser passes remain available to explicit frozen-schema
+translation/conformance tests, but that capability grants no serving authority.
+Duplicate safety stays conservative when keys are quarantined.
+
+Current `sf-serve` loads authored R2RML before opening the backend and does not
+generate Direct Mapping. The Direct Mapping utility and conformance runners use
+explicit frozen fixture schemas. Because PK/FK facts determine the generated
+mapping itself, any future live Direct-Mapping path must bind mapping generation
+and the entire streamed execution to one verified source generation; removing
+optimiser facts after generation would be insufficient. These changes close the
+later-DDL integrity-constraint wrong-answer path, but do not provide structural/
+type schema digests or drift detection, atomic reload, a verified-constraint
+lease, federation, production admission or release authority.
 
 ## Consequences
 

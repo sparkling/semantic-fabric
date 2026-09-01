@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-19
-updated: 2026-07-19
+updated: 2026-09-01
 tags: [set-semantics, bgp-dedup, duplicate-rows, soundness, union-dedup, key-elision]
 supersedes: []
 depends-on:
@@ -19,13 +19,26 @@ implements: []
 All 9 red-phase cells green against the spareval oracle: 34→4, 4→3, 66→3, 34→3,
 130→3, 514→3, 4→3 (CONSTRUCT), 405→2, plus the bare-reifies twin. New general
 locks: plain-pattern duplicate-row `=_bag` + COUNT-below-GROUP-BY (dedup lands
-under aggregation), PK-covered elision (no DISTINCT in emitted SQL), disjoint
+under aggregation), frozen-schema PK-covered elision (no DISTINCT in emitted SQL), disjoint
 arms stay unpooled (no UNION), and the D2 non-injective+non-disjoint sound-501
 pin. Gates: `differential_star` 65/0, `differential_tree` 178/0,
 `differential_paths` 23/0, `adversarial_adr0033_refute` 24/0, observers 6/0.
 
-**Where it lives:** D1 proof `cascade::branch_needs_distinct_for_dup_safety` /
-`table_key_covered_by_bindings`; flat hook `unfold::bgp` + tree hook
+**Serving reconciliation (2026-09-01).** The D1/D2 algorithm and its historical
+frozen-fixture tests remain implemented. Current `sf-serve`, however, constructs
+`CompilerSchema` with `ConstraintAuthority::Unverified`; PK, UNIQUE, FK,
+functional-dependency and NOT-NULL observations are removed before translation.
+D1 therefore cannot use PK-covered elision in serving and keeps its conservative
+duplicate-safety path (a derived-table `DISTINCT` for injective scans). D2
+template-disjointness is structural and unchanged.
+Raw translation/conformance APIs may still exercise key elision with an explicit
+frozen `TableSchema`, but that is compiler/test capability, not product serving
+authority. Direct Mapping conformance likewise generates mappings from its frozen
+fixture schema; current `sf-serve` consumes authored R2RML and does not generate
+Direct Mapping from a mutable source.
+
+**Where it lives:** D1 proof `cascade::force_distinct_for_dup_safety` /
+`scan_key_covered`; flat hook `unfold::bgp` + tree hook
 `iq/resolve.rs` `Intensional` arm (both BEFORE joining/projection narrowing —
 timing is load-bearing); aggregate wrap `cascade::dedup_before_aggregate` (the
 below-GROUP-BY commitment); D2 pooling `unfold::pool_pattern_relation` (flat) /
@@ -168,8 +181,8 @@ never at the final result (projection/UNION above the BGP create *legitimate*
 duplicates that must survive).
 
 **D1 — within-branch (duplicate rows).** A branch whose joined tables do not
-all contribute a declared key over the branch's output-determining columns gets
-`SELECT DISTINCT`, reusing the existing single-branch DISTINCT pushdown
+all contribute an authority-admitted declared key over the branch's
+output-determining columns gets `SELECT DISTINCT`, reusing the existing single-branch DISTINCT pushdown
 discipline (`iq.rs` — SELECT list restricted to output-determining columns,
 per-branch, already proven for query-level DISTINCT).
 
@@ -182,20 +195,25 @@ phase 1 refuses (sound 501, pinned); the general fallback (dedup over rendered
 term expressions — the same fully-rendered-lexical lesson as the Fix-1 `pf:` id
 repair) is phase 2 if a real mapping ever needs it.
 
-**Elision — the performance story (this is why this is cheap in practice).**
-Introspection already captures `TableSchema.primary_key` and `.unique`:
+**Elision — the performance story under frozen/verified authority.** Raw
+introspection captures `TableSchema.primary_key` and `.unique`, but those fields
+authorize elision only after entering an explicit frozen/verified compiler
+schema. Current serving intentionally admits neither:
 
-- D1 elides when every joined table's projected columns are covered by a
-  declared PK/UNIQUE key (duplicate rows impossible) — the overwhelmingly
-  common case (PK-templated subjects).
+- D1 elides in frozen-schema/compiler tests when every joined table's projected
+  columns are covered by an admitted PK/UNIQUE key (duplicate rows impossible).
+  Unverified serving instead keeps `DISTINCT`, including for commonly
+  PK-templated subjects.
 - D2 elides when the arms' subject/object templates are pairwise **provably
   disjoint** (`unify::templates_provably_disjoint` — existing machinery, ADR-0032
   D6): disjoint arms cannot produce the same mapping, so `UNION ALL` is already
   set-correct.
 
-A well-keyed, disjointly-templated mapping — the norm — emits byte-identical
-SQL to today. The DISTINCT/UNION cost lands only on mappings that can actually
-produce duplicates, where it is the price of a correct answer.
+Under a frozen/verified schema, a well-keyed, disjointly-templated mapping emits
+the historically pinned SQL. Under the current unverified serving policy, D1
+pays a conservative DISTINCT cost even when the mutable source still has the
+observed key; correctness takes priority over an unleased performance proof. D2
+still elides UNION dedup for structurally disjoint arms.
 
 **Interactions.**
 - Aggregates: the BGP block sits below GROUP BY, so dedup-before-aggregation is
@@ -216,10 +234,11 @@ produce duplicates, where it is the price of a correct answer.
   than fixture-lucky. This closes a **soundness** gap in the project's own
   definition (answer equivalence with the native evaluator over the decoded
   graph).
-- SQL shape changes only where duplicates are possible; elision cells must pin
-  the common case emitting NO DISTINCT (SQL-shape assertions), and the criterion
-  bench suite gates the perf claim (target: zero measurable regression on the
-  existing PK-covered fixtures).
+- Frozen/verified compiler SQL shape changes only where duplicates are possible;
+  its elision cells pin NO DISTINCT. Current quarantine result controls prove
+  conservative answers, but no serving-path SQL-shape assertion or performance
+  receipt yet pins the DISTINCT cost. Both are required before a serving
+  performance claim or future verified mode is admitted.
 - The phase-1 non-injective cross-arm 501 is a new, honest, pinned boundary
   (expected to be unreachable for realistic mappings; revisit only on evidence).
 
@@ -228,7 +247,10 @@ produce duplicates, where it is the price of a correct answer.
 1. All 9 `differential_star` set-semantics cells green, `=_bag` with spareval.
 2. New plain-pattern (non-star) duplicate-row cells in `differential_tree` —
    the bug is general; its regression lock must be too.
-3. Elision SQL-shape cells: PK-covered fixture emits no DISTINCT; disjoint-arm
-   fixture emits UNION ALL.
+3. Existing elision SQL-shape cells prove an explicitly frozen PK-covered
+   compiler fixture emits no DISTINCT and a disjoint-arm fixture emits UNION ALL.
+   Add a serving-path assertion that raw PK metadata under unverified authority
+   still emits the conservative DISTINCT shape before claiming that shape as
+   serving evidence.
 4. Full suites: differential_tree/paths/star, adversarial_adr0033_refute, no
    regressions; bench before/after receipts on the standard suite.
