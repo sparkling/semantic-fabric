@@ -24,9 +24,11 @@ As of 2026-09-01, the generated catalog records:
 - **Qualified:** PostgreSQL and MySQL have live query and endpoint evidence, but those suites can still skip and do not establish production admission.
 - **Qualified:** Sealed required-live PostgreSQL RDB2RDF execution records 57 passes, one documented deviation and five exact skips across 63 R2RML cases, plus 23 passes and one exact skip across 24 Direct Mapping cases; this is mapping evidence only and does not establish production admission.
 - **Qualified:** Sealed SQLite RDB2RDF execution records 62/63 R2RML cases passing with one documented deviation and 19/24 Direct Mapping cases passing with five exact skips; this is mapping evidence only.
-- **Limitation:** Resource-qualified property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
+- **Limitation:** Total-resource-qualified recursive property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
 - **Qualified:** The canonical product-mock development KAT seals all 139 gold artifacts and 171 admitted source files, then compares one Style R2RML map with live PostgreSQL; it proves no image/source provenance or production admission.
 - **Limitation:** None of SQLite, PostgreSQL or MySQL is production-admitted under ADR-0038 R3.
+- **Qualified:** SQLite, PostgreSQL and MySQL compilers use exact finite-pair fixed points for recursive P+/P*; hostile required execution is SQLite-only, while live PostgreSQL/MySQL qualification and total resource governance remain open.
+- **Current:** Pre-response HTTP failures and startup CLI surfaces are redacted; correlation IDs have no telemetry sink and post-200 stream failures cannot become atomic RFC 9457 responses.
 - **Qualified:** The runtime contains SQLite, PostgreSQL and MySQL source-selector paths; reachability is not production admission.
 - **Qualified:** External SERVICE and named non-enabled source forms are rejected before query execution or connector construction.
 - **Current:** Known source-sized Rust fallback plans are rejected before backend selection or source I/O; bounded physical implementations remain planned.
