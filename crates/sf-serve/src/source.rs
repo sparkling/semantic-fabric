@@ -12,6 +12,19 @@ pub const MAX_SOURCE_INPUT_BYTES: usize = 16 * 1024;
 /// Maximum admitted environment-variable name size, in ASCII bytes.
 pub const MAX_SOURCE_ENV_NAME_BYTES: usize = 128;
 
+/// Exact PostgreSQL startup option that binds unqualified runtime relations to
+/// the catalogue scope introspected by `sf-sql`. `pg_temp` is explicit and last
+/// so a temporary same-name relation cannot shadow `public`.
+pub(crate) const POSTGRES_RELATION_SCOPE_OPTIONS: &str = "-csearch_path=pg_catalog,public,pg_temp";
+
+/// Exact server-reported value corresponding to
+/// [`POSTGRES_RELATION_SCOPE_OPTIONS`].
+pub(crate) const POSTGRES_RELATION_SCOPE_SETTING: &str = "pg_catalog,public,pg_temp";
+
+/// Reapply the invariant whenever a pooled session is recycled.
+pub(crate) const POSTGRES_RELATION_SCOPE_RECYCLE_SQL: &str =
+    "SELECT pg_catalog.set_config('search_path', 'pg_catalog,public,pg_temp', false)";
+
 /// A source supplied directly on the command line or referenced through the
 /// process environment. Inline values must be credential-free; environment
 /// values are the only admitted secret-injection path in this narrow boundary.
@@ -101,7 +114,7 @@ impl SourceInput {
         }
 
         if let Some(conninfo) = self.value.strip_prefix("pg:") {
-            let config = conninfo
+            let mut config = conninfo
                 .parse::<tokio_postgres::Config>()
                 .map_err(|error| source_error_with_label(label, error.to_string()))?;
             if !admits_credentials && config.get_password().is_some() {
@@ -110,6 +123,13 @@ impl SourceInput {
                     "inline PostgreSQL credentials are not admitted; use environment injection",
                 ));
             }
+            if config.get_options().is_some() {
+                return Err(source_error_with_label(
+                    label,
+                    "PostgreSQL server options are reserved by the runtime relation-scope invariant",
+                ));
+            }
+            config.options(POSTGRES_RELATION_SCOPE_OPTIONS);
             return Ok(PreparedSource::Postgres {
                 config: Box::new(config),
                 label,
@@ -286,6 +306,7 @@ mod tests {
             panic!("expected PostgreSQL")
         };
         assert_eq!(config.get_password(), Some(SENTINEL.as_bytes()));
+        assert_eq!(config.get_options(), Some(POSTGRES_RELATION_SCOPE_OPTIONS));
 
         let mysql = SourceInput::injected(format!("mysql://user:{SENTINEL}@database.invalid/db"))
             .expect("valid injected value")
@@ -311,5 +332,18 @@ mod tests {
                 .prepare()
                 .unwrap_or_else(|error| panic!("{spec:?} should prepare: {error}"));
         }
+    }
+
+    #[test]
+    fn caller_supplied_postgres_server_options_are_rejected() {
+        let error = SourceInput::injected(
+            "pg:host=database.invalid user=test options=-csearch_path=private".to_owned(),
+        )
+        .expect("bounded injected source")
+        .prepare()
+        .err()
+        .expect("runtime-reserved server options must fail");
+        assert_eq!(error.code(), "startup-source");
+        assert!(!error.to_string().contains("private"));
     }
 }

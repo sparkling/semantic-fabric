@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use sf_sql::introspect::introspect_sqlite;
 use sf_sql::{Dialect, TableSchema};
 
+use crate::source::POSTGRES_RELATION_SCOPE_SETTING;
+
 /// A pooled PostgreSQL connection, re-derefed to `tokio_postgres::Client` in one
 /// hop. `deadpool_postgres::Object` derefs to its own `ClientWrapper` (adds
 /// statement caching), not directly to `Client` — `sf_sparql::exec_pg`'s generic
@@ -13,8 +15,9 @@ use sf_sql::{Dialect, TableSchema};
 pub(crate) struct PgConn(deadpool_postgres::Object);
 
 impl PgConn {
-    pub(crate) fn new(conn: deadpool_postgres::Object) -> Self {
-        Self(conn)
+    pub(crate) async fn checked(conn: deadpool_postgres::Object) -> Result<Self, String> {
+        verify_pg_relation_scope(&conn).await?;
+        Ok(Self(conn))
     }
 }
 
@@ -23,6 +26,26 @@ impl std::ops::Deref for PgConn {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+/// Verify the relation-resolution invariant before catalogue reads or source
+/// I/O. The error is deliberately structural and does not expose connection
+/// configuration.
+pub(crate) async fn verify_pg_relation_scope(
+    client: &tokio_postgres::Client,
+) -> Result<(), String> {
+    let row = client
+        .query_one(
+            "SELECT pg_catalog.current_setting('search_path') = $1",
+            &[&POSTGRES_RELATION_SCOPE_SETTING],
+        )
+        .await
+        .map_err(|_| "PostgreSQL relation scope could not be verified".to_owned())?;
+    if row.get::<_, bool>(0) {
+        Ok(())
+    } else {
+        Err("PostgreSQL relation scope invariant mismatch".to_owned())
     }
 }
 
@@ -193,23 +216,14 @@ pub fn introspect_sqlite_all(conn: &rusqlite::Connection) -> Result<Vec<TableSch
     Ok(schemas)
 }
 
-/// Introspect every PostgreSQL public base table in 5 set-based round trips
-/// total, rather than 5 **per table** (M4 wave-2 finding 4 — the N+1 this
-/// function used to drive via a per-table
-/// [`sf_sql::introspect::introspect_postgres`] loop).
+/// Introspect every PostgreSQL public base table in one coherent read-only
+/// snapshot: one enumeration plus 5 set-based catalogue round trips, rather
+/// than 5 **per table** (M4 wave-2 finding 4 — the N+1 this function used to
+/// drive via a per-table [`sf_sql::introspect::introspect_postgres`] loop).
 pub async fn introspect_pg_all(
-    client: &tokio_postgres::Client,
+    client: &mut tokio_postgres::Client,
 ) -> Result<Vec<TableSchema>, String> {
-    let rows = client
-        .query(
-            "SELECT table_name FROM information_schema.tables \
-             WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name",
-            &[],
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    let names: Vec<String> = rows.into_iter().map(|r| r.get(0)).collect();
-    sf_sql::introspect::introspect_postgres_all(client, &names)
+    sf_sql::introspect::introspect_postgres_public_snapshot(client)
         .await
         .map_err(|e| e.to_string())
 }

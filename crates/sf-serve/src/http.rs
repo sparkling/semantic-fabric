@@ -352,7 +352,7 @@ async fn acquire_pg(
         Ok(result) => result,
         Err(_) => return Err(timeout_response()),
     };
-    acquired.map(PgConn::new).map_err(|e| match e {
+    let conn = acquired.map_err(|e| match e {
         PoolError::Timeout(_) => {
             let mut resp = problem::response(ProblemCode::SourceUnavailable);
             resp.headers_mut().insert(
@@ -365,7 +365,12 @@ async fn acquire_pg(
             resp
         }
         _ => problem::response(ProblemCode::Internal),
-    })
+    })?;
+    match deadline.run(PgConn::checked(conn)).await {
+        Err(_) => Err(timeout_response()),
+        Ok(Err(_)) => Err(problem::response(ProblemCode::Internal)),
+        Ok(Ok(conn)) => Ok(conn),
+    }
 }
 
 /// The first value of form key `key` in a urlencoded string (`+`/`%XX` decoded).

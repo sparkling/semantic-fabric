@@ -344,17 +344,25 @@ mod pg {
     /// `sf_serve::run::open_backend`'s PG branch — ADR-0010 §C stream-lane pool,
     /// ADR-0027, M4 wave-2 finding 2).
     fn pg_pool_sized(conn_str: &str, max_size: usize) -> deadpool_postgres::Pool {
-        let pg_config: tokio_postgres::Config = conn_str.parse().expect("valid PG conninfo");
-        let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
+        let mut pg_config: tokio_postgres::Config = conn_str.parse().expect("valid PG conninfo");
+        pg_config.options("-csearch_path=pg_catalog,public,pg_temp");
+        let manager = deadpool_postgres::Manager::from_config(
+            pg_config,
+            NoTls,
+            deadpool_postgres::ManagerConfig {
+                recycling_method: deadpool_postgres::RecyclingMethod::Custom(
+                    "SELECT pg_catalog.set_config( \
+                         'search_path', 'pg_catalog,public,pg_temp', false \
+                     )"
+                    .to_owned(),
+                ),
+            },
+        );
         deadpool_postgres::Pool::builder(manager)
             .max_size(max_size)
             .runtime(deadpool_postgres::Runtime::Tokio1)
             .build()
             .expect("build test PG pool")
-    }
-
-    fn pg_pool(conn_str: &str) -> deadpool_postgres::Pool {
-        pg_pool_sized(conn_str, 16)
     }
 
     #[tokio::test]
@@ -363,7 +371,7 @@ mod pg {
         // A plain admin connection drives DDL/seed/cleanup; the endpoint itself is
         // exercised over a real pool (`Backend::Pg` is a `deadpool_postgres::Pool`,
         // not a single shared client).
-        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((mut client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!("SKIP pg_select_and_construct: no PostgreSQL on localhost:5432");
             return;
         };
@@ -396,10 +404,22 @@ mod pg {
 "#
         );
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
-        let schema = sf_serve::introspect_pg_all(&client).await.unwrap();
+        let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
         // Same conninfo as the admin connection (no dbname override) so the pool's
         // connections see the table the admin connection just created.
-        let pool = pg_pool(&conn_str);
+        let pool = pg_pool_sized(&conn_str, 1);
+        {
+            let shadow = pool.get().await.expect("acquire hostile fixture session");
+            shadow
+                .batch_execute(&format!(
+                    "CREATE TEMP TABLE \"{table}\" (\"id\" INTEGER PRIMARY KEY, \
+                     \"name\" TEXT, \"age\" INTEGER); \
+                     INSERT INTO pg_temp.\"{table}\" \
+                     VALUES (999999, 'HOSTILE_SHADOW', 999999);"
+                ))
+                .await
+                .expect("seed same-name temporary shadow relation");
+        }
         let cfg = Arc::new(ServeConfig::new_unchecked(
             Backend::Pg(pool),
             maps,
@@ -422,6 +442,7 @@ mod pg {
         );
         let json: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(json["results"]["bindings"].as_array().unwrap().len(), n);
+        assert!(!body.contains("HOSTILE_SHADOW"));
 
         let (s_con, ctype, turtle) = send(
             cfg,
@@ -453,7 +474,7 @@ mod pg {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn pg_pool_concurrency_receipt() {
         let conn_str = base_conn();
-        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((mut client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!("SKIP pg_pool_concurrency_receipt: no PostgreSQL on localhost:5432");
             return;
         };
@@ -484,7 +505,7 @@ mod pg {
 "#
         );
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
-        let schema = sf_serve::introspect_pg_all(&client).await.unwrap();
+        let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
 
         const N: usize = 16;
 
@@ -561,7 +582,7 @@ mod pg {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pg_pool_exhaustion_sheds_503_with_retry_after() {
         let conn_str = base_conn();
-        let Ok((client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((mut client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
             eprintln!(
                 "SKIP pg_pool_exhaustion_sheds_503_with_retry_after: \
                  no PostgreSQL on localhost:5432"
@@ -595,7 +616,7 @@ mod pg {
 "#
         );
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
-        let schema = sf_serve::introspect_pg_all(&client).await.unwrap();
+        let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
 
         // One connection, a short wait: a second concurrent request has no
         // chance of acquiring one before the first (a slow full-table dump)

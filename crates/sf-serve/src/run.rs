@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio_postgres::NoTls;
 
 use crate::problem::StartupCause;
-use crate::source::PreparedSource;
+use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
 use crate::{
     introspect_pg_all, router, Backend, IntrospectedSource, ServeConfig, ServeError, SourceRef,
 };
@@ -117,7 +117,8 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
 }
 
 /// Open the prepared backend and pair it with the base-table schema observed
-/// through that handle. This pairing is not yet a coherent/live snapshot claim.
+/// through that handle. PostgreSQL catalogue reads form one coherent read-only
+/// snapshot; validated reload/drift detection remains outside this constructor.
 /// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
 /// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
 /// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
@@ -141,7 +142,15 @@ async fn open_backend(
         PreparedSource::Postgres { config, label } => {
             // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
             // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
-            let manager = deadpool_postgres::Manager::new(*config, NoTls);
+            let manager = deadpool_postgres::Manager::from_config(
+                *config,
+                NoTls,
+                deadpool_postgres::ManagerConfig {
+                    recycling_method: deadpool_postgres::RecyclingMethod::Custom(
+                        POSTGRES_RELATION_SCOPE_RECYCLE_SQL.to_owned(),
+                    ),
+                },
+            );
             let pool = deadpool_postgres::Pool::builder(manager)
                 .max_size(pg_pool_size)
                 .wait_timeout(Some(pg_pool_wait))
@@ -156,13 +165,21 @@ async fn open_backend(
                         error: error.to_string(),
                     })
                 })?;
-            let conn = pool.get().await.map_err(|error| {
+            let mut conn = pool.get().await.map_err(|error| {
                 ServeError::new(StartupCause::SourceConnect {
                     spec: label.to_owned(),
                     error: error.to_string(),
                 })
             })?;
-            let schema = introspect_pg_all(&conn).await.map_err(|error| {
+            crate::backend::verify_pg_relation_scope(&conn)
+                .await
+                .map_err(|error| {
+                    ServeError::new(StartupCause::Schema {
+                        spec: label.to_owned(),
+                        error,
+                    })
+                })?;
+            let schema = introspect_pg_all(&mut conn).await.map_err(|error| {
                 ServeError::new(StartupCause::Schema {
                     spec: label.to_owned(),
                     error,
@@ -422,5 +439,24 @@ mod tests {
             3,
             "pg_pool_size passed to open_backend should flow through to the pool's max_size"
         );
+        let conn = pool.get().await.expect("acquire configured PG session");
+        let setting: String = conn
+            .query_one("SELECT current_setting('search_path')", &[])
+            .await
+            .expect("read relation scope")
+            .get(0);
+        assert_eq!(setting, crate::source::POSTGRES_RELATION_SCOPE_SETTING);
+        conn.batch_execute("SET SESSION search_path = pg_temp")
+            .await
+            .expect("perturb recyclable session");
+        drop(conn);
+
+        let recycled = pool.get().await.expect("reacquire configured PG session");
+        let setting: String = recycled
+            .query_one("SELECT current_setting('search_path')", &[])
+            .await
+            .expect("read recycled relation scope")
+            .get(0);
+        assert_eq!(setting, crate::source::POSTGRES_RELATION_SCOPE_SETTING);
     }
 }
