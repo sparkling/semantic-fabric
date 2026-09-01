@@ -31,8 +31,8 @@
 //! pushes `ORDER BY … NULLS FIRST/LAST` into SQL, a bag-union sorts globally in
 //! `exec`), `rr:class` / refObjectMap unfolding, and the
 //! property paths with variable endpoints (`WITH RECURSIVE` / non-recursive CTE,
-//! ADR-0007; `owl:TransitiveProperty` served live, ADR-0008; depth-bounded,
-//! ADR-0010): `P+`/`P*` over a single predicate, the `?` (ZeroOrOne), `!` (NPS),
+//! ADR-0007; `owl:TransitiveProperty` served live, ADR-0008; finite-pair cycle
+//! collapse, ADR-0010/0038): `P+`/`P*` over a single predicate, the `?` (ZeroOrOne), `!` (NPS),
 //! and `^`/`/`/`|` (inverse / sequence / alternative) operators, and `P+`/`P*`
 //! over such composites (see [`path`] for the per-shape soundness gates — raw-key
 //! equality requires matching node shapes; `P*`/`p?` reflexive requires a
@@ -42,9 +42,7 @@
 //! shape-mismatched composite, `P*`/`p?` over a multi-predicate graph; for a single
 //! branch pushed to SQL an ORDER BY on a non-`rr:column` term (a template IRI /
 //! COALESCE); OPTIONAL with a multi-scan right side (JOIN inside OPTIONAL); plus
-//! LATERAL, SERVICE, OWL 2 QL tier-2 (ADR-0008), and PostgreSQL execution (SQLite
-//! is this wave's execution target; the path CTE's Postgres `CYCLE` variant is
-//! the later MB-4 wave; emission is otherwise dialect-generic).
+//! LATERAL, SERVICE, and OWL 2 QL tier-2 (ADR-0008).
 //!
 //! ## Wave-E / M4 additions (2026-06-29)
 //!

@@ -250,7 +250,7 @@ INSERT INTO edge VALUES (1, 5);
     for path in ["+", "*"] {
         let q = format!("PREFIX ex: <http://ex/> SELECT ?s ?o WHERE {{ ?s ex:reaches{path} ?o }}");
 
-        // Engine: the path compiles to a depth-bounded recursive CTE (ADR-0010).
+        // Engine: the path compiles to an exact finite-pair recursive CTE.
         let plan = engine_plan(&maps, &schema, &q, true);
         let sql = &plan.emitted().expect("emit")[0].sql;
         let up = sql.to_uppercase();
@@ -259,8 +259,8 @@ INSERT INTO edge VALUES (1, 5);
             "recursive CTE for reaches{path}: {sql}"
         );
         assert!(
-            sql.contains("256"),
-            "ADR-0010 recursion-depth bound present in the CTE for reaches{path}: {sql}"
+            !sql.contains("sf_d"),
+            "walk depth must not enter closure identity for reaches{path}: {sql}"
         );
 
         // Engine answer over the live SQLite source via the recursive CTE.
@@ -290,8 +290,8 @@ INSERT INTO edge VALUES (1, 5);
 /// once and terminate. This is asserted as a **BAG** (`Vec`, duplicates counted)
 /// against the independent `spareval` oracle: a missing outer `SELECT DISTINCT`
 /// on the pair (the depth dimension leaking into the result) would emit each pair
-/// once per depth and fail the bag equality. Termination proves the depth bound
-/// is a real cycle terminator.
+/// once per depth and fail the bag equality. Termination proves pair-set
+/// deduplication is the cycle terminator.
 #[test]
 fn property_path_cyclic_and_diamond_engine_matches_oracle_as_bag() {
     const EDGE_SQL: &str = r#"
@@ -331,7 +331,7 @@ INSERT INTO edge VALUES (1, 3);
         let plan = engine_plan(&maps, &schema, &q, true);
 
         // Engine answer over the live SQLite source via the recursive CTE — must
-        // terminate (depth bound) despite the cycle.
+        // reach a fixed point despite the cycle.
         let engine = oracle::engine_bag(&exec::select(&plan, &conn).expect("exec"));
 
         let OracleAnswer::Solutions(oracle_rows) =

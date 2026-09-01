@@ -1,6 +1,6 @@
 //! Property-path compilation (ADR-0007 *recursive paths compile to source-dialect
-//! recursive CTEs*; ADR-0008 transitive properties served live; ADR-0010 recursion
-//! bounds). Translates a `?s PATH ?o` pattern into a [`PathClosure`] branch whose
+//! recursive CTEs*; ADR-0008 transitive properties served live; ADR-0010 cycle
+//! governance). Translates a `?s PATH ?o` pattern into a [`PathClosure`] branch whose
 //! one-hop relation ([`HopExpr`]) is a predicate leaf or a sequence/alternative/
 //! inverse/negated composite over **raw key columns** (term-construction lifting):
 //! the closure iterates the keys and the RDF terms are built only at the outer
@@ -39,13 +39,6 @@ use spargebra::term::{NamedNode, TermPattern};
 use crate::iq::{Branch, HopExpr, HopRelation, PathClosure, PathKind, TermDef};
 use crate::unfold::{bind, Unfolder};
 use crate::{Error, Result};
-
-/// ADR-0010 recursion-depth backstop for property-path closures. SPARQL path
-/// reachability is set-based (the CTE body uses `UNION`), so the closure already
-/// terminates on a finite hop relation — this bound is the safety net against a
-/// pathological mapping, capping the longest chased chain. A simple path longer
-/// than this is truncated (a documented limit, not a correctness claim).
-const PATH_MAX_DEPTH: usize = 256;
 
 /// A compiled one-hop relation plus the term maps and node shapes its endpoints
 /// reconstruct from / are checked against.
@@ -89,6 +82,24 @@ impl<'a> Unfolder<'a> {
             // composite (no closure operator) is one step.
             other => (PathKind::One, other),
         };
+
+        // Recursive syntax and duplicate-elimination semantics are proven only
+        // on the three admitted relational dialects. In particular, SQL Server
+        // does not accept the generic `WITH RECURSIVE` form. Reject during
+        // translation rather than emit unproven SQL or risk a non-terminating /
+        // incomplete closure on a scaffolded backend (ADR-0038 R1).
+        if matches!(kind, PathKind::OneOrMore | PathKind::ZeroOrMore)
+            && !matches!(
+                self.dialect,
+                sf_sql::Dialect::Sqlite | sf_sql::Dialect::Postgres | sf_sql::Dialect::MySql
+            )
+        {
+            return Err(Error::Unsupported(
+                "recursive P+/P* requires a proven finite-pair fixed point; this SQL dialect \
+                 is not admitted for recursive property paths → 501"
+                    .to_owned(),
+            ));
+        }
 
         let (subj_var, obj_var) = match (subject, object) {
             (TermPattern::Variable(s), TermPattern::Variable(o)) => (s.as_str(), o.as_str()),
@@ -163,7 +174,6 @@ impl<'a> Unfolder<'a> {
             alias,
             kind,
             hop: compiled.expr,
-            max_depth: PATH_MAX_DEPTH,
         });
         // Bind via the shared helper so `?s PATH ?s` self-unifies (ColEq sf_s,sf_o).
         bind(&mut branch, subj_var, subj_def)?;

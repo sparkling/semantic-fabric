@@ -401,18 +401,13 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
 ///   (NPS) is the bag exception — its `UNION ALL` hop is kept un-`DISTINCT`ed.
 /// * `ZeroOrOne` (`p?`) — the hop ∪ the reflexive `(x, x)` pairs over the active
 ///   graph's nodes (only over a single-predicate bare leaf, `unfold`-enforced).
-/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` closure: the recursive member keeps an
-///   `sf_d` depth counter, its body a `UNION` deduped on `(sf_s, sf_o, sf_d)` so a
-///   pair revisited around a cycle is NOT collapsed there — `sf_d < max_depth` is
-///   the *sole* recursion terminator (ADR-0010; SQLite has no `CYCLE` clause — the
-///   later MB-4 wave). The outer `SELECT DISTINCT` collapses the depth dimension.
-/// * `ZeroOrMore` (`P*`) — `OneOrMore` plus the reflexive `(x, x)` pairs at depth 0.
+/// * `OneOrMore` (`P+`) — a `WITH RECURSIVE` finite-pair fixed point. Its `UNION`
+///   deduplicates on `(sf_s, sf_o)`, so cyclic revisits are discarded and recursion
+///   ends only when no new reachable pair exists. This is exact for a finite source
+///   relation; no successful result is cut off at an arbitrary walk depth.
+/// * `ZeroOrMore` (`P*`) — `OneOrMore` plus the reflexive `(x, x)` pairs.
 ///
-/// The depth ints and the bound are engine constants (not query data), so — like
-/// `LIMIT` and the `ESCAPE '\'` char — they are part of the trusted skeleton, not
-/// bound params. RDF terms are still built only at the outer projection
-/// ([`crate::exec`]). This wave targets the SQLite dialect; the PostgreSQL
-/// `CYCLE`/PG14 variant is the later MB-4 wave.
+/// RDF terms are still built only at the outer projection ([`crate::exec`]).
 /// The `WITH …` prelude defining the path closure's distinct-pairs relation
 /// `t{alias}(sf_s, sf_o)` — a plain CTE for length-1 shapes, a `WITH RECURSIVE` for `+`/`*`.
 /// Shared by [`emit_path_branch`] (a standalone path result) and the `PathExists`
@@ -424,11 +419,7 @@ fn path_with_prelude(
 ) -> Result<String> {
     let cte = format!("t{}", pc.alias);
     let hop = hop_sql(&pc.hop, dialect, catalog);
-    let (sf_s, sf_o, sf_d) = (
-        dialect.quote_ident("sf_s"),
-        dialect.quote_ident("sf_o"),
-        dialect.quote_ident("sf_d"),
-    );
+    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
     Ok(match pc.kind {
         PathKind::One => {
             let one_distinct = if matches!(pc.hop, HopExpr::Nps(_)) {
@@ -442,7 +433,7 @@ fn path_with_prelude(
             )
         }
         PathKind::ZeroOrOne => {
-            let refl = reflexive_sql(&pc.hop, dialect, catalog, None)?;
+            let refl = reflexive_sql(&pc.hop, dialect, catalog)?;
             format!(
                 "WITH {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM \
                  (SELECT {sf_s}, {sf_o} FROM ({hop}) hx UNION {refl}) z)"
@@ -450,20 +441,19 @@ fn path_with_prelude(
         }
         PathKind::OneOrMore | PathKind::ZeroOrMore => {
             let cte_raw = format!("t{}r", pc.alias);
-            let one_hop = format!("SELECT {sf_s}, {sf_o}, 1 AS {sf_d} FROM ({hop}) hx");
+            let one_hop = format!("SELECT {sf_s}, {sf_o} FROM ({hop}) hx");
             let anchor = if matches!(pc.kind, PathKind::ZeroOrMore) {
-                let refl = reflexive_sql(&pc.hop, dialect, catalog, Some(0))?;
+                let refl = reflexive_sql(&pc.hop, dialect, catalog)?;
                 format!("{one_hop} UNION {refl}")
             } else {
                 one_hop
             };
             let recursive = format!(
-                "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o}, c.{sf_d} + 1 AS {sf_d} \
-                 FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s} WHERE c.{sf_d} < {max}",
-                max = pc.max_depth
+                "SELECT c.{sf_s} AS {sf_s}, h.{sf_o} AS {sf_o} \
+                 FROM {cte_raw} c JOIN ({hop}) h ON c.{sf_o} = h.{sf_s}"
             );
             format!(
-                "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}, {sf_d}) AS ({anchor} UNION {recursive}), \
+                "WITH RECURSIVE {cte_raw}({sf_s}, {sf_o}) AS ({anchor} UNION {recursive}), \
                  {cte}({sf_s}, {sf_o}) AS (SELECT DISTINCT {sf_s}, {sf_o} FROM {cte_raw})"
             )
         }
@@ -741,8 +731,7 @@ fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
 }
 
 /// The reflexive `(x, x)` pairs over a bare-predicate hop's node set (its subjects
-/// ∪ objects) — the ZeroLengthPath component of `P*` / `p?`. `depth` adds a
-/// constant `sf_d` column for the recursive (`P*`) anchor. `unfold` only emits
+/// ∪ objects) — the ZeroLengthPath component of `P*` / `p?`. `unfold` only emits
 /// reflexive kinds over a single-predicate bare leaf, so a composite hop here is a
 /// programming error surfaced as 501.
 ///
@@ -755,12 +744,7 @@ fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
 /// guard on just the column each half projects): a row failing the OTHER column's
 /// NULL check still generates no triple, so its own column is not a valid node
 /// either.
-fn reflexive_sql(
-    hop: &HopExpr,
-    dialect: Dialect,
-    catalog: &ColumnCatalog,
-    depth: Option<u32>,
-) -> Result<String> {
+fn reflexive_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> Result<String> {
     let rel = hop.as_pred().ok_or_else(|| {
         Error::Unsupported("reflexive (P*/p?) path over a composite hop → 501".to_owned())
     })?;
@@ -768,19 +752,11 @@ fn reflexive_sql(
     let cols = catalog.columns(&rel.source);
     let s = dialect.quote_ident(resolve_col(rel.subj_col.as_ref(), cols));
     let o = dialect.quote_ident(resolve_col(rel.obj_col.as_ref(), cols));
-    let (sf_s, sf_o, sf_d) = (
-        dialect.quote_ident("sf_s"),
-        dialect.quote_ident("sf_o"),
-        dialect.quote_ident("sf_d"),
-    );
-    let dcol = match depth {
-        Some(d) => format!(", {d} AS {sf_d}"),
-        None => String::new(),
-    };
+    let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
     Ok(format!(
-        "SELECT h0.{s} AS {sf_s}, h0.{s} AS {sf_o}{dcol} FROM {src} h0 \
+        "SELECT h0.{s} AS {sf_s}, h0.{s} AS {sf_o} FROM {src} h0 \
          WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL \
-         UNION SELECT h0.{o} AS {sf_s}, h0.{o} AS {sf_o}{dcol} FROM {src} h0 \
+         UNION SELECT h0.{o} AS {sf_s}, h0.{o} AS {sf_o} FROM {src} h0 \
          WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL"
     ))
 }

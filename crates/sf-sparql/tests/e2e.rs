@@ -606,7 +606,7 @@ fn property_path_oneormore_is_transitive_closure() {
     let q = format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>+ ?o }}");
     let plan = parse_and_translate(&q, &maps, Dialect::Sqlite).unwrap();
 
-    // The closure compiles to a depth-bounded recursive CTE (ADR-0007 / ADR-0010).
+    // The closure compiles to an exact finite-pair recursive CTE (ADR-0038 R1).
     let sql = &plan.emitted().unwrap()[0].sql;
     let up = sql.to_uppercase();
     assert!(up.contains("WITH RECURSIVE"), "recursive CTE: {sql}");
@@ -614,7 +614,10 @@ fn property_path_oneormore_is_transitive_closure() {
         up.contains("UNION") && !up.contains("UNION ALL"),
         "set-union closure: {sql}"
     );
-    assert!(sql.contains("256"), "ADR-0010 depth bound present: {sql}");
+    assert!(
+        !sql.contains("sf_d"),
+        "walk depth must not enter row identity: {sql}"
+    );
 
     let sol = exec::select(&plan, &conn).unwrap();
     let got: BTreeSet<(String, String)> =

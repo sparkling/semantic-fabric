@@ -502,15 +502,16 @@ impl HopExpr {
 /// A branch carrying a `PathClosure` has an **empty `core`**: its `FROM` is the
 /// (possibly recursive) CTE, not a base scan. The CTE runs over the **raw key
 /// columns** of the one-hop relation (term-construction lifting, ADR-0007): it
-/// projects two canonical key columns (`sf_s`, `sf_o`) and (for the recursive
-/// kinds) a depth counter; the branch's `bindings` build the RDF subject/object
-/// terms from those keys at the outer projection only. Connectivity is
+/// projects two canonical key columns (`sf_s`, `sf_o`); the branch's `bindings`
+/// build the RDF subject/object terms from those keys at the outer projection
+/// only. Connectivity is
 /// **set-based** over node pairs (SPARQL `P+`/`P*` semantics): emission wraps the
 /// relation in a `SELECT DISTINCT sf_s, sf_o` so a pair reached at several depths
 /// or around a cycle yields one solution. The recursion (for `OneOrMore`/
-/// `ZeroOrMore`) terminates **only** via `sf_d < max_depth` (the depth key keeps
-/// cyclic revisits distinct in the recursive member; the SQLite `CYCLE` clause is
-/// the later MB-4 wave). `max_depth` is the ADR-0010 bound.
+/// `ZeroOrMore`) computes a finite-pair fixed point: `UNION` deduplicates on
+/// `(sf_s, sf_o)`, so cyclic revisits add no work and termination occurs when no
+/// new reachable pair exists. A finite hop relation therefore produces an exact
+/// closure rather than a depth-limited prefix.
 #[derive(Debug, Clone)]
 pub struct PathClosure {
     /// The scan alias the CTE is bound to; the outer projection reads
@@ -521,8 +522,6 @@ pub struct PathClosure {
     /// The one-hop relation the closure iterates (a predicate leaf or a
     /// sequence/alternative/inverse composite).
     pub hop: HopExpr,
-    /// ADR-0010 recursion-depth backstop (the `WHERE sf_d < max_depth` guard).
-    pub max_depth: usize,
 }
 
 /// The one-hop `(subject-key, object-key)` relation a [`PathClosure`] closes
