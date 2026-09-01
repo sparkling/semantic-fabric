@@ -218,12 +218,9 @@ and measured benchmarks. Proposed
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md)
 defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. The programme is
 evolutionary, not a compiler rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service Rust.
-The exact-revision product-mock gold/live database is a 14-category development
-oracle, but admitted relational R2RML covers only one of 112 tables. Completion makes every advertised global operator bounded, then adds source identity and a federated physical plan so the accepted cross-RDBMS charter becomes real.
+The revision-pinned product-mock gold and separately qualified live database are a 14-category development oracle. Rust KATs seal all 139 gold artifacts and 171 admitted source files, then compare the one Style R2RML map with live PostgreSQL in a rolled-back read-only snapshot. This proves neither image/source provenance nor production admission; relational R2RML covers only one of 112 tables.
 
-The first release blockers are silent 256-hop property-path truncation,
-source-sized Rust state in some global sort/group/dedup paths, incomplete total
-request governance, and a broad production dependency closure. M0 now also has
+Exact recursive property-path fixed points replace the former 256-hop prefix, and serving rejects known source-sized Rust sort/group/dedup fallbacks before backend selection or I/O. Bounded physical alternatives, total request governance, federation and the production dependency closure remain release blockers. M0 also has
 backend-aware v3 receipts for all 87 SQLite and required-live PostgreSQL mapping
 outcomes, per-test expected SQLite query/protocol baselines, and a receipt for
 the default `sf-cli` package dependency closure. The first exact current-`sf-cli` host
