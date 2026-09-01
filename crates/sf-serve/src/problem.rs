@@ -354,14 +354,14 @@ mod tests {
 
     #[test]
     fn public_http_call_sites_cannot_accept_raw_error_strings() {
-        let serve_source = include_str!("lib.rs");
-        assert!(!serve_source.contains("err_text("));
-        assert!(!serve_source.contains("response_for_status("));
-        assert!(!serve_source.contains("Body::from("));
+        let http_source = include_str!("http.rs");
+        assert!(!http_source.contains("err_text("));
+        assert!(!http_source.contains("response_for_status("));
+        assert!(!http_source.contains("Body::from("));
         assert_eq!(
-            serve_source.matches("Response::builder()").count(),
+            http_source.matches("Response::builder()").count(),
             1,
-            "only the success response builder belongs in lib.rs"
+            "only the success response builder belongs in http.rs"
         );
     }
 }
