@@ -20,10 +20,10 @@ release authority.
 The retry/coordinator, row-codec, and prepare/finalize materializer slices are
 implemented as sealed Node reference-oracle inputs absent from the public
 bundle. The manifest and readiness result remain nonoperational with every
-capability flag false. Migrations and language-neutral contracts may feed a
-future Rust implementation; a live adapter, transport root, credentials, TLS,
-pool, signer and deployment do not exist. Development-only tests may use an
-exact-pinned Node driver without creating runtime authority.
+capability flag false. Node retains only provider-free fixed vectors, fakes and
+mutation evidence. Migrations and language-neutral contracts may feed a future
+Rust implementation; the live Rust adapter, transport root, credentials, TLS,
+pool, signer and deployment do not exist.
 
 ## Context
 
@@ -49,13 +49,12 @@ uniqueness, exclusion, message, result value, or plain object can request retry.
 All other errors and any connection-loss or commit ambiguity remain fixed
 indeterminate outcomes.
 
-Node tests may model the marker bridge with an exact-pinned development `pg`
-`DatabaseError` from the query just awaited, exact prototype and allowlisted
-SQLSTATE; no driver-bearing bridge enters the Node oracle artifact. Production
-Rust must independently classify
-the corresponding trusted `tokio-postgres` error/`SqlState` at the awaited
-driver boundary. Plain code/message data, foreign errors, every 23505, and
-mapper, materializer, signer or cleanup failures cannot request retry.
+Node tests model the marker bridge only with fixed provider-free trusted-error
+vectors and fakes; no driver, driver prototype or driver-bearing bridge enters
+the Node evidence package. Production Rust must independently classify the
+corresponding trusted `tokio-postgres` error/`SqlState` at the awaited driver
+boundary. Plain code/message data, foreign errors, every 23505, and mapper,
+materializer, signer or cleanup failures cannot request retry.
 
 The programme needs executable PostgreSQL evidence without weakening the sealed
 dependency-free public bundle or pretending that tests provision independently
@@ -117,11 +116,11 @@ the Rust service. Neither is a source input of `src/index.ts`. Test sources are
 bound by harness receipts rather than a production-artifact digest. Node runtime
 packages remain empty and the public oracle bundle stays byte-identical.
 
-Required-live Node tests may use exact-pinned `pg` and type declarations as
-development dependencies. They prove PostgreSQL behavior but do not make the
-oracle deployable. Production activation requires the separate Rust service,
-its own pools/roles/TLS/signer ports, differential vectors, live tests and
-reviewed deployment evidence under ADR-0048.
+Node evidence dependencies remain empty. Live PostgreSQL apply, concurrency,
+cleanup, role-denial and fault evidence belongs to Rust/`tokio-postgres` tests.
+Production activation requires the separate Rust service, its own
+pools/roles/TLS/signer ports, differential vectors, live tests and reviewed
+deployment evidence under ADR-0048.
 
 ### 3. Use one project namespace per database and exact domains
 
@@ -390,10 +389,10 @@ The dormant adapter slice is complete only when:
    `supervisor-run-event-signing-v2` canonical payload and Ed25519 signature
    under the pinned SPKI, reject wrong key/bytes/signature, and bind the exact
    ADR-0042 public-leaf bytes and digest;
-5. migrations apply once to an empty PostgreSQL 16.15 database, serialize concurrent
+5. a deployment-only Rust migrator applies once to an empty PostgreSQL 16.15 database, serializes concurrent
    migrators, and reject digest drift, gaps, future versions, partial failure,
    wrong ownership, policy, and privileges;
-6. required-live tests cover 201, exact replay, changed-replay 409, post-close
+6. required-live Rust tests cover 201, exact replay, changed-replay 409, post-close
    recovery, rollback, known abort, connection cleanup, and role denial. Two
    identical concurrent requests return identical stored bytes with one semantic
    row set; two distinct request bodies yield one semantic 201 winner and one
@@ -408,7 +407,7 @@ The dormant adapter slice is complete only when:
    foreign mapper/row/custom-setting inputs. Provider-free provisioning mutations
    prove an additional project login or membership edge keeps readiness false;
    there is never a two-project-in-one-database fixture;
-7. event, result, run, head, and outbox cardinalities prove atomicity after every
+7. Rust event, result, run, head, and outbox cardinalities prove atomicity after every
    injected fault;
 8. service and parent suites, audits, hardened builds, protected registries,
    historical anchors, and required Node 20.0.0 and Node 24.14.1
@@ -433,8 +432,8 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
 
 ### Negative
 
-- The test package gains an exact-pinned PostgreSQL development dependency.
-- Migrations, row codecs, materialization, privileges, and live concurrency add a
+- Node evidence packages remain dependency-free; PostgreSQL is a Rust test/runtime concern.
+- Rust migrations, row codecs, materialization, privileges, and live concurrency add a
   substantial independently sealed surface.
 - Safety-first ambiguity may permanently spend availability and require exact
   recovery or operator intervention.
@@ -467,7 +466,7 @@ a test substitute and must not be reported as ADR-0042 acceptance gate 4.
   produces nontransactional gaps.
 - **Use inner joins for exact recovery** — damaged provenance becomes a false
   miss and could authorize another append.
-- **Add `pg` as a runtime dependency** — violates the evidence-only Node boundary.
+- **Add `pg` anywhere in the Node package** — violates the evidence-only Node boundary.
 - **Reuse `sf-serve` pools or query execution** — crosses product and evidence
   credentials, authority and failure domains. A separate Rust supervisor using
   generic Rust PostgreSQL crates is the selected boundary, not a product rewrite.

@@ -160,8 +160,9 @@ SQLite evidence covers the frozen core query cases and read-only HTTP format
 subset; PostgreSQL and MySQL have live-optional evidence that can still skip.
 The runtime has source-selector paths for all three, but none is production-
 admitted under ADR-0038 R3. Property-path cases, RDF-star, named graphs, R2RML,
-Direct Mapping and simple streaming all have bounded evidence profiles with the
-deviations and release blockers recorded per matrix cell.
+Direct Mapping and simple streaming all have evidence-scoped profiles with the
+deviations and release blockers recorded per matrix cell. Recursive paths are
+semantically exact on evidenced dialects, but are not yet total-resource-qualified.
 
 ## Correctness and verification
 
@@ -222,7 +223,7 @@ defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witn
 evolutionary, not a compiler rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service Rust.
 The revision-pinned product-mock gold and separately qualified live database are a 14-category development oracle. Rust KATs seal all 139 gold artifacts and 171 admitted source files, then compare the one Style R2RML map with live PostgreSQL in a rolled-back read-only snapshot. This proves neither image/source provenance nor production admission; relational R2RML covers only one of 112 tables.
 
-Exact recursive property-path fixed points replace the former 256-hop prefix, and serving rejects known source-sized Rust sort/group/dedup fallbacks before backend selection or I/O. Bounded physical alternatives, total request governance, federation and the production dependency closure remain release blockers. M0 also has
+Exact recursive property-path fixed points replace the former 256-hop prefix, and serving rejects known source-sized Rust sort/group/dedup fallbacks before backend selection or I/O. Pre-response HTTP failures use redacted RFC 9457 problem details, startup/CLI errors are opaque, and one ingress-to-serialization deadline is integrated; post-commit stream failures only terminate the body. Bounded physical alternatives, full QueryBudget, federation and the production dependency closure remain release blockers. M0 also has
 backend-aware v3 receipts for all 87 SQLite and required-live PostgreSQL mapping
 outcomes, per-test expected SQLite query/protocol baselines, and a receipt for
 the default `sf-cli` package dependency closure. The first exact current-`sf-cli` host
@@ -441,14 +442,14 @@ claim. It is a small localhost workload, not a production sizing result.
 | Named graphs | `GRAPH <g>` and `GRAPH ?g` work; a path under `GRAPH ?g` remains unsupported when mappings contain dynamic graph maps |
 | Federation | Cross-RDBMS planning is in scope but not implemented: the current runtime owns one source and the semi-join planner has no production caller. External SPARQL `SERVICE` remains excluded |
 | Materialization | Not a product mode. A one-off streamed dump uses the query/execution path; Nova owns its downstream bulk-load adapter |
-| Exactness and boundedness | Recursive closures silently stop at 256 hops; some global ORDER/GROUP/DISTINCT/CONSTRUCT paths retain source-sized Rust collections. Both are release blockers in ADR-0038 |
+| Exactness and boundedness | Recursive closures now use exact finite-pair fixed points on evidenced dialects and reject unproved dialects; known source-sized ORDER/GROUP/DISTINCT/CONSTRUCT fallbacks reject before I/O. Bounded physical alternatives and total QueryBudget remain release blockers in ADR-0038 |
 | Production hardening | Reliability, security, operability, lifecycle and packaging have graduated from proposed ADR-0014 into the sequenced ADR-0038 programme |
-| Accepted designs not wired | Observability/configuration (ADR-0011), property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) |
+| Accepted designs not fully wired | ADR-0011 has redacted errors but not telemetry/configuration; property/fuzz/snapshot testing (ADR-0012), query-time provenance (ADR-0017), and the security edge (ADR-0018) remain incomplete |
 | Dependency security | The root `Cargo.lock` is tracked, CI dependency-resolving Cargo commands use `--locked`, and the default `sf-cli` package resolution/feature/edge closure is receipt-bound. A private external observation binds one current binary and observed final-link inputs; the sealed-source smoke round-trips an in-memory `authority=none` record, checks the closed ELF policy identity, and statically parses the exact held bwrap bytes as `RootPie`. A separate `authority=none` counterfactual inventory now binds bounded loader stdout and replayed bwrap-host names/paths under held identity/policy fences. Digest checks detect source drift; private native tests prove the static preflight and narrow late cBPF enforcement. The inventory does not execute bwrap, and its interpreter, DSOs, and path target are unheld/undigested. Receipt V1 remains byte-compatible, does not attest the preflight, inventory, or live late-filter proof, and has no final-FD inventory. None establishes authenticated execution or complete build/tool/system/runtime closure—including actual bwrap-host byte consumption, time-of-use, cache/hwcaps/preload/LSM semantics—opaque ELF semantics, SBOM, reproducibility, minimality, admission, or release. Six advisory exceptions, three unmaintained-crate warnings, hosted-runner/apt-transitive closure, and release SBOM/provenance remain debt |
 | M0 performance evidence | ADR-0041 proposes a separate single-attempt capture transaction. Node 20/24 supplies only protected non-deployable oracles; INSERT values/results and DDL coupling are sealed at `0d5d09e`/`e37cce7`, with 705 Node-24 tests and an unchanged dependency-free public bundle. Remaining SELECT/transport/tag, adapter/store/runner/live-verifier, credentials, witnessing, controlled performance and two-builder work is Rust/operational evidence. It runs in parallel with M1–M6 but gates authoritative performance and M7 |
 
-Unsupported shapes are designed to fail explicitly. The current 256-hop path
-truncation violates that invariant and is release-blocking until fixed.
+Unsupported shapes are designed to fail explicitly. Exact path fixed points and
+pre-I/O fallback admission now enforce that invariant for their evidenced scope.
 
 ## Workspace
 
@@ -465,11 +466,11 @@ truncation violates that invariant and is release-blocking until fixed.
 
 ## Architecture decisions
 
-The canonical [ADR corpus](docs/adr/) contains 45 records: 34 accepted, ten
+The canonical [ADR corpus](docs/adr/) contains 46 records: 35 accepted, ten
 proposed ([ADR-0014](docs/adr/ADR-0014-production-hardening-backlog.md),
 [ADR-0039](docs/adr/ADR-0039-minimal-production-serving-artifact.md), [ADR-0040](docs/adr/ADR-0040-bounded-federated-global-operators-and-spill.md),
 [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md), [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md),
-[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), [ADR-0046](docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md), and [ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md)); accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) fixes the Rust/Node boundary,
+[ADR-0043](docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md), [ADR-0044](docs/adr/ADR-0044-postgresql-supervisor-catalogue-contract.md), [ADR-0045](docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md), [ADR-0046](docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md), and [ADR-0047](docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md)); accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) fixes the Rust/Node boundary and accepted [ADR-0049](docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md) fixes recursive-path semantics,
 and one superseded ([ADR-0030](docs/adr/ADR-0030-metaharness-darwin-mode-dev-process-adoption.md),
 replaced by ADR-0037). ADRs are living plans and must be updated with the code.
 `accepted` means the decision is adopted; the dated implementation-status note
@@ -481,7 +482,7 @@ and direct evidence say whether it has shipped.
 | Governance, tests, datatype correctness, provenance, security, readiness | ADR-0010–0019 |
 | Optimisation, Ontop parity, operator-tree IR, backend abstraction, QE | ADR-0020–0028 |
 | RDF-star mapping/query, path joins, set/graph semantics | ADR-0029, ADR-0031–0035 |
-| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) |
+| Remediation, engineering control plane, application completion and design locks | [ADR-0036](docs/adr/ADR-0036-correctness-first-open-issue-remediation.md)–[ADR-0049](docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md) |
 
 Research grounding and prior-art reviews are under
 [`docs/research/`](docs/research/). RDF-star has a normative

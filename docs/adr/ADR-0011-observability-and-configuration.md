@@ -17,9 +17,10 @@ implements:
 > **Implementation status (2026-09-01): partially implemented.** Commits
 > `3e0f920`/`c9e6c53` add a closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
-> `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests. Raw
+> `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
+> `6cd85eb` routes every pre-response absolute-deadline expiry through it. Raw
 > generated SQL, driver text, mapping details and source specifications cannot
-> enter that public boundary. A SELECT/CONSTRUCT failure after `200` is committed
+> enter that public boundary. A SELECT/CONSTRUCT failure after committing `200`
 > can only terminate the stream; this does not turn it into a problem response or
 > prove an atomic no-prefix contract. Correlation IDs currently reach the response
 > only, not a log sink. The production crates still contain no tracing/metrics/OTLP

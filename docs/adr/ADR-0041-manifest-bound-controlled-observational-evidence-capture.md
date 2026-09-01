@@ -438,20 +438,18 @@ marginal provider-API charge, not a spend cap or a capacity claim.
 1. Implement and mutation-test the closed task parser and policy state machine.
 2. Implement exact input attestation and the negative-only host non-admission
    boundary before any positive runner claim.
-3. Extend the implemented claim, exact-commit source, and non-authorizing
-   acknowledgement seams with independently administered append-only
-   registration/lease authority and its provider-free replay.
-4. Provision a dedicated controlled runner and create its canonical tracked
-   profile; do not derive that profile from this unsuitable development host.
-5. Complete positive host/capture preflights and execution runtime; consume only
-   an ADR-0039 two-builder-agreed artifact digest and keep V4/V5/V6 byte-stable.
-6. Register and protect the task/launcher/parser/test controller closure in the
+3. In parallel, implement the independently administered append-only
+   registration/lease authority, provision the dedicated controlled runner and
+   tracked profile, and complete ADR-0039 two-builder artifact agreement.
+4. After all three pass independently, integrate positive host/capture preflights
+   and execution runtime while keeping V4/V5/V6 byte-stable.
+5. Register and protect the task/launcher/parser/test controller closure in the
    global manifest and controller build. Bind the profile, scenarios, lock, and
    product-source closure as task-scoped immutable commit blobs so existing
    patch transactions may still modify product implementation paths.
-7. Run one fresh-ID capture with native Codex and Claude review outside the
+6. Run one fresh-ID capture with native Codex and Claude review outside the
    measurement interval; seal and replay the private receipt.
-8. Import only replay-verified bytes, protect the baseline, add CI
+7. Import only replay-verified bytes, protect the baseline, add CI
    `check-baseline`, and update ADR-0038/programme status with exact evidence.
 
 Acceptance requires parser mutation coverage, dirty/pre-existing/path/identity

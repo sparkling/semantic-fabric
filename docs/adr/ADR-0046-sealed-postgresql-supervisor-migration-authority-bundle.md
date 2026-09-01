@@ -14,7 +14,7 @@ implements: [ADR-0044, ADR-0045]
 
 This ADR is **proposed**. It defines provisioning, manifest, seed, empty-state and migration-runner representation gaps left by ADR-0044/0045. The fixed reader, opaque dormant `Plan`, descriptor-first receipt parser, unbranded descriptor-only capability capture, seven terminal singleton representations, exact lifecycle/control/deadline representation, and non-executable catalogue/INSERT contracts described below are implemented as Node executable-specification evidence. A complete executable catalogue, store, bridge, runner and live verifier are not. This does not accept the ADR, activate the supervisor, provision credentials, contact PostgreSQL, grant runtime access, or make a production deployment.
 
-The bundle remains a private, dormant and non-deployable Node oracle. A future Rust supervisor may independently verify equivalent sealed migrations at startup/readiness but never apply or repair them. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
+The bundle remains a private, dormant and non-deployable Node oracle. Future Rust supervisor startup/readiness is verify-only and never applies or repairs migrations. A separately packaged deployment-only Rust migrator, absent from `sf-server` and readiness credentials, may implement exact empty/no-op apply but never drift repair. Five public exports, false authority/readiness, empty dependencies and bytes stay unchanged.
 
 ## Context
 
@@ -317,7 +317,7 @@ Mutable chain fields may be constraint-validly advanced. Only the empty
 apply must replay `last=0`, `next=1`, `last_event=NULL` before commit. Exact
 replay performs no DDL, seed, or ledger write.
 
-The empty apply order is exactly `0001 -> seed -> 0002 -> ledger versions 1 and
+The deployment-only Rust migrator's empty apply order is exactly `0001 -> seed -> 0002 -> ledger versions 1 and
 2 -> owner-policy seed replay -> same-RW-transaction catalogue/provisioning
 comparison -> COMMIT`. Ledger rows store each script digest and the shared
 catalogue and seed digests; there is no provisioning-digest column. Both apply
@@ -327,9 +327,9 @@ later readiness transaction. Readiness separately uses `SERIALIZABLE READ ONLY
 DEFERRABLE`, external-profile evidence, and a separately frozen receipt after
 commit; this runner never returns ready.
 
-### 7. Specify the future Rust state machine and retain a Node oracle
+### 7. Specify the future deployment-only Rust migrator and retain a Node oracle
 
-The future Rust entrypoint accepts only privately owned plan/store types from its
+The future Rust migrator entrypoint accepts only privately owned plan/store types from its
 isolated PostgreSQL adapter. It captures owned checkout/open/session capability before
 await; malformed input/discard is bounded, and no caller SQL, driver or product pool crosses.
 
@@ -340,21 +340,19 @@ cancellation and cleanup; no Node `pg` dependency, bridge, live store or runner 
 Node capability records are exact-key, trap-free oracle inputs; Rust uses closed enums/private
 types. Neither admits a driver, path, classifier, verifier, repair callback or caller SQL.
 
-The closed execute descriptor is `{operation,text,values}`: an ASCII plan-step enum,
-sealed script/fixed statement, and null/boolean/safe-integer/string/byte values.
-Node uses dense arrays and copied intrinsic `Uint8Array`; Rust uses owned enums/bytes.
-The result union is:
+The Node evidence keeps three non-authorizing contracts disjoint:
 
-- `{kind:'command-complete',commandTag,rowCount,rows:[]}` with an exact per-step
-  tag and `rowCount` of null or the exact safe integer;
-- `{kind:'rows',commandTag:'SELECT',rowCount,columns,rows}` where columns is a
-  dense array of exact literal aliases and rows is a dense array of intrinsic
-  plain records with exactly those string data keys and only the base values
-  above, all synchronously copied before a step-specific codec;
-- `{kind:'script-complete',operation}` only for the whole simple-query
-  `migration-0001` or `migration-0002` payload; and
-- `{kind:'server-rejected',operation,sqlstate,transactionStatus}` with the exact
-  in-flight operation, five-character code, and `idle|transaction|failed` state.
+- descriptors `{descriptorKind,operation,text,parameters}` carry fixed SQL and
+  parameter metadata, never execution values;
+- four Plan-only value sets carry copied null/boolean/safe-integer/string/byte
+  values for the four INSERT operations; and
+- INSERT completion evidence fixes `{operation,resultKind:'command-complete',
+  wireCommandTag:'INSERT 0 1',normalizedCommandKind:'INSERT',rowCount:1,rows:[]}`.
+
+Only Rust may join a descriptor to values after Plan and DDL validation. Completion
+metadata is expected evidence, never classifier or admission input.
+`statementCatalogueComplete` and `resultContractsSealed` remain false; SELECT,
+script, rejection and transport result contracts remain unsealed.
 
 Every observation step must separately pin semantic `acceptedCardinality`, the
 max-plus-one admission probe, and a compiled `hardMaximumRows`; none may be
@@ -464,7 +462,7 @@ This decision is implemented only when:
    all seven singleton shapes, every deadline at minus-one/exact/plus-one, delayed timer callbacks,
    host suspension, late fulfilment/rejection/disposal, zero unhandled rejection and zero live timer
    handle after normal settlement are pinned;
-4. the Rust adapter against PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
+4. the deployment-only Rust migrator against PostgreSQL 16.15 proves empty/exact/concurrent apply, stock baseline, PUBLIC object/default ACL,
    value sentinels, acknowledged-versus-uncertain rollback/commit, pre-send termination,
    unknown-commit reclassification, per-statement simple-query timeout re-arm, hung ROLLBACK,
    no retry/partial repair, and every ADR-0044/0045 denial;

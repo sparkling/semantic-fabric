@@ -27,19 +27,19 @@ correctness suite, runtime selector paths for three relational backends, and
 credible bounded-streaming and Ontop comparison evidence. Under this ADR's R3,
 zero backends are yet production-admitted: a reachable runtime path is not an
 admission decision. It is not yet a complete application.
-The 2026-08-26 source audit found five release-level contradictions:
+At the 2026-08-26 source audit, five release-level contradictions remained:
 
-1. recursive property paths return a normal result after a hard-coded 256-hop
+1. recursive property paths returned a normal result after a hard-coded 256-hop
    truncation;
-2. supported global ordering, grouping, DISTINCT, and CONSTRUCT dedup paths can
+2. supported global ordering, grouping, DISTINCT, and CONSTRUCT dedup paths could
    retain source-sized Rust collections despite the bounded-memory invariant;
-3. the public runtime owns one source, while the accepted charter includes
+3. the public runtime owned one source, while the accepted charter included
    cross-RDBMS federation;
 4. resource governance, observability, configuration, identity, provenance,
-   lifecycle, and release controls accepted in ADR-0010/0011/0017/0018 are
+   lifecycle, and release controls accepted in ADR-0010/0011/0017/0018 were
    incomplete or absent; and
-5. the application lockfile is ignored, live/standards gates can skip, and the
-   production CLI pulls conformance, benchmark, and prototype-adapter
+5. the application lockfile was ignored, live/standards gates could skip, and the
+   production CLI pulled conformance, benchmark, and prototype-adapter
    dependencies into its normal feature closure.
 
 The current architecture should not be discarded. Its semantic compiler,
@@ -186,7 +186,7 @@ implemented. Each affected ADR must gain a dated implementation-status note as
 its increment lands. ADR-0014's previously deferred areas graduate into this
 programme, but this ADR does not itself mark them implemented.
 
-### 7. Implementation status (2026-08-31)
+### 7. Implementation status (through 2026-09-01)
 
 The H0a reusable-harness foundation is implemented in `b40dbc6`: frozen v5 gate
 law and task/runtime derivation, strict schema dispatch, an externally anchored
@@ -442,7 +442,7 @@ commit-before-reveal and byte identity; missing, failed, mismatched, selected,
 tiebroken or retried results fail. Current receipts neither block M1–M6 nor
 authorize M7, backend admission or a readiness rescore.
 
-The 2026-08-31 integrated M0 hardening candidate protects default-empty project MCP launchers and a pinned local Ruflo reader; its opaque historical overlay and private status snapshots add no product authority. The current 124-file/941-test harness has two intentional skips; OIA remains inconclusive and fixed-seed Darwin Shield passes 9/12 gates. On 2026-09-01, `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` sealed ADR-0046 Node-oracle contracts; exact Node 20/24 gates preserve the dependency-free oracle, but ADR-0046 stays proposed and no Node adapter, runner or live authority may be added. Rust commits `5c379f6`/`639134d` close silent recursive-path prefixes and reject known source-sized fallback plans. `13b8187`/`8c6181b`/`9b60dc2` seal all 139 canonical gold artifacts, every admitted byte in the 171-file source snapshot, and a read-only live PostgreSQL Style differential. This is development evidence without image/source provenance, generic RML, production admission or release authority; ADR-0048 remains the controlling Rust/Node boundary.
+The 2026-08-31 integrated M0 hardening candidate protects default-empty project MCP launchers and a pinned local Ruflo reader; its opaque historical overlay and private status snapshots add no product authority. The current 124-file/941-test harness has two intentional skips; OIA remains inconclusive and fixed-seed Darwin Shield passes 9/12 gates. On 2026-09-01, `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` sealed ADR-0046 Node-oracle contracts; exact Node 20/24 gates preserve the dependency-free oracle, but ADR-0046 stays proposed and no Node adapter, runner or live authority may be added. Rust commits `5c379f6`/`639134d` close silent recursive-path prefixes and reject known source-sized fallback plans. `3e0f920`/`c9e6c53` add the redacted RFC 9457 boundary, and `6cd85eb` carries one ingress deadline through compiler admission, execution and serialization without claiming a full QueryBudget or atomic streamed response. `13b8187`/`8c6181b`/`9b60dc2` seal all 139 canonical gold artifacts, every admitted byte in the 171-file source snapshot, and a read-only live PostgreSQL Style differential. This is development evidence without image/source provenance, generic RML, production admission or release authority; ADR-0048 remains the controlling Rust/Node boundary.
 
 ## Acceptance
 

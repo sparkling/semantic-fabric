@@ -102,6 +102,22 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > timeout, or cancellation contract across all three backend paths. No production-
 > admission claim follows from pair exactness or the current timeout/pool controls.
 
+> **Status correction, part 5 (2026-09-01, built + measured).** Commit `6cd85eb`
+> mints one absolute deadline before request-body extraction and carries that same
+> instant through a fixed-capacity compiler admission wait, the blocking compile
+> waiter, PostgreSQL acquisition, ASK execution, the complete stream driver,
+> serializer finish and body send. A timed-out or abandoned compile keeps its one
+> of four permits until the blocking closure really returns, and the executor
+> yields once per bounded raw batch even when OFFSET/dedup discards every row
+> before the sink. Deterministic tests cover every phase and prove that no phase
+> refreshes the clock. This is a narrow elapsed-time boundary, not completed R4/R5:
+> compiler CPU is not cooperatively cancellable; queued HTTP waiters, rows, bytes,
+> source work and recursion lack one total budget; sources lack a common native
+> statement-cancellation contract; SQLite cannot interrupt an in-flight blocking
+> bridge; and work inside one raw batch is not pre-empted. After HTTP `200`, a
+> SELECT/CONSTRUCT timeout terminates the body and may expose a usable prefix, so
+> no atomic/no-success-prefix response claim or backend admission follows.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.

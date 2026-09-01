@@ -466,7 +466,7 @@ This decision is implemented only when:
 
 - This completes ADR-0044's representation; it does not change the product
   architecture, application goals, public API, or activation state.
-- Provisioning remains the next separate contract slice.
+- The non-authorizing Node provisioning representation is implemented; Rust live provisioning and migration remain the separate open slice.
 
 ## Alternatives rejected
 
