@@ -2,13 +2,68 @@ name: ci
 on:
   push:
   pull_request:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: select CI gates from trusted PR base
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.selector.outputs.rust }}
+      coding_harness: ${{ steps.selector.outputs.coding_harness }}
+      supervisor: ${{ steps.selector.outputs.supervisor }}
+      acl_replay: ${{ steps.selector.outputs.acl_replay }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20.0.0'
+      - name: select affected gates without exposing changed paths
+        id: selector
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          full() {
+            printf '%s\n' 'rust=true' 'coding_harness=true' 'supervisor=true' 'acl_replay=true' >> "$GITHUB_OUTPUT"
+          }
+          if [ "$EVENT_NAME" != pull_request ]; then
+            full
+            exit 0
+          fi
+          selector="$RUNNER_TEMP/select-ci-gates.mjs"
+          manifest="$RUNNER_TEMP/base-harness-manifest.json"
+          if ! git show "${BASE_SHA}:coding-harness/scripts/select-ci-gates.mjs" > "$selector"; then
+            full
+            exit 0
+          fi
+          if ! git show "${BASE_SHA}:coding-harness/.harness/manifest.json" > "$manifest"; then
+            full
+            exit 0
+          fi
+          node "$selector" --event "$EVENT_NAME" --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --manifest "$manifest" >> "$GITHUB_OUTPUT"
+
   coding-harness:
     name: coding harness · node ${{ matrix.node }} · build · test
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.coding_harness != 'false') }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -42,6 +97,8 @@ jobs:
 
   supervisor-service:
     name: supervisor evidence oracle · node ${{ matrix.node }} · sealed build · test
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.supervisor != 'false') }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -65,6 +122,8 @@ jobs:
 
   postgresql-public-acl-replay:
     name: PostgreSQL ACL V1 + V2 + projection mutations · node ${{ matrix.node }} · eight isolated runs
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.acl_replay != 'false') }}
     runs-on: ubuntu-24.04
     # Covers the conservative 140-minute sum of all eight isolated replay/cleanup ceilings.
     timeout-minutes: 150
@@ -90,6 +149,8 @@ jobs:
 
   build:
     name: fmt · clippy · build · test
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.rust != 'false') }}
     runs-on: ubuntu-24.04
     # Live PostgreSQL/MySQL/SQL Server service containers. The sealed PostgreSQL
     # RDB2RDF receipt check below explicitly requires this live service; the other
@@ -219,6 +280,43 @@ jobs:
       # emits EARL with non-deterministic blank-node labels; that diff is not committed.
       - name: conformance (W3C RDB2RDF)
         run: cargo run --locked -p sf-cli -- conformance
+
+  required:
+    name: required
+    needs: [changes, coding-harness, supervisor-service, postgresql-public-acl-replay, build]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    env:
+      CHANGES_RESULT: ${{ needs.changes.result }}
+      SELECT_RUST: ${{ needs.changes.outputs.rust }}
+      SELECT_CODING_HARNESS: ${{ needs.changes.outputs.coding_harness }}
+      SELECT_SUPERVISOR: ${{ needs.changes.outputs.supervisor }}
+      SELECT_ACL_REPLAY: ${{ needs.changes.outputs.acl_replay }}
+      RUST_RESULT: ${{ needs.build.result }}
+      CODING_HARNESS_RESULT: ${{ needs['coding-harness'].result }}
+      SUPERVISOR_RESULT: ${{ needs['supervisor-service'].result }}
+      ACL_REPLAY_RESULT: ${{ needs['postgresql-public-acl-replay'].result }}
+    steps:
+      - name: require every selected gate and reject malformed selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CHANGES_RESULT" = success
+          check() {
+            selected="$1"
+            result="$2"
+            case "$selected" in
+              true) test "$result" = success ;;
+              false) test "$result" = skipped || test "$result" = success ;;
+              *) return 1 ;;
+            esac
+          }
+          test "$SELECT_ACL_REPLAY" != true || test "$SELECT_SUPERVISOR" = true
+          test "$SELECT_SUPERVISOR" != true || test "$SELECT_CODING_HARNESS" = true
+          check "$SELECT_RUST" "$RUST_RESULT"
+          check "$SELECT_CODING_HARNESS" "$CODING_HARNESS_RESULT"
+          check "$SELECT_SUPERVISOR" "$SUPERVISOR_RESULT"
+          check "$SELECT_ACL_REPLAY" "$ACL_REPLAY_RESULT"
 
   readiness:
     name: meta-harness readiness telemetry (ADR-0026)
