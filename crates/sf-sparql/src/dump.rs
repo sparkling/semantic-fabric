@@ -19,7 +19,7 @@ use sf_core::graph_map::union;
 use sf_core::ir::{ObjectMap, TermMap, TriplesMap};
 use sf_core::{NamedNode, Term};
 
-use crate::iq::{Branch, ColRef, Scan, SqlCond, TermDef};
+use crate::iq::{mapping_term_def, Branch, ColRef, R2rmlGraphScope, Scan, SqlCond, TermDef};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
@@ -75,8 +75,10 @@ fn class_atoms(tm: &TriplesMap, out: &mut Vec<Branch>) {
                 alias: CHILD,
                 source: tm.source.clone(),
             });
-            b.bindings
-                .insert(VAR_S.to_owned(), def_of(&tm.subject.term, CHILD));
+            b.bindings.insert(
+                VAR_S.to_owned(),
+                mapping_term_def(&tm.subject.term, CHILD, graph_scope(gt)),
+            );
             b.bindings.insert(
                 VAR_P.to_owned(),
                 TermDef::Const(Term::NamedNode(NamedNode::new_unchecked(RDF_TYPE))),
@@ -104,11 +106,13 @@ fn pom_branch(
         alias: CHILD,
         source: tm.source.clone(),
     });
-    b.bindings
-        .insert(VAR_S.to_owned(), def_of(&tm.subject.term, CHILD));
+    b.bindings.insert(
+        VAR_S.to_owned(),
+        mapping_term_def(&tm.subject.term, CHILD, graph_scope(gt)),
+    );
     b.bindings.insert(VAR_P.to_owned(), def_of(pm, CHILD));
     let obj_def = match om {
-        ObjectMap::Term(otm) => def_of(otm, CHILD),
+        ObjectMap::Term(otm) => mapping_term_def(otm, CHILD, graph_scope(gt)),
         ObjectMap::Ref(r) => {
             let parent = maps.iter().find(|m| m.id == r.parent_triples_map)?;
             b.core.push(Scan {
@@ -121,7 +125,7 @@ fn pom_branch(
                     ColRef::new(PARENT, j.parent.clone()),
                 ));
             }
-            def_of(&parent.subject.term, PARENT)
+            mapping_term_def(&parent.subject.term, PARENT, graph_scope(gt))
         }
     };
     b.bindings.insert(VAR_O.to_owned(), obj_def);
@@ -135,6 +139,16 @@ fn pom_branch(
 fn bind_graph(b: &mut Branch, gt: Option<&TermMap>) {
     if let Some(gm) = gt {
         b.bindings.insert(VAR_G.to_owned(), def_of(gm, CHILD));
+    }
+}
+
+fn graph_scope(gt: Option<&TermMap>) -> R2rmlGraphScope {
+    match gt {
+        None => R2rmlGraphScope::Default,
+        Some(graph_map) => R2rmlGraphScope::Mapped {
+            term_map: graph_map.clone(),
+            alias: CHILD,
+        },
     }
 }
 

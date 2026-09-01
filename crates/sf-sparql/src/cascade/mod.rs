@@ -38,7 +38,9 @@
 use sf_core::ir::{LogicalSource, Segment, TermMap, TermType};
 use sf_sql::TableSchema;
 
-use crate::iq::{collect_cond_cols, Branch, CmpOp, ColRef, Scan, SqlCond, TermDef};
+use crate::iq::{
+    collect_cond_cols, Branch, CmpOp, ColRef, R2rmlGraphScope, Scan, SqlCond, TermDef,
+};
 
 /// `table name -> TableSchema` — built ONCE per [`run`] call ([`build_schema_map`])
 /// and threaded to every constraint-driven pass below, so a pass's schema lookup is
@@ -758,6 +760,16 @@ pub(super) fn rewrite_def_alias(def: &mut TermDef, from: usize, to: usize) {
                 *alias = to;
             }
         }
+        TermDef::R2rmlBlank { alias, graph, .. } => {
+            if *alias == from {
+                *alias = to;
+            }
+            if let R2rmlGraphScope::Mapped { alias, .. } = graph {
+                if *alias == from {
+                    *alias = to;
+                }
+            }
+        }
         TermDef::Coalesce(l, r) => {
             rewrite_def_alias(l, from, to);
             rewrite_def_alias(r, from, to);
@@ -1154,6 +1166,8 @@ fn is_single_scan_selection(cond: &SqlCond) -> bool {
 /// [`Template::is_injective`]); for non-IRI templates only a single column
 /// slot is safe because the lack of percent-encoding means a separator
 /// character can appear in a column value, breaking uniqueness.
+/// A graph-scoped R2RML blank node is injective only when both its generated
+/// identifier and its effective graph component are injective.
 ///
 /// `pub(crate)`: also the gate `unfold::group_key_columns` and
 /// `iq::lower::try_sql_group_over_union` use before treating a `GROUP BY` key's
@@ -1161,11 +1175,23 @@ fn is_single_scan_selection(cond: &SqlCond) -> bool {
 /// injectivity concern from the one this fn was written for — DISTINCT-removal
 /// — but the same underlying soundness condition).
 pub(crate) fn binding_is_injective(def: &TermDef) -> bool {
-    let TermDef::Derived {
-        term_map: TermMap::Template(t, spec),
-        ..
-    } = def
-    else {
+    match def {
+        TermDef::Derived { term_map, .. } => term_map_is_injective(term_map),
+        TermDef::R2rmlBlank {
+            term_map, graph, ..
+        } => {
+            term_map_is_injective(term_map)
+                && match graph {
+                    R2rmlGraphScope::Default => true,
+                    R2rmlGraphScope::Mapped { term_map, .. } => term_map_is_injective(term_map),
+                }
+        }
+        _ => true,
+    }
+}
+
+fn term_map_is_injective(term_map: &TermMap) -> bool {
+    let TermMap::Template(t, spec) = term_map else {
         return true; // Column / Constant / Coalesce / Concat / Agg — not gated
     };
     if spec.term_type == TermType::Iri {
@@ -1490,8 +1516,9 @@ fn binding_is_term_dedup_safe(def: &TermDef) -> bool {
     if binding_is_injective(def) {
         return true;
     }
-    let TermDef::Derived { term_map, .. } = def else {
-        return false;
+    let term_map = match def {
+        TermDef::Derived { term_map, .. } | TermDef::R2rmlBlank { term_map, .. } => term_map,
+        _ => return false,
     };
     crate::iq::term_map_type(term_map) != Some(TermType::Iri)
 }
@@ -1707,9 +1734,8 @@ fn alias_used_columns(b: &Branch, alias: usize) -> Vec<Box<str>> {
 /// — the per-scan wrap's soundness precondition (see [`apply_dup_safety`]'s
 /// doc comment for why a non-injective binding disqualifies the wrap).
 fn alias_bindings_injective(b: &Branch, alias: usize) -> bool {
-    b.bindings.values().all(|def| match def {
-        TermDef::Derived { alias: a, .. } if *a == alias => binding_is_injective(def),
-        _ => true,
+    b.bindings.values().all(|def| {
+        !def.columns().iter().any(|column| column.alias == alias) || binding_is_injective(def)
     })
 }
 
@@ -1934,7 +1960,10 @@ fn table_key_covered_by_bindings(
         .values()
         .filter(|def| binding_is_injective(def))
         .filter_map(|def| match def {
-            TermDef::Derived { term_map, alias: a } if *a == alias => Some(term_map),
+            TermDef::Derived { term_map, alias: a }
+            | TermDef::R2rmlBlank {
+                term_map, alias: a, ..
+            } if *a == alias => Some(term_map),
             _ => None,
         })
         .flat_map(|term_map| -> Vec<&str> {
@@ -2104,7 +2133,7 @@ fn wrap_aggregate_input_if_needed(b: &mut Branch, dialect: sf_sql::Dialect) {
     // binding (`TermDef::Agg`) is left untouched — it reads `b.agg`'s own output
     // column, unrelated to the wrapped inner SELECT.
     for def in b.bindings.values_mut() {
-        if matches!(def, TermDef::Derived { .. }) {
+        if matches!(def, TermDef::Derived { .. } | TermDef::R2rmlBlank { .. }) {
             if let Ok(remapped) = crate::iq::lower::remap_termdef(def, &cols, sp_alias) {
                 *def = remapped;
             }

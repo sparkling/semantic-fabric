@@ -71,6 +71,45 @@ fn build_term(def: &TermDef, raw: &RawRow<'_>) -> Result<Option<Term>> {
     match def {
         TermDef::Const(t) => Ok(Some(t.clone())),
         TermDef::Derived { term_map, alias } => derived_term(term_map, *alias, raw),
+        TermDef::R2rmlBlank {
+            term_map,
+            alias,
+            graph,
+        } => {
+            let Some(base) = derived_term(term_map, *alias, raw)? else {
+                return Ok(None);
+            };
+            let Term::BlankNode(blank) = base else {
+                return Err(Error::Core(
+                    "R2rmlBlank IQ recipe generated a non-blank RDF term".to_owned(),
+                ));
+            };
+            let graph_iri = match graph {
+                R2rmlGraphScope::Default => None,
+                R2rmlGraphScope::Mapped { term_map, alias } => {
+                    let Some(graph_term) = derived_term(term_map, *alias, raw)? else {
+                        return Ok(None);
+                    };
+                    let Term::NamedNode(graph) = graph_term else {
+                        return Ok(None);
+                    };
+                    (graph.as_str() != RR_DEFAULT_GRAPH).then_some(graph)
+                }
+            };
+            let mut label = if graph_iri.is_some() {
+                String::from("sfr1n_")
+            } else {
+                String::from("sfr1d_")
+            };
+            if let Some(graph) = graph_iri {
+                super::push_hex(&mut label, graph.as_str().as_bytes());
+                label.push('_');
+            }
+            super::push_hex(&mut label, blank.as_str().as_bytes());
+            Ok(Some(Term::BlankNode(sf_core::BlankNode::new_unchecked(
+                label,
+            ))))
+        }
         // R2 COALESCE: the preserved (left) side wins when bound; otherwise the
         // optional (right) value (ADR-0007). `None` from `left` = its source
         // columns were NULL (the optional did not match), so fall back to `right`.
@@ -355,5 +394,68 @@ use sf_core::datatype::{self, XsdTypeCode};
 use sf_core::ir::{TermMap, TermType};
 use sf_core::{Literal, Row, Term, Triple};
 
-use crate::iq::{AggKind, Branch, ColRef, TermDef};
+use crate::graph_map::RR_DEFAULT_GRAPH;
+use crate::iq::{AggKind, Branch, ColRef, R2rmlGraphScope, TermDef};
 use crate::{Error, Result};
+
+#[cfg(test)]
+mod graph_scope_tests {
+    use super::*;
+    use sf_core::ir::TermSpec;
+
+    fn blank(graph: R2rmlGraphScope, graph_value: &str) -> Term {
+        let schema = vec![ColRef::new(0, "id"), ColRef::new(0, "graph")];
+        let index = build_col_index(&schema);
+        let values = vec![Some("shared".to_owned()), Some(graph_value.to_owned())];
+        let codes = vec![None, None];
+        let raw = RawRow {
+            values: &values,
+            codes: &codes,
+            index: &index,
+        };
+        build_term(
+            &TermDef::R2rmlBlank {
+                term_map: TermMap::Column("id".into(), TermSpec::blank_node()),
+                alias: 0,
+                graph,
+            },
+            &raw,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn generated_labels_are_injective_over_effective_graph_and_identifier() {
+        let default = blank(R2rmlGraphScope::Default, "unused");
+        let named = blank(
+            R2rmlGraphScope::Mapped {
+                term_map: TermMap::Constant(Term::NamedNode(sf_core::NamedNode::new_unchecked(
+                    "http://ex/g1",
+                ))),
+                alias: 0,
+            },
+            "unused",
+        );
+        let dynamic_named = blank(
+            R2rmlGraphScope::Mapped {
+                term_map: TermMap::Column("graph".into(), TermSpec::iri()),
+                alias: 0,
+            },
+            "http://ex/g1",
+        );
+        let dynamic_default = blank(
+            R2rmlGraphScope::Mapped {
+                term_map: TermMap::Column("graph".into(), TermSpec::iri()),
+                alias: 0,
+            },
+            RR_DEFAULT_GRAPH,
+        );
+
+        assert_eq!(named, dynamic_named);
+        assert_eq!(default, dynamic_default);
+        assert_ne!(default, named);
+        assert!(matches!(default, Term::BlankNode(ref b) if b.as_str().starts_with("sfr1d_")));
+        assert!(matches!(named, Term::BlankNode(ref b) if b.as_str().starts_with("sfr1n_")));
+    }
+}

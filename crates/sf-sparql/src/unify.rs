@@ -13,7 +13,7 @@ use sf_core::Term;
 
 use sf_sql::Dialect;
 
-use crate::iq::{CmpOp, ColRef, SqlCond, StrMatchOp, TermDef};
+use crate::iq::{plain_term_def, CmpOp, ColRef, R2rmlGraphScope, SqlCond, StrMatchOp, TermDef};
 
 /// The result of unifying two term definitions for the same variable.
 pub enum Unify {
@@ -28,6 +28,21 @@ pub enum Unify {
 /// Unify two definitions of the same variable.
 pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
     match (a, b) {
+        (
+            TermDef::R2rmlBlank {
+                term_map: t1,
+                alias: a1,
+                graph: g1,
+            },
+            TermDef::R2rmlBlank {
+                term_map: t2,
+                alias: a2,
+                graph: g2,
+            },
+        ) => combine_unify(
+            unify(&plain_term_def(t1, *a1), &plain_term_def(t2, *a2)),
+            unify_graph_scope(g1, g2),
+        ),
         (TermDef::Const(x), TermDef::Const(y)) => {
             if x == y {
                 Unify::Sat(vec![])
@@ -49,6 +64,28 @@ pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
                 alias: a2,
             },
         ) => unify_derived(t1, *a1, t2, *a2),
+        (TermDef::R2rmlBlank { .. }, TermDef::Const(term))
+        | (TermDef::Const(term), TermDef::R2rmlBlank { .. }) => {
+            if matches!(term, Term::BlankNode(_)) {
+                Unify::Unsupported(
+                    "unification of a graph-scoped R2RML blank node with an unscoped blank-node constant"
+                        .to_owned(),
+                )
+            } else {
+                Unify::Empty
+            }
+        }
+        (TermDef::R2rmlBlank { .. }, TermDef::Derived { term_map, .. })
+        | (TermDef::Derived { term_map, .. }, TermDef::R2rmlBlank { .. }) => {
+            if term_map_type(term_map) == Some(TermType::BlankNode) {
+                Unify::Unsupported(
+                    "unification of a graph-scoped R2RML blank node with an unscoped blank-node recipe"
+                        .to_owned(),
+                )
+            } else {
+                Unify::Empty
+            }
+        }
         // A COALESCE'd (multi-OPTIONAL shared var) or CONCAT'd (BIND-computed)
         // binding is a multi-source constructed term; reducing it to raw-column
         // equalities is deferred (ADR-0007 v1 — never silently wrong). So sharing a
@@ -78,6 +115,42 @@ pub fn unify(a: &TermDef, b: &TermDef) -> Unify {
              (multi-source / computed) binding"
                 .to_owned(),
         ),
+    }
+}
+
+fn unify_graph_scope(a: &R2rmlGraphScope, b: &R2rmlGraphScope) -> Unify {
+    match (a, b) {
+        (R2rmlGraphScope::Default, R2rmlGraphScope::Default) => Unify::Sat(Vec::new()),
+        (
+            R2rmlGraphScope::Mapped {
+                term_map: ta,
+                alias: aa,
+            },
+            R2rmlGraphScope::Mapped {
+                term_map: tb,
+                alias: ab,
+            },
+        ) => unify(&plain_term_def(ta, *aa), &plain_term_def(tb, *ab)),
+        (R2rmlGraphScope::Default, R2rmlGraphScope::Mapped { term_map, alias })
+        | (R2rmlGraphScope::Mapped { term_map, alias }, R2rmlGraphScope::Default) => unify(
+            &TermDef::Const(Term::NamedNode(sf_core::NamedNode::new_unchecked(
+                crate::graph_map::RR_DEFAULT_GRAPH,
+            ))),
+            &plain_term_def(term_map, *alias),
+        ),
+    }
+}
+
+fn combine_unify(left: Unify, right: Unify) -> Unify {
+    match (left, right) {
+        (Unify::Empty, _) | (_, Unify::Empty) => Unify::Empty,
+        (Unify::Sat(mut a), Unify::Sat(b)) => {
+            a.extend(b);
+            Unify::Sat(a)
+        }
+        (Unify::Unsupported(reason), _) | (_, Unify::Unsupported(reason)) => {
+            Unify::Unsupported(reason)
+        }
     }
 }
 
@@ -359,20 +432,24 @@ fn lexical_eq_is_term_eq(spec: &TermSpec) -> bool {
 /// [`unify`], whose `Sat`/`Unsupported` verdicts make no sense to act on before the
 /// path restriction they would otherwise bypass.
 pub(crate) fn templates_provably_disjoint(a: &TermDef, b: &TermDef) -> bool {
-    let (
-        TermDef::Derived {
-            term_map: TermMap::Template(tx, _),
-            ..
-        },
-        TermDef::Derived {
-            term_map: TermMap::Template(ty, _),
-            ..
-        },
-    ) = (a, b)
-    else {
+    let (Some(tx), Some(ty)) = (term_def_template(a), term_def_template(b)) else {
         return false;
     };
     leading_literal_prefixes_conflict(tx.segments(), ty.segments())
+}
+
+fn term_def_template(def: &TermDef) -> Option<&sf_core::ir::Template> {
+    match def {
+        TermDef::Derived {
+            term_map: TermMap::Template(template, _),
+            ..
+        }
+        | TermDef::R2rmlBlank {
+            term_map: TermMap::Template(template, _),
+            ..
+        } => Some(template),
+        _ => None,
+    }
 }
 
 /// Whether `sx`/`sy`'s leading literal text — see [`leading_literal_prefix`]
@@ -848,6 +925,15 @@ fn var_var_eq_beyond_column(
         } else {
             SqlCond::Or(vec![])
         })),
+        (TermDef::R2rmlBlank { .. }, TermDef::R2rmlBlank { .. }) => match unify(d1, d2) {
+            Unify::Sat(conditions) => Ok(Some(SqlCond::And(conditions))),
+            Unify::Empty => Ok(Some(SqlCond::Or(vec![]))),
+            Unify::Unsupported(why) => Err(format!(
+                "FILTER equality on ?{}/?{}: scoped R2RML blank nodes cannot align ({why})",
+                v1.as_str(),
+                v2.as_str()
+            )),
+        },
         (
             TermDef::Derived {
                 term_map: TermMap::Template(t1, spec1),

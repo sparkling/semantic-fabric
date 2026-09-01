@@ -380,3 +380,119 @@ fn graph_var_single_pom_multiple_graph_maps_multiplies_branches() {
         "one POM, two rr:graphMaps: one branch per declared graph",
     );
 }
+
+const BN_SQL: &str = r#"
+CREATE TABLE bn (id TEXT NOT NULL, left_value TEXT NOT NULL, right_value TEXT NOT NULL, named_graph TEXT NOT NULL, default_graph TEXT NOT NULL);
+INSERT INTO bn VALUES ('shared', 'left', 'right', 'http://ex/g1', 'http://www.w3.org/ns/r2rml#defaultGraph');
+"#;
+
+const BN_R2RML: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#DefaultStatic> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "{id}"; rr:termType rr:BlankNode ];
+  rr:predicateObjectMap [ rr:predicate ex:ds; rr:objectMap [ rr:column "left_value" ] ].
+<#DefaultDynamic> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "{id}"; rr:termType rr:BlankNode; rr:graphMap [ rr:column "default_graph"; rr:termType rr:IRI ] ];
+  rr:predicateObjectMap [ rr:predicate ex:dd; rr:objectMap [ rr:column "right_value" ] ].
+<#NamedConstant> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "{id}"; rr:termType rr:BlankNode; rr:class ex:Scoped; rr:graphMap [ rr:constant <http://ex/g1> ] ];
+  rr:predicateObjectMap [ rr:predicate ex:nc; rr:objectMap [ rr:column "left_value" ] ].
+<#NamedDynamic> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "{id}"; rr:termType rr:BlankNode; rr:graphMap [ rr:column "named_graph"; rr:termType rr:IRI ] ];
+  rr:predicateObjectMap [ rr:predicate ex:nd; rr:objectMap [ rr:column "right_value" ] ].
+<#NamedOther> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "{id}"; rr:termType rr:BlankNode; rr:graphMap [ rr:constant <http://ex/g2> ] ];
+  rr:predicateObjectMap [ rr:predicate ex:no; rr:objectMap [ rr:column "right_value" ] ].
+<#ChildRef> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "http://ex/child/{id}"; rr:graphMap [ rr:constant <http://ex/g2> ] ];
+  rr:predicateObjectMap [ rr:predicate ex:ref; rr:objectMap [
+    rr:parentTriplesMap <#NamedConstant>; rr:joinCondition [ rr:child "id"; rr:parent "id" ] ] ].
+<#DirectObject> rr:logicalTable [ rr:tableName "bn" ]; rr:subjectMap [ rr:template "http://ex/owner/{id}"; rr:graphMap [ rr:constant <http://ex/g1> ] ];
+  rr:predicateObjectMap [ rr:predicate ex:blank; rr:objectMap [ rr:template "{id}"; rr:termType rr:BlankNode ] ].
+"#;
+
+fn assert_bn(query: &str, expected_len: usize, msg: &str) {
+    assert_both_match_oracle(BN_SQL, BN_R2RML, query, expected_len, msg);
+}
+
+#[test]
+fn generated_blank_nodes_share_identity_only_within_the_effective_graph() {
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?s WHERE { ?s ex:ds ?a; ex:dd ?b }",
+        1,
+        "implicit and dynamically generated rr:defaultGraph share identity",
+    );
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?g ?s WHERE { GRAPH ?g { ?s ex:nc ?a; ex:nd ?b } }",
+        1,
+        "constant and dynamic graph maps resolving to g1 share identity",
+    );
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?s WHERE { GRAPH <http://ex/g1> { ?s a ex:Scoped; ex:nc ?v } }",
+        1,
+        "class atoms and ordinary triples reconstruct the same scoped subject",
+    );
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?v WHERE { GRAPH <http://ex/g1> { <http://ex/owner/shared> ex:blank/ex:nc ?v } }",
+        1,
+        "direct blank objects remain scoped through property-path endpoints",
+    );
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?s WHERE { { SELECT DISTINCT ?s WHERE { GRAPH <http://ex/g1> { ?s ex:nc ?a } } } GRAPH <http://ex/g1> { ?s ex:nd ?b } }",
+        1,
+        "DISTINCT subplan projection preserves the graph component",
+    );
+}
+
+#[test]
+fn generated_blank_nodes_never_join_across_target_graphs() {
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?s WHERE { GRAPH <http://ex/g1> { ?s ex:nc ?a } GRAPH <http://ex/g2> { ?s ex:no ?b } }",
+        0, "equal generated identifiers in g1 and g2 denote different blank nodes",
+    );
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?s WHERE { ?s ex:ds ?a GRAPH <http://ex/g1> { ?s ex:nc ?b } }",
+        0, "default-graph and named-graph blank nodes are distinct",
+    );
+}
+
+#[test]
+fn rr_default_graph_is_not_addressable_as_a_named_graph() {
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?s WHERE { GRAPH <http://www.w3.org/ns/r2rml#defaultGraph> { ?s ex:dd ?o } }",
+        0, "rr:defaultGraph denotes the default destination, never a named graph",
+    );
+}
+
+#[test]
+fn referencing_object_blank_node_uses_the_child_triples_target_graph() {
+    assert_bn(
+        "PREFIX ex: <http://ex/> SELECT ?o WHERE { GRAPH <http://ex/g2> { ?c ex:ref ?o . ?o ex:no ?v } }",
+        1,
+        "the parent lexical identifier is scoped to the child reference triple's g2 target",
+    );
+}
+
+#[test]
+fn quad_dump_carries_the_graph_scoped_identity_directly() {
+    let conn = sqlite::load(BN_SQL).expect("fixture loads");
+    let maps = sf_mapping::parse_r2rml(BN_R2RML).expect("R2RML parses");
+    let quads = exec::dump_quads(&maps, &conn, Dialect::Sqlite).expect("materialize");
+    let subject = |predicate: &str| {
+        quads
+            .iter()
+            .find(|quad| quad.predicate.as_str() == predicate)
+            .expect("predicate quad")
+            .subject
+            .to_string()
+    };
+    let default = subject("http://ex/ds");
+    let g1 = subject("http://ex/nc");
+    let g2 = subject("http://ex/no");
+    assert_eq!(default, subject("http://ex/dd"));
+    assert_eq!(g1, subject("http://ex/nd"));
+    assert_ne!(default, g1);
+    assert_ne!(g1, g2);
+    let referenced = quads
+        .iter()
+        .find(|quad| quad.predicate.as_str() == "http://ex/ref")
+        .expect("reference quad")
+        .object
+        .to_string();
+    assert_eq!(referenced, g2);
+}

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-20
-updated: 2026-08-25
+updated: 2026-09-01
 tags: [graph-queries, named-graphs, quad-semantics, sparql-dataset, unfold, rdf-star]
 supersedes: []
 depends-on:
@@ -28,6 +28,18 @@ The decision is not marked fully implemented because the planned live
 PostgreSQL matrix, mutation-lite receipt, and accepted dual-host MetaHarness
 transaction were not completed. Those are evidence gaps, not a reversal of the
 landed semantic correction.
+
+The 2026-09-01 graph-scope correction adds one further required invariant:
+mapping-generated blank-node identity is `(effective target graph, generated
+identifier)`, not the identifier alone and not a triples-map/source identifier.
+The graph component is carried in the IQ through ordinary/class/direct-object/
+reference-object unfolding, fixed-graph paths, optimizer rewrites, subplans,
+query reconstruction and quad dumping. Row-derived `rr:defaultGraph` normalizes
+to the default graph; CONSTRUCT template nodes retain a disjoint
+fresh-per-solution domain. Required SQLite differentials cover those paths.
+Dynamic-graph paths and row-dependent rendered-width pooling remain explicit
+`501` boundaries, and PostgreSQL/MySQL still lack direct named-graph matrices,
+so this does not upgrade the broader evidence status above.
 
 ## Context and problem statement
 

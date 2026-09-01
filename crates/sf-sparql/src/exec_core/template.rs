@@ -54,9 +54,16 @@ fn instantiate_term(
         TermPattern::Variable(v) => bindings.get(v.as_str()).cloned(),
         TermPattern::NamedNode(n) => Some(Term::NamedNode(n.clone())),
         TermPattern::Literal(l) => Some(Term::Literal(l.clone())),
-        TermPattern::BlankNode(b) => Some(Term::BlankNode(sf_core::BlankNode::new_unchecked(
-            format!("{}_{solution_id}", b.as_str()),
-        ))),
+        TermPattern::BlankNode(b) => {
+            // A dedicated, versioned domain keeps template-minted nodes disjoint
+            // from R2RML-generated nodes even for adversarially chosen labels.
+            let mut label = String::from("sfc1_");
+            super::push_hex(&mut label, b.as_str().as_bytes());
+            label.push('_');
+            use std::fmt::Write as _;
+            write!(&mut label, "{solution_id:016x}").expect("write to String");
+            Some(Term::BlankNode(sf_core::BlankNode::new_unchecked(label)))
+        }
         TermPattern::Triple(inner) => {
             let s = instantiate_term(&inner.subject, bindings, solution_id)?;
             let p = match &inner.predicate {
@@ -73,3 +80,23 @@ fn instantiate_term(
 use sf_core::{Term, Triple};
 
 use super::row::Bindings;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn construct_blank_nodes_use_a_fresh_disjoint_label_domain() {
+        let pattern = spargebra::term::TermPattern::BlankNode(
+            spargebra::term::BlankNode::new_unchecked("sfr1d_736861726564"),
+        );
+        let bindings = Bindings::new();
+        let first = instantiate_term(&pattern, &bindings, 7).unwrap();
+        let same_solution = instantiate_term(&pattern, &bindings, 7).unwrap();
+        let next_solution = instantiate_term(&pattern, &bindings, 8).unwrap();
+
+        assert_eq!(first, same_solution);
+        assert_ne!(first, next_solution);
+        assert!(matches!(first, Term::BlankNode(ref b) if b.as_str().starts_with("sfc1_")));
+    }
+}

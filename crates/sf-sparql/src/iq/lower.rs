@@ -61,8 +61,8 @@ use spargebra::algebra::Expression;
 
 use crate::iq::node::{AggArg, AggDef, BindDef, IqCond, IqNode, Var};
 use crate::iq::{
-    AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, OrderKey, RustAgg, RustGroup, Scan,
-    SqlCond, SubPlanJoin, TermDef,
+    AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, OrderKey, R2rmlGraphScope, RustAgg,
+    RustGroup, Scan, SqlCond, SubPlanJoin, TermDef,
 };
 use crate::leftjoin::{
     def_is_nullable, inner_join_one, left_join_branches, not_exists_cond_for, null_safe,
@@ -1671,6 +1671,25 @@ pub(crate) fn remap_termdef(
                 alias: sp_alias,
             })
         }
+        TermDef::R2rmlBlank {
+            term_map,
+            alias: inner_alias,
+            graph,
+        } => {
+            let term_map = remap_term_map(term_map, *inner_alias, projection)?;
+            let graph = match graph {
+                R2rmlGraphScope::Default => R2rmlGraphScope::Default,
+                R2rmlGraphScope::Mapped { term_map, alias } => R2rmlGraphScope::Mapped {
+                    term_map: remap_term_map(term_map, *alias, projection)?,
+                    alias: sp_alias,
+                },
+            };
+            Ok(TermDef::R2rmlBlank {
+                term_map,
+                alias: sp_alias,
+                graph,
+            })
+        }
         TermDef::Coalesce(l, r) => Ok(TermDef::Coalesce(
             Box::new(remap_termdef(l, projection, sp_alias)?),
             Box::new(remap_termdef(r, projection, sp_alias)?),
@@ -1934,6 +1953,55 @@ pub(crate) fn pool_rendered(
                         },
                     );
                 }
+                TermDef::R2rmlBlank {
+                    term_map, graph, ..
+                } => {
+                    // The rendered-width fallback can carry a fixed graph scope
+                    // unchanged. A row-dependent graph needs its own rendered
+                    // projection slot; fail closed until that wider pooling shape
+                    // is modelled.
+                    if matches!(
+                        graph,
+                        R2rmlGraphScope::Mapped {
+                            term_map: TermMap::Column(..) | TermMap::Template(..),
+                            ..
+                        }
+                    ) {
+                        return Ok(None);
+                    }
+                    let (expr, spec) = match term_map {
+                        TermMap::Column(c, spec) => {
+                            let quoted = inner_sql
+                                .is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
+                            let col_ref = if quoted {
+                                format!("{local}.{}", dialect.quote_ident(c))
+                            } else {
+                                format!("{local}.{c}")
+                            };
+                            (col_ref, spec.clone())
+                        }
+                        TermMap::Template(t, spec) => {
+                            let expr = crate::emit::render_template_inline(
+                                t.segments(),
+                                &local,
+                                false,
+                                inner_sql,
+                                dialect,
+                            )?;
+                            (expr, spec.clone())
+                        }
+                        TermMap::Constant(_) => return Ok(None),
+                    };
+                    select_items.push(format!("{expr} AS rv{i}"));
+                    new_bindings.insert(
+                        v.clone(),
+                        TermDef::R2rmlBlank {
+                            term_map: TermMap::Column(format!("rv{i}").into(), spec),
+                            alias: scan.alias,
+                            graph: graph.clone(),
+                        },
+                    );
+                }
                 _ => return Ok(None), // Coalesce/Concat/Agg/ComposedTriple — not this shape
             }
         }
@@ -1984,7 +2052,7 @@ enum TermClass {
 fn term_class(def: &TermDef) -> Option<TermClass> {
     match def {
         TermDef::Const(t) => Some(TermClass::Const(format!("{t:?}"))),
-        TermDef::Derived { term_map, .. } => {
+        TermDef::Derived { term_map, .. } | TermDef::R2rmlBlank { term_map, .. } => {
             let spec = match term_map {
                 sf_core::ir::TermMap::Column(_, spec) | sf_core::ir::TermMap::Template(_, spec) => {
                     spec
@@ -3717,5 +3785,31 @@ mod tests {
             "nested DISTINCT subquery must produce a subplan_join branch: {:?}",
             p.branches
         );
+    }
+
+    #[test]
+    fn rendered_pooling_rejects_row_dependent_blank_node_graph_scope() {
+        let arm = |alias| {
+            let mut branch = Branch::empty();
+            branch.core.push(Scan {
+                alias,
+                source: LogicalSource::Table(format!("t{alias}")),
+            });
+            branch.bindings.insert(
+                "s".to_owned(),
+                TermDef::R2rmlBlank {
+                    term_map: TermMap::Column("id".into(), TermSpec::blank_node()),
+                    alias,
+                    graph: R2rmlGraphScope::Mapped {
+                        term_map: TermMap::Column("graph".into(), TermSpec::iri()),
+                        alias,
+                    },
+                },
+            );
+            branch
+        };
+        let arms = [arm(1), arm(2)];
+        let pooled = pool_rendered(&arms, &["s".to_owned()], sf_sql::Dialect::Sqlite).unwrap();
+        assert!(pooled.is_none(), "dynamic graph scope must fail closed");
     }
 }

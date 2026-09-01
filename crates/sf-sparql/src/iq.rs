@@ -70,6 +70,19 @@ pub enum TermDef {
     Const(Term),
     /// A column/template term map evaluated against the columns of `alias`.
     Derived { term_map: TermMap, alias: usize },
+    /// An R2RML-generated blank node, carrying the graph in which its identifier
+    /// is generated. R2RML §9.1 makes graph identity part of blank-node
+    /// identity: equal lexical identifiers in one graph denote one node, while
+    /// the same identifier in two graphs denotes two different nodes.
+    ///
+    /// This scope is kept in the IQ (rather than applied only by the quad dumper)
+    /// so joins, DISTINCT/SubPlan projection, and every execution backend all see
+    /// the same term identity.
+    R2rmlBlank {
+        term_map: TermMap,
+        alias: usize,
+        graph: R2rmlGraphScope,
+    },
     /// **R2 (ADR-0007).** A shared variable is one SPARQL variable but two SQL
     /// representations after a LEFT JOIN — project it as `COALESCE(left, right)`.
     /// Reconstruction tries the preserved (`left`) side first and falls back to
@@ -128,6 +141,22 @@ impl TermDef {
                 .into_iter()
                 .map(|c| ColRef::new(*alias, c))
                 .collect(),
+            TermDef::R2rmlBlank {
+                term_map,
+                alias,
+                graph,
+            } => {
+                let mut cols: Vec<ColRef> = term_map_columns(term_map)
+                    .into_iter()
+                    .map(|c| ColRef::new(*alias, c))
+                    .collect();
+                for col in graph.columns() {
+                    if !cols.contains(&col) {
+                        cols.push(col);
+                    }
+                }
+                cols
+            }
             TermDef::Coalesce(l, r) => {
                 let mut cols = l.columns();
                 for c in r.columns() {
@@ -154,6 +183,68 @@ impl TermDef {
                 cols
             }
         }
+    }
+}
+
+/// The target-graph component of an R2RML-generated blank node's identity.
+/// `Mapped` stores a term-map recipe instead of a graph-map identifier: two
+/// different graph maps that generate the same IRI must share blank-node
+/// identity, while one dynamic graph map generating two IRIs must separate it.
+#[derive(Debug, Clone)]
+pub enum R2rmlGraphScope {
+    Default,
+    Mapped { term_map: TermMap, alias: usize },
+}
+
+impl R2rmlGraphScope {
+    pub fn columns(&self) -> Vec<ColRef> {
+        match self {
+            Self::Default => Vec::new(),
+            Self::Mapped { term_map, alias } => term_map_columns(term_map)
+                .into_iter()
+                .map(|c| ColRef::new(*alias, c))
+                .collect(),
+        }
+    }
+}
+
+/// Build a mapping-derived RDF term in a target graph. Only blank nodes retain
+/// the graph scope; every other RDF term keeps the ordinary lifted recipe.
+pub(crate) fn mapping_term_def(
+    term_map: &TermMap,
+    alias: usize,
+    graph: R2rmlGraphScope,
+) -> TermDef {
+    if term_map_is_blank_node(term_map) {
+        TermDef::R2rmlBlank {
+            term_map: term_map.clone(),
+            alias,
+            graph,
+        }
+    } else {
+        plain_term_def(term_map, alias)
+    }
+}
+
+/// Build a term-map recipe without R2RML graph scoping. Used for predicates and
+/// graph-map values, neither of which can itself be a generated data blank node.
+pub(crate) fn plain_term_def(term_map: &TermMap, alias: usize) -> TermDef {
+    match term_map {
+        TermMap::Constant(term) => TermDef::Const(term.clone()),
+        other => TermDef::Derived {
+            term_map: other.clone(),
+            alias,
+        },
+    }
+}
+
+pub(crate) fn term_map_is_blank_node(term_map: &TermMap) -> bool {
+    match term_map {
+        TermMap::Constant(Term::BlankNode(_)) => true,
+        TermMap::Column(_, spec) | TermMap::Template(_, spec) => {
+            spec.term_type == TermType::BlankNode
+        }
+        TermMap::Constant(_) => false,
     }
 }
 

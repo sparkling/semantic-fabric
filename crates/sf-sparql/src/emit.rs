@@ -32,7 +32,7 @@ use sf_sql::Dialect;
 
 use crate::iq::{
     collect_cond_cols, AggCol, AggKind, Aggregation, Branch, ColRef, HopExpr, OrderKey,
-    PathClosure, PathKind, SqlCond, StrMatchOp, TermDef,
+    PathClosure, PathKind, R2rmlGraphScope, SqlCond, StrMatchOp, TermDef,
 };
 use crate::{Error, Result};
 
@@ -380,6 +380,16 @@ fn order_column(def: &TermDef) -> Option<ColRef> {
         TermDef::Derived {
             term_map: TermMap::Column(c, _),
             alias,
+        } => Some(ColRef::new(*alias, c.clone())),
+        TermDef::R2rmlBlank {
+            term_map: TermMap::Column(c, _),
+            alias,
+            graph:
+                R2rmlGraphScope::Default
+                | R2rmlGraphScope::Mapped {
+                    term_map: TermMap::Constant(_),
+                    ..
+                },
         } => Some(ColRef::new(*alias, c.clone())),
         _ => None,
     }

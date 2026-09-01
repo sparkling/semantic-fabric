@@ -111,7 +111,6 @@ Material gaps found directly in the current tree:
 |---|---|---|---|
 | P1 | Recursive-path resource qualification | `5c379f6` computes an exact finite-pair fixed point beyond 256 and rejects unproved dialects; it has no total work/cancellation budget | Charge closure work to `QueryBudget`; add live/cancellation qualification before backend admission |
 | P0 | Bounded global operators are unavailable | `639134d` classifies global order, Rust grouping and solution/triple dedup and rejects source-reading fallbacks before backend selection or I/O | Composite SQL or bounded spill/merge behind the same classifier; retain `501` until proved |
-| P0 | Generated blank-node identity is not graph-scoped | Current reconstruction mints R2RML blank nodes from lexical value alone, so equal identifiers can be shared across different target graphs contrary to R2RML §9.1; the corrected ADR-0040 key preserves same-graph cross-map merging | Add two-graph adversarial coverage and graph-scope generated blank nodes without changing CONSTRUCT template freshness; keep unsupported dynamic scopes at `501` until sound |
 | P0 | Constraint-sensitive plans can outlive their schema facts | Startup PK/FK/uniqueness/FD facts actively drive the cascade; no DDL exclusion, drift watcher or atomic generation swap prevents cached and newly compiled plans from using stale facts | Disable those passes in serving or enforce a race-safe DDL-exclusion plus schema-generation/drift/reload contract before admission |
 | P0 | Cross-source charter is not delivered | `faee07a` provides one enforcing source/backend/compiler/cache binding; `9d0da85` coheres PostgreSQL `public` catalogue identity and unqualified relation resolution. Raw `rr:sqlQuery` remains trusted and schema-unconfined. There is no digest generation, registry, federated plan or caller | Close safe construction and snapshot digests/lifecycle; then source registry, federated plan and bounded coordinator |
 | P0 | Reproducibility closure is incomplete | `93ae3c2` tracks `Cargo.lock`; `374ca99` pins actions, images and selected tools; `31a1164` installs MetaHarness/Darwin from the npm lock; the package receipt closes resolution/features/edges; external observation `173d0698…51ca` binds one current binary plus observed build/link inputs; the private prepared one-shot holds exact sealed sources and bubblewrap inode and reproduces candidate loader resolution; `805f413` adds only a canonical in-memory non-admission record and semantic reparse; `9282e60` checks caller-supplied live ELF policy identity; `73e9864` adds exact late default-kill cBPF confinement and a comparative native canary; `50adc0a` adds same-byte static bwrap `RootPie` preflight; `b34b6d7` adds a separately replayable counterfactual name/path inventory, but Receipt V1 attests or replays none of those three diagnostics | Accept a production collector design before promotion; bind authenticated held/digested exact interpreter, DSO and target bytes actually consumed by bwrap plus complete dynamic host closure, final-FD inventory, syscall-trace evidence and aggregate cgroup/process containment; add durable authenticated witness/provenance and replay authority plus build-script, tool, linker and system closure; produce SBOM and reproducibility/admission evidence; close hosted-runner, apt-transitive and release-toolchain residuals; repeat the complete M0 gate in two clean builders |
@@ -123,6 +122,18 @@ Material gaps found directly in the current tree:
 | P1 | Serving artifact is too broad | `sf-cli` imports conformance/bench; conformance enables REST and SQL Server | Minimal serve artifact; opt-in evidence/developer features |
 | P1 | Remaining lifecycle and admission work | no atomic reload/readiness path; `M ⋈ T` not a startup gate after the P0 constraint-safety fix | Validated immutable snapshot, atomic swap and readiness |
 | P2 | Maintainability risk | `exec_core`, `build`, and PostgreSQL introspection are characterized/decomposed; `iq/lower.rs`, `iq/normalize.rs`, `unfold.rs` and `emit.rs` remain shared-lane hotspots | Split only lane-blocking stages, preserving test identities/evidence selectors |
+
+The 2026-09-01 graph-scope slice closes the former P0 generated-blank-node
+identity gap for the evidenced single-source profile. R2RML mapping nodes are
+reconstructed from `(effective target graph, generated identifier)`; default,
+constant and row-derived graph maps normalize consistently; direct and
+reference objects, class atoms, fixed-graph paths, dump/query execution and
+DISTINCT subplan remapping share the same IQ identity; and CONSTRUCT template
+nodes retain a disjoint fresh-per-solution label domain. Same-graph equality
+between differently shaped identifier recipes remains a sound `501`, as do
+dynamic-graph paths and row-dependent rendered-width pooling. PostgreSQL/MySQL
+still need direct named-graph execution matrices, and globally bounded graph
+dedup remains open.
 
 `cargo audit` passes with six configured advisory exceptions and three
 unmaintained crates: `paste 1.0.15` (`RUSTSEC-2024-0436`),

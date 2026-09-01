@@ -36,7 +36,9 @@ use sf_core::Term;
 use spargebra::algebra::PropertyPathExpression;
 use spargebra::term::{NamedNode, TermPattern};
 
-use crate::iq::{Branch, HopExpr, HopRelation, PathClosure, PathKind, TermDef};
+use crate::iq::{
+    mapping_term_def, Branch, HopExpr, HopRelation, PathClosure, PathKind, R2rmlGraphScope, TermDef,
+};
 use crate::unfold::{bind, Unfolder};
 use crate::{Error, Result};
 
@@ -159,14 +161,23 @@ impl<'a> Unfolder<'a> {
         }
 
         let alias = self.alias();
-        let subj_def = TermDef::Derived {
-            term_map: rewrite_single_col(&compiled.subj_map, "sf_s")?,
-            alias,
+        let graph_scope = match self.current_graph.as_ref() {
+            None => R2rmlGraphScope::Default,
+            Some(graph) => R2rmlGraphScope::Mapped {
+                term_map: TermMap::Constant(Term::NamedNode(graph.clone())),
+                alias,
+            },
         };
-        let obj_def = TermDef::Derived {
-            term_map: rewrite_single_col(&compiled.obj_map, "sf_o")?,
+        let subj_def = mapping_term_def(
+            &rewrite_single_col(&compiled.subj_map, "sf_s")?,
             alias,
-        };
+            graph_scope.clone(),
+        );
+        let obj_def = mapping_term_def(
+            &rewrite_single_col(&compiled.obj_map, "sf_o")?,
+            alias,
+            graph_scope,
+        );
 
         let mut branch = Branch::empty();
         branch.path = Some(PathClosure {

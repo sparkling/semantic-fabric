@@ -6,7 +6,7 @@ use sf_core::ir::{LogicalSource, Segment, Template, TermMap};
 use sf_sql::TableSchema;
 
 use super::{scan_table, Fds};
-use crate::iq::{collect_cond_cols, Branch, ColRef, SqlCond, TermDef};
+use crate::iq::{collect_cond_cols, Branch, ColRef, R2rmlGraphScope, SqlCond, TermDef};
 
 // --- 2b-pre. LJ→IJ FK-guaranteed downgrade --------------------------------
 
@@ -353,6 +353,16 @@ fn rewrite_parent_def_multi(def: &mut TermDef, e: &MultiFkElim) {
                 *alias = e.child_alias;
             }
         }
+        TermDef::R2rmlBlank {
+            term_map,
+            alias,
+            graph,
+        } => {
+            rewrite_term_map_multi(term_map, alias, e);
+            if let R2rmlGraphScope::Mapped { term_map, alias } = graph {
+                rewrite_term_map_multi(term_map, alias, e);
+            }
+        }
         TermDef::Coalesce(l, r) => {
             rewrite_parent_def_multi(l, e);
             rewrite_parent_def_multi(r, e);
@@ -567,6 +577,16 @@ fn rewrite_parent_def(def: &mut TermDef, e: &FkElim) {
                 *alias = e.child_alias;
             }
         }
+        TermDef::R2rmlBlank {
+            term_map,
+            alias,
+            graph,
+        } => {
+            rewrite_term_map(term_map, alias, e);
+            if let R2rmlGraphScope::Mapped { term_map, alias } = graph {
+                rewrite_term_map(term_map, alias, e);
+            }
+        }
         TermDef::Coalesce(l, r) => {
             rewrite_parent_def(l, e);
             rewrite_parent_def(r, e);
@@ -590,6 +610,24 @@ fn rewrite_parent_def(def: &mut TermDef, e: &FkElim) {
             rewrite_parent_def(predicate, e);
             rewrite_parent_def(object, e);
         }
+    }
+}
+
+fn rewrite_term_map_multi(term_map: &mut TermMap, alias: &mut usize, e: &MultiFkElim) {
+    if *alias == e.parent_alias {
+        let mut rewritten = term_map.clone();
+        for (parent_col, child_col) in &e.rewrites {
+            rewritten = rename_col_in_term_map(&rewritten, parent_col, child_col);
+        }
+        *term_map = rewritten;
+        *alias = e.child_alias;
+    }
+}
+
+fn rewrite_term_map(term_map: &mut TermMap, alias: &mut usize, e: &FkElim) {
+    if *alias == e.parent_alias {
+        *term_map = rename_col_in_term_map(term_map, &e.parent_col, &e.child_col);
+        *alias = e.child_alias;
     }
 }
 

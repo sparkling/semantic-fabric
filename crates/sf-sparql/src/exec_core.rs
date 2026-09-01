@@ -13,6 +13,18 @@ mod order;
 mod row;
 mod template;
 
+/// Append a byte string as lowercase hexadecimal without an intermediate
+/// allocation. Scoped blank-node labels use hex as an injective, legal-label
+/// encoding; their domain/version prefixes are supplied by the caller.
+fn push_hex(out: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.reserve(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+}
+
 #[allow(unused_imports)]
 pub(crate) use aggregation::rust_group_result_rows;
 pub(crate) use driver::{block_on, dedup_group_alias};

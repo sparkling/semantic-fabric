@@ -19,8 +19,8 @@ use crate::graph_map::{apply_filter, bind_variable, is_default_graph, RR_DEFAULT
 use crate::iq::lower::{convert_path_branches, remap_termdef};
 use crate::iq::node::triple_pattern_vars;
 use crate::iq::{
-    AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey, RustAgg, RustGroup, Scan,
-    SqlCond, SubPlanJoin, TermDef,
+    mapping_term_def, AggCol, AggKind, Aggregation, Branch, ColRef, GroupKey, OrderKey,
+    R2rmlGraphScope, RustAgg, RustGroup, Scan, SqlCond, SubPlanJoin, TermDef,
 };
 use crate::leftjoin::{def_is_nullable, left_join_branches, null_safe};
 use crate::saturate::Tbox;
@@ -769,6 +769,18 @@ impl<'a> Unfolder<'a> {
             source: tm.source.clone(),
         });
 
+        // Capture the ACTUAL target graph for generated blank-node identity. In
+        // fixed/default mode the query's active graph is the target regardless of
+        // which member of the graph union proved membership; in GRAPH ?g mode the
+        // enumerated graph map supplies the row's generated graph value.
+        let term_graph = match graph {
+            AtomGraph::Bind(_, gm) => R2rmlGraphScope::Mapped {
+                term_map: gm.clone(),
+                alias,
+            },
+            AtomGraph::Filter(_) => fixed_graph_scope(self.current_graph.as_ref()),
+        };
+
         // ADR-0035 GRAPH ?v enumeration: bind the graph variable to this candidate's
         // effective graph map before anything else (an early, if rare, prune point —
         // e.g. `GRAPH ?s { ?s :p ?o }` reusing the subject var as the graph var).
@@ -793,9 +805,9 @@ impl<'a> Unfolder<'a> {
         };
 
         // Subject + object definitions from the mapping (swap for inverse preds).
-        let subj_def = def_of(&tm.subject.term, alias);
+        let subj_def = mapping_term_def(&tm.subject.term, alias, term_graph.clone());
         let obj_def = match om {
-            ObjectMap::Term(otm) => def_of(otm, alias),
+            ObjectMap::Term(otm) => mapping_term_def(otm, alias, term_graph.clone()),
             ObjectMap::Ref(r) => {
                 let parent = self
                     .map_by_id(&r.parent_triples_map)
@@ -814,7 +826,9 @@ impl<'a> Unfolder<'a> {
                         crate::iq::ColRef::new(palias, j.parent.clone()),
                     ));
                 }
-                def_of(&parent.subject.term, palias)
+                // A ref-object's lexical identifier comes from the parent row,
+                // but the generated object belongs to THIS child triple's graph.
+                mapping_term_def(&parent.subject.term, palias, term_graph.clone())
             }
         };
         // R2RML §11: a column/template object term map produces NO RDF term (hence no
@@ -899,7 +913,13 @@ impl<'a> Unfolder<'a> {
             } else if !apply_filter(&mut branch, self.current_graph.as_ref(), graphs, alias)? {
                 continue;
             }
-            let subj_def = def_of(&tm.subject.term, alias);
+            let term_graph = graph_binding
+                .map(|(_, gm)| R2rmlGraphScope::Mapped {
+                    term_map: gm.clone(),
+                    alias,
+                })
+                .unwrap_or_else(|| fixed_graph_scope(self.current_graph.as_ref()));
+            let subj_def = mapping_term_def(&tm.subject.term, alias, term_graph);
             // predicate is rdf:type (matched); bind object var to the class IRI.
             if let TermPattern::Variable(ov) = &tp.object {
                 if !bind(
@@ -1316,13 +1336,15 @@ fn parse_rust_agg(
 /// 501 (never silently wrong).
 pub(crate) fn group_key_columns(def: &TermDef, var: &str) -> Result<Vec<ColRef>> {
     match def {
-        TermDef::Derived { .. } if !crate::cascade::binding_is_injective(def) => {
+        TermDef::Derived { .. } | TermDef::R2rmlBlank { .. }
+            if !crate::cascade::binding_is_injective(def) =>
+        {
             Err(Error::Unsupported(format!(
                 "GROUP BY ?{var} is a non-injective template key (two distinct raw-column \
                  tuples could construct the same term) → 501"
             )))
         }
-        TermDef::Derived { .. } => {
+        TermDef::Derived { .. } | TermDef::R2rmlBlank { .. } => {
             let cols = def.columns();
             if cols.is_empty() {
                 Err(Error::Unsupported(format!(
@@ -1489,6 +1511,16 @@ fn def_of(tm: &TermMap, alias: usize) -> TermDef {
         other => TermDef::Derived {
             term_map: other.clone(),
             alias,
+        },
+    }
+}
+
+fn fixed_graph_scope(active: Option<&NamedNode>) -> R2rmlGraphScope {
+    match active {
+        None => R2rmlGraphScope::Default,
+        Some(graph) => R2rmlGraphScope::Mapped {
+            term_map: TermMap::Constant(Term::NamedNode(graph.clone())),
+            alias: 0,
         },
     }
 }
@@ -2017,8 +2049,7 @@ fn arms_provably_disjoint(a: &Branch, b: &Branch) -> bool {
 /// and an explicit `"…"^^xsd:string` count as the SAME term class here too,
 /// never disjoint.
 fn term_specs_disjoint(a: &TermDef, b: &TermDef) -> bool {
-    let (TermDef::Derived { term_map: tmx, .. }, TermDef::Derived { term_map: tmy, .. }) = (a, b)
-    else {
+    let (Some(tmx), Some(tmy)) = (mapping_term_map(a), mapping_term_map(b)) else {
         return false;
     };
     let (Some(sx), Some(sy)) = (term_map_spec(tmx), term_map_spec(tmy)) else {
@@ -2027,6 +2058,13 @@ fn term_specs_disjoint(a: &TermDef, b: &TermDef) -> bool {
     sx.term_type != sy.term_type
         || (sx.term_type == sf_core::ir::TermType::Literal
             && (sx.language != sy.language || normalized_datatype(sx) != normalized_datatype(sy)))
+}
+
+fn mapping_term_map(def: &TermDef) -> Option<&TermMap> {
+    match def {
+        TermDef::Derived { term_map, .. } | TermDef::R2rmlBlank { term_map, .. } => Some(term_map),
+        _ => None,
+    }
 }
 
 /// A literal [`sf_core::ir::TermSpec`]'s declared datatype, defaulting an

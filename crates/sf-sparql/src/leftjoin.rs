@@ -470,6 +470,10 @@ pub(crate) fn def_is_nullable(def: &TermDef, opt_aliases: &HashSet<usize>) -> bo
     match def {
         TermDef::Const(_) => false,
         TermDef::Derived { alias, .. } => opt_aliases.contains(alias),
+        TermDef::R2rmlBlank { .. } => def
+            .columns()
+            .iter()
+            .any(|column| opt_aliases.contains(&column.alias)),
         TermDef::Coalesce(l, r) => {
             def_is_nullable(l, opt_aliases) || def_is_nullable(r, opt_aliases)
         }

@@ -30,6 +30,11 @@ pub(crate) fn filter(
     graphs: &[&TermMap],
     alias: usize,
 ) -> Result<Filter> {
+    // rr:defaultGraph is a reserved graph-map value denoting the DEFAULT graph;
+    // it is never the name of a graph addressable by GRAPH <...>.
+    if active.is_some_and(|graph| graph.as_str() == RR_DEFAULT_GRAPH) {
+        return Ok(Filter::Never);
+    }
     if graphs.is_empty() {
         return Ok(if active.is_none() {
             Filter::Always

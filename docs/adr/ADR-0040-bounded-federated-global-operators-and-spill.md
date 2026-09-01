@@ -163,6 +163,29 @@ Operator equality and order remain operator-specific:
 Hashing is permitted only after the semantic key is constructed. Hash equality
 always requires a full semantic equality check.
 
+#### Implemented precursor: single-source blank-node identity
+
+The 2026-09-01 Rust graph-scope slice implements this blank-node identity law
+inside the existing single-source compiler and executor. A dedicated IQ term
+definition carries the generated identifier recipe and effective graph recipe
+through unfolding, unification, cascade rewrites, subplan projection,
+reconstruction, query execution, quad dumping, class atoms, direct and
+reference objects, and fixed-graph path endpoints. Runtime labels are a
+versioned injective encoding of default/named graph plus natural identifier;
+row-derived `rr:defaultGraph` normalizes to the default graph. CONSTRUCT
+template nodes use a separate versioned fresh-per-solution domain.
+
+Required SQLite differentials pin same-graph co-reference across maps,
+cross-graph separation, constant/dynamic graph equivalence, direct dump
+identity, child-graph reference-object scope, class/path propagation and
+DISTINCT subplan remapping. The implementation remains deliberately partial:
+differently shaped recipes that happen to render the same identifier can still
+return `501`, as can dynamic-graph paths and row-dependent rendered-width
+pooling. Those are sound completeness limits, not alternative identity laws.
+No PostgreSQL/MySQL named-graph matrix, cross-source request scope, spill key,
+federation runtime or bounded global graph dedup is claimed. This precursor
+therefore does not accept this ADR.
+
 ### 4. Purpose-built bounded external-memory substrate
 
 The recommended implementation has one fixed memory arena and one spill quota
