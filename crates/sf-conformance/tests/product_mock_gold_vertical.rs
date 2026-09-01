@@ -118,7 +118,17 @@ fn pure_mutants_cannot_change_transitive_or_source_bytes() {
         .expect("source exists")[0] ^= 1;
     assert_eq!(
         support::admit_synthetic(&source),
-        Err("required source file seal mismatch")
+        Err("source snapshot file seal mismatch")
+    );
+
+    let mut unpinned_source = support::SyntheticFixture::valid();
+    unpinned_source
+        .sources
+        .get_mut("src/unpinned.rs")
+        .expect("unpinned source exists")[0] ^= 1;
+    assert_eq!(
+        support::admit_synthetic(&unpinned_source),
+        Err("source snapshot file seal mismatch")
     );
 
     let mut snapshot_count = support::SyntheticFixture::valid();

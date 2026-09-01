@@ -23,15 +23,24 @@ impl SyntheticFixture {
                 b"synthetic initial migration".to_vec(),
             ),
             (FK_MIGRATION.to_owned(), b"synthetic FK migration".to_vec()),
+            (
+                "src/unpinned.rs".to_owned(),
+                b"synthetic source outside the required migration pins".to_vec(),
+            ),
         ]);
-        let source_pins: Vec<_> = sources
+        let snapshot_pins: Vec<_> = sources
             .iter()
             .map(|(path, bytes)| pin(path, bytes))
+            .collect();
+        let source_pins: Vec<_> = snapshot_pins
+            .iter()
+            .filter(|pin| [INITIAL_MIGRATION, FK_MIGRATION].contains(&pin.path.as_str()))
+            .cloned()
             .collect();
         let snapshot = serde_json::to_vec(&json!({
             "schemaVersion": 1,
             "repository": {"revision": SOURCE_REVISION},
-            "files": source_pins.iter().map(pin_json).collect::<Vec<_>>()
+            "files": snapshot_pins.iter().map(pin_json).collect::<Vec<_>>()
         }))
         .expect("synthetic snapshot serializes");
         let artifacts = BTreeMap::from([

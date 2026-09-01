@@ -271,15 +271,17 @@ where
     for entry in files {
         let path = string(entry, "/path")?;
         let count = unsigned(entry, "/bytes")?;
-        if !safe_relative(path)
-            || !valid_digest(string(entry, "/digest")?)
-            || !paths.insert(path.to_owned())
-        {
+        let digest = string(entry, "/digest")?;
+        if !safe_relative(path) || !valid_digest(digest) || !paths.insert(path.to_owned()) {
             return Err("source snapshot descriptor is invalid");
         }
         total = total
             .checked_add(count)
             .ok_or("source snapshot byte count overflow")?;
+        let actual = source(path)?;
+        if actual.len() as u64 != count || sha256(&actual) != digest {
+            return Err("source snapshot file seal mismatch");
+        }
     }
     if total != policy.snapshot_file_bytes {
         return Err("source snapshot byte count mismatch");
@@ -293,10 +295,6 @@ where
             || string(entry, "/digest")? != expected.digest
         {
             return Err("required source snapshot entry mismatch");
-        }
-        let actual = source(&expected.path)?;
-        if actual.len() as u64 != expected.bytes || sha256(&actual) != expected.digest {
-            return Err("required source file seal mismatch");
         }
     }
     Ok(())
