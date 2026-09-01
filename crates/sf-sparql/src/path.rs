@@ -84,8 +84,10 @@ impl<'a> Unfolder<'a> {
         };
 
         // Recursive syntax and duplicate-elimination semantics are proven only
-        // on the three admitted relational dialects. In particular, SQL Server
-        // does not accept the generic `WITH RECURSIVE` form. Reject during
+        // on the three currently evidenced relational emission targets. This is
+        // a compiler capability boundary, not production backend admission. In
+        // particular, SQL Server does not accept the generic `WITH RECURSIVE`
+        // form. Reject during
         // translation rather than emit unproven SQL or risk a non-terminating /
         // incomplete closure on a scaffolded backend (ADR-0038 R1).
         if matches!(kind, PathKind::OneOrMore | PathKind::ZeroOrMore)

@@ -96,7 +96,7 @@ fn one_or_more_is_exact_at_and_beyond_the_old_256_hop_boundary() {
 }
 
 #[test]
-fn admitted_dialects_deduplicate_on_pairs_not_walk_depth() {
+fn evidenced_target_dialects_deduplicate_on_pairs_not_walk_depth() {
     let maps = edge_mapping();
     let mut depth_keyed = Vec::new();
 
