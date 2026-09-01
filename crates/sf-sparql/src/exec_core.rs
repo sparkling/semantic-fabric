@@ -48,9 +48,10 @@ fn map_sql_err(e: sf_sql::Error) -> Error {
 }
 
 /// Drive an always-ready future to completion with no runtime (design §5 M2
-/// sync↔async bridge). The SQLite backend's stream is fully synchronous, so every
-/// `.await` resolves `Ready` immediately; a `noop` waker + poll loop needs no tokio
-/// runtime and therefore never nests / panics inside `sf-serve`'s `spawn_blocking`.
+/// sync↔async bridge). SQLite backend waits resolve synchronously; the explicit
+/// cooperative checkpoint below returns `Pending` once and is immediately
+/// re-polled. A `noop` waker + poll loop therefore needs no tokio runtime and never
+/// nests / panics inside `sf-serve`'s `spawn_blocking`.
 pub(crate) fn block_on<F: Future>(fut: F) -> F::Output {
     use std::task::{Context, Poll, Waker};
     let mut cx = Context::from_waker(Waker::noop());
@@ -60,6 +61,34 @@ pub(crate) fn block_on<F: Future>(fut: F) -> F::Output {
             return v;
         }
     }
+}
+
+/// Yield once without tying this driver-agnostic crate to an async runtime.
+///
+/// Tokio-backed callers regain control at the next pull checkpoint, while the
+/// SQLite `block_on` shim simply polls again. This is cooperative scheduling;
+/// it does not cancel a source statement or pre-empt work within a batch.
+async fn cooperative_yield() {
+    struct YieldOnce(bool);
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<()> {
+            if self.0 {
+                std::task::Poll::Ready(())
+            } else {
+                self.0 = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    YieldOnce(false).await;
 }
 
 /// Evaluate ORDER BY expression keys (e.g. `STRLEN(?n)`) and inject each result as a
@@ -291,6 +320,12 @@ where
             if raw_batch.is_empty() {
                 break;
             }
+            // Pull-side cooperative checkpoint for the serve lane's outer absolute
+            // deadline: an always-ready cursor whose rows are later discarded might
+            // otherwise never reach the sink (and never return `Pending`). This is
+            // one checkpoint per bounded batch, not source cancellation or CPU
+            // pre-emption within reconstruction of that batch.
+            cooperative_yield().await;
             let exhausted = raw_batch.len() < target;
             first_batch = false;
             // Reconstruct first: DISTINCT needs the projected terms, and dedup must
@@ -2759,6 +2794,10 @@ mod batch_loop_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "exec_core_deadline_tests.rs"]
+mod deadline_checkpoint_tests;
 
 // --- W5b: canonical_pairs / Bindings::insert unit locks ---------------------
 

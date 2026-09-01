@@ -12,9 +12,11 @@
 //! (PG `query_raw`, SQLite cap-1 bridge, MySQL packet-bounded `exec_iter`).
 //!
 //! A slow/aborted client (receiver dropped) makes the next send fail → the producer
-//! stops (cancel-on-drop, ADR-0010 §C), and a passed deadline aborts at the next
-//! chunk/row (the request timeout). ASK is a single boolean — bounded by
-//! construction — and is serialised whole via [`collected_body`].
+//! stops (cancel-on-drop, ADR-0010 §C). The carried absolute deadline also wraps
+//! the whole async driver, covering pool wait and rows discarded before a sink;
+//! it does not prove source-statement cancellation or pre-emption inside SQLite's
+//! blocking bridge. ASK is a single boolean — bounded by construction — and is
+//! serialised whole via [`collected_body`].
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -29,6 +31,8 @@ use oxttl::{NTriplesSerializer, TurtleSerializer};
 use sparesults::{QueryResultsFormat, QueryResultsSerializer};
 use tokio::sync::mpsc::Sender;
 use tokio_stream::wrappers::ReceiverStream;
+
+use crate::deadline::TIMEOUT_MESSAGE;
 
 /// Bytes per streamed body chunk (a flush boundary, not a result-size cap).
 const CHUNK: usize = 16 * 1024;
@@ -154,6 +158,7 @@ where
         let varv = variables(&vars);
         let buf = SharedBuf::default();
         let result: io::Result<()> = async {
+            check_deadline(deadline)?;
             // The serialiser writer is shared with the sink via Arc<Mutex<Option>> so
             // the sink can serialise each row and the outer scope can `finish()` +
             // flush the tail after the driver returns (the sink's clone is dropped
@@ -182,16 +187,18 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            drive(sink)
-                .await
+            before_deadline(deadline, drive(sink))
+                .await?
                 .map_err(|e| io::Error::other(e.to_string()))?;
+            check_deadline(deadline)?;
             let writer = writer
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .take()
                 .expect("writer live after streaming");
             writer.finish()?;
-            send_chunk(&tx, buf.take_all()).await
+            check_deadline(deadline)?;
+            before_deadline(deadline, send_chunk(&tx, buf.take_all())).await?
         }
         .await;
         if let Err(e) = result {
@@ -214,6 +221,7 @@ where
     tokio::spawn(async move {
         let buf = SharedBuf::default();
         let result: io::Result<()> = async {
+            check_deadline(deadline)?;
             let sink_ser = Arc::new(Mutex::new(Some(TripleSink::start(fmt, buf.clone()))));
             let sink: TripleStreamSink = {
                 let sink_ser = Arc::clone(&sink_ser);
@@ -233,16 +241,18 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            drive(sink)
-                .await
+            before_deadline(deadline, drive(sink))
+                .await?
                 .map_err(|e| io::Error::other(e.to_string()))?;
+            check_deadline(deadline)?;
             let ser = sink_ser
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .take()
                 .expect("serialiser live after streaming");
             ser.finish()?;
-            send_chunk(&tx, buf.take_all()).await
+            check_deadline(deadline)?;
+            before_deadline(deadline, send_chunk(&tx, buf.take_all())).await?
         }
         .await;
         if let Err(e) = result {
@@ -266,12 +276,25 @@ fn solution_pairs<'a>(
 /// Error out if the request deadline (ADR-0010 timeout) has passed.
 fn check_deadline(deadline: Option<Instant>) -> io::Result<()> {
     match deadline {
-        Some(d) if Instant::now() > d => Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "request timeout (ADR-0010)",
-        )),
+        Some(deadline) if Instant::now() >= deadline => Err(timeout_error()),
         _ => Ok(()),
     }
+}
+
+async fn before_deadline<F>(deadline: Option<Instant>, future: F) -> io::Result<F::Output>
+where
+    F: Future,
+{
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), future)
+            .await
+            .map_err(|_| timeout_error()),
+        None => Ok(future.await),
+    }
+}
+
+fn timeout_error() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, TIMEOUT_MESSAGE)
 }
 
 /// A `std::io::Write` over a shared byte buffer the async streamers serialise into
