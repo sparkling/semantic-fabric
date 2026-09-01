@@ -20,8 +20,12 @@ pub mod run;
 pub mod stream;
 
 mod admission;
+mod problem;
 
+pub use problem::ServeError;
 pub use run::{serve_blocking, ServeOptions};
+
+use problem::ProblemCode;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -243,7 +247,7 @@ async fn handle_get(
     headers: HeaderMap,
 ) -> Response {
     let Some(query) = raw.as_deref().and_then(|q| form_param(q, "query")) else {
-        return err_text(StatusCode::BAD_REQUEST, "missing 'query' parameter");
+        return problem::response(ProblemCode::InvalidRequest);
     };
     process(cfg, query, accept(&headers)).await
 }
@@ -263,7 +267,7 @@ async fn handle_post(
     let query = match ctype.as_str() {
         "application/sparql-query" => match String::from_utf8(body.to_vec()) {
             Ok(q) => q,
-            Err(_) => return err_text(StatusCode::BAD_REQUEST, "query body is not valid UTF-8"),
+            Err(_) => return problem::response(ProblemCode::InvalidRequest),
         },
         "application/x-www-form-urlencoded" => {
             match std::str::from_utf8(&body)
@@ -271,15 +275,10 @@ async fn handle_post(
                 .and_then(|s| form_param(s, "query"))
             {
                 Some(q) => q,
-                None => return err_text(StatusCode::BAD_REQUEST, "missing 'query' parameter"),
+                None => return problem::response(ProblemCode::InvalidRequest),
             }
         }
-        other => {
-            return err_text(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                format!("unsupported Content-Type: {other:?}"),
-            )
-        }
+        _ => return problem::response(ProblemCode::UnsupportedMediaType),
     };
     process(cfg, query, accept(&headers)).await
 }
@@ -287,13 +286,7 @@ async fn handle_post(
 /// The shared request pipeline: cap → compile → dispatch by query form → stream.
 async fn process(cfg: Arc<ServeConfig>, query: String, accept: Option<String>) -> Response {
     if query.len() > cfg.max_query_len {
-        return err_text(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!(
-                "query exceeds the {}-byte cap (ADR-0010)",
-                cfg.max_query_len
-            ),
-        );
+        return problem::response(ProblemCode::PayloadTooLarge);
     }
 
     let plan = match compile(cfg.clone(), query).await {
@@ -301,13 +294,8 @@ async fn process(cfg: Arc<ServeConfig>, query: String, accept: Option<String>) -
         Err(resp) => return resp,
     };
     if let Err(error) = admission::admit(&plan) {
-        return err_text(
-            StatusCode::NOT_IMPLEMENTED,
-            format!(
-                "unsupported resource shape: source-sized-state={} requires bounded physical execution (ADR-0038 M1)",
-                error.state().code()
-            ),
-        );
+        let _internal_state = error.state();
+        return problem::response(ProblemCode::UnsupportedQuery);
     }
     let accept = accept.as_deref();
 
@@ -336,11 +324,8 @@ async fn compile(cfg: Arc<ServeConfig>, query: String) -> Result<Plan, Response>
     })
     .await;
     match joined {
-        Err(e) => Err(err_text(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("compile task join error: {e}"),
-        )),
-        Ok(Err(e)) => Err(err_text(status_for(&e), e.to_string())),
+        Err(_) => Err(problem::response(ProblemCode::Internal)),
+        Ok(Err(e)) => Err(problem::response_for_sparql(&e)),
         Ok(Ok(plan)) => Ok(plan),
     }
 }
@@ -352,10 +337,7 @@ async fn compile(cfg: Arc<ServeConfig>, query: String) -> Result<Plan, Response>
 async fn respond_select(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) -> Response {
     let fmt = negotiate_results(accept);
     let PlanForm::Select { vars } = &plan.form else {
-        return err_text(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal: non-SELECT plan reached respond_select",
-        );
+        return problem::response(ProblemCode::Internal);
     };
     let vars = vars.clone();
     let deadline = Some(Instant::now() + cfg.timeout);
@@ -417,12 +399,8 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
             let conn = pool.pick();
             let run = tokio::spawn(async move { exec::ask_sqlite_owned(&plan, conn).await });
             match tokio::time::timeout(cfg.timeout, run).await {
-                Err(_) => {
-                    return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
-                }
-                Ok(Err(e)) => {
-                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, format!("exec task: {e}"))
-                }
+                Err(_) => return problem::response(ProblemCode::RequestTimeout),
+                Ok(Err(_)) => return problem::response(ProblemCode::Internal),
                 Ok(Ok(r)) => r,
             }
         }
@@ -432,9 +410,7 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 Err(resp) => return resp,
             };
             match tokio::time::timeout(cfg.timeout, exec_pg::ask_pg(&plan, conn)).await {
-                Err(_) => {
-                    return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
-                }
+                Err(_) => return problem::response(ProblemCode::RequestTimeout),
                 Ok(r) => r,
             }
         }
@@ -455,12 +431,8 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
                 exec_mysql::ask_each_mysql(&plan, conn).await
             });
             match tokio::time::timeout(cfg.timeout, run).await {
-                Err(_) => {
-                    return err_text(StatusCode::GATEWAY_TIMEOUT, "request timeout (ADR-0010)")
-                }
-                Ok(Err(e)) => {
-                    return err_text(StatusCode::INTERNAL_SERVER_ERROR, format!("exec task: {e}"))
-                }
+                Err(_) => return problem::response(ProblemCode::RequestTimeout),
+                Ok(Err(_)) => return problem::response(ProblemCode::Internal),
                 Ok(Ok(r)) => r,
             }
         }
@@ -468,9 +440,9 @@ async fn respond_ask(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&str>) ->
     match value {
         Ok(b) => match stream::serialize_boolean(b, fmt) {
             Ok(bytes) => ok_stream(fmt.media_type(), stream::collected_body(bytes)),
-            Err(e) => err_text(StatusCode::INTERNAL_SERVER_ERROR, e),
+            Err(_) => problem::response(ProblemCode::Internal),
         },
-        Err(e) => err_text(status_for(&e), e.to_string()),
+        Err(e) => problem::response_for_sparql(&e),
     }
 }
 
@@ -530,10 +502,7 @@ async fn respond_construct(cfg: Arc<ServeConfig>, plan: Plan, accept: Option<&st
 async fn acquire_pg(pool: &deadpool_postgres::Pool) -> Result<PgConn, Response> {
     pool.get().await.map(PgConn).map_err(|e| match e {
         PoolError::Timeout(_) => {
-            let mut resp = err_text(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "PostgreSQL connection pool exhausted, retry shortly (ADR-0010)",
-            );
+            let mut resp = problem::response(ProblemCode::SourceUnavailable);
             resp.headers_mut().insert(
                 header::RETRY_AFTER,
                 // Fixed at 1s rather than derived from pool pressure/wait-time —
@@ -543,22 +512,8 @@ async fn acquire_pg(pool: &deadpool_postgres::Pool) -> Result<PgConn, Response> 
             );
             resp
         }
-        other => err_text(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("PostgreSQL pool: {other}"),
-        ),
+        _ => problem::response(ProblemCode::Internal),
     })
-}
-
-/// Map a rewriter error to an HTTP status (ADR-0010 §error handling).
-fn status_for(err: &SparqlError) -> StatusCode {
-    match err {
-        SparqlError::Parse(_) => StatusCode::BAD_REQUEST,
-        SparqlError::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
-        SparqlError::Mapping(_) | SparqlError::Sql(_) | SparqlError::Core(_) => {
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-    }
 }
 
 /// The first value of form key `key` in a urlencoded string (`+`/`%XX` decoded).
@@ -609,14 +564,6 @@ fn ok_stream(content_type: &str, body: Body) -> Response {
         .expect("static response builder")
 }
 
-fn err_text(status: StatusCode, msg: impl Into<String>) -> Response {
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Body::from(msg.into()))
-        .expect("static response builder")
-}
-
 /// Introspect every SQLite base table (schema order from `sqlite_master`), filling
 /// the source schema that makes the ADR-0007 cascade passes fire.
 pub fn introspect_sqlite_all(conn: &rusqlite::Connection) -> Result<Vec<TableSchema>, String> {
@@ -659,32 +606,6 @@ pub async fn introspect_pg_all(
 #[cfg(test)]
 mod pure_helper_tests {
     use super::*;
-
-    // --- status_for ---------------------------------------------------------
-
-    #[test]
-    fn status_for_maps_every_error_variant_to_its_documented_status() {
-        assert_eq!(
-            status_for(&SparqlError::Parse("x".into())),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            status_for(&SparqlError::Unsupported("x".into())),
-            StatusCode::NOT_IMPLEMENTED
-        );
-        assert_eq!(
-            status_for(&SparqlError::Mapping("x".into())),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        assert_eq!(
-            status_for(&SparqlError::Sql("x".into())),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        assert_eq!(
-            status_for(&SparqlError::Core("x".into())),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
 
     // --- form_param -----------------------------------------------------------
 

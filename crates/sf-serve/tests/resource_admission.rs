@@ -90,7 +90,8 @@ async fn global_order_is_typed_501_before_a_missing_live_table_is_touched() {
         .expect("collect rejection")
         .to_bytes();
     let body = String::from_utf8(body.to_vec()).expect("UTF-8 rejection");
-    assert!(body.contains("source-sized-state"), "body={body}");
-    assert!(body.contains("global-order"), "body={body}");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("problem JSON");
+    assert_eq!(json["code"], "unsupported-query", "body={body}");
+    assert!(!body.contains("global-order"), "body={body}");
     assert!(!body.contains("no such table"), "body={body}");
 }

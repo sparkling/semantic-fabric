@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use tokio_postgres::NoTls;
 
-use crate::{introspect_pg_all, router, Backend, ServeConfig};
+use crate::problem::StartupCause;
+use crate::{introspect_pg_all, router, Backend, ServeConfig, ServeError};
 
 /// Options resolved from the `serve` CLI flags. The runner reads the mapping /
 /// ontology files itself so the CLI stays a thin argument parser.
@@ -35,24 +36,41 @@ pub struct ServeOptions {
 
 /// Build the config + router and serve until the process is stopped. Returns a
 /// clear error (never panics) when a required input is missing or invalid.
-pub fn serve_blocking(opts: ServeOptions) -> Result<(), String> {
+pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
+        .map_err(|error| {
+            ServeError::new(StartupCause::Runtime {
+                error: error.to_string(),
+            })
+        })?;
     rt.block_on(async move { serve_async(opts).await })
 }
 
-async fn serve_async(opts: ServeOptions) -> Result<(), String> {
-    let mapping_ttl = std::fs::read_to_string(&opts.mapping_path)
-        .map_err(|e| format!("read mapping {}: {e}", opts.mapping_path))?;
-    let mapping = sf_mapping::parse_r2rml(&mapping_ttl).map_err(|e| format!("parse R2RML: {e}"))?;
+async fn serve_async(opts: ServeOptions) -> Result<(), ServeError> {
+    let mapping_ttl = std::fs::read_to_string(&opts.mapping_path).map_err(|error| {
+        ServeError::new(StartupCause::MappingRead {
+            path: opts.mapping_path.clone(),
+            error: error.to_string(),
+        })
+    })?;
+    let mapping = sf_mapping::parse_r2rml(&mapping_ttl).map_err(|error| {
+        ServeError::new(StartupCause::MappingParse {
+            error: error.to_string(),
+        })
+    })?;
 
     let tbox = match &opts.ontology_path {
         Some(path) => {
-            let ttl =
-                std::fs::read_to_string(path).map_err(|e| format!("read ontology {path}: {e}"))?;
-            crate::tbox_from_turtle(&ttl)?
+            let ttl = std::fs::read_to_string(path).map_err(|error| {
+                ServeError::new(StartupCause::OntologyRead {
+                    path: path.clone(),
+                    error: error.to_string(),
+                })
+            })?;
+            crate::tbox_from_turtle(&ttl)
+                .map_err(|error| ServeError::new(StartupCause::OntologyParse { error }))?
         }
         None => sf_sparql::Tbox::default(),
     };
@@ -72,12 +90,23 @@ async fn serve_async(opts: ServeOptions) -> Result<(), String> {
     let app = router(Arc::new(cfg));
     let listener = tokio::net::TcpListener::bind(&opts.bind)
         .await
-        .map_err(|e| format!("bind {}: {e}", opts.bind))?;
-    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            ServeError::new(StartupCause::Bind {
+                bind: opts.bind.clone(),
+                error: error.to_string(),
+            })
+        })?;
+    let addr = listener.local_addr().map_err(|error| {
+        ServeError::new(StartupCause::Server {
+            error: error.to_string(),
+        })
+    })?;
     println!("semantic-fabric: SPARQL 1.2 endpoint listening on http://{addr}/sparql");
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| format!("server error: {e}"))
+    axum::serve(listener, app).await.map_err(|error| {
+        ServeError::new(StartupCause::Server {
+            error: error.to_string(),
+        })
+    })
 }
 
 /// Open the backend named by `spec` and introspect its base-table schema.
@@ -89,15 +118,25 @@ async fn open_backend(
     pg_pool_size: usize,
     pg_pool_wait: Duration,
     sqlite_pool_size: usize,
-) -> Result<(Backend, Vec<sf_sql::TableSchema>), String> {
+) -> Result<(Backend, Vec<sf_sql::TableSchema>), ServeError> {
     if let Some(path) = spec.strip_prefix("sqlite:") {
-        Backend::sqlite_pool_from_path(path, sqlite_pool_size)
+        Backend::sqlite_pool_from_path(path, sqlite_pool_size).map_err(|error| {
+            ServeError::new(StartupCause::SourceConnect {
+                spec: spec.to_owned(),
+                error,
+            })
+        })
     } else if let Some(conninfo) = spec.strip_prefix("pg:") {
         // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
         // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
-        let pg_config: tokio_postgres::Config = conninfo
-            .parse()
-            .map_err(|e| format!("parse PG conninfo {conninfo:?}: {e}"))?;
+        let pg_config = conninfo
+            .parse::<tokio_postgres::Config>()
+            .map_err(|error| {
+                ServeError::new(StartupCause::SourceSpec {
+                    spec: spec.to_owned(),
+                    error: error.to_string(),
+                })
+            })?;
         let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
         let pool = deadpool_postgres::Pool::builder(manager)
             .max_size(pg_pool_size)
@@ -107,28 +146,53 @@ async fn open_backend(
             // `NoRuntimeSpecified` instead of ever honouring the timeout.
             .runtime(deadpool_postgres::Runtime::Tokio1)
             .build()
-            .map_err(|e| format!("build PostgreSQL pool: {e}"))?;
-        let conn = pool
-            .get()
-            .await
-            .map_err(|e| format!("PostgreSQL pool get (introspection): {e}"))?;
-        let schema = introspect_pg_all(&conn).await?;
+            .map_err(|error| {
+                ServeError::new(StartupCause::SourceConnect {
+                    spec: spec.to_owned(),
+                    error: error.to_string(),
+                })
+            })?;
+        let conn = pool.get().await.map_err(|error| {
+            ServeError::new(StartupCause::SourceConnect {
+                spec: spec.to_owned(),
+                error: error.to_string(),
+            })
+        })?;
+        let schema = introspect_pg_all(&conn).await.map_err(|error| {
+            ServeError::new(StartupCause::Schema {
+                spec: spec.to_owned(),
+                error,
+            })
+        })?;
         drop(conn);
         Ok((Backend::Pg(pool), schema))
     } else if spec.starts_with("mysql://") {
         // `Pool::from_url` needs the whole `mysql://…` URL — never strip the scheme.
-        let pool = mysql_async::Pool::from_url(spec).map_err(|e| format!("connect MySQL: {e}"))?;
-        let mut conn = pool
-            .get_conn()
-            .await
-            .map_err(|e| format!("MySQL get_conn: {e}"))?;
-        let schema = introspect_mysql_all(&mut conn).await?;
+        let pool = mysql_async::Pool::from_url(spec).map_err(|error| {
+            ServeError::new(StartupCause::SourceSpec {
+                spec: spec.to_owned(),
+                error: error.to_string(),
+            })
+        })?;
+        let mut conn = pool.get_conn().await.map_err(|error| {
+            ServeError::new(StartupCause::SourceConnect {
+                spec: spec.to_owned(),
+                error: error.to_string(),
+            })
+        })?;
+        let schema = introspect_mysql_all(&mut conn).await.map_err(|error| {
+            ServeError::new(StartupCause::Schema {
+                spec: spec.to_owned(),
+                error,
+            })
+        })?;
         drop(conn);
         Ok((Backend::Mysql(pool), schema))
     } else {
-        Err(format!(
-            "unrecognised --source {spec:?}: expected sqlite:<path>, pg:<conninfo>, or mysql://<url>"
-        ))
+        Err(ServeError::new(StartupCause::SourceSpec {
+            spec: spec.to_owned(),
+            error: "unrecognised source family".to_owned(),
+        }))
     }
 }
 
@@ -230,7 +294,6 @@ mod tests {
 
     #[tokio::test]
     async fn should_reject_unadmitted_source_families_before_connector_construction() {
-        const ADMITTED_SOURCE_FORMS: &str = "sqlite:<path>, pg:<conninfo>, or mysql://<url>";
         let rejected = [
             ("Trino", "trino://query.invalid"),
             ("Presto", "presto://query.invalid"),
@@ -259,11 +322,37 @@ mod tests {
                 Err(err) => err,
                 Ok(_) => panic!("{family} source {spec:?} must not be admitted"),
             };
-            assert_eq!(
-                err,
-                format!("unrecognised --source {spec:?}: expected {ADMITTED_SOURCE_FORMS}"),
-                "{family} source {spec:?} should be rejected at source admission"
-            );
+            assert_eq!(err.code(), "startup-source");
+            let StartupCause::SourceSpec { spec: retained, .. } = err.internal_cause() else {
+                panic!("{family} should retain a typed source-spec cause")
+            };
+            assert_eq!(retained, spec);
+            assert!(!err.to_string().contains(spec));
+            assert!(!format!("{err:?}").contains(spec));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_pg_and_mysql_specs_retain_private_causes_but_redact_public_formats() {
+        const SENTINEL: &str = "sf_secret_NEVER_EXPOSE_internal_34aa";
+        let specs = [
+            format!("pg:host=localhost password='{SENTINEL}"),
+            format!("mysql://user:{SENTINEL}@localhost:not-a-port/db"),
+        ];
+
+        for spec in specs {
+            let error = match open_backend(&spec, 16, Duration::from_secs(5), 4).await {
+                Err(error) => error,
+                Ok(_) => panic!("malformed source specification must fail"),
+            };
+            assert_eq!(error.code(), "startup-source");
+            let StartupCause::SourceSpec { spec: retained, .. } = error.internal_cause() else {
+                panic!("malformed source should retain a typed source-spec cause")
+            };
+            assert_eq!(retained, &spec);
+            assert!(error.internal_cause().to_string().contains(SENTINEL));
+            assert!(!error.to_string().contains(SENTINEL));
+            assert!(!format!("{error:?}").contains(SENTINEL));
         }
     }
 

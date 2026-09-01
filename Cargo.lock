@@ -4777,6 +4777,7 @@ dependencies = [
  "oxrdf",
  "oxttl",
  "rusqlite",
+ "serde",
  "serde_json",
  "sf-core",
  "sf-mapping",

@@ -862,9 +862,13 @@ async fn post_unsupported_content_type_returns_415() {
         .header(header::CONTENT_TYPE, "text/plain")
         .body(Body::from("SELECT * WHERE { ?s ?p ?o }"))
         .unwrap();
-    let (status, _, body) = send(cfg, req).await;
+    let (status, ctype, body) = send(cfg, req).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    assert!(body.contains("unsupported Content-Type"));
+    assert_eq!(ctype, "application/problem+json");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "unsupported-media-type"
+    );
 }
 
 #[tokio::test]
@@ -876,9 +880,13 @@ async fn oversized_query_returns_413() {
         "PREFIX ex: <http://ex/> SELECT ?n WHERE { ?p ex:name ?n }",
         "application/sparql-results+json",
     );
-    let (status, _, body) = send(cfg, req).await;
+    let (status, ctype, body) = send(cfg, req).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert!(body.contains("exceeds the 16-byte cap"));
+    assert_eq!(ctype, "application/problem+json");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "payload-too-large"
+    );
 }
 
 #[tokio::test]
@@ -890,9 +898,13 @@ async fn post_sparql_query_body_non_utf8_returns_400() {
         .header(header::CONTENT_TYPE, "application/sparql-query")
         .body(Body::from(vec![0xff, 0xfe, 0x00, 0x01])) // invalid UTF-8
         .unwrap();
-    let (status, _, body) = send(cfg, req).await;
+    let (status, ctype, body) = send(cfg, req).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body.contains("not valid UTF-8"));
+    assert_eq!(ctype, "application/problem+json");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "invalid-request"
+    );
 }
 
 #[tokio::test]
@@ -922,9 +934,13 @@ async fn ask_query_exceeding_timeout_returns_504() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     let cfg = Arc::new(cfg);
     let req = post_query("ASK { ?s ?p ?o }", "application/sparql-results+json");
-    let (status, _, body) = send(cfg, req).await;
+    let (status, ctype, body) = send(cfg, req).await;
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
-    assert!(body.contains("request timeout"));
+    assert_eq!(ctype, "application/problem+json");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+        "request-timeout"
+    );
     hold.join().unwrap();
 }
 
