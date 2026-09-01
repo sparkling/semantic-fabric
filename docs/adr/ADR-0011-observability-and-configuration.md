@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-08-26
+updated: 2026-09-01
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -14,11 +14,17 @@ implements:
 
 # Observability & configuration
 
-> **Implementation status (2026-08-26): accepted, not implemented.** The
-> production crates contain no `tracing`/metrics/OTLP stack or layered validated
-> configuration model, and the server exposes no metrics/readiness lifecycle.
-> Proposed ADR-0038 promotes this entire decision into milestones M3/M5 with
-> redaction, bounded-cardinality, overhead, readiness, and reload gates.
+> **Implementation status (2026-09-01): partially implemented.** Commits
+> `3e0f920`/`c9e6c53` add a closed pre-commit RFC 9457 problem vocabulary,
+> opaque/redacted startup errors, bounded response-only correlation IDs,
+> `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests. Raw
+> generated SQL, driver text, mapping details and source specifications cannot
+> enter that public boundary. A SELECT/CONSTRUCT failure after `200` is committed
+> can only terminate the stream; this does not turn it into a problem response or
+> prove an atomic no-prefix contract. Correlation IDs currently reach the response
+> only, not a log sink. The production crates still contain no tracing/metrics/OTLP
+> stack or layered validated configuration model, and expose no metrics/readiness
+> lifecycle. ADR-0038 retains those M3/M5 gates.
 
 ## Context and Problem Statement
 
