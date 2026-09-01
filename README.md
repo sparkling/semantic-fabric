@@ -148,12 +148,10 @@ curl -s 'http://127.0.0.1:7878/sparql' \
     SELECT ?route ?agency WHERE { ?route a gtfs:Route ; gtfs:agency ?agency . }'
 ```
 
-`GET` and `POST /sparql` implement the read-only query subset of the draft
-SPARQL 1.2 Protocol and are content-negotiated. SELECT/ASK can
-return SPARQL Results JSON, XML, CSV, or TSV. CONSTRUCT/DESCRIBE can return
-Turtle, N-Triples, or JSON-LD. Requests are bounded by timeout, query-size,
-pool, and cancellation controls from
-[ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
+`GET` and `POST /sparql` implement the read-only query subset of the draft SPARQL
+1.2 Protocol and are content-negotiated. SELECT/ASK can return SPARQL Results
+JSON, XML, CSV, or TSV. CONSTRUCT/DESCRIBE can return Turtle, N-Triples, or
+JSON-LD. Requests are bounded by timeout, query-size, pool and cancellation controls from [ADR-0010](docs/adr/ADR-0010-security-and-resource-governance.md).
 
 ## What works today
 
