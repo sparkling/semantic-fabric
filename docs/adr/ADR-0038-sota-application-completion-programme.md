@@ -65,8 +65,10 @@ non-deployable evidence. M1–M6 may proceed beside the evidence-authority lane;
 authoritative performance and M7 still require controlled exact-artifact proof.
 ADR-0039 remains proposed: ADR-0006 and immutable V1 `sf-cli` receipts stay
 authoritative until explicit adoption and a domain-separated V2 contract.
-The 14-category product-mock gold/live vertical is development evidence only:
-relational R2RML covers one of 112 tables, and generic RML stays out of scope.
+The revision-pinned 14-category product-mock gold and separately qualified live
+development vertical are evidence only: relational R2RML covers one of 112
+tables, generic RML stays out of scope, and no source-to-container provenance is
+claimed.
 
 ### 1. Definition of complete
 
@@ -121,8 +123,9 @@ operator layer carries substantial correctness and maintenance cost.
 ### 3. Exactness and evidence precede feature breadth
 
 Silent partial results are severity-zero release blockers. Commit `5c379f6` and ADR-0049
-replace the 256-hop prefix with an exact pair fixed point and reject unproved dialects. Next, every
-supported blocking operator must meet the memory invariant. Property, metamorphic, differential,
+replace the 256-hop prefix with an exact pair fixed point and reject unproved dialects. Commit
+`639134d` rejects known source-sized Rust fallback plans before backend selection or I/O; bounded
+physical implementations and total request governance still remain. Property, metamorphic, differential,
 fuzz, mutation, exact-suite-inventory, coverage, load, and soak evidence then
 become durable CI/release gates under ADR-0012.
 
@@ -439,13 +442,7 @@ commit-before-reveal and byte identity; missing, failed, mismatched, selected,
 tiebroken or retried results fail. Current receipts neither block M1–M6 nor
 authorize M7, backend admission or a readiness rescore.
 
-The 2026-08-31 integrated M0 hardening candidate makes tracked project MCP launchers
-default-empty and protected, then adds a strict scoped current-state admission gate.
-Its pinned local Ruflo collector materializes the already-attested schema-v2 CLI from an exact
-protected two-file historical gzip overlay; its opaque decoded snapshot and three Git-backed
-packed-runtime resources add no ambient read, identity, export, fetch or authority. It mounts
-only private status snapshots under `--unshare-net`; cooperative `0664` ledger input stays non-authoritative.
-The earlier 122-file/905-test receipt predates this overlay and is not evidence for it; current protected binary, opacity and three-launcher KATs pass within a 124-file/941-test run with two intentional skips. OIA remains inconclusive and fixed-seed Darwin Shield passes only 9/12 gates. On 2026-09-01, commits `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` sealed ADR-0046's Node-oracle lifecycle, command, INSERT value/result and DDL-coupling contracts. Node 24 passes 705 tests; exact Node 20 passes TypeScript, 23 focused tests, artifact replay and parent focused gates; artifact `715c72fd…0552` preserves the dependency-free 49,106-byte public bundle `90e21e7c…f7c3a`. These are executable-specification receipts only. ADR-0046 remains proposed; no Node adapter, runner or live authority may be added, and any production implementation belongs to the separate Rust boundary in ADR-0048.
+The 2026-08-31 integrated M0 hardening candidate protects default-empty project MCP launchers and a pinned local Ruflo reader; its opaque historical overlay and private status snapshots add no product authority. The current 124-file/941-test harness has two intentional skips; OIA remains inconclusive and fixed-seed Darwin Shield passes 9/12 gates. On 2026-09-01, `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` sealed ADR-0046 Node-oracle contracts; exact Node 20/24 gates preserve the dependency-free oracle, but ADR-0046 stays proposed and no Node adapter, runner or live authority may be added. Rust commits `5c379f6`/`639134d` close silent recursive-path prefixes and reject known source-sized fallback plans. `13b8187`/`8c6181b`/`9b60dc2` seal all 139 canonical gold artifacts, every admitted byte in the 171-file source snapshot, and a read-only live PostgreSQL Style differential. This is development evidence without image/source provenance, generic RML, production admission or release authority; ADR-0048 remains the controlling Rust/Node boundary.
 
 ## Acceptance
 

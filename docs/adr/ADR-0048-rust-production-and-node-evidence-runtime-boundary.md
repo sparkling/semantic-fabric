@@ -37,9 +37,9 @@ dependencies and every database, network, signer, publication and readiness
 flag is false. Calling it deployable would turn evidence infrastructure into a
 second production runtime without a reviewed reason.
 
-The canonical semantic-product-mock gold and its exact-revision PostgreSQL
-instance also provide a faster development path, but their authority and
-coverage must remain honest. The gold candidate contains 30,696 ontology,
+The canonical semantic-product-mock gold and a separately qualified live
+PostgreSQL development instance provide a faster development path, but their
+authority and coverage must remain honest. The gold candidate contains 30,696 ontology,
 3,617 shape, 4,501 mapping and 900 provenance quads across 14 categories. Its
 relational inventory covers 112 tables and 598 columns, while its admitted
 relational R2RML currently covers only one table and two columns. It is a
@@ -122,10 +122,13 @@ the manifest/source revision and digests it consumes; it does not fork or
 silently refresh the gold.
 
 The live PostgreSQL instance is a development integration/differential source.
-Tests separately verify an exact source checkout and database image/schema;
-SQL observations cannot prove the container was built from that source. Its
-operational rows are not gold, and mutable volume, trust authentication, lack
-of TLS and partial R2RML coverage prohibit backend admission or release claims.
+Tests separately verify every byte in the admitted 171-file source snapshot
+and the live server/version/schema posture. They do not attest the source Git
+worktree, OCI image bytes, build process, or a source-to-container provenance
+link; SQL observations cannot prove the container was built from that source.
+Its operational rows are not gold, and mutable volume, trust authentication,
+lack of TLS and partial R2RML coverage prohibit backend admission or release
+claims.
 
 Semantic Fabric continues to support R2RML, not generic RML. The one admitted
 relational R2RML map may seed an end-to-end vertical slice. Coverage of the
@@ -148,6 +151,26 @@ Lanes 3 and 4 do not block application feature implementation. They still block
 claims that require their authority. Harness scores, plans and receipts do not
 earn product progress; deterministic application behavior and direct product
 tests do.
+
+### 7. Implementation status (2026-09-01)
+
+Commit `7c12aa7` enforces the Rust product boundary in protected harness and CI
+metadata while preserving the dependency-free Node oracle. Commits `13b8187`,
+`8c6181b` and `9b60dc2` add Rust-only development KATs that:
+
+- seal the 38,321-byte candidate manifest and all 139 transitive artifacts;
+- verify all 171 admitted source files plus the two required migration pins;
+- preserve the exact one-table/two-column R2RML coverage and its explicit gaps;
+- admit only literal-loopback PostgreSQL 16.9 with the expected Style schema;
+- compare direct SQL with parse-to-translate-to-execute results inside one
+  read-only, repeatable-read transaction and explicitly roll it back.
+
+These KATs passed against the canonical external gold/source roots and the live
+development database. They establish neither production backend admission nor
+image, build, deployment, TLS, authentication, data-provenance or release
+authority. ADR-0042 through ADR-0047 were reviewed against this boundary: their
+committed Node code remains explicitly non-deployable oracle evidence, and each
+future production implementation is assigned to a separate Rust service.
 
 ## Consequences
 
