@@ -17,17 +17,19 @@ live in the engine; source rows are streamed on demand and discarded.
 <!-- capability-matrix:start -->
 ## Evidence-scoped capability status
 
-As of 2026-08-29, the generated catalog records:
+As of 2026-09-01, the generated catalog records:
 
 - **Current:** DESCRIBE CBD compilation has required compiler-only tests; this does not establish backend or endpoint execution.
 - **Limitation:** Full SPARQL 1.2 Query or Protocol conformance is not claimed.
 - **Qualified:** PostgreSQL and MySQL have live query and endpoint evidence, but those suites can still skip and do not establish production admission.
 - **Qualified:** Sealed required-live PostgreSQL RDB2RDF execution records 57 passes, one documented deviation and five exact skips across 63 R2RML cases, plus 23 passes and one exact skip across 24 Direct Mapping cases; this is mapping evidence only and does not establish production admission.
 - **Qualified:** Sealed SQLite RDB2RDF execution records 62/63 R2RML cases passing with one documented deviation and 19/24 Direct Mapping cases passing with five exact skips; this is mapping evidence only.
-- **Limitation:** Exact unbounded property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
+- **Limitation:** Resource-qualified property paths, bounded global operators, federation, total request governance, security/identity, observability/lifecycle and an exact production artifact remain planned.
+- **Qualified:** The canonical product-mock development KAT seals all 139 gold artifacts and 171 admitted source files, then compares one Style R2RML map with live PostgreSQL; it proves no image/source provenance or production admission.
 - **Limitation:** None of SQLite, PostgreSQL or MySQL is production-admitted under ADR-0038 R3.
 - **Qualified:** The runtime contains SQLite, PostgreSQL and MySQL source-selector paths; reachability is not production admission.
 - **Qualified:** External SERVICE and named non-enabled source forms are rejected before query execution or connector construction.
+- **Current:** Known source-sized Rust fallback plans are rejected before backend selection or source I/O; bounded physical implementations remain planned.
 - **Current:** SQLite has required evidence for GET/raw/form POST, ASK JSON, SELECT JSON/XML/CSV/TSV and CONSTRUCT Turtle/N-Triples/JSON-LD within the tested read-only endpoint subset.
 - **Current:** The simple SQLite streaming-CONSTRUCT profile has a required growing-source constant-memory benchmark; this does not cover global operators.
 
