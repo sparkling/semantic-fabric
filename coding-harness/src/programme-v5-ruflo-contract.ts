@@ -21,6 +21,7 @@ export const PROGRAMME_V5_RUFLO_MCP_IDENTITY = Object.freeze({
 export const PROGRAMME_V5_RUFLO_CLI_IDENTITY = Object.freeze({
   packageName: '@claude-flow/cli' as const,
   packageVersion: '3.38.20' as const,
+  // Frozen schema-V2 identity label; actual source identity is the sealed aggregate below.
   entryPath: '/home/claude/.npm-global/lib/node_modules/@claude-flow/cli/bin/mcp-server.js' as const,
   entryDigest: 'b2baccea433793c53ec1f7638134ea76ee7516c8e4808dda92fc6f6948ee43fa' as const,
   nodePath: '/usr/bin/node' as const,

@@ -63,6 +63,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-private-source-v1.ts',
   'coding-harness/src/programme-capture-protected-paths-v1.ts',
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
+  'coding-harness/src/programme-capture-source-paths-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
   'coding-harness/src/programme-capture-supervisor-authority-config-v2.ts',
   'coding-harness/src/programme-capture-supervisor-authority-transition-v2.ts',
@@ -136,4 +137,6 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md',
   'docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md',
   'docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md',
+  'docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md',
+  'docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md',
 ]);

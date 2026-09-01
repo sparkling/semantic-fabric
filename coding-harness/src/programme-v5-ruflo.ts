@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, type BigIntStats,
 } from 'node:fs';
-import { isAbsolute, dirname, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import {
   SHA256_PATTERN, asNonEmptyString, asRecord, asUniqueStrings, assertExactKeys,
@@ -23,7 +23,10 @@ import {
   type ProgrammeV5RufloEvidence, type ProgrammeV5RufloSwarmStatus,
   type ProgrammeV5RufloTaskStatus,
 } from './programme-v5-ruflo-contract.js';
-import { createProgrammeV5RufloPrivateRuntime } from './programme-v5-ruflo-runtime.js';
+import {
+  createProgrammeV5RufloPrivateRuntime,
+  resolveProgrammeV5RufloPackageRoot,
+} from './programme-v5-ruflo-runtime.js';
 import { parseJsonWithoutDuplicateKeys } from './strict-json.js';
 
 export { PROGRAMME_V5_RUFLO_CLI_IDENTITY, PROGRAMME_V5_RUFLO_MCP_IDENTITY,
@@ -49,8 +52,6 @@ export interface ProgrammeV5RufloCollectorInput {
 }
 
 type McpChild = ChildProcessByStdio<Writable, Readable, Readable>;
-const PACKAGE_MANIFEST_PATH = dirname(dirname(PROGRAMME_V5_RUFLO_CLI_IDENTITY.entryPath))
-  + '/package.json';
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,160}$/;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -68,10 +69,11 @@ export async function collectProgrammeV5RufloEvidence(
   const bindings = parseCollectorInput(input);
   if (input.signal?.aborted) throw abortError();
   const captureBindingDigest = programmeV5RufloCaptureBindingDigest(bindings);
-  const identityBefore = inspectPinnedCliIdentity();
+  const packageRoot = resolveProgrammeV5RufloPackageRoot();
+  const identityBefore = inspectPinnedCliIdentity(packageRoot);
   const nodeBefore = inspectPinnedNodeIdentity();
   const requests = programmeV5RufloRequests(bindings.coordinationTaskId, bindings.swarmId);
-  const runtime = createProgrammeV5RufloPrivateRuntime(bindings.repositoryRoot);
+  const runtime = createProgrammeV5RufloPrivateRuntime(bindings.repositoryRoot, packageRoot);
   let session: SessionResult;
   try {
     session = await runLocalMcpSession({
@@ -85,7 +87,7 @@ export async function collectProgrammeV5RufloEvidence(
       signal: input.signal,
     });
   } finally { runtime.cleanup(); }
-  const identityAfter = inspectPinnedCliIdentity();
+  const identityAfter = inspectPinnedCliIdentity(packageRoot);
   const nodeAfter = inspectPinnedNodeIdentity();
   if (JSON.stringify(identityAfter) !== JSON.stringify(identityBefore)
     || JSON.stringify(nodeAfter) !== JSON.stringify(nodeBefore)) {
@@ -150,14 +152,15 @@ function parseCollectorInput(input: ProgrammeV5RufloCollectorInput): Readonly<{
   });
 }
 
-function inspectPinnedCliIdentity(): typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY {
+function inspectPinnedCliIdentity(packageRoot: string): typeof PROGRAMME_V5_RUFLO_CLI_IDENTITY {
+  const entryPath = join(packageRoot, 'bin', 'mcp-server.js');
   const entryDigest = stableProgrammeV5RufloFileDigest(
-    PROGRAMME_V5_RUFLO_CLI_IDENTITY.entryPath, true,
+    entryPath, true,
   );
   if (entryDigest !== PROGRAMME_V5_RUFLO_CLI_IDENTITY.entryDigest) {
     throw new Error('HARNESS_PROGRAMME_V5_RUFLO_ENTRY_DIGEST_MISMATCH');
   }
-  const manifestFile = readStableFile(PACKAGE_MANIFEST_PATH, false, 1_048_576, true);
+  const manifestFile = readStableFile(join(packageRoot, 'package.json'), false, 1_048_576, true);
   const manifest = asRecord(parseJsonWithoutDuplicateKeys(
     new TextDecoder('utf-8', { fatal: true }).decode(manifestFile.bytes),
     'installed Ruflo package manifest',

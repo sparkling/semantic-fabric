@@ -27,6 +27,21 @@ import { bwrapAvailable } from './native-test-prerequisites.js';
 const nativeIt = bwrapAvailable() ? it : it.skip;
 
 describe('programme v5 local Ruflo MCP collector', () => {
+  it('rejects a non-canonical configured package source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'semantic-fabric-ruflo-source-'));
+    const variable = 'SF_HARNESS_RUFLO_PACKAGE_ROOT';
+    const original = process.env[variable];
+    try {
+      process.env[variable] = 'relative/package';
+      expect(() => createProgrammeV5RufloPrivateRuntime(root))
+        .toThrow('HARNESS_PROGRAMME_V5_RUFLO_RUNTIME_PACKAGE_ROOT_INVALID');
+    } finally {
+      if (original === undefined) delete process.env[variable];
+      else process.env[variable] = original;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   nativeIt('queries exact persisted task and swarm IDs through the pinned local stdio server', async () => {
     const root = await mkdtemp(join(tmpdir(), 'semantic-fabric-ruflo-'));
     const taskId = 'coordination-test-0001';
@@ -137,6 +152,7 @@ describe('programme v5 local Ruflo MCP collector', () => {
 
       const runtime = createProgrammeV5RufloPrivateRuntime(root);
       cleanup = runtime.cleanup;
+      expect(runtime.environment).not.toHaveProperty('SF_HARNESS_RUFLO_PACKAGE_ROOT');
       expect(runtime.args).toContain('--unshare-net');
       expect(runtime.args).not.toContain('--share-net');
       expect(runtime.args.filter((value) => value === '--unshare-net')).toHaveLength(1);
@@ -224,6 +240,8 @@ describe('programme v5 local Ruflo MCP collector', () => {
     const root = await mkdtemp(join(tmpdir(), 'semantic-fabric-ruflo-race-'));
     const taskStore = join(root, '.claude-flow', 'tasks', 'store.json');
     let runtime: ProgrammeV5RufloPrivateRuntime | undefined;
+    let mutator: ReturnType<typeof spawn> | undefined;
+    let completed: Promise<number | null> | undefined;
     try {
       await mkdir(join(root, '.claude-flow', 'tasks'), { recursive: true });
       await mkdir(join(root, '.claude-flow', 'swarm'), { recursive: true });
@@ -232,11 +250,11 @@ describe('programme v5 local Ruflo MCP collector', () => {
         join(root, '.claude-flow', 'swarm', 'swarm-state.json'),
         '{"version":"3.0.0","swarms":{}}',
       );
-      const mutator = spawn(process.execPath, ['-e', ledgerMutator, taskStore], {
+      mutator = spawn(process.execPath, ['-e', ledgerMutator, taskStore], {
         stdio: 'ignore',
       });
-      const completed = new Promise<number | null>((resolveExit) => {
-        mutator.once('exit', (code) => resolveExit(code));
+      completed = new Promise<number | null>((resolveClose) => {
+        mutator.once('close', (code) => resolveClose(code));
       });
       expect(() => {
         runtime = createProgrammeV5RufloPrivateRuntime(root);
@@ -244,6 +262,8 @@ describe('programme v5 local Ruflo MCP collector', () => {
       expect(await completed).toBe(0);
     } finally {
       runtime?.cleanup();
+      if (mutator?.exitCode === null && mutator.signalCode === null) mutator.kill('SIGTERM');
+      await completed;
       await rm(root, { recursive: true, force: true });
     }
   }, 20_000);

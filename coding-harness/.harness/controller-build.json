@@ -148,10 +148,10 @@
     "coding-harness/dist/programme-v5-qe.js": "d50f6c8ef3571be3e84c3fd2637493b8bba0ac35ea6b058dd13f49a3f18c503b",
     "coding-harness/dist/programme-v5-receipt-io.js": "e640e63101017dd36c133246ba1e4cee43e5854e3a82d3a6ba1cab3416274fa8",
     "coding-harness/dist/programme-v5-replay.js": "ed4443fa6c5e0bc360c3168900e7b235cbd6718d356be0dcd730afc73521c35c",
-    "coding-harness/dist/programme-v5-ruflo-contract.js": "bd4b2c9f74d73c141cbaf925d81803636c5a848fc37507b08b8cd0ba393fd01b",
-    "coding-harness/dist/programme-v5-ruflo-runtime.js": "1f05e7a7954bb56f7c96fd720574539402afedb69d4b0708c8e63f8d2ce1420c",
+    "coding-harness/dist/programme-v5-ruflo-contract.js": "183eeca70fdd39d25051523ee9edb228842516db4e1238c5ff80f1811389966a",
+    "coding-harness/dist/programme-v5-ruflo-runtime.js": "b8f9bd65a7df8fde3cb108d2918a9c92bd5d4fd14c219a4f01f861feb10ed0e7",
     "coding-harness/dist/programme-v5-ruflo-schema-v2-materialization.js": "acf292d18925c688e48ca2c37023e3f48a5b6636f7e4638dc098312530a1a432",
-    "coding-harness/dist/programme-v5-ruflo.js": "bf0bd38c1b8490145b8dc0f02ada376db32c44eac351a6e9d6f5cb2f2c4af2c8",
+    "coding-harness/dist/programme-v5-ruflo.js": "e487f659556a44647a03f1dca3da0c0525e65b0e06c1ac61f69957f45ddf846d",
     "coding-harness/dist/programme-v5-system.js": "a11ff237cf4439ecee6cca0006577f17ffa9a64f256fcefd67d268f06cc0d6f5",
     "coding-harness/dist/programme-v6-base-execution.js": "031ed648af727a79ed584a45c25f0dc1f5ef925c855006cd163d4d2254705d9c",
     "coding-harness/dist/programme-v6-policy-anchor.js": "8ed200093b3cf90102eef17758177092f48623900426e52d26c5c5f63fd5e5c1",
@@ -303,5 +303,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "a14cebebac0d94e3653ffb2340d98fe3300aef577af492dcad7a01ea5fa3b7b4"
+  "runtimeTreeDigest": "213363b7ab5020b147055b2623582d36675cc419506dd25d827546d818313d41"
 }

@@ -14,14 +14,8 @@ import {
 } from './programme-v5-ruflo-schema-v2-materialization.js';
 import { systemNativeRuntimeLibraryMounts } from './native-system-filesystem.js';
 
-const PACKAGE_ROOT = dirname(dirname(PROGRAMME_V5_RUFLO_CLI_IDENTITY.entryPath));
-const PACKAGE_MANIFEST = join(PACKAGE_ROOT, 'package.json');
-const PACKAGE_BIN = join(PACKAGE_ROOT, 'bin');
-const PACKAGE_DIST = join(PACKAGE_ROOT, 'dist');
-const CLI_CORE_ROOT = join(PACKAGE_ROOT, 'node_modules', '@claude-flow', 'cli-core');
-const SECURITY_ROOT = join(PACKAGE_ROOT, 'node_modules', '@claude-flow', 'security');
-const BCRYPT_ROOT = join(PACKAGE_ROOT, 'node_modules', 'bcryptjs');
-const ZOD_ROOT = join(PACKAGE_ROOT, 'node_modules', 'zod');
+const DEFAULT_PACKAGE_ROOT = '/home/claude/.npm-global/lib/node_modules/@claude-flow/cli';
+const PACKAGE_ROOT_ENV = 'SF_HARNESS_RUFLO_PACKAGE_ROOT';
 const MANIFEST_DIGEST = '633b4446e2574f0863ba53ab5918fb663d55a8d1c5195e7811cd5a10e67320b8';
 const BIN_DIGEST = '17479c2c2ee3143942738bff57fbddc959ec97decf62425b0c98045004d2a771';
 const DIST_DIGEST = 'a3d4b4ea863454b38b2ef34dba8243e1395654c325979ec696d636151546139e';
@@ -44,8 +38,17 @@ export interface ProgrammeV5RufloPrivateRuntime {
 
 export function createProgrammeV5RufloPrivateRuntime(
   repositoryRoot: string,
+  sourceRoot = resolveProgrammeV5RufloPackageRoot(),
 ): ProgrammeV5RufloPrivateRuntime {
   const repository = canonicalDirectory(repositoryRoot, 'REPOSITORY');
+  const packageRoot = canonicalDirectory(sourceRoot, 'PACKAGE_ROOT');
+  const packageManifest = join(packageRoot, 'package.json');
+  const packageBin = join(packageRoot, 'bin');
+  const packageDist = join(packageRoot, 'dist');
+  const cliCoreRoot = join(packageRoot, 'node_modules', '@claude-flow', 'cli-core');
+  const securityRoot = join(packageRoot, 'node_modules', '@claude-flow', 'security');
+  const bcryptRoot = join(packageRoot, 'node_modules', 'bcryptjs');
+  const zodRoot = join(packageRoot, 'node_modules', 'zod');
   const taskStore = join(repository, '.claude-flow', 'tasks', 'store.json');
   const swarmState = join(repository, '.claude-flow', 'swarm', 'swarm-state.json');
   assertRootOnlyBwrapParent();
@@ -65,7 +68,7 @@ export function createProgrammeV5RufloPrivateRuntime(
         expectedDigest: PROGRAMME_V5_RUFLO_BWRAP_IDENTITY.digest,
       },
       {
-        key: 'manifest', sourcePath: PACKAGE_MANIFEST,
+        key: 'manifest', sourcePath: packageManifest,
         relativePath: 'package/package.json', executable: false,
         expectedDigest: MANIFEST_DIGEST, maxBytes: 1_048_576,
       },
@@ -92,31 +95,31 @@ export function createProgrammeV5RufloPrivateRuntime(
     ],
     trees: [
       {
-        key: 'bin', sourceRoot: PACKAGE_BIN, relativePath: 'package/bin',
+        key: 'bin', sourceRoot: packageBin, relativePath: 'package/bin',
         maxFiles: 16, maxBytes: 1_048_576,
       },
       {
-        key: 'dist', sourceRoot: PACKAGE_DIST, relativePath: 'package/dist',
+        key: 'dist', sourceRoot: packageDist, relativePath: 'package/dist',
         maxFiles: 1_024, maxBytes: 20_000_000,
         overrideManifest: PROGRAMME_V5_RUFLO_SCHEMA_V2_OVERRIDE_MANIFEST,
       },
       {
-        key: 'cliCore', sourceRoot: CLI_CORE_ROOT,
+        key: 'cliCore', sourceRoot: cliCoreRoot,
         relativePath: 'package/node_modules/@claude-flow/cli-core',
         maxFiles: 128, maxBytes: 1_000_000,
       },
       {
-        key: 'security', sourceRoot: SECURITY_ROOT,
+        key: 'security', sourceRoot: securityRoot,
         relativePath: 'package/node_modules/@claude-flow/security',
         maxFiles: 256, maxBytes: 2_000_000,
       },
       {
-        key: 'bcrypt', sourceRoot: BCRYPT_ROOT,
+        key: 'bcrypt', sourceRoot: bcryptRoot,
         relativePath: 'package/node_modules/bcryptjs',
         maxFiles: 128, maxBytes: 1_000_000,
       },
       {
-        key: 'zod', sourceRoot: ZOD_ROOT,
+        key: 'zod', sourceRoot: zodRoot,
         relativePath: 'package/node_modules/zod',
         maxFiles: 1_024, maxBytes: 10_000_000,
       },
@@ -162,6 +165,12 @@ export function createProgrammeV5RufloPrivateRuntime(
     runtime.cleanup();
     throw error;
   }
+}
+
+export function resolveProgrammeV5RufloPackageRoot(): string {
+  const configured = process.env[PACKAGE_ROOT_ENV];
+  return canonicalDirectory(configured === undefined ? DEFAULT_PACKAGE_ROOT : configured,
+    'PACKAGE_ROOT');
 }
 
 function assertPackageSource(runtime: ReturnType<typeof createImmutablePrivateRuntime>): void {
