@@ -19,6 +19,7 @@
 
 pub mod ontology;
 pub mod run;
+pub mod source;
 pub mod stream;
 
 mod admission;
@@ -37,4 +38,5 @@ pub use http::router;
 pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
 pub use run::{serve_blocking, ServeOptions};
+pub use source::{SourceInput, SourceRef, MAX_SOURCE_ENV_NAME_BYTES, MAX_SOURCE_INPUT_BYTES};
 pub use stream::RdfFormat;

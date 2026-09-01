@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
-use sf_serve::{serve_blocking, ServeOptions};
+use sf_serve::{serve_blocking, ServeOptions, SourceRef};
 
 #[derive(Parser)]
 #[command(
@@ -37,9 +37,8 @@ enum Command {
 /// `serve` flags (ADR-0019 G8, ADR-0010/0011). Read-only query endpoint.
 #[derive(clap::Args)]
 struct ServeArgs {
-    /// Source: `sqlite:<path>` (path may be `:memory:`), `pg:<conninfo>`, or `mysql://<url>`.
-    #[arg(long)]
-    source: String,
+    #[command(flatten)]
+    source_input: SourceArgs,
     /// R2RML mapping document (Turtle).
     #[arg(long)]
     mapping: String,
@@ -67,6 +66,29 @@ struct ServeArgs {
     sqlite_pool_size: usize,
 }
 
+/// Exactly one source transport: a credential-free inline value or the name of
+/// an environment variable containing the complete source value.
+#[derive(clap::Args)]
+#[group(required = true, multiple = false)]
+struct SourceArgs {
+    /// Credential-free `sqlite:`, `pg:`, or `mysql://` source.
+    #[arg(long)]
+    source: Option<String>,
+    /// Environment variable containing the complete source (credentials allowed).
+    #[arg(long)]
+    source_env: Option<String>,
+}
+
+impl SourceArgs {
+    fn into_source_ref(self) -> SourceRef {
+        match (self.source, self.source_env) {
+            (Some(value), None) => SourceRef::inline(value),
+            (None, Some(variable)) => SourceRef::environment(variable),
+            _ => unreachable!("clap requires exactly one source argument"),
+        }
+    }
+}
+
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Conformance => conformance(),
@@ -78,8 +100,9 @@ fn main() -> ExitCode {
 /// Run the SPARQL 1.2 Protocol endpoint (`sf-serve`). Returns a clear error
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
+    let source = args.source_input.into_source_ref();
     let opts = ServeOptions {
-        source: args.source,
+        source,
         mapping_path: args.mapping,
         ontology_path: args.ontology,
         bind: args.bind,
@@ -241,6 +264,32 @@ mod tests {
     }
 
     #[test]
+    fn serve_source_selector_requires_exactly_one_transport() {
+        let base = ["semantic-fabric", "serve", "--mapping", "mapping.ttl"];
+        assert!(Cli::try_parse_from(base).is_err());
+
+        let both = [
+            "semantic-fabric",
+            "serve",
+            "--mapping",
+            "mapping.ttl",
+            "--source",
+            "sqlite::memory:",
+            "--source-env",
+            "SF_SOURCE",
+        ];
+        assert!(Cli::try_parse_from(both).is_err());
+
+        for selector in [
+            ["--source", "sqlite::memory:"],
+            ["--source-env", "SF_SOURCE"],
+        ] {
+            let args = base.into_iter().chain(selector);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
+
+    #[test]
     fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
         // The one cheap, crate-local integration check on serve(): a mapping path
         // that doesn't exist must surface as a clean ExitCode::FAILURE (via
@@ -248,7 +297,10 @@ mod tests {
         // that's this crate's own responsibility as the process entry point,
         // regardless of how sf-serve itself is implemented/tested.
         let opts = ServeArgs {
-            source: "sqlite::memory:".to_owned(),
+            source_input: SourceArgs {
+                source: Some("sqlite::memory:".to_owned()),
+                source_env: None,
+            },
             mapping: "/nonexistent/path/does-not-exist.ttl".to_owned(),
             ontology: None,
             bind: "127.0.0.1:0".to_owned(),
