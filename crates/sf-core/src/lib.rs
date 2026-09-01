@@ -34,6 +34,7 @@ pub use oxrdf::{
 pub mod datatype;
 pub mod graph_map;
 pub mod ir;
+pub mod query_control;
 pub mod term;
 
 /// Errors raised by the shared core.

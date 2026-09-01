@@ -3,8 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::BodyExt;
+use sf_core::query_control::{QueryControl, QueryControlError};
 use sparesults::QueryResultsFormat;
 use tokio::sync::{oneshot, Semaphore};
+use tokio::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 use tower::ServiceExt;
 
@@ -158,6 +160,20 @@ async fn stream_driver_stall_ends_at_the_carried_deadline() {
     tokio::time::advance(Duration::from_secs(10)).await;
     let error = body.collect().await.expect_err("stream must time out");
     assert!(error.to_string().contains("request timeout"), "{error}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn shared_control_port_uses_the_existing_tokio_clock() {
+    let start = Instant::now();
+    let deadline = RequestDeadline::after(Duration::from_secs(10));
+
+    deadline
+        .check_at(start + Duration::from_secs(6))
+        .expect("checkpoint remains before the original deadline");
+    assert_eq!(
+        deadline.check_at(start + Duration::from_secs(10)),
+        Err(QueryControlError::DeadlineExceeded)
+    );
 }
 
 #[tokio::test(start_paused = true)]

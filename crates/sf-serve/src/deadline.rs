@@ -8,6 +8,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use sf_core::query_control::{QueryControl, QueryControlError};
 use tokio::sync::Semaphore;
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
@@ -44,8 +45,16 @@ impl RequestDeadline {
     }
 
     pub(crate) fn check(self) -> Result<(), DeadlineExceeded> {
-        if Instant::now() >= self.0 {
-            Err(DeadlineExceeded)
+        self.check_at(Instant::now()).map_err(|_| DeadlineExceeded)
+    }
+}
+
+impl QueryControl for RequestDeadline {
+    type Instant = Instant;
+
+    fn check_at(&self, now: Instant) -> Result<(), QueryControlError> {
+        if now >= self.0 {
+            Err(QueryControlError::DeadlineExceeded)
         } else {
             Ok(())
         }
