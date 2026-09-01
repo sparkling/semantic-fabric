@@ -289,6 +289,9 @@ describe('PostgreSQL migration lifecycle contract V1', () => {
       mutants.push(candidate);
     };
     mutate((value) => { value.authority = 'migration'; });
+    mutate((value) => { value.readinessAuthorized = true; });
+    mutate((value) => { value.databaseAccessAuthorized = true; });
+    mutate((value) => { value.migrationApplyAuthorized = true; });
     mutate((value) => { value.executableAuthority = true; });
     mutate((value) => { value.lifecycleNames.pop(); });
     mutate((value) => { value.executeOperations[30] = value.executeOperations[0]; });
@@ -302,6 +305,14 @@ describe('PostgreSQL migration lifecycle contract V1', () => {
     mutate((value) => { value.deadlines.ordinaryExecuteMilliseconds += 1; });
     mutate((value) => { value.deadlines.successfulNormalWorkMilliseconds -= 1; });
     mutate((value) => { value.extra = false; });
+    mutants.push(Object.fromEntries(Object.entries(structuredClone(original)).reverse()));
+    const reorderedNested = structuredClone(original) as unknown as {
+      controlSql: Record<string, string>;
+    };
+    reorderedNested.controlSql = Object.fromEntries(
+      Object.entries(reorderedNested.controlSql).reverse(),
+    );
+    mutants.push(reorderedNested);
     const accessor = structuredClone(original);
     Object.defineProperty(accessor, 'authority', { enumerable: true, get: () => 'none' });
     mutants.push(accessor, new Proxy(structuredClone(original), {
