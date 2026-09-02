@@ -135,6 +135,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/format/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/prepared_receipt/tests.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_linkage/tests.rs',
+  'crates/sf-serve/src/http_tests.rs', 'crates/sf-serve/src/post_body.rs', 'crates/sf-serve/src/request_deadline.rs', 'crates/sf-serve/tests/post_body_admission.rs',
   'docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md',
   'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',
   'docs/adr/ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md',

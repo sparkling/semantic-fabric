@@ -183,6 +183,7 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/tests/regression_baseline_cli.rs',
   'crates/sf-conformance/tests/rust_closure_receipt.rs',
   'crates/sf-conformance/tests/w3c_pg_suite.rs',
+  'crates/sf-serve/src/http_tests.rs', 'crates/sf-serve/src/post_body.rs', 'crates/sf-serve/src/request_deadline.rs', 'crates/sf-serve/tests/post_body_admission.rs',
   'crates/sf-serve/tests/endpoint.rs',
   'crates/sf-sparql/tests/e2e.rs',
   'docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md',

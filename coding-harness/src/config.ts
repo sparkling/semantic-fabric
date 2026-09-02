@@ -378,6 +378,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'crates/sf-core/Cargo.toml',
     'crates/sf-mapping/Cargo.toml',
     'crates/sf-serve/Cargo.toml',
+    'crates/sf-serve/src/http_tests.rs', 'crates/sf-serve/src/post_body.rs', 'crates/sf-serve/src/request_deadline.rs', 'crates/sf-serve/tests/post_body_admission.rs',
     'crates/sf-serve/tests/endpoint.rs',
     'crates/sf-sparql/Cargo.toml',
     'crates/sf-sparql/tests/e2e.rs',
