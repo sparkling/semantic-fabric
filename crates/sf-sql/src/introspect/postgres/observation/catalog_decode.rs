@@ -46,6 +46,53 @@ pub(super) fn decode_guard_row_v1(
     })
 }
 
+pub(super) fn decode_relation_row_v1(
+    row: &Row,
+) -> Result<CatalogRelationRowV1, PostgresSchemaIdentityUnavailableV1> {
+    macro_rules! get {
+        ($name:literal, $ty:ty) => {
+            row.try_get::<_, $ty>($name)
+                .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogDecode)?
+        };
+    }
+    let value = CatalogRelationRowV1 {
+        relation_oid: get!("relation_oid", u32),
+        relation_namespace_oid: get!("relation_namespace_oid", u32),
+        joined_namespace_oid: get!("joined_namespace_oid", u32),
+        namespace_name: get!("namespace_name", String),
+        relation_name: get!("relation_name", String),
+        text_overflow: get!("sf_text_overflow", bool),
+        relation_kind: one_char(get!("relkind", String))?,
+        persistence: one_char(get!("relpersistence", String))?,
+        is_partition: get!("relispartition", bool),
+        row_security: get!("relrowsecurity", bool),
+        force_row_security: get!("relforcerowsecurity", bool),
+        of_type_oid: get!("reloftype", u32),
+        rewrite_oid: get!("relrewrite", u32),
+        access_method_oid: get!("relam", u32),
+        joined_access_method_oid: get!("joined_access_method_oid", Option<u32>),
+        access_method_namespace: get!("access_method_namespace", Option<String>),
+        access_method_name: get!("access_method_name", Option<String>),
+        access_method_type: get!("access_method_type", Option<String>)
+            .map(one_char)
+            .transpose()?,
+        physical_attribute_count: get!("relnatts", i16),
+    };
+    value.validate()?;
+    Ok(value)
+}
+
+fn one_char(value: String) -> Result<char, PostgresSchemaIdentityUnavailableV1> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(PostgresSchemaIdentityUnavailableV1::CatalogDecode);
+    };
+    if chars.next().is_some() {
+        return Err(PostgresSchemaIdentityUnavailableV1::CatalogDecode);
+    }
+    Ok(first)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CatalogRelationRowV1 {
     pub(super) relation_oid: u32,
