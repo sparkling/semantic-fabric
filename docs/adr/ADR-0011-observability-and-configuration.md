@@ -18,13 +18,19 @@ implements:
 > `3e0f920`/`c9e6c53` add a closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
 > `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
-> `6cd85eb` routes every pre-response absolute-deadline expiry through it, and
-> `484a4b4` adds a bounded redacted `SourceRef`: the CLI accepts exactly one
+> `6cd85eb` routes every pre-response absolute-deadline expiry through it;
+> `58cca82` adds the redacted `429 query-budget-exceeded` boundary, and `bac8240`
+> rejects an unrepresentable timeout as redacted startup configuration before
+> source, file, runtime, or network I/O. Commit `f1f4747` rechecks the deadline at
+> response handoff and rejects zero-capacity ASK before backend acquisition.
+> Commit `484a4b4` adds a bounded redacted
+> `SourceRef`: the CLI accepts exactly one
 > credential-free inline source or environment reference, and typed PostgreSQL/
 > MySQL parsing rejects inline passwords before runtime, file, or network I/O. Raw
 > generated SQL, driver text, mapping details and source specifications cannot
 > enter that public boundary. Current hardening also maps SELECT/CONSTRUCT
-> executor failures after committing `200` to the single stable body error
+> executor and query-budget failures after committing `200` to the single stable
+> body error
 > `result stream failed`, so driver, mapping, schema and SQL text cannot escape
 > through that channel. The failure still terminates the stream; it does not turn
 > the response into RFC 9457 or prove an atomic no-prefix contract. Environment

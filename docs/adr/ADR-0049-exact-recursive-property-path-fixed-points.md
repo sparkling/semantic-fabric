@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [sparql, property-paths, correctness, recursive-cte, resource-governance]
 supersedes: []
 depends-on: [ADR-0007, ADR-0010, ADR-0038]
@@ -17,9 +17,11 @@ corrects ADR-0010 R3 where a numeric recursion-depth limit was allowed to end a
 successful `P+` or `P*` query. It does not accept a partial answer at any depth.
 
 This decision closes the known semantic truncation in the single-source
-compiler. It does not complete `QueryBudget`, cost admission, source-native
-timeouts, cancellation, result limits, cross-source closure, production backend
-admission, or live MySQL qualification.
+compiler. The serving lane now carries one absolute deadline plus finite limits
+for observable probes, opens, pulls, semantic results, and serializer writes.
+Raw/conformance APIs remain explicitly uncontrolled; compiler CPU, database
+rows/recursive SQL and source cost, source-native timeouts/cancellation, cross-
+source closure, production backend admission, and live MySQL remain open.
 
 ## Context
 
@@ -78,8 +80,9 @@ label the accumulated path prefix complete. Current HTTP streaming is not
 atomic: after `200`, already-sent bytes can remain observable when the body
 terminates. That is a failed transport, not a successful semantic answer;
 atomic no-prefix delivery remains open under ADR-0010/0011. Production admission
-also requires one absolute ingress-to-serialization budget, source-native
-statement controls, cancellation, and backend-specific load evidence.
+also requires extending the serving budget to compiler CPU, database rows,
+recursive iterations and source cost, plus source-native statement controls,
+cancellation, and backend-specific load evidence.
 
 ### 4. Keep the evidence adversarial
 

@@ -148,17 +148,32 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > identity through the absolute deadline, compiler admission/wait, pool acquisition,
 > controlled SQLite/PostgreSQL/MySQL execution, semantic result charging and every
 > serializer write. Defaults and CLI flags expose inclusive ceilings for source
-> work, result items and serialized bytes. ASK breaches are known before response
-> and use a redacted `429 query-budget-exceeded`; SELECT/CONSTRUCT breaches after
+> work, result items and serialized bytes. An impossible zero-result ASK budget
+> rejects before source I/O; every ASK breach is known before response and uses a
+> redacted `429 query-budget-exceeded`. SELECT/CONSTRUCT breaches after
 > the status handoff always terminate with the stable `result stream failed` body
-> error. All SPARQL-result and RDF serializers pass at their exact byte ceiling and
-> fail before an over-limit append; dropping a sub-chunk body cancels and drops a
-> stalled Rust driver. R4/R5 are still incomplete: source work means only catalog
+> error. Streamed SELECT/CONSTRUCT serializers pass at their exact byte ceiling and
+> fail before an over-limit append; bounded ASK serialization charges before the
+> response. Dropping a sub-chunk body cancels and drops a stalled Rust driver.
+> R4/R5 are still incomplete: source work means only catalog
 > probes, branch opens and pull attempts—not database rows scanned, recursive CTE
-> iterations, compiler CPU or source cost. Raw/conformance APIs remain explicitly
-> uncontrolled, and no common native statement cancellation, SQLite in-flight
-> interruption, bounded recursive work, or atomic/no-prefix streamed response is
-> claimed.
+> iterations, compiler CPU or source cost. MySQL acquisition is deadline-bounded
+> but lacks PostgreSQL's fast `503`/`Retry-After` pool-shedding contract.
+> Raw/conformance APIs remain explicitly uncontrolled, and no common native
+> statement cancellation, SQLite in-flight interruption, bounded recursive work,
+> or atomic/no-prefix streamed response is claimed.
+
+> **Status correction, part 9 (2026-09-02, adversarial race closure).** Commit
+> `087e7e2` makes charge/termination transitions linearizable: an in-flight
+> charge completes before a later terminal transition, while a rejected charge
+> changes no counter; barrier and concurrency tests lock both cases. Commit
+> `f1f4747` rechecks the absolute clock before accepting handler output, makes a
+> body-drop cancellation deadline-aware, and rejects an impossible ASK result
+> capacity before backend selection or acquisition. Commit `136f21b` pulls ASK
+> one row at a time and stops after the first final solution without truncating a
+> Rust-group inner collection or losing ordered OFFSET/LIMIT semantics. These
+> repairs do not change the part-8 database-work, native-cancellation,
+> raw/conformance, recursive-work, or post-`200` atomicity nonclaims.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
