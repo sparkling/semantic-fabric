@@ -14,7 +14,8 @@ implements: [ADR-0038]
 
 This ADR remains **proposed** for lifecycle phases 2 through 6. Its Phase 1 pure
 `sf-core` Observed Schema Identity V1 kernel is implemented as a non-authorizing
-content-identity utility. No production profile is registered and no adapter can
+content-identity utility. [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md)
+now proposes the first closed production-shaped profile, but no adapter can yet
 emit or carry its digests. This implementation does not accept the remaining
 design or claim that a runtime snapshot manager, reload, drift detection, a
 backend-generation lease, or live Direct Mapping exists.
@@ -347,6 +348,7 @@ require that none escape.
 [ADR-0015](ADR-0015-datatype-dialect-correctness.md),
 [ADR-0038](ADR-0038-sota-application-completion-programme.md), and
 [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md).
+The Phase 2 profile is [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md).
 Normative companions:
 [Appendix A](../design/ADR-0050-observed-schema-identity-v1-contract.md) and
 [Appendix B](../design/ADR-0050-observed-schema-identity-v1-known-answer-vectors.md).
