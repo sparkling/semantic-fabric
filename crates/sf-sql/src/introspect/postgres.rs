@@ -5,6 +5,15 @@ use std::collections::{BTreeMap, HashMap};
 use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, TableSchema};
 
+mod observation;
+pub use observation::{
+    Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
+    PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
+    PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailableV1,
+    POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1, POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1,
+    POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1,
+};
+
 const RUNTIME_SCHEMA: &str = "public";
 
 const TABLES_SQL: &str = "SELECT table_name FROM information_schema.tables \
