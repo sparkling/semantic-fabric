@@ -4,7 +4,7 @@ meta	surface	sparql-protocol
 meta	backend	sqlite
 meta	hash-algorithm	sha256
 meta	attestation-scope	expected-local-test-outcomes-not-runtime-provenance-w3c-conformance-or-backend-admission
-input	Cargo.lock	158522	a6c7f6ac81cfb96d497b746cfc57671967cda6d026ed7c1d5c103b2feab92c67
+input	Cargo.lock	158538	e879facb45e46c4b8f7680868e25fb55571ef1e4e27c56858481ff400a16e8f3
 input	Cargo.toml	2597	b0c4ac281585bd34b3dfd1fa97e7f0fd8776e3cb4fcc144aba916cecde2c7bc4
 input	crates/sf-serve/Cargo.toml	1517	343af72945a639b4beeecc9d0c7f3da25286126e58a76081a7deb8015e7ea87c
 input	crates/sf-serve/tests/endpoint.rs	40037	613ba890eefa7ca0507751065b071ded6849da3684d2d20e735bf166d5b0f2b9

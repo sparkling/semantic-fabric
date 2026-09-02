@@ -3,7 +3,7 @@ meta	profile-id	sqlite-protocol-regression-v2
 meta	surface	sparql-protocol
 meta	backend	sqlite
 meta	inventory-path	tests/sparql/protocol/inventory.tsv
-meta	inventory-sha256	a70dd160e3871ec057ca5b1e8d116316d73595f8a5193d5fe9965627f10d729b
+meta	inventory-sha256	f6739f842a84aca1e3ad5777a961e2d4bcf8919403c54cae019f44f1443a8e3c
 meta	hash-algorithm	sha256
 meta	attestation-scope	expected-local-test-outcomes-not-runtime-provenance-w3c-conformance-or-backend-admission
 meta	suite-count	1
