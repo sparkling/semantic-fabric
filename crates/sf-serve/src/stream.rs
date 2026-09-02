@@ -38,6 +38,8 @@ use crate::deadline::TIMEOUT_MESSAGE;
 const CHUNK: usize = 16 * 1024;
 /// Bound on chunks in flight — the HTTP-body backpressure window (ADR-0006).
 const CHANNEL_CAP: usize = 8;
+/// Stable public body error for executor failures after streaming has committed.
+const STREAM_FAILURE_MESSAGE: &str = "result stream failed";
 
 /// The RDF serialisation chosen by content negotiation for CONSTRUCT/DESCRIBE.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,7 +191,7 @@ where
             };
             before_deadline(deadline, drive(sink))
                 .await?
-                .map_err(|e| io::Error::other(e.to_string()))?;
+                .map_err(|_| stream_failure_error())?;
             check_deadline(deadline)?;
             let writer = writer
                 .lock()
@@ -243,7 +245,7 @@ where
             };
             before_deadline(deadline, drive(sink))
                 .await?
-                .map_err(|e| io::Error::other(e.to_string()))?;
+                .map_err(|_| stream_failure_error())?;
             check_deadline(deadline)?;
             let ser = sink_ser
                 .lock()
@@ -295,6 +297,10 @@ where
 
 fn timeout_error() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, TIMEOUT_MESSAGE)
+}
+
+fn stream_failure_error() -> io::Error {
+    io::Error::other(STREAM_FAILURE_MESSAGE)
 }
 
 /// A `std::io::Write` over a shared byte buffer the async streamers serialise into
@@ -360,4 +366,46 @@ async fn send_chunk(tx: &Sender<Result<Bytes, io::Error>>, bytes: Vec<u8>) -> io
             "client disconnected (cancel-on-drop)",
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use http_body_util::BodyExt;
+
+    use super::*;
+
+    const ERROR_SENTINEL: &str = "sf_stream_secret_NEVER_EXPOSE_4d91";
+    const SAFE_STREAM_ERROR: &str = "result stream failed";
+
+    async fn assert_safe_stream_error(body: Body) {
+        let error = body
+            .collect()
+            .await
+            .expect_err("executor failure must terminate the body");
+
+        assert_eq!(error.to_string(), SAFE_STREAM_ERROR);
+    }
+
+    #[tokio::test]
+    async fn select_executor_error_does_not_escape_into_body_error() {
+        let body = select_body_streaming(
+            |_sink| Box::pin(async { Err(sf_sparql::Error::Sql(ERROR_SENTINEL.to_owned())) }),
+            QueryResultsFormat::Json,
+            vec!["value".to_owned()],
+            None,
+        );
+
+        assert_safe_stream_error(body).await;
+    }
+
+    #[tokio::test]
+    async fn construct_executor_error_does_not_escape_into_body_error() {
+        let body = construct_body_streaming(
+            |_sink| Box::pin(async { Err(sf_sparql::Error::Sql(ERROR_SENTINEL.to_owned())) }),
+            RdfFormat::Turtle,
+            None,
+        );
+
+        assert_safe_stream_error(body).await;
+    }
 }

@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -370,10 +370,10 @@ through `a84aa05` establish the private supply chain, dual-host transaction,
 exact-origin and filesystem/resource isolation, bounded retry/cancellation,
 provider-free QE/SAST, schema-V6 evidence law, trusted execution/replay,
 protected dormant retrieval tuning, and PostgreSQL receipt authority. The
-2026-08-31 checkpoint historically passed 905 tests/122 files. The last accepted
-full relocatable Ruflo checkpoint passed 942 tests/124 files with two skips; it
-predates the current Rust slices and has not been rerun. Neither checkpoint grants
-product, publication, promotion, or evolution authority.
+2026-08-31 checkpoint historically passed 905 tests/122 files. The 2026-09-02
+current-tree hermetic checkpoint passes 965 tests/124 files with two skips after
+refreshing five Rust source bindings and the controller attestation. The excluded
+mutable ambient collector grants no product, publication, promotion, or evolution authority.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
 `f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate

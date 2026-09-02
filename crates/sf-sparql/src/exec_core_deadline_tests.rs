@@ -32,7 +32,7 @@ impl SqlBackend for ReadyBackend {
         Self: 's;
 
     async fn column_names(&mut self, _probe: &str) -> sf_sql::Result<Vec<String>> {
-        Ok(Vec::new())
+        Ok(vec!["val".to_owned()])
     }
 
     async fn open_branch(&mut self, _sql: &str, _params: &[String]) -> sf_sql::Result<ReadyStream> {
@@ -70,7 +70,7 @@ fn discarded_ready_rows_reach_a_pull_side_cooperative_checkpoint() {
         order: Vec::new(),
         rust_group: None,
         dialect: Dialect::Sqlite,
-        dedup_groups: std::collections::HashMap::new(),
+        dedup_scopes: Vec::new(),
         construct_drops_some_branch_var: false,
     };
     let rows = (0..TERM_GEN_FIRST_BATCH_SIZE)

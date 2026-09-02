@@ -42,7 +42,7 @@ where
         // `canonical_lexical` numeric formatting) that measurably benefits from
         // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
         parallel_term_gen: true,
-        dedup_groups: &plan.dedup_groups,
+        dedup_scopes: &plan.dedup_scopes,
     };
     let mut inner_rows: Vec<Bindings> = Vec::new();
     run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
@@ -290,7 +290,7 @@ where
         order: Vec::new(),
         rust_group: None,
         dialect,
-        dedup_groups: std::collections::HashMap::new(),
+        dedup_scopes: Vec::new(),
         construct_drops_some_branch_var: false,
     };
     for_each_solution(&plan, b, |branch, bindings| {

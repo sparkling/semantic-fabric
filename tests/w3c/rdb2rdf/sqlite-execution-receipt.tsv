@@ -11,7 +11,7 @@ meta	direct-mapping-count	24
 meta	passed-count	81
 meta	failed-count	1
 meta	skipped-count	5
-meta	outcomes-sha256	bf334cf72c875524cac99c0727e46de862a3cde4cc3cfe74e8c58d087cc320de
+meta	outcomes-sha256	75ceab034c30af4f02f5e627b7122ec5dbc982a6569f747f9fc3bfe1809d3a41
 case	DirectGraphTC0000	direct-mapping	passed	graph-matched
 case	DirectGraphTC0001	direct-mapping	passed	graph-matched
 case	DirectGraphTC0002	direct-mapping	passed	graph-matched
@@ -45,7 +45,7 @@ case	R2RMLTC0002c	r2rml	passed	execution-error
 case	R2RMLTC0002d	r2rml	passed	graph-matched
 case	R2RMLTC0002e	r2rml	passed	execution-error
 case	R2RMLTC0002f	r2rml	failed	unexpected-output
-case	R2RMLTC0002g	r2rml	passed	execution-error
+case	R2RMLTC0002g	r2rml	passed	source-validation-error
 case	R2RMLTC0002h	r2rml	passed	source-validation-error
 case	R2RMLTC0002i	r2rml	passed	graph-matched
 case	R2RMLTC0002j	r2rml	passed	graph-matched

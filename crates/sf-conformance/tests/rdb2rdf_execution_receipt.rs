@@ -256,8 +256,8 @@ fn count_neutral_per_id_status_mutation_fails_self_verification() {
     );
     replace_once(
         &receipt.path,
-        "case\tR2RMLTC0002g\tr2rml\tpassed\texecution-error",
-        "case\tR2RMLTC0002g\tr2rml\tfailed\tunexpected-output",
+        "case\tR2RMLTC0000\tr2rml\tpassed\tgraph-matched",
+        "case\tR2RMLTC0000\tr2rml\tfailed\tunexpected-output",
     );
 
     let error = execution_receipt::check(&source_suite(), &receipt.path).unwrap_err();

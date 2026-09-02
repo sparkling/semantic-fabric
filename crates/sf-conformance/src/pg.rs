@@ -249,15 +249,17 @@ async fn validate_query_sources(
     use sf_core::ir::LogicalSource;
     for map in maps {
         if let LogicalSource::Query(q) = &map.source {
-            if let Ok(stmt) = client.prepare(q).await {
-                let mut seen = HashSet::new();
-                for col in stmt.columns() {
-                    if !seen.insert(col.name().to_owned()) {
-                        return Err(format!(
-                            "rr:sqlQuery produces duplicate column name {:?} (R2RML §5.1)",
-                            col.name()
-                        ));
-                    }
+            let stmt = client
+                .prepare(q)
+                .await
+                .map_err(|_| "rr:sqlQuery metadata validation failed".to_owned())?;
+            let mut seen = HashSet::new();
+            for col in stmt.columns() {
+                if !seen.insert(col.name().to_owned()) {
+                    return Err(
+                        "rr:sqlQuery produces duplicate result-column names (R2RML §5.1)"
+                            .to_owned(),
+                    );
                 }
             }
         }

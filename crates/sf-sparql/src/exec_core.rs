@@ -6,6 +6,8 @@
 
 mod aggregation;
 mod batch;
+mod dedup_scope;
+mod dedup_scope_runtime;
 mod driver;
 mod expression;
 mod forms;
@@ -27,7 +29,8 @@ fn push_hex(out: &mut String, bytes: &[u8]) {
 
 #[allow(unused_imports)]
 pub(crate) use aggregation::rust_group_result_rows;
-pub(crate) use driver::{block_on, dedup_group_alias};
+pub(crate) use dedup_scope::lift_dedup_scopes;
+pub(crate) use driver::block_on;
 #[allow(unused_imports)]
 pub(crate) use expression::eval_expr;
 pub(crate) use forms::construct_may_need_cross_branch_dedup;

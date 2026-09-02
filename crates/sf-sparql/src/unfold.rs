@@ -15,6 +15,7 @@ use spargebra::algebra::{
 };
 use spargebra::term::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
 
+use crate::compiler_schema::ColumnTypeUse;
 use crate::graph_map::{apply_filter, bind_variable, is_default_graph, RR_DEFAULT_GRAPH};
 use crate::iq::lower::{convert_path_branches, remap_termdef};
 use crate::iq::node::triple_pattern_vars;
@@ -63,6 +64,14 @@ impl TransPattern {
     }
 }
 
+/// Resolve-time marker for one D2 fallback arm. The term definitions are
+/// captured at the BGP boundary, before any outer projection can remove them.
+#[derive(Debug, Clone)]
+pub(crate) struct DedupMarker {
+    pub(crate) group_id: usize,
+    pub(crate) key_bindings: std::collections::BTreeMap<String, TermDef>,
+}
+
 /// Walks the mappings + T-Box, allocating fresh scan aliases.
 pub struct Unfolder<'a> {
     pub(crate) maps: &'a [TriplesMap],
@@ -79,11 +88,10 @@ pub struct Unfolder<'a> {
     /// (stable across the flat `merge`/tree bridge-lower round trip, unlike a
     /// hypothetical field on `Branch` itself — see `pool_pattern_relation`'s /
     /// `iq::resolve`'s Intensional-arm doc comments for why the marker lives
-    /// here, keyed by alias, rather than on `Branch`). Pulled into the final
-    /// [`crate::Plan::dedup_groups`] by [`Unfolder::dedup_groups`] (flat) or
-    /// [`crate::iq::resolve::ResolveCx::dedup_groups`] (tree) once translation
-    /// finishes; [`crate::exec_core::run_branches`] is the only reader.
-    dedup_groups: std::collections::HashMap<usize, usize>,
+    /// here, keyed by alias, rather than on `Branch`). Lifted onto the final
+    /// root [`crate::Plan::dedup_scopes`] by the post-cascade validation
+    /// (`Unfolder::dedup_groups` for flat, `ResolveCx::dedup_groups` for tree).
+    dedup_groups: std::collections::HashMap<usize, DedupMarker>,
     /// The named graph currently active inside a `GRAPH <g> { ... }` clause, or
     /// `None` when translating the default graph (no GRAPH wrapper). Set/restored
     /// by the `GraphPattern::Graph` arm; all other arms inherit the current value.
@@ -120,6 +128,10 @@ pub struct Unfolder<'a> {
     /// per-pattern D1 check (`ResolveCx` wraps an `Unfolder` for exactly this
     /// reason — see its own doc comment).
     pub(crate) schema: &'a [sf_sql::TableSchema],
+    /// Whether observed SQL types may prove positional PostgreSQL pooling safe.
+    /// Raw translation callers explicitly authorize frozen schema facts; cached
+    /// serving compilation supplies `Unverified` through `CompilerBinding`.
+    pub(crate) column_type_use: ColumnTypeUse,
     /// `true` while resolving a pattern that lives INSIDE a `FILTER EXISTS` /
     /// `FILTER NOT EXISTS` / `MINUS` body (set/restored around that recursion by
     /// `iq::resolve`'s `resolve_cond`, the tree engine's only caller — the flat
@@ -159,6 +171,22 @@ impl<'a> Unfolder<'a> {
         dialect: sf_sql::Dialect,
         schema: &'a [sf_sql::TableSchema],
     ) -> Self {
+        Self::new_with_column_type_use(
+            maps,
+            tbox,
+            dialect,
+            schema,
+            ColumnTypeUse::CallerAuthorizedFrozen,
+        )
+    }
+
+    pub(crate) fn new_with_column_type_use(
+        maps: &'a [TriplesMap],
+        tbox: &'a Tbox,
+        dialect: sf_sql::Dialect,
+        schema: &'a [sf_sql::TableSchema],
+        column_type_use: ColumnTypeUse,
+    ) -> Self {
         Self {
             maps,
             tbox,
@@ -168,6 +196,7 @@ impl<'a> Unfolder<'a> {
             current_graph: None,
             current_graph_var: None,
             schema,
+            column_type_use,
             in_existential: false,
         }
     }
@@ -183,14 +212,38 @@ impl<'a> Unfolder<'a> {
     /// tree engine's `iq::resolve` is the one cross-module caller (it cannot
     /// reach the private field directly); the flat engine's `pool_pattern_
     /// relation` takes `&mut self.dedup_groups` directly instead (same module).
-    pub(crate) fn tag_dedup_group(&mut self, alias: usize, group: usize) {
-        self.dedup_groups.insert(alias, group);
+    pub(crate) fn tag_dedup_group(
+        &mut self,
+        alias: usize,
+        group: usize,
+        branch: &Branch,
+        key_vars: &std::collections::HashSet<String>,
+    ) -> Result<()> {
+        let key_bindings = branch
+            .bindings
+            .iter()
+            .filter(|(variable, _)| key_vars.contains(variable.as_str()))
+            .map(|(variable, definition)| (variable.clone(), definition.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if key_bindings.len() != key_vars.len() {
+            return Err(Error::Unsupported(
+                "D2 shared term-dedup arm does not bind its complete pattern key → 501".to_owned(),
+            ));
+        }
+        self.dedup_groups.insert(
+            alias,
+            DedupMarker {
+                group_id: group,
+                key_bindings,
+            },
+        );
+        Ok(())
     }
 
     /// The accumulated alias → shared-dedup-group-id map, pulled into the final
-    /// [`crate::Plan::dedup_groups`] once translation finishes (see
-    /// `dedup_groups`' own field doc comment).
-    pub(crate) fn dedup_groups(&self) -> &std::collections::HashMap<usize, usize> {
+    /// the final root [`crate::Plan::dedup_scopes`] after post-cascade scope
+    /// validation (see `dedup_groups`' own field doc comment).
+    pub(crate) fn dedup_groups(&self) -> &std::collections::HashMap<usize, DedupMarker> {
         &self.dedup_groups
     }
 
@@ -560,12 +613,22 @@ impl<'a> Unfolder<'a> {
         let mut acc: Vec<Branch> = vec![Branch::empty()];
         for tp in patterns {
             let alts = self.pattern_branches(tp)?;
+            let mut key_vars: Vec<String> = triple_pattern_vars(tp)
+                .iter()
+                .map(|variable| variable.to_string())
+                .collect();
+            if let Some(graph_var) = self.current_graph_var.as_deref() {
+                if !key_vars.iter().any(|variable| variable == graph_var) {
+                    key_vars.push(graph_var.to_owned());
+                }
+            }
             let mut alts = pool_pattern_relation(
                 alts,
-                tp,
+                &key_vars,
                 self.dialect,
                 &mut self.next_alias,
                 self.schema,
+                self.column_type_use,
                 &mut self.dedup_groups,
             )?;
             crate::cascade::force_distinct_for_dup_safety(&mut alts, self.schema, self.dialect);
@@ -1703,33 +1766,25 @@ fn reject_dropped_slice(t: &TransPattern) -> Result<()> {
 /// hook this at a different point in their own pipelines while sharing the
 /// pooling implementation).
 ///
-/// **Run 5 C0e restoration**: a group `cascade::group_has_unsafe_float_slot_
-/// mismatch` would otherwise sound-501 (PG only) is NOT pooled at all when it is
-/// ALSO `cascade::group_eligible_for_term_dedup` (every member standalone, an
-/// offending non-injective binding present) — its members stay separate
+/// **Run 5 C0e restoration, extended for type-authority quarantine**: a group
+/// whose PostgreSQL column-type compatibility is unproven is NOT pooled when
+/// every member is standalone and its projected RDF terms can be deduplicated
+/// after reconstruction — its members stay separate
 /// bag-union branches (`run_branches` already executes each on its own), tagged
 /// via `dedup_groups` to share ONE Rust-side seen-set instead of a SQL `UNION`,
-/// sidestepping the type-alignment wall entirely (W3C R2RMLTC0012e). Every OTHER
-/// group (non-standalone, or no term-dedup-safe offender) is unaffected: the
-/// float-mismatch refusal and `pool_group` SQL pooling below are unchanged.
+/// sidestepping the type-alignment wall entirely (W3C R2RMLTC0011a/0012e). The
+/// resource profile rejects this source-sized fallback on serving paths. Other
+/// groups remain a sound 501; proven-compatible groups still use SQL pooling.
 fn pool_pattern_relation(
     arms: Vec<Branch>,
-    tp: &TriplePattern,
+    vars: &[String],
     dialect: sf_sql::Dialect,
     next_alias: &mut usize,
     schema: &[sf_sql::TableSchema],
-    dedup_groups: &mut std::collections::HashMap<usize, usize>,
+    column_type_use: ColumnTypeUse,
+    dedup_groups: &mut std::collections::HashMap<usize, DedupMarker>,
 ) -> Result<Vec<Branch>> {
     if arms.len() <= 1 || all_pairwise_disjoint(&arms) {
-        return Ok(arms);
-    }
-    let vars: Vec<String> = triple_pattern_vars(tp)
-        .iter()
-        .map(|v| v.to_string())
-        .collect();
-    if vars.is_empty() {
-        // A fully-ground triple pattern (every position a constant): nothing to pool
-        // positionally. Left as today's (rare, existing) bag-union concatenation.
         return Ok(arms);
     }
     let groups = disjoint_groups(&arms);
@@ -1744,33 +1799,63 @@ fn pool_pattern_relation(
             .iter()
             .map(|&i| arms[i].take().expect("each index visited once"))
             .collect();
-        // Mirrors `iq::resolve`'s identical gate — see `cascade::group_has_unsafe_
-        // float_slot_mismatch`'s doc comment (W3C R2RMLTC0012e) — so flat and tree
+        // Mirrors `iq::resolve`'s identical gate — see `cascade::group_pool_type_
+        // safety`'s doc comment (W3C R2RMLTC0012e) — so flat and tree
         // agree on the SAME 501 (`differential_tree`'s "flat and tree must agree
         // on Unsupported" invariant).
         let member_refs: Vec<&Branch> = members.iter().collect();
-        if crate::cascade::group_has_unsafe_float_slot_mismatch(&member_refs, schema, dialect) {
+        if crate::cascade::group_pool_type_safety(&member_refs, schema, dialect, column_type_use)
+            == crate::cascade::PoolTypeSafety::Unproven
+        {
             let keep: std::collections::HashSet<String> = vars.iter().cloned().collect();
-            if crate::cascade::group_eligible_for_term_dedup(&members, &keep) {
+            if crate::cascade::group_can_fallback_to_shared_term_dedup(&members, &keep) {
                 crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
                 let gid = *next_alias;
                 *next_alias += 1;
                 for b in &members {
-                    if let Some((alias, _)) = b.alias_sources().into_iter().next() {
-                        dedup_groups.insert(alias, gid);
+                    let mut aliases = b.alias_sources().into_iter();
+                    let Some((alias, _)) = aliases.next() else {
+                        return Err(Error::Unsupported(
+                            "D2 shared term-dedup arm has no representative source → 501"
+                                .to_owned(),
+                        ));
+                    };
+                    if aliases.next().is_some() {
+                        return Err(Error::Unsupported(
+                            "D2 shared term-dedup arm has multiple representative sources → 501"
+                                .to_owned(),
+                        ));
                     }
+                    let key_bindings = b
+                        .bindings
+                        .iter()
+                        .filter(|(variable, _)| keep.contains(variable.as_str()))
+                        .map(|(variable, definition)| (variable.clone(), definition.clone()))
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    if key_bindings.len() != keep.len() {
+                        return Err(Error::Unsupported(
+                            "D2 shared term-dedup arm does not bind its complete pattern key → 501"
+                                .to_owned(),
+                        ));
+                    }
+                    dedup_groups.insert(
+                        alias,
+                        DedupMarker {
+                            group_id: gid,
+                            key_bindings,
+                        },
+                    );
                 }
                 out.extend(members);
                 continue;
             }
             return Err(Error::Unsupported(
-                "D2 pool: a floating-point column would positionally UNION against a \
-                 differently-typed sibling column on PostgreSQL → 501 (cannot be aligned \
-                 soundly in SQL without risking lexical drift — ADR-0025)"
+                "D2 pool: PostgreSQL column-type compatibility is not proven → 501 \
+                 (a positional UNION could fail or drift lexically — ADR-0025)"
                     .to_owned(),
             ));
         }
-        out.push(pool_group(members, &vars, dialect, next_alias)?);
+        out.push(pool_group(members, vars, dialect, next_alias)?);
     }
     Ok(out)
 }
@@ -1909,7 +1994,7 @@ fn pool_group(
         // This nested SubPlan executes wholly in SQL (`emit_subplan_sql`) — the
         // Run 5 C0e shared-seen-set mechanism never applies to it (that path
         // exists PRECISELY to avoid a nested Plan like this one).
-        dedup_groups: std::collections::HashMap::new(),
+        dedup_scopes: Vec::new(),
         // Not a `PlanForm::Construct` plan — item 3's cross-branch CONSTRUCT
         // triple dedup never applies to this SQL-pooled SELECT sub-plan.
         construct_drops_some_branch_var: false,

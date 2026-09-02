@@ -11,11 +11,12 @@ use tower::ServiceExt;
 
 const SECRET: &str = "sf_secret_NEVER_EXPOSE_7f42";
 const SECRET_COLUMN: &str = "sf_secret_NEVER_EXPOSE_7f42_column";
+const SECRET_TABLE: &str = "sf_secret_NEVER_EXPOSE_7f42_table";
 const MAPPING_TTL: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
 @prefix ex: <http://example.test/> .
 <#Items> a rr:TriplesMap ;
-  rr:logicalTable [ rr:tableName "items" ] ;
+  rr:logicalTable [ rr:tableName "sf_secret_NEVER_EXPOSE_7f42_table" ] ;
   rr:subjectMap [ rr:template "http://example.test/item/{id}" ] ;
   rr:predicateObjectMap [
     rr:predicate ex:value ;
@@ -24,18 +25,25 @@ const MAPPING_TTL: &str = r#"
 "#;
 
 fn config_with_stale_schema() -> ServeConfig {
+    config_after_schema_change(&format!(
+        "ALTER TABLE \"{SECRET_TABLE}\" RENAME COLUMN \"{SECRET_COLUMN}\" TO public_value"
+    ))
+}
+
+fn config_with_dropped_table() -> ServeConfig {
+    config_after_schema_change(&format!("DROP TABLE \"{SECRET_TABLE}\""))
+}
+
+fn config_after_schema_change(change: &str) -> ServeConfig {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
     conn.execute_batch(&format!(
-        "CREATE TABLE items (id INTEGER PRIMARY KEY, \"{SECRET_COLUMN}\" TEXT); \
-         INSERT INTO items VALUES (1, 'value');"
+        "CREATE TABLE \"{SECRET_TABLE}\" (id INTEGER PRIMARY KEY, \"{SECRET_COLUMN}\" TEXT); \
+         INSERT INTO \"{SECRET_TABLE}\" VALUES (1, 'value');"
     ))
     .expect("seed fixture");
     let schema = introspect_sqlite_all(&conn).expect("snapshot schema");
     let mapping = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse mapping");
-    conn.execute_batch(&format!(
-        "ALTER TABLE items RENAME COLUMN \"{SECRET_COLUMN}\" TO public_value"
-    ))
-    .expect("drift live schema");
+    conn.execute_batch(change).expect("drift live schema");
     ServeConfig::new_unchecked(Backend::sqlite(conn), mapping, Tbox::default(), schema)
 }
 
@@ -139,6 +147,25 @@ async fn schema_drift_failure_is_a_redacted_internal_problem() {
     let text = String::from_utf8(body).expect("problem UTF-8");
     assert!(!text.to_ascii_lowercase().contains("sqlite"), "body={text}");
     assert!(!text.contains("no such column"), "body={text}");
+}
+
+#[tokio::test]
+async fn dropped_table_ask_failure_is_a_redacted_internal_problem() {
+    let body = assert_problem(
+        config_with_dropped_table(),
+        request(
+            "ASK { ?item <http://example.test/value> ?value }",
+            "application/sparql-query",
+        ),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal-error",
+    )
+    .await;
+
+    assert_secret_absent(&body);
+    let text = String::from_utf8(body).expect("problem UTF-8");
+    assert!(!text.to_ascii_lowercase().contains("sqlite"), "body={text}");
+    assert!(!text.contains("no such table"), "body={text}");
 }
 
 #[tokio::test]

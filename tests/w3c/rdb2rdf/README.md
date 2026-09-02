@@ -76,7 +76,12 @@ typed cause to this inventory: SQLite records 81 passes, one declared deviation
 (`R2RMLTC0002f`), and five exact skips; required-live PostgreSQL records 80
 passes, the same deviation, and six exact skips. They attest mapping inputs and
 outcomes only—not runner/toolchain/host/provider provenance, SPARQL Query or
-Protocol conformance, release readiness, or production admission.
+Protocol conformance, release readiness, or production admission. The
+2026-09-02 regeneration preserves aggregate counts and `passed` status while
+reclassifying the typed cause for SQLite `R2RMLTC0002g` and PostgreSQL
+`R2RMLTC0002g`/`R2RMLTC0002h` from `execution-error` to
+`source-validation-error`; SQLite `R2RMLTC0002h` was already
+`source-validation-error`.
 
 ### Known non-passing outcomes (honest, per-ID and fail-closed)
 

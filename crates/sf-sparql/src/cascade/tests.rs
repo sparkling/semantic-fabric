@@ -23,6 +23,39 @@ fn col_binding(alias: usize, col: &str) -> TermDef {
 }
 
 #[test]
+fn postgres_d1_rewrites_synthetic_table_rowid_but_not_query_output_rowid() {
+    let cols = vec![Box::<str>::from("rowid")];
+
+    let mut table_branch = Branch::single(scan(0, "no_pk"));
+    wrap_scan_distinct(&mut table_branch, 0, &cols, sf_sql::Dialect::Postgres);
+    let LogicalSource::Query(table_sql) = &table_branch.core[0].source else {
+        panic!("D1 must wrap a table scan as a query")
+    };
+    assert!(
+        table_sql.contains("(sfs0.ctid)::text AS rowid"),
+        "synthetic base-table rowid must use PostgreSQL CTID: {table_sql}"
+    );
+
+    let query_scan = crate::iq::Scan {
+        alias: 1,
+        source: LogicalSource::Query("SELECT 7 AS rowid".to_owned()),
+    };
+    let mut query_branch = Branch::single(query_scan);
+    wrap_scan_distinct(&mut query_branch, 1, &cols, sf_sql::Dialect::Postgres);
+    let LogicalSource::Query(query_sql) = &query_branch.core[0].source else {
+        panic!("D1 must preserve a query source as a nested query")
+    };
+    assert!(
+        query_sql.contains("sfs1.rowid AS rowid"),
+        "authored query output rowid must remain an ordinary derived column: {query_sql}"
+    );
+    assert!(
+        !query_sql.contains("ctid"),
+        "a derived query has no source-local CTID: {query_sql}"
+    );
+}
+
+#[test]
 fn prune_drops_contradictory_equalities() {
     let mut b = Branch::single(scan(0, "emp"));
     b.where_conds

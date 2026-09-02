@@ -63,6 +63,7 @@ use std::collections::BTreeMap;
 
 use sf_core::ir::TriplesMap;
 
+use crate::compiler_schema::ColumnTypeUse;
 use crate::iq::node::{
     graph_pattern_var, path_pattern_vars, triple_pattern_vars, BindDef, IqCond, IqNode,
 };
@@ -96,16 +97,40 @@ impl<'a> ResolveCx<'a> {
         dialect: sf_sql::Dialect,
         schema: &'a [sf_sql::TableSchema],
     ) -> Self {
+        Self::new_with_column_type_use(
+            maps,
+            tbox,
+            dialect,
+            schema,
+            ColumnTypeUse::CallerAuthorizedFrozen,
+        )
+    }
+
+    pub(crate) fn new_with_column_type_use(
+        maps: &'a [TriplesMap],
+        tbox: &'a Tbox,
+        dialect: sf_sql::Dialect,
+        schema: &'a [sf_sql::TableSchema],
+        column_type_use: ColumnTypeUse,
+    ) -> Self {
         Self {
-            unfolder: Unfolder::new(maps, tbox, dialect, schema),
+            unfolder: Unfolder::new_with_column_type_use(
+                maps,
+                tbox,
+                dialect,
+                schema,
+                column_type_use,
+            ),
         }
     }
 
     /// The accumulated D2 shared-dedup-group map (ADR-0034 C0e restoration) —
-    /// pulled into the final [`crate::Plan::dedup_groups`] by `translate_tree`
-    /// once resolution finishes. Delegates to [`Unfolder::dedup_groups`] (the
-    /// field itself is private to `unfold`).
-    pub(crate) fn dedup_groups(&self) -> &std::collections::HashMap<usize, usize> {
+    /// lifted onto the final root [`crate::Plan::dedup_scopes`] by
+    /// `translate_tree` after lowering and cascades finish. Delegates to
+    /// [`Unfolder::dedup_groups`] (the raw field is private to `unfold`).
+    pub(crate) fn dedup_groups(
+        &self,
+    ) -> &std::collections::HashMap<usize, crate::unfold::DedupMarker> {
         self.unfolder.dedup_groups()
     }
 }
@@ -135,6 +160,11 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                 }
             }
             let mut branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
+            // D1 may wrap a base Table scan in a compiler-generated Query to
+            // enforce duplicate safety. Keep the pre-wrap branches as the
+            // column-type provenance authority for the later D2 pooling gate;
+            // the wrapper changes SQL shape, not the physical column's type.
+            let type_authority_branches = branches.clone();
             // ADR-0034 D1/D2 are both skipped inside a FILTER EXISTS / FILTER NOT
             // EXISTS / MINUS body — see `Unfolder::in_existential`'s own doc comment
             // for the SPARQL semantics that make this sound (an existence / anti-join
@@ -237,20 +267,25 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                     // ADR-0025 (sound-pooling shape): a positional pool this group's arms
                     // would otherwise need can hit PostgreSQL's own `UNION` type-resolver
                     // (a raw SQL error) or, if aligned via a `CAST`, silently drift a
-                    // floating-point column's lexical form — see `cascade::group_has_
-                    // unsafe_float_slot_mismatch`'s doc comment for the live-verified
-                    // evidence (W3C R2RMLTC0012e).
-                    let member_refs: Vec<&Branch> = members.iter().collect();
-                    if crate::cascade::group_has_unsafe_float_slot_mismatch(
+                    // floating-point column's lexical form, and mutable startup type
+                    // observations cannot prove different physical columns remain
+                    // compatible — see `cascade::group_pool_type_safety`.
+                    let member_refs: Vec<&Branch> = group
+                        .iter()
+                        .map(|&index| &type_authority_branches[index])
+                        .collect();
+                    if crate::cascade::group_pool_type_safety(
                         &member_refs,
                         cx.unfolder.schema,
                         cx.unfolder.dialect,
-                    ) {
-                        // Run 5 C0e restoration (mirrors `unfold::pool_pattern_relation`'s
-                        // identical gate verbatim): when this group is ALSO
-                        // `group_eligible_for_term_dedup` (every member standalone, an
-                        // offending non-injective binding present), skip SQL pooling
-                        // entirely instead of refusing — bridge each member SEPARATELY
+                        cx.unfolder.column_type_use,
+                    ) == crate::cascade::PoolTypeSafety::Unproven
+                    {
+                        // Type-independent correctness fallback (mirrors
+                        // `unfold::pool_pattern_relation`): when every member is
+                        // standalone and its projected RDF terms can be deduplicated
+                        // after reconstruction, skip SQL pooling — bridge each member
+                        // SEPARATELY
                         // (exactly the `group.len() == 1` arm above, just for N members),
                         // tagged via `cx.unfolder`'s `dedup_groups` so `run_branches`
                         // shares ONE Rust-side term-dedup seen-set across them instead of
@@ -258,22 +293,32 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                         // float-vs-text type-alignment wall never applies.
                         let keep: std::collections::HashSet<String> =
                             vars.iter().map(|v| v.to_string()).collect();
-                        if crate::cascade::group_eligible_for_term_dedup(&members, &keep) {
+                        if crate::cascade::group_can_fallback_to_shared_term_dedup(&members, &keep)
+                        {
                             crate::cascade::narrow_group_for_shared_term_dedup(&mut members, &keep);
                             let gid = cx.unfolder.alias();
                             for b in &members {
-                                if let Some((alias, _)) = b.alias_sources().into_iter().next() {
-                                    cx.unfolder.tag_dedup_group(alias, gid);
+                                let mut aliases = b.alias_sources().into_iter();
+                                let Some((alias, _)) = aliases.next() else {
+                                    return Err(Error::Unsupported(
+                                        "D2 shared term-dedup arm has no representative source → 501"
+                                            .to_owned(),
+                                    ));
+                                };
+                                if aliases.next().is_some() {
+                                    return Err(Error::Unsupported(
+                                        "D2 shared term-dedup arm has multiple representative sources → 501"
+                                            .to_owned(),
+                                    ));
                                 }
+                                cx.unfolder.tag_dedup_group(alias, gid, b, &keep)?;
                             }
                             children.extend(members.into_iter().map(bridge_branch));
                             continue;
                         }
                         return Err(Error::Unsupported(
-                            "D2 pool: a floating-point column would positionally UNION \
-                             against a differently-typed sibling column on PostgreSQL → 501 \
-                             (cannot be aligned soundly in SQL without risking lexical drift \
-                             — ADR-0025)"
+                            "D2 pool: PostgreSQL column-type compatibility is not proven → 501 \
+                             (a positional UNION could fail or drift lexically — ADR-0025)"
                                 .to_owned(),
                         ));
                     }

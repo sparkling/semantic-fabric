@@ -425,14 +425,15 @@ fn validate_query_sources(
     use sf_core::ir::LogicalSource;
     for map in maps {
         if let LogicalSource::Query(query) = &map.source {
-            if let Ok(names) = sf_sql::sqlite_column_names(conn, query) {
-                let mut seen = std::collections::HashSet::new();
-                for name in &names {
-                    if !seen.insert(name.as_str()) {
-                        return Err(format!(
-                            "rr:sqlQuery produces duplicate column name {name:?} (R2RML §5.1)"
-                        ));
-                    }
+            let names = sf_sql::sqlite_column_names(conn, query).map_err(|error| {
+                format!("rr:sqlQuery column metadata validation failed: {error}")
+            })?;
+            let mut seen = std::collections::HashSet::new();
+            for name in &names {
+                if !seen.insert(name.as_str()) {
+                    return Err(format!(
+                        "rr:sqlQuery produces duplicate column name {name:?} (R2RML §5.1)"
+                    ));
                 }
             }
         }
@@ -448,6 +449,18 @@ pub(crate) fn read(dir: &Path, file: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    const INVALID_QUERY_MAPPING: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.test/> .
+<#InvalidQuery> a rr:TriplesMap ;
+  rr:logicalTable [ rr:sqlQuery "SELECT value FROM missing_relation" ] ;
+  rr:subjectMap [ rr:template "http://example.test/item/{value}" ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:value ;
+    rr:objectMap [ rr:column "value" ]
+  ] .
+"#;
+
     #[test]
     fn missing_sealed_input_is_an_error_not_a_skip() {
         let case = Case {
@@ -461,5 +474,19 @@ mod tests {
             .expect_err("missing input must fail closed");
         assert!(error.contains("sealed input error"), "{error}");
         assert!(error.contains("create.sql"), "{error}");
+    }
+
+    #[test]
+    fn sql_query_column_metadata_failure_is_not_ignored() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
+        let maps = sf_mapping::parse_r2rml(INVALID_QUERY_MAPPING).expect("parse mapping");
+
+        let error = validate_query_sources(&conn, &maps)
+            .expect_err("invalid rr:sqlQuery metadata must fail validation");
+
+        assert!(
+            error.starts_with("rr:sqlQuery column metadata validation failed:"),
+            "error={error:?}"
+        );
     }
 }

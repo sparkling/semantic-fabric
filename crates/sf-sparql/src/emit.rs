@@ -20,14 +20,15 @@
 //! resolved against the source's *introspected* column names ([`ColumnCatalog`]):
 //! an **exact** match wins (a delimited, case-exact identifier), else a **single
 //! ASCII-case-insensitive** match (the regular-identifier folding the W3C suite
-//! and every dialect honour), else the identifier is emitted as written (the
-//! source has no such column — the error surfaces unchanged). Reconstruction is
-//! untouched: it reads result columns by position and matches the *raw* IR column
-//! strings, so only the rendered SQL text changes here.
+//! and every dialect honour). Live execution rejects missing, duplicate, and
+//! case-fold-ambiguous metadata before opening a cursor; dialect-neutral
+//! [`emit_branch`] remains permissive and emits an unresolved identifier as written.
+//! Reconstruction is untouched: it reads result columns by position and matches
+//! the *raw* IR column strings, so only the rendered SQL text changes here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use sf_core::ir::{LogicalSource, TermMap};
+use sf_core::ir::{LogicalSource, Segment, TermMap};
 use sf_sql::Dialect;
 
 use crate::iq::{
@@ -53,6 +54,23 @@ impl ColumnCatalog {
         self.by_source.insert(source_key(source), columns);
     }
 
+    /// Record one live source's metadata, rejecting an unusable result schema
+    /// without including mapping identifiers or query text in the error.
+    pub(crate) fn insert_live(
+        &mut self,
+        source: &LogicalSource,
+        columns: Vec<String>,
+    ) -> Result<()> {
+        let mut unique = HashSet::new();
+        if columns.iter().any(|column| !unique.insert(column.as_str())) {
+            return Err(Error::Sql(
+                "live metadata contains duplicate result-column names".to_owned(),
+            ));
+        }
+        self.insert(source, columns);
+        Ok(())
+    }
+
     /// Add `columns` to `source`'s entry, creating it if absent, keeping any names
     /// already recorded — unlike [`insert`](Self::insert), which replaces. Two
     /// different raw columns of the same source are folded one at a time
@@ -67,31 +85,347 @@ impl ColumnCatalog {
     fn columns(&self, source: &LogicalSource) -> Option<&[String]> {
         self.by_source.get(&source_key(source)).map(Vec::as_slice)
     }
+
+    fn validate_live_column(
+        &self,
+        source: &LogicalSource,
+        raw: &str,
+        dialect: Dialect,
+    ) -> Result<()> {
+        let Some(columns) = self.columns(source) else {
+            return Err(Error::Sql(
+                "live metadata is unavailable for a required logical source".to_owned(),
+            ));
+        };
+        let exact = columns
+            .iter()
+            .filter(|column| column.as_str() == raw)
+            .count();
+        if exact > 1 {
+            return Err(Error::Sql(
+                "live metadata contains duplicate result-column names".to_owned(),
+            ));
+        }
+        if exact == 1 {
+            return Ok(());
+        }
+        let folded = columns
+            .iter()
+            .filter(|column| column.eq_ignore_ascii_case(raw))
+            .count();
+        if folded > 1 {
+            return Err(Error::Sql(
+                "live metadata contains ambiguous result-column names".to_owned(),
+            ));
+        }
+        if folded == 1 || physical_row_identifier(source, raw, dialect) {
+            return Ok(());
+        }
+        Err(Error::Sql(
+            "live metadata is missing a required result column".to_owned(),
+        ))
+    }
 }
 
-/// A translate-time [`ColumnCatalog`] for SubPlan embedding ([`crate::Plan::emitted`]).
-/// nested derived-table SQL is built with no live DB connection in hand — unlike the
-/// top-level executor (`exec_core::run_branches`), which probes the connection per
-/// source before emitting (see the module docs) — so [`colref`]'s `actuals` lookup
-/// always misses there today and falls back to quoting every identifier exact-case.
+/// Stable, variant-tagged identity for one logical source. A table name and an
+/// `rr:sqlQuery` can produce byte-identical probe SQL, but they are still distinct
+/// metadata authorities and must never share a catalog entry or dedup key.
+pub(crate) fn logical_source_identity(source: &LogicalSource) -> String {
+    source_key(source)
+}
+
+/// Every live logical source nested in `branches`, in deterministic encounter
+/// order. The executor deduplicates this list by [`logical_source_identity`]
+/// before probing; keeping enumeration and identity separate makes the fail-closed
+/// ordering explicit at the I/O boundary.
+pub(crate) fn live_metadata_sources(branches: &[Branch]) -> Vec<&LogicalSource> {
+    fn hop_sources<'a>(hop: &'a HopExpr, out: &mut Vec<&'a LogicalSource>) {
+        match hop {
+            HopExpr::Pred(relation) => out.push(&relation.source),
+            HopExpr::Inverse(inner) => hop_sources(inner, out),
+            HopExpr::Seq(left, right) => {
+                hop_sources(left, out);
+                hop_sources(right, out);
+            }
+            HopExpr::Alt(parts) | HopExpr::Nps(parts) => {
+                for part in parts {
+                    hop_sources(part, out);
+                }
+            }
+        }
+    }
+
+    fn condition_sources<'a>(condition: &'a SqlCond, out: &mut Vec<&'a LogicalSource>) {
+        match condition {
+            SqlCond::Not(inner) => condition_sources(inner, out),
+            SqlCond::And(parts) | SqlCond::Or(parts) => {
+                for part in parts {
+                    condition_sources(part, out);
+                }
+            }
+            SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
+                out.extend(scans.iter().map(|scan| &scan.source));
+                for condition in conds {
+                    condition_sources(condition, out);
+                }
+            }
+            SqlCond::PathExists { pc, conds, .. } => {
+                hop_sources(&pc.hop, out);
+                for condition in conds {
+                    condition_sources(condition, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn branch_sources<'a>(branch: &'a Branch, out: &mut Vec<&'a LogicalSource>) {
+        out.extend(branch.core.iter().map(|scan| &scan.source));
+        out.extend(branch.opts.iter().map(|join| &join.scan.source));
+        if let Some(path) = &branch.path {
+            hop_sources(&path.hop, out);
+        }
+        for condition in &branch.where_conds {
+            condition_sources(condition, out);
+        }
+        for join in &branch.opts {
+            for condition in join.on.iter().chain(join.extra.iter()) {
+                condition_sources(condition, out);
+            }
+        }
+        for subplan in &branch.subplan_joins {
+            for condition in &subplan.on {
+                condition_sources(condition, out);
+            }
+            for inner in &subplan.plan.branches {
+                branch_sources(inner, out);
+            }
+        }
+    }
+
+    let mut sources = Vec::new();
+    for branch in branches {
+        branch_sources(branch, &mut sources);
+    }
+    sources
+}
+
+/// Validate every raw base-source column that live emission can reference before
+/// any branch cursor opens. Offline [`emit_branch`] remains permissive because it
+/// never calls this preflight and continues to emit mapping-authored identifiers.
+pub(crate) fn validate_live_columns(
+    branches: &[Branch],
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> Result<()> {
+    #[derive(Clone, Copy)]
+    enum AliasSource<'a> {
+        Base(&'a LogicalSource),
+        Derived,
+    }
+
+    fn validate_ref(
+        column: &ColRef,
+        aliases: &HashMap<usize, AliasSource<'_>>,
+        dialect: Dialect,
+        catalog: &ColumnCatalog,
+    ) -> Result<()> {
+        if let Some(AliasSource::Base(source)) = aliases.get(&column.alias) {
+            catalog.validate_live_column(source, &column.column, dialect)?;
+        }
+        Ok(())
+    }
+
+    fn validate_hop(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> Result<()> {
+        match hop {
+            HopExpr::Pred(relation) => {
+                catalog.validate_live_column(&relation.source, &relation.subj_col, dialect)?;
+                catalog.validate_live_column(&relation.source, &relation.obj_col, dialect)
+            }
+            HopExpr::Inverse(inner) => validate_hop(inner, dialect, catalog),
+            HopExpr::Seq(left, right) => {
+                validate_hop(left, dialect, catalog)?;
+                validate_hop(right, dialect, catalog)
+            }
+            HopExpr::Alt(parts) | HopExpr::Nps(parts) => {
+                for part in parts {
+                    validate_hop(part, dialect, catalog)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn validate_condition(
+        condition: &SqlCond,
+        aliases: &HashMap<usize, AliasSource<'_>>,
+        dialect: Dialect,
+        catalog: &ColumnCatalog,
+    ) -> Result<()> {
+        match condition {
+            SqlCond::ColEq(left, right) | SqlCond::NullSafeEq(left, right) => {
+                validate_ref(left, aliases, dialect, catalog)?;
+                validate_ref(right, aliases, dialect, catalog)
+            }
+            SqlCond::Cmp(column, _, _)
+            | SqlCond::IsNotNull(column)
+            | SqlCond::IsNull(column)
+            | SqlCond::StrMatch { col: column, .. } => {
+                validate_ref(column, aliases, dialect, catalog)
+            }
+            SqlCond::Not(inner) => validate_condition(inner, aliases, dialect, catalog),
+            SqlCond::And(parts) | SqlCond::Or(parts) => {
+                for part in parts {
+                    validate_condition(part, aliases, dialect, catalog)?;
+                }
+                Ok(())
+            }
+            SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => {
+                // EXISTS/MINUS aliases live in a nested SQL scope. Insert them
+                // only while validating that scope: flattening them into the
+                // outer map can collide with a derived SubPlan alias and make an
+                // outer positional `cN` look like a base-table column.
+                let mut nested = aliases.clone();
+                for scan in scans {
+                    nested.insert(scan.alias, AliasSource::Base(&scan.source));
+                }
+                for condition in conds {
+                    validate_condition(condition, &nested, dialect, catalog)?;
+                }
+                Ok(())
+            }
+            SqlCond::PathExists { pc, conds, .. } => {
+                validate_hop(&pc.hop, dialect, catalog)?;
+                for condition in conds {
+                    validate_condition(condition, aliases, dialect, catalog)?;
+                }
+                Ok(())
+            }
+            SqlCond::TemplateEq(left, left_alias, right, right_alias, _) => {
+                for segment in left {
+                    if let Segment::Column(column) = segment {
+                        validate_ref(
+                            &ColRef::new(*left_alias, column.clone()),
+                            aliases,
+                            dialect,
+                            catalog,
+                        )?;
+                    }
+                }
+                for segment in right {
+                    if let Segment::Column(column) = segment {
+                        validate_ref(
+                            &ColRef::new(*right_alias, column.clone()),
+                            aliases,
+                            dialect,
+                            catalog,
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn validate_branch(branch: &Branch, dialect: Dialect, catalog: &ColumnCatalog) -> Result<()> {
+        let mut aliases = HashMap::new();
+        for scan in &branch.core {
+            aliases.insert(scan.alias, AliasSource::Base(&scan.source));
+        }
+        for join in &branch.opts {
+            aliases.insert(join.scan.alias, AliasSource::Base(&join.scan.source));
+        }
+        for subplan in &branch.subplan_joins {
+            // The derived table exposes positional `cN` columns, not live base
+            // metadata. Insert it after base scans, matching `branch_actuals`.
+            aliases.insert(subplan.alias, AliasSource::Derived);
+        }
+        for definition in branch.bindings.values() {
+            for column in definition.columns() {
+                validate_ref(&column, &aliases, dialect, catalog)?;
+            }
+        }
+        for condition in &branch.where_conds {
+            validate_condition(condition, &aliases, dialect, catalog)?;
+        }
+        for join in &branch.opts {
+            for condition in join.on.iter().chain(&join.extra) {
+                validate_condition(condition, &aliases, dialect, catalog)?;
+            }
+        }
+        for subplan in &branch.subplan_joins {
+            for condition in &subplan.on {
+                validate_condition(condition, &aliases, dialect, catalog)?;
+            }
+            for inner in &subplan.plan.branches {
+                validate_branch(inner, dialect, catalog)?;
+            }
+        }
+        if let Some(path) = &branch.path {
+            validate_hop(&path.hop, dialect, catalog)?;
+        }
+        if let Some(aggregation) = &branch.agg {
+            for key in &aggregation.keys {
+                for column in &key.cols {
+                    validate_ref(column, &aliases, dialect, catalog)?;
+                }
+            }
+            for aggregate in &aggregation.aggs {
+                if let Some(column) = &aggregate.arg {
+                    validate_ref(column, &aliases, dialect, catalog)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    for branch in branches {
+        validate_branch(branch, dialect, catalog)?;
+    }
+    Ok(())
+}
+
+fn physical_row_identifier(source: &LogicalSource, raw: &str, dialect: Dialect) -> bool {
+    matches!(source, LogicalSource::Table(_))
+        && raw == "rowid"
+        && matches!(dialect, Dialect::Postgres | Dialect::Sqlite)
+}
+
+/// Render a raw property-path endpoint from its base scan. Direct Mapping uses
+/// the synthetic `rowid` key for no-primary-key table subjects; PostgreSQL's
+/// equivalent is `ctid`, exactly as for ordinary [`colref`] emission.
+fn path_endpoint_sql(
+    source: &LogicalSource,
+    raw: &str,
+    source_alias: &str,
+    dialect: Dialect,
+    catalog: &ColumnCatalog,
+) -> String {
+    if dialect == Dialect::Postgres && physical_row_identifier(source, raw, dialect) {
+        return format!("({source_alias}.ctid)::text");
+    }
+    let name = resolve_col(raw, catalog.columns(source));
+    format!("{source_alias}.{}", dialect.quote_ident(name))
+}
+
+/// A translate-time [`ColumnCatalog`] for offline SubPlan embedding
+/// ([`crate::Plan::emitted`]). Offline derived-table SQL has no live DB connection,
+/// so [`colref`]'s `actuals` lookup otherwise falls back to quoting every identifier
+/// exact-case.
 /// That is correct for a genuinely delimited column, but WRONG for a *regular*
 /// (bare) `rr:sqlQuery` output alias: PostgreSQL folds it to lowercase at
 /// declaration, so an exact-case-quoted reference to it does not exist (W3C
 /// R2RMLTC0014b — `SELECT (…) AS jobTypeURI` folds to `jobtypeuri`; a downstream
 /// `t5."jobTypeURI"` 42703s; confirmed live against PostgreSQL 17).
 ///
-/// For every column each branch's own bindings/conditions actually reference (a
-/// typed walk over [`TermDef::columns`] / [`collect_cond_cols`] — never a text scan
-/// of the SQL itself, so there is no risk of matching inside a string literal or
-/// unrelated keyword), probe the owning scan's `rr:sqlQuery` text with
-/// [`crate::cascade::col_is_unquoted_alias`] — the SAME translate-time heuristic the
-/// D1 per-scan DISTINCT wrap and Mechanism B rendered-pooling fallback already use —
-/// and, when it names a bare alias, seed the catalog with its folded (lowercase)
-/// form. [`resolve_col`]'s existing exact/case-insensitive matching then resolves it
-/// correctly with no change to [`colref`] or any of its other callers. A
-/// `LogicalSource::Table` column has no declaring SQL text to probe and is left
-/// alone — the pre-existing, already-correct shape (SQLite is case-insensitive
-/// regardless; a live top-level catalog resolves it for PostgreSQL).
+/// A typed walk identifies the referenced columns, then
+/// [`crate::cascade::col_is_unquoted_alias`] lexically scans the owning
+/// `rr:sqlQuery` for an explicit bare `AS` alias and seeds its folded name. That
+/// bounded heuristic is not SQL-token/comment/string-literal aware and is therefore
+/// non-authoritative. Live execution does not rely on it for base sources:
+/// [`emit_subplan_sql`] overlays the recursively probed live catalog before nested
+/// emission. A `LogicalSource::Table` has no alias declaration to inspect and is
+/// left alone.
 pub(crate) fn synthetic_subplan_catalog(branches: &[Branch]) -> ColumnCatalog {
     let mut catalog = ColumnCatalog::default();
     for b in branches {
@@ -151,17 +485,41 @@ fn resolve_col<'a>(raw: &'a str, actual: Option<&'a [String]>) -> &'a str {
     }
 }
 
-/// The actual columns of every scan alias in `b`, keyed by alias, for resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AliasSourceKind {
+    Table,
+    Query,
+    Derived,
+}
+
+#[derive(Clone, Debug)]
+struct AliasActuals {
+    source_kind: AliasSourceKind,
+    columns: Vec<String>,
+}
+
+type ActualColumns = HashMap<usize, AliasActuals>;
+
+fn source_actuals(source: &LogicalSource, catalog: &ColumnCatalog) -> AliasActuals {
+    AliasActuals {
+        source_kind: match source {
+            LogicalSource::Table(_) => AliasSourceKind::Table,
+            LogicalSource::Query(_) => AliasSourceKind::Query,
+        },
+        columns: catalog.columns(source).unwrap_or_default().to_vec(),
+    }
+}
+
+/// The source kind and actual columns of every scan alias in `b`, keyed by alias,
+/// for physical-row handling and identifier resolution.
 /// For SubPlan-join aliases, the "actual columns" are the projected variable names
 /// from the nested Plan's `PlanForm::Select { vars }` (the names the derived table
 /// exposes). SubPlan aliases are NOT in `alias_sources()` (they have no catalog
 /// entry), so they are wired up here directly.
-fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> HashMap<usize, Vec<String>> {
+fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> ActualColumns {
     let mut out = HashMap::new();
     for (alias, source) in b.alias_sources() {
-        if let Some(cols) = catalog.columns(source) {
-            out.insert(alias, cols.to_vec());
-        }
+        out.insert(alias, source_actuals(source, catalog));
     }
     // SubPlan derived-table aliases: their columns are the positional names the
     // inner `emit_branch` assigns (`c0`, `c1`, …), NOT the SPARQL variable names.
@@ -169,7 +527,13 @@ fn branch_actuals(b: &Branch, catalog: &ColumnCatalog) -> HashMap<usize, Vec<Str
     for sp in &b.subplan_joins {
         if let crate::PlanForm::Select { vars } = &sp.plan.form {
             let positional: Vec<String> = (0..vars.len()).map(|i| format!("c{i}")).collect();
-            out.insert(sp.alias, positional);
+            out.insert(
+                sp.alias,
+                AliasActuals {
+                    source_kind: AliasSourceKind::Derived,
+                    columns: positional,
+                },
+            );
         }
     }
     out
@@ -342,7 +706,7 @@ fn render_order(
     order: &[OrderKey],
     b: &Branch,
     dialect: Dialect,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
 ) -> Result<Option<String>> {
     if order.is_empty() {
         return Ok(None);
@@ -508,7 +872,7 @@ fn emit_path_branch(
     // `t{alias}`). Its columns are the canonical `sf_s` / `sf_o` keys, never base
     // columns, so the outer projection / WHERE resolve against an empty catalog.
     let cte = format!("t{}", pc.alias);
-    let outer_actuals: HashMap<usize, Vec<String>> = HashMap::new();
+    let outer_actuals = ActualColumns::new();
     let with = path_with_prelude(pc, dialect, catalog)?;
 
     let select_list = projection
@@ -558,7 +922,7 @@ fn emit_agg_branch(
     agg: &Aggregation,
     dialect: Dialect,
     catalog: &ColumnCatalog,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
 ) -> Result<EmittedBranch> {
     let mut params = Vec::new();
     let mut pidx = 0usize;
@@ -658,7 +1022,7 @@ fn emit_agg_branch(
 /// The SQL for one aggregate output column (`COUNT(*)` / `COUNT`/`SUM`/`AVG`/`MIN`/
 /// `MAX(<col>)`, with optional `DISTINCT`). `MIN`/`MAX` ignore DISTINCT (it never
 /// changes the extremum), but it is rendered when requested for faithfulness.
-fn agg_expr_sql(a: &AggCol, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {
+fn agg_expr_sql(a: &AggCol, dialect: Dialect, actuals: &ActualColumns) -> String {
     let d = if a.distinct { "DISTINCT " } else { "" };
     let func = match a.kind {
         AggKind::Count => "COUNT",
@@ -695,12 +1059,11 @@ fn hop_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> String {
     match hop {
         HopExpr::Pred(rel) => {
             let src = source_sql(&rel.source, dialect);
-            let cols = catalog.columns(&rel.source);
-            let s = dialect.quote_ident(resolve_col(rel.subj_col.as_ref(), cols));
-            let o = dialect.quote_ident(resolve_col(rel.obj_col.as_ref(), cols));
+            let s = path_endpoint_sql(&rel.source, rel.subj_col.as_ref(), "h0", dialect, catalog);
+            let o = path_endpoint_sql(&rel.source, rel.obj_col.as_ref(), "h0", dialect, catalog);
             format!(
-                "SELECT h0.{s} AS {sf_s}, h0.{o} AS {sf_o} FROM {src} h0 \
-                 WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL"
+                "SELECT {s} AS {sf_s}, {o} AS {sf_o} FROM {src} h0 \
+                 WHERE {s} IS NOT NULL AND {o} IS NOT NULL"
             )
         }
         HopExpr::Inverse(inner) => {
@@ -759,15 +1122,14 @@ fn reflexive_sql(hop: &HopExpr, dialect: Dialect, catalog: &ColumnCatalog) -> Re
         Error::Unsupported("reflexive (P*/p?) path over a composite hop → 501".to_owned())
     })?;
     let src = source_sql(&rel.source, dialect);
-    let cols = catalog.columns(&rel.source);
-    let s = dialect.quote_ident(resolve_col(rel.subj_col.as_ref(), cols));
-    let o = dialect.quote_ident(resolve_col(rel.obj_col.as_ref(), cols));
+    let s = path_endpoint_sql(&rel.source, rel.subj_col.as_ref(), "h0", dialect, catalog);
+    let o = path_endpoint_sql(&rel.source, rel.obj_col.as_ref(), "h0", dialect, catalog);
     let (sf_s, sf_o) = (dialect.quote_ident("sf_s"), dialect.quote_ident("sf_o"));
     Ok(format!(
-        "SELECT h0.{s} AS {sf_s}, h0.{s} AS {sf_o} FROM {src} h0 \
-         WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL \
-         UNION SELECT h0.{o} AS {sf_s}, h0.{o} AS {sf_o} FROM {src} h0 \
-         WHERE h0.{s} IS NOT NULL AND h0.{o} IS NOT NULL"
+        "SELECT {s} AS {sf_s}, {s} AS {sf_o} FROM {src} h0 \
+         WHERE {s} IS NOT NULL AND {o} IS NOT NULL \
+         UNION SELECT {o} AS {sf_s}, {o} AS {sf_o} FROM {src} h0 \
+         WHERE {s} IS NOT NULL AND {o} IS NOT NULL"
     ))
 }
 
@@ -784,7 +1146,7 @@ fn render_from(
     b: &Branch,
     dialect: Dialect,
     catalog: &ColumnCatalog,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
@@ -800,7 +1162,7 @@ fn render_from(
                    pidx: &mut usize,
                    join_kw: &str|
      -> Result<String> {
-        let (nested_sql, nested_params) = emit_subplan_sql(&sp.plan, dialect)?;
+        let (nested_sql, nested_params) = emit_subplan_sql(&sp.plan, dialect, catalog)?;
         let nested_count = nested_params.len();
         // Rebase Postgres $N placeholders in the nested SQL from $1.. to $(pidx+1)..
         let rebased = rebase_placeholders(&nested_sql, dialect, *pidx)?;
@@ -899,10 +1261,30 @@ fn render_from(
 }
 
 /// Render all prepared branches of a nested [`Plan`] to a single SQL SELECT string
-/// (for embedding as a derived table). Multi-branch plans become a `UNION ALL`.
-/// Returns `(sql_text, params)` — params in text order, placeholders starting from 1.
-fn emit_subplan_sql(plan: &crate::Plan, dialect: Dialect) -> Result<(String, Vec<String>)> {
-    let emitted = plan.emitted()?;
+/// (for embedding as a derived table). Recursively probed live names override the
+/// offline lexical fallback. Multi-branch plans become a `UNION ALL`. Returns
+/// `(sql_text, params)` — params in text order, placeholders starting from 1.
+fn emit_subplan_sql(
+    plan: &crate::Plan,
+    dialect: Dialect,
+    live_catalog: &ColumnCatalog,
+) -> Result<(String, Vec<String>)> {
+    let branches = plan.prepared_branches();
+    let mut catalog = synthetic_subplan_catalog(&branches);
+    // Live top-level execution has already probed every recursively reachable
+    // base source. Overlay those authoritative names so nested SubPlan emission
+    // does not depend on the offline lexical alias-folding heuristic. The
+    // synthetic entries remain only for dialect-neutral/offline emission and
+    // source-free derived columns.
+    for source in live_metadata_sources(&branches) {
+        if let Some(columns) = live_catalog.columns(source) {
+            catalog.insert(source, columns.to_vec());
+        }
+    }
+    let emitted = branches
+        .iter()
+        .map(|branch| emit_branch_with(branch, dialect, &catalog))
+        .collect::<Result<Vec<_>>>()?;
     if emitted.is_empty() {
         // Empty inner plan — a values-empty derived table: return a SELECT with no rows.
         // Use a dummy column so it is syntactically valid as a derived table.
@@ -983,7 +1365,7 @@ fn render_where(
     conds: &[SqlCond],
     dialect: Dialect,
     catalog: &ColumnCatalog,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<Option<String>> {
@@ -1000,7 +1382,7 @@ fn render_conjunction(
     conds: &[&SqlCond],
     dialect: Dialect,
     catalog: &ColumnCatalog,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
@@ -1018,7 +1400,7 @@ fn render_cond(
     cond: &SqlCond,
     dialect: Dialect,
     catalog: &ColumnCatalog,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
@@ -1099,8 +1481,13 @@ fn render_cond(
                     acc.push_str(&scan_ref(&s.source, s.alias, dialect));
                     acc
                 });
+            let mut nested_actuals = actuals.clone();
+            for scan in scans {
+                nested_actuals.insert(scan.alias, source_actuals(&scan.source, catalog));
+            }
             let refs: Vec<&SqlCond> = conds.iter().collect();
-            let where_sql = render_conjunction(&refs, dialect, catalog, actuals, params, pidx)?;
+            let where_sql =
+                render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx)?;
             let kw = if neg { "NOT EXISTS" } else { "EXISTS" };
             if from.is_empty() {
                 format!("{kw} (SELECT 1 WHERE {where_sql})")
@@ -1116,8 +1503,17 @@ fn render_cond(
         // prelude error soundly instead of the old empty-catalog `unwrap_or_default`.
         SqlCond::PathExists { pc, conds, negated } => {
             let with = path_with_prelude(pc, dialect, catalog)?;
+            let mut nested_actuals = actuals.clone();
+            nested_actuals.insert(
+                pc.alias,
+                AliasActuals {
+                    source_kind: AliasSourceKind::Derived,
+                    columns: vec!["sf_s".to_owned(), "sf_o".to_owned()],
+                },
+            );
             let refs: Vec<&SqlCond> = conds.iter().collect();
-            let where_sql = render_conjunction(&refs, dialect, catalog, actuals, params, pidx)?;
+            let where_sql =
+                render_conjunction(&refs, dialect, catalog, &nested_actuals, params, pidx)?;
             let kw = if *negated { "NOT EXISTS" } else { "EXISTS" };
             format!(
                 "{kw} ({with} SELECT 1 FROM t{} WHERE {where_sql})",
@@ -1203,7 +1599,7 @@ fn render_template_concat(
     alias: usize,
     encode_iri: bool,
     dialect: Dialect,
-    actuals: &HashMap<usize, Vec<String>>,
+    actuals: &ActualColumns,
     params: &mut Vec<String>,
     pidx: &mut usize,
 ) -> Result<String> {
@@ -1280,13 +1676,7 @@ pub(crate) fn render_template_inline(
                 // R2RMLTC0011a exercises (a single-arm width mismatch pooled AFTER
                 // D1 already folded one of the arm's columns to lowercase on
                 // PostgreSQL).
-                let quoted =
-                    inner_sql.is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
-                let col = if quoted {
-                    format!("{alias}.{}", dialect.quote_ident(c))
-                } else {
-                    format!("{alias}.{c}")
-                };
+                let col = render_immediate_source_column(alias, c, inner_sql, dialect);
                 if encode_iri {
                     percent_encode_col(&col, dialect)?
                 } else {
@@ -1302,6 +1692,31 @@ pub(crate) fn render_template_inline(
             "ADR-0034 D2 rendered-projection pooling (SQL CONCAT fallback) is not implemented \
              for {other:?} → 501 (never a silently wrong NULL/concat-operator guess)"
         ))),
+    }
+}
+
+/// Render `column` against one immediate scan source at translate time.
+///
+/// `inner_sql == None` denotes a base [`LogicalSource::Table`]; `Some` denotes a
+/// derived [`LogicalSource::Query`]. That distinction is load-bearing for Direct
+/// Mapping's synthetic no-primary-key `rowid`: PostgreSQL reads base-table
+/// `ctid`, while an authored or compiler-derived query output named `rowid`
+/// remains an ordinary column. Query aliases also retain the existing bounded
+/// bare-`AS` case-folding heuristic. Live emission uses the typed equivalent in
+/// [`colref`].
+pub(crate) fn render_immediate_source_column(
+    alias: &str,
+    column: &str,
+    inner_sql: Option<&str>,
+    dialect: Dialect,
+) -> String {
+    if dialect == Dialect::Postgres && column == "rowid" && inner_sql.is_none() {
+        return format!("({alias}.ctid)::text");
+    }
+    if inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, column)) {
+        format!("{alias}.{column}")
+    } else {
+        format!("{alias}.{}", dialect.quote_ident(column))
     }
 }
 
@@ -1516,17 +1931,29 @@ END, '' ORDER BY ord\
     )
 }
 
-fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -> String {
+fn colref(c: &ColRef, dialect: Dialect, actuals: &ActualColumns) -> String {
     // The Direct Mapping no-PK blank-node identifier is keyed on the source's
     // physical row id (`sf-mapping`'s synthetic `rowid` column). SQLite exposes
     // that as the `rowid` pseudo-column; PostgreSQL has no `rowid`, so render the
     // equivalent system tuple id `ctid` cast to text (the value is an existential
-    // blank-node seed — only per-row uniqueness matters, ADR-0005). Renders as a
-    // plain reference for every real column.
-    if dialect == Dialect::Postgres && c.column.as_ref() == "rowid" {
+    // blank-node seed — only per-row uniqueness matters, ADR-0005). This exception
+    // is source-aware: an internally wrapped or mapping-authored query can expose a
+    // real result column named `rowid`, which must remain an ordinary derived-table
+    // column rather than being silently rewritten to that query's unrelated `ctid`.
+    if dialect == Dialect::Postgres
+        && c.column.as_ref() == "rowid"
+        && actuals
+            .get(&c.alias)
+            .is_some_and(|actual| actual.source_kind == AliasSourceKind::Table)
+    {
         return format!("(t{}.ctid)::text", c.alias);
     }
-    let name = resolve_col(&c.column, actuals.get(&c.alias).map(Vec::as_slice));
+    let name = resolve_col(
+        &c.column,
+        actuals
+            .get(&c.alias)
+            .map(|actual| actual.columns.as_slice()),
+    );
     format!("t{}.{}", c.alias, dialect.quote_ident(name))
 }
 
@@ -1534,7 +1961,7 @@ fn colref(c: &ColRef, dialect: Dialect, actuals: &HashMap<usize, Vec<String>>) -
 mod tests {
     use super::*;
     use crate::iq::{Scan, StrMatchOp};
-    use sf_core::ir::LogicalSource;
+    use sf_core::ir::{LogicalSource, TermSpec};
 
     fn branch_with(cond: SqlCond) -> Branch {
         let mut b = Branch::single(Scan {
@@ -1604,6 +2031,114 @@ mod tests {
         assert!(!e.sql.contains("\"StudentId\""), "{}", e.sql);
         // Reconstruction still keys on the raw IR identifier (position-based read).
         assert_eq!(&*e.projection[0].column, "StudentId");
+    }
+
+    #[test]
+    fn live_validation_preserves_physical_row_identifier_exceptions() {
+        let mut branch = Branch::single(Scan {
+            alias: 0,
+            source: LogicalSource::Table("no_pk".to_owned()),
+        });
+        branch.bindings.insert(
+            "s".to_owned(),
+            TermDef::Derived {
+                term_map: TermMap::Column("value".into(), TermSpec::plain_literal()),
+                alias: 0,
+            },
+        );
+        branch.path = Some(PathClosure {
+            alias: 1,
+            kind: PathKind::One,
+            hop: HopExpr::Pred(crate::iq::HopRelation {
+                source: LogicalSource::Table("no_pk".to_owned()),
+                subj_col: "rowid".into(),
+                obj_col: "value".into(),
+            }),
+        });
+        let mut catalog = ColumnCatalog::default();
+        catalog.insert(
+            &LogicalSource::Table("no_pk".to_owned()),
+            vec!["value".to_owned()],
+        );
+
+        assert!(
+            validate_live_columns(std::slice::from_ref(&branch), Dialect::Sqlite, &catalog).is_ok()
+        );
+        assert!(
+            validate_live_columns(std::slice::from_ref(&branch), Dialect::Postgres, &catalog)
+                .is_ok()
+        );
+        assert!(validate_live_columns(&[branch], Dialect::MySql, &catalog).is_err());
+    }
+
+    #[test]
+    fn postgres_rowid_rewrite_stops_at_a_derived_query_boundary() {
+        let mut table = Branch::single(Scan {
+            alias: 0,
+            source: LogicalSource::Table("no_pk".to_owned()),
+        });
+        table
+            .where_conds
+            .push(SqlCond::IsNotNull(ColRef::new(0, "rowid")));
+        let table_sql = emit_branch(&table, Dialect::Postgres).unwrap().sql;
+        assert!(table_sql.contains("(t0.ctid)::TEXT"), "{table_sql}");
+
+        let mut query = Branch::single(Scan {
+            alias: 0,
+            source: LogicalSource::Query(
+                "SELECT (sfs0.ctid)::text AS rowid FROM no_pk sfs0".to_owned(),
+            ),
+        });
+        query
+            .where_conds
+            .push(SqlCond::IsNotNull(ColRef::new(0, "rowid")));
+        let query_sql = emit_branch(&query, Dialect::Postgres).unwrap().sql;
+        assert!(query_sql.contains("t0.\"rowid\""), "{query_sql}");
+        assert!(!query_sql.contains("t0.ctid"), "{query_sql}");
+    }
+
+    #[test]
+    fn translate_time_rowid_rendering_is_base_table_only() {
+        assert_eq!(
+            render_immediate_source_column("sfs0", "rowid", None, Dialect::Postgres),
+            "(sfs0.ctid)::text"
+        );
+        assert_eq!(
+            render_immediate_source_column(
+                "sfs0",
+                "rowid",
+                Some("SELECT 7 AS rowid"),
+                Dialect::Postgres,
+            ),
+            "sfs0.rowid"
+        );
+        assert_eq!(
+            render_immediate_source_column(
+                "sfs0",
+                "rowid",
+                Some("SELECT 7 AS \"rowid\""),
+                Dialect::Postgres,
+            ),
+            "sfs0.\"rowid\""
+        );
+
+        let template = vec![
+            sf_core::ir::Segment::Literal("urn:row:".into()),
+            sf_core::ir::Segment::Column("rowid".into()),
+        ];
+        let table_sql =
+            render_template_inline(&template, "sfs0", false, None, Dialect::Postgres).unwrap();
+        assert!(table_sql.contains("(sfs0.ctid)::text"), "{table_sql}");
+        let query_sql = render_template_inline(
+            &template,
+            "sfs0",
+            false,
+            Some("SELECT 7 AS rowid"),
+            Dialect::Postgres,
+        )
+        .unwrap();
+        assert!(query_sql.contains("sfs0.rowid"), "{query_sql}");
+        assert!(!query_sql.contains("ctid"), "{query_sql}");
     }
 
     /// PostgreSQL regex pushdown renders `~` / `~*` with a numbered, bound param.

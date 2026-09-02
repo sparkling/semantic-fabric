@@ -12,7 +12,7 @@ use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 
 use crate::emit::{self, ColumnCatalog};
 use crate::iq::{Branch, OrderKey};
-use crate::{Error, Plan, PlanForm, Result};
+use crate::{DedupScope, Error, Plan, PlanForm, Result};
 
 use super::batch::{reconstruct_batch, TERM_GEN_BATCH_SIZE, TERM_GEN_FIRST_BATCH_SIZE};
 use super::expression::eval_expr;
@@ -133,7 +133,7 @@ where
         // doc comment and [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the
         // measured reason (ledger F8, un-gated on an idle-machine re-measurement).
         parallel_term_gen: true,
-        dedup_groups: &plan.dedup_groups,
+        dedup_scopes: &plan.dedup_scopes,
     };
     run_branches(&branches, ctx, b, sink).await
 }
@@ -154,37 +154,10 @@ pub(super) struct PlanCtx<'a> {
     /// (see its `parallel_allowed` doc comment, ledger F8) — `true` only for
     /// [`rust_group_execute`]'s inner collection.
     pub(super) parallel_term_gen: bool,
-    /// ADR-0034 C0e restoration — [`Plan::dedup_groups`] verbatim: a branch's own
-    /// representative scan/opt/subplan alias → shared term-dedup-set id. See
-    /// [`run_branches`]'s own doc comment for how this replaces a fresh
-    /// per-branch seen-set with one shared across every same-id branch.
-    pub(super) dedup_groups: &'a std::collections::HashMap<usize, usize>,
-}
-
-/// The scan/opt alias to look up in [`PlanCtx::dedup_groups`] for `branch`'s
-/// own shared dedup-group id, if any (ADR-0034 C0e restoration). A standalone
-/// group member tagged `distinct = true` (`unfold::pool_pattern_relation` /
-/// `iq::resolve`'s Intensional arm) that lands as a `Union` child on the TREE
-/// engine is never the query's own top-level spine, so `iq::lower::
-/// lower_as_subplan` wraps it in a `SubPlanJoin` regardless — the SAME
-/// wrapping a lone `eligible_for_term_dedup` branch already gets there (e.g.
-/// W3C TC0005b). `branch.core`/`.opts` end up empty (`Branch::alias_sources`
-/// finds nothing), but the scan whose alias was registered survives
-/// unchanged, just nested one level down inside the SubPlan's own inner
-/// `Plan` — `lower_as_subplan` mints a FRESH alias for the `SubPlanJoin`
-/// itself, never for the scan it wraps. The flat engine never wraps anything
-/// (`alias_sources` alone always finds it there), so this only recurses on
-/// tree output.
-pub(crate) fn dedup_group_alias(branch: &Branch) -> Option<usize> {
-    if let Some((alias, _)) = branch.alias_sources().into_iter().next() {
-        return Some(alias);
-    }
-    let inner = branch.subplan_joins.first()?.plan.branches.first()?;
-    inner
-        .alias_sources()
-        .into_iter()
-        .next()
-        .map(|(alias, _)| alias)
+    /// ADR-0034 C0e restoration — post-cascade, executor-branch-aligned shared
+    /// term-dedup scopes. Empty means no shared groups; otherwise its length
+    /// must equal `branches.len()` and each slot corresponds to the same index.
+    pub(super) dedup_scopes: &'a [Option<DedupScope>],
 }
 
 /// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
@@ -207,22 +180,74 @@ where
     F: FnMut(&Branch, &Bindings) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    // Catalog: one probe per distinct source; SWALLOW column_names errors (design
-    // A4 — a source whose metadata cannot be read is omitted; resolution falls back
-    // to the raw identifier).
-    let mut catalog = ColumnCatalog::default();
-    let mut seen_probe = std::collections::HashSet::new();
-    for branch in branches {
-        for (_, source) in branch.alias_sources() {
-            let probe = ctx.dialect.probe_sql(source);
-            if !seen_probe.insert(probe.clone()) {
-                continue;
-            }
-            if let Ok(names) = b.column_names(&probe).await {
-                catalog.insert(source, names);
+    // The post-cascade lift normally guarantees alignment. Keep this boundary
+    // fail-closed for hand-built/internal Plans before metadata probing or SQL
+    // emission can perform I/O.
+    if !ctx.dedup_scopes.is_empty() && ctx.dedup_scopes.len() != branches.len() {
+        return Err(Error::Unsupported(
+            "shared term-dedup branch ownership is malformed -> 501".to_owned(),
+        ));
+    }
+    let mut scope_keys =
+        std::collections::HashMap::<usize, std::collections::BTreeSet<String>>::new();
+    let mut scope_counts = std::collections::HashMap::<usize, usize>::new();
+    for (branch, scope) in branches.iter().zip(ctx.dedup_scopes) {
+        let Some(scope) = scope else { continue };
+        super::dedup_scope_runtime::validate_runtime_scope(branch, scope)?;
+        let keys: std::collections::BTreeSet<String> = scope.key_bindings.keys().cloned().collect();
+        if keys.is_empty()
+            || scope_keys
+                .insert(scope.group_id, keys.clone())
+                .is_some_and(|existing| existing != keys)
+        {
+            return Err(Error::Unsupported(
+                "shared term-dedup key metadata is malformed -> 501".to_owned(),
+            ));
+        }
+        *scope_counts.entry(scope.group_id).or_default() += 1;
+    }
+    if scope_counts.values().any(|count| *count < 2) {
+        return Err(Error::Unsupported(
+            "shared term-dedup group no longer spans two executable branches -> 501".to_owned(),
+        ));
+    }
+    // Overlay hidden BGP-boundary key definitions only onto this execution's
+    // private branch clone. The cached Plan and public SELECT projection remain
+    // unchanged, while SQL emission/reconstruction can still dedup before the
+    // later outer projection.
+    let mut execution_branches = if ctx.dedup_scopes.is_empty() {
+        None
+    } else {
+        Some(branches.to_vec())
+    };
+    if let Some(scoped) = &mut execution_branches {
+        for (branch, scope) in scoped.iter_mut().zip(ctx.dedup_scopes) {
+            if let Some(scope) = scope {
+                super::dedup_scope::overlay_key_bindings(branch, &scope.key_bindings)?;
             }
         }
     }
+    let branches = execution_branches.as_deref().unwrap_or(branches);
+    // Fail-closed live metadata preflight: probe every distinct logical source
+    // before opening any branch. Dedup uses the tagged Table/Query identity, not
+    // probe SQL text (the two variants can deliberately render identical probes).
+    let mut catalog = ColumnCatalog::default();
+    let mut seen_sources = std::collections::HashSet::new();
+    for source in emit::live_metadata_sources(branches) {
+        if !seen_sources.insert(emit::logical_source_identity(source)) {
+            continue;
+        }
+        let probe = ctx.dialect.probe_sql(source);
+        let names = b.column_names(&probe).await.map_err(map_sql_err)?;
+        catalog.insert_live(source, names)?;
+    }
+    emit::validate_live_columns(branches, ctx.dialect, &catalog)?;
+    // Emission is part of the same preflight. A malformed later branch must fail
+    // before an earlier branch can open a cursor or expose a partial result.
+    let emitted_branches = branches
+        .iter()
+        .map(|branch| emit::emit_branch_with(branch, ctx.dialect, &catalog))
+        .collect::<Result<Vec<_>>>()?;
     let multi = branches.len() > 1;
     // DISTINCT over a multi-branch bag-union: SQL dedups only within each branch, so
     // dedup the projected solutions here — before OFFSET/LIMIT (SPARQL evaluates
@@ -233,14 +258,16 @@ where
     };
     let mut seen_tuples: std::collections::HashSet<Vec<Option<Term>>> =
         std::collections::HashSet::new();
-    // ADR-0034 C0e restoration: one seen-set PER shared dedup-group id, keyed by
-    // `ctx.dedup_groups`' values — declared OUTSIDE the branch loop below (unlike
+    // ADR-0034 C0e restoration: one seen-set PER shared dedup group, keyed by
+    // `ctx.dedup_scopes`' ids — declared OUTSIDE the branch loop below (unlike
     // the per-branch `own_term_seen` further down) so every branch tagged with
     // the SAME group id contributes to and checks against the SAME set, giving
     // the cross-branch dedup `unfold::pool_group`'s SQL `UNION` used to provide,
     // without ever emitting one.
-    let mut group_seen: std::collections::HashMap<usize, std::collections::HashSet<Vec<Term>>> =
-        std::collections::HashMap::new();
+    let mut group_seen: std::collections::HashMap<
+        usize,
+        std::collections::HashSet<Vec<Option<Term>>>,
+    > = std::collections::HashMap::new();
     let mut seen = 0usize; // solutions observed (for offset)
     let mut emitted = 0usize; // solutions passed downstream (for limit)
                               // ORDER BY is applied HERE for every plan, never in SQL (a SQL ORDER BY inherits
@@ -248,8 +275,7 @@ where
                               // order_cmp, then OFFSET/LIMIT (SPARQL §15: order, then slice).
     let ordered = !ctx.order.is_empty();
     let mut buffer: Vec<(usize, Bindings)> = Vec::new();
-    for (bi, branch) in branches.iter().enumerate() {
-        let e = emit::emit_branch_with(branch, ctx.dialect, &catalog)?;
+    for (bi, (branch, e)) in branches.iter().zip(&emitted_branches).enumerate() {
         // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path — see `cascade::
         // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
         // scope rule): `e.sql` above omitted DISTINCT even though `branch.distinct` is
@@ -259,14 +285,13 @@ where
         // scope and question: this collapses duplicates WITHIN this one branch's own
         // relation, on its FULL reconstructed solution tuple (every bound variable),
         // independent of whatever the outer query later projects or whether it asked
-        // for DISTINCT at all. `group_id` (ADR-0034 C0e restoration), when set, means
+        // for DISTINCT at all. `group_scope` (ADR-0034 C0e restoration), when set, means
         // this branch is one member of a D2 standalone group sharing `group_seen`'s
         // entry instead — a DIFFERENT branch, tagged with the SAME id, may already
         // have inserted the key this branch's own row reconstructs to (the cross-
         // branch same-triple case a fresh-per-branch set could never catch).
-        let group_id: Option<usize> =
-            dedup_group_alias(branch).and_then(|alias| ctx.dedup_groups.get(&alias).copied());
-        let term_dedup = group_id.is_some() || crate::cascade::eligible_for_term_dedup(branch);
+        let group_scope = ctx.dedup_scopes.get(bi).and_then(Option::as_ref);
+        let term_dedup = group_scope.is_some() || crate::cascade::eligible_for_term_dedup(branch);
         let mut own_term_seen: std::collections::HashSet<Vec<Term>> =
             std::collections::HashSet::new();
         // The column schema is fixed for this branch's whole row stream, so index
@@ -358,13 +383,22 @@ where
                     // canonicalize via `canonical_pairs` so two equal solutions
                     // whose vars got bound in a different sequence still hash
                     // the same (see `Bindings`'s doc comment).
-                    let key: Vec<Term> = canonical_pairs(&bindings)
-                        .into_iter()
-                        .map(|(_, v)| v.clone())
-                        .collect();
-                    let inserted = match group_id {
-                        Some(gid) => group_seen.entry(gid).or_default().insert(key),
-                        None => own_term_seen.insert(key),
+                    let inserted = match group_scope {
+                        Some(scope) => {
+                            let key = scope
+                                .key_bindings
+                                .keys()
+                                .map(|variable| bindings.get(variable).cloned())
+                                .collect();
+                            group_seen.entry(scope.group_id).or_default().insert(key)
+                        }
+                        None => {
+                            let key: Vec<Term> = canonical_pairs(&bindings)
+                                .into_iter()
+                                .map(|(_, value)| value.clone())
+                                .collect();
+                            own_term_seen.insert(key)
+                        }
                     };
                     if !inserted {
                         // duplicate reconstructed solution (ADR-0034 D1 term dedup,

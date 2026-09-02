@@ -84,9 +84,11 @@ pub mod unify;
 
 #[cfg(test)]
 mod cache_binding_tests;
+#[cfg(test)]
+mod column_type_authority_tests;
 
 pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
-pub use compiler_schema::{CompilerSchema, ConstraintAuthority};
+pub use compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthority};
 pub use iq::Branch;
 pub use saturate::Tbox;
 
@@ -124,6 +126,17 @@ pub enum PlanForm {
     Ask,
 }
 
+/// One post-cascade, executor-branch-aligned shared term-dedup scope.
+///
+/// `key_bindings` is the complete BGP-boundary variable set, not the later outer
+/// SELECT projection. Execution overlays these hidden bindings onto its private
+/// branch clone; only [`PlanForm::Select`] variables are exposed to callers.
+#[derive(Debug, Clone)]
+pub(crate) struct DedupScope {
+    pub(crate) group_id: usize,
+    pub(crate) key_bindings: std::collections::BTreeMap<String, iq::TermDef>,
+}
+
 /// A compiled query plan: a bag-union of [`Branch`]es (each one SQL `SELECT`) plus
 /// the form and the solution modifiers. Memory-bounded by `⟨T, M⟩` — independent
 /// of source data (ADR-0006).
@@ -143,15 +156,12 @@ pub struct Plan {
     /// and computes `aggs` in Rust before streaming the grouped results.
     pub rust_group: Option<iq::RustGroup>,
     pub dialect: Dialect,
-    /// ADR-0034 C0e restoration: a D2 standalone group's shared term-dedup-set
-    /// id, keyed by each member branch's own representative scan/opt/subplan
-    /// alias — `exec_core::run_branches` shares ONE seen-set across every
-    /// `branches` entry whose alias maps to the SAME id here, instead of a
-    /// fresh per-branch set (see `unfold::Unfolder`'s `dedup_groups` field doc
-    /// comment for why the marker lives here, keyed by alias, rather than as a
-    /// field on `Branch` itself). Empty for the overwhelming common case (no D2
-    /// group needed this path).
-    pub(crate) dedup_groups: std::collections::HashMap<usize, usize>,
+    /// ADR-0034 C0e restoration: D2 shared term-dedup scope aligned with
+    /// [`Plan::branches`]. Resolve records leaf aliases plus their complete
+    /// BGP-boundary key; after all rewrites, `exec_core::lift_dedup_scopes`
+    /// proves ownership and key preservation through pure unary wrappers.
+    /// An empty vector is the common no-group case.
+    pub(crate) dedup_scopes: Vec<Option<DedupScope>>,
     /// ADR-0034 item 3 (Run 5): `true` when SOME `PlanForm::Construct` branch's
     /// ORIGINAL (pre-narrowing) bindings bound a variable the CONSTRUCT
     /// template does not use — captured by `dedup_construct_template_
@@ -187,12 +197,11 @@ impl Plan {
 
     /// Emit every prepared branch to parameterised dialect SQL (ADR-0007 step 6).
     ///
-    /// Used only for SubPlan (nested derived-table) embedding (`emit::emit_subplan_sql`);
-    /// the top-level executor emits via `emit_branch_with` with its own live-probed
-    /// catalog instead (`exec_core::run_branches`), never through here. No live DB
-    /// connection is available at this point, so column-identifier case-folding is
-    /// resolved from a translate-time synthetic catalog — see
-    /// `emit::synthetic_subplan_catalog`'s doc comment (W3C R2RMLTC0014b).
+    /// Used by dialect-neutral/offline SubPlan callers. The live top-level executor
+    /// emits through `emit_branch_with`; its nested `emit_subplan_sql` path overlays
+    /// the recursively probed live catalog instead of treating this synthetic
+    /// alias-folding heuristic as metadata authority. See
+    /// `emit::synthetic_subplan_catalog` (W3C R2RMLTC0014b).
     pub fn emitted(&self) -> Result<Vec<emit::EmittedBranch>> {
         let branches = self.prepared_branches();
         let catalog = emit::synthetic_subplan_catalog(&branches);
@@ -214,6 +223,9 @@ pub fn translate(query: &Query, maps: &[TriplesMap], dialect: Dialect) -> Result
 /// schema (the constraint-driven cascade passes, ADR-0007). Routes through the
 /// operator-tree (IQ) pipeline — the default since ADR-0023 M8. `sparopt` is not
 /// wired into the product pipeline; the characterized cascade is the optimizer.
+/// This raw API is caller-authorized: `schema` must be frozen or otherwise
+/// verified for the full compiled-plan lifetime. Product serving uses
+/// [`CompilerBinding`], which quarantines mutable startup type observations.
 pub fn translate_with(
     query: &Query,
     maps: &[TriplesMap],
@@ -236,7 +248,8 @@ pub fn translate_flat(query: &Query, maps: &[TriplesMap], dialect: Dialect) -> R
 /// Translate through the **flat unfold path** with a T-Box and schema. This was
 /// the production path before ADR-0023 M8; it is now the `=_bag` oracle /
 /// fallback. Prefer [`translate_with`] (tree path) for production; call this when
-/// the flat SQL shape matters or as a regression guard.
+/// the flat SQL shape matters or as a regression guard. Like [`translate_with`],
+/// this raw entry requires a frozen or otherwise verified `schema`.
 pub fn translate_with_flat(
     query: &Query,
     maps: &[TriplesMap],
@@ -254,7 +267,8 @@ pub fn translate_with_flat(
 /// identical bag; any divergence pinpoints the offending cascade rule, no external
 /// oracle required. Like the optimized path, an empty/contradictory branch still
 /// yields no rows (the SQL `=`-constants are simply not pruned here), so `=_bag`
-/// is preserved by construction.
+/// is preserved by construction. Its raw `schema` carries the same caller-owned
+/// frozen/verified contract as [`translate_with_flat`].
 pub fn translate_unoptimized(
     query: &Query,
     maps: &[TriplesMap],
@@ -430,6 +444,7 @@ fn translate_inner_flat(
     // join/filter unification is already done; `unify::unify` never sees a
     // `ComposedTriple` on this path in practice).
     star::apply_composed_bindings(&mut branches, &star_env);
+    let dedup_scopes = exec_core::lift_dedup_scopes(&branches, uf.dedup_groups())?;
     Ok(Plan {
         branches,
         form,
@@ -439,7 +454,7 @@ fn translate_inner_flat(
         order: trans.order,
         rust_group: trans.rust_group,
         dialect,
-        dedup_groups: uf.dedup_groups().clone(),
+        dedup_scopes,
         construct_drops_some_branch_var,
     })
 }
@@ -460,12 +475,36 @@ fn translate_inner_flat(
 ///
 /// The single [`iq::resolve::ResolveCx`] threads ONE alias counter across the whole
 /// query, so sibling patterns receive disjoint scan aliases (M3 design §3.2).
+/// This is a raw caller-authorized entry: `schema` must remain frozen or otherwise
+/// verified for the plan lifetime. Cached product serving uses the private
+/// authority-carrying entry below.
 pub fn translate_tree(
     query: &Query,
     maps: &[TriplesMap],
     tbox: &Tbox,
     dialect: Dialect,
     schema: &[TableSchema],
+) -> Result<Plan> {
+    translate_tree_with_column_type_use(
+        query,
+        maps,
+        tbox,
+        dialect,
+        schema,
+        compiler_schema::ColumnTypeUse::CallerAuthorizedFrozen,
+    )
+}
+
+/// Internal tree entry point carrying the column-type capability explicitly.
+/// Public raw translation always supplies `CallerAuthorizedFrozen`; the cached
+/// product binding is the sole `Unverified` caller.
+fn translate_tree_with_column_type_use(
+    query: &Query,
+    maps: &[TriplesMap],
+    tbox: &Tbox,
+    dialect: Dialect,
+    schema: &[TableSchema],
+    column_type_use: compiler_schema::ColumnTypeUse,
 ) -> Result<Plan> {
     // ADR-0031/ADR-0032: the SAME shared pre-pass `translate_inner_flat` runs, so
     // both engines see an identical, already-desugared WHERE pattern (never a
@@ -477,7 +516,13 @@ pub fn translate_tree(
     // identical note in `translate_inner_flat`.
     let (query, star_env) = star::rewrite_query(query)?;
     let query = &query;
-    let mut cx = iq::resolve::ResolveCx::new(maps, tbox, dialect, schema);
+    let mut cx = iq::resolve::ResolveCx::new_with_column_type_use(
+        maps,
+        tbox,
+        dialect,
+        schema,
+        column_type_use,
+    );
     let extra_keep = star::all_component_var_names(&star_env);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
@@ -613,9 +658,11 @@ pub fn translate_tree(
     // ADR-0032 D3 item 2 — the projection seam, applied LAST (see the
     // identical note in `translate_inner_flat`).
     star::apply_composed_bindings(&mut plan.branches, &star_env);
-    // ADR-0034 C0e restoration — see `Plan::dedup_groups`'s own doc comment;
-    // the identical pull the flat core does from `uf.dedup_groups()`.
-    plan.dedup_groups = cx.dedup_groups().clone();
+    // ADR-0034 C0e restoration: normalize resolve's leaf-alias markers only
+    // AFTER both root and recursive cascades. Nested Plans emit as SQL, so only
+    // a proven pure unary wrapper chain may lift a group onto a root executor
+    // branch; every other post-lower shape fails closed here.
+    plan.dedup_scopes = exec_core::lift_dedup_scopes(&plan.branches, cx.dedup_groups())?;
     Ok(plan)
 }
 
@@ -670,12 +717,13 @@ pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan
         }
         return Ok(cached.plan().clone());
     }
-    let plan = translate_with(
+    let plan = translate_tree_with_column_type_use(
         query,
         binding.triples_maps(),
-        binding.dialect(),
         binding.tbox(),
+        binding.dialect(),
         binding.schema(),
+        binding.column_type_use(),
     )?;
     binding
         .cache()
@@ -706,6 +754,7 @@ pub fn parse_and_translate(sparql: &str, maps: &[TriplesMap], dialect: Dialect) 
 /// Parse `sparql` and translate it through the **operator-tree path** (ADR-0023)
 /// with a T-Box and source `schema` (convenience over [`translate_tree`]). Drop-in
 /// alternative to [`parse_and_translate_with`] for the M7 benchmark comparison.
+/// The caller must keep `schema` frozen or otherwise verified for the plan lifetime.
 pub fn parse_and_translate_tree_with(
     sparql: &str,
     maps: &[TriplesMap],
@@ -740,7 +789,8 @@ pub fn parse_and_translate_with(
 /// Parse `sparql` and translate it through the **flat unfold path** (the ADR-0023
 /// oracle / permanent fallback), with a T-Box and source `schema`. Symmetric
 /// counterpart to [`parse_and_translate_tree_with`]; intended for benchmark
-/// comparison (bench group `obda_select_flat_1x`) and test oracle arms.
+/// comparison (bench group `obda_select_flat_1x`) and test oracle arms. The caller
+/// must keep `schema` frozen or otherwise verified for the plan lifetime.
 pub fn parse_and_translate_flat_with(
     sparql: &str,
     maps: &[TriplesMap],

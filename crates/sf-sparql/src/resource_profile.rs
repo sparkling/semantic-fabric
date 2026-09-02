@@ -81,15 +81,14 @@ fn collect_states(plan: &Plan, states: &mut BTreeSet<SourceSizedState>) {
     {
         states.insert(SourceSizedState::ProjectedDistinct);
     }
-    if plan.branches.iter().any(|branch| {
-        if !branch_reads_source(branch) {
-            return false;
-        }
-        let uses_shared_group = crate::exec_core::dedup_group_alias(branch)
-            .and_then(|alias| plan.dedup_groups.get(&alias))
-            .is_some();
-        uses_shared_group || crate::cascade::eligible_for_term_dedup(branch)
-    }) {
+    if plan.dedup_scopes.iter().any(Option::is_some)
+        || plan.branches.iter().any(|branch| {
+            if !branch_reads_source(branch) {
+                return false;
+            }
+            crate::cascade::eligible_for_term_dedup(branch)
+        })
+    {
         states.insert(SourceSizedState::TermDedup);
     }
     if source_backed && crate::exec_core::construct_may_need_cross_branch_dedup(plan) {
@@ -149,7 +148,7 @@ mod tests {
         AggCol, AggKind, Aggregation, Branch, ColRef, OrderKey, RustGroup, Scan, SubPlanJoin,
         TermDef,
     };
-    use crate::{Plan, PlanForm};
+    use crate::{DedupScope, Plan, PlanForm};
     use sf_core::ir::{LogicalSource, Template, TermMap, TermSpec};
     use sf_sql::Dialect;
 
@@ -170,7 +169,7 @@ mod tests {
             order: Vec::new(),
             rust_group: None,
             dialect: Dialect::Sqlite,
-            dedup_groups: std::collections::HashMap::new(),
+            dedup_scopes: Vec::new(),
             construct_drops_some_branch_var: false,
         }
     }
@@ -252,7 +251,10 @@ mod tests {
     #[test]
     fn classifies_shared_term_dedup_group() {
         let mut candidate = select_plan(vec![branch(7)]);
-        candidate.dedup_groups.insert(7, 99);
+        candidate.dedup_scopes = vec![Some(DedupScope {
+            group_id: 99,
+            key_bindings: candidate.branches[0].bindings.clone(),
+        })];
 
         assert_eq!(
             candidate.source_sized_states(),

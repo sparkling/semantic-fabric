@@ -68,9 +68,9 @@ pub trait SqlBackend {
     /// Prepare-time result-column NAMES of `probe_sql`, in projection order, for
     /// `emit::resolve_col` identifier case-folding. Metadata only — fetches no rows.
     /// `probe_sql` is built ONCE by the core via [`crate::Dialect::probe_sql`], so no
-    /// SQL is generated inside this method. A per-source failure is swallowed by the
-    /// caller (catalog omits the source; resolution falls back to the raw
-    /// identifier), so this returns `Result` but the core never `?`-propagates it.
+    /// SQL is generated inside this method. Every error is propagated by the core,
+    /// which also validates missing, duplicate, and case-fold-ambiguous live columns
+    /// before opening any branch cursor.
     async fn column_names(&mut self, probe_sql: &str) -> Result<Vec<String>>;
 
     /// Open a server-side cursor for one emitted branch and bind `lexical_params`

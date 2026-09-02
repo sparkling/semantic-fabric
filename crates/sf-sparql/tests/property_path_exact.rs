@@ -5,10 +5,10 @@
 
 use rusqlite::{params, Connection};
 use sf_core::ir::{
-    LogicalSource, ObjectMap, PredicateObjectMap, SubjectMap, Template, TermMap, TermSpec,
+    LogicalSource, ObjectMap, PredicateObjectMap, Segment, SubjectMap, Template, TermMap, TermSpec,
     TriplesMap,
 };
-use sf_core::NamedNode;
+use sf_core::{Column, NamedNode, TableSchema};
 use sf_sparql::{exec, parse_and_translate};
 use sf_sql::Dialect;
 
@@ -32,6 +32,31 @@ fn edge_mapping() -> Vec<TriplesMap> {
                 Template::parse("http://ex/n/{child}").unwrap(),
                 TermSpec::iri(),
             ))],
+            graphs: vec![],
+        }],
+    }]
+}
+
+fn rowid_reflexive_mapping() -> Vec<TriplesMap> {
+    let row_node = TermMap::Template(
+        Template::from_segments(vec![
+            Segment::Literal("edge_".into()),
+            Segment::Column("rowid".into()),
+        ])
+        .expect("non-empty row template"),
+        TermSpec::blank_node(),
+    );
+    vec![TriplesMap {
+        id: "ROWID_EDGE".to_owned(),
+        source: LogicalSource::Table("edge".to_owned()),
+        subject: SubjectMap {
+            term: row_node.clone(),
+            classes: vec![],
+            graphs: vec![],
+        },
+        predicate_object_maps: vec![PredicateObjectMap {
+            predicates: vec![TermMap::Constant(NamedNode::new_unchecked(REACHES).into())],
+            objects: vec![ObjectMap::Term(row_node)],
             graphs: vec![],
         }],
     }]
@@ -188,4 +213,74 @@ fn unproven_dialects_reject_recursive_paths_before_emission() {
             );
         }
     }
+}
+
+#[test]
+fn no_pk_direct_mapping_paths_use_each_dialects_physical_row_identifier() {
+    let mut table = TableSchema::new("edge");
+    table.columns = vec![Column::new("child", "text", false)];
+    let maps = sf_mapping::direct_mapping(std::slice::from_ref(&table), "http://ex/")
+        .expect("generate direct mapping");
+    let predicate = "http://ex/edge#child";
+
+    let query = format!("SELECT ?s ?o WHERE {{ ?s (<{predicate}>|<{predicate}>) ?o }}");
+
+    let postgres = parse_and_translate(&query, &maps, Dialect::Postgres)
+        .expect("translate PostgreSQL path")
+        .emitted()
+        .expect("emit PostgreSQL path")[0]
+        .sql
+        .clone();
+    assert!(postgres.contains("(h0.ctid)::TEXT"), "{postgres}");
+    assert!(!postgres.contains("h0.\"rowid\""), "{postgres}");
+
+    let sqlite = parse_and_translate(&query, &maps, Dialect::Sqlite)
+        .expect("translate SQLite path")
+        .emitted()
+        .expect("emit SQLite path")[0]
+        .sql
+        .clone();
+    assert!(sqlite.contains("h0.\"rowid\""), "{sqlite}");
+    assert!(!sqlite.contains("ctid"), "{sqlite}");
+}
+
+#[test]
+fn reflexive_rowid_paths_use_postgresql_ctid_and_sqlite_rowid() {
+    let maps = rowid_reflexive_mapping();
+    let query = format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>? ?o }}");
+
+    let postgres = parse_and_translate(&query, &maps, Dialect::Postgres)
+        .expect("translate PostgreSQL reflexive path")
+        .emitted()
+        .expect("emit PostgreSQL reflexive path")[0]
+        .sql
+        .clone();
+    assert!(postgres.contains("(h0.ctid)::TEXT"), "{postgres}");
+    assert!(!postgres.contains("h0.\"rowid\""), "{postgres}");
+
+    let sqlite = parse_and_translate(&query, &maps, Dialect::Sqlite)
+        .expect("translate SQLite reflexive path")
+        .emitted()
+        .expect("emit SQLite reflexive path")[0]
+        .sql
+        .clone();
+    assert!(sqlite.contains("h0.\"rowid\""), "{sqlite}");
+    assert!(!sqlite.contains("ctid"), "{sqlite}");
+}
+
+#[test]
+fn query_backed_rowid_path_endpoints_remain_ordinary_postgresql_columns() {
+    let mut maps = rowid_reflexive_mapping();
+    maps[0].source = LogicalSource::Query("SELECT 7 AS rowid".to_owned());
+    let query = format!("SELECT ?s ?o WHERE {{ ?s <{REACHES}>? ?o }}");
+
+    let postgres = parse_and_translate(&query, &maps, Dialect::Postgres)
+        .expect("translate query-backed PostgreSQL path")
+        .emitted()
+        .expect("emit query-backed PostgreSQL path")[0]
+        .sql
+        .clone();
+
+    assert!(postgres.contains("h0.\"rowid\""), "{postgres}");
+    assert!(!postgres.contains("h0.ctid"), "{postgres}");
 }

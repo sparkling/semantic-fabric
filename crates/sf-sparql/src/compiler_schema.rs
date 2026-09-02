@@ -1,4 +1,4 @@
-//! Constraint-authority boundary for relational compiler metadata.
+//! Authority boundary for relational compiler metadata.
 
 use std::fmt;
 
@@ -19,17 +19,54 @@ pub enum ConstraintAuthority {
     Unverified,
 }
 
-/// Compiler-safe relational metadata with an explicit constraint authority.
+/// Whether observed SQL column types may authorize compiler decisions.
+///
+/// The serving product does not hold a database-generation lease from compile
+/// through streamed execution, so a startup catalogue observation is always
+/// [`Unverified`](Self::Unverified). A future verified serving mode needs an
+/// unforgeable snapshot/lease capability; it must not be introduced as another
+/// publicly constructible enum variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColumnTypeAuthority {
+    /// Type names are retained as observations, but may not prove a rewrite safe
+    /// when different physical columns must remain type-compatible at execution.
+    Unverified,
+}
+
+/// How one translation entry point is allowed to consume column-type facts.
+///
+/// The caller-authorized variant belongs only to the explicit raw translation
+/// APIs, whose documentation requires a frozen or otherwise verified schema.
+/// Product serving enters through [`crate::CompilerBinding`] and can obtain only
+/// `Unverified`; this private distinction therefore cannot mint serving
+/// authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColumnTypeUse {
+    CallerAuthorizedFrozen,
+    Unverified,
+}
+
+impl From<ColumnTypeAuthority> for ColumnTypeUse {
+    fn from(authority: ColumnTypeAuthority) -> Self {
+        match authority {
+            ColumnTypeAuthority::Unverified => Self::Unverified,
+        }
+    }
+}
+
+/// Compiler-safe relational metadata with explicit constraint and type authority.
 ///
 /// Raw introspection output cannot enter [`crate::CompilerBinding`] directly.
 /// The only constructor deliberately removes PK, UNIQUE, FK,
 /// functional-dependency, and NOT-NULL claims while retaining table/column
-/// names, SQL types, and estimates. This keeps duplicate-safety and type guards
-/// working conservatively without trusting mutable startup constraints for the
-/// lifetime of a server.
+/// names, SQL-type observations, and estimates. Types remain available for
+/// diagnostics and structurally safe decisions, but their `Unverified` authority
+/// prevents them from proving compatibility between different physical columns.
 pub struct CompilerSchema {
     tables: Vec<TableSchema>,
     constraint_authority: ConstraintAuthority,
+    column_type_authority: ColumnTypeAuthority,
 }
 
 impl CompilerSchema {
@@ -42,11 +79,16 @@ impl CompilerSchema {
                 .map(quarantine_unverified_constraints)
                 .collect(),
             constraint_authority: ConstraintAuthority::Unverified,
+            column_type_authority: ColumnTypeAuthority::Unverified,
         }
     }
 
     pub const fn constraint_authority(&self) -> ConstraintAuthority {
         self.constraint_authority
+    }
+
+    pub const fn column_type_authority(&self) -> ColumnTypeAuthority {
+        self.column_type_authority
     }
 
     pub(crate) fn tables(&self) -> &[TableSchema] {
@@ -59,6 +101,7 @@ impl fmt::Debug for CompilerSchema {
         formatter
             .debug_struct("CompilerSchema")
             .field("constraint_authority", &self.constraint_authority)
+            .field("column_type_authority", &self.column_type_authority)
             .field("table_count", &self.tables.len())
             .finish()
     }

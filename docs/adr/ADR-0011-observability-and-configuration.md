@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -14,7 +14,7 @@ implements:
 
 # Observability & configuration
 
-> **Implementation status (2026-09-01): partially implemented.** Commits
+> **Implementation status (2026-09-02): partially implemented.** Commits
 > `3e0f920`/`c9e6c53` add a closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
 > `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
@@ -23,9 +23,12 @@ implements:
 > credential-free inline source or environment reference, and typed PostgreSQL/
 > MySQL parsing rejects inline passwords before runtime, file, or network I/O. Raw
 > generated SQL, driver text, mapping details and source specifications cannot
-> enter that public boundary. A SELECT/CONSTRUCT failure after committing `200`
-> can only terminate the stream; this does not turn it into a problem response or
-> prove an atomic no-prefix contract. Environment injection is not the layered
+> enter that public boundary. Current hardening also maps SELECT/CONSTRUCT
+> executor failures after committing `200` to the single stable body error
+> `result stream failed`, so driver, mapping, schema and SQL text cannot escape
+> through that channel. The failure still terminates the stream; it does not turn
+> the response into RFC 9457 or prove an atomic no-prefix contract. Environment
+> injection is not the layered
 > TOML/config/secret-store model and remote PostgreSQL still uses `NoTls`.
 > Correlation IDs currently reach the response
 > only, not a log sink. The production crates still contain no tracing/metrics/OTLP

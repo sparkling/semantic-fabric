@@ -1542,28 +1542,46 @@ pub(crate) fn group_eligible_for_term_dedup(
     branches: &[Branch],
     keep: &std::collections::HashSet<String>,
 ) -> bool {
-    if branches.len() < 2 {
+    if !group_can_fallback_to_shared_term_dedup(branches, keep) {
         return false;
     }
     let mut any_offender = false;
     for b in branches {
-        if b.path.is_some()
-            || b.agg.is_some()
-            || b.core.len() + b.opts.len() + b.subplan_joins.len() > 1
-        {
-            return false;
-        }
         for (k, def) in &b.bindings {
             if !keep.contains(k) || binding_is_injective(def) {
                 continue;
-            }
-            if !binding_is_term_dedup_safe(def) {
-                return false;
             }
             any_offender = true;
         }
     }
     any_offender
+}
+
+/// Whether a D2 group can avoid an unproven PostgreSQL positional `UNION` by
+/// executing its standalone arms separately and deduplicating reconstructed RDF
+/// terms in the executor. This is the resource-costlier but type-independent
+/// correctness fallback: all projected bindings must either be injective or one
+/// of the already-admitted literal/blank-node template shapes. The resource
+/// profile classifies the shared set as source-sized, so serving rejects it before
+/// I/O until bounded spill/merge exists; conformance/raw callers may still use it.
+pub(crate) fn group_can_fallback_to_shared_term_dedup(
+    branches: &[Branch],
+    keep: &std::collections::HashSet<String>,
+) -> bool {
+    branches.len() >= 2
+        && branches.iter().all(|branch| {
+            branch.path.is_none()
+                && branch.agg.is_none()
+                && branch.core.len() + branch.opts.len() + branch.subplan_joins.len() <= 1
+                && keep
+                    .iter()
+                    .all(|name| branch.bindings.contains_key(name.as_str()))
+                && branch
+                    .bindings
+                    .iter()
+                    .filter(|(name, _)| keep.contains(name.as_str()))
+                    .all(|(_, definition)| binding_is_term_dedup_safe(definition))
+        })
 }
 
 /// Run 5 C0e restoration — prepare a [`group_eligible_for_term_dedup`] group's
@@ -1590,11 +1608,12 @@ pub(crate) fn narrow_group_for_shared_term_dedup(
     }
 }
 
-/// Whether pooling `members` (a D2 group of ≥2 not-provably-disjoint arms,
-/// [`disjoint_groups`](crate::unfold::disjoint_groups)) positionally on
-/// PostgreSQL risks a `UNION` the engine cannot honor soundly: either a hard SQL
-/// type-resolver error, or — if papered over with a `CAST` to align the types — a
-/// silent lexical-drift wrong answer. Live-verified (PostgreSQL 17): a bare
+/// Whether column-type compatibility for pooling `members` is proven.
+///
+/// A D2 group of ≥2 not-provably-disjoint arms ([`disjoint_groups`](crate::unfold::disjoint_groups))
+/// pools columns positionally. On PostgreSQL, a type mismatch can cause either a
+/// hard `UNION` type-resolver error or — if papered over with a `CAST` — a silent
+/// lexical-drift wrong answer. Live-verified (PostgreSQL 17): a bare
 /// `float8::text` cast switches to scientific notation outside a plain-decimal
 /// magnitude range (`1e+20`, `1.7976931348623157e+308`) and drops the sign of
 /// negative zero, where Rust's `f64::to_string()` — what reconstruction actually
@@ -1603,26 +1622,39 @@ pub(crate) fn narrow_group_for_shared_term_dedup(
 /// it either (loses trailing significant digits at extreme magnitudes,
 /// live-verified). No PostgreSQL expression was found that exactly reproduces
 /// Rust's shortest-round-trip plain-decimal formatting, so a floating-point slot
-/// mismatch cannot be aligned soundly in SQL — sound refuse (ADR-0025's own
-/// established "cannot pool soundly ⇒ 501" shape) rather than risk either
+/// mismatch cannot be aligned soundly in SQL — sound refusal (ADR-0025's own
+/// established "cannot pool soundly ⇒ 501" shape) rather than risking either
 /// failure mode (W3C R2RMLTC0012e: `IOUs.amount FLOAT` pools against
 /// `Lives.city VARCHAR` at the shared blank-node subject template's 3rd column
 /// slot). Integer/text/boolean mismatches are NOT flagged — their to-text
 /// conversions are exact and dialect-agnostic, so positional pooling already
 /// renders them correctly with no cast needed.
 ///
-/// Only checks pairs of arms that project the SAME variable with the SAME
-/// column-count (`TermDef::columns().len()`) — a differing count is a width
-/// mismatch, a completely different code path (Mechanism B / `pool_rendered`),
-/// not this one. SQLite is dynamically typed (no such `UNION` error exists
-/// there), so this is a no-op for every other dialect.
-pub(crate) fn group_has_unsafe_float_slot_mismatch(
+/// Unverified startup types cannot prove compatibility between different
+/// physical columns: DDL may change either type after compilation. The same
+/// exact logical source and raw column remains structurally safe because both
+/// references are resolved within one SQL statement. Caller-authorized frozen
+/// schemas may prove compatibility from their type names, but missing metadata
+/// still fails closed.
+///
+/// Only checks pairs of arms that project the same variable with the same
+/// column-count (`TermDef::columns().len()`). A differing count is a width
+/// mismatch handled by Mechanism B / `pool_rendered`. SQLite is dynamically
+/// typed, so this remains a no-op for every non-PostgreSQL dialect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PoolTypeSafety {
+    ProvenSafe,
+    Unproven,
+}
+
+pub(crate) fn group_pool_type_safety(
     members: &[&Branch],
     schema: &[TableSchema],
     dialect: sf_sql::Dialect,
-) -> bool {
+    column_type_use: crate::compiler_schema::ColumnTypeUse,
+) -> PoolTypeSafety {
     if dialect != sf_sql::Dialect::Postgres || members.len() < 2 {
-        return false;
+        return PoolTypeSafety::ProvenSafe;
     }
     let schema_map = build_schema_map(schema);
     let col_type = |b: &Branch, c: &ColRef| -> Option<&str> {
@@ -1633,6 +1665,23 @@ pub(crate) fn group_has_unsafe_float_slot_mismatch(
         schema_map_get(&schema_map, t)?
             .column(&c.column)
             .map(|col| col.sql_type.as_str())
+    };
+    fn physical_col<'a>(b: &'a Branch, c: &ColRef) -> Option<&'a LogicalSource> {
+        b.alias_sources()
+            .into_iter()
+            .find_map(|(alias, source)| (alias == c.alias).then_some(source))
+    }
+    let same_physical_col = |bi: &Branch, ci: &ColRef, bj: &Branch, cj: &ColRef| {
+        if ci.column != cj.column {
+            return false;
+        }
+        matches!(
+            (physical_col(bi, ci), physical_col(bj, cj)),
+            (Some(LogicalSource::Table(a)), Some(LogicalSource::Table(b))) if a == b
+        ) || matches!(
+            (physical_col(bi, ci), physical_col(bj, cj)),
+            (Some(LogicalSource::Query(a)), Some(LogicalSource::Query(b))) if a == b
+        )
     };
     let is_float = |ty: &str| {
         let ty = ty.to_ascii_lowercase();
@@ -1649,17 +1698,23 @@ pub(crate) fn group_has_unsafe_float_slot_mismatch(
                     continue;
                 }
                 for (ci, cj) in cols_i.iter().zip(&cols_j) {
-                    let (Some(ti), Some(tj)) = (col_type(bi, ci), col_type(bj, cj)) else {
+                    if same_physical_col(bi, ci, bj, cj) {
                         continue;
+                    }
+                    if column_type_use == crate::compiler_schema::ColumnTypeUse::Unverified {
+                        return PoolTypeSafety::Unproven;
+                    }
+                    let (Some(ti), Some(tj)) = (col_type(bi, ci), col_type(bj, cj)) else {
+                        return PoolTypeSafety::Unproven;
                     };
                     if !ti.eq_ignore_ascii_case(tj) && (is_float(ti) || is_float(tj)) {
-                        return true;
+                        return PoolTypeSafety::Unproven;
                     }
                 }
             }
         }
     }
-    false
+    PoolTypeSafety::ProvenSafe
 }
 
 /// Whether `scan`'s table is covered by a declared PK/UNIQUE key over
@@ -1810,12 +1865,17 @@ fn wrap_scan_distinct(b: &mut Branch, alias: usize, cols: &[Box<str>], dialect: 
 /// D1 already folded this column and would default back to the mapping's
 /// original, unfolded text.
 ///
-/// * **`rowid` → `ctid`** (identical to `emit::colref`'s own special case):
-///   Direct Mapping's synthetic no-PK blank-node identifier reads the
+/// * **A base-table `rowid` → a source-local `rowid` projection**: Direct Mapping's
+///   synthetic no-PK blank-node identifier reads the
 ///   physical row id (`sf-mapping`'s `rowid` column). SQLite exposes that as
 ///   the `rowid` pseudo-column; PostgreSQL has none — render the equivalent
-///   system tuple id `(sfsN.ctid)::text` (existential blank-node seed; only
-///   per-row uniqueness matters, ADR-0005). Confirmed live: every
+///   system tuple id `(sfsN.ctid)::text`, but preserve the logical output name
+///   as `rowid` for the derived query (existential blank-node seed; only per-row
+///   uniqueness matters, ADR-0005). `emit::colref` rewrites `rowid` to `ctid`
+///   only for a base-table alias and treats this wrapper's query output as an
+///   ordinary column. An authored `rr:sqlQuery` output named `rowid` is likewise
+///   an ordinary derived-table column and must never be rewritten to `ctid`.
+///   Confirmed live: every
 ///   DirectMapping no-PK W3C case (DirectGraphTC0000/1/2/3/4/5/12/14/17/18/
 ///   22/25) failed with "column sfsN.rowid does not exist" before this.
 /// * **A column that is itself an UNQUOTED alias in the immediate inner SQL
@@ -1850,14 +1910,11 @@ fn wrap_col_ref(
     inner_sql: Option<&str>,
     dialect: sf_sql::Dialect,
 ) -> String {
-    if dialect == sf_sql::Dialect::Postgres && col == "rowid" {
-        // Aliased AS `ctid`, NOT `rowid`: `emit::colref`'s own rowid special
-        // case always emits a bare `t{alias}.ctid` for ANY `ColRef.column ==
-        // "rowid"`, regardless of what this wrap's own output is named — so
-        // the wrapped derived table must expose a column literally called
-        // `ctid` for that outer reference to resolve, or this wrap would
-        // silently orphan the very reference it exists to serve.
-        return format!("({src_alias}.ctid)::text AS ctid");
+    if dialect == sf_sql::Dialect::Postgres && col == "rowid" && inner_sql.is_none() {
+        // Keep the logical column name across this Table -> Query boundary.
+        // The source-aware emitter uses physical `ctid` only while the alias is
+        // still a Table and quotes this derived query's `rowid` thereafter.
+        return format!("({src_alias}.ctid)::text AS rowid");
     }
     if inner_sql.is_some_and(|sql| col_is_unquoted_alias(sql, col)) {
         return format!("{src_alias}.{col} AS {col}");
@@ -2099,10 +2156,9 @@ fn wrap_aggregate_input_if_needed(b: &mut Branch, dialect: sf_sql::Dialect) {
         order: Vec::new(),
         rust_group: None,
         dialect,
-        // This nested SubPlan executes wholly in SQL — the Run 5 C0e shared-
-        // seen-set mechanism never applies to it (see `Plan::dedup_groups`'s
-        // doc comment).
-        dedup_groups: std::collections::HashMap::new(),
+        // This nested SubPlan executes wholly in SQL; only the final root Plan
+        // can own a lifted Rust shared-dedup group.
+        dedup_scopes: Vec::new(),
         construct_drops_some_branch_var: false,
     };
     let rewrite = |c: &mut ColRef| {

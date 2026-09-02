@@ -75,17 +75,65 @@ use crate::{Error, Plan, PlanForm, Result};
 /// Scan the entire `IqNode` tree to find the maximum scan alias in use.
 /// Used by [`lower`] to initialize a fresh alias counter that never collides
 /// with any scan alias produced by the RESOLVE pass across all subtrees.
+fn max_alias_in_sql_cond(cond: &SqlCond) -> usize {
+    match cond {
+        SqlCond::ColEq(left, right) | SqlCond::NullSafeEq(left, right) => {
+            left.alias.max(right.alias)
+        }
+        SqlCond::Cmp(column, _, _)
+        | SqlCond::IsNotNull(column)
+        | SqlCond::IsNull(column)
+        | SqlCond::StrMatch { col: column, .. } => column.alias,
+        SqlCond::Not(inner) => max_alias_in_sql_cond(inner),
+        SqlCond::And(parts) | SqlCond::Or(parts) => {
+            parts.iter().map(max_alias_in_sql_cond).max().unwrap_or(0)
+        }
+        SqlCond::NotExists { scans, conds } | SqlCond::Exists { scans, conds } => scans
+            .iter()
+            .map(|scan| scan.alias)
+            .chain(conds.iter().map(max_alias_in_sql_cond))
+            .max()
+            .unwrap_or(0),
+        SqlCond::PathExists { pc, conds, .. } => conds
+            .iter()
+            .map(max_alias_in_sql_cond)
+            .chain(std::iter::once(pc.alias))
+            .max()
+            .unwrap_or(0),
+        SqlCond::TemplateEq(_, left_alias, _, right_alias, _) => (*left_alias).max(*right_alias),
+    }
+}
+
+fn max_alias_in_cond(cond: &IqCond) -> usize {
+    match cond {
+        IqCond::Sql(sql) => max_alias_in_sql_cond(sql),
+        IqCond::And(parts) | IqCond::Or(parts) => {
+            parts.iter().map(max_alias_in_cond).max().unwrap_or(0)
+        }
+        IqCond::Not(inner) => max_alias_in_cond(inner),
+        IqCond::Exists(inner) | IqCond::NotExists { inner, .. } => max_alias_in_tree(inner),
+        IqCond::Expr(_) => 0,
+    }
+}
+
+fn max_alias_in_conds(conds: &[IqCond]) -> usize {
+    conds.iter().map(max_alias_in_cond).max().unwrap_or(0)
+}
+
 fn max_alias_in_tree(node: &IqNode) -> usize {
     match node {
         IqNode::Extensional { scan, .. } => scan.alias,
-        IqNode::InnerJoin { children, .. } => {
-            children.iter().map(max_alias_in_tree).max().unwrap_or(0)
-        }
-        IqNode::LeftJoin { left, right, .. } => {
-            max_alias_in_tree(left).max(max_alias_in_tree(right))
-        }
-        IqNode::Filter { child, .. }
-        | IqNode::Construction { child, .. }
+        IqNode::InnerJoin { children, cond } => children
+            .iter()
+            .map(max_alias_in_tree)
+            .chain(std::iter::once(max_alias_in_conds(cond)))
+            .max()
+            .unwrap_or(0),
+        IqNode::LeftJoin { left, right, cond } => max_alias_in_tree(left)
+            .max(max_alias_in_tree(right))
+            .max(max_alias_in_conds(cond)),
+        IqNode::Filter { child, cond } => max_alias_in_tree(child).max(max_alias_in_conds(cond)),
+        IqNode::Construction { child, .. }
         | IqNode::Distinct { child }
         | IqNode::Aggregation { child, .. }
         | IqNode::Slice { child, .. }
@@ -159,10 +207,9 @@ pub fn lower(
         order: spine.order,
         rust_group: spine.rust_group,
         dialect,
-        // `translate_tree` (lib.rs) overwrites this with the resolve-stage
-        // `ResolveCx`'s accumulated map right after `lower` returns — see
-        // `Plan::dedup_groups`'s own doc comment (ADR-0034 C0e restoration).
-        dedup_groups: std::collections::HashMap::new(),
+        // `translate_tree` lifts resolve's leaf-alias markers onto root executor
+        // branches only after every cascade has completed (ADR-0034 C0e).
+        dedup_scopes: Vec::new(),
         // `translate_tree` overwrites this too, once it knows the form is
         // `PlanForm::Construct` (set on `plan` AFTER `lower` returns) — see
         // `Plan::construct_drops_some_branch_var`'s own doc comment.
@@ -1352,9 +1399,6 @@ fn lower_as_subplan(
             ))
         }
     };
-    if vars.is_empty() {
-        return Ok(Vec::new());
-    }
     // For a multi-branch DISTINCT SubPlan, narrow each arm's SELECT list to exactly the
     // projected vars so the pooled `UNION` dedups on THOSE columns only. An arm may bind
     // internal vars — e.g. `SELECT DISTINCT ?p { {?p :a ?n} UNION {?p :b ?e} }` binds ?n/?e
@@ -1922,13 +1966,9 @@ pub(crate) fn pool_rendered(
                 TermDef::Derived { term_map, .. } => {
                     let (expr, spec) = match term_map {
                         TermMap::Column(c, spec) => {
-                            let quoted = inner_sql
-                                .is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
-                            let col_ref = if quoted {
-                                format!("{local}.{}", dialect.quote_ident(c))
-                            } else {
-                                format!("{local}.{c}")
-                            };
+                            let col_ref = crate::emit::render_immediate_source_column(
+                                &local, c, inner_sql, dialect,
+                            );
                             (col_ref, spec.clone())
                         }
                         TermMap::Template(t, spec) => {
@@ -1971,13 +2011,9 @@ pub(crate) fn pool_rendered(
                     }
                     let (expr, spec) = match term_map {
                         TermMap::Column(c, spec) => {
-                            let quoted = inner_sql
-                                .is_none_or(|sql| !crate::cascade::col_is_unquoted_alias(sql, c));
-                            let col_ref = if quoted {
-                                format!("{local}.{}", dialect.quote_ident(c))
-                            } else {
-                                format!("{local}.{c}")
-                            };
+                            let col_ref = crate::emit::render_immediate_source_column(
+                                &local, c, inner_sql, dialect,
+                            );
                             (col_ref, spec.clone())
                         }
                         TermMap::Template(t, spec) => {
@@ -2084,20 +2120,15 @@ fn render_null_guard(
     inner_sql: Option<&str>,
     dialect: sf_sql::Dialect,
 ) -> Option<String> {
-    let ident = |col: &str| {
-        if inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, col)) {
-            col.to_owned()
-        } else {
-            dialect.quote_ident(col)
-        }
-    };
     match cond {
-        SqlCond::IsNotNull(c) if c.alias == alias => {
-            Some(format!("{local}.{} IS NOT NULL", ident(&c.column)))
-        }
-        SqlCond::IsNull(c) if c.alias == alias => {
-            Some(format!("{local}.{} IS NULL", ident(&c.column)))
-        }
+        SqlCond::IsNotNull(c) if c.alias == alias => Some(format!(
+            "{} IS NOT NULL",
+            crate::emit::render_immediate_source_column(local, &c.column, inner_sql, dialect)
+        )),
+        SqlCond::IsNull(c) if c.alias == alias => Some(format!(
+            "{} IS NULL",
+            crate::emit::render_immediate_source_column(local, &c.column, inner_sql, dialect)
+        )),
         _ => None,
     }
 }
@@ -2605,10 +2636,9 @@ fn try_sql_group_over_union(
         order: Vec::new(),
         rust_group: None,
         dialect,
-        // This nested SubPlan executes wholly in SQL — the Run 5 C0e shared-
-        // seen-set mechanism never applies to it (see `Plan::dedup_groups`'s doc
-        // comment; `unfold::pool_group`'s own `nested_plan` mirrors this).
-        dedup_groups: std::collections::HashMap::new(),
+        // This nested SubPlan executes wholly in SQL; only the final root Plan
+        // can own a lifted Rust shared-dedup group.
+        dedup_scopes: Vec::new(),
         construct_drops_some_branch_var: false,
     };
 
@@ -3784,6 +3814,57 @@ mod tests {
             p.branches.iter().any(|b| !b.subplan_joins.is_empty()),
             "nested DISTINCT subquery must produce a subplan_join branch: {:?}",
             p.branches
+        );
+    }
+
+    #[test]
+    fn fresh_subplan_aliases_include_scans_hidden_inside_exists_conditions() {
+        fn exists_scan_aliases(cond: &SqlCond, out: &mut HashSet<usize>) {
+            match cond {
+                SqlCond::Exists { scans, conds } | SqlCond::NotExists { scans, conds } => {
+                    out.extend(scans.iter().map(|scan| scan.alias));
+                    for cond in conds {
+                        exists_scan_aliases(cond, out);
+                    }
+                }
+                SqlCond::Not(inner) => exists_scan_aliases(inner, out),
+                SqlCond::And(parts) | SqlCond::Or(parts) => {
+                    for part in parts {
+                        exists_scan_aliases(part, out);
+                    }
+                }
+                SqlCond::PathExists { conds, .. } => {
+                    for cond in conds {
+                        exists_scan_aliases(cond, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let p = plan(
+            "SELECT * WHERE { ?d <http://ex/dname> ?label \
+             OPTIONAL { SELECT DISTINCT ?d ?name WHERE { \
+             ?e <http://ex/dept> ?d . ?e <http://ex/name> ?name } } \
+             FILTER EXISTS { ?e2 <http://ex/name> ?name } }",
+        );
+        let derived: HashSet<usize> = p
+            .branches
+            .iter()
+            .flat_map(|branch| branch.subplan_joins.iter().map(|join| join.alias))
+            .collect();
+        let mut exists = HashSet::new();
+        for branch in &p.branches {
+            for cond in &branch.where_conds {
+                exists_scan_aliases(cond, &mut exists);
+            }
+        }
+
+        assert!(!derived.is_empty(), "query must lower through a SubPlan");
+        assert!(!exists.is_empty(), "query must retain an EXISTS scan");
+        assert!(
+            derived.is_disjoint(&exists),
+            "derived aliases {derived:?} collide with nested EXISTS scans {exists:?}"
         );
     }
 

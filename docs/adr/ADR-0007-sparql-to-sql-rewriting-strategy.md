@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [obda, virtualization, sparql-to-sql, rewriting, intermediate-query, optional, null-semantics, optimizer-cascade, correctness, term-construction-lifting, plan-cache, cost-driven]
 supersedes: []
 depends-on:
@@ -54,7 +54,7 @@ NULL / left-join rules the base translation obeys:
 4. **Tier-0 elimination (up front)** — a refObjectMap with no `rr:joinCondition` ⇒ inline the parent's subject IRI (no join); parent == child triples-map on a PK ⇒ collapse to a scan (redundant self-join elimination).
 5. **Optimizer cascade — order is load-bearing:** (i) IRI-template-mismatch pruning → (ii) self-join / self-left-join elimination → (iii) functional-dependency inference (transitive closure, through unions) → (iv) FK/PK join elimination → (v) selection pushdown → (vi) distinct removal.
 6. **Emit** — translate the optimized tree to a `sqlparser` AST and render the target dialect; values are bound parameters only (ADR-0010).
-7. **Execute & reconstruct** — run through the shared `SqlBackend` over the native SQLite/PostgreSQL/MySQL adapters; map rows to bindings; serialize with `sparesults`/RDF writers under the evidenced result profile (streamed where admitted, ADR-0010).
+7. **Execute & reconstruct** — probe and validate every live result-column catalog, pre-emit every branch, then open cursors through the shared `SqlBackend` over the native SQLite/PostgreSQL/MySQL adapters; map rows to bindings; serialize with `sparesults`/RDF writers under the evidenced result profile (streamed where admitted, ADR-0010).
 
 Steps 4–5 describe compiler capability, not unconditional serving behaviour.
 Explicit frozen-schema/conformance callers may exercise the constraint-driven
@@ -79,9 +79,9 @@ IRI/literal construction (`concat`/`cast` over `rr:template` segments) is **lift
 
 ### Performance
 
-**Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, compiler-safe schema, constraint authority and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope (including the authority), dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding/policy reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability/policy digests and atomic generation changes.
+**Plan cache (hot path).** The implemented single-source `CompilerBinding` inseparably owns `SourceMapping`, dialect, T-box, compiler-safe schema, constraint authority, column-type authority and a bounded `quick_cache`. Its key includes a process-unique binding/generation scope (including both authorities), dialect, a structural hash, and the full canonical algebra; cached values carry and recheck the same scope. This conservative form safely keys all constants and prevents cross-source/dialect/binding/policy reuse, but it may miss reusable data-constant plans. PostgreSQL statements use the native client preparation path; there is no `deadpool` prepared-statement cache. The target refinement parameterises *data* constants while keying *schema-selecting* constants, then replaces process-local identity with immutable ontology/mapping/schema/capability/policy digests and atomic generation changes.
 
-**Implemented serving quarantine (`24a0e20`).** `sf-serve` converts every startup observation
+**Implemented serving quarantine (`24a0e20`; hardened 2026-09-02).** `sf-serve` converts every startup observation
 to `CompilerSchema::from_unverified_observation`. Both fresh and cached plans see
 names, SQL types and estimates but no PK, UNIQUE, FK, functional dependency or
 NOT-NULL proof, so later constraint DDL cannot make a constraint-sensitive pass
@@ -89,8 +89,44 @@ change a serving answer. Duplicate safety consequently keeps its conservative
 deduplication path. This closes the earlier stale-constraint P0 without claiming
 a watcher, fingerprint, reload, or verified-constraint mode.
 
-Structural/type drift remains open: retained table, column and SQL-type
-observations can still age, and there is no atomic replacement path. A future
+`ColumnTypeAuthority::Unverified` now also prevents mutable startup type strings
+from proving positional PostgreSQL pooling safe across different physical
+columns; missing type facts fail closed, while an identical source/column pair
+is structurally one live expression. When compatibility remains unproven, each
+fallback arm captures its full BGP-boundary term definitions, including an active
+graph variable, before outer projection. After all rewrites, the scope and key
+remap only through physically key-preserving pure unary SubPlan chains; execution
+overlays them onto a private branch clone and hashes the explicit key. Runtime
+repeats the shape/key proof before metadata I/O. Joined/OPTIONAL/path/aggregate,
+modifier-bearing or multi-branch nested wrappers, key-dropping nested projections,
+orphaned/multiply owned markers, or groups with fewer than two executable arms
+return `501`. Fully ground overlapping arms use an exact SQL unit-relation pool.
+The exact shared set remains a source-sized raw/conformance fallback that serving rejects pre-I/O. The raw
+translation APIs retain an explicit caller-authorized frozen-schema contract. At execution, every
+distinct base Table/Query source recursively reachable through correlated
+conditions and nested SubPlans is probed, missing/duplicate/ambiguous live
+columns reject, and all branches are emitted before the first cursor opens.
+Fresh derived aliases are allocated above aliases hidden in nested IQ/SQL
+conditions. Live nested emission overlays probed catalogs for base-source
+references. Offline/synthetic derived aliases and translate-time immediate
+wrappers retain the bounded `col_is_unquoted_alias` lexical heuristic, which is
+not SQL-token-aware and never live metadata authority. Probe and emission errors therefore cannot
+produce a partial multi-branch result. SELECT/CONSTRUCT executor failures expose
+only a stable body error after HTTP commitment.
+
+Compiler SQL-shape tests show that the tested no-primary-key Direct-Mapping path
+forms retain SQLite `rowid` and substitute PostgreSQL `(ctid)::text` for the
+synthetic `rowid` sentinel; the D1 Table→Query wrapper preserves the logical
+`rowid` output name and only base-table aliases read `ctid`. This removes the
+known nonexistent-`rowid` emission for those shapes, but is not a general row
+identity proof: a real PostgreSQL table column named `rowid` is still
+indistinguishable from the sentinel, `ctid` is snapshot-local, and live
+PostgreSQL property-path execution is not evidenced.
+
+The structural/type lifecycle remains open: probes are sequential, can race DDL
+after preflight, and do not establish one coherent generation; SQLite metadata
+preparation also uses non-cancellable blocking work. There is no digest, watcher,
+readiness transition or atomic replacement path. A future
 verified-constraint mode requires an unforgeable backend lease that covers a
 coherent revalidation, compilation, and the entire streamed cursor; a digest
 precheck alone has a time-of-check/time-of-use gap. Replacement activates a new
@@ -101,7 +137,8 @@ Direct Mapping is a separate lifecycle. Current serving accepts authored R2RML
 and does not generate it. Frozen conformance/development callers may derive a
 mapping from an explicit schema, but a future live generator must bind the
 PK/FK-dependent mapping generation to the same verified execution generation;
-redacting optimiser facts after generation is insufficient.
+redacting optimiser facts after generation is insufficient. That work also needs
+a typed synthetic-row identity instead of the current `rowid` string convention.
 
 ### Correctness anchor
 
