@@ -107,6 +107,38 @@ async fn introspect_postgres_all_matches_per_table_loop_and_is_faster() {
         "batched introspection must match the per-table loop byte-for-byte"
     );
 
+    let t0 = new_schemas
+        .iter()
+        .find(|schema| schema.name == "t0")
+        .expect("t0 is present");
+    assert_eq!(
+        t0.columns
+            .iter()
+            .map(|column| (
+                column.name.as_str(),
+                column.sql_type.as_str(),
+                column.not_null
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("id", "integer", true),
+            ("code", "text", true),
+            ("val", "integer", true),
+        ],
+        "bounded projection aliases must decode into the right column fields"
+    );
+    assert_eq!(t0.primary_key, ["id"]);
+    assert_eq!(t0.unique, [vec!["code".to_owned()]]);
+
+    let t1 = new_schemas
+        .iter()
+        .find(|schema| schema.name == "t1")
+        .expect("t1 is present");
+    assert_eq!(t1.foreign_keys.len(), 1);
+    assert_eq!(t1.foreign_keys[0].columns, ["prev_id"]);
+    assert_eq!(t1.foreign_keys[0].parent_table, "t0");
+    assert_eq!(t1.foreign_keys[0].parent_columns, ["id"]);
+
     let snapshot_schemas = introspect_postgres_public_snapshot(&mut client2)
         .await
         .expect("coherent public snapshot");

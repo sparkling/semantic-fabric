@@ -2,16 +2,25 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use tokio_postgres::types::Type;
+
 use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, TableSchema};
 
 mod legacy_bounds;
 mod legacy_query;
+mod legacy_row;
+mod legacy_sql;
 mod observation;
 use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
 use legacy_query::{
-    query_bounded, LEGACY_RELATION_QUERY_LIMIT_PG16_V1, LEGACY_SET_QUERY_LIMIT_PG16_V1,
-    MAX_LEGACY_RELATIONS_PG16_V1, MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+    query_bounded, TypedQueryParameter, LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
+    LEGACY_SET_QUERY_LIMIT_PG16_V1, MAX_LEGACY_RELATIONS_PG16_V1, MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+};
+use legacy_row::{LegacyRow, LEGACY_TEXT_QUERY_LIMIT_PG16_V1};
+use legacy_sql::{
+    COLUMNS_SQL, EARLIER_RELATION_COLLISIONS_SQL, FOREIGN_KEYS_SQL, KEYS_SQL, NDISTINCT_SQL,
+    RELTUPLES_SQL, TABLES_SQL,
 };
 pub use observation::{
     Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
@@ -22,68 +31,6 @@ pub use observation::{
 };
 
 const RUNTIME_SCHEMA: &str = "public";
-
-const TABLES_SQL: &str = "SELECT table_name FROM information_schema.tables \
-     WHERE table_schema = $1 AND table_type = 'BASE TABLE' \
-     ORDER BY table_name LIMIT $2";
-
-// Generated base-table SQL is intentionally unqualified under the runtime's
-// exact `pg_catalog,public,pg_temp` search path. A `public` base table that has
-// the same name as any `pg_catalog` relation would therefore be introspected
-// from `public` but executed from the earlier catalogue namespace. Until the IR
-// carries qualified relation identity, reject that database at introspection.
-const EARLIER_RELATION_COLLISIONS_SQL: &str = "SELECT c.relname FROM pg_catalog.pg_class c \
-     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-     WHERE c.relname = ANY($1) AND n.nspname = $2 ORDER BY c.relname LIMIT $3";
-
-const COLUMNS_SQL: &str = "SELECT table_name, column_name, data_type, is_nullable \
-     FROM information_schema.columns \
-     WHERE table_name = ANY($1) AND table_schema = $2 \
-     ORDER BY table_name, ordinal_position LIMIT $3";
-
-const KEYS_SQL: &str =
-    "SELECT tc.table_name, tc.constraint_type, tc.constraint_name, kcu.column_name \
-     FROM information_schema.table_constraints tc \
-     JOIN information_schema.key_column_usage kcu \
-       ON tc.constraint_catalog = kcu.constraint_catalog \
-      AND tc.constraint_schema = kcu.constraint_schema \
-      AND tc.constraint_name = kcu.constraint_name \
-      AND tc.table_catalog = kcu.table_catalog \
-      AND tc.table_schema = kcu.table_schema \
-      AND tc.table_name = kcu.table_name \
-     WHERE tc.table_name = ANY($1) AND tc.table_schema = $2 \
-       AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
-     ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position LIMIT $3";
-
-// The paired attnum arrays preserve composite-FK column alignment. Parent
-// namespace is selected explicitly because the current DTO cannot represent a
-// schema-qualified parent and must reject that case rather than misbind it.
-const FOREIGN_KEYS_SQL: &str = "SELECT child.relname, con.conname, ca.attname, parent.relname, \
-            parent_ns.nspname, pa.attname \
-     FROM pg_catalog.pg_constraint con \
-     JOIN pg_catalog.pg_class child ON child.oid = con.conrelid \
-     JOIN pg_catalog.pg_namespace child_ns ON child_ns.oid = child.relnamespace \
-     JOIN pg_catalog.pg_class parent ON parent.oid = con.confrelid \
-     JOIN pg_catalog.pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace \
-     JOIN LATERAL ROWS FROM ( \
-          pg_catalog.unnest(con.conkey), pg_catalog.unnest(con.confkey) \
-     ) WITH ORDINALITY AS k(child_attnum, parent_attnum, ord) ON true \
-     JOIN pg_catalog.pg_attribute ca \
-       ON ca.attrelid = con.conrelid AND ca.attnum = k.child_attnum \
-     JOIN pg_catalog.pg_attribute pa \
-       ON pa.attrelid = con.confrelid AND pa.attnum = k.parent_attnum \
-     WHERE con.contype = 'f' AND child.relname = ANY($1) \
-       AND child_ns.nspname = $2 \
-     ORDER BY child.relname, con.conname, k.ord LIMIT $3";
-
-const RELTUPLES_SQL: &str = "SELECT c.relname, GREATEST(c.reltuples, 0)::bigint \
-     FROM pg_catalog.pg_class c \
-     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-     WHERE c.relname = ANY($1) AND n.nspname = $2 \
-       AND c.relkind IN ('r', 'p', 'm', 'v') LIMIT $3";
-
-const NDISTINCT_SQL: &str = "SELECT tablename, attname, n_distinct FROM pg_catalog.pg_stats \
-     WHERE tablename = ANY($1) AND schemaname = $2 LIMIT $3";
 
 /// Introspect one table from the runtime-supported PostgreSQL `public` schema.
 pub async fn introspect_postgres(
@@ -126,12 +73,19 @@ pub async fn introspect_postgres_public_snapshot(
     let rows = query_bounded(
         &transaction,
         TABLES_SQL,
-        &[&RUNTIME_SCHEMA, &LEGACY_RELATION_QUERY_LIMIT_PG16_V1],
+        &[
+            TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
         MAX_LEGACY_RELATIONS_PG16_V1,
         "table rows",
     )
     .await?;
-    let tables: Vec<String> = rows.into_iter().map(|row| row.get(0)).collect();
+    let tables: Vec<String> = rows
+        .into_iter()
+        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
+        .collect::<Result<_>>()?;
     let schemas = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
     transaction.commit().await?;
     Ok(schemas)
@@ -187,17 +141,18 @@ where
         client,
         EARLIER_RELATION_COLLISIONS_SQL,
         &[
-            &tables,
-            &earlier_schema,
-            &LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
+            TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
+            TypedQueryParameter::new(&earlier_schema, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
         ],
         MAX_LEGACY_RELATIONS_PG16_V1,
         "catalogue-collision rows",
     )
     .await?
     .into_iter()
-    .map(|row| row.get(0))
-    .collect();
+    .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "collision name"))
+    .collect::<Result<_>>()?;
     if collisions.is_empty() {
         return Ok(());
     }
@@ -220,16 +175,22 @@ where
     for row in query_bounded(
         client,
         COLUMNS_SQL,
-        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        &[
+            TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_SET_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "column rows",
     )
     .await?
     {
-        let table: String = row.get(0);
-        let name: String = row.get(1);
-        let data_type: String = row.get(2);
-        let is_nullable: String = row.get(3);
+        let row = LegacyRow::try_new(&row)?;
+        let table = row.text("bounded_text_0", "column table name")?;
+        let name = row.text("bounded_text_1", "column name")?;
+        let data_type = row.text("bounded_text_2", "column data type")?;
+        let is_nullable = row.text("bounded_text_3", "column nullability")?;
         if let Some(schema) = schemas.get_mut(&table) {
             schema.columns.push(Column::new(
                 name,
@@ -262,16 +223,22 @@ where
     for row in query_bounded(
         client,
         KEYS_SQL,
-        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        &[
+            TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_SET_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "key rows",
     )
     .await?
     {
-        let table: String = row.get(0);
-        let constraint_type: String = row.get(1);
-        let constraint: String = row.get(2);
-        let column: String = row.get(3);
+        let row = LegacyRow::try_new(&row)?;
+        let table = row.text("bounded_text_0", "key table name")?;
+        let constraint_type = row.text("bounded_text_1", "key constraint type")?;
+        let constraint = row.text("bounded_text_2", "key constraint name")?;
+        let column = row.text("bounded_text_3", "key column name")?;
         if constraint_type == "PRIMARY KEY" {
             primary.entry(table).or_default().push(column);
         } else {
@@ -306,18 +273,24 @@ where
     for row in query_bounded(
         client,
         FOREIGN_KEYS_SQL,
-        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        &[
+            TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_SET_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "foreign-key rows",
     )
     .await?
     {
-        let table: String = row.get(0);
-        let constraint: String = row.get(1);
-        let column: String = row.get(2);
-        let parent_table: String = row.get(3);
-        let parent_schema: String = row.get(4);
-        let parent_column: String = row.get(5);
+        let row = LegacyRow::try_new(&row)?;
+        let table = row.text("bounded_text_0", "foreign-key child table")?;
+        let constraint = row.text("bounded_text_1", "foreign-key constraint")?;
+        let column = row.text("bounded_text_2", "foreign-key child column")?;
+        let parent_table = row.text("bounded_text_3", "foreign-key parent table")?;
+        let parent_schema = row.text("bounded_text_4", "foreign-key parent schema")?;
+        let parent_column = row.text("bounded_text_5", "foreign-key parent column")?;
         require_same_schema(schema_name, &parent_schema, &table, &constraint)?;
         let key = foreign
             .entry(table)
@@ -352,14 +325,20 @@ where
     for row in query_bounded(
         client,
         RELTUPLES_SQL,
-        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        &[
+            TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_SET_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "relation-statistic rows",
     )
     .await?
     {
-        let table: String = row.get(0);
-        let estimate: i64 = row.get(1);
+        let row = LegacyRow::try_new(&row)?;
+        let table = row.text("bounded_text_0", "relation-statistic table")?;
+        let estimate: i64 = row.scalar("row_estimate", "relation estimate")?;
         if estimate >= 0 {
             if let Some(schema) = schemas.get_mut(&table) {
                 schema.row_estimate = Some(estimate as u64);
@@ -369,15 +348,21 @@ where
     for row in query_bounded(
         client,
         NDISTINCT_SQL,
-        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        &[
+            TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_SET_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
         MAX_LEGACY_ROWS_PER_SET_PG16_V1,
         "column-statistic rows",
     )
     .await?
     {
-        let table: String = row.get(0);
-        let column: String = row.get(1);
-        let estimate: f32 = row.get(2);
+        let row = LegacyRow::try_new(&row)?;
+        let table = row.text("bounded_text_0", "column-statistic table")?;
+        let column = row.text("bounded_text_1", "column-statistic column")?;
+        let estimate: f32 = row.scalar("distinct_estimate", "distinct estimate")?;
         if let Some(schema) = schemas.get_mut(&table) {
             let distinct = if estimate >= 0.0 {
                 estimate as u64

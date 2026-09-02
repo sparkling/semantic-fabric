@@ -1,5 +1,5 @@
 use futures_util::TryStream;
-use tokio_postgres::types::ToSql;
+use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{GenericClient, Row};
 
 use crate::error::{Error, Result};
@@ -11,17 +11,41 @@ pub(super) use super::legacy_bounds::{
 pub(super) const LEGACY_RELATION_QUERY_LIMIT_PG16_V1: i64 = MAX_LEGACY_RELATIONS_PG16_V1 as i64 + 1;
 pub(super) const LEGACY_SET_QUERY_LIMIT_PG16_V1: i64 = MAX_LEGACY_ROWS_PER_SET_PG16_V1 as i64 + 1;
 
+pub(super) struct TypedQueryParameter<'a> {
+    value: &'a (dyn ToSql + Sync),
+    parameter_type: Type,
+}
+
+impl<'a> TypedQueryParameter<'a> {
+    pub(super) fn new<T>(value: &'a T, parameter_type: Type) -> Self
+    where
+        T: ToSql + Sync,
+    {
+        Self {
+            value,
+            parameter_type,
+        }
+    }
+}
+
 pub(super) async fn query_bounded<C>(
     client: &C,
     sql: &str,
-    params: &[&(dyn ToSql + Sync)],
+    params: &[TypedQueryParameter<'_>],
     maximum: usize,
     resource: &'static str,
 ) -> Result<Vec<Row>>
 where
     C: GenericClient + Sync,
 {
-    let rows = client.query_raw(sql, params.iter().copied()).await?;
+    let rows = client
+        .query_typed_raw(
+            sql,
+            params
+                .iter()
+                .map(|parameter| (parameter.value, parameter.parameter_type.clone())),
+        )
+        .await?;
     collect_bounded_rows(rows, maximum, resource).await
 }
 
