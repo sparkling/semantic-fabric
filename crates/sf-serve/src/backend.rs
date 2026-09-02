@@ -7,6 +7,9 @@ use sf_sql::{Dialect, TableSchema};
 
 use crate::source::POSTGRES_RELATION_SCOPE_SETTING;
 
+const POSTGRES_RELATION_SCOPE_QUERY: &str =
+    "SELECT pg_catalog.current_setting('search_path') AS search_path";
+
 /// A pooled PostgreSQL connection, re-derefed to `tokio_postgres::Client` in one
 /// hop. `deadpool_postgres::Object` derefs to its own `ClientWrapper` (adds
 /// statement caching), not directly to `Client` — `sf_sparql::exec_pg`'s generic
@@ -36,17 +39,21 @@ pub(crate) async fn verify_pg_relation_scope(
     client: &tokio_postgres::Client,
 ) -> Result<(), String> {
     let row = client
-        .query_one(
-            "SELECT pg_catalog.current_setting('search_path') = $1",
-            &[&POSTGRES_RELATION_SCOPE_SETTING],
-        )
+        .query_one(POSTGRES_RELATION_SCOPE_QUERY, &[])
         .await
         .map_err(|_| "PostgreSQL relation scope could not be verified".to_owned())?;
-    if row.get::<_, bool>(0) {
+    let setting = row
+        .try_get::<_, String>("search_path")
+        .map_err(|_| "PostgreSQL relation scope could not be verified".to_owned())?;
+    if relation_scope_matches(&setting) {
         Ok(())
     } else {
         Err("PostgreSQL relation scope invariant mismatch".to_owned())
     }
+}
+
+fn relation_scope_matches(setting: &str) -> bool {
+    setting == POSTGRES_RELATION_SCOPE_SETTING
 }
 
 /// A small fixed pool of SQLite connections, dispatched round-robin. Serve is a
@@ -227,3 +234,6 @@ pub async fn introspect_pg_all(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests;
