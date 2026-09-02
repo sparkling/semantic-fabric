@@ -21,6 +21,11 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) child_key: Option<Vec<i16>>,
     pub(super) parent_key: Option<Vec<i16>>,
     pub(super) array_overflow: bool,
+    pub(super) index_oid: Option<u32>,
+    pub(super) trigger_oids: Option<Vec<u32>>,
+    pub(super) operator_oids: Option<Vec<u32>>,
+    pub(super) search_operator_oids: Option<Vec<u32>>,
+    pub(super) trigger_overflow: bool,
 }
 
 pub(super) fn decode_constraint_row_v1(
@@ -43,8 +48,33 @@ pub(super) fn decode_constraint_row_v1(
         child_key: get!("conkey", Option<Vec<i16>>),
         parent_key: get!("confkey", Option<Vec<i16>>),
         array_overflow: get!("sf_array_overflow", bool),
+        index_oid: get!("conindid", Option<u32>),
+        trigger_oids: get!("trigger_oids", Option<Vec<u32>>),
+        operator_oids: get!("operator_oids", Option<Vec<u32>>),
+        search_operator_oids: get!("search_operator_oids", Option<Vec<u32>>),
+        trigger_overflow: get!("sf_trigger_overflow", bool),
     };
-    if value.array_overflow {
+    if value.array_overflow || value.trigger_overflow {
+        return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+            PostgresSchemaIdentityLimitCodeV1::KeyMembers,
+        ));
+    }
+    let operators_mismatch = match (&value.operator_oids, &value.search_operator_oids) {
+        (Some(a), Some(b)) => a.len() != b.len(),
+        (None, None) => false,
+        _ => true,
+    };
+    if value.trigger_oids.as_ref().is_some_and(|v| v.len() > 4)
+        || value
+            .operator_oids
+            .as_ref()
+            .is_some_and(|v| v.len() > MAX_CATALOG_ARRAY_MEMBERS_V1)
+        || value
+            .search_operator_oids
+            .as_ref()
+            .is_some_and(|v| v.len() > MAX_CATALOG_ARRAY_MEMBERS_V1)
+        || operators_mismatch
+    {
         return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
             PostgresSchemaIdentityLimitCodeV1::KeyMembers,
         ));
@@ -115,6 +145,7 @@ pub(super) fn decode_relation_row_v1(
         relation_kind: one_char(get!("relkind", String))?,
         persistence: one_char(get!("relpersistence", String))?,
         is_partition: get!("relispartition", bool),
+        is_shared: get!("relisshared", bool),
         row_security: get!("relrowsecurity", bool),
         force_row_security: get!("relforcerowsecurity", bool),
         of_type_oid: get!("reloftype", u32),
@@ -189,6 +220,7 @@ pub(super) struct CatalogRelationRowV1 {
     pub(super) relation_kind: char,
     pub(super) persistence: char,
     pub(super) is_partition: bool,
+    pub(super) is_shared: bool,
     pub(super) row_security: bool,
     pub(super) force_row_security: bool,
     pub(super) of_type_oid: u32,
@@ -357,6 +389,7 @@ mod tests {
             relation_kind: 'r',
             persistence: 'p',
             is_partition: false,
+            is_shared: false,
             row_security: false,
             force_row_security: false,
             of_type_oid: 0,
