@@ -76,8 +76,9 @@ pub async fn dump_quads_mysql(
 }
 
 /// Stream a SELECT over a **dedicated** MySQL connection (design §4.2): the owned
-/// `Conn` is held for the stream's full lifetime and discarded/reset on early drop
-/// (LIMIT/deadline/client-gone). `sink(..).await` runs per projected row.
+/// `Conn` is held for the stream's full Rust lifetime. Early drop releases that
+/// handle; it does not prove source-native statement cancellation or pool reset.
+/// `sink(..).await` runs per projected row.
 ///
 /// Takes an owned `Conn` (not `&mut Conn`) because this future is `tokio::spawn`ed by
 /// the serve lane: an owned, `'static` backend ([`MysqlBackend<Conn>`]) is what lets

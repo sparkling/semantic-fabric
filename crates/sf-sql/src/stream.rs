@@ -118,10 +118,9 @@ pub type PgParams<'a> = &'a [&'a (dyn tokio_postgres::types::ToSql + Sync)];
 /// `query_raw` — never the buffer-all `query()` (ADR-0010 §C). `query_raw`
 /// bounds client memory and propagates backpressure to the backend.
 ///
-/// **Cancel-on-drop:** dropping this stream drops the underlying portal, so the
-/// backend cancels the in-flight query; the connection must then be *discarded,
-/// not recycled* (ADR-0010 §C — that pooling step belongs to the executor /
-/// stream-lane pool and is tracked there, not in this leaf type).
+/// Dropping this Rust stream releases its client-side handle, but this leaf has
+/// no `CancelToken` or dirty-lease protocol and therefore makes no source-native
+/// cancellation or safe pool-recycle claim. Those remain ADR-0010 admission gates.
 ///
 /// Requires a live server, so it is exercised by the integration suite
 /// (ADR-0012), not the in-crate unit tests.
