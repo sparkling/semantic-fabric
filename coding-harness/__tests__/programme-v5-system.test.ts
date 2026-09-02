@@ -3,7 +3,7 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { ISSUE_8_SYSTEM_PATHS } from '../src/issue-8-system.js';
 import {
   PROGRAMME_V5_AGENTIC_QE_PACKAGE_IDENTITY,
@@ -12,20 +12,18 @@ import {
   stableProgrammeV5SystemFileDigest,
 } from '../src/programme-v5-system.js';
 import { assertTaskQeRunnerIdentity } from '../src/task-qe.js';
+import { nativeIntegrationEnabled } from './native-test-prerequisites.js';
 
-let evidence: Readonly<Record<string, string>>;
 const roots: string[] = [];
-
-beforeAll(() => {
-  evidence = attestProgrammeV5SystemTools();
-});
+const nativeIt = nativeIntegrationEnabled() ? it : it.skip;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('programme-v5 system evidence', () => {
-  it('attests the exact live system key set and v5 digests', () => {
+  nativeIt('attests the exact live system key set and v5 digests', () => {
+    const evidence = attestProgrammeV5SystemTools();
     expect(evidence).toEqual({
       cargo: `${ISSUE_8_SYSTEM_PATHS.cargo}#sha256:f30f9fd1b1d0b8fd10dc33219eb4cd4bec3543f40e434ac71f5a03fd0359063f`,
       cargoLlvmCov: `${ISSUE_8_SYSTEM_PATHS.cargoLlvmCov}#sha256:c59831d34b46a3e3a3dc5b357fa12f75eb0af3172f8e9e81a6fc1412cdbcaa1a`,
@@ -48,7 +46,8 @@ describe('programme-v5 system evidence', () => {
     expect(evidence).not.toHaveProperty('claude');
   });
 
-  it('accepts the live v5 identity while the unchanged v4 default rejects it', () => {
+  nativeIt('accepts the live v5 identity while the unchanged v4 default rejects it', () => {
+    const evidence = attestProgrammeV5SystemTools();
     const live = {
       package: {
         version: evidence.agenticQe.split('#')[0],

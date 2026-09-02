@@ -12,11 +12,13 @@ import {
   parsePolicyReviewReceipt,
   programmeV5OperatorExitCode,
 } from '../scripts/run-programme-v5.mjs';
+import { nativeIntegrationEnabled } from './native-test-prerequisites.js';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const operatorPath = resolve(repositoryRoot, 'coding-harness/scripts/run-programme-v5.mjs');
 const controllerCommit = gitText(['rev-parse', 'HEAD']);
 const roots: string[] = [];
+const nativeIt = nativeIntegrationEnabled() ? it : it.skip;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -35,7 +37,7 @@ describe('programme-v5 operator', () => {
     expect(() => assertProgrammeV5ChildStatus('execute', 0, { status: 'pass' })).not.toThrow();
   });
 
-  it('requires a clean outer Node process before parsing an operation', () => {
+  nativeIt('requires a clean outer Node process before parsing an operation', () => {
     const runtime = temporary('programme-v5-operator-process-');
     const base = [
       '-i', 'LANG=C.UTF-8', `XDG_RUNTIME_DIR=${runtime}`,

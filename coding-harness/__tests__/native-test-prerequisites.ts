@@ -1,13 +1,28 @@
 // SPDX-License-Identifier: MIT
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 
 let cachedBwrap: boolean | undefined;
 let cachedSystemd: boolean | undefined;
 
+export function nativeIntegrationEnabled(): boolean {
+  return process.env.HARNESS_REQUIRE_NATIVE_INTEGRATION !== '0';
+}
+
+export function trustedTestNodeExecutable(): string | null {
+  const candidates = [...new Set([realpathSync(process.execPath), '/usr/bin/node'])];
+  for (const candidate of candidates) {
+    if (isTrustedExecutable(candidate)) return candidate;
+  }
+  if (nativeIntegrationEnabled()) {
+    throw new Error('HARNESS_TEST_NATIVE_CAPABILITY_REQUIRED:TRUSTED_NODE');
+  }
+  return null;
+}
+
 export function bwrapAvailable(): boolean {
-  if (process.env.HARNESS_REQUIRE_NATIVE_INTEGRATION === '0') return false;
+  if (!nativeIntegrationEnabled()) return false;
   if (cachedBwrap !== undefined) return requireCapability(cachedBwrap, 'BWRAP');
   if (process.platform !== 'linux' || !existsSync('/usr/bin/bwrap')) {
     cachedBwrap = false;
@@ -27,7 +42,7 @@ export function bwrapAvailable(): boolean {
 }
 
 export function systemdUserAvailable(): boolean {
-  if (process.env.HARNESS_REQUIRE_NATIVE_INTEGRATION === '0') return false;
+  if (!nativeIntegrationEnabled()) return false;
   if (cachedSystemd !== undefined) return requireCapability(cachedSystemd, 'SYSTEMD_USER');
   if (process.platform !== 'linux'
     || !existsSync('/usr/bin/systemd-run')
@@ -48,4 +63,16 @@ function requireCapability(available: boolean, name: string): boolean {
     throw new Error(`HARNESS_TEST_NATIVE_CAPABILITY_REQUIRED:${name}`);
   }
   return available;
+}
+
+function isTrustedExecutable(path: string): boolean {
+  if (!existsSync(path)) return false;
+  const stat = lstatSync(path, { bigint: true });
+  return stat.isFile()
+    && !stat.isSymbolicLink()
+    && stat.uid === 0n
+    && stat.nlink === 1n
+    && (stat.mode & 0o111n) !== 0n
+    && (stat.mode & 0o022n) === 0n
+    && realpathSync(path) === path;
 }

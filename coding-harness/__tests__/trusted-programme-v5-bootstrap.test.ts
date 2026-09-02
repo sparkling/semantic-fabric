@@ -9,8 +9,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RECEIPT_FAILURE_CODES } from '../src/failure-code.js';
+import { trustedTestNodeExecutable } from './native-test-prerequisites.js';
 const GIT = '/usr/bin/git';
-const NODE = '/usr/bin/node';
+const NODE = trustedTestNodeExecutable();
+const launcherIt = NODE === null ? it.skip : it;
 const PRIMARY_ENTRY = 'coding-harness/dist/issue-8-program.js';
 const V5_ENTRY = 'coding-harness/dist/programme-v5-program.js';
 const DEFAULT_TASK = 'coding-harness/config/programme-v5-acceptance.json'; const ASSET_PATHS = ['coding-harness/config/programme-v5-ruflo-schema-v2-memory-bridge.js.gz', 'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz', 'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json'];
@@ -31,7 +33,7 @@ interface Fixture { readonly repository: string; readonly runtime: string;
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('trusted programme-v5 bootstrap', () => {
-  it('anchors canonical policy bytes after prepare and before execute', () => {
+  launcherIt('anchors canonical policy bytes after prepare and before execute', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const result = runLauncher(fixture);
       const policyFingerprint = sha256(POLICY);
@@ -72,7 +74,7 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(existsSync(fixture.store)).toBe(false);
     });
 
-  it('emits a replayable prepare-only policy receipt after complete cleanup', () => {
+  launcherIt('emits a replayable prepare-only policy receipt after complete cleanup', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const result = runLauncher(fixture, [], fixture.policyFingerprint, true);
 
@@ -97,7 +99,7 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(policyReviewReceiptDigest).toBe(sha256(canonical(body)));
     });
 
-  it('verifies replay without preparing or executing and preserves recorded rejection', () => {
+  launcherIt('verifies replay without preparing or executing and preserves recorded rejection', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const result = runLauncher(fixture, [], fixture.policyFingerprint, false, true);
 
@@ -115,7 +117,7 @@ describe('trusted programme-v5 bootstrap', () => {
       });
     });
 
-  it('rejects a false prepare-only fingerprint without leaking its store', () => {
+  launcherIt('rejects a false prepare-only fingerprint without leaking its store', () => {
       const fixture = controllerFixture({ policyBlob: POLICY, wrongReviewFingerprint: true });
       const result = runLauncher(fixture, [], fixture.policyFingerprint, true);
 
@@ -129,7 +131,7 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(existsSync(fixture.store)).toBe(false);
     });
 
-  it('rejects changing, noncanonical, and malformed policy without execute', () => {
+  launcherIt('rejects changing, noncanonical, and malformed policy without execute', () => {
       const cases: readonly [Behavior, string][] = [
         [
           { policyBlob: POLICY, changingPolicy: true },
@@ -157,7 +159,7 @@ describe('trusted programme-v5 bootstrap', () => {
       }
     });
 
-  it('rejects an externally anchored fingerprint mismatch before execute', () => {
+  launcherIt('rejects an externally anchored fingerprint mismatch before execute', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const result = runLauncher(fixture, [], 'd'.repeat(64));
       const events = readEvents(fixture);
@@ -172,7 +174,7 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(existsSync(fixture.store)).toBe(false);
     });
 
-  it('rejects a sealed fingerprint that differs from the launcher anchor', () => {
+  launcherIt('rejects a sealed fingerprint that differs from the launcher anchor', () => {
       const fixture = controllerFixture({ policyBlob: POLICY, wrongFingerprint: true });
       const result = runLauncher(fixture);
       const events = readEvents(fixture);
@@ -187,7 +189,7 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(existsSync(fixture.store)).toBe(false);
     });
 
-  it('calls abort exactly once when execute does not complete successfully', () => {
+  launcherIt('calls abort exactly once when execute does not complete successfully', () => {
       const fixture = controllerFixture({ policyBlob: POLICY, executeThrows: true });
       const result = runLauncher(fixture);
       const events = readEvents(fixture);
@@ -202,7 +204,7 @@ describe('trusted programme-v5 bootstrap', () => {
       expect(existsSync(fixture.store)).toBe(false);
     });
 
-  it('binds an explicit v5 task without falling back to the v4 default', () => {
+  launcherIt('binds an explicit v5 task without falling back to the v4 default', () => {
       const fixture = controllerFixture({ policyBlob: POLICY });
       const taskPath = 'coding-harness/config/alternate-programme-v5-acceptance.json';
       const result = runLauncher(fixture, ['--task-path', taskPath]);
@@ -368,6 +370,7 @@ function runLauncher(
   policyReview = false,
   replay = false,
 ) {
+  if (NODE === null) throw new Error('HARNESS_TEST_NATIVE_CAPABILITY_REQUIRED:TRUSTED_NODE');
   const launcher = readFileSync(
     new URL('../scripts/launch-programme-v5.mjs', import.meta.url),
   );

@@ -13,11 +13,13 @@ import {
   parseProgrammeV6ReplaySummary,
   programmeV6OperatorExitCode,
 } from '../scripts/run-programme-v6.mjs';
+import { nativeIntegrationEnabled } from './native-test-prerequisites.js';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const operatorPath = resolve(repositoryRoot, 'coding-harness/scripts/run-programme-v6.mjs');
 const controllerCommit = gitText(['rev-parse', 'HEAD']);
 const roots: string[] = [];
+const nativeIt = nativeIntegrationEnabled() ? it : it.skip;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -81,7 +83,7 @@ describe('programme-v6 operator', () => {
       .toThrow('HARNESS_OPERATOR_REPLAY_SUMMARY_INVALID');
   });
 
-  it('requires a clean outer Node process before parsing an operation', () => {
+  nativeIt('requires a clean outer Node process before parsing an operation', () => {
     const runtime = temporary('programme-v6-operator-process-');
     const base = [
       '-i', 'LANG=C.UTF-8', `XDG_RUNTIME_DIR=${runtime}`,

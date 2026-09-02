@@ -4,12 +4,15 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  rmSync, writeFileSync,
+  realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  nativeIntegrationEnabled, trustedTestNodeExecutable,
+} from './native-test-prerequisites.js';
 
 interface Version {
   readonly name: 'issue8' | 'v5' | 'v6';
@@ -28,7 +31,8 @@ interface Fixture {
 }
 
 const GIT = '/usr/bin/git';
-const NODE = '/usr/bin/node';
+const NODE = trustedTestNodeExecutable();
+const launcherIt = NODE === null ? it.skip : it;
 const PRIMARY_ENTRY = 'coding-harness/dist/issue-8-program.js';
 const ASSET_PATHS = Object.freeze([
   'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json',
@@ -58,7 +62,16 @@ afterEach(() => {
 });
 
 describe('packed controller Ruflo overlay asset closure', () => {
-  it.each(VERSIONS)(
+  it('binds launcher tests to an exact canonical Node executable without PATH lookup', () => {
+    if (NODE === null) {
+      expect(nativeIntegrationEnabled()).toBe(false);
+      return;
+    }
+    expect(NODE).toBe(realpathSync(NODE));
+    expect([realpathSync(process.execPath), '/usr/bin/node']).toContain(NODE);
+  });
+
+  launcherIt.each(VERSIONS)(
     'materializes exact committed overlay assets in the $name private runtime',
     (version) => {
       const fixture = controllerFixture(version);
@@ -83,7 +96,7 @@ describe('packed controller Ruflo overlay asset closure', () => {
     15_000,
   );
 
-  it.each(VERSIONS)('rejects a missing $name runtime resource binding', (version) => {
+  launcherIt.each(VERSIONS)('rejects a missing $name runtime resource binding', (version) => {
     const fixture = controllerFixture(version, ASSET_PATHS[0]);
     const result = runLauncher(fixture, version);
     expect(result.error).toBeUndefined();
@@ -229,6 +242,7 @@ function canonicalJson(value: unknown): string {
 }
 
 function runLauncher(fixture: Fixture, version: Version) {
+  if (NODE === null) throw new Error('HARNESS_TEST_NATIVE_CAPABILITY_REQUIRED:TRUSTED_NODE');
   const previousUmask = process.umask(0o077);
   try {
     const args = [
