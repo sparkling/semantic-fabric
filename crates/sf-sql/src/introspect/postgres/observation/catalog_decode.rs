@@ -10,6 +10,56 @@ pub(super) const MAX_CATALOG_TEXT_BYTES_V1: usize = 256;
 pub(super) const MAX_CATALOG_ARRAY_MEMBERS_V1: usize = 32;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CatalogConstraintRowV1 {
+    pub(super) constraint_oid: u32,
+    pub(super) constraint_kind: String,
+    pub(super) child_oid: u32,
+    pub(super) parent_oid: u32,
+    pub(super) validated: bool,
+    pub(super) deferrable: bool,
+    pub(super) deferred: bool,
+    pub(super) child_key: Option<Vec<i16>>,
+    pub(super) parent_key: Option<Vec<i16>>,
+    pub(super) array_overflow: bool,
+}
+
+pub(super) fn decode_constraint_row_v1(
+    row: &Row,
+) -> Result<CatalogConstraintRowV1, PostgresSchemaIdentityUnavailableV1> {
+    macro_rules! get {
+        ($name:literal, $ty:ty) => {
+            row.try_get::<_, $ty>($name)
+                .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogDecode)?
+        };
+    }
+    let value = CatalogConstraintRowV1 {
+        constraint_oid: get!("constraint_oid", u32),
+        constraint_kind: get!("contype", String),
+        child_oid: get!("child_oid", u32),
+        parent_oid: get!("parent_oid", u32),
+        validated: get!("convalidated", bool),
+        deferrable: get!("condeferrable", bool),
+        deferred: get!("condeferred", bool),
+        child_key: get!("conkey", Option<Vec<i16>>),
+        parent_key: get!("confkey", Option<Vec<i16>>),
+        array_overflow: get!("sf_array_overflow", bool),
+    };
+    if value.array_overflow {
+        return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+            PostgresSchemaIdentityLimitCodeV1::KeyMembers,
+        ));
+    }
+    if !matches!(value.constraint_kind.as_str(), "p" | "u" | "f")
+        || value.deferrable
+        || value.deferred
+        || value.child_key.as_ref().is_none_or(|v| v.is_empty())
+    {
+        return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+    }
+    Ok(value)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CatalogGuardRowV1 {
     pub(super) server_version_num: i32,
     pub(super) server_encoding: String,
