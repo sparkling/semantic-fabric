@@ -4,9 +4,47 @@
 //! module deliberately contains no driver calls and no public/runtime wiring.
 
 use super::{PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailableV1};
+use tokio_postgres::Row;
 
 pub(super) const MAX_CATALOG_TEXT_BYTES_V1: usize = 256;
 pub(super) const MAX_CATALOG_ARRAY_MEMBERS_V1: usize = 32;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CatalogGuardRowV1 {
+    pub(super) server_version_num: i32,
+    pub(super) server_encoding: String,
+    pub(super) client_encoding: String,
+    pub(super) max_identifier_length: i32,
+    pub(super) max_index_keys: i32,
+    pub(super) integer_datetimes: String,
+    pub(super) session_replication_role: String,
+    pub(super) search_path: String,
+    pub(super) public_namespace_count: i64,
+    pub(super) current_database_count: i64,
+}
+
+pub(super) fn decode_guard_row_v1(
+    row: &Row,
+) -> Result<CatalogGuardRowV1, PostgresSchemaIdentityUnavailableV1> {
+    macro_rules! get {
+        ($name:literal, $ty:ty) => {
+            row.try_get::<_, $ty>($name)
+                .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogDecode)?
+        };
+    }
+    Ok(CatalogGuardRowV1 {
+        server_version_num: get!("server_version_num", i32),
+        server_encoding: get!("server_encoding", String),
+        client_encoding: get!("client_encoding", String),
+        max_identifier_length: get!("max_identifier_length", i32),
+        max_index_keys: get!("max_index_keys", i32),
+        integer_datetimes: get!("integer_datetimes", String),
+        session_replication_role: get!("session_replication_role", String),
+        search_path: get!("search_path", String),
+        public_namespace_count: get!("public_namespace_count", i64),
+        current_database_count: get!("current_database_count", i64),
+    })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CatalogRelationRowV1 {
