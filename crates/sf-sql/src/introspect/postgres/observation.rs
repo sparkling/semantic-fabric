@@ -10,6 +10,8 @@ use sf_core::schema_identity::{
 use crate::schema::TableSchema;
 
 #[allow(dead_code)]
+mod constraints;
+#[allow(dead_code)]
 mod relation;
 #[allow(dead_code)]
 mod source_type;

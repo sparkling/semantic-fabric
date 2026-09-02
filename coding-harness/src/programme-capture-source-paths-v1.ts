@@ -147,6 +147,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sql/src/introspect/postgres/legacy_row/tests.rs',
   'crates/sf-sql/src/introspect/postgres/legacy_sql.rs',
   'crates/sf-sql/src/introspect/postgres/observation.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/constraints.rs',
   'crates/sf-sql/src/introspect/postgres/observation/relation.rs',
   'crates/sf-sql/src/introspect/postgres/observation/relation/accounting.rs',
   'crates/sf-sql/src/introspect/postgres/observation/relation/adversarial_tests.rs',
