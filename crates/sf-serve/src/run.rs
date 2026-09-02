@@ -47,6 +47,7 @@ pub struct ServeOptions {
 /// Build the config + router and serve until the process is stopped. Returns a
 /// clear error (never panics) when a required input is missing or invalid.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
+    validate_request_timeout(opts.timeout)?;
     // Resolve, bound, parse, and reject inline credentials before runtime, file,
     // DNS, socket, or connector construction.
     let source = opts.source.resolve()?.prepare()?;
@@ -59,6 +60,17 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
             })
         })?;
     rt.block_on(async move { serve_async(opts, source).await })
+}
+
+fn validate_request_timeout(timeout: Duration) -> Result<(), ServeError> {
+    tokio::time::Instant::now()
+        .checked_add(timeout)
+        .map(|_| ())
+        .ok_or_else(|| {
+            ServeError::new(StartupCause::Configuration {
+                error: "request timeout exceeds the monotonic clock range".to_owned(),
+            })
+        })
 }
 
 async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), ServeError> {
@@ -254,6 +266,16 @@ mod tests {
 
     fn prepare_injected(spec: String) -> Result<PreparedSource, ServeError> {
         crate::SourceInput::injected(spec)?.prepare()
+    }
+
+    #[test]
+    fn should_reject_unrepresentable_request_timeout_before_startup_io() {
+        let error = validate_request_timeout(Duration::from_secs(u64::MAX)).unwrap_err();
+        assert_eq!(error.code(), "startup-configuration");
+        assert!(matches!(
+            error.internal_cause(),
+            StartupCause::Configuration { .. }
+        ));
     }
 
     /// A unique path under the OS temp dir — avoids clashing with other tests

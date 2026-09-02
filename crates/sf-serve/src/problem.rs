@@ -173,6 +173,7 @@ impl StartupCode {
 
 #[derive(Debug)]
 pub(crate) enum StartupCause {
+    Configuration { error: String },
     Runtime { error: String },
     MappingRead { path: String, error: String },
     MappingParse { error: String },
@@ -188,7 +189,8 @@ pub(crate) enum StartupCause {
 impl StartupCause {
     fn code(&self) -> StartupCode {
         match self {
-            Self::MappingRead { .. }
+            Self::Configuration { .. }
+            | Self::MappingRead { .. }
             | Self::MappingParse { .. }
             | Self::OntologyRead { .. }
             | Self::OntologyParse { .. } => StartupCode::Configuration,
@@ -203,6 +205,7 @@ impl StartupCause {
 impl fmt::Display for StartupCause {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Configuration { error } => write!(formatter, "configuration: {error}"),
             Self::Runtime { error } => write!(formatter, "runtime: {error}"),
             Self::MappingRead { path, error } => {
                 write!(formatter, "mapping read {path:?}: {error}")
