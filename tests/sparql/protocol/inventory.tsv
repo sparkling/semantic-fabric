@@ -7,7 +7,7 @@ meta	attestation-scope	expected-local-test-outcomes-not-runtime-provenance-w3c-c
 input	Cargo.lock	158522	a6c7f6ac81cfb96d497b746cfc57671967cda6d026ed7c1d5c103b2feab92c67
 input	Cargo.toml	2597	b0c4ac281585bd34b3dfd1fa97e7f0fd8776e3cb4fcc144aba916cecde2c7bc4
 input	crates/sf-serve/Cargo.toml	1517	343af72945a639b4beeecc9d0c7f3da25286126e58a76081a7deb8015e7ea87c
-input	crates/sf-serve/tests/endpoint.rs	40443	38283f61fa1691e016c36b40c2a98457788ea101f3dbe142712b629b67eab288
+input	crates/sf-serve/tests/endpoint.rs	40037	613ba890eefa7ca0507751065b071ded6849da3684d2d20e735bf166d5b0f2b9
 input	rust-toolchain.toml	122	e8c8b3d67e37fa6c751296b6583b82805e597b619a1868b35369185eb61e4b45
 suite	protocol-endpoint	sf-serve	endpoint	600
 test	protocol-endpoint	ask_query_backend_sql_error_returns_500	include	required
