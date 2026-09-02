@@ -14,6 +14,15 @@ pub(super) const RICH_RELATIONS_SQL_V1: &str = "SELECT \
  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam LEFT JOIN pg_catalog.pg_namespace amn ON amn.oid=am.amnamespace \
  WHERE n.nspname=$1 AND c.relkind IN ('r','p','f') ORDER BY c.relname LIMIT $3";
 
+pub(super) const RICH_GUARD_SQL_V1: &str = "SELECT \
+ current_setting('server_version_num')::int4 AS server_version_num, \
+ current_setting('server_encoding') AS server_encoding, current_setting('client_encoding') AS client_encoding, \
+ current_setting('max_identifier_length')::int4 AS max_identifier_length, current_setting('max_index_keys')::int4 AS max_index_keys, \
+ current_setting('integer_datetimes') AS integer_datetimes, current_setting('session_replication_role') AS session_replication_role, \
+ current_setting('search_path') AS search_path, \
+ (SELECT count(*)::int8 FROM pg_catalog.pg_namespace WHERE nspname='public') AS public_namespace_count, \
+ (SELECT count(*)::int8 FROM pg_catalog.pg_database WHERE datname=current_database()) AS current_database_count";
+
 pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "SELECT \
  a.attrelid AS relation_oid, a.attnum, CASE WHEN a.attname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(a.attname::text,'UTF8')) > $2 THEN NULL::text ELSE a.attname::text END AS attribute_name, \
  (a.attname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(a.attname::text,'UTF8')) > $2) AS sf_text_overflow, \
@@ -35,6 +44,25 @@ mod tests {
             assert!(query.contains("n.nspname=$1"));
             assert!(query.contains("c.relkind IN ('r','p','f')"));
         }
+    }
+
+    #[test]
+    fn guard_query_contains_every_profile_gate_and_no_unbounded_relation_scan() {
+        for field in [
+            "server_version_num",
+            "server_encoding",
+            "client_encoding",
+            "max_identifier_length",
+            "max_index_keys",
+            "integer_datetimes",
+            "session_replication_role",
+            "search_path",
+            "public_namespace_count",
+            "current_database_count",
+        ] {
+            assert!(RICH_GUARD_SQL_V1.contains(field));
+        }
+        assert!(!RICH_GUARD_SQL_V1.contains("FROM pg_class"));
     }
 
     #[test]
