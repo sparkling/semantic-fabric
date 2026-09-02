@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [postgresql, supervisor, migrations, provisioning, canonical-json]
 supersedes: []
 depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0048]
@@ -448,7 +448,7 @@ Results are seven module-level deeply frozen intrinsic singleton records, one fo
 
 The private reader and Plan sources are sealed build inputs while their tests are parent-harness protected. Thirteen focused KATs cover import-without-I/O, fixed-root loading, exact order, fresh byte copies, brands, clone/proxy rejection, pathless deterministic receipt/replay, ordered descriptor parsing without candidate serialization, hostile accessors/proxies without invocation, UTF-8 bounds, symlinked ancestors/components/files, hardlinks, FIFOs, writable modes, missing/short/long/digest-mutated files, missing `O_NOFOLLOW`, close failure and sanitized failures.
 Two further SQL-policy KATs prove that unqualified and `pg_catalog`-qualified quoted callable identifiers fail closed before callable allowlist evaluation. Fourteen capability/terminal KATs prove ordered descriptor capture without invocation, thenable assimilation or inherited setters; proxy/accessor/symbol/exotic/revoked-proxy rejection; captured-intrinsic and receiver-free behavior; and seven pairwise-distinct exact frozen non-authorizing terminal identities.
-Commits `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` close only the Node oracle's lifecycle/control/deadline, command metadata, INSERT value/result and DDL-coupling slices. Node 24.14.1 passes 705 tests; exact Node 20.0.0 passes TypeScript, 23 focused tests, artifact replay and parent focused gates. Oracle artifact SHA-256 is `715c72fdd096d638fa54bbb2504d8f95559a7daca99988b8573bdf666ce40552`; the dependency-free public bundle remains 49,106 bytes at `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`. Supervisor catalogue-observation SELECT, PostgreSQL wire-transport/tag vectors and future separately packaged Rust-supervisor live execution remain open; Node execution expansion is closed.
+Commits `1e2d88d`, `7d5af51`, `0d5d09e` and `e37cce7` close only the Node oracle's lifecycle/control/deadline, command metadata, INSERT value/result and DDL-coupling slices. Exact Node 20.0.0 and 24.14.1 clean installs each pass all 706 tests. npm 9.6.4's platform detection requires `@rollup/rollup-linux-x64-gnu@4.63.1` as a direct development-only dependency for the pinned Linux evidence runner; runtime dependencies remain empty. Oracle artifact SHA-256 is `422c6854e4dc8abdf24b30fbd4b6042b48a7acc8ca605365fcb6adc653dd3219`; the dependency-free public bundle remains byte-identical at 49,106 bytes and `90e21e7c0e3a45b66da55f0e8cf9c0a23b3fb82e805223922d81096e097f7c3a`. Supervisor catalogue-observation SELECT, PostgreSQL wire-transport/tag vectors and future separately packaged Rust-supervisor live execution remain open; Node execution expansion is closed.
 
 ## Acceptance gates
 

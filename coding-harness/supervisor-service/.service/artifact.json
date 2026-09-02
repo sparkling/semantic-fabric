@@ -3,7 +3,7 @@
   "serviceKind": "programme-capture-supervisor-service-v1",
   "authority": "nonoperational-proposed-adr-0042",
   "serviceManifestDigest": "65364989858ff3b2151e97e0a58cd689f4aa7d6e30acf4a1454646d7eec654f5",
-  "packageLockDigest": "13bc52fd364fa55f0230715a719179fa554a344d537066cf504c8eb09ae516b6",
+  "packageLockDigest": "770d9383a21a89c752d59cf5dbaa78424e40e608fe25bd4b9a498c3611427cff",
   "sourceInputs": {
     "src/closed-json.ts": "bc65ae11b5fc19e5247db53f53e680b1d5358394188761ab4559915135f316df",
     "src/index.ts": "5209206c6f346687f800ec8e500e5c2564bcea7ed91e29d0dade1adb81407e2b",
@@ -18,10 +18,10 @@
     "migrations/catalog-contract-v1.json": "e7ce3572463587f4beed55c35c5a6b93810a270136cb963cf312b580fd1ace69",
     "migrations/manifest-v1.json": "72782ecae7d33a0149fb2ceb0a3219254fcd68137e499b811260f77b5cd70478",
     "migrations/provisioning-contract-v1.json": "71e4bafda6f97f44b54f28903363fe4ff88f3199a2d08b4dc4bc9060c33e55a9",
-    "package.json": "ab0399aa9d05fd7f98f54b7251320de8446dfb544883271de932616d5d24f8f3",
+    "package.json": "b57542ea3e3009471632b2cfb1521e7f8b6f7b4325ed51338ef9ff085eabd93b",
     "tsconfig.json": "7641d2522c27810e97f7e7f82c954e4cc8bf2c373b102d672ee7c4e025cc3e2a",
     "vitest.config.ts": "3981e36312e69b0025abe2e2dfdaca362f675deaa243281a25ae09de2eadf609",
-    "scripts/artifact-lib.mjs": "7c59a4d1a677b7b00fba047482fe23ff86ff2dc0dad5d154d67e14f3168ad363",
+    "scripts/artifact-lib.mjs": "28ae45d958f3fccdece05e3ab244be41dab4328d49859d74667d86c6dc93f443",
     "scripts/build.mjs": "6a0d4c55e0b7c0d146cad5f4c1a13f40fc44739f6ed27830d3024a69b3b6a5fa",
     "scripts/deny-publish.mjs": "62c51d4c0d58dd2f12d79e3f9600bdde975e8c78aa0a6aea84d7fc10eed15edc",
     "scripts/verify-artifact.mjs": "4bcc7b8ef4705f225c13fa35c2112ab82809cbe8c9607713116050f7d815ed06",
@@ -69,5 +69,5 @@
   },
   "externalImports": [],
   "runtimePackages": [],
-  "artifactDigest": "715c72fdd096d638fa54bbb2504d8f95559a7daca99988b8573bdf666ce40552"
+  "artifactDigest": "422c6854e4dc8abdf24b30fbd4b6042b48a7acc8ca605365fcb6adc653dd3219"
 }

@@ -8,6 +8,39 @@ import { describe, expect, it } from 'vitest';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('private supervisor-service package boundary', () => {
+  it('requires the Linux x64 GNU Rollup binary in the clean-install closure', () => {
+    const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
+      devDependencies?: Record<string, string>;
+    };
+    const lock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, {
+        cpu?: string[];
+        dev?: boolean;
+        devDependencies?: Record<string, string>;
+        libc?: string[];
+        optional?: boolean;
+        os?: string[];
+        version?: string;
+      }>;
+    };
+    const expectedVersion = '4.63.1';
+    const nativePackage = lock.packages['node_modules/@rollup/rollup-linux-x64-gnu'];
+
+    expect(packageJson.devDependencies)
+      .toHaveProperty('@rollup/rollup-linux-x64-gnu', expectedVersion);
+    expect(lock.packages['']?.devDependencies)
+      .toHaveProperty('@rollup/rollup-linux-x64-gnu', expectedVersion);
+    expect(nativePackage).toMatchObject({
+      version: expectedVersion,
+      dev: true,
+      cpu: ['x64'],
+      os: ['linux'],
+    });
+    // npm 9.6.4 reads the wrong Node 20 report key and rejects a required glibc lock entry.
+    expect(nativePackage).not.toHaveProperty('libc');
+    expect(nativePackage?.optional).not.toBe(true);
+  });
+
   it('owns a private package and nonoperational service manifest', () => {
     const packagePath = resolve(root, 'package.json');
     const manifestPath = resolve(root, '.service/manifest.json');
@@ -33,6 +66,7 @@ describe('private supervisor-service package boundary', () => {
     expect(packageJson).not.toHaveProperty('workspaces');
     expect(packageJson.dependencies).toEqual({});
     expect(packageJson.devDependencies).toEqual({
+      '@rollup/rollup-linux-x64-gnu': '4.63.1',
       '@types/node': '20.19.43',
       esbuild: '0.28.2',
       typescript: '5.9.3',

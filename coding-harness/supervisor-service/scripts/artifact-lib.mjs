@@ -202,7 +202,7 @@ export function validatePackageContract(packageJson) {
   ], 'PACKAGE_SCRIPTS');
   assertExactKeys(packageJson.dependencies, [], 'PACKAGE_DEPENDENCIES');
   assertExactKeys(packageJson.devDependencies, [
-    '@types/node', 'esbuild', 'typescript', 'vite', 'vitest',
+    '@rollup/rollup-linux-x64-gnu', '@types/node', 'esbuild', 'typescript', 'vite', 'vitest',
   ], 'PACKAGE_DEV_DEPENDENCIES');
   assertExactKeys(packageJson.engines, ['node'], 'PACKAGE_ENGINES');
   if (packageJson.name !== 'semantic-fabric-supervisor-service'
@@ -215,6 +215,7 @@ export function validatePackageContract(packageJson) {
     || packageJson.scripts.verify
       !== 'npm run build && npm test && node scripts/verify-artifact.mjs'
     || packageJson.scripts.prepublishOnly !== 'node scripts/deny-publish.mjs'
+    || packageJson.devDependencies['@rollup/rollup-linux-x64-gnu'] !== '4.63.1'
     || packageJson.devDependencies['@types/node'] !== '20.19.43'
     || packageJson.devDependencies.esbuild !== '0.28.2'
     || packageJson.devDependencies.typescript !== '5.9.3'

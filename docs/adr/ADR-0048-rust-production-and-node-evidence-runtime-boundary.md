@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -198,6 +198,14 @@ physical source used by historical captures. V2 remains strictly replayable but
 is never emitted for relocated-source execution. Schema V3 instead binds
 `content-addressed-relocatable-package-root-v1`, the aggregate digest/count/bytes
 and the private executed `entryPath`; V2 and V3 identities cannot cross-parse.
+
+The private supervisor oracle's exact Linux CI closure now declares
+`@rollup/rollup-linux-x64-gnu@4.63.1` as a direct development dependency because
+npm 9.6.4 otherwise omits Rollup's optional native package on Node 20.0.0. Exact
+Node 20.0.0 and 24.14.1 clean installs each pass all 706 tests. Runtime
+dependencies remain empty, the dependency-free public bundle is byte-identical,
+and this host-specific evidence-tool pin enters neither Cargo nor any product or
+production artefact.
 
 Commit `cbb63ab` adds a separate development-only table/column inventory gate.
 It recounts the sealed 11 stores, 112 tables and 598 columns, then inspects each
