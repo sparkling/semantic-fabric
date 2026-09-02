@@ -1,5 +1,8 @@
 use crate::error::{Error, Result};
 
+pub(super) const MAX_LEGACY_RELATIONS_PG16_V1: usize = 4_096;
+pub(super) const MAX_LEGACY_ROWS_PER_SET_PG16_V1: usize = 65_536;
+
 #[derive(Clone, Copy)]
 pub(super) struct LegacyInputLimitsV1 {
     pub(super) max_relations: usize,
@@ -8,7 +11,7 @@ pub(super) struct LegacyInputLimitsV1 {
 }
 
 pub(super) const PRODUCTION_LEGACY_INPUT_LIMITS_V1: LegacyInputLimitsV1 = LegacyInputLimitsV1 {
-    max_relations: 4_096,
+    max_relations: MAX_LEGACY_RELATIONS_PG16_V1,
     max_name_bytes: 256,
     max_total_name_bytes: 1_048_576,
 };

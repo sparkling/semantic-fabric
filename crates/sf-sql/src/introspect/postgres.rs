@@ -6,8 +6,13 @@ use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, TableSchema};
 
 mod legacy_bounds;
+mod legacy_query;
 mod observation;
 use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
+use legacy_query::{
+    query_bounded, LEGACY_RELATION_QUERY_LIMIT_PG16_V1, LEGACY_SET_QUERY_LIMIT_PG16_V1,
+    MAX_LEGACY_RELATIONS_PG16_V1, MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+};
 pub use observation::{
     Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
     PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
@@ -19,7 +24,8 @@ pub use observation::{
 const RUNTIME_SCHEMA: &str = "public";
 
 const TABLES_SQL: &str = "SELECT table_name FROM information_schema.tables \
-     WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name";
+     WHERE table_schema = $1 AND table_type = 'BASE TABLE' \
+     ORDER BY table_name LIMIT $2";
 
 // Generated base-table SQL is intentionally unqualified under the runtime's
 // exact `pg_catalog,public,pg_temp` search path. A `public` base table that has
@@ -28,12 +34,12 @@ const TABLES_SQL: &str = "SELECT table_name FROM information_schema.tables \
 // carries qualified relation identity, reject that database at introspection.
 const EARLIER_RELATION_COLLISIONS_SQL: &str = "SELECT c.relname FROM pg_catalog.pg_class c \
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-     WHERE c.relname = ANY($1) AND n.nspname = $2 ORDER BY c.relname";
+     WHERE c.relname = ANY($1) AND n.nspname = $2 ORDER BY c.relname LIMIT $3";
 
 const COLUMNS_SQL: &str = "SELECT table_name, column_name, data_type, is_nullable \
      FROM information_schema.columns \
      WHERE table_name = ANY($1) AND table_schema = $2 \
-     ORDER BY table_name, ordinal_position";
+     ORDER BY table_name, ordinal_position LIMIT $3";
 
 const KEYS_SQL: &str =
     "SELECT tc.table_name, tc.constraint_type, tc.constraint_name, kcu.column_name \
@@ -47,7 +53,7 @@ const KEYS_SQL: &str =
       AND tc.table_name = kcu.table_name \
      WHERE tc.table_name = ANY($1) AND tc.table_schema = $2 \
        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
-     ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position";
+     ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position LIMIT $3";
 
 // The paired attnum arrays preserve composite-FK column alignment. Parent
 // namespace is selected explicitly because the current DTO cannot represent a
@@ -68,16 +74,16 @@ const FOREIGN_KEYS_SQL: &str = "SELECT child.relname, con.conname, ca.attname, p
        ON pa.attrelid = con.confrelid AND pa.attnum = k.parent_attnum \
      WHERE con.contype = 'f' AND child.relname = ANY($1) \
        AND child_ns.nspname = $2 \
-     ORDER BY child.relname, con.conname, k.ord";
+     ORDER BY child.relname, con.conname, k.ord LIMIT $3";
 
 const RELTUPLES_SQL: &str = "SELECT c.relname, GREATEST(c.reltuples, 0)::bigint \
      FROM pg_catalog.pg_class c \
      JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
      WHERE c.relname = ANY($1) AND n.nspname = $2 \
-       AND c.relkind IN ('r', 'p', 'm', 'v')";
+       AND c.relkind IN ('r', 'p', 'm', 'v') LIMIT $3";
 
 const NDISTINCT_SQL: &str = "SELECT tablename, attname, n_distinct FROM pg_catalog.pg_stats \
-     WHERE tablename = ANY($1) AND schemaname = $2";
+     WHERE tablename = ANY($1) AND schemaname = $2 LIMIT $3";
 
 /// Introspect one table from the runtime-supported PostgreSQL `public` schema.
 pub async fn introspect_postgres(
@@ -117,7 +123,14 @@ pub async fn introspect_postgres_public_snapshot(
         .read_only(true)
         .start()
         .await?;
-    let rows = transaction.query(TABLES_SQL, &[&RUNTIME_SCHEMA]).await?;
+    let rows = query_bounded(
+        &transaction,
+        TABLES_SQL,
+        &[&RUNTIME_SCHEMA, &LEGACY_RELATION_QUERY_LIMIT_PG16_V1],
+        MAX_LEGACY_RELATIONS_PG16_V1,
+        "table rows",
+    )
+    .await?;
     let tables: Vec<String> = rows.into_iter().map(|row| row.get(0)).collect();
     let schemas = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
     transaction.commit().await?;
@@ -170,12 +183,21 @@ where
     C: tokio_postgres::GenericClient + Sync,
 {
     let earlier_schema = "pg_catalog";
-    let collisions: Vec<String> = client
-        .query(EARLIER_RELATION_COLLISIONS_SQL, &[&tables, &earlier_schema])
-        .await?
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
+    let collisions: Vec<String> = query_bounded(
+        client,
+        EARLIER_RELATION_COLLISIONS_SQL,
+        &[
+            &tables,
+            &earlier_schema,
+            &LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
+        ],
+        MAX_LEGACY_RELATIONS_PG16_V1,
+        "catalogue-collision rows",
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.get(0))
+    .collect();
     if collisions.is_empty() {
         return Ok(());
     }
@@ -195,7 +217,15 @@ async fn load_columns<C>(
 where
     C: tokio_postgres::GenericClient + Sync,
 {
-    for row in client.query(COLUMNS_SQL, &[&tables, &schema_name]).await? {
+    for row in query_bounded(
+        client,
+        COLUMNS_SQL,
+        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+        "column rows",
+    )
+    .await?
+    {
         let table: String = row.get(0);
         let name: String = row.get(1);
         let data_type: String = row.get(2);
@@ -229,7 +259,15 @@ where
 {
     let mut primary: HashMap<String, Vec<String>> = HashMap::new();
     let mut unique: HashMap<String, BTreeMap<String, Vec<String>>> = HashMap::new();
-    for row in client.query(KEYS_SQL, &[&tables, &schema_name]).await? {
+    for row in query_bounded(
+        client,
+        KEYS_SQL,
+        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+        "key rows",
+    )
+    .await?
+    {
         let table: String = row.get(0);
         let constraint_type: String = row.get(1);
         let constraint: String = row.get(2);
@@ -265,9 +303,14 @@ where
     C: tokio_postgres::GenericClient + Sync,
 {
     let mut foreign: HashMap<String, BTreeMap<String, ForeignKey>> = HashMap::new();
-    for row in client
-        .query(FOREIGN_KEYS_SQL, &[&tables, &schema_name])
-        .await?
+    for row in query_bounded(
+        client,
+        FOREIGN_KEYS_SQL,
+        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+        "foreign-key rows",
+    )
+    .await?
     {
         let table: String = row.get(0);
         let constraint: String = row.get(1);
@@ -306,9 +349,14 @@ async fn load_statistics<C>(
 where
     C: tokio_postgres::GenericClient + Sync,
 {
-    for row in client
-        .query(RELTUPLES_SQL, &[&tables, &schema_name])
-        .await?
+    for row in query_bounded(
+        client,
+        RELTUPLES_SQL,
+        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+        "relation-statistic rows",
+    )
+    .await?
     {
         let table: String = row.get(0);
         let estimate: i64 = row.get(1);
@@ -318,9 +366,14 @@ where
             }
         }
     }
-    for row in client
-        .query(NDISTINCT_SQL, &[&tables, &schema_name])
-        .await?
+    for row in query_bounded(
+        client,
+        NDISTINCT_SQL,
+        &[&tables, &schema_name, &LEGACY_SET_QUERY_LIMIT_PG16_V1],
+        MAX_LEGACY_ROWS_PER_SET_PG16_V1,
+        "column-statistic rows",
+    )
+    .await?
     {
         let table: String = row.get(0);
         let column: String = row.get(1);
@@ -381,6 +434,22 @@ mod tests {
         assert!(EARLIER_RELATION_COLLISIONS_SQL.contains("n.nspname = $2"));
         assert!(KEYS_SQL.contains("tc.table_name = kcu.table_name"));
         assert!(KEYS_SQL.contains("tc.table_catalog = kcu.table_catalog"));
+    }
+
+    #[test]
+    fn legacy_queries_have_server_side_cap_plus_one_limits() {
+        for sql in [TABLES_SQL, EARLIER_RELATION_COLLISIONS_SQL] {
+            assert!(sql.contains("LIMIT $2") || sql.contains("LIMIT $3"));
+        }
+        for sql in [
+            COLUMNS_SQL,
+            KEYS_SQL,
+            FOREIGN_KEYS_SQL,
+            RELTUPLES_SQL,
+            NDISTINCT_SQL,
+        ] {
+            assert!(sql.contains("LIMIT $3"));
+        }
     }
 
     #[test]
