@@ -1,6 +1,14 @@
 use super::*;
 
 #[test]
+fn public_snapshot_timeouts_are_exact_and_transaction_local() {
+    assert_eq!(
+        SNAPSHOT_TIMEOUTS_SQL,
+        "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s';"
+    );
+}
+
+#[test]
 fn catalogue_queries_bind_complete_relation_identity() {
     for (sql, schema_identity) in [
         (COLUMNS_SQL, "table_schema"),

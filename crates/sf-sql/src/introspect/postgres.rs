@@ -31,6 +31,8 @@ pub use observation::{
 };
 
 const RUNTIME_SCHEMA: &str = "public";
+const SNAPSHOT_TIMEOUTS_SQL: &str =
+    "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s';";
 
 /// Introspect one table from the runtime-supported PostgreSQL `public` schema.
 pub async fn introspect_postgres(
@@ -70,6 +72,7 @@ pub async fn introspect_postgres_public_snapshot(
         .read_only(true)
         .start()
         .await?;
+    transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
     let rows = query_bounded(
         &transaction,
         TABLES_SQL,
