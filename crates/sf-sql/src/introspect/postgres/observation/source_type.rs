@@ -17,6 +17,7 @@ pub(super) struct Postgres16ColumnTypeCatalogFactV1 {
     pub(super) type_relation_oid: u32,
     pub(super) array_dimensions: i16,
     pub(super) type_modifier: i32,
+    /// `pg_type.typcollation`; the attribute's `attcollation` is carried separately.
     pub(super) collation_oid: u32,
 }
 

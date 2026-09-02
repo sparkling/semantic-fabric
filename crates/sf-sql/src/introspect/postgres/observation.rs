@@ -10,6 +10,8 @@ use sf_core::schema_identity::{
 use crate::schema::TableSchema;
 
 #[allow(dead_code)]
+mod relation;
+#[allow(dead_code)]
 mod source_type;
 
 pub const POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1: &str =
