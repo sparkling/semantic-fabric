@@ -104,6 +104,14 @@ pub(super) fn decode_attribute_row_v1(
         array_dimensions: get!("attndims", i16),
         type_modifier: get!("atttypmod", i32),
         collation_oid: get!("attcollation", u32),
+        joined_type_oid: get!("joined_type_oid", Option<u32>),
+        joined_type_name: get!("joined_type_name", Option<String>),
+        joined_type_namespace_oid: get!("joined_type_namespace_oid", Option<u32>),
+        joined_collation_oid: get!("joined_collation_oid", Option<u32>),
+        joined_collation_name: get!("joined_collation_name", Option<String>),
+        joined_collation_namespace_oid: get!("joined_collation_namespace_oid", Option<u32>),
+        joined_collation_provider: get!("joined_collation_provider", Option<String>),
+        joined_collation_version: get!("joined_collation_version", Option<String>),
     };
     value.validate()?;
     Ok(value)
@@ -157,6 +165,14 @@ pub(super) struct CatalogAttributeRowV1 {
     pub(super) array_dimensions: i16,
     pub(super) type_modifier: i32,
     pub(super) collation_oid: u32,
+    pub(super) joined_type_oid: Option<u32>,
+    pub(super) joined_type_name: Option<String>,
+    pub(super) joined_type_namespace_oid: Option<u32>,
+    pub(super) joined_collation_oid: Option<u32>,
+    pub(super) joined_collation_name: Option<String>,
+    pub(super) joined_collation_namespace_oid: Option<u32>,
+    pub(super) joined_collation_provider: Option<String>,
+    pub(super) joined_collation_version: Option<String>,
 }
 
 impl CatalogRelationRowV1 {
@@ -309,6 +325,14 @@ mod tests {
             array_dimensions: 0,
             type_modifier: -1,
             collation_oid: 0,
+            joined_type_oid: None,
+            joined_type_name: None,
+            joined_type_namespace_oid: None,
+            joined_collation_oid: None,
+            joined_collation_name: None,
+            joined_collation_namespace_oid: None,
+            joined_collation_provider: None,
+            joined_collation_version: None,
         };
         assert!(dropped.validate().is_ok());
         let mut live = dropped.clone();
