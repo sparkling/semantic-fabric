@@ -1,6 +1,6 @@
 //! Source identity and mapping affinity without changing the R2RML IR.
 //!
-//! [`TriplesMap`](crate::ir::TriplesMap) remains a source-local semantic model:
+//! [`TriplesMap`] remains a source-local semantic model:
 //! its [`LogicalSource`](crate::ir::LogicalSource) names a relation, not a
 //! connection. [`SourceMapping`] is a source-affinity sidecar that associates one
 //! immutable mapping bundle with one opaque [`SourceId`]. It does not itself own
