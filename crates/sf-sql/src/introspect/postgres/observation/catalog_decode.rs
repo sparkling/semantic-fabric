@@ -82,6 +82,33 @@ pub(super) fn decode_relation_row_v1(
     Ok(value)
 }
 
+pub(super) fn decode_attribute_row_v1(
+    row: &Row,
+) -> Result<CatalogAttributeRowV1, PostgresSchemaIdentityUnavailableV1> {
+    macro_rules! get {
+        ($name:literal, $ty:ty) => {
+            row.try_get::<_, $ty>($name)
+                .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogDecode)?
+        };
+    }
+    let value = CatalogAttributeRowV1 {
+        relation_oid: get!("relation_oid", u32),
+        attribute_number: get!("attnum", i16),
+        attribute_name: get!("attribute_name", Option<String>),
+        text_overflow: get!("sf_text_overflow", bool),
+        is_dropped: get!("attisdropped", bool),
+        is_local: get!("attislocal", bool),
+        inheritance_count: get!("attinhcount", i16),
+        is_not_null: get!("attnotnull", bool),
+        attribute_type_oid: get!("atttypid", u32),
+        array_dimensions: get!("attndims", i16),
+        type_modifier: get!("atttypmod", i32),
+        collation_oid: get!("attcollation", u32),
+    };
+    value.validate()?;
+    Ok(value)
+}
+
 fn one_char(value: String) -> Result<char, PostgresSchemaIdentityUnavailableV1> {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
