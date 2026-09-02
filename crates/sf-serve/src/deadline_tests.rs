@@ -8,7 +8,7 @@ use sparesults::QueryResultsFormat;
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
-use tower::ServiceExt;
+use tower::{Service, ServiceExt};
 
 use crate::budget::RequestBudget;
 use crate::deadline::{join_task, run_compiler, CompilerRunError};
@@ -16,6 +16,41 @@ use crate::{router, Backend, ServeConfig};
 
 fn request_budget(timeout: Duration) -> RequestBudget {
     RequestBudget::after(timeout, QueryLimits::new(u64::MAX, u64::MAX, u64::MAX))
+}
+
+#[tokio::test(start_paused = true)]
+async fn time_before_inner_router_dispatch_counts_toward_the_request_deadline() {
+    let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
+    let mut cfg = ServeConfig::new_unchecked(
+        Backend::sqlite(conn),
+        Vec::new(),
+        sf_sparql::Tbox::default(),
+        Vec::new(),
+    );
+    cfg.timeout = Duration::from_secs(15);
+
+    let request = axum::http::Request::builder()
+        .uri("/sparql?query=ASK%20%7B%7D")
+        .body(axum::body::Body::empty())
+        .expect("request");
+    let mut service = router(Arc::new(cfg));
+    std::future::poll_fn(|cx| {
+        <crate::RequestDeadlineService as Service<
+            axum::http::Request<axum::body::Body>,
+        >>::poll_ready(&mut service, cx)
+    })
+    .await
+    .expect("outer service ready");
+
+    // `call` mints the deadline synchronously. Delaying the first poll therefore
+    // models time before the inner Axum Router is dispatched.
+    let response = service.call(request);
+    tokio::time::advance(Duration::from_secs(15)).await;
+
+    assert_eq!(
+        response.await.expect("outer service").status(),
+        axum::http::StatusCode::GATEWAY_TIMEOUT
+    );
 }
 
 #[tokio::test(start_paused = true)]

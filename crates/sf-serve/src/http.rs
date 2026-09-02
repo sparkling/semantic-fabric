@@ -3,9 +3,8 @@
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, Extension, RawQuery, Request, State};
+use axum::extract::{DefaultBodyLimit, Extension, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
@@ -21,48 +20,26 @@ use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
 use crate::deadline::{self, CompilerRunError, JoinedTaskError};
 use crate::problem::{self, ProblemCode};
+use crate::request_deadline::RequestDeadlineService;
 use crate::stream::{self, RdfFormat};
 
 #[cfg(test)]
 #[path = "http_tests.rs"]
 mod tests;
 
-/// Build the axum router exposing `GET`/`POST /sparql` over `cfg`.
-pub fn router(cfg: Arc<ServeConfig>) -> Router {
-    let deadline_state = cfg.clone();
+/// Build the governed request service exposing `GET`/`POST /sparql` over `cfg`.
+pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
     let max_body_len = cfg
         .max_query_len
         .saturating_mul(3)
         .saturating_add("query=".len());
-    Router::new()
+    let inner = Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
         .fallback(problem::not_found)
         .method_not_allowed_fallback(problem::method_not_allowed)
         .layer(DefaultBodyLimit::max(max_body_len))
-        .layer(middleware::from_fn_with_state(
-            deadline_state,
-            begin_request_deadline,
-        ))
-        .with_state(cfg)
-}
-
-/// Mint and enforce the request's one absolute deadline before route extractors
-/// consume the body. Streaming continues after response headers and therefore
-/// also receives this same instant explicitly.
-async fn begin_request_deadline(
-    State(cfg): State<Arc<ServeConfig>>,
-    mut request: Request,
-    next: Next,
-) -> Response {
-    let budget = RequestBudget::after(cfg.timeout, cfg.query_limits);
-    request.extensions_mut().insert(budget.clone());
-    let mut cancellation = budget.cancellation_guard();
-    let response = match budget.run_until_deadline(next.run(request)).await {
-        Ok(response) => response,
-        Err(error) => problem::response_for_control(error),
-    };
-    cancellation.disarm();
-    response
+        .with_state(cfg.clone());
+    RequestDeadlineService::new(inner, cfg)
 }
 
 /// `GET /sparql?query=...` (SPARQL 1.2 Protocol query via URL parameters).

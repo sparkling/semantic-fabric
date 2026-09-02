@@ -133,11 +133,13 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
         })
     })?;
     println!("semantic-fabric: SPARQL 1.2 endpoint listening on http://{addr}/sparql");
-    axum::serve(listener, app).await.map_err(|error| {
-        ServeError::new(StartupCause::Server {
-            error: error.to_string(),
+    axum::serve(listener, app.into_make_service())
+        .await
+        .map_err(|error| {
+            ServeError::new(StartupCause::Server {
+                error: error.to_string(),
+            })
         })
-    })
 }
 
 /// Open the prepared backend and pair it with the base-table schema observed

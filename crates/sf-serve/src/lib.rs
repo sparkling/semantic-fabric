@@ -32,6 +32,7 @@ mod config;
 mod deadline;
 mod http;
 mod problem;
+mod request_deadline;
 
 #[cfg(test)]
 mod deadline_tests;
@@ -44,6 +45,7 @@ pub use config::{ServeConfig, DEFAULT_QUERY_LIMITS};
 pub use http::router;
 pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
+pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
 pub use run::{serve_blocking, ServeOptions};
 pub use source::{SourceInput, SourceRef, MAX_SOURCE_ENV_NAME_BYTES, MAX_SOURCE_INPUT_BYTES};
 pub use stream::RdfFormat;
