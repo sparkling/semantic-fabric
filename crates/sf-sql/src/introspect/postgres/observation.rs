@@ -12,6 +12,8 @@ use crate::schema::TableSchema;
 #[allow(dead_code)]
 mod catalog_decode;
 #[allow(dead_code)]
+mod catalog_sql;
+#[allow(dead_code)]
 mod constraints;
 #[allow(dead_code)]
 mod relation;
