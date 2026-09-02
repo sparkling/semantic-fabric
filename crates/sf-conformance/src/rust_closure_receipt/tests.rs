@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use super::{format, metadata, platform, Edge, OriginKind, PackageRecord, Receipt, TARGET};
+use super::{
+    format, metadata, plain_cargo_command, platform, Edge, OriginKind, PackageRecord, Receipt,
+    TARGET,
+};
 
 fn package(name: &str, features: &[&str], edges: Vec<Edge>) -> PackageRecord {
     let mut package = PackageRecord {
@@ -35,6 +38,17 @@ fn linux_target() -> platform::TargetContext {
         "target_arch=\"x86_64\"\ntarget_os=\"linux\"\nunix\n",
     )
     .unwrap()
+}
+
+#[test]
+fn cargo_receipt_commands_override_ambient_colour_for_machine_output() {
+    let command = plain_cargo_command(Path::new("/tmp/checkout-a"));
+    let colour = command
+        .get_envs()
+        .find_map(|(name, value)| (name == "CARGO_TERM_COLOR").then_some(value))
+        .flatten();
+
+    assert_eq!(colour, Some(std::ffi::OsStr::new("never")));
 }
 
 #[test]

@@ -239,9 +239,8 @@ fn capture(repo_root: &Path) -> Result<Receipt, String> {
 
 fn cargo_metadata(repo_root: &Path) -> Result<String, String> {
     let manifest = repo_root.join(ROOT_MANIFEST);
-    let mut command = Command::new("cargo");
+    let mut command = plain_cargo_command(repo_root);
     command
-        .current_dir(repo_root)
         .args([
             "metadata",
             "--locked",
@@ -256,8 +255,8 @@ fn cargo_metadata(repo_root: &Path) -> Result<String, String> {
 }
 
 fn cargo_tree(repo_root: &Path) -> Result<String, String> {
-    let mut command = Command::new("cargo");
-    command.current_dir(repo_root).args([
+    let mut command = plain_cargo_command(repo_root);
+    command.args([
         "tree",
         "--locked",
         "--offline",
@@ -273,6 +272,18 @@ fn cargo_tree(repo_root: &Path) -> Result<String, String> {
         "{p}\t{f}",
     ]);
     process::output(command, "cargo tree", MAX_TREE_BYTES, CARGO_TIMEOUT)
+}
+
+/// Cargo's machine-readable output must not inherit a caller's colour policy.
+/// In particular, CI sets `CARGO_TERM_COLOR=always` for human build logs; ANSI
+/// controls in `cargo tree` feature fields are correctly rejected by the strict
+/// receipt parser, so the producer fixes its own output contract explicitly.
+fn plain_cargo_command(repo_root: &Path) -> Command {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(repo_root)
+        .env("CARGO_TERM_COLOR", "never");
+    command
 }
 
 fn command_line(program: &str, arguments: &[&str]) -> Result<String, String> {
