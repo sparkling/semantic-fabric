@@ -238,6 +238,9 @@ async fn respond_ask(
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
+    if let Err(error) = budget.preflight_ask_result() {
+        return problem::response_for_control(error);
+    }
     let fmt = negotiate_results(accept);
     let value = match backend {
         Backend::Sqlite(pool) => {

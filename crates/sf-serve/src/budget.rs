@@ -100,16 +100,36 @@ impl RequestBudget {
             _ = wait_for_deadline(self.0.deadline) => {
                 Err(self.terminate(QueryControlError::DeadlineExceeded))
             }
-            output = future => Ok(output),
+            output = future => {
+                self.check_deadline_at(Instant::now())?;
+                Ok(output)
+            },
         }
     }
 
     pub(crate) fn cancel(&self) -> QueryControlError {
-        self.terminate(QueryControlError::Cancelled)
+        let reason = if self.deadline_reached(Instant::now()) {
+            QueryControlError::DeadlineExceeded
+        } else {
+            QueryControlError::Cancelled
+        };
+        self.terminate(reason)
     }
 
     pub(crate) fn cancellation_guard(&self) -> CancellationGuard {
         CancellationGuard(Some(self.clone()))
+    }
+
+    /// Reject an ASK whose guaranteed boolean cannot fit before any backend is
+    /// selected or acquired. A positive capacity is charged by the executor.
+    pub(crate) fn preflight_ask_result(&self) -> Result<(), QueryControlError> {
+        self.checkpoint()?;
+        if self.0.accounting.consumed(QueryCharge::ResultItems)
+            >= self.0.accounting.limits().max_result_items()
+        {
+            return self.consume(QueryCharge::ResultItems, 1);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -125,6 +145,20 @@ impl RequestBudget {
             return Err(self.terminate(QueryControlError::DeadlineExceeded));
         }
         Ok(())
+    }
+
+    fn deadline_reached(&self, now: Instant) -> bool {
+        self.0.deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    fn check_deadline_at(&self, now: Instant) -> Result<(), QueryControlError> {
+        if self.deadline_reached(now) {
+            return Err(self.terminate(QueryControlError::DeadlineExceeded));
+        }
+        match self.0.accounting.terminal() {
+            Some(QueryControlError::DeadlineExceeded) => Err(QueryControlError::DeadlineExceeded),
+            _ => Ok(()),
+        }
     }
 
     fn terminate(&self, reason: QueryControlError) -> QueryControlError {
@@ -220,5 +254,63 @@ mod tests {
             waiter.await.expect("waiter task"),
             Err(QueryControlError::SourceWorkExceeded)
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handler_output_is_rechecked_against_the_absolute_deadline() {
+        let budget = RequestBudget::after(
+            Duration::from_millis(1),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+        );
+
+        let result = budget
+            .run_until_deadline(async {
+                std::thread::sleep(Duration::from_millis(20));
+                "response"
+            })
+            .await;
+
+        assert_eq!(result, Err(QueryControlError::DeadlineExceeded));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_at_or_after_deadline_records_deadline() {
+        let expired = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+        );
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(expired.cancel(), QueryControlError::DeadlineExceeded);
+
+        let live = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+        );
+        assert_eq!(live.cancel(), QueryControlError::Cancelled);
+    }
+
+    #[test]
+    fn ask_preflight_rejects_zero_capacity_without_consuming() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(u64::MAX, 0, u64::MAX),
+        );
+
+        assert_eq!(
+            budget.preflight_ask_result(),
+            Err(QueryControlError::ResultItemsExceeded)
+        );
+        assert_eq!(budget.consumed(QueryCharge::ResultItems), 0);
+    }
+
+    #[test]
+    fn ask_preflight_leaves_positive_capacity_for_the_executor() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(u64::MAX, 1, u64::MAX),
+        );
+
+        assert_eq!(budget.preflight_ask_result(), Ok(()));
+        assert_eq!(budget.consumed(QueryCharge::ResultItems), 0);
     }
 }
