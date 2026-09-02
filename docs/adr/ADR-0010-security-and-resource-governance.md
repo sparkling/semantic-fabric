@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -117,6 +117,16 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > bridge; and work inside one raw batch is not pre-empted. After HTTP `200`, a
 > SELECT/CONSTRUCT timeout terminates the body and may expose a usable prefix, so
 > no atomic/no-success-prefix response claim or backend admission follows.
+
+> **Status correction, part 6 (2026-09-02, accounting foundation).** The
+> runtime-neutral `sf-core` port now owns typed inclusive limits for observable
+> source work, semantic result items and serialized bytes, plus checked atomic
+> counters and one sticky terminal reason for deadline, cancellation, limit or
+> arithmetic failure. Exact-limit, overflow, concurrency and first-cause tests
+> pass. This foundation alone is not request-wide enforcement: until serving,
+> execution and serialization all carry the same identity, the part-5
+> cancellation, recursion, response-atomicity and production-admission
+> nonclaims remain unchanged.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
