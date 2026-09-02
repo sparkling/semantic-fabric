@@ -134,16 +134,17 @@ primary and bare stores; no controlled profile, project run, source tree,
 receipt, or measurement is created by the repository test suite.
 
 Supervisor-service verification also protects the PostgreSQL 16.15 baseline
-fixture, its test-only bounded scanner/one-parse reader and opaque
-non-authorizing byte brand, independent completeness oracle, immutable V1
-receipt, and additive V2 OID/attribute-aware candidate-matrix/effective-privilege
-witness receipt. The reader's 92 hostile/limit/private-brand KATs plus five
-exact-fixture baseline tests reject noncanonical or forged fixture authority.
-V1's raw oracle independently expands direct ACL atoms. V2 binds 13,603 fresh
-no-membership-role checks across six populated classes; FDW/server remain
-explicit zero classes. It also binds matching captures from two distinct fresh
-volumes. These are test evidence only: they are excluded from the Node oracle's
-source and build inputs and authorize neither migration nor runtime activation.
+fixture, bounded reader, completeness oracle and immutable V1/V2 receipts. The
+additive V3 replay contract pins those receipts and historical replay implementations
+byte-exact and never invokes the historical runners. Its only invoked V3 profiles are
+`baseline-v1`, `baseline-v2`, `branch` and `final-where`; each owns two distinct
+fresh networkless containers with anonymous volumes and no published ports.
+Acceptance requires `/proc/1/comm` to be exactly `postgres\n` and `pg_isready`
+to succeed. The reader's 92 hostile/limit/private-brand KATs plus five exact-fixture
+tests reject forged authority. V1's raw oracle expands direct ACL atoms; V2 binds 13,603 fresh
+no-membership-role checks across six populated classes, with FDW/server explicit
+zero classes. The V1/V2 receipts and V3 contract are test evidence only: they are excluded from
+the Node oracle build and authorize neither migration nor runtime activation.
 A pure lexical mutator and fail-closed replay support protect
 eight branch deletions plus four record-set mutants. A separate source-pinned
 quartet freezes 19 final-`WHERE` deletions and two batches of ten and nine. Each
@@ -155,10 +156,9 @@ non-equivalent killed, four independently proved guard-equivalent, and zero
 unresolved; two fresh networkless runs reproduced deterministic 11,963,849-
 and 11,608,234-byte transcripts and complete rollback/cleanup. The sealed Node
 oracle and public bundle remain byte-identical, so no product runtime input or
-export changed. The exact Node 20/24 CI matrix now runs eight isolated
-V1/V2/branch/final-`WHERE` replays under a 150-minute ceiling. No version-bound
-run receipt is tracked; hosted and remaining mutation evidence stays open. Live
-bridge/store/runner work belongs to Rust; Node execution expansion is closed.
+export changed. Hosted V3 evidence remains pending until the exact Node 20/24
+CI matrix is green; no hosted run receipt is tracked. Live bridge/store/runner
+work belongs to Rust; Node execution expansion is closed.
 
 The parent harness replaces Node 20's asynchronous recursive watcher with
 explicit root/nested directory watches, three agreeing tree digests and an

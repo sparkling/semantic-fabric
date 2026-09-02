@@ -121,7 +121,7 @@ jobs:
         run: git diff --exit-code -- coding-harness/supervisor-service/.service/artifact.json
 
   postgresql-public-acl-replay:
-    name: PostgreSQL ACL V1 + V2 + projection mutations · node ${{ matrix.node }} · eight isolated runs
+    name: PostgreSQL ACL additive V3 suite · node ${{ matrix.node }} · eight isolated runs
     needs: changes
     if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.acl_replay != 'false') }}
     runs-on: ubuntu-24.04
@@ -140,12 +140,14 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: pull exact PostgreSQL 16.15 platform manifest
         run: docker pull postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
-      - name: replay V1, V2, and projection mutations from owned isolated containers
+      # V1/V2 are immutable historical receipts whose pg_isready-only runners
+      # raced the image's temporary init server. V3 pins them but never reruns them.
+      - name: replay four additive V3 profiles from owned isolated containers
         run: |
-          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs
-          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v2.mjs
-          node coding-harness/supervisor-service/scripts/verify-postgresql-public-acl-projection-branch-mutations-v1.mjs
-          node coding-harness/supervisor-service/scripts/verify-postgresql-public-acl-projection-final-where-mutations-v1.mjs
+          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs baseline-v1
+          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs baseline-v2
+          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs branch
+          node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs final-where
 
   build:
     name: fmt · clippy · build · test

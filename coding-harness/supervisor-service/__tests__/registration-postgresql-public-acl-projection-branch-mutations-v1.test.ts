@@ -415,7 +415,7 @@ describe('PostgreSQL PUBLIC ACL projection branch mutation catalogue V1', () => 
     expect(runner).not.toMatch(/\bwriteFile(?:Sync)?\b|\bappendFile(?:Sync)?\b/u);
     expect(runner).not.toContain("['run', '--detach'");
   });
-  it('gates the live mutation proof after V1 and V2 on exact Node 20 and 24', () => {
+  it('gates all additive V3 replay profiles on exact Node 20 and 24', () => {
     const workflow = readFileSync(resolve(ROOT, '../../.github/workflows/ci.yml'), 'utf8');
     const start = workflow.indexOf('  postgresql-public-acl-replay:');
     const end = workflow.indexOf('\n  build:', start);
@@ -423,17 +423,15 @@ describe('PostgreSQL PUBLIC ACL projection branch mutation catalogue V1', () => 
     expect(end).toBeGreaterThan(start);
     const job = workflow.slice(start, end);
     expect(job.match(/- node: '[^']+'/gu)).toEqual(["- node: '20.0.0'", "- node: '24.14.1'"]);
-    const commands = [
-      'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs',
-      'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v2.mjs',
-      `node coding-harness/supervisor-service/${RUNNER_PATH}`,
-      'node coding-harness/supervisor-service/scripts/verify-postgresql-public-acl-projection-final-where-mutations-v1.mjs',
-    ];
+    const v3 = 'node coding-harness/supervisor-service/scripts/'
+      + 'replay-postgresql-public-acl-suite-v3.mjs';
+    const commands = ['baseline-v1', 'baseline-v2', 'branch', 'final-where']
+      .map((profile) => `${v3} ${profile}`);
     expect(job.match(/timeout-minutes: 150/gu)).toHaveLength(1);
-    const step = job.slice(job.indexOf('      - name: replay V1, V2, and projection mutations'))
+    const step = job.slice(job.indexOf('      - name: replay four additive V3 profiles'))
       .trimEnd();
     expect(step).toBe([
-      '      - name: replay V1, V2, and projection mutations from owned isolated containers',
+      '      - name: replay four additive V3 profiles from owned isolated containers',
       '        run: |',
       ...commands.map((command) => `          ${command}`),
     ].join('\n'));

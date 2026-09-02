@@ -201,11 +201,19 @@ and the private executed `entryPath`; V2 and V3 identities cannot cross-parse.
 
 The private supervisor oracle's exact Linux CI closure now declares
 `@rollup/rollup-linux-x64-gnu@4.63.1` as a direct development dependency because
-npm 9.6.4 otherwise omits Rollup's optional native package on Node 20.0.0. Exact
-Node 20.0.0 and 24.14.1 clean installs each pass all 706 tests. Runtime
+npm 9.6.4 otherwise omits Rollup's optional native package on Node 20.0.0. Fresh
+local exact Node 20.0.0 and 24.14.1 clean installs each pass all 715 tests. Runtime
 dependencies remain empty, the dependency-free public bundle is byte-identical,
 and this host-specific evidence-tool pin enters neither Cargo nor any product or
 production artefact.
+
+The additive evidence-only V3 PUBLIC-ACL replay retains the historical V1/V2
+receipts and replay implementations byte-exact and never invokes those runners.
+It invokes only `baseline-v1`, `baseline-v2`, `branch` and `final-where`, each
+twice in distinct fresh networkless anonymous-volume containers with no ports,
+and accepts readiness only after PID 1 is `postgres` and `pg_isready` succeeds.
+Hosted evidence remains pending until exact Node 20/24 CI is green. This Node
+work is non-deployable development evidence and grants no runtime or admission.
 
 Commit `cbb63ab` adds a separate development-only table/column inventory gate.
 It recounts the sealed 11 stores, 112 tables and 598 columns, then inspects each

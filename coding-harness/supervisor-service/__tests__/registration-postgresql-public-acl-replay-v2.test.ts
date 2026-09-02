@@ -199,7 +199,7 @@ describe('PostgreSQL 16.15 PUBLIC ACL additive V2 replay receipt', () => {
     });
   });
 
-  it('records exact replay commands and gates both additive replays in CI', () => {
+  it('records frozen replay commands and gates their additive V3 profiles in CI', () => {
     expect(v2.replay).toEqual({
       minimumRuns: 2,
       requiresDistinctAnonymousDataVolumes: true,
@@ -222,9 +222,14 @@ describe('PostgreSQL 16.15 PUBLIC ACL additive V2 replay receipt', () => {
     expect(job.match(/docker pull postgres@sha256:/gu)).toHaveLength(1);
     const v1Command = 'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs';
     const v2Command = 'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v2.mjs';
-    expect(job.split(v1Command)).toHaveLength(2);
-    expect(job.split(v2Command)).toHaveLength(2);
-    expect(job.indexOf(v1Command)).toBeLessThan(job.indexOf(v2Command));
+    expect(job).not.toContain(v1Command);
+    expect(job).not.toContain(v2Command);
+    const v3Command = 'node coding-harness/supervisor-service/scripts/'
+      + 'replay-postgresql-public-acl-suite-v3.mjs';
+    expect(job.split(`${v3Command} baseline-v1`)).toHaveLength(2);
+    expect(job.split(`${v3Command} baseline-v2`)).toHaveLength(2);
+    expect(job.indexOf(`${v3Command} baseline-v1`))
+      .toBeLessThan(job.indexOf(`${v3Command} baseline-v2`));
   });
 
   it('keeps every V2 evidence file outside the non-deployable oracle artifact', () => {

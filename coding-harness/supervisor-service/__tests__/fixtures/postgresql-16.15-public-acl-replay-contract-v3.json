@@ -1,0 +1,192 @@
+{
+  "schemaVersion": "semantic-fabric.postgresql-public-acl-replay-contract/v3",
+  "authority": "test-only-non-runtime",
+  "contractDate": "2026-09-02",
+  "predecessors": [
+    {
+      "path": "__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v1.json",
+      "schemaVersion": "semantic-fabric.postgresql-public-acl-capture-receipt/v1",
+      "bytes": 4835,
+      "sha256": "14fbd3ff2d2b50d3a8adbe0b51dc921eb926cd644a4a765183723518ec4fd08b",
+      "disposition": "preserved-historical-no-rerun"
+    },
+    {
+      "path": "__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v2.json",
+      "schemaVersion": "semantic-fabric.postgresql-public-acl-capture-receipt/v2",
+      "bytes": 8816,
+      "sha256": "48d54b635ff6bafc6bdb4ffcb1bb9d74c8357e932e22f7b6453bb54cb0d698e8",
+      "disposition": "preserved-historical-no-rerun"
+    }
+  ],
+  "historicalFailure": {
+    "runId": 33612211004,
+    "headSha": "a2a20e33239bf5d8210b75b51189d96f5cb1ecfe",
+    "diagnosis": "temporary-init-server-readiness-race",
+    "jobs": [
+      {
+        "node": "24.14.1",
+        "jobId": 100189827960,
+        "error": "REPLAY_PSQL_FAILED"
+      },
+      {
+        "node": "20.0.0",
+        "jobId": 100189828074,
+        "error": "REPLAY_DATABASE_CREATE_FAILED"
+      }
+    ],
+    "replayPolicy": "historical-runners-not-invoked"
+  },
+  "image": {
+    "reference": "postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8",
+    "manifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+    "platformManifestDigest": "sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8",
+    "configurationDigest": "sha256:80f4c7a5e91618546dce5b4fe60cf03b14c0f9efa7e40157278d122772ced8d2",
+    "platform": "linux/amd64",
+    "serverVersion": "16.15 (Debian 16.15-1.pgdg13+2)"
+  },
+  "sources": {
+    "projection": {
+      "path": "__tests__/fixtures/postgresql-16.15-public-acl-projection-v1.sql",
+      "bytes": 6859,
+      "sha256": "0e3ad724f4ce85191564c245c51dd7665b6d9aa704c355067a0056cdbfe95232"
+    },
+    "rawOracle": {
+      "path": "__tests__/fixtures/postgresql-16.15-public-acl-completeness-oracle-v1.sql",
+      "bytes": 16037,
+      "sha256": "6a1cf204ca8c5a3aa7a70da4f5c8c46cd15998b745d2eb648b77568e6c912722"
+    },
+    "captureRunner": {
+      "path": "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+      "bytes": 19469,
+      "sha256": "2b4266f7bbf8813026f3435f2fa90c05c8f59e47f2d95dc1a8fe9d9718b5229c"
+    },
+    "oracleRunner": {
+      "path": "scripts/verify-postgresql-public-acl-oracle-v1.mjs",
+      "bytes": 6646,
+      "sha256": "130e018860cfe6c7a0c9e107cf4337ca96ed862185e248e574792451e2bbfea2"
+    },
+    "witnessRunner": {
+      "path": "scripts/verify-postgresql-public-acl-has-privilege-v1.mjs",
+      "bytes": 9873,
+      "sha256": "272407b81f261c7cdffd8bf8bd5c13a71c4ef8047b2292741a4125810923fd71"
+    },
+    "branchMutator": {
+      "path": "scripts/postgresql-public-acl-projection-branch-mutations-v1.mjs",
+      "bytes": 14733,
+      "sha256": "d4ed0307a0b5d57c27e1d81887d7bceccbc3367dac033fa2c2f0a38217217892"
+    },
+    "mutationReplaySupport": {
+      "path": "scripts/postgresql-public-acl-mutation-replay-support-v1.mjs",
+      "bytes": 11110,
+      "sha256": "c0e30a7a2e9586749f9758ecfd751047a18f7c2e5a87116da8dc14d674e6d3ce"
+    },
+    "branchVerifier": {
+      "path": "scripts/verify-postgresql-public-acl-projection-branch-mutations-v1.mjs",
+      "bytes": 23558,
+      "sha256": "d3364ead34d13ee3ee2b772b61b730708d7390cea00f9f9955e178fb8c87dd82"
+    },
+    "finalWhereMutator": {
+      "path": "scripts/postgresql-public-acl-projection-final-where-mutations-v1.mjs",
+      "bytes": 6120,
+      "sha256": "609dfbfdc8ea2bdb329b3b46d26e14ae30cfe1bca108bf49e2b0940070865444"
+    },
+    "finalWhereOracle": {
+      "path": "scripts/postgresql-public-acl-final-where-mutation-oracle-v1.mjs",
+      "bytes": 13264,
+      "sha256": "6b78318813843e537e47f0ec7ee2ebde92668c204392566058db78dd62a08b34"
+    },
+    "finalWhereVerifier": {
+      "path": "scripts/verify-postgresql-public-acl-projection-final-where-mutations-v1.mjs",
+      "bytes": 21049,
+      "sha256": "e2f1309dc7af289ee0c051583649a91e0a4f730f91f12d61aa803acbe062c293"
+    },
+    "v3ReplaySupport": {
+      "path": "scripts/postgresql-public-acl-replay-support-v3.mjs",
+      "bytes": 14757,
+      "sha256": "3ddbf61b768ad113d0b4ee95740918f9c94e030a5db23a26be24fc672885d602"
+    },
+    "v3ReplayRunner": {
+      "path": "scripts/replay-postgresql-public-acl-suite-v3.mjs",
+      "bytes": 26844,
+      "sha256": "2a43c52ec45dbd51ea415078799e39d3aa20733169f34bd57d3df82181db2129"
+    }
+  },
+  "lifecycle": {
+    "pid1CommPath": "/proc/1/comm",
+    "expectedPid1Comm": "postgres\n",
+    "readinessArgv": [
+      "pg_isready",
+      "-q",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres"
+    ],
+    "acceptance": "pid1-and-readiness",
+    "timeoutMilliseconds": 60000
+  },
+  "replay": {
+    "minimumRunsPerProfile": 2,
+    "totalMinimumRuns": 8,
+    "requiresDistinctAnonymousDataVolumes": true,
+    "requiresNoPublishedPorts": true,
+    "requiresNetworkMode": "none",
+    "profiles": [
+      {
+        "name": "baseline-v1",
+        "minimumRuns": 2,
+        "childPaths": {
+          "capture": "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+          "oracle": "scripts/verify-postgresql-public-acl-oracle-v1.mjs"
+        },
+        "runnerArgv": [
+          "node",
+          "scripts/replay-postgresql-public-acl-suite-v3.mjs",
+          "baseline-v1"
+        ]
+      },
+      {
+        "name": "baseline-v2",
+        "minimumRuns": 2,
+        "childPaths": {
+          "capture": "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+          "oracle": "scripts/verify-postgresql-public-acl-oracle-v1.mjs",
+          "witness": "scripts/verify-postgresql-public-acl-has-privilege-v1.mjs"
+        },
+        "runnerArgv": [
+          "node",
+          "scripts/replay-postgresql-public-acl-suite-v3.mjs",
+          "baseline-v2"
+        ]
+      },
+      {
+        "name": "branch",
+        "minimumRuns": 2,
+        "childPaths": {
+          "capture": "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+          "oracle": "scripts/verify-postgresql-public-acl-oracle-v1.mjs",
+          "witness": "scripts/verify-postgresql-public-acl-projection-branch-mutations-v1.mjs"
+        },
+        "runnerArgv": [
+          "node",
+          "scripts/replay-postgresql-public-acl-suite-v3.mjs",
+          "branch"
+        ]
+      },
+      {
+        "name": "final-where",
+        "minimumRuns": 2,
+        "childPaths": {
+          "capture": "scripts/capture-postgresql-public-acl-baseline-v1.mjs",
+          "oracle": "scripts/verify-postgresql-public-acl-oracle-v1.mjs",
+          "witness": "scripts/verify-postgresql-public-acl-projection-final-where-mutations-v1.mjs"
+        },
+        "runnerArgv": [
+          "node",
+          "scripts/replay-postgresql-public-acl-suite-v3.mjs",
+          "final-where"
+        ]
+      }
+    ]
+  }
+}

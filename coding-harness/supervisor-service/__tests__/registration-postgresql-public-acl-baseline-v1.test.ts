@@ -148,7 +148,7 @@ describe('PostgreSQL 16.15 PUBLIC ACL baseline', () => {
     evidencePaths.forEach((path) => expect(artifactPaths).not.toContain(path));
   });
 
-  it('gates the owned replay on both exact supported Node runtimes', () => {
+  it('preserves V1 historically and gates its additive V3 profile on both Node runtimes', () => {
     const workflow = readFileSync(resolve(ROOT, '../../.github/workflows/ci.yml'), 'utf8');
     const start = workflow.indexOf('  postgresql-public-acl-replay:');
     const end = workflow.indexOf('\n  build:', start);
@@ -157,9 +157,11 @@ describe('PostgreSQL 16.15 PUBLIC ACL baseline', () => {
     const job = workflow.slice(start, end);
     expect(job.match(/- node: '[^']+'/gu)).toEqual(["- node: '20.0.0'", "- node: '24.14.1'"]);
     expect(job.match(/docker pull postgres@sha256:/gu)).toHaveLength(1);
-    expect(job.split(
+    expect(job).not.toContain(
       'node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-baseline-v1.mjs',
-    )).toHaveLength(2);
+    );
+    expect(job.split('node coding-harness/supervisor-service/scripts/'
+      + 'replay-postgresql-public-acl-suite-v3.mjs baseline-v1')).toHaveLength(2);
   });
 });
 

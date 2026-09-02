@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-30
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [postgresql, supervisor, privileges, canonical-json, verification]
 supersedes: []
 depends-on: [ADR-0038, ADR-0039, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0048]
@@ -23,12 +23,11 @@ independently reviewed projection but must never embed, learn or supply the
 expected baseline count, length or digest.
 Those values enter only through the reviewed provisioning contract selected by
 the independently pinned manifest.
-The current receipts are test-fixture evidence only. Receipt V1 remains an
-immutable, non-attesting predecessor; additive receipt V2 binds its exact bytes
-before adding the OID/attribute-aware candidate matrix and effective-privilege
-witness. They are replay-checkable against the owned fresh-initialization
-procedure, but neither authenticates its historical run event nor admits a
-runtime fixture.
+The V1/V2 receipts are test-fixture evidence only and remain immutable byte-exact predecessors; the additive V3 replay contract also pins their historical replay implementations and
+never invokes those runners. V3 defines four evidence profiles—`baseline-v1`,
+`baseline-v2`, `branch` and `final-where`—but does not authenticate a historical
+run event or admit a runtime fixture. Hosted V3 evidence remains pending until
+the exact CI gate is green.
 
 ## Context
 
@@ -279,8 +278,8 @@ byte for exact input maximum/+1; 8,192/+1 root primitives for width; 8/+1
 decoded keys for object width; and one nested object then one deeper for depth.
 
 The recorded reproduction establishes candidate test-fixture values only.
-Development-only Node replay scripts in the same private package—but outside its TypeScript runtime module, imports/exports, public bundle and every deployable closure—invoke frozen Docker/`psql` for two fresh networkless containers,
-anonymous volumes and `template0` databases, then bind the projection and raw-catalogue cross-check. No Node `pg` driver, live client or store enters the oracle. Matching runs prove determinism, never completeness. The candidate cannot enter provisioning or manifest bytes until Section 7's enumerated fail-closed pre-sealing predicate passes; its item 6 is not a prerequisite for constructing the bundle it tests.
+The additive development-only V3 replay invokes only `baseline-v1`, `baseline-v2`, `branch` and `final-where`, twice each in distinct fresh networkless anonymous-volume containers with no published ports. It admits readiness only when `/proc/1/comm` is exactly `postgres\n` and `pg_isready` succeeds.
+V3 pins the historical V1/V2 receipts and replay implementations byte-exact but never invokes those runners. It remains outside the TypeScript runtime module, imports/exports, public bundle and every deployable closure; no Node `pg` driver, live client or store enters the oracle. Matching runs prove determinism, never completeness. The candidate cannot enter provisioning or manifest bytes until Section 7's enumerated fail-closed pre-sealing predicate passes; its item 6 is not a prerequisite for constructing the bundle it tests.
 
 ### 6. Make Rust runtime comparison bounded and independent
 
@@ -400,8 +399,9 @@ bag-equivalent. Two fresh runs reproduced deterministic 11,963,849-byte and
 11,608,234-byte transcripts with SHA-256 `2df643f9…c50f` and `688a5ed3…522`.
 The receipt is exactly **19 executed; 15/15 non-equivalent killed; four guard-
 equivalent; zero unresolved**. Postflight proves both transactions per run rolled back.
-CI runs all eight isolated V1/V2/branch/final-`WHERE` replays on exact Node 20
-and 24 under a 150-minute ceiling for the conservative 140-minute sum.
+The additive V3 gate invokes those four V3 profiles only, each twice in a fresh networkless anonymous-volume container. It requires PID 1 `postgres` plus a
+successful `pg_isready`; historical V1/V2 receipts and runners remain byte-exact
+and uninvoked. Hosted evidence remains pending until exact Node 20/24 CI is green.
 
 This closes item 5's branch, final-`WHERE`, zero, single-atom omission/addition
 and count-neutral-substitution subsets. Item 4 and the remaining value,
@@ -409,9 +409,9 @@ nullability, order, duplicate, array/element and `UNION ALL` replacements remain
 open. ADR-0046's Node sealed reader, compiled-pin `Plan`, and descriptor-first
 receipt parser are oracle evidence; item 6's Rust live observation and
 PostgreSQL adapter remain open.
-All mutation machinery remains outside Node-oracle build inputs and exports. These
-developer runs lack a versioned test-run receipt; hosted evidence and runtime
-admission remain open.
+All mutation machinery remains outside Node-oracle build inputs and exports.
+The V3 contract and any developer-local result grant no runtime or admission
+authority; only a green hosted gate can supply the still-pending hosted evidence.
 
 ### 8. Record the reproduced test-only candidate
 
@@ -443,6 +443,11 @@ and binds the inventory, observation, raw-oracle, session and per-run transcript
 digests plus every witness/replay source. FDW and server remain explicit
 zero-check/zero-atom class counts under this exact clean profile rather than
 omitted classes.
+
+The additive V3 replay contract retains those V1/V2 receipt and historical-runner bytes
+without invoking either runner. Its four named V3 profiles each require two
+distinct fresh networkless anonymous-volume containers, PID 1 `postgres` and
+`pg_isready`; it remains test-only and awaits green hosted CI.
 
 The reproduced candidate fixture is **4,059 records**, **36,532 JSON nodes** and **860,988
 bytes**, with raw SHA-256
@@ -489,5 +494,6 @@ runtime authority.
 [ADR-0048](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md),
 [capture receipt V1](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v1.json),
 [capture receipt V2](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-capture-receipt-v2.json),
+[V3 replay contract](../../coding-harness/supervisor-service/__tests__/fixtures/postgresql-16.15-public-acl-replay-contract-v3.json),
 [PostgreSQL 16 privileges](https://www.postgresql.org/docs/16/ddl-priv.html), and
 [PostgreSQL 16.15 `pg_type_aclmask`](https://github.com/postgres/postgres/blob/REL_16_15/src/backend/catalog/aclchk.c#L3483-L3552).
