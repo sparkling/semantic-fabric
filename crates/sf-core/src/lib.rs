@@ -37,6 +37,7 @@ pub mod graph_map;
 pub mod ir;
 pub mod query_control;
 pub mod schema;
+pub mod schema_identity;
 pub mod term;
 
 pub use affinity::{SourceId, SourceIdError, SourceMapping};

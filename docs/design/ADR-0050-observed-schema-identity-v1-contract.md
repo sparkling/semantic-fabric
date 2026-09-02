@@ -170,6 +170,10 @@ match the typed variant and code. `Display` and `Debug` are at most 256 UTF-8
 bytes, expose only code/index/count data, and never identifiers, type text, SQL,
 paths or source configuration; `source()` returns `None`.
 
+`RelationKind` is a reserved error code for a future untyped adapter boundary.
+Direct Phase 1 input uses the closed `RelationKindV1` enum and therefore cannot
+construct an unsupported relation kind; this reservation grants no new V1 kind.
+
 Changing a cap, primitive encoding, tag meaning or record grammar requires V2.
 Adding a separately specified profile under this grammar does not.
 

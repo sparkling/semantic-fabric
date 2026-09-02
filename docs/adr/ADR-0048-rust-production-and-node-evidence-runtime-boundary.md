@@ -252,10 +252,11 @@ explicit frozen fixture schemas. Because PK/FK facts determine the generated
 mapping itself, any future live Direct-Mapping path must bind mapping generation
 and the entire streamed execution to one verified source generation; removing
 optimiser facts after generation would be insufficient. These changes close the
-later-DDL integrity-constraint wrong-answer path, but do not provide structural/
-type schema digests or drift detection, atomic reload, a verified-constraint
-lease, federation, production admission or release authority. Proposed ADR-0050
-specifies that Rust-only M5 design without claiming implementation.
+later-DDL integrity-constraint wrong-answer path. ADR-0050's pure Phase 1 Rust
+kernel now computes non-authorizing structural/type/constraint content digests,
+but no adapter emits them and no runtime binding carries them. Drift detection,
+atomic reload, a verified-constraint lease, federation, production admission and
+release authority remain absent; the rest of ADR-0050 remains proposed.
 
 ## Consequences
 

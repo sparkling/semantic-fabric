@@ -12,9 +12,12 @@ implements: [ADR-0038]
 
 ## Status boundary
 
-This ADR is **proposed**. It proposes the design boundary for ADR-0038 M5; it does
-not claim that canonical schema identities, a runtime snapshot manager, reload,
-drift detection, a backend-generation lease, or live Direct Mapping exists.
+This ADR remains **proposed** for lifecycle phases 2 through 6. Its Phase 1 pure
+`sf-core` Observed Schema Identity V1 kernel is implemented as a non-authorizing
+content-identity utility. No production profile is registered and no adapter can
+emit or carry its digests. This implementation does not accept the remaining
+design or claim that a runtime snapshot manager, reload, drift detection, a
+backend-generation lease, or live Direct Mapping exists.
 
 The current Rust serving path safely owns one startup mapping, ontology,
 constraint/type-quarantined schema observation, backend and plan cache inside a
@@ -22,8 +25,8 @@ single `RuntimeBinding`. Its process-local compile scope prevents detached-plan
 reuse. PostgreSQL catalogue reads use one read-only repeatable-read startup
 transaction. Those are sound precursors, not a mutable-schema authority: the
 transaction ends before compilation and streamed execution, later requests may
-use another pooled connection, and there is no digest, watcher, readiness
-transition or atomic replacement path.
+use another pooled connection, and there is no adapter-emitted digest, runtime
+digest propagation, watcher, readiness transition or atomic replacement path.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,
@@ -230,9 +233,11 @@ persist across generations.
 
 ### 7. Deliver in authority-preserving phases
 
-1. **Pure Observed Schema Identity V1 kernel:** add only neutral `sf-core`
-   values, generic validation, canonical encoding, hashing and exact Rust test
-   vectors. It performs no I/O and changes no adapter or runtime binding.
+1. **Pure Observed Schema Identity V1 kernel (implemented 2026-09-02):** neutral
+   `sf-core` values, generic validation, canonical encoding, hashing and exact
+   Rust test vectors. It performs no I/O and changes no adapter or runtime
+   binding. Test-reserved profile IDs exercise the contract but register no
+   production profile.
 2. **Observational source integration:** register backend profiles, bound
    catalogue collection, improve type fidelity, construct V1 inputs and carry
    the three digests in the current binding while every compiler authority
@@ -249,8 +254,9 @@ persist across generations.
    schema and admit backend profiles one at a time.
 
 Phases 1 and 2 do not add reload, verified authority or live Direct Mapping.
-Each later phase requires its own executable evidence before capability
-promotion.
+Phase 1 completion therefore grants no source, compiler, serving, cache or
+activation authority. Each later phase requires its own executable evidence
+before capability promotion.
 
 Crate ownership follows ADR-0006: `sf-core` owns neutral validated values and
 pure canonical hashing; `sf-sql` owns catalogue and lease I/O; `sf-serve` owns

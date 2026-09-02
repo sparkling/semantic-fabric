@@ -4751,6 +4751,7 @@ dependencies = [
  "oxiri 0.2.11",
  "oxrdf",
  "oxsdatatypes",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
 ]
 
