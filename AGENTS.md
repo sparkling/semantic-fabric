@@ -20,77 +20,60 @@
 - Keep files under 500 lines
 - Validate input at system boundaries
 
+**ruflo-interface-contract:v1**
+
+## Ruflo Interface Contract
+
+- Use `search_ruvnet` for RuvNet source and capability claims when the Brain is installed; cite its source.
+- Use `guidance_brain` / `guidance_recommend` and the live MCP registry for this process's actual registered, configured, reachable, healthy, and authorized state.
+- Prefer a live structured Ruflo MCP tool for coordination, memory, routing, learning, and status. Discover deferred tools and schemas; never guess names or arguments.
+- For a genuine CLI-only gap, use `ruvnet_cli_help`, then `ruvnet_cli_run` with literal `argv` when that bridge is registered. Exact requested help must authorize the run; parent help or exit code alone is insufficient.
+- Direct shell is for bootstrap and administration that cannot depend on MCP: install/init, first MCP registration/start, diagnostics, and deliberate daemon work.
+- Native Claude/Codex agents execute. Ruflo tracks a swarm only after `swarm_init` and `agent_spawn` create records; a native agent alone is not proof.
+- Before generic testing or security agents, discover specialized installed QE or adversarial-security capabilities and disclose any fallback.
+
+**ruflo-managed:swarm:v2**
+
 ## Swarm & Coordination
 
-| Setting | Value | Purpose |
-|---------|-------|---------|
-| Topology | `hierarchical` | Queen-led coordination (anti-drift) |
-| Max Agents | 8 | Optimal team size |
-| Strategy | `specialized` | Clear role boundaries |
-| Consensus | `raft` | Leader-based consistency |
+Use the smallest capable structure derived from dependency edges, shared-state risk, and required evidence instead of a file count.
 
-```bash
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized
-```
+- Independent one-shot native agents need no Ruflo swarm.
+- For persistent topology, shared memory, or tracked handoffs, discover the live schemas, call `swarm_init`, then register each worker with `agent_spawn({agentType: "...", agentId: "..."})`.
+- A tracked record does not launch a native Claude/Codex agent; launch the matching executor separately.
+- Give every writer an isolated worktree and non-overlapping ownership; name one integration owner.
+- Read-only research may run concurrently. Continue independent work after spawning and wait only on a real dependency.
+- Role strings such as `researcher`, `architect`, `coder`, and `reviewer` are labels, not proof of a specialized runtime.
 
-### When to use a swarm
-- **YES**: 3+ files, new features, cross-module refactoring, API changes with tests, security-related changes, performance optimization
-- **NO**: single-file edits, 1–2 line fixes, documentation updates, configuration changes, questions
-
-### Agent types
-
-| Type | Role |
-|------|------|
-| `researcher` | Requirements analysis, understanding scope |
-| `architect` / `system-architect` | System design, planning structure |
-| `coder` / `backend-dev` | Implementation |
-| `tester` | Test creation, quality assurance |
-| `reviewer` | Code review, security and quality |
-
-Also: `security-architect`, `security-auditor`, `performance-engineer`, `perf-analyzer`,
-`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`, `pr-manager`,
-`code-review-swarm`, `issue-tracker`, `release-manager`. Any string works as a custom agent type.
+**ruflo-managed:mcp:v2**
 
 ## MCP Integration
 
-Use MCP tools for coordination, then keep working. Coordination calls return instantly.
+Use structured MCP tools for normal runtime work, then continue implementation. Coordination calls return immediately. Host-level registration is not proof of a tracked worker or a generated MetaHarness verifier.
 
-| Category | Key tools |
-|----------|-----------|
-| **Swarm** | `swarm_init`, `swarm_status`, `swarm_health` |
-| **Agents** | `agent_spawn`, `agent_list`, `agent_status` |
-| **Memory** | `memory_store`, `memory_search`, `memory_search_unified` |
-| **Hooks** | `hooks_route`, `hooks_post-task`, `hooks_worker-dispatch` |
-| **Security** | `aidefence_scan`, `aidefence_is_safe`, `aidefence_has_pii` |
-| **Hive-Mind** | `hive-mind_init`, `hive-mind_consensus`, `hive-mind_spawn` |
+| Need | Live structured tools |
+|------|-----------------------|
+| Guidance | `guidance_brain`, `guidance_recommend` |
+| Swarm | `swarm_init`, `swarm_status`, `swarm_health` |
+| Agents | `agent_spawn`, `agent_list`, `agent_status` |
+| Memory | `memory_store`, `memory_search`, `memory_search_unified` |
+| Hooks | `hooks_route`, `hooks_pre_task`, `hooks_post_task`, `hooks_worker_dispatch` |
+| Status/performance | `system_status`, `performance_benchmark`, `performance_profile` |
+
+Use AIDefence or other plugin tools only when the live registry reports them configured and reachable. Do not invent Hive-Mind, federation, workflow, claims, or session interfaces; discover the exact installed tool first.
+
+**ruflo-managed:memory:v2**
 
 ## Memory & Learning
 
-### Before any task
-```bash
-npx @claude-flow/cli@latest memory search --query "[task keywords]" --namespace patterns
-npx @claude-flow/cli@latest hooks route --task "[task description]"
-```
+Memory is optional context, not a delivery gate. Use native Ruflo MCP/AgentDB tools for store, search, retrieve, recall, list, delete, statistics, diagnosis, and verification.
 
-### After success
-```bash
-npx @claude-flow/cli@latest memory store --namespace patterns --key "[name]" --value "[what worked]"
-npx @claude-flow/cli@latest hooks post-task --task-id "[id]" --success true --store-results true
-```
-
-### Background workers
-
-| Worker | When |
-|--------|------|
-| `audit` | After security changes |
-| `optimize` | After performance work |
-| `testgaps` | After adding features |
-| `map` | Every 5+ file changes |
-| `document` | After API changes |
-
-```bash
-npx @claude-flow/cli@latest hooks worker dispatch --trigger audit
-```
+- Never open managed memory through direct SQL, `sqlite3`, `sql.js`, raw file reads/writes, or whole-image operations.
+- A live `memory.db-wal` is expected while a native owner is active. Never checkpoint, delete, rename, replace, or unlink database sidecars.
+- If recall fails or is safely refused, report it once and continue from repository/source evidence. Do not force a second driver or claim an empty result is healthy.
+- Before relevant work, use `memory_search` / `memory_search_unified` and `hooks_route` when available.
+- After a validated success, use `memory_store` and `hooks_post_task` when the result is genuinely reusable.
+- Dispatch background work through `hooks_worker_dispatch` only after discovering its current schema and confirming that a worker is appropriate.
 
 ## Code Standards
 

@@ -11,42 +11,17 @@
 
 Claude Code invokes skills with `/skill-name`. (Codex uses `$skill-name`.)
 
+**ruflo-managed:claude-agents:v2**
+
 ## Agent comms
 
-The `Agent` tool and `SendMessage` are Claude Code features; Codex has no equivalent.
-Named agents coordinate by messaging each other directly, not by polling shared state.
+The `Agent` tool and `SendMessage` are Claude Code features; Codex uses its own native agent surface. Named native agents coordinate by messaging, not by polling shared state. Native agents are not automatically Ruflo-tracked.
 
-```javascript
-// ALL agents in ONE message, each knowing WHO to message next
-Agent({ prompt: "Research the codebase. SendMessage findings to 'architect'.",
-  subagent_type: "researcher", name: "researcher", run_in_background: true })
-Agent({ prompt: "Wait for 'researcher'. Design the solution. SendMessage to 'coder'.",
-  subagent_type: "system-architect", name: "architect", run_in_background: true })
-Agent({ prompt: "Wait for 'architect'. Implement it. SendMessage to 'tester'.",
-  subagent_type: "coder", name: "coder", run_in_background: true })
-Agent({ prompt: "Wait for 'coder'. Write tests. SendMessage results to 'reviewer'.",
-  subagent_type: "tester", name: "tester", run_in_background: true })
-Agent({ prompt: "Wait for 'tester'. Review code quality and security.",
-  subagent_type: "reviewer", name: "reviewer", run_in_background: true })
-
-// Kick off the pipeline
-SendMessage({ to: "researcher", summary: "Start", message: "[task context]" })
-```
-
-| Pattern | Flow | Use when |
-|---------|------|----------|
-| **Pipeline** | A to B to C to D | Sequential dependencies (feature work) |
-| **Fan-out** | Lead to A, B, C, back to lead | Independent parallel work (research) |
-| **Supervisor** | Lead and workers, both ways | Ongoing coordination (complex refactor) |
-
-- ALWAYS name agents; `name: "role"` is what makes one addressable
-- ALWAYS tell an agent who to message and what to send. An agent with no SendMessage
-  instruction finishes and goes idle without ever reporting back
-- Spawn ALL agents in ONE message with `run_in_background: true`
-- After spawning: STOP, tell the user what is running, and wait
-- NEVER poll status. Agents message back, or they complete
-
-(Which agent types exist, and when a swarm is worth it at all, is in `AGENTS.md`.)
+- Name every agent and tell it who receives which result.
+- Launch independent agents together; give writers isolated worktrees and non-overlapping ownership.
+- For Ruflo-tracked work, create the structured swarm/agent records before launching matching native agents.
+- After spawning, continue independent work. Wait only when a real dependency blocks progress.
+- Do not poll repeatedly; agents message back or complete through the native host.
 
 ## Model routing
 
@@ -65,9 +40,14 @@ the cheapest tier that can do the job correctly.
 The Bash tool's default commit-message template suggests a `Co-Authored-By` trailer. Ignore it.
 The rule itself, and its rationale, are in `AGENTS.md`.
 
+**ruflo-managed:claude-setup:v2**
+
 ## Setup
 
+`ruflo-core` owns the Claude MCP server when the plugin is installed. Do not register a duplicate standalone `claude-flow` server because both would write the same project state.
+
+Direct diagnostics remain valid:
+
 ```bash
-claude mcp add claude-flow -- npx -y ruflo@latest mcp start
 npx ruflo@latest doctor --fix
 ```

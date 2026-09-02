@@ -28,91 +28,13 @@ AgentDB memory system with HNSW vector search. Provides 150x-12,500x faster patt
 - external data sources available
 - read-only exploration
 
-## Commands
+<!-- ruflo-source-patch (ruvnet/ruflo#3153):memory-management -->
+## Structured Interface
 
-### Store Pattern
-Store a pattern or knowledge item in memory
-
-```bash
-npx @claude-flow/cli memory store --key "[key]" --value "[value]" --namespace patterns
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli memory store --key "auth-jwt-pattern" --value "JWT validation with refresh tokens" --namespace patterns
-```
-
-### Semantic Search
-Search memory using semantic similarity
-
-```bash
-npx @claude-flow/cli memory search --query "[search terms]" --limit 10
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli memory search --query "authentication best practices" --limit 5
-```
-
-### Retrieve Entry
-Retrieve a specific memory entry by key
-
-```bash
-npx @claude-flow/cli memory get --key "[key]" --namespace [namespace]
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli memory get --key "auth-jwt-pattern" --namespace patterns
-```
-
-### List Entries
-List all entries in a namespace
-
-```bash
-npx @claude-flow/cli memory list --namespace [namespace]
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli memory list --namespace patterns --limit 20
-```
-
-### Delete Entry
-Delete a memory entry
-
-```bash
-npx @claude-flow/cli memory delete --key "[key]" --namespace [namespace]
-```
-
-### Initialize HNSW Index
-Initialize HNSW vector search index
-
-```bash
-npx @claude-flow/cli memory init --enable-hnsw
-```
-
-### Memory Stats
-Show memory usage statistics
-
-```bash
-npx @claude-flow/cli memory stats
-```
-
-### Export Memory
-Export memory to JSON
-
-```bash
-npx @claude-flow/cli memory export --output memory-backup.json
-```
-
-
-## Scripts
-
-| Script | Path | Description |
-|--------|------|-------------|
-| `memory-backup` | `.agents/scripts/memory-backup.sh` | Backup memory to external storage |
-| `memory-consolidate` | `.agents/scripts/memory-consolidate.sh` | Consolidate and optimize memory |
+Discover the live schemas, then use `memory_store` to persist validated patterns
+and `memory_search` / `memory_search_unified` to recall them. Memory is optional
+context, not a delivery gate. Never replace a refused managed read with raw SQL,
+whole-file access, or a second npx-resolved memory driver.
 
 
 ## References

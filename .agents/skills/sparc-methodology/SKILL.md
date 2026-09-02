@@ -29,82 +29,13 @@ SPARC development workflow: Specification, Pseudocode, Architecture, Refinement,
 - well-defined small tasks
 - routine maintenance
 
-## Commands
+<!-- ruflo-source-patch (ruvnet/ruflo#3153):sparc-methodology -->
+## Structured Interface
 
-### Specification Phase
-Define requirements, acceptance criteria, and constraints
-
-```bash
-npx @claude-flow/cli hooks route --task "specification: [requirements]"
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli hooks route --task "specification: user authentication with OAuth2, MFA, and session management"
-```
-
-### Pseudocode Phase
-Write high-level pseudocode for the implementation
-
-```bash
-npx @claude-flow/cli hooks route --task "pseudocode: [feature]"
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli hooks route --task "pseudocode: OAuth2 login flow with token refresh"
-```
-
-### Architecture Phase
-Design system structure, interfaces, and dependencies
-
-```bash
-npx @claude-flow/cli hooks route --task "architecture: [design]"
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli hooks route --task "architecture: auth module with service layer, repository, and API endpoints"
-```
-
-### Refinement Phase
-Iterate on the design based on feedback
-
-```bash
-npx @claude-flow/cli hooks route --task "refinement: [feedback]"
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli hooks route --task "refinement: add rate limiting and brute force protection"
-```
-
-### Completion Phase
-Finalize implementation with tests and documentation
-
-```bash
-npx @claude-flow/cli hooks route --task "completion: [final checks]"
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli hooks route --task "completion: verify all tests pass, update API docs, security review"
-```
-
-### SPARC Coordinator
-Spawn SPARC coordinator agent
-
-```bash
-npx @claude-flow/cli agent spawn --type sparc-coord --name sparc-lead
-```
-
-
-## Scripts
-
-| Script | Path | Description |
-|--------|------|-------------|
-| `sparc-init` | `.agents/scripts/sparc-init.sh` | Initialize SPARC workflow for a new feature |
-| `sparc-review` | `.agents/scripts/sparc-review.sh` | Run SPARC phase review checklist |
+Use native host tools to execute Specification, Pseudocode, Architecture,
+Refinement, and Completion. When Ruflo routing is useful, discover and call
+`hooks_route`; recall prior constraints with `memory_search`, and store only
+validated reusable outcomes with `memory_store`.
 
 
 ## References

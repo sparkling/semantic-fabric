@@ -30,98 +30,15 @@ Comprehensive security scanning and vulnerability detection. Includes input vali
 - static documentation
 - styling changes
 
-## Commands
+<!-- ruflo-source-patch (ruvnet/ruflo#3153):security-audit -->
+## Structured Interface
 
-### Full Security Scan
-Run comprehensive security analysis on the codebase
-
-```bash
-npx @claude-flow/cli security scan --depth full
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli security scan --depth full --output security-report.json
-```
-
-### Input Validation Check
-Check for input validation issues
-
-```bash
-npx @claude-flow/cli security scan --check input-validation
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli security scan --check input-validation --path ./src/api
-```
-
-### Path Traversal Check
-Check for path traversal vulnerabilities
-
-```bash
-npx @claude-flow/cli security scan --check path-traversal
-```
-
-### SQL Injection Check
-Check for SQL injection vulnerabilities
-
-```bash
-npx @claude-flow/cli security scan --check sql-injection
-```
-
-### XSS Check
-Check for cross-site scripting vulnerabilities
-
-```bash
-npx @claude-flow/cli security scan --check xss
-```
-
-### CVE Scan
-Scan dependencies for known CVEs
-
-```bash
-npx @claude-flow/cli security cve --scan
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli security cve --scan --severity high
-```
-
-### Security Audit Report
-Generate full security audit report
-
-```bash
-npx @claude-flow/cli security audit --report
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli security audit --report --format markdown --output SECURITY.md
-```
-
-### Threat Modeling
-Run threat modeling analysis
-
-```bash
-npx @claude-flow/cli security threats --analyze
-```
-
-### Validate Secrets
-Check for hardcoded secrets
-
-```bash
-npx @claude-flow/cli security validate --check secrets
-```
-
-
-## Scripts
-
-| Script | Path | Description |
-|--------|------|-------------|
-| `security-scan` | `.agents/scripts/security-scan.sh` | Run full security scan pipeline |
-| `cve-remediate` | `.agents/scripts/cve-remediate.sh` | Auto-remediate known CVEs |
+Discover specialized installed security capabilities first. Use
+`aidefence_scan`, `aidefence_is_safe`, and `aidefence_has_pii` only when
+they are registered and reachable. Ruflo source/dependency scanning is CLI-only:
+when the Brain bridge is present, obtain exact subcommand help with
+`ruvnet_cli_help`, then use `ruvnet_cli_run` with literal argv. Otherwise
+inspect the installed executable's help; never guess flags or claim a scan ran.
 
 
 ## References

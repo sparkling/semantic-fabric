@@ -30,77 +30,14 @@ Multi-agent swarm coordination for complex tasks. Uses hierarchical topology wit
 - configuration changes
 - quick exploration
 
-## Commands
+<!-- ruflo-source-patch (ruvnet/ruflo#3153):swarm-orchestration -->
+## Structured Interface
 
-### Initialize Swarm
-Start a new swarm with hierarchical topology (anti-drift)
-
-```bash
-npx ruflo swarm init --topology hierarchical --max-agents 8 --strategy specialized
-```
-
-**Example:**
-```bash
-npx ruflo swarm init --topology hierarchical --max-agents 6 --strategy specialized
-```
-
-### Route Task
-Route a task to the appropriate agents based on task type
-
-```bash
-npx @claude-flow/cli hooks route --task "[task description]"
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli hooks route --task "implement OAuth2 authentication flow"
-```
-
-### Spawn Agent
-Spawn a specific agent type
-
-```bash
-npx @claude-flow/cli agent spawn --type [type] --name [name]
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli agent spawn --type coder --name impl-auth
-```
-
-### Monitor Status
-Check the current swarm status
-
-```bash
-npx @claude-flow/cli swarm status --verbose
-```
-
-### Orchestrate Task
-Orchestrate a task across multiple agents
-
-```bash
-npx @claude-flow/cli task orchestrate --task "[task]" --strategy adaptive
-```
-
-**Example:**
-```bash
-npx @claude-flow/cli task orchestrate --task "refactor auth module" --strategy parallel --max-agents 4
-```
-
-### List Agents
-List all active agents
-
-```bash
-npx @claude-flow/cli agent list --filter active
-```
-
-
-## Scripts
-
-| Script | Path | Description |
-|--------|------|-------------|
-| `swarm-start` | `.agents/scripts/swarm-start.sh` | Initialize swarm with default settings |
-| `swarm-monitor` | `.agents/scripts/swarm-monitor.sh` | Real-time swarm monitoring dashboard |
+Choose topology from dependencies, shared-state risk, and evidence needs—not a file
+count. Discover schemas, then use `swarm_init`, `hooks_route`, and
+`swarm_status`. A Ruflo agent record does not launch a native host agent: register
+tracked workers with `agent_spawn`, then launch matching Claude/Codex executors
+separately with isolated ownership.
 
 
 ## References
