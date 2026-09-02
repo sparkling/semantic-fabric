@@ -72,6 +72,7 @@ describe('cooperative metadata tree integrity', () => {
   });
 
   it('coalesces concurrent checks and rejects a changed closure', async () => {
+    watchProbe.fake = true;
     const root = mkdtempSync(join(tmpdir(), 'coding-harness-metadata-change-'));
     roots.push(root);
     const path = join(root, 'sealed.txt');
@@ -92,6 +93,7 @@ describe('cooperative metadata tree integrity', () => {
   });
 
   it('rejects a mutation behind the cooperative scan cursor', async () => {
+    watchProbe.fake = true;
     const root = mkdtempSync(join(tmpdir(), 'coding-harness-metadata-race-'));
     roots.push(root);
     const nested = join(root, 'nested');
@@ -117,6 +119,7 @@ describe('cooperative metadata tree integrity', () => {
   });
 
   it('drains a same-check-phase mutation on a one-file tree', async () => {
+    watchProbe.fake = true;
     const root = mkdtempSync(join(tmpdir(), 'coding-harness-metadata-drain-'));
     roots.push(root);
     const path = join(root, 'sealed.txt');
