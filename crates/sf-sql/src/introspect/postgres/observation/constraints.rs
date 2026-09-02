@@ -53,6 +53,14 @@ pub(super) struct Postgres16RawForeignKeyV1 {
     pub(super) parent_index: Postgres16RawIndexV1,
     pub(super) equality_operators: Vec<Postgres16RawEqualityOperatorV1>,
     pub(super) triggers: Postgres16RawForeignKeyTriggersV1,
+    /// Decoder-proven equality of every child/parent source type and facet.
+    pub(super) types_and_facets_equal: bool,
+    /// Decoder-proven exact pg_catalog operator-family/search-operator shape.
+    pub(super) operators_exact: bool,
+    /// Decoder-proven exact four-row internal trigger multiset and action map.
+    pub(super) triggers_exact: bool,
+    /// Decoder-proven update/delete action codes are in the supported set.
+    pub(super) actions_supported: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +197,10 @@ fn foreign_key(
     let parent_columns = key_columns(r, f.parent_oid, &f.parent_attnums)?;
     validate_index_shape(&f.parent_index, f.parent_oid, &f.parent_attnums)?;
     if !f.parent_index.unique || !f.parent_index.immediate {
+        return Err(unsupported());
+    }
+    if !f.types_and_facets_equal || !f.operators_exact || !f.triggers_exact || !f.actions_supported
+    {
         return Err(unsupported());
     }
     if !f.triggers.child_insert_ok
@@ -414,6 +426,10 @@ mod tests {
                 parent_update_ok: true,
                 all_enabled: true,
             },
+            types_and_facets_equal: true,
+            operators_exact: true,
+            triggers_exact: true,
+            actions_supported: true,
         });
         assert_eq!(
             normalize_postgres16_constraints_v1(&relations, vec![fk]),
