@@ -372,7 +372,7 @@ provider-free QE/SAST, schema-V6 evidence law, trusted execution/replay,
 protected dormant retrieval tuning, and PostgreSQL receipt authority. The
 2026-08-31 checkpoint historically passed 905 tests/122 files. The 2026-09-02
 current-tree hermetic checkpoint passes 965 tests/124 files with two skips after
-refreshing five Rust source bindings and the controller attestation. The excluded
+refreshing the expanded Rust source closure and controller attestation. The excluded
 mutable ambient collector grants no product, publication, promotion, or evolution authority.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,

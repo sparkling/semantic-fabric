@@ -112,8 +112,8 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > before the sink. Deterministic tests cover every phase and prove that no phase
 > refreshes the clock. This is a narrow elapsed-time boundary, not completed R4/R5:
 > compiler CPU is not cooperatively cancellable; queued HTTP waiters, rows, bytes,
-> source work and recursion lack one total budget; sources lack a common native
-> statement-cancellation contract; SQLite cannot interrupt an in-flight blocking
+> source work and recursion lack one total budget; sources lack a common
+> source-native statement-cancellation contract; SQLite cannot interrupt an in-flight blocking
 > bridge; and work inside one raw batch is not pre-empted. After HTTP `200`, a
 > SELECT/CONSTRUCT timeout terminates the body and may expose a usable prefix, so
 > no atomic/no-success-prefix response claim or backend admission follows.
@@ -159,8 +159,8 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > probes, branch opens and pull attempts—not database rows scanned, recursive CTE
 > iterations, compiler CPU or source cost. MySQL acquisition is deadline-bounded
 > but lacks PostgreSQL's fast `503`/`Retry-After` pool-shedding contract.
-> Raw/conformance APIs remain explicitly uncontrolled, and no common native
-> statement cancellation, SQLite in-flight interruption, bounded recursive work,
+> Raw/conformance APIs remain explicitly uncontrolled, and no common source-native
+> statement-cancellation contract, SQLite in-flight interruption, bounded recursive work,
 > or atomic/no-prefix streamed response is claimed.
 
 > **Status correction, part 9 (2026-09-02, adversarial race closure).** Commit
@@ -172,7 +172,7 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > capacity before backend selection or acquisition. Commit `136f21b` pulls ASK
 > one row at a time and stops after the first final solution without truncating a
 > Rust-group inner collection or losing ordered OFFSET/LIMIT semantics. These
-> repairs do not change the part-8 database-work, native-cancellation,
+> repairs do not change the part-8 database-work, source-native statement-cancellation,
 > raw/conformance, recursive-work, or post-`200` atomicity nonclaims.
 
 ## More Information
