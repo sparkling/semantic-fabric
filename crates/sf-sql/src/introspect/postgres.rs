@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap};
 use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, TableSchema};
 
+mod legacy_bounds;
 mod observation;
+use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
 pub use observation::{
     Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
     PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
@@ -82,6 +84,7 @@ pub async fn introspect_postgres(
     client: &tokio_postgres::Client,
     table: &str,
 ) -> Result<TableSchema> {
+    validate_legacy_table_names(std::iter::once(table), PRODUCTION_LEGACY_INPUT_LIMITS_V1)?;
     let tables = vec![table.to_owned()];
     introspect_in_schema(client, RUNTIME_SCHEMA, &tables)
         .await?
@@ -129,6 +132,10 @@ async fn introspect_in_schema<C>(
 where
     C: tokio_postgres::GenericClient + Sync,
 {
+    validate_legacy_table_names(
+        tables.iter().map(String::as_str),
+        PRODUCTION_LEGACY_INPUT_LIMITS_V1,
+    )?;
     if tables.is_empty() {
         return Ok(Vec::new());
     }
