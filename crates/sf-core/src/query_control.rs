@@ -4,8 +4,8 @@
 //! runtime adapter supplies deadline observation and wake-up semantics while the
 //! executor and serializers share this exact accounting identity.
 
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 /// A governed unit charged by an observable execution boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,30 +80,6 @@ pub enum QueryControlError {
 }
 
 impl QueryControlError {
-    const fn code(self) -> u8 {
-        match self {
-            Self::DeadlineExceeded => 1,
-            Self::Cancelled => 2,
-            Self::SourceWorkExceeded => 3,
-            Self::ResultItemsExceeded => 4,
-            Self::SerializedBytesExceeded => 5,
-            Self::AccountingOverflow => 6,
-        }
-    }
-
-    fn from_code(code: u8) -> Option<Self> {
-        match code {
-            0 => None,
-            1 => Some(Self::DeadlineExceeded),
-            2 => Some(Self::Cancelled),
-            3 => Some(Self::SourceWorkExceeded),
-            4 => Some(Self::ResultItemsExceeded),
-            5 => Some(Self::SerializedBytesExceeded),
-            6 => Some(Self::AccountingOverflow),
-            _ => Some(Self::AccountingOverflow),
-        }
-    }
-
     const fn for_limit(charge: QueryCharge) -> Self {
         match charge {
             QueryCharge::SourceWork => Self::SourceWorkExceeded,
@@ -144,7 +120,7 @@ struct BudgetState {
     source_work: AtomicU64,
     result_items: AtomicU64,
     serialized_bytes: AtomicU64,
-    terminal: AtomicU8,
+    terminal: RwLock<Option<QueryControlError>>,
 }
 
 /// Cloneable atomic accounting shared by every phase of one query.
@@ -158,7 +134,7 @@ impl QueryBudget {
             source_work: AtomicU64::new(0),
             result_items: AtomicU64::new(0),
             serialized_bytes: AtomicU64::new(0),
-            terminal: AtomicU8::new(0),
+            terminal: RwLock::new(None),
         }))
     }
 
@@ -172,16 +148,20 @@ impl QueryBudget {
 
     /// Seal a terminal reason if none exists and return the sticky first reason.
     pub fn terminate(&self, reason: QueryControlError) -> QueryControlError {
-        let _ =
-            self.0
-                .terminal
-                .compare_exchange(0, reason.code(), Ordering::AcqRel, Ordering::Acquire);
-        self.terminal()
-            .unwrap_or(QueryControlError::AccountingOverflow)
+        let mut terminal = self
+            .0
+            .terminal
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *terminal.get_or_insert(reason)
     }
 
     pub fn terminal(&self) -> Option<QueryControlError> {
-        QueryControlError::from_code(self.0.terminal.load(Ordering::Acquire))
+        *self
+            .0
+            .terminal
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn counter(&self, charge: QueryCharge) -> &AtomicU64 {
@@ -199,28 +179,49 @@ impl QueryControl for QueryBudget {
     }
 
     fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError> {
-        self.checkpoint()?;
+        self.consume_with_hook(charge, amount, || {})
+    }
+}
+
+impl QueryBudget {
+    fn consume_with_hook(
+        &self,
+        charge: QueryCharge,
+        amount: u64,
+        before_commit: impl FnOnce(),
+    ) -> Result<(), QueryControlError> {
+        // A termination write excludes this read-side critical section. A charge
+        // therefore linearizes wholly before a later terminal transition, or sees
+        // the existing terminal and leaves every counter unchanged.
+        let terminal = self
+            .0
+            .terminal
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(reason) = *terminal {
+            return Err(reason);
+        }
         if amount == 0 {
             return Ok(());
         }
+        before_commit();
 
         let counter = self.counter(charge);
         let limit = self.0.limits.limit(charge);
         let mut current = counter.load(Ordering::Acquire);
         loop {
             let Some(next) = current.checked_add(amount) else {
+                drop(terminal);
                 return Err(self.terminate(QueryControlError::AccountingOverflow));
             };
             if next > limit {
+                drop(terminal);
                 return Err(self.terminate(QueryControlError::for_limit(charge)));
             }
             match counter.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
             {
-                Ok(_) => return self.checkpoint(),
-                Err(observed) => {
-                    self.checkpoint()?;
-                    current = observed;
-                }
+                Ok(_) => return Ok(()),
+                Err(observed) => current = observed,
             }
         }
     }
@@ -311,5 +312,46 @@ mod tests {
             QueryControlError::Cancelled
         );
         assert_eq!(budget.checkpoint(), Err(QueryControlError::Cancelled));
+    }
+
+    #[test]
+    fn an_in_flight_charge_linearizes_before_termination() {
+        let budget = QueryBudget::new(QueryLimits::new(1, 1, 1));
+        let entered = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        std::thread::scope(|scope| {
+            let charge_budget = budget.clone();
+            let charge_entered = entered.clone();
+            let charge_release = release.clone();
+            let charge = scope.spawn(move || {
+                charge_budget.consume_with_hook(QueryCharge::SourceWork, 1, || {
+                    charge_entered.wait();
+                    charge_release.wait();
+                })
+            });
+            entered.wait();
+            let terminate_budget = budget.clone();
+            let terminate =
+                scope.spawn(move || terminate_budget.terminate(QueryControlError::Cancelled));
+            release.wait();
+
+            assert_eq!(charge.join().unwrap(), Ok(()));
+            assert_eq!(terminate.join().unwrap(), QueryControlError::Cancelled);
+        });
+        assert_eq!(budget.consumed(QueryCharge::SourceWork), 1);
+        assert_eq!(budget.checkpoint(), Err(QueryControlError::Cancelled));
+    }
+
+    #[test]
+    fn a_charge_rejected_after_termination_changes_no_counter() {
+        let budget = QueryBudget::new(QueryLimits::new(1, 1, 1));
+        budget.terminate(QueryControlError::Cancelled);
+
+        assert_eq!(
+            budget.consume(QueryCharge::SourceWork, 1),
+            Err(QueryControlError::Cancelled)
+        );
+        assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
     }
 }
