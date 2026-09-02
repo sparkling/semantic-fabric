@@ -181,9 +181,9 @@ async fn unsupported_method_is_a_redacted_problem_with_allow() {
 }
 
 #[tokio::test]
-async fn extractor_body_limit_is_a_redacted_payload_problem() {
+async fn media_specific_body_limit_is_a_redacted_payload_problem() {
     let mut cfg = config_with_stale_schema();
-    cfg.max_query_len = 8;
+    cfg.set_max_query_len(8).expect("representable query limit");
     let req = request(
         &format!("query={SECRET}"),
         "application/x-www-form-urlencoded",

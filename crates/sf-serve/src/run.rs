@@ -8,6 +8,7 @@ use std::time::Duration;
 use sf_core::query_control::QueryLimits;
 use tokio_postgres::NoTls;
 
+use crate::config::validate_max_query_len;
 use crate::problem::StartupCause;
 use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
 use crate::{
@@ -47,6 +48,7 @@ pub struct ServeOptions {
 /// Build the config + router and serve until the process is stopped. Returns a
 /// clear error (never panics) when a required input is missing or invalid.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
+    validate_max_query_len(opts.max_query_len)?;
     validate_request_timeout(opts.timeout)?;
     // Resolve, bound, parse, and reject inline credentials before runtime, file,
     // DNS, socket, or connector construction.
@@ -111,7 +113,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
 
     let mut cfg = ServeConfig::new(source, mapping, tbox);
     cfg.timeout = opts.timeout;
-    cfg.max_query_len = opts.max_query_len;
+    cfg.set_max_query_len(opts.max_query_len)?;
     cfg.query_limits = QueryLimits::new(
         opts.max_source_work,
         opts.max_result_items,

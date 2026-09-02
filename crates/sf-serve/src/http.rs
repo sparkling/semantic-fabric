@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, Extension, RawQuery, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::body::Body;
+use axum::extract::{Extension, RawQuery, State};
+use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
@@ -29,66 +29,62 @@ mod tests;
 
 /// Build the governed request service exposing `GET`/`POST /sparql` over `cfg`.
 pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
-    let max_body_len = cfg
-        .max_query_len
-        .saturating_mul(3)
-        .saturating_add("query=".len());
     let inner = Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
         .fallback(problem::not_found)
         .method_not_allowed_fallback(problem::method_not_allowed)
-        .layer(DefaultBodyLimit::max(max_body_len))
         .with_state(cfg.clone());
     RequestDeadlineService::new(inner, cfg)
 }
 
-/// `GET /sparql?query=...` (SPARQL 1.2 Protocol query via URL parameters).
+/// `GET /sparql?query=...` for the strict, single-query Protocol subset.
 async fn handle_get(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let Some(query) = raw.as_deref().and_then(|q| form_param(q, "query")) else {
-        return problem::response(ProblemCode::InvalidRequest);
+    let query = match raw.as_deref() {
+        Some(encoded) => {
+            match crate::post_body::unique_query_param(encoded.as_bytes(), cfg.max_query_len()) {
+                Ok(query) => query,
+                Err(crate::post_body::QueryParamError::Invalid) => {
+                    return problem::response(ProblemCode::InvalidRequest)
+                }
+                Err(crate::post_body::QueryParamError::TooLong) => {
+                    return problem::response(ProblemCode::PayloadTooLarge)
+                }
+            }
+        }
+        None => return problem::response(ProblemCode::InvalidRequest),
     };
     process(cfg, query, accept(&headers), budget).await
 }
 
-/// `POST /sparql` — either `application/x-www-form-urlencoded` (`query=...`) or a
-/// raw `application/sparql-query` body (SPARQL 1.2 Protocol §2.1.2).
+/// `POST /sparql` — either a strict single-query urlencoded form or a bounded
+/// raw `application/sparql-query` body (SPARQL 1.2 Protocol §2.2.2–2.2.3).
 async fn handle_post(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
-    headers: HeaderMap,
-    body: Result<Bytes, axum::extract::rejection::BytesRejection>,
+    request: Request<Body>,
 ) -> Response {
-    let body = match body {
-        Ok(body) => body,
-        Err(error) => return problem::response_for_body_rejection(&error),
+    if request.uri().query().is_some() {
+        return problem::response(ProblemCode::InvalidRequest);
+    }
+    let (parts, body) = request.into_parts();
+    let accepted = accept(&parts.headers);
+    let query = match crate::post_body::query(
+        &parts.headers,
+        body,
+        cfg.max_query_len(),
+        cfg.max_form_body_len(),
+    )
+    .await
+    {
+        Ok(query) => query,
+        Err(code) => return problem::response(code),
     };
-    let ctype = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(';').next().unwrap_or("").trim().to_owned())
-        .unwrap_or_default();
-    let query = match ctype.as_str() {
-        "application/sparql-query" => match String::from_utf8(body.to_vec()) {
-            Ok(q) => q,
-            Err(_) => return problem::response(ProblemCode::InvalidRequest),
-        },
-        "application/x-www-form-urlencoded" => {
-            match std::str::from_utf8(&body)
-                .ok()
-                .and_then(|s| form_param(s, "query"))
-            {
-                Some(q) => q,
-                None => return problem::response(ProblemCode::InvalidRequest),
-            }
-        }
-        _ => return problem::response(ProblemCode::UnsupportedMediaType),
-    };
-    process(cfg, query, accept(&headers), budget).await
+    process(cfg, query, accepted, budget).await
 }
 
 /// The shared request pipeline: cap → compile → dispatch by query form → stream.
@@ -98,7 +94,7 @@ async fn process(
     accept: Option<String>,
     budget: RequestBudget,
 ) -> Response {
-    if query.len() > cfg.max_query_len {
+    if query.len() > cfg.max_query_len() {
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
@@ -427,11 +423,12 @@ async fn acquire_pg(
     }
 }
 
-/// The first value of form key `key` in a urlencoded string (`+`/`%XX` decoded).
+/// The sole decoded `query` field, rejecting duplicates and every other key.
+#[cfg(test)]
 fn form_param(encoded: &str, key: &str) -> Option<String> {
-    form_urlencoded::parse(encoded.as_bytes())
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.into_owned())
+    (key == "query")
+        .then(|| crate::post_body::unique_query_param(encoded.as_bytes(), usize::MAX).ok())
+        .flatten()
 }
 
 fn accept(headers: &HeaderMap) -> Option<String> {

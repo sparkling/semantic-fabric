@@ -16,11 +16,18 @@ fn form_param_returns_none_when_key_absent() {
 }
 
 #[test]
-fn form_param_returns_the_first_match_when_key_repeated() {
-    assert_eq!(
-        form_param("query=first&query=second", "query"),
-        Some("first".to_owned())
-    );
+fn form_param_rejects_the_key_when_repeated() {
+    assert_eq!(form_param("query=first&query=second", "query"), None);
+}
+
+#[test]
+fn form_param_rejects_every_extra_parameter() {
+    for key in ["default-graph-uri", "named-graph-uri", "version", "other"] {
+        assert_eq!(
+            form_param(&format!("query=ASK+%7B%7D&{key}=1"), "query"),
+            None
+        );
+    }
 }
 
 #[test]

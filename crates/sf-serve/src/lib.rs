@@ -31,6 +31,7 @@ mod budget;
 mod config;
 mod deadline;
 mod http;
+mod post_body;
 mod problem;
 mod request_deadline;
 

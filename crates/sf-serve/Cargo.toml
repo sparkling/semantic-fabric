@@ -22,6 +22,7 @@ tower.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 form_urlencoded.workspace = true
+http-body-util = "0.1"
 # Source drivers (held in the server backend; ADR-0006).
 rusqlite = { workspace = true, features = ["bundled"] }
 tokio-postgres = "0.7"
@@ -33,6 +34,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
-http-body-util = "0.1"
 form_urlencoded.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

@@ -4,7 +4,6 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
-use axum::extract::rejection::BytesRejection;
 use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde::Serialize;
@@ -153,15 +152,6 @@ pub(crate) fn response_for_sparql(error: &SparqlError) -> Response {
 
 pub(crate) fn response_for_control(error: QueryControlError) -> Response {
     response(ProblemCode::from_control(error))
-}
-
-pub(crate) fn response_for_body_rejection(error: &BytesRejection) -> Response {
-    let code = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        ProblemCode::PayloadTooLarge
-    } else {
-        ProblemCode::InvalidRequest
-    };
-    response(code)
 }
 
 pub(crate) async fn not_found() -> Response {

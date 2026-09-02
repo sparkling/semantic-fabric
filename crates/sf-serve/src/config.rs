@@ -10,7 +10,11 @@ use sf_sql::TableSchema;
 use tokio::sync::Semaphore;
 
 use crate::binding::{BoundPlan, ExecutablePlan, IntrospectedSource, RuntimeBinding};
-use crate::Backend;
+use crate::problem::StartupCause;
+use crate::{Backend, ServeError};
+
+/// Worst-case wire bytes for the percent-encoded `query` key plus `=`.
+const FORM_QUERY_FIELD_OVERHEAD: usize = 16;
 
 /// Default request timeout and max query length when constructed via [`ServeConfig::new`].
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -30,7 +34,8 @@ const DEFAULT_COMPILER_PERMITS: usize = 4;
 pub struct ServeConfig {
     binding: RuntimeBinding,
     pub timeout: Duration,
-    pub max_query_len: usize,
+    max_query_len: usize,
+    max_form_body_len: usize,
     /// Inclusive request-wide source/result/serialization ceilings.
     pub query_limits: QueryLimits,
     /// Bounds active `spawn_blocking` compilers. An owned permit lives inside the
@@ -41,10 +46,13 @@ pub struct ServeConfig {
 impl ServeConfig {
     /// Build a source-bound config with the default governance knobs.
     pub fn new(source: IntrospectedSource, mapping: SourceMapping, tbox: Tbox) -> Self {
+        let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
+            .expect("default query length has a representable form-body limit");
         Self {
             binding: RuntimeBinding::new(source, mapping, tbox),
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
+            max_form_body_len,
             query_limits: DEFAULT_QUERY_LIMITS,
             compiler_permits: Arc::new(Semaphore::new(DEFAULT_COMPILER_PERMITS)),
         }
@@ -69,6 +77,24 @@ impl ServeConfig {
         )
     }
 
+    /// Set the decoded query limit after proving that the corresponding
+    /// worst-case urlencoded request-body limit is representable.
+    pub fn set_max_query_len(&mut self, max_query_len: usize) -> Result<(), ServeError> {
+        let max_form_body_len = validate_max_query_len(max_query_len)?;
+        self.max_query_len = max_query_len;
+        self.max_form_body_len = max_form_body_len;
+        Ok(())
+    }
+
+    /// Maximum admitted decoded query length in bytes.
+    pub fn max_query_len(&self) -> usize {
+        self.max_query_len
+    }
+
+    pub(crate) fn max_form_body_len(&self) -> usize {
+        self.max_form_body_len
+    }
+
     pub(crate) fn compile(&self, query: &str) -> sf_sparql::Result<BoundPlan> {
         self.binding.compile(query)
     }
@@ -83,4 +109,18 @@ impl ServeConfig {
     pub(crate) fn compiler_permits(&self) -> Arc<Semaphore> {
         self.compiler_permits.clone()
     }
+}
+
+pub(crate) fn validate_max_query_len(max_query_len: usize) -> Result<usize, ServeError> {
+    checked_form_body_len(max_query_len).ok_or_else(|| {
+        ServeError::new(StartupCause::Configuration {
+            error: "max query length cannot be represented as a form-body limit".to_owned(),
+        })
+    })
+}
+
+fn checked_form_body_len(max_query_len: usize) -> Option<usize> {
+    max_query_len
+        .checked_mul(3)
+        .and_then(|encoded| encoded.checked_add(FORM_QUERY_FIELD_OVERHEAD))
 }

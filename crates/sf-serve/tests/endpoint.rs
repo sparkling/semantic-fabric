@@ -912,7 +912,8 @@ async fn post_unsupported_content_type_returns_415() {
 #[tokio::test]
 async fn oversized_query_returns_413() {
     let mut cfg = sqlite_config();
-    cfg.max_query_len = 16; // shrink the cap well below any real query
+    cfg.set_max_query_len(16)
+        .expect("representable query limit"); // shrink below any real query
     let cfg = Arc::new(cfg);
     let req = post_query(
         "PREFIX ex: <http://ex/> SELECT ?n WHERE { ?p ex:name ?n }",
