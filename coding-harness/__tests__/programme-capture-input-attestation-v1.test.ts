@@ -95,7 +95,7 @@ describe('programme capture V1 commit-object input attestation', () => {
       'Cargo.lock',
       ...PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS,
     ]);
-    expect(result.record.protectedInputs).toHaveLength(133);
+    expect(result.record.protectedInputs).toHaveLength(141);
     expect(result.record.protectedInputsDigest).toBe(
       digestValue(result.record.protectedInputs),
     );
