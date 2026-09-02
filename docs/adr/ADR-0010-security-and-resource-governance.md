@@ -186,6 +186,19 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > response is handed off and later non-deadline stream failures remain post-`200`.
 > An unrepresentable deadline remains `AccountingOverflow`, not a timeout.
 
+> **Status correction, part 11 (2026-09-02, outer deadline and strict request
+> admission).** Commit `1e85249` moves deadline creation to Tower
+> `Service::call`: Hyper has parsed the HTTP/request target, but Axum route and
+> method dispatch have not begun. Commit `36488d5` admits exactly one query for
+> GET or form POST, or one raw POST query; optional version, dataset, duplicate,
+> and extra parameters reject instead of being ignored. Unsupported media
+> rejects without polling the application body. The raw per-request body cap is
+> `n`; the checked form wire cap is `3n+16` with a decoded-query cap of `n`, and
+> unrepresentable configuration rejects before source/file/network I/O. These
+> are request-admission limits, not aggregate service quotas. Full Protocol,
+> compiler/source/recursive work, native cancellation and atomic post-`200`
+> delivery remain open, so R4/R5 and production admission remain incomplete.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.

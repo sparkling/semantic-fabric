@@ -27,8 +27,15 @@ implements:
 > classes as RFC 9457: unknown paths, unsupported methods (with the derived
 > `Allow` header), configured body-size rejection and body-buffer failure. At an
 > expired representable handoff the public result is always `504`, while internal
-> accounting retains any earlier sticky resource cause. Malformed HTTP request
-> targets rejected before Axum router entry remain outside this application boundary.
+> accounting retains any earlier sticky resource cause. Commit `1e85249` moves
+> that deadline to Tower `Service::call`, after HTTP/request-target parsing but
+> before Axum route/method dispatch. Commit `36488d5` adds strict media-specific
+> admission: exactly one GET/form query or one raw query, per-request raw `n` and
+> checked form `3n+16` wire limits with decoded `n`, rejection of optional
+> version/dataset/extra parameters, and unsupported-media rejection without
+> polling the application body. These redacted failures do not claim full
+> Protocol conformance. Malformed HTTP request targets rejected before the outer
+> Tower service remain outside this application boundary.
 > Commit `484a4b4` adds a bounded redacted
 > `SourceRef`: the CLI accepts exactly one
 > credential-free inline source or environment reference, and typed PostgreSQL/
