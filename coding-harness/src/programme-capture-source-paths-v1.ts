@@ -76,6 +76,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/exec_core/batch_loop_tests.rs',
   'crates/sf-sparql/src/exec_core/batch_reconstruct_tests.rs',
   'crates/sf-sparql/src/exec_core/bindings_tests.rs',
+  'crates/sf-sparql/src/exec_core/budget_tests.rs',
   'crates/sf-sparql/src/exec_core/dedup_scope.rs',
   'crates/sf-sparql/src/exec_core/dedup_scope_runtime.rs',
   'crates/sf-sparql/src/exec_core/driver.rs',
