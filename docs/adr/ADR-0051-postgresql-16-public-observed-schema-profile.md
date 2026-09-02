@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-02
-updated: 2026-09-02
+updated: 2026-09-03
 tags: [postgresql, schema, identity, pg-catalog, runtime, observation]
 supersedes: []
 depends-on: [ADR-0006, ADR-0015, ADR-0038, ADR-0048, ADR-0050]
@@ -15,9 +15,9 @@ implements: [ADR-0050]
 This ADR is **proposed**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2,
 but no adapter currently emits it and no runtime currently carries it. The profile covers one PostgreSQL 16
 semantic catalogue contract; PostgreSQL 16.9 and 16.15 are its initial exact live qualification targets.
-The exact engine-version selector and registered identity finalizer are now implemented as private `sf-sql` code
-with no production caller; profile normalization, adapter wiring, qualification receipts and runtime carriage remain
-unimplemented.
+The exact engine-version selector, registered identity finalizer and complete source-type/default-collation normalizer
+are now implemented as private `sf-sql` code with no production caller. Relation/column and constraint normalization,
+catalogue SQL/decoding, adapter wiring, qualification receipts and runtime carriage remain unimplemented.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.

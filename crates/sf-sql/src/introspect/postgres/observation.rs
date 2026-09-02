@@ -9,6 +9,9 @@ use sf_core::schema_identity::{
 
 use crate::schema::TableSchema;
 
+#[allow(dead_code)]
+mod source_type;
+
 pub const POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1: &str =
     "io.github.sparkling.semantic-fabric.pg16-pb.structural-v1";
 pub const POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1: &str =
