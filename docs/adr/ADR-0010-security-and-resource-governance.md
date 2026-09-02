@@ -171,9 +171,20 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > body-drop cancellation deadline-aware, and rejects an impossible ASK result
 > capacity before backend selection or acquisition. Commit `136f21b` pulls ASK
 > one row at a time and stops after the first final solution without truncating a
-> Rust-group inner collection or losing ordered OFFSET/LIMIT semantics. These
+> Rust-group inner collection or losing ordered OFFSET/LIMIT semantics. Commit
+> `481f870` aligns serving admission: top-level ASK ordering cannot change
+> existence and uses no global sort buffer, while genuinely source-sized states
+> and ordered nested subplans remain rejected. These
 > repairs do not change the part-8 database-work, source-native statement-cancellation,
 > raw/conformance, recursive-work, or post-`200` atomicity nonclaims.
+
+> **Status correction, part 10 (2026-09-02, deterministic deadline handoff).**
+> Commit `d391927` separates the public handoff classification from sticky
+> internal accounting. At an expired representable deadline, handler handoff is
+> always `DeadlineExceeded`/HTTP `504`, even when an earlier resource terminal
+> remains the accounting identity's first cause. Before that instant a prepared
+> response is handed off and later non-deadline stream failures remain post-`200`.
+> An unrepresentable deadline remains `AccountingOverflow`, not a timeout.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

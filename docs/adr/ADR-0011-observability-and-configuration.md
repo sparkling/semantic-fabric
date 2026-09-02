@@ -15,14 +15,20 @@ implements:
 # Observability & configuration
 
 > **Implementation status (2026-09-02): partially implemented.** Commits
-> `3e0f920`/`c9e6c53` add a closed pre-commit RFC 9457 problem vocabulary,
+> `3e0f920`/`c9e6c53` add the closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
 > `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
-> `6cd85eb` routes every pre-response absolute-deadline expiry through it;
+> `6cd85eb` routes absolute-deadline expiry through it;
 > `58cca82` adds the redacted `429 query-budget-exceeded` boundary, and `bac8240`
 > rejects an unrepresentable timeout as redacted startup configuration before
 > source, file, runtime, or network I/O. Commit `f1f4747` rechecks the deadline at
 > response handoff and rejects zero-capacity ASK before backend acquisition.
+> Commit `d391927` closes the current Axum-router path, method and body-extraction
+> classes as RFC 9457: unknown paths, unsupported methods (with the derived
+> `Allow` header), configured body-size rejection and body-buffer failure. At an
+> expired representable handoff the public result is always `504`, while internal
+> accounting retains any earlier sticky resource cause. Malformed HTTP request
+> targets rejected before Axum router entry remain outside this application boundary.
 > Commit `484a4b4` adds a bounded redacted
 > `SourceRef`: the CLI accepts exactly one
 > credential-free inline source or environment reference, and typed PostgreSQL/
