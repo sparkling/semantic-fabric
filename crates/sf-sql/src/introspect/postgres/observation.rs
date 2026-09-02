@@ -2,7 +2,10 @@
 
 use std::fmt;
 
-use sf_core::schema_identity::ObservedSchemaIdentityV1;
+use sf_core::schema_identity::{
+    ConstraintInputV1, ObservedSchemaIdentityV1, ProfileIdV1, RelationInputV1,
+    SchemaIdentityErrorV1, SchemaIdentityLimitV1, SchemaObservationInputV1, SchemaProfilesV1,
+};
 
 use crate::schema::TableSchema;
 
@@ -12,6 +15,103 @@ pub const POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1: &str =
     "io.github.sparkling.semantic-fabric.pg16-pb.type-v1";
 pub const POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1: &str =
     "io.github.sparkling.semantic-fabric.pg16-pb.constraint-v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RegisteredPostgresObservationProfileV1 {
+    Postgres16PublicBaseV1,
+}
+
+impl RegisteredPostgresObservationProfileV1 {
+    fn profiles(self) -> Result<SchemaProfilesV1, PostgresSchemaIdentityUnavailableV1> {
+        match self {
+            Self::Postgres16PublicBaseV1 => Ok(SchemaProfilesV1 {
+                structural: registered_profile_id(POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1)?,
+                types: registered_profile_id(POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1)?,
+                constraints: registered_profile_id(POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1)?,
+            }),
+        }
+    }
+}
+
+fn select_registered_profile_v1(
+    server_version_num: i32,
+) -> Result<RegisteredPostgresObservationProfileV1, PostgresSchemaIdentityUnavailableV1> {
+    match server_version_num {
+        160_009 | 160_015 => Ok(RegisteredPostgresObservationProfileV1::Postgres16PublicBaseV1),
+        160_000..=169_999 => Err(PostgresSchemaIdentityUnavailableV1::UnqualifiedEnginePatch),
+        _ => Err(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented),
+    }
+}
+
+// Kept private and unreachable from production until both exact patch
+// qualification receipts and the PostgreSQL profile adapter are complete.
+#[allow(dead_code)]
+fn build_registered_observation(
+    server_version_num: i32,
+    relations: Vec<RelationInputV1>,
+    constraints: Vec<ConstraintInputV1>,
+) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1> {
+    let profiles = select_registered_profile_v1(server_version_num)?.profiles()?;
+    let identity = ObservedSchemaIdentityV1::build(SchemaObservationInputV1 {
+        profiles,
+        relations,
+        constraints,
+    })
+    .map_err(map_schema_identity_error_v1)?;
+    Ok(Postgres16PublicObservedSchemaV1 { identity })
+}
+
+fn registered_profile_id(
+    value: &'static str,
+) -> Result<ProfileIdV1, PostgresSchemaIdentityUnavailableV1> {
+    ProfileIdV1::new(value).map_err(|_| PostgresSchemaIdentityUnavailableV1::IdentityRejected)
+}
+
+fn map_schema_identity_error_v1(
+    error: SchemaIdentityErrorV1,
+) -> PostgresSchemaIdentityUnavailableV1 {
+    match error {
+        SchemaIdentityErrorV1::LimitExceeded { limit, .. } => {
+            match map_schema_identity_limit_v1(limit) {
+                Some(code) => PostgresSchemaIdentityUnavailableV1::LimitExceeded(code),
+                None => PostgresSchemaIdentityUnavailableV1::IdentityRejected,
+            }
+        }
+        SchemaIdentityErrorV1::Invalid { .. }
+        | SchemaIdentityErrorV1::ArithmeticOverflow { .. } => {
+            PostgresSchemaIdentityUnavailableV1::IdentityRejected
+        }
+    }
+}
+
+const fn map_schema_identity_limit_v1(
+    limit: SchemaIdentityLimitV1,
+) -> Option<PostgresSchemaIdentityLimitCodeV1> {
+    use PostgresSchemaIdentityLimitCodeV1 as PostgresLimit;
+    use SchemaIdentityLimitV1 as KernelLimit;
+
+    match limit {
+        KernelLimit::ProfileOrTokenBytes
+        | KernelLimit::IdentifierBytes
+        | KernelLimit::FacetTextValueBytes => None,
+        KernelLimit::Relations => Some(PostgresLimit::RichRelations),
+        KernelLimit::ColumnsPerRelation | KernelLimit::ColumnsTotal => {
+            Some(PostgresLimit::LiveColumns)
+        }
+        KernelLimit::RawConstraints | KernelLimit::CanonicalConstraints => {
+            Some(PostgresLimit::RawConstraints)
+        }
+        KernelLimit::KeyMembers => Some(PostgresLimit::KeyMembers),
+        KernelLimit::FacetsPerColumn
+        | KernelLimit::FacetsTotal
+        | KernelLimit::FacetListItems
+        | KernelLimit::FacetListItemsTotal => Some(PostgresLimit::Facets),
+        KernelLimit::Utf8PayloadBytes => Some(PostgresLimit::TextBytes),
+        KernelLimit::StructuralBodyBytes
+        | KernelLimit::TypeBodyBytes
+        | KernelLimit::ConstraintBodyBytes => Some(PostgresLimit::CanonicalBody),
+    }
+}
 
 /// A registered PostgreSQL-16 observation that callers cannot construct.
 ///
