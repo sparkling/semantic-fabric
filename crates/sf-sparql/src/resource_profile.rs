@@ -68,7 +68,7 @@ impl Plan {
 
 fn collect_states(plan: &Plan, states: &mut BTreeSet<SourceSizedState>) {
     let source_backed = plan_reads_source(plan);
-    if source_backed && !plan.order.is_empty() {
+    if source_backed && !plan.order.is_empty() && !matches!(plan.form, PlanForm::Ask) {
         states.insert(SourceSizedState::GlobalOrder);
     }
     if source_backed && plan.rust_group.is_some() {
@@ -196,6 +196,18 @@ mod tests {
             candidate.source_sized_states(),
             vec![SourceSizedState::GlobalOrder]
         );
+    }
+
+    #[test]
+    fn ordered_ask_does_not_claim_the_unused_global_order_buffer() {
+        let mut candidate = plan(vec![branch(1)], PlanForm::Ask);
+        candidate.order.push(OrderKey {
+            var: "value".to_owned(),
+            descending: false,
+            expr: None,
+        });
+
+        assert!(candidate.source_sized_states().is_empty());
     }
 
     #[test]
