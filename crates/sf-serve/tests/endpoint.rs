@@ -344,6 +344,14 @@ mod pg {
     /// `sf_serve::run::open_backend`'s PG branch — ADR-0010 §C stream-lane pool,
     /// ADR-0027, M4 wave-2 finding 2).
     fn pg_pool_sized(conn_str: &str, max_size: usize) -> deadpool_postgres::Pool {
+        pg_pool_sized_with_wait(conn_str, max_size, None)
+    }
+
+    fn pg_pool_sized_with_wait(
+        conn_str: &str,
+        max_size: usize,
+        wait_timeout: Option<std::time::Duration>,
+    ) -> deadpool_postgres::Pool {
         let mut pg_config: tokio_postgres::Config = conn_str.parse().expect("valid PG conninfo");
         pg_config.options("-csearch_path=pg_catalog,public,pg_temp");
         let manager = deadpool_postgres::Manager::from_config(
@@ -360,6 +368,7 @@ mod pg {
         );
         deadpool_postgres::Pool::builder(manager)
             .max_size(max_size)
+            .wait_timeout(wait_timeout)
             .runtime(deadpool_postgres::Runtime::Tokio1)
             .build()
             .expect("build test PG pool")
@@ -576,9 +585,9 @@ mod pg {
 
     /// The ADR-0010 §C admission-control addition ([`sf_serve::acquire_pg`], not
     /// public — exercised only through the endpoint): a `max_size=1` pool with a
-    /// short wait timeout sheds a second concurrent request as `503` +
-    /// `Retry-After` while the first still holds the only connection, rather than
-    /// queueing it indefinitely or failing with a generic `500`.
+    /// short wait timeout sheds a request as `503` + `Retry-After` while the only
+    /// connection is held, rather than queueing it indefinitely or failing with
+    /// a generic `500`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pg_pool_exhaustion_sheds_503_with_retry_after() {
         let conn_str = base_conn();
@@ -594,7 +603,7 @@ mod pg {
         });
 
         let table = format!("sf_serve_pool_503_{}", std::process::id());
-        const ROWS: i64 = 300_000;
+        const ROWS: i64 = 32;
         client
             .batch_execute(&format!(
                 "DROP TABLE IF EXISTS \"{table}\"; \
@@ -618,37 +627,18 @@ mod pg {
         let maps = sf_mapping::parse_r2rml(&mapping_ttl).unwrap();
         let schema = sf_serve::introspect_pg_all(&mut client).await.unwrap();
 
-        // One connection, a short wait: a second concurrent request has no
-        // chance of acquiring one before the first (a slow full-table dump)
-        // finishes.
-        let pg_config: tokio_postgres::Config = conn_str.parse().unwrap();
-        let manager = deadpool_postgres::Manager::new(pg_config, NoTls);
-        let pool = deadpool_postgres::Pool::builder(manager)
-            .max_size(1)
-            .wait_timeout(Some(std::time::Duration::from_millis(50)))
-            .runtime(deadpool_postgres::Runtime::Tokio1)
-            .build()
-            .unwrap();
+        // Hold the correctly configured pool's only connection explicitly.
+        // This proves the exhaustion mapping without racing a first request's
+        // compiler and stream startup against an arbitrary sleep.
+        let pool =
+            pg_pool_sized_with_wait(&conn_str, 1, Some(std::time::Duration::from_millis(50)));
+        let held = pool.get().await.expect("hold the sole PG pool connection");
         let cfg = Arc::new(ServeConfig::new_unchecked(
             Backend::Pg(pool),
             maps,
             Tbox::default(),
             schema,
         ));
-
-        let cfg1 = cfg.clone();
-        let first = tokio::spawn(async move {
-            router(cfg1)
-                .oneshot(post_query(
-                    "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
-                    "application/sparql-results+json",
-                ))
-                .await
-                .unwrap()
-        });
-        // Give the first request a head start so it actually holds the pool's
-        // one connection before the second competes for it.
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let resp2 = router(cfg.clone())
             .oneshot(post_query(
@@ -673,20 +663,26 @@ mod pg {
                 .to_vec(),
         )
         .unwrap();
-        assert!(body2.contains("exhausted"), "{body2}");
+        assert!(body2.contains("\"code\":\"source-unavailable\""), "{body2}");
+        assert!(!body2.contains("PoolError"), "{body2}");
 
-        let resp1 = first.await.expect("first request task join");
+        // Once capacity returns, the same governed path must recover and use a
+        // relation-scope-verified pooled session.
+        drop(held);
+        let resp1 = router(cfg.clone())
+            .oneshot(post_query(
+                "SELECT ?name WHERE { ?s <http://ex/name> ?name }",
+                "application/sparql-results+json",
+            ))
+            .await
+            .unwrap();
         assert_eq!(
             resp1.status(),
             StatusCode::OK,
-            "the request that held the connection must still succeed"
+            "the request after capacity is released must succeed"
         );
-        // Drop the body WITHOUT draining it (cancel-on-drop, ADR-0010 §C) instead
-        // of streaming all 300k rows: the background streaming task otherwise
-        // blocks forever on channel backpressure once its buffer fills, holding
-        // the size-1 pool's one connection and deadlocking the DROP TABLE cleanup
-        // below against the still-open cursor's table lock (mirrors
-        // `mysql_release.rs`'s drop-the-body release check).
+        // Drop the body without draining it to exercise cancel-on-drop and free
+        // the connection before fixture cleanup.
         drop(resp1);
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
