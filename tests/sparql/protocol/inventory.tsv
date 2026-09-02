@@ -4,10 +4,10 @@ meta	surface	sparql-protocol
 meta	backend	sqlite
 meta	hash-algorithm	sha256
 meta	attestation-scope	expected-local-test-outcomes-not-runtime-provenance-w3c-conformance-or-backend-admission
-input	Cargo.lock	158523	91cc1270c725d1bde2ed41d8c796268df929b8895ea839f33483d90a28ecbffc
-input	Cargo.toml	2554	923859c6e94d2a88b46603772ae5f5c6d8e31e1bfb3a79c568087098726af183
-input	crates/sf-serve/Cargo.toml	1428	01a442bfa29af27f93826f82c8adb94dcd0b463490b194d9fdd0bdb81521d55b
-input	crates/sf-serve/tests/endpoint.rs	38611	c00a42a5200ed9fc15fdeb2a8dcb5a04eae56c78d8b69185f882f1ef52f4d2ef
+input	Cargo.lock	158522	a6c7f6ac81cfb96d497b746cfc57671967cda6d026ed7c1d5c103b2feab92c67
+input	Cargo.toml	2597	b0c4ac281585bd34b3dfd1fa97e7f0fd8776e3cb4fcc144aba916cecde2c7bc4
+input	crates/sf-serve/Cargo.toml	1517	343af72945a639b4beeecc9d0c7f3da25286126e58a76081a7deb8015e7ea87c
+input	crates/sf-serve/tests/endpoint.rs	40443	38283f61fa1691e016c36b40c2a98457788ea101f3dbe142712b629b67eab288
 input	rust-toolchain.toml	122	e8c8b3d67e37fa6c751296b6583b82805e597b619a1868b35369185eb61e4b45
 suite	protocol-endpoint	sf-serve	endpoint	600
 test	protocol-endpoint	ask_query_backend_sql_error_returns_500	include	required
