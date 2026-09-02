@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
+use axum::extract::rejection::BytesRejection;
 use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde::Serialize;
@@ -15,6 +16,8 @@ static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProblemCode {
     InvalidRequest,
+    NotFound,
+    MethodNotAllowed,
     UnsupportedMediaType,
     PayloadTooLarge,
     UnsupportedQuery,
@@ -48,6 +51,8 @@ impl ProblemCode {
     fn value(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid-request",
+            Self::NotFound => "not-found",
+            Self::MethodNotAllowed => "method-not-allowed",
             Self::UnsupportedMediaType => "unsupported-media-type",
             Self::PayloadTooLarge => "payload-too-large",
             Self::UnsupportedQuery => "unsupported-query",
@@ -61,6 +66,8 @@ impl ProblemCode {
     fn status(self) -> StatusCode {
         match self {
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedQuery => StatusCode::NOT_IMPLEMENTED,
@@ -80,8 +87,10 @@ impl ProblemCode {
     fn detail(self) -> &'static str {
         match self {
             Self::InvalidRequest => "The request is invalid.",
+            Self::NotFound => "The requested resource was not found.",
+            Self::MethodNotAllowed => "The request method is not supported for this resource.",
             Self::UnsupportedMediaType => "The request Content-Type is not supported.",
-            Self::PayloadTooLarge => "The query exceeds the configured byte limit.",
+            Self::PayloadTooLarge => "The request body or query exceeds the configured byte limit.",
             Self::UnsupportedQuery => "The requested query or execution shape is not supported.",
             Self::RequestTimeout => "The request deadline expired.",
             Self::QueryBudgetExceeded => "The query exceeded a configured resource limit.",
@@ -144,6 +153,23 @@ pub(crate) fn response_for_sparql(error: &SparqlError) -> Response {
 
 pub(crate) fn response_for_control(error: QueryControlError) -> Response {
     response(ProblemCode::from_control(error))
+}
+
+pub(crate) fn response_for_body_rejection(error: &BytesRejection) -> Response {
+    let code = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ProblemCode::PayloadTooLarge
+    } else {
+        ProblemCode::InvalidRequest
+    };
+    response(code)
+}
+
+pub(crate) async fn not_found() -> Response {
+    response(ProblemCode::NotFound)
+}
+
+pub(crate) async fn method_not_allowed() -> Response {
+    response(ProblemCode::MethodNotAllowed)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,6 +345,12 @@ mod tests {
                 ProblemCode::InvalidRequest,
                 StatusCode::BAD_REQUEST,
                 "invalid-request",
+            ),
+            (ProblemCode::NotFound, StatusCode::NOT_FOUND, "not-found"),
+            (
+                ProblemCode::MethodNotAllowed,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method-not-allowed",
             ),
             (
                 ProblemCode::UnsupportedMediaType,

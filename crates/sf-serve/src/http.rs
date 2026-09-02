@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Extension, RawQuery, Request, State};
+use axum::extract::{DefaultBodyLimit, Extension, RawQuery, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -30,8 +30,15 @@ mod tests;
 /// Build the axum router exposing `GET`/`POST /sparql` over `cfg`.
 pub fn router(cfg: Arc<ServeConfig>) -> Router {
     let deadline_state = cfg.clone();
+    let max_body_len = cfg
+        .max_query_len
+        .saturating_mul(3)
+        .saturating_add("query=".len());
     Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
+        .fallback(problem::not_found)
+        .method_not_allowed_fallback(problem::method_not_allowed)
+        .layer(DefaultBodyLimit::max(max_body_len))
         .layer(middleware::from_fn_with_state(
             deadline_state,
             begin_request_deadline,
@@ -77,8 +84,12 @@ async fn handle_post(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, axum::extract::rejection::BytesRejection>,
 ) -> Response {
+    let body = match body {
+        Ok(body) => body,
+        Err(error) => return problem::response_for_body_rejection(&error),
+    };
     let ctype = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -174,9 +185,8 @@ async fn respond_select(
         return problem::response(ProblemCode::Internal);
     };
     let vars = vars.clone();
-    // Uniform lane (ADR-0024 M5): every backend drives the generic streamer via a
-    // thin concrete `exec_*::select_each_*` closure. SQLite's blocking now lives in
-    // the adapter's cap-1 bridge (no sf-serve spawn_blocking special-case).
+    // Every backend drives the generic streamer; SQLite owns its blocking cap-1
+    // bridge rather than giving sf-serve a special case (ADR-0024 M5).
     let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
@@ -244,10 +254,8 @@ async fn respond_ask(
     let fmt = negotiate_results(accept);
     let value = match backend {
         Backend::Sqlite(pool) => {
-            // Uniform lane (ADR-0024 M5): SQLite ASK spawns the owned cap-1-bridge
-            // backend onto the runtime like the MySQL arm — no `spawn_blocking`
-            // special-case; the adapter owns SQLite's blocking. `tokio::spawn` checks
-            // `Send` on the concrete owned-backend future directly (provable).
+            // The adapter owns SQLite's blocking; spawning its concrete future
+            // proves the `Send` obligation directly (ADR-0024 M5).
             let conn = pool.pick();
             let task_budget = budget.clone();
             let run = tokio::spawn(async move {

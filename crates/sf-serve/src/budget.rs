@@ -13,6 +13,7 @@ use tokio::time::Instant;
 struct RequestBudgetState {
     accounting: QueryBudget,
     deadline: Option<Instant>,
+    deadline_representable: bool,
     terminal: watch::Sender<Option<QueryControlError>>,
 }
 
@@ -26,13 +27,14 @@ impl RequestBudget {
     pub(crate) fn after(timeout: Duration, limits: QueryLimits) -> Self {
         let now = Instant::now();
         let (terminal, _) = watch::channel(None);
-        let overflow = now.checked_add(timeout).is_none();
+        let deadline = now.checked_add(timeout);
         let request = Self(Arc::new(RequestBudgetState {
             accounting: QueryBudget::new(limits),
-            deadline: Some(now.checked_add(timeout).unwrap_or(now)),
+            deadline: Some(deadline.unwrap_or(now)),
+            deadline_representable: deadline.is_some(),
             terminal,
         }));
-        if overflow {
+        if deadline.is_none() {
             request.terminate(QueryControlError::AccountingOverflow);
         }
         request
@@ -43,6 +45,7 @@ impl RequestBudget {
         Self(Arc::new(RequestBudgetState {
             accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX)),
             deadline: deadline.map(Instant::from_std),
+            deadline_representable: true,
             terminal,
         }))
     }
@@ -93,15 +96,15 @@ impl RequestBudget {
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            return Err(self.terminate(QueryControlError::DeadlineExceeded));
+            return Err(self.handoff_deadline_error());
         }
         tokio::select! {
             biased;
             _ = wait_for_deadline(self.0.deadline) => {
-                Err(self.terminate(QueryControlError::DeadlineExceeded))
+                Err(self.handoff_deadline_error())
             }
             output = future => {
-                self.check_deadline_at(Instant::now())?;
+                self.check_handoff_deadline_at(Instant::now())?;
                 Ok(output)
             },
         }
@@ -151,14 +154,28 @@ impl RequestBudget {
         self.0.deadline.is_some_and(|deadline| now >= deadline)
     }
 
-    fn check_deadline_at(&self, now: Instant) -> Result<(), QueryControlError> {
+    fn check_handoff_deadline_at(&self, now: Instant) -> Result<(), QueryControlError> {
         if self.deadline_reached(now) {
-            return Err(self.terminate(QueryControlError::DeadlineExceeded));
+            return Err(self.handoff_deadline_error());
         }
         match self.0.accounting.terminal() {
             Some(QueryControlError::DeadlineExceeded) => Err(QueryControlError::DeadlineExceeded),
             _ => Ok(()),
         }
+    }
+
+    /// Classify an expired, representable handoff clock independently from the
+    /// sticky first accounting cause. The latter remains available internally.
+    fn handoff_deadline_error(&self) -> QueryControlError {
+        if !self.0.deadline_representable {
+            return self
+                .0
+                .accounting
+                .terminal()
+                .unwrap_or(QueryControlError::AccountingOverflow);
+        }
+        let _ = self.terminate(QueryControlError::DeadlineExceeded);
+        QueryControlError::DeadlineExceeded
     }
 
     fn terminate(&self, reason: QueryControlError) -> QueryControlError {
@@ -271,6 +288,97 @@ mod tests {
             .await;
 
         assert_eq!(result, Err(QueryControlError::DeadlineExceeded));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_handoff_before_deadline_ignores_a_sticky_resource_failure() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(0, u64::MAX, u64::MAX),
+        );
+        assert_eq!(
+            budget.consume(QueryCharge::SourceWork, 1),
+            Err(QueryControlError::SourceWorkExceeded)
+        );
+
+        assert_eq!(
+            budget.run_until_deadline(async { "response" }).await,
+            Ok("response")
+        );
+        assert_eq!(
+            budget.checkpoint(),
+            Err(QueryControlError::SourceWorkExceeded)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_handoff_reports_deadline_while_accounting_keeps_first_cause() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(0, u64::MAX, u64::MAX),
+        );
+        assert_eq!(
+            budget.consume(QueryCharge::SourceWork, 1),
+            Err(QueryControlError::SourceWorkExceeded)
+        );
+        tokio::time::advance(Duration::from_secs(5)).await;
+
+        assert_eq!(
+            budget.run_until_deadline(async { "response" }).await,
+            Err(QueryControlError::DeadlineExceeded)
+        );
+        assert_eq!(
+            budget.checkpoint(),
+            Err(QueryControlError::SourceWorkExceeded)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pending_handoff_reports_deadline_after_an_earlier_resource_failure() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(5),
+            QueryLimits::new(0, u64::MAX, u64::MAX),
+        );
+        assert_eq!(
+            budget.consume(QueryCharge::SourceWork, 1),
+            Err(QueryControlError::SourceWorkExceeded)
+        );
+        let waiter = tokio::spawn({
+            let budget = budget.clone();
+            async move {
+                budget
+                    .run_until_deadline(std::future::pending::<()>())
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+
+        assert_eq!(
+            waiter.await.expect("waiter task"),
+            Err(QueryControlError::DeadlineExceeded)
+        );
+        assert_eq!(
+            budget.checkpoint(),
+            Err(QueryControlError::SourceWorkExceeded)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unrepresentable_handoff_deadline_remains_accounting_overflow() {
+        let budget = RequestBudget::after(
+            Duration::MAX,
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+        );
+
+        assert_eq!(
+            budget.run_until_deadline(async { "response" }).await,
+            Err(QueryControlError::AccountingOverflow)
+        );
+        assert_eq!(
+            budget.checkpoint(),
+            Err(QueryControlError::AccountingOverflow)
+        );
     }
 
     #[tokio::test(start_paused = true)]

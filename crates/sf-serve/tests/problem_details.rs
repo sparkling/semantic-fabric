@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
@@ -67,6 +67,14 @@ async fn assert_problem(
         .oneshot(req)
         .await
         .expect("route request");
+    assert_problem_response(response, expected_status, expected_code).await
+}
+
+async fn assert_problem_response(
+    response: axum::response::Response,
+    expected_status: StatusCode,
+    expected_code: &str,
+) -> Vec<u8> {
     assert_eq!(response.status(), expected_status);
     assert_eq!(
         response.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -128,6 +136,81 @@ fn assert_secret_absent(body: &[u8]) {
         "secret sentinel escaped byte-for-byte: {}",
         String::from_utf8_lossy(body)
     );
+}
+
+#[tokio::test]
+async fn unknown_route_is_a_redacted_not_found_problem() {
+    let req = Request::builder()
+        .uri(format!("/{SECRET}"))
+        .body(Body::empty())
+        .expect("static request");
+    let body = assert_problem(
+        config_with_stale_schema(),
+        req,
+        StatusCode::NOT_FOUND,
+        "not-found",
+    )
+    .await;
+
+    assert_secret_absent(&body);
+}
+
+#[tokio::test]
+async fn unsupported_method_is_a_redacted_problem_with_allow() {
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/sparql")
+        .body(Body::from(SECRET))
+        .expect("static request");
+    let response = router(Arc::new(config_with_stale_schema()))
+        .oneshot(req)
+        .await
+        .expect("route request");
+    assert_eq!(
+        response.headers().get(header::ALLOW).expect("Allow header"),
+        "GET,HEAD,POST"
+    );
+    let body = assert_problem_response(
+        response,
+        StatusCode::METHOD_NOT_ALLOWED,
+        "method-not-allowed",
+    )
+    .await;
+
+    assert_secret_absent(&body);
+}
+
+#[tokio::test]
+async fn extractor_body_limit_is_a_redacted_payload_problem() {
+    let mut cfg = config_with_stale_schema();
+    cfg.max_query_len = 8;
+    let req = request(
+        &format!("query={SECRET}"),
+        "application/x-www-form-urlencoded",
+    );
+    let body = assert_problem(cfg, req, StatusCode::PAYLOAD_TOO_LARGE, "payload-too-large").await;
+
+    assert_secret_absent(&body);
+}
+
+#[tokio::test]
+async fn body_stream_failure_is_a_redacted_invalid_request_problem() {
+    let stream = tokio_stream::once(Err::<Bytes, std::io::Error>(std::io::Error::other(SECRET)));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/sparql")
+        .header(header::CONTENT_TYPE, "application/sparql-query")
+        .body(Body::from_stream(stream))
+        .expect("static request");
+    let body = assert_problem(
+        config_with_stale_schema(),
+        req,
+        StatusCode::BAD_REQUEST,
+        "invalid-request",
+    )
+    .await;
+
+    assert_secret_absent(&body);
 }
 
 #[tokio::test]
