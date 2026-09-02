@@ -263,3 +263,19 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
         assert_eq!(budget.consumed(QueryCharge::ResultItems), 1);
     }
 }
+
+#[test]
+fn zero_ask_result_budget_rejects_before_source_io() {
+    let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
+    let (mut backend, calls) = backend(vec![vec![row("one")]]);
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 0, u64::MAX));
+
+    let error = super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::QueryControl(QueryControlError::ResultItemsExceeded)
+    ));
+    assert_calls(&calls, 0, 0, 0);
+    assert_eq!(budget.consumed(QueryCharge::ResultItems), 0);
+}

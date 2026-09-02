@@ -259,13 +259,16 @@ pub async fn ask_controlled<B: SqlBackend>(
     b: &mut B,
     control: &dyn QueryControl,
 ) -> Result<bool> {
+    // ASK always has exactly one protocol result. Reserve it before source work
+    // so an impossible zero-result budget fails without probing or opening the
+    // backend.
+    control.consume(QueryCharge::ResultItems, 1)?;
     let mut any = false;
     for_each_solution_controlled(plan, b, control, |_b, _s| {
         any = true;
         Ok(std::future::ready(Ok(())))
     })
     .await?;
-    control.consume(QueryCharge::ResultItems, 1)?;
     Ok(any)
 }
 
