@@ -43,6 +43,7 @@ where
         // `canonical_lexical` numeric formatting) that measurably benefits from
         // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
         parallel_term_gen: true,
+        stop_after_first: false,
         dedup_scopes: &plan.dedup_scopes,
         control,
     };
@@ -56,6 +57,9 @@ where
     let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
     for result in rust_group_result_rows(plan, rg, inner_rows)? {
         sink(&dummy, &result)?.await?;
+        if matches!(plan.form, PlanForm::Ask) {
+            break;
+        }
     }
     Ok(())
 }

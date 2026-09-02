@@ -152,12 +152,12 @@ where
         // doc comment and [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the
         // measured reason (ledger F8, un-gated on an idle-machine re-measurement).
         parallel_term_gen: true,
+        stop_after_first: matches!(plan.form, PlanForm::Ask),
         dedup_scopes: &plan.dedup_scopes,
         control,
     };
     run_branches(&branches, ctx, b, sink).await
 }
-
 /// The scalar [`Plan`] fields [`run_branches`] needs, threaded independently of
 /// `branches` — decoupled so [`rust_group_execute`]'s inner-collection call can
 /// override just the modifiers ([`Plan::prepared_branches`]'s single-branch
@@ -170,10 +170,10 @@ pub(super) struct PlanCtx<'a> {
     pub(super) order: &'a [OrderKey],
     pub(super) offset: usize,
     pub(super) limit: Option<usize>,
-    /// Whether [`reconstruct_batch`] may dispatch a large-enough batch to rayon
-    /// (see its `parallel_allowed` doc comment, ledger F8) — `true` only for
-    /// [`rust_group_execute`]'s inner collection.
+    /// Whether [`reconstruct_batch`] may dispatch a large batch to rayon.
     pub(super) parallel_term_gen: bool,
+    /// Stop after the first final sink call; false for aggregate inner collection.
+    pub(super) stop_after_first: bool,
     /// ADR-0034 C0e restoration — post-cascade, executor-branch-aligned shared
     /// term-dedup scopes. Empty means no shared groups; otherwise its length
     /// must equal `branches.len()` and each slot corresponds to the same index.
@@ -298,7 +298,8 @@ where
                               // ORDER BY is applied HERE for every plan, never in SQL (a SQL ORDER BY inherits
                               // the column's collation/affinity). Buffer, stable-sort via the type-aware
                               // order_cmp, then OFFSET/LIMIT (SPARQL §15: order, then slice).
-    let ordered = !ctx.order.is_empty();
+                              // ASK existence is order-independent; do not force a full-source buffer.
+    let ordered = !ctx.order.is_empty() && !ctx.stop_after_first;
     let mut buffer: Vec<(usize, Bindings)> = Vec::new();
     for (bi, (branch, e)) in branches.iter().zip(&emitted_branches).enumerate() {
         // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path — see `cascade::
@@ -349,7 +350,9 @@ where
         // grows to the full `TERM_GEN_BATCH_SIZE` for throughput.
         let mut first_batch = true;
         'branch_rows: loop {
-            let target = if first_batch {
+            let target = if ctx.stop_after_first {
+                1
+            } else if first_batch {
                 TERM_GEN_FIRST_BATCH_SIZE
             } else {
                 TERM_GEN_BATCH_SIZE
@@ -446,7 +449,7 @@ where
                 }
                 // Streaming OFFSET/LIMIT only when SQL didn't apply them (a multi-branch
                 // bag-union; a single unordered branch sliced in SQL).
-                if multi {
+                if multi || (ctx.stop_after_first && !ctx.order.is_empty()) {
                     if seen < ctx.offset {
                         seen += 1;
                         continue;
@@ -459,6 +462,9 @@ where
                 }
                 emitted += 1;
                 sink(branch, &bindings)?.await?;
+                if ctx.stop_after_first {
+                    return Ok(());
+                }
             }
             if exhausted {
                 break;
@@ -484,6 +490,9 @@ where
         for &i in idx.iter().skip(ctx.offset).take(take) {
             let (bi, bindings) = &buffer[i];
             sink(&branches[*bi], bindings)?.await?;
+            if ctx.stop_after_first {
+                return Ok(());
+            }
         }
     }
     Ok(())

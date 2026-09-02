@@ -10,7 +10,7 @@ use sf_core::NamedNode;
 use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 
-use crate::iq::{Branch, Scan, TermDef};
+use crate::iq::{Branch, OrderKey, RustGroup, Scan, TermDef};
 use crate::{Error, Plan, PlanForm};
 
 use super::{ask_controlled, construct_each_async_controlled, select_each_async_controlled};
@@ -262,6 +262,83 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
         );
         assert_eq!(budget.consumed(QueryCharge::ResultItems), 1);
     }
+}
+
+#[test]
+fn ask_stops_after_the_first_solution_and_its_pull() {
+    let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
+    let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
+    let budget = QueryBudget::new(QueryLimits::new(3, 1, u64::MAX));
+
+    assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
+    assert_calls(&calls, 1, 1, 1);
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), 3);
+    assert_eq!(budget.consumed(QueryCharge::ResultItems), 1);
+}
+
+#[test]
+fn ask_does_not_truncate_the_inner_rows_of_rust_group() {
+    let mut plan = plan(PlanForm::Ask, vec![column_branch(0)]);
+    plan.offset = 1;
+    plan.rust_group = Some(RustGroup {
+        keys: vec!["v".to_owned()],
+        aggs: Vec::new(),
+        post_exprs: Vec::new(),
+    });
+    let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
+    let budget = QueryBudget::new(QueryLimits::new(5, 1, u64::MAX));
+
+    assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
+    assert_calls(&calls, 1, 1, 3);
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), 5);
+}
+
+#[test]
+fn ask_ignores_order_but_still_applies_a_single_branch_offset() {
+    let mut plan = plan(PlanForm::Ask, vec![column_branch(0)]);
+    plan.order = vec![OrderKey {
+        var: "v".to_owned(),
+        descending: false,
+        expr: None,
+    }];
+    plan.offset = 3;
+    let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
+    let budget = QueryBudget::new(QueryLimits::new(5, 1, u64::MAX));
+
+    assert!(!super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
+    assert_calls(&calls, 1, 1, 3);
+}
+
+#[test]
+fn ordered_ask_stops_after_the_first_post_offset_solution() {
+    let mut plan = plan(PlanForm::Ask, vec![column_branch(0)]);
+    plan.order = vec![OrderKey {
+        var: "v".to_owned(),
+        descending: true,
+        expr: None,
+    }];
+    plan.offset = 1;
+    let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
+    let budget = QueryBudget::new(QueryLimits::new(4, 1, u64::MAX));
+
+    assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
+    assert_calls(&calls, 1, 1, 2);
+}
+
+#[test]
+fn ordered_ask_limit_zero_emits_no_solution() {
+    let mut plan = plan(PlanForm::Ask, vec![column_branch(0)]);
+    plan.order = vec![OrderKey {
+        var: "v".to_owned(),
+        descending: false,
+        expr: None,
+    }];
+    plan.limit = Some(0);
+    let (mut backend, calls) = backend(vec![vec![row("one")]]);
+    let budget = QueryBudget::new(QueryLimits::new(3, 1, u64::MAX));
+
+    assert!(!super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
+    assert_calls(&calls, 1, 1, 1);
 }
 
 #[test]
