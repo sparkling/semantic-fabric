@@ -17,6 +17,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
+use sf_core::query_control::QueryControl;
 use sf_core::{Term, Triple};
 
 use crate::{Plan, Result};
@@ -127,6 +128,21 @@ where
     crate::exec_core::select_each_async(plan, &mut b, sink).await
 }
 
+/// Governed serve sibling of [`select_each_sqlite_owned`].
+pub async fn select_each_sqlite_owned_controlled<F, Fut>(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
+    crate::exec_core::select_each_async_controlled(plan, &mut b, control, sink).await
+}
+
 /// Stream a CONSTRUCT's per-solution triples over an owned SQLite handle into an
 /// async `sink` (serve lane), bounded by the template size — never the whole graph.
 pub async fn construct_each_sqlite_owned<F, Fut>(
@@ -142,11 +158,36 @@ where
     crate::exec_core::construct_each_async(plan, &mut b, sink).await
 }
 
+/// Governed serve sibling of [`construct_each_sqlite_owned`].
+pub async fn construct_each_sqlite_owned_controlled<F, Fut>(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
+    crate::exec_core::construct_each_async_controlled(plan, &mut b, control, sink).await
+}
+
 /// Execute an ASK over an owned SQLite handle (serve lane) — true iff at least one
 /// solution exists. Spawnable: the concrete owned-backend future is `Send`.
 pub async fn ask_sqlite_owned(plan: &Plan, conn: Arc<Mutex<Connection>>) -> Result<bool> {
     let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
     crate::exec_core::ask(plan, &mut b).await
+}
+
+/// Governed serve sibling of [`ask_sqlite_owned`].
+pub async fn ask_sqlite_owned_controlled(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    control: &dyn QueryControl,
+) -> Result<bool> {
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
+    crate::exec_core::ask_controlled(plan, &mut b, control).await
 }
 
 /// Serialise triples as N-Triples 1.2 (ADR-0019 G1: triple-term graphs serialise

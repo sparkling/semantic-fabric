@@ -35,8 +35,9 @@ pub(crate) use driver::block_on;
 pub(crate) use expression::eval_expr;
 pub(crate) use forms::construct_may_need_cross_branch_dedup;
 pub use forms::{
-    ask, construct, construct_each_async, construct_triples, dump_quads, dump_quads_stream, select,
-    select_each, select_each_async, Solutions,
+    ask, ask_controlled, construct, construct_each_async, construct_each_async_controlled,
+    construct_triples, dump_quads, dump_quads_stream, select, select_each, select_each_async,
+    select_each_async_controlled, Solutions,
 };
 #[allow(unused_imports)]
 pub(crate) use row::{reconstruct, Bindings, RawRow};
@@ -52,6 +53,9 @@ mod batch_reconstruct_tests;
 #[cfg(test)]
 #[path = "exec_core/bindings_tests.rs"]
 mod bindings_tests;
+#[cfg(test)]
+#[path = "exec_core/budget_tests.rs"]
+mod budget_tests;
 #[cfg(test)]
 #[path = "exec_core_deadline_tests.rs"]
 mod deadline_checkpoint_tests;

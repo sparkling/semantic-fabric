@@ -111,6 +111,9 @@ pub enum Error {
     /// Term generation / datatype error from `sf-core`.
     #[error("core error: {0}")]
     Core(String),
+    /// Request-scoped governance stopped controlled execution.
+    #[error(transparent)]
+    QueryControl(#[from] sf_core::query_control::QueryControlError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

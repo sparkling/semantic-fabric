@@ -24,6 +24,7 @@
 use std::future::Future;
 use std::ops::Deref;
 
+use sf_core::query_control::QueryControl;
 use sf_core::{Quad, Term, Triple};
 use sf_sql::backend::pg::PgBackend;
 use sf_sql::Dialect;
@@ -61,6 +62,22 @@ where
     crate::exec_core::construct_each_async(plan, &mut b, sink).await
 }
 
+/// Governed serve sibling of [`construct_each_pg`].
+pub async fn construct_each_pg_controlled<C, F, Fut>(
+    plan: &Plan,
+    client: C,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    C: Deref<Target = Client> + Send + 'static,
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = PgBackend::new(client);
+    crate::exec_core::construct_each_async_controlled(plan, &mut b, control, sink).await
+}
+
 /// Execute a SELECT over a live PostgreSQL connection, collecting solutions —
 /// the async mirror of the sync SQLite [`crate::exec::select`] (ADR-0003 R3: the
 /// SAME reconstruction). Bounded-memory streaming is the [`crate::exec_core`]
@@ -88,6 +105,22 @@ where
     crate::exec_core::select_each_async(plan, &mut b, sink).await
 }
 
+/// Governed serve sibling of [`select_each_pg`].
+pub async fn select_each_pg_controlled<C, F, Fut>(
+    plan: &Plan,
+    client: C,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    C: Deref<Target = Client> + Send + 'static,
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = PgBackend::new(client);
+    crate::exec_core::select_each_async_controlled(plan, &mut b, control, sink).await
+}
+
 /// Execute an ASK over a live PostgreSQL connection — true iff at least one
 /// solution exists. The async mirror of the sync [`crate::exec::ask`] (same
 /// streaming core, same reconstruction).
@@ -103,6 +136,19 @@ where
 {
     let mut b = PgBackend::new(client);
     crate::exec_core::ask(plan, &mut b).await
+}
+
+/// Governed serve sibling of [`ask_pg`].
+pub async fn ask_pg_controlled<C>(
+    plan: &Plan,
+    client: C,
+    control: &dyn QueryControl,
+) -> Result<bool>
+where
+    C: Deref<Target = Client> + Send + 'static,
+{
+    let mut b = PgBackend::new(client);
+    crate::exec_core::ask_controlled(plan, &mut b, control).await
 }
 
 /// Collect the mapping-IR **quad** dump over a live PostgreSQL connection

@@ -30,6 +30,7 @@
 use std::future::Future;
 
 use mysql_async::Conn;
+use sf_core::query_control::QueryControl;
 use sf_core::{Quad, Term, Triple};
 use sf_sql::backend::mysql::MysqlBackend;
 use sf_sql::Dialect;
@@ -91,6 +92,21 @@ where
     crate::exec_core::select_each_async(plan, &mut b, sink).await
 }
 
+/// Governed serve sibling of [`select_each_mysql`].
+pub async fn select_each_mysql_controlled<F, Fut>(
+    plan: &Plan,
+    conn: Conn,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = MysqlBackend::new(conn);
+    crate::exec_core::select_each_async_controlled(plan, &mut b, control, sink).await
+}
+
 /// Stream a CONSTRUCT's per-solution triples over a dedicated MySQL connection
 /// (design §4.2), bounded by the template size — never the whole graph.
 pub async fn construct_each_mysql<F, Fut>(plan: &Plan, conn: Conn, sink: F) -> Result<()>
@@ -100,6 +116,21 @@ where
 {
     let mut b = MysqlBackend::new(conn);
     crate::exec_core::construct_each_async(plan, &mut b, sink).await
+}
+
+/// Governed serve sibling of [`construct_each_mysql`].
+pub async fn construct_each_mysql_controlled<F, Fut>(
+    plan: &Plan,
+    conn: Conn,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = MysqlBackend::new(conn);
+    crate::exec_core::construct_each_async_controlled(plan, &mut b, control, sink).await
 }
 
 /// Execute an ASK over a **dedicated** owned MySQL connection (serve lane) — true
@@ -115,4 +146,14 @@ where
 pub async fn ask_each_mysql(plan: &Plan, conn: Conn) -> Result<bool> {
     let mut b = MysqlBackend::new(conn);
     crate::exec_core::ask(plan, &mut b).await
+}
+
+/// Governed serve sibling of [`ask_each_mysql`].
+pub async fn ask_each_mysql_controlled(
+    plan: &Plan,
+    conn: Conn,
+    control: &dyn QueryControl,
+) -> Result<bool> {
+    let mut b = MysqlBackend::new(conn);
+    crate::exec_core::ask_controlled(plan, &mut b, control).await
 }

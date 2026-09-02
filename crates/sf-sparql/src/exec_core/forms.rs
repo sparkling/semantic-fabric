@@ -9,11 +9,12 @@ pub(super) async fn rust_group_execute<B, F, Fut>(
     plan: &Plan,
     b: &mut B,
     rg: &RustGroup,
+    control: &dyn QueryControl,
     mut sink: F,
 ) -> Result<()>
 where
     B: SqlBackend,
-    F: FnMut(&Branch, &Bindings) -> Fut,
+    F: FnMut(&Branch, &Bindings) -> Result<Fut>,
     Fut: Future<Output = Result<()>>,
 {
     // The inner collection's "prepared branches" — `Plan::prepared_branches`'s
@@ -43,17 +44,18 @@ where
         // it (ledger F8 / `micro_distinct_agg`, `micro_group_avg_rust`).
         parallel_term_gen: true,
         dedup_scopes: &plan.dedup_scopes,
+        control,
     };
     let mut inner_rows: Vec<Bindings> = Vec::new();
     run_branches(&inner_branches, inner_ctx, b, |_, bindings| {
         inner_rows.push(bindings.clone());
-        std::future::ready(Ok(()))
+        Ok(std::future::ready(Ok(())))
     })
     .await?;
 
     let dummy = plan.branches.first().cloned().unwrap_or_else(Branch::empty);
     for result in rust_group_result_rows(plan, rg, inner_rows)? {
-        sink(&dummy, &result).await?;
+        sink(&dummy, &result)?.await?;
     }
     Ok(())
 }
@@ -73,7 +75,7 @@ pub async fn select<B: SqlBackend>(plan: &Plan, b: &mut B) -> Result<Solutions> 
     let mut rows = Vec::new();
     for_each_solution(plan, b, |_branch, bindings| {
         rows.push(vars.iter().map(|v| bindings.get(v).cloned()).collect());
-        std::future::ready(Ok(()))
+        Ok(std::future::ready(Ok(())))
     })
     .await?;
     Ok(Solutions { vars, rows })
@@ -97,7 +99,7 @@ where
     for_each_solution(plan, b, |_branch, bindings| {
         row.clear();
         row.extend(vars.iter().map(|v| bindings.get(v).cloned()));
-        std::future::ready(sink(&row))
+        Ok(std::future::ready(sink(&row)))
     })
     .await
 }
@@ -107,7 +109,24 @@ where
 /// backpressures the server-side cursor (ADR-0006 / ADR-0010 §C). SQLite's serve
 /// lane keeps the sync [`select_each`]. Written once over the shared core, so it
 /// inherits rust_group / DISTINCT / ORDER / OFFSET / LIMIT.
-pub async fn select_each_async<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
+pub async fn select_each_async<B, F, Fut>(plan: &Plan, b: &mut B, sink: F) -> Result<()>
+where
+    B: SqlBackend + Send,
+    for<'s> B::Stream<'s>: Send,
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    select_each_async_controlled(plan, b, &UncontrolledQueryControl, sink).await
+}
+
+/// Controlled serve-lane SELECT. Each semantic result is charged before it
+/// reaches the serializer; rows discarded by modifiers remain source work only.
+pub async fn select_each_async_controlled<B, F, Fut>(
+    plan: &Plan,
+    b: &mut B,
+    control: &dyn QueryControl,
+    mut sink: F,
+) -> Result<()>
 where
     B: SqlBackend + Send,
     for<'s> B::Stream<'s>: Send,
@@ -122,9 +141,10 @@ where
             ))
         }
     };
-    for_each_solution(plan, b, |_branch, bindings| {
+    for_each_solution_controlled(plan, b, control, |_branch, bindings| {
         let row: Vec<Option<Term>> = vars.iter().map(|v| bindings.get(v).cloned()).collect();
-        sink(row)
+        control.consume(QueryCharge::ResultItems, 1)?;
+        Ok(sink(row))
     })
     .await
 }
@@ -168,7 +188,24 @@ pub(crate) fn construct_may_need_cross_branch_dedup(plan: &Plan) -> bool {
 /// Stream a CONSTRUCT's per-solution triples into an ASYNC sink (bounded by the
 /// template size — never the whole graph). The PostgreSQL/MySQL serve-lane form of
 /// [`construct`], written once over the shared core.
-pub async fn construct_each_async<B, F, Fut>(plan: &Plan, b: &mut B, mut sink: F) -> Result<()>
+pub async fn construct_each_async<B, F, Fut>(plan: &Plan, b: &mut B, sink: F) -> Result<()>
+where
+    B: SqlBackend + Send,
+    for<'s> B::Stream<'s>: Send,
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    construct_each_async_controlled(plan, b, &UncontrolledQueryControl, sink).await
+}
+
+/// Controlled serve-lane CONSTRUCT. Result accounting is per emitted triple,
+/// not per input solution or template invocation.
+pub async fn construct_each_async_controlled<B, F, Fut>(
+    plan: &Plan,
+    b: &mut B,
+    control: &dyn QueryControl,
+    mut sink: F,
+) -> Result<()>
 where
     B: SqlBackend + Send,
     for<'s> B::Stream<'s>: Send,
@@ -191,7 +228,7 @@ where
     // stays one identity within a solution, while the NEXT solution advances
     // it, freshening (`instantiate_term`'s `TermPattern::BlankNode` arm).
     let mut solution_id: u64 = 0;
-    for_each_solution(plan, b, |_branch, bindings| {
+    for_each_solution_controlled(plan, b, control, |_branch, bindings| {
         let sid = solution_id;
         solution_id += 1;
         let mut triples: Vec<Triple> = template
@@ -201,19 +238,34 @@ where
         if let Some(seen) = &mut seen {
             triples.retain(|t| seen.insert(t.clone()));
         }
-        sink(triples)
+        let count = u64::try_from(triples.len()).map_err(|_| {
+            Error::QueryControl(sf_core::query_control::QueryControlError::AccountingOverflow)
+        })?;
+        control.consume(QueryCharge::ResultItems, count)?;
+        Ok(sink(triples))
     })
     .await
 }
 
 /// Execute an ASK — true iff at least one solution exists.
 pub async fn ask<B: SqlBackend>(plan: &Plan, b: &mut B) -> Result<bool> {
+    ask_controlled(plan, b, &UncontrolledQueryControl).await
+}
+
+/// Controlled ASK. Its protocol result is one boolean whether or not the graph
+/// pattern has a solution, so it consumes exactly one semantic result item.
+pub async fn ask_controlled<B: SqlBackend>(
+    plan: &Plan,
+    b: &mut B,
+    control: &dyn QueryControl,
+) -> Result<bool> {
     let mut any = false;
-    for_each_solution(plan, b, |_b, _s| {
+    for_each_solution_controlled(plan, b, control, |_b, _s| {
         any = true;
-        std::future::ready(Ok(()))
+        Ok(std::future::ready(Ok(())))
     })
     .await?;
+    control.consume(QueryCharge::ResultItems, 1)?;
     Ok(any)
 }
 
@@ -253,7 +305,7 @@ where
                 sink(triple);
             }
         }
-        std::future::ready(Ok(()))
+        Ok(std::future::ready(Ok(())))
     })
     .await?;
     Ok(count)
@@ -326,7 +378,7 @@ where
         if let Some(q) = quad {
             sink(q);
         }
-        std::future::ready(Ok(()))
+        Ok(std::future::ready(Ok(())))
     })
     .await
 }
@@ -349,6 +401,7 @@ pub struct Solutions {
 }
 use std::future::Future;
 
+use sf_core::query_control::{QueryCharge, QueryControl, UncontrolledQueryControl};
 use sf_core::{Term, Triple};
 use sf_sql::{Dialect, SqlBackend};
 
@@ -356,6 +409,6 @@ use crate::iq::{Branch, RustGroup};
 use crate::{Error, Plan, PlanForm, Result};
 
 use super::aggregation::rust_group_result_rows;
-use super::driver::{for_each_solution, run_branches, PlanCtx};
+use super::driver::{for_each_solution, for_each_solution_controlled, run_branches, PlanCtx};
 use super::row::Bindings;
 use super::template::instantiate;

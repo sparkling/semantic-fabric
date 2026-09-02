@@ -7,6 +7,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use sf_core::query_control::{QueryCharge, QueryControl, UncontrolledQueryControl};
 use sf_core::Term;
 use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 
@@ -113,11 +114,29 @@ fn inject_order_expr_keys(order: &[OrderKey], bindings: Bindings) -> Bindings {
 pub(super) async fn for_each_solution<B, F, Fut>(plan: &Plan, b: &mut B, sink: F) -> Result<()>
 where
     B: SqlBackend,
-    F: FnMut(&Branch, &Bindings) -> Fut,
+    F: FnMut(&Branch, &Bindings) -> Result<Fut>,
     Fut: Future<Output = Result<()>>,
 {
+    for_each_solution_controlled(plan, b, &UncontrolledQueryControl, sink).await
+}
+
+/// Controlled sibling of [`for_each_solution`]. Production serving supplies one
+/// request-scoped control; raw/conformance entry points use the explicit
+/// [`UncontrolledQueryControl`] wrapper above.
+pub(super) async fn for_each_solution_controlled<B, F, Fut>(
+    plan: &Plan,
+    b: &mut B,
+    control: &dyn QueryControl,
+    sink: F,
+) -> Result<()>
+where
+    B: SqlBackend,
+    F: FnMut(&Branch, &Bindings) -> Result<Fut>,
+    Fut: Future<Output = Result<()>>,
+{
+    control.checkpoint()?;
     if let Some(rg) = &plan.rust_group {
-        return rust_group_execute(plan, b, rg, sink).await;
+        return rust_group_execute(plan, b, rg, control, sink).await;
     }
     let branches = plan.prepared_branches();
     let ctx = PlanCtx {
@@ -134,6 +153,7 @@ where
         // measured reason (ledger F8, un-gated on an idle-machine re-measurement).
         parallel_term_gen: true,
         dedup_scopes: &plan.dedup_scopes,
+        control,
     };
     run_branches(&branches, ctx, b, sink).await
 }
@@ -158,6 +178,8 @@ pub(super) struct PlanCtx<'a> {
     /// term-dedup scopes. Empty means no shared groups; otherwise its length
     /// must equal `branches.len()` and each slot corresponds to the same index.
     pub(super) dedup_scopes: &'a [Option<DedupScope>],
+    /// One request-scoped governance identity. Raw APIs pass an explicit no-op.
+    pub(super) control: &'a dyn QueryControl,
 }
 
 /// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
@@ -177,9 +199,10 @@ pub(super) async fn run_branches<B, F, Fut>(
 ) -> Result<()>
 where
     B: SqlBackend,
-    F: FnMut(&Branch, &Bindings) -> Fut,
+    F: FnMut(&Branch, &Bindings) -> Result<Fut>,
     Fut: Future<Output = Result<()>>,
 {
+    ctx.control.checkpoint()?;
     // The post-cascade lift normally guarantees alignment. Keep this boundary
     // fail-closed for hand-built/internal Plans before metadata probing or SQL
     // emission can perform I/O.
@@ -238,9 +261,11 @@ where
             continue;
         }
         let probe = ctx.dialect.probe_sql(source);
+        ctx.control.consume(QueryCharge::SourceWork, 1)?;
         let names = b.column_names(&probe).await.map_err(map_sql_err)?;
         catalog.insert_live(source, names)?;
     }
+    ctx.control.checkpoint()?;
     emit::validate_live_columns(branches, ctx.dialect, &catalog)?;
     // Emission is part of the same preflight. A malformed later branch must fail
     // before an earlier branch can open a cursor or expose a partial result.
@@ -303,6 +328,7 @@ where
         // the same "once per branch, not per row" idiom as `col_index` above).
         let interned = intern_bindings(branch);
         // The ONLY bind site: `e.params` bound as N positional params by the adapter.
+        ctx.control.consume(QueryCharge::SourceWork, 1)?;
         let mut s = b
             .open_branch(&e.sql, &e.params)
             .await
@@ -330,6 +356,10 @@ where
             };
             let mut raw_batch: Vec<RawTuple> = Vec::with_capacity(target);
             while raw_batch.len() < target {
+                // Charge the observable pull attempt before source I/O. The final
+                // EOF attempt is work too, and a zero budget therefore rejects
+                // before metadata/open/pull can touch the source.
+                ctx.control.consume(QueryCharge::SourceWork, 1)?;
                 match s.next_row().await.map_err(map_sql_err)? {
                     Some(t) => raw_batch.push(t),
                     None => break,
@@ -344,6 +374,7 @@ where
             // one checkpoint per bounded batch, not source cancellation or CPU
             // pre-emption within reconstruction of that batch.
             cooperative_yield().await;
+            ctx.control.checkpoint()?;
             let exhausted = raw_batch.len() < target;
             first_batch = false;
             // Reconstruct first: DISTINCT needs the projected terms, and dedup must
@@ -427,7 +458,7 @@ where
                     }
                 }
                 emitted += 1;
-                sink(branch, &bindings).await?;
+                sink(branch, &bindings)?.await?;
             }
             if exhausted {
                 break;
@@ -452,7 +483,7 @@ where
         let take = ctx.limit.unwrap_or(usize::MAX);
         for &i in idx.iter().skip(ctx.offset).take(take) {
             let (bi, bindings) = &buffer[i];
-            sink(&branches[*bi], bindings).await?;
+            sink(&branches[*bi], bindings)?.await?;
         }
     }
     Ok(())

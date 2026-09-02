@@ -128,6 +128,21 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > cancellation, recursion, response-atomicity and production-admission
 > nonclaims remain unchanged.
 
+> **Status correction, part 7 (2026-09-02, executor enforcement).** The shared
+> SQLite/PostgreSQL/MySQL executor now accepts the runtime-neutral control and
+> charges source work before every catalog probe, branch open and row-pull
+> attempt (including the final EOF pull). SELECT charges each semantic row,
+> CONSTRUCT atomically charges the number of emitted triples, and ASK charges
+> exactly one boolean; every charge occurs before the caller's sink. Raw and
+> conformance entry points remain explicitly uncontrolled, while dedicated
+> controlled siblings exist for the serving lane. Boundary tests prove
+> zero-budget rejection before source I/O, exact accounting for OFFSET-discarded
+> rows, no over-limit sink call, and all-or-nothing multi-triple charging. This
+> still does not complete R4: `sf-serve` does not yet mint and carry this budget
+> through compilation and serialization, recursive work inside source SQL is not
+> observable, and no common source-native cancellation contract or atomic
+> pre-`200` response exists.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
