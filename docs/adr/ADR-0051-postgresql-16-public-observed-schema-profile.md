@@ -16,8 +16,11 @@ This ADR is **proposed**. It freezes the first production-shaped observation pro
 but no adapter currently emits it and no runtime currently carries it. The profile covers one PostgreSQL 16
 semantic catalogue contract; PostgreSQL 16.9 and 16.15 are its initial exact live qualification targets.
 The exact engine-version selector, registered identity finalizer and complete source-type/default-collation normalizer
-are now implemented as private `sf-sql` code with no production caller. Relation/column and constraint normalization,
-catalogue SQL/decoding, adapter wiring, qualification receipts and runtime carriage remain unimplemented.
+are now implemented as private `sf-sql` code with no production caller. Relation/column and constraint normalization
+are also implemented as private, dead-staged code with adversarial unit coverage; their SQL catalogue decoder,
+adapter wiring, qualification receipts and runtime carriage remain unimplemented. The constraint raw-fact contract
+requires explicit decoder proofs for FK type/facet equality, operator shape, trigger structure/action mapping and
+supported action codes, so a later decoder cannot silently infer or weaken those invariants.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.
