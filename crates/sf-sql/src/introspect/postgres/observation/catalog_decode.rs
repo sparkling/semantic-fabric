@@ -203,6 +203,19 @@ impl CatalogAttributeRowV1 {
         } else if !self.is_dropped {
             return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
         }
+        if self.is_dropped {
+            if self.attribute_type_oid != 0
+                || self.joined_type_oid.is_some()
+                || self.joined_collation_oid.is_some()
+            {
+                return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
+            }
+        } else if self.joined_type_oid != Some(self.attribute_type_oid)
+            || (self.collation_oid == 0) != self.joined_collation_oid.is_none()
+            || (self.collation_oid != 0 && self.joined_collation_oid != Some(self.collation_oid))
+        {
+            return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
+        }
         Ok(())
     }
 }
