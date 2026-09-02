@@ -156,8 +156,9 @@ non-equivalent killed, four independently proved guard-equivalent, and zero
 unresolved; two fresh networkless runs reproduced deterministic 11,963,849-
 and 11,608,234-byte transcripts and complete rollback/cleanup. The sealed Node
 oracle and public bundle remain byte-identical, so no product runtime input or
-export changed. Hosted V3 evidence remains pending until the exact Node 20/24
-CI matrix is green; no hosted run receipt is tracked. Live bridge/store/runner
+export changed. Hosted run [`33636424967`](https://github.com/sparkling/semantic-fabric/actions/runs/33636424967)
+at exact `d0cc5fb938a1ff8b70859c19882934461fe23c5a` passes the exact Node 20/24 V3 matrix; no hosted run receipt is
+tracked. Live bridge/store/runner
 work belongs to Rust; Node execution expansion is closed.
 
 The parent harness replaces Node 20's asynchronous recursive watcher with

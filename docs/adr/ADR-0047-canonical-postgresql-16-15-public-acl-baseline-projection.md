@@ -26,8 +26,8 @@ the independently pinned manifest.
 The V1/V2 receipts are test-fixture evidence only and remain immutable byte-exact predecessors; the additive V3 replay contract also pins their historical replay implementations and
 never invokes those runners. V3 defines four evidence profiles—`baseline-v1`,
 `baseline-v2`, `branch` and `final-where`—but does not authenticate a historical
-run event or admit a runtime fixture. Hosted V3 evidence remains pending until
-the exact CI gate is green.
+run event or admit a runtime fixture. Hosted run [`33636424967`](https://github.com/sparkling/semantic-fabric/actions/runs/33636424967)
+at exact `d0cc5fb938a1ff8b70859c19882934461fe23c5a` passes the Node 20.0.0 and 24.14.1 V3 gates; no hosted run receipt is tracked.
 
 ## Context
 
@@ -401,7 +401,7 @@ The receipt is exactly **19 executed; 15/15 non-equivalent killed; four guard-
 equivalent; zero unresolved**. Postflight proves both transactions per run rolled back.
 The additive V3 gate invokes those four V3 profiles only, each twice in a fresh networkless anonymous-volume container. It requires PID 1 `postgres` plus a
 successful `pg_isready`; historical V1/V2 receipts and runners remain byte-exact
-and uninvoked. Hosted evidence remains pending until exact Node 20/24 CI is green.
+and uninvoked. Hosted run `33636424967` passes exact Node 20/24 CI.
 
 This closes item 5's branch, final-`WHERE`, zero, single-atom omission/addition
 and count-neutral-substitution subsets. Item 4 and the remaining value,
@@ -411,7 +411,7 @@ receipt parser are oracle evidence; item 6's Rust live observation and
 PostgreSQL adapter remain open.
 All mutation machinery remains outside Node-oracle build inputs and exports.
 The V3 contract and any developer-local result grant no runtime or admission
-authority; only a green hosted gate can supply the still-pending hosted evidence.
+authority; the green hosted gate supplies development evidence only.
 
 ### 8. Record the reproduced test-only candidate
 
@@ -447,7 +447,7 @@ omitted classes.
 The additive V3 replay contract retains those V1/V2 receipt and historical-runner bytes
 without invoking either runner. Its four named V3 profiles each require two
 distinct fresh networkless anonymous-volume containers, PID 1 `postgres` and
-`pg_isready`; it remains test-only and awaits green hosted CI.
+`pg_isready`; hosted run `33636424967` is green and remains test-only.
 
 The reproduced candidate fixture is **4,059 records**, **36,532 JSON nodes** and **860,988
 bytes**, with raw SHA-256

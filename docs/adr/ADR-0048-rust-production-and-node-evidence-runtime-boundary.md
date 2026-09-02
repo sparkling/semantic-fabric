@@ -16,7 +16,7 @@ This ADR is **accepted** by explicit maintainer direction on 2026-09-01. It
 fixes the implementation-language, packaging and authority boundary for the
 application, coding harness and proposed capture supervisor.
 
-It does not accept ADR-0039 or ADR-0041 through ADR-0047, claim that a Rust
+It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050, claim that a Rust
 supervisor exists, authorize a database or deployment, or weaken any final
 correctness, security, performance, reproducibility or release gate. Existing
 TypeScript artefacts remain non-authorizing reference evidence.
@@ -212,8 +212,8 @@ receipts and replay implementations byte-exact and never invokes those runners.
 It invokes only `baseline-v1`, `baseline-v2`, `branch` and `final-where`, each
 twice in distinct fresh networkless anonymous-volume containers with no ports,
 and accepts readiness only after PID 1 is `postgres` and `pg_isready` succeeds.
-Hosted evidence remains pending until exact Node 20/24 CI is green. This Node
-work is non-deployable development evidence and grants no runtime or admission.
+Hosted run [`33636424967`](https://github.com/sparkling/semantic-fabric/actions/runs/33636424967)
+at exact `d0cc5fb938a1ff8b70859c19882934461fe23c5a` passes exact Node 20/24 V3 CI. No hosted run receipt is tracked. This Node work is non-deployable development evidence and grants no runtime or admission.
 
 Commit `cbb63ab` adds a separate development-only table/column inventory gate.
 It recounts the sealed 11 stores, 112 tables and 598 columns, then inspects each
@@ -254,7 +254,8 @@ and the entire streamed execution to one verified source generation; removing
 optimiser facts after generation would be insufficient. These changes close the
 later-DDL integrity-constraint wrong-answer path, but do not provide structural/
 type schema digests or drift detection, atomic reload, a verified-constraint
-lease, federation, production admission or release authority.
+lease, federation, production admission or release authority. Proposed ADR-0050
+specifies that Rust-only M5 design without claiming implementation.
 
 ## Consequences
 
@@ -293,5 +294,6 @@ lease, federation, production admission or release authority.
 [ADR-0043](ADR-0043-postgresql-supervisor-registration-state-and-dormant-adapter.md),
 [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md),
 [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md),
-[ADR-0046](ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md), and
-[ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md).
+[ADR-0046](ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md),
+[ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md), and
+[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).

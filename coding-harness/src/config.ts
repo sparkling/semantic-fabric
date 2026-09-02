@@ -427,7 +427,7 @@ export const SECURE_HARNESS_CONFIG = parseHarnessConfig({
     'docs/adr/ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md',
     'docs/adr/ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md',
     'docs/adr/ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md',
-    'docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md', 'docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md',
+    'docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md', 'docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md', 'docs/adr/ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md', 'docs/design/ADR-0050-observed-schema-identity-v1-contract.md', 'docs/design/ADR-0050-observed-schema-identity-v1-known-answer-vectors.md',
     'docs/capability-matrix.json',
     'docs/capability-matrix.md',
     'docs/plans/open-issues-ruflo-metaharness-implementation-plan.md',

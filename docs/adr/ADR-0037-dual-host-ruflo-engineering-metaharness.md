@@ -371,7 +371,7 @@ exact-origin and filesystem/resource isolation, bounded retry/cancellation,
 provider-free QE/SAST, schema-V6 evidence law, trusted execution/replay,
 protected dormant retrieval tuning, and PostgreSQL receipt authority. The
 2026-08-31 checkpoint historically passed 905 tests/122 files. The 2026-09-02
-current-tree hermetic checkpoint passes 965 tests/124 files with two skips after
+current-tree hermetic checkpoint passes 966 tests/124 files with two skips after
 refreshing the expanded Rust source closure and controller attestation. The excluded
 mutable ambient collector grants no product, publication, promotion, or evolution authority.
 
