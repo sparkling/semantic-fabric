@@ -211,6 +211,34 @@ mod tests {
     }
 
     #[test]
+    fn ordered_ask_does_not_exempt_an_ordered_nested_select() {
+        let mut nested = select_plan(vec![branch(2)]);
+        nested.order.push(OrderKey {
+            var: "value".to_owned(),
+            descending: false,
+            expr: None,
+        });
+        let mut outer_branch = Branch::empty();
+        outer_branch.subplan_joins.push(SubPlanJoin {
+            alias: 3,
+            plan: Box::new(nested),
+            on: Vec::new(),
+            left: false,
+        });
+        let mut candidate = plan(vec![outer_branch], PlanForm::Ask);
+        candidate.order.push(OrderKey {
+            var: "value".to_owned(),
+            descending: true,
+            expr: None,
+        });
+
+        assert_eq!(
+            candidate.source_sized_states(),
+            vec![SourceSizedState::GlobalOrder]
+        );
+    }
+
+    #[test]
     fn classifies_rust_group() {
         let mut candidate = select_plan(vec![branch(1)]);
         candidate.rust_group = Some(RustGroup {

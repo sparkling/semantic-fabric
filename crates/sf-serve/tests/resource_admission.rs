@@ -76,24 +76,28 @@ async fn plain_streaming_plan_remains_admitted() {
 }
 
 #[tokio::test]
-async fn ordered_ask_is_admitted_without_a_global_sort_buffer() {
-    let response = router(Arc::new(config()))
-        .oneshot(query_request(
-            "ASK WHERE { ?item <http://example.test/label> ?label } \
-             ORDER BY DESC(?label) OFFSET 1 LIMIT 1",
-        ))
-        .await
-        .expect("route request");
+async fn ordered_ask_is_admitted_and_respects_the_offset_boundary() {
+    let cfg = Arc::new(config());
+    for (offset, expected) in [(1, true), (2, false)] {
+        let query = format!(
+            "ASK WHERE {{ ?item <http://example.test/label> ?label }} \
+             ORDER BY DESC(?label) OFFSET {offset} LIMIT 1"
+        );
+        let response = router(cfg.clone())
+            .oneshot(query_request(&query))
+            .await
+            .expect("route request");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("collect successful response")
-        .to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).expect("result JSON");
-    assert_eq!(json["boolean"], true);
+        assert_eq!(response.status(), StatusCode::OK, "offset={offset}");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect successful response")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("result JSON");
+        assert_eq!(json["boolean"], expected, "offset={offset}");
+    }
 }
 
 #[tokio::test]
