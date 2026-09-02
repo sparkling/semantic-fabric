@@ -10,14 +10,16 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use deadpool_postgres::PoolError;
-use sf_sparql::{exec, exec_mysql, exec_pg, Error as SparqlError, Plan, PlanForm};
+use sf_core::query_control::{QueryCharge, QueryControl};
+use sf_sparql::{exec, exec_mysql, exec_pg, Plan, PlanForm};
 use sparesults::QueryResultsFormat;
 
 use crate::admission;
 use crate::backend::{Backend, PgConn};
 use crate::binding::BoundPlan;
+use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
-use crate::deadline::{self, CompilerRunError, JoinedTaskError, RequestDeadline};
+use crate::deadline::{self, CompilerRunError, JoinedTaskError};
 use crate::problem::{self, ProblemCode};
 use crate::stream::{self, RdfFormat};
 
@@ -45,32 +47,35 @@ async fn begin_request_deadline(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let deadline = RequestDeadline::after(cfg.timeout);
-    request.extensions_mut().insert(deadline);
-    match deadline.run(next.run(request)).await {
+    let budget = RequestBudget::after(cfg.timeout, cfg.query_limits);
+    request.extensions_mut().insert(budget.clone());
+    let mut cancellation = budget.cancellation_guard();
+    let response = match budget.run_until_deadline(next.run(request)).await {
         Ok(response) => response,
-        Err(_) => timeout_response(),
-    }
+        Err(error) => problem::response_for_control(error),
+    };
+    cancellation.disarm();
+    response
 }
 
 /// `GET /sparql?query=...` (SPARQL 1.2 Protocol query via URL parameters).
 async fn handle_get(
     State(cfg): State<Arc<ServeConfig>>,
-    Extension(deadline): Extension<RequestDeadline>,
+    Extension(budget): Extension<RequestBudget>,
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     let Some(query) = raw.as_deref().and_then(|q| form_param(q, "query")) else {
         return problem::response(ProblemCode::InvalidRequest);
     };
-    process(cfg, query, accept(&headers), deadline).await
+    process(cfg, query, accept(&headers), budget).await
 }
 
 /// `POST /sparql` — either `application/x-www-form-urlencoded` (`query=...`) or a
 /// raw `application/sparql-query` body (SPARQL 1.2 Protocol §2.1.2).
 async fn handle_post(
     State(cfg): State<Arc<ServeConfig>>,
-    Extension(deadline): Extension<RequestDeadline>,
+    Extension(budget): Extension<RequestBudget>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -95,7 +100,7 @@ async fn handle_post(
         }
         _ => return problem::response(ProblemCode::UnsupportedMediaType),
     };
-    process(cfg, query, accept(&headers), deadline).await
+    process(cfg, query, accept(&headers), budget).await
 }
 
 /// The shared request pipeline: cap → compile → dispatch by query form → stream.
@@ -103,13 +108,13 @@ async fn process(
     cfg: Arc<ServeConfig>,
     query: String,
     accept: Option<String>,
-    deadline: RequestDeadline,
+    budget: RequestBudget,
 ) -> Response {
     if query.len() > cfg.max_query_len {
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let bound = match compile(cfg.clone(), query, deadline).await {
+    let bound = match compile(cfg.clone(), query, budget.clone()).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -125,9 +130,9 @@ async fn process(
     let accept = accept.as_deref();
 
     match &plan.form {
-        PlanForm::Select { .. } => respond_select(backend, plan, accept, deadline).await,
-        PlanForm::Ask => respond_ask(backend, plan, accept, deadline).await,
-        PlanForm::Construct { .. } => respond_construct(backend, plan, accept, deadline).await,
+        PlanForm::Select { .. } => respond_select(backend, plan, accept, budget).await,
+        PlanForm::Ask => respond_ask(backend, plan, accept, budget).await,
+        PlanForm::Construct { .. } => respond_construct(backend, plan, accept, budget).await,
     }
 }
 
@@ -139,12 +144,12 @@ async fn process(
 async fn compile(
     cfg: Arc<ServeConfig>,
     query: String,
-    deadline: RequestDeadline,
+    budget: RequestBudget,
 ) -> Result<BoundPlan, Response> {
     let permits = cfg.compiler_permits();
-    let compiled = deadline::run_compiler(deadline, permits, move || cfg.compile(&query)).await;
+    let compiled = deadline::run_compiler(budget, permits, move || cfg.compile(&query)).await;
     match compiled {
-        Err(CompilerRunError::Deadline(_)) => Err(timeout_response()),
+        Err(CompilerRunError::Control(error)) => Err(problem::response_for_control(error)),
         Err(CompilerRunError::AdmissionClosed | CompilerRunError::Join(_)) => {
             Err(problem::response(ProblemCode::Internal))
         }
@@ -162,7 +167,7 @@ async fn respond_select(
     backend: Backend,
     plan: Plan,
     accept: Option<&str>,
-    deadline: RequestDeadline,
+    budget: RequestBudget,
 ) -> Response {
     let fmt = negotiate_results(accept);
     let PlanForm::Select { vars } = &plan.form else {
@@ -175,43 +180,54 @@ async fn respond_select(
     let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
-            stream::select_body_streaming(
+            let drive_budget = budget.clone();
+            stream::select_body_streaming_controlled(
                 move |sink| {
-                    Box::pin(async move { exec::select_each_sqlite_owned(&plan, conn, sink).await })
+                    Box::pin(async move {
+                        exec::select_each_sqlite_owned_controlled(&plan, conn, &drive_budget, sink)
+                            .await
+                    })
                 },
                 fmt,
                 vars,
-                Some(deadline.into_std()),
+                budget,
             )
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, deadline).await {
+            let conn = match acquire_pg(&pool, budget.clone()).await {
                 Ok(c) => c,
                 Err(resp) => return resp,
             };
-            stream::select_body_streaming(
+            let drive_budget = budget.clone();
+            stream::select_body_streaming_controlled(
                 move |sink| {
-                    Box::pin(async move { exec_pg::select_each_pg(&plan, conn, sink).await })
+                    Box::pin(async move {
+                        exec_pg::select_each_pg_controlled(&plan, conn, &drive_budget, sink).await
+                    })
                 },
                 fmt,
                 vars,
-                Some(deadline.into_std()),
+                budget,
             )
         }
-        Backend::Mysql(pool) => stream::select_body_streaming(
-            move |sink| {
-                Box::pin(async move {
-                    let conn = pool
-                        .get_conn()
-                        .await
-                        .map_err(|e| SparqlError::Sql(e.to_string()))?;
-                    exec_mysql::select_each_mysql(&plan, conn, sink).await
-                })
-            },
-            fmt,
-            vars,
-            Some(deadline.into_std()),
-        ),
+        Backend::Mysql(pool) => {
+            let conn = match acquire_mysql(&pool, &budget).await {
+                Ok(conn) => conn,
+                Err(response) => return response,
+            };
+            let drive_budget = budget.clone();
+            stream::select_body_streaming_controlled(
+                move |sink| {
+                    Box::pin(async move {
+                        exec_mysql::select_each_mysql_controlled(&plan, conn, &drive_budget, sink)
+                            .await
+                    })
+                },
+                fmt,
+                vars,
+                budget,
+            )
+        }
     };
     ok_stream(fmt.media_type(), body)
 }
@@ -220,7 +236,7 @@ async fn respond_ask(
     backend: Backend,
     plan: Plan,
     accept: Option<&str>,
-    deadline: RequestDeadline,
+    budget: RequestBudget,
 ) -> Response {
     let fmt = negotiate_results(accept);
     let value = match backend {
@@ -230,20 +246,28 @@ async fn respond_ask(
             // special-case; the adapter owns SQLite's blocking. `tokio::spawn` checks
             // `Send` on the concrete owned-backend future directly (provable).
             let conn = pool.pick();
-            let run = tokio::spawn(async move { exec::ask_sqlite_owned(&plan, conn).await });
-            match deadline::join_task(deadline, run).await {
-                Err(JoinedTaskError::Deadline(_)) => return timeout_response(),
+            let task_budget = budget.clone();
+            let run = tokio::spawn(async move {
+                exec::ask_sqlite_owned_controlled(&plan, conn, &task_budget).await
+            });
+            match deadline::join_task(budget.clone(), run).await {
+                Err(JoinedTaskError::Control(error)) => {
+                    return problem::response_for_control(error)
+                }
                 Err(JoinedTaskError::Join(_)) => return problem::response(ProblemCode::Internal),
                 Ok(r) => r,
             }
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, deadline).await {
+            let conn = match acquire_pg(&pool, budget.clone()).await {
                 Ok(c) => c,
                 Err(resp) => return resp,
             };
-            match deadline.run(exec_pg::ask_pg(&plan, conn)).await {
-                Err(_) => return timeout_response(),
+            match budget
+                .run(exec_pg::ask_pg_controlled(&plan, conn, &budget))
+                .await
+            {
+                Err(error) => return problem::response_for_control(error),
                 Ok(result) => result,
             }
         }
@@ -256,15 +280,18 @@ async fn respond_ask(
             // owned-`Conn` task future directly (provable), and gives the dedicated
             // conn a task to live in, dropped/disposed after the run (§4.2). Mirrors
             // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` join handling.
+            let conn = match acquire_mysql(&pool, &budget).await {
+                Ok(conn) => conn,
+                Err(response) => return response,
+            };
+            let task_budget = budget.clone();
             let run = tokio::spawn(async move {
-                let conn = pool
-                    .get_conn()
-                    .await
-                    .map_err(|e| SparqlError::Sql(e.to_string()))?;
-                exec_mysql::ask_each_mysql(&plan, conn).await
+                exec_mysql::ask_each_mysql_controlled(&plan, conn, &task_budget).await
             });
-            match deadline::join_task(deadline, run).await {
-                Err(JoinedTaskError::Deadline(_)) => return timeout_response(),
+            match deadline::join_task(budget.clone(), run).await {
+                Err(JoinedTaskError::Control(error)) => {
+                    return problem::response_for_control(error)
+                }
                 Err(JoinedTaskError::Join(_)) => return problem::response(ProblemCode::Internal),
                 Ok(r) => r,
             }
@@ -272,14 +299,22 @@ async fn respond_ask(
     };
     match value {
         Ok(b) => {
-            if deadline.check().is_err() {
-                return timeout_response();
+            if let Err(error) = budget.checkpoint() {
+                return problem::response_for_control(error);
             }
             match stream::serialize_boolean(b, fmt) {
-                Ok(bytes) if deadline.check().is_ok() => {
+                Ok(bytes) => {
+                    let Ok(amount) = u64::try_from(bytes.len()) else {
+                        return problem::response(ProblemCode::Internal);
+                    };
+                    if let Err(error) = budget.consume(QueryCharge::SerializedBytes, amount) {
+                        return problem::response_for_control(error);
+                    }
+                    if let Err(error) = budget.checkpoint() {
+                        return problem::response_for_control(error);
+                    }
                     ok_stream(fmt.media_type(), stream::collected_body(bytes))
                 }
-                Ok(_) => timeout_response(),
                 Err(_) => problem::response(ProblemCode::Internal),
             }
         }
@@ -293,50 +328,81 @@ async fn respond_construct(
     backend: Backend,
     plan: Plan,
     accept: Option<&str>,
-    deadline: RequestDeadline,
+    budget: RequestBudget,
 ) -> Response {
     let fmt = negotiate_rdf(accept);
     let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
-            stream::construct_body_streaming(
+            let drive_budget = budget.clone();
+            stream::construct_body_streaming_controlled(
                 move |sink| {
-                    Box::pin(
-                        async move { exec::construct_each_sqlite_owned(&plan, conn, sink).await },
-                    )
+                    Box::pin(async move {
+                        exec::construct_each_sqlite_owned_controlled(
+                            &plan,
+                            conn,
+                            &drive_budget,
+                            sink,
+                        )
+                        .await
+                    })
                 },
                 fmt,
-                Some(deadline.into_std()),
+                budget,
             )
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, deadline).await {
+            let conn = match acquire_pg(&pool, budget.clone()).await {
                 Ok(c) => c,
                 Err(resp) => return resp,
             };
-            stream::construct_body_streaming(
+            let drive_budget = budget.clone();
+            stream::construct_body_streaming_controlled(
                 move |sink| {
-                    Box::pin(async move { exec_pg::construct_each_pg(&plan, conn, sink).await })
+                    Box::pin(async move {
+                        exec_pg::construct_each_pg_controlled(&plan, conn, &drive_budget, sink)
+                            .await
+                    })
                 },
                 fmt,
-                Some(deadline.into_std()),
+                budget,
             )
         }
-        Backend::Mysql(pool) => stream::construct_body_streaming(
-            move |sink| {
-                Box::pin(async move {
-                    let conn = pool
-                        .get_conn()
+        Backend::Mysql(pool) => {
+            let conn = match acquire_mysql(&pool, &budget).await {
+                Ok(conn) => conn,
+                Err(response) => return response,
+            };
+            let drive_budget = budget.clone();
+            stream::construct_body_streaming_controlled(
+                move |sink| {
+                    Box::pin(async move {
+                        exec_mysql::construct_each_mysql_controlled(
+                            &plan,
+                            conn,
+                            &drive_budget,
+                            sink,
+                        )
                         .await
-                        .map_err(|e| SparqlError::Sql(e.to_string()))?;
-                    exec_mysql::construct_each_mysql(&plan, conn, sink).await
-                })
-            },
-            fmt,
-            Some(deadline.into_std()),
-        ),
+                    })
+                },
+                fmt,
+                budget,
+            )
+        }
     };
     ok_stream(fmt.media_type(), body)
+}
+
+async fn acquire_mysql(
+    pool: &mysql_async::Pool,
+    budget: &RequestBudget,
+) -> Result<mysql_async::Conn, Response> {
+    match budget.run(pool.get_conn()).await {
+        Err(error) => Err(problem::response_for_control(error)),
+        Ok(Err(_)) => Err(problem::response(ProblemCode::SourceUnavailable)),
+        Ok(Ok(conn)) => Ok(conn),
+    }
 }
 
 /// Acquire a pooled PostgreSQL connection (ADR-0010 §C stream-lane pool, ADR-0027;
@@ -346,11 +412,11 @@ async fn respond_construct(
 /// — the ADR-0010 "shed overflow" clause this pass implements.
 async fn acquire_pg(
     pool: &deadpool_postgres::Pool,
-    deadline: RequestDeadline,
+    budget: RequestBudget,
 ) -> Result<PgConn, Response> {
-    let acquired = match deadline.run(pool.get()).await {
+    let acquired = match budget.run(pool.get()).await {
         Ok(result) => result,
-        Err(_) => return Err(timeout_response()),
+        Err(error) => return Err(problem::response_for_control(error)),
     };
     let conn = acquired.map_err(|e| match e {
         PoolError::Timeout(_) => {
@@ -366,8 +432,8 @@ async fn acquire_pg(
         }
         _ => problem::response(ProblemCode::Internal),
     })?;
-    match deadline.run(PgConn::checked(conn)).await {
-        Err(_) => Err(timeout_response()),
+    match budget.run(PgConn::checked(conn)).await {
+        Err(error) => Err(problem::response_for_control(error)),
         Ok(Err(_)) => Err(problem::response(ProblemCode::Internal)),
         Ok(Ok(conn)) => Ok(conn),
     }
@@ -378,10 +444,6 @@ fn form_param(encoded: &str, key: &str) -> Option<String> {
     form_urlencoded::parse(encoded.as_bytes())
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.into_owned())
-}
-
-fn timeout_response() -> Response {
-    problem::response(ProblemCode::RequestTimeout)
 }
 
 fn accept(headers: &HeaderMap) -> Option<String> {

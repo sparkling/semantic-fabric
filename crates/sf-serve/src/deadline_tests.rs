@@ -3,15 +3,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::BodyExt;
-use sf_core::query_control::{QueryControl, QueryControlError};
+use sf_core::query_control::{QueryControlError, QueryLimits};
 use sparesults::QueryResultsFormat;
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 use tower::ServiceExt;
 
-use crate::deadline::{join_task, run_compiler, CompilerRunError, RequestDeadline};
+use crate::budget::RequestBudget;
+use crate::deadline::{join_task, run_compiler, CompilerRunError};
 use crate::{router, Backend, ServeConfig};
+
+fn request_budget(timeout: Duration) -> RequestBudget {
+    RequestBudget::after(timeout, QueryLimits::new(u64::MAX, u64::MAX, u64::MAX))
+}
 
 #[tokio::test(start_paused = true)]
 async fn request_clock_starts_before_body_extraction() {
@@ -49,7 +54,7 @@ async fn request_clock_starts_before_body_extraction() {
 #[tokio::test(start_paused = true)]
 async fn compiler_timeout_retains_its_permit_until_detached_work_ends() {
     let permits = Arc::new(Semaphore::new(1));
-    let deadline = RequestDeadline::after(Duration::from_secs(60));
+    let deadline = request_budget(Duration::from_secs(60));
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
@@ -63,7 +68,9 @@ async fn compiler_timeout_retains_its_permit_until_detached_work_ends() {
     tokio::time::advance(Duration::from_secs(60)).await;
     assert!(matches!(
         run.await.expect("compiler waiter task"),
-        Err(CompilerRunError::Deadline(_))
+        Err(CompilerRunError::Control(
+            QueryControlError::DeadlineExceeded
+        ))
     ));
     assert_eq!(permits.available_permits(), 0, "detached work owns permit");
 
@@ -75,7 +82,7 @@ async fn compiler_timeout_retains_its_permit_until_detached_work_ends() {
 #[tokio::test]
 async fn cancelled_compiler_waiter_cannot_return_its_live_work_permit() {
     let permits = Arc::new(Semaphore::new(1));
-    let deadline = RequestDeadline::after(Duration::from_secs(60));
+    let deadline = request_budget(Duration::from_secs(60));
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
@@ -101,7 +108,7 @@ async fn cancelled_compiler_waiter_cannot_return_its_live_work_permit() {
 async fn pool_acquire_wait_uses_the_existing_absolute_deadline() {
     let pool = Arc::new(Semaphore::new(1));
     let held = pool.acquire().await.expect("hold only pool slot");
-    let deadline = RequestDeadline::after(Duration::from_secs(30));
+    let deadline = request_budget(Duration::from_secs(30));
     let wait = tokio::spawn({
         let pool = pool.clone();
         async move { deadline.run(pool.acquire_owned()).await }
@@ -124,7 +131,7 @@ async fn ask_timeout_aborts_the_joined_request_task() {
         }
     }
 
-    let deadline = RequestDeadline::after(Duration::from_secs(20));
+    let deadline = request_budget(Duration::from_secs(20));
     let (started_tx, started_rx) = oneshot::channel();
     let (dropped_tx, dropped_rx) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -142,9 +149,9 @@ async fn ask_timeout_aborts_the_joined_request_task() {
 
 #[tokio::test(start_paused = true)]
 async fn stream_driver_stall_ends_at_the_carried_deadline() {
-    let deadline = RequestDeadline::after(Duration::from_secs(10));
+    let deadline = request_budget(Duration::from_secs(10));
     let (started_tx, started_rx) = oneshot::channel();
-    let body = crate::stream::select_body_streaming(
+    let body = crate::stream::select_body_streaming_controlled(
         move |_sink| {
             Box::pin(async move {
                 let _ = started_tx.send(());
@@ -153,19 +160,19 @@ async fn stream_driver_stall_ends_at_the_carried_deadline() {
         },
         QueryResultsFormat::Json,
         vec!["value".to_owned()],
-        Some(deadline.into_std()),
+        deadline,
     );
     started_rx.await.expect("stream driver reached barrier");
 
     tokio::time::advance(Duration::from_secs(10)).await;
     let error = body.collect().await.expect_err("stream must time out");
-    assert!(error.to_string().contains("request timeout"), "{error}");
+    assert_eq!(error.to_string(), "result stream failed");
 }
 
 #[tokio::test(start_paused = true)]
 async fn shared_control_port_uses_the_existing_tokio_clock() {
     let start = Instant::now();
-    let deadline = RequestDeadline::after(Duration::from_secs(10));
+    let deadline = request_budget(Duration::from_secs(10));
 
     deadline
         .check_at(start + Duration::from_secs(6))
@@ -178,7 +185,7 @@ async fn shared_control_port_uses_the_existing_tokio_clock() {
 
 #[tokio::test(start_paused = true)]
 async fn phases_consume_one_deadline_instead_of_refreshing_the_timeout() {
-    let deadline = RequestDeadline::after(Duration::from_secs(10));
+    let deadline = request_budget(Duration::from_secs(10));
     deadline
         .run(tokio::time::sleep(Duration::from_secs(6)))
         .await

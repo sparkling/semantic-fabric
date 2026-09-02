@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
-use sf_serve::{serve_blocking, ServeOptions, SourceRef};
+use sf_serve::{serve_blocking, ServeOptions, SourceRef, DEFAULT_QUERY_LIMITS};
 
 #[derive(Parser)]
 #[command(
@@ -54,6 +54,15 @@ struct ServeArgs {
     /// Max query length in bytes (ADR-0010).
     #[arg(long, default_value_t = 1 << 20)]
     max_query_len: usize,
+    /// Max metadata probes, branch opens, and row-pull attempts per request.
+    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_source_work())]
+    max_source_work: u64,
+    /// Max semantic result items per request (rows, triples, or ASK boolean).
+    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_result_items())]
+    max_result_items: u64,
+    /// Max serialized response bytes per request.
+    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_serialized_bytes())]
+    max_serialized_bytes: u64,
     /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
     #[arg(long, default_value_t = 16)]
     pg_pool_size: usize,
@@ -108,6 +117,9 @@ fn serve(args: ServeArgs) -> ExitCode {
         bind: args.bind,
         timeout: Duration::from_secs(args.timeout_secs),
         max_query_len: args.max_query_len,
+        max_source_work: args.max_source_work,
+        max_result_items: args.max_result_items,
+        max_serialized_bytes: args.max_serialized_bytes,
         pg_pool_size: args.pg_pool_size,
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
         sqlite_pool_size: args.sqlite_pool_size,
@@ -306,6 +318,9 @@ mod tests {
             bind: "127.0.0.1:0".to_owned(),
             timeout_secs: 1,
             max_query_len: 1024,
+            max_source_work: 1_000,
+            max_result_items: 1_000,
+            max_serialized_bytes: 1 << 20,
             pg_pool_size: 16,
             pg_pool_wait_secs: 5,
             sqlite_pool_size: 4,

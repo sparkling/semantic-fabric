@@ -11,28 +11,28 @@
 //! chunk once it fills — backpressure flows straight back to the server-side cursor
 //! (PG `query_raw`, SQLite cap-1 bridge, MySQL packet-bounded `exec_iter`).
 //!
-//! A slow/aborted client (receiver dropped) makes the next send fail → the producer
-//! stops (cancel-on-drop, ADR-0010 §C). The carried absolute deadline also wraps
-//! the whole async driver, covering pool wait and rows discarded before a sink;
-//! it does not prove source-statement cancellation or pre-emption inside SQLite's
-//! blocking bridge. ASK is a single boolean — bounded by construction — and is
-//! serialised whole via [`collected_body`].
+//! A slow/aborted client closes the receiver; that event races the entire producer,
+//! seals cancellation, and drops the driver even when no chunk is ready. The same
+//! budget wraps the async driver and charges every serializer write before append.
+//! This proves cooperative Rust-handle release, not source-native statement
+//! cancellation or pre-emption inside SQLite's blocking bridge. ASK is a single
+//! boolean and is serialised whole via [`collected_body`].
 
 use std::future::Future;
 use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use axum::body::{Body, Bytes};
 use oxjsonld::JsonLdSerializer;
 use oxrdf::{GraphNameRef, Term, Triple, Variable};
 use oxttl::{NTriplesSerializer, TurtleSerializer};
+use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 use sparesults::{QueryResultsFormat, QueryResultsSerializer};
 use tokio::sync::mpsc::Sender;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::deadline::TIMEOUT_MESSAGE;
+use crate::budget::RequestBudget;
 
 /// Bytes per streamed body chunk (a flush boundary, not a result-size cap).
 const CHUNK: usize = 16 * 1024;
@@ -143,13 +143,24 @@ type TripleStreamSink = Box<dyn FnMut(Vec<Triple>) -> BoxedResult + Send>;
 /// bridge / PG `Arc<Client>` / MySQL dedicated `Conn`). `send().await` backpressures
 /// the server-side cursor, so memory stays bounded regardless of result size
 /// (ADR-0010 §C); a dropped receiver or passed deadline terminates the stream and
-/// releases the backend (PG cancel-on-drop / MySQL dedicated-conn discard §4.2 /
-/// SQLite bridge thread stops).
+/// releases its Rust-side backend handle. No source-native cancel guarantee follows.
 pub fn select_body_streaming<D>(
     drive: D,
     fmt: QueryResultsFormat,
     vars: Vec<String>,
-    deadline: Option<Instant>,
+    deadline: Option<std::time::Instant>,
+) -> Body
+where
+    D: FnOnce(RowSink) -> BoxedResult + Send + 'static,
+{
+    select_body_streaming_controlled(drive, fmt, vars, RequestBudget::uncontrolled(deadline))
+}
+
+pub(crate) fn select_body_streaming_controlled<D>(
+    drive: D,
+    fmt: QueryResultsFormat,
+    vars: Vec<String>,
+    budget: RequestBudget,
 ) -> Body
 where
     D: FnOnce(RowSink) -> BoxedResult + Send + 'static,
@@ -157,10 +168,12 @@ where
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(CHANNEL_CAP);
     let err_tx = tx.clone();
     tokio::spawn(async move {
-        let varv = variables(&vars);
-        let buf = SharedBuf::default();
-        let result: io::Result<()> = async {
-            check_deadline(deadline)?;
+        let closed_tx = tx.clone();
+        let phase_budget = budget.clone();
+        let guarded = budget.run(async move {
+            let varv = variables(&vars);
+            let buf = SharedBuf::new(phase_budget.clone());
+            phase_budget.checkpoint().map_err(control_error)?;
             // The serialiser writer is shared with the sink via Arc<Mutex<Option>> so
             // the sink can serialise each row and the outer scope can `finish()` +
             // flush the tail after the driver returns (the sink's clone is dropped
@@ -174,9 +187,10 @@ where
                 let buf = buf.clone();
                 let varv = varv.clone();
                 let tx = tx.clone();
+                let sink_budget = phase_budget.clone();
                 Box::new(move |row: Vec<Option<Term>>| {
                     let prepared = (|| -> io::Result<Vec<u8>> {
-                        check_deadline(deadline)?;
+                        sink_budget.checkpoint().map_err(control_error)?;
                         writer
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
@@ -189,20 +203,25 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            before_deadline(deadline, drive(sink))
-                .await?
-                .map_err(|_| stream_failure_error())?;
-            check_deadline(deadline)?;
+            drive(sink).await.map_err(sparql_stream_error)?;
+            phase_budget.checkpoint().map_err(control_error)?;
             let writer = writer
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .take()
                 .expect("writer live after streaming");
             writer.finish()?;
-            check_deadline(deadline)?;
-            before_deadline(deadline, send_chunk(&tx, buf.take_all())).await?
-        }
-        .await;
+            phase_budget.checkpoint().map_err(control_error)?;
+            send_chunk(&tx, buf.take_all()).await
+        });
+        let result = tokio::select! {
+            biased;
+            _ = closed_tx.closed() => {
+                budget.cancel();
+                return;
+            }
+            result = guarded => result.unwrap_or_else(|error| Err(control_error(error))),
+        };
         if let Err(e) = result {
             let _ = err_tx.send(Err(e)).await;
         }
@@ -214,24 +233,42 @@ where
 /// [`select_body_streaming`]): build a [`TripleStreamSink`] and hand it to the
 /// concrete `exec_*::construct_each_*` `drive` closure, serialising each solution's
 /// triples into a [`SharedBuf`] and flushing chunks as they fill.
-pub fn construct_body_streaming<D>(drive: D, fmt: RdfFormat, deadline: Option<Instant>) -> Body
+pub fn construct_body_streaming<D>(
+    drive: D,
+    fmt: RdfFormat,
+    deadline: Option<std::time::Instant>,
+) -> Body
+where
+    D: FnOnce(TripleStreamSink) -> BoxedResult + Send + 'static,
+{
+    construct_body_streaming_controlled(drive, fmt, RequestBudget::uncontrolled(deadline))
+}
+
+pub(crate) fn construct_body_streaming_controlled<D>(
+    drive: D,
+    fmt: RdfFormat,
+    budget: RequestBudget,
+) -> Body
 where
     D: FnOnce(TripleStreamSink) -> BoxedResult + Send + 'static,
 {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(CHANNEL_CAP);
     let err_tx = tx.clone();
     tokio::spawn(async move {
-        let buf = SharedBuf::default();
-        let result: io::Result<()> = async {
-            check_deadline(deadline)?;
+        let closed_tx = tx.clone();
+        let phase_budget = budget.clone();
+        let guarded = budget.run(async move {
+            let buf = SharedBuf::new(phase_budget.clone());
+            phase_budget.checkpoint().map_err(control_error)?;
             let sink_ser = Arc::new(Mutex::new(Some(TripleSink::start(fmt, buf.clone()))));
             let sink: TripleStreamSink = {
                 let sink_ser = Arc::clone(&sink_ser);
                 let buf = buf.clone();
                 let tx = tx.clone();
+                let sink_budget = phase_budget.clone();
                 Box::new(move |triples: Vec<Triple>| {
                     let prepared = (|| -> io::Result<Vec<u8>> {
-                        check_deadline(deadline)?;
+                        sink_budget.checkpoint().map_err(control_error)?;
                         let mut guard = sink_ser.lock().unwrap_or_else(|p| p.into_inner());
                         let ser = guard.as_mut().expect("serialiser live during streaming");
                         for t in &triples {
@@ -243,20 +280,25 @@ where
                     Box::pin(async move { send_prepared(&tx, prepared).await }) as BoxedResult
                 })
             };
-            before_deadline(deadline, drive(sink))
-                .await?
-                .map_err(|_| stream_failure_error())?;
-            check_deadline(deadline)?;
+            drive(sink).await.map_err(sparql_stream_error)?;
+            phase_budget.checkpoint().map_err(control_error)?;
             let ser = sink_ser
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .take()
                 .expect("serialiser live after streaming");
             ser.finish()?;
-            check_deadline(deadline)?;
-            before_deadline(deadline, send_chunk(&tx, buf.take_all())).await?
-        }
-        .await;
+            phase_budget.checkpoint().map_err(control_error)?;
+            send_chunk(&tx, buf.take_all()).await
+        });
+        let result = tokio::select! {
+            biased;
+            _ = closed_tx.closed() => {
+                budget.cancel();
+                return;
+            }
+            result = guarded => result.unwrap_or_else(|error| Err(control_error(error))),
+        };
         if let Err(e) = result {
             let _ = err_tx.send(Err(e)).await;
         }
@@ -275,32 +317,19 @@ fn solution_pairs<'a>(
         .filter_map(|(term, var)| term.as_ref().map(|t| (var.as_ref(), t.as_ref())))
 }
 
-/// Error out if the request deadline (ADR-0010 timeout) has passed.
-fn check_deadline(deadline: Option<Instant>) -> io::Result<()> {
-    match deadline {
-        Some(deadline) if Instant::now() >= deadline => Err(timeout_error()),
-        _ => Ok(()),
-    }
-}
-
-async fn before_deadline<F>(deadline: Option<Instant>, future: F) -> io::Result<F::Output>
-where
-    F: Future,
-{
-    match deadline {
-        Some(deadline) => tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), future)
-            .await
-            .map_err(|_| timeout_error()),
-        None => Ok(future.await),
-    }
-}
-
-fn timeout_error() -> io::Error {
-    io::Error::new(io::ErrorKind::TimedOut, TIMEOUT_MESSAGE)
-}
-
 fn stream_failure_error() -> io::Error {
     io::Error::other(STREAM_FAILURE_MESSAGE)
+}
+
+fn control_error(_error: QueryControlError) -> io::Error {
+    stream_failure_error()
+}
+
+fn sparql_stream_error(error: sf_sparql::Error) -> io::Error {
+    match error {
+        sf_sparql::Error::QueryControl(error) => control_error(error),
+        _ => stream_failure_error(),
+    }
 }
 
 /// A `std::io::Write` over a shared byte buffer the async streamers serialise into
@@ -308,13 +337,23 @@ fn stream_failure_error() -> io::Error {
 /// another). `write` only appends — it never blocks — so it is safe to call from the
 /// serialiser on the async runtime; draining + sending is done explicitly at an
 /// `.await` point.
-#[derive(Clone, Default)]
-struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+#[derive(Clone)]
+struct SharedBuf {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    budget: RequestBudget,
+}
 
 impl SharedBuf {
+    fn new(budget: RequestBudget) -> Self {
+        Self {
+            bytes: Arc::new(Mutex::new(Vec::new())),
+            budget,
+        }
+    }
+
     /// Take the buffered bytes once they reach a chunk (else leave them to batch).
     fn take_if_full(&self) -> Vec<u8> {
-        let mut g = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.bytes.lock().unwrap_or_else(|p| p.into_inner());
         if g.len() >= CHUNK {
             std::mem::take(&mut *g)
         } else {
@@ -324,13 +363,17 @@ impl SharedBuf {
 
     /// Take everything buffered (the final tail after `finish`).
     fn take_all(&self) -> Vec<u8> {
-        std::mem::take(&mut *self.0.lock().unwrap_or_else(|p| p.into_inner()))
+        std::mem::take(&mut *self.bytes.lock().unwrap_or_else(|p| p.into_inner()))
     }
 }
 
 impl Write for SharedBuf {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.0
+        let amount = u64::try_from(data.len()).map_err(|_| stream_failure_error())?;
+        self.budget
+            .consume(QueryCharge::SerializedBytes, amount)
+            .map_err(control_error)?;
+        self.bytes
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .extend_from_slice(data);

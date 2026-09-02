@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use sf_core::query_control::QueryLimits;
 use sf_core::{ir::TriplesMap, SourceId, SourceMapping};
 use sf_sparql::Tbox;
 use sf_sql::TableSchema;
@@ -14,6 +15,9 @@ use crate::Backend;
 /// Default request timeout and max query length when constructed via [`ServeConfig::new`].
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
+/// Finite serve defaults; CLI help and programmatic construction share this value.
+pub const DEFAULT_QUERY_LIMITS: QueryLimits =
+    QueryLimits::new(1_000_000, 100_000, 64 * 1024 * 1024);
 
 /// Blocking query compilers admitted per server instance. Queue time consumes the
 /// same request deadline; this is a partial-M2 capacity bound, not a work budget.
@@ -27,6 +31,8 @@ pub struct ServeConfig {
     binding: RuntimeBinding,
     pub timeout: Duration,
     pub max_query_len: usize,
+    /// Inclusive request-wide source/result/serialization ceilings.
+    pub query_limits: QueryLimits,
     /// Bounds active `spawn_blocking` compilers. An owned permit lives inside the
     /// blocking closure, including after its request waiter times out.
     compiler_permits: Arc<Semaphore>,
@@ -39,6 +45,7 @@ impl ServeConfig {
             binding: RuntimeBinding::new(source, mapping, tbox),
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
+            query_limits: DEFAULT_QUERY_LIMITS,
             compiler_permits: Arc::new(Semaphore::new(DEFAULT_COMPILER_PERMITS)),
         }
     }

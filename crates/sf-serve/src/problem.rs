@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde::Serialize;
+use sf_core::query_control::QueryControlError;
 use sf_sparql::Error as SparqlError;
 
 static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
@@ -18,6 +19,7 @@ pub(crate) enum ProblemCode {
     PayloadTooLarge,
     UnsupportedQuery,
     RequestTimeout,
+    QueryBudgetExceeded,
     SourceUnavailable,
     Internal,
 }
@@ -28,6 +30,18 @@ impl ProblemCode {
             SparqlError::Parse(_) => Self::InvalidRequest,
             SparqlError::Unsupported(_) => Self::UnsupportedQuery,
             SparqlError::Mapping(_) | SparqlError::Sql(_) | SparqlError::Core(_) => Self::Internal,
+            SparqlError::QueryControl(error) => Self::from_control(*error),
+        }
+    }
+
+    fn from_control(error: QueryControlError) -> Self {
+        match error {
+            QueryControlError::DeadlineExceeded => Self::RequestTimeout,
+            QueryControlError::SourceWorkExceeded
+            | QueryControlError::ResultItemsExceeded
+            | QueryControlError::SerializedBytesExceeded => Self::QueryBudgetExceeded,
+            QueryControlError::Cancelled | QueryControlError::AccountingOverflow => Self::Internal,
+            _ => Self::Internal,
         }
     }
 
@@ -38,6 +52,7 @@ impl ProblemCode {
             Self::PayloadTooLarge => "payload-too-large",
             Self::UnsupportedQuery => "unsupported-query",
             Self::RequestTimeout => "request-timeout",
+            Self::QueryBudgetExceeded => "query-budget-exceeded",
             Self::SourceUnavailable => "source-unavailable",
             Self::Internal => "internal-error",
         }
@@ -50,6 +65,7 @@ impl ProblemCode {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedQuery => StatusCode::NOT_IMPLEMENTED,
             Self::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
+            Self::QueryBudgetExceeded => StatusCode::TOO_MANY_REQUESTS,
             Self::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -68,6 +84,7 @@ impl ProblemCode {
             Self::PayloadTooLarge => "The query exceeds the configured byte limit.",
             Self::UnsupportedQuery => "The requested query or execution shape is not supported.",
             Self::RequestTimeout => "The request deadline expired.",
+            Self::QueryBudgetExceeded => "The query exceeded a configured resource limit.",
             Self::SourceUnavailable => "The source is temporarily unavailable.",
             Self::Internal => "The request could not be completed.",
         }
@@ -123,6 +140,10 @@ pub(crate) fn response(code: ProblemCode) -> Response {
 
 pub(crate) fn response_for_sparql(error: &SparqlError) -> Response {
     response(ProblemCode::from_sparql(error))
+}
+
+pub(crate) fn response_for_control(error: QueryControlError) -> Response {
+    response(ProblemCode::from_control(error))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,6 +336,11 @@ mod tests {
                 ProblemCode::RequestTimeout,
                 StatusCode::GATEWAY_TIMEOUT,
                 "request-timeout",
+            ),
+            (
+                ProblemCode::QueryBudgetExceeded,
+                StatusCode::TOO_MANY_REQUESTS,
+                "query-budget-exceeded",
             ),
             (
                 ProblemCode::SourceUnavailable,

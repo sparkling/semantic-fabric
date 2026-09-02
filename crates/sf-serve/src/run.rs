@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use sf_core::query_control::QueryLimits;
 use tokio_postgres::NoTls;
 
 use crate::problem::StartupCause;
@@ -28,6 +29,12 @@ pub struct ServeOptions {
     pub timeout: Duration,
     /// Max query length in bytes (ADR-0010).
     pub max_query_len: usize,
+    /// Inclusive metadata-probe, branch-open, and row-pull ceiling per request.
+    pub max_source_work: u64,
+    /// Inclusive semantic SELECT-row, CONSTRUCT-triple, or ASK-boolean ceiling.
+    pub max_result_items: u64,
+    /// Inclusive serialized response-byte ceiling per request.
+    pub max_serialized_bytes: u64,
     /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
     pub pg_pool_size: usize,
     /// Max wait for a pooled PostgreSQL connection before shedding `503` (ADR-0010 §C).
@@ -93,6 +100,11 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
     let mut cfg = ServeConfig::new(source, mapping, tbox);
     cfg.timeout = opts.timeout;
     cfg.max_query_len = opts.max_query_len;
+    cfg.query_limits = QueryLimits::new(
+        opts.max_source_work,
+        opts.max_result_items,
+        opts.max_serialized_bytes,
+    );
 
     let app = router(Arc::new(cfg));
     let listener = tokio::net::TcpListener::bind(&opts.bind)

@@ -114,8 +114,8 @@ pub enum Backend {
     Sqlite(SqlitePool),
     Pg(deadpool_postgres::Pool),
     /// MySQL: a cloneable `mysql_async::Pool`; each streaming request draws a
-    /// DEDICATED connection for the stream's lifetime, discarded/reset on early drop
-    /// (ADR-0024 §4.2 — mirrors PG cancel-on-drop).
+    /// dedicated connection for the stream's lifetime. Early driver drop releases
+    /// the Rust handle; this is not a native statement-cancellation guarantee.
     Mysql(mysql_async::Pool),
 }
 

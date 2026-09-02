@@ -11,12 +11,13 @@
 //! response body (ADR-0010 §C; [`stream`]). Values stay bound parameters end to
 //! end—the rewriter/executors never interpolate (ADR-0010 R1).
 //!
-//! Governance (ADR-0010): one configurable absolute request deadline spans body
-//! extraction, admitted compilation, pool wait, async execution, and serialisation;
-//! plus a max-query-length cap and producer cancel-on-client-drop. This partial-M2
-//! clock is not source-statement cancellation, SQLite interruptibility, or a
-//! row/byte/work budget. Error → status mapping: parse → 400, unsupported
-//! feature → 501, execution → 500, success → 200.
+//! Governance (ADR-0010): one request budget spans body extraction, admitted
+//! compilation, pool wait, controlled execution, and serialisation. It combines
+//! an absolute deadline with finite observable source-work, semantic-result, and
+//! serialized-byte ceilings, plus producer cancellation on client drop. It does
+//! not count compiler CPU or recursive SQL work and is not source-native statement
+//! cancellation, SQLite interruptibility, or atomic streamed failure. Pre-response
+//! policy limits map to 429; every post-200 failure stays a redacted body error.
 
 pub mod ontology;
 pub mod run;
@@ -26,6 +27,7 @@ pub mod stream;
 mod admission;
 mod backend;
 mod binding;
+mod budget;
 mod config;
 mod deadline;
 mod http;
@@ -33,10 +35,12 @@ mod problem;
 
 #[cfg(test)]
 mod deadline_tests;
+#[cfg(test)]
+mod query_budget_tests;
 
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::{BackendProfile, IntrospectedSource};
-pub use config::ServeConfig;
+pub use config::{ServeConfig, DEFAULT_QUERY_LIMITS};
 pub use http::router;
 pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
