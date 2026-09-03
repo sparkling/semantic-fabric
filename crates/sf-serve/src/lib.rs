@@ -39,6 +39,7 @@ mod post_body;
 mod problem;
 mod request_deadline;
 mod sqlite_admission;
+mod terminal_body;
 
 #[cfg(test)]
 mod sqlite_admission_tests;

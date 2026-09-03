@@ -34,17 +34,14 @@ use oxttl::{NTriplesSerializer, TurtleSerializer};
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 use sparesults::{QueryResultsFormat, QueryResultsSerializer};
 use tokio::sync::mpsc::Sender;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::budget::RequestBudget;
+use crate::terminal_body;
 
 /// Bytes per streamed body chunk (a flush boundary, not a result-size cap).
 const CHUNK: usize = 16 * 1024;
 /// Bound on chunks in flight — the HTTP-body backpressure window (ADR-0006).
 const CHANNEL_CAP: usize = 8;
-/// Stable public body error for executor failures after streaming has committed.
-const STREAM_FAILURE_MESSAGE: &str = "result stream failed";
-
 /// The RDF serialisation chosen by content negotiation for CONSTRUCT/DESCRIBE.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RdfFormat {
@@ -169,12 +166,8 @@ pub(crate) fn select_body_streaming_controlled<D>(
 where
     D: FnOnce(RowSink) -> BoxedResult + Send + 'static,
 {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(CHANNEL_CAP);
-    let err_tx = tx.clone();
-    tokio::spawn(async move {
-        let closed_tx = tx.clone();
-        let phase_budget = budget.clone();
-        let guarded = budget.run(async move {
+    let (body, producer) =
+        terminal_body::spawn(CHANNEL_CAP, budget, move |tx, phase_budget| async move {
             let varv = variables(&vars);
             let buf = SharedBuf::new(phase_budget.clone());
             phase_budget.checkpoint().map_err(control_error)?;
@@ -218,19 +211,8 @@ where
             phase_budget.checkpoint().map_err(control_error)?;
             send_chunk(&tx, buf.take_all()).await
         });
-        let result = tokio::select! {
-            biased;
-            _ = closed_tx.closed() => {
-                budget.cancel();
-                return;
-            }
-            result = guarded => result.unwrap_or_else(|error| Err(control_error(error))),
-        };
-        if let Err(e) = result {
-            let _ = err_tx.send(Err(e)).await;
-        }
-    });
-    Body::from_stream(ReceiverStream::new(rx))
+    drop(producer);
+    body
 }
 
 /// Stream a CONSTRUCT end to end over **any** backend (the CONSTRUCT sibling of
@@ -256,12 +238,8 @@ pub(crate) fn construct_body_streaming_controlled<D>(
 where
     D: FnOnce(TripleStreamSink) -> BoxedResult + Send + 'static,
 {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, io::Error>>(CHANNEL_CAP);
-    let err_tx = tx.clone();
-    tokio::spawn(async move {
-        let closed_tx = tx.clone();
-        let phase_budget = budget.clone();
-        let guarded = budget.run(async move {
+    let (body, producer) =
+        terminal_body::spawn(CHANNEL_CAP, budget, move |tx, phase_budget| async move {
             let buf = SharedBuf::new(phase_budget.clone());
             phase_budget.checkpoint().map_err(control_error)?;
             let sink_ser = Arc::new(Mutex::new(Some(TripleSink::start(fmt, buf.clone()))));
@@ -295,19 +273,8 @@ where
             phase_budget.checkpoint().map_err(control_error)?;
             send_chunk(&tx, buf.take_all()).await
         });
-        let result = tokio::select! {
-            biased;
-            _ = closed_tx.closed() => {
-                budget.cancel();
-                return;
-            }
-            result = guarded => result.unwrap_or_else(|error| Err(control_error(error))),
-        };
-        if let Err(e) = result {
-            let _ = err_tx.send(Err(e)).await;
-        }
-    });
-    Body::from_stream(ReceiverStream::new(rx))
+    drop(producer);
+    body
 }
 
 /// One solution row's bound `(variable, term)` pairs in projection order (unbound
@@ -322,7 +289,7 @@ fn solution_pairs<'a>(
 }
 
 fn stream_failure_error() -> io::Error {
-    io::Error::other(STREAM_FAILURE_MESSAGE)
+    terminal_body::stream_failure_error()
 }
 
 fn control_error(_error: QueryControlError) -> io::Error {
@@ -391,10 +358,7 @@ impl Write for SharedBuf {
 
 /// Send a chunk (skipping empties), mapping a dropped receiver to the sparql
 /// error type the async executor sink expects (terminating the stream).
-async fn send_prepared(
-    tx: &Sender<Result<Bytes, io::Error>>,
-    prepared: io::Result<Vec<u8>>,
-) -> sf_sparql::Result<()> {
+async fn send_prepared(tx: &Sender<Bytes>, prepared: io::Result<Vec<u8>>) -> sf_sparql::Result<()> {
     let bytes = prepared.map_err(|e| sf_sparql::Error::Sql(e.to_string()))?;
     send_chunk(tx, bytes)
         .await
@@ -403,11 +367,11 @@ async fn send_prepared(
 
 /// Flush one chunk into the body channel; a dropped receiver (client gone) is a
 /// broken pipe → the producer stops (cancel-on-drop, ADR-0010 §C).
-async fn send_chunk(tx: &Sender<Result<Bytes, io::Error>>, bytes: Vec<u8>) -> io::Result<()> {
+async fn send_chunk(tx: &Sender<Bytes>, bytes: Vec<u8>) -> io::Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
-    tx.send(Ok(Bytes::from(bytes))).await.map_err(|_| {
+    tx.send(Bytes::from(bytes)).await.map_err(|_| {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             "client disconnected (cancel-on-drop)",
