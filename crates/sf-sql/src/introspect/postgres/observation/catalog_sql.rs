@@ -38,7 +38,7 @@ pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "WITH bounded AS (SELECT \
 pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = "SELECT \
  con.oid AS constraint_oid, con.contype, con.conrelid AS child_oid, con.confrelid AS parent_oid, \
  con.convalidated, con.condeferrable, con.condeferred, CASE WHEN pg_catalog.cardinality(con.conkey) <= 32 THEN con.conkey ELSE NULL::int2[] END AS conkey, CASE WHEN pg_catalog.cardinality(con.confkey) <= 32 THEN con.confkey ELSE NULL::int2[] END AS confkey, con.conindid, con.confmatchtype, con.confupdtype, con.confdeltype, \
- i.indisprimary, i.indisunique, i.indisvalid, i.indisready, i.indislive, i.indimmediate, i.indnkeyatts, i.indnatts, i.indkey, i.indclass, i.indcollation, i.indnullsnotdistinct, am.amname AS index_access_method, \
+ i.indisprimary, i.indisunique, i.indisvalid, i.indisready, i.indislive, i.indimmediate, i.indnkeyatts, i.indnatts, i.indkey, i.indclass, i.indcollation, i.indnullsnotdistinct, am.amname AS index_access_method, COALESCE((SELECT pg_catalog.bool_and(opc.opcdefault AND opc.opcnamespace=(SELECT oid FROM pg_catalog.pg_namespace WHERE nspname='pg_catalog') AND opc.opcmethod=am.oid) FROM pg_catalog.unnest(i.indclass) AS cls(opclass_oid) JOIN pg_catalog.pg_opclass opc ON opc.oid=cls.opclass_oid), false) AS index_opclass_default, \
  (pg_catalog.cardinality(con.conkey) IS NULL OR pg_catalog.cardinality(con.conkey)=0 OR pg_catalog.cardinality(con.conkey)>32 OR pg_catalog.cardinality(con.confkey)>32) AS sf_array_overflow, \
  pg_catalog.cardinality(tr.trigger_oids) > 4 AS sf_trigger_overflow, tr.trigger_oids, op.operator_oids, op.search_operator_oids \
  FROM pg_catalog.pg_constraint con LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid LEFT JOIN pg_catalog.pg_class idx ON idx.oid=con.conindid LEFT JOIN pg_catalog.pg_am am ON am.oid=idx.relam \
@@ -98,6 +98,7 @@ mod tests {
             "operator_oids",
             "search_operator_oids",
             "index_access_method",
+            "index_opclass_default",
             "LIMIT $1",
         ] {
             assert!(RICH_CONSTRAINTS_SQL_V1.contains(field));

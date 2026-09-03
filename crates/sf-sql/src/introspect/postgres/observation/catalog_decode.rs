@@ -91,6 +91,7 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) index_key_attnums: Option<Vec<i16>>,
     pub(super) index_nulls_not_distinct: Option<bool>,
     pub(super) index_access_method: Option<String>,
+    pub(super) index_opclass_default: Option<bool>,
     pub(super) match_code: Option<String>,
     pub(super) update_action: Option<String>,
     pub(super) delete_action: Option<String>,
@@ -131,6 +132,7 @@ pub(super) fn decode_constraint_row_v1(
         index_key_attnums: get!("indkey", Option<Vec<i16>>),
         index_nulls_not_distinct: get!("indnullsnotdistinct", Option<bool>),
         index_access_method: get!("index_access_method", Option<String>),
+        index_opclass_default: get!("index_opclass_default", Option<bool>),
         match_code: get!("confmatchtype", Option<String>),
         update_action: get!("confupdtype", Option<String>),
         delete_action: get!("confdeltype", Option<String>),
@@ -172,7 +174,8 @@ pub(super) fn decode_constraint_row_v1(
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
     if matches!(value.constraint_kind.as_str(), "p" | "u")
-        && value.index_access_method.as_deref() != Some("btree")
+        && (value.index_access_method.as_deref() != Some("btree")
+            || value.index_opclass_default != Some(true))
     {
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
