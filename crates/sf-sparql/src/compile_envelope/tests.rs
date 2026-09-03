@@ -194,7 +194,30 @@ fn should_resume_structural_scanning_after_an_invalid_iri_prefix() {
     let envelope = CompileEnvelopeV1::scan("<not-an-iri || ?a || ?b")
         .expect("bounded malformed input remains scanner-safe");
 
-    assert_eq!(envelope.max_operators_per_scope, 2);
+    assert_eq!(
+        envelope.max_operators_per_scope, 6,
+        "malformed IRI-like text must be scanned conservatively as operators"
+    );
+}
+
+#[test]
+fn should_not_hide_a_parser_accepted_operator_chain_as_an_unterminated_iri() {
+    let mut expression = String::from("?x <1");
+    for _ in 0..MAX_OPERATORS_PER_SCOPE_V1 {
+        expression.push_str("+1");
+    }
+    let input = format!("SELECT * WHERE {{ ?s ?p ?x . FILTER({expression}) }}");
+    spargebra::SparqlParser::new()
+        .parse_query(&input)
+        .expect("the pinned parser accepts the no-whitespace relational expression");
+
+    let error = CompileEnvelopeV1::scan(&input).expect_err("operator chain must not be hidden");
+    assert_limit(
+        error,
+        CompileEnvelopeLimit::OperatorsPerScope,
+        MAX_OPERATORS_PER_SCOPE_V1 + 1,
+        MAX_OPERATORS_PER_SCOPE_V1,
+    );
 }
 
 #[test]

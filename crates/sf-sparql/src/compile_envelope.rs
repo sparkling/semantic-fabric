@@ -1,10 +1,11 @@
 //! Fixed pre-parser lexical envelope for staged governed compilation.
 //!
 //! V1 deliberately has its own limits; a caller's HTTP/body limit cannot raise
-//! them. The scanner is allocation-free, visits input bytes once, and only
-//! classifies enough syntax to avoid charging punctuation inside lexical
-//! payloads. It is not a SPARQL parser and does not make `spargebra` parsing
-//! cancellable or pre-emptible.
+//! them. The scanner is allocation-free and linear; an IRI candidate receives
+//! one bounded lookahead before its bytes are consumed. It only classifies
+//! enough syntax to avoid charging punctuation inside lexical payloads. It is
+//! not a SPARQL parser and does not make `spargebra` parsing cancellable or
+//! pre-emptible.
 //!
 //! Lexeme byte counts include their quotes, angle brackets, or comment marker;
 //! comments count as conservative tokens. Operator accounting counts every
@@ -162,19 +163,22 @@ impl<'input> Scanner<'input> {
     }
 
     fn starts_iri(&self) -> bool {
-        let Some(next) = self.peek(1) else {
-            return false;
-        };
-        if next.is_ascii_whitespace()
-            || matches!(next, b'=' | b'?' | b'$' | b'\'' | b'"' | b'(' | b'+' | b'-')
-        {
-            return false;
+        let mut candidate = self.cursor + 1;
+        while let Some(&byte) = self.bytes.get(candidate) {
+            match byte {
+                b'>' => return true,
+                byte if is_iri_boundary(byte) => return false,
+                b'\\' => {
+                    candidate += 1;
+                    if candidate >= self.bytes.len() {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            candidate += 1;
         }
-        self.cursor == 0
-            || !matches!(
-                self.bytes[self.cursor - 1],
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' | b'?' | b')' | b']'
-            )
+        false
     }
 
     fn scan_comment(&mut self) -> Result<(), CompileEnvelopeError> {
