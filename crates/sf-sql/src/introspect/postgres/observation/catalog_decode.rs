@@ -3,6 +3,9 @@
 //! SQL adapters must validate these envelopes before retaining rich facts. This
 //! module deliberately contains no driver calls and no public/runtime wiring.
 
+use super::constraints::{
+    Postgres16RawConstraintV1, Postgres16RawIndexV1, Postgres16RawKeyV1, Postgres16RawUniqueV1,
+};
 use super::relation::{Postgres16AttributeCatalogFactV1, Postgres16RelationCatalogFactV1};
 use super::source_type::{
     Postgres16ColumnTypeCatalogFactV1, Postgres16DefaultCollationCatalogFactV1,
@@ -100,6 +103,64 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) match_code: Option<String>,
     pub(super) update_action: Option<String>,
     pub(super) delete_action: Option<String>,
+}
+
+impl CatalogConstraintRowV1 {
+    /// Convert only PK/UNIQUE rows whose complete index proof is present.
+    /// Foreign keys remain unavailable until trigger/operator rows are decoded
+    /// into their structured raw evidence.
+    pub(super) fn into_raw_constraint(
+        self,
+    ) -> Result<Postgres16RawConstraintV1, PostgresSchemaIdentityUnavailableV1> {
+        if self.constraint_kind == "f" {
+            return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+        }
+        let attnums = self
+            .child_key
+            .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+        let index_attnums = self
+            .index_key_attnums
+            .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+        if attnums.is_empty()
+            || attnums.len() > MAX_CATALOG_ARRAY_MEMBERS_V1
+            || index_attnums != attnums
+            || self.index_key_count != Some(attnums.len() as i16)
+            || self.index_access_method.as_deref() != Some("btree")
+            || self.index_opclass_default != Some(true)
+        {
+            return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+        }
+        let index = Postgres16RawIndexV1 {
+            relation_oid: self.child_oid,
+            key_attnums: index_attnums,
+            unique: self.index_unique == Some(true),
+            primary: self.index_primary == Some(true),
+            valid: self.index_valid == Some(true),
+            ready: self.index_ready == Some(true),
+            live: self.index_live == Some(true),
+            immediate: self.index_immediate == Some(true),
+            btree_default: true,
+        };
+        let key = Postgres16RawKeyV1 {
+            relation_oid: self.child_oid,
+            attnums,
+            validated: self.validated,
+            enforced: true,
+            index,
+        };
+        match self.constraint_kind.as_str() {
+            "p" if self.index_primary == Some(true) => {
+                Ok(Postgres16RawConstraintV1::PrimaryKey(key))
+            }
+            "u" if self.index_unique == Some(true) => {
+                Ok(Postgres16RawConstraintV1::Unique(Postgres16RawUniqueV1 {
+                    key,
+                    nulls_not_distinct: self.index_nulls_not_distinct == Some(true),
+                }))
+            }
+            _ => Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint),
+        }
+    }
 }
 
 pub(super) fn decode_constraint_row_v1(
