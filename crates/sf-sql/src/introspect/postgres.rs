@@ -138,13 +138,41 @@ pub async fn introspect_postgres_public_snapshot_guarded(
 pub async fn introspect_postgres_public_observed_snapshot(
     client: &mut tokio_postgres::Client,
 ) -> Result<Postgres16PublicObservedSnapshotV1> {
-    let legacy_tables = introspect_postgres_public_snapshot_guarded(client).await?;
-    Ok(
-        observation::Postgres16PublicObservedSnapshotV1::unavailable(
-            legacy_tables,
-            PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented,
-        ),
+    let transaction = client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?;
+    transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
+    observation::qualify_profile_guard(&transaction)
+        .await
+        .map_err(|error| Error::Introspection(error.to_string()))?;
+    let rows = query_bounded(
+        &transaction,
+        TABLES_SQL,
+        &[
+            TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
+        MAX_LEGACY_RELATIONS_PG16_V1,
+        "table rows",
     )
+    .await?;
+    let tables: Vec<String> = rows
+        .into_iter()
+        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
+        .collect::<Result<_>>()?;
+    let legacy_tables = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
+    let rich = observation::capture_registered_observation(&transaction, RUNTIME_SCHEMA)
+        .await
+        .map_err(|error| Error::Introspection(error.to_string()))?;
+    transaction.commit().await?;
+    Ok(observation::Postgres16PublicObservedSnapshotV1::available(
+        legacy_tables,
+        rich,
+    ))
 }
 
 async fn introspect_in_schema<C>(

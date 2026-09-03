@@ -373,13 +373,13 @@ pub struct Postgres16PublicObservedSnapshotV1 {
 }
 
 impl Postgres16PublicObservedSnapshotV1 {
-    pub(super) fn unavailable(
+    pub(super) fn available(
         legacy_tables: Vec<TableSchema>,
-        reason: PostgresSchemaIdentityUnavailableV1,
+        observation: Postgres16PublicObservedSchemaV1,
     ) -> Self {
         Self {
             legacy_tables,
-            availability: PostgresSchemaIdentityAvailabilityV1::Unavailable(reason),
+            availability: PostgresSchemaIdentityAvailabilityV1::Available(observation),
         }
     }
 
