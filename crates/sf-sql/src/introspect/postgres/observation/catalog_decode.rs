@@ -156,6 +156,13 @@ pub(super) struct CatalogGuardRowV1 {
 
 impl CatalogGuardRowV1 {
     pub(super) fn validate(&self) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
+        match self.server_version_num {
+            160_009 | 160_015 => {}
+            160_000..=169_999 => {
+                return Err(PostgresSchemaIdentityUnavailableV1::UnqualifiedEnginePatch)
+            }
+            _ => return Err(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented),
+        }
         let exact = [
             (
                 self.server_encoding.as_str(),
@@ -469,6 +476,17 @@ mod tests {
     fn guard_validator_classifies_each_profile_gate() {
         let mut guard = valid_guard();
         assert!(guard.validate().is_ok());
+        guard.server_version_num = 160_014;
+        assert_eq!(
+            guard.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::UnqualifiedEnginePatch)
+        );
+        guard.server_version_num = 150_010;
+        assert_eq!(
+            guard.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented)
+        );
+        guard = valid_guard();
         guard.search_path = "public".into();
         assert_eq!(
             guard.validate(),
