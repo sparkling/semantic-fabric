@@ -185,6 +185,19 @@ pub(super) fn decode_constraint_row_v1(
     {
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
+    if value.constraint_kind == "f"
+        && (!matches!(value.match_code.as_deref(), Some("s" | "f"))
+            || !matches!(
+                value.update_action.as_deref(),
+                Some("a" | "r" | "c" | "n" | "d")
+            )
+            || !matches!(
+                value.delete_action.as_deref(),
+                Some("a" | "r" | "c" | "n" | "d")
+            ))
+    {
+        return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+    }
     Ok(value)
 }
 
