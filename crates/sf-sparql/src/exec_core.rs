@@ -13,6 +13,7 @@ mod expression;
 mod forms;
 mod order;
 mod row;
+mod sql_error;
 mod template;
 
 /// Append a byte string as lowercase hexadecimal without an intermediate

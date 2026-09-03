@@ -20,26 +20,7 @@ use super::expression::eval_expr;
 use super::forms::rust_group_execute;
 use super::order::{order_cmp_precomputed, precompute_order_keys, TermSortKey};
 use super::row::{build_col_index, canonical_pairs, intern_bindings, Bindings};
-
-/// Flatten an `sf-sql` driver error's source chain into the message (the SQLite
-/// chain is usually empty, so this is byte-identical to the old `Error::Sql(e)`).
-fn map_sql_err(e: sf_sql::Error) -> Error {
-    use std::error::Error as _;
-    // An uncovered PG result type (adapter `pg_value`) is preserved as a distinct
-    // 501 skip — byte-identical to the pre-M3 `exec_pg` path, which returned
-    // `sf_sparql::Error::Unsupported` directly from `pg_value` (never `Sql`).
-    if let sf_sql::Error::Unsupported(m) = &e {
-        return Error::Unsupported(m.clone());
-    }
-    let mut msg = e.to_string();
-    let mut src = e.source();
-    while let Some(s) = src {
-        msg.push_str(": ");
-        msg.push_str(&s.to_string());
-        src = s.source();
-    }
-    Error::Sql(msg)
-}
+use super::sql_error::map_sql_err;
 
 /// Drive an always-ready future to completion with no runtime (design §5 M2
 /// sync↔async bridge). SQLite backend waits resolve synchronously; the explicit
