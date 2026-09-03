@@ -4,7 +4,7 @@ use super::*;
 fn public_snapshot_timeouts_are_exact_and_transaction_local() {
     assert_eq!(
         SNAPSHOT_TIMEOUTS_SQL,
-        "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s';"
+        "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s'; SELECT set_config('search_path','pg_catalog,public,pg_temp',true); SET LOCAL session_replication_role = origin;"
     );
 }
 
