@@ -132,6 +132,21 @@ pub async fn introspect_postgres_public_snapshot_guarded(
     Ok(schemas)
 }
 
+/// Capture a guarded snapshot with explicit identity availability. Until the
+/// rich catalogue normalizer is wired, the legacy projection is preserved and
+/// availability is reported as `ProfileNotImplemented` rather than inferred.
+pub async fn introspect_postgres_public_observed_snapshot(
+    client: &mut tokio_postgres::Client,
+) -> Result<Postgres16PublicObservedSnapshotV1> {
+    let legacy_tables = introspect_postgres_public_snapshot_guarded(client).await?;
+    Ok(
+        observation::Postgres16PublicObservedSnapshotV1::unavailable(
+            legacy_tables,
+            PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented,
+        ),
+    )
+}
+
 async fn introspect_in_schema<C>(
     client: &C,
     schema_name: &str,
