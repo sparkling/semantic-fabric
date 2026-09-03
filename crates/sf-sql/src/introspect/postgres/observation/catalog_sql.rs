@@ -36,7 +36,7 @@ pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "WITH bounded AS (SELECT \
 
 pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = "SELECT \
  con.oid AS constraint_oid, con.contype, con.conrelid AS child_oid, con.confrelid AS parent_oid, \
- con.convalidated, con.condeferrable, con.condeferred, con.conkey, con.confkey, con.conindid, con.confmatchtype, con.confupdtype, con.confdeltype, \
+ con.convalidated, con.condeferrable, con.condeferred, CASE WHEN pg_catalog.cardinality(con.conkey) <= 32 THEN con.conkey ELSE NULL::int2[] END AS conkey, CASE WHEN pg_catalog.cardinality(con.confkey) <= 32 THEN con.confkey ELSE NULL::int2[] END AS confkey, con.conindid, con.confmatchtype, con.confupdtype, con.confdeltype, \
  i.indisprimary, i.indisunique, i.indisvalid, i.indisready, i.indislive, i.indimmediate, i.indnkeyatts, i.indnatts, i.indkey, i.indclass, i.indcollation, i.indnullsnotdistinct, \
  (pg_catalog.cardinality(con.conkey) IS NULL OR pg_catalog.cardinality(con.conkey)=0 OR pg_catalog.cardinality(con.conkey)>32 OR pg_catalog.cardinality(con.confkey)>32) AS sf_array_overflow, \
  pg_catalog.cardinality(tr.trigger_oids) > 4 AS sf_trigger_overflow, tr.trigger_oids, op.operator_oids, op.search_operator_oids \
@@ -94,6 +94,7 @@ mod tests {
         }
         assert!(RICH_CONSTRAINTS_SQL_V1.contains("cardinality(tr.trigger_oids) > 4"));
         assert!(RICH_CONSTRAINTS_SQL_V1.contains("ORDER BY t.oid LIMIT 5"));
+        assert!(RICH_CONSTRAINTS_SQL_V1.contains("cardinality(con.conkey) <= 32"));
     }
 
     #[test]
