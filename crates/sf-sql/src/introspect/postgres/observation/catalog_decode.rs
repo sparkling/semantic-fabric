@@ -4,7 +4,8 @@
 //! module deliberately contains no driver calls and no public/runtime wiring.
 
 use super::constraints::{
-    Postgres16RawConstraintV1, Postgres16RawIndexV1, Postgres16RawKeyV1, Postgres16RawUniqueV1,
+    Postgres16RawConstraintV1, Postgres16RawEqualityOperatorV1, Postgres16RawForeignKeyTriggersV1,
+    Postgres16RawForeignKeyV1, Postgres16RawIndexV1, Postgres16RawKeyV1, Postgres16RawUniqueV1,
 };
 use super::relation::{Postgres16AttributeCatalogFactV1, Postgres16RelationCatalogFactV1};
 use super::source_type::{
@@ -122,26 +123,28 @@ impl CatalogConstraintRowV1 {
     pub(super) fn into_raw_constraint(
         self,
     ) -> Result<Postgres16RawConstraintV1, PostgresSchemaIdentityUnavailableV1> {
-        if self.constraint_kind == "f" {
-            return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
-        }
-        let attnums = self
+        let child_attnums = self
             .child_key
             .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+        let parent_attnums = self.parent_key.clone().unwrap_or_default();
         let index_attnums = self
             .index_key_attnums
+            .clone()
             .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
-        if attnums.is_empty()
-            || attnums.len() > MAX_CATALOG_ARRAY_MEMBERS_V1
-            || index_attnums != attnums
-            || self.index_key_count != Some(attnums.len() as i16)
+        if child_attnums.is_empty()
+            || child_attnums.len() > MAX_CATALOG_ARRAY_MEMBERS_V1
+            || (self.constraint_kind != "f" && index_attnums != child_attnums)
             || self.index_access_method.as_deref() != Some("btree")
             || self.index_opclass_default != Some(true)
         {
             return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
         }
         let index = Postgres16RawIndexV1 {
-            relation_oid: self.child_oid,
+            relation_oid: if self.constraint_kind == "f" {
+                self.parent_oid
+            } else {
+                self.child_oid
+            },
             key_attnums: index_attnums,
             unique: self.index_unique == Some(true),
             primary: self.index_primary == Some(true),
@@ -151,9 +154,80 @@ impl CatalogConstraintRowV1 {
             immediate: self.index_immediate == Some(true),
             btree_default: true,
         };
+        if self.constraint_kind == "f" {
+            if parent_attnums.is_empty() || parent_attnums.len() != child_attnums.len() {
+                return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+            }
+            let selected = self
+                .operator_oids
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+            let search = self
+                .search_operator_oids
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+            let child_types = self
+                .child_type_oids
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+            let parent_types = self
+                .parent_type_oids
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+            if selected.len() != child_attnums.len()
+                || search.len() != selected.len()
+                || child_types.len() != selected.len()
+                || parent_types.len() != selected.len()
+                || selected.iter().zip(&search).any(|(a, b)| a != b)
+                || self.operator_complete != Some(true)
+                || self.types_and_facets_equal != Some(true)
+                || self.trigger_shape_valid != Some(true)
+                || self.trigger_functions_valid != Some(true)
+                || self.trigger_all_enabled != Some(true)
+            {
+                return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+            }
+            let match_code = self
+                .match_code
+                .as_deref()
+                .and_then(|v| v.chars().next())
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+            let equality_operators = selected
+                .into_iter()
+                .zip(child_types.into_iter().zip(parent_types))
+                .map(
+                    |(selected_oid, (child_oid, parent_oid))| Postgres16RawEqualityOperatorV1 {
+                        child_oid,
+                        parent_oid,
+                        selected_oid,
+                        search_oid: selected_oid,
+                        is_catalog_equals_bool: true,
+                    },
+                )
+                .collect();
+            return Ok(Postgres16RawConstraintV1::ForeignKey(
+                Postgres16RawForeignKeyV1 {
+                    child_oid: self.child_oid,
+                    parent_oid: self.parent_oid,
+                    child_attnums,
+                    parent_attnums,
+                    validated: self.validated,
+                    match_code,
+                    parent_index: index,
+                    equality_operators,
+                    triggers: Postgres16RawForeignKeyTriggersV1 {
+                        child_insert_ok: true,
+                        child_update_ok: true,
+                        parent_delete_ok: true,
+                        parent_update_ok: true,
+                        all_enabled: true,
+                    },
+                    types_and_facets_equal: true,
+                    operators_exact: true,
+                    triggers_exact: true,
+                    actions_supported: true,
+                },
+            ));
+        }
         let key = Postgres16RawKeyV1 {
             relation_oid: self.child_oid,
-            attnums,
+            attnums: child_attnums,
             validated: self.validated,
             enforced: true,
             index,
@@ -172,7 +246,6 @@ impl CatalogConstraintRowV1 {
         }
     }
 }
-
 pub(super) fn decode_constraint_row_v1(
     row: &Row,
 ) -> Result<CatalogConstraintRowV1, PostgresSchemaIdentityUnavailableV1> {
