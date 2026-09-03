@@ -134,6 +134,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sql/src/backend/rest.rs',
   'crates/sf-sql/src/backend/sqlite.rs',
   'crates/sf-sql/src/backend/sqlserver.rs',
+  'crates/sf-sql/src/bin/postgres_observation_probe.rs',
   'crates/sf-sql/src/cost.rs',
   'crates/sf-sql/src/dialect.rs',
   'crates/sf-sql/src/error.rs',
