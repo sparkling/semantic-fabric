@@ -126,7 +126,7 @@ fn zero_source_budget_rejects_before_metadata_or_branch_io() {
         vec![column_branch(0)],
     );
     let (mut backend, calls) = backend(vec![vec![row("one")]]);
-    let budget = QueryBudget::new(QueryLimits::new(0, u64::MAX, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 0, u64::MAX, u64::MAX));
     let sinks = AtomicUsize::new(0);
 
     let error = super::block_on(select_each_async_controlled(
@@ -159,7 +159,7 @@ fn offset_discarded_rows_charge_every_pull_attempt() {
     );
     plan.offset = usize::MAX;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")], Vec::new()]);
-    let budget = QueryBudget::new(QueryLimits::new(7, 0, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 7, 0, u64::MAX));
     let sinks = AtomicUsize::new(0);
 
     super::block_on(select_each_async_controlled(
@@ -188,7 +188,7 @@ fn select_result_budget_rejects_before_over_limit_sink() {
         vec![column_branch(0)],
     );
     let (mut backend, _) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let budget = QueryBudget::new(QueryLimits::new(10, 2, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 2, u64::MAX));
     let sinks = AtomicUsize::new(0);
 
     let error = super::block_on(select_each_async_controlled(
@@ -227,7 +227,7 @@ fn construct_budget_counts_triples_not_solutions() {
         vec![column_branch(0)],
     );
     let (mut backend, _) = backend(vec![vec![row("one")]]);
-    let budget = QueryBudget::new(QueryLimits::new(10, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 1, u64::MAX));
     let sinks = AtomicUsize::new(0);
 
     let error = super::block_on(construct_each_async_controlled(
@@ -254,7 +254,7 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
     for (rows, expected) in [(vec![row("one"), row("two")], true), (Vec::new(), false)] {
         let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
         let (mut backend, _) = backend(vec![rows]);
-        let budget = QueryBudget::new(QueryLimits::new(10, 1, u64::MAX));
+        let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 10, 1, u64::MAX));
 
         assert_eq!(
             super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap(),
@@ -268,7 +268,7 @@ fn ask_charges_exactly_one_boolean_for_true_and_false() {
 fn ask_stops_after_the_first_solution_and_its_pull() {
     let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let budget = QueryBudget::new(QueryLimits::new(3, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 3, 1, u64::MAX));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 1);
@@ -286,7 +286,7 @@ fn ask_does_not_truncate_the_inner_rows_of_rust_group() {
         post_exprs: Vec::new(),
     });
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
-    let budget = QueryBudget::new(QueryLimits::new(5, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 5, 1, u64::MAX));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 3);
@@ -303,7 +303,7 @@ fn ask_ignores_order_but_still_applies_a_single_branch_offset() {
     }];
     plan.offset = 3;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two")]]);
-    let budget = QueryBudget::new(QueryLimits::new(5, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 5, 1, u64::MAX));
 
     assert!(!super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 3);
@@ -319,7 +319,7 @@ fn ordered_ask_stops_after_the_first_post_offset_solution() {
     }];
     plan.offset = 1;
     let (mut backend, calls) = backend(vec![vec![row("one"), row("two"), row("three")]]);
-    let budget = QueryBudget::new(QueryLimits::new(4, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 4, 1, u64::MAX));
 
     assert!(super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 2);
@@ -335,7 +335,7 @@ fn ordered_ask_limit_zero_emits_no_solution() {
     }];
     plan.limit = Some(0);
     let (mut backend, calls) = backend(vec![vec![row("one")]]);
-    let budget = QueryBudget::new(QueryLimits::new(3, 1, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 3, 1, u64::MAX));
 
     assert!(!super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap());
     assert_calls(&calls, 1, 1, 1);
@@ -345,7 +345,7 @@ fn ordered_ask_limit_zero_emits_no_solution() {
 fn zero_ask_result_budget_rejects_before_source_io() {
     let plan = plan(PlanForm::Ask, vec![column_branch(0)]);
     let (mut backend, calls) = backend(vec![vec![row("one")]]);
-    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, 0, u64::MAX));
+    let budget = QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, 0, u64::MAX));
 
     let error = super::block_on(ask_controlled(&plan, &mut backend, &budget)).unwrap_err();
 

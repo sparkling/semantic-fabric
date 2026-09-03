@@ -133,6 +133,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            u64::MAX,
         )));
         let control: Arc<dyn QueryControl> = budget.clone();
 
@@ -163,6 +164,7 @@ mod tests {
     fn empty_operation_marker_never_reads_later_budget_state() {
         let connection = Connection::open_in_memory().unwrap();
         let budget = Arc::new(QueryBudget::new(QueryLimits::new(
+            u64::MAX,
             u64::MAX,
             u64::MAX,
             u64::MAX,

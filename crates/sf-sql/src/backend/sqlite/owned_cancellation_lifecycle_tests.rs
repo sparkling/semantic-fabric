@@ -24,6 +24,7 @@ fn budget() -> Arc<QueryBudget> {
         u64::MAX,
         u64::MAX,
         u64::MAX,
+        u64::MAX,
     )))
 }
 

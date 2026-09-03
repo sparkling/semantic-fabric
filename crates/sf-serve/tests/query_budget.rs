@@ -74,7 +74,7 @@ async fn assert_budget_problem(response: axum::response::Response) {
 #[tokio::test]
 async fn ask_result_limit_is_a_pre_response_429() {
     let response = route(
-        QueryLimits::new(100, 0, u64::MAX),
+        QueryLimits::new(u64::MAX, 100, 0, u64::MAX),
         "ASK { ?item <http://example.test/value> ?value }",
     )
     .await;
@@ -84,7 +84,7 @@ async fn ask_result_limit_is_a_pre_response_429() {
 #[tokio::test]
 async fn ask_serialized_byte_limit_is_a_pre_response_429() {
     let response = route(
-        QueryLimits::new(100, 1, 0),
+        QueryLimits::new(u64::MAX, 100, 1, 0),
         "ASK { ?item <http://example.test/value> ?value }",
     )
     .await;
@@ -109,16 +109,16 @@ async fn assert_post_handoff_failure(limits: QueryLimits) {
 #[tokio::test]
 async fn select_source_limit_is_deterministically_post_handoff() {
     for _ in 0..8 {
-        assert_post_handoff_failure(QueryLimits::new(0, u64::MAX, u64::MAX)).await;
+        assert_post_handoff_failure(QueryLimits::new(u64::MAX, 0, u64::MAX, u64::MAX)).await;
     }
 }
 
 #[tokio::test]
 async fn select_result_limit_is_a_redacted_post_handoff_failure() {
-    assert_post_handoff_failure(QueryLimits::new(100, 1, u64::MAX)).await;
+    assert_post_handoff_failure(QueryLimits::new(u64::MAX, 100, 1, u64::MAX)).await;
 }
 
 #[tokio::test]
 async fn serializer_header_counts_toward_the_post_handoff_byte_limit() {
-    assert_post_handoff_failure(QueryLimits::new(100, 2, 0)).await;
+    assert_post_handoff_failure(QueryLimits::new(u64::MAX, 100, 2, 0)).await;
 }

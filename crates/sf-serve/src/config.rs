@@ -21,7 +21,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
 /// Finite serve defaults; CLI help and programmatic construction share this value.
 pub const DEFAULT_QUERY_LIMITS: QueryLimits =
-    QueryLimits::new(1_000_000, 100_000, 64 * 1024 * 1024);
+    QueryLimits::new(1_000_000, 1_000_000, 100_000, 64 * 1024 * 1024);
 /// Conservative finite governance default for admitted requests. This value is
 /// not a throughput target or a load-test result.
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 64;
@@ -39,7 +39,7 @@ pub struct ServeConfig {
     pub timeout: Duration,
     max_query_len: usize,
     max_form_body_len: usize,
-    /// Inclusive request-wide source/result/serialization ceilings.
+    /// Inclusive request-wide compiler/source/result/serialization ceilings.
     pub query_limits: QueryLimits,
     /// Bounds active `spawn_blocking` compilers. An owned permit lives inside the
     /// blocking closure, including after its request waiter times out.

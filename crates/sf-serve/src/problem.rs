@@ -27,6 +27,31 @@ pub(crate) enum ProblemCode {
     Internal,
 }
 
+const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlError::VARIANT_COUNT] = [
+    (
+        QueryControlError::DeadlineExceeded,
+        ProblemCode::RequestTimeout,
+    ),
+    (QueryControlError::Cancelled, ProblemCode::Internal),
+    (
+        QueryControlError::CompilerWorkExceeded,
+        ProblemCode::QueryBudgetExceeded,
+    ),
+    (
+        QueryControlError::SourceWorkExceeded,
+        ProblemCode::QueryBudgetExceeded,
+    ),
+    (
+        QueryControlError::ResultItemsExceeded,
+        ProblemCode::QueryBudgetExceeded,
+    ),
+    (
+        QueryControlError::SerializedBytesExceeded,
+        ProblemCode::QueryBudgetExceeded,
+    ),
+    (QueryControlError::AccountingOverflow, ProblemCode::Internal),
+];
+
 impl ProblemCode {
     fn from_sparql(error: &SparqlError) -> Self {
         match error {
@@ -38,14 +63,10 @@ impl ProblemCode {
     }
 
     fn from_control(error: QueryControlError) -> Self {
-        match error {
-            QueryControlError::DeadlineExceeded => Self::RequestTimeout,
-            QueryControlError::SourceWorkExceeded
-            | QueryControlError::ResultItemsExceeded
-            | QueryControlError::SerializedBytesExceeded => Self::QueryBudgetExceeded,
-            QueryControlError::Cancelled | QueryControlError::AccountingOverflow => Self::Internal,
-            _ => Self::Internal,
-        }
+        CONTROL_PROBLEM_CODES
+            .iter()
+            .find_map(|(candidate, code)| (*candidate == error).then_some(*code))
+            .expect("QueryControlError mapping table must cover every variant")
     }
 
     fn value(self) -> &'static str {
@@ -339,6 +360,18 @@ mod tests {
         let error = SparqlError::Sql(sentinel.to_owned());
         assert_eq!(ProblemCode::from_sparql(&error), ProblemCode::Internal);
         assert!(error.to_string().contains(sentinel));
+    }
+
+    #[test]
+    fn every_control_error_has_an_explicit_public_mapping() {
+        for error in QueryControlError::VARIANTS {
+            let mut mappings = CONTROL_PROBLEM_CODES
+                .iter()
+                .filter(|(candidate, _)| *candidate == error);
+            let (_, code) = mappings.next().expect("variant has a public mapping");
+            assert!(mappings.next().is_none(), "variant has one public mapping");
+            assert_eq!(ProblemCode::from_control(error), *code);
+        }
     }
 
     #[test]

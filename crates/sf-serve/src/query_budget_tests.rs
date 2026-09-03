@@ -15,7 +15,7 @@ use crate::stream::{
 fn budget(max_bytes: u64) -> RequestBudget {
     RequestBudget::after(
         Duration::from_secs(60),
-        QueryLimits::new(u64::MAX, u64::MAX, max_bytes),
+        QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, max_bytes),
     )
 }
 

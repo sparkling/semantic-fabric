@@ -43,8 +43,7 @@ pub struct ServeOptions {
     pub sqlite_pool_size: usize,
 }
 
-/// Build the config + router and serve until the process is stopped. Returns a
-/// clear error (never panics) when a required input is missing or invalid.
+/// Build the config + router and serve until stopped; invalid input returns an error.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     validate_max_query_len(opts.max_query_len)?;
     validate_max_concurrent_requests(opts.max_concurrent_requests)?;
@@ -114,6 +113,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
     cfg.set_max_query_len(opts.max_query_len)?;
     cfg.set_max_concurrent_requests(opts.max_concurrent_requests)?;
     cfg.query_limits = QueryLimits::new(
+        cfg.query_limits.max_compiler_work(),
         opts.max_source_work,
         opts.max_result_items,
         opts.max_serialized_bytes,

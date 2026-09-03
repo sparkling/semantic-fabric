@@ -150,7 +150,10 @@ mod tests {
     const CAPACITY: usize = 8;
 
     fn budget(timeout: Duration) -> RequestBudget {
-        RequestBudget::after(timeout, QueryLimits::new(u64::MAX, u64::MAX, u64::MAX))
+        RequestBudget::after(
+            timeout,
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        )
     }
 
     #[test]
@@ -187,6 +190,11 @@ mod tests {
             Ok(())
         });
         full_rx.await.expect("producer filled the data channel");
+        assert_eq!(
+            request_permits.available_permits(),
+            0,
+            "in-flight producer retains aggregate request capacity"
+        );
 
         tokio::time::advance(timeout).await;
         tokio::time::timeout(Duration::from_secs(1), producer)

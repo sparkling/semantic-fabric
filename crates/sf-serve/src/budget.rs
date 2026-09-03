@@ -51,7 +51,7 @@ impl RequestBudget {
     pub(crate) fn uncontrolled(deadline: Option<std::time::Instant>) -> Self {
         let (terminal, _) = watch::channel(None);
         Self(Arc::new(RequestBudgetState {
-            accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX)),
+            accounting: QueryBudget::new(QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)),
             deadline: deadline.map(Instant::from_std),
             deadline_representable: true,
             terminal,
@@ -250,17 +250,43 @@ impl QueryControl for RequestBudget {
             .consume(charge, amount)
             .map_err(|error| self.signal_error(error))
     }
+
+    fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+        RequestBudget::terminate(self, reason)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn trait_object_termination_delegates_to_the_sticky_request_identity() {
+        let budget = RequestBudget::after(
+            Duration::from_secs(60),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        );
+        let control: &dyn QueryControl = &budget;
+
+        assert_eq!(
+            control.terminate(QueryControlError::CompilerWorkExceeded),
+            QueryControlError::CompilerWorkExceeded
+        );
+        assert_eq!(
+            control.terminate(QueryControlError::Cancelled),
+            QueryControlError::CompilerWorkExceeded
+        );
+        assert_eq!(
+            budget.checkpoint(),
+            Err(QueryControlError::CompilerWorkExceeded)
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn cancellation_wakes_a_pending_phase_and_is_sticky() {
         let budget = RequestBudget::after(
             Duration::from_secs(60),
-            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         );
         let waiter = tokio::spawn({
             let budget = budget.clone();
@@ -280,7 +306,7 @@ mod tests {
     async fn limit_failure_wakes_an_independent_pending_phase() {
         let budget = RequestBudget::after(
             Duration::from_secs(60),
-            QueryLimits::new(0, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, 0, u64::MAX, u64::MAX),
         );
         let waiter = tokio::spawn({
             let budget = budget.clone();
@@ -303,7 +329,7 @@ mod tests {
     async fn handler_output_is_rechecked_against_the_absolute_deadline() {
         let budget = RequestBudget::after(
             Duration::from_millis(1),
-            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         );
 
         let result = budget
@@ -320,7 +346,7 @@ mod tests {
     async fn ready_handoff_before_deadline_ignores_a_sticky_resource_failure() {
         let budget = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(0, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, 0, u64::MAX, u64::MAX),
         );
         assert_eq!(
             budget.consume(QueryCharge::SourceWork, 1),
@@ -341,7 +367,7 @@ mod tests {
     async fn expired_handoff_reports_deadline_while_accounting_keeps_first_cause() {
         let budget = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(0, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, 0, u64::MAX, u64::MAX),
         );
         assert_eq!(
             budget.consume(QueryCharge::SourceWork, 1),
@@ -363,7 +389,7 @@ mod tests {
     async fn pending_handoff_reports_deadline_after_an_earlier_resource_failure() {
         let budget = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(0, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, 0, u64::MAX, u64::MAX),
         );
         assert_eq!(
             budget.consume(QueryCharge::SourceWork, 1),
@@ -394,7 +420,7 @@ mod tests {
     async fn unrepresentable_handoff_deadline_remains_accounting_overflow() {
         let budget = RequestBudget::after(
             Duration::MAX,
-            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         );
 
         assert_eq!(
@@ -411,14 +437,14 @@ mod tests {
     async fn cancellation_at_or_after_deadline_records_deadline() {
         let expired = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         );
         tokio::time::advance(Duration::from_secs(5)).await;
         assert_eq!(expired.cancel(), QueryControlError::DeadlineExceeded);
 
         let live = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         );
         assert_eq!(live.cancel(), QueryControlError::Cancelled);
     }
@@ -427,7 +453,7 @@ mod tests {
     fn ask_preflight_rejects_zero_capacity_without_consuming() {
         let budget = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(u64::MAX, 0, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, 0, u64::MAX),
         );
 
         assert_eq!(
@@ -441,7 +467,7 @@ mod tests {
     fn ask_preflight_leaves_positive_capacity_for_the_executor() {
         let budget = RequestBudget::after(
             Duration::from_secs(5),
-            QueryLimits::new(u64::MAX, 1, u64::MAX),
+            QueryLimits::new(u64::MAX, u64::MAX, 1, u64::MAX),
         );
 
         assert_eq!(budget.preflight_ask_result(), Ok(()));

@@ -263,7 +263,7 @@ async fn submitted_sqlite_worker_retains_capacity_until_worker_exit() {
     let request_permits = Arc::new(tokio::sync::Semaphore::new(1));
     let mut budget = crate::budget::RequestBudget::after(
         Duration::from_secs(60),
-        QueryLimits::new(u64::MAX, u64::MAX, u64::MAX),
+        QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
     );
     budget
         .retain_admission(

@@ -15,7 +15,10 @@ use crate::deadline::{join_task, run_compiler, run_compiler_observed, CompilerRu
 use crate::{router, Backend, ServeConfig};
 
 fn request_budget(timeout: Duration) -> RequestBudget {
-    RequestBudget::after(timeout, QueryLimits::new(u64::MAX, u64::MAX, u64::MAX))
+    RequestBudget::after(
+        timeout,
+        QueryLimits::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+    )
 }
 
 #[tokio::test(start_paused = true)]
