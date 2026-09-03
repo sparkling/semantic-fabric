@@ -80,6 +80,8 @@ mod graph_map;
 pub mod iq;
 pub mod leftjoin;
 pub mod path;
+#[allow(dead_code)] // Staged clone/envelope primitive; cache wiring is a later slice.
+mod plan_measure;
 pub mod resource_profile;
 pub mod saturate;
 pub mod star;
