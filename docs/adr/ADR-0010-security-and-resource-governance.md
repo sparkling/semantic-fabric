@@ -233,6 +233,34 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > database-row, recursive-work, atomic post-`200`, total-M2, or production-
 > admission claim follows.
 
+> **Status correction, part 14 (2026-09-03, aggregate serving admission and
+> terminal delivery).** Commits `25196b4`, `04dc983`, and `20f3df2` add one
+> shared fail-fast gate for admitted application work. The
+> `--max-concurrent-requests` option has a conservative finite default of 64—not a
+> measured throughput target—and startup accepts only
+> `1..=Semaphore::MAX_PERMITS` before source resolution, file reads, runtime
+> construction, or network I/O. Tower `poll_ready` does not queue for this gate:
+> `Service::call` checks the request control, uses `try_acquire_owned`, and does
+> not poll the Router or request body when saturated. Saturation is the distinct
+> redacted `503 service-overloaded` response with fixed `Retry-After: 1`; an
+> expired representable deadline takes precedence as `504`, while a closed gate
+> is an internal `500`. This is zero-queue shedding, not fairness or bounded
+> waiting, and the flag does not count sockets, completed responses, or rate-limit
+> clients.
+>
+> The owned permit is retained by the request budget through active handler,
+> producer, detached compiler, and backend-worker clones; caller cancellation
+> cannot return capacity while one of those internal tasks still owns it. The
+> permit is not retained merely while a client drains bytes from an already-
+> completed bounded producer. Streaming terminal state is therefore carried
+> out-of-band from the bounded data channel: even a full unpolled channel can
+> finish at its deadline, after which the body yields its buffered prefix, exactly one stable
+> `result stream failed` error, then fused EOF, without a `Content-Length`.
+> This does not prove compiler or database cooperative cancellation, database-row
+> or recursive-work accounting, raw/conformance governance, SQLite raw-mutex or
+> busy/UDF/VFS/I/O pre-emption, PostgreSQL/MySQL native cancellation, response
+> atomicity after `200`, per-request fairness, or production backend admission.
+
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.
 * **Research:** `docs/research/` — `virtualization-streaming`, `obda-resource-governance`.
