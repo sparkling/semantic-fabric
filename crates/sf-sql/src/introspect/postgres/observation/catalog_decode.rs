@@ -81,6 +81,8 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) operator_oids: Option<Vec<u32>>,
     pub(super) search_operator_oids: Option<Vec<u32>>,
     pub(super) trigger_overflow: bool,
+    pub(super) trigger_shape_valid: Option<bool>,
+    pub(super) trigger_all_enabled: Option<bool>,
     pub(super) index_primary: Option<bool>,
     pub(super) index_unique: Option<bool>,
     pub(super) index_valid: Option<bool>,
@@ -122,6 +124,8 @@ pub(super) fn decode_constraint_row_v1(
         operator_oids: get!("operator_oids", Option<Vec<u32>>),
         search_operator_oids: get!("search_operator_oids", Option<Vec<u32>>),
         trigger_overflow: get!("sf_trigger_overflow", bool),
+        trigger_shape_valid: get!("trigger_shape_valid", Option<bool>),
+        trigger_all_enabled: get!("trigger_all_enabled", Option<bool>),
         index_primary: get!("indisprimary", Option<bool>),
         index_unique: get!("indisunique", Option<bool>),
         index_valid: get!("indisvalid", Option<bool>),
@@ -169,7 +173,9 @@ pub(super) fn decode_constraint_row_v1(
         || (value.constraint_kind == "f"
             && (value.trigger_oids.is_none()
                 || value.operator_oids.is_none()
-                || value.search_operator_oids.is_none()))
+                || value.search_operator_oids.is_none()
+                || value.trigger_shape_valid != Some(true)
+                || value.trigger_all_enabled != Some(true)))
     {
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
