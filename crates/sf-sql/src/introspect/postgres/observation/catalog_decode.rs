@@ -463,6 +463,17 @@ impl CatalogAttributeRowV1 {
         {
             return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
         }
+        if let Some(name) = &self.joined_type_name {
+            BoundedCatalogTextV1::new(name.clone())?;
+        }
+        if let Some(namespace) = &self.joined_type_namespace_oid {
+            if *namespace == 0 {
+                return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
+            }
+        }
+        if let Some(name) = &self.joined_collation_name {
+            BoundedCatalogTextV1::new(name.clone())?;
+        }
         Ok(())
     }
 }
