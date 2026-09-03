@@ -73,6 +73,14 @@ mod tests {
             "search_path",
             "public_namespace_count",
             "current_database_count",
+            "database_oid",
+            "database_provider",
+            "database_collate",
+            "database_ctype",
+            "database_icu_locale",
+            "database_icu_rules",
+            "database_recorded_version",
+            "database_actual_version",
         ] {
             assert!(RICH_GUARD_SQL_V1.contains(field));
         }
