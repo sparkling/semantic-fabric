@@ -10,7 +10,7 @@ pub(super) const RICH_RELATIONS_SQL_V1: &str = "SELECT \
  CASE WHEN c.relname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(c.relname::text,'UTF8')) > $2 \
       THEN NULL::text ELSE c.relname::text END AS relation_name, \
  (n.nspname IS NULL OR c.relname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(n.nspname::text,'UTF8')) > $2 OR pg_catalog.octet_length(pg_catalog.convert_to(c.relname::text,'UTF8')) > $2) AS sf_text_overflow, \
- c.relkind, c.relpersistence, c.relispartition, c.relisshared, c.relrowsecurity, c.relforcerowsecurity, c.reloftype, c.relrewrite, c.relam, am.oid AS joined_access_method_oid, amn.nspname AS access_method_namespace, am.amname AS access_method_name, am.amtype AS access_method_type, c.relnatts \
+ c.relkind, c.relpersistence, c.relispartition, c.relisshared, c.relrowsecurity, c.relforcerowsecurity, c.reloftype, c.relrewrite, c.relam, am.oid AS joined_access_method_oid, amn.nspname AS access_method_namespace, am.amname AS access_method_name, am.amtype AS access_method_type, (EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhrelid=c.oid)) AS inherits_as_child, (EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhparent=c.oid)) AS inherits_as_parent, c.relnatts \
  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam LEFT JOIN pg_catalog.pg_namespace amn ON amn.oid=am.amnamespace \
  WHERE n.nspname=$1 AND c.relkind IN ('r','p','f') ORDER BY c.relname LIMIT $3";
 

@@ -3,6 +3,7 @@
 //! SQL adapters must validate these envelopes before retaining rich facts. This
 //! module deliberately contains no driver calls and no public/runtime wiring.
 
+use super::relation::Postgres16RelationCatalogFactV1;
 use super::{
     PostgresSchemaIdentityGuardCodeV1, PostgresSchemaIdentityLimitCodeV1,
     PostgresSchemaIdentityUnavailableV1,
@@ -319,6 +320,8 @@ pub(super) fn decode_relation_row_v1(
         access_method_type: get!("access_method_type", Option<String>)
             .map(one_char)
             .transpose()?,
+        inherits_as_child: get!("inherits_as_child", bool),
+        inherits_as_parent: get!("inherits_as_parent", bool),
         physical_attribute_count: get!("relnatts", i16),
     };
     value.validate()?;
@@ -402,6 +405,8 @@ pub(super) struct CatalogRelationRowV1 {
     pub(super) access_method_namespace: Option<String>,
     pub(super) access_method_name: Option<String>,
     pub(super) access_method_type: Option<char>,
+    pub(super) inherits_as_child: bool,
+    pub(super) inherits_as_parent: bool,
     pub(super) physical_attribute_count: i16,
 }
 
@@ -440,6 +445,34 @@ pub(super) struct CatalogAttributeRowV1 {
 }
 
 impl CatalogRelationRowV1 {
+    pub(super) fn into_catalog_fact(
+        self,
+    ) -> Result<Postgres16RelationCatalogFactV1, PostgresSchemaIdentityUnavailableV1> {
+        self.validate()?;
+        Ok(Postgres16RelationCatalogFactV1 {
+            relation_oid: self.relation_oid,
+            relation_namespace_oid: self.relation_namespace_oid,
+            joined_namespace_oid: self.joined_namespace_oid,
+            namespace_name: self.namespace_name.into_boxed_str(),
+            relation_name: self.relation_name.into_boxed_str(),
+            relation_kind: self.relation_kind,
+            persistence: self.persistence,
+            is_shared: self.is_shared,
+            is_partition: self.is_partition,
+            row_security: self.row_security,
+            force_row_security: self.force_row_security,
+            of_type_oid: self.of_type_oid,
+            rewrite_oid: self.rewrite_oid,
+            access_method_oid: self.access_method_oid,
+            joined_access_method_oid: self.joined_access_method_oid,
+            access_method_name: self.access_method_name.map(String::into_boxed_str),
+            access_method_type: self.access_method_type,
+            inherits_as_child: self.inherits_as_child,
+            inherits_as_parent: self.inherits_as_parent,
+            physical_attribute_count: self.physical_attribute_count,
+        })
+    }
+
     pub(super) fn validate(&self) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
         if self.text_overflow {
             return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
@@ -685,6 +718,8 @@ mod tests {
             access_method_namespace: Some("pg_catalog".into()),
             access_method_name: Some("heap".into()),
             access_method_type: Some('t'),
+            inherits_as_child: false,
+            inherits_as_parent: false,
             physical_attribute_count: 1,
         };
         assert!(relation.validate().is_ok());
