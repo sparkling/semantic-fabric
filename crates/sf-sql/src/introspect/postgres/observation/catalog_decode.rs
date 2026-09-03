@@ -228,6 +228,15 @@ impl CatalogGuardRowV1 {
                 PostgresSchemaIdentityGuardCodeV1::CurrentDatabase,
             ));
         }
+        if self.database_oid == 0
+            || self
+                .database_recorded_version
+                .as_ref()
+                .zip(self.database_actual_version.as_ref())
+                .is_some_and(|(recorded, actual)| recorded != actual)
+        {
+            return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
+        }
         BoundedCatalogTextV1::new(self.database_collate.clone())?;
         BoundedCatalogTextV1::new(self.database_ctype.clone())?;
         one_char(self.database_provider.clone())?;
