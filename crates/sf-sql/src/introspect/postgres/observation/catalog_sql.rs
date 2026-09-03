@@ -99,6 +99,8 @@ mod tests {
             "search_operator_oids",
             "index_access_method",
             "index_opclass_default",
+            "trigger_shape_valid",
+            "trigger_all_enabled",
             "LIMIT $1",
         ] {
             assert!(RICH_CONSTRAINTS_SQL_V1.contains(field));
