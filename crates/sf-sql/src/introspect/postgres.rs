@@ -132,9 +132,9 @@ pub async fn introspect_postgres_public_snapshot_guarded(
     Ok(schemas)
 }
 
-/// Capture a guarded snapshot with explicit identity availability. Until the
-/// rich catalogue normalizer is wired, the legacy projection is preserved and
-/// availability is reported as `ProfileNotImplemented` rather than inferred.
+/// Capture a guarded snapshot with explicit identity availability. Rich
+/// catalogue evidence is collected in the same repeatable-read transaction;
+/// unsupported evidence (including incomplete FK proof) remains unavailable.
 pub async fn introspect_postgres_public_observed_snapshot(
     client: &mut tokio_postgres::Client,
 ) -> Result<Postgres16PublicObservedSnapshotV1> {
