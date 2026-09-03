@@ -38,6 +38,37 @@ pub(super) async fn query_bounded<C>(
 where
     C: GenericClient + Sync,
 {
+    query_bounded_mapped(
+        client,
+        sql,
+        params,
+        maximum,
+        Error::Postgres,
+        || {
+            Error::Introspection(format!(
+                "PostgreSQL introspection {resource} exceeds the configured limit"
+            ))
+        },
+        Ok,
+    )
+    .await
+}
+
+pub(super) async fn query_bounded_mapped<C, T, E, F, DriverError, LimitError>(
+    client: &C,
+    sql: &str,
+    params: &[TypedQueryParameter<'_>],
+    maximum: usize,
+    driver_error: DriverError,
+    limit_error: LimitError,
+    map: F,
+) -> std::result::Result<Vec<T>, E>
+where
+    C: GenericClient + Sync,
+    F: FnMut(Row) -> std::result::Result<T, E>,
+    DriverError: Fn(tokio_postgres::Error) -> E + Copy,
+    LimitError: Fn() -> E,
+{
     let rows = client
         .query_typed_raw(
             sql,
@@ -45,29 +76,33 @@ where
                 .iter()
                 .map(|parameter| (parameter.value, parameter.parameter_type.clone())),
         )
-        .await?;
-    collect_bounded_rows(rows, maximum, resource).await
+        .await
+        .map_err(driver_error)?;
+    collect_bounded_mapped_rows(rows, maximum, driver_error, limit_error, map).await
 }
 
-async fn collect_bounded_rows<T, S>(
+async fn collect_bounded_mapped_rows<T, U, S, E, F, DriverError, LimitError>(
     rows: S,
     maximum: usize,
-    resource: &'static str,
-) -> Result<Vec<T>>
+    driver_error: DriverError,
+    limit_error: LimitError,
+    mut map: F,
+) -> std::result::Result<Vec<T>, E>
 where
-    S: TryStream<Ok = T, Error = tokio_postgres::Error>,
+    S: TryStream<Ok = U, Error = tokio_postgres::Error>,
+    F: FnMut(U) -> std::result::Result<T, E>,
+    DriverError: Fn(tokio_postgres::Error) -> E,
+    LimitError: Fn() -> E,
 {
     futures_util::pin_mut!(rows);
     let mut retained = Vec::new();
     while let Some(row) = std::future::poll_fn(|context| rows.as_mut().try_poll_next(context)).await
     {
-        let row = row?;
+        let row = row.map_err(&driver_error)?;
         if retained.len() == maximum {
-            return Err(Error::Introspection(format!(
-                "PostgreSQL introspection {resource} exceeds the configured limit"
-            )));
+            return Err(limit_error());
         }
-        retained.push(row);
+        retained.push(map(row)?);
     }
     Ok(retained)
 }

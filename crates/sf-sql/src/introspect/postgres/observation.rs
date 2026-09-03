@@ -7,9 +7,14 @@ use tokio_postgres::{GenericClient, Row};
 use sf_core::schema_identity::{
     ConstraintInputV1, ObservedSchemaIdentityV1, ProfileIdV1, RelationInputV1,
     SchemaIdentityErrorV1, SchemaIdentityLimitV1, SchemaObservationInputV1, SchemaProfilesV1,
+    MAX_RAW_CONSTRAINTS_V1, MAX_RELATIONS_V1,
 };
 
+use tokio_postgres::types::Type;
+
 use crate::schema::TableSchema;
+
+use super::legacy_query::{query_bounded_mapped, TypedQueryParameter};
 
 #[allow(dead_code)]
 mod catalog_decode;
@@ -117,38 +122,64 @@ where
         .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
     let guard = catalog_decode::decode_guard_row_v1(&guard_row)?;
     let server_version_num = guard.server_version_num;
-    let relation_rows = client
-        .query(
-            catalog_sql::RICH_RELATIONS_SQL_V1,
-            &[&schema_name, &256i32, &65_537i64],
-        )
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
-    let relations = catalog_decode::decode_relation_rows_v1(&relation_rows)?
-        .into_iter()
-        .map(catalog_decode::CatalogRelationRowV1::into_catalog_fact)
-        .collect::<Result<Vec<_>, _>>()?;
-    let attribute_rows = client
-        .query(
-            catalog_sql::RICH_ATTRIBUTES_SQL_V1,
-            &[&schema_name, &256i32, &1_048_577i64],
-        )
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::UnsupportedType)?;
-    let attributes = catalog_decode::decode_attribute_rows_v1(&attribute_rows)?
-        .into_iter()
-        .map(|row| row.into_catalog_fact(&guard))
-        .collect::<Result<Vec<_>, _>>()?;
+    let text_limit = catalog_decode::MAX_CATALOG_TEXT_BYTES_V1 as i32;
+    let relation_limit = MAX_RELATIONS_V1 as i64 + 1;
+    let relations = query_bounded_mapped(
+        client,
+        catalog_sql::RICH_RELATIONS_SQL_V1,
+        &[
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&text_limit, Type::INT4),
+            TypedQueryParameter::new(&relation_limit, Type::INT8),
+        ],
+        MAX_RELATIONS_V1,
+        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
+        || {
+            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+                PostgresSchemaIdentityLimitCodeV1::RichRelations,
+            )
+        },
+        |row| catalog_decode::decode_relation_row_v1(&row)?.into_catalog_fact(),
+    )
+    .await?;
+    let attribute_limit = relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1 as i64 + 1;
+    let attributes = query_bounded_mapped(
+        client,
+        catalog_sql::RICH_ATTRIBUTES_SQL_V1,
+        &[
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&text_limit, Type::INT4),
+            TypedQueryParameter::new(&attribute_limit, Type::INT8),
+        ],
+        relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1,
+        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
+        || {
+            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+                PostgresSchemaIdentityLimitCodeV1::PhysicalAttributes,
+            )
+        },
+        |row| catalog_decode::decode_attribute_row_v1(&row)?.into_catalog_fact(&guard),
+    )
+    .await?;
     let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
-    let constraint_rows = client
-        .query(
-            catalog_sql::RICH_CONSTRAINTS_SQL_V1,
-            &[&schema_name, &65_537i64],
-        )
-        .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
-    let raw_constraints = catalog_decode::decode_constraint_rows_v1(&constraint_rows)?;
-    let raw_constraints = catalog_decode::adapt_constraint_rows_v1(raw_constraints)?;
+    let constraint_limit = MAX_RAW_CONSTRAINTS_V1 as i64 + 1;
+    let raw_constraints = query_bounded_mapped(
+        client,
+        catalog_sql::RICH_CONSTRAINTS_SQL_V1,
+        &[
+            TypedQueryParameter::new(&schema_name, Type::TEXT),
+            TypedQueryParameter::new(&constraint_limit, Type::INT8),
+        ],
+        MAX_RAW_CONSTRAINTS_V1,
+        |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
+        || {
+            PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+                PostgresSchemaIdentityLimitCodeV1::RawConstraints,
+            )
+        },
+        |row| catalog_decode::decode_constraint_row_v1(&row)?.into_raw_constraint(),
+    )
+    .await?;
     build_registered_observation_from_raw(server_version_num, normalized, raw_constraints)
 }
 
