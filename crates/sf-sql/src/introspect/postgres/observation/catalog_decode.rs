@@ -171,6 +171,11 @@ pub(super) fn decode_constraint_row_v1(
     {
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
+    if matches!(value.constraint_kind.as_str(), "p" | "u")
+        && value.index_access_method.as_deref() != Some("btree")
+    {
+        return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
+    }
     Ok(value)
 }
 
