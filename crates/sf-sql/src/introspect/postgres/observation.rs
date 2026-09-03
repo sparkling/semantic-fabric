@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use tokio_postgres::{GenericClient, Row};
+
 use sf_core::schema_identity::{
     ConstraintInputV1, ObservedSchemaIdentityV1, ProfileIdV1, RelationInputV1,
     SchemaIdentityErrorV1, SchemaIdentityLimitV1, SchemaObservationInputV1, SchemaProfilesV1,
@@ -19,6 +21,19 @@ mod constraints;
 mod relation;
 #[allow(dead_code)]
 mod source_type;
+
+pub(super) async fn qualify_profile_guard<C>(
+    client: &C,
+) -> Result<(), PostgresSchemaIdentityUnavailableV1>
+where
+    C: GenericClient + Sync,
+{
+    let row: Row = client
+        .query_one(catalog_sql::RICH_GUARD_SQL_V1, &[])
+        .await
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+    catalog_decode::decode_guard_row_v1(&row).map(|_| ())
+}
 
 pub const POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1: &str =
     "io.github.sparkling.semantic-fabric.pg16-pb.structural-v1";

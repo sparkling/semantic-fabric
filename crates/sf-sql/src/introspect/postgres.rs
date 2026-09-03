@@ -94,6 +94,44 @@ pub async fn introspect_postgres_public_snapshot(
     Ok(schemas)
 }
 
+/// Capture the legacy public snapshot only after the frozen PostgreSQL-16
+/// profile guards pass. Rich identity availability is not yet returned by
+/// this compatibility-shaped API; callers needing it must use the future
+/// observed-snapshot entry point.
+pub async fn introspect_postgres_public_snapshot_guarded(
+    client: &mut tokio_postgres::Client,
+) -> Result<Vec<TableSchema>> {
+    let transaction = client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?;
+    transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
+    observation::qualify_profile_guard(&transaction)
+        .await
+        .map_err(|error| Error::Introspection(error.to_string()))?;
+    let rows = query_bounded(
+        &transaction,
+        TABLES_SQL,
+        &[
+            TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
+            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
+            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
+        ],
+        MAX_LEGACY_RELATIONS_PG16_V1,
+        "table rows",
+    )
+    .await?;
+    let tables: Vec<String> = rows
+        .into_iter()
+        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
+        .collect::<Result<_>>()?;
+    let schemas = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
+    transaction.commit().await?;
+    Ok(schemas)
+}
+
 async fn introspect_in_schema<C>(
     client: &C,
     schema_name: &str,
