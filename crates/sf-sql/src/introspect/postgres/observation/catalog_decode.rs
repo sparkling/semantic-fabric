@@ -85,6 +85,7 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) trigger_overflow: bool,
     pub(super) trigger_shape_valid: Option<bool>,
     pub(super) trigger_all_enabled: Option<bool>,
+    pub(super) trigger_functions_valid: Option<bool>,
     pub(super) index_primary: Option<bool>,
     pub(super) index_unique: Option<bool>,
     pub(super) index_valid: Option<bool>,
@@ -130,6 +131,7 @@ pub(super) fn decode_constraint_row_v1(
         trigger_overflow: get!("sf_trigger_overflow", bool),
         trigger_shape_valid: get!("trigger_shape_valid", Option<bool>),
         trigger_all_enabled: get!("trigger_all_enabled", Option<bool>),
+        trigger_functions_valid: get!("trigger_functions_valid", Option<bool>),
         index_primary: get!("indisprimary", Option<bool>),
         index_unique: get!("indisunique", Option<bool>),
         index_valid: get!("indisvalid", Option<bool>),
@@ -181,7 +183,8 @@ pub(super) fn decode_constraint_row_v1(
                 || value.operator_complete != Some(true)
                 || value.types_and_facets_equal != Some(true)
                 || value.trigger_shape_valid != Some(true)
-                || value.trigger_all_enabled != Some(true)))
+                || value.trigger_all_enabled != Some(true)
+                || value.trigger_functions_valid != Some(true)))
     {
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
