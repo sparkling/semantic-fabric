@@ -8,6 +8,54 @@ use tokio_postgres::Row;
 
 pub(super) const MAX_CATALOG_TEXT_BYTES_V1: usize = 256;
 pub(super) const MAX_CATALOG_ARRAY_MEMBERS_V1: usize = 32;
+const MAX_RELATION_ROWS_V1: usize = 65_536;
+const MAX_ATTRIBUTE_ROWS_V1: usize = 1_048_576;
+const MAX_CONSTRAINT_ROWS_V1: usize = 65_536;
+
+fn bounded_rows<T>(
+    rows: &[Row],
+    cap: usize,
+    limit: PostgresSchemaIdentityLimitCodeV1,
+    decode: impl Fn(&Row) -> Result<T, PostgresSchemaIdentityUnavailableV1>,
+) -> Result<Vec<T>, PostgresSchemaIdentityUnavailableV1> {
+    if rows.len() > cap {
+        return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(limit));
+    }
+    rows.iter().map(decode).collect()
+}
+
+pub(super) fn decode_relation_rows_v1(
+    rows: &[Row],
+) -> Result<Vec<CatalogRelationRowV1>, PostgresSchemaIdentityUnavailableV1> {
+    bounded_rows(
+        rows,
+        MAX_RELATION_ROWS_V1,
+        PostgresSchemaIdentityLimitCodeV1::RichRelations,
+        decode_relation_row_v1,
+    )
+}
+
+pub(super) fn decode_attribute_rows_v1(
+    rows: &[Row],
+) -> Result<Vec<CatalogAttributeRowV1>, PostgresSchemaIdentityUnavailableV1> {
+    bounded_rows(
+        rows,
+        MAX_ATTRIBUTE_ROWS_V1,
+        PostgresSchemaIdentityLimitCodeV1::PhysicalAttributes,
+        decode_attribute_row_v1,
+    )
+}
+
+pub(super) fn decode_constraint_rows_v1(
+    rows: &[Row],
+) -> Result<Vec<CatalogConstraintRowV1>, PostgresSchemaIdentityUnavailableV1> {
+    bounded_rows(
+        rows,
+        MAX_CONSTRAINT_ROWS_V1,
+        PostgresSchemaIdentityLimitCodeV1::RawConstraints,
+        decode_constraint_row_v1,
+    )
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CatalogConstraintRowV1 {
