@@ -35,7 +35,9 @@ use crate::stream::sqlite_column_decltypes;
 mod cancellation;
 mod owned;
 
-pub use owned::{SqliteOwnedBackend, SqliteReceiverStream};
+pub use owned::{
+    SqliteOwnedBackend, SqliteOwnedConnection, SqliteOwnedLease, SqliteReceiverStream,
+};
 
 /// A borrowing SQLite backend over a live `&Connection`. The current branch's
 /// prepared `Statement` is stored in `stmt` so [`SqliteBranch`]'s `Rows` can borrow

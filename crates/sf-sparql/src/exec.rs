@@ -165,6 +165,25 @@ where
     crate::exec_core::select_each_async_controlled(plan, &mut b, control.as_ref(), sink).await
 }
 
+/// Serving-admission sibling of [`select_each_sqlite_owned_interruptible`]. The
+/// acquired lease is cloned into every SQLite blocking worker by the backend.
+pub async fn select_each_sqlite_owned_interruptible_leased<F, Fut>(
+    plan: &Plan,
+    lease: sf_sql::backend::sqlite::SqliteOwnedLease,
+    control: Arc<dyn QueryControl>,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled_leased(
+        lease,
+        Arc::clone(&control),
+    );
+    crate::exec_core::select_each_async_controlled(plan, &mut b, control.as_ref(), sink).await
+}
+
 /// Stream a CONSTRUCT's per-solution triples over an owned SQLite handle into an
 /// async `sink` (serve lane), bounded by the template size — never the whole graph.
 pub async fn construct_each_sqlite_owned<F, Fut>(
@@ -215,6 +234,24 @@ where
     crate::exec_core::construct_each_async_controlled(plan, &mut b, control.as_ref(), sink).await
 }
 
+/// Serving-admission sibling of [`construct_each_sqlite_owned_interruptible`].
+pub async fn construct_each_sqlite_owned_interruptible_leased<F, Fut>(
+    plan: &Plan,
+    lease: sf_sql::backend::sqlite::SqliteOwnedLease,
+    control: Arc<dyn QueryControl>,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled_leased(
+        lease,
+        Arc::clone(&control),
+    );
+    crate::exec_core::construct_each_async_controlled(plan, &mut b, control.as_ref(), sink).await
+}
+
 /// Execute an ASK over an owned SQLite handle (serve lane) — true iff at least one
 /// solution exists. Spawnable: the concrete owned-backend future is `Send`.
 pub async fn ask_sqlite_owned(plan: &Plan, conn: Arc<Mutex<Connection>>) -> Result<bool> {
@@ -244,6 +281,19 @@ pub async fn ask_sqlite_owned_interruptible(
 ) -> Result<bool> {
     let mut b =
         sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled(conn, Arc::clone(&control));
+    crate::exec_core::ask_controlled(plan, &mut b, control.as_ref()).await
+}
+
+/// Serving-admission sibling of [`ask_sqlite_owned_interruptible`].
+pub async fn ask_sqlite_owned_interruptible_leased(
+    plan: &Plan,
+    lease: sf_sql::backend::sqlite::SqliteOwnedLease,
+    control: Arc<dyn QueryControl>,
+) -> Result<bool> {
+    let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled_leased(
+        lease,
+        Arc::clone(&control),
+    );
     crate::exec_core::ask_controlled(plan, &mut b, control.as_ref()).await
 }
 

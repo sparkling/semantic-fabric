@@ -946,10 +946,10 @@ async fn post_sparql_query_body_non_utf8_returns_400() {
 async fn ask_query_exceeding_timeout_returns_504() {
     // Deterministic (not machine-speed-dependent): `Backend::Sqlite` guards its
     // connection with a plain blocking `std::sync::Mutex` (confirmed in
-    // `sf_serve::lib`). Hold that lock from a background OS thread for longer
-    // than `cfg.timeout` — `ask_sqlite_owned` genuinely blocks trying to
-    // acquire it, so `tokio::time::timeout` wrapping the ASK task reliably
-    // elapses before any response is sent (ASK collects a single boolean,
+    // `sf_serve::lib`). Hold that raw lock from a background OS thread and use
+    // an explicit acquisition/release barrier — the leased worker genuinely
+    // blocks trying to acquire it, so the request deadline reliably elapses
+    // before any response is sent (ASK collects a single boolean,
     // unlike a streamed SELECT/CONSTRUCT whose 200 status line commits before
     // any deadline is ever checked mid-body — why ASK is the clean way to
     // reach 504 here). A workload-dependent "make the SQL itself slow" query
@@ -957,13 +957,22 @@ async fn ask_query_exceeding_timeout_returns_504() {
     let (mut cfg, pool) = sqlite_config_with_pool();
     cfg.timeout = std::time::Duration::from_millis(20);
     let conn = pool.pick();
+    let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let hold = std::thread::spawn(move || {
         let _guard = conn.lock().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        acquired_tx.send(()).expect("signal held raw mutex");
+        release_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("release held raw mutex");
     });
-    // Give the background thread a moment to actually acquire the lock before
-    // firing the request (avoids a race where the request's lock attempt wins).
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    tokio::task::spawn_blocking(move || {
+        acquired_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("raw mutex holder did not reach barrier")
+    })
+    .await
+    .expect("raw mutex barrier task");
     let cfg = Arc::new(cfg);
     let req = post_query("ASK { ?s ?p ?o }", "application/sparql-results+json");
     let (status, ctype, body) = send(cfg, req).await;
@@ -973,6 +982,7 @@ async fn ask_query_exceeding_timeout_returns_504() {
         serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
         "request-timeout"
     );
+    release_tx.send(()).expect("release raw mutex holder");
     hold.join().unwrap();
 }
 

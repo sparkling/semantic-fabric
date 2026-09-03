@@ -2,10 +2,14 @@
 
 use std::sync::{Arc, Mutex};
 
+use sf_sql::backend::sqlite::SqliteOwnedConnection;
 use sf_sql::introspect::introspect_sqlite;
 use sf_sql::{Dialect, TableSchema};
 
 use crate::source::POSTGRES_RELATION_SCOPE_SETTING;
+
+#[cfg(test)]
+type AdmissionPendingObserver = Box<dyn FnOnce() + Send + 'static>;
 
 const POSTGRES_RELATION_SCOPE_QUERY: &str =
     "SELECT pg_catalog.current_setting('search_path') AS search_path";
@@ -64,7 +68,11 @@ fn relation_scope_matches(setting: &str) -> bool {
 /// status-correction part 2: "SQLite remains a single `Mutex<Connection>` by
 /// choice ... an open refinement" — this closes that refinement). Each request
 /// takes exactly one member's mutex for its query's duration, so up to
-/// `pool_size` requests proceed concurrently instead of fully serialising.
+/// `pool_size` requests proceed concurrently instead of fully serialising. A
+/// serving request first awaits the selected member's permanent cap-1 admission
+/// gate, then its blocking workers take that member's mutex. Round-robin choice
+/// is not availability-aware, and legacy [`SqlitePool::pick`] users bypass the
+/// serving gate.
 ///
 /// `:memory:` sources stay a pool of one, read-write (see [`Backend::sqlite`] /
 /// [`crate::run`]): each `rusqlite::Connection::open(":memory:")` call creates an
@@ -72,8 +80,10 @@ fn relation_scope_matches(setting: &str) -> bool {
 /// would silently serve queries against the wrong (empty) database.
 #[derive(Clone)]
 pub struct SqlitePool {
-    conns: Arc<Vec<Arc<Mutex<rusqlite::Connection>>>>,
+    conns: Arc<Vec<SqliteOwnedConnection>>,
     next: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    admission_pending_observer: Arc<Mutex<Option<AdmissionPendingObserver>>>,
 }
 
 impl SqlitePool {
@@ -89,8 +99,44 @@ impl SqlitePool {
             "SqlitePool needs at least one connection"
         );
         Self {
-            conns: Arc::new(conns.into_iter().map(|c| Arc::new(Mutex::new(c))).collect()),
+            conns: Arc::new(conns.into_iter().map(SqliteOwnedConnection::new).collect()),
             next: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            admission_pending_observer: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn pick_owned(&self) -> SqliteOwnedConnection {
+        let n = self.conns.len();
+        let i = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        self.conns[i].clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_admission_pending_observer<F>(&self, observer: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let mut slot = self
+            .admission_pending_observer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            slot.is_none(),
+            "SQLite admission observer already installed"
+        );
+        *slot = Some(Box::new(observer));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_admission_pending(&self) {
+        let observer = self
+            .admission_pending_observer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(observer) = observer {
+            observer();
         }
     }
 
@@ -99,9 +145,7 @@ impl SqlitePool {
     /// [`Backend::sqlite`]) always returns that same connection, so callers see
     /// identical behaviour to the pre-pool single-`Mutex` design.
     pub fn pick(&self) -> Arc<Mutex<rusqlite::Connection>> {
-        let n = self.conns.len();
-        let i = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
-        self.conns[i].clone()
+        self.pick_owned().raw_connection()
     }
 }
 

@@ -21,6 +21,7 @@ use crate::config::ServeConfig;
 use crate::deadline::{self, CompilerRunError, JoinedTaskError};
 use crate::problem::{self, ProblemCode};
 use crate::request_deadline::RequestDeadlineService;
+use crate::sqlite_admission;
 use crate::stream::{self, RdfFormat};
 
 #[cfg(test)]
@@ -158,18 +159,19 @@ async fn respond_select(
         return problem::response(ProblemCode::Internal);
     };
     let vars = vars.clone();
-    // Every backend drives the generic streamer; SQLite owns its blocking cap-1
-    // bridge rather than giving sf-serve a special case (ADR-0024 M5).
     let body = match backend {
         Backend::Sqlite(pool) => {
-            let conn = pool.pick();
+            let lease = match sqlite_admission::acquire(&pool, &budget).await {
+                Ok(lease) => lease,
+                Err(response) => return response,
+            };
             let drive_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
             stream::select_body_streaming_controlled(
                 move |sink| {
                     Box::pin(async move {
-                        exec::select_each_sqlite_owned_interruptible(
+                        exec::select_each_sqlite_owned_interruptible_leased(
                             &plan,
-                            conn,
+                            lease,
                             drive_control,
                             sink,
                         )
@@ -232,12 +234,14 @@ async fn respond_ask(
     let fmt = negotiate_results(accept);
     let value = match backend {
         Backend::Sqlite(pool) => {
-            // The adapter owns SQLite's blocking; spawning its concrete future
-            // proves the `Send` obligation directly (ADR-0024 M5).
-            let conn = pool.pick();
+            // The concrete adapter future proves the `Send` obligation.
+            let lease = match sqlite_admission::acquire(&pool, &budget).await {
+                Ok(lease) => lease,
+                Err(response) => return response,
+            };
             let task_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
             let run = tokio::spawn(async move {
-                exec::ask_sqlite_owned_interruptible(&plan, conn, task_control).await
+                exec::ask_sqlite_owned_interruptible_leased(&plan, lease, task_control).await
             });
             match deadline::join_task(budget.clone(), run).await {
                 Err(JoinedTaskError::Control(error)) => {
@@ -322,14 +326,17 @@ async fn respond_construct(
     let fmt = negotiate_rdf(accept);
     let body = match backend {
         Backend::Sqlite(pool) => {
-            let conn = pool.pick();
+            let lease = match sqlite_admission::acquire(&pool, &budget).await {
+                Ok(lease) => lease,
+                Err(response) => return response,
+            };
             let drive_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
             stream::construct_body_streaming_controlled(
                 move |sink| {
                     Box::pin(async move {
-                        exec::construct_each_sqlite_owned_interruptible(
+                        exec::construct_each_sqlite_owned_interruptible_leased(
                             &plan,
-                            conn,
+                            lease,
                             drive_control,
                             sink,
                         )

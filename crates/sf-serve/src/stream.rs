@@ -14,11 +14,13 @@
 //! A slow/aborted client closes the receiver; that event races the entire producer,
 //! seals cancellation, and drops the driver even when no chunk is ready. The same
 //! budget wraps the async driver and charges every serializer write before append.
-//! The owned SQLite serving path also interrupts active VM work after mutex
-//! acquisition. It does not pre-empt mutex/queue waits, busy timeouts, blocking
-//! UDF/VFS/I/O, compiler work, raw/conformance paths, other backends, or response
-//! prefixes already committed after `200`; there is no common source-native
-//! cancellation contract. ASK is serialised whole via [`collected_body`].
+//! The owned SQLite serving path first acquires a cancellable per-connection
+//! admission lease and then interrupts active VM work after mutex acquisition.
+//! It does not pre-empt a raw mutex holder, an already-submitted Tokio blocking
+//! task, busy timeouts, blocking UDF/VFS/I/O, compiler work, raw/conformance
+//! paths, other backends, or response prefixes already committed after `200`;
+//! there is no common source-native cancellation contract. ASK is serialised
+//! whole via [`collected_body`].
 
 use std::future::Future;
 use std::io::{self, Write};

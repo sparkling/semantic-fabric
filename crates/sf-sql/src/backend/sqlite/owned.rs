@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use sf_core::query_control::QueryControl;
+use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore};
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
@@ -14,11 +15,68 @@ use super::cancellation::{
 use super::{column_meta, marshal_row};
 
 #[cfg(test)]
+#[path = "owned_admission_tests.rs"]
+mod admission_tests;
+#[cfg(test)]
 #[path = "owned_cancellation_lifecycle_tests.rs"]
 mod cancellation_lifecycle_tests;
 #[cfg(test)]
 #[path = "owned_cancellation_tests.rs"]
 mod cancellation_tests;
+
+/// One physical SQLite connection paired permanently with its cap-1 async
+/// admission gate. Clones preserve that identity; they never mint another gate.
+#[derive(Clone)]
+pub struct SqliteOwnedConnection {
+    conn: Arc<Mutex<Connection>>,
+    admission: Arc<Semaphore>,
+}
+
+impl SqliteOwnedConnection {
+    /// Pair a physical connection with its one serving admission permit.
+    pub fn new(conn: Connection) -> Self {
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            admission: Arc::new(Semaphore::new(1)),
+        }
+    }
+
+    /// Preserve access for legacy callers that do not participate in serving
+    /// admission. Such access is outside the lease's concurrency guarantee.
+    pub fn raw_connection(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
+
+    /// Wait asynchronously for exclusive serving admission to this connection.
+    /// Dropping the acquisition future cancels only this queue wait.
+    pub async fn acquire(&self) -> std::result::Result<SqliteOwnedLease, AcquireError> {
+        let permit = Arc::clone(&self.admission).acquire_owned().await?;
+        Ok(SqliteOwnedLease {
+            state: Arc::new(SqliteOwnedLeaseState {
+                conn: Arc::clone(&self.conn),
+                _permit: permit,
+            }),
+        })
+    }
+
+    #[cfg(test)]
+    fn available_permits(&self) -> usize {
+        self.admission.available_permits()
+    }
+}
+
+/// An opaque exclusive serving lease for one physical SQLite connection.
+/// It is consumed exactly once by [`SqliteOwnedBackend`]; only that backend may
+/// clone the private state into a submitted worker so the worker can outlive a
+/// cancelled async caller without admitting overlapping serving work.
+pub struct SqliteOwnedLease {
+    state: Arc<SqliteOwnedLeaseState>,
+}
+
+struct SqliteOwnedLeaseState {
+    conn: Arc<Mutex<Connection>>,
+    _permit: OwnedSemaphorePermit,
+}
 
 /// An **owned, `'static`** SQLite backend over `Arc<Mutex<Connection>>` — the serve
 /// lane's flavor (design §4.1). Its stream ([`SqliteReceiverStream`]) is the receive
@@ -28,6 +86,7 @@ mod cancellation_tests;
 /// bound hold across `tokio::spawn`.
 pub struct SqliteOwnedBackend {
     conn: Arc<Mutex<Connection>>,
+    lease: Option<Arc<SqliteOwnedLeaseState>>,
     control: Option<Arc<dyn QueryControl>>,
     observer: SqliteCancellationObserver,
 }
@@ -37,6 +96,7 @@ impl SqliteOwnedBackend {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self {
             conn,
+            lease: None,
             control: None,
             observer: SqliteCancellationObserver::default(),
         }
@@ -52,6 +112,18 @@ impl SqliteOwnedBackend {
     pub fn new_controlled(conn: Arc<Mutex<Connection>>, control: Arc<dyn QueryControl>) -> Self {
         Self {
             conn,
+            lease: None,
+            control: Some(control),
+            observer: SqliteCancellationObserver::default(),
+        }
+    }
+
+    /// Build a governed backend from a serving lease acquired before any
+    /// blocking task is submitted. Each worker receives a private state clone.
+    pub fn new_controlled_leased(lease: SqliteOwnedLease, control: Arc<dyn QueryControl>) -> Self {
+        Self {
+            conn: Arc::clone(&lease.state.conn),
+            lease: Some(lease.state),
             control: Some(control),
             observer: SqliteCancellationObserver::default(),
         }
@@ -65,6 +137,21 @@ impl SqliteOwnedBackend {
     ) -> Self {
         Self {
             conn,
+            lease: None,
+            control: Some(control),
+            observer,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_controlled_leased_observed(
+        lease: SqliteOwnedLease,
+        control: Arc<dyn QueryControl>,
+        observer: SqliteCancellationObserver,
+    ) -> Self {
+        Self {
+            conn: Arc::clone(&lease.state.conn),
+            lease: Some(lease.state),
             control: Some(control),
             observer,
         }
@@ -118,10 +205,12 @@ impl SqlBackend for SqliteOwnedBackend {
         // `sqlite_pool_concurrency_receipt` doc + `column_names_spawn_blocking_
         // deadlock_regression`).
         let conn = Arc::clone(&self.conn);
+        let lease = self.lease.clone();
         let control = self.control.clone();
         let observer = self.observer.clone();
         let probe_sql = probe_sql.to_owned();
         let joined = tokio::task::spawn_blocking(move || {
+            let _lease = lease;
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             observer.observe(SqliteCancellationEvent::MutexAcquired);
             match control {
@@ -153,6 +242,7 @@ impl SqlBackend for SqliteOwnedBackend {
         // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation.
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
         let conn = Arc::clone(&self.conn);
+        let lease = self.lease.clone();
         let control = self.control.clone();
         let observer = self.observer.clone();
         let sql = sql.to_owned();
@@ -161,6 +251,7 @@ impl SqlBackend for SqliteOwnedBackend {
         // thread; `blocking_send` on the cap-1 channel blocks the cursor until the
         // reactor consumes ⇒ explicit backpressure (strengthens bounded memory).
         tokio::task::spawn_blocking(move || {
+            let _lease = lease;
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
             observer.observe(SqliteCancellationEvent::MutexAcquired);
             let cancellation = match control.as_ref() {

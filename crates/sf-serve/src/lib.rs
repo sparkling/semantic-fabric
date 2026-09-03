@@ -17,8 +17,9 @@
 //! serialized-byte ceilings, plus producer cancellation on client drop. It does
 //! not count compiler CPU or recursive SQL work and does not provide a common
 //! source-native cancellation or atomic streamed-failure contract. The owned
-//! SQLite serving path interrupts active VM work after mutex acquisition, but not
-//! mutex/queue waits, busy timeouts, blocking UDF/VFS/I/O, compiler work,
+//! SQLite serving path cancels its per-connection admission wait and interrupts
+//! active VM work after mutex acquisition, but not raw mutex or submitted Tokio
+//! blocking-task waits, busy timeouts, blocking UDF/VFS/I/O, compiler work,
 //! raw/conformance paths, or committed response prefixes. Pre-response policy
 //! limits map to 429; every post-200 failure stays a redacted body error.
 
@@ -37,6 +38,10 @@ mod http;
 mod post_body;
 mod problem;
 mod request_deadline;
+mod sqlite_admission;
+
+#[cfg(test)]
+mod sqlite_admission_tests;
 
 #[cfg(test)]
 mod deadline_tests;

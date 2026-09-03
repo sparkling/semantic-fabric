@@ -1,8 +1,9 @@
 //! Red integration test for one shared exec-core/SQLite-worker control identity.
 //!
-//! This is an active-VM contract only; it does not claim mutex-wait, blocking
-//! UDF/VFS/I/O, busy-timeout, compiler, other-backend, total-M2, or post-200
-//! atomic cancellation.
+//! This covers the leased serving path's active-VM contract. Admission waiting
+//! happens before this entry point; the test does not claim cancellation of the
+//! raw mutex, a submitted blocking task, blocking UDF/VFS/I/O, busy-timeout,
+//! compiler work, another backend, total M2, or post-200 atomic delivery.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 use sf_sparql::{exec, parse_and_translate, Error};
+use sf_sql::backend::sqlite::SqliteOwnedConnection;
 use sf_sql::Dialect;
 
 const MAPPING: &str = r#"
@@ -91,11 +93,12 @@ async fn exec_core_and_sqlite_worker_use_the_exact_same_control_identity() {
         Dialect::Sqlite,
     )
     .expect("translate query");
-    let conn = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+    let conn = SqliteOwnedConnection::new(Connection::open_in_memory().unwrap());
+    let lease = conn.acquire().await.expect("acquire serving lease");
     let control = IdentityControl::new();
     let shared: Arc<dyn QueryControl> = control.clone();
 
-    let error = exec::ask_sqlite_owned_interruptible(&plan, conn, shared)
+    let error = exec::ask_sqlite_owned_interruptible_leased(&plan, lease, shared)
         .await
         .expect_err("worker callback must observe executor's armed identity");
 
