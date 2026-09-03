@@ -1,6 +1,6 @@
 //! Pure, bounded PostgreSQL 16 constraint projection (ADR-0051 §7).
 //!
-//! This module is deliberately dead-staged: SQL decoding and adapter wiring are
+//! This module is deliberately dead-staged: SQL-to-raw-fact adapter wiring is
 //! supplied by a later slice. OIDs are join handles only and never reach the
 //! schema identity.
 use std::collections::HashSet;
