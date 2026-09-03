@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
-use sf_serve::{serve_blocking, ServeOptions, SourceRef, DEFAULT_QUERY_LIMITS};
+use sf_serve::{
+    serve_blocking, ServeOptions, SourceRef, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_QUERY_LIMITS,
+};
 
 #[derive(Parser)]
 #[command(
@@ -54,6 +56,9 @@ struct ServeArgs {
     /// Max query length in bytes (ADR-0010).
     #[arg(long, default_value_t = 1 << 20)]
     max_query_len: usize,
+    /// Server-wide ceiling for requests admitted into application work.
+    #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS)]
+    max_concurrent_requests: usize,
     /// Max metadata probes, branch opens, and row-pull attempts per request.
     #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_source_work())]
     max_source_work: u64,
@@ -117,6 +122,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         bind: args.bind,
         timeout: Duration::from_secs(args.timeout_secs),
         max_query_len: args.max_query_len,
+        max_concurrent_requests: args.max_concurrent_requests,
         max_source_work: args.max_source_work,
         max_result_items: args.max_result_items,
         max_serialized_bytes: args.max_serialized_bytes,
@@ -302,6 +308,34 @@ mod tests {
     }
 
     #[test]
+    fn serve_request_admission_limit_has_a_finite_default_and_accepts_an_override() {
+        let base = [
+            "semantic-fabric",
+            "serve",
+            "--mapping",
+            "mapping.ttl",
+            "--source",
+            "sqlite::memory:",
+        ];
+        let defaults = Cli::try_parse_from(base).expect("default serve arguments");
+        let Command::Serve(defaults) = defaults.command else {
+            panic!("serve command")
+        };
+        assert_eq!(
+            defaults.max_concurrent_requests,
+            DEFAULT_MAX_CONCURRENT_REQUESTS
+        );
+
+        let explicit =
+            Cli::try_parse_from(base.into_iter().chain(["--max-concurrent-requests", "7"]))
+                .expect("explicit request-admission limit");
+        let Command::Serve(explicit) = explicit.command else {
+            panic!("serve command")
+        };
+        assert_eq!(explicit.max_concurrent_requests, 7);
+    }
+
+    #[test]
     fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
         // The one cheap, crate-local integration check on serve(): a mapping path
         // that doesn't exist must surface as a clean ExitCode::FAILURE (via
@@ -318,6 +352,7 @@ mod tests {
             bind: "127.0.0.1:0".to_owned(),
             timeout_secs: 1,
             max_query_len: 1024,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             max_source_work: 1_000,
             max_result_items: 1_000,
             max_serialized_bytes: 1 << 20,

@@ -11,6 +11,7 @@ use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_serve::{
     introspect_sqlite_all, router, serve_blocking, Backend, ServeConfig, ServeOptions, SourceRef,
+    DEFAULT_MAX_CONCURRENT_REQUESTS,
 };
 use sf_sparql::Tbox;
 use tower::ServiceExt;
@@ -352,6 +353,7 @@ fn should_reject_unrepresentable_limit_before_source_or_file_io() {
         bind: "203.0.113.1:1".to_owned(),
         timeout: Duration::from_secs(1),
         max_query_len: usize::MAX,
+        max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         max_source_work: 1,
         max_result_items: 1,
         max_serialized_bytes: 1,

@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde::Serialize;
 use sf_core::query_control::QueryControlError;
@@ -22,6 +22,9 @@ pub(crate) enum ProblemCode {
     UnsupportedQuery,
     RequestTimeout,
     QueryBudgetExceeded,
+    // Consumed by the independently integrated outer-service admission slice.
+    #[cfg_attr(not(test), allow(dead_code))]
+    ServiceOverloaded,
     SourceUnavailable,
     Internal,
 }
@@ -57,6 +60,7 @@ impl ProblemCode {
             Self::UnsupportedQuery => "unsupported-query",
             Self::RequestTimeout => "request-timeout",
             Self::QueryBudgetExceeded => "query-budget-exceeded",
+            Self::ServiceOverloaded => "service-overloaded",
             Self::SourceUnavailable => "source-unavailable",
             Self::Internal => "internal-error",
         }
@@ -72,7 +76,7 @@ impl ProblemCode {
             Self::UnsupportedQuery => StatusCode::NOT_IMPLEMENTED,
             Self::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
             Self::QueryBudgetExceeded => StatusCode::TOO_MANY_REQUESTS,
-            Self::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::ServiceOverloaded | Self::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -93,6 +97,7 @@ impl ProblemCode {
             Self::UnsupportedQuery => "The requested query or execution shape is not supported.",
             Self::RequestTimeout => "The request deadline expired.",
             Self::QueryBudgetExceeded => "The query exceeded a configured resource limit.",
+            Self::ServiceOverloaded => "The service is temporarily overloaded.",
             Self::SourceUnavailable => "The source is temporarily unavailable.",
             Self::Internal => "The request could not be completed.",
         }
@@ -144,6 +149,16 @@ pub(crate) fn response(code: ProblemCode) -> Response {
         .header("x-correlation-id", correlation_id)
         .body(Body::from(body))
         .expect("static problem response builder")
+}
+
+/// Build a temporary-unavailability response with the shared fixed retry hint.
+pub(crate) fn response_with_retry_after(code: ProblemCode) -> Response {
+    debug_assert_eq!(code.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let mut response = response(code);
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }
 
 pub(crate) fn response_for_sparql(error: &SparqlError) -> Response {
@@ -368,6 +383,11 @@ mod tests {
                 "query-budget-exceeded",
             ),
             (
+                ProblemCode::ServiceOverloaded,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service-overloaded",
+            ),
+            (
                 ProblemCode::SourceUnavailable,
                 StatusCode::SERVICE_UNAVAILABLE,
                 "source-unavailable",
@@ -388,6 +408,22 @@ mod tests {
             assert!(!details.title.is_empty());
             assert!(!details.detail.is_empty());
         }
+        assert_eq!(
+            ProblemCode::ServiceOverloaded.detail(),
+            "The service is temporarily overloaded."
+        );
+    }
+
+    #[test]
+    fn temporary_unavailability_uses_one_fixed_retry_hint() {
+        for code in [
+            ProblemCode::ServiceOverloaded,
+            ProblemCode::SourceUnavailable,
+        ] {
+            let response = response_with_retry_after(code);
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "1");
+        }
     }
 
     #[test]
@@ -406,13 +442,26 @@ mod tests {
     #[test]
     fn public_http_call_sites_cannot_accept_raw_error_strings() {
         let http_source = include_str!("http.rs");
-        assert!(!http_source.contains("err_text("));
-        assert!(!http_source.contains("response_for_status("));
-        assert!(!http_source.contains("Body::from("));
+        let request_deadline_source = include_str!("request_deadline.rs");
+        for (name, source) in [
+            ("http.rs", http_source),
+            ("request_deadline.rs", request_deadline_source),
+        ] {
+            assert!(!source.contains("err_text("), "source={name}");
+            assert!(!source.contains("response_for_status("), "source={name}");
+            assert!(!source.contains("Body::from("), "source={name}");
+        }
         assert_eq!(
             http_source.matches("Response::builder()").count(),
             1,
             "only the success response builder belongs in http.rs"
+        );
+        assert_eq!(
+            request_deadline_source
+                .matches("Response::builder()")
+                .count(),
+            0,
+            "request_deadline.rs must use the closed problem vocabulary"
         );
     }
 }

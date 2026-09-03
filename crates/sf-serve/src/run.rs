@@ -1,6 +1,4 @@
-//! The blocking entry point the CLI calls (`semantic-fabric serve`): resolve the
-//! source spec, open the backend, parse the mapping `M` and optional ontology `T`,
-//! introspect the source schema, bind, and serve until shutdown.
+//! The blocking `semantic-fabric serve` entry point for loading, binding, and serving a source.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,15 +6,14 @@ use std::time::Duration;
 use sf_core::query_control::QueryLimits;
 use tokio_postgres::NoTls;
 
-use crate::config::validate_max_query_len;
+use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
 use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
 use crate::{
     introspect_pg_all, router, Backend, IntrospectedSource, ServeConfig, ServeError, SourceRef,
 };
 
-/// Options resolved from the `serve` CLI flags. The runner reads the mapping /
-/// ontology files itself so the CLI stays a thin argument parser.
+/// Options resolved from the `serve` CLI flags; the runner reads semantic files.
 pub struct ServeOptions {
     /// Credential-free inline source or environment-injected source reference.
     pub source: SourceRef,
@@ -30,6 +27,8 @@ pub struct ServeOptions {
     pub timeout: Duration,
     /// Max query length in bytes (ADR-0010).
     pub max_query_len: usize,
+    /// Server-wide ceiling for requests admitted into application work.
+    pub max_concurrent_requests: usize,
     /// Inclusive metadata-probe, branch-open, and row-pull ceiling per request.
     pub max_source_work: u64,
     /// Inclusive semantic SELECT-row, CONSTRUCT-triple, or ASK-boolean ceiling.
@@ -40,8 +39,7 @@ pub struct ServeOptions {
     pub pg_pool_size: usize,
     /// Max wait for a pooled PostgreSQL connection before shedding `503` (ADR-0010 §C).
     pub pg_pool_wait: Duration,
-    /// Read-only connection pool size for a file-backed SQLite source (ADR-0010
-    /// status-correction part 2).
+    /// Read-only file-backed SQLite pool size (ADR-0010 status-correction part 2).
     pub sqlite_pool_size: usize,
 }
 
@@ -49,9 +47,9 @@ pub struct ServeOptions {
 /// clear error (never panics) when a required input is missing or invalid.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     validate_max_query_len(opts.max_query_len)?;
+    validate_max_concurrent_requests(opts.max_concurrent_requests)?;
     validate_request_timeout(opts.timeout)?;
-    // Resolve, bound, parse, and reject inline credentials before runtime, file,
-    // DNS, socket, or connector construction.
+    // Resolve and reject inline credentials before runtime or connector construction.
     let source = opts.source.resolve()?.prepare()?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -114,6 +112,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
     let mut cfg = ServeConfig::new(source, mapping, tbox);
     cfg.timeout = opts.timeout;
     cfg.set_max_query_len(opts.max_query_len)?;
+    cfg.set_max_concurrent_requests(opts.max_concurrent_requests)?;
     cfg.query_limits = QueryLimits::new(
         opts.max_source_work,
         opts.max_result_items,

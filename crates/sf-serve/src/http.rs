@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Extension, RawQuery, State};
-use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
@@ -415,17 +415,10 @@ async fn acquire_pg(
         Err(error) => return Err(problem::response_for_control(error)),
     };
     let conn = acquired.map_err(|e| match e {
-        PoolError::Timeout(_) => {
-            let mut resp = problem::response(ProblemCode::SourceUnavailable);
-            resp.headers_mut().insert(
-                header::RETRY_AFTER,
-                // Fixed at 1s rather than derived from pool pressure/wait-time —
-                // a pressure-aware value is future work (ADR-0010 status
-                // correction part 2's second open refinement).
-                HeaderValue::from_static("1"),
-            );
-            resp
-        }
+        // Fixed at 1s rather than derived from pool pressure/wait-time — a
+        // pressure-aware value is future work (ADR-0010 status correction part
+        // 2's second open refinement).
+        PoolError::Timeout(_) => problem::response_with_retry_after(ProblemCode::SourceUnavailable),
         _ => problem::response(ProblemCode::Internal),
     })?;
     match budget.run(PgConn::checked(conn)).await {
