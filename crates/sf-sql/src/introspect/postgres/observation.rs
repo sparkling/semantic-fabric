@@ -87,6 +87,20 @@ fn build_registered_observation(
     Ok(Postgres16PublicObservedSchemaV1 { identity })
 }
 
+/// Assemble a registered observation from the private normalized relation
+/// graph and bounded raw constraint evidence. This is the single pure seam
+/// that the eventual SQL snapshot adapter must call.
+#[allow(dead_code)]
+fn build_registered_observation_from_raw(
+    server_version_num: i32,
+    relations: relation::Postgres16NormalizedRelationsV1,
+    raw_constraints: Vec<constraints::Postgres16RawConstraintV1>,
+) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1> {
+    let constraints =
+        constraints::normalize_postgres16_constraints_v1(&relations, raw_constraints)?;
+    build_registered_observation(server_version_num, relations.into_relations(), constraints)
+}
+
 fn registered_profile_id(
     value: &'static str,
 ) -> Result<ProfileIdV1, PostgresSchemaIdentityUnavailableV1> {
