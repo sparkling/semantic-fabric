@@ -81,6 +81,18 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) operator_oids: Option<Vec<u32>>,
     pub(super) search_operator_oids: Option<Vec<u32>>,
     pub(super) trigger_overflow: bool,
+    pub(super) index_primary: Option<bool>,
+    pub(super) index_unique: Option<bool>,
+    pub(super) index_valid: Option<bool>,
+    pub(super) index_ready: Option<bool>,
+    pub(super) index_live: Option<bool>,
+    pub(super) index_immediate: Option<bool>,
+    pub(super) index_key_count: Option<i16>,
+    pub(super) index_key_attnums: Option<Vec<i16>>,
+    pub(super) index_nulls_not_distinct: Option<bool>,
+    pub(super) match_code: Option<String>,
+    pub(super) update_action: Option<String>,
+    pub(super) delete_action: Option<String>,
 }
 
 pub(super) fn decode_constraint_row_v1(
@@ -108,6 +120,18 @@ pub(super) fn decode_constraint_row_v1(
         operator_oids: get!("operator_oids", Option<Vec<u32>>),
         search_operator_oids: get!("search_operator_oids", Option<Vec<u32>>),
         trigger_overflow: get!("sf_trigger_overflow", bool),
+        index_primary: get!("indisprimary", Option<bool>),
+        index_unique: get!("indisunique", Option<bool>),
+        index_valid: get!("indisvalid", Option<bool>),
+        index_ready: get!("indisready", Option<bool>),
+        index_live: get!("indislive", Option<bool>),
+        index_immediate: get!("indimmediate", Option<bool>),
+        index_key_count: get!("indnkeyatts", Option<i16>),
+        index_key_attnums: get!("indkey", Option<Vec<i16>>),
+        index_nulls_not_distinct: get!("indnullsnotdistinct", Option<bool>),
+        match_code: get!("confmatchtype", Option<String>),
+        update_action: get!("confupdtype", Option<String>),
+        delete_action: get!("confdeltype", Option<String>),
     };
     if value.array_overflow || value.trigger_overflow {
         return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
