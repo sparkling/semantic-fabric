@@ -14,6 +14,8 @@
 
 use std::fmt;
 
+pub(crate) mod algebra;
+
 /// Independent V1 input ceiling. Changing any profile constant requires a new
 /// compile-profile identity when this scanner is integrated with the cache.
 pub(crate) const MAX_SCANNED_BYTES_V1: usize = 256 * 1024;
@@ -31,6 +33,10 @@ pub(crate) enum CompileEnvelopeLimit {
     NestingDepth,
     RdfStarDepth,
     OperatorsPerScope,
+    AlgebraNodes,
+    AlgebraDepth,
+    CollectionSlots,
+    RetainedPayloadBytes,
 }
 
 impl fmt::Display for CompileEnvelopeLimit {
@@ -42,6 +48,10 @@ impl fmt::Display for CompileEnvelopeLimit {
             Self::NestingDepth => "nesting-depth",
             Self::RdfStarDepth => "rdf-star-depth",
             Self::OperatorsPerScope => "operators-per-scope",
+            Self::AlgebraNodes => "algebra-nodes",
+            Self::AlgebraDepth => "algebra-depth",
+            Self::CollectionSlots => "collection-slots",
+            Self::RetainedPayloadBytes => "retained-payload-bytes",
         })
     }
 }
