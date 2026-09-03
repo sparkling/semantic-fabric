@@ -50,6 +50,7 @@ fn guard_code_is_exhaustive(code: PostgresSchemaIdentityGuardCodeV1) {
         | PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit
         | PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes
         | PostgresSchemaIdentityGuardCodeV1::ReplicationRole
+        | PostgresSchemaIdentityGuardCodeV1::SearchPath
         | PostgresSchemaIdentityGuardCodeV1::PublicNamespace
         | PostgresSchemaIdentityGuardCodeV1::CurrentDatabase => {}
     }

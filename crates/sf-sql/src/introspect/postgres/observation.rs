@@ -154,6 +154,7 @@ pub enum PostgresSchemaIdentityGuardCodeV1 {
     IndexKeyLimit,
     IntegerDatetimes,
     ReplicationRole,
+    SearchPath,
     PublicNamespace,
     CurrentDatabase,
 }
@@ -221,6 +222,7 @@ const fn guard_message(code: PostgresSchemaIdentityGuardCodeV1) -> &'static str 
         PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit => "index key limit unsupported",
         PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes => "integer datetimes unsupported",
         PostgresSchemaIdentityGuardCodeV1::ReplicationRole => "replication role unsupported",
+        PostgresSchemaIdentityGuardCodeV1::SearchPath => "search path unsupported",
         PostgresSchemaIdentityGuardCodeV1::PublicNamespace => "public namespace unsupported",
         PostgresSchemaIdentityGuardCodeV1::CurrentDatabase => "current database unsupported",
     }

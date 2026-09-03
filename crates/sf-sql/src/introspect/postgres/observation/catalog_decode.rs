@@ -180,7 +180,7 @@ impl CatalogGuardRowV1 {
             (
                 self.search_path.as_str(),
                 "pg_catalog,public,pg_temp",
-                PostgresSchemaIdentityGuardCodeV1::ReplicationRole,
+                PostgresSchemaIdentityGuardCodeV1::SearchPath,
             ),
         ];
         if let Some((_, _, code)) = exact
