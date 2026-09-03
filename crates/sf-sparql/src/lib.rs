@@ -65,6 +65,8 @@ use spargebra::Query;
 pub mod build;
 pub mod cache;
 pub mod cascade;
+#[allow(dead_code)] // Staged safety boundary; serving integration is a later slice.
+mod compile_envelope;
 mod compiler_schema;
 pub mod dump;
 pub mod emit;
