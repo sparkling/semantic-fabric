@@ -14,9 +14,13 @@
 //! Governance (ADR-0010): one request budget spans body extraction, admitted
 //! compilation, pool wait, controlled execution, and serialisation. It combines
 //! an absolute deadline with finite observable source-work, semantic-result, and
-//! serialized-byte ceilings, plus producer cancellation on client drop. It does
-//! not count compiler CPU or recursive SQL work and does not provide a common
-//! source-native cancellation or atomic streamed-failure contract. The owned
+//! serialized-byte ceilings, plus producer cancellation on client drop. A
+//! server-wide fail-fast gate bounds requests admitted into application work;
+//! its permit follows that budget through active producers and detached blocking
+//! workers, but not through already-produced body bytes. Stream terminal errors
+//! use an out-of-band outcome so a full client channel cannot park cleanup. This
+//! does not count compiler CPU or recursive SQL work and does not provide a
+//! common source-native cancellation or atomic streamed-failure contract. The owned
 //! SQLite serving path cancels its per-connection admission wait and interrupts
 //! active VM work after mutex acquisition, but not raw mutex or submitted Tokio
 //! blocking-task waits, busy timeouts, blocking UDF/VFS/I/O, compiler work,
@@ -48,6 +52,8 @@ mod sqlite_admission_tests;
 mod deadline_tests;
 #[cfg(test)]
 mod query_budget_tests;
+#[cfg(test)]
+mod request_admission_tests;
 
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::{BackendProfile, IntrospectedSource};

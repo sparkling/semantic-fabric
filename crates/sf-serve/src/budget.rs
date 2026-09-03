@@ -1,4 +1,5 @@
-//! One request-scoped deadline, cancellation signal, and accounting identity.
+//! One request-scoped deadline, cancellation, accounting, and active-work
+//! admission identity.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::time::Duration;
 use sf_core::query_control::{
     QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
 };
-use tokio::sync::watch;
+use tokio::sync::{watch, OwnedSemaphorePermit};
 use tokio::time::Instant;
 
 struct RequestBudgetState {
@@ -15,9 +16,15 @@ struct RequestBudgetState {
     deadline: Option<Instant>,
     deadline_representable: bool,
     terminal: watch::Sender<Option<QueryControlError>>,
+    /// One fail-fast serve-lane admission identity. The owned permit follows
+    /// every budget clone into active producers and blocking workers, then
+    /// returns only when the last such clone is dropped.
+    admission: Option<OwnedSemaphorePermit>,
 }
 
-/// The single governance identity minted before request-body extraction.
+/// The single governance identity minted before request-body extraction. On the
+/// serve lane it also retains one aggregate admission permit through every
+/// active producer or worker clone, but not through already-produced body bytes.
 #[derive(Clone)]
 pub(crate) struct RequestBudget(Arc<RequestBudgetState>);
 
@@ -33,6 +40,7 @@ impl RequestBudget {
             deadline: Some(deadline.unwrap_or(now)),
             deadline_representable: deadline.is_some(),
             terminal,
+            admission: None,
         }));
         if deadline.is_none() {
             request.terminate(QueryControlError::AccountingOverflow);
@@ -47,7 +55,25 @@ impl RequestBudget {
             deadline: deadline.map(Instant::from_std),
             deadline_representable: true,
             terminal,
+            admission: None,
         }))
+    }
+
+    /// Attach the outer serving admission permit before this budget is cloned.
+    /// Returning the permit on misuse keeps this boundary fail closed without a
+    /// panic or a silent capacity leak.
+    pub(crate) fn retain_admission(
+        &mut self,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<(), OwnedSemaphorePermit> {
+        let Some(state) = Arc::get_mut(&mut self.0) else {
+            return Err(permit);
+        };
+        if state.admission.is_some() {
+            return Err(permit);
+        }
+        state.admission = Some(permit);
+        Ok(())
     }
 
     /// Await a phase without refreshing the original absolute deadline.

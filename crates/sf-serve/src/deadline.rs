@@ -32,14 +32,48 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
+    run_compiler_inner(budget, permits, work, || {}).await
+}
+
+#[cfg(test)]
+pub(crate) async fn run_compiler_observed<T, F, O>(
+    budget: RequestBudget,
+    permits: Arc<Semaphore>,
+    work: F,
+    on_submitted: O,
+) -> Result<T, CompilerRunError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    O: FnOnce() + Send,
+{
+    run_compiler_inner(budget, permits, work, on_submitted).await
+}
+
+async fn run_compiler_inner<T, F, O>(
+    budget: RequestBudget,
+    permits: Arc<Semaphore>,
+    work: F,
+    on_submitted: O,
+) -> Result<T, CompilerRunError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    O: FnOnce() + Send,
+{
     let permit = budget
         .run(permits.acquire_owned())
         .await?
         .map_err(|_| CompilerRunError::AdmissionClosed)?;
+    let request_admission = budget.clone();
     let task = tokio::task::spawn_blocking(move || {
+        // A timed-out async waiter must not return aggregate request capacity
+        // while its detached compiler is still queued or running.
+        let _request_admission = request_admission;
         let _permit = permit;
         work()
     });
+    on_submitted();
 
     match budget.run(task).await {
         Err(error) => Err(error.into()),

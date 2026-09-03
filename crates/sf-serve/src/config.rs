@@ -131,8 +131,6 @@ impl ServeConfig {
         self.compiler_permits.clone()
     }
 
-    // Consumed by the independently integrated outer-service admission slice.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn request_admission_permits(&self) -> Arc<Semaphore> {
         self.request_admission_permits.clone()
     }

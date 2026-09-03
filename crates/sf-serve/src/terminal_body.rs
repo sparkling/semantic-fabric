@@ -137,12 +137,13 @@ pub(crate) fn stream_failure_error() -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use axum::body::HttpBody;
     use http_body_util::BodyExt;
-    use sf_core::query_control::{QueryControl, QueryControlError, QueryLimits};
-    use tokio::sync::oneshot;
+    use sf_core::query_control::QueryLimits;
+    use tokio::sync::{oneshot, Semaphore};
 
     use super::*;
 
@@ -163,8 +164,15 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn full_unpolled_channel_finishes_at_deadline_then_drains_prefix_error_and_fuses() {
         let timeout = Duration::from_secs(10);
-        let request_budget = budget(timeout);
-        let observed_budget = request_budget.clone();
+        let request_permits = Arc::new(Semaphore::new(1));
+        let request_permit = request_permits
+            .clone()
+            .try_acquire_owned()
+            .expect("take aggregate request capacity");
+        let mut request_budget = budget(timeout);
+        request_budget
+            .retain_admission(request_permit)
+            .expect("attach request admission before cloning");
         let (full_tx, full_rx) = oneshot::channel();
         let (mut body, producer) = spawn(CAPACITY, request_budget, move |tx, _budget| async move {
             for index in 0..CAPACITY {
@@ -186,8 +194,9 @@ mod tests {
             .expect("producer must terminate without polling the full body")
             .expect("producer task must not panic");
         assert_eq!(
-            observed_budget.checkpoint(),
-            Err(QueryControlError::DeadlineExceeded)
+            request_permits.available_permits(),
+            1,
+            "producer returns aggregate capacity while completed bytes remain unread"
         );
 
         for index in 0..CAPACITY {

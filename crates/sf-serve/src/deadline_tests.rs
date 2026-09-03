@@ -11,7 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower::{Service, ServiceExt};
 
 use crate::budget::RequestBudget;
-use crate::deadline::{join_task, run_compiler, CompilerRunError};
+use crate::deadline::{join_task, run_compiler, run_compiler_observed, CompilerRunError};
 use crate::{router, Backend, ServeConfig};
 
 fn request_budget(timeout: Duration) -> RequestBudget {
@@ -89,7 +89,13 @@ async fn request_clock_starts_before_body_extraction() {
 #[tokio::test(start_paused = true)]
 async fn compiler_timeout_retains_its_permit_until_detached_work_ends() {
     let permits = Arc::new(Semaphore::new(1));
-    let deadline = request_budget(Duration::from_secs(60));
+    let request_permits = Arc::new(Semaphore::new(1));
+    let mut deadline = request_budget(Duration::from_secs(60));
+    let request_permit = request_permits
+        .clone()
+        .try_acquire_owned()
+        .expect("take request admission permit");
+    assert!(deadline.retain_admission(request_permit).is_ok());
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
@@ -108,16 +114,35 @@ async fn compiler_timeout_retains_its_permit_until_detached_work_ends() {
         ))
     ));
     assert_eq!(permits.available_permits(), 0, "detached work owns permit");
+    assert_eq!(
+        request_permits.available_permits(),
+        0,
+        "detached work owns aggregate request capacity"
+    );
 
     release_tx.send(()).expect("release compiler");
     let permit = permits.acquire().await.expect("permit returns after work");
     drop(permit);
+    let request_permit = request_permits
+        .acquire()
+        .await
+        .expect("request capacity returns after work");
+    drop(request_permit);
 }
 
 #[tokio::test]
 async fn cancelled_compiler_waiter_cannot_return_its_live_work_permit() {
     let permits = Arc::new(Semaphore::new(1));
-    let deadline = request_budget(Duration::from_secs(60));
+    let request_permits = Arc::new(Semaphore::new(1));
+    let mut deadline = request_budget(Duration::from_secs(60));
+    deadline
+        .retain_admission(
+            request_permits
+                .clone()
+                .try_acquire_owned()
+                .expect("take aggregate request capacity"),
+        )
+        .expect("attach request admission before cloning");
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
@@ -133,10 +158,95 @@ async fn cancelled_compiler_waiter_cannot_return_its_live_work_permit() {
         0,
         "blocking closure owns permit"
     );
+    assert_eq!(
+        request_permits.available_permits(),
+        0,
+        "blocking closure owns aggregate request capacity"
+    );
 
     release_tx.send(()).expect("release compiler");
     let permit = permits.acquire().await.expect("permit returns after work");
     drop(permit);
+    let request_permit = request_permits
+        .acquire()
+        .await
+        .expect("request capacity returns after work");
+    drop(request_permit);
+}
+
+#[test]
+fn cancelled_queued_compiler_retains_aggregate_capacity_until_work_exits() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("build bounded test runtime");
+
+    runtime.block_on(async {
+        let (blocker_started_tx, blocker_started_rx) = oneshot::channel();
+        let (release_blocker_tx, release_blocker_rx) = std::sync::mpsc::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            let _ = blocker_started_tx.send(());
+            release_blocker_rx.recv().expect("release blocking lane");
+        });
+        tokio::time::timeout(Duration::from_secs(2), blocker_started_rx)
+            .await
+            .expect("blocking-lane watchdog")
+            .expect("blocking lane occupied");
+
+        let compiler_permits = Arc::new(Semaphore::new(1));
+        let request_permits = Arc::new(Semaphore::new(1));
+        let mut budget = request_budget(Duration::from_secs(60));
+        budget
+            .retain_admission(
+                request_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("take aggregate request capacity"),
+            )
+            .expect("attach request admission before cloning");
+        let (submitted_tx, submitted_rx) = oneshot::channel();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let waiter = tokio::spawn(run_compiler_observed(
+            budget,
+            compiler_permits.clone(),
+            move || {
+                let _ = finished_tx.send(());
+            },
+            move || {
+                let _ = submitted_tx.send(());
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(2), submitted_rx)
+            .await
+            .expect("compiler-submission watchdog")
+            .expect("compiler submitted behind occupied lane");
+
+        waiter.abort();
+        assert!(waiter
+            .await
+            .expect_err("compiler waiter is cancelled")
+            .is_cancelled());
+        assert_eq!(compiler_permits.available_permits(), 0);
+        assert_eq!(request_permits.available_permits(), 0);
+
+        release_blocker_tx.send(()).expect("release blocking lane");
+        blocker.await.expect("blocking-lane holder task");
+        tokio::time::timeout(Duration::from_secs(2), finished_rx)
+            .await
+            .expect("queued-compiler watchdog")
+            .expect("queued compiler eventually ran");
+        let request_permit = tokio::time::timeout(
+            Duration::from_secs(2),
+            request_permits.clone().acquire_owned(),
+        )
+        .await
+        .expect("aggregate-capacity watchdog")
+        .expect("aggregate capacity returns after compiler exit");
+        drop(request_permit);
+        assert_eq!(compiler_permits.available_permits(), 1);
+    });
 }
 
 #[tokio::test(start_paused = true)]

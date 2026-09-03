@@ -22,8 +22,6 @@ pub(crate) enum ProblemCode {
     UnsupportedQuery,
     RequestTimeout,
     QueryBudgetExceeded,
-    // Consumed by the independently integrated outer-service admission slice.
-    #[cfg_attr(not(test), allow(dead_code))]
     ServiceOverloaded,
     SourceUnavailable,
     Internal,
