@@ -3,7 +3,10 @@
 //! SQL adapters must validate these envelopes before retaining rich facts. This
 //! module deliberately contains no driver calls and no public/runtime wiring.
 
-use super::{PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailableV1};
+use super::{
+    PostgresSchemaIdentityGuardCodeV1, PostgresSchemaIdentityLimitCodeV1,
+    PostgresSchemaIdentityUnavailableV1,
+};
 use tokio_postgres::Row;
 
 pub(super) const MAX_CATALOG_TEXT_BYTES_V1: usize = 256;
@@ -151,6 +154,65 @@ pub(super) struct CatalogGuardRowV1 {
     pub(super) current_database_count: i64,
 }
 
+impl CatalogGuardRowV1 {
+    pub(super) fn validate(&self) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
+        let exact = [
+            (
+                self.server_encoding.as_str(),
+                "UTF8",
+                PostgresSchemaIdentityGuardCodeV1::ServerEncoding,
+            ),
+            (
+                self.client_encoding.as_str(),
+                "UTF8",
+                PostgresSchemaIdentityGuardCodeV1::ServerEncoding,
+            ),
+            (
+                self.integer_datetimes.as_str(),
+                "on",
+                PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes,
+            ),
+            (
+                self.session_replication_role.as_str(),
+                "origin",
+                PostgresSchemaIdentityGuardCodeV1::ReplicationRole,
+            ),
+            (
+                self.search_path.as_str(),
+                "pg_catalog,public,pg_temp",
+                PostgresSchemaIdentityGuardCodeV1::ReplicationRole,
+            ),
+        ];
+        if let Some((_, _, code)) = exact
+            .into_iter()
+            .find(|(actual, expected, _)| actual != expected)
+        {
+            return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(code));
+        }
+        if self.max_identifier_length != 63 {
+            return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit,
+            ));
+        }
+        if self.max_index_keys != 32 {
+            return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit,
+            ));
+        }
+        if self.public_namespace_count != 1 {
+            return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::PublicNamespace,
+            ));
+        }
+        if self.current_database_count != 1 {
+            return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::CurrentDatabase,
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn decode_guard_row_v1(
     row: &Row,
 ) -> Result<CatalogGuardRowV1, PostgresSchemaIdentityUnavailableV1> {
@@ -160,7 +222,7 @@ pub(super) fn decode_guard_row_v1(
                 .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogDecode)?
         };
     }
-    Ok(CatalogGuardRowV1 {
+    let value = CatalogGuardRowV1 {
         server_version_num: get!("server_version_num", i32),
         server_encoding: get!("server_encoding", String),
         client_encoding: get!("client_encoding", String),
@@ -171,7 +233,9 @@ pub(super) fn decode_guard_row_v1(
         search_path: get!("search_path", String),
         public_namespace_count: get!("public_namespace_count", i64),
         current_database_count: get!("current_database_count", i64),
-    })
+    };
+    value.validate()?;
+    Ok(value)
 }
 
 pub(super) fn decode_relation_row_v1(
