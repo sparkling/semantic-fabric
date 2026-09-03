@@ -122,7 +122,7 @@ impl<'input> Scanner<'input> {
                 byte if byte.is_ascii_whitespace() => self.cursor += 1,
                 b'#' => self.scan_comment()?,
                 b'\'' | b'"' => self.scan_string(byte)?,
-                b'<' if self.peek(1) == Some(b'<') => self.open_rdf_star()?,
+                b'<' if self.peek(1) == Some(b'<') => self.scan_double_less_than()?,
                 b'<' if self.starts_iri() => self.scan_iri()?,
                 b'<' => self.operator(if self.peek(1) == Some(b'=') { 2 } else { 1 })?,
                 b'>' if self.peek(1) == Some(b'>') && self.top() == Some(Delimiter::RdfStar) => {
@@ -183,21 +183,18 @@ impl<'input> Scanner<'input> {
         None
     }
 
-    fn open_rdf_star(&mut self) -> Result<(), CompileEnvelopeError> {
+    fn scan_double_less_than(&mut self) -> Result<(), CompileEnvelopeError> {
         // `<<` is context-sensitive in the pinned parser: it can be the quoted
-        // triple opener, or relational `<` immediately followed by `<iri>`. Keep
-        // RDF-star depth accounting and conservatively enforce the second
-        // interpretation's operator, token and complete IRI lexeme as well.
-        if let Some(iri_width) = self.iri_candidate_len(self.cursor + 1) {
-            enforce(
-                CompileEnvelopeLimit::LexemeBytes,
-                iri_width,
-                MAX_LEXEME_BYTES_V1,
-            )?;
-            self.record_token(iri_width)?;
-            self.record_scope_operator()?;
+        // triple opener, or relational `<` immediately followed by `<iri>`. In
+        // the latter case consume only the operator; the next scan step sees and
+        // measures the complete IRI. A real compact RDF-star opener followed by
+        // an IRI is `<<<iri>`, so the candidate beginning at the second byte is
+        // stopped by its own following `<` and cannot enter this branch.
+        if self.iri_candidate_len(self.cursor + 1).is_some() {
+            self.operator(1)
+        } else {
+            self.open(Delimiter::RdfStar, 2)
         }
-        self.open(Delimiter::RdfStar, 2)
     }
 
     fn scan_comment(&mut self) -> Result<(), CompileEnvelopeError> {

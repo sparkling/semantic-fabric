@@ -254,6 +254,22 @@ fn should_reject_an_overlong_iri_after_compact_relational_less_than() {
 }
 
 #[test]
+fn should_not_accumulate_false_rdf_star_depth_across_compact_comparisons() {
+    let mut input = String::from("SELECT * WHERE { ?s ?p ?x . ");
+    for index in 0..(MAX_RDF_STAR_DEPTH_V1 + 1) {
+        input.push_str(&format!("FILTER(?x<<urn:value:{index}>) "));
+    }
+    input.push('}');
+    spargebra::SparqlParser::new()
+        .parse_query(&input)
+        .expect("the pinned parser accepts sequential compact comparisons");
+
+    let envelope = CompileEnvelopeV1::scan(&input).expect("comparisons are not RDF-star nesting");
+    assert_eq!(envelope.max_rdf_star_depth, 0);
+    assert_eq!(envelope.max_operators_per_scope, 1);
+}
+
+#[test]
 fn should_accept_the_exact_scanned_byte_limit() {
     let input = " ".repeat(MAX_SCANNED_BYTES_V1);
     let envelope = CompileEnvelopeV1::scan(&input).expect("exact byte limit fits");
