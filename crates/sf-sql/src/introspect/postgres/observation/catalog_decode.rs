@@ -634,5 +634,14 @@ mod tests {
         let mut live = dropped.clone();
         live.is_dropped = false;
         assert!(live.validate().is_err());
+        let mut overflow = dropped;
+        overflow.physical_ordinal = 1_601;
+        overflow.physical_overflow = true;
+        assert_eq!(
+            overflow.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+                PostgresSchemaIdentityLimitCodeV1::PhysicalAttributes
+            ))
+        );
     }
 }
