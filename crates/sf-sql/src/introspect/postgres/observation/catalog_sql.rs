@@ -1,7 +1,7 @@
 //! Frozen, private PostgreSQL 16 rich-catalogue query contracts (ADR-0051 §8).
 //!
-//! These strings are decoder inputs only. They are not runtime SQL until the
-//! typed row adapters and live qualification receipts are complete.
+//! These strings are executed only by the guarded rich snapshot collector;
+//! production availability still requires the live qualification receipts.
 
 pub(super) const RICH_RELATIONS_SQL_V1: &str = "SELECT \
  c.oid AS relation_oid, c.relnamespace AS relation_namespace_oid, n.oid AS joined_namespace_oid, \

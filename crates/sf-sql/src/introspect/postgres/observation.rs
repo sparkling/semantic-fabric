@@ -69,8 +69,8 @@ fn select_registered_profile_v1(
     }
 }
 
-// Kept private and unreachable from production until both exact patch
-// qualification receipts and the PostgreSQL profile adapter are complete.
+// Kept private; the public snapshot exposes its result only after the guarded
+// collector succeeds, while exact patch qualification remains a release gate.
 #[allow(dead_code)]
 fn build_registered_observation(
     server_version_num: i32,

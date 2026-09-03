@@ -12,19 +12,18 @@ implements: [ADR-0050]
 
 ## Status boundary
 
-This ADR is **proposed**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2,
-but no adapter currently emits it and no runtime currently carries it. The profile covers one PostgreSQL 16
+This ADR is **proposed**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2.
+The guarded snapshot API now emits and carries the profile through one repeatable-read transaction. The profile covers one PostgreSQL 16
 semantic catalogue contract; PostgreSQL 16.9 and 16.15 are its initial exact live qualification targets.
 The exact engine-version selector, registered identity finalizer and complete source-type/default-collation normalizer
-are now implemented as private `sf-sql` code with no production caller. Relation/column and constraint normalization,
-bounded typed catalogue row decoding, collection caps, and exact profile-guard validation are implemented as private,
-dead-staged code with adversarial unit coverage. Production adapter wiring, qualification receipts and runtime carriage
-remain unimplemented. The constraint raw-fact contract
+are now implemented as private `sf-sql` code and used by the guarded rich collector. Relation/column and constraint normalization,
+bounded typed catalogue row decoding, collection caps, exact profile-guard validation, and raw PK/UNIQUE/FK adaptation
+are implemented with adversarial unit coverage. Exact PostgreSQL 16.9/16.15 qualification receipts remain open. The constraint raw-fact contract
 requires explicit decoder proofs for FK type/facet equality, operator shape, trigger structure/action mapping and
 supported action codes, so a later decoder cannot silently infer or weaken those invariants.
 Rich SQL envelopes now bound physical attributes with a per-relation ordinal sentinel, bound trigger aggregates before
-transfer, and suppress oversized constraint key arrays before driver decoding; these remain evidence-only until the
-complete adapter is qualified.
+transfer, and suppress oversized constraint key arrays before driver decoding; production availability remains gated on
+the exact qualification receipts.
 The attribute envelope also carries the complete joined `pg_type` identity required by the source-type normalizer and
 the joined collation encoding/determinism fields required by the collation normalizer; absent database-default facts
 are not inferred.
