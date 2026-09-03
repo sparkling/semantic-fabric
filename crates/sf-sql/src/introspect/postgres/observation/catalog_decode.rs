@@ -316,6 +316,8 @@ pub(super) fn decode_attribute_row_v1(
         joined_collation_namespace_oid: get!("joined_collation_namespace_oid", Option<u32>),
         joined_collation_provider: get!("joined_collation_provider", Option<String>),
         joined_collation_version: get!("joined_collation_version", Option<String>),
+        physical_ordinal: get!("sf_physical_ordinal", i64),
+        physical_overflow: get!("sf_physical_overflow", bool),
     };
     value.validate()?;
     Ok(value)
@@ -378,6 +380,8 @@ pub(super) struct CatalogAttributeRowV1 {
     pub(super) joined_collation_namespace_oid: Option<u32>,
     pub(super) joined_collation_provider: Option<String>,
     pub(super) joined_collation_version: Option<String>,
+    pub(super) physical_ordinal: i64,
+    pub(super) physical_overflow: bool,
 }
 
 impl CatalogRelationRowV1 {
@@ -402,6 +406,14 @@ impl CatalogAttributeRowV1 {
     pub(super) fn validate(&self) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
         if self.text_overflow || self.attribute_number <= 0 {
             return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
+        }
+        if self.physical_ordinal <= 0 || self.physical_ordinal > 1_601 {
+            return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
+        }
+        if self.physical_overflow {
+            return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+                PostgresSchemaIdentityLimitCodeV1::PhysicalAttributes,
+            ));
         }
         if let Some(name) = &self.attribute_name {
             BoundedCatalogTextV1::new(name.clone())?;
@@ -615,6 +627,8 @@ mod tests {
             joined_collation_namespace_oid: None,
             joined_collation_provider: None,
             joined_collation_version: None,
+            physical_ordinal: 1,
+            physical_overflow: false,
         };
         assert!(dropped.validate().is_ok());
         let mut live = dropped.clone();

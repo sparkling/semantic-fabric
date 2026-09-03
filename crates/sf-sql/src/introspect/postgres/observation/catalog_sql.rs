@@ -23,14 +23,16 @@ pub(super) const RICH_GUARD_SQL_V1: &str = "SELECT \
  (SELECT count(*)::int8 FROM pg_catalog.pg_namespace WHERE nspname='public') AS public_namespace_count, \
  (SELECT count(*)::int8 FROM pg_catalog.pg_database WHERE datname=current_database()) AS current_database_count";
 
-pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "SELECT \
+pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "WITH bounded AS (SELECT \
  a.attrelid AS relation_oid, a.attnum, CASE WHEN a.attname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(a.attname::text,'UTF8')) > $2 THEN NULL::text ELSE a.attname::text END AS attribute_name, \
  (a.attname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(a.attname::text,'UTF8')) > $2) AS sf_text_overflow, \
  a.attisdropped, a.attislocal, a.attinhcount, a.attnotnull, a.atttypid, a.attndims, a.atttypmod, a.attcollation, \
  t.oid AS joined_type_oid, t.typname AS joined_type_name, t.typnamespace AS joined_type_namespace_oid, \
- coll.oid AS joined_collation_oid, coll.collname AS joined_collation_name, coll.collnamespace AS joined_collation_namespace_oid, coll.collprovider AS joined_collation_provider, coll.collversion AS joined_collation_version \
+ coll.oid AS joined_collation_oid, coll.collname AS joined_collation_name, coll.collnamespace AS joined_collation_namespace_oid, coll.collprovider AS joined_collation_provider, coll.collversion AS joined_collation_version, \
+ pg_catalog.row_number() OVER (PARTITION BY a.attrelid ORDER BY a.attnum) AS sf_physical_ordinal \
  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_type t ON t.oid=a.atttypid LEFT JOIN pg_catalog.pg_collation coll ON coll.oid=a.attcollation \
- WHERE n.nspname=$1 AND c.relkind IN ('r','p','f') AND a.attnum > 0 ORDER BY a.attrelid, a.attnum LIMIT $3";
+ WHERE n.nspname=$1 AND c.relkind IN ('r','p','f') AND a.attnum > 0) \
+ SELECT bounded.*, (bounded.sf_physical_ordinal=1601) AS sf_physical_overflow FROM bounded WHERE bounded.sf_physical_ordinal <= 1601 ORDER BY bounded.relation_oid, bounded.attnum LIMIT $3";
 
 pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = "SELECT \
  con.oid AS constraint_oid, con.contype, con.conrelid AS child_oid, con.confrelid AS parent_oid, \
