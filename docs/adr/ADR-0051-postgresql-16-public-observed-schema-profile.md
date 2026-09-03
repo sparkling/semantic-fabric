@@ -28,6 +28,8 @@ complete adapter is qualified.
 The attribute envelope also carries the complete joined `pg_type` identity required by the source-type normalizer and
 the joined collation encoding/determinism fields required by the collation normalizer; absent database-default facts
 are not inferred.
+The guard envelope now carries the current database's provider, locale, ICU, and recorded/actual collation-version
+facts. These facts remain inert until combined with the matching catalog-collation join in the raw-fact adapter.
 An explicitly opt-in guarded legacy snapshot entry point now executes the frozen profile guard in the same
 repeatable-read transaction; it does not yet publish rich identity availability.
 An availability-carrying snapshot entry point now exposes that transitional state to callers as an explicit
