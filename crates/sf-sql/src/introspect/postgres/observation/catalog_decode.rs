@@ -444,8 +444,22 @@ impl CatalogAttributeRowV1 {
                 return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
             }
         } else if self.joined_type_oid != Some(self.attribute_type_oid)
+            || self.joined_type_name.is_none()
+            || self.joined_type_namespace_oid.is_none()
+            || self.joined_type_kind.is_none()
+            || self.joined_type_is_defined.is_none()
+            || self.joined_type_base_oid.is_none()
+            || self.joined_type_element_oid.is_none()
+            || self.joined_type_relation_oid.is_none()
+            || self.joined_type_collation_oid.is_none()
             || (self.collation_oid == 0) != self.joined_collation_oid.is_none()
             || (self.collation_oid != 0 && self.joined_collation_oid != Some(self.collation_oid))
+            || (self.collation_oid != 0
+                && (self.joined_collation_name.is_none()
+                    || self.joined_collation_namespace_oid.is_none()
+                    || self.joined_collation_provider.is_none()
+                    || self.joined_collation_encoding.is_none()
+                    || self.joined_collation_is_deterministic.is_none()))
         {
             return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
         }
