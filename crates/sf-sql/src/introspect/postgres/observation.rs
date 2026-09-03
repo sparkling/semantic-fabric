@@ -101,6 +101,54 @@ fn build_registered_observation_from_raw(
     build_registered_observation(server_version_num, relations.into_relations(), constraints)
 }
 
+/// Capture and assemble the rich profile inside one caller-owned snapshot.
+/// Every row is decoded and bounded before the pure normalizers run.
+#[allow(dead_code)]
+pub(super) async fn capture_registered_observation<C>(
+    client: &C,
+    schema_name: &str,
+) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1>
+where
+    C: GenericClient + Sync,
+{
+    let guard_row = client
+        .query_one(catalog_sql::RICH_GUARD_SQL_V1, &[])
+        .await
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+    let guard = catalog_decode::decode_guard_row_v1(&guard_row)?;
+    let server_version_num = guard.server_version_num;
+    let relation_rows = client
+        .query(
+            catalog_sql::RICH_RELATIONS_SQL_V1,
+            &[&schema_name, &256i32, &65_537i64],
+        )
+        .await
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+    let relations = catalog_decode::decode_relation_rows_v1(&relation_rows)?
+        .into_iter()
+        .map(catalog_decode::CatalogRelationRowV1::into_catalog_fact)
+        .collect::<Result<Vec<_>, _>>()?;
+    let attribute_rows = client
+        .query(
+            catalog_sql::RICH_ATTRIBUTES_SQL_V1,
+            &[&schema_name, &256i32, &1_048_577i64],
+        )
+        .await
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+    let attributes = catalog_decode::decode_attribute_rows_v1(&attribute_rows)?
+        .into_iter()
+        .map(|row| row.into_catalog_fact(&guard))
+        .collect::<Result<Vec<_>, _>>()?;
+    let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
+    let constraint_rows = client
+        .query(catalog_sql::RICH_CONSTRAINTS_SQL_V1, &[&65_537i64])
+        .await
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+    let raw_constraints = catalog_decode::decode_constraint_rows_v1(&constraint_rows)?;
+    let raw_constraints = catalog_decode::adapt_constraint_rows_v1(raw_constraints)?;
+    build_registered_observation_from_raw(server_version_num, normalized, raw_constraints)
+}
+
 fn registered_profile_id(
     value: &'static str,
 ) -> Result<ProfileIdV1, PostgresSchemaIdentityUnavailableV1> {
