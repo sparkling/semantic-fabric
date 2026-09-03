@@ -22,6 +22,8 @@ dead-staged code with adversarial unit coverage. Production adapter wiring, qual
 remain unimplemented. The constraint raw-fact contract
 requires explicit decoder proofs for FK type/facet equality, operator shape, trigger structure/action mapping and
 supported action codes, so a later decoder cannot silently infer or weaken those invariants.
+An explicitly opt-in guarded legacy snapshot entry point now executes the frozen profile guard in the same
+repeatable-read transaction; it does not yet publish rich identity availability.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.
