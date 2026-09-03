@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-07-01
-updated: 2026-08-25
+updated: 2026-09-03
 ratified: 2026-07-01
 tags: [execution, drivers, dialect, postgres, sqlite, mysql, scaling, backend-abstraction, streaming, charter, ontop-parity]
 supersedes: []
@@ -107,6 +107,25 @@ Per-database variation is thereby confined to exactly two thin, declarative plac
 > requires a separate production-cloud-backend decision, governed by this ADR
 > and ADR-0010, rather than weaker invariants or a renamed prototype. Issue #10
 > is dependency hygiene and does not supersede this architecture.
+
+> **Implementation reconciliation (2026-09-03, SQLite serving admission).**
+> Each physical serving SQLite connection is now paired permanently with one
+> cap-one async admission identity. SELECT, ASK, and CONSTRUCT acquire the
+> selected member under the same request budget before submitting any blocking
+> SQLite worker. A cancelled or expired waiter leaves that acquisition queue;
+> an admission timeout is a pre-response `504`. The public lease is non-`Clone`
+> and consumed once; the backend retains its private state and clones that state
+> into the metadata and row-stream workers through their actual exit. Async
+> caller or body cancellation therefore cannot admit overlapping work while an
+> earlier worker is still submitted or running. Deterministic unit and HTTP tests cover identity,
+> worker lifetime, no-entry timeout, and recovery. This is a serving adapter
+> refinement, not a new executor architecture or total queue governance: raw
+> `SqlitePool::pick`/foreign mutex holders bypass it, the semaphore waiter count
+> depends on external request admission plus per-waiter deadline/cancellation,
+> selection remains non-availability-aware round-robin, and neither the standard
+> mutex nor already-submitted/running blocking work is cancellable. Busy,
+> UDF/VFS/I/O, other backends, compiler/raw/conformance work, and production
+> admission remain outside this slice.
 
 ## More Information
 

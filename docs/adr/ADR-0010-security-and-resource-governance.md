@@ -205,10 +205,33 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > metadata/query work. It shares the request's exact control identity, preserves
 > the recorded cancellation/deadline cause, removes the handler on every
 > exit/unwind, and leaves unrelated `SQLITE_INTERRUPT` failures as driver errors.
-> This does not cover mutex or `spawn_blocking` queue wait, busy timeout, blocking
-> UDF/VFS/I/O, compiler CPU, raw/conformance callers, PostgreSQL/MySQL, database
+> This active-VM profile does not make raw mutex wait or already-submitted/running
+> `spawn_blocking` work cancellable; busy timeout, blocking UDF/VFS/I/O, compiler
+> CPU, raw/conformance callers, PostgreSQL/MySQL, database
 > rows or recursive source work, total M2, source admission, or atomic post-`200`
 > delivery. The common source-native statement-cancellation contract remains open.
+
+> **Status correction, part 13 (2026-09-03, SQLite connection admission).**
+> Every physical `SqlitePool` member now has one permanent cap-one async
+> admission identity. Serving SELECT, ASK, and CONSTRUCT acquire the selected
+> member under the request's existing `RequestBudget` before submitting any
+> SQLite blocking worker. A deadline or cancellation drops that acquisition
+> waiter; an admission timeout therefore returns a redacted pre-`200` HTTP `504`
+> without entering SQLite. The public lease is non-`Clone` and consumed once;
+> its private state is retained and cloned into both `column_names` and
+> `open_branch` workers through worker exit, so cancelling the async caller
+> cannot return capacity while submitted work still owns it.
+> Deterministic unit and HTTP tests lock the cap-one identity, both worker
+> lifetimes, pre-response timeout, no-UDF-entry, and recovery behavior.
+> This closes the serving admission wait, not total queue governance: the
+> semaphore's waiter count is bounded only by external request admission and
+> each waiter's deadline/cancellation. Raw `SqlitePool::pick` and foreign mutex
+> holders bypass the lease; the standard mutex and already-submitted/running
+> `spawn_blocking` work remain non-cancellable. Busy waits and blocking
+> UDF/VFS/I/O are still non-preemptible, selection remains round-robin rather
+> than availability-aware, and no PostgreSQL/MySQL, compiler, raw/conformance,
+> database-row, recursive-work, atomic post-`200`, total-M2, or production-
+> admission claim follows.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

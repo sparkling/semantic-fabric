@@ -136,6 +136,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sql/src/backend/sqlite.rs',
   'crates/sf-sql/src/backend/sqlite/cancellation.rs',
   'crates/sf-sql/src/backend/sqlite/owned.rs',
+  'crates/sf-sql/src/backend/sqlite/owned_admission_tests.rs',
   'crates/sf-sql/src/backend/sqlite/owned_cancellation_lifecycle_tests.rs',
   'crates/sf-sql/src/backend/sqlite/owned_cancellation_tests.rs',
   'crates/sf-sql/src/backend/sqlserver.rs',
