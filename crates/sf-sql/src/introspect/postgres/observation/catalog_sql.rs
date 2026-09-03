@@ -106,7 +106,15 @@ mod tests {
             "a.attcollation",
             "a.attndims",
             "joined_type_oid",
+            "joined_type_kind",
+            "joined_type_is_defined",
+            "joined_type_base_oid",
+            "joined_type_element_oid",
+            "joined_type_relation_oid",
+            "joined_type_collation_oid",
             "joined_collation_oid",
+            "joined_collation_encoding",
+            "joined_collation_is_deterministic",
         ] {
             assert!(RICH_ATTRIBUTES_SQL_V1.contains(field));
         }
