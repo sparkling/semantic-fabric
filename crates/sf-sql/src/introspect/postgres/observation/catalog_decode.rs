@@ -134,6 +134,10 @@ pub(super) fn decode_constraint_row_v1(
         || value.deferrable
         || value.deferred
         || value.child_key.as_ref().is_none_or(|v| v.is_empty())
+        || (value.constraint_kind == "f"
+            && (value.trigger_oids.is_none()
+                || value.operator_oids.is_none()
+                || value.search_operator_oids.is_none()))
     {
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
