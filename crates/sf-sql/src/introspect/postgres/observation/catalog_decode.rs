@@ -251,8 +251,10 @@ pub(super) fn decode_constraint_row_v1(
 ) -> Result<CatalogConstraintRowV1, PostgresSchemaIdentityUnavailableV1> {
     macro_rules! get {
         ($name:literal, $ty:ty) => {
-            row.try_get::<_, $ty>($name)
-                .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogDecode)?
+            row.try_get::<_, $ty>($name).map_err(|e| {
+                eprintln!("constraint decode {}: {}", $name, e);
+                PostgresSchemaIdentityUnavailableV1::CatalogDecode
+            })?
         };
     }
     let value = CatalogConstraintRowV1 {
