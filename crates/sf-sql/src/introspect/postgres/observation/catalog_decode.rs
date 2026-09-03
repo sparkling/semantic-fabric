@@ -3,7 +3,10 @@
 //! SQL adapters must validate these envelopes before retaining rich facts. This
 //! module deliberately contains no driver calls and no public/runtime wiring.
 
-use super::relation::Postgres16RelationCatalogFactV1;
+use super::relation::{Postgres16AttributeCatalogFactV1, Postgres16RelationCatalogFactV1};
+use super::source_type::{
+    Postgres16ColumnTypeCatalogFactV1, Postgres16DefaultCollationCatalogFactV1,
+};
 use super::{
     PostgresSchemaIdentityGuardCodeV1, PostgresSchemaIdentityLimitCodeV1,
     PostgresSchemaIdentityUnavailableV1,
@@ -491,6 +494,112 @@ impl CatalogRelationRowV1 {
 }
 
 impl CatalogAttributeRowV1 {
+    pub(super) fn into_catalog_fact(
+        self,
+        guard: &CatalogGuardRowV1,
+    ) -> Result<Postgres16AttributeCatalogFactV1, PostgresSchemaIdentityUnavailableV1> {
+        self.validate()?;
+        guard.validate()?;
+        if self.is_dropped {
+            return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedType);
+        }
+        let type_fact = Postgres16ColumnTypeCatalogFactV1 {
+            type_oid: self
+                .joined_type_oid
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+            type_namespace: "pg_catalog".into(),
+            type_name: self
+                .joined_type_name
+                .clone()
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?
+                .into_boxed_str(),
+            type_kind: one_char(
+                self.joined_type_kind
+                    .clone()
+                    .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+            )?,
+            type_is_defined: self
+                .joined_type_is_defined
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+            type_base_oid: self
+                .joined_type_base_oid
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+            type_element_oid: self
+                .joined_type_element_oid
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+            type_relation_oid: self
+                .joined_type_relation_oid
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+            array_dimensions: self.array_dimensions,
+            type_modifier: self.type_modifier,
+            collation_oid: self
+                .joined_type_collation_oid
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedType)?,
+        };
+        let collation = self
+            .joined_collation_oid
+            .map(|oid| {
+                Ok(Postgres16DefaultCollationCatalogFactV1 {
+                    collation_oid: oid,
+                    collation_namespace: "pg_catalog".into(),
+                    collation_name: self
+                        .joined_collation_name
+                        .clone()
+                        .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedCollation)?
+                        .into_boxed_str(),
+                    collation_provider: one_char(
+                        self.joined_collation_provider
+                            .clone()
+                            .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedCollation)?,
+                    )?,
+                    collation_encoding: self
+                        .joined_collation_encoding
+                        .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedCollation)?,
+                    collation_is_deterministic: self
+                        .joined_collation_is_deterministic
+                        .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedCollation)?,
+                    database_provider: one_char(guard.database_provider.clone())?,
+                    database_collate: guard.database_collate.clone().into_boxed_str(),
+                    database_ctype: guard.database_ctype.clone().into_boxed_str(),
+                    database_icu_locale: guard
+                        .database_icu_locale
+                        .clone()
+                        .map(String::into_boxed_str),
+                    database_icu_rules: guard
+                        .database_icu_rules
+                        .clone()
+                        .map(String::into_boxed_str),
+                    database_recorded_version: guard
+                        .database_recorded_version
+                        .clone()
+                        .map(String::into_boxed_str),
+                    actual_version: guard
+                        .database_actual_version
+                        .clone()
+                        .map(String::into_boxed_str),
+                })
+            })
+            .transpose()?;
+        Ok(Postgres16AttributeCatalogFactV1 {
+            relation_oid: self.relation_oid,
+            attribute_number: self.attribute_number,
+            attribute_name: self
+                .attribute_name
+                .ok_or(PostgresSchemaIdentityUnavailableV1::IdentityRejected)?
+                .into_boxed_str(),
+            is_dropped: self.is_dropped,
+            is_local: self.is_local,
+            inheritance_count: self.inheritance_count,
+            is_not_null: self.is_not_null,
+            attribute_type_oid: self.attribute_type_oid,
+            array_dimensions: self.array_dimensions,
+            type_modifier: self.type_modifier,
+            collation_oid: self.collation_oid,
+            joined_type: Some(type_fact),
+            joined_default_collation: collation,
+        })
+    }
+
     pub(super) fn validate(&self) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
         if self.text_overflow || self.attribute_number <= 0 {
             return Err(PostgresSchemaIdentityUnavailableV1::IdentityRejected);
