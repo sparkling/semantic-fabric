@@ -115,14 +115,12 @@ impl QueryControlError {
 ///
 /// Implementations must keep one control identity for a query. `consume` is an
 /// inclusive checked charge: reaching a limit succeeds; the next unit fails.
+/// Stateful implementations must return their sticky first terminal cause;
+/// stateless controls must return the supplied reason unchanged.
 pub trait QueryControl: Send + Sync {
     fn checkpoint(&self) -> Result<(), QueryControlError>;
     fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError>;
-
-    /// Record a terminal cause when the implementation owns request state.
-    fn terminate(&self, reason: QueryControlError) -> QueryControlError {
-        reason
-    }
+    fn terminate(&self, reason: QueryControlError) -> QueryControlError;
 }
 
 /// Explicit control for raw, diagnostic, and conformance APIs.
@@ -138,6 +136,10 @@ impl QueryControl for UncontrolledQueryControl {
 
     fn consume(&self, _charge: QueryCharge, _amount: u64) -> Result<(), QueryControlError> {
         Ok(())
+    }
+
+    fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+        reason
     }
 }
 

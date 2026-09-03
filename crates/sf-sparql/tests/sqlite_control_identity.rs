@@ -82,6 +82,10 @@ impl QueryControl for IdentityControl {
         }
         self.checkpoint()
     }
+
+    fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+        reason
+    }
 }
 
 #[tokio::test]

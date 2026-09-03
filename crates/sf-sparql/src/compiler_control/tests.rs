@@ -31,17 +31,17 @@ fn envelope_error() -> CompileEnvelopeError {
 }
 
 #[test]
-fn should_charge_exact_compiler_work_then_fail_at_n_plus_one() {
+fn should_reserve_exact_compiler_work_then_fail_at_n_plus_one() {
     let budget = budget(7);
     let control: &dyn QueryControl = &budget;
     let meter = CompileMeter::new(control);
 
-    meter.charge(7).expect("the inclusive limit fits");
+    meter.reserve_work(7).expect("the inclusive limit fits");
     assert_eq!(budget.consumed(QueryCharge::CompilerWork), 7);
     assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
 
     assert_control_error(
-        meter.charge(1).expect_err("N+1 must fail"),
+        meter.reserve_work(1).expect_err("N+1 must fail"),
         QueryControlError::CompilerWorkExceeded,
     );
     assert_eq!(budget.consumed(QueryCharge::CompilerWork), 7);
@@ -69,7 +69,7 @@ fn should_compute_checked_units_sum_and_product_without_charging() {
     assert_eq!(meter.checked_sum(&[2, 3, 5]).unwrap(), 10);
     assert_eq!(meter.checked_product(&[2, 3, 5]).unwrap(), 30);
     assert_eq!(meter.checked_product(&[2, 0, usize::MAX]).unwrap(), 0);
-    assert_eq!(meter.checked_product(&[]).unwrap(), 0);
+    assert_eq!(meter.checked_product(&[]).unwrap(), 1);
     assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
 }
 
@@ -141,7 +141,9 @@ fn should_seal_a_distinct_envelope_reason_through_a_trait_object() {
     );
     assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
     assert_control_error(
-        meter.charge(1).expect_err("first terminal cause is sticky"),
+        meter
+            .reserve_work(1)
+            .expect_err("first terminal cause is sticky"),
         QueryControlError::CompilerEnvelopeExceeded,
     );
 }

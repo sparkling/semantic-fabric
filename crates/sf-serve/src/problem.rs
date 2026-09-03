@@ -116,7 +116,7 @@ impl ProblemCode {
             Self::PayloadTooLarge => "The request body or query exceeds the configured byte limit.",
             Self::UnsupportedQuery => "The requested query or execution shape is not supported.",
             Self::RequestTimeout => "The request deadline expired.",
-            Self::QueryBudgetExceeded => "The query exceeded a configured resource limit.",
+            Self::QueryBudgetExceeded => "The query exceeded a resource limit.",
             Self::ServiceOverloaded => "The service is temporarily overloaded.",
             Self::SourceUnavailable => "The source is temporarily unavailable.",
             Self::Internal => "The request could not be completed.",

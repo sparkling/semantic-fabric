@@ -24,8 +24,9 @@ impl<'control> CompileMeter<'control> {
         self.control.checkpoint().map_err(Error::from)
     }
 
-    /// Charge compiler work that has already occurred.
-    pub(crate) fn charge(&self, units: u64) -> Result<()> {
+    /// Reserve work immediately before performing the corresponding bounded
+    /// compiler operation.
+    pub(crate) fn reserve_work(&self, units: u64) -> Result<()> {
         self.control
             .consume(QueryCharge::CompilerWork, units)
             .map_err(Error::from)
@@ -45,7 +46,7 @@ impl<'control> CompileMeter<'control> {
 
     /// Compute prospective product work without mutating the request budget.
     pub(crate) fn checked_product(&self, factors: &[usize]) -> Result<u64> {
-        if factors.is_empty() || factors.contains(&0) {
+        if factors.contains(&0) {
             return Ok(0);
         }
 
@@ -60,7 +61,7 @@ impl<'control> CompileMeter<'control> {
     /// Precharge a prospective product once after all arithmetic checks.
     pub(crate) fn precharge_product(&self, factors: &[usize]) -> Result<u64> {
         let units = self.checked_product(factors)?;
-        self.charge(units)?;
+        self.reserve_work(units)?;
         Ok(units)
     }
 

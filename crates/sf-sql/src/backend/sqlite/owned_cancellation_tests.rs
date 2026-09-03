@@ -117,6 +117,10 @@ impl QueryControl for ArmedControl {
     fn consume(&self, _charge: QueryCharge, _amount: u64) -> Result<(), QueryControlError> {
         self.checkpoint()
     }
+
+    fn terminate(&self, reason: QueryControlError) -> QueryControlError {
+        reason
+    }
 }
 
 fn stage_observer(
