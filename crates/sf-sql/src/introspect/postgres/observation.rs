@@ -134,16 +134,19 @@ where
             &[&schema_name, &256i32, &1_048_577i64],
         )
         .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::UnsupportedType)?;
     let attributes = catalog_decode::decode_attribute_rows_v1(&attribute_rows)?
         .into_iter()
         .map(|row| row.into_catalog_fact(&guard))
         .collect::<Result<Vec<_>, _>>()?;
     let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
     let constraint_rows = client
-        .query(catalog_sql::RICH_CONSTRAINTS_SQL_V1, &[&65_537i64])
+        .query(
+            catalog_sql::RICH_CONSTRAINTS_SQL_V1,
+            &[&schema_name, &65_537i64],
+        )
         .await
-        .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
+        .map_err(|_| PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
     let raw_constraints = catalog_decode::decode_constraint_rows_v1(&constraint_rows)?;
     let raw_constraints = catalog_decode::adapt_constraint_rows_v1(raw_constraints)?;
     build_registered_observation_from_raw(server_version_num, normalized, raw_constraints)
