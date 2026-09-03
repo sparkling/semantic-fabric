@@ -24,6 +24,8 @@ requires explicit decoder proofs for FK type/facet equality, operator shape, tri
 supported action codes, so a later decoder cannot silently infer or weaken those invariants.
 An explicitly opt-in guarded legacy snapshot entry point now executes the frozen profile guard in the same
 repeatable-read transaction; it does not yet publish rich identity availability.
+An availability-carrying snapshot entry point now exposes that transitional state to callers as an explicit
+`ProfileNotImplemented` result, preserving the legacy projection without forging a rich identity.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.
