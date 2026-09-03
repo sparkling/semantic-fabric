@@ -166,6 +166,7 @@ impl fmt::Debug for Postgres16PublicObservedSchemaV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PostgresSchemaIdentityGuardCodeV1 {
     ServerEncoding,
+    IdentifierLength,
     IndexKeyLimit,
     IntegerDatetimes,
     ReplicationRole,
@@ -234,6 +235,7 @@ impl std::error::Error for PostgresSchemaIdentityUnavailableV1 {}
 const fn guard_message(code: PostgresSchemaIdentityGuardCodeV1) -> &'static str {
     match code {
         PostgresSchemaIdentityGuardCodeV1::ServerEncoding => "server encoding unsupported",
+        PostgresSchemaIdentityGuardCodeV1::IdentifierLength => "identifier length unsupported",
         PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit => "index key limit unsupported",
         PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes => "integer datetimes unsupported",
         PostgresSchemaIdentityGuardCodeV1::ReplicationRole => "replication role unsupported",

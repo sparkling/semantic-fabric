@@ -47,6 +47,7 @@ fn snapshot_contract_is_public(_: &Postgres16PublicObservedSnapshotV1) {}
 fn guard_code_is_exhaustive(code: PostgresSchemaIdentityGuardCodeV1) {
     match code {
         PostgresSchemaIdentityGuardCodeV1::ServerEncoding
+        | PostgresSchemaIdentityGuardCodeV1::IdentifierLength
         | PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit
         | PostgresSchemaIdentityGuardCodeV1::IntegerDatetimes
         | PostgresSchemaIdentityGuardCodeV1::ReplicationRole

@@ -202,7 +202,7 @@ impl CatalogGuardRowV1 {
         }
         if self.max_identifier_length != 63 {
             return Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
-                PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit,
+                PostgresSchemaIdentityGuardCodeV1::IdentifierLength,
             ));
         }
         if self.max_index_keys != 32 {
@@ -489,6 +489,14 @@ mod tests {
         assert_eq!(
             guard.validate(),
             Err(PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented)
+        );
+        guard = valid_guard();
+        guard.max_identifier_length = 62;
+        assert_eq!(
+            guard.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::IdentifierLength
+            ))
         );
         guard = valid_guard();
         guard.search_path = "public".into();
