@@ -8,78 +8,17 @@
 //! pre-emptible.
 //!
 //! Lexeme byte counts include their quotes, angle brackets, or comment marker;
-//! comments count as conservative tokens. Operator accounting counts every
-//! recognized operator in a delimiter scope, so it upper-bounds rather than
-//! attempts to reconstruct exact grammar-level chains.
-
-use std::fmt;
+//! comments count as conservative tokens. Operator and active-path accounting
+//! are diagnostic proxies over recognized syntax. They are not grammar-complete
+//! bounds: the pinned PEG parser resolves some `<...>` forms contextually and
+//! decodes Unicode escapes before parsing. This module must remain dormant
+//! until parser-view differential calibration plus parser instrumentation or
+//! isolation closes that gap.
 
 pub(crate) mod algebra;
+mod limits;
 
-/// Independent V1 input ceiling. Changing any profile constant requires a new
-/// compile-profile identity when this scanner is integrated with the cache.
-pub(crate) const MAX_SCANNED_BYTES_V1: usize = 256 * 1024;
-pub(crate) const MAX_TOKENS_V1: usize = 32 * 1024;
-pub(crate) const MAX_LEXEME_BYTES_V1: usize = 16 * 1024;
-pub(crate) const MAX_NESTING_DEPTH_V1: usize = 64;
-pub(crate) const MAX_RDF_STAR_DEPTH_V1: usize = 32;
-pub(crate) const MAX_OPERATORS_PER_SCOPE_V1: usize = 128;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CompileEnvelopeLimit {
-    InputBytes,
-    Tokens,
-    LexemeBytes,
-    NestingDepth,
-    RdfStarDepth,
-    OperatorsPerScope,
-    AlgebraNodes,
-    AlgebraDepth,
-    CollectionSlots,
-    RetainedPayloadBytes,
-}
-
-impl fmt::Display for CompileEnvelopeLimit {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::InputBytes => "input-bytes",
-            Self::Tokens => "tokens",
-            Self::LexemeBytes => "lexeme-bytes",
-            Self::NestingDepth => "nesting-depth",
-            Self::RdfStarDepth => "rdf-star-depth",
-            Self::OperatorsPerScope => "operators-per-scope",
-            Self::AlgebraNodes => "algebra-nodes",
-            Self::AlgebraDepth => "algebra-depth",
-            Self::CollectionSlots => "collection-slots",
-            Self::RetainedPayloadBytes => "retained-payload-bytes",
-        })
-    }
-}
-
-/// Internal admission failure. It intentionally carries bounded numeric data,
-/// never submitted query text or an upstream parser diagnostic.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum CompileEnvelopeError {
-    #[error("compile envelope V1 {dimension} limit exceeded ({observed}>{maximum})")]
-    LimitExceeded {
-        dimension: CompileEnvelopeLimit,
-        observed: usize,
-        maximum: usize,
-    },
-}
-
-/// Measurements retained by the V1 scan for later work accounting.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct CompileEnvelopeV1 {
-    pub(crate) input_bytes: usize,
-    pub(crate) tokens: usize,
-    pub(crate) max_lexeme_bytes: usize,
-    pub(crate) max_nesting_depth: usize,
-    pub(crate) max_rdf_star_depth: usize,
-    /// Conservative upper bound for any operator chain: every operator in one
-    /// delimiter scope is counted, even when separate operands break the chain.
-    pub(crate) max_operators_per_scope: usize,
-}
+pub(crate) use limits::*;
 
 impl CompileEnvelopeV1 {
     pub(crate) fn scan(input: &str) -> Result<Self, CompileEnvelopeError> {
@@ -105,6 +44,7 @@ struct Scanner<'input> {
     cursor: usize,
     depth: usize,
     rdf_star_depth: usize,
+    active_operators: usize,
     delimiters: [Delimiter; MAX_NESTING_DEPTH_V1],
     scope_operators: [usize; MAX_NESTING_DEPTH_V1 + 1],
     envelope: CompileEnvelopeV1,
@@ -117,6 +57,7 @@ impl<'input> Scanner<'input> {
             cursor: 0,
             depth: 0,
             rdf_star_depth: 0,
+            active_operators: 0,
             delimiters: [Delimiter::Round; MAX_NESTING_DEPTH_V1],
             scope_operators: [0; MAX_NESTING_DEPTH_V1 + 1],
             envelope: CompileEnvelopeV1 {
@@ -134,7 +75,10 @@ impl<'input> Scanner<'input> {
                 b'\'' | b'"' => self.scan_string(byte)?,
                 b'<' if self.peek(1) == Some(b'<') => self.scan_double_less_than()?,
                 b'<' if self.starts_iri() => self.scan_iri()?,
-                b'<' => self.operator(if self.peek(1) == Some(b'=') { 2 } else { 1 })?,
+                b'<' => {
+                    self.enforce_possible_iri_lexeme()?;
+                    self.operator(if self.peek(1) == Some(b'=') { 2 } else { 1 })?;
+                }
                 b'>' if self.peek(1) == Some(b'>') && self.top() == Some(Delimiter::RdfStar) => {
                     self.close(Delimiter::RdfStar, 2)?;
                 }
@@ -171,7 +115,18 @@ impl<'input> Scanner<'input> {
     }
 
     fn starts_iri(&self) -> bool {
-        self.iri_candidate_len(self.cursor).is_some()
+        let Some(width) = self.iri_candidate_len(self.cursor) else {
+            return false;
+        };
+        // The pinned PEG parser resolves `<...>` from grammar context rather
+        // than with a standalone lexer. These markers cover known ambiguous
+        // forms for diagnostics; they are deliberately not an admission proof.
+        // A candidate scanned structurally is still measured as a complete
+        // possible IRI first.
+        !self.bytes[self.cursor + 1..self.cursor + width - 1]
+            .iter()
+            .copied()
+            .any(is_iri_expression_ambiguity)
     }
 
     fn iri_candidate_len(&self, start: usize) -> Option<usize> {
@@ -191,6 +146,18 @@ impl<'input> Scanner<'input> {
             candidate += 1;
         }
         None
+    }
+
+    fn enforce_possible_iri_lexeme(&mut self) -> Result<(), CompileEnvelopeError> {
+        if let Some(width) = self.iri_candidate_len(self.cursor) {
+            enforce(
+                CompileEnvelopeLimit::LexemeBytes,
+                width,
+                MAX_LEXEME_BYTES_V1,
+            )?;
+            self.envelope.max_lexeme_bytes = self.envelope.max_lexeme_bytes.max(width);
+        }
+        Ok(())
     }
 
     fn scan_double_less_than(&mut self) -> Result<(), CompileEnvelopeError> {
@@ -335,6 +302,7 @@ impl<'input> Scanner<'input> {
 
     fn separator(&mut self) -> Result<(), CompileEnvelopeError> {
         self.record_token(1)?;
+        self.active_operators -= self.scope_operators[self.depth];
         self.scope_operators[self.depth] = 0;
         self.cursor += 1;
         Ok(())
@@ -360,6 +328,7 @@ impl<'input> Scanner<'input> {
             next_rdf_depth,
             MAX_RDF_STAR_DEPTH_V1,
         )?;
+        self.enforce_recursion_potential(next_depth, self.active_operators)?;
         self.delimiters[self.depth] = delimiter;
         self.depth = next_depth;
         self.rdf_star_depth = next_rdf_depth;
@@ -377,6 +346,7 @@ impl<'input> Scanner<'input> {
             if delimiter == Delimiter::RdfStar {
                 self.rdf_star_depth -= 1;
             }
+            self.active_operators -= self.scope_operators[self.depth];
             self.scope_operators[self.depth] = 0;
             self.depth -= 1;
         }
@@ -399,8 +369,26 @@ impl<'input> Scanner<'input> {
             observed,
             MAX_OPERATORS_PER_SCOPE_V1,
         )?;
+        let next_active_operators = self.active_operators.saturating_add(1);
+        self.enforce_recursion_potential(self.depth, next_active_operators)?;
         self.scope_operators[self.depth] = observed;
+        self.active_operators = next_active_operators;
         self.envelope.max_operators_per_scope = self.envelope.max_operators_per_scope.max(observed);
+        Ok(())
+    }
+
+    fn enforce_recursion_potential(
+        &mut self,
+        depth: usize,
+        active_operators: usize,
+    ) -> Result<(), CompileEnvelopeError> {
+        let observed = depth.saturating_add(active_operators);
+        enforce(
+            CompileEnvelopeLimit::RecursionPotential,
+            observed,
+            MAX_RECURSION_POTENTIAL_V1,
+        )?;
+        self.envelope.max_recursion_potential = self.envelope.max_recursion_potential.max(observed);
         Ok(())
     }
 }
@@ -459,6 +447,32 @@ fn is_iri_boundary(byte: u8) -> bool {
     byte.is_ascii_control()
         || byte.is_ascii_whitespace()
         || matches!(byte, b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`')
+}
+
+fn is_iri_expression_ambiguity(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'\''
+            | b'('
+            | b')'
+            | b'['
+            | b']'
+            | b'.'
+            | b';'
+            | b','
+            | b'#'
+            | b'!'
+            | b'='
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'/'
+            | b'|'
+            | b'&'
+            | b'^'
+            | b'?'
+            | b'$'
+    )
 }
 
 fn is_operator_keyword(word: &[u8]) -> bool {

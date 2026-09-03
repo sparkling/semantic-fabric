@@ -1,5 +1,8 @@
 use super::*;
 
+mod ambiguity;
+mod recursion;
+
 fn assert_limit(
     error: CompileEnvelopeError,
     dimension: CompileEnvelopeLimit,
@@ -41,7 +44,7 @@ fn should_count_utf8_lexemes_in_bytes() {
 #[test]
 fn should_shield_every_string_form_iri_and_comment_context() {
     let input = concat!(
-        "<https://example.test/a/(b)?x=1#frag> ",
+        "<urn:plain> ",
         "'single \\' still ) || <<' ",
         "\"double \\\" still ] && >>\" ",
         "'''long ' \" still } | <<''' ",
@@ -64,7 +67,7 @@ fn should_shield_every_string_form_iri_and_comment_context() {
 }
 
 #[test]
-fn should_keep_iri_unicode_escapes_fragment_and_path_operators_in_one_lexeme() {
+fn should_measure_complete_iri_while_scanning_ambiguous_punctuation() {
     let input = r#"<https://example.test/\u0028?a=b/c#fragment>"#;
     let envelope = CompileEnvelopeV1::scan(input).expect("escaped IRI fits");
 
@@ -75,7 +78,7 @@ fn should_keep_iri_unicode_escapes_fragment_and_path_operators_in_one_lexeme() {
             envelope.max_nesting_depth,
             envelope.max_operators_per_scope,
         ),
-        (1, input.len(), 0, 0)
+        (15, input.len(), 0, 6)
     );
 }
 
@@ -166,9 +169,8 @@ fn should_reset_operator_chains_at_structural_separators() {
 
 #[test]
 fn should_count_boolean_comparison_and_datatype_operators() {
-    let envelope =
-        CompileEnvelopeV1::scan("?a <= ?b && ?c != ?d || ?e >= 1 ^^ <https://example.test/type>")
-            .expect("short mixed chain fits");
+    let envelope = CompileEnvelopeV1::scan("?a <= ?b && ?c != ?d || ?e >= 1 ^^ <urn:type>")
+        .expect("short mixed chain fits");
 
     assert_eq!(envelope.max_operators_per_scope, 6);
 }
@@ -267,6 +269,41 @@ fn should_not_accumulate_false_rdf_star_depth_across_compact_comparisons() {
     let envelope = CompileEnvelopeV1::scan(&input).expect("comparisons are not RDF-star nesting");
     assert_eq!(envelope.max_rdf_star_depth, 0);
     assert_eq!(envelope.max_operators_per_scope, 1);
+}
+
+#[test]
+fn should_not_hide_nested_relational_syntax_as_an_iri() {
+    let input = "SELECT * WHERE { ?s ?p ?x . FILTER(?x <(1>0)) }";
+    spargebra::SparqlParser::new()
+        .parse_query(input)
+        .expect("the pinned parser accepts the nested relational expression");
+
+    let envelope = CompileEnvelopeV1::scan(input).expect("small nested comparison fits");
+    assert_eq!(envelope.max_nesting_depth, 3);
+    assert_eq!(envelope.max_operators_per_scope, 1);
+}
+
+#[test]
+fn should_not_hide_a_single_quoted_greater_than_as_an_iri() {
+    let input = "SELECT * WHERE { ?s ?p ?x . FILTER(?x <'>') }";
+    spargebra::SparqlParser::new()
+        .parse_query(input)
+        .expect("the pinned parser accepts comparison with a quoted greater-than");
+
+    let envelope = CompileEnvelopeV1::scan(input).expect("small quoted comparison fits");
+    assert_eq!(envelope.max_operators_per_scope, 1);
+}
+
+#[test]
+fn should_measure_both_interpretations_of_an_ambiguous_valid_iri() {
+    let iri = "<https://example.test/a/(b)>";
+    let input = format!("SELECT * WHERE {{ ?s ?p {iri} }}");
+    spargebra::SparqlParser::new()
+        .parse_query(&input)
+        .expect("the pinned parser accepts parentheses inside an IRI");
+
+    let envelope = CompileEnvelopeV1::scan(&input).expect("small ambiguous IRI fits");
+    assert_eq!(envelope.max_lexeme_bytes, iri.len());
 }
 
 #[test]
