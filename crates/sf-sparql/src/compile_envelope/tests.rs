@@ -220,6 +220,39 @@ fn should_not_hide_a_parser_accepted_operator_chain_as_an_unterminated_iri() {
     );
 }
 
+fn compact_relational_iri(payload_len: usize) -> String {
+    let iri = format!("<urn:{}>", "a".repeat(payload_len));
+    format!("SELECT * WHERE {{ ?s ?p ?x . FILTER(?x<{iri}) }}")
+}
+
+#[test]
+fn should_enforce_both_parser_interpretations_of_compact_double_less_than() {
+    let input = compact_relational_iri(MAX_LEXEME_BYTES_V1 - 6);
+    spargebra::SparqlParser::new()
+        .parse_query(&input)
+        .expect("the pinned parser accepts relational less-than followed by an IRI");
+
+    let envelope = CompileEnvelopeV1::scan(&input).expect("exact IRI lexeme limit fits");
+    assert_eq!(envelope.max_lexeme_bytes, MAX_LEXEME_BYTES_V1);
+    assert!(envelope.max_operators_per_scope >= 1);
+}
+
+#[test]
+fn should_reject_an_overlong_iri_after_compact_relational_less_than() {
+    let input = compact_relational_iri(MAX_LEXEME_BYTES_V1 - 5);
+    spargebra::SparqlParser::new()
+        .parse_query(&input)
+        .expect("the pinned parser accepts the over-envelope IRI syntax");
+
+    let error = CompileEnvelopeV1::scan(&input).expect_err("overlong IRI must not be split");
+    assert_limit(
+        error,
+        CompileEnvelopeLimit::LexemeBytes,
+        MAX_LEXEME_BYTES_V1 + 1,
+        MAX_LEXEME_BYTES_V1,
+    );
+}
+
 #[test]
 fn should_accept_the_exact_scanned_byte_limit() {
     let input = " ".repeat(MAX_SCANNED_BYTES_V1);

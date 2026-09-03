@@ -122,9 +122,7 @@ impl<'input> Scanner<'input> {
                 byte if byte.is_ascii_whitespace() => self.cursor += 1,
                 b'#' => self.scan_comment()?,
                 b'\'' | b'"' => self.scan_string(byte)?,
-                b'<' if self.peek(1) == Some(b'<') => {
-                    self.open(Delimiter::RdfStar, 2)?;
-                }
+                b'<' if self.peek(1) == Some(b'<') => self.open_rdf_star()?,
                 b'<' if self.starts_iri() => self.scan_iri()?,
                 b'<' => self.operator(if self.peek(1) == Some(b'=') { 2 } else { 1 })?,
                 b'>' if self.peek(1) == Some(b'>') && self.top() == Some(Delimiter::RdfStar) => {
@@ -163,22 +161,43 @@ impl<'input> Scanner<'input> {
     }
 
     fn starts_iri(&self) -> bool {
-        let mut candidate = self.cursor + 1;
+        self.iri_candidate_len(self.cursor).is_some()
+    }
+
+    fn iri_candidate_len(&self, start: usize) -> Option<usize> {
+        let mut candidate = start.checked_add(1)?;
         while let Some(&byte) = self.bytes.get(candidate) {
             match byte {
-                b'>' => return true,
-                byte if is_iri_boundary(byte) => return false,
+                b'>' => return candidate.checked_add(1)?.checked_sub(start),
+                byte if is_iri_boundary(byte) => return None,
                 b'\\' => {
                     candidate += 1;
                     if candidate >= self.bytes.len() {
-                        return false;
+                        return None;
                     }
                 }
                 _ => {}
             }
             candidate += 1;
         }
-        false
+        None
+    }
+
+    fn open_rdf_star(&mut self) -> Result<(), CompileEnvelopeError> {
+        // `<<` is context-sensitive in the pinned parser: it can be the quoted
+        // triple opener, or relational `<` immediately followed by `<iri>`. Keep
+        // RDF-star depth accounting and conservatively enforce the second
+        // interpretation's operator, token and complete IRI lexeme as well.
+        if let Some(iri_width) = self.iri_candidate_len(self.cursor + 1) {
+            enforce(
+                CompileEnvelopeLimit::LexemeBytes,
+                iri_width,
+                MAX_LEXEME_BYTES_V1,
+            )?;
+            self.record_token(iri_width)?;
+            self.record_scope_operator()?;
+        }
+        self.open(Delimiter::RdfStar, 2)
     }
 
     fn scan_comment(&mut self) -> Result<(), CompileEnvelopeError> {
