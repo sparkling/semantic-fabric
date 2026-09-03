@@ -70,7 +70,8 @@ fn should_accept_exact_payload_limit_and_reject_the_next_byte() {
 #[test]
 fn should_keep_typed_errors_free_of_submitted_payload() {
     let marker = "SECRET_QUERY_PAYLOAD";
-    let rejected = filter_variable(MAX_RETAINED_PAYLOAD_BYTES_V1 + marker.len());
+    let submitted = format!("{}{marker}", "x".repeat(MAX_RETAINED_PAYLOAD_BYTES_V1));
+    let rejected = filter_named_variable(&submitted);
     let error = AlgebraEnvelopeV1::validate(&rejected).expect_err("payload is rejected");
 
     assert!(!error.to_string().contains(marker));
@@ -102,8 +103,12 @@ fn values_with_empty_cells(count: usize) -> Query {
 }
 
 fn filter_variable(bytes: usize) -> Query {
+    filter_named_variable(&"x".repeat(bytes))
+}
+
+fn filter_named_variable(name: &str) -> Query {
     select(GraphPattern::Filter {
-        expr: Expression::Variable(var(&"x".repeat(bytes))),
+        expr: Expression::Variable(var(name)),
         inner: Box::new(empty()),
     })
 }
