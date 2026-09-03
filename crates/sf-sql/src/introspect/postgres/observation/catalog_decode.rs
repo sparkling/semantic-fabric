@@ -127,10 +127,13 @@ impl CatalogConstraintRowV1 {
             .child_key
             .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
         let parent_attnums = self.parent_key.clone().unwrap_or_default();
-        let index_attnums = self
-            .index_key_attnums
-            .clone()
-            .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
+        let index_attnums = if self.constraint_kind == "f" {
+            parent_attnums.clone()
+        } else {
+            self.index_key_attnums
+                .clone()
+                .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?
+        };
         if child_attnums.is_empty()
             || child_attnums.len() > MAX_CATALOG_ARRAY_MEMBERS_V1
             || (self.constraint_kind != "f" && index_attnums != child_attnums)
