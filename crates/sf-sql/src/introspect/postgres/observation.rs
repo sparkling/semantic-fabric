@@ -7,7 +7,7 @@ use tokio_postgres::{GenericClient, Row};
 use sf_core::schema_identity::{
     ConstraintInputV1, ObservedSchemaIdentityV1, ProfileIdV1, RelationInputV1,
     SchemaIdentityErrorV1, SchemaIdentityLimitV1, SchemaObservationInputV1, SchemaProfilesV1,
-    MAX_RAW_CONSTRAINTS_V1, MAX_RELATIONS_V1,
+    MAX_RELATIONS_V1,
 };
 
 use tokio_postgres::types::Type;
@@ -21,11 +21,15 @@ mod catalog_decode;
 #[allow(dead_code)]
 mod catalog_sql;
 #[allow(dead_code)]
+mod constraint_budget;
+#[allow(dead_code)]
 mod constraints;
 #[allow(dead_code)]
 mod relation;
 #[allow(dead_code)]
 mod source_type;
+#[allow(dead_code)]
+mod trigger_evidence;
 
 pub(super) async fn qualify_profile_guard<C>(
     client: &C,
@@ -162,15 +166,17 @@ where
     )
     .await?;
     let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
-    let constraint_limit = MAX_RAW_CONSTRAINTS_V1 as i64 + 1;
-    let raw_constraints = query_bounded_mapped(
+    let mut raw_constraints = constraints::observed_not_null_constraints_v1(&normalized)?;
+    let (remaining_constraints, constraint_limit) =
+        constraint_budget::constraint_catalog_budget_v1(raw_constraints.len())?;
+    let mut catalog_constraints = query_bounded_mapped(
         client,
         catalog_sql::RICH_CONSTRAINTS_SQL_V1,
         &[
             TypedQueryParameter::new(&schema_name, Type::TEXT),
             TypedQueryParameter::new(&constraint_limit, Type::INT8),
         ],
-        MAX_RAW_CONSTRAINTS_V1,
+        remaining_constraints,
         |_| PostgresSchemaIdentityUnavailableV1::CatalogQuery,
         || {
             PostgresSchemaIdentityUnavailableV1::LimitExceeded(
@@ -180,6 +186,7 @@ where
         |row| catalog_decode::decode_constraint_row_v1(&row)?.into_raw_constraint(),
     )
     .await?;
+    raw_constraints.append(&mut catalog_constraints);
     build_registered_observation_from_raw(server_version_num, normalized, raw_constraints)
 }
 

@@ -132,9 +132,10 @@ pub async fn introspect_postgres_public_snapshot_guarded(
     Ok(schemas)
 }
 
-/// Capture a guarded snapshot with explicit identity availability. Rich
-/// catalogue evidence is collected in the same repeatable-read transaction;
-/// unsupported evidence (including incomplete FK proof) remains unavailable.
+/// Capture a guarded snapshot with an available, non-authorizing identity.
+/// Rich catalogue evidence is collected in the same repeatable-read
+/// transaction; guard, query, decode, and unsupported-evidence failures are
+/// currently returned as redacted introspection errors.
 pub async fn introspect_postgres_public_observed_snapshot(
     client: &mut tokio_postgres::Client,
 ) -> Result<Postgres16PublicObservedSnapshotV1> {

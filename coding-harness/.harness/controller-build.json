@@ -89,8 +89,8 @@
     "coding-harness/dist/network.js": "80c7d2f504af5445637a4e4ddfb5fc39087f3290d637fae9288d60576e46b583",
     "coding-harness/dist/parallel.js": "1bec419c8cfb6a3035996d50acf964e50d85d1b5e328a818f183c63390ce0b65",
     "coding-harness/dist/policy.js": "58ddde715266d38f5a48ffc50cbac965f015ad45487683abd1e05312e2b53974",
-    "coding-harness/dist/postgres-observation-qualification-runner.js": "a9a78c8c2f4c5e7ecee511210e2c4b8862592128d1430ab48ca169150f341421",
-    "coding-harness/dist/postgres-observation-qualification.js": "2c7d84e29632af0aeeef405303d726860e778ed5a6722a440886fdf3db3f602d",
+    "coding-harness/dist/postgres-observation-qualification-runner.js": "fdde59020ae69e8fd6672cae3897219e3e07a40f8c398ff96c760d60c9bc20d4",
+    "coding-harness/dist/postgres-observation-qualification.js": "b69c3ef32fc0abefbd5851a3e9d308b125ae9785e88a0ad290d0168376834fd2",
     "coding-harness/dist/process.js": "75ecf658c55defbfb6006e2668f48319078fe9dd226238bc1e94bc06fc7f1497",
     "coding-harness/dist/programme-acceptance.js": "cd81658e6681c9752216a24fdf914f68f8fd0980c94b174165c40b271cb84293",
     "coding-harness/dist/programme-capture-claim-io-v1.js": "6f379b605045d27ccf1eb92b36e76650050840acbd000dbdcb7b611164a4abbc",
@@ -107,7 +107,7 @@
     "coding-harness/dist/programme-capture-private-source-v1.js": "017a9460306d9270e987d76295ea0dbaab027e4d8d29d37791993dde3fa4810e",
     "coding-harness/dist/programme-capture-protected-paths-v1.js": "39318068907d78eb38362c39ae4c98445cda09e21c000477aad1d59e3487d6c3",
     "coding-harness/dist/programme-capture-runner-profile-v1.js": "61c4b076b28c2ce5544978df15083969ca45e1e732909c4a81a01dadc062df26",
-    "coding-harness/dist/programme-capture-source-paths-v1.js": "06a27ffd50f686625ab853d612c7c1b921f8c6a98e7480e1fe8e9975a8c1cf3c",
+    "coding-harness/dist/programme-capture-source-paths-v1.js": "56b514394c4b6058513ce4dfef7759563faeaf7debccbebac58c34ba414f32fb",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
     "coding-harness/dist/programme-capture-supervisor-authority-config-v2.js": "29ea6c4caa028535220d3f04bc79f7f36e2112530a3fd89f409aebd191a4ced3",
     "coding-harness/dist/programme-capture-supervisor-authority-transition-v2.js": "d6df66d081b1d76fb6082b63e8c839e0de3bda849e01c9fc80119cedcbed16f4",
@@ -305,5 +305,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "fa76a4bb1950337c6baab36a0a5bbde8300b874ff401809b52efbcbf30333956"
+  "runtimeTreeDigest": "6ae0b6ea30aa2942412d9c467bd0844eb050387b5cb447942c1cc4a04c86ee94"
 }

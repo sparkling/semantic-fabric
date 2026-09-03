@@ -13,39 +13,32 @@ implements: [ADR-0050]
 ## Status boundary
 
 This ADR is **proposed**. It freezes the first production-shaped observation profile required by ADR-0050 Phase 2.
-The guarded snapshot API now emits and carries the profile through one repeatable-read transaction. The profile covers one PostgreSQL 16
-semantic catalogue contract; PostgreSQL 16.9 and 16.15 are its initial exact live qualification targets.
-The exact engine-version selector, registered identity finalizer and complete source-type/default-collation normalizer
-are now implemented as private `sf-sql` code and used by the guarded rich collector. Relation/column and constraint normalization,
-bounded typed catalogue row decoding, collection caps, exact profile-guard validation, and raw PK/UNIQUE/FK adaptation
-are implemented with adversarial unit coverage. The 2026-09-03 FK operator slice now reads the ordered
-`conpfeqop`, `conppeqop`, and `conffeqop` arrays, resolves the exact `conindid`
-key opclass through `pg_amop`, and requires the strategy-3 search operator,
-binary `pg_catalog.=` Boolean signature, and operand-type coordinates to agree.
-The normalizer admits the one closed `varchar`-source/`text`-default-opclass
-case rather than confusing relation OIDs with type OIDs. Focused unit tests and
-an isolated PostgreSQL 16.15 diagnostic cover integer, character, and composite
-keys; they are development evidence, not a qualification receipt. Exact
-PostgreSQL 16.9/16.15 qualification receipts remain open. Exact per-position
-index shape/collation proof, complete trigger-role multiset proof (including
-self-referencing FKs), disabled-trigger state, and cap-plus-one streaming
-evidence remain implementation gates before profile qualification. The constraint raw-fact contract
-requires explicit decoder proofs for FK type/facet equality, operator shape, trigger structure/action mapping and
-supported action codes, so a later decoder cannot silently infer or weaken those invariants.
-Rich SQL envelopes now bound physical attributes with a per-relation ordinal sentinel, bound trigger aggregates before
-transfer, and suppress oversized constraint key arrays before driver decoding; production availability remains gated on
-the exact qualification receipts.
-The attribute envelope also carries the complete joined `pg_type` identity required by the source-type normalizer and
-the joined collation encoding/determinism fields required by the collation normalizer; absent database-default facts
-are not inferred.
-The guard envelope now carries the current database's provider, locale, ICU, and recorded/actual collation-version
-facts. These facts remain inert until combined with the matching catalog-collation join in the raw-fact adapter.
-The explicitly opt-in observed-snapshot entry point now collects the guarded
-rich profile in the same repeatable-read transaction and can return its branded,
-non-authorizing content identity for development diagnostics. Existing legacy
-entry points remain unchanged. `sf-serve` does not consume this identity and no
-`RuntimeBinding` carries it, so the pre-qualification diagnostic state cannot
-affect compilation, cache identity, readiness, reload, or execution.
+The private, explicitly opt-in Rust adapter now covers one PostgreSQL 16 semantic catalogue contract and can return its
+branded, non-authorizing identity from the same repeatable-read transaction as the legacy projection. PostgreSQL 16.9
+and 16.15 are the initial exact live qualification targets. The adapter implements the exact engine selector, profile
+finalizer, guards, bounded typed row decoding, relation/column/type/default-collation normalization, live NOT NULL
+emission, and raw PK/UNIQUE/FK adaptation. FK proof binds the ordered equality-operator arrays to the exact `conindid`
+B-tree key/opclass/collation positions and strategy-3 `pg_catalog.=` signature. Index key prefixes are exact; only
+resolved positive INCLUDE tails are admitted, while partial, expression, reordered and non-default-opclass indexes
+reject. The four structural trigger roles are checked as a multiset, including self-reference; `O`/`A` are enforced and
+`D`/`R` are valid but not enforced. NOT NULL and catalogue constraints share one 65,536-entry budget, and each bounded
+collector polls at most the single overflow sentinel without decoding or retaining it.
+
+Adversarial unit tests cover those laws. Untracked operator diagnostics against isolated PostgreSQL 16.9 and 16.15
+produced byte-equal baseline digests across patches; disabling one FK trigger changed only the constraint digest,
+dropping NOT NULL changed only the constraint digest, and reversing the referenced key or using `text_pattern_ops`
+failed closed with a redacted unsupported-constraint error. No repository receipt backs those observations. They are
+development diagnostics, not qualification: they did not execute the required twice-per-image networkless,
+non-owner-role, immutable-image and byte-identical protocol.
+
+The current public diagnostic still propagates a rich guard/query/decode/unsupported failure as redacted
+`sf_sql::Error::Introspection` and constructs only an available snapshot. It does not yet implement this ADR's planned
+savepoint recovery, committed `Unavailable` result, or transaction/commit fault matrix. A closed two-replay evidence
+contract binds the future receipt fields and literal non-authority/runtime-gap status, but its executor fails closed
+because the current Rust probe cannot supply the required counts and preflight evidence. Exact PostgreSQL 16.9/16.15
+qualification receipts therefore remain open. Existing legacy entry points are unchanged; `sf-serve` does not consume
+the identity and no `RuntimeBinding` carries it, so it cannot affect compilation, cache identity, readiness, reload or
+execution.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.
@@ -368,7 +361,7 @@ The rich path uses a fixed O(1) query set and no N+1 reads:
 | guard | exactly 1 | exact session/profile values |
 | table-like candidates | `MAX_RELATIONS_V1+1` | candidate/admitted relation cap |
 | positive attributes + type/collation | `MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1+1` | physical per-relation/total and live-column caps, bounded text |
-| `p/u/f` + index/FK-trigger aggregates | `MAX_RAW_CONSTRAINTS_V1+1` | combined NOT NULL/constraint cap, array arity before copy |
+| `p/u/f` + index/FK-trigger aggregates | remaining combined budget + 1 | streamed sentinel before decode; array arity before copy |
 
 `MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1` is 65,536, distinct from the equal-valued
 live-column cap because dropped slots consume only the former. Queries use
@@ -377,6 +370,10 @@ projections and arrays that become NULL plus an overflow flag before oversized
 payload transfer. FK triggers are fixed-size aggregates, not expanded result
 rows; each correlated trigger input stops at five rows (four expected plus one
 overflow sentinel) before aggregation.
+Live NOT NULL facts are emitted first. Their count must not exceed `MAX_RAW_CONSTRAINTS_V1`; the catalogue query then
+receives `remaining=MAX_RAW_CONSTRAINTS_V1-not_null_count` and `LIMIT remaining+1`. The evidence contract records NOT
+NULL, catalogue and combined counts separately, plus each stream's cap, polled, decoded, retained-peak and overflow
+values, so a cap-plus-one row cannot masquerade as decoded or retained input.
 
 `MAX_LEGACY_RELATIONS_PG16_V1` is 4,096. It bounds both snapshot enumeration and caller-supplied table slices. Before
 clone, allocation or SQL, each caller name must be at most 256 UTF-8 bytes and their checked cumulative length at most
@@ -394,29 +391,27 @@ failure. Error precedence among simultaneous defects is not normative.
 
 ### 9. Keep runtime availability closed and non-authorizing
 
-`sf-sql` returns an opaque committed snapshot containing the complete legacy
-vector and either a branded registered whole identity or a closed unavailable
-reason. The new closed algebra has no free-form payload: `Display` and `Debug`
+The completed Phase-2 adapter will return an opaque committed snapshot containing the complete legacy vector and either
+a branded registered whole identity or a closed unavailable reason. The closed algebra has no free-form payload: `Display` and `Debug`
 are at most 256 UTF-8 bytes, contain no identifiers, SQL, connection material,
 paths or values, and `Error::source()` is `None`.
 The top-level variants are `ProfileNotImplemented`, `UnqualifiedEnginePatch`,
 `GuardUnsupported(GuardCodeV1)`, `LegacyCoordinateMismatch`, `CatalogQuery`,
 `CatalogDecode`, `LimitExceeded(LimitCodeV1)`, `UnsupportedRelation`,
 `UnsupportedType`, `UnsupportedCollation`, `UnsupportedConstraint`, and
-`IdentityRejected`. `GuardCodeV1` is `{ServerEncoding, IndexKeyLimit,
-IntegerDatetimes, ReplicationRole, PublicNamespace, CurrentDatabase}`.
+`IdentityRejected`. `GuardCodeV1` is `{ServerEncoding, IdentifierLength, IndexKeyLimit,
+IntegerDatetimes, ReplicationRole, SearchPath, PublicNamespace, CurrentDatabase}`.
 `LimitCodeV1` is `{RichRelations,
 PhysicalAttributes, LiveColumns, RawConstraints, KeyMembers, Facets, TextBytes,
 CanonicalBody}`. Legacy-cap failure is fatal, outside this unavailable algebra.
 Both nested code types are identifier-free enums.
-The public `sf_sql::introspect::observe_postgres16_public_snapshot_v1` returns the opaque snapshot. Existing public
-`sf-sql` functions `introspect_postgres`, `introspect_postgres_all` and
-`introspect_postgres_public_snapshot` preserve their exact `sf_sql::Result` signatures; the public `sf-serve`
-`introspect_pg_all` preserves `Result<Vec<TableSchema>, String>`. All use the bounded legacy collector. Only the
-snapshot functions own a bounded legacy-only transaction; the other two retain caller-supplied transaction semantics.
-None calls the branded API or creates runtime availability. Product startup calls only the new API; explicit callers
-may irreversibly discard its observation through `into_legacy_tables`.
-`sf-serve`'s crate-private PostgreSQL opener consumes the opaque snapshot into an `IntrospectedSource` private
+The target public snapshot API returns that opaque result. Existing legacy `sf-sql` functions `introspect_postgres`,
+`introspect_postgres_all` and `introspect_postgres_public_snapshot` preserve their signatures; public `sf-serve`
+`introspect_pg_all` preserves `Result<Vec<TableSchema>, String>`. They use the bounded legacy collector, and the first
+two retain caller-supplied transaction semantics. Current `introspect_postgres_public_observed_snapshot` invokes the
+branded adapter only as an opt-in diagnostic, returns only success, and propagates rich failure. In the completed design,
+startup calls the availability API and explicit callers may discard its observation through `into_legacy_tables`.
+The planned `sf-serve` crate-private PostgreSQL opener consumes the opaque snapshot into an `IntrospectedSource` private
 `observation: SourceSchemaObservationV1` field. That closed private enum is either `Unavailable` or carries the whole
 `Postgres16PublicObservedSchemaV1`; unchecked, SQLite and MySQL constructors can create only `Unavailable`.
 `RuntimeBinding` gains a private `schema_observation: BoundSourceSchemaObservationV1` field holding backend kind,
@@ -432,75 +427,43 @@ availability diagnostic; it never logs the unavailable cause's source error.
 
 ### Qualification receipt contract
 
-Each qualified engine patch has one canonical, replayable JSON receipt with
-`receiptKind=postgresql-public-observation-qualification-v1` and exactly these
-domains: source commit/tree and Cargo lock digests; ADR/profile/query and test
-input digests; OCI image repository, platform and immutable image digest;
-observed `server_version_num` and `server_version`; guard result; bounded row
-counts and overflow outcomes; structural/type/constraint identity digests;
-legacy-coordinate comparison result; normalized error code (or `null` on
-success); and an overall `replayStatus`. The receipt records no credentials,
-SQL result payloads, OIDs, names or raw catalogue rows. A replay must rerun the
-same pinned image twice in fresh networkless containers, compare every digest
-domain and byte-identical canonical receipt, and accept the patch only when
-both 16.9 and 16.15 receipts pass. Until those receipts exist, the registered
-engine set remains unqualified and runtime admission is unavailable.
+Each qualified engine patch requires one canonical, replayable JSON receipt with
+`receiptKind=postgresql-public-observation-qualification-v1`. It binds source commit/tree and Cargo lock; ADR/profile/
+query/test/fixture/runner/protocol inputs; Rust toolchain and probe artefact; OCI repository, platform, immutable manifest
+and configuration digests; exact server version and role preflight; separate relation, attribute, NOT NULL, catalogue and
+combined-constraint counts; each stream's cap/polled/decoded/retained-peak/overflow/terminal state; the three identities; legacy
+comparison; closed error code plus failure phase, or both `null`; bounded output digests; distinct execution resources; cleanup; and
+`replayStatus`. It contains no credentials, SQL payloads, OIDs, names or raw rows. Replay runs each pinned image twice in
+fresh networkless containers and requires every stable candidate byte to agree. Both 16.9 and 16.15 must pass before
+qualification or admission. Until all runtime gaps close, even a replay pass says `qualificationStatus=withheld-runtime-gaps`.
 
-- exact registry IDs, grammar, backend binding, guard/failure matrix, legacy Vec
-  API compatibility and qualified-patch tests (including unqualified 16.x), plus
-  a PostgreSQL-16 catalogue-column inventory comparison for 16.9 and 16.15;
-- table-driven normalization/rejection for every type class and exact typmod boundary: fixed-type `-1/other`,
-  character 4/5/max/max+1, numeric precision/scale minima/maxima/outside/noncanonical re-encoding, temporal
-  `-2/-1/0/6/7`, digest equality of implicit versus explicit temporal precision 6, overlong `daticurules`, each default
-  collation provider shape and each constraint state;
-- instrumented exact-cap/cap-plus-one tests proving at most cap plus one rows are polled and no oversized text/array is
-  copied; oversized `introspect_postgres_all` input issues zero SQL, keys test 32/33, FK aggregation tests 4/5, and
-  dropped slots consume physical but not live-column capacity;
+- exact registry IDs, grammar, backend binding, guard/failure matrix, legacy Vec compatibility, qualified/unqualified-patch tests, and a PostgreSQL-16 catalogue-column inventory comparison for 16.9 and 16.15;
+- table-driven normalization/rejection for every type and exact typmod boundary: fixed `-1/other`, character 4/5/max/max+1, numeric minima/maxima/outside/noncanonical, temporal `-2/-1/0/6/7`, implicit/explicit precision-6 equality, overlong `daticurules`, each default-collation provider and each constraint state;
+- instrumented exact-cap/cap-plus-one tests proving at most one sentinel is polled and no sentinel or oversized text/array is copied; oversized caller input issues zero SQL, keys test 32/33, FK aggregation 4/5, and dropped slots consume only physical capacity;
 - transaction/redaction/kernel-call fault injection, including fatal legacy caps, failed savepoint recovery and commit;
-- a live/dropped/live matrix proving dense ordinals and PK/UNIQUE/FK remapping; reject dropped/nonzero-type,
-  live/NULL-type, character/NULL-collation, duplicate/gapped/out-of-range `attnum`, `relnatts` mismatch and keys naming
-  a dropped slot, while accepting NULL collation facts for live `attcollation=0`;
-- on both images, prove the comparison role is non-superuser/non-owner, cannot inherit, bypass, `SET ROLE` or DDL, and
-  has only required CONNECT/USAGE/SELECT plus callable `pg_database_collation_actual_version(oid)`; then prove owner
-  identity equality while the role-visible legacy constraint result differs;
-- statistics/data/ACL/owner/OID/name-only noninterference, explicit blind-spot
-  tests, and isolated mutations for each digest domain;
-- unsupported relation/type/collation/constraint and malformed-catalogue cases
-  produce closed unavailability, never partial identity;
-- end-to-end and compile-fail tests prove only the committed opaque snapshot creates `Available`, carrier state and
-  exact backend/`SourceId` survive `IntrospectedSource -> RuntimeBinding`, `into_parts` cannot omit state,
-  unchecked/compatibility/SQLite/MySQL paths cannot inject it, compiler authorities remain `Unverified`, and equal
-  identities in distinct bindings do not merge scopes;
+- a live/dropped/live matrix proving dense ordinals and PK/UNIQUE/FK remapping; reject dropped/nonzero-type, live/NULL-type, character/NULL-collation, duplicate/gapped/out-of-range `attnum`, `relnatts` mismatch and keys naming a dropped slot, while accepting NULL collation facts for live `attcollation=0`;
+- on both images, prove the comparison role is non-superuser/non-owner, cannot inherit, bypass, `SET ROLE` or DDL, and has only required CONNECT/USAGE/SELECT plus callable `pg_database_collation_actual_version(oid)`; then prove owner identity equality while role-visible legacy constraints differ;
+- statistics/data/ACL/owner/OID/name-only noninterference, explicit blind-spot tests, and isolated mutations for each digest domain;
+- unsupported relation/type/collation/constraint and malformed-catalogue cases produce closed unavailability, never partial identity;
+- end-to-end and compile-fail tests prove only the committed opaque snapshot creates `Available`; carrier state and exact backend/`SourceId` survive `IntrospectedSource -> RuntimeBinding`; `into_parts` cannot omit state; unchecked/compatibility/SQLite/MySQL paths cannot inject it; compiler authorities remain `Unverified`; and equal identities in distinct bindings do not merge scopes;
 - deterministic old-or-new DDL barriers without sleeps; and
-- two fresh, ownership-labelled, `--network none` containers for each pinned
-  PostgreSQL 16.9 and 16.15 image digest, with a fixed internal test database,
-  Unix-socket test execution, byte-equal replay summaries and verified cleanup.
+- two fresh, ownership-labelled, `--network none` containers for each pinned PostgreSQL 16.9 and 16.15 digest, with a fixed database, Unix-socket execution, byte-equal replay summaries and verified cleanup.
 
-The tracked receipt binds commit/tree, Cargo lock/toolchain, ADR/profile/query/
-fixture/test/runner bytes, image repository and config digests, `linux/amd64`,
-exact server version, preflight, result and bounded stdout/stderr digests,
-container/volume distinctness and cleanup. It says
-`test-only-non-runtime`, `productionAdmission=false`, `verifiedLease=false`,
-`reload=false`, and `directMapping=false`.
+Any future tracked receipt also binds toolchain, fixture/runner bytes, image configuration, preflight/result, bounded stdout/
+stderr, container/volume distinctness and cleanup. It says `test-only-non-runtime`, `productionAdmission=false`,
+`verifiedLease=false`, `reload=false`, and `directMapping=false`.
 
-No test may connect to, mutate or use the live product-mock database. Static
-product-mock source and semantic-builder gold may inform fixtures but are not
-runtime authority. Existing sealed evidence describes eleven PostgreSQL-16.9
-databases and a `public`-schema table/column inventory, but its inventory query
-permits partitioned relations and omits the richer type, collation, constraint
-and guard checks here.
-It therefore does not qualify any product-mock database for this profile. Each
-database needs separate isolated evidence; later multi-database composition is
-an extension, not an architecture rewrite.
-Node 20/24 MetaHarness checks protect inputs and replay receipts with
-`authority=development-only-no-promotion`, `evolution.eligible=false`, and all
-learning/promotion paths disabled. Node remains outside the product closure.
+No test may connect to, mutate or use live product-mock. Its static source and semantic-builder gold may inform fixtures
+but grant no runtime authority. Existing sealed evidence covers eleven PostgreSQL-16.9 databases and a `public` table/
+column inventory, but permits partitions and omits this profile's type, collation, constraint and guard laws. It qualifies
+no product-mock database; each needs isolated evidence. Multi-database composition is an extension, not a rewrite.
+Node 20/24 MetaHarness protects inputs and replays receipts with development-only authority, evolution ineligible, and
+learning/promotion disabled. Node remains outside the product closure.
 
 ## Consequences
 
 - PostgreSQL gains repeatable rich identity without changing compiler authority or in-bound legacy projection values.
-- Exact scope, type, collation, constraint and collection laws prevent catalogue implementation choices becoming an
-  undocumented wire contract.
+- Exact scope, type, collation, constraint and collection laws prevent catalogue implementation choices becoming an undocumented wire contract.
 - Dense ordinals reconcile dropped PostgreSQL attributes with Appendix A.
 - Initial availability is narrow; unsupported schemas retain serving behavior but expose a redacted unavailable status.
 - Extreme legacy catalogues that exceed the new safety caps fail startup rather than consuming unbounded memory.
@@ -510,20 +473,17 @@ learning/promotion paths disabled. Node remains outside the product closure.
 
 - **Hash `TableSchema`** — lossy, unqualified and statistics-sensitive.
 - **Use `information_schema` for identity** — privilege-filtered and role-variant.
-- **Derive the legacy DTO from rich rows now** — risks changing compiler display
-  types and serving behavior during an observational phase.
+- **Derive the legacy DTO from rich rows now** — risks changing compiler display types and serving behavior during an observational phase.
 - **Let callers attach a digest** — the pure builder is not provenance.
 - **Use raw `attnum` as V1 ordinal** — dropped columns violate continuity.
 - **Silently filter table-like candidates** — produces falsely complete scope.
-- **Hash an actual-collation function result directly** — makes an ephemeral
-  host probe a durable input; the recorded catalogue version is hashed instead.
+- **Hash an actual-collation function result directly** — makes an ephemeral host probe a durable input; the recorded catalogue version is hashed instead.
 
 ## Rules
 
 - **R1** — only the closed PostgreSQL adapter publishes availability; compatibility APIs never do.
 - **R2** — identity uses bounded `pg_catalog` facts from the committed legacy repeatable-read snapshot.
-- **R3** — transient PostgreSQL identifiers never enter digests; live columns use dense ordinals and database name is
-  source binding only.
+- **R3** — transient PostgreSQL identifiers never enter digests; live columns use dense ordinals and database name is source binding only.
 - **R4** — unsupported or incomplete observations never emit partial/stale identity or upgrade compiler authority.
 - **R5** — product/runtime implementation is Rust; Node is evidence-only.
 - **R6** — Phase-2 downgrade is permitted only while identity is non-authorizing; a requiring phase fails closed.

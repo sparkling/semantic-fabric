@@ -35,16 +35,218 @@ pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "WITH bounded AS (SELECT \
  WHERE n.nspname=$1 AND c.relkind IN ('r','p','f') AND a.attnum > 0) \
  SELECT bounded.*, (bounded.sf_physical_ordinal=1601) AS sf_physical_overflow FROM bounded WHERE bounded.sf_physical_ordinal <= 1601 ORDER BY bounded.relation_oid, bounded.attnum LIMIT $3";
 
-pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = "SELECT \
- con.oid AS constraint_oid, con.contype::text AS contype, con.conrelid AS child_oid, con.confrelid AS parent_oid, \
- con.convalidated, con.condeferrable, con.condeferred, CASE WHEN pg_catalog.cardinality(con.conkey) <= 32 THEN con.conkey ELSE NULL::int2[] END AS conkey, CASE WHEN pg_catalog.cardinality(con.confkey) <= 32 THEN con.confkey ELSE NULL::int2[] END AS confkey, con.conindid, con.confmatchtype::text AS confmatchtype, con.confupdtype::text AS confupdtype, con.confdeltype::text AS confdeltype, \
- COALESCE(i.indisprimary,fi.indisprimary) AS indisprimary, COALESCE(i.indisunique,fi.indisunique) AS indisunique, COALESCE(i.indisvalid,fi.indisvalid) AS indisvalid, COALESCE(i.indisready,fi.indisready) AS indisready, COALESCE(i.indislive,fi.indislive) AS indislive, COALESCE(i.indimmediate,fi.indimmediate) AS indimmediate, COALESCE(i.indnkeyatts,fi.indnkeyatts) AS indnkeyatts, COALESCE(i.indnatts,fi.indnatts) AS indnatts, COALESCE(i.indkey::int2[],fi.indkey::int2[]) AS indkey, COALESCE(i.indclass::oid[],fi.indclass::oid[]) AS indclass, COALESCE(i.indcollation::oid[],fi.indcollation::oid[]) AS indcollation, COALESCE(i.indnullsnotdistinct,fi.indnullsnotdistinct) AS indnullsnotdistinct, am.amname AS index_access_method, COALESCE((SELECT pg_catalog.bool_and(opc.opcdefault AND opc.opcnamespace=(SELECT ns.oid FROM pg_catalog.pg_namespace ns WHERE ns.nspname='pg_catalog') AND opc.opcmethod=am.oid) FROM pg_catalog.unnest(COALESCE(fi.indclass, i.indclass)) AS cls(opclass_oid) JOIN pg_catalog.pg_opclass opc ON opc.oid=cls.opclass_oid), false) AS index_opclass_default, \
- COALESCE((pg_catalog.cardinality(con.conkey) IS NULL OR pg_catalog.cardinality(con.conkey)=0 OR pg_catalog.cardinality(con.conkey)>32 OR pg_catalog.cardinality(con.confkey)>32), false) AS sf_array_overflow, \
- COALESCE(pg_catalog.cardinality(tr.trigger_oids) > 4, false) AS sf_trigger_overflow, tr.trigger_oids, tr.trigger_shape_valid, tr.trigger_all_enabled, tr.trigger_functions_valid, op.operator_oids, op.search_operator_oids, op.operator_complete, op.types_and_facets_equal, op.operator_left_type_oids, op.operator_right_type_oids \
- FROM pg_catalog.pg_constraint con LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid LEFT JOIN LATERAL (SELECT pi.* FROM pg_catalog.pg_index pi WHERE con.contype='f' AND pi.indrelid=con.confrelid AND pi.indisunique AND pi.indisvalid AND pi.indkey::int2[]=con.confkey ORDER BY pi.indexrelid LIMIT 1) fi ON true LEFT JOIN pg_catalog.pg_class idx ON idx.oid=COALESCE(con.conindid, fi.indexrelid) LEFT JOIN pg_catalog.pg_am am ON am.oid=idx.relam \
- LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(t.oid ORDER BY t.oid) AS trigger_oids, COALESCE(count(*)=4 AND bool_and(t.tgconstrindid=con.conindid AND ((t.tgtype=5 AND t.tgrelid=con.conrelid AND t.tgconstrrelid=con.confrelid) OR (t.tgtype=17 AND t.tgrelid=con.conrelid AND t.tgconstrrelid=con.confrelid) OR (t.tgtype=9 AND t.tgrelid=con.confrelid AND t.tgconstrrelid=con.conrelid) OR (t.tgtype=17 AND t.tgrelid=con.confrelid AND t.tgconstrrelid=con.conrelid)) AND t.tgparentid=0 AND t.tgisinternal AND NOT t.tgdeferrable AND NOT t.tginitdeferred AND t.tgnargs=0 AND pg_catalog.cardinality(t.tgattr)=0 AND t.tgqual IS NULL AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL), false) AS trigger_shape_valid, COALESCE(count(*)=4 AND bool_and(t.tgenabled IN ('O','A')), false) AS trigger_all_enabled, COALESCE(count(*)=4 AND bool_and(t.pronamespace=(SELECT ns.oid FROM pg_catalog.pg_namespace ns WHERE ns.nspname='pg_catalog') AND t.pronargs=0 AND t.prorettype='trigger'::pg_catalog.regtype AND ((t.tgtype=5 AND t.tgrelid=con.conrelid AND t.proname='RI_FKey_check_ins') OR (t.tgtype=17 AND t.tgrelid=con.conrelid AND t.proname='RI_FKey_check_upd') OR (t.tgtype=9 AND t.tgrelid=con.confrelid AND t.proname=CASE con.confdeltype WHEN 'a' THEN 'RI_FKey_noaction_del' WHEN 'r' THEN 'RI_FKey_restrict_del' WHEN 'c' THEN 'RI_FKey_cascade_del' WHEN 'n' THEN 'RI_FKey_setnull_del' WHEN 'd' THEN 'RI_FKey_setdefault_del' END) OR (t.tgtype=17 AND t.tgrelid=con.confrelid AND t.proname=CASE con.confupdtype WHEN 'a' THEN 'RI_FKey_noaction_upd' WHEN 'r' THEN 'RI_FKey_restrict_upd' WHEN 'c' THEN 'RI_FKey_cascade_upd' WHEN 'n' THEN 'RI_FKey_setnull_upd' WHEN 'd' THEN 'RI_FKey_setdefault_upd' END))), false) AS trigger_functions_valid FROM (SELECT t.*, p.pronamespace, p.pronargs, p.prorettype, p.proname FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid WHERE t.tgconstraint=con.oid ORDER BY t.oid LIMIT 5) t) tr ON true \
- LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(pf.oid ORDER BY s.n) AS operator_oids, pg_catalog.array_agg(amop.amopopr ORDER BY s.n) AS search_operator_oids, pg_catalog.array_agg(pf.oprleft ORDER BY s.n) AS operator_left_type_oids, pg_catalog.array_agg(pf.oprright ORDER BY s.n) AS operator_right_type_oids, COALESCE(count(*)=pg_catalog.cardinality(con.conkey) AND pg_catalog.cardinality(con.conpfeqop)=pg_catalog.cardinality(con.conkey) AND pg_catalog.cardinality(con.conppeqop)=pg_catalog.cardinality(con.conkey) AND pg_catalog.cardinality(con.conffeqop)=pg_catalog.cardinality(con.conkey) AND bool_and(pf.oid=pp.oid AND pf.oid=ff.oid AND pf.oid=amop.amopopr), false) AS operator_complete, COALESCE(bool_and(ct.oid=pt.oid AND ct.typbasetype=pt.typbasetype AND ct.typtypmod=pt.typtypmod AND ca.atttypmod=pa.atttypmod AND ca.attndims=pa.attndims AND ca.attcollation=pa.attcollation), false) AS types_and_facets_equal FROM pg_catalog.generate_subscripts(CASE WHEN con.contype='f' AND pg_catalog.cardinality(con.conkey) BETWEEN 1 AND 32 AND pg_catalog.cardinality(con.confkey)=pg_catalog.cardinality(con.conkey) AND pg_catalog.cardinality(con.conpfeqop)=pg_catalog.cardinality(con.conkey) AND pg_catalog.cardinality(con.conppeqop)=pg_catalog.cardinality(con.conkey) AND pg_catalog.cardinality(con.conffeqop)=pg_catalog.cardinality(con.conkey) THEN con.conkey ELSE NULL::int2[] END, 1) AS s(n) JOIN pg_catalog.pg_attribute ca ON ca.attrelid=con.conrelid AND ca.attnum=con.conkey[s.n] JOIN pg_catalog.pg_attribute pa ON pa.attrelid=con.confrelid AND pa.attnum=con.confkey[s.n] JOIN pg_catalog.pg_type ct ON ct.oid=ca.atttypid JOIN pg_catalog.pg_type pt ON pt.oid=pa.atttypid JOIN pg_catalog.pg_operator pf ON pf.oid=con.conpfeqop[s.n] AND pf.oprname='=' AND pf.oprkind='b' AND pf.oprresult='bool'::pg_catalog.regtype JOIN pg_catalog.pg_operator pp ON pp.oid=con.conppeqop[s.n] JOIN pg_catalog.pg_operator ff ON ff.oid=con.conffeqop[s.n] JOIN pg_catalog.pg_namespace opns ON opns.oid=pf.oprnamespace AND opns.nspname='pg_catalog' JOIN pg_catalog.pg_index pi ON pi.indexrelid=con.conindid JOIN LATERAL pg_catalog.unnest(pi.indclass) WITH ORDINALITY AS ic(opclass_oid,n) ON ic.n=s.n JOIN pg_catalog.pg_opclass opc ON opc.oid=ic.opclass_oid JOIN pg_catalog.pg_amop amop ON amop.amopfamily=opc.opcfamily AND amop.amopstrategy=3 AND amop.amoppurpose='s' AND amop.amopmethod=opc.opcmethod AND amop.amoplefttype=opc.opcintype AND amop.amoprighttype=opc.opcintype WHERE pf.oprleft=opc.opcintype AND pf.oprright=opc.opcintype) op ON true \
- WHERE con.contype IN ('p','u','f') AND EXISTS (SELECT 1 FROM pg_catalog.pg_class cc JOIN pg_catalog.pg_namespace cn ON cn.oid=cc.relnamespace WHERE cc.oid=con.conrelid AND cn.nspname=$1) ORDER BY con.conrelid, con.oid LIMIT $2";
+pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = r#"
+SELECT
+ con.oid AS constraint_oid, con.contype::text AS contype,
+ con.conrelid AS child_oid, con.confrelid AS parent_oid,
+ con.convalidated, con.condeferrable, con.condeferred,
+ con.contypid, con.conparentid, con.conislocal, con.coninhcount,
+ CASE WHEN pg_catalog.cardinality(con.conkey) <= 32
+      THEN con.conkey ELSE NULL::int2[] END AS conkey,
+ CASE WHEN pg_catalog.cardinality(con.confkey) <= 32
+      THEN con.confkey ELSE NULL::int2[] END AS confkey,
+ con.conindid AS selected_index_oid,
+ con.confmatchtype::text AS confmatchtype,
+ con.confupdtype::text AS confupdtype,
+ con.confdeltype::text AS confdeltype,
+ i.indexrelid AS joined_index_oid, i.indrelid AS index_relation_oid,
+ i.indisprimary, i.indisunique, i.indisvalid, i.indisready,
+ i.indislive, i.indimmediate, i.indnkeyatts, i.indnatts,
+ CASE WHEN pg_catalog.cardinality(i.indkey::int2[]) <= 32
+      THEN i.indkey::int2[] ELSE NULL::int2[] END AS indkey,
+ i.indnullsnotdistinct,
+ am.amname::text AS index_access_method, am.amtype::text AS index_access_method_type,
+ CASE WHEN i.indexrelid IS NULL THEN NULL::bool ELSE i.indexprs IS NULL END
+   AS index_expressions_absent,
+ CASE WHEN i.indexrelid IS NULL THEN NULL::bool ELSE i.indpred IS NULL END
+   AS index_predicate_absent,
+ ip.index_opclass_oids, ip.index_opclass_input_type_oids,
+ ip.index_collation_oids, ip.index_position_exact_flags,
+ COALESCE(
+   pg_catalog.cardinality(con.conkey) IS NULL
+   OR pg_catalog.cardinality(con.conkey)=0
+   OR pg_catalog.cardinality(con.conkey)>32
+   OR pg_catalog.cardinality(con.confkey)>32
+   OR i.indnatts>32
+   OR pg_catalog.cardinality(i.indkey::int2[])>32
+   OR pg_catalog.cardinality(i.indclass::oid[])>32
+   OR pg_catalog.cardinality(i.indcollation::oid[])>32,
+   false
+ ) AS sf_array_overflow,
+ COALESCE(pg_catalog.cardinality(tr.trigger_role_codes)>4, false)
+   AS sf_trigger_overflow,
+ tr.trigger_role_codes, tr.trigger_enabled_codes,
+ op.operator_oids, op.search_operator_oids, op.operator_opclass_oids,
+ op.operator_complete, op.types_and_facets_equal,
+ op.operator_left_type_oids, op.operator_right_type_oids
+FROM pg_catalog.pg_constraint con
+LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid
+LEFT JOIN pg_catalog.pg_class idx ON idx.oid=i.indexrelid
+LEFT JOIN pg_catalog.pg_am am ON am.oid=idx.relam
+LEFT JOIN LATERAL (
+ SELECT
+  pg_catalog.array_agg(k.opclass_oid ORDER BY k.n) AS index_opclass_oids,
+  pg_catalog.array_agg(opc.opcintype ORDER BY k.n)
+    AS index_opclass_input_type_oids,
+  pg_catalog.array_agg(k.index_collation_oid ORDER BY k.n)
+    AS index_collation_oids,
+  pg_catalog.array_agg(COALESCE(
+    k.attnum>0
+    AND opc.opcmethod=am.oid
+    AND opc.opcdefault
+    AND opcns.nspname='pg_catalog'
+    AND am.amname='btree'
+    AND am.amtype='i'
+    AND k.index_collation_oid=pa.attcollation
+    AND (opc.opcintype=pa.atttypid
+         OR (pa.atttypid=1043 AND opc.opcintype=25)),
+    false
+  ) ORDER BY k.n) AS index_position_exact_flags
+ FROM ROWS FROM (
+   pg_catalog.unnest(i.indkey::int2[]),
+   pg_catalog.unnest(i.indclass::oid[]),
+   pg_catalog.unnest(i.indcollation::oid[])
+ ) WITH ORDINALITY AS k(attnum,opclass_oid,index_collation_oid,n)
+ JOIN pg_catalog.pg_attribute pa
+   ON pa.attrelid=i.indrelid AND pa.attnum=k.attnum
+ JOIN pg_catalog.pg_opclass opc ON opc.oid=k.opclass_oid
+ JOIN pg_catalog.pg_namespace opcns ON opcns.oid=opc.opcnamespace
+ WHERE k.n<=i.indnkeyatts
+) ip ON i.indexrelid IS NOT NULL
+LEFT JOIN LATERAL (
+ SELECT
+  pg_catalog.array_agg((CASE
+   WHEN x.common_shape AND x.function_shape
+    AND x.tgtype=5 AND x.tgrelid=con.conrelid
+    AND x.tgconstrrelid=con.confrelid
+    AND x.proname='RI_FKey_check_ins' THEN 1
+   WHEN x.common_shape AND x.function_shape
+    AND x.tgtype=17 AND x.tgrelid=con.conrelid
+    AND x.tgconstrrelid=con.confrelid
+    AND x.proname='RI_FKey_check_upd' THEN 2
+   WHEN x.common_shape AND x.function_shape
+    AND x.tgtype=9 AND x.tgrelid=con.confrelid
+    AND x.tgconstrrelid=con.conrelid
+    AND x.proname=CASE con.confdeltype
+      WHEN 'a' THEN 'RI_FKey_noaction_del'
+      WHEN 'r' THEN 'RI_FKey_restrict_del'
+      WHEN 'c' THEN 'RI_FKey_cascade_del'
+      WHEN 'n' THEN 'RI_FKey_setnull_del'
+      WHEN 'd' THEN 'RI_FKey_setdefault_del' END THEN 3
+   WHEN x.common_shape AND x.function_shape
+    AND x.tgtype=17 AND x.tgrelid=con.confrelid
+    AND x.tgconstrrelid=con.conrelid
+    AND x.proname=CASE con.confupdtype
+      WHEN 'a' THEN 'RI_FKey_noaction_upd'
+      WHEN 'r' THEN 'RI_FKey_restrict_upd'
+      WHEN 'c' THEN 'RI_FKey_cascade_upd'
+      WHEN 'n' THEN 'RI_FKey_setnull_upd'
+      WHEN 'd' THEN 'RI_FKey_setdefault_upd' END THEN 4
+   ELSE 0 END)::int2 ORDER BY x.oid) AS trigger_role_codes,
+  pg_catalog.array_agg((CASE x.tgenabled
+    WHEN 'O' THEN 1 WHEN 'A' THEN 1
+    WHEN 'D' THEN 0 WHEN 'R' THEN 0
+    ELSE -1 END)::int2 ORDER BY x.oid) AS trigger_enabled_codes
+ FROM (
+  SELECT t.*,
+   (t.tgconstrindid=con.conindid
+    AND t.tgparentid=0
+    AND t.tgisinternal
+    AND NOT t.tgdeferrable
+    AND NOT t.tginitdeferred
+    AND t.tgnargs=0
+    AND pg_catalog.octet_length(t.tgargs)=0
+    AND pg_catalog.cardinality(t.tgattr)=0
+    AND t.tgqual IS NULL
+    AND t.tgoldtable IS NULL
+    AND t.tgnewtable IS NULL) AS common_shape,
+   (p.oid IS NOT NULL
+    AND pns.nspname='pg_catalog'
+    AND p.prokind='f'
+    AND NOT p.proretset
+    AND p.pronargs=0
+    AND pg_catalog.cardinality(p.proargtypes::oid[])=0
+    AND rtns.nspname='pg_catalog'
+    AND rt.typname='trigger') AS function_shape,
+   p.proname
+  FROM (
+   SELECT t.* FROM pg_catalog.pg_trigger t
+   WHERE t.tgconstraint=con.oid ORDER BY t.oid LIMIT 5
+  ) t
+  LEFT JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
+  LEFT JOIN pg_catalog.pg_namespace pns ON pns.oid=p.pronamespace
+  LEFT JOIN pg_catalog.pg_type rt ON rt.oid=p.prorettype
+  LEFT JOIN pg_catalog.pg_namespace rtns ON rtns.oid=rt.typnamespace
+ ) x
+) tr ON con.contype='f'
+LEFT JOIN LATERAL (
+ SELECT
+  pg_catalog.array_agg(pf.oid ORDER BY s.n) AS operator_oids,
+  pg_catalog.array_agg(amop.amopopr ORDER BY s.n) AS search_operator_oids,
+  pg_catalog.array_agg(opc.oid ORDER BY s.n) AS operator_opclass_oids,
+  pg_catalog.array_agg(pf.oprleft ORDER BY s.n) AS operator_left_type_oids,
+  pg_catalog.array_agg(pf.oprright ORDER BY s.n) AS operator_right_type_oids,
+  COALESCE(
+   count(*)=pg_catalog.cardinality(con.conkey)
+   AND pg_catalog.cardinality(con.conpfeqop)=pg_catalog.cardinality(con.conkey)
+   AND pg_catalog.cardinality(con.conppeqop)=pg_catalog.cardinality(con.conkey)
+   AND pg_catalog.cardinality(con.conffeqop)=pg_catalog.cardinality(con.conkey)
+   AND pg_catalog.bool_and(
+    pf.oid=pp.oid AND pf.oid=ff.oid AND pf.oid=amop.amopopr
+   ), false
+  ) AS operator_complete,
+  COALESCE(pg_catalog.bool_and(
+   ct.oid=pt.oid
+   AND ct.typbasetype=pt.typbasetype
+   AND ct.typtypmod=pt.typtypmod
+   AND ca.atttypmod=pa.atttypmod
+   AND ca.attndims=pa.attndims
+   AND ca.attcollation=pa.attcollation
+  ), false) AS types_and_facets_equal
+ FROM pg_catalog.generate_subscripts(
+  CASE WHEN con.contype='f'
+    AND pg_catalog.cardinality(con.conkey) BETWEEN 1 AND 32
+    AND pg_catalog.cardinality(con.confkey)=pg_catalog.cardinality(con.conkey)
+    AND pg_catalog.cardinality(con.conpfeqop)=pg_catalog.cardinality(con.conkey)
+    AND pg_catalog.cardinality(con.conppeqop)=pg_catalog.cardinality(con.conkey)
+    AND pg_catalog.cardinality(con.conffeqop)=pg_catalog.cardinality(con.conkey)
+   THEN con.conkey ELSE NULL::int2[] END, 1
+ ) AS s(n)
+ JOIN pg_catalog.pg_attribute ca
+   ON ca.attrelid=con.conrelid AND ca.attnum=con.conkey[s.n]
+ JOIN pg_catalog.pg_attribute pa
+   ON pa.attrelid=con.confrelid AND pa.attnum=con.confkey[s.n]
+ JOIN pg_catalog.pg_type ct ON ct.oid=ca.atttypid
+ JOIN pg_catalog.pg_type pt ON pt.oid=pa.atttypid
+ JOIN pg_catalog.pg_operator pf
+   ON pf.oid=con.conpfeqop[s.n]
+  AND pf.oprname='=' AND pf.oprkind='b'
+  AND pf.oprresult='bool'::pg_catalog.regtype
+ JOIN pg_catalog.pg_operator pp ON pp.oid=con.conppeqop[s.n]
+ JOIN pg_catalog.pg_operator ff ON ff.oid=con.conffeqop[s.n]
+ JOIN pg_catalog.pg_namespace opns
+   ON opns.oid=pf.oprnamespace AND opns.nspname='pg_catalog'
+ JOIN LATERAL pg_catalog.unnest(i.indclass) WITH ORDINALITY
+   AS ic(opclass_oid,n) ON ic.n=s.n
+ JOIN pg_catalog.pg_opclass opc ON opc.oid=ic.opclass_oid
+ JOIN pg_catalog.pg_amop amop
+   ON amop.amopfamily=opc.opcfamily
+  AND amop.amopstrategy=3
+  AND amop.amoppurpose='s'
+  AND amop.amopmethod=opc.opcmethod
+  AND amop.amoplefttype=opc.opcintype
+  AND amop.amoprighttype=opc.opcintype
+ WHERE pf.oprleft=opc.opcintype AND pf.oprright=opc.opcintype
+) op ON con.contype='f'
+WHERE con.contype IN ('p','u','f')
+ AND EXISTS (
+  SELECT 1 FROM pg_catalog.pg_class cc
+  JOIN pg_catalog.pg_namespace cn ON cn.oid=cc.relnamespace
+  WHERE cc.oid=con.conrelid AND cn.nspname=$1
+ )
+ORDER BY con.conrelid, con.oid
+LIMIT $2
+"#;
 
 #[cfg(test)]
 mod tests {
@@ -94,9 +296,11 @@ mod tests {
             "confkey",
             "sf_array_overflow",
             "sf_trigger_overflow",
-            "trigger_oids",
+            "trigger_role_codes",
+            "trigger_enabled_codes",
             "operator_oids",
             "search_operator_oids",
+            "operator_opclass_oids",
             "operator_complete",
             "types_and_facets_equal",
             "operator_left_type_oids",
@@ -109,19 +313,54 @@ mod tests {
             "amop.amopstrategy=3",
             "amop.amoppurpose='s'",
             "pf.oprkind='b'",
-            "trigger_functions_valid",
             "index_access_method",
-            "index_opclass_default",
-            "trigger_shape_valid",
-            "trigger_all_enabled",
+            "index_position_exact_flags",
             "LIMIT $2",
         ] {
             assert!(RICH_CONSTRAINTS_SQL_V1.contains(field));
         }
-        assert!(RICH_CONSTRAINTS_SQL_V1.contains("cardinality(tr.trigger_oids) > 4"));
+        assert!(RICH_CONSTRAINTS_SQL_V1.contains("cardinality(tr.trigger_role_codes)>4"));
         assert!(RICH_CONSTRAINTS_SQL_V1.contains("ORDER BY t.oid LIMIT 5"));
         assert!(RICH_CONSTRAINTS_SQL_V1.contains("cardinality(con.conkey) <= 32"));
         assert!(!RICH_CONSTRAINTS_SQL_V1.contains("eq.oprleft=ca.atttypid"));
+    }
+
+    #[test]
+    fn constraint_query_binds_exact_selected_index_position_evidence() {
+        for proof in [
+            "i.indexrelid=con.conindid",
+            "joined_index_oid",
+            "index_relation_oid",
+            "i.indnatts",
+            "i.indexprs IS NULL",
+            "i.indpred IS NULL",
+            "am.amtype",
+            "index_opclass_oids",
+            "index_opclass_input_type_oids",
+            "index_collation_oids",
+            "WITH ORDINALITY",
+        ] {
+            assert!(RICH_CONSTRAINTS_SQL_V1.contains(proof), "missing {proof}");
+        }
+        assert!(!RICH_CONSTRAINTS_SQL_V1.contains(" fi "));
+        assert!(!RICH_CONSTRAINTS_SQL_V1.contains("fi."));
+    }
+
+    #[test]
+    fn constraint_query_emits_an_exact_bounded_trigger_role_multiset() {
+        for proof in [
+            "trigger_role_codes",
+            "trigger_enabled_codes",
+            "pg_catalog.octet_length(t.tgargs)=0",
+            "p.prokind='f'",
+            "NOT p.proretset",
+            "LEFT JOIN pg_catalog.pg_proc",
+        ] {
+            assert!(RICH_CONSTRAINTS_SQL_V1.contains(proof), "missing {proof}");
+        }
+        assert!(RICH_CONSTRAINTS_SQL_V1.contains("ORDER BY t.oid LIMIT 5"));
+        assert!(!RICH_CONSTRAINTS_SQL_V1.contains("trigger_shape_valid"));
+        assert!(!RICH_CONSTRAINTS_SQL_V1.contains("trigger_functions_valid"));
     }
 
     #[test]

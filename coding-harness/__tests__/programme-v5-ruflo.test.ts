@@ -237,7 +237,7 @@ describe('programme v5 local Ruflo MCP collector', () => {
     }
   }, 20_000);
 
-  nativeIt('fails when a cooperative ledger source changes during the full snapshot', async () => {
+  nativeIt('fails closed when a cooperative ledger mutator races the full snapshot', async () => {
     const root = await mkdtemp(join(tmpdir(), 'semantic-fabric-ruflo-race-'));
     const taskStore = join(root, '.claude-flow', 'tasks', 'store.json');
     let runtime: ProgrammeV5RufloPrivateRuntime | undefined;
@@ -259,7 +259,7 @@ describe('programme v5 local Ruflo MCP collector', () => {
       });
       expect(() => {
         runtime = createProgrammeV5RufloPrivateRuntime(root);
-      }).toThrow('HARNESS_IMMUTABLE_RUNTIME_SOURCE_CHANGED');
+      }).toThrow(/HARNESS_IMMUTABLE_RUNTIME_SOURCE_(?:CHANGED|UNTRUSTED)/);
       expect(await completed).toBe(0);
     } finally {
       runtime?.cleanup();

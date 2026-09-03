@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-02
-updated: 2026-09-02
+updated: 2026-09-03
 tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
@@ -15,10 +15,15 @@ implements: [ADR-0038]
 This ADR remains **proposed** for lifecycle phases 2 through 6. Its Phase 1 pure
 `sf-core` Observed Schema Identity V1 kernel is implemented as a non-authorizing
 content-identity utility. [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md)
-now proposes the first closed production-shaped profile, but no adapter can yet
-emit or carry its digests. This implementation does not accept the remaining
-design or claim that a runtime snapshot manager, reload, drift detection, a
-backend-generation lease, or live Direct Mapping exists.
+now proposes the first closed production-shaped profile. Its private, opt-in
+`sf-sql` diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after
+bounded rich observation, but its two-version operator observations are
+untracked and its evidence runner explicitly withholds qualification. The
+planned committed-unavailability path is incomplete, and no serving binding
+carries the digests.
+This does not accept the remaining design or claim that a runtime snapshot
+manager, reload, drift detection, a backend-generation lease, or live Direct
+Mapping exists.
 
 The current Rust serving path safely owns one startup mapping, ontology,
 constraint/type-quarantined schema observation, backend and plan cache inside a
@@ -26,8 +31,9 @@ single `RuntimeBinding`. Its process-local compile scope prevents detached-plan
 reuse. PostgreSQL catalogue reads use one read-only repeatable-read startup
 transaction. Those are sound precursors, not a mutable-schema authority: the
 transaction ends before compilation and streamed execution, later requests may
-use another pooled connection, and there is no adapter-emitted digest, runtime
-digest propagation, watcher, readiness transition or atomic replacement path.
+use another pooled connection, and there is no adapter-emitted runtime
+authority, serving digest propagation, watcher, readiness transition or atomic
+replacement path.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,

@@ -67,19 +67,40 @@ pub(super) struct Postgres16RawForeignKeyV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Postgres16RawIndexV1 {
+    /// Index OID selected by the owning `pg_constraint.conindid` row.
+    pub(super) selected_oid: u32,
+    /// Index OID observed through the exact `pg_index` join.
+    pub(super) observed_oid: u32,
     pub(super) relation_oid: u32,
-    pub(super) key_attnums: Vec<i16>,
+    pub(super) key_count: i16,
+    pub(super) total_attribute_count: i16,
+    /// Complete `indkey`: semantic keys followed by identity-invisible INCLUDE columns.
+    pub(super) all_attnums: Vec<i16>,
+    pub(super) key_positions: Vec<Postgres16RawIndexPositionV1>,
     pub(super) unique: bool,
     pub(super) primary: bool,
     pub(super) valid: bool,
     pub(super) ready: bool,
     pub(super) live: bool,
     pub(super) immediate: bool,
-    pub(super) btree_default: bool,
+    pub(super) access_method_exact: bool,
+    pub(super) expressions_absent: bool,
+    pub(super) predicate_absent: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Postgres16RawIndexPositionV1 {
+    pub(super) attnum: i16,
+    pub(super) opclass_oid: u32,
+    pub(super) opclass_input_type_oid: u32,
+    pub(super) collation_oid: u32,
+    /// Exact built-in `pg_catalog` default B-tree opclass proof.
+    pub(super) default_btree: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Postgres16RawEqualityOperatorV1 {
+    pub(super) opclass_oid: u32,
     pub(super) parent_operand_type_oid: u32,
     pub(super) child_operand_type_oid: u32,
     pub(super) selected_oid: u32,
@@ -94,6 +115,33 @@ pub(super) struct Postgres16RawForeignKeyTriggersV1 {
     pub(super) parent_delete_ok: bool,
     pub(super) parent_update_ok: bool,
     pub(super) all_enabled: bool,
+}
+
+pub(super) fn observed_not_null_constraints_v1(
+    relations: &Postgres16NormalizedRelationsV1,
+) -> Result<Vec<Postgres16RawConstraintV1>, PostgresSchemaIdentityUnavailableV1> {
+    let mut constraints = Vec::new();
+    for (relation_oid, relation) in &relations.coordinates_by_relation_oid {
+        for (attnum, coordinate) in &relation.attributes_by_number {
+            let super::relation::Postgres16AttributeCoordinateV1::Live(column) = coordinate else {
+                continue;
+            };
+            if !column.is_not_null {
+                continue;
+            }
+            if constraints.len() == MAX_CONSTRAINTS {
+                return Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
+                    PostgresSchemaIdentityLimitCodeV1::RawConstraints,
+                ));
+            }
+            constraints.push(Postgres16RawConstraintV1::NotNull {
+                relation_oid: *relation_oid,
+                attnum: *attnum,
+                validated: true,
+            });
+        }
+    }
+    Ok(constraints)
 }
 
 pub(super) fn normalize_postgres16_constraints_v1(
@@ -135,7 +183,7 @@ pub(super) fn normalize_postgres16_constraints_v1(
             Postgres16RawConstraintV1::Unique(unique) => {
                 let relation = relation_of(relations, unique.key.relation_oid)?;
                 let columns = key_columns(relations, unique.key.relation_oid, &unique.key.attnums)?;
-                validate_index(&unique.key, true, false)?;
+                validate_index(relations, &unique.key, true, false)?;
                 ConstraintInputV1::UniqueKey {
                     relation,
                     state: state(unique.key.validated, unique.key.enforced),
@@ -164,7 +212,7 @@ fn key_constraint(
 ) -> Result<ConstraintInputV1, PostgresSchemaIdentityUnavailableV1> {
     let relation = relation_of(r, k.relation_oid)?;
     let columns = key_columns(r, k.relation_oid, &k.attnums)?;
-    validate_index(&k, true, primary)?;
+    validate_index(r, &k, true, primary)?;
     if primary
         && k.attnums.iter().any(|attnum| {
             r.live_column_by_number(k.relation_oid, *attnum)
@@ -197,7 +245,7 @@ fn foreign_key(
     let parent = relation_of(r, f.parent_oid)?;
     let child_columns = key_columns(r, f.child_oid, &f.child_attnums)?;
     let parent_columns = key_columns(r, f.parent_oid, &f.parent_attnums)?;
-    validate_index_shape(&f.parent_index, f.parent_oid, &f.parent_attnums)?;
+    validate_index_shape(r, &f.parent_index, f.parent_oid, &f.parent_attnums)?;
     if !f.parent_index.unique || !f.parent_index.immediate {
         return Err(unsupported());
     }
@@ -212,7 +260,7 @@ fn foreign_key(
     {
         return Err(unsupported());
     }
-    if !f.triggers.all_enabled || !operators_match_columns(r, &f) {
+    if !operators_match_columns(r, &f) {
         return Err(unsupported());
     }
     if duplicate_columns(&child_columns) || duplicate_columns(&parent_columns) {
@@ -240,30 +288,35 @@ fn operators_match_columns(
         .iter()
         .zip(&fk.child_attnums)
         .zip(&fk.parent_attnums)
-        .all(|((operator, child_attnum), parent_attnum)| {
-            let Some((child, child_coordinate)) =
-                relations.live_column_by_number(fk.child_oid, *child_attnum)
-            else {
-                return false;
-            };
-            let Some((parent, parent_coordinate)) =
-                relations.live_column_by_number(fk.parent_oid, *parent_attnum)
-            else {
-                return false;
-            };
-            child.source_type == parent.source_type
-                && operand_matches_source_type(
-                    operator.child_operand_type_oid,
-                    child_coordinate.type_oid,
-                )
-                && operand_matches_source_type(
-                    operator.parent_operand_type_oid,
-                    parent_coordinate.type_oid,
-                )
-                && operator.selected_oid != 0
-                && operator.selected_oid == operator.search_oid
-                && operator.is_catalog_equals_bool
-        })
+        .zip(&fk.parent_index.key_positions)
+        .all(
+            |(((operator, child_attnum), parent_attnum), index_position)| {
+                let Some((child, child_coordinate)) =
+                    relations.live_column_by_number(fk.child_oid, *child_attnum)
+                else {
+                    return false;
+                };
+                let Some((parent, parent_coordinate)) =
+                    relations.live_column_by_number(fk.parent_oid, *parent_attnum)
+                else {
+                    return false;
+                };
+                child.source_type == parent.source_type
+                    && operand_matches_source_type(
+                        operator.child_operand_type_oid,
+                        child_coordinate.type_oid,
+                    )
+                    && operand_matches_source_type(
+                        operator.parent_operand_type_oid,
+                        parent_coordinate.type_oid,
+                    )
+                    && operator.opclass_oid == index_position.opclass_oid
+                    && operator.parent_operand_type_oid == index_position.opclass_input_type_oid
+                    && operator.selected_oid != 0
+                    && operator.selected_oid == operator.search_oid
+                    && operator.is_catalog_equals_bool
+            },
+        )
 }
 
 fn operand_matches_source_type(operand_type_oid: u32, source_type_oid: u32) -> bool {
@@ -294,31 +347,76 @@ fn key_columns(
         .collect()
 }
 fn validate_index(
+    r: &Postgres16NormalizedRelationsV1,
     k: &Postgres16RawKeyV1,
     unique: bool,
     primary: bool,
 ) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
-    validate_index_shape(&k.index, k.relation_oid, &k.attnums)?;
-    if k.index.unique != unique || k.index.primary != primary || !k.index.immediate {
+    validate_index_shape(r, &k.index, k.relation_oid, &k.attnums)?;
+    if !k.validated
+        || !k.enforced
+        || k.index.unique != unique
+        || k.index.primary != primary
+        || !k.index.immediate
+    {
         return Err(unsupported());
     }
     Ok(())
 }
 fn validate_index_shape(
+    r: &Postgres16NormalizedRelationsV1,
     i: &Postgres16RawIndexV1,
     oid: u32,
     nums: &[i16],
 ) -> Result<(), PostgresSchemaIdentityUnavailableV1> {
-    if i.relation_oid != oid
-        || i.key_attnums != nums
-        || i.key_attnums.is_empty()
-        || i.key_attnums.len() > MAX_KEY_MEMBERS
+    let key_count = usize::try_from(i.key_count).map_err(|_| unsupported())?;
+    let total_attribute_count =
+        usize::try_from(i.total_attribute_count).map_err(|_| unsupported())?;
+    if i.selected_oid == 0
+        || i.selected_oid != i.observed_oid
+        || i.relation_oid != oid
+        || key_count == 0
+        || key_count != nums.len()
+        || total_attribute_count < key_count
+        || total_attribute_count > MAX_KEY_MEMBERS
+        || i.all_attnums.len() != total_attribute_count
+        || i.key_positions.len() != key_count
+        || i.all_attnums[..key_count] != *nums
+        || i.all_attnums.iter().any(|attnum| *attnum <= 0)
+        || i.all_attnums.iter().collect::<HashSet<_>>().len() != i.all_attnums.len()
         || !i.valid
         || !i.ready
         || !i.live
-        || !i.btree_default
+        || !i.access_method_exact
+        || !i.expressions_absent
+        || !i.predicate_absent
     {
         return Err(unsupported());
+    }
+    if i.all_attnums
+        .iter()
+        .any(|attnum| r.live_column_by_number(oid, *attnum).is_none())
+    {
+        return Err(unsupported());
+    }
+    for ((position, expected_attnum), actual_attnum) in i
+        .key_positions
+        .iter()
+        .zip(nums)
+        .zip(&i.all_attnums[..key_count])
+    {
+        let Some((_, coordinate)) = r.live_column_by_number(oid, *expected_attnum) else {
+            return Err(unsupported());
+        };
+        if position.attnum != *expected_attnum
+            || position.attnum != *actual_attnum
+            || position.opclass_oid == 0
+            || !position.default_btree
+            || !operand_matches_source_type(position.opclass_input_type_oid, coordinate.type_oid)
+            || position.collation_oid != coordinate.collation_oid
+        {
+            return Err(unsupported());
+        }
     }
     Ok(())
 }
@@ -349,5 +447,7 @@ fn unsupported() -> PostgresSchemaIdentityUnavailableV1 {
     PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint
 }
 
+#[cfg(test)]
+mod not_null_tests;
 #[cfg(test)]
 mod tests;
