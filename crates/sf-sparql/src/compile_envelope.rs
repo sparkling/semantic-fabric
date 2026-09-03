@@ -16,6 +16,7 @@
 //! isolation closes that gap.
 
 pub(crate) mod algebra;
+pub(crate) mod iri_materialization;
 mod limits;
 
 pub(crate) use limits::*;

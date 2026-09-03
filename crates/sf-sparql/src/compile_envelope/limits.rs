@@ -12,6 +12,11 @@ pub(crate) const MAX_OPERATORS_PER_SCOPE_V1: usize = 128;
 /// calibration. It combines open delimiters with operators not released by a
 /// separator or matching close.
 pub(crate) const MAX_RECURSION_POTENTIAL_V1: usize = 256;
+/// Provisional prologue ceilings pending corpus calibration. Prefix state is
+/// separately bounded because a short prefixed name can expand to a long IRI.
+pub(crate) const MAX_PREFIX_DECLARATIONS_V1: usize = 1_024;
+pub(crate) const MAX_PREFIX_BINDINGS_V1: usize = 512;
+pub(crate) const MAX_DIRECT_IRI_MATERIALIZATION_BYTES_V1: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompileEnvelopeLimit {
@@ -22,6 +27,9 @@ pub(crate) enum CompileEnvelopeLimit {
     RdfStarDepth,
     OperatorsPerScope,
     RecursionPotential,
+    PrefixDeclarations,
+    PrefixBindings,
+    DirectIriMaterializationBytes,
     AlgebraNodes,
     AlgebraDepth,
     CollectionSlots,
@@ -38,6 +46,9 @@ impl fmt::Display for CompileEnvelopeLimit {
             Self::RdfStarDepth => "rdf-star-depth",
             Self::OperatorsPerScope => "operators-per-scope",
             Self::RecursionPotential => "recursion-potential",
+            Self::PrefixDeclarations => "prefix-declarations",
+            Self::PrefixBindings => "prefix-bindings",
+            Self::DirectIriMaterializationBytes => "direct-iri-materialization-bytes",
             Self::AlgebraNodes => "algebra-nodes",
             Self::AlgebraDepth => "algebra-depth",
             Self::CollectionSlots => "collection-slots",
