@@ -38,10 +38,10 @@ pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "WITH bounded AS (SELECT \
 pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = "SELECT \
  con.oid AS constraint_oid, con.contype, con.conrelid AS child_oid, con.confrelid AS parent_oid, \
  con.convalidated, con.condeferrable, con.condeferred, CASE WHEN pg_catalog.cardinality(con.conkey) <= 32 THEN con.conkey ELSE NULL::int2[] END AS conkey, CASE WHEN pg_catalog.cardinality(con.confkey) <= 32 THEN con.confkey ELSE NULL::int2[] END AS confkey, con.conindid, con.confmatchtype, con.confupdtype, con.confdeltype, \
- i.indisprimary, i.indisunique, i.indisvalid, i.indisready, i.indislive, i.indimmediate, i.indnkeyatts, i.indnatts, i.indkey, i.indclass, i.indcollation, i.indnullsnotdistinct, \
+ i.indisprimary, i.indisunique, i.indisvalid, i.indisready, i.indislive, i.indimmediate, i.indnkeyatts, i.indnatts, i.indkey, i.indclass, i.indcollation, i.indnullsnotdistinct, am.amname AS index_access_method, \
  (pg_catalog.cardinality(con.conkey) IS NULL OR pg_catalog.cardinality(con.conkey)=0 OR pg_catalog.cardinality(con.conkey)>32 OR pg_catalog.cardinality(con.confkey)>32) AS sf_array_overflow, \
  pg_catalog.cardinality(tr.trigger_oids) > 4 AS sf_trigger_overflow, tr.trigger_oids, op.operator_oids, op.search_operator_oids \
- FROM pg_catalog.pg_constraint con LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid \
+ FROM pg_catalog.pg_constraint con LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid LEFT JOIN pg_catalog.pg_class idx ON idx.oid=con.conindid LEFT JOIN pg_catalog.pg_am am ON am.oid=idx.relam \
  LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(t.oid ORDER BY t.oid) AS trigger_oids FROM (SELECT t.oid FROM pg_catalog.pg_trigger t WHERE t.tgconstraint=con.oid ORDER BY t.oid LIMIT 5) t) tr ON true \
  LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(o.oid ORDER BY o.oid) AS operator_oids, pg_catalog.array_agg(o.amopopr ORDER BY o.oid) AS search_operator_oids FROM pg_catalog.pg_operator o WHERE false) op ON true \
  WHERE con.contype IN ('p','u','f') ORDER BY con.conrelid, con.oid LIMIT $1";
@@ -97,6 +97,7 @@ mod tests {
             "trigger_oids",
             "operator_oids",
             "search_operator_oids",
+            "index_access_method",
             "LIMIT $1",
         ] {
             assert!(RICH_CONSTRAINTS_SQL_V1.contains(field));
