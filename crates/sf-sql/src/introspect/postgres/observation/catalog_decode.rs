@@ -332,25 +332,12 @@ pub(super) fn decode_constraint_row_v1(
                 || value.trigger_all_enabled != Some(true)
                 || value.trigger_functions_valid != Some(true)))
     {
-        eprintln!(
-            "UNSUPPORTED FK {:?} {:?} {:?} {:?} {:?} {:?}",
-            value.constraint_kind,
-            value.child_key,
-            value.trigger_oids,
-            value.operator_complete,
-            value.types_and_facets_equal,
-            value.trigger_shape_valid
-        );
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
     if matches!(value.constraint_kind.as_str(), "p" | "u")
         && (value.index_access_method.as_deref() != Some("btree")
             || value.index_opclass_default != Some(true))
     {
-        eprintln!(
-            "UNSUPPORTED INDEX {:?} {:?}",
-            value.index_access_method, value.index_opclass_default
-        );
         return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
     }
     if value.constraint_kind == "f"
