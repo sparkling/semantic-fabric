@@ -39,7 +39,7 @@ pub(super) const RICH_CONSTRAINTS_SQL_V1: &str = "SELECT \
  (pg_catalog.cardinality(con.conkey) IS NULL OR pg_catalog.cardinality(con.conkey)=0 OR pg_catalog.cardinality(con.conkey)>32 OR pg_catalog.cardinality(con.confkey)>32) AS sf_array_overflow, \
  pg_catalog.cardinality(tr.trigger_oids) > 4 AS sf_trigger_overflow, tr.trigger_oids, op.operator_oids, op.search_operator_oids \
  FROM pg_catalog.pg_constraint con LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid \
- LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(t.oid ORDER BY t.oid) AS trigger_oids FROM pg_catalog.pg_trigger t WHERE t.tgconstraint=con.oid) tr ON true \
+ LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(t.oid ORDER BY t.oid) AS trigger_oids FROM (SELECT t.oid FROM pg_catalog.pg_trigger t WHERE t.tgconstraint=con.oid ORDER BY t.oid LIMIT 5) t) tr ON true \
  LEFT JOIN LATERAL (SELECT pg_catalog.array_agg(o.oid ORDER BY o.oid) AS operator_oids, pg_catalog.array_agg(o.amopopr ORDER BY o.oid) AS search_operator_oids FROM pg_catalog.pg_operator o WHERE false) op ON true \
  WHERE con.contype IN ('p','u','f') ORDER BY con.conrelid, con.oid LIMIT $1";
 
@@ -91,6 +91,7 @@ mod tests {
             assert!(RICH_CONSTRAINTS_SQL_V1.contains(field));
         }
         assert!(RICH_CONSTRAINTS_SQL_V1.contains("cardinality(tr.trigger_oids) > 4"));
+        assert!(RICH_CONSTRAINTS_SQL_V1.contains("ORDER BY t.oid LIMIT 5"));
     }
 
     #[test]
