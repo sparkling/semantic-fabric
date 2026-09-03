@@ -20,7 +20,7 @@ pub(super) const RICH_GUARD_SQL_V1: &str = "SELECT \
  current_setting('max_identifier_length')::int4 AS max_identifier_length, current_setting('max_index_keys')::int4 AS max_index_keys, \
  current_setting('integer_datetimes') AS integer_datetimes, current_setting('session_replication_role') AS session_replication_role, \
  current_setting('search_path') AS search_path, \
- d.oid AS database_oid, d.datlocprovider AS database_provider, d.datcollate AS database_collate, d.datctype AS database_ctype, d.daticulocale AS database_icu_locale, d.daticurules AS database_icu_rules, d.datcollversion AS database_recorded_version, pg_catalog.pg_database_collation_actual_version(d.oid) AS database_actual_version, \
+ d.oid AS database_oid, d.datlocprovider::text AS database_provider, d.datcollate AS database_collate, d.datctype AS database_ctype, d.daticulocale AS database_icu_locale, d.daticurules AS database_icu_rules, d.datcollversion AS database_recorded_version, pg_catalog.pg_database_collation_actual_version(d.oid) AS database_actual_version, \
  (SELECT count(*)::int8 FROM pg_catalog.pg_namespace WHERE nspname='public') AS public_namespace_count, \
  (SELECT count(*)::int8 FROM pg_catalog.pg_database WHERE datname=current_database()) AS current_database_count FROM pg_catalog.pg_database d WHERE d.datname=current_database()";
 
