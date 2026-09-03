@@ -32,6 +32,7 @@ use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 use crate::stream::sqlite_column_decltypes;
 
+mod cancellation;
 mod owned;
 
 pub use owned::{SqliteOwnedBackend, SqliteReceiverStream};

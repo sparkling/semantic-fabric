@@ -143,6 +143,28 @@ where
     crate::exec_core::select_each_async_controlled(plan, &mut b, control, sink).await
 }
 
+/// Governed serve path sharing one owned control with exec-core and the SQLite
+/// VM progress callback.
+///
+/// Interruption begins only after mutex acquisition and does not cover mutex or
+/// queue waits, SQLite busy waits, blocking UDF/VFS/I/O, or non-VM work. The
+/// controlled backend exclusively owns and clears the connection's progress-
+/// handler slot; it does not restore a prior handler.
+pub async fn select_each_sqlite_owned_interruptible<F, Fut>(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    control: Arc<dyn QueryControl>,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Option<Term>>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b =
+        sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled(conn, Arc::clone(&control));
+    crate::exec_core::select_each_async_controlled(plan, &mut b, control.as_ref(), sink).await
+}
+
 /// Stream a CONSTRUCT's per-solution triples over an owned SQLite handle into an
 /// async `sink` (serve lane), bounded by the template size — never the whole graph.
 pub async fn construct_each_sqlite_owned<F, Fut>(
@@ -173,6 +195,26 @@ where
     crate::exec_core::construct_each_async_controlled(plan, &mut b, control, sink).await
 }
 
+/// Governed serve path sharing one owned control with exec-core and the SQLite
+/// VM progress callback. Interruption begins only after mutex acquisition and
+/// does not cover mutex/queue waits, SQLite busy waits, blocking UDF/VFS/I/O, or
+/// non-VM work. The backend exclusively owns and clears the progress-handler
+/// slot; it does not restore a prior handler.
+pub async fn construct_each_sqlite_owned_interruptible<F, Fut>(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    control: Arc<dyn QueryControl>,
+    sink: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<Triple>) -> Fut + Send,
+    Fut: Future<Output = Result<()>> + Send,
+{
+    let mut b =
+        sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled(conn, Arc::clone(&control));
+    crate::exec_core::construct_each_async_controlled(plan, &mut b, control.as_ref(), sink).await
+}
+
 /// Execute an ASK over an owned SQLite handle (serve lane) — true iff at least one
 /// solution exists. Spawnable: the concrete owned-backend future is `Send`.
 pub async fn ask_sqlite_owned(plan: &Plan, conn: Arc<Mutex<Connection>>) -> Result<bool> {
@@ -188,6 +230,21 @@ pub async fn ask_sqlite_owned_controlled(
 ) -> Result<bool> {
     let mut b = sf_sql::backend::sqlite::SqliteOwnedBackend::new(conn);
     crate::exec_core::ask_controlled(plan, &mut b, control).await
+}
+
+/// Governed serve path sharing one owned control with exec-core and the SQLite
+/// VM progress callback. Interruption begins only after mutex acquisition and
+/// does not cover mutex/queue waits, SQLite busy waits, blocking UDF/VFS/I/O, or
+/// non-VM work. The backend exclusively owns and clears the progress-handler
+/// slot; it does not restore a prior handler.
+pub async fn ask_sqlite_owned_interruptible(
+    plan: &Plan,
+    conn: Arc<Mutex<Connection>>,
+    control: Arc<dyn QueryControl>,
+) -> Result<bool> {
+    let mut b =
+        sf_sql::backend::sqlite::SqliteOwnedBackend::new_controlled(conn, Arc::clone(&control));
+    crate::exec_core::ask_controlled(plan, &mut b, control.as_ref()).await
 }
 
 /// Serialise triples as N-Triples 1.2 (ADR-0019 G1: triple-term graphs serialise

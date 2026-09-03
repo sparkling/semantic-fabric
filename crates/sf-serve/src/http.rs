@@ -163,12 +163,17 @@ async fn respond_select(
     let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
-            let drive_budget = budget.clone();
+            let drive_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
             stream::select_body_streaming_controlled(
                 move |sink| {
                     Box::pin(async move {
-                        exec::select_each_sqlite_owned_controlled(&plan, conn, &drive_budget, sink)
-                            .await
+                        exec::select_each_sqlite_owned_interruptible(
+                            &plan,
+                            conn,
+                            drive_control,
+                            sink,
+                        )
+                        .await
                     })
                 },
                 fmt,
@@ -230,9 +235,9 @@ async fn respond_ask(
             // The adapter owns SQLite's blocking; spawning its concrete future
             // proves the `Send` obligation directly (ADR-0024 M5).
             let conn = pool.pick();
-            let task_budget = budget.clone();
+            let task_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
             let run = tokio::spawn(async move {
-                exec::ask_sqlite_owned_controlled(&plan, conn, &task_budget).await
+                exec::ask_sqlite_owned_interruptible(&plan, conn, task_control).await
             });
             match deadline::join_task(budget.clone(), run).await {
                 Err(JoinedTaskError::Control(error)) => {
@@ -318,14 +323,14 @@ async fn respond_construct(
     let body = match backend {
         Backend::Sqlite(pool) => {
             let conn = pool.pick();
-            let drive_budget = budget.clone();
+            let drive_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
             stream::construct_body_streaming_controlled(
                 move |sink| {
                     Box::pin(async move {
-                        exec::construct_each_sqlite_owned_controlled(
+                        exec::construct_each_sqlite_owned_interruptible(
                             &plan,
                             conn,
-                            &drive_budget,
+                            drive_control,
                             sink,
                         )
                         .await

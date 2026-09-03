@@ -15,6 +15,9 @@ pub enum Error {
     /// A SQLite source driver error (`rusqlite`).
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// Query-local control stopped governed SQLite work.
+    #[error(transparent)]
+    QueryControl(#[from] sf_core::query_control::QueryControlError),
     /// A PostgreSQL source driver error (`tokio-postgres`).
     #[error("postgres error: {0}")]
     Postgres(#[from] tokio_postgres::Error),

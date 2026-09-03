@@ -15,9 +15,12 @@
 //! compilation, pool wait, controlled execution, and serialisation. It combines
 //! an absolute deadline with finite observable source-work, semantic-result, and
 //! serialized-byte ceilings, plus producer cancellation on client drop. It does
-//! not count compiler CPU or recursive SQL work and is not source-native statement
-//! cancellation, SQLite interruptibility, or atomic streamed failure. Pre-response
-//! policy limits map to 429; every post-200 failure stays a redacted body error.
+//! not count compiler CPU or recursive SQL work and does not provide a common
+//! source-native cancellation or atomic streamed-failure contract. The owned
+//! SQLite serving path interrupts active VM work after mutex acquisition, but not
+//! mutex/queue waits, busy timeouts, blocking UDF/VFS/I/O, compiler work,
+//! raw/conformance paths, or committed response prefixes. Pre-response policy
+//! limits map to 429; every post-200 failure stays a redacted body error.
 
 pub mod ontology;
 pub mod run;

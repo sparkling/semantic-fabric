@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-02
+updated: 2026-09-03
 tags: [security, resource-governance, injection-safety, dos, recursive-cte, result-streaming, query-limits, production]
 supersedes: []
 depends-on:
@@ -198,6 +198,17 @@ The virtualiser (ADR-0007) is a security boundary: untrusted SPARQL is translate
 > are request-admission limits, not aggregate service quotas. Full Protocol,
 > compiler/source/recursive work, native cancellation and atomic post-`200`
 > delivery remain open, so R4/R5 and production admission remain incomplete.
+
+> **Status correction, part 12 (2026-09-03, narrow SQLite active-VM
+> cancellation).** The owned serving SQLite backend installs a query-local
+> `rusqlite` progress handler after acquiring the connection mutex and before
+> metadata/query work. It shares the request's exact control identity, preserves
+> the recorded cancellation/deadline cause, removes the handler on every
+> exit/unwind, and leaves unrelated `SQLITE_INTERRUPT` failures as driver errors.
+> This does not cover mutex or `spawn_blocking` queue wait, busy timeout, blocking
+> UDF/VFS/I/O, compiler CPU, raw/conformance callers, PostgreSQL/MySQL, database
+> rows or recursive source work, total M2, source admission, or atomic post-`200`
+> delivery. The common source-native statement-cancellation contract remains open.
 
 ## More Information
 * **Rewriter / `P+`:** ADR-0007. **Exact closure:** ADR-0049. **Exec / pooling:** ADR-0006. **Reasoning:** ADR-0008. **Authorization:** ADR-0018. **Observability / secrets:** ADR-0011. **Fuzzing:** ADR-0012. **Edge ops:** ADR-0014.

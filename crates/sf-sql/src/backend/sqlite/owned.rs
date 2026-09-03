@@ -3,11 +3,22 @@
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
+use sf_core::query_control::QueryControl;
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 
+use super::cancellation::{
+    SqliteCancellationEvent, SqliteCancellationGuard, SqliteCancellationObserver,
+};
 use super::{column_meta, marshal_row};
+
+#[cfg(test)]
+#[path = "owned_cancellation_lifecycle_tests.rs"]
+mod cancellation_lifecycle_tests;
+#[cfg(test)]
+#[path = "owned_cancellation_tests.rs"]
+mod cancellation_tests;
 
 /// An **owned, `'static`** SQLite backend over `Arc<Mutex<Connection>>` — the serve
 /// lane's flavor (design §4.1). Its stream ([`SqliteReceiverStream`]) is the receive
@@ -17,13 +28,60 @@ use super::{column_meta, marshal_row};
 /// bound hold across `tokio::spawn`.
 pub struct SqliteOwnedBackend {
     conn: Arc<Mutex<Connection>>,
+    control: Option<Arc<dyn QueryControl>>,
+    observer: SqliteCancellationObserver,
 }
 
 impl SqliteOwnedBackend {
     /// Wrap a shared connection handle (the serve lane already holds this shape).
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            control: None,
+            observer: SqliteCancellationObserver::default(),
+        }
     }
+
+    /// Wrap a shared connection with the exact request-scoped control identity
+    /// used by exec-core. The worker clones this Arc; it never mints a control.
+    /// Cancellation starts only after mutex acquisition and cannot pre-empt mutex
+    /// or queue waits, SQLite busy waits, blocking UDF/VFS/I/O, or work outside an
+    /// active SQLite VM. This backend exclusively owns the connection-global
+    /// progress-handler slot while each locked operation runs; a prior handler is
+    /// not restored.
+    pub fn new_controlled(conn: Arc<Mutex<Connection>>, control: Arc<dyn QueryControl>) -> Self {
+        Self {
+            conn,
+            control: Some(control),
+            observer: SqliteCancellationObserver::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_controlled_observed(
+        conn: Arc<Mutex<Connection>>,
+        control: Arc<dyn QueryControl>,
+        observer: SqliteCancellationObserver,
+    ) -> Self {
+        Self {
+            conn,
+            control: Some(control),
+            observer,
+        }
+    }
+}
+
+fn send_error(
+    tx: &tokio::sync::mpsc::Sender<Result<RawTuple>>,
+    control: Option<&dyn QueryControl>,
+    error: Error,
+) {
+    // Preserve an already-classified driver/marshalling error. The checkpoint is
+    // still mandatory immediately before every potentially blocking send.
+    if let Some(control) = control {
+        let _ = control.checkpoint();
+    }
+    let _ = tx.blocking_send(Err(error));
 }
 
 /// The receive end of the cap-1 bridge: each `next_row` awaits the next
@@ -60,10 +118,22 @@ impl SqlBackend for SqliteOwnedBackend {
         // `sqlite_pool_concurrency_receipt` doc + `column_names_spawn_blocking_
         // deadlock_regression`).
         let conn = Arc::clone(&self.conn);
+        let control = self.control.clone();
+        let observer = self.observer.clone();
         let probe_sql = probe_sql.to_owned();
         let joined = tokio::task::spawn_blocking(move || {
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
-            crate::stream::sqlite_column_names(&guard, &probe_sql)
+            observer.observe(SqliteCancellationEvent::MutexAcquired);
+            match control {
+                Some(control) => {
+                    control.checkpoint()?;
+                    let cancellation =
+                        SqliteCancellationGuard::install(&guard, Arc::clone(&control), observer)?;
+                    crate::stream::sqlite_column_names(&guard, &probe_sql)
+                        .map_err(|error| cancellation.map_error(error))
+                }
+                None => crate::stream::sqlite_column_names(&guard, &probe_sql),
+            }
         })
         .await;
         match joined {
@@ -83,6 +153,8 @@ impl SqlBackend for SqliteOwnedBackend {
         // + one `&Row` live on the blocking thread ⇒ ~2-row materialisation.
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<RawTuple>>(1);
         let conn = Arc::clone(&self.conn);
+        let control = self.control.clone();
+        let observer = self.observer.clone();
         let sql = sql.to_owned();
         let params: Vec<String> = lexical_params.to_vec();
         // The `!Send` Connection / Statement / Rows live ONLY on this blocking
@@ -90,44 +162,103 @@ impl SqlBackend for SqliteOwnedBackend {
         // reactor consumes ⇒ explicit backpressure (strengthens bounded memory).
         tokio::task::spawn_blocking(move || {
             let guard = conn.lock().unwrap_or_else(|p| p.into_inner());
+            observer.observe(SqliteCancellationEvent::MutexAcquired);
+            let cancellation = match control.as_ref() {
+                Some(control) => {
+                    if let Err(error) = control.checkpoint() {
+                        send_error(&tx, Some(control.as_ref()), Error::QueryControl(error));
+                        return;
+                    }
+                    match SqliteCancellationGuard::install(
+                        &guard,
+                        Arc::clone(control),
+                        observer.clone(),
+                    ) {
+                        Ok(cancellation) => Some(cancellation),
+                        Err(error) => {
+                            send_error(&tx, Some(control.as_ref()), error);
+                            return;
+                        }
+                    }
+                }
+                None => None,
+            };
             let (decl_codes, pads, nproj) = match column_meta(&guard, &sql) {
                 Ok(m) => m,
                 Err(e) => {
-                    let _ = tx.blocking_send(Err(e));
+                    let error = match cancellation.as_ref() {
+                        Some(cancellation) => cancellation.map_error(e),
+                        None => e,
+                    };
+                    send_error(&tx, control.as_deref(), error);
                     return;
                 }
             };
+            observer.observe(SqliteCancellationEvent::MetadataReady);
+            if let Some(control) = control.as_ref() {
+                if let Err(error) = control.checkpoint() {
+                    send_error(&tx, Some(control.as_ref()), Error::QueryControl(error));
+                    return;
+                }
+            }
             let mut stmt = match guard.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
-                    let _ = tx.blocking_send(Err(Error::from(e)));
+                    let error = match cancellation.as_ref() {
+                        Some(cancellation) => cancellation.map_rusqlite_error(e),
+                        None => Error::Sqlite(e),
+                    };
+                    send_error(&tx, control.as_deref(), error);
                     return;
                 }
             };
             let mut rows = match stmt.query(rusqlite::params_from_iter(params.iter())) {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.blocking_send(Err(Error::from(e)));
+                    let error = match cancellation.as_ref() {
+                        Some(cancellation) => cancellation.map_rusqlite_error(e),
+                        None => Error::Sqlite(e),
+                    };
+                    send_error(&tx, control.as_deref(), error);
                     return;
                 }
             };
             loop {
                 match rows.next() {
                     Ok(Some(row)) => {
-                        let sent = match marshal_row(row, &decl_codes, &pads, nproj) {
-                            Ok(tuple) => tx.blocking_send(Ok(tuple)).is_ok(),
-                            Err(e) => {
-                                let _ = tx.blocking_send(Err(e));
-                                false // hard marshalling error ⇒ stop the cursor (A2)
-                            }
+                        let item = marshal_row(row, &decl_codes, &pads, nproj);
+                        observer.observe(SqliteCancellationEvent::BeforeRowSend);
+                        let checkpoint = control.as_ref().map(|control| control.checkpoint());
+                        let item = match (item, checkpoint) {
+                            (Ok(_tuple), Some(Err(error))) => Err(Error::QueryControl(error)),
+                            (Ok(tuple), _) => Ok(tuple),
+                            (Err(error), _) => Err(error),
                         };
-                        if !sent {
+                        let terminal = item.is_err();
+                        if tx.blocking_send(item).is_err() {
                             break; // receiver gone (cancel-on-drop) or error sent
                         }
+                        if terminal {
+                            break;
+                        }
                     }
-                    Ok(None) => break, // clean EOF ⇒ drop tx ⇒ next_row sees None
+                    Ok(None) => {
+                        observer.observe(SqliteCancellationEvent::BeforeEof);
+                        if let Some(control) = control.as_ref() {
+                            if let Err(error) = control.checkpoint() {
+                                // The failing checkpoint is immediately before
+                                // this send; clean EOF is otherwise channel close.
+                                let _ = tx.blocking_send(Err(Error::QueryControl(error)));
+                            }
+                        }
+                        break;
+                    }
                     Err(e) => {
-                        let _ = tx.blocking_send(Err(Error::from(e)));
+                        let error = match cancellation.as_ref() {
+                            Some(cancellation) => cancellation.map_rusqlite_error(e),
+                            None => Error::Sqlite(e),
+                        };
+                        send_error(&tx, control.as_deref(), error);
                         break;
                     }
                 }

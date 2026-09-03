@@ -36,3 +36,4 @@ serde_json.workspace = true
 tower = { workspace = true, features = ["util"] }
 form_urlencoded.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+rusqlite = { workspace = true, features = ["bundled", "functions"] }

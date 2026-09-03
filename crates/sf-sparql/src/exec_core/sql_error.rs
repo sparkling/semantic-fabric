@@ -7,9 +7,11 @@ pub(super) fn map_sql_err(e: sf_sql::Error) -> Error {
     // An uncovered PG result type (adapter `pg_value`) is preserved as a distinct
     // 501 skip — byte-identical to the pre-M3 `exec_pg` path, which returned
     // `sf_sparql::Error::Unsupported` directly from `pg_value` (never `Sql`).
-    if let sf_sql::Error::Unsupported(m) = &e {
-        return Error::Unsupported(m.clone());
-    }
+    let e = match e {
+        sf_sql::Error::QueryControl(error) => return Error::QueryControl(error),
+        sf_sql::Error::Unsupported(message) => return Error::Unsupported(message),
+        other => other,
+    };
     let mut msg = e.to_string();
     let mut src = e.source();
     while let Some(s) = src {
