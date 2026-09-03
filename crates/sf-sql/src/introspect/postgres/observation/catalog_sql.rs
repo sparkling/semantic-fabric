@@ -27,7 +27,7 @@ pub(super) const RICH_ATTRIBUTES_SQL_V1: &str = "WITH bounded AS (SELECT \
  a.attrelid AS relation_oid, a.attnum, CASE WHEN a.attname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(a.attname::text,'UTF8')) > $2 THEN NULL::text ELSE a.attname::text END AS attribute_name, \
  (a.attname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(a.attname::text,'UTF8')) > $2) AS sf_text_overflow, \
  a.attisdropped, a.attislocal, a.attinhcount, a.attnotnull, a.atttypid, a.attndims, a.atttypmod, a.attcollation, \
- t.oid AS joined_type_oid, t.typname AS joined_type_name, t.typnamespace AS joined_type_namespace_oid, \
+ t.oid AS joined_type_oid, t.typname AS joined_type_name, t.typnamespace AS joined_type_namespace_oid, t.typtype AS joined_type_kind, t.typisdefined AS joined_type_is_defined, t.typbasetype AS joined_type_base_oid, t.typelem AS joined_type_element_oid, t.typrelid AS joined_type_relation_oid, t.typcollation AS joined_type_collation_oid, \
  coll.oid AS joined_collation_oid, coll.collname AS joined_collation_name, coll.collnamespace AS joined_collation_namespace_oid, coll.collprovider AS joined_collation_provider, coll.collversion AS joined_collation_version, \
  pg_catalog.row_number() OVER (PARTITION BY a.attrelid ORDER BY a.attnum) AS sf_physical_ordinal \
  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_type t ON t.oid=a.atttypid LEFT JOIN pg_catalog.pg_collation coll ON coll.oid=a.attcollation \
