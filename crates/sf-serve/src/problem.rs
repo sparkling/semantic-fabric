@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde::Serialize;
-use sf_core::query_control::QueryControlError;
+use sf_core::query_control::QueryControlError::{self, CompilerEnvelopeExceeded};
 use sf_sparql::Error as SparqlError;
 
 static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
@@ -33,6 +33,7 @@ const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlErro
         ProblemCode::RequestTimeout,
     ),
     (QueryControlError::Cancelled, ProblemCode::Internal),
+    (CompilerEnvelopeExceeded, ProblemCode::QueryBudgetExceeded),
     (
         QueryControlError::CompilerWorkExceeded,
         ProblemCode::QueryBudgetExceeded,

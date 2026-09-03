@@ -67,6 +67,8 @@ pub mod cache;
 pub mod cascade;
 #[allow(dead_code)] // Staged safety boundary; serving integration is a later slice.
 mod compile_envelope;
+#[allow(dead_code)] // Internal primitives; compiler pipeline wiring is a later slice.
+mod compiler_control;
 mod compiler_schema;
 pub mod dump;
 pub mod emit;

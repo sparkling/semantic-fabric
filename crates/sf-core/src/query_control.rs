@@ -92,6 +92,7 @@ macro_rules! define_query_control_error {
 define_query_control_error! {
     DeadlineExceeded => "query deadline exceeded",
     Cancelled => "query cancelled",
+    CompilerEnvelopeExceeded => "query compiler safety envelope exceeded",
     CompilerWorkExceeded => "query compiler-work budget exceeded",
     SourceWorkExceeded => "query source-work budget exceeded",
     ResultItemsExceeded => "query result-item budget exceeded",
@@ -474,3 +475,7 @@ mod tests {
         assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "query_control/envelope_tests.rs"]
+mod envelope_tests;
