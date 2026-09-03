@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get(0);
     client
         .batch_execute(
-            "SET search_path = pg_catalog,public,pg_temp; SET session_replication_role = origin;",
+            "SELECT set_config('search_path','pg_catalog,public,pg_temp',false); SET session_replication_role = origin;",
         )
         .await?;
     let snapshot = introspect_postgres_public_observed_snapshot(&mut client).await?;
