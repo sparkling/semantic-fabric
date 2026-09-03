@@ -18,7 +18,18 @@ semantic catalogue contract; PostgreSQL 16.9 and 16.15 are its initial exact liv
 The exact engine-version selector, registered identity finalizer and complete source-type/default-collation normalizer
 are now implemented as private `sf-sql` code and used by the guarded rich collector. Relation/column and constraint normalization,
 bounded typed catalogue row decoding, collection caps, exact profile-guard validation, and raw PK/UNIQUE/FK adaptation
-are implemented with adversarial unit coverage. Exact PostgreSQL 16.9/16.15 qualification receipts remain open. The constraint raw-fact contract
+are implemented with adversarial unit coverage. The 2026-09-03 FK operator slice now reads the ordered
+`conpfeqop`, `conppeqop`, and `conffeqop` arrays, resolves the exact `conindid`
+key opclass through `pg_amop`, and requires the strategy-3 search operator,
+binary `pg_catalog.=` Boolean signature, and operand-type coordinates to agree.
+The normalizer admits the one closed `varchar`-source/`text`-default-opclass
+case rather than confusing relation OIDs with type OIDs. Focused unit tests and
+an isolated PostgreSQL 16.15 diagnostic cover integer, character, and composite
+keys; they are development evidence, not a qualification receipt. Exact
+PostgreSQL 16.9/16.15 qualification receipts remain open. Exact per-position
+index shape/collation proof, complete trigger-role multiset proof (including
+self-referencing FKs), disabled-trigger state, and cap-plus-one streaming
+evidence remain implementation gates before profile qualification. The constraint raw-fact contract
 requires explicit decoder proofs for FK type/facet equality, operator shape, trigger structure/action mapping and
 supported action codes, so a later decoder cannot silently infer or weaken those invariants.
 Rich SQL envelopes now bound physical attributes with a per-relation ordinal sentinel, bound trigger aggregates before
@@ -29,10 +40,12 @@ the joined collation encoding/determinism fields required by the collation norma
 are not inferred.
 The guard envelope now carries the current database's provider, locale, ICU, and recorded/actual collation-version
 facts. These facts remain inert until combined with the matching catalog-collation join in the raw-fact adapter.
-An explicitly opt-in guarded legacy snapshot entry point now executes the frozen profile guard in the same
-repeatable-read transaction; it does not yet publish rich identity availability.
-An availability-carrying snapshot entry point now exposes that transitional state to callers as an explicit
-`ProfileNotImplemented` result, preserving the legacy projection without forging a rich identity.
+The explicitly opt-in observed-snapshot entry point now collects the guarded
+rich profile in the same repeatable-read transaction and can return its branded,
+non-authorizing content identity for development diagnostics. Existing legacy
+entry points remain unchanged. `sf-serve` does not consume this identity and no
+`RuntimeBinding` carries it, so the pre-qualification diagnostic state cannot
+affect compilation, cache identity, readiness, reload, or execution.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.

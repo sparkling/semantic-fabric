@@ -1,8 +1,8 @@
 //! Pure, bounded PostgreSQL 16 constraint projection (ADR-0051 §7).
 //!
-//! This module is deliberately dead-staged: SQL-to-raw-fact adapter wiring is
-//! supplied by a later slice. OIDs are join handles only and never reach the
-//! schema identity.
+//! The guarded rich collector supplies only decoder-validated raw facts to
+//! this module. OIDs are transaction-local proof coordinates and never reach
+//! the schema identity.
 use std::collections::HashSet;
 
 use sf_core::schema_identity::{
@@ -14,6 +14,8 @@ use super::{PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailable
 
 const MAX_KEY_MEMBERS: usize = 32;
 const MAX_CONSTRAINTS: usize = 65_536;
+const PG_TEXT_TYPE_OID: u32 = 25;
+const PG_VARCHAR_TYPE_OID: u32 = 1_043;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Postgres16RawConstraintV1 {
@@ -78,8 +80,8 @@ pub(super) struct Postgres16RawIndexV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Postgres16RawEqualityOperatorV1 {
-    pub(super) child_oid: u32,
-    pub(super) parent_oid: u32,
+    pub(super) parent_operand_type_oid: u32,
+    pub(super) child_operand_type_oid: u32,
     pub(super) selected_oid: u32,
     pub(super) search_oid: u32,
     pub(super) is_catalog_equals_bool: bool,
@@ -210,14 +212,7 @@ fn foreign_key(
     {
         return Err(unsupported());
     }
-    if !f.triggers.all_enabled
-        || !f.equality_operators.iter().all(|x| {
-            x.child_oid == f.child_oid
-                && x.parent_oid == f.parent_oid
-                && x.selected_oid == x.search_oid
-                && x.is_catalog_equals_bool
-        })
-    {
+    if !f.triggers.all_enabled || !operators_match_columns(r, &f) {
         return Err(unsupported());
     }
     if duplicate_columns(&child_columns) || duplicate_columns(&parent_columns) {
@@ -235,6 +230,48 @@ fn foreign_key(
         },
         pairs,
     })
+}
+
+fn operators_match_columns(
+    relations: &Postgres16NormalizedRelationsV1,
+    fk: &Postgres16RawForeignKeyV1,
+) -> bool {
+    fk.equality_operators
+        .iter()
+        .zip(&fk.child_attnums)
+        .zip(&fk.parent_attnums)
+        .all(|((operator, child_attnum), parent_attnum)| {
+            let Some((child, child_coordinate)) =
+                relations.live_column_by_number(fk.child_oid, *child_attnum)
+            else {
+                return false;
+            };
+            let Some((parent, parent_coordinate)) =
+                relations.live_column_by_number(fk.parent_oid, *parent_attnum)
+            else {
+                return false;
+            };
+            child.source_type == parent.source_type
+                && operand_matches_source_type(
+                    operator.child_operand_type_oid,
+                    child_coordinate.type_oid,
+                )
+                && operand_matches_source_type(
+                    operator.parent_operand_type_oid,
+                    parent_coordinate.type_oid,
+                )
+                && operator.selected_oid != 0
+                && operator.selected_oid == operator.search_oid
+                && operator.is_catalog_equals_bool
+        })
+}
+
+fn operand_matches_source_type(operand_type_oid: u32, source_type_oid: u32) -> bool {
+    if source_type_oid == PG_VARCHAR_TYPE_OID {
+        operand_type_oid == PG_TEXT_TYPE_OID
+    } else {
+        operand_type_oid == source_type_oid
+    }
 }
 
 fn key_columns(
@@ -313,127 +350,4 @@ fn unsupported() -> PostgresSchemaIdentityUnavailableV1 {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-
-    fn empty_relations() -> Postgres16NormalizedRelationsV1 {
-        Postgres16NormalizedRelationsV1 {
-            relations: Vec::new(),
-            coordinates_by_relation_oid: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn empty_input_is_a_complete_empty_constraint_set() {
-        assert_eq!(
-            normalize_postgres16_constraints_v1(&empty_relations(), Vec::new()),
-            Ok(Vec::new())
-        );
-    }
-
-    #[test]
-    fn unknown_relation_and_column_references_fail_closed() {
-        let relations = empty_relations();
-        let raw = Postgres16RawConstraintV1::NotNull {
-            relation_oid: 99,
-            attnum: 1,
-            validated: true,
-        };
-        assert_eq!(
-            normalize_postgres16_constraints_v1(&relations, vec![raw]),
-            Err(unsupported())
-        );
-    }
-
-    #[test]
-    fn empty_and_oversized_key_members_are_rejected_before_lookup() {
-        let relations = empty_relations();
-        let index = Postgres16RawIndexV1 {
-            relation_oid: 1,
-            key_attnums: Vec::new(),
-            unique: true,
-            primary: false,
-            valid: true,
-            ready: true,
-            live: true,
-            immediate: true,
-            btree_default: true,
-        };
-        let key = Postgres16RawConstraintV1::Unique(Postgres16RawUniqueV1 {
-            key: Postgres16RawKeyV1 {
-                relation_oid: 1,
-                attnums: Vec::new(),
-                validated: true,
-                enforced: true,
-                index,
-            },
-            nulls_not_distinct: false,
-        });
-        assert_eq!(
-            normalize_postgres16_constraints_v1(&relations, vec![key]),
-            Err(unsupported())
-        );
-    }
-
-    #[test]
-    fn constraint_collection_cap_is_fail_closed() {
-        let relations = empty_relations();
-        let raw = std::iter::repeat_n(
-            Postgres16RawConstraintV1::NotNull {
-                relation_oid: 1,
-                attnum: 1,
-                validated: true,
-            },
-            MAX_CONSTRAINTS + 1,
-        )
-        .collect();
-        assert_eq!(
-            normalize_postgres16_constraints_v1(&relations, raw),
-            Err(PostgresSchemaIdentityUnavailableV1::LimitExceeded(
-                PostgresSchemaIdentityLimitCodeV1::RawConstraints,
-            ),)
-        );
-    }
-
-    #[test]
-    fn foreign_key_partial_match_and_arity_mismatch_are_rejected() {
-        let relations = empty_relations();
-        let fk = Postgres16RawConstraintV1::ForeignKey(Postgres16RawForeignKeyV1 {
-            child_oid: 1,
-            parent_oid: 2,
-            child_attnums: vec![1],
-            parent_attnums: vec![1, 2],
-            validated: true,
-            match_code: 'p',
-            parent_index: Postgres16RawIndexV1 {
-                relation_oid: 2,
-                key_attnums: vec![1],
-                unique: true,
-                primary: false,
-                valid: true,
-                ready: true,
-                live: true,
-                immediate: true,
-                btree_default: true,
-            },
-            equality_operators: Vec::new(),
-            triggers: Postgres16RawForeignKeyTriggersV1 {
-                child_insert_ok: true,
-                child_update_ok: true,
-                parent_delete_ok: true,
-                parent_update_ok: true,
-                all_enabled: true,
-            },
-            types_and_facets_equal: true,
-            operators_exact: true,
-            triggers_exact: true,
-            actions_supported: true,
-        });
-        assert_eq!(
-            normalize_postgres16_constraints_v1(&relations, vec![fk]),
-            Err(unsupported())
-        );
-    }
-}
+mod tests;

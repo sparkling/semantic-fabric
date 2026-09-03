@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-02
+updated: 2026-09-03
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -253,10 +253,14 @@ mapping itself, any future live Direct-Mapping path must bind mapping generation
 and the entire streamed execution to one verified source generation; removing
 optimiser facts after generation would be insufficient. These changes close the
 later-DDL integrity-constraint wrong-answer path. ADR-0050's pure Phase 1 Rust
-kernel now computes non-authorizing structural/type/constraint content digests,
-but no adapter emits them and no runtime binding carries them. Drift detection,
-atomic reload, a verified-constraint lease, federation, production admission and
-release authority remain absent; the rest of ADR-0050 remains proposed.
+kernel computes non-authorizing structural/type/constraint content digests, and
+the opt-in `sf-sql` PostgreSQL observed-snapshot path can now emit the private
+ADR-0051 profile after one guarded transaction. The ordinary `sf-serve`
+`IntrospectedSource` and `RuntimeBinding` still carry only the legacy schema and
+no observed identity, so compiler constraint/type authorities remain
+`Unverified`. Drift detection, atomic reload, a verified-constraint lease,
+federation, production admission and release authority remain absent; the rest
+of ADR-0050 and ADR-0051 remains proposed.
 
 ## Consequences
 

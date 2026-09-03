@@ -94,8 +94,8 @@ pub(super) struct CatalogConstraintRowV1 {
     pub(super) search_operator_oids: Option<Vec<u32>>,
     pub(super) operator_complete: Option<bool>,
     pub(super) types_and_facets_equal: Option<bool>,
-    pub(super) child_type_oids: Option<Vec<u32>>,
-    pub(super) parent_type_oids: Option<Vec<u32>>,
+    pub(super) operator_left_type_oids: Option<Vec<u32>>,
+    pub(super) operator_right_type_oids: Option<Vec<u32>>,
     pub(super) trigger_overflow: bool,
     pub(super) trigger_shape_valid: Option<bool>,
     pub(super) trigger_all_enabled: Option<bool>,
@@ -117,9 +117,8 @@ pub(super) struct CatalogConstraintRowV1 {
 }
 
 impl CatalogConstraintRowV1 {
-    /// Convert only PK/UNIQUE rows whose complete index proof is present.
-    /// Foreign keys remain unavailable until trigger/operator rows are decoded
-    /// into their structured raw evidence.
+    /// Convert only rows whose required index proof is present. Foreign keys
+    /// additionally require complete, bounded trigger and operator evidence.
     pub(super) fn into_raw_constraint(
         self,
     ) -> Result<Postgres16RawConstraintV1, PostgresSchemaIdentityUnavailableV1> {
@@ -167,17 +166,16 @@ impl CatalogConstraintRowV1 {
             let search = self
                 .search_operator_oids
                 .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
-            let child_types = self
-                .child_type_oids
+            let left_types = self
+                .operator_left_type_oids
                 .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
-            let parent_types = self
-                .parent_type_oids
+            let right_types = self
+                .operator_right_type_oids
                 .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
             if selected.len() != child_attnums.len()
                 || search.len() != selected.len()
-                || child_types.len() != selected.len()
-                || parent_types.len() != selected.len()
-                || selected.iter().zip(&search).any(|(a, b)| a != b)
+                || left_types.len() != selected.len()
+                || right_types.len() != selected.len()
                 || self.operator_complete != Some(true)
                 || self.types_and_facets_equal != Some(true)
                 || self.trigger_shape_valid != Some(true)
@@ -186,6 +184,18 @@ impl CatalogConstraintRowV1 {
             {
                 return Err(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint);
             }
+            let operators_exact = self.operator_complete == Some(true);
+            let types_and_facets_equal = self.types_and_facets_equal == Some(true);
+            let triggers_exact = self.trigger_shape_valid == Some(true)
+                && self.trigger_functions_valid == Some(true);
+            let all_enabled = self.trigger_all_enabled == Some(true);
+            let actions_supported = matches!(
+                self.update_action.as_deref(),
+                Some("a" | "r" | "c" | "n" | "d")
+            ) && matches!(
+                self.delete_action.as_deref(),
+                Some("a" | "r" | "c" | "n" | "d")
+            );
             let match_code = self
                 .match_code
                 .as_deref()
@@ -193,14 +203,17 @@ impl CatalogConstraintRowV1 {
                 .ok_or(PostgresSchemaIdentityUnavailableV1::UnsupportedConstraint)?;
             let equality_operators = selected
                 .into_iter()
-                .zip(child_types.into_iter().zip(parent_types))
+                .zip(search)
+                .zip(left_types.into_iter().zip(right_types))
                 .map(
-                    |(selected_oid, (child_oid, parent_oid))| Postgres16RawEqualityOperatorV1 {
-                        child_oid,
-                        parent_oid,
-                        selected_oid,
-                        search_oid: selected_oid,
-                        is_catalog_equals_bool: true,
+                    |((selected_oid, search_oid), (left_type_oid, right_type_oid))| {
+                        Postgres16RawEqualityOperatorV1 {
+                            parent_operand_type_oid: left_type_oid,
+                            child_operand_type_oid: right_type_oid,
+                            selected_oid,
+                            search_oid,
+                            is_catalog_equals_bool: operators_exact,
+                        }
                     },
                 )
                 .collect();
@@ -215,16 +228,16 @@ impl CatalogConstraintRowV1 {
                     parent_index: index,
                     equality_operators,
                     triggers: Postgres16RawForeignKeyTriggersV1 {
-                        child_insert_ok: true,
-                        child_update_ok: true,
-                        parent_delete_ok: true,
-                        parent_update_ok: true,
-                        all_enabled: true,
+                        child_insert_ok: triggers_exact,
+                        child_update_ok: triggers_exact,
+                        parent_delete_ok: triggers_exact,
+                        parent_update_ok: triggers_exact,
+                        all_enabled,
                     },
-                    types_and_facets_equal: true,
-                    operators_exact: true,
-                    triggers_exact: true,
-                    actions_supported: true,
+                    types_and_facets_equal,
+                    operators_exact,
+                    triggers_exact,
+                    actions_supported,
                 },
             ));
         }
@@ -275,8 +288,8 @@ pub(super) fn decode_constraint_row_v1(
         search_operator_oids: get!("search_operator_oids", Option<Vec<u32>>),
         operator_complete: get!("operator_complete", Option<bool>),
         types_and_facets_equal: get!("types_and_facets_equal", Option<bool>),
-        child_type_oids: get!("child_type_oids", Option<Vec<u32>>),
-        parent_type_oids: get!("parent_type_oids", Option<Vec<u32>>),
+        operator_left_type_oids: get!("operator_left_type_oids", Option<Vec<u32>>),
+        operator_right_type_oids: get!("operator_right_type_oids", Option<Vec<u32>>),
         trigger_overflow: get!("sf_trigger_overflow", bool),
         trigger_shape_valid: get!("trigger_shape_valid", Option<bool>),
         trigger_all_enabled: get!("trigger_all_enabled", Option<bool>),
@@ -301,9 +314,16 @@ pub(super) fn decode_constraint_row_v1(
             PostgresSchemaIdentityLimitCodeV1::KeyMembers,
         ));
     }
-    let operators_mismatch = match (&value.operator_oids, &value.search_operator_oids) {
-        (Some(a), Some(b)) => a.len() != b.len(),
-        (None, None) => false,
+    let operators_mismatch = match (
+        &value.operator_oids,
+        &value.search_operator_oids,
+        &value.operator_left_type_oids,
+        &value.operator_right_type_oids,
+    ) {
+        (Some(a), Some(b), Some(c), Some(d)) => {
+            a.len() != b.len() || a.len() != c.len() || a.len() != d.len()
+        }
+        (None, None, None, None) => false,
         _ => true,
     };
     if value.trigger_oids.as_ref().is_some_and(|v| v.len() > 4)
@@ -313,6 +333,14 @@ pub(super) fn decode_constraint_row_v1(
             .is_some_and(|v| v.len() > MAX_CATALOG_ARRAY_MEMBERS_V1)
         || value
             .search_operator_oids
+            .as_ref()
+            .is_some_and(|v| v.len() > MAX_CATALOG_ARRAY_MEMBERS_V1)
+        || value
+            .operator_left_type_oids
+            .as_ref()
+            .is_some_and(|v| v.len() > MAX_CATALOG_ARRAY_MEMBERS_V1)
+        || value
+            .operator_right_type_oids
             .as_ref()
             .is_some_and(|v| v.len() > MAX_CATALOG_ARRAY_MEMBERS_V1)
         || operators_mismatch
@@ -329,6 +357,8 @@ pub(super) fn decode_constraint_row_v1(
             && (value.trigger_oids.is_none()
                 || value.operator_oids.is_none()
                 || value.search_operator_oids.is_none()
+                || value.operator_left_type_oids.is_none()
+                || value.operator_right_type_oids.is_none()
                 || value.operator_complete != Some(true)
                 || value.types_and_facets_equal != Some(true)
                 || value.trigger_shape_valid != Some(true)
