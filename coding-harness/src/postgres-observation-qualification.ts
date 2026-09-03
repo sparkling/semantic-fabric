@@ -24,7 +24,7 @@ export interface PostgresObservationQualificationReceipt
 export function createPostgresObservationQualificationReceipt(
   input: PostgresObservationQualificationInput,
 ): PostgresObservationQualificationReceipt {
-  const replayStatus = input.guard === 'pass'
+  const replayStatus: 'pass' | 'fail' = input.guard === 'pass'
     && input.errorCode === null
     && input.identity !== null
     && input.legacyComparison === 'equal'
