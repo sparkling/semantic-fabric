@@ -228,6 +228,20 @@ impl CatalogGuardRowV1 {
                 PostgresSchemaIdentityGuardCodeV1::CurrentDatabase,
             ));
         }
+        BoundedCatalogTextV1::new(self.database_collate.clone())?;
+        BoundedCatalogTextV1::new(self.database_ctype.clone())?;
+        one_char(self.database_provider.clone())?;
+        for value in [
+            self.database_icu_locale.as_deref(),
+            self.database_icu_rules.as_deref(),
+            self.database_recorded_version.as_deref(),
+            self.database_actual_version.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            BoundedCatalogTextV1::new(value.to_owned())?;
+        }
         Ok(())
     }
 }
