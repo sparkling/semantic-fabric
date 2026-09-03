@@ -417,6 +417,22 @@ availability diagnostic; it never logs the unavailable cause's source error.
 
 ## Required evidence
 
+### Qualification receipt contract
+
+Each qualified engine patch has one canonical, replayable JSON receipt with
+`receiptKind=postgresql-public-observation-qualification-v1` and exactly these
+domains: source commit/tree and Cargo lock digests; ADR/profile/query and test
+input digests; OCI image repository, platform and immutable image digest;
+observed `server_version_num` and `server_version`; guard result; bounded row
+counts and overflow outcomes; structural/type/constraint identity digests;
+legacy-coordinate comparison result; normalized error code (or `null` on
+success); and an overall `replayStatus`. The receipt records no credentials,
+SQL result payloads, OIDs, names or raw catalogue rows. A replay must rerun the
+same pinned image twice in fresh networkless containers, compare every digest
+domain and byte-identical canonical receipt, and accept the patch only when
+both 16.9 and 16.15 receipts pass. Until those receipts exist, the registered
+engine set remains unqualified and runtime admission is unavailable.
+
 - exact registry IDs, grammar, backend binding, guard/failure matrix, legacy Vec
   API compatibility and qualified-patch tests (including unqualified 16.x), plus
   a PostgreSQL-16 catalogue-column inventory comparison for 16.9 and 16.15;
