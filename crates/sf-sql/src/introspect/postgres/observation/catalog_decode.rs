@@ -67,6 +67,14 @@ pub(super) fn decode_constraint_rows_v1(
     )
 }
 
+pub(super) fn adapt_constraint_rows_v1(
+    rows: Vec<CatalogConstraintRowV1>,
+) -> Result<Vec<Postgres16RawConstraintV1>, PostgresSchemaIdentityUnavailableV1> {
+    rows.into_iter()
+        .map(CatalogConstraintRowV1::into_raw_constraint)
+        .collect()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CatalogConstraintRowV1 {
     pub(super) constraint_oid: u32,
