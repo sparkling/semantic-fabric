@@ -450,6 +450,50 @@ pub(super) fn validate_catalog_array_len<T>(
 mod tests {
     use super::*;
 
+    fn valid_guard() -> CatalogGuardRowV1 {
+        CatalogGuardRowV1 {
+            server_version_num: 160_015,
+            server_encoding: "UTF8".into(),
+            client_encoding: "UTF8".into(),
+            max_identifier_length: 63,
+            max_index_keys: 32,
+            integer_datetimes: "on".into(),
+            session_replication_role: "origin".into(),
+            search_path: "pg_catalog,public,pg_temp".into(),
+            public_namespace_count: 1,
+            current_database_count: 1,
+        }
+    }
+
+    #[test]
+    fn guard_validator_classifies_each_profile_gate() {
+        let mut guard = valid_guard();
+        assert!(guard.validate().is_ok());
+        guard.search_path = "public".into();
+        assert_eq!(
+            guard.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::SearchPath
+            ))
+        );
+        guard = valid_guard();
+        guard.public_namespace_count = 2;
+        assert_eq!(
+            guard.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::PublicNamespace
+            ))
+        );
+        guard = valid_guard();
+        guard.max_index_keys = 31;
+        assert_eq!(
+            guard.validate(),
+            Err(PostgresSchemaIdentityUnavailableV1::GuardUnsupported(
+                PostgresSchemaIdentityGuardCodeV1::IndexKeyLimit
+            ))
+        );
+    }
+
     #[test]
     fn text_envelope_is_nonempty_nulfree_and_bounded() {
         assert_eq!(
