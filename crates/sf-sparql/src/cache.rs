@@ -17,6 +17,7 @@
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use sf_core::{SourceId, SourceMapping};
 use sf_sql::{Dialect, TableSchema};
@@ -26,6 +27,17 @@ use crate::compiler_schema::{
     ColumnTypeAuthority, ColumnTypeUse, CompilerSchema, ConstraintAuthority,
 };
 use crate::{Plan, Result, Tbox};
+
+/// Closed compiler-governance profile used to partition cache authority.
+///
+/// The governed variant is intentionally dormant until every owned compiler
+/// phase is metered. Merely constructing its key grants no governed capability.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CompileProfileId {
+    Uncontrolled,
+    #[allow(dead_code)] // Activated only after every owned compiler phase is metered.
+    GovernedV1,
+}
 
 /// A compile-binding generation marker.
 ///
@@ -220,20 +232,29 @@ impl CompilerBinding {
 #[derive(Clone)]
 pub(crate) struct CachedPlan {
     scope: CompileScope,
-    plan: Plan,
+    profile: CompileProfileId,
+    plan: Arc<Plan>,
 }
 
 impl CachedPlan {
-    pub(crate) const fn new(scope: CompileScope, plan: Plan) -> Self {
-        Self { scope, plan }
+    pub(crate) fn new(scope: CompileScope, profile: CompileProfileId, plan: Plan) -> Self {
+        Self {
+            scope,
+            profile,
+            plan: Arc::new(plan),
+        }
     }
 
     pub(crate) const fn scope(&self) -> CompileScope {
         self.scope
     }
 
-    pub(crate) const fn plan(&self) -> &Plan {
-        &self.plan
+    pub(crate) const fn profile(&self) -> CompileProfileId {
+        self.profile
+    }
+
+    pub(crate) fn plan(&self) -> &Plan {
+        self.plan.as_ref()
     }
 }
 
@@ -252,15 +273,17 @@ impl fmt::Debug for CompilerBinding {
     }
 }
 
-/// The structural cache key: `(compile-scope, algebra-hash)` plus the **canonical
-/// algebra string** that disambiguates a 64-bit hash collision. `Eq` compares the
-/// canonical string, so two distinct queries that happen to share a
-/// `structural_hash` in the same scope can never collide onto one plan — closing
-/// the hazard ADR-0007 *sharp keying* warns about (a plan for `:a` serving `:b`).
-/// `Hash` uses only the fast `(scope, structural_hash)` pre-hash.
+/// The structural cache key: `(compile-scope, compile-profile, algebra-hash)`
+/// plus the **canonical algebra string** that disambiguates a 64-bit hash
+/// collision. `Eq` compares the canonical string, so two distinct queries that
+/// happen to share a `structural_hash` in the same scope/profile can never
+/// collide onto one plan — closing the hazard ADR-0007 *sharp keying* warns
+/// about (a plan for `:a` serving `:b`). `Hash` uses only the fast
+/// `(scope, profile, structural_hash)` pre-hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanKey {
     scope: CompileScope,
+    profile: CompileProfileId,
     structural_hash: u64,
     canonical: String,
 }
@@ -268,6 +291,7 @@ pub struct PlanKey {
 impl std::hash::Hash for PlanKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.scope.hash(state);
+        self.profile.hash(state);
         self.structural_hash.hash(state);
     }
 }
@@ -277,12 +301,21 @@ impl std::hash::Hash for PlanKey {
 /// (predicate IRIs, template constants) — and, for now, data constants too — and
 /// is also stored verbatim so equality is exact, never hash-only.
 pub fn plan_key(query: &Query, scope: CompileScope) -> PlanKey {
+    plan_key_for_profile(query, scope, CompileProfileId::Uncontrolled)
+}
+
+pub(crate) fn plan_key_for_profile(
+    query: &Query,
+    scope: CompileScope,
+    profile: CompileProfileId,
+) -> PlanKey {
     use std::hash::{Hash, Hasher};
     let canonical = query.to_string();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     canonical.hash(&mut h);
     PlanKey {
         scope,
+        profile,
         structural_hash: h.finish(),
         canonical,
     }

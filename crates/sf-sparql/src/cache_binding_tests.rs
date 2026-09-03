@@ -9,7 +9,7 @@ use sf_core::{NamedNode, SourceId, SourceMapping};
 use sf_sql::{Column, Dialect, ForeignKey, FunctionalDep, TableSchema};
 use spargebra::SparqlParser;
 
-use crate::cache::{self, CachedPlan};
+use crate::cache::{self, CachedPlan, CompileProfileId};
 use crate::{
     exec, parse_and_translate_with, translate_cached, translate_with, CompilerBinding,
     CompilerSchema, ConstraintAuthority, Error, Tbox,
@@ -60,13 +60,34 @@ fn deliberately_misscoped_cached_artifact_fails_closed() {
     let other = binding(source_id, Dialect::Sqlite);
     let plan = translate_with(&query, &[], Dialect::Sqlite, &Tbox::default(), &[]).unwrap();
     let key = cache::plan_key(&query, current.scope());
-    current
-        .cache()
-        .put(key, CachedPlan::new(other.scope(), plan));
+    current.cache().put(
+        key,
+        CachedPlan::new(other.scope(), CompileProfileId::Uncontrolled, plan),
+    );
 
     assert!(matches!(
         translate_cached(&query, &current),
         Err(Error::Mapping(message)) if message == "compiled-plan cache scope mismatch"
+    ));
+}
+
+#[test]
+fn deliberately_misprofiled_cached_artifact_fails_closed() {
+    let query = SparqlParser::new()
+        .parse_query("SELECT * WHERE { ?s ?p ?o }")
+        .unwrap();
+    let source_id = SourceId::new(0).unwrap();
+    let current = binding(source_id, Dialect::Sqlite);
+    let plan = translate_with(&query, &[], Dialect::Sqlite, &Tbox::default(), &[]).unwrap();
+    let key = cache::plan_key(&query, current.scope());
+    current.cache().put(
+        key,
+        CachedPlan::new(current.scope(), CompileProfileId::GovernedV1, plan),
+    );
+
+    assert!(matches!(
+        translate_cached(&query, &current),
+        Err(Error::Mapping(message)) if message == "compiled-plan cache profile mismatch"
     ));
 }
 

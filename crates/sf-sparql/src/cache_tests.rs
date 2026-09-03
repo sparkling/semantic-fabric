@@ -32,6 +32,16 @@ fn schema_selecting_constant_changes_key() {
 }
 
 #[test]
+fn governed_and_uncontrolled_profiles_cannot_share_a_key() {
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+    let query = parse("SELECT * WHERE { ?s ?p ?o }");
+    let uncontrolled = plan_key_for_profile(&query, scope, CompileProfileId::Uncontrolled);
+    let governed = plan_key_for_profile(&query, scope, CompileProfileId::GovernedV1);
+
+    assert_ne!(uncontrolled, governed);
+}
+
+#[test]
 fn hash_collision_does_not_serve_the_wrong_plan() {
     let cache: PlanCache<u32> = PlanCache::new(8);
     let scope = scope(Dialect::Sqlite, Epoch(0));
@@ -119,6 +129,7 @@ fn cache_round_trips_and_is_bounded() {
 fn synth_key(scope: CompileScope, id: usize) -> PlanKey {
     PlanKey {
         scope,
+        profile: CompileProfileId::Uncontrolled,
         structural_hash: id as u64,
         canonical: format!("synthetic-plan-{id}"),
     }

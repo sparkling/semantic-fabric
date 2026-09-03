@@ -713,11 +713,17 @@ fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
 /// binding and therefore a new namespace. Keying remains collision-safe because
 /// the canonical algebra disambiguates equal 64-bit hashes (see [`cache`]).
 pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan> {
-    let key = cache::plan_key(query, binding.scope());
+    let profile = cache::CompileProfileId::Uncontrolled;
+    let key = cache::plan_key_for_profile(query, binding.scope(), profile);
     if let Some(cached) = binding.cache().get(&key) {
         if cached.scope() != binding.scope() {
             return Err(Error::Mapping(
                 "compiled-plan cache scope mismatch".to_owned(),
+            ));
+        }
+        if cached.profile() != profile {
+            return Err(Error::Mapping(
+                "compiled-plan cache profile mismatch".to_owned(),
             ));
         }
         return Ok(cached.plan().clone());
@@ -730,9 +736,10 @@ pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan
         binding.schema(),
         binding.column_type_use(),
     )?;
-    binding
-        .cache()
-        .put(key, cache::CachedPlan::new(binding.scope(), plan.clone()));
+    binding.cache().put(
+        key,
+        cache::CachedPlan::new(binding.scope(), profile, plan.clone()),
+    );
     Ok(plan)
 }
 
