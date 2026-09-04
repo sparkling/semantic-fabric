@@ -32,24 +32,13 @@ Compiler-measurement work-stack allocation failure has a distinct typed cause
 and a dormant redacted `503` mapping without `Retry-After`; no public controlled
 compiler path serves it.
 
-ADR-0053's normal control-only parser peer and separate parser-free synthetic peer
-use exact private tuples, the same held ELF, cumulative-cap nonblocking pipes and
-one immutable spawn deadline. After `Hello`/`Ready`, the synthetic parent sends
-the prepared 96-byte header plus source and closes stdin. The child structurally
-preflights its header and body limit, allocates one complete header-plus-body
-frame, requires exact EOF, validates nonce then digest then UTF-8, and returns a correlated 128-byte header plus an independently static
-100-byte empty-ASK `QueryV1`. The parent preflights on stack, prospectively caps
-one allocation, requires exact EOF, waitability, group sweep, exact reap and success,
-then checks request replay, correlation, digests, decode, direct re-encoding and
-static equality. Only unit escapes. Provisional totals are 1,048,856 input and
-8,388,920 output bytes, separate from the 67,108,864-byte `RLIMIT_FSIZE`.
+ADR-0053's normal control-only parser peer, selector-free parser-free peer and separately feature-gated parser-free mutant peer use exact private tuples, the same held ELF, cumulative-cap nonblocking pipes and one immutable spawn deadline. Evidence commits `e55fccd` and `ce5487e` implement the closed child/parent mutant matrix, `d103438` tracks its sources in the development harness, and `fa9d977` proves live request-EOF ordering; these commits are integrated evidence, not shipment or release qualification.
 
-The private Rust `QueryV1` codec provides allocation-free preflight, fallible
-iterative reconstruction and exact replay. Its 22 inner and 17 outer-frame tests
-cover pinned variants, malformed wire, correlation, closed outcomes and raw caps.
-No parser produces these bytes. A private typed comparator's eight tests cover
-eligibility, closed outcomes, exact SELECT outputs and bounded alpha comparison;
-its profile is correlation-only, without a paired differential or receipt.
+The normal path sends a prepared 96-byte header plus source after `Hello`/`Ready`, closes stdin, and preserves structural preflight → one complete request allocation → exact EOF → nonce/digest/UTF-8 validation. The parent preserves stack header preflight → prospective output cap → one complete result allocation → exact EOF → pidfd waitability/group sweep/exact reap/success → post-reap request replay, correlation, digest, `QueryV1` decode/direct re-encode/static equality. Only unit escapes from either hidden evidence seam.
+
+A closed two-byte big-endian directive before `Hello` selects ten same-executable mutants. Four exit-zero correlation/payload defects fail only after reap; status 78 and deadline dominate wrong correlation after 412 accepted output bytes; a trailing byte fails EOF before semantics while accepted output stays 412; exact-cap output accepts 8,388,920 bytes before post-reap invalid-`QueryV1`; cap+1 fails prospectively at 312 bytes before body allocation; and request-frame allocation refusal means zero result bytes after the required 184-byte `Ready`, followed by EOF, exact reap and raw 78. Live bad nonce, source digest and UTF-8 requests remain alive and silent until stdin EOF, then close output and raw-exit 78. Each case permits a clean next launch.
+
+The provisional whole-life input cap is exactly 1,048,856 bytes: the normal source ceiling is 1,048,576, while the directive reduces the mutant ceiling to 1,048,574. Output is capped at 8,388,920 bytes (`Ready` 184 + result header 128 + body 8,388,608), independently of the 67,108,864-byte `RLIMIT_FSIZE`. The private Rust `QueryV1` codec retains allocation-free preflight, fallible iterative reconstruction and exact replay, but no parser produces these bytes. The private typed comparator remains correlation-only, without a paired differential or receipt.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
@@ -357,27 +346,23 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
 2. **Parser/envelope — parser-free transport and control-ready candidates only:**
-   provisional raw lexical, direct-IRI and fallible algebra/Plan measurements
-   exist. ADR-0053 has held-ELF validation, descriptor-exact launch under rlimits,
-   a default-allow stage-one filter, capped nonblocking pipes under one deadline,
-   and termination/reap containment. Its first-statement dispatcher recognizes
-   exact private tuples before Clap/thread-pool startup and requires raw-empty
-   Linux `environ`. The non-default evidence seam correlates a bounded GNU build
-   ID, verifies/repairs the post-exec envelope, compares candidate profile/limits,
-   self-probes a default-kill policy candidate and completes an exact handshake.
-   Malformed or unprepared reserved invocations exit silently with status 78.
-   This is neither a final parser policy nor a governed dependency closure and
-   adds no UID/GID, group, capability or privilege-transition contract. The
-   workspace exact-pins `spargebra =0.4.6`; evidence requires
-   `x86_64-unknown-linux-gnu`. Inner `QueryV1` and 96/128-byte codecs are private.
-   A separate synthetic tuple carries the prepared request and fixed empty-ASK
-   result with the validation, EOF, reap and replay sequence above. Black-box
-   cases cover unrelated/empty source, exact 1 MiB, over-limit prelaunch, path
-   rejection before preparation and next-launch recovery. Its evidence grants no
-   parser execution, policy/profile qualification, paired-corpus receipt,
-   witness, cache, serving, release or admission. Qualify the complete parser
-   profile before real parsing, parser-produced `QueryV1`, corpus evidence or
-   activation; normal loader/Rust startup precedes dispatch.
+   provisional raw lexical, direct-IRI and algebra/Plan measurements exist.
+   ADR-0053 holds and descriptor-launches one ELF under rlimits, a stage-one
+   filter, one deadline, cumulative nonblocking-pipe caps and deterministic
+   termination/reap. Its first-statement dispatcher recognizes exact private
+   tuples before Clap/thread-pool startup and requires raw-empty Linux `environ`.
+   The evidence seam correlates a bounded GNU build ID, repairs/verifies the
+   post-exec envelope, checks candidate profile/limits, self-probes a default-kill
+   candidate and completes the exact handshake. The normal parser-free exchange
+   and all ten closed mutant outcomes prove structural/preallocation checks,
+   terminal/deadline/trailing-output precedence, exact cap and cap+1 behavior,
+   post-EOF request validation, whole-life byte accounting and clean recovery.
+   The matrix and source capture are recorded by `e55fccd`, `ce5487e`, `d103438`
+   and `fa9d977` as evidence, not shipment. `spargebra =0.4.6` is exact-pinned and
+   evidence requires `x86_64-unknown-linux-gnu`; normal loader/Rust startup still
+   precedes dispatch. The policy/dependency profile remains unqualified and adds
+   no credential boundary. Qualify it before real parsing, parser-produced
+   `QueryV1`, paired-corpus evidence, witness, cache, serving or admission.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
@@ -456,12 +441,12 @@ logical-work accounting across governed cold and cache-hit paths.”
 uses recursive PEG productions and allocation-heavy semantic actions. The raw
 scanner and call-boundary checkpoints cannot bound construction or destruction.
 ADR-0053 now has private launch, bounded pipe I/O, cleanup, a control-policy
-candidate and parser-free closed/correlated framing. Inner `QueryV1` supplies
-preflight, fallible iterative decode and exact replay. Parser-profile
-qualification, real parse/encode, parser-produced `QueryV1`, paired-corpus alpha
-receipts and a witness remain blockers for `compile_controlled` and every
-parser-inclusive boundedness claim. A post-parse-only mode would not be
-whole-compiler governance.
+candidate and parser-free normal/mutant framing with terminal-order and exact-cap
+evidence. Inner `QueryV1` supplies preflight, fallible iterative decode and exact
+replay. Parser execution and complete profile qualification, real parse/encode,
+parser-produced `QueryV1`, paired-corpus alpha receipts and a witness remain
+blockers for `compile_controlled` and every parser-inclusive boundedness claim.
+A post-parse-only mode would not be whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database
 rows scanned or recursive SQL iterations; source-cost governance; raw or

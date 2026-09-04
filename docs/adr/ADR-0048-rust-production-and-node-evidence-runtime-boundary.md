@@ -17,7 +17,7 @@ fixes the implementation-language, packaging and authority boundary for the
 application, coding harness and proposed capture supervisor.
 
 It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050 through
-ADR-0053, claim that a complete or active Rust supervisor exists, authorize a
+ADR-0053, claim that a complete or production-active Rust supervisor exists, authorize a
 database or deployment, or weaken any final correctness, security, performance,
 reproducibility or release gate. Existing TypeScript artefacts remain
 non-authorizing reference evidence.
@@ -276,40 +276,47 @@ hidden first-statement Rust dispatcher exact-matches private two-token
 invocations and requires a raw-empty Linux environment.
 
 Commits `c754165`, `56c2236`, `7c87fae` and `3a0199e` retain the exact normal
-control-only parser tuple and add a separate exact, feature-gated parser-free
-transport tuple against the same held ELF. After bounded GNU-build-ID
-correlation, post-exec envelope repair, installation/self-probe of the default-
-kill policy candidate and `Hello`/`Ready`, the parent sends its prepared
-96-byte request header plus source under the same cumulative cap and immutable
-deadline. The child structurally preflights the fixed header and body limit
-before one complete header-plus-body allocation, requires exact stdin EOF,
-checks nonce, source digest and UTF-8 in that order, and emits a correlated
-128-byte success header plus an independently defined static 100-byte empty-ASK
-`QueryV1` while retaining the policy owner through exit.
+control-only parser tuple and add the selector-free parser-free normal tuple
+against the same held ELF. Integrated evidence commits `e55fccd` and `ce5487e`
+add a separately feature-gated same-executable mutant peer and parent; `d103438`
+adds both modules to the Node development-harness source inventory, and
+`fa9d977` adds live request-EOF ordering. These commits evidence the Rust
+boundary, not a
+shipped or release-qualified capability.
 
-The parent reads the result header on its stack, preflights it and prospectively
-charges the declared body before its one complete result-frame allocation. It
-requires exact stdout EOF, pidfd waitability, process-group sweep, exact reap
-and successful status before replaying the request, checking correlation and
-digests, decoding `QueryV1`, directly re-encoding it and comparing the static
-bytes. The hidden external seam drops the AST and returns only unit. Black-box
-coverage includes empty, ordinary ASK and unrelated sources, the exact 1 MiB
-source cap, over-limit rejection before launch, relative/traversal path
-rejection before source preparation and clean next-launch recovery.
+The normal exchange preserves one immutable deadline and cumulative accounting
+through `Hello`/`Ready`, parent write/close of the prepared 96-byte request plus
+source, child stack preflight, one complete request allocation/body read, exact
+stdin EOF, nonce/digest/UTF-8 validation, and the static
+128-byte-header/100-byte-`QueryV1` result. The parent
+stack-preflights and prospectively caps before one complete result allocation,
+then requires stdout EOF, pidfd waitability, group sweep, exact reap and success
+before replay, correlation, digest, decode, direct re-encode and static equality.
+Only unit escapes from either hidden evidence seam.
 
-Candidate limits remain provisional at 1,048,856 cumulative input,
-8,388,920 cumulative output and a separate 67,108,864-byte `RLIMIT_FSIZE`.
-Malformed or unprepared reserved invocations still exit silently with status
-78; other targets remain fail-closed. The default-kill policy and partial
-dependency/profile digest remain unqualified, the parser syscall/randomness
-surface and dynamic closure remain unqualified, and GNU build-ID comparison is
-correlation rather than release attestation. No parser is invoked and
-no parser-produced wire exists; the synthetic exchange grants no parser-policy/profile qualification,
-paired corpus, witness, cache, admission, serving, release or independent
-attestation. It establishes no UID/GID, group, capability or privilege-
-transition contract. ADR-0053 remains proposed. All runtime code in this slice
-is Rust/Cargo; Node supplies development/evidence only. Neither the application
-goals nor the evolutionary semantic architecture changes.
+The mutant tuple sends a closed two-byte big-endian directive before `Hello`.
+Its ten cases prove exit-zero nonce/source-digest/payload-digest/invalid-
+`QueryV1` classification only post-reap; status 78 and deadline precedence over
+wrong correlation at 412 accepted output bytes; and trailing-output rejection
+before semantics with its extra byte unaccepted. Exact-cap output accepts
+`Ready` 184 + header 128 + body 8,388,608 = 8,388,920 bytes before post-reap
+invalid-`QueryV1`; cap+1 fails prospectively at 312 bytes before body allocation.
+Request-frame allocation refusal means zero result bytes after the required
+184-byte `Ready`, followed by EOF, exact reap and raw 78. Live bad nonce, digest
+and UTF-8 requests stay alive and silent until EOF, then close output and
+raw-exit 78. Every mutant and bad-request probe permits a clean next launch.
+
+The provisional whole-life input cap remains 1,048,856 bytes: normal source
+ceiling 1,048,576 and mutant ceiling 1,048,574 after its two directive bytes.
+Output remains capped at 8,388,920 bytes, independently of the 67,108,864-byte
+`RLIMIT_FSIZE`. The default-kill policy, dependency/profile digest, parser
+syscall/randomness surface and dynamic closure remain unqualified; GNU build-ID
+comparison is correlation, not release attestation. No parser runs and no
+parser-produced wire, qualified parser profile, paired corpus, witness, cache,
+admission, serving, release or attestation exists. Parser execution and complete
+profile qualification remain next; ADR-0053 stays proposed. Every product/runtime
+component here is Rust/Cargo. Node/MetaHarness only preserves or exercises
+development evidence and adds no runtime authority or dependency.
 
 ## Consequences
 
