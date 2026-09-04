@@ -4,6 +4,7 @@ use sf_core::query_control::{
 
 use super::*;
 use crate::compile_envelope::{CompileEnvelopeError, CompileEnvelopeLimit};
+use crate::plan_measure::PlanMeasureV1;
 use crate::Error;
 
 fn budget(max_compiler_work: u64) -> QueryBudget {
@@ -28,6 +29,145 @@ fn envelope_error() -> CompileEnvelopeError {
         observed: 2,
         maximum: 1,
     }
+}
+
+fn plan_measure(deep_clone_work: u64) -> PlanMeasureV1 {
+    PlanMeasureV1 {
+        nodes: 0,
+        collection_slots: 0,
+        payload_bytes: 0,
+        deep_clone_work,
+        max_depth: 0,
+        max_pending_items: 0,
+    }
+}
+
+fn assert_copy<T: Copy>() {}
+
+#[test]
+fn compile_context_is_copy_and_preserves_the_request_identity() {
+    assert_copy::<CompileContext<'_>>();
+
+    let budget = budget(3);
+    let context = CompileContext::new(&budget);
+    let copied = context;
+
+    context.reserve_checked_sum(&[1]).unwrap();
+    copied.reserve_checked_product(&[2, 1]).unwrap();
+
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), 3);
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
+}
+
+#[test]
+fn compile_context_reservations_cover_zero_exact_n_and_n_plus_one() {
+    let zero = budget(0);
+    let zero_context = CompileContext::new(&zero);
+    assert_eq!(zero_context.reserve_checked_sum(&[]).unwrap(), 0);
+    assert_eq!(
+        zero_context
+            .reserve_measured_clone(&plan_measure(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(zero.consumed(QueryCharge::CompilerWork), 0);
+
+    let exact = budget(6);
+    let exact_context = CompileContext::new(&exact);
+    assert_eq!(exact_context.reserve_checked_product(&[2, 3]).unwrap(), 6);
+    assert_eq!(exact.consumed(QueryCharge::CompilerWork), 6);
+
+    let short = budget(5);
+    let short_context = CompileContext::new(&short);
+    assert_control_error(
+        short_context
+            .reserve_checked_sum(&[2, 4])
+            .expect_err("N+1 prospective work must fail"),
+        QueryControlError::CompilerWorkExceeded,
+    );
+    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+}
+
+#[test]
+fn compile_context_reserves_the_exact_measured_clone_work() {
+    let exact = budget(7);
+    let exact_context = CompileContext::new(&exact);
+    let measure = plan_measure(7);
+
+    assert_eq!(exact_context.reserve_measured_clone(&measure).unwrap(), 7);
+    assert_eq!(exact.consumed(QueryCharge::CompilerWork), 7);
+    assert_eq!(exact.consumed(QueryCharge::SourceWork), 0);
+
+    let short = budget(6);
+    let short_context = CompileContext::new(&short);
+    assert_control_error(
+        short_context
+            .reserve_measured_clone(&measure)
+            .expect_err("the exact clone measure exceeds the budget"),
+        QueryControlError::CompilerWorkExceeded,
+    );
+    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+}
+
+#[test]
+fn compile_context_preserves_a_pre_existing_terminal_cause() {
+    let budget = budget(10);
+    budget.terminate(QueryControlError::DeadlineExceeded);
+    let context = CompileContext::new(&budget);
+
+    assert_control_error(
+        context
+            .reserve_measured_clone(&plan_measure(1))
+            .expect_err("a terminal request cannot reserve clone work"),
+        QueryControlError::DeadlineExceeded,
+    );
+    assert_control_error(
+        context
+            .checkpoint()
+            .expect_err("the same terminal cause remains visible"),
+        QueryControlError::DeadlineExceeded,
+    );
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
+}
+
+#[test]
+fn compile_context_maps_arithmetic_and_counter_overflow_to_query_control() {
+    let arithmetic = budget(u64::MAX);
+    let arithmetic_context = CompileContext::new(&arithmetic);
+    assert_control_error(
+        arithmetic_context
+            .reserve_checked_sum(&[u64::MAX, 1])
+            .expect_err("prospective arithmetic must be checked"),
+        QueryControlError::AccountingOverflow,
+    );
+    assert_eq!(arithmetic.consumed(QueryCharge::CompilerWork), 0);
+
+    let product = budget(u64::MAX);
+    let product_context = CompileContext::new(&product);
+    assert_control_error(
+        product_context
+            .reserve_checked_product(&[usize::MAX; 8])
+            .expect_err("prospective product arithmetic must be checked"),
+        QueryControlError::AccountingOverflow,
+    );
+    assert_eq!(product.consumed(QueryCharge::CompilerWork), 0);
+
+    let counter = budget(u64::MAX);
+    let counter_context = CompileContext::new(&counter);
+    counter_context
+        .reserve_checked_sum(&[u64::MAX])
+        .expect("the inclusive maximum fits");
+    assert_control_error(
+        counter_context
+            .reserve_measured_clone(&plan_measure(1))
+            .expect_err("the shared compiler-work counter must not wrap"),
+        QueryControlError::AccountingOverflow,
+    );
+    assert_eq!(counter.consumed(QueryCharge::CompilerWork), u64::MAX);
+    assert_eq!(
+        counter.checkpoint(),
+        Err(QueryControlError::AccountingOverflow)
+    );
 }
 
 #[test]
