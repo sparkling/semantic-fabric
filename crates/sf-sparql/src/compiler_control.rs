@@ -3,7 +3,11 @@
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 
 use crate::compile_envelope::CompileEnvelopeError;
-use crate::plan_measure::PlanMeasureV1;
+use crate::iq::Branch;
+use crate::plan_measure::clone_root::{
+    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
+};
+use crate::plan_measure::{PlanMeasureError, PlanMeasureV1};
 use crate::{Error, Result};
 
 /// A compiler-facing view of the request's shared query control.
@@ -116,11 +120,34 @@ impl<'control> CompileContext<'control> {
         self.meter.precharge_product(factors)
     }
 
-    /// Reserve the exact V1 prospective work of one measured deep clone.
-    pub(crate) fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {
+    /// Measure, reserve, and perform exactly one recursive branch-forest clone.
+    ///
+    /// Keeping all three operations behind one method prevents a caller from
+    /// charging one graph and cloning another, charging once and cloning twice,
+    /// or reserving after the allocation has already happened.
+    pub(crate) fn clone_branch_forest(&self, branches: &[Branch]) -> Result<Vec<Branch>> {
+        let measure =
+            measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(branches))
+                .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(branches.to_vec())
+    }
+
+    fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {
         let units = measure.deep_clone_work;
         self.meter.reserve_work(units)?;
         Ok(units)
+    }
+
+    fn measurement_error(&self, error: PlanMeasureError) -> Error {
+        match error {
+            PlanMeasureError::AccountingOverflow => self.meter.accounting_overflow(),
+            PlanMeasureError::LimitExceeded { .. } | PlanMeasureError::AllocationFailed => self
+                .meter
+                .control
+                .terminate(QueryControlError::CompilerEnvelopeExceeded)
+                .into(),
+        }
     }
 }
 

@@ -1,10 +1,14 @@
+use sf_core::ir::LogicalSource;
 use sf_core::query_control::{
     QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
 };
 
 use super::*;
 use crate::compile_envelope::{CompileEnvelopeError, CompileEnvelopeLimit};
-use crate::plan_measure::PlanMeasureV1;
+use crate::iq::{Branch, Scan};
+use crate::plan_measure::clone_root::{
+    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
+};
 use crate::Error;
 
 fn budget(max_compiler_work: u64) -> QueryBudget {
@@ -31,15 +35,11 @@ fn envelope_error() -> CompileEnvelopeError {
     }
 }
 
-fn plan_measure(deep_clone_work: u64) -> PlanMeasureV1 {
-    PlanMeasureV1 {
-        nodes: 0,
-        collection_slots: 0,
-        payload_bytes: 0,
-        deep_clone_work,
-        max_depth: 0,
-        max_pending_items: 0,
-    }
+fn branch_forest() -> Vec<Branch> {
+    vec![Branch::single(Scan {
+        alias: 1,
+        source: LogicalSource::Table("source".to_owned()),
+    })]
 }
 
 fn assert_copy<T: Copy>() {}
@@ -64,12 +64,7 @@ fn compile_context_reservations_cover_zero_exact_n_and_n_plus_one() {
     let zero = budget(0);
     let zero_context = CompileContext::new(&zero);
     assert_eq!(zero_context.reserve_checked_sum(&[]).unwrap(), 0);
-    assert_eq!(
-        zero_context
-            .reserve_measured_clone(&plan_measure(0))
-            .unwrap(),
-        0
-    );
+    assert!(zero_context.clone_branch_forest(&[]).unwrap().is_empty());
     assert_eq!(zero.consumed(QueryCharge::CompilerWork), 0);
 
     let exact = budget(6);
@@ -89,20 +84,35 @@ fn compile_context_reservations_cover_zero_exact_n_and_n_plus_one() {
 }
 
 #[test]
-fn compile_context_reserves_the_exact_measured_clone_work() {
-    let exact = budget(7);
+fn compile_context_binds_exact_measure_reservation_and_one_clone() {
+    let source = branch_forest();
+    let measure =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(&source)).unwrap();
+    let exact = budget(measure.deep_clone_work);
     let exact_context = CompileContext::new(&exact);
-    let measure = plan_measure(7);
+    let source_allocation = source.as_ptr();
 
-    assert_eq!(exact_context.reserve_measured_clone(&measure).unwrap(), 7);
-    assert_eq!(exact.consumed(QueryCharge::CompilerWork), 7);
+    let cloned = exact_context.clone_branch_forest(&source).unwrap();
+    assert_eq!(cloned.len(), source.len());
+    assert_eq!(cloned[0].core[0].alias, source[0].core[0].alias);
+    match (&cloned[0].core[0].source, &source[0].core[0].source) {
+        (LogicalSource::Table(actual), LogicalSource::Table(expected)) => {
+            assert_eq!(actual, expected)
+        }
+        _ => panic!("branch forest fixture must retain its table source"),
+    }
+    assert_ne!(cloned.as_ptr(), source_allocation);
+    assert_eq!(
+        exact.consumed(QueryCharge::CompilerWork),
+        measure.deep_clone_work
+    );
     assert_eq!(exact.consumed(QueryCharge::SourceWork), 0);
 
-    let short = budget(6);
+    let short = budget(measure.deep_clone_work - 1);
     let short_context = CompileContext::new(&short);
     assert_control_error(
         short_context
-            .reserve_measured_clone(&measure)
+            .clone_branch_forest(&source)
             .expect_err("the exact clone measure exceeds the budget"),
         QueryControlError::CompilerWorkExceeded,
     );
@@ -117,7 +127,7 @@ fn compile_context_preserves_a_pre_existing_terminal_cause() {
 
     assert_control_error(
         context
-            .reserve_measured_clone(&plan_measure(1))
+            .clone_branch_forest(&branch_forest())
             .expect_err("a terminal request cannot reserve clone work"),
         QueryControlError::DeadlineExceeded,
     );
@@ -159,7 +169,7 @@ fn compile_context_maps_arithmetic_and_counter_overflow_to_query_control() {
         .expect("the inclusive maximum fits");
     assert_control_error(
         counter_context
-            .reserve_measured_clone(&plan_measure(1))
+            .clone_branch_forest(&branch_forest())
             .expect_err("the shared compiler-work counter must not wrap"),
         QueryControlError::AccountingOverflow,
     );
