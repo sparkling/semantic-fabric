@@ -94,6 +94,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/compile_envelope/tests/recursion.rs',
   'crates/sf-sparql/src/compiler_control.rs',
   'crates/sf-sparql/src/compiler_control/construction_union_tests.rs',
+  'crates/sf-sparql/src/compiler_control/lower_work_mode_tests.rs',
   'crates/sf-sparql/src/compiler_control/normalize_join_tests.rs',
   'crates/sf-sparql/src/compiler_control/pipeline_tests.rs',
   'crates/sf-sparql/src/compiler_control/tests.rs',
