@@ -13,6 +13,10 @@ use super::seccomp::StageOnePolicy;
 use super::SupervisorError;
 use crate::parser_isolation::profile::V1_CANDIDATE_RLIMIT_FSIZE_BYTES;
 use crate::parser_isolation::protocol::ParserWorkerLimits;
+#[cfg(feature = "query-v1-transport-evidence")]
+use crate::parser_isolation::worker::{
+    PRIVATE_QUERY_V1_TRANSPORT_MODE, PRIVATE_QUERY_V1_TRANSPORT_NAME,
+};
 use crate::parser_isolation::worker::{PRIVATE_WORKER_MODE, PRIVATE_WORKER_NAME};
 
 const MIN_DYNAMIC_LOADER_FDS: u64 = 16;
@@ -93,6 +97,21 @@ pub(super) fn spawn_private(
         &[
             PRIVATE_WORKER_NAME.as_bytes(),
             PRIVATE_WORKER_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "query-v1-transport-evidence")]
+pub(super) fn spawn_query_v1_transport(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_QUERY_V1_TRANSPORT_NAME.as_bytes(),
+            PRIVATE_QUERY_V1_TRANSPORT_MODE.as_bytes(),
         ],
     )
 }

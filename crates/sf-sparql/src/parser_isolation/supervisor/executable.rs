@@ -223,7 +223,10 @@ impl PreparedParserExecutable {
         Self::prepare(file, require_elf)
     }
 
-    #[cfg(feature = "parser-worker-evidence")]
+    #[cfg(any(
+        feature = "parser-worker-evidence",
+        feature = "query-v1-transport-evidence"
+    ))]
     pub(in crate::parser_isolation) fn from_file_for_evidence(
         file: File,
     ) -> Result<Self, SupervisorError> {

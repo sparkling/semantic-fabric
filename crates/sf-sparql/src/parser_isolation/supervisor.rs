@@ -5,8 +5,10 @@
 //! materially different descriptor, lifecycle, and containment invariants.
 //! Nothing outside `parser_isolation` can launch this worker. The public binary
 //! has a fail-closed private entry discriminator, and only a non-default Rust
-//! evidence seam can reach the Hello/Ready/EOF exchange. No parser request can
-//! yet reach the supervisor.
+//! evidence seam can reach the Hello/Ready/EOF exchange. The parser peer remains
+//! control-only; an independently gated parser-free peer exercises one fixed
+//! synthetic QueryV1 request/result transport without parser or admission
+//! authority.
 //!
 //! The foundation pins one opened current-executable inode, observes bounded
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
@@ -14,11 +16,11 @@
 //! libraries, restrict filesystem/network/ioctl access, drop OS privilege,
 //! implement a general syscall sandbox, or make reap bounded under
 //! uninterruptible kernel sleep. Parent pipe operations are cumulative-byte
-//! bounded, nonblocking, and share the immutable spawn deadline, but no protocol
-//! query exchange calls them yet. The default-allow stage-one filter is safe
-//! only because the worker verifies its inherited state and stacks a
-//! default-kill control-ready candidate before reading peer-controlled bytes.
-//! That candidate is not parser-qualified and grants no query admission.
+//! bounded, nonblocking, and share the immutable spawn deadline across both the
+//! handshake and synthetic frame. The default-allow stage-one filter is safe
+//! only because the worker verifies its inherited state and stacks a default-kill
+//! control-ready candidate before reading peer-controlled bytes. That candidate
+//! is not parser-qualified and grants no query admission.
 
 use std::fmt;
 use std::io as std_io;
@@ -40,6 +42,13 @@ mod io;
 mod lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
+#[cfg(all(
+    feature = "query-v1-transport-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+mod query_v1_transport;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod seccomp;
 
@@ -134,6 +143,15 @@ impl PreparedParserExecutable {
         let prepared = handshake::prepare(self, source)?;
         handshake::launch(self, prepared)
     }
+
+    #[cfg(feature = "query-v1-transport-evidence")]
+    fn launch_query_v1_transport(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch_query_v1_transport(self, prepared)
+    }
 }
 
 #[cfg(all(
@@ -150,6 +168,20 @@ pub(super) fn exercise_handshake_for_evidence(
     prepared
         .launch_private_worker(source)?
         .finish_without_query()
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_transport_for_evidence(
+    file: std::fs::File,
+    source: &str,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_transport::finish(prepared.launch_query_v1_transport(source)?)
 }
 
 /// Buildable fail-closed stub for every unqualified target.

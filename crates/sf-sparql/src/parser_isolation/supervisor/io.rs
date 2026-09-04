@@ -238,12 +238,10 @@ impl BoundedWorkerIo {
         self.stdout.take();
     }
 
-    #[cfg(test)]
     pub(super) const fn sent(&self) -> u64 {
         self.sent
     }
 
-    #[cfg(test)]
     pub(super) const fn received(&self) -> u64 {
         self.received
     }

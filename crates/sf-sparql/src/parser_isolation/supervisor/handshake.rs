@@ -10,8 +10,8 @@ use crate::parser_isolation::protocol::{
 };
 
 pub(super) struct ControlReadyWorker {
-    process: ParserWorkerProcess,
-    prepared_request: PreparedParseRequestV1,
+    pub(super) process: ParserWorkerProcess,
+    pub(super) prepared_request: PreparedParseRequestV1,
 }
 
 pub(super) struct PreparedControlExchange {
@@ -37,7 +37,26 @@ pub(super) fn launch(
     executable: &PreparedParserExecutable,
     prepared: PreparedControlExchange,
 ) -> Result<ControlReadyWorker, SupervisorError> {
-    let mut process = linux::spawn_private(executable, v1_limits())?;
+    launch_with(executable, prepared, linux::spawn_private)
+}
+
+#[cfg(feature = "query-v1-transport-evidence")]
+pub(super) fn launch_query_v1_transport(
+    executable: &PreparedParserExecutable,
+    prepared: PreparedControlExchange,
+) -> Result<ControlReadyWorker, SupervisorError> {
+    launch_with(executable, prepared, linux::spawn_query_v1_transport)
+}
+
+fn launch_with(
+    executable: &PreparedParserExecutable,
+    prepared: PreparedControlExchange,
+    spawn: fn(
+        &PreparedParserExecutable,
+        crate::parser_isolation::protocol::ParserWorkerLimits,
+    ) -> Result<ParserWorkerProcess, SupervisorError>,
+) -> Result<ControlReadyWorker, SupervisorError> {
+    let mut process = spawn(executable, v1_limits())?;
     process.write_all_until_deadline(&prepared.hello.encode())?;
 
     let mut encoded_ready = [0_u8; FRAME_LEN];

@@ -47,12 +47,10 @@ impl ParserWorkerProcess {
         self.io.close_stdin();
     }
 
-    #[cfg(test)]
     pub(super) const fn sent_bytes(&self) -> u64 {
         self.io.sent()
     }
 
-    #[cfg(test)]
     pub(super) const fn received_bytes(&self) -> u64 {
         self.io.received()
     }
@@ -158,7 +156,7 @@ impl ParserWorkerProcess {
         Ok(status)
     }
 
-    fn contain_live_failure(&mut self, primary: SupervisorError) -> SupervisorError {
+    pub(super) fn contain_live_failure(&mut self, primary: SupervisorError) -> SupervisorError {
         match self.terminate_and_reap() {
             Ok(_) => primary,
             Err(containment) => containment,
