@@ -3,8 +3,9 @@
 //! This is intentionally separate from `sf-conformance`'s run-to-exit evidence
 //! capture: a parser worker will eventually be an interactive protocol peer and
 //! has materially different descriptor, lifecycle, and containment invariants.
-//! Nothing outside `parser_isolation` can launch this worker, and no production
-//! worker entry point exists yet.
+//! Nothing outside `parser_isolation` can launch this worker. The public binary
+//! has a fail-closed private entry discriminator, but no parser request can yet
+//! reach this dormant supervisor.
 //!
 //! The foundation pins one opened current-executable inode, observes bounded
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
@@ -110,8 +111,8 @@ impl PreparedParserExecutable {
     /// The intentionally unreachable production launch primitive.
     ///
     /// `sf-cli` must not call this until its private worker dispatch runs before
-    /// Clap/thread initialization and installs/verifies the final worker policy
-    /// before emitting `Ready`.
+    /// Clap/application thread-pool initialization and installs/verifies the
+    /// final worker policy before emitting `Ready`.
     fn launch_private_worker(&self) -> Result<ParserWorkerProcess, SupervisorError> {
         linux::spawn_private(self, v1_limits())
     }

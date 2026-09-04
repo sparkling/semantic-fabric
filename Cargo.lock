@@ -4710,6 +4710,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "sf-bench",
  "sf-conformance",
  "sf-core",

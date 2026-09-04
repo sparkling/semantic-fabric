@@ -111,6 +111,8 @@ mod compiler_control_pipeline_tests;
 pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
 pub use compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthority};
 pub use iq::Branch;
+#[doc(hidden)]
+pub use parser_isolation::dispatch_private_parser_worker_v1;
 pub use saturate::Tbox;
 
 /// Errors raised by the virtualizer (deferred features surface as

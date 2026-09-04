@@ -104,6 +104,7 @@ impl SourceArgs {
 }
 
 fn main() -> ExitCode {
+    sf_sparql::dispatch_private_parser_worker_v1();
     match Cli::parse().command {
         Command::Conformance => conformance(),
         Command::Serve(args) => serve(args),

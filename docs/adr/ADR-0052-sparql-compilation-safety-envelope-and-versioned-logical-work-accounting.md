@@ -347,11 +347,14 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    held-executable validation and a descriptor-exact private launch primitive under exact rlimits, a
    default-allow stage-one seccomp filter, cumulative-cap nonblocking parent
    pipes sharing the immutable spawn deadline, and a termination/reap
-   containment path for live-process I/O failures. There is no private worker dispatch at the first
-   user-code statement, before Clap/application thread-pool initialization;
-   verified final default-deny policy; `Ready` exchange; bounded query-protocol
-   IPC; parser invocation; `QueryV1` wire; admitted witness; or independent
-   release/runtime attestation. Normal loader/Rust runtime startup necessarily
+   containment path for live-process I/O failures. A hidden first-statement
+   dispatcher now distinguishes the exact reserved two-token invocation before
+   Clap/application thread-pool initialization, requires raw-empty Linux `environ`,
+   and exits every reserved invocation silently with status 78 at an
+   unavailable-worker stub (via raw `_exit` on Unix).
+   A verified final default-deny policy, `Ready` exchange, bounded query-protocol
+   IPC, parser invocation, `QueryV1` wire, admitted witness and independent
+   release/runtime attestation remain absent. Normal loader/Rust runtime startup necessarily
    precedes dispatch; the future worker may read no untrusted IPC until the final
    policy is installed and verified. Implement those boundaries, integrate
    metering into the algebra pass, add prospective plan-build limits, and

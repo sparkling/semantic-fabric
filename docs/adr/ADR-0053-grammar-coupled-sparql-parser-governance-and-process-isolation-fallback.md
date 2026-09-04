@@ -20,13 +20,17 @@ handshake codec are implemented. The supervisor holds the opened current ELF,
 records a bounded observed SHA-256 fingerprint, launches a test-only fixture by
 that exact descriptor under a stage-one Linux x86-64 policy, and owns required
 pidfd/process-group termination and reap. Its parent pipe ends are nonblocking,
-cumulatively byte-capped and share the immutable spawn deadline. It is private
-and unreachable from the product CLI. No private worker dispatch at the first
-user-code statement, before Clap/application thread-pool initialization;
-post-exec final-policy verification; final default-deny policy; `Ready`
-exchange; bounded query-protocol IPC; parser invocation; `QueryV1` result wire;
+cumulatively byte-capped and share the immutable spawn deadline. A hidden Rust
+dispatcher is now the literal first statement of `sf-cli::main`, before Clap or
+application thread-pool initialization. It byte-compares only the exact reserved
+`argv[0]`/`argv[1]` tuple, rejects malformed reserved-position invocations, and
+requires the raw Linux process `environ` vector—not Rust's filtered environment
+iterator—to be empty. Every reserved invocation still exits silently with status
+78 at an unavailable-worker stub (via raw `_exit` on Unix); it reads no stdin and cannot reach
+the supervisor or parser. Post-exec verification, a final default-deny policy,
+`Ready` exchange, bounded query-protocol IPC, parser invocation, `QueryV1` result wire,
 admitted-query witness; independent release/runtime attestation;
-concurrency-permit integration; or serving binding exists. These foundations do
+concurrency-permit integration and serving binding remain absent. These foundations do
 not enable `CompileProfileId::GovernedV1`, change serving, or change any
 capability status or admission.
 
@@ -259,10 +263,14 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    containment, reap and clean next
    launch. This grants no production worker, query-wire or admitted-witness
    authority.
-3. **Incomplete:** dispatch the private worker at the first user-code statement,
-   before Clap/application thread-pool initialization, and prove its post-exec
-   verification, signal reset, final default-deny syscall policy and verified
-   controls before `Ready`. Qualify descendant prevention without relying on
+3. **Partial:** the hidden private-entry discriminator is the first user-code
+   statement before Clap/application thread-pool initialization. Exact two-token
+   routing, malformed-reserved rejection, raw-empty-`environ` enforcement, ordinary
+   CLI fallthrough and silent status 78 via raw Unix `_exit` are tested, including a malformed raw
+   environment entry that Rust's iterator filters. The selected invocation still
+   reaches only an unavailable-worker stub. Add post-exec verification, signal
+   reset, final default-deny syscall policy and verified controls before `Ready`.
+   Qualify descendant prevention without relying on
    per-user `RLIMIT_NPROC` as a per-worker boundary. No untrusted bytes may be consumed
    under the stage-one/default-allow gap.
 4. **Partial:** parent I/O tests inject stalls, truncation, closed pipes and
@@ -304,8 +312,8 @@ the current explicitly uncontrolled compiler path.
   parser paths that cannot be completely hooked in-process.
 - Good: the private dormant parent now has descriptor-exact launch,
   deadline/cumulative-cap nonblocking pipe primitives and deterministic
-  pidfd/process-group cleanup without exposing an incomplete worker mode or
-  widening the product API.
+  pidfd/process-group cleanup; the hidden dispatcher fails closed without
+  exposing a parser service or widening advertised product capability.
 - Cost: a fresh worker adds launch/IPC latency, a bounded wire protocol and
   Linux-specific operating-system qualification.
 - Cost: the flat wire must explicitly cover the full admitted `Query` algebra;
@@ -316,12 +324,13 @@ the current explicitly uncontrolled compiler path.
 ## Nonclaims
 
 This decision does not claim an accessible production worker, complete
-containment or a general syscall sandbox. In particular, it does not claim a
-private worker dispatch at the first user-code statement, before
-Clap/application thread-pool initialization; post-exec final-policy verification;
-final default-deny policy; `Ready` exchange; bounded query-protocol IPC; parser
-invocation; `QueryV1` wire; admitted witness; independent release/runtime
-attestation; concurrency-permit integration; or serving activation. The current
+containment or a general syscall sandbox. The first-statement dispatcher is only
+an exact fail-closed routing seam: every reserved invocation exits at the
+unavailable-worker stub. In particular, this decision does not claim post-exec
+final-policy verification, a final default-deny policy, `Ready` exchange, bounded
+query-protocol IPC, parser invocation, `QueryV1` wire, an admitted witness,
+independent release/runtime attestation, concurrency-permit integration or
+serving activation. The current
 fingerprint does not authenticate a release or its dynamic closure; pre-exec dumpability is
 not asserted after exec; and pidfd acquisition assumes integration excludes a
 competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible

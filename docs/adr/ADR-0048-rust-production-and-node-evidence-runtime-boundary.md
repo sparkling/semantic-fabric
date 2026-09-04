@@ -268,16 +268,15 @@ federation, production admission and release authority remain absent; the rest
 of ADR-0050 and ADR-0051 remains proposed.
 
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a dormant
-fixed-size parser-worker handshake codec. It adds no process launcher, enforced
-containment, parser invocation, flat query wire, admitted witness or serving
-integration, and therefore grants no governed-parser capability.
-
-The next dormant slice remains product-owned Rust under `sf-sparql`: it holds
-and observes the current executable, provides a private Linux x86-64
-descriptor-exact fixture launcher with stage-one pre-exec controls, and owns
-required pidfd/process-group termination and reap. Other targets compile a
-fail-closed `UnsupportedPlatform` stub. Node supplies none of this runtime code.
-There is still no accessible private worker mode, post-exec final policy,
+fixed-size parser-worker handshake codec. Later Rust-only slices hold and
+observe the current executable, provide a private Linux x86-64 descriptor-exact
+fixture launcher with stage-one pre-exec controls, own required
+pidfd/process-group termination/reap and bound parent-pipe I/O under one spawn
+deadline. A hidden first-statement Rust dispatcher now exact-matches the private
+two-token invocation, requires a raw-empty Linux environment and exits every
+reserved invocation silently with status 78 (via raw `_exit` on Unix) before Clap.
+Other targets retain a fail-closed path. Node supplies none of this runtime code.
+There is still no accessible parser worker, post-exec final policy,
 `Ready` exchange, bounded query IPC, parser invocation, `QueryV1`, admitted
 witness, concurrency-permit integration or serving path, so this foundation
 does not grant governed-parser capability or accept ADR-0053.

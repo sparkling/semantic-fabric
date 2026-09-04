@@ -12,10 +12,9 @@ use super::lifecycle::{open_pidfd, terminate_unbound_child, ParserWorkerProcess}
 use super::seccomp::StageOnePolicy;
 use super::SupervisorError;
 use crate::parser_isolation::protocol::ParserWorkerLimits;
+use crate::parser_isolation::worker::{PRIVATE_WORKER_MODE, PRIVATE_WORKER_NAME};
 
 const MIN_DYNAMIC_LOADER_FDS: u64 = 16;
-const PRIVATE_WORKER_NAME: &[u8] = b"sf-parser-worker-v1";
-const PRIVATE_WORKER_MODE: &[u8] = b"--sf-private-parser-worker-v1";
 const MAX_FIXTURE_ARGUMENTS: usize = 8;
 const MAX_FIXTURE_ARGUMENT_BYTES: usize = 4 * 1024;
 
@@ -90,7 +89,10 @@ pub(super) fn spawn_private(
     spawn(
         executable,
         limits,
-        &[PRIVATE_WORKER_NAME, PRIVATE_WORKER_MODE],
+        &[
+            PRIVATE_WORKER_NAME.as_bytes(),
+            PRIVATE_WORKER_MODE.as_bytes(),
+        ],
     )
 }
 
