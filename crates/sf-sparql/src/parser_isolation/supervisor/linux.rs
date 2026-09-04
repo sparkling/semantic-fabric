@@ -298,8 +298,8 @@ unsafe fn child_setup(
         {
             return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
         }
-        // DUMPABLE may reset across exec; the future worker must set and verify
-        // it again before Ready. NO_NEW_PRIVS persists. All catchable signals
+        // DUMPABLE may reset across exec; worker entry sets and verifies it
+        // again before Ready. NO_NEW_PRIVS persists. All catchable signals
         // stay blocked until that entry resets and verifies their dispositions;
         // SIGKILL cleanup and PDEATHSIG remain effective.
         if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0

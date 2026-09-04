@@ -267,19 +267,21 @@ no observed identity, so compiler constraint/type authorities remain
 federation, production admission and release authority remain absent; the rest
 of ADR-0050 and ADR-0051 remains proposed.
 
-Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a dormant
-fixed-size parser-worker handshake codec. Later Rust-only slices hold and
-observe the current executable, provide a private Linux x86-64 descriptor-exact
-fixture launcher with stage-one pre-exec controls, own required
-pidfd/process-group termination/reap and bound parent-pipe I/O under one spawn
-deadline. A hidden first-statement Rust dispatcher now exact-matches the private
-two-token invocation, requires a raw-empty Linux environment and exits every
-reserved invocation silently with status 78 (via raw `_exit` on Unix) before Clap.
-Other targets retain a fail-closed path. Node supplies none of this runtime code.
-There is still no accessible parser worker, post-exec final policy,
-`Ready` exchange, bounded query IPC, parser invocation, `QueryV1`, admitted
-witness, concurrency-permit integration or serving path, so this foundation
-does not grant governed-parser capability or accept ADR-0053.
+Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
+parser-worker handshake codec. Later Rust-only slices hold and observe the
+current executable, provide a private Linux x86-64 descriptor-exact launcher
+with stage-one pre-exec controls, own pidfd/process-group termination/reap and
+bound parent-pipe I/O under one spawn deadline. A hidden first-statement Rust
+dispatcher exact-matches the private two-token invocation and requires a
+raw-empty Linux environment. A feature-gated, non-default Rust evidence seam
+now completes a held-binary `Hello`/`Ready`/EOF control exchange after bounded
+GNU-build-ID correlation, post-exec envelope repair and installation/self-probe
+of a default-kill policy candidate. Malformed or unprepared reserved invocations
+still exit silently with status 78 via raw Unix `_exit`; other targets remain
+fail-closed. This is control evidence only: no product/serving launcher, query
+protocol, parser, `QueryV1`, witness or parser-qualified final policy exists, and
+no UID/GID, group, capability or privilege-transition contract is established.
+Node supplies none of the runtime and ADR-0053 remains proposed.
 
 ## Consequences
 

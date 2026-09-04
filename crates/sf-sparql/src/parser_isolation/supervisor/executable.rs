@@ -6,6 +6,9 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 
 use sha2::{Digest, Sha256};
 
+use crate::parser_isolation::build_identity;
+use crate::parser_isolation::protocol::BuildIdentityDigest;
+
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -47,6 +50,7 @@ pub(super) struct HeldExecutableIdentity {
     changed_seconds: i64,
     changed_nanoseconds: i64,
     fingerprint: ObservedExecutableFingerprint,
+    build_identity: BuildIdentityDigest,
 }
 
 impl HeldExecutableIdentity {
@@ -68,6 +72,10 @@ impl HeldExecutableIdentity {
 
     pub(super) const fn fingerprint(self) -> ObservedExecutableFingerprint {
         self.fingerprint
+    }
+
+    pub(super) const fn build_identity(self) -> BuildIdentityDigest {
+        self.build_identity
     }
 }
 
@@ -160,6 +168,16 @@ impl PreparedParserExecutable {
                 ));
             }
         }
+        let build_identity = if require_elf {
+            build_identity::observe(&file).ok_or(SupervisorError::InvalidExecutable(
+                "ELF has no unique bounded GNU build ID",
+            ))?
+        } else {
+            // Only cfg(test) arbitrary-byte fixtures can disable ELF checks;
+            // production and evidence constructors always require an observed
+            // GNU build ID before descriptor launch.
+            BuildIdentityDigest::new([0; 32])
+        };
         let fingerprint = fingerprint(&file, before.byte_len)?;
         let after = metadata_identity(file.as_raw_fd())?;
         if before != after {
@@ -179,6 +197,7 @@ impl PreparedParserExecutable {
                 changed_seconds: before.changed_seconds,
                 changed_nanoseconds: before.changed_nanoseconds,
                 fingerprint,
+                build_identity,
             },
         })
     }
@@ -202,6 +221,13 @@ impl PreparedParserExecutable {
         require_elf: bool,
     ) -> Result<Self, SupervisorError> {
         Self::prepare(file, require_elf)
+    }
+
+    #[cfg(feature = "parser-worker-evidence")]
+    pub(in crate::parser_isolation) fn from_file_for_evidence(
+        file: File,
+    ) -> Result<Self, SupervisorError> {
+        Self::prepare(file, true)
     }
 }
 

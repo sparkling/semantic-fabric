@@ -59,7 +59,13 @@ impl BoundedWorkerIo {
             .as_raw_fd();
         let mut offset = 0;
         while offset < bytes.len() {
-            wait_ready(descriptor, pidfd.as_raw_fd(), libc::POLLOUT, deadline)?;
+            wait_ready(
+                descriptor,
+                pidfd.as_raw_fd(),
+                libc::POLLOUT,
+                deadline,
+                false,
+            )?;
             // SAFETY: descriptor is live and the remaining slice is readable.
             let count = unsafe {
                 libc::write(
@@ -122,7 +128,7 @@ impl BoundedWorkerIo {
             .as_raw_fd();
         let mut offset = 0;
         while offset < output.len() {
-            wait_ready(descriptor, pidfd.as_raw_fd(), libc::POLLIN, deadline)?;
+            wait_ready(descriptor, pidfd.as_raw_fd(), libc::POLLIN, deadline, false)?;
             // SAFETY: descriptor is live and the remaining slice is writable.
             let count = unsafe {
                 libc::read(
@@ -165,6 +171,52 @@ impl BoundedWorkerIo {
             ));
         }
         Ok(())
+    }
+
+    /// Require a clean worker-output EOF without accepting a valid frame as a
+    /// prefix of a longer message stream.
+    pub(super) fn expect_eof(
+        &mut self,
+        pidfd: &OwnedFd,
+        deadline: Instant,
+    ) -> Result<(), SupervisorError> {
+        ensure_before_deadline(deadline)?;
+        let descriptor = self
+            .stdout
+            .as_ref()
+            .ok_or(SupervisorError::InvalidState(
+                "parser worker stdout is closed",
+            ))?
+            .as_raw_fd();
+        let mut trailing = [0_u8; 1];
+        loop {
+            wait_ready(descriptor, pidfd.as_raw_fd(), libc::POLLIN, deadline, true)?;
+            let count = unsafe { libc::read(descriptor, trailing.as_mut_ptr().cast(), 1) };
+            if count == 0 {
+                return Ok(());
+            }
+            if count > 0 {
+                self.received =
+                    self.received
+                        .checked_add(1)
+                        .ok_or(SupervisorError::InvalidState(
+                            "parser worker output accounting overflowed",
+                        ))?;
+                return Err(SupervisorError::InvalidState(
+                    "parser worker emitted trailing protocol output",
+                ));
+            }
+            let error = std::io::Error::last_os_error();
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+            ) {
+                continue;
+            }
+            return Err(SupervisorError::operation(
+                "verify parser worker output EOF",
+            )(error));
+        }
     }
 
     pub(super) fn close_stdin(&mut self) {
@@ -218,6 +270,7 @@ fn wait_ready(
     pidfd: RawFd,
     requested: libc::c_short,
     deadline: Instant,
+    allow_worker_exit: bool,
 ) -> Result<(), SupervisorError> {
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -275,10 +328,13 @@ fn wait_ready(
         if requested == libc::POLLIN && io_ready {
             return Ok(());
         }
-        if worker_exited {
+        if worker_exited && !allow_worker_exit {
             return Err(SupervisorError::InvalidState(
                 "parser worker exited before fixed I/O completed",
             ));
+        }
+        if worker_exited {
+            return Ok(());
         }
         if io_ready {
             return Ok(());

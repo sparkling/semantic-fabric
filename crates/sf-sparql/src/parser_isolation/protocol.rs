@@ -164,6 +164,35 @@ impl HelloFrame {
     pub(crate) const fn nonce(self) -> HandshakeNonce {
         self.payload.nonce
     }
+
+    /// Builds `Ready` only after matching independently established worker
+    /// identity, parser profile, and containment values.
+    ///
+    /// The nonce is the only value echoed from the parent. Every other field
+    /// in the response comes from worker-owned observations or fixed profile
+    /// material, so decoding a `Hello` cannot blindly manufacture readiness.
+    pub(crate) fn acknowledge_verified(
+        self,
+        observed_build_identity: BuildIdentityDigest,
+        expected_parser_profile: ParserProfileDigest,
+        observed_limits: ParserWorkerLimits,
+    ) -> Result<ReadyFrame, HandshakeError> {
+        if self.payload.build_identity != observed_build_identity {
+            return Err(HandshakeError::BuildIdentityMismatch);
+        }
+        if self.payload.parser_profile != expected_parser_profile {
+            return Err(HandshakeError::ParserProfileMismatch);
+        }
+        if self.payload.limits != observed_limits {
+            return Err(HandshakeError::AcknowledgedLimitsMismatch);
+        }
+        Ok(ReadyFrame::new(
+            self.payload.nonce,
+            observed_build_identity,
+            expected_parser_profile,
+            observed_limits,
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

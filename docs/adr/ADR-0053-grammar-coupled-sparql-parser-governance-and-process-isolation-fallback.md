@@ -15,24 +15,28 @@ implements: [ADR-0010, ADR-0052]
 This ADR is **proposed**. A source-level feasibility audit selects the bounded
 Linux Rust process-isolation fallback for V1; complete in-process hooks would
 require a broad maintained fork, not the narrow extension originally preferred.
-A dormant parent-side supervisor foundation and the fixed-size `Hello`/`Ready`
-handshake codec are implemented. The supervisor holds the opened current ELF,
-records a bounded observed SHA-256 fingerprint, launches a test-only fixture by
-that exact descriptor under a stage-one Linux x86-64 policy, and owns required
-pidfd/process-group termination and reap. Its parent pipe ends are nonblocking,
-cumulatively byte-capped and share the immutable spawn deadline. A hidden Rust
-dispatcher is now the literal first statement of `sf-cli::main`, before Clap or
-application thread-pool initialization. It byte-compares only the exact reserved
-`argv[0]`/`argv[1]` tuple, rejects malformed reserved-position invocations, and
-requires the raw Linux process `environ` vector—not Rust's filtered environment
-iterator—to be empty. Every reserved invocation still exits silently with status
-78 at an unavailable-worker stub (via raw `_exit` on Unix); it reads no stdin and cannot reach
-the supervisor or parser. Post-exec verification, a final default-deny policy,
-`Ready` exchange, bounded query-protocol IPC, parser invocation, `QueryV1` result wire,
-admitted-query witness; independent release/runtime attestation;
-concurrency-permit integration and serving binding remain absent. These foundations do
-not enable `CompileProfileId::GovernedV1`, change serving, or change any
-capability status or admission.
+A private parent-side supervisor, fixed-size `Hello`/`Ready` codec and
+control-only evidence exchange are implemented. The supervisor holds one opened
+ELF, records a bounded full-file SHA-256 diagnostic, launches that exact
+descriptor under a stage-one Linux x86-64 policy, and owns pidfd/process-group
+termination and reap. Its nonblocking parent pipes are cumulatively byte-capped
+under the immutable spawn deadline. A hidden Rust dispatcher is the literal
+first statement of `sf-cli::main`, before Clap or application thread-pool
+initialization. It byte-compares only the exact reserved `argv[0]`/`argv[1]`
+tuple, rejects malformed reserved-position invocations, and requires the raw
+Linux `environ` vector—not Rust's filtered iterator—to be empty. A non-default
+Rust evidence seam can launch a prepared worker, correlate independently
+observed bounded GNU build-ID digests, repair and verify its post-exec control
+envelope, install and self-probe a default-kill control-ready policy candidate,
+and complete exact `Hello`/`Ready`/EOF. Malformed or unprepared reserved
+invocations still exit silently with status 78 via raw Unix `_exit`; a prepared
+evidence exchange can exit 0. The partial dependency/profile digest and policy
+remain unqualified candidates. Query IPC, parser invocation, `QueryV1`, an
+admitted-query witness, independent release/runtime attestation, permit
+integration and serving remain absent. No UID/GID, supplementary-group,
+capability, namespace, LSM or privilege-transition qualification is claimed.
+These foundations do not enable `CompileProfileId::GovernedV1`, change serving,
+or change capability status or admission.
 
 The raw lexical scanner, parser-view direct-IRI measurement, fallible post-parse
 algebra validator, bounded cache-key writer, exact clone roots, `CompileContext`
@@ -116,18 +120,23 @@ launches it by descriptor, and invokes a private parser-worker mode. Worker
 dispatch must be the first user-code statement, before Clap or application
 thread-pool initialization. Normal dynamic-loader and Rust runtime startup
 necessarily precede it; this is not a zero-runtime or zero-allocation startup
-claim. The worker reads no untrusted IPC until it has installed and verified its
-final default-deny policy. Starting with the same held binary keeps the worker inside
+claim. The worker reads no peer bytes until it has installed and locally
+distinguished its default-kill control-ready policy candidate. Starting with the same held binary keeps the worker inside
 the Rust/Cargo product boundary and prevents a mutable path from choosing
-another executable. The observed fingerprint is diagnostic continuity
-evidence, not release authority, executable authentication or attestation of
-the dynamic runtime closure; those remain ADR-0039 release gates. Other targets
+another executable. The parent's full-file fingerprint and the bounded GNU
+build-ID digest used by the handshake are diagnostic continuity/correlation
+evidence, not release authority, executable authentication or dynamic-runtime-
+closure attestation; those remain ADR-0039 release gates. Other targets
 remain buildable but return `UnsupportedPlatform` before launch, so this profile
 fails closed rather than becoming a weaker fallback.
 
-The dormant parent foundation opens `/proc/self/exe` once, validates and hashes
-that bounded regular ELF through the held descriptor, and never reopens a
-derived path. Its child setup uses only prebuilt POD/C-string state and raw or
+The private parent foundation opens one regular ELF, validates and hashes its
+bounded full bytes through the held descriptor, and never reopens a derived
+path. It separately requires exactly one bounded GNU build ID; the worker
+observes the same form through `/proc/self/exe` before its policy-candidate
+transition. This build-ID comparison neither rehashes the entire image in each
+child nor authenticates provenance or dynamic dependencies. Child setup uses
+only prebuilt POD/C-string state and raw or
 async-signal-safe operations. It applies exact hard and soft rlimits, an empty
 environment, a new process group, parent-death signal, no-new-privileges,
 non-dumpable pre-exec state, a filled signal mask and close-on-exec descriptor
@@ -151,17 +160,24 @@ parent contract requires ignored `SIGPIPE` so a raced close becomes a contained
 `EPIPE`, not process termination. `max_input_bytes` and `max_output_bytes` count
 all bytes in their direction for the whole worker lifetime, including future
 `Hello`/`Ready` and every later frame header. They are not raw-query or payload
-allowances: the final query ceiling needs framing headroom and calibration.
-These primitives exchange no protocol bytes.
+allowances: the final query ceiling needs framing headroom and calibration. The
+evidence seam exchanges one exact `Hello`/`Ready` pair and then requires stdout
+EOF; no query frame is defined or accepted.
 
 That stage-one policy is deliberately default-allow and is not a general
-sandbox. Its blanket `clone`/`clone3` denial makes the future worker
-single-threaded. After exec, a future worker must verify/reset inherited state,
-install its final allowlist policy, verify the child-observed kernel limits and
-acknowledge the exact parent-owned contract values before `Ready`; it must
-consume no untrusted bytes before that transition. Executing a
-new image may reset dumpability, so the parent-side setting is not a post-exec
-claim. Those worker-side controls do not yet exist.
+sandbox. Its blanket `clone`/`clone3` denial preserves the single-threaded
+construction of worker entry. After exec and before reading `Hello`, worker
+entry closes unintended descriptors; verifies stdin/stdout pipes, `/dev/null`
+stderr, PID/TID/group/parent, parent-death signal, no-new-privileges, filter
+mode, exact rlimits and stage-one mutation denial; repairs/verifies signal
+dispositions, pending set, alternate stack and empty mask; restores umask and
+non-dumpability; observes its bounded GNU build ID; then installs with TSYNC and
+self-probes the default-kill control-ready policy candidate. `Ready` is derived
+from that build ID, a locally pinned partial profile candidate, local limit
+constants and the parent nonce. Only rlimits are kernel-observed; wall,
+direction-byte and concurrency values are local candidate constants matched to
+the parent frame. This does not qualify the candidate for parser workloads or
+establish a credential, namespace or LSM boundary.
 
 Each parse uses a fresh child. Before announcing readiness, the child applies
 fixed stack, address-space, CPU, output, descriptor and descendant-process
@@ -176,17 +192,19 @@ separately named parser-containment envelope, not an accounting reservation;
 refund semantics do not apply. Work model V1 charges only operations the parent can observe and schedule exactly: admitted
 input/frame bytes, process launch, protocol frames, iterative validation/decoding
 and owned compilation. It does not charge a fictitious worst-case amount for
-child work that might not occur. Exact executable identity, Cargo
-source/checksum and features, OS-control profile, containment limits,
-parent-side charge schedule and wire version form the governed compile-profile
-identity.
+child work that might not occur. Before activation, exact executable/release
+identity, the complete resolved Cargo dependency-and-feature graph,
+parser-qualified OS policy, containment limits, parent charge schedule and wire
+version must form the governed compile profile. The current four-crate/checksum/
+feature digest is only a partial control-ready marker and does not satisfy that
+gate.
 
 The child parses once and returns a bounded flat, index-based `QueryV1` wire. The
 parent never accepts SPARQL/SSE text that would require reparsing. Frame lengths,
 counts, indices and aggregate bytes are validated before allocation; decoding is
 iterative and fallible, so generic recursive Serde is not an admissible shortcut.
 A successful decode and post-parse algebra validation may eventually mint a
-private `AdmittedQuery`; the current dormant handshake/supervisor foundation cannot.
+private `AdmittedQuery`; the current control-only handshake cannot.
 
 `QueryV1` separates exact replay from fresh-reparse equivalence. Exact replay
 requires a worker wire to decode to the exact encoded AST and re-encode to the
@@ -247,7 +265,7 @@ plan-construction bounds and owned-phase metering remain separate later gates.
 1. Pin parser/PEG sources, checksums and features plus the exact same-executable
    worker identity, Linux control profile, fixed containment limits and
    parent-observable work schedule.
-2. **Dormant handshake and parent-supervisor foundations implemented:** fixed
+2. **Handshake and parent-supervisor control foundations implemented:** fixed
    framing, magic, version, nonce, build/parser profile and exact contract-value
    acknowledgement are canonical. Only the rlimit fields are child-observed;
    wall time, cumulative direction bytes and concurrency are parent-owned, while
@@ -257,26 +275,30 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    nonblocking; prospective cumulative direction caps, fixed-buffer partial and
    `EINTR`/`EAGAIN`/hangup/error handling share the immutable spawn deadline.
    Live-process I/O errors enter the termination/reap containment path under the
-   required ignored-`SIGPIPE` contract. Test-only fixture
-   seams prove held identity, limit validation, environment/descriptor closure,
+   required ignored-`SIGPIPE` contract. Fixture and non-default evidence seams
+   prove held identity, limit validation, environment/descriptor closure,
    stage-one spawn/group/exec denial, canonical wall timeout, pipe-limit/failure
-   containment, reap and clean next
-   launch. This grants no production worker, query-wire or admitted-witness
-   authority.
-3. **Partial:** the hidden private-entry discriminator is the first user-code
+   containment, exact `Hello`/`Ready`/EOF, trailing-output rejection, reap and
+   clean next launch. The handshake correlates one bounded GNU build-ID digest;
+   the parent's separate full-file SHA remains diagnostic. This grants no
+   production worker, parser-qualified policy/profile, query wire or admitted
+   witness authority.
+3. **Partial; control-ready candidate evidenced:** the hidden private-entry discriminator is the first user-code
    statement before Clap/application thread-pool initialization. Exact two-token
    routing, malformed-reserved rejection, raw-empty-`environ` enforcement, ordinary
-   CLI fallthrough and silent status 78 via raw Unix `_exit` are tested, including a malformed raw
-   environment entry that Rust's iterator filters. The selected invocation still
-   reaches only an unavailable-worker stub. Add post-exec verification, signal
-   reset, final default-deny syscall policy and verified controls before `Ready`.
-   Qualify descendant prevention without relying on
-   per-user `RLIMIT_NPROC` as a per-worker boundary. No untrusted bytes may be consumed
-   under the stage-one/default-allow gap.
+   CLI fallthrough and silent status 78 via raw Unix `_exit` are tested, including
+   a malformed raw environment entry that Rust's iterator filters. The prepared
+   evidence path verifies/repairs the enumerated post-exec control envelope,
+   installs/self-probes a TSYNC default-kill policy candidate before reading
+   `Hello`, and emits independently derived `Ready`. Descendant prevention does
+   not rely on per-user `RLIMIT_NPROC`. The candidate must still be replaced or
+   qualified against the complete parser corpus/syscall surface, and the partial
+   dependency marker must become a complete governed profile before QueryV1.
 4. **Partial:** parent I/O tests inject stalls, truncation, closed pipes and
    cumulative-limit rejection, proving attempted kill/reap and successful next
    launch. Add cancellation, panic, abort, stack/address-space exhaustion,
-   malformed/trailing protocol output and forced death; prove no
+   malformed protocol output and forced death; trailing control output is now
+   contained. Prove no
    PID/FD/permit leak and a successful next request after each.
 5. Define a complete flat index-based `QueryV1` wire and iterative fallible
    encoder/decoder. Prove exact decode/re-encode replay plus frame, input, output,
@@ -310,10 +332,11 @@ the current explicitly uncontrolled compiler path.
   intact.
 - Good: process containment is a fail-closed boundary for the audited upstream
   parser paths that cannot be completely hooked in-process.
-- Good: the private dormant parent now has descriptor-exact launch,
+- Good: the private parent now has descriptor-exact launch,
   deadline/cumulative-cap nonblocking pipe primitives and deterministic
-  pidfd/process-group cleanup; the hidden dispatcher fails closed without
-  exposing a parser service or widening advertised product capability.
+  pidfd/process-group cleanup plus an evidence-only post-exec control check,
+  policy-candidate transition and exact control handshake; the hidden dispatcher
+  fails closed without exposing a parser service or widening product capability.
 - Cost: a fresh worker adds launch/IPC latency, a bounded wire protocol and
   Linux-specific operating-system qualification.
 - Cost: the flat wire must explicitly cover the full admitted `Query` algebra;
@@ -323,16 +346,16 @@ the current explicitly uncontrolled compiler path.
 
 ## Nonclaims
 
-This decision does not claim an accessible production worker, complete
-containment or a general syscall sandbox. The first-statement dispatcher is only
-an exact fail-closed routing seam: every reserved invocation exits at the
-unavailable-worker stub. In particular, this decision does not claim post-exec
-final-policy verification, a final default-deny policy, `Ready` exchange, bounded
-query-protocol IPC, parser invocation, `QueryV1` wire, an admitted witness,
-independent release/runtime attestation, concurrency-permit integration or
-serving activation. The current
-fingerprint does not authenticate a release or its dynamic closure; pre-exec dumpability is
-not asserted after exec; and pidfd acquisition assumes integration excludes a
+This decision does not claim an accessible production parser worker, complete
+containment or a general syscall sandbox. The evidence-only control peer proves
+only the enumerated post-exec observations/repairs, candidate-policy installation
+probe, exact `Hello`/`Ready`/EOF exchange and cleanup. It does not prove an
+accepted/final parser policy, parser-syscall completeness, a complete governed
+dependency profile, UID/GID/groups/capability/namespace/LSM confinement, query
+IPC, parser execution, `QueryV1`, an admitted witness, independent release or
+runtime attestation, permit integration or serving activation. The full-file
+fingerprint and bounded GNU build-ID digest do not authenticate a release or its
+dynamic closure; and pidfd acquisition assumes integration excludes a
 competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible
 sleep can still delay reap. This ADR also does not claim exact CPU time or heap
 bytes, governance of raw/conformance APIs, complete owned compiler-phase

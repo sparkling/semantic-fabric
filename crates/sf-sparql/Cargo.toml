@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "semantic-fabric virtualizer: SPARQL→SQL OBDA rewriting (ADR-0007)"
 
+[features]
+parser-worker-evidence = []
+
 [dependencies]
 sf-core.workspace = true
 sf-sql.workspace = true

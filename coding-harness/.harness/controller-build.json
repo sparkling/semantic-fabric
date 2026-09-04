@@ -107,7 +107,7 @@
     "coding-harness/dist/programme-capture-private-source-v1.js": "017a9460306d9270e987d76295ea0dbaab027e4d8d29d37791993dde3fa4810e",
     "coding-harness/dist/programme-capture-protected-paths-v1.js": "39318068907d78eb38362c39ae4c98445cda09e21c000477aad1d59e3487d6c3",
     "coding-harness/dist/programme-capture-runner-profile-v1.js": "61c4b076b28c2ce5544978df15083969ca45e1e732909c4a81a01dadc062df26",
-    "coding-harness/dist/programme-capture-source-paths-v1.js": "4d72c1448a6595e9c1600186176970429e71fc528cb4bd314aab3267e623e731",
+    "coding-harness/dist/programme-capture-source-paths-v1.js": "e2e7f32ca27bde4b8968c18935fa817a06dc021e806e5d2320f38f02116c7429",
     "coding-harness/dist/programme-capture-state-v1.js": "0ce780155fe9dfb5033098f54c7a626a3490d34cbff7ddd88e0e500f04a791f7",
     "coding-harness/dist/programme-capture-supervisor-authority-config-v2.js": "29ea6c4caa028535220d3f04bc79f7f36e2112530a3fd89f409aebd191a4ced3",
     "coding-harness/dist/programme-capture-supervisor-authority-transition-v2.js": "d6df66d081b1d76fb6082b63e8c839e0de3bda849e01c9fc80119cedcbed16f4",
@@ -305,5 +305,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "d96297ce422f73103a04f2baea93bc4f8cb7b739647d8047703183f1d0264f0a"
+  "runtimeTreeDigest": "21be79769cbd8f7277f85074f3d7d44b56d20cdcf1d5d12b826081c02818d405"
 }

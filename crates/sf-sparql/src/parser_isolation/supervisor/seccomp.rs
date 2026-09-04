@@ -3,8 +3,9 @@
 //! This is deliberately a default-allow deny-list, not a general sandbox. It
 //! prevents process/thread creation, process-group escape, limit relaxation,
 //! and every exec except the launcher's one descriptor-exact `execveat`. A
-//! future worker must stack its separately reviewed final policy before Ready.
-//! Until that post-exec policy exists, no untrusted bytes may reach the worker.
+//! worker entry stacks a separately reviewed default-kill control-ready policy
+//! candidate before Ready. That candidate is not parser-qualified, so no query
+//! bytes may reach the worker.
 
 use std::os::fd::RawFd;
 
@@ -137,7 +138,7 @@ fn build_filters(
         statement(BPF_RET_K, SECCOMP_RET_KILL_PROCESS),
     ];
 
-    // Blanket clone denial is load-bearing: the future worker is single
+    // Blanket clone denial is load-bearing: worker entry is single
     // threaded after this point. Tokio, Rayon, and lazy background-thread
     // initialization are forbidden on that private path.
     for syscall in [
@@ -155,7 +156,7 @@ fn build_filters(
     }
 
     // Permit only query-only self observation (pid 0, new_limit NULL), and
-    // reject cross-process queries and every mutation. The future worker must
+    // reject cross-process queries and every mutation. Worker entry must
     // verify inherited caps before Ready without gaining a way to relax them.
     filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 13));
     filters.extend([

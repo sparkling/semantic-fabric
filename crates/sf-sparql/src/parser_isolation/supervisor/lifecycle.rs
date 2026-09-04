@@ -31,6 +31,11 @@ impl ParserWorkerProcess {
         self.contain_io_result(result)
     }
 
+    pub(super) fn expect_stdout_eof_until_deadline(&mut self) -> Result<(), SupervisorError> {
+        let result = self.io.expect_eof(&self.pidfd, self.wall_deadline);
+        self.contain_io_result(result)
+    }
+
     pub(super) fn close_stdin(&mut self) {
         self.io.close_stdin();
     }

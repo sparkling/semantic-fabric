@@ -34,7 +34,7 @@ fn ordinary_help_still_reaches_clap() {
 }
 
 #[test]
-fn exact_private_tuple_exits_silently_at_the_dormant_boundary() {
+fn exact_private_tuple_without_supervisor_envelope_exits_silently() {
     assert_private_rejection(&run(PRIVATE_WORKER_NAME, &[PRIVATE_WORKER_MODE], true));
 }
 

@@ -1,12 +1,18 @@
 //! Byte-exact private parser-worker entry discrimination.
 //!
 //! This entry runs before `sf-cli` invokes Clap or creates application thread
-//! pools. The reserved tuple is only a routing sentinel, never authentication;
-//! the future worker must verify its inherited kernel envelope before reading
-//! peer-controlled bytes. Until that verifier exists, every reserved invocation
-//! terminates silently and cannot fall through to the public CLI.
+//! pools. The reserved tuple is only a routing sentinel, never authentication.
+//! On qualified Linux, the worker verifies and repairs its inherited kernel
+//! envelope, stacks a default-kill control-ready policy candidate, and only then
+//! reads Hello. Unprepared or malformed reserved invocations terminate silently
+//! and cannot fall through to the public CLI. No parser request is accepted.
 
 use std::ffi::{OsStr, OsString};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod linux;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod policy_candidate;
 
 pub(super) const PRIVATE_WORKER_NAME: &str = "sf-parser-worker-v1";
 pub(super) const PRIVATE_WORKER_MODE: &str = "--sf-private-parser-worker-v1";
@@ -95,9 +101,16 @@ fn reject_private_invocation() -> ! {
 }
 
 fn run_private_worker_v1() -> ! {
-    // The final envelope verifier, policy installation, and Ready exchange are
-    // deliberately a later slice. Exact private routing is fail-closed until
-    // that complete transition exists.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        let status = if linux::run().is_ok() {
+            0
+        } else {
+            PRIVATE_WORKER_REJECTED_EXIT_CODE
+        };
+        unsafe { libc::_exit(status) }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     reject_private_invocation()
 }
 

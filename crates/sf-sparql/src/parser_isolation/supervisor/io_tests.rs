@@ -83,6 +83,33 @@ mod linux_tests {
     }
 
     #[test]
+    fn output_eof_is_exact_and_trailing_bytes_are_contained_before_recovery() {
+        let shell = prepared("/bin/sh");
+        let mut clean = spawn_fixture(&shell, v1_limits(), &[b"sh", b"-c", b"printf R"])
+            .expect("launch clean EOF fixture");
+        let mut frame = [0_u8; 1];
+        clean.read_exact_until_deadline(&mut frame).unwrap();
+        assert_eq!(frame, [b'R']);
+        clean.expect_stdout_eof_until_deadline().unwrap();
+        assert!(clean.wait_until_deadline().unwrap().success());
+
+        let mut trailing = spawn_fixture(&shell, v1_limits(), &[b"sh", b"-c", b"printf RZ"])
+            .expect("launch trailing-output fixture");
+        trailing.read_exact_until_deadline(&mut frame).unwrap();
+        assert_eq!(frame, [b'R']);
+        let pidfd = trailing.duplicate_pidfd().unwrap();
+        assert!(matches!(
+            trailing.expect_stdout_eof_until_deadline(),
+            Err(SupervisorError::InvalidState(
+                "parser worker emitted trailing protocol output"
+            ))
+        ));
+        assert!(trailing.child.is_none(), "trailing output must reap");
+        assert!(!pidfd_targets_live_process(&pidfd));
+        successful_round_trip(&prepared("/bin/cat"));
+    }
+
+    #[test]
     fn stalled_read_uses_the_spawn_deadline_and_recovers() {
         let executable = prepared("/bin/sh");
         let mut child = spawn_stalled_shell(&executable, v1_limits().values().max_input_bytes);

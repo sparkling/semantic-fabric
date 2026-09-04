@@ -72,6 +72,28 @@ fn hello_and_ready_have_canonical_deterministic_round_trips() {
 }
 
 #[test]
+fn worker_acknowledgement_uses_independently_supplied_contract_values() {
+    let hello = sample_hello();
+    let ready = hello
+        .acknowledge_verified(
+            BuildIdentityDigest::new([0x22; DIGEST_LEN]),
+            ParserProfileDigest::new([0x33; DIGEST_LEN]),
+            sample_limits(),
+        )
+        .expect("independent values match the request");
+    assert_eq!(verify_ready(&hello, &ready), Ok(()));
+
+    assert_eq!(
+        hello.acknowledge_verified(
+            BuildIdentityDigest::new([0x23; DIGEST_LEN]),
+            ParserProfileDigest::new([0x33; DIGEST_LEN]),
+            sample_limits(),
+        ),
+        Err(HandshakeError::BuildIdentityMismatch)
+    );
+}
+
+#[test]
 fn decoder_requires_exact_zero_n_and_n_plus_one_frame_lengths() {
     let encoded = sample_hello().encode();
     assert_eq!(

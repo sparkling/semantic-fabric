@@ -113,6 +113,13 @@ pub use compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthori
 pub use iq::Branch;
 #[doc(hidden)]
 pub use parser_isolation::dispatch_private_parser_worker_v1;
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[doc(hidden)]
+pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
 pub use saturate::Tbox;
 
 /// Errors raised by the virtualizer (deferred features surface as

@@ -33,13 +33,14 @@ Compiler-measurement work-stack allocation failure has a distinct typed cause
 and a dormant redacted `503` mapping without `Retry-After`; no public controlled
 compiler path serves it.
 
-ADR-0053's dormant parent additionally has cumulative-cap nonblocking pipe I/O
+ADR-0053's private parent additionally has cumulative-cap nonblocking pipe I/O
 under the immutable spawn deadline. Fixed-buffer partial operations and
 `EINTR`/`EAGAIN`/hangup/error outcomes are contained, and each live-process I/O
 error invokes the termination/reap containment path. Direction caps cover the whole future protocol lifetime,
 including handshake and frame headers; they are not raw-query allowances, so
-the final query ceiling needs framing headroom and calibration. No query
-protocol calls this transport.
+the final query ceiling needs framing headroom and calibration. Its feature-gated
+evidence seam now uses exact `Hello`/`Ready`/EOF control frames; no query-protocol
+frame calls this transport.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
@@ -341,24 +342,27 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 1. **Core identity — foundation implemented:** the fourth counter/error/limit
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
-2. **Parser/envelope — diagnostic, handshake and parent-supervisor foundations only:** raw
+2. **Parser/envelope — diagnostic and control-ready evidence candidate only:** raw
    lexical, parser-view direct-IRI and allocation-fallible iterative algebra/Plan
-   measurements exist with provisional limits. ADR-0053's dormant parent has
+   measurements exist with provisional limits. ADR-0053's private parent has
    held-executable validation and a descriptor-exact private launch primitive under exact rlimits, a
    default-allow stage-one seccomp filter, cumulative-cap nonblocking parent
    pipes sharing the immutable spawn deadline, and a termination/reap
    containment path for live-process I/O failures. A hidden first-statement
    dispatcher now distinguishes the exact reserved two-token invocation before
-   Clap/application thread-pool initialization, requires raw-empty Linux `environ`,
-   and exits every reserved invocation silently with status 78 at an
-   unavailable-worker stub (via raw `_exit` on Unix).
-   A verified final default-deny policy, `Ready` exchange, bounded query-protocol
-   IPC, parser invocation, `QueryV1` wire, admitted witness and independent
-   release/runtime attestation remain absent. Normal loader/Rust runtime startup necessarily
-   precedes dispatch; the future worker may read no untrusted IPC until the final
-   policy is installed and verified. Implement those boundaries, integrate
-   metering into the algebra pass, add prospective plan-build limits, and
-   calibrate before activation.
+   Clap/application thread-pool initialization and requires raw-empty Linux
+   `environ`. The non-default evidence seam launches a held ELF, correlates one
+   independently observed bounded GNU build ID, repairs and verifies the
+   post-exec envelope, compares local candidate profile/limit material, installs
+   and self-probes a default-kill policy candidate, verifies `Ready`, and then
+   requires exact EOF. Malformed or unprepared reserved invocations still exit
+   silently with status 78 via raw Unix `_exit`. This candidate is neither the
+   final parser policy nor a governed dependency closure and adds no UID/GID,
+   group, capability or privilege-transition contract. `QueryV1`, query IPC,
+   parser invocation, an admitted witness, serving and independent attestation
+   remain absent. Normal loader/Rust runtime startup necessarily precedes
+   dispatch. Qualify the parser policy/profile and implement those remaining
+   boundaries, then calibrate before activation.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
@@ -434,9 +438,11 @@ logical-work accounting across governed cold and cache-hit paths.”
 Unicode and uses recursive PEG productions and allocation-heavy semantic
 actions. The raw scanner does not bound that parser. Checkpoints before and
 after the call cannot interrupt construction or safe destruction. ADR-0053's
-selected bounded Rust process isolation now has a dormant parent-side launch,
-bounded-pipe-I/O and cleanup foundation. The worker-side final policy, bounded
-protocol, flat wire and iterative parent decode remain activation blockers for
+selected bounded Rust process isolation now has a private parent-side launch,
+bounded-pipe-I/O and cleanup foundation plus an evidence-only control-policy
+candidate and bounded `Hello`/`Ready`/EOF handshake. Parser-policy/profile
+qualification, QueryV1/query framing, parser execution, the flat wire, iterative
+parent decode and an admitted witness remain activation blockers for
 `compile_controlled` and every
 parser-inclusive boundedness claim—not merely a stronger one-second
 cancellation SLA. A separately named post-parse-only mode could be developed,

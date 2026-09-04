@@ -1,4 +1,4 @@
-//! Private tests for the dormant Linux supervisor foundation.
+//! Private tests for the Linux supervisor foundation.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux_tests {

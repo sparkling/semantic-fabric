@@ -21,3 +21,4 @@ anyhow.workspace = true
 
 [dev-dependencies]
 libc.workspace = true
+sf-sparql = { workspace = true, features = ["parser-worker-evidence"] }
