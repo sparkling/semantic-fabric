@@ -225,7 +225,8 @@ impl PreparedParserExecutable {
 
     #[cfg(any(
         feature = "parser-worker-evidence",
-        feature = "query-v1-transport-evidence"
+        feature = "query-v1-transport-evidence",
+        feature = "query-v1-transport-mutant-evidence"
     ))]
     pub(in crate::parser_isolation) fn from_file_for_evidence(
         file: File,

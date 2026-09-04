@@ -17,6 +17,10 @@ use crate::parser_isolation::protocol::ParserWorkerLimits;
 use crate::parser_isolation::worker::{
     PRIVATE_QUERY_V1_TRANSPORT_MODE, PRIVATE_QUERY_V1_TRANSPORT_NAME,
 };
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+use crate::parser_isolation::worker::{
+    PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE, PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+};
 use crate::parser_isolation::worker::{PRIVATE_WORKER_MODE, PRIVATE_WORKER_NAME};
 
 const MIN_DYNAMIC_LOADER_FDS: u64 = 16;
@@ -112,6 +116,21 @@ pub(super) fn spawn_query_v1_transport(
         &[
             PRIVATE_QUERY_V1_TRANSPORT_NAME.as_bytes(),
             PRIVATE_QUERY_V1_TRANSPORT_MODE.as_bytes(),
+        ],
+    )
+}
+
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(super) fn spawn_query_v1_transport_mutant(
+    executable: &PreparedParserExecutable,
+    limits: ParserWorkerLimits,
+) -> Result<ParserWorkerProcess, SupervisorError> {
+    spawn(
+        executable,
+        limits,
+        &[
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME.as_bytes(),
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE.as_bytes(),
         ],
     )
 }

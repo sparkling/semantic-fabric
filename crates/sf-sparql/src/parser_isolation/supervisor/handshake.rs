@@ -3,10 +3,16 @@
 use super::executable::PreparedParserExecutable;
 use super::lifecycle::ParserWorkerProcess;
 use super::{linux, SupervisorError};
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+use crate::parser_isolation::parse_protocol::ParseFrameError;
 use crate::parser_isolation::parse_protocol::PreparedParseRequestV1;
 use crate::parser_isolation::profile::{control_ready_profile_candidate_digest, v1_limits};
 use crate::parser_isolation::protocol::{
     verify_ready, HandshakeNonce, HelloFrame, ReadyFrame, DIGEST_LEN, FRAME_LEN,
+};
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+use crate::parser_isolation::query_v1_mutant::{
+    QueryV1TransportMutant, MAX_MUTANT_SOURCE_BYTES_V1,
 };
 
 pub(super) struct ControlReadyWorker {
@@ -33,11 +39,22 @@ pub(super) fn prepare(
     Ok(PreparedControlExchange { hello, request })
 }
 
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(super) fn prepare_query_v1_mutant(
+    executable: &PreparedParserExecutable,
+    source: &str,
+) -> Result<PreparedControlExchange, SupervisorError> {
+    if source.len() > MAX_MUTANT_SOURCE_BYTES_V1 {
+        return Err(ParseFrameError::SourceLimitExceeded.into());
+    }
+    prepare(executable, source)
+}
+
 pub(super) fn launch(
     executable: &PreparedParserExecutable,
     prepared: PreparedControlExchange,
 ) -> Result<ControlReadyWorker, SupervisorError> {
-    launch_with(executable, prepared, linux::spawn_private)
+    launch_with(executable, prepared, linux::spawn_private, None)
 }
 
 #[cfg(feature = "query-v1-transport-evidence")]
@@ -45,7 +62,21 @@ pub(super) fn launch_query_v1_transport(
     executable: &PreparedParserExecutable,
     prepared: PreparedControlExchange,
 ) -> Result<ControlReadyWorker, SupervisorError> {
-    launch_with(executable, prepared, linux::spawn_query_v1_transport)
+    launch_with(executable, prepared, linux::spawn_query_v1_transport, None)
+}
+
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(super) fn launch_query_v1_transport_mutant(
+    executable: &PreparedParserExecutable,
+    prepared: PreparedControlExchange,
+    mutant: QueryV1TransportMutant,
+) -> Result<ControlReadyWorker, SupervisorError> {
+    launch_with(
+        executable,
+        prepared,
+        linux::spawn_query_v1_transport_mutant,
+        Some(mutant.encode()),
+    )
 }
 
 fn launch_with(
@@ -55,8 +86,12 @@ fn launch_with(
         &PreparedParserExecutable,
         crate::parser_isolation::protocol::ParserWorkerLimits,
     ) -> Result<ParserWorkerProcess, SupervisorError>,
+    directive: Option<[u8; 2]>,
 ) -> Result<ControlReadyWorker, SupervisorError> {
     let mut process = spawn(executable, v1_limits())?;
+    if let Some(directive) = directive {
+        process.write_all_until_deadline(&directive)?;
+    }
     process.write_all_until_deadline(&prepared.hello.encode())?;
 
     let mut encoded_ready = [0_u8; FRAME_LEN];

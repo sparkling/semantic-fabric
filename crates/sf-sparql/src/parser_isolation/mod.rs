@@ -66,10 +66,32 @@ pub fn exercise_synthetic_query_v1_transport_for_evidence(
         .map_err(|error| error.to_string())
 }
 
+/// Non-default evidence seam for one closed QueryV1 transport mutant.
+///
+/// Success means the selected private peer was contained and exhibited its
+/// exact terminal stage and whole-life byte accounting. No result bytes,
+/// decoded query, or parser/admission authority escape this boundary.
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_synthetic_query_v1_transport_mutant_for_evidence(
+    executable: &std::path::Path,
+    source: &str,
+    mutant: QueryV1TransportMutant,
+) -> Result<(), String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_query_v1_transport_mutant_for_evidence(file, source, mutant)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(all(
     any(
         feature = "parser-worker-evidence",
-        feature = "query-v1-transport-evidence"
+        feature = "query-v1-transport-evidence",
+        feature = "query-v1-transport-mutant-evidence"
     ),
     target_os = "linux",
     target_arch = "x86_64",

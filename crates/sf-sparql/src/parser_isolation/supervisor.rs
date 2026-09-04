@@ -7,8 +7,9 @@
 //! has a fail-closed private entry discriminator, and only a non-default Rust
 //! evidence seam can reach the Hello/Ready/EOF exchange. The parser peer remains
 //! control-only; an independently gated parser-free peer exercises one fixed
-//! synthetic QueryV1 request/result transport without parser or admission
-//! authority.
+//! synthetic QueryV1 request/result transport, while a separately gated closed
+//! mutant peer supplies transport-failure evidence. Neither has parser or
+//! admission authority.
 //!
 //! The foundation pins one opened current-executable inode, observes bounded
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
@@ -43,7 +44,17 @@ mod lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
 #[cfg(all(
-    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+mod query_v1_mutant;
+#[cfg(all(
+    any(
+        feature = "query-v1-transport-evidence",
+        feature = "query-v1-transport-mutant-evidence"
+    ),
     target_os = "linux",
     target_arch = "x86_64",
     target_env = "gnu"
@@ -152,6 +163,16 @@ impl PreparedParserExecutable {
         let prepared = handshake::prepare(self, source)?;
         handshake::launch_query_v1_transport(self, prepared)
     }
+
+    #[cfg(feature = "query-v1-transport-mutant-evidence")]
+    fn launch_query_v1_transport_mutant(
+        &self,
+        source: &str,
+        mutant: super::query_v1_mutant::QueryV1TransportMutant,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare_query_v1_mutant(self, source)?;
+        handshake::launch_query_v1_transport_mutant(self, prepared, mutant)
+    }
 }
 
 #[cfg(all(
@@ -182,6 +203,24 @@ pub(super) fn exercise_query_v1_transport_for_evidence(
 ) -> Result<(), SupervisorError> {
     let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
     query_v1_transport::finish(prepared.launch_query_v1_transport(source)?)
+}
+
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_transport_mutant_for_evidence(
+    file: std::fs::File,
+    source: &str,
+    mutant: super::query_v1_mutant::QueryV1TransportMutant,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_mutant::finish(
+        prepared.launch_query_v1_transport_mutant(source, mutant)?,
+        mutant,
+    )
 }
 
 /// Buildable fail-closed stub for every unqualified target.

@@ -1,73 +1,205 @@
 //! Parent sequencing for the parser-free synthetic QueryV1 transport.
 
+use std::process::ExitStatus;
+
 use super::handshake::ControlReadyWorker;
 use super::lifecycle::ParserWorkerProcess;
 use super::SupervisorError;
 use crate::parser_isolation::parse_protocol::{
-    allocate_frame_exact, FrameAllocation, ParseFrameError, ParseRequestV1, ParseResultV1,
-    PreparedParseRequestV1, ResultHeaderV1, RESULT_HEADER_LEN, SYNTHETIC_EMPTY_ASK_QUERY_V1,
+    allocate_frame_exact, FrameAllocation, PreparedParseRequestV1, ResultHeaderV1,
+    RESULT_HEADER_LEN,
 };
+#[cfg(feature = "query-v1-transport-evidence")]
+use crate::parser_isolation::parse_protocol::{
+    ParseFrameError, ParseRequestV1, ParseResultV1, SYNTHETIC_EMPTY_ASK_QUERY_V1,
+};
+#[cfg(feature = "query-v1-transport-evidence")]
 use crate::parser_isolation::protocol::FRAME_LEN;
+#[cfg(feature = "query-v1-transport-evidence")]
 use crate::parser_isolation::query_v1;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TransportStage {
+    RequestWrite,
+    ResultHeaderRead,
+    StructuralPreflight,
+    ProspectiveOutput,
+    BodyLimit,
+    FrameAllocation,
+    ResultBodyRead,
+    OutputEof,
+    TerminalWait,
+    Containment,
+}
+
+/// A complete frame whose peer has already passed pidfd waitability, process-
+/// group sweep, and exact reap. Callers must still require successful status
+/// before inspecting any peer-controlled result semantics.
+pub(super) struct ReapedTransport {
+    pub(super) prepared_request: PreparedParseRequestV1,
+    pub(super) encoded_result: Vec<u8>,
+    pub(super) status: ExitStatus,
+    pub(super) sent_bytes: u64,
+    pub(super) received_bytes: u64,
+}
+
+/// Closed evidence for a transport failure after containment was attempted.
+/// No stack header, partial frame, or other peer-controlled bytes escape.
+pub(super) struct TransportFailure {
+    pub(super) stage: TransportStage,
+    pub(super) error: SupervisorError,
+    pub(super) terminal_status: Option<ExitStatus>,
+    pub(super) reaped: bool,
+    pub(super) sent_bytes: u64,
+    pub(super) received_bytes: u64,
+}
+
+impl TransportFailure {
+    fn into_error(self) -> SupervisorError {
+        self.error
+    }
+}
+
+#[cfg(feature = "query-v1-transport-evidence")]
 pub(super) fn finish(worker: ControlReadyWorker) -> Result<(), SupervisorError> {
-    let ControlReadyWorker {
-        mut process,
-        prepared_request,
-    } = worker;
-
-    process.write_all_until_deadline(prepared_request.encoded())?;
-    process.close_stdin();
-
-    let mut encoded_header = [0_u8; RESULT_HEADER_LEN];
-    process.read_exact_until_deadline(&mut encoded_header)?;
-    let header = contain_frame_result(&mut process, ResultHeaderV1::preflight(&encoded_header))?;
-
-    // Charge the peer's declared body against Ready plus the fixed header
-    // before either trusting that declaration or allocating storage for it.
-    process.ensure_can_receive(header.body_len())?;
-    contain_frame_result(&mut process, header.enforce_body_limit())?;
-
-    // The only result-frame allocation owns the complete header-plus-body
-    // bytes. No detached body or later capacity growth is permitted.
-    let mut encoded_result = contain_frame_result(
-        &mut process,
-        allocate_frame_exact(header.frame_len(), FrameAllocation::Attempt),
-    )?;
-    encoded_result[..RESULT_HEADER_LEN].copy_from_slice(&encoded_header);
-    process.read_exact_until_deadline(&mut encoded_result[RESULT_HEADER_LEN..])?;
-    process.expect_stdout_eof_until_deadline()?;
-
-    // wait_until_deadline performs pidfd waitability inspection, sweeps the
-    // process group while its leader is unreaped, and then reaps the exact
-    // Child. Peer-controlled semantics remain untouched until this succeeds.
-    let status = process.wait_until_deadline()?;
-    if !status.success() {
+    let reaped = capture_reaped(worker).map_err(TransportFailure::into_error)?;
+    if !reaped.status.success() {
         return Err(SupervisorError::InvalidState(
             "QueryV1 transport peer did not exit successfully",
         ));
     }
 
-    verify_reaped_accounting(&process, &prepared_request)?;
-    verify_reaped_result(&prepared_request, &encoded_result)
+    verify_reaped_accounting(&reaped)?;
+    verify_reaped_result(&reaped.prepared_request, &reaped.encoded_result)
 }
 
-fn contain_frame_result<T>(
+/// Capture one complete QueryV1 frame without touching its semantic fields.
+/// Every pre-terminal failure is contained and reaped before returning.
+pub(super) fn capture_reaped(
+    worker: ControlReadyWorker,
+) -> Result<ReapedTransport, TransportFailure> {
+    let ControlReadyWorker {
+        mut process,
+        prepared_request,
+    } = worker;
+
+    let write_result = process.io.write_all(
+        &process.pidfd,
+        process.wall_deadline,
+        prepared_request.encoded(),
+    );
+    complete_live_step(&mut process, TransportStage::RequestWrite, write_result)?;
+    process.close_stdin();
+
+    let mut encoded_header = [0_u8; RESULT_HEADER_LEN];
+    let header_read =
+        process
+            .io
+            .read_exact(&process.pidfd, process.wall_deadline, &mut encoded_header);
+    complete_live_step(&mut process, TransportStage::ResultHeaderRead, header_read)?;
+    let preflight = ResultHeaderV1::preflight(&encoded_header).map_err(SupervisorError::from);
+    let header = complete_live_step(&mut process, TransportStage::StructuralPreflight, preflight)?;
+
+    // Charge the peer's declared body against Ready plus the fixed header
+    // before either trusting that declaration or allocating storage for it.
+    let prospective = process
+        .io
+        .ensure_can_receive(process.wall_deadline, header.body_len());
+    complete_live_step(&mut process, TransportStage::ProspectiveOutput, prospective)?;
+    let body_limit = header.enforce_body_limit().map_err(SupervisorError::from);
+    complete_live_step(&mut process, TransportStage::BodyLimit, body_limit)?;
+
+    // The only result-frame allocation owns the complete header-plus-body
+    // bytes. No detached body or later capacity growth is permitted.
+    let allocation = allocate_frame_exact(header.frame_len(), FrameAllocation::Attempt)
+        .map_err(SupervisorError::from);
+    let mut encoded_result =
+        complete_live_step(&mut process, TransportStage::FrameAllocation, allocation)?;
+    encoded_result[..RESULT_HEADER_LEN].copy_from_slice(&encoded_header);
+    let body_read = process.io.read_exact(
+        &process.pidfd,
+        process.wall_deadline,
+        &mut encoded_result[RESULT_HEADER_LEN..],
+    );
+    complete_live_step(&mut process, TransportStage::ResultBodyRead, body_read)?;
+    let eof = process.io.expect_eof(&process.pidfd, process.wall_deadline);
+    complete_live_step(&mut process, TransportStage::OutputEof, eof)?;
+
+    // wait_until_deadline performs pidfd waitability inspection, sweeps the
+    // process group while its leader is unreaped, and then reaps the exact
+    // Child. Peer-controlled semantics remain untouched until this succeeds.
+    let status = match process.wait_until_deadline() {
+        Ok(status) => status,
+        Err(error) => return Err(failure_after_wait(&mut process, error)),
+    };
+    Ok(ReapedTransport {
+        prepared_request,
+        encoded_result,
+        status,
+        sent_bytes: process.sent_bytes(),
+        received_bytes: process.received_bytes(),
+    })
+}
+
+fn complete_live_step<T>(
     process: &mut ParserWorkerProcess,
-    result: Result<T, ParseFrameError>,
-) -> Result<T, SupervisorError> {
+    stage: TransportStage,
+    result: Result<T, SupervisorError>,
+) -> Result<T, TransportFailure> {
     match result {
         Ok(value) => Ok(value),
-        Err(error) => Err(process.contain_live_failure(error.into())),
+        Err(error) => Err(contain_failure(process, stage, error)),
     }
 }
 
-fn verify_reaped_accounting(
-    process: &ParserWorkerProcess,
-    prepared_request: &PreparedParseRequestV1,
-) -> Result<(), SupervisorError> {
+fn contain_failure(
+    process: &mut ParserWorkerProcess,
+    stage: TransportStage,
+    primary: SupervisorError,
+) -> TransportFailure {
+    let sent_bytes = process.sent_bytes();
+    let received_bytes = process.received_bytes();
+    match process.terminate_and_reap() {
+        Ok(status) => TransportFailure {
+            stage,
+            error: primary,
+            terminal_status: Some(status),
+            reaped: true,
+            sent_bytes,
+            received_bytes,
+        },
+        Err(containment) => TransportFailure {
+            stage: TransportStage::Containment,
+            error: containment,
+            terminal_status: None,
+            reaped: process.child.is_none(),
+            sent_bytes,
+            received_bytes,
+        },
+    }
+}
+
+fn failure_after_wait(
+    process: &mut ParserWorkerProcess,
+    primary: SupervisorError,
+) -> TransportFailure {
+    if process.child.is_some() {
+        return contain_failure(process, TransportStage::TerminalWait, primary);
+    }
+    TransportFailure {
+        stage: TransportStage::TerminalWait,
+        error: primary,
+        terminal_status: None,
+        reaped: true,
+        sent_bytes: process.sent_bytes(),
+        received_bytes: process.received_bytes(),
+    }
+}
+
+#[cfg(feature = "query-v1-transport-evidence")]
+fn verify_reaped_accounting(reaped: &ReapedTransport) -> Result<(), SupervisorError> {
     let expected_input = FRAME_LEN
-        .checked_add(prepared_request.encoded().len())
+        .checked_add(reaped.prepared_request.encoded().len())
         .and_then(|total| u64::try_from(total).ok())
         .ok_or(SupervisorError::InvalidState(
             "QueryV1 transport input accounting overflowed",
@@ -79,7 +211,7 @@ fn verify_reaped_accounting(
         .ok_or(SupervisorError::InvalidState(
             "QueryV1 transport output accounting overflowed",
         ))?;
-    if process.sent_bytes() != expected_input || process.received_bytes() != expected_output {
+    if reaped.sent_bytes != expected_input || reaped.received_bytes != expected_output {
         return Err(SupervisorError::InvalidState(
             "QueryV1 transport lifetime byte accounting drifted",
         ));
@@ -90,6 +222,7 @@ fn verify_reaped_accounting(
 /// Replays request and result semantics only after the caller has completed a
 /// successful exact reap. The decoded `Query` remains local and is dropped
 /// before this evidence-only function returns unit.
+#[cfg(feature = "query-v1-transport-evidence")]
 fn verify_reaped_result(
     prepared_request: &PreparedParseRequestV1,
     encoded_result: &[u8],
@@ -122,7 +255,7 @@ fn verify_reaped_result(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "query-v1-transport-evidence"))]
 mod tests {
     use super::*;
     use crate::parser_isolation::parse_protocol::synthetic_empty_ask_result_header_for;

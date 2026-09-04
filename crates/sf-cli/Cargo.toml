@@ -26,6 +26,11 @@ name = "private_query_v1_transport"
 path = "tests/private_query_v1_transport.rs"
 required-features = ["query-v1-transport-evidence"]
 
+[[test]]
+name = "private_query_v1_transport_mutant"
+path = "tests/private_query_v1_transport_mutant.rs"
+required-features = ["query-v1-transport-mutant-evidence"]
+
 [dependencies]
 sf-core.workspace = true
 sf-sparql.workspace = true
