@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::build::build_tree;
-use crate::iq::node::IqNode;
+use crate::iq::node::{BindDef, IqCond, IqNode, Var};
 use crate::iq::resolve::{resolve, ResolveCx};
 use crate::iq::{Scan, TermDef};
 use crate::saturate::Tbox;
