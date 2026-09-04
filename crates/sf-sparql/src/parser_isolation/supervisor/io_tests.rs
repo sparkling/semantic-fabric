@@ -190,6 +190,35 @@ mod linux_tests {
         assert!(!pidfd_targets_live_process(&pidfd));
     }
 
+    #[test]
+    fn zero_length_io_cannot_bypass_the_spawn_deadline() {
+        let executable = prepared("/bin/cat");
+        for read in [false, true] {
+            let mut values = v1_limits().values();
+            values.wall_time_millis = 1;
+            let mut child = spawn_fixture(
+                &executable,
+                ParserWorkerLimits::new(values).unwrap(),
+                &[b"cat", b"-"],
+            )
+            .expect("launch deadline fixture");
+            let deadline = child.wall_deadline;
+            while Instant::now() < deadline {
+                std::hint::spin_loop();
+            }
+            let pidfd = child.duplicate_pidfd().unwrap();
+
+            let result = if read {
+                child.read_exact_until_deadline(&mut [])
+            } else {
+                child.write_all_until_deadline(&[])
+            };
+            assert!(matches!(result, Err(SupervisorError::DeadlineExceeded)));
+            assert!(child.child.is_none());
+            assert!(!pidfd_targets_live_process(&pidfd));
+        }
+    }
+
     fn spawn_stalled_shell(
         executable: &PreparedParserExecutable,
         max_input_bytes: u64,

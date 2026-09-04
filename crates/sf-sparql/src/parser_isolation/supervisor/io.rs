@@ -47,6 +47,7 @@ impl BoundedWorkerIo {
         deadline: Instant,
         bytes: &[u8],
     ) -> Result<(), SupervisorError> {
+        ensure_before_deadline(deadline)?;
         let expected = prospective_total(self.sent, bytes.len(), self.max_sent)
             .ok_or(SupervisorError::InvalidState(INPUT_LIMIT_MESSAGE))?;
         let descriptor = self
@@ -109,6 +110,7 @@ impl BoundedWorkerIo {
         deadline: Instant,
         output: &mut [u8],
     ) -> Result<(), SupervisorError> {
+        ensure_before_deadline(deadline)?;
         let expected = prospective_total(self.received, output.len(), self.max_received)
             .ok_or(SupervisorError::InvalidState(OUTPUT_LIMIT_MESSAGE))?;
         let descriptor = self
@@ -182,6 +184,14 @@ impl BoundedWorkerIo {
     #[cfg(test)]
     pub(super) const fn received(&self) -> u64 {
         self.received
+    }
+}
+
+fn ensure_before_deadline(deadline: Instant) -> Result<(), SupervisorError> {
+    if Instant::now() >= deadline {
+        Err(SupervisorError::DeadlineExceeded)
+    } else {
+        Ok(())
     }
 }
 
