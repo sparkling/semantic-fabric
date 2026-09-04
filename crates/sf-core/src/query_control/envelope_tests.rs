@@ -2,12 +2,19 @@ use super::*;
 
 #[test]
 fn generated_error_cardinality_includes_the_distinct_compiler_envelope_reason() {
-    assert_eq!(QueryControlError::VARIANT_COUNT, 8);
-    assert_eq!(QueryControlError::VARIANTS.len(), 8);
+    assert_eq!(QueryControlError::VARIANT_COUNT, 9);
+    assert_eq!(QueryControlError::VARIANTS.len(), 9);
     assert_eq!(
         QueryControlError::VARIANTS
             .iter()
             .filter(|error| **error == QueryControlError::CompilerEnvelopeExceeded)
+            .count(),
+        1
+    );
+    assert_eq!(
+        QueryControlError::VARIANTS
+            .iter()
+            .filter(|error| **error == QueryControlError::CompilerResourceExhausted)
             .count(),
         1
     );

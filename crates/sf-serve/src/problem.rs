@@ -7,11 +7,12 @@ use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde::Serialize;
-use sf_core::query_control::QueryControlError::{self, CompilerEnvelopeExceeded};
+use sf_core::query_control::QueryControlError::{
+    self, CompilerEnvelopeExceeded, CompilerResourceExhausted,
+};
 use sf_sparql::Error as SparqlError;
 
 static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProblemCode {
     InvalidRequest,
@@ -26,7 +27,6 @@ pub(crate) enum ProblemCode {
     SourceUnavailable,
     Internal,
 }
-
 const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlError::VARIANT_COUNT] = [
     (
         QueryControlError::DeadlineExceeded,
@@ -34,6 +34,7 @@ const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlErro
     ),
     (QueryControlError::Cancelled, ProblemCode::Internal),
     (CompilerEnvelopeExceeded, ProblemCode::QueryBudgetExceeded),
+    (CompilerResourceExhausted, ProblemCode::ServiceOverloaded),
     (
         QueryControlError::CompilerWorkExceeded,
         ProblemCode::QueryBudgetExceeded,
@@ -52,7 +53,6 @@ const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlErro
     ),
     (QueryControlError::AccountingOverflow, ProblemCode::Internal),
 ];
-
 impl ProblemCode {
     fn from_sparql(error: &SparqlError) -> Self {
         match error {

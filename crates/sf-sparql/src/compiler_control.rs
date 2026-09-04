@@ -142,10 +142,15 @@ impl<'control> CompileContext<'control> {
     fn measurement_error(&self, error: PlanMeasureError) -> Error {
         match error {
             PlanMeasureError::AccountingOverflow => self.meter.accounting_overflow(),
-            PlanMeasureError::LimitExceeded { .. } | PlanMeasureError::AllocationFailed => self
+            PlanMeasureError::LimitExceeded { .. } => self
                 .meter
                 .control
                 .terminate(QueryControlError::CompilerEnvelopeExceeded)
+                .into(),
+            PlanMeasureError::AllocationFailed => self
+                .meter
+                .control
+                .terminate(QueryControlError::CompilerResourceExhausted)
                 .into(),
         }
     }

@@ -9,6 +9,7 @@ use crate::iq::{Branch, Scan};
 use crate::plan_measure::clone_root::{
     measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
 };
+use crate::plan_measure::{PlanMeasureError, PlanMeasureLimit};
 use crate::Error;
 
 fn budget(max_compiler_work: u64) -> QueryBudget {
@@ -178,6 +179,37 @@ fn compile_context_maps_arithmetic_and_counter_overflow_to_query_control() {
         counter.checkpoint(),
         Err(QueryControlError::AccountingOverflow)
     );
+}
+
+#[test]
+fn compile_context_preserves_measurement_failure_classification() {
+    let allocation = budget(10);
+    let allocation_context = CompileContext::new(&allocation);
+    assert_control_error(
+        allocation_context.measurement_error(PlanMeasureError::AllocationFailed),
+        QueryControlError::CompilerResourceExhausted,
+    );
+    assert_eq!(
+        allocation.checkpoint(),
+        Err(QueryControlError::CompilerResourceExhausted)
+    );
+    assert_eq!(allocation.consumed(QueryCharge::CompilerWork), 0);
+
+    let envelope = budget(10);
+    let envelope_context = CompileContext::new(&envelope);
+    assert_control_error(
+        envelope_context.measurement_error(PlanMeasureError::LimitExceeded {
+            dimension: PlanMeasureLimit::Nodes,
+            observed: 2,
+            maximum: 1,
+        }),
+        QueryControlError::CompilerEnvelopeExceeded,
+    );
+    assert_eq!(
+        envelope.checkpoint(),
+        Err(QueryControlError::CompilerEnvelopeExceeded)
+    );
+    assert_eq!(envelope.consumed(QueryCharge::CompilerWork), 0);
 }
 
 #[test]

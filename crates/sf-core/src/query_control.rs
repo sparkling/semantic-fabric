@@ -93,6 +93,7 @@ define_query_control_error! {
     DeadlineExceeded => "query deadline exceeded",
     Cancelled => "query cancelled",
     CompilerEnvelopeExceeded => "query compiler safety envelope exceeded",
+    CompilerResourceExhausted => "query compiler resource exhausted",
     CompilerWorkExceeded => "query compiler-work budget exceeded",
     SourceWorkExceeded => "query source-work budget exceeded",
     ResultItemsExceeded => "query result-item budget exceeded",

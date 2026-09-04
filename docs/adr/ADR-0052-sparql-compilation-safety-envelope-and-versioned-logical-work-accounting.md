@@ -13,15 +13,18 @@ implements: [ADR-0010, ADR-0038]
 ## Status boundary
 
 This ADR is **proposed**. The compiler-work `QueryBudget` dimension, typed
-`CompilerWorkExceeded`/`CompilerEnvelopeExceeded` failures, mandatory
-`QueryControl::terminate` semantics, cache-profile key discriminator and
-`Arc<Plan>` cache storage are implemented foundations. Private dormant
-primitives also measure raw lexical proxies, parser-view direct-IRI
+`CompilerWorkExceeded`/`CompilerEnvelopeExceeded`/`CompilerResourceExhausted`
+failures, mandatory `QueryControl::terminate` semantics, cache-profile key
+discriminator and `Arc<Plan>` cache storage are implemented foundations.
+Private dormant primitives also measure raw lexical proxies, parser-view direct-IRI
 materialization, post-parse algebra, compiler reservations and complete Plan
-clone work. None is wired into whole-query serving governance: the blocking
-compiler closure receives no request control, `CompilerBinding::compile`
-remains uncontrolled, candidate limits are uncalibrated, and the parser and
-owned compiler phases are not prospectively governed.
+clone work. Exact branch-forest measurement, reservation and one clone are
+encapsulated as a non-separable private operation, but have no production caller
+yet. None is wired into whole-query serving governance: the blocking compiler
+closure receives the exact request control only for handoff checkpoints;
+`CompilerBinding::compile` remains uncontrolled, no `CompileContext` enters the
+owned pipeline, candidate limits are uncalibrated, and the parser and owned
+compiler phases are not prospectively governed.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -183,8 +186,11 @@ The algebra validation traversal, plan audit and a subsequent copy are distinct
 operations and each consumes its own units; that is not double charging. The
 same concrete operation is never charged twice. After activation, any charge-
 schedule or envelope-constant change requires a new compile-profile identity.
-Canonical key production must be bounded and fallible; unmetered recursive
-`Query::to_string()` is not acceptable on the governed path.
+An inability to allocate the bounded measurement work stack terminates the
+request as redacted `CompilerResourceExhausted`; it is not misreported as an
+input envelope violation or accounting overflow. Canonical key production must
+be bounded and fallible; unmetered recursive `Query::to_string()` is not
+acceptable on the governed path.
 
 This work model is a portable defensive proxy, not a measurement of total CPU,
 heap, I/O or source execution. If cache-independent query-complexity
@@ -279,7 +285,8 @@ through the finite default.
 Owned compilation phases checkpoint before and after parse and at bounded loop
 intervals. The first terminal cause remains sticky internally. A compiler-work
 failure before a live HTTP handoff is a redacted `429 query-budget-exceeded`; a
-deadline observed first is `DeadlineExceeded`; and the existing representable
+compiler measurement allocation failure is a redacted `503 service-overloaded`;
+a deadline observed first is `DeadlineExceeded`; and the existing representable
 expired-handoff rule still returns public `504` even when an earlier internal
 resource cause remains recorded. Cancellation and accounting overflow stay
 internal failures.
