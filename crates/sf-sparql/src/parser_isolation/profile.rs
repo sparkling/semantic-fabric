@@ -21,6 +21,21 @@ const _: () = {
     assert!(V1_CANDIDATE_RLIMIT_FSIZE_BYTES == 67_108_864);
 };
 
+/// Partial parser-worker identity used only to correlate the evidence seam.
+///
+/// This wrapper is deliberately not a governed parser profile and has no
+/// conversion into a future governed-profile identity. Equality only says that
+/// two evidence observations used the same provisional material. It cannot
+/// qualify a receipt for ADR-0053 gate 6.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ParserWorkerEvidenceProfileV1(ParserProfileDigest);
+
+impl ParserWorkerEvidenceProfileV1 {
+    pub(super) const fn new(digest: ParserProfileDigest) -> Self {
+        Self(digest)
+    }
+}
+
 pub(super) const V1_LIMIT_VALUES: ParserWorkerLimitValues = ParserWorkerLimitValues {
     stack_bytes: 16 * 1024 * 1024,
     address_space_bytes: 1024 * 1024 * 1024,
@@ -53,6 +68,15 @@ pub(super) fn v1_limits() -> ParserWorkerLimits {
     ParserWorkerLimits::new(V1_LIMIT_VALUES).expect("the fixed V1 limits are valid")
 }
 
+pub(super) fn parser_worker_evidence_profile_v1() -> ParserWorkerEvidenceProfileV1 {
+    ParserWorkerEvidenceProfileV1::new(control_ready_profile_candidate_digest())
+}
+
+/// The digest retained for the existing control-ready handshake only.
+///
+/// It remains a partial grammar-source marker, not a complete governed parser
+/// profile. `ParserWorkerEvidenceProfileV1` wraps this material only for the
+/// provisional, feature-gated correlation seam.
 pub(super) fn control_ready_profile_candidate_digest() -> ParserProfileDigest {
     ParserProfileDigest::new(Sha256::digest(CONTROL_READY_PROFILE_CANDIDATE_V1_MATERIAL).into())
 }

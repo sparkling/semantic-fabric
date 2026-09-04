@@ -17,6 +17,9 @@ mod query_v1;
 mod supervisor;
 mod worker;
 
+#[cfg(feature = "parser-worker-evidence")]
+mod alpha_equivalence;
+
 pub use worker::dispatch_private_parser_worker_v1;
 
 /// Non-default Rust evidence seam for the exact worker control handshake.
