@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 
 use super::policy_candidate::ControlReadyPolicyCandidate;
+use super::PRIVATE_WORKER_REJECTED_EXIT_CODE;
 use crate::parser_isolation::build_identity;
 use crate::parser_isolation::profile::{
     control_ready_profile_candidate_digest, v1_limits, V1_CANDIDATE_RLIMIT_FSIZE_BYTES,
@@ -20,28 +21,37 @@ mod query_v1_transport;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct WorkerFailure;
 
-pub(super) fn run() -> Result<(), WorkerFailure> {
-    let prepared = prepare_for_hello()?;
-    let (_nonce, _policy) = read_hello_and_emit_ready(prepared)?;
-
-    // QueryV1 is not implemented on the parser peer. Remaining alive until
-    // the trusted parent closes its pipe proves a real control-ready
-    // transition without accepting an unframed byte as a parser request.
-    require_parent_eof()
+pub(super) fn run() -> ! {
+    match prepare_for_hello() {
+        Ok(prepared) => {
+            let result = read_hello_and_emit_ready(&prepared).and_then(|_| {
+                // QueryV1 is not implemented on the parser peer. Remaining
+                // alive until the trusted parent closes its pipe proves a real
+                // control-ready transition without accepting a parse request.
+                require_parent_eof()
+            });
+            exit_with_policy_owner_live(&prepared, result)
+        }
+        Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
+    }
 }
 
 #[cfg(feature = "query-v1-transport-evidence")]
-pub(super) fn run_query_v1_transport() -> Result<(), WorkerFailure> {
-    let prepared = prepare_for_hello()?;
-    let (nonce, _policy) = read_hello_and_emit_ready(prepared)?;
-    query_v1_transport::run(nonce)
+pub(super) fn run_query_v1_transport() -> ! {
+    match prepare_for_hello() {
+        Ok(prepared) => {
+            let result = read_hello_and_emit_ready(&prepared).and_then(query_v1_transport::run);
+            exit_with_policy_owner_live(&prepared, result)
+        }
+        Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
+    }
 }
 
 struct PreparedForHello {
     build_identity: BuildIdentityDigest,
     parser_profile_candidate: ParserProfileDigest,
     observed_limits: ParserWorkerLimits,
-    policy: ControlReadyPolicyCandidate,
+    _policy: ControlReadyPolicyCandidate,
 }
 
 fn prepare_for_hello() -> Result<PreparedForHello, WorkerFailure> {
@@ -62,13 +72,11 @@ fn prepare_for_hello() -> Result<PreparedForHello, WorkerFailure> {
         build_identity,
         parser_profile_candidate,
         observed_limits,
-        policy,
+        _policy: policy,
     })
 }
 
-fn read_hello_and_emit_ready(
-    prepared: PreparedForHello,
-) -> Result<(HandshakeNonce, ControlReadyPolicyCandidate), WorkerFailure> {
+fn read_hello_and_emit_ready(prepared: &PreparedForHello) -> Result<HandshakeNonce, WorkerFailure> {
     let mut encoded_hello = [0_u8; FRAME_LEN];
     read_exact(libc::STDIN_FILENO, &mut encoded_hello)?;
     let hello = HelloFrame::decode(&encoded_hello).map_err(|_| WorkerFailure)?;
@@ -81,7 +89,26 @@ fn read_hello_and_emit_ready(
         )
         .map_err(|_| WorkerFailure)?;
     write_all(libc::STDOUT_FILENO, &ready.encode())?;
-    Ok((nonce, prepared.policy))
+    Ok(nonce)
+}
+
+fn exit_with_policy_owner_live(
+    _prepared: &PreparedForHello,
+    result: Result<(), WorkerFailure>,
+) -> ! {
+    let status = if result.is_ok() {
+        0
+    } else {
+        PRIVATE_WORKER_REJECTED_EXIT_CODE
+    };
+    raw_exit(status)
+}
+
+fn raw_exit(status: i32) -> ! {
+    // The caller deliberately retains `PreparedForHello` while entering this
+    // non-returning boundary, so the installed policy owner is never dropped
+    // before either the successful or rejected process exit.
+    unsafe { libc::_exit(status) }
 }
 
 fn repair_and_verify_kernel_envelope() -> Result<libc::pid_t, WorkerFailure> {

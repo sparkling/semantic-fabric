@@ -172,12 +172,7 @@ fn run_private_worker_v1() -> ! {
         target_env = "gnu"
     ))]
     {
-        let status = if linux::run().is_ok() {
-            0
-        } else {
-            PRIVATE_WORKER_REJECTED_EXIT_CODE
-        };
-        unsafe { libc::_exit(status) }
+        linux::run()
     }
     #[cfg(not(all(
         feature = "parser-worker-evidence",
@@ -196,12 +191,7 @@ fn run_query_v1_transport_worker_v1() -> ! {
         target_env = "gnu"
     ))]
     {
-        let status = if linux::run_query_v1_transport().is_ok() {
-            0
-        } else {
-            PRIVATE_WORKER_REJECTED_EXIT_CODE
-        };
-        unsafe { libc::_exit(status) }
+        linux::run_query_v1_transport()
     }
     #[cfg(not(all(
         feature = "query-v1-transport-evidence",
