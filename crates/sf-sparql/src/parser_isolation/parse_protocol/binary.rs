@@ -77,11 +77,29 @@ pub(super) fn encode_common_header(
     Ok(())
 }
 
-pub(super) fn allocate_frame(total: usize) -> Result<Vec<u8>, ParseFrameError> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FrameAllocation {
+    Attempt,
+    Refuse,
+}
+
+/// Performs the only input-sized outer-frame allocation and initializes exactly
+/// the requested logical length without a later capacity-growing operation.
+pub(crate) fn allocate_frame_exact(
+    total: usize,
+    allocation: FrameAllocation,
+) -> Result<Vec<u8>, ParseFrameError> {
+    if allocation == FrameAllocation::Refuse {
+        return Err(ParseFrameError::AllocationFailed);
+    }
     let mut output = Vec::new();
     output
         .try_reserve_exact(total)
         .map_err(|_| ParseFrameError::AllocationFailed)?;
+    if output.capacity() < total {
+        return Err(ParseFrameError::AllocationFailed);
+    }
+    output.resize(total, 0);
     Ok(output)
 }
 

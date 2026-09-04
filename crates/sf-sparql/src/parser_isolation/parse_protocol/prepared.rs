@@ -43,7 +43,6 @@ impl PreparedParseRequestV1 {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn encoded(&self) -> &[u8] {
         &self.encoded
     }

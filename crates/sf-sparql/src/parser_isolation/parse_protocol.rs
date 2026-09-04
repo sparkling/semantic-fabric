@@ -12,14 +12,19 @@ use super::protocol::{HandshakeNonce, DIGEST_LEN};
 use super::query_v1;
 
 mod binary;
+mod header;
 mod prepared;
+mod synthetic;
 
 pub(crate) use prepared::PreparedParseRequestV1;
+pub(crate) const SYNTHETIC_EMPTY_ASK_QUERY_V1: [u8; 100] = synthetic::SYNTHETIC_EMPTY_ASK_QUERY_V1;
 
-use binary::{
-    allocate_frame, checked_frame_len, encode_common_header, read_u16, read_u32, read_u64,
-    require_header, write_u16, ContentDigest,
-};
+pub(crate) use binary::{allocate_frame_exact, FrameAllocation};
+use binary::{encode_common_header, read_u16, write_u16, ContentDigest};
+pub(crate) use header::{RequestHeaderV1, ResultHeaderV1};
+
+#[cfg(test)]
+use binary::read_u64;
 
 pub(crate) const REQUEST_HEADER_LEN: usize = 96;
 pub(crate) const RESULT_HEADER_LEN: usize = 128;
@@ -79,27 +84,12 @@ impl<'source> ParseRequestV1<'source> {
         if input.len() > MAX_REQUEST_FRAME_BYTES_V1 {
             return Err(ParseFrameError::SourceLimitExceeded);
         }
-        require_header(input, REQUEST_HEADER_LEN, &REQUEST_MAGIC)?;
-        if input[KIND_OFFSET] != REQUEST_KIND {
-            return Err(ParseFrameError::UnsupportedMessageKind);
+        if input.len() < REQUEST_HEADER_LEN {
+            return Err(ParseFrameError::InvalidFrameLength);
         }
-        if input[FLAGS_OFFSET] != 0
-            || read_u32(input, HEADER_LEN_OFFSET) != REQUEST_HEADER_LEN as u32
-            || read_u32(input, REQUEST_RESERVED_OFFSET) != 0
-        {
-            return Err(ParseFrameError::NonCanonicalHeader);
-        }
-        if read_u16(input, REQUEST_ENCODING_OFFSET) != UTF8_ENCODING {
-            return Err(ParseFrameError::UnsupportedSourceEncoding);
-        }
-        if read_u16(input, REQUEST_QUERY_VERSION_OFFSET) != query_v1::WIRE_VERSION {
-            return Err(ParseFrameError::UnsupportedQueryVersion);
-        }
-
-        let source_len = checked_frame_len(REQUEST_HEADER_LEN, read_u64(input, BODY_LEN_OFFSET))?;
-        let source_len = source_len - REQUEST_HEADER_LEN;
-        enforce_source_limit(source_len)?;
-        if input.len() != REQUEST_HEADER_LEN + source_len {
+        let header = RequestHeaderV1::preflight(&input[..REQUEST_HEADER_LEN])?;
+        header.enforce_body_limit()?;
+        if input.len() != header.frame_len() {
             return Err(ParseFrameError::InvalidFrameLength);
         }
 
@@ -136,8 +126,7 @@ impl<'source> ParseRequestV1<'source> {
         let total = REQUEST_HEADER_LEN
             .checked_add(self.source.len())
             .ok_or(ParseFrameError::LengthOverflow)?;
-        let mut output = allocate_frame(total)?;
-        output.resize(REQUEST_HEADER_LEN, 0);
+        let mut output = allocate_frame_exact(total, FrameAllocation::Attempt)?;
         encode_common_header(
             &mut output,
             &REQUEST_MAGIC,
@@ -153,7 +142,7 @@ impl<'source> ParseRequestV1<'source> {
             REQUEST_QUERY_VERSION_OFFSET,
             query_v1::WIRE_VERSION,
         );
-        output.extend_from_slice(self.source.as_bytes());
+        output[REQUEST_HEADER_LEN..].copy_from_slice(self.source.as_bytes());
         Ok(output)
     }
 
@@ -254,46 +243,15 @@ impl ParseResultV1 {
         if input.len() > MAX_RESULT_FRAME_BYTES_V1 {
             return Err(ParseFrameError::PayloadLimitExceeded);
         }
-        require_header(input, RESULT_HEADER_LEN, &RESULT_MAGIC)?;
-        let kind = input[KIND_OFFSET];
-        if !matches!(kind, RESULT_SUCCESS_KIND | RESULT_REJECTED_KIND) {
-            return Err(ParseFrameError::UnsupportedMessageKind);
-        }
-        if input[FLAGS_OFFSET] != 0
-            || read_u32(input, HEADER_LEN_OFFSET) != RESULT_HEADER_LEN as u32
-            || read_u32(input, RESULT_RESERVED_OFFSET) != 0
-        {
-            return Err(ParseFrameError::NonCanonicalHeader);
-        }
-
-        let total = checked_frame_len(RESULT_HEADER_LEN, read_u64(input, BODY_LEN_OFFSET))?;
-        let payload_len = total - RESULT_HEADER_LEN;
-        if payload_len > query_v1::MAX_QUERY_WIRE_BYTES {
-            return Err(ParseFrameError::PayloadLimitExceeded);
-        }
-        if input.len() != total {
+        if input.len() < RESULT_HEADER_LEN {
             return Err(ParseFrameError::InvalidFrameLength);
         }
-
-        let query_version = read_u16(input, RESULT_QUERY_VERSION_OFFSET);
-        let rejection_code = read_u16(input, RESULT_REJECTION_OFFSET);
-        match kind {
-            RESULT_SUCCESS_KIND => {
-                if rejection_code != 0 || payload_len == 0 {
-                    return Err(ParseFrameError::InvalidResultShape);
-                }
-                if query_version != query_v1::WIRE_VERSION {
-                    return Err(ParseFrameError::UnsupportedQueryVersion);
-                }
-            }
-            RESULT_REJECTED_KIND => {
-                if query_version != 0 || payload_len != 0 {
-                    return Err(ParseFrameError::InvalidResultShape);
-                }
-                ParseRejectionV1::decode(rejection_code)?;
-            }
-            _ => unreachable!(),
+        let header = ResultHeaderV1::preflight(&input[..RESULT_HEADER_LEN])?;
+        header.enforce_body_limit()?;
+        if input.len() != header.frame_len() {
+            return Err(ParseFrameError::InvalidFrameLength);
         }
+        header.validate_shape()?;
 
         if input[NONCE_OFFSET..SOURCE_DIGEST_OFFSET] != request.nonce.correlation_bytes()[..] {
             return Err(ParseFrameError::NonceMismatch);
@@ -310,7 +268,7 @@ impl ParseResultV1 {
             return Err(ParseFrameError::PayloadDigestMismatch);
         }
 
-        let (query, rejection) = if kind == RESULT_SUCCESS_KIND {
+        let (query, rejection) = if input[KIND_OFFSET] == RESULT_SUCCESS_KIND {
             (
                 Some(
                     query_v1::decode_exact(payload)
@@ -319,7 +277,13 @@ impl ParseResultV1 {
                 None,
             )
         } else {
-            (None, Some(ParseRejectionV1::decode(rejection_code)?))
+            (
+                None,
+                Some(ParseRejectionV1::decode(read_u16(
+                    input,
+                    RESULT_REJECTION_OFFSET,
+                ))?),
+            )
         };
         Ok(Self {
             nonce: request.nonce,
@@ -346,8 +310,7 @@ impl ParseResultV1 {
         let total = RESULT_HEADER_LEN
             .checked_add(payload.len())
             .ok_or(ParseFrameError::LengthOverflow)?;
-        let mut output = allocate_frame(total)?;
-        output.resize(RESULT_HEADER_LEN, 0);
+        let mut output = allocate_frame_exact(total, FrameAllocation::Attempt)?;
         encode_common_header(
             &mut output,
             &RESULT_MAGIC,
@@ -370,7 +333,7 @@ impl ParseResultV1 {
             }
             _ => unreachable!(),
         }
-        output.extend_from_slice(payload);
+        output[RESULT_HEADER_LEN..].copy_from_slice(payload);
         Ok(output)
     }
 
