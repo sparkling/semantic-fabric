@@ -1,9 +1,10 @@
 ---
 status: proposed
 date: 2026-09-03
+updated: 2026-09-04
 tags: [sparql, compiler, resource-governance, cancellation, cache, dos]
 supersedes: []
-depends-on: [ADR-0006, ADR-0007, ADR-0010, ADR-0012, ADR-0023, ADR-0038, ADR-0048]
+depends-on: [ADR-0004, ADR-0006, ADR-0007, ADR-0010, ADR-0012, ADR-0023, ADR-0038, ADR-0048]
 implements: [ADR-0010, ADR-0038]
 ---
 
@@ -11,12 +12,16 @@ implements: [ADR-0010, ADR-0038]
 
 ## Status boundary
 
-This ADR is **proposed**. It records the next M2 design slice; it does not claim
-that compilation is currently bounded, cancellable or governed by
-`QueryBudget`. The current serving path limits query bytes and concurrent
-blocking compiler jobs, but its compiler closure cannot consume the request
-budget. `QueryLimits` has only source-work, result-item and serialized-byte
-dimensions, and `CompilerBinding::compile` remains uncontrolled.
+This ADR is **proposed**. The compiler-work `QueryBudget` dimension, typed
+`CompilerWorkExceeded`/`CompilerEnvelopeExceeded` failures, mandatory
+`QueryControl::terminate` semantics, cache-profile key discriminator and
+`Arc<Plan>` cache storage are implemented foundations. Private dormant
+primitives also measure raw lexical proxies, parser-view direct-IRI
+materialization, post-parse algebra, compiler reservations and complete Plan
+clone work. None is wired into whole-query serving governance: the blocking
+compiler closure receives no request control, `CompilerBinding::compile`
+remains uncontrolled, candidate limits are uncalibrated, and the parser and
+owned compiler phases are not prospectively governed.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -33,13 +38,24 @@ branch-product allocation, normalization fixed points, canonical cache-key
 construction and plan cloning. Checked query length bounds input bytes but does
 not express structural limits or the work performed within that length.
 
+The pinned `spargebra` 0.4.6 parser first performs global Unicode decoding and
+then resolves context-sensitive PEG productions. `<...>` can be an IRI or an
+expression; implicit sibling graph patterns create left-deep joins without an
+explicit join token; BASE/PREFIX expansion allocates resolved terms; and
+property/object lists, collections, annotations, reification and
+`CONSTRUCT WHERE` generate or clone terms before a returned algebra can be
+checked. Partially built or rejected recursive values must also be dropped.
+Consequently an external lexical model and a post-parse traversal cannot prove
+parser construction or destruction safe.
+
 The current compiler semaphore limits aggregate concurrency, not work per
 request. A deadline can release the async waiter while `spawn_blocking` keeps a
 non-cooperative compiler and both its compiler and aggregate admission permits
 alive. Cache hits skip much cold work, but the current key has no governance
-profile: an uncontrolled caller can populate the same semantic cache namespace
-later used by serving. Integer overflow, charging after allocation and
-cache-dependent authorization are additional fail-open risks.
+authority: the dormant profile discriminator prevents a raw semantic hit, but
+both profiles share one physical cache and only the uncontrolled path is wired.
+Raw churn can still impose eviction/drop work. Integer overflow, charging after
+allocation and cache-dependent authorization are additional fail-open risks.
 
 The threat model includes an unauthenticated client choosing query text and
 timing, repeated cache priming or eviction, and concurrent requests racing a
@@ -61,9 +77,13 @@ CPU cycle, elapsed nanosecond or allocated byte.
   Rejected: existing `QueryBudget` dimensions account for work actually
   performed. Replaying skipped work would silently turn accounting into a
   distinct complexity-authorization policy.
-- **Fork the parser immediately or isolate every compiler in a process.**
-  Deferred. Either may close the remaining pre-emptibility gap, but neither is
-  required for the narrower, honest envelope-and-logical-work capability.
+- **Use a grammar-shadow scanner as parser admission authority.** Rejected: its
+  language and construction model diverge from the Unicode-decoded contextual
+  PEG grammar, effectively creating a second parser contrary to ADR-0004.
+- **Instrument the pinned parser, with bounded Rust process isolation as the
+  fail-closed fallback.** Selected for proof in proposed ADR-0053. One of those
+  boundaries is required before any parser-inclusive governed compiler path may
+  activate; a thread timeout or post-parse check is insufficient.
 
 ## Proposed decision
 
@@ -94,7 +114,7 @@ budget. Its inclusive, checked, no-refund and sticky-first-terminal laws remain
 unchanged across all four counters. Checked addition or multiplication failure
 terminates with `AccountingOverflow` before allocation or mutation.
 
-### 2. Put a fixed, versioned envelope in front of logical fuel
+### 2. Layer the fixed envelope around the real parser boundary
 
 The governed compiler uses an internal closed `CompileProfileId` whose initial
 variants distinguish `Uncontrolled` from `GovernedV1`, and an immutable
@@ -103,29 +123,42 @@ the caller's fuel value and not raiseable by `--max-compiler-work` or another
 runtime setting. A profile change requires a new identifier and cache
 namespace.
 
-Before `spargebra` parsing, an allocation-bounded, token-aware linear scan
-enforces finite limits for tokens, individual lexemes, string/comment/IRI and
-escape payloads, resolved prefix expansion, delimiter nesting, RDF-star
-nesting, and right-recursive operator chains. It must distinguish syntax
-contexts rather than count punctuation inside comments or literals. After
-parse, an iterative traversal enforces finite algebra node, depth and retained
-payload limits before any project-owned recursive rewrite. Plan builders reserve
-finite branch, node, nesting and retained-payload envelope capacity before each
-growth operation; a final iterative validation must pass before cache insertion
-or return. A post-construction check alone is not admission.
+The raw input-byte ceiling is checked before Unicode decoding or allocation.
+The current token/lexeme/nesting/operator scanner is diagnostic only: it neither
+authorizes nor rejects production input and its counters are not
+grammar-complete parser work. The parser-view direct-IRI primitive separately
+measures sequential in-query BASE/PREFIX state and direct materialization. It
+does not cover contextual PEG choices, parser-generated clones, container or
+allocator overhead, or externally configured parser state.
 
-The exact V1 constants are not invented in this design record. Implementation
-must calibrate them against the frozen conformance and application corpus, add
-adversarial boundary fixtures, freeze them in Rust source and this ADR, and
-obtain review before the ADR can be accepted.
+Parser-inclusive governance requires ADR-0053's grammar-coupled controlled
+parser. If complete in-process coverage cannot be proved, the parse/compiler
+operation moves behind its bounded Rust process-isolation fallback. A
+successful authoritative parser boundary returns a private admitted-query
+witness; only that witness can construct a `GovernedV1` cache key.
 
-### 3. Charge deterministic work actually performed
+Immediately after parse and before canonical rendering, an iterative traversal
+enforces algebra node, depth, collection and retained-payload limits. Project-
+owned plan construction then reserves finite branch, node, nesting and payload
+capacity before growth. `PlanMeasureV1` is a final consistency audit and a
+prospective cost for an unavoidable later copy; it cannot retroactively admit
+construction already performed.
+
+Candidate constants exist in Rust but are provisional and deliberately
+unwired. Implementation must calibrate them jointly with serving fuel against
+the frozen conformance/application corpus and adversarial boundary fixtures,
+then freeze them in source and this ADR. Activation must also explicitly resolve
+the current 1 MiB HTTP query limit versus the private 256 KiB scanner ceiling;
+the 256 KiB–1 MiB band must not silently change from accepted input to `429`.
+
+### 3. Reserve deterministic scheduled work at the operation boundary
 
 An internal `CompileMeter` wraps the request's `QueryControl`. Work model V1 is
-the checked sum of one unit for each elementary item actually visited or
-created on the governed path:
+the checked sum of versioned logical units reserved immediately before each
+corresponding operation on the governed path, without refund:
 
-- admitted input bytes and lexical tokens scanned;
+- admitted input bytes and actual controlled-parser operations, not diagnostic
+  lexical counters;
 - algebra nodes and retained payload bytes traversed;
 - mapping and ontology candidates inspected;
 - branch/product candidates considered, precharged with checked arithmetic
@@ -133,15 +166,25 @@ created on the governed path:
 - expression, term and rewrite-rule comparisons;
 - nodes visited in every normalization/cascade round, including unsuccessful
   fixpoint rounds;
-- canonical cache-key bytes produced; and
-- plan nodes and owned payload bytes copied for cache insertion or return.
+- bounded canonical cache-key fragments produced and cache probes performed;
+- plan-build nodes, collection slots and owned payload retained; and
+- every unavoidable recursive graph copy, synchronous eviction and destruction.
 
 Every potentially super-linear loop charges at its loop boundary, and every
 bulk allocation or clone charges its deterministically computed prospective
-amount first. Counters never depend on hash iteration order, addresses, thread
+amount first. Cache insertion, nested-subplan rollback, parser/algebra/IQ/Plan
+copies and every failed terminal fixpoint round are included in the operation
+audit. Counters never depend on hash iteration order, addresses, thread
 scheduling, wall time or whether tracing is enabled. An implementation may
 batch adjacent unit charges only when the checked total and exact failure point
 are equivalent to individual charging.
+
+The algebra validation traversal, plan audit and a subsequent copy are distinct
+operations and each consumes its own units; that is not double charging. The
+same concrete operation is never charged twice. After activation, any charge-
+schedule or envelope-constant change requires a new compile-profile identity.
+Canonical key production must be bounded and fallible; unmetered recursive
+`Query::to_string()` is not acceptable on the governed path.
 
 This work model is a portable defensive proxy, not a measurement of total CPU,
 heap, I/O or source execution. If cache-independent query-complexity
@@ -158,47 +201,64 @@ impl CompilerBinding {
         &self,
         sparql: &str,
         control: &dyn QueryControl,
-    ) -> Result<Plan>;
+    ) -> Result<Arc<Plan>>;
 }
 ```
 
 This is initially the only public API that may claim governance of a complete
-query because it owns lexical admission, parse, keying and translation. A
+query because it owns raw admission, authoritative parse, keying and
+translation. A
 public controlled API accepting an already parsed `Query` would omit parser
 work and must not carry the same claim. Existing `compile`, `translate*` and
 `parse_and_translate*` APIs remain source-compatible for raw, diagnostic,
 oracle and conformance use, but are documented as explicitly uncontrolled.
 Their semantic results remain the oracle for governed-path equivalence.
 
-Project-owned traversals take `&dyn QueryControl` or `&CompileMeter`, checkpoint
-at bounded intervals and propagate the existing `sf_sparql::Error::QueryControl`
-without embedding query, mapping, schema or driver text.
+The successful parser boundary returns a private admitted-query witness required
+by the governed key and translation path. Project-owned traversals share one
+`CompileContext` containing the same `CompileMeter`, checkpoint at bounded
+intervals and propagate `sf_sparql::Error::QueryControl` without embedding
+query, mapping, schema or driver text.
 
 ### 5. Separate governed cache authority and charge the hot path honestly
 
-The governed cache key includes `CompileProfileId` in addition to the existing
-`CompileScope`, structural hash and collision-resolving canonical content. A
-raw/uncontrolled compile therefore cannot seed or hit a governed entry. Cached
-values become equivalent in shape to:
+The implemented cache key includes `CompileProfileId` in addition to the
+existing `CompileScope`, structural hash and collision-resolving canonical
+content. Implemented values already hold `Arc<Plan>`, so raw compilation cannot
+seed or hit a governed key but both profiles currently share one physical
+entry-count cache. Raw churn can therefore evict governed entries, and insertion
+can synchronously drop an unmetered recursive plan. That shared resource is not
+governed authority.
+
+The activated profile uses physically separate governed and uncontrolled cache
+capacity. Governed values carry their final plan measurement:
 
 ```rust
 struct CachedPlan {
     scope: CompileScope,
     profile: CompileProfileId,
     plan: Arc<Plan>,
-    clone_work: u64,
+    measure: PlanMeasureV1,
 }
 ```
 
-`clone_work` is the V1 structural cost of the one prospective deep plan copy,
-not the historical cold compilation total. Cache lookup clones only the `Arc`,
-validates scope and profile, charges actual lookup/key work plus `clone_work`,
-then performs at most one deep clone. A cold path charges all compilation work
-and the actual copy retained or returned by caching. Cache insertion never
-creates governance authority.
+Serving and execution propagate `Arc<Plan>` so a hit performs no recursive Plan
+copy and a miss constructs the Plan once, inserts one shallow handle and returns
+another. Scope/profile/witness validation precedes use. Key rendering, hashing,
+probe and each shallow handle operation have fixed versioned charges. A legacy
+path that genuinely requires a deep copy must reserve the stored prospective
+clone work through a non-duplicable operation immediately before exactly one
+copy; failed reservation cannot seed or consume a governed entry.
+
+Governed insertion also reserves or otherwise contains every synchronous
+eviction and final recursive destruction using the stored measurement. If the
+cache implementation cannot expose or prospectively bound that operation, it
+must be replaced for the governed profile. Physical separation prevents raw
+entries from imposing capacity or destruction work on a governed request.
+Cache insertion never creates governance authority.
 
 A hot request may consequently pass with a compiler-work limit that would reject
-the same cold request. This is intentional actual-work accounting. Both paths
+the same cold request. This is intentional scheduled-work accounting. Both paths
 remain inside the identical cache-independent V1 envelope, and admitted
 semantic output must be identical.
 
@@ -228,19 +288,26 @@ internal failures.
 
 Implementation proceeds as bounded, independently reviewable Rust slices:
 
-1. **Core identity:** add the fourth counter/error/limit; migrate every caller
-   explicitly; retain exact concurrency, overflow and sticky-terminal laws.
-2. **Envelope:** implement the lexical scanner and iterative algebra validator;
-   freeze constants only after corpus and adversarial calibration.
+1. **Core identity — foundation implemented:** the fourth counter/error/limit
+   and explicit terminal semantics are present; final whole-path acceptance
+   evidence remains a promotion gate.
+2. **Parser/envelope — diagnostic foundation only:** raw lexical, parser-view
+   direct-IRI, iterative algebra and Plan measurements exist with provisional
+   limits. Implement ADR-0053's authoritative parser boundary, make algebra
+   validation fallible and metered in one pass, add prospective plan-build
+   limits, and calibrate before activation.
 3. **Owned compiler work:** instrument mapping expansion, branch products,
-   normalization/cascade, canonical content and plan construction; charge before
-   allocation and prove governed/raw semantic equivalence.
-4. **Cache:** add the profile discriminator and `Arc<Plan>` storage; prove raw
-   entries cannot hit governed compilation and that no deep copy precedes its
-   charge.
-5. **Serving:** pass the exact `RequestBudget` into the blocking worker, add the
-   finite CLI/config limit and redacted HTTP mapping, and retain both admission
-   permits until the worker really exits.
+   normalization/cascade, canonical content, hidden recursive copies and plan
+   construction; reserve before work and prove governed/raw semantic
+   equivalence.
+4. **Cache — partial:** key-level profile separation and `Arc<Plan>` storage are
+   present. Add the admitted witness, bounded key writer, physical capacity
+   separation, Arc propagation, final measurement and governed eviction/drop
+   control.
+5. **Serving — partial:** a finite placeholder compiler-work value and redacted
+   error mapping exist. Pass the exact `RequestBudget` into the worker, add the
+   explicit CLI/config limit, call only the governed API and retain both
+   admission permits until the worker really exits.
 6. **Claims:** update capability and operational documentation only after all
    relevant gates pass; keep this ADR proposed until its constants and work
    model receive explicit maintainer acceptance.
@@ -249,42 +316,47 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 
 - Core tests cover `0`, exact `N`, `N+1`, checked overflow, concurrent consumers
   and every sticky first-cause pairing across all four dimensions.
-- Lexical tests cover exact/max-plus-one strings, comments, IRIs, escapes,
-  prefixes, Unicode, RDF-star, delimiters and right-recursive operator chains;
-  iterative algebra tests cover node, depth and payload boundaries.
+- Raw-scanner tests record false-positive and false-negative drift without
+  granting rejection authority. ADR-0053 proves controlled parser boundaries
+  for contextual angles, Unicode-created syntax, implicit joins, BASE/PREFIX,
+  collections, property lists, reification, RDF-star, `CONSTRUCT WHERE`, deep
+  failure and recursive destruction.
+- Iterative algebra tests cover node, depth, collection and payload boundaries,
+  fallible work-stack growth and exact pre-item charging in one pass.
 - Compiler tests cover mapping fan-out, `JOIN`/`OPTIONAL`/`MINUS` products,
-  normalization and cascade fixpoints, and prove rejection occurs before the
-  guarded allocation or clone.
+  normalization/cascade fixpoints and every recursive Branch/IQ/Plan copy, and
+  prove rejection occurs before the guarded allocation, mutation or clone.
 - Cache tests pin cold and hot V1 work independently, allow the intentionally
-  lower hot budget, reject raw-to-governed reuse, and prove semantic identity.
+  lower hot budget, reject raw-to-governed reuse, prove raw churn cannot evict
+  governed state, contain eviction/drop work, and prove semantic identity.
 - Barrier-controlled deadline and disconnect tests prove eventual owned-phase
   worker and permit release without timing-only sleep assertions. They do not
   convert the parser limitation below into a one-second claim.
 - HTTP tests prove a pre-source compiler excess performs no backend I/O and
   returns redacted `429`, while an expired representable handoff remains `504`.
-- Bounded fuzz/property smoke tests cover scanner/parser/algebra boundaries
-  under ADR-0012, and the full format, clippy, build, workspace-test,
-  conformance and frozen-corpus regression gates pass.
+- Persisted-corpus fuzzing and generated parser/algebra/compiler properties run
+  continuously under ADR-0012; a bounded smoke alone is not acceptance. Full
+  format, Clippy, build, workspace-test, conformance and frozen-corpus gates pass.
 - The finite serving default and all V1 constants are justified by replayable
   benchmark evidence; an adversarial review finds no uncharged super-linear
   owned loop or cross-profile cache path.
 
-Only then may documentation claim: “The serving compiler enforces a fixed,
-versioned syntax/algebra/plan envelope and deterministic logical-work accounting
-on cold and governed-cache paths.”
+Only then may documentation claim: “Serving enforces a fixed raw-input boundary,
+grammar-coupled parser controls or equivalent process containment, post-parse
+algebra admission, prospective plan-construction bounds, and deterministic
+logical-work accounting across governed cold and cache-hit paths.”
 
 ## Known blocker and nonclaims
 
-`spargebra` 0.4.6 exposes parsing without `QueryControl` and uses a PEG grammar
-with recursive expression productions. The V1 pre-parser envelope bounds what
-enters it, and checkpoints observe cancellation before and after it, but cannot
-interrupt a parser call already running. The same caution applies to any
-remaining upstream recursive formatter or allocator call until replaced or
-instrumented. Cooperative/pre-emptive cancellation throughout parsing, or a
-guaranteed one-second release of a compiler permit for every input, requires an
-upstream/forked native Rust parser control hook or process isolation. This is
-an unavoidable blocker to that stronger claim, not a blocker to the
-narrower envelope-and-logical-work slice.
+`spargebra` 0.4.6 exposes parsing without `QueryControl`, globally decodes
+Unicode and uses recursive PEG productions and allocation-heavy semantic
+actions. The raw scanner does not bound that parser. Checkpoints before and
+after the call cannot interrupt construction or safe destruction. ADR-0053's
+complete grammar-coupled native control hook, or its bounded Rust process-
+isolation fallback, is therefore an activation blocker for
+`compile_controlled` and every parser-inclusive boundedness claim—not merely a
+stronger one-second cancellation SLA. A separately named post-parse-only mode
+could be developed, but it is not whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database
 rows scanned or recursive SQL iterations; source-cost governance; raw or
@@ -296,16 +368,17 @@ admission. It does not change query semantics or authorize a second compiler.
 
 - Good: adversarial compiler work gains a deterministic per-request ceiling in
   the existing governance identity, with exact reproducible boundary tests.
-- Good: a fixed structural envelope and disjoint cache profile prevent fuel or
-  cache state from weakening the hard safety boundary.
+- Good: a fixed structural envelope and physically isolated governed cache
+  prevent fuel or raw cache churn from weakening the hard safety boundary.
 - Good: the current compiler, `Plan`, bindings and Rust serving architecture are
   extended rather than rewritten.
 - Bad: the constructor and public `ServeOptions` shape break source compatibility
   deliberately before 1.0, requiring explicit migration of all call sites.
 - Bad: cache warmth can change work-budget admission even though semantics and
   the fixed envelope do not change.
-- Bad: the upstream parser remains bounded but non-pre-emptible within one call;
-  the stronger cancellation SLA remains open.
+- Bad: the upstream parser is not yet bounded or pre-emptible; instrumenting it
+  carries fork/hook maintenance, while fallback isolation carries a Rust worker
+  and versioned-wire cost.
 
 ## More information
 
@@ -315,4 +388,5 @@ admission. It does not change query semantics or authorize a second compiler.
 - [ADR-0023 — Query IR architecture](ADR-0023-query-ir-architecture-flat-ucq-vs-iq-tree.md)
 - [ADR-0038 — SOTA application-completion programme](ADR-0038-sota-application-completion-programme.md)
 - [ADR-0048 — Rust production and Node evidence runtime boundary](ADR-0048-rust-production-and-node-evidence-runtime-boundary.md)
+- [ADR-0053 — Grammar-coupled parser governance and isolation fallback](ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md)
 - [Application-completion programme](../plans/sota-application-completion-programme.md)

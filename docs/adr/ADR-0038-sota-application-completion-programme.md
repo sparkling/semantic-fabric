@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-27
-updated: 2026-09-03
+updated: 2026-09-04
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -452,6 +452,8 @@ The 2026-08-31 integrated M0 hardening candidate protects default-empty project 
 
 **2026-09-03 aggregate-admission correction:** Rust commits `25196b4`, `04dc983`, and `20f3df2` implement the M2 aggregate active-application-work gate without adding a Node product dependency. One shared ceiling defaults to 64 as a conservative finite governance value, not sizing or throughput evidence; `1..=Semaphore::MAX_PERMITS` is validated before source/file/runtime/network I/O. Tower keeps `poll_ready` ready and sheds in `Service::call`, before Router or request-body polling, so saturation creates no internal wait and returns stable redacted `503 service-overloaded` plus `Retry-After: 1`; deadline/control classification takes precedence and a closed gate is internal `500`. The permit follows active handler, producer, detached compiler and backend-worker budget clones, but not draining already-completed bounded body bytes. Out-of-band terminal authority lets a full unpolled stream producer finish at its deadline, then yields any buffered prefix, exactly one stable `result stream failed` error and fused EOF, with no `Content-Length`. This proves neither fairness/bounded waiting, compiler or general backend cooperative cancellation, database-row/recursive-work accounting, raw/conformance coverage, SQLite raw-mutex/busy/UDF/VFS/I/O pre-emption, PostgreSQL/MySQL native cancellation, atomic post-`200` failure, nor production admission; the narrow SQLite active-VM interruption remains the only such implemented backend path. M2 and the programme remain in progress; Node remains development/evidence infrastructure only.
 
+**2026-09-04 compiler-governance correction:** commits `b4ef817` through `8e6b0b7` add the fourth compiler-work budget/error contract, cache-profile keys with `Arc<Plan>`, mandatory terminal semantics, a reservation meter, and private dormant raw-lexical, parser-view direct-IRI, post-parse algebra and complete Plan measurements. The raw scanner is diagnostic rather than admission authority, direct-IRI bytes exclude parser-generated clones, constants are provisional, both profiles still share physical cache capacity, canonical rendering and owned compiler phases are unmetered, and serving still calls the uncontrolled compiler. Native Codex/Claude adversarial review found that global Unicode decoding, contextual PEG choices, implicit joins, syntax-sugar cloning and recursive destruction make grammar-coupled parser instrumentation—or bounded Rust process isolation when coverage cannot be proved—an activation gate. Proposed ADR-0053 records that boundary. ADR-0052, M2, capability and production admission remain open; this is an evolutionary safety boundary, not a semantic-compiler or application-goal rewrite.
+
 ## Acceptance
 
 The acceptance condition was satisfied on 2026-08-27 when the maintainer directed completion of this programme without removing its cross-RDBMS federation requirement or gates. It moves to `implemented` only when:
@@ -493,8 +495,4 @@ The acceptance condition was satisfied on 2026-08-27 when the maintainer directe
 
 ## More information
 
-- Programme: [`docs/plans/sota-application-completion-programme.md`](../plans/sota-application-completion-programme.md)
-- Stable mapping baseline: [W3C R2RML](https://www.w3.org/TR/r2rml/)
-- Draft query baseline: [W3C SPARQL 1.2 Query](https://www.w3.org/TR/sparql12-query/)
-- Draft protocol baseline: [W3C SPARQL 1.2 Protocol](https://www.w3.org/TR/sparql12-protocol/)
-- Observability baseline: [OpenTelemetry database semantic conventions](https://opentelemetry.io/docs/specs/semconv/db/)
+- Programme: [`docs/plans/sota-application-completion-programme.md`](../plans/sota-application-completion-programme.md); stable mapping baseline: [W3C R2RML](https://www.w3.org/TR/r2rml/); draft query baseline: [W3C SPARQL 1.2 Query](https://www.w3.org/TR/sparql12-query/); draft protocol baseline: [W3C SPARQL 1.2 Protocol](https://www.w3.org/TR/sparql12-protocol/); observability baseline: [OpenTelemetry database semantic conventions](https://opentelemetry.io/docs/specs/semconv/db/).

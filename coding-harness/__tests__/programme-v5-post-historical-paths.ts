@@ -150,6 +150,8 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'docs/adr/ADR-0049-exact-recursive-property-path-fixed-points.md',
   'docs/adr/ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md',
   'docs/adr/ADR-0051-postgresql-16-public-observed-schema-profile.md',
+  'docs/adr/ADR-0052-sparql-compilation-safety-envelope-and-versioned-logical-work-accounting.md',
+  'docs/adr/ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md',
   'docs/design/ADR-0050-observed-schema-identity-v1-contract.md',
   'docs/design/ADR-0050-observed-schema-identity-v1-known-answer-vectors.md',
 ]);

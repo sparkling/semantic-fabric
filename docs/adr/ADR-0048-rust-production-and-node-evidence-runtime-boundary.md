@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-03
+updated: 2026-09-04
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -59,6 +59,9 @@ component.
 ADR-0039's public `semantic-fabric` server remains a product artefact. A future
 supervisor is a separate Rust bounded context and separately packaged service;
 it is never linked into `sf-server` and never reuses the product query path.
+Likewise, ADR-0053's fallback compiler-containment worker, if required, is a
+Rust/Cargo product component with a bounded versioned wire contract. Ruflo,
+MetaHarness and Node may test that boundary but may not implement it at runtime.
 
 ### 2. Keep all committed Node code non-deployable
 
@@ -301,4 +304,5 @@ of ADR-0050 and ADR-0051 remains proposed.
 [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md),
 [ADR-0046](ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md),
 [ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md), and
-[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md).
+[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md), and
+[ADR-0053](ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md).
