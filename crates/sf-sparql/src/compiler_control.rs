@@ -126,6 +126,7 @@ impl<'control> CompileContext<'control> {
     /// charging one graph and cloning another, charging once and cloning twice,
     /// or reserving after the allocation has already happened.
     pub(crate) fn clone_branch_forest(&self, branches: &[Branch]) -> Result<Vec<Branch>> {
+        self.checkpoint()?;
         let measure =
             measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(branches))
                 .map_err(|error| self.measurement_error(error))?;

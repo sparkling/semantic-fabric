@@ -1,0 +1,114 @@
+use sf_core::ir::LogicalSource;
+use sf_core::query_control::{
+    QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
+};
+use sf_sql::Dialect;
+
+use super::*;
+use crate::compiler_control::CompileContext;
+use crate::iq::{Branch, Scan, SubPlanJoin};
+use crate::plan_measure::clone_root::{
+    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
+};
+
+fn budget(max_compiler_work: u64) -> QueryBudget {
+    QueryBudget::new(QueryLimits::new(
+        max_compiler_work,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+    ))
+}
+
+fn branch(alias: usize) -> Branch {
+    Branch::single(Scan {
+        alias,
+        source: LogicalSource::Table(format!("source_{alias}")),
+    })
+}
+
+fn outer_with_nested_plan() -> Branch {
+    let nested_branches = vec![branch(1), branch(2)];
+    let mut outer = branch(3);
+    outer.subplan_joins.push(SubPlanJoin {
+        alias: 4,
+        plan: Box::new(Plan {
+            dedup_scopes: vec![None; nested_branches.len()],
+            branches: nested_branches,
+            form: PlanForm::Select { vars: Vec::new() },
+            distinct: false,
+            limit: None,
+            offset: 0,
+            order: Vec::new(),
+            rust_group: None,
+            dialect: Dialect::Sqlite,
+            construct_drops_some_branch_var: false,
+        }),
+        on: Vec::new(),
+        left: false,
+    });
+    outer
+}
+
+fn nested_branches(branch: &Branch) -> &[Branch] {
+    &branch.subplan_joins[0].plan.branches
+}
+
+fn assert_control_error(error: Error, expected: QueryControlError) {
+    match error {
+        Error::QueryControl(actual) => assert_eq!(actual, expected),
+        other => panic!("expected query-control error, got {other:?}"),
+    }
+}
+
+#[test]
+fn metered_nested_subplan_clone_accepts_the_exact_measure() {
+    let source = outer_with_nested_plan();
+    let measure = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(
+        nested_branches(&source),
+    ))
+    .unwrap();
+    let budget = budget(measure.deep_clone_work);
+    let mode = CompilerWorkMode::Metered(CompileContext::new(&budget));
+    let mut metered = source.clone();
+    let mut raw = source;
+
+    cascade_subplans(&mut metered, &[], mode).unwrap();
+    cascade_subplans(&mut raw, &[], CompilerWorkMode::Uncontrolled).unwrap();
+
+    assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
+    assert_eq!(
+        budget.consumed(QueryCharge::CompilerWork),
+        measure.deep_clone_work
+    );
+}
+
+#[test]
+fn metered_nested_subplan_clone_rejects_n_minus_one_before_mutation() {
+    let mut source = outer_with_nested_plan();
+    let measure = measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(
+        nested_branches(&source),
+    ))
+    .unwrap();
+    let budget = budget(measure.deep_clone_work - 1);
+    let before = format!("{source:?}");
+    let allocation = nested_branches(&source).as_ptr();
+
+    assert_control_error(
+        cascade_subplans(
+            &mut source,
+            &[],
+            CompilerWorkMode::Metered(CompileContext::new(&budget)),
+        )
+        .expect_err("N-1 must reject before the rollback candidate clone"),
+        QueryControlError::CompilerWorkExceeded,
+    );
+
+    assert_eq!(format!("{source:?}"), before);
+    assert_eq!(nested_branches(&source).as_ptr(), allocation);
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
+    assert_eq!(
+        budget.checkpoint(),
+        Err(QueryControlError::CompilerWorkExceeded)
+    );
+}

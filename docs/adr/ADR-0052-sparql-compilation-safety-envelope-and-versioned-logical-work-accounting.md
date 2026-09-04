@@ -19,12 +19,15 @@ discriminator and `Arc<Plan>` cache storage are implemented foundations.
 Private dormant primitives also measure raw lexical proxies, parser-view direct-IRI
 materialization, post-parse algebra, compiler reservations and complete Plan
 clone work. Exact branch-forest measurement, reservation and one clone are
-encapsulated as a non-separable private operation, but have no production caller
-yet. None is wired into whole-query serving governance: the blocking compiler
-closure receives the exact request control only for handoff checkpoints;
-`CompilerBinding::compile` remains uncontrolled, no `CompileContext` enters the
-owned pipeline, candidate limits are uncalibrated, and the parser and owned
-compiler phases are not prospectively governed.
+encapsulated as a non-separable private operation. A private raw/metered work-mode
+seam now invokes it for the nested-subplan rollback candidate, with exact-limit
+and pre-mutation rejection tests. Public raw and cached entry points still select
+the uncontrolled mode, however. None is wired into whole-query serving
+governance: the blocking compiler closure receives the exact request control
+only for handoff checkpoints; `CompilerBinding::compile` remains uncontrolled,
+no request-owned `CompileContext` enters a publicly reachable compiler path,
+candidate limits are uncalibrated, and the parser and remaining owned compiler
+phases are not prospectively governed.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -303,10 +306,13 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    limits. Implement ADR-0053's authoritative parser boundary, make algebra
    validation fallible and metered in one pass, add prospective plan-build
    limits, and calibrate before activation.
-3. **Owned compiler work:** instrument mapping expansion, branch products,
-   normalization/cascade, canonical content, hidden recursive copies and plan
-   construction; reserve before work and prove governed/raw semantic
-   equivalence.
+3. **Owned compiler work — first operation metered:** the private work-mode seam
+   prospectively measures and charges the nested-subplan cascade rollback clone,
+   and exact `N`/`N-1` tests prove raw equivalence and rejection before mutation.
+   Instrument mapping expansion, branch products, the rest of
+   normalization/cascade, canonical content, remaining hidden recursive copies
+   and plan construction; reserve before work and prove whole-path governed/raw
+   semantic equivalence.
 4. **Cache — partial:** key-level profile separation and `Arc<Plan>` storage are
    present. Add the admitted witness, bounded key writer, physical capacity
    separation, Arc propagation, final measurement and governed eviction/drop

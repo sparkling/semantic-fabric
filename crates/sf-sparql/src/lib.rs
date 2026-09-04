@@ -93,6 +93,9 @@ pub mod unify;
 mod cache_binding_tests;
 #[cfg(test)]
 mod column_type_authority_tests;
+#[cfg(test)]
+#[path = "compiler_control/pipeline_tests.rs"]
+mod compiler_control_pipeline_tests;
 
 pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
 pub use compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthority};
@@ -502,7 +505,27 @@ pub fn translate_tree(
         dialect,
         schema,
         compiler_schema::ColumnTypeUse::CallerAuthorizedFrozen,
+        CompilerWorkMode::Uncontrolled,
     )
+}
+
+/// Selects how project-owned compiler operations execute without granting a
+/// parser or cache profile any governed authority.
+#[derive(Clone, Copy)]
+enum CompilerWorkMode<'control> {
+    Uncontrolled,
+    #[allow(dead_code)]
+    // Activated one owned operation at a time before serving switches profiles.
+    Metered(compiler_control::CompileContext<'control>),
+}
+
+impl CompilerWorkMode<'_> {
+    fn clone_branch_forest(self, branches: &[Branch]) -> Result<Vec<Branch>> {
+        match self {
+            Self::Uncontrolled => Ok(branches.to_vec()),
+            Self::Metered(context) => context.clone_branch_forest(branches),
+        }
+    }
 }
 
 /// Internal tree entry point carrying the column-type capability explicitly.
@@ -515,6 +538,7 @@ fn translate_tree_with_column_type_use(
     dialect: Dialect,
     schema: &[TableSchema],
     column_type_use: compiler_schema::ColumnTypeUse,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<Plan> {
     // ADR-0031/ADR-0032: the SAME shared pre-pass `translate_inner_flat` runs, so
     // both engines see an identical, already-desugared WHERE pattern (never a
@@ -643,7 +667,7 @@ fn translate_tree_with_column_type_use(
     // guard above — a nested arm's raw columns feed its outer union/aggregation BY
     // NAME, so they must never be shrunk away).
     for b in &mut plan.branches {
-        cascade_subplans(b, schema);
+        cascade_subplans(b, schema, work_mode)?;
     }
     // ADR-0034: dedup below GROUP BY (see the identical note in
     // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
@@ -694,7 +718,11 @@ fn translate_tree_with_column_type_use(
 /// (post-cascade) — otherwise keep the pre-cascade arms for this SubPlan (still
 /// correct; this SubPlan alone forgoes the optimization). A single-branch nested
 /// Plan has no such cross-arm contract, so it always keeps the cascaded result.
-fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
+fn cascade_subplans(
+    b: &mut Branch,
+    schema: &[TableSchema],
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<()> {
     for sp in &mut b.subplan_joins {
         let ctx = cascade::CascadeCtx {
             distinct: false,
@@ -703,7 +731,7 @@ fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
         // Cascade one cloned candidate while retaining the exact original as
         // rollback state. Moving the original out avoids a second recursive
         // BranchForest clone without weakening the multi-arm safety guard.
-        let candidate = sp.plan.branches.clone();
+        let candidate = work_mode.clone_branch_forest(&sp.plan.branches)?;
         let pre = std::mem::take(&mut sp.plan.branches);
         let post = cascade::run(candidate, schema, &ctx);
         let post_lens: Vec<usize> = post.iter().map(|br| br.projection().len()).collect();
@@ -711,9 +739,10 @@ fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
             || (post.len() == pre.len() && post_lens.windows(2).all(|w| w[0] == w[1]));
         sp.plan.branches = if safe { post } else { pre };
         for inner in &mut sp.plan.branches {
-            cascade_subplans(inner, schema);
+            cascade_subplans(inner, schema, work_mode)?;
         }
     }
+    Ok(())
 }
 
 /// Translate through one immutable [`CompilerBinding`]'s compiled-plan cache
@@ -744,6 +773,7 @@ pub fn translate_cached_shared(query: &Query, binding: &CompilerBinding) -> Resu
         binding.dialect(),
         binding.schema(),
         binding.column_type_use(),
+        CompilerWorkMode::Uncontrolled,
     )?;
     let plan = Arc::new(plan);
     binding.cache().put(
