@@ -14,6 +14,8 @@ mod parse_protocol;
 mod profile;
 pub(crate) mod protocol;
 mod query_v1;
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+mod query_v1_mutant;
 mod supervisor;
 mod worker;
 
@@ -21,6 +23,9 @@ mod worker;
 mod alpha_equivalence;
 
 pub use worker::dispatch_private_parser_worker_v1;
+
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub use query_v1_mutant::QueryV1TransportMutant;
 
 /// Non-default Rust evidence seam for the exact worker control handshake.
 ///

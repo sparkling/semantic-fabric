@@ -129,6 +129,9 @@ pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
 ))]
 #[doc(hidden)]
 pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+#[doc(hidden)]
+pub use parser_isolation::QueryV1TransportMutant;
 pub use saturate::Tbox;
 
 /// Errors raised by the virtualizer (deferred features surface as
