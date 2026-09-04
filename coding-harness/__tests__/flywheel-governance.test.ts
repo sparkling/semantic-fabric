@@ -86,6 +86,9 @@ describe('retrieval flywheel governance', () => {
     expect(env).not.toHaveProperty('RUFLO_HARNESS_LOOP');
     expect(env).not.toHaveProperty('RUFLO_FLYWHEEL_LEGACY_APPLY');
 
+    const lifecycleHooks = JSON.stringify(settings.hooks ?? {});
+    expect(lifecycleHooks).not.toMatch(/auto-memory-hook\.mjs.*(?:import|sync)/);
+
     const claudeFlow = settings.claudeFlow as Record<string, unknown>;
     const daemon = claudeFlow.daemon as Record<string, unknown>;
     expect(daemon.workers).not.toContain('harness');

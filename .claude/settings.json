@@ -1,28 +1,4 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh -c 'D=\"${CLAUDE_PROJECT_DIR:-.}\"; [ -f \"$D/.claude/helpers/auto-memory-hook.mjs\" ] || D=\"${HOME}\"; exec node \"$D/.claude/helpers/auto-memory-hook.mjs\" import'",
-            "timeout": 8000
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh -c 'D=\"${CLAUDE_PROJECT_DIR:-.}\"; [ -f \"$D/.claude/helpers/auto-memory-hook.mjs\" ] || D=\"${HOME}\"; exec node \"$D/.claude/helpers/auto-memory-hook.mjs\" sync'",
-            "timeout": 10000
-          }
-        ]
-      }
-    ]
-  },
   "statusLine": {
     "type": "command",
     "command": "sh -c 'D=\"${CLAUDE_PROJECT_DIR:-.}\"; [ -f \"$D/.claude/helpers/statusline.cjs\" ] || D=\"${HOME}\"; exec node \"$D/.claude/helpers/statusline.cjs\"'"
