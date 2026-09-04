@@ -208,6 +208,33 @@ fn limits_reject_nonportable_counts_resources_and_stack_relationship() {
 }
 
 #[test]
+fn limits_accept_every_exact_maximum_and_equal_stack_address_boundary() {
+    let resource_max = i64::MAX as u64;
+    let count_max = u64::from(u32::MAX);
+    let values = ParserWorkerLimitValues {
+        stack_bytes: resource_max,
+        address_space_bytes: resource_max,
+        cpu_time_millis: resource_max,
+        wall_time_millis: resource_max,
+        max_input_bytes: resource_max,
+        max_output_bytes: resource_max,
+        max_open_fds: count_max,
+        max_processes: count_max,
+        max_concurrency: count_max,
+    };
+    let limits = ParserWorkerLimits::new(values).expect("inclusive maxima must be valid");
+    assert_eq!(limits.values(), values);
+
+    let hello = HelloFrame::new(
+        HandshakeNonce::new([0x11; DIGEST_LEN]),
+        BuildIdentityDigest::new([0x22; DIGEST_LEN]),
+        ParserProfileDigest::new([0x33; DIGEST_LEN]),
+        limits,
+    );
+    assert_eq!(HelloFrame::decode(&hello.encode()), Ok(hello));
+}
+
+#[test]
 fn ready_verifier_rejects_each_identity_mismatch_axis() {
     let hello = sample_hello();
     let nonce_mismatch = ReadyFrame::new(
@@ -261,6 +288,98 @@ fn ready_verifier_rejects_each_effective_limit_mismatch_axis() {
             Err(HandshakeError::EffectiveLimitsMismatch),
             "limit axis {index}"
         );
+    }
+}
+
+#[test]
+fn fixed_identity_debug_names_the_type_without_reflecting_bytes() {
+    assert_eq!(
+        format!("{:?}", HandshakeNonce::new([0x11; DIGEST_LEN])),
+        "HandshakeNonce(<redacted>)"
+    );
+    assert_eq!(
+        format!("{:?}", BuildIdentityDigest::new([0x22; DIGEST_LEN])),
+        "BuildIdentityDigest(<redacted>)"
+    );
+    assert_eq!(
+        format!("{:?}", ParserProfileDigest::new([0x33; DIGEST_LEN])),
+        "ParserProfileDigest(<redacted>)"
+    );
+
+    let frame_debug = format!("{:?}", sample_hello());
+    assert!(frame_debug.contains("HandshakeNonce(<redacted>)"));
+    assert!(frame_debug.contains("BuildIdentityDigest(<redacted>)"));
+    assert!(frame_debug.contains("ParserProfileDigest(<redacted>)"));
+    assert!(!frame_debug.contains("[17, 17"));
+    assert!(!frame_debug.contains("[34, 34"));
+    assert!(!frame_debug.contains("[51, 51"));
+}
+
+#[test]
+fn every_handshake_error_has_fixed_non_reflective_display_and_debug() {
+    let cases = [
+        (
+            HandshakeError::InvalidFrameLength,
+            "invalid parser-worker handshake frame length",
+            "InvalidFrameLength",
+        ),
+        (
+            HandshakeError::InvalidMagic,
+            "invalid parser-worker handshake magic",
+            "InvalidMagic",
+        ),
+        (
+            HandshakeError::UnsupportedVersion,
+            "unsupported parser-worker handshake version",
+            "UnsupportedVersion",
+        ),
+        (
+            HandshakeError::UnsupportedMessageKind,
+            "unsupported parser-worker handshake message kind",
+            "UnsupportedMessageKind",
+        ),
+        (
+            HandshakeError::UnexpectedMessageKind,
+            "unexpected parser-worker handshake message kind",
+            "UnexpectedMessageKind",
+        ),
+        (
+            HandshakeError::NonCanonicalHeader,
+            "non-canonical parser-worker handshake header",
+            "NonCanonicalHeader",
+        ),
+        (
+            HandshakeError::InvalidLimit(LimitField::StackBytes),
+            "invalid parser-worker stack-byte limit",
+            "InvalidLimit(StackBytes)",
+        ),
+        (
+            HandshakeError::NonceMismatch,
+            "parser-worker nonce mismatch",
+            "NonceMismatch",
+        ),
+        (
+            HandshakeError::BuildIdentityMismatch,
+            "parser-worker build identity mismatch",
+            "BuildIdentityMismatch",
+        ),
+        (
+            HandshakeError::ParserProfileMismatch,
+            "parser-worker parser profile mismatch",
+            "ParserProfileMismatch",
+        ),
+        (
+            HandshakeError::EffectiveLimitsMismatch,
+            "parser-worker effective limits mismatch",
+            "EffectiveLimitsMismatch",
+        ),
+    ];
+
+    for (error, expected_display, expected_debug) in cases {
+        assert_eq!(error.to_string(), expected_display);
+        assert_eq!(format!("{error:?}"), expected_debug);
+        assert!(!error.to_string().contains("DO_NOT_REFLECT"));
+        assert!(!format!("{error:?}").contains("DO_NOT_REFLECT"));
     }
 }
 

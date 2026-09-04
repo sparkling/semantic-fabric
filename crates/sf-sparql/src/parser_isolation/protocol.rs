@@ -26,11 +26,14 @@ const LIMIT_WIDTH: usize = 8;
 const MAX_RESOURCE_LIMIT: u64 = i64::MAX as u64;
 const MAX_COUNT_LIMIT: u64 = u32::MAX as u64;
 
-const _: () = assert!(LIMITS_OFFSET + LIMIT_FIELD_COUNT * LIMIT_WIDTH == FRAME_LEN);
+const _: () = {
+    assert!(LIMITS_OFFSET + LIMIT_FIELD_COUNT * LIMIT_WIDTH == FRAME_LEN);
+    assert!(FRAME_LEN_U32 as usize == FRAME_LEN);
+};
 
 macro_rules! fixed_bytes_type {
     ($name:ident) => {
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[derive(Clone, Copy, Eq, PartialEq)]
         pub(crate) struct $name([u8; DIGEST_LEN]);
 
         impl $name {
@@ -40,6 +43,12 @@ macro_rules! fixed_bytes_type {
 
             const fn as_bytes(&self) -> &[u8; DIGEST_LEN] {
                 &self.0
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(concat!(stringify!($name), "(<redacted>)"))
             }
         }
     };
