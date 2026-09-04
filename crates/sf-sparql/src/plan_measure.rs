@@ -108,6 +108,10 @@ pub(crate) enum IqCloneFragmentV1<'a> {
     Nodes(&'a [IqNode]),
     Conditions(&'a [IqCond]),
     Substitution(&'a BTreeMap<Var, BindDef>),
+    /// Variables are owned payload leaves rather than walker nodes. A
+    /// variable-only fragment therefore has zero depth and pending-item counts;
+    /// those two counters describe the iterative measurement stack, not Rust's
+    /// `Clone` call stack.
     Variables(&'a [Var]),
     OrderKeys(&'a [OrderKey]),
     ValueRows(&'a [Vec<Option<TermDef>>]),

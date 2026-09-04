@@ -360,3 +360,101 @@ fn every_exact_iq_fragment_root_matches_its_clone() {
         measure_iq_fragment_clone_v1(IqCloneFragmentV1::ValueRows(&row_clones)).unwrap()
     );
 }
+
+#[test]
+fn exact_clone_roots_have_hand_calculated_v1_schedules() {
+    let branches = vec![Branch::empty()];
+    assert_eq!(
+        measure_branch_forest_clone_v1(&branches).unwrap(),
+        PlanMeasureV1 {
+            nodes: 1,
+            collection_slots: 1,
+            payload_bytes: 0,
+            deep_clone_work: 2,
+            max_depth: 1,
+            max_pending_items: 1,
+        }
+    );
+
+    let nodes = vec![IqNode::True];
+    assert_eq!(
+        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Nodes(&nodes)).unwrap(),
+        PlanMeasureV1 {
+            nodes: 1,
+            collection_slots: 1,
+            payload_bytes: 0,
+            deep_clone_work: 2,
+            max_depth: 1,
+            max_pending_items: 1,
+        }
+    );
+
+    let conditions = vec![IqCond::Sql(SqlCond::IsNull(col("x")))];
+    assert_eq!(
+        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Conditions(&conditions)).unwrap(),
+        PlanMeasureV1 {
+            nodes: 3,
+            collection_slots: 1,
+            payload_bytes: 1,
+            deep_clone_work: 5,
+            max_depth: 3,
+            max_pending_items: 1,
+        }
+    );
+
+    let substitution = BTreeMap::from([(Var::from("v"), BindDef::Resolved(constant("http://x")))]);
+    assert_eq!(
+        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Substitution(&substitution)).unwrap(),
+        PlanMeasureV1 {
+            nodes: 4,
+            collection_slots: 1,
+            payload_bytes: 9,
+            deep_clone_work: 14,
+            max_depth: 4,
+            max_pending_items: 1,
+        }
+    );
+
+    let variables: Vec<Var> = vec!["a".into(), "β".into()];
+    assert_eq!(
+        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Variables(&variables)).unwrap(),
+        PlanMeasureV1 {
+            nodes: 0,
+            collection_slots: 2,
+            payload_bytes: 3,
+            deep_clone_work: 5,
+            max_depth: 0,
+            max_pending_items: 0,
+        }
+    );
+
+    let keys = vec![OrderKey {
+        var: "key".to_owned(),
+        descending: false,
+        expr: None,
+    }];
+    assert_eq!(
+        measure_iq_fragment_clone_v1(IqCloneFragmentV1::OrderKeys(&keys)).unwrap(),
+        PlanMeasureV1 {
+            nodes: 1,
+            collection_slots: 1,
+            payload_bytes: 3,
+            deep_clone_work: 5,
+            max_depth: 1,
+            max_pending_items: 1,
+        }
+    );
+
+    let rows = vec![vec![None, Some(constant("http://x"))]];
+    assert_eq!(
+        measure_iq_fragment_clone_v1(IqCloneFragmentV1::ValueRows(&rows)).unwrap(),
+        PlanMeasureV1 {
+            nodes: 3,
+            collection_slots: 3,
+            payload_bytes: 8,
+            deep_clone_work: 14,
+            max_depth: 3,
+            max_pending_items: 1,
+        }
+    );
+}
