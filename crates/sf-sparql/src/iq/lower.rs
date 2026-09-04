@@ -70,7 +70,7 @@ use crate::leftjoin::{
 use crate::star::{self, StarEnv};
 use crate::unfold::{group_key_columns, join_branches, single_column_of};
 use crate::unify::{bind_term_def, filter_cond, unify, Unify};
-use crate::{Error, Plan, PlanForm, Result};
+use crate::{CompilerWorkMode, Error, Plan, PlanForm, Result};
 
 /// Scan the entire `IqNode` tree to find the maximum scan alias in use.
 /// Used by [`lower`] to initialize a fresh alias counter that never collides
@@ -178,11 +178,34 @@ fn max_alias_in_tree(node: &IqNode) -> usize {
 /// top-level `star::apply_composed_bindings` projection seam trying — too
 /// late — to re-derive it from components that never crossed the boundary.
 /// Empty (`&StarEnv::new()`) for a query with no composed variables.
+///
+/// This public raw entry is explicitly uncontrolled. Request-owned compilation
+/// uses [`lower_with_work_mode`] instead.
 pub fn lower(
     node: IqNode,
     dialect: sf_sql::Dialect,
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
+) -> Result<Plan> {
+    lower_with_work_mode(
+        node,
+        dialect,
+        extra_keep,
+        star_env,
+        CompilerWorkMode::Uncontrolled,
+    )
+}
+
+/// Internal lowering entry that preserves one request's compiler-work identity
+/// through the complete lowering tree, including recursively materialized SubPlans.
+/// The retained mode currently governs exact borrowed-EXISTS IQ clones; existing
+/// `SqlCond`/`TermDef` copies and `filter_cond` allocations remain staged work.
+pub(crate) fn lower_with_work_mode(
+    node: IqNode,
+    dialect: sf_sql::Dialect,
+    extra_keep: &HashSet<String>,
+    star_env: &StarEnv,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<Plan> {
     let mut next_alias = max_alias_in_tree(&node) + 1;
     let mut spine = Spine::default();
@@ -193,6 +216,7 @@ pub fn lower(
         &mut next_alias,
         extra_keep,
         star_env,
+        work_mode,
     )?;
     let vars = spine
         .project
@@ -248,11 +272,14 @@ fn lower_spine(
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
     match node {
         IqNode::Distinct { child } => {
             spine.distinct = true;
-            lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)
+            lower_spine(
+                *child, dialect, spine, next_alias, extra_keep, star_env, work_mode,
+            )
         }
         IqNode::Slice {
             child,
@@ -261,18 +288,22 @@ fn lower_spine(
         } => {
             spine.offset = offset;
             spine.limit = limit;
-            lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)
+            lower_spine(
+                *child, dialect, spine, next_alias, extra_keep, star_env, work_mode,
+            )
         }
         IqNode::OrderBy { child, keys } => {
             spine.order = keys;
-            lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)
+            lower_spine(
+                *child, dialect, spine, next_alias, extra_keep, star_env, work_mode,
+            )
         }
         IqNode::Aggregation {
             child,
             grouping,
             aggs,
         } => lower_aggregation(
-            *child, grouping, aggs, dialect, spine, next_alias, extra_keep, star_env,
+            *child, grouping, aggs, dialect, spine, next_alias, extra_keep, star_env, work_mode,
         ),
         // A `Construction` over a spine node — the SELECT projection / a post-GROUP-BY
         // `(agg AS ?v)` Extend over an `Aggregation`/`Distinct`/`Slice`/`OrderBy`. Record
@@ -301,8 +332,9 @@ fn lower_spine(
                 matches!(d, BindDef::Expr(e)
                     if !matches!(e.as_ref(), Expression::Variable(_)) && is_arith_over_agg(e.as_ref()))
             });
-            let mut branches =
-                lower_spine(*child, dialect, spine, next_alias, extra_keep, star_env)?;
+            let mut branches = lower_spine(
+                *child, dialect, spine, next_alias, extra_keep, star_env, work_mode,
+            )?;
             // A MULTI-branch aggregation lowers to a `rust_group`: the aggregate outputs
             // are computed in Rust AFTER grouping, so they are NOT columns of the pre-group
             // union branches. The outer `Construction`'s `(agg AS ?v)` Extend must rewrite
@@ -327,7 +359,9 @@ fn lower_spine(
         // leaf): the projected scope is its output scope; fold it to branches.
         other => {
             spine.project.get_or_insert_with(|| other.output_vars());
-            lower_node(other, dialect, false, next_alias, extra_keep, star_env)
+            lower_node(
+                other, dialect, false, next_alias, extra_keep, star_env, work_mode,
+            )
         }
     }
 }
@@ -348,6 +382,7 @@ fn lower_node(
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
     match node {
         // ---- leaves --------------------------------------------------------------
@@ -392,8 +427,9 @@ fn lower_node(
             // merge is a pure CROSS JOIN; the shared-var equalities ride `cond`.
             let mut acc = vec![Branch::empty()];
             for child in children {
-                let mut cbr =
-                    lower_node(child, dialect, decompose, next_alias, extra_keep, star_env)?;
+                let mut cbr = lower_node(
+                    child, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
+                )?;
                 // ADR-0033: convert any path-carrying branch to an ordinary derived-table
                 // Scan BEFORE `join_branches` (the flat `merge`'s unconditional path-join
                 // 501) ever sees it — safe unconditionally here, since NORMALIZE collapses
@@ -405,9 +441,7 @@ fn lower_node(
                     break;
                 }
             }
-            for b in &mut acc {
-                apply_conds(&cond, b, dialect)?;
-            }
+            apply_conds_to_branches(cond, &mut acc, dialect, work_mode)?;
             Ok(acc)
         }
 
@@ -416,7 +450,9 @@ fn lower_node(
             // The LEFT operand inherits the enclosing `decompose` context (a left-nested
             // OPTIONAL is already opts-free-compatible: `left_join_branches` only requires
             // the RIGHT to be opts-free, so the left keeps the efficient path at top level).
-            let mut l = lower_node(*left, dialect, decompose, next_alias, extra_keep, star_env)?;
+            let mut l = lower_node(
+                *left, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
+            )?;
             // ADR-0033: convert a path-carrying LEFT operand to an ordinary derived-table
             // Scan — without this, `build_left_join`'s `left.path.is_some()` guard 501s the
             // moment an OPTIONAL's OWN preceding pattern is a property path.
@@ -424,7 +460,9 @@ fn lower_node(
             // The RIGHT operand MUST lower to OPTS-FREE branches to be re-feedable into
             // `left_join_branches` (§5.3 nested-right closure): force any OPTIONAL inside
             // the right to its `(P⋈R)∪(P−R)` decomposition rather than the OptJoin form.
-            let mut r = lower_node(*right, dialect, true, next_alias, extra_keep, star_env)?;
+            let mut r = lower_node(
+                *right, dialect, true, next_alias, extra_keep, star_env, work_mode,
+            )?;
             // ADR-0033: convert a path-carrying RIGHT operand too, BEFORE the
             // `is_single_subplan_branch` check below — a bare-path right converts to a
             // branch with exactly one `core` `Scan` (never a SubPlan), so it falls through
@@ -470,11 +508,10 @@ fn lower_node(
 
         // ---- selection: resolve each cond per resulting branch (R4) ---------------
         IqNode::Filter { child, cond } => {
-            let mut branches =
-                lower_node(*child, dialect, decompose, next_alias, extra_keep, star_env)?;
-            for b in &mut branches {
-                apply_conds(&cond, b, dialect)?;
-            }
+            let mut branches = lower_node(
+                *child, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
+            )?;
+            apply_conds_to_branches(cond, &mut branches, dialect, work_mode)?;
             Ok(branches)
         }
 
@@ -483,7 +520,7 @@ fn lower_node(
             let mut out = Vec::new();
             for c in children {
                 out.extend(lower_node(
-                    c, dialect, decompose, next_alias, extra_keep, star_env,
+                    c, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
                 )?);
             }
             Ok(out)
@@ -501,8 +538,11 @@ fn lower_node(
             // pattern, THEN FILTER — `unfold.rs:135-142`), so peel the leading FILTER(s)
             // and apply their conds per branch once the bindings are in place (R4).
             let (body, filters) = peel_filters(*child);
-            let branches = lower_node(body, dialect, decompose, next_alias, extra_keep, star_env)?;
+            let mut branches = lower_node(
+                body, dialect, decompose, next_alias, extra_keep, star_env, work_mode,
+            )?;
             let mut out = Vec::with_capacity(branches.len());
+            let last = branches.pop();
             for mut b in branches {
                 // A `fold_subst` shared-var unify may prove the branch unsatisfiable
                 // (provably disjoint constants) — drop it, mirroring the flat `merge`
@@ -511,7 +551,7 @@ fn lower_node(
                     continue;
                 }
                 for cond in &filters {
-                    apply_conds(cond, &mut b, dialect)?;
+                    apply_conds(cond, &mut b, dialect, work_mode)?;
                 }
                 // ADR-0032 D3 item 2: `extra_keep` widens this restrict-to-project so a
                 // composed variable's component vars survive to the later projection
@@ -521,6 +561,17 @@ fn lower_node(
                     project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
                 });
                 out.push(b);
+            }
+            if let Some(mut b) = last {
+                if fold_subst(&subst, &mut b)? {
+                    for cond in filters {
+                        apply_owned_conds(cond, &mut b, dialect, work_mode)?;
+                    }
+                    b.bindings.retain(|k, _| {
+                        project.iter().any(|p| p.as_ref() == k.as_str()) || extra_keep.contains(k)
+                    });
+                    out.push(b);
+                }
             }
             Ok(out)
         }
@@ -551,7 +602,7 @@ fn lower_node(
         | IqNode::Distinct { .. }
         | IqNode::Slice { .. }
         | IqNode::OrderBy { .. } => {
-            lower_as_subplan(node, dialect, next_alias, extra_keep, star_env)
+            lower_as_subplan(node, dialect, next_alias, extra_keep, star_env, work_mode)
         }
         IqNode::Intensional { .. } => Err(Error::Unsupported(
             "Intensional survived to LOWER — the RESOLVE invariant (ZERO Intensional) \
@@ -805,9 +856,44 @@ fn peel_filters(mut node: IqNode) -> (IqNode, Vec<Vec<IqCond>>) {
 /// (design §5 Filter / InnerJoin). Applied PER resulting branch (R4 loop, mirroring the
 /// live `Filter` arm `unfold.rs:136-142`), so each symbolic `Expr`/`Exists` sees the
 /// branch's own single bindings map.
-fn apply_conds(conds: &[IqCond], b: &mut Branch, dialect: sf_sql::Dialect) -> Result<()> {
+fn apply_conds_to_branches(
+    conds: Vec<IqCond>,
+    branches: &mut Vec<Branch>,
+    dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<()> {
+    let last = branches.pop();
+    for branch in branches.iter_mut() {
+        apply_conds(&conds, branch, dialect, work_mode)?;
+    }
+    if let Some(mut branch) = last {
+        apply_owned_conds(conds, &mut branch, dialect, work_mode)?;
+        branches.push(branch);
+    }
+    Ok(())
+}
+
+fn apply_conds(
+    conds: &[IqCond],
+    b: &mut Branch,
+    dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<()> {
     for c in conds {
-        let sql = lower_iq_cond(c, b, dialect)?;
+        let sql = lower_iq_cond(c, b, dialect, work_mode)?;
+        b.where_conds.push(sql);
+    }
+    Ok(())
+}
+
+fn apply_owned_conds(
+    conds: Vec<IqCond>,
+    b: &mut Branch,
+    dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<()> {
+    for cond in conds {
+        let sql = lower_owned_iq_cond(cond, b, dialect, work_mode)?;
         b.where_conds.push(sql);
     }
     Ok(())
@@ -818,24 +904,66 @@ fn apply_conds(conds: &[IqCond], b: &mut Branch, dialect: sf_sql::Dialect) -> Re
 /// SAME fn the live FILTER path delegates leaves to — a var bound to a constructed term
 /// is opaque to it and defers to a sound 501); the boolean combinators recurse;
 /// `Exists`/`NotExists` build the correlated semi/anti-join via [`lower_iq_exists`].
-fn lower_iq_cond(cond: &IqCond, outer: &Branch, dialect: sf_sql::Dialect) -> Result<SqlCond> {
+fn lower_iq_cond(
+    cond: &IqCond,
+    outer: &Branch,
+    dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<SqlCond> {
     match cond {
         IqCond::Sql(s) => Ok(s.clone()),
         IqCond::Expr(e) => filter_cond(e, &outer.bindings, dialect).map_err(Error::Unsupported),
         IqCond::And(cs) => Ok(SqlCond::And(
             cs.iter()
-                .map(|c| lower_iq_cond(c, outer, dialect))
+                .map(|c| lower_iq_cond(c, outer, dialect, work_mode))
                 .collect::<Result<_>>()?,
         )),
         IqCond::Or(cs) => Ok(SqlCond::Or(
             cs.iter()
-                .map(|c| lower_iq_cond(c, outer, dialect))
+                .map(|c| lower_iq_cond(c, outer, dialect, work_mode))
                 .collect::<Result<_>>()?,
         )),
-        IqCond::Not(c) => Ok(SqlCond::Not(Box::new(lower_iq_cond(c, outer, dialect)?))),
-        IqCond::Exists(n) => lower_iq_exists(n, outer, false, false, dialect),
+        IqCond::Not(c) => Ok(SqlCond::Not(Box::new(lower_iq_cond(
+            c, outer, dialect, work_mode,
+        )?))),
+        IqCond::Exists(n) => lower_iq_exists(n, outer, false, false, dialect, work_mode),
         IqCond::NotExists { inner, is_minus } => {
-            lower_iq_exists(inner, outer, true, *is_minus, dialect)
+            lower_iq_exists(inner, outer, true, *is_minus, dialect, work_mode)
+        }
+    }
+}
+
+fn lower_owned_iq_cond(
+    cond: IqCond,
+    outer: &Branch,
+    dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<SqlCond> {
+    match cond {
+        IqCond::Sql(sql) => Ok(sql),
+        IqCond::Expr(expression) => {
+            filter_cond(&expression, &outer.bindings, dialect).map_err(Error::Unsupported)
+        }
+        IqCond::And(conditions) => Ok(SqlCond::And(
+            conditions
+                .into_iter()
+                .map(|condition| lower_owned_iq_cond(condition, outer, dialect, work_mode))
+                .collect::<Result<_>>()?,
+        )),
+        IqCond::Or(conditions) => Ok(SqlCond::Or(
+            conditions
+                .into_iter()
+                .map(|condition| lower_owned_iq_cond(condition, outer, dialect, work_mode))
+                .collect::<Result<_>>()?,
+        )),
+        IqCond::Not(condition) => Ok(SqlCond::Not(Box::new(lower_owned_iq_cond(
+            *condition, outer, dialect, work_mode,
+        )?))),
+        IqCond::Exists(node) => {
+            lower_owned_iq_exists(*node, outer, false, false, dialect, work_mode)
+        }
+        IqCond::NotExists { inner, is_minus } => {
+            lower_owned_iq_exists(*inner, outer, true, is_minus, dialect, work_mode)
         }
     }
 }
@@ -866,6 +994,19 @@ fn lower_iq_exists(
     negated: bool,
     is_minus: bool,
     dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<SqlCond> {
+    let node = work_mode.clone_iq_node(node)?;
+    lower_owned_iq_exists(node, outer, negated, is_minus, dialect, work_mode)
+}
+
+fn lower_owned_iq_exists(
+    node: IqNode,
+    outer: &Branch,
+    negated: bool,
+    is_minus: bool,
+    dialect: sf_sql::Dialect,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<SqlCond> {
     // ADR-0032 D3 item 2 — INVESTIGATED, downgraded to defensive (not
     // load-bearing): an EMPTY `extra_keep` here (not threaded from
@@ -911,12 +1052,13 @@ fn lower_iq_exists(
     // (only existence is tested), so there is no observable surface for a
     // composed variable inside it to need `TermDef::ComposedTriple` at all.
     let inner = lower_node(
-        node.clone(),
+        node,
         dialect,
         false,
         &mut 0,
         &HashSet::new(),
         &StarEnv::new(),
+        work_mode,
     )?;
     // Name the actual operator this call is serving in any deferral message: this
     // function is shared by MINUS (`is_minus`), FILTER NOT EXISTS (`negated`
@@ -1376,8 +1518,9 @@ fn lower_as_subplan(
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
-    let mut nested_plan = lower(node, dialect, extra_keep, star_env)?;
+    let mut nested_plan = lower_with_work_mode(node, dialect, extra_keep, star_env, work_mode)?;
     // ADR-0025 Tier-1 bug #2: a SubPlan used as a join input is emitted as a derived table
     // via `emit_subplan_sql` → `plan.emitted()`, which renders only per-branch SQL. A
     // plan-level SLICE (LIMIT/OFFSET) is applied by the Rust executor on the OUTER result,
@@ -2180,8 +2323,11 @@ fn lower_aggregation(
     next_alias: &mut usize,
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<Vec<Branch>> {
-    let mut inner = lower_node(child, dialect, false, next_alias, extra_keep, star_env)?;
+    let mut inner = lower_node(
+        child, dialect, false, next_alias, extra_keep, star_env, work_mode,
+    )?;
     spine.project.get_or_insert_with(|| {
         let mut out = grouping.clone();
         for a in &aggs {

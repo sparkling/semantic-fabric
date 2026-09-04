@@ -611,7 +611,7 @@ fn translate_tree_with_column_type_use(
         let built = build::build_tree(pattern, None)?;
         let resolved = iq::resolve::resolve(built, &mut cx)?;
         let normalized = iq::normalize::normalize_with_work_mode(resolved, work_mode)?;
-        iq::lower::lower(normalized, dialect, &extra_keep, &star_env)
+        iq::lower::lower_with_work_mode(normalized, dialect, &extra_keep, &star_env, work_mode)
     };
 
     let mut plan = match query {
