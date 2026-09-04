@@ -362,9 +362,10 @@ fn normalize_inner_join(
         let mut out_arms = Vec::with_capacity(arms.len());
         let last = arms.pop();
         for arm in arms {
-            let mut nc = children.clone();
+            let mut nc = work_mode.clone_iq_nodes(&children)?;
             nc.insert(i, arm);
-            out_arms.push(normalize_inner_join(nc, cond.clone(), work_mode)?);
+            let arm_cond = work_mode.clone_iq_conditions(&cond)?;
+            out_arms.push(normalize_inner_join(nc, arm_cond, work_mode)?);
         }
         if let Some(arm) = last {
             // The final distributed arm can consume both fixed operands and the
@@ -560,12 +561,9 @@ fn normalize_left_join(
             let mut out = Vec::with_capacity(arms.len());
             let last = arms.pop();
             for a in arms {
-                out.push(normalize_left_join(
-                    a,
-                    right.clone(),
-                    cond.clone(),
-                    work_mode,
-                )?);
+                let arm_right = work_mode.clone_iq_node(&right)?;
+                let arm_cond = work_mode.clone_iq_conditions(&cond)?;
+                out.push(normalize_left_join(a, arm_right, arm_cond, work_mode)?);
             }
             if let Some(a) = last {
                 // LEFT JOIN is non-commutative, so retain the left-arm order and

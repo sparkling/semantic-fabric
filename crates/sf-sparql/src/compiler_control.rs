@@ -3,10 +3,11 @@
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 
 use crate::compile_envelope::CompileEnvelopeError;
-use crate::iq::node::IqCond;
+use crate::iq::node::{IqCond, IqNode};
 use crate::iq::Branch;
 use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
+    measure_compiler_clone_collection_v1, measure_compiler_clone_root_v1,
+    CompilerCloneCollectionV1, CompilerCloneRootV1,
 };
 use crate::plan_measure::{PlanMeasureError, PlanMeasureV1};
 use crate::{Error, Result};
@@ -148,6 +149,28 @@ impl<'control> CompileContext<'control> {
         .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(conditions.to_vec())
+    }
+
+    /// Measure, reserve, and perform exactly one recursive IQ-node collection clone.
+    pub(crate) fn clone_iq_nodes(&self, nodes: &[IqNode]) -> Result<Vec<IqNode>> {
+        self.checkpoint()?;
+        let measure =
+            measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(nodes))
+                .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(nodes.to_vec())
+    }
+
+    /// Measure, reserve, and perform exactly one recursive scalar IQ-node clone.
+    ///
+    /// This deliberately uses the scalar root: wrapping `node` in a synthetic
+    /// one-element collection would charge work that the actual clone never does.
+    pub(crate) fn clone_iq_node(&self, node: &IqNode) -> Result<IqNode> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(node))
+            .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(node.clone())
     }
 
     fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {

@@ -94,6 +94,9 @@ mod cache_binding_tests;
 #[cfg(test)]
 mod column_type_authority_tests;
 #[cfg(test)]
+#[path = "compiler_control/normalize_join_tests.rs"]
+mod compiler_control_normalize_join_tests;
+#[cfg(test)]
 #[path = "compiler_control/pipeline_tests.rs"]
 mod compiler_control_pipeline_tests;
 
@@ -531,6 +534,20 @@ impl CompilerWorkMode<'_> {
         match self {
             Self::Uncontrolled => Ok(conditions.to_vec()),
             Self::Metered(context) => context.clone_iq_conditions(conditions),
+        }
+    }
+
+    fn clone_iq_nodes(self, nodes: &[iq::node::IqNode]) -> Result<Vec<iq::node::IqNode>> {
+        match self {
+            Self::Uncontrolled => Ok(nodes.to_vec()),
+            Self::Metered(context) => context.clone_iq_nodes(nodes),
+        }
+    }
+
+    fn clone_iq_node(self, node: &iq::node::IqNode) -> Result<iq::node::IqNode> {
+        match self {
+            Self::Uncontrolled => Ok(node.clone()),
+            Self::Metered(context) => context.clone_iq_node(node),
         }
     }
 }
