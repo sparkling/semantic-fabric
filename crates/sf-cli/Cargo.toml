@@ -21,6 +21,11 @@ name = "private_worker_handshake"
 path = "tests/private_worker_handshake.rs"
 required-features = ["parser-worker-evidence"]
 
+[[test]]
+name = "private_query_v1_transport"
+path = "tests/private_query_v1_transport.rs"
+required-features = ["query-v1-transport-evidence"]
+
 [dependencies]
 sf-core.workspace = true
 sf-sparql.workspace = true

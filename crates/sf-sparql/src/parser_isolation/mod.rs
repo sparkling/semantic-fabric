@@ -37,6 +37,40 @@ pub fn exercise_private_parser_worker_handshake_for_evidence(
     executable: &std::path::Path,
     source: &str,
 ) -> Result<(), String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_handshake_for_evidence(file, source).map_err(|error| error.to_string())
+}
+
+/// Non-default Rust evidence seam for the parser-free QueryV1 transport.
+///
+/// A successful return proves only the fixed synthetic exchange, terminal
+/// containment, correlation, and canonical QueryV1 replay. It does not parse
+/// the supplied source or grant admission, witness, cache, or serving authority.
+#[cfg(all(
+    feature = "query-v1-transport-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_synthetic_query_v1_transport_for_evidence(
+    executable: &std::path::Path,
+    source: &str,
+) -> Result<(), String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_query_v1_transport_for_evidence(file, source)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(
+    any(
+        feature = "parser-worker-evidence",
+        feature = "query-v1-transport-evidence"
+    ),
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+fn open_evidence_executable(executable: &std::path::Path) -> Result<std::fs::File, String> {
     use std::fs::OpenOptions;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::Component;
@@ -48,12 +82,11 @@ pub fn exercise_private_parser_worker_handshake_for_evidence(
     {
         return Err("evidence executable path must be absolute and normalized".into());
     }
-    let file = OpenOptions::new()
+    OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(executable)
-        .map_err(|error| format!("open evidence executable: {error}"))?;
-    supervisor::exercise_handshake_for_evidence(file, source).map_err(|error| error.to_string())
+        .map_err(|error| format!("open evidence executable: {error}"))
 }
 
 #[cfg(test)]

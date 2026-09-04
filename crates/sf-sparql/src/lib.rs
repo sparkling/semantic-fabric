@@ -121,6 +121,14 @@ pub use parser_isolation::dispatch_private_parser_worker_v1;
 ))]
 #[doc(hidden)]
 pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
+#[cfg(all(
+    feature = "query-v1-transport-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+#[doc(hidden)]
+pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
 pub use saturate::Tbox;
 
 /// Errors raised by the virtualizer (deferred features surface as
