@@ -22,6 +22,8 @@ The remaining mutants bind boundaries precisely. Exact-cap output accepts `Ready
 
 Live bad nonce, source-digest and UTF-8 requests remain alive and silent beyond `Ready` while stdin stays open; only after exact EOF do they close output and raw-exit 78. Every mutant and malformed-request probe permits a clean next launch. The private pure-Rust `QueryV1` codec retains allocation-free preflight, fallible iterative reconstruction and exact replay, and the typed alpha profile remains correlation-only. No parser is invoked, no parser policy/profile or dependency/syscall closure is qualified, and no parser-produced wire, paired-worker receipt, witness, cache, attestation, admission, permit, serving, release or `CompileProfileId::GovernedV1` authority exists. No credential, namespace, LSM or privilege-transition boundary is claimed. Parser execution and complete profile qualification remain next.
 
+Commit `38e9c7a` closes the raw directive proof gap with internally fixed zero-, one-, and three-byte and unknown-`u16` cases: each emits zero bytes, raw-exits 78, is exactly reaped and permits recovery on the same held descriptor. Commit `5a9919b` makes the ten-mutant matrix use one preparation/fingerprint and one held descriptor, preserving a fresh child and all controls per case while reducing the focused all-feature run from 192.31 to 24.24 seconds. The default-only dependency receipt refreshed at `949cf11` is baseline evidence, not the complete parser-profile receipt required by Gate 3.
+
 The raw lexical scanner, parser-view direct-IRI measurement, fallible post-parse
 algebra validator, bounded cache-key writer, exact clone roots, `CompileContext`
 and Plan measurement remain private development foundations. Five dormant
