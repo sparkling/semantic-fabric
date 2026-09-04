@@ -71,9 +71,12 @@ describe('fail-closed CI impact selector', () => {
     expect(selectForChanges([
       { status: 'M', path: 'crates/sf-sparql/src/lib.rs' },
     ])).toEqual(gates(true, false));
-    for (const status of ['A', 'D'] as const) {
+    for (const status of ['A', 'D', 'T'] as const) {
       expect(selectForChanges([
         { status, path: 'crates/sf-sparql/src/new-module.rs' },
+      ])).toEqual(gates(true, true));
+      expect(selectForChanges([
+        { status, path: 'crates/sf-sparql/build.rs' },
       ])).toEqual(gates(true, true));
     }
     expect(selectForChanges([

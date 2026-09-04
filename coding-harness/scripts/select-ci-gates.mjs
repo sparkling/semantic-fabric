@@ -53,6 +53,13 @@ const CAPTURE_LOCAL_SOURCE_PREFIXES = [
   'crates/sf-sparql/src/',
   'crates/sf-sql/src/',
 ];
+const CAPTURE_LOCAL_BUILD_PATHS = new Set([
+  'crates/sf-bench/build.rs',
+  'crates/sf-core/build.rs',
+  'crates/sf-mapping/build.rs',
+  'crates/sf-sparql/build.rs',
+  'crates/sf-sql/build.rs',
+]);
 const DIFF_STATUSES = new Set(['A', 'D', 'M', 'T']);
 
 export function allGates() {
@@ -81,8 +88,9 @@ export function selectForChanges(changes, protectedPaths = []) {
       const classification = classify(path, protectedSet);
       if (classification === null) return allGates();
       for (const gate of classification) selected[gate] = true;
-      if ((status === 'A' || status === 'D')
-        && CAPTURE_LOCAL_SOURCE_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+      if ((status === 'A' || status === 'D' || status === 'T')
+        && (CAPTURE_LOCAL_BUILD_PATHS.has(path)
+          || CAPTURE_LOCAL_SOURCE_PREFIXES.some((prefix) => path.startsWith(prefix)))) {
         selected.coding_harness = true;
       }
     }
