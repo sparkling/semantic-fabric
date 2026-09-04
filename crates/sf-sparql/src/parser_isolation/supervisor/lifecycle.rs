@@ -31,6 +31,13 @@ impl ParserWorkerProcess {
         self.contain_io_result(result)
     }
 
+    /// Contain a peer whose declared output cannot fit the remaining
+    /// whole-worker budget, before allocating storage for that declaration.
+    pub(super) fn ensure_can_receive(&mut self, additional: usize) -> Result<(), SupervisorError> {
+        let result = self.io.ensure_can_receive(self.wall_deadline, additional);
+        self.contain_io_result(result)
+    }
+
     pub(super) fn expect_stdout_eof_until_deadline(&mut self) -> Result<(), SupervisorError> {
         let result = self.io.expect_eof(&self.pidfd, self.wall_deadline);
         self.contain_io_result(result)

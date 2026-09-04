@@ -173,6 +173,19 @@ impl BoundedWorkerIo {
         Ok(())
     }
 
+    /// Check a future fixed read against the immutable lifetime budget before
+    /// the caller allocates storage for peer-declared bytes.
+    pub(super) fn ensure_can_receive(
+        &self,
+        deadline: Instant,
+        additional: usize,
+    ) -> Result<(), SupervisorError> {
+        ensure_before_deadline(deadline)?;
+        prospective_total(self.received, additional, self.max_received)
+            .map(|_| ())
+            .ok_or(SupervisorError::InvalidState(OUTPUT_LIMIT_MESSAGE))
+    }
+
     /// Require a clean worker-output EOF without accepting a valid frame as a
     /// prefix of a longer message stream.
     pub(super) fn expect_eof(
@@ -341,12 +354,32 @@ fn wait_ready(
 
 #[cfg(test)]
 mod unit_tests {
-    use super::prospective_total;
+    use std::time::{Duration, Instant};
+
+    use super::{prospective_total, BoundedWorkerIo};
 
     #[test]
     fn prospective_totals_are_checked_before_io() {
         assert_eq!(prospective_total(3, 2, 5), Some(5));
         assert_eq!(prospective_total(3, 3, 5), None);
         assert_eq!(prospective_total(u64::MAX, 1, u64::MAX), None);
+    }
+
+    #[test]
+    fn receive_budget_is_prospected_without_mutating_accounting() {
+        let io = BoundedWorkerIo {
+            stdin: None,
+            stdout: None,
+            sent: 0,
+            received: 3,
+            max_sent: 1,
+            max_received: 5,
+        };
+
+        let future = Instant::now() + Duration::from_secs(1);
+        assert!(io.ensure_can_receive(future, 2).is_ok());
+        assert!(io.ensure_can_receive(future, 3).is_err());
+        assert!(io.ensure_can_receive(Instant::now(), 0).is_err());
+        assert_eq!(io.received, 3);
     }
 }
