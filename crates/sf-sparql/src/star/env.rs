@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
 
-use crate::iq::{Branch, TermDef};
+use crate::iq::{collect_cond_cols, Branch, ColRef, TermDef};
 use crate::Plan;
 
 use super::util::fresh_component_var;
@@ -292,16 +292,18 @@ pub(super) fn propagate_single_branch_distinct(plan: &mut Plan) {
 /// cross-boundary gap.
 pub(super) fn apply_composed_bindings_checked(branch: &mut Branch, env: &StarEnv) {
     let before = branch.projection();
-    let mut candidate = branch.clone();
-    apply_to_one_branch(&mut candidate, env);
-    for sp in &mut candidate.subplan_joins {
+    let updates = composed_binding_updates(branch, env);
+    if projection_with_binding_updates(branch, &updates) != before {
+        return;
+    }
+    for (var, def) in updates {
+        branch.bindings.insert(var, def);
+    }
+    for sp in &mut branch.subplan_joins {
         propagate_single_branch_distinct(&mut sp.plan);
         for inner in &mut sp.plan.branches {
             apply_composed_bindings_checked(inner, env);
         }
-    }
-    if candidate.projection() == before {
-        *branch = candidate;
     }
 }
 
@@ -310,20 +312,97 @@ pub(super) fn apply_composed_bindings_checked(branch: &mut Branch, env: &StarEnv
 /// into `subplan_joins`, no safety check; see [`apply_composed_bindings`] /
 /// [`apply_composed_bindings_checked`] for the two call sites that add those.
 fn apply_to_one_branch(branch: &mut Branch, env: &StarEnv) {
-    // Two passes (collect then insert) — inserting while iterating `env`
-    // would be fine (env isn't mutated), but collecting first keeps the
-    // borrow of `branch.bindings` used by `composed_term_def` read-only
-    // for the whole scan, independent of the mutation that follows.
-    let updates: Vec<(String, TermDef)> = env
-        .keys()
-        .filter_map(|var| {
-            composed_term_def(var, env, &branch.bindings).map(|def| (var.as_str().to_owned(), def))
-        })
-        .collect();
-    for (var, def) in updates {
+    for (var, def) in composed_binding_updates(branch, env) {
         branch.bindings.insert(var, def);
     }
 }
+
+/// Collect the deterministic, name-sorted binding replacements without
+/// mutating `branch`. Resolving every definition from the same original
+/// binding map preserves [`apply_to_one_branch`]'s existing two-pass behavior.
+fn composed_binding_updates(branch: &Branch, env: &StarEnv) -> Vec<(String, TermDef)> {
+    env.keys()
+        .filter_map(|var| {
+            composed_term_def(var, env, &branch.bindings).map(|def| (var.as_str().to_owned(), def))
+        })
+        .collect()
+}
+
+/// Return the exact projection `branch` would have after `updates`, without
+/// cloning or temporarily mutating the branch. Both inputs are sorted by
+/// binding name (`BTreeMap` order for the base and [`StarEnv`] order for the
+/// updates), so a merge yields the same value order as a committed map.
+///
+/// Keep the non-binding contribution in sync with [`Branch::projection`]. The
+/// focused overlay tests cover sorted insertion/replacement, alias identity,
+/// exact column order, DISTINCT, and rejection without mutation.
+fn projection_with_binding_updates(branch: &Branch, updates: &[(String, TermDef)]) -> Vec<ColRef> {
+    let mut cols = Vec::new();
+    let push = |col: ColRef, cols: &mut Vec<ColRef>| {
+        if !cols.contains(&col) {
+            cols.push(col);
+        }
+    };
+    let add_def = |def: &TermDef, cols: &mut Vec<ColRef>| {
+        for col in def.columns() {
+            push(col, cols);
+        }
+    };
+
+    let mut bindings = branch.bindings.iter().peekable();
+    let mut replacements = updates.iter().peekable();
+    loop {
+        match (bindings.peek(), replacements.peek()) {
+            (Some((name, _)), Some((replacement_name, _))) => {
+                match name.as_str().cmp(replacement_name.as_str()) {
+                    std::cmp::Ordering::Less => {
+                        let (_, def) = bindings.next().expect("peeked binding");
+                        add_def(def, &mut cols);
+                    }
+                    std::cmp::Ordering::Equal => {
+                        bindings.next();
+                        let (_, def) = replacements.next().expect("peeked replacement");
+                        add_def(def, &mut cols);
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let (_, def) = replacements.next().expect("peeked replacement");
+                        add_def(def, &mut cols);
+                    }
+                }
+            }
+            (Some(_), None) => {
+                let (_, def) = bindings.next().expect("peeked binding");
+                add_def(def, &mut cols);
+            }
+            (None, Some(_)) => {
+                let (_, def) = replacements.next().expect("peeked replacement");
+                add_def(def, &mut cols);
+            }
+            (None, None) => break,
+        }
+    }
+
+    if !branch.distinct {
+        for cond in &branch.where_conds {
+            collect_cond_cols(cond, &mut |col| push(col.clone(), &mut cols));
+        }
+        for opt in &branch.opts {
+            for cond in opt.on.iter().chain(opt.extra.iter()) {
+                collect_cond_cols(cond, &mut |col| push(col.clone(), &mut cols));
+            }
+        }
+        for subplan in &branch.subplan_joins {
+            for cond in &subplan.on {
+                collect_cond_cols(cond, &mut |col| push(col.clone(), &mut cols));
+            }
+        }
+    }
+    cols
+}
+
+#[cfg(test)]
+#[path = "env_overlay_tests.rs"]
+mod overlay_tests;
 
 /// Build `var`'s [`TermDef::ComposedTriple`] by resolving its
 /// [`ComposedInfo`]'s three component vars: a component that is ITSELF an
