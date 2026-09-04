@@ -149,6 +149,8 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/parser_isolation/protocol.rs',
   'crates/sf-sparql/src/parser_isolation/supervisor.rs',
   'crates/sf-sparql/src/parser_isolation/supervisor/executable.rs',
+  'crates/sf-sparql/src/parser_isolation/supervisor/io.rs',
+  'crates/sf-sparql/src/parser_isolation/supervisor/io_tests.rs',
   'crates/sf-sparql/src/parser_isolation/supervisor/lifecycle.rs',
   'crates/sf-sparql/src/parser_isolation/supervisor/linux.rs',
   'crates/sf-sparql/src/parser_isolation/supervisor/seccomp.rs',
