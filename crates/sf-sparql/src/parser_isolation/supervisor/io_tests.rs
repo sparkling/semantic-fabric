@@ -4,7 +4,7 @@
 mod linux_tests {
     use std::fs::File;
     use std::os::fd::{AsRawFd, OwnedFd};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use super::super::executable::PreparedParserExecutable;
     use super::super::linux::spawn_fixture;
@@ -113,6 +113,34 @@ mod linux_tests {
         assert!(trailing.child.is_none(), "trailing output must reap");
         assert!(!pidfd_targets_live_process(&pidfd));
         successful_round_trip(&prepared("/bin/cat"));
+    }
+
+    #[test]
+    fn local_observation_accepts_silent_live_peer_and_contains_early_output() {
+        let executable = prepared("/bin/cat");
+        let mut silent = spawn_fixture(&executable, v1_limits(), &[b"cat", b"-"])
+            .expect("launch silent live fixture");
+        silent
+            .observe_alive_and_silent_until(Instant::now() + Duration::from_millis(20))
+            .expect("cat stays live and silent while stdin is held open");
+        assert!(silent.child.is_some());
+        assert_eq!(silent.received_bytes(), 0);
+        silent.close_stdin();
+        assert!(silent.wait_until_deadline().unwrap().success());
+
+        let mut noisy = spawn_fixture(&executable, v1_limits(), &[b"cat", b"-"])
+            .expect("launch early-output fixture");
+        noisy.write_all_until_deadline(b"X").unwrap();
+        let pidfd = noisy.duplicate_pidfd().unwrap();
+        assert!(matches!(
+            noisy.observe_alive_and_silent_until(Instant::now() + Duration::from_millis(100)),
+            Err(SupervisorError::InvalidState(
+                "parser worker emitted result bytes before request EOF"
+            ))
+        ));
+        assert!(noisy.child.is_none(), "early output must be reaped");
+        assert!(!pidfd_targets_live_process(&pidfd));
+        successful_round_trip(&executable);
     }
 
     #[test]

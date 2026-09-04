@@ -87,6 +87,24 @@ pub fn exercise_synthetic_query_v1_transport_mutant_for_evidence(
         .map_err(|error| error.to_string())
 }
 
+/// Prove that fixed request defects remain silent until the one-shot EOF.
+///
+/// The three corruptions and observation interval are closed inside this
+/// mutant-only aggregate; callers cannot select behavior for the normal peer.
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_synthetic_query_v1_request_eof_order_for_evidence(
+    executable: &std::path::Path,
+) -> Result<(), String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_query_v1_request_eof_order_for_evidence(file)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(all(
     any(
         feature = "parser-worker-evidence",

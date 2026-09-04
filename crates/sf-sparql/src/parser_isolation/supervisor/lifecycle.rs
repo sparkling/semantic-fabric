@@ -38,6 +38,18 @@ impl ParserWorkerProcess {
         self.contain_io_result(result)
     }
 
+    pub(super) fn observe_alive_and_silent_until(
+        &mut self,
+        observation_deadline: Instant,
+    ) -> Result<(), SupervisorError> {
+        let result = self.io.observe_alive_and_silent_until(
+            &self.pidfd,
+            observation_deadline,
+            self.wall_deadline,
+        );
+        self.contain_io_result(result)
+    }
+
     pub(super) fn expect_stdout_eof_until_deadline(&mut self) -> Result<(), SupervisorError> {
         let result = self.io.expect_eof(&self.pidfd, self.wall_deadline);
         self.contain_io_result(result)

@@ -223,6 +223,19 @@ pub(super) fn exercise_query_v1_transport_mutant_for_evidence(
     )
 }
 
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_query_v1_request_eof_order_for_evidence(
+    file: std::fs::File,
+) -> Result<(), SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    query_v1_mutant::exercise_request_eof_order(&prepared)
+}
+
 /// Buildable fail-closed stub for every unqualified target.
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
 struct PreparedParserExecutable;

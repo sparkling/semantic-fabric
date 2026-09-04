@@ -29,6 +29,8 @@ mod streaming;
 mod synthetic;
 
 pub(crate) use prepared::PreparedParseRequestV1;
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(crate) use prepared::RequestEofCorruption;
 #[cfg(any(
     test,
     feature = "query-v1-transport-evidence",

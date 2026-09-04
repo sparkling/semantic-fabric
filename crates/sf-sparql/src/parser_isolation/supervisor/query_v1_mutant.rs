@@ -1,12 +1,16 @@
 //! Parent-only verification of the ten closed QueryV1 transport mutants.
 
+use std::time::{Duration, Instant};
+
+use super::executable::PreparedParserExecutable;
 use super::handshake::ControlReadyWorker;
 use super::query_v1_transport::{
     capture_reaped, ReapedTransport, TransportFailure, TransportStage,
 };
 use super::SupervisorError;
 use crate::parser_isolation::parse_protocol::{
-    ParseFrameError, ParseRequestV1, ParseResultV1, PreparedParseRequestV1, RESULT_HEADER_LEN,
+    ParseFrameError, ParseRequestV1, ParseResultV1, PreparedParseRequestV1, RequestEofCorruption,
+    RESULT_HEADER_LEN,
 };
 use crate::parser_isolation::profile::V1_CANDIDATE_MAX_OUTPUT_BYTES;
 use crate::parser_isolation::protocol::FRAME_LEN;
@@ -18,6 +22,9 @@ const STANDARD_OUTPUT_BYTES: u64 =
     (FRAME_LEN + RESULT_HEADER_LEN + STANDARD_RESULT_BODY_LEN) as u64;
 const HEADER_ONLY_OUTPUT_BYTES: u64 = (FRAME_LEN + RESULT_HEADER_LEN) as u64;
 const READY_ONLY_OUTPUT_BYTES: u64 = FRAME_LEN as u64;
+const REQUEST_EOF_OBSERVATION: Duration = Duration::from_millis(100);
+const REQUEST_EOF_SOURCE_BYTES: usize = 128 * 1024;
+const REQUEST_EOF_MUTANT: QueryV1TransportMutant = QueryV1TransportMutant::WrongNonceExitZero;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExpectedTerminal {
@@ -41,6 +48,79 @@ enum ExpectedFailure {
 struct ExpectedOutcome {
     terminal: ExpectedTerminal,
     output_bytes: u64,
+}
+
+/// Prove that validation of three fixed request defects is strictly post-EOF.
+pub(super) fn exercise_request_eof_order(
+    executable: &PreparedParserExecutable,
+) -> Result<(), SupervisorError> {
+    let source = request_eof_source()?;
+    for corruption in RequestEofCorruption::ALL {
+        observe_one_request_eof_order(executable, &source, corruption)?;
+        prove_clean_next_launch(executable)?;
+    }
+    Ok(())
+}
+
+fn observe_one_request_eof_order(
+    executable: &PreparedParserExecutable,
+    source: &str,
+    corruption: RequestEofCorruption,
+) -> Result<(), SupervisorError> {
+    let mut worker = executable.launch_query_v1_transport_mutant(source, REQUEST_EOF_MUTANT)?;
+    let corrupted = worker
+        .prepared_request
+        .corrupted_for_eof_evidence(corruption)?;
+    if corrupted.len() != worker.prepared_request.encoded().len() {
+        return Err(SupervisorError::InvalidState(
+            "request EOF corruption changed the frame length",
+        ));
+    }
+    let expected_input = expected_input_bytes(&worker.prepared_request)?;
+
+    worker.process.write_all_until_deadline(&corrupted)?;
+    let observation_deadline = Instant::now().checked_add(REQUEST_EOF_OBSERVATION).ok_or(
+        SupervisorError::InvalidState("request EOF observation deadline overflowed"),
+    )?;
+    worker
+        .process
+        .observe_alive_and_silent_until(observation_deadline)?;
+    require_accounting(
+        worker.process.sent_bytes(),
+        worker.process.received_bytes(),
+        expected_input,
+        READY_ONLY_OUTPUT_BYTES,
+    )?;
+
+    worker.process.close_stdin();
+    worker.process.expect_stdout_eof_until_deadline()?;
+    let status = worker.process.wait_until_deadline()?;
+    require_exit_78(&status)?;
+    require_accounting(
+        worker.process.sent_bytes(),
+        worker.process.received_bytes(),
+        expected_input,
+        READY_ONLY_OUTPUT_BYTES,
+    )?;
+    worker.prepared_request.verify_exact()?;
+    Ok(())
+}
+
+fn prove_clean_next_launch(executable: &PreparedParserExecutable) -> Result<(), SupervisorError> {
+    let worker = executable
+        .launch_query_v1_transport_mutant("clean request EOF recovery", REQUEST_EOF_MUTANT)?;
+    finish(worker, REQUEST_EOF_MUTANT)
+}
+
+fn request_eof_source() -> Result<String, SupervisorError> {
+    let mut source = String::new();
+    source
+        .try_reserve_exact(REQUEST_EOF_SOURCE_BYTES)
+        .map_err(|_| {
+            SupervisorError::InvalidState("request EOF evidence source allocation failed")
+        })?;
+    source.extend(std::iter::repeat_n('x', REQUEST_EOF_SOURCE_BYTES));
+    Ok(source)
 }
 
 pub(super) fn finish(

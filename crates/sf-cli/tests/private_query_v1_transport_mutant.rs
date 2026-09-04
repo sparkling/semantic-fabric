@@ -66,6 +66,12 @@ fn mutant_transport_accepts_its_exact_source_cap_and_rejects_cap_plus_one() {
 }
 
 #[test]
+fn corrupt_requests_remain_alive_and_silent_until_exact_eof() {
+    sf_sparql::exercise_synthetic_query_v1_request_eof_order_for_evidence(Path::new(BINARY))
+        .expect("nonce, source-digest, and UTF-8 validation must be strictly post-EOF");
+}
+
+#[test]
 fn mutant_evidence_rejects_paths_before_preparing_an_oversized_request() {
     for path in [Path::new("semantic-fabric"), Path::new("/tmp/../bin/false")] {
         let error = sf_sparql::exercise_synthetic_query_v1_transport_mutant_for_evidence(
