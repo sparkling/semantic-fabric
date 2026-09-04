@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-25
-updated: 2026-09-03
+updated: 2026-09-04
 tags: [dev-process, ruflo, metaharness, dual-host, codex, claude, agentic-qe, darwin, avo]
 supersedes:
   - ADR-0030
@@ -365,18 +365,15 @@ Darwin/GEPA fitness, promotion, or repair reward.
 
 ## Implementation status
 
-Accepted architecture, framework, and H0c activation are implemented. Commits
-through `a84aa05` establish the private supply chain, dual-host transaction,
-exact-origin and filesystem/resource isolation, bounded retry/cancellation,
-provider-free QE/SAST, schema-V6 evidence law, trusted execution/replay,
-protected dormant retrieval tuning, and PostgreSQL mapping-receipt evidence authority. The
-2026-08-31 checkpoint historically passed 905 tests/122 files. The 2026-09-03
-current-tree, drift-independent harness checkpoint passes 970 tests/125 files with
-two skips after refreshing the expanded Rust source closure and controller
-attestation. The excluded seven-test mutable ambient collector has three passing
-fail-closed controls and four positive cases that reject installed-package drift;
-it grants no product, publication, promotion, or evolution authority. No controlled
-performance receipt is recaptured or promoted by this test checkpoint.
+Accepted architecture, framework, and H0c activation are implemented. Commits through `a84aa05`
+establish the private supply chain, dual-host transaction, exact-origin and
+filesystem/resource isolation, bounded retry/cancellation, provider-free QE/SAST,
+schema-V6 evidence law, trusted execution/replay, protected dormant retrieval tuning, and PostgreSQL mapping-receipt evidence authority. The 2026-08-31 checkpoint historically
+passed 905 tests/122 files. The 2026-09-03 current-tree, drift-independent harness checkpoint
+passed 970 tests/125 files with two skips after refreshing the expanded Rust source closure
+and controller attestation. The excluded seven-test mutable ambient collector had three
+passing fail-closed controls and four positive cases that rejected installed-package drift;
+it grants no product, publication, promotion, or evolution authority. No controlled performance receipt is recaptured or promoted by this test checkpoint.
 
 The reusable-harness prerequisite then advanced through `ef10001`, `c3a3e99`,
 `f8db1e0`, `7a5244a`, `6e7c153`, `b40dbc6`, and `7a1fa24`. H0a freezes schema-v5 gate
@@ -469,8 +466,8 @@ Sensitive controls prove namespace separation and block host TCP, local DNS and 
 while shared-network and whole-directory mutants connect. Source changes and alternate
 file types fail closed. Same-euid/same-gid, non-world-writable `0664` state is cooperative,
 non-authoritative evidence—not atomic cross-file authority or hostile same-principal safety.
-MetaHarness OIA remains clean/info with score 75 and a ready genome, but cannot inspect
-these actual launchers and is `INCONCLUSIVE`; WAL refusal must not be bypassed by bulk import.
+MetaHarness OIA remains clean/info with score 75 and a ready genome, but cannot inspect these
+launchers and is `INCONCLUSIVE`. Project lifecycle hooks leave the legacy JSON memory bridge inert; it must not bypass owning MCP stores through bulk copy.
 A fixed-seed 2×1 Darwin Shield run passed only 9/12 gates; evolution stays disabled.
 
 ## Consequences

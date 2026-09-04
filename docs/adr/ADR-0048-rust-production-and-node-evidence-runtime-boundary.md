@@ -16,10 +16,11 @@ This ADR is **accepted** by explicit maintainer direction on 2026-09-01. It
 fixes the implementation-language, packaging and authority boundary for the
 application, coding harness and proposed capture supervisor.
 
-It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050, claim that a Rust
-supervisor exists, authorize a database or deployment, or weaken any final
-correctness, security, performance, reproducibility or release gate. Existing
-TypeScript artefacts remain non-authorizing reference evidence.
+It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050 through
+ADR-0053, claim that a Rust supervisor exists, authorize a database or
+deployment, or weaken any final correctness, security, performance,
+reproducibility or release gate. Existing TypeScript artefacts remain
+non-authorizing reference evidence.
 
 ## Context
 
@@ -59,9 +60,10 @@ component.
 ADR-0039's public `semantic-fabric` server remains a product artefact. A future
 supervisor is a separate Rust bounded context and separately packaged service;
 it is never linked into `sf-server` and never reuses the product query path.
-Likewise, ADR-0053's fallback compiler-containment worker, if required, is a
-Rust/Cargo product component with a bounded versioned wire contract. Ruflo,
-MetaHarness and Node may test that boundary but may not implement it at runtime.
+If proposed ADR-0053 is accepted, its selected V1 compiler-containment worker
+is likewise a Rust/Cargo product component with a bounded versioned wire
+contract. Ruflo, MetaHarness and Node may test that boundary but may not
+implement it at runtime.
 
 ### 2. Keep all committed Node code non-deployable
 
@@ -166,7 +168,7 @@ claims that require their authority. Harness scores, plans and receipts do not
 earn product progress; deterministic application behavior and direct product
 tests do.
 
-### 7. Implementation status (2026-09-01)
+### 7. Implementation status (2026-09-04)
 
 Commit `7c12aa7` enforces the Rust product boundary in protected harness and CI
 metadata while preserving the dependency-free Node oracle. Commits `13b8187`,
@@ -265,6 +267,11 @@ no observed identity, so compiler constraint/type authorities remain
 federation, production admission and release authority remain absent; the rest
 of ADR-0050 and ADR-0051 remains proposed.
 
+Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a dormant
+fixed-size parser-worker handshake codec. It adds no process launcher, enforced
+containment, parser invocation, flat query wire, admitted witness or serving
+integration, and therefore grants no governed-parser capability.
+
 ## Consequences
 
 - **Positive:** the application retains one production language and dependency
@@ -303,6 +310,8 @@ of ADR-0050 and ADR-0051 remains proposed.
 [ADR-0044](ADR-0044-postgresql-supervisor-catalogue-contract.md),
 [ADR-0045](ADR-0045-canonical-postgresql-supervisor-catalogue-oracle-representation.md),
 [ADR-0046](ADR-0046-sealed-postgresql-supervisor-migration-authority-bundle.md),
-[ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md), and
-[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md), and
+[ADR-0047](ADR-0047-canonical-postgresql-16-15-public-acl-baseline-projection.md),
+[ADR-0050](ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md),
+[ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md),
+[ADR-0052](ADR-0052-sparql-compilation-safety-envelope-and-versioned-logical-work-accounting.md), and
 [ADR-0053](ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md).

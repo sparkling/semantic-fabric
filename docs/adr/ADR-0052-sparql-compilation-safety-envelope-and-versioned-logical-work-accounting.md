@@ -17,10 +17,16 @@ This ADR is **proposed**. Implemented foundations include the compiler-work
 `QueryControl::terminate`, exact request-budget handoff and compiler-permit
 retention, profile-keyed cache entries, and active serving reuse of `Arc<Plan>`.
 Private dormant primitives provide fallible algebra/Plan measurement, bounded
-canonical key rendering, compiler reservations and exact clone roots. One
-non-separable measure/reserve/clone operation is privately wired to the
-nested-subplan rollback candidate, with exact-limit and pre-mutation rejection
-tests; allocation failure is classified as redacted service resource exhaustion.
+canonical key rendering, compiler reservations and exact clone roots. Four
+fan-out/rollback sites privately meter each retained clone operation by binding
+checkpoint, exact measurement, reservation and exactly one clone:
+nested-subplan rollback branch forests; FILTER-over-UNION preceding-arm
+conditions; InnerJoin-over-UNION preceding-arm IQ-node collections and
+conditions; and LeftJoin-over-left-UNION preceding-arm scalar right nodes and
+conditions. Their exact-limit and pre-mutation rejection tests preserve
+operation-local charging. Compiler-measurement work-stack allocation failure
+has a distinct typed cause and a dormant redacted `503` mapping without
+`Retry-After`; no public controlled compiler path serves it.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
@@ -85,10 +91,11 @@ CPU cycle, elapsed nanosecond or allocated byte.
 - **Use a grammar-shadow scanner as parser admission authority.** Rejected: its
   language and construction model diverge from the Unicode-decoded contextual
   PEG grammar, effectively creating a second parser contrary to ADR-0004.
-- **Instrument the pinned parser, with bounded Rust process isolation as the
-  fail-closed fallback.** Selected for proof in proposed ADR-0053. One of those
-  boundaries is required before any parser-inclusive governed compiler path may
-  activate; a thread timeout or post-parse check is insufficient.
+- **Instrument the pinned parser or contain it in a bounded Rust process.**
+  ADR-0053's source audit selected process isolation for V1 because complete
+  hooks require a broad maintained parser/PEG fork. The boundary is required
+  before any parser-inclusive governed compiler path may activate; a thread
+  timeout or post-parse check is insufficient.
 
 ## Proposed decision
 
@@ -136,9 +143,9 @@ measures sequential in-query BASE/PREFIX state and direct materialization. It
 does not cover contextual PEG choices, parser-generated clones, container or
 allocator overhead, or externally configured parser state.
 
-Parser-inclusive governance requires ADR-0053's grammar-coupled controlled
-parser. If complete in-process coverage cannot be proved, the parse/compiler
-operation moves behind its bounded Rust process-isolation fallback. A
+Parser-inclusive governance uses ADR-0053's selected bounded Linux Rust process
+boundary: a fresh same-executable worker parses once and emits a bounded flat
+wire that the parent validates and decodes iteratively without reparsing. A
 successful authoritative parser boundary returns a private admitted-query
 witness; only that witness can construct a `GovernedV1` cache key.
 
@@ -162,8 +169,11 @@ An internal `CompileMeter` wraps the request's `QueryControl`. Work model V1 is
 the checked sum of versioned logical units reserved immediately before each
 corresponding operation on the governed path, without refund:
 
-- admitted input bytes and actual controlled-parser operations, not diagnostic
-  lexical counters;
+- admitted input/frame bytes and actual in-process controlled-parser operations,
+  if a future profile selects them, not diagnostic lexical counters; the selected isolated V1 charges
+  exact parent-observable launch, protocol and iterative-decode operations while
+  fixed child resource ceilings belong to a separate containment envelope, not
+  a fictitious worst-case `CompilerWork` debit;
 - algebra nodes and retained payload bytes traversed;
 - mapping and ontology candidates inspected;
 - branch/product candidates considered, precharged with checked arithmetic
@@ -300,16 +310,21 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 1. **Core identity — foundation implemented:** the fourth counter/error/limit
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
-2. **Parser/envelope — diagnostic foundation only:** raw lexical, parser-view
-   direct-IRI and allocation-fallible iterative algebra/Plan measurements exist
-   with provisional limits. Implement ADR-0053's authoritative parser boundary,
+2. **Parser/envelope — diagnostic and handshake-codec foundations only:** raw
+   lexical, parser-view direct-IRI and allocation-fallible iterative algebra/Plan
+   measurements exist with provisional limits. ADR-0053's fixed-size dormant
+   `Hello`/`Ready` codec has no supervisor, enforced containment, parser
+   invocation, `QueryV1` wire or witness authority. Implement those boundaries,
    integrate metering into the algebra pass, add prospective plan-build limits,
    and calibrate before activation.
-3. **Owned compiler work — first operation metered:** the private work-mode seam
-   prospectively measures and charges the nested-subplan cascade rollback clone,
-   and exact `N`/`N-1` tests prove raw equivalence and rejection before that
-   operation's mutation. Completed earlier operations and charges are not rolled
-   back when a later recursive operation fails.
+3. **Owned compiler work — four fan-out/rollback sites metered:** the private
+   work-mode seam prospectively measures and charges nested-subplan cascade
+   rollback branch forests, FILTER-over-UNION preceding-arm conditions,
+   InnerJoin-over-UNION preceding-arm IQ-node collections and conditions, and
+   LeftJoin-over-left-UNION preceding-arm scalar right nodes and conditions.
+   Exact `N`/`N-1`, nested-condition, allocation-identity, raw-equivalence and
+   pre-mutation tests cover those operations. Completed earlier operations and
+   charges are not rolled back when a later recursive operation fails.
    Instrument mapping expansion, branch products, the rest of
    normalization/cascade, canonical content, remaining hidden recursive copies
    and plan construction; reserve before work and prove whole-path governed/raw
@@ -331,7 +346,7 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 - Core tests cover `0`, exact `N`, `N+1`, checked overflow, concurrent consumers
   and every sticky first-cause pairing across all four dimensions.
 - Raw-scanner tests record false-positive and false-negative drift without
-  granting rejection authority. ADR-0053 proves controlled parser boundaries
+  granting rejection authority. ADR-0053 proves isolated parser boundaries
   for contextual angles, Unicode-created syntax, implicit joins, BASE/PREFIX,
   collections, property lists, reification, RDF-star, `CONSTRUCT WHERE`, deep
   failure and recursive destruction.
@@ -358,8 +373,8 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
   owned loop or cross-profile cache path.
 
 Only then may documentation claim: “Serving enforces a fixed raw-input boundary,
-grammar-coupled parser controls or equivalent process containment, post-parse
-algebra admission, prospective plan-construction bounds, and deterministic
+bounded parser process containment, post-parse algebra admission, prospective
+plan-construction bounds, and deterministic parent-observable and owned
 logical-work accounting across governed cold and cache-hit paths.”
 
 ## Known blocker and nonclaims
@@ -368,11 +383,11 @@ logical-work accounting across governed cold and cache-hit paths.”
 Unicode and uses recursive PEG productions and allocation-heavy semantic
 actions. The raw scanner does not bound that parser. Checkpoints before and
 after the call cannot interrupt construction or safe destruction. ADR-0053's
-complete grammar-coupled native control hook, or its bounded Rust process-
-isolation fallback, is therefore an activation blocker for
-`compile_controlled` and every parser-inclusive boundedness claim—not merely a
-stronger one-second cancellation SLA. A separately named post-parse-only mode
-could be developed, but it is not whole-compiler governance.
+selected bounded Rust process isolation, flat wire and iterative parent decode
+are therefore activation blockers for `compile_controlled` and every
+parser-inclusive boundedness claim—not merely a stronger one-second
+cancellation SLA. A separately named post-parse-only mode could be developed,
+but it is not whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database
 rows scanned or recursive SQL iterations; source-cost governance; raw or
@@ -392,9 +407,9 @@ admission. It does not change query semantics or authorize a second compiler.
   deliberately before 1.0, requiring explicit migration of all call sites.
 - Bad: cache warmth can change work-budget admission even though semantics and
   the fixed envelope do not change.
-- Bad: the upstream parser is not yet bounded or pre-emptible; instrumenting it
-  carries fork/hook maintenance, while fallback isolation carries a Rust worker
-  and versioned-wire cost.
+- Bad: the selected isolation boundary carries a Rust worker and versioned-wire
+  cost; any future in-process profile would carry broad parser/PEG fork and
+  hook-audit maintenance.
 
 ## More information
 
