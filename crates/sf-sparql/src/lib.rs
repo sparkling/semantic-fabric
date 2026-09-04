@@ -99,6 +99,9 @@ mod column_type_authority_tests;
 #[path = "compiler_control/construction_union_tests.rs"]
 mod compiler_control_construction_union_tests;
 #[cfg(test)]
+#[path = "compiler_control/lower_work_mode_tests.rs"]
+mod compiler_control_lower_work_mode_tests;
+#[cfg(test)]
 #[path = "compiler_control/normalize_join_tests.rs"]
 mod compiler_control_normalize_join_tests;
 #[cfg(test)]

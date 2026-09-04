@@ -11,8 +11,7 @@ use crate::compiler_control::CompileContext;
 use crate::iq::node::{IqCond, IqNode};
 use crate::iq::{Branch, Scan, SubPlanJoin, TermDef};
 use crate::plan_measure::clone_root::{
-    measure_compiler_clone_collection_v1, measure_compiler_clone_root_v1,
-    CompilerCloneCollectionV1, CompilerCloneRootV1,
+    measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
 };
 
 fn budget(max_compiler_work: u64) -> QueryBudget {
@@ -137,40 +136,6 @@ fn assert_control_error(error: Error, expected: QueryControlError) {
     match error {
         Error::QueryControl(actual) => assert_eq!(actual, expected),
         other => panic!("expected query-control error, got {other:?}"),
-    }
-}
-
-fn exists_body(alias: usize, marker: &str) -> (IqNode, u64) {
-    let source = format!("SELECT 1 /* {marker} */");
-    let node = IqNode::Extensional {
-        scan: Scan {
-            alias,
-            source: LogicalSource::Query(source),
-        },
-        bind: BTreeMap::new(),
-    };
-    let work = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(&node))
-        .unwrap()
-        .deep_clone_work;
-    (node, work)
-}
-
-fn nested_subplan_with_conditions(cond: Vec<IqCond>) -> IqNode {
-    IqNode::Union {
-        children: vec![
-            extensional_arm(70),
-            IqNode::OrderBy {
-                child: Box::new(IqNode::Filter {
-                    child: Box::new(IqNode::Values {
-                        vars: Vec::new(),
-                        rows: vec![Vec::new(), Vec::new()],
-                    }),
-                    cond,
-                }),
-                keys: Vec::new(),
-            },
-        ],
-        project: Vec::new(),
     }
 }
 
@@ -354,84 +319,6 @@ fn metered_filter_union_rejects_n_minus_one_before_the_guarded_clone() {
     assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
     assert_eq!(
         budget.checkpoint(),
-        Err(QueryControlError::CompilerWorkExceeded)
-    );
-}
-
-#[test]
-fn metered_lower_retains_mode_inside_subplan_and_moves_the_final_exists_body() {
-    let (body, work) = exists_body(81, "owned-final-subplan-exists-body");
-    let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))]);
-    let control = budget(work);
-    let raw = iq::lower::lower(
-        source.clone(),
-        Dialect::Sqlite,
-        &Default::default(),
-        &Default::default(),
-    )
-    .unwrap();
-
-    let metered = iq::lower::lower_with_work_mode(
-        source,
-        Dialect::Sqlite,
-        &Default::default(),
-        &Default::default(),
-        CompilerWorkMode::Metered(CompileContext::new(&control)),
-    )
-    .unwrap();
-
-    assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), work);
-}
-
-#[test]
-fn nested_subplan_exists_rejects_n_minus_one_before_the_first_clone() {
-    let (body, work) = exists_body(82, "first-subplan-exists-boundary");
-    let source = nested_subplan_with_conditions(vec![IqCond::Exists(Box::new(body))]);
-    let control = budget(work - 1);
-
-    assert_control_error(
-        iq::lower::lower_with_work_mode(
-            source,
-            Dialect::Sqlite,
-            &Default::default(),
-            &Default::default(),
-            CompilerWorkMode::Metered(CompileContext::new(&control)),
-        )
-        .expect_err("N-1 must reject inside the nested SubPlan before its EXISTS clone"),
-        QueryControlError::CompilerWorkExceeded,
-    );
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), 0);
-    assert_eq!(
-        control.checkpoint(),
-        Err(QueryControlError::CompilerWorkExceeded)
-    );
-}
-
-#[test]
-fn later_nested_exists_failure_retains_the_completed_clone_charge() {
-    let (first, first_work) = exists_body(83, "first-completed-subplan-exists-clone");
-    let (second, second_work) = exists_body(84, "second-rejected-subplan-exists-clone");
-    let source = nested_subplan_with_conditions(vec![
-        IqCond::Exists(Box::new(first)),
-        IqCond::Exists(Box::new(second)),
-    ]);
-    let control = budget(first_work + second_work - 1);
-
-    assert_control_error(
-        iq::lower::lower_with_work_mode(
-            source,
-            Dialect::Sqlite,
-            &Default::default(),
-            &Default::default(),
-            CompilerWorkMode::Metered(CompileContext::new(&control)),
-        )
-        .expect_err("the second EXISTS clone must reject after the first completes"),
-        QueryControlError::CompilerWorkExceeded,
-    );
-    assert_eq!(control.consumed(QueryCharge::CompilerWork), first_work);
-    assert_eq!(
-        control.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)
     );
 }
