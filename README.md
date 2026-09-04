@@ -202,8 +202,7 @@ harness score:
   build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
   workspace tests 1,088 passed with 3 ignored, and conformance with zero
   unexpected failures.
-- The 2026-09-03 current-tree hermetic engineering-harness checkpoint passed 977 tests across 126 files with two intentional skips after refreshing the expanded Rust source closure and controller attestation.
-  The excluded seven-test mutable ambient Ruflo collector passed three fail-closed controls and rejected its four positive cases on exact installed-package drift; it grants no authority.
+- The 2026-09-03 discovered engineering-harness inventory contained 977 cases across 126 files. Its hermetic checkpoint contained 970 cases across 125 files, including two intentional skips; the separate seven-case mutable ambient Ruflo collector passed three fail-closed controls and rejected four positive cases on exact installed-package drift, granting no authority.
 
 Reproduce the primary gates:
 
@@ -217,7 +216,7 @@ cargo run --locked -p sf-cli -- conformance
 
 ## Application-completion programme
 
-The issue-independent [SOTA completion programme](docs/plans/sota-application-completion-programme.md), governed by accepted [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md), derives the remaining work from the charter, source, accepted ADRs, tests, CI, standards, and measured benchmarks. Proposed [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. Proposed [ADR-0050](docs/adr/ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md) proposes the M5 lifecycle boundary between observed schema identity, application snapshot lifetime and backend-generation authority; proposed [ADR-0051](docs/adr/ADR-0051-postgresql-16-public-observed-schema-profile.md) narrows its first PostgreSQL-16 profile. Proposed [ADR-0052](docs/adr/ADR-0052-sparql-compilation-safety-envelope-and-versioned-logical-work-accounting.md) defines M2 compiler governance; compiler-work accounting, profile-keyed `Arc<Plan>` caching and private diagnostic envelope/meter primitives are implemented, but none is a serving capability. Proposed [ADR-0053](docs/adr/ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md) makes grammar-coupled parser control—or bounded Rust process isolation when complete instrumentation cannot be proved—an activation gate. The raw scanner and direct-IRI measurement remain diagnostics, constants are provisional, owned phases and cache resources are not yet governed, and serving still uses the uncontrolled compiler. The private opt-in Rust schema diagnostic was exercised by untracked 16.9/16.15 operator probes but remains unqualified, non-authorizing and absent from serving; its closed two-replay evidence contract explicitly withholds qualification and its executor fails closed until the Rust probe emits the required evidence. The programme is evolutionary, not a semantic-compiler or application-goal rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service—including any compiler-containment worker—Rust.
+The issue-independent [SOTA completion programme](docs/plans/sota-application-completion-programme.md), governed by accepted [ADR-0038](docs/adr/ADR-0038-sota-application-completion-programme.md), derives the remaining work from the charter, source, accepted ADRs, tests, CI, standards, and measured benchmarks. Proposed [ADR-0041](docs/adr/ADR-0041-manifest-bound-controlled-observational-evidence-capture.md) defines the sibling capture transaction, while [ADR-0042](docs/adr/ADR-0042-witnessed-single-use-capture-supervisor-protocol.md) separates its transactional supervisor, transparency, semantic witness, resource-fencing, and controlled-runner authority. Proposed [ADR-0050](docs/adr/ADR-0050-verified-source-generation-leases-schema-identity-and-atomic-runtime-activation.md) proposes the M5 lifecycle boundary between observed schema identity, application snapshot lifetime and backend-generation authority; proposed [ADR-0051](docs/adr/ADR-0051-postgresql-16-public-observed-schema-profile.md) narrows its first PostgreSQL-16 profile. Proposed [ADR-0052](docs/adr/ADR-0052-sparql-compilation-safety-envelope-and-versioned-logical-work-accounting.md) defines M2 compiler governance. Exact request-control handoff, retained compiler permits and shared `Arc<Plan>` cache reuse are active serving foundations; the bounded key writer, clone-root measurements and `CompileContext` remain private, with only one dormant nested-rollback clone metered and allocation failure redacted as `503`. The active chain is still `RuntimeBinding::compile` → `CompilerBinding::compile_shared` in `CompilerWorkMode::Uncontrolled`, so this is not governed compiler serving. Proposed [ADR-0053](docs/adr/ADR-0053-grammar-coupled-sparql-parser-governance-and-process-isolation-fallback.md) makes grammar-coupled parser control—or bounded Rust process isolation when complete instrumentation cannot be proved—an activation gate. Constants are provisional and parser construction, remaining owned phases and cache resources are ungoverned. The private opt-in Rust schema diagnostic was exercised by untracked 16.9/16.15 operator probes but remains unqualified, non-authorizing and absent from serving; its closed two-replay evidence contract explicitly withholds qualification and its executor fails closed until the Rust probe emits the required evidence. The programme is evolutionary, not a semantic-compiler or application-goal rewrite. Accepted [ADR-0048](docs/adr/ADR-0048-rust-production-and-node-evidence-runtime-boundary.md) keeps Node strictly non-deployable evidence and every product/production service—including any compiler-containment worker—Rust.
 The canonical `semantic-builder` gold comprises `expected-ontology.json`, the Turtle `categories/` tree and `candidate-manifest.json`; `.metaharness` copies are evidence only. It is separate from sealed `semantic-product-mock` revision `7c45292…e18573` and mutable live ProductDesign PostgreSQL. Rust KATs seal all 139 gold artifacts and 171 development source files, compare the narrow Style R2RML map in a rolled-back read-only snapshot, and recount 11 stores/112 tables/598 columns using one read-only transaction per database. The inventory is red on ten infrastructure additions, empty `Style360`, and one `ProductDesign` column drift; it proves no provenance or admission. The bundle has 30,696 ontology, 3,617 shape, 4,501 mapping and 900 provenance quads. Its 134 generic RML TriplesMaps/492 predicate-object maps are outside the charter; the in-charter qualified development KAT covers one table/two columns.
 
 Commit `24a0e20` closes the stale integrity-constraint rewrite hazard for the authored-R2RML serving lane. Raw catalogue observations must first become a typed, `Unverified` `CompilerSchema`; PK, UNIQUE, FK, functional-dependency and NOT-NULL proofs are removed before compiler/cache construction. The 2026-09-02 extension adds `ColumnTypeAuthority::Unverified`: mutable startup types cannot authorize PostgreSQL pooling across different physical columns, while identical source/column references remain structurally safe and missing facts fail closed. Live execution recursively probes base Table/Query sources, overlays those catalogs for base-source references during nested SubPlan emission, rejects missing/duplicate/ambiguous result columns, allocates aliases above nested IQ/SQL uses, and pre-emits every branch before the first cursor; conformance query-metadata errors propagate. Offline/synthetic derived aliases and translate-time immediate wrappers still use a bounded lexical heuristic that is not SQL-token-aware. When cross-column type compatibility is unproved, each fallback arm captures its full BGP-boundary key, including an active graph variable, before outer projection; post-cascade scopes remap that key only through physically key-preserving pure unary wrappers, and execution overlays it onto a private branch clone before exact term dedup. Runtime repeats the shape/key proof before metadata I/O. Joined/OPTIONAL/path/aggregate, modifier-bearing or multi-branch nested wrappers, key-dropping nested projections, orphaned/multiply owned markers and groups with fewer than two executable arms return `501`; fully ground overlapping arms use an exact SQL unit-relation pool, while serving rejects the remaining source-sized fallback before I/O. Compiler controls show no-primary-key Direct-Mapping path shapes using SQLite `rowid` or PostgreSQL `(ctid)::text`, with Table→Query wrappers preserving the logical `rowid` name and only base-table aliases reading `ctid`. This is not a general row-identity proof: a real PostgreSQL `rowid` column collides with the sentinel, `ctid` is snapshot-local, and live PostgreSQL path execution is not evidenced. Sequential probes remain TOCTOU-prone. Owned serving SQLite has budget-cancellable admission before worker submission and active-VM interruption after mutex acquisition; raw mutex holders, submitted/running blocking work, aggregate waiter count, busy/UDF/VFS/I/O and other metadata paths remain open. Coherent schema generations, atomic reload, typed synthetic row identity, Direct Mapping regeneration and a race-safe verified authority lease remain open, with no backend admission.
@@ -382,32 +381,23 @@ Darwin/GEPA remains disabled until at least five discriminating training tasks
 and five sealed holdouts exist. No diagnostic score can override a failed
 product oracle.
 
-The separate Ruflo retrieval-policy flywheel is also **off by default**. A
-48-task, ADR-derived candidate relevance benchmark with balanced deterministic
-halves and a canonical SHA-256 pin is tracked under `.claude/eval/` and protected
-by the harness. It still requires maintainer label review and calibration against
-a live retrieval baseline before activation. The 2026-08-28 operational check
-found no flywheel opt-in variables or enabled `harness` worker in the live daemon; that
-runtime fact must be rechecked after every restart. The explicit evaluation path
-validates the anchor but currently reports `store too small to harvest a corpus`:
-Ruflo's flywheel-visible `neural_patterns` store is empty even though older
-learning counters and ReasoningBank files contain history. Those stores are not
-silently conflated or seeded from benchmark labels.
+The separate Ruflo retrieval-policy flywheel is **off by default**. A 48-task,
+ADR-derived relevance benchmark with deterministic halves and a canonical hash
+is tracked under `.claude/eval/`, but still needs maintainer label review and live
+baseline calibration. The current structured MCP status reports no active
+champion reference, policy, gate, receipt or serving epoch, and a valid promotion
+ledger with zero commits. The ignored `.claude-flow/harness-active-policy.json`
+instead records an inherited `framework/node-cli` policy; it is not a
+repository-local promotion and grants no Semantic Fabric authority.
 
-H0c receipt collection and ordinary verified-outcome persistence do not opt into
-or activate this flywheel.
-
-Eight owner-visible records with four harvestable are only enough to begin an
-evaluation; they do not establish production readiness. Once the store,
-non-fallback embedding provider, immutable snapshot, and reviewed benchmark are
-ready, an operator may run a model-call-free, local evaluation-only trial. It
-cannot apply a policy; a separate confirmed promotion requires an amended
-project decision, a trusted Ed25519 key, frozen gates, sequential evidence,
-stale-head protection, durable receipt retention, and ledger compare-and-swap.
-Background generation remains
-prohibited because Ruflo 3.38.20 does not route that daemon path through the same
-transaction. A replayable receipt verifies signatures, lineage, the frozen gate,
-and its decision over sealed scores—it does **not** re-run the benchmark.
+Ordinary outcome persistence does not activate the flywheel, and no memory store
+is bulk-seeded or silently conflated with benchmark labels. A future local,
+model-call-free evaluation still requires enough synchronized history, a
+non-fallback embedding provider, an immutable snapshot and the reviewed anchor.
+Promotion remains a separate confirmed transaction requiring an accepted project
+decision, trusted Ed25519 key, frozen gates, sequential evidence, stale-head
+protection, durable receipts and ledger compare-and-swap. Replay verifies the
+sealed decision; it does not re-run the benchmark.
 
 GitHub-hosted CI runs the portable parent harness and supervisor oracle on exact
 Node 20.0.0 and 24.14.1. Native integration remains fail-closed and is run only by the manually dispatched

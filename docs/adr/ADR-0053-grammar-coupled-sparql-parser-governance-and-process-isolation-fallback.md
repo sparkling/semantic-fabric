@@ -16,10 +16,12 @@ prove before any parser-inclusive compiler-governance claim may be activated.
 It does not accept a `spargebra` fork, add a production worker process, enable
 `CompileProfileId::GovernedV1`, or change the capability catalogue.
 
-The existing raw lexical scanner, parser-view direct-IRI measurement,
-post-parse algebra validator, compiler meter and plan measurement remain private,
-dormant development primitives. They may produce calibration and adversarial
-evidence, but they are not parser admission authority.
+The raw lexical scanner, parser-view direct-IRI measurement, fallible post-parse
+algebra validator, bounded cache-key writer, exact clone roots, `CompileContext`
+and Plan measurement remain private development foundations. One exact
+nested-subplan rollback clone is metered through a dormant raw/metered seam; all
+public compiler paths select uncontrolled mode. These primitives may produce
+calibration and adversarial evidence, but none is parser admission authority.
 
 ## Context
 
