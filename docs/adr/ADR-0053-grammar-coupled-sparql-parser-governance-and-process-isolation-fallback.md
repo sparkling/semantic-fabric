@@ -19,22 +19,30 @@ A dormant parent-side supervisor foundation and the fixed-size `Hello`/`Ready`
 handshake codec are implemented. The supervisor holds the opened current ELF,
 records a bounded observed SHA-256 fingerprint, launches a test-only fixture by
 that exact descriptor under a stage-one Linux x86-64 policy, and owns required
-pidfd/process-group termination and reap. It is private and unreachable from
-the product CLI. No pre-Clap worker entry, post-exec final-policy verification,
-`Ready` exchange, bounded query IPC, parser invocation, `QueryV1` result wire,
-admitted-query witness, concurrency-permit integration or serving binding
-exists. These foundations do not enable `CompileProfileId::GovernedV1`, change
-serving, or change the capability catalogue.
+pidfd/process-group termination and reap. Its parent pipe ends are nonblocking,
+cumulatively byte-capped and share the immutable spawn deadline. It is private
+and unreachable from the product CLI. No private worker dispatch at the first
+user-code statement, before Clap/application thread-pool initialization;
+post-exec final-policy verification; final default-deny policy; `Ready`
+exchange; bounded query-protocol IPC; parser invocation; `QueryV1` result wire;
+admitted-query witness; independent release/runtime attestation;
+concurrency-permit integration; or serving binding exists. These foundations do
+not enable `CompileProfileId::GovernedV1`, change serving, or change any
+capability status or admission.
 
 The raw lexical scanner, parser-view direct-IRI measurement, fallible post-parse
 algebra validator, bounded cache-key writer, exact clone roots, `CompileContext`
-and Plan measurement remain private development foundations. Four dormant
+and Plan measurement remain private development foundations. Five dormant
 fan-out/rollback sites prospectively meter nested-subplan rollback branch
 forests, FILTER-over-UNION preceding-arm conditions, InnerJoin-over-UNION
 preceding-arm IQ-node collections and conditions, and
-LeftJoin-over-left-UNION preceding-arm scalar right nodes and conditions. All
-public compiler paths select uncontrolled mode. These primitives may produce
-calibration and adversarial evidence, but none is parser admission authority.
+LeftJoin-over-left-UNION preceding-arm scalar right nodes and conditions, plus
+Construction-over-UNION substitution/projection fan-out. `CompilerWorkMode`
+now propagates through lowering, including nested SubPlans and `EXISTS`, with
+the tested preceding-`B-1` clone/final-owner schedule and retained completed
+charges. All public compiler paths select uncontrolled mode. These primitives
+may produce calibration and adversarial evidence, but none is parser admission
+authority; remaining recursive-copy sites are still unmetered.
 
 ## Context
 
@@ -100,8 +108,12 @@ authority from the diagnostic scanner or from this audit.
 
 V1 uses a Linux x86-64-only process-isolation profile. A prepared parent holds
 the same opened `sf-cli` executable, records its observed identity and SHA-256,
-launches it by descriptor, and invokes a private parser-worker mode before
-normal CLI parsing. Starting with the same held binary keeps the worker inside
+launches it by descriptor, and invokes a private parser-worker mode. Worker
+dispatch must be the first user-code statement, before Clap or application
+thread-pool initialization. Normal dynamic-loader and Rust runtime startup
+necessarily precede it; this is not a zero-runtime or zero-allocation startup
+claim. The worker reads no untrusted IPC until it has installed and verified its
+final default-deny policy. Starting with the same held binary keeps the worker inside
 the Rust/Cargo product boundary and prevents a mutable path from choosing
 another executable. The observed fingerprint is diagnostic continuity
 evidence, not release authority, executable authentication or attestation of
@@ -122,11 +134,28 @@ empty-path pointer, and denies descendant creation, process-group escape and
 limit mutation. The launch descriptor closes on successful exec and cannot be
 recreated below the enforced descriptor ceiling.
 
+Both parent pipe ends are `O_NONBLOCK`. Prospective cumulative input/output
+caps reject an operation before I/O; fixed-buffer loops handle partial work,
+`EINTR`, `EAGAIN`, hangup and error under the one deadline created before spawn.
+Worker exit wins a pending write, while a read first drains pipe bytes already
+buffered at exit. Each live-process I/O error enters a containment path that
+tries process-group and exact-worker signaling before reap; if every signaling
+route fails, it surfaces that containment error rather than blocking on an
+uncontained wait. Tests prove limit, stall, truncation, closed-pipe and
+next-launch recovery. The
+parent contract requires ignored `SIGPIPE` so a raced close becomes a contained
+`EPIPE`, not process termination. `max_input_bytes` and `max_output_bytes` count
+all bytes in their direction for the whole worker lifetime, including future
+`Hello`/`Ready` and every later frame header. They are not raw-query or payload
+allowances: the final query ceiling needs framing headroom and calibration.
+These primitives exchange no protocol bytes.
+
 That stage-one policy is deliberately default-allow and is not a general
 sandbox. Its blanket `clone`/`clone3` denial makes the future worker
 single-threaded. After exec, a future worker must verify/reset inherited state,
-install its final allowlist policy and prove the effective limits before
-`Ready`; it must consume no untrusted bytes before that transition. Executing a
+install its final allowlist policy, verify the child-observed kernel limits and
+acknowledge the exact parent-owned contract values before `Ready`; it must
+consume no untrusted bytes before that transition. Executing a
 new image may reset dumpability, so the parent-side setting is not a post-exec
 claim. Those worker-side controls do not yet exist.
 
@@ -153,7 +182,25 @@ parent never accepts SPARQL/SSE text that would require reparsing. Frame lengths
 counts, indices and aggregate bytes are validated before allocation; decoding is
 iterative and fallible, so generic recursive Serde is not an admissible shortcut.
 A successful decode and post-parse algebra validation may eventually mint a
-private `AdmittedQuery`; the current handshake-codec-only foundation cannot.
+private `AdmittedQuery`; the current dormant handshake/supervisor foundation cannot.
+
+`QueryV1` separates exact replay from fresh-reparse equivalence. Exact replay
+requires a worker wire to decode to the exact encoded AST and re-encode to the
+same canonical wire. A separate pinned-parser invocation cannot use raw AST or
+wire equality as its oracle: `spargebra` creates random internal variables and
+anonymous blank-node identifiers, so equal source may parse to unequal raw
+identities. The independent differential must instead use a versioned,
+scope-aware alpha mapping and form-specific oracles: SELECT, ASK and DESCRIBE
+preserve their dataset/base and pattern semantics; CONSTRUCT additionally
+preserves template scope and blank-node relationships. User-named variables and
+source-spelled blank nodes remain bound by their query scopes and cannot be
+treated as unconstrained generated identities.
+
+The first governed cache may use admitted source plus immutable compile
+configuration/scope only to find candidates. A hit still requires exact
+validated AST/wire collision equality. Stable reuse across fresh parses needs a
+separately versioned scope-aware alpha canonicalizer; until it exists, regenerated
+identity is an honest miss and never authority to bypass parsing or validation.
 
 This is an implementation-time selection, not runtime failover. A release
 profile attests one boundary and never switches after an error. Node,
@@ -197,28 +244,40 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    worker identity, Linux control profile, fixed containment limits and
    parent-observable work schedule.
 2. **Dormant handshake and parent-supervisor foundations implemented:** fixed
-   framing, magic, version, nonce, build/parser profile and exact effective-limit
-   acknowledgement are canonical. The private Linux x86-64 launcher holds the
-   executable descriptor, installs exact parent-side pre-exec controls, requires
-   a pidfd and owns deterministic process-group kill/reap. Test-only fixture
+   framing, magic, version, nonce, build/parser profile and exact contract-value
+   acknowledgement are canonical. Only the rlimit fields are child-observed;
+   wall time, cumulative direction bytes and concurrency are parent-owned, while
+   descendant denial enforces the process count. The private Linux x86-64
+   launcher holds the executable descriptor, installs exact parent-side pre-exec controls, requires
+   a pidfd and owns deterministic process-group kill/reap. Parent pipe ends are
+   nonblocking; prospective cumulative direction caps, fixed-buffer partial and
+   `EINTR`/`EAGAIN`/hangup/error handling share the immutable spawn deadline.
+   Live-process I/O errors enter the termination/reap containment path under the
+   required ignored-`SIGPIPE` contract. Test-only fixture
    seams prove held identity, limit validation, environment/descriptor closure,
-   stage-one spawn/group/exec denial, canonical wall timeout, reap and clean next
+   stage-one spawn/group/exec denial, canonical wall timeout, pipe-limit/failure
+   containment, reap and clean next
    launch. This grants no production worker, query-wire or admitted-witness
    authority.
-3. **Incomplete:** add the pre-Clap private worker and prove its post-exec
-   verification, signal reset, final syscall allowlist and effective controls
-   before `Ready`. Qualify descendant prevention without relying on per-user
-   `RLIMIT_NPROC` as a per-worker boundary. No untrusted bytes may be consumed
+3. **Incomplete:** dispatch the private worker at the first user-code statement,
+   before Clap/application thread-pool initialization, and prove its post-exec
+   verification, signal reset, final default-deny syscall policy and verified
+   controls before `Ready`. Qualify descendant prevention without relying on
+   per-user `RLIMIT_NPROC` as a per-worker boundary. No untrusted bytes may be consumed
    under the stage-one/default-allow gap.
-4. Inject timeout, cancellation, panic, abort, stack/address-space exhaustion,
-   malformed/truncated/trailing/oversized output and forced death; prove bounded
-   kill/reap, no PID/FD/permit leak and a successful next request after each.
+4. **Partial:** parent I/O tests inject stalls, truncation, closed pipes and
+   cumulative-limit rejection, proving attempted kill/reap and successful next
+   launch. Add cancellation, panic, abort, stack/address-space exhaustion,
+   malformed/trailing protocol output and forced death; prove no
+   PID/FD/permit leak and a successful next request after each.
 5. Define a complete flat index-based `QueryV1` wire and iterative fallible
-   encoder/decoder. Prove frame, input, output, count, index and aggregate-byte
-   `0`, exact `N` and `N+1` rejection before allocation or access.
+   encoder/decoder. Prove exact decode/re-encode replay plus frame, input, output,
+   count, index and aggregate-byte `0`, exact `N` and `N+1` rejection before
+   allocation or access.
 6. Differentially prove decoded `Query` semantics and syntax outcomes against
-   the direct pinned parser over checked-in application, W3C, Unicode and
-   adversarial corpora, including contextual angles, implicit joins, long
+   a fresh direct pinned parse using the versioned scope-aware alpha mapping and
+   SELECT/ASK/DESCRIBE/CONSTRUCT-specific oracles over application, W3C, Unicode
+   and adversarial corpora, including contextual angles, implicit joins, long
    BASE/PREFIX, collections, property lists, reification, RDF-star,
    `CONSTRUCT WHERE`, deep failure and recursive-drop fixtures.
 7. Run persisted-corpus fuzzing, generated protocol/algebra properties and
@@ -243,9 +302,10 @@ the current explicitly uncontrolled compiler path.
   intact.
 - Good: process containment is a fail-closed boundary for the audited upstream
   parser paths that cannot be completely hooked in-process.
-- Good: the private dormant parent now has descriptor-exact launch and
-  deterministic pidfd/process-group cleanup primitives without exposing an
-  incomplete worker mode or widening the product API.
+- Good: the private dormant parent now has descriptor-exact launch,
+  deadline/cumulative-cap nonblocking pipe primitives and deterministic
+  pidfd/process-group cleanup without exposing an incomplete worker mode or
+  widening the product API.
 - Cost: a fresh worker adds launch/IPC latency, a bounded wire protocol and
   Linux-specific operating-system qualification.
 - Cost: the flat wire must explicitly cover the full admitted `Query` algebra;
@@ -257,10 +317,12 @@ the current explicitly uncontrolled compiler path.
 
 This decision does not claim an accessible production worker, complete
 containment or a general syscall sandbox. In particular, it does not claim a
-pre-Clap worker entry, post-exec final-policy verification, `Ready` exchange,
-bounded query IPC, parser invocation, `QueryV1` wire, admitted witness,
-concurrency-permit integration or serving activation. The current fingerprint
-does not authenticate a release or its dynamic closure; pre-exec dumpability is
+private worker dispatch at the first user-code statement, before
+Clap/application thread-pool initialization; post-exec final-policy verification;
+final default-deny policy; `Ready` exchange; bounded query-protocol IPC; parser
+invocation; `QueryV1` wire; admitted witness; independent release/runtime
+attestation; concurrency-permit integration; or serving activation. The current
+fingerprint does not authenticate a release or its dynamic closure; pre-exec dumpability is
 not asserted after exec; and pidfd acquisition assumes integration excludes a
 competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible
 sleep can still delay reap. This ADR also does not claim exact CPU time or heap

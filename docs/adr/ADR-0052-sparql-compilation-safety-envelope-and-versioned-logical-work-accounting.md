@@ -17,22 +17,36 @@ This ADR is **proposed**. Implemented foundations include the compiler-work
 `QueryControl::terminate`, exact request-budget handoff and compiler-permit
 retention, profile-keyed cache entries, and active serving reuse of `Arc<Plan>`.
 Private dormant primitives provide fallible algebra/Plan measurement, bounded
-canonical key rendering, compiler reservations and exact clone roots. Four
+canonical key rendering, compiler reservations and exact clone roots. Five
 fan-out/rollback sites privately meter each retained clone operation by binding
 checkpoint, exact measurement, reservation and exactly one clone:
 nested-subplan rollback branch forests; FILTER-over-UNION preceding-arm
 conditions; InnerJoin-over-UNION preceding-arm IQ-node collections and
-conditions; and LeftJoin-over-left-UNION preceding-arm scalar right nodes and
-conditions. Their exact-limit and pre-mutation rejection tests preserve
-operation-local charging. Compiler-measurement work-stack allocation failure
-has a distinct typed cause and a dormant redacted `503` mapping without
-`Retry-After`; no public controlled compiler path serves it.
+conditions; LeftJoin-over-left-UNION preceding-arm scalar right nodes and
+conditions; and Construction-over-UNION substitution/projection fan-out. Their
+exact-limit and pre-mutation rejection tests preserve operation-local charging.
+`CompilerWorkMode` is now retained through IQ lowering, including nested
+SubPlans and nested `EXISTS`. For `B` resulting branches, a borrowed `EXISTS`
+body is cloned only for the preceding `B-1` branches and the final branch owns
+the original; rejection of a later clone retains completed earlier charges.
+Compiler-measurement work-stack allocation failure has a distinct typed cause
+and a dormant redacted `503` mapping without `Retry-After`; no public controlled
+compiler path serves it.
+
+ADR-0053's dormant parent additionally has cumulative-cap nonblocking pipe I/O
+under the immutable spawn deadline. Fixed-buffer partial operations and
+`EINTR`/`EAGAIN`/hangup/error outcomes are contained, and each live-process I/O
+error invokes the termination/reap containment path. Direction caps cover the whole future protocol lifetime,
+including handshake and frame headers; they are not raw-query allowances, so
+the final query ceiling needs framing headroom and calibration. No query
+protocol calls this transport.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
 request-control handoff checkpoints. No request-owned `CompileContext` enters a
 publicly reachable compiler path. Parser construction/destruction, remaining
-owned phases, cache capacity/eviction and provisional limits are not governed.
+owned phases and recursive-copy sites, cache capacity/eviction and provisional
+limits are not governed.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -149,6 +163,15 @@ wire that the parent validates and decodes iteratively without reparsing. A
 successful authoritative parser boundary returns a private admitted-query
 witness; only that witness can construct a `GovernedV1` cache key.
 
+`QueryV1` has two different equivalence obligations. Exact replay means that
+one worker-produced wire decodes to the exact encoded `Query` structure and can
+be re-encoded canonically. A fresh independent parse is different: pinned
+`spargebra` generates random internal variables and anonymous blank-node IDs,
+so raw `Query` equality or byte-identical wire across two parses of identical
+source is not deterministic. Fresh-reparse proof must therefore compare
+semantics modulo a versioned, scope-aware alpha-renaming, never silently weaken
+exact wire replay.
+
 Immediately after parse and before canonical rendering, an iterative traversal
 enforces algebra node, depth, collection and retained-payload limits. Project-
 owned plan construction then reserves finite branch, node, nesting and payload
@@ -248,6 +271,14 @@ entry-count cache. Raw churn can therefore evict governed entries, and insertion
 can synchronously drop an unmetered recursive plan. That shared resource is not
 governed authority.
 
+An initial isolated-parser cache may use admitted source bytes plus immutable
+compile configuration/scope to locate a candidate bucket, but that index grants
+no hit: collision resolution still requires exact validated AST/wire identity.
+Because a fresh parse regenerates internal identities, stable hits across parses
+require the separately versioned, scope-aware alpha-canonicalizer above. Until
+that exists, an independently reparsed raw AST/wire mismatch is a cache miss,
+not evidence of semantic divergence and not permission to skip parsing.
+
 The activated profile uses physically separate governed and uncontrolled cache
 capacity. Governed values carry their final plan measurement:
 
@@ -310,18 +341,30 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 1. **Core identity — foundation implemented:** the fourth counter/error/limit
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
-2. **Parser/envelope — diagnostic and handshake-codec foundations only:** raw
+2. **Parser/envelope — diagnostic, handshake and parent-supervisor foundations only:** raw
    lexical, parser-view direct-IRI and allocation-fallible iterative algebra/Plan
-   measurements exist with provisional limits. ADR-0053's fixed-size dormant
-   `Hello`/`Ready` codec has no supervisor, enforced containment, parser
-   invocation, `QueryV1` wire or witness authority. Implement those boundaries,
-   integrate metering into the algebra pass, add prospective plan-build limits,
-   and calibrate before activation.
-3. **Owned compiler work — four fan-out/rollback sites metered:** the private
+   measurements exist with provisional limits. ADR-0053's dormant parent has
+   held-executable validation and a descriptor-exact private launch primitive under exact rlimits, a
+   default-allow stage-one seccomp filter, cumulative-cap nonblocking parent
+   pipes sharing the immutable spawn deadline, and a termination/reap
+   containment path for live-process I/O failures. There is no private worker dispatch at the first
+   user-code statement, before Clap/application thread-pool initialization;
+   verified final default-deny policy; `Ready` exchange; bounded query-protocol
+   IPC; parser invocation; `QueryV1` wire; admitted witness; or independent
+   release/runtime attestation. Normal loader/Rust runtime startup necessarily
+   precedes dispatch; the future worker may read no untrusted IPC until the final
+   policy is installed and verified. Implement those boundaries, integrate
+   metering into the algebra pass, add prospective plan-build limits, and
+   calibrate before activation.
+3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
    InnerJoin-over-UNION preceding-arm IQ-node collections and conditions, and
-   LeftJoin-over-left-UNION preceding-arm scalar right nodes and conditions.
+   LeftJoin-over-left-UNION preceding-arm scalar right nodes and conditions, plus
+   Construction-over-UNION substitution/projection fan-out. The same mode now
+   reaches nested SubPlans and `EXISTS`; its `B-1` borrowed-clone schedule moves
+   the original condition into the final branch and retains charges completed
+   before a later rejection.
    Exact `N`/`N-1`, nested-condition, allocation-identity, raw-equivalence and
    pre-mutation tests cover those operations. Completed earlier operations and
    charges are not rolled back when a later recursive operation fails.
@@ -350,6 +393,11 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
   for contextual angles, Unicode-created syntax, implicit joins, BASE/PREFIX,
   collections, property lists, reification, RDF-star, `CONSTRUCT WHERE`, deep
   failure and recursive destruction.
+- `QueryV1` tests separate exact encode/decode/re-encode replay from fresh
+  reparse equivalence. Fresh differentials are query-form aware: they preserve
+  dataset/base and SELECT/ASK/DESCRIBE pattern semantics, and preserve CONSTRUCT
+  template scope and blank-node relationships, modulo only the versioned
+  scope-aware alpha mapping.
 - Iterative algebra tests cover node, depth, collection and payload boundaries,
   fallible work-stack growth and exact pre-item charging in one pass.
 - Compiler tests cover mapping fan-out, `JOIN`/`OPTIONAL`/`MINUS` products,
@@ -383,8 +431,10 @@ logical-work accounting across governed cold and cache-hit paths.”
 Unicode and uses recursive PEG productions and allocation-heavy semantic
 actions. The raw scanner does not bound that parser. Checkpoints before and
 after the call cannot interrupt construction or safe destruction. ADR-0053's
-selected bounded Rust process isolation, flat wire and iterative parent decode
-are therefore activation blockers for `compile_controlled` and every
+selected bounded Rust process isolation now has a dormant parent-side launch,
+bounded-pipe-I/O and cleanup foundation. The worker-side final policy, bounded
+protocol, flat wire and iterative parent decode remain activation blockers for
+`compile_controlled` and every
 parser-inclusive boundedness claim—not merely a stronger one-second
 cancellation SLA. A separately named post-parse-only mode could be developed,
 but it is not whole-compiler governance.
