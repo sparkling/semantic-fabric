@@ -18,7 +18,7 @@ require a broad maintained fork, not the narrow extension originally preferred.
 A private parent-side supervisor, fixed-size `Hello`/`Ready` codec and
 control-only evidence exchange are implemented. The supervisor holds one opened
 ELF, records a bounded full-file SHA-256 diagnostic, launches that exact
-descriptor under a stage-one Linux x86-64 policy, and owns pidfd/process-group
+descriptor under a stage-one `x86_64-unknown-linux-gnu` policy, and owns pidfd/process-group
 termination and reap. Its nonblocking parent pipes are cumulatively byte-capped
 under the immutable spawn deadline. A hidden Rust dispatcher is the literal
 first statement of `sf-cli::main`, before Clap or application thread-pool
@@ -36,11 +36,15 @@ implemented but is not connected to either process: its fixed 32-byte header
 and records, explicit tag table and provisional record/edge/scalar/wire caps
 feed an allocation-free borrowed-wire preflight, exact postorder-tree and scalar
 validation, fallible iterative reconstruction, post-decode algebra validation
-and byte-exact canonical replay. Twenty-two focused golden, round-trip,
-full-variant and mutation tests pass. This establishes a codec foundation only:
-no request/result frame, parser execution, fresh-parse alpha oracle,
-worker-produced wire, admitted-query witness, independent release/runtime
-attestation, permit integration or serving exists. No UID/GID,
+and byte-exact canonical replay. Private 96-byte `ParseRequestV1` and 128-byte
+`ParseResultV1` outer codecs now bind exact kinds, lengths, nonce, source and
+payload digests, encoding/wire versions, zero flags/reserved fields and closed
+outcomes. Independent raw-frame caps run before header access; rejection
+encoding is allocation-free and carries no parser text. Twenty-two focused
+inner-wire tests and seventeen outer-frame tests pass. These establish dormant
+codec foundations only: no request/result transport, parser execution,
+fresh-parse alpha oracle, worker-produced wire, admitted-query witness,
+independent release/runtime attestation, permit integration or serving exists. No UID/GID,
 supplementary-group, capability, namespace, LSM or privilege-transition
 qualification is claimed.
 These foundations do not enable `CompileProfileId::GovernedV1`, change serving,
@@ -83,7 +87,8 @@ post-parse node/depth check therefore cannot retroactively protect parser stack,
 intermediate allocation, amplification, work, or recursive destruction. Query
 length and a thread timeout do not close those gaps.
 
-The 2026-09-04 source audit binds the current dependency to `spargebra` 0.4.6,
+The 2026-09-04 source audit and workspace manifest exact-pin the dependency as
+`spargebra =0.4.6`,
 Cargo checksum `46715eb9…f656`, with `peg`, `peg-macros` and `peg-runtime` 0.8.6
 and the `sparql-12`, `sep-0002`, `sep-0006` and
 `standard-unicode-escaping` features. The parser module is private. Its Unicode
@@ -133,9 +138,10 @@ authority from the diagnostic scanner or from this audit.
 ### 3. Select a bounded fresh Rust process per parse
 
 V1 selects one exact 64-bit `x86_64-unknown-linux-gnu` process-isolation
-profile. The current `linux` + `x86_64` compile gate is broader than its
-GNU/glibc evidence and must be narrowed before promotion; musl or another ABI
-requires an independently qualified profile. A prepared parent holds the same
+profile. The parser-isolation and evidence compile gates now require that exact
+target triple; musl or another ABI requires an independently qualified profile.
+This closes target selection, not GNU/glibc, toolchain, dependency, syscall,
+loader or release qualification. A prepared parent holds the same
 opened `sf-cli` executable, records its observed identity and SHA-256,
 launches it by descriptor, and invokes a private parser-worker mode. Worker
 dispatch must be the first user-code statement, before Clap or application
@@ -185,7 +191,29 @@ all bytes in their direction for the whole worker lifetime, including future
 `Hello`/`Ready` and every later frame header. They are not raw-query or payload
 allowances: the final query ceiling needs framing headroom and calibration. The
 evidence seam exchanges one exact `Hello`/`Ready` pair and then requires stdout
-EOF; no query frame is defined or accepted.
+EOF; the private query/result codecs are defined but no transport path accepts
+or emits them.
+
+The dormant `ParseRequestV1` header is exactly 96 bytes: magic `SFPREQ01`,
+protocol version, request kind, zero flags, header length, source length,
+handshake nonce, SHA-256 source digest, UTF-8 encoding tag, QueryV1 version and
+zero reserved bytes. The dormant `ParseResultV1` header is exactly 128 bytes:
+magic `SFPRES01`, protocol version, success/rejection kind, zero flags, header
+length, payload length, the correlated nonce and source digest, SHA-256 payload
+digest, QueryV1 version, closed rejection code and zero reserved bytes. All
+integers are big-endian. Success requires a non-empty canonical QueryV1 payload;
+rejection requires an empty payload, zero QueryV1 version and exactly one of
+`Syntax`, `QueryEnvelope` or `ResourceExhausted`. Nonce/digest mismatch,
+unknown values, nonzero flags/reserved bytes, truncation, trailing bytes or a
+noncanonical QueryV1 payload fails closed.
+
+With the existing 184-byte handshake, a full 1 MiB source needs at least
+1,048,856 cumulative input bytes (`184 + 96 + 1,048,576`), so the current
+1,048,576-byte candidate input cap cannot carry its stated source maximum. A
+full 8 MiB result needs at least 8,388,920 cumulative output bytes
+(`184 + 128 + 8,388,608`). Worker integration must bind those direction totals
+and define whether the one-byte EOF/trailing-output probe consumes budget; it
+must not silently reduce the public query ceiling to hide framing overhead.
 
 The eventual one-shot terminal contract is stricter than receipt of a valid
 prefix: the parent accepts exactly one canonical result frame only after stdout
@@ -253,20 +281,45 @@ consumed, and `NO_INDEX` is legal only for `VALUES` `UNDEF`. Borrowed UTF-8,
 IRI, variable, blank-node, datatype and language-tag validation precedes
 input-sized decode allocation. Recursive `Box` nodes use a reviewed fallible
 global-allocator helper; successful reconstruction must re-encode to the exact
-input bytes. These constants and bytes remain provisional until outer framing,
-corpus/fuzz calibration and profile binding are complete.
+input bytes. These constants and bytes remain provisional until transport
+integration, corpus/fuzz calibration and profile binding are complete.
 
 `QueryV1` separates exact replay from fresh-reparse equivalence. Exact replay
 requires a worker wire to decode to the exact encoded AST and re-encode to the
 same canonical wire. A separate pinned-parser invocation cannot use raw AST or
 wire equality as its oracle: `spargebra` creates random internal variables and
 anonymous blank-node identifiers, so equal source may parse to unequal raw
-identities. The independent differential must instead use a versioned,
-scope-aware alpha mapping and form-specific oracles: SELECT, ASK and DESCRIBE
-preserve their dataset/base and pattern semantics; CONSTRUCT additionally
-preserves template scope and blank-node relationships. User-named variables and
-source-spelled blank nodes remain bound by their query scopes and cannot be
-treated as unconstrained generated identities.
+identities. Fresh comparison is valid only when both sides bind the same source
+SHA-256 and complete parser-profile digest, including initial base IRI, prefix
+map and custom aggregate-function set. Two syntax rejections may match; parsed
+versus rejected fails, and resource, protocol, panic, kill or limit failures
+never count as syntax equivalence.
+
+The versioned structural comparator preserves every query/algebra/expression/
+path/term discriminant, scalar, vector order, duplicate, dataset/base and option
+state exactly, modulo three independent bijections: one global query-wide
+variable map, one global query-pattern blank-node map including nested `EXISTS`,
+and one separate CONSTRUCT-template blank-node map. Before traversal, top-level
+SELECT result variables are fixed to their exact names and order. The global
+variable map then remains shared through patterns, subqueries, `EXISTS`,
+aggregates and the template so joins and correlations cannot split or merge.
+The conservative global pattern blank-node map may reject some equivalent
+hand-built ASTs, but cannot hide an identity change in same-source parser output.
+CONSTRUCT template and pattern blank nodes never share identity authority,
+including `CONSTRUCT WHERE`. No commutative, set, join or order normalization is
+permitted. PREFIX spelling/history is erased by parsing and remains bound only
+through the source digest.
+
+Complete generated-variable provenance is not structurally recoverable from
+`spargebra::Query`: implicit GROUP aliases and DESCRIBE IRI variables can have
+the same AST shapes as authored `AS`/`BIND` forms, and users may legally spell
+the random hexadecimal name shape. The comparator must not implement an
+`is_generated_variable` name or shape heuristic. It alpha-maps every
+non-observable variable under the one global bijection while keeping top-level
+SELECT output exact. If generated/source provenance later becomes policy
+authority, the parser must emit a versioned provenance sidecar or use a
+maintained fork and a new governed wire/profile; it does not require an
+application-architecture rewrite.
 
 The first governed cache may use admitted source plus immutable compile
 configuration/scope only to find candidates. A hit still requires exact
@@ -312,8 +365,10 @@ plan-construction bounds and owned-phase metering remain separate later gates.
 
 ## Implementation and acceptance gates
 
-1. Pin parser/PEG sources, checksums and features plus the exact same-executable
-   worker identity, Linux control profile, fixed containment limits and
+1. **Partial:** the workspace manifest exact-pins `spargebra =0.4.6`, and the
+   parser/evidence compile gates require `x86_64-unknown-linux-gnu`. Complete the
+   parser/PEG/runtime dependency-and-feature closure, exact same-executable
+   worker identity, GNU control profile, fixed containment limits and
    parent-observable work schedule.
 2. **Handshake and parent-supervisor control foundations implemented:** fixed
    framing, magic, version, nonce, build/parser profile and exact contract-value
@@ -343,28 +398,36 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    `Hello`, and emits independently derived `Ready`. Descendant prevention does
    not rely on per-user `RLIMIT_NPROC`. The candidate must still be replaced or
    qualified against the complete parser corpus/syscall surface, and the partial
-   dependency marker must become a complete governed profile before QueryV1.
+   dependency marker must become a complete governed profile before QueryV1
+   integration, profile admission or serving.
 4. **Partial:** parent I/O tests inject stalls, truncation, closed pipes and
    cumulative-limit rejection, proving attempted kill/reap and successful next
    launch. Add cancellation, panic, abort, stack/address-space exhaustion,
    malformed protocol output and forced death; trailing control output is now
    contained. Prove no
    PID/FD/permit leak and a successful next request after each.
-5. **Partial; pure inner codec implemented:** the fixed flat index-based
+5. **Partial; inner and outer codecs implemented:** the fixed flat index-based
    `QueryV1` tag/schema table, fallible iterative encoder/reconstructor,
    allocation-free structural/scalar preflight, canonical ownership proof and
    exact decode/re-encode replay are covered by 22 focused tests over every
    pinned query/algebra/function/aggregate family plus malformed headers,
-   ranges, indices, sharing, scalars and component bounds. Add frozen outer
-   request/result frames, allocation-failure injection, exact frame/direction
-   `0`/`N`/`N+1`, persisted fuzz/property corpora and worker-produced replay;
-   provisional inner limits are not accepted calibration.
+   ranges, indices, sharing, scalars and component bounds. Exact dormant
+   96-byte request and 128-byte result codecs add 17 focused golden, mutation,
+   correlation, redaction and raw-cap `0`/`N`/`N+1` tests. Add transport-level
+   direction `0`/`N`/`N+1`, allocation-failure injection, persisted
+   fuzz/property corpora and worker-produced replay; provisional limits are not
+   accepted calibration.
 6. Differentially prove decoded `Query` semantics and syntax outcomes against
-   a fresh direct pinned parse using the versioned scope-aware alpha mapping and
-   SELECT/ASK/DESCRIBE/CONSTRUCT-specific oracles over application, W3C, Unicode
-   and adversarial corpora, including contextual angles, implicit joins, long
+   a fresh direct pinned parse with the same source/profile. Use one global
+   variable bijection with exact ordered top-level SELECT outputs, one global
+   query-pattern blank-node bijection and a disjoint CONSTRUCT-template
+   bijection; do not infer generated-variable provenance from names or AST
+   shapes. Cover SELECT/ASK/DESCRIBE/CONSTRUCT over application, W3C, Unicode and
+   adversarial corpora, including contextual angles, implicit joins, long
    BASE/PREFIX, collections, property lists, reification, RDF-star,
-   `CONSTRUCT WHERE`, deep failure and recursive-drop fixtures.
+   `CONSTRUCT WHERE`, deep failure and recursive-drop fixtures. The comparison
+   receipt binds source/profile and both exact wire digests but grants no
+   admission, cache or serving authority.
 7. Run persisted-corpus fuzzing, generated protocol/algebra properties and
    protocol/control mutation tests under ADR-0012; a bounded smoke is not
    acceptance.
@@ -407,9 +470,9 @@ only the enumerated post-exec observations/repairs, candidate-policy installatio
 probe, exact `Hello`/`Ready`/EOF exchange and cleanup. It does not prove an
 accepted/final parser policy, parser-syscall completeness, a complete governed
 dependency profile, UID/GID/groups/capability/namespace/LSM confinement, query
-IPC, parser execution, worker-produced `QueryV1`, a fresh-parse alpha oracle, an
+IPC or transport, parser execution, worker-produced `QueryV1`, a fresh-parse alpha oracle, an
 admitted witness, independent release or runtime attestation, permit integration
-or serving activation. The pure inner codec grants none of those authorities. The full-file
+or serving activation. The dormant inner/outer codecs grant none of those authorities. The full-file
 fingerprint and bounded GNU build-ID digest do not authenticate a release or its
 dynamic closure; and pidfd acquisition assumes integration excludes a
 competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible

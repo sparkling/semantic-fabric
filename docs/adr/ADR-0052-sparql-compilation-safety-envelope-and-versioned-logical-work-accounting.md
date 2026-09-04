@@ -7,7 +7,6 @@ supersedes: []
 depends-on: [ADR-0004, ADR-0006, ADR-0007, ADR-0010, ADR-0012, ADR-0023, ADR-0038, ADR-0048]
 implements: [ADR-0010, ADR-0038]
 ---
-
 # SPARQL compilation safety envelope and versioned logical-work accounting
 
 ## Status boundary
@@ -36,20 +35,21 @@ compiler path serves it.
 ADR-0053's private parent additionally has cumulative-cap nonblocking pipe I/O
 under the immutable spawn deadline. Fixed-buffer partial operations and
 `EINTR`/`EAGAIN`/hangup/error outcomes are contained, and each live-process I/O
-error invokes the termination/reap containment path. Direction caps cover the whole future protocol lifetime,
-including handshake and frame headers; they are not raw-query allowances, so
-the final query ceiling needs framing headroom and calibration. Its feature-gated
-evidence seam now uses exact `Hello`/`Ready`/EOF control frames; no query-protocol
-frame calls this transport.
+error invokes the termination/reap containment path. Direction caps cover the whole
+future protocol lifetime, including handshake and frame headers; they are not raw-query allowances.
+The evidence seam uses exact `Hello`/`Ready`/`EOF` control frames. Private dormant 96-byte `ParseRequestV1` and 128-byte
+`ParseResultV1` codecs exist, but no transport calls them. A 1 MiB source plus
+handshake/header needs 1,048,856 input bytes, exceeding the current 1,048,576-byte cap;
+integration must reconcile it without lowering the source ceiling.
 
-The private Rust `QueryV1` inner codec foundation is now implemented with fixed
-canonical bytes, an allocation-free borrowed preflight, exact flat-tree
-ownership and scalar validation, fallible iterative reconstruction, the
+The private Rust `QueryV1` inner codec has fixed canonical bytes, an allocation-free
+borrowed preflight, exact flat-tree/scalar validation, fallible iterative reconstruction, the
 post-parse algebra envelope and byte-exact decode/re-encode replay. Its 22
 focused tests cover all pinned query/algebra/function/aggregate families and
-malformed wire classes. The limits are provisional, no worker or frame emits
-the wire, and exact replay is not the still-missing fresh-parse scope-aware
-alpha differential.
+malformed wire classes. Seventeen outer-frame tests cover fixed goldens,
+zero flags/reserved fields, lengths, correlation, closed redacted outcomes, raw
+`0`/`N`/`N+1` caps and allocation-free rejection. Limits remain provisional; no
+worker emits these bytes and exact replay is not fresh-parse alpha equivalence.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
@@ -178,9 +178,14 @@ one worker-produced wire decodes to the exact encoded `Query` structure and can
 be re-encoded canonically. A fresh independent parse is different: pinned
 `spargebra` generates random internal variables and anonymous blank-node IDs,
 so raw `Query` equality or byte-identical wire across two parses of identical
-source is not deterministic. Fresh-reparse proof must therefore compare
-semantics modulo a versioned, scope-aware alpha-renaming, never silently weaken
-exact wire replay.
+source is not deterministic. Fresh-reparse proof therefore compares same-source/profile
+structures with one query-wide variable bijection, one global
+query-pattern blank-node bijection and one disjoint CONSTRUCT-template bijection.
+Top-level SELECT result names/order and every other discriminant, scalar, vector
+order, duplicate, dataset/base and option state remain exact. It must not infer
+generated variables from names or AST shapes because implicit GROUP/DESCRIBE
+aliases can match authored forms. This conservative comparison never weakens
+exact replay, and its receipt grants no admission or cache authority.
 
 Immediately after parse and before canonical rendering, an iterative traversal
 enforces algebra node, depth, collection and retained-payload limits. Project-
@@ -351,7 +356,7 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
 1. **Core identity — foundation implemented:** the fourth counter/error/limit
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
-2. **Parser/envelope — diagnostic and control-ready evidence candidate only:** raw
+2. **Parser/envelope — dormant codecs and control-ready evidence candidate only:** raw
    lexical, parser-view direct-IRI and allocation-fallible iterative algebra/Plan
    measurements exist with provisional limits. ADR-0053's private parent has
    held-executable validation and a descriptor-exact private launch primitive under exact rlimits, a
@@ -367,13 +372,13 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    requires exact EOF. Malformed or unprepared reserved invocations still exit
    silently with status 78 via raw Unix `_exit`. This candidate is neither the
    final parser policy nor a governed dependency closure and adds no UID/GID,
-   group, capability or privilege-transition contract. The pure `QueryV1`
-   inner codec and exact replay tests are implemented, but query framing,
-   worker parser execution, fresh-parse alpha equivalence, an admitted witness,
-   serving and independent attestation remain absent. Normal loader/Rust
-   runtime startup necessarily precedes dispatch. Narrow and qualify the exact
-   GNU parser policy/profile, implement those remaining boundaries, then
-   calibrate before activation.
+   group, capability or privilege-transition contract. The workspace exact-pins
+   `spargebra =0.4.6`; parser/evidence code requires
+   `x86_64-unknown-linux-gnu`; and inner QueryV1 plus 96/128-byte outer codecs
+   are implemented. Transport, worker parsing, fresh alpha equivalence, witness,
+   serving and attestation remain absent. Normal loader/Rust startup precedes
+   dispatch. Qualify the complete profile, integrate those boundaries, reconcile
+   direction headroom and calibrate before activation.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
@@ -412,10 +417,11 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
   collections, property lists, reification, RDF-star, `CONSTRUCT WHERE`, deep
   failure and recursive destruction.
 - `QueryV1` tests separate exact encode/decode/re-encode replay from fresh
-  reparse equivalence. Fresh differentials are query-form aware: they preserve
-  dataset/base and SELECT/ASK/DESCRIBE pattern semantics, and preserve CONSTRUCT
-  template scope and blank-node relationships, modulo only the versioned
-  scope-aware alpha mapping.
+  reparse equivalence. Fresh differentials bind identical source/profile,
+  preserve every ordered structure/option and exact top-level SELECT schema, and
+  use one query-wide variable map, one global pattern blank-node map and one
+  separate CONSTRUCT-template map. Mutations reject split, merged, partial and
+  cross-domain renamings; generated-name heuristics are inadmissible.
 - Iterative algebra tests cover node, depth, collection and payload boundaries,
   fallible work-stack growth and exact pre-item charging in one pass.
 - Compiler tests cover mapping fan-out, `JOIN`/`OPTIONAL`/`MINUS` products,
@@ -451,15 +457,13 @@ actions. The raw scanner does not bound that parser. Checkpoints before and
 after the call cannot interrupt construction or safe destruction. ADR-0053's
 selected bounded Rust process isolation now has a private parent-side launch,
 bounded-pipe-I/O and cleanup foundation plus an evidence-only control-policy
-candidate and bounded `Hello`/`Ready`/EOF handshake. The pure inner `QueryV1`
-codec now provides allocation-free preflight, fallible iterative parent decode
-and exact replay in isolation. Parser-policy/profile qualification, outer query
-framing, worker parser/codec execution, the fresh-parse alpha differential and
-an admitted witness remain activation blockers for
-`compile_controlled` and every
-parser-inclusive boundedness claim—not merely a stronger one-second
-cancellation SLA. A separately named post-parse-only mode could be developed,
-but it is not whole-compiler governance.
+candidate and bounded `Hello`/`Ready`/`EOF` handshake. The pure inner QueryV1
+codec provides preflight, fallible iterative decode and exact replay; dormant
+request/result codecs provide closed, correlated outer framing. Profile
+qualification, transport, worker parse/encode, fresh alpha proof and a witness
+remain blockers for `compile_controlled` and every parser-inclusive boundedness
+claim—not merely a stronger one-second cancellation SLA. A separately named
+post-parse-only mode would not be whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database
 rows scanned or recursive SQL iterations; source-cost governance; raw or

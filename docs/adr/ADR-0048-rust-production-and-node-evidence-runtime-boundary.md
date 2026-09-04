@@ -269,7 +269,8 @@ of ADR-0050 and ADR-0051 remains proposed.
 
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
 parser-worker handshake codec. Later Rust-only slices hold and observe the
-current executable, provide a private Linux x86-64 descriptor-exact launcher
+current executable, provide a private `x86_64-unknown-linux-gnu`
+descriptor-exact launcher
 with stage-one pre-exec controls, own pidfd/process-group termination/reap and
 bound parent-pipe I/O under one spawn deadline. A hidden first-statement Rust
 dispatcher exact-matches the private two-token invocation and requires a
@@ -278,14 +279,15 @@ now completes a held-binary `Hello`/`Ready`/EOF control exchange after bounded
 GNU-build-ID correlation, post-exec envelope repair and installation/self-probe
 of a default-kill policy candidate. Malformed or unprepared reserved invocations
 still exit silently with status 78 via raw Unix `_exit`; other targets remain
-fail-closed. This is control evidence only: no product/serving launcher, query
-protocol, worker parser execution, fresh-parse alpha oracle, witness or
-parser-qualified final policy exists, and no UID/GID, group, capability or
-privilege-transition contract is established. A private pure-Rust `QueryV1`
-inner codec now adds fixed canonical bytes, allocation-free validation,
-fallible iterative reconstruction and exact replay tests without adding Node
-to Cargo or the production closure. Node supplies none of the runtime and
-ADR-0053 remains proposed.
+fail-closed. The workspace exact-pins `spargebra =0.4.6`; a private pure-Rust
+`QueryV1` inner codec plus dormant exact 96-byte request and 128-byte result
+codecs provide canonical bytes, allocation-free validation, fallible iterative
+reconstruction, exact replay and closed redacted framing without adding Node to
+Cargo or the production closure. This is control/codec evidence only: no
+product/serving launcher, query transport, worker parser execution, fresh-parse
+alpha oracle, witness or parser-qualified final policy exists, and no UID/GID,
+group, capability or privilege-transition contract is established. Node
+supplies none of the runtime and ADR-0053 remains proposed.
 
 ## Consequences
 
