@@ -305,6 +305,21 @@ pub struct PlanKey {
     canonical: String,
 }
 
+impl PlanKey {
+    fn from_canonical(scope: CompileScope, profile: CompileProfileId, canonical: String) -> Self {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        canonical.hash(&mut hasher);
+        Self {
+            scope,
+            profile,
+            structural_hash: hasher.finish(),
+            canonical,
+        }
+    }
+}
+
 impl std::hash::Hash for PlanKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.scope.hash(state);
@@ -326,17 +341,13 @@ pub(crate) fn plan_key_for_profile(
     scope: CompileScope,
     profile: CompileProfileId,
 ) -> PlanKey {
-    use std::hash::{Hash, Hasher};
     let canonical = query.to_string();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut h);
-    PlanKey {
-        scope,
-        profile,
-        structural_hash: h.finish(),
-        canonical,
-    }
+    PlanKey::from_canonical(scope, profile, canonical)
 }
+
+#[allow(dead_code)] // Dormant until the controlled compiler path is activated.
+#[path = "cache_key.rs"]
+pub(crate) mod bounded_key;
 
 /// A bounded plan cache. Generic over the cached plan type `P` so the cache does
 /// not couple to the (large) plan struct. Bounded by `⟨T, M⟩` size via `capacity`
