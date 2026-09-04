@@ -22,7 +22,7 @@ pub(crate) enum CompilerRunError {
 /// Bound blocking compiler concurrency and its queue wait with the request's
 /// deadline. The owned permit moves into the blocking closure, so timing out the
 /// async waiter cannot release capacity while detached work is still queued or
-/// running.
+/// running. The closure receives a clone of the same request budget identity.
 pub(crate) async fn run_compiler<T, F>(
     budget: RequestBudget,
     permits: Arc<Semaphore>,
@@ -30,7 +30,7 @@ pub(crate) async fn run_compiler<T, F>(
 ) -> Result<T, CompilerRunError>
 where
     T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
+    F: FnOnce(RequestBudget) -> T + Send + 'static,
 {
     run_compiler_inner(budget, permits, work, || {}).await
 }
@@ -44,7 +44,7 @@ pub(crate) async fn run_compiler_observed<T, F, O>(
 ) -> Result<T, CompilerRunError>
 where
     T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
+    F: FnOnce(RequestBudget) -> T + Send + 'static,
     O: FnOnce() + Send,
 {
     run_compiler_inner(budget, permits, work, on_submitted).await
@@ -58,20 +58,19 @@ async fn run_compiler_inner<T, F, O>(
 ) -> Result<T, CompilerRunError>
 where
     T: Send + 'static,
-    F: FnOnce() -> T + Send + 'static,
+    F: FnOnce(RequestBudget) -> T + Send + 'static,
     O: FnOnce() + Send,
 {
     let permit = budget
         .run(permits.acquire_owned())
         .await?
         .map_err(|_| CompilerRunError::AdmissionClosed)?;
-    let request_admission = budget.clone();
+    let worker_budget = budget.clone();
     let task = tokio::task::spawn_blocking(move || {
         // A timed-out async waiter must not return aggregate request capacity
         // while its detached compiler is still queued or running.
-        let _request_admission = request_admission;
         let _permit = permit;
-        work()
+        work(worker_budget)
     });
     on_submitted();
 

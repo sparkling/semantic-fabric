@@ -116,8 +116,12 @@ impl ServeConfig {
         self.max_form_body_len
     }
 
-    pub(crate) fn compile(&self, query: &str) -> sf_sparql::Result<BoundPlan> {
-        self.binding.compile(query)
+    pub(crate) fn compile(
+        &self,
+        query: &str,
+        control: &dyn sf_core::query_control::QueryControl,
+    ) -> sf_sparql::Result<BoundPlan> {
+        self.binding.compile(query, control)
     }
 
     pub(crate) fn prepare_execution(

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http_body_util::BodyExt;
-use sf_core::query_control::{QueryControlError, QueryLimits};
+use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError, QueryLimits};
 use sparesults::QueryResultsFormat;
 use tokio::sync::{oneshot, Semaphore};
 use tokio::time::Instant;
@@ -102,7 +102,7 @@ async fn compiler_timeout_retains_its_permit_until_detached_work_ends() {
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
-    let run = tokio::spawn(run_compiler(deadline, permits.clone(), move || {
+    let run = tokio::spawn(run_compiler(deadline, permits.clone(), move |_budget| {
         let _ = started_tx.send(());
         release_rx.recv().expect("release compiler barrier");
         7usize
@@ -149,7 +149,7 @@ async fn cancelled_compiler_waiter_cannot_return_its_live_work_permit() {
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
-    let waiter = tokio::spawn(run_compiler(deadline, permits.clone(), move || {
+    let waiter = tokio::spawn(run_compiler(deadline, permits.clone(), move |_budget| {
         let _ = started_tx.send(());
         release_rx.recv().expect("release compiler barrier");
     }));
@@ -214,7 +214,7 @@ fn cancelled_queued_compiler_retains_aggregate_capacity_until_work_exits() {
         let waiter = tokio::spawn(run_compiler_observed(
             budget,
             compiler_permits.clone(),
-            move || {
+            move |_budget| {
                 let _ = finished_tx.send(());
             },
             move || {
@@ -250,6 +250,24 @@ fn cancelled_queued_compiler_retains_aggregate_capacity_until_work_exits() {
         drop(request_permit);
         assert_eq!(compiler_permits.available_permits(), 1);
     });
+}
+
+#[tokio::test]
+async fn compiler_receives_the_same_request_accounting_identity() {
+    let permits = Arc::new(Semaphore::new(1));
+    let budget = request_budget(Duration::from_secs(60));
+    let observer = budget.clone();
+
+    let value = run_compiler(budget, permits, move |worker_budget| {
+        worker_budget.consume(QueryCharge::CompilerWork, 3)?;
+        Ok::<usize, QueryControlError>(7)
+    })
+    .await
+    .expect("compiler runner")
+    .expect("compiler work charge");
+
+    assert_eq!(value, 7);
+    assert_eq!(observer.consumed(QueryCharge::CompilerWork), 3);
 }
 
 #[tokio::test(start_paused = true)]

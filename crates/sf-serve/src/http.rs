@@ -123,16 +123,19 @@ async fn process(
 
 /// Compile (parse + rewrite) off the async runtime (ADR-0006); map errors to status.
 /// Uses the per-config plan cache (ADR-0007): repeated queries at the same epoch
-/// skip the full rewrite and return a cached plan clone. Timeout stops the request
-/// waiter, not CPU work already running; the owned admission permit stays charged
-/// until that detached blocking closure actually returns.
+/// skip the full rewrite and return a shared cached plan handle. Timeout stops
+/// the request waiter, not CPU work already running; the owned admission permit
+/// stays charged until that detached blocking closure actually returns.
 async fn compile(
     cfg: Arc<ServeConfig>,
     query: String,
     budget: RequestBudget,
 ) -> Result<BoundPlan, Response> {
     let permits = cfg.compiler_permits();
-    let compiled = deadline::run_compiler(budget, permits, move || cfg.compile(&query)).await;
+    let compiled = deadline::run_compiler(budget, permits, move |worker_budget| {
+        cfg.compile(&query, &worker_budget)
+    })
+    .await;
     match compiled {
         Err(CompilerRunError::Control(error)) => Err(problem::response_for_control(error)),
         Err(CompilerRunError::AdmissionClosed | CompilerRunError::Join(_)) => {

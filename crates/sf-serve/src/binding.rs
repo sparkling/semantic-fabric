@@ -12,6 +12,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use sf_core::query_control::QueryControl;
 use sf_core::{SourceId, SourceMapping};
 use sf_sparql::{CompileScope, CompilerBinding, CompilerSchema, Plan, Tbox};
 use sf_sql::{Dialect, TableSchema};
@@ -131,8 +132,19 @@ impl RuntimeBinding {
         }
     }
 
-    pub(crate) fn compile(&self, sparql: &str) -> sf_sparql::Result<BoundPlan> {
-        self.compiler.compile_shared(sparql).map(|plan| BoundPlan {
+    /// Compile through the raw cache path while carrying the request control
+    /// identity into the blocking worker. The checkpoints bound handoff only;
+    /// compiler-work governance remains dormant until the controlled pipeline
+    /// is complete.
+    pub(crate) fn compile(
+        &self,
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<BoundPlan> {
+        control.checkpoint()?;
+        let compiled = self.compiler.compile_shared(sparql);
+        control.checkpoint()?;
+        compiled.map(|plan| BoundPlan {
             scope: self.compiler.scope(),
             source_id: self.compiler.source_id(),
             plan,
@@ -266,7 +278,10 @@ mod tests {
     fn a_plan_from_another_binding_is_rejected_before_execution() {
         let first = binding(0);
         let second = binding(0);
-        let bound = first.compile("SELECT * WHERE { ?s ?p ?o }").unwrap();
+        let control = sf_core::query_control::UncontrolledQueryControl;
+        let bound = first
+            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
+            .unwrap();
 
         assert_ne!(first.scope(), second.scope());
         assert!(matches!(
@@ -304,8 +319,13 @@ mod tests {
     #[test]
     fn runtime_binding_reuses_the_cached_plan_allocation() {
         let binding = binding(0);
-        let first = binding.compile("SELECT * WHERE { ?s ?p ?o }").unwrap();
-        let second = binding.compile("SELECT * WHERE { ?s ?p ?o }").unwrap();
+        let control = sf_core::query_control::UncontrolledQueryControl;
+        let first = binding
+            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
+            .unwrap();
+        let second = binding
+            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
+            .unwrap();
 
         assert!(Arc::ptr_eq(&first.plan, &second.plan));
     }
