@@ -11,36 +11,13 @@ use sf_sparql::QueryV1TransportMutant;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_semantic-fabric");
 
-const MUTANTS: [QueryV1TransportMutant; 10] = [
-    QueryV1TransportMutant::WrongNonceExitZero,
-    QueryV1TransportMutant::WrongSourceDigestExitZero,
-    QueryV1TransportMutant::WrongPayloadDigestExitZero,
-    QueryV1TransportMutant::SelfConsistentDigestOverInvalidQueryV1ExitZero,
-    QueryV1TransportMutant::WrongCorrelationThenExit78,
-    QueryV1TransportMutant::WrongCorrelationThenDeadlineStall,
-    QueryV1TransportMutant::TrailingOutput,
-    QueryV1TransportMutant::ExactOutputCap,
-    QueryV1TransportMutant::OutputCapPlusOne,
-    QueryV1TransportMutant::RequestFrameAllocationRefusal,
-];
-
 #[test]
 fn held_binary_exhibits_each_exact_mutant_then_allows_a_clean_normal_launch() {
-    for mutant in MUTANTS {
-        sf_sparql::exercise_synthetic_query_v1_transport_mutant_for_evidence(
-            Path::new(BINARY),
-            "unparsed mutant evidence source",
-            mutant,
-        )
-        .expect("observe the mutant's exact contained outcome");
-
-        #[cfg(feature = "query-v1-transport-evidence")]
-        sf_sparql::exercise_synthetic_query_v1_transport_for_evidence(
-            Path::new(BINARY),
-            "clean next normal launch",
-        )
-        .expect("a contained mutant cannot poison the next normal launch");
-    }
+    sf_sparql::exercise_synthetic_query_v1_mutant_matrix_for_evidence(
+        Path::new(BINARY),
+        "unparsed mutant evidence source",
+    )
+    .expect("each exact mutant must be contained before a clean follow-up launch");
 }
 
 #[test]

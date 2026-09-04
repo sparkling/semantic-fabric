@@ -141,6 +141,7 @@ pub use parser_isolation::QueryV1TransportMutant;
 #[doc(hidden)]
 pub use parser_isolation::{
     exercise_synthetic_query_v1_malformed_directives_for_evidence,
+    exercise_synthetic_query_v1_mutant_matrix_for_evidence,
     exercise_synthetic_query_v1_request_eof_order_for_evidence,
     exercise_synthetic_query_v1_transport_mutant_for_evidence,
 };

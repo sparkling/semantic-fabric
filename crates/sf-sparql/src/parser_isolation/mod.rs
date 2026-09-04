@@ -87,6 +87,25 @@ pub fn exercise_synthetic_query_v1_transport_mutant_for_evidence(
         .map_err(|error| error.to_string())
 }
 
+/// Exercise the complete closed mutant matrix against one held executable.
+///
+/// The executable is opened, fingerprinted, and prepared once. Every case still
+/// receives a fresh child, exact containment, and a clean follow-up launch.
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_synthetic_query_v1_mutant_matrix_for_evidence(
+    executable: &std::path::Path,
+    source: &str,
+) -> Result<(), String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_query_v1_mutant_matrix_for_evidence(file, source)
+        .map_err(|error| error.to_string())
+}
+
 /// Prove that the mutant peer silently rejects the closed malformed-directive set.
 ///
 /// The zero-, one-, and three-byte directives plus one unknown two-byte

@@ -56,6 +56,20 @@ struct ExpectedOutcome {
     output_bytes: u64,
 }
 
+/// Run every closed mutant against one held descriptor and prove that each
+/// contained outcome leaves a fresh child launch usable.
+pub(super) fn exercise_matrix(
+    executable: &PreparedParserExecutable,
+    source: &str,
+) -> Result<(), SupervisorError> {
+    for mutant in QueryV1TransportMutant::ALL {
+        let worker = executable.launch_query_v1_transport_mutant(source, mutant)?;
+        finish(worker, mutant)?;
+        prove_clean_next_launch(executable)?;
+    }
+    Ok(())
+}
+
 /// Prove that the closed two-byte directive rejects every malformed length and
 /// an unknown discriminant before Hello or Ready, then leaves no poisoned state.
 pub(super) fn exercise_malformed_directives(
@@ -172,6 +186,14 @@ fn observe_one_request_eof_order(
     Ok(())
 }
 
+#[cfg(feature = "query-v1-transport-evidence")]
+fn prove_clean_next_launch(executable: &PreparedParserExecutable) -> Result<(), SupervisorError> {
+    super::query_v1_transport::finish(
+        executable.launch_query_v1_transport("clean next normal launch")?,
+    )
+}
+
+#[cfg(not(feature = "query-v1-transport-evidence"))]
 fn prove_clean_next_launch(executable: &PreparedParserExecutable) -> Result<(), SupervisorError> {
     let worker =
         executable.launch_query_v1_transport_mutant("clean mutant recovery", REQUEST_EOF_MUTANT)?;
