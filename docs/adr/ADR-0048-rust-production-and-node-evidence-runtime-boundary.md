@@ -279,9 +279,13 @@ GNU-build-ID correlation, post-exec envelope repair and installation/self-probe
 of a default-kill policy candidate. Malformed or unprepared reserved invocations
 still exit silently with status 78 via raw Unix `_exit`; other targets remain
 fail-closed. This is control evidence only: no product/serving launcher, query
-protocol, parser, `QueryV1`, witness or parser-qualified final policy exists, and
-no UID/GID, group, capability or privilege-transition contract is established.
-Node supplies none of the runtime and ADR-0053 remains proposed.
+protocol, worker parser execution, fresh-parse alpha oracle, witness or
+parser-qualified final policy exists, and no UID/GID, group, capability or
+privilege-transition contract is established. A private pure-Rust `QueryV1`
+inner codec now adds fixed canonical bytes, allocation-free validation,
+fallible iterative reconstruction and exact replay tests without adding Node
+to Cargo or the production closure. Node supplies none of the runtime and
+ADR-0053 remains proposed.
 
 ## Consequences
 

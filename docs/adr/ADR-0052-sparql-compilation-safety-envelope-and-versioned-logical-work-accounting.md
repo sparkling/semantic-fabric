@@ -42,6 +42,15 @@ the final query ceiling needs framing headroom and calibration. Its feature-gate
 evidence seam now uses exact `Hello`/`Ready`/EOF control frames; no query-protocol
 frame calls this transport.
 
+The private Rust `QueryV1` inner codec foundation is now implemented with fixed
+canonical bytes, an allocation-free borrowed preflight, exact flat-tree
+ownership and scalar validation, fallible iterative reconstruction, the
+post-parse algebra envelope and byte-exact decode/re-encode replay. Its 22
+focused tests cover all pinned query/algebra/function/aggregate families and
+malformed wire classes. The limits are provisional, no worker or frame emits
+the wire, and exact replay is not the still-missing fresh-parse scope-aware
+alpha differential.
+
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
 request-control handoff checkpoints. No request-owned `CompileContext` enters a
@@ -358,11 +367,13 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    requires exact EOF. Malformed or unprepared reserved invocations still exit
    silently with status 78 via raw Unix `_exit`. This candidate is neither the
    final parser policy nor a governed dependency closure and adds no UID/GID,
-   group, capability or privilege-transition contract. `QueryV1`, query IPC,
-   parser invocation, an admitted witness, serving and independent attestation
-   remain absent. Normal loader/Rust runtime startup necessarily precedes
-   dispatch. Qualify the parser policy/profile and implement those remaining
-   boundaries, then calibrate before activation.
+   group, capability or privilege-transition contract. The pure `QueryV1`
+   inner codec and exact replay tests are implemented, but query framing,
+   worker parser execution, fresh-parse alpha equivalence, an admitted witness,
+   serving and independent attestation remain absent. Normal loader/Rust
+   runtime startup necessarily precedes dispatch. Narrow and qualify the exact
+   GNU parser policy/profile, implement those remaining boundaries, then
+   calibrate before activation.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
@@ -440,9 +451,11 @@ actions. The raw scanner does not bound that parser. Checkpoints before and
 after the call cannot interrupt construction or safe destruction. ADR-0053's
 selected bounded Rust process isolation now has a private parent-side launch,
 bounded-pipe-I/O and cleanup foundation plus an evidence-only control-policy
-candidate and bounded `Hello`/`Ready`/EOF handshake. Parser-policy/profile
-qualification, QueryV1/query framing, parser execution, the flat wire, iterative
-parent decode and an admitted witness remain activation blockers for
+candidate and bounded `Hello`/`Ready`/EOF handshake. The pure inner `QueryV1`
+codec now provides allocation-free preflight, fallible iterative parent decode
+and exact replay in isolation. Parser-policy/profile qualification, outer query
+framing, worker parser/codec execution, the fresh-parse alpha differential and
+an admitted witness remain activation blockers for
 `compile_controlled` and every
 parser-inclusive boundedness claim—not merely a stronger one-second
 cancellation SLA. A separately named post-parse-only mode could be developed,

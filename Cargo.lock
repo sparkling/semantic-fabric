@@ -4799,6 +4799,7 @@ dependencies = [
  "bytes",
  "libc",
  "mysql_async",
+ "oxilangtag",
  "oxiri 0.2.11",
  "oxjsonld",
  "oxrdf",

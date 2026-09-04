@@ -3,13 +3,16 @@
 //! A held-descriptor supervisor can exercise a post-exec control envelope and
 //! exact Hello/Ready/EOF exchange through a non-default evidence feature. A raw
 //! or malformed reserved invocation fails closed. The policy and profile are
-//! control-ready candidates only: QueryV1, parser-qualified confinement, actual
-//! parser invocation, admission witnesses, permits, and serving remain absent.
+//! control-ready candidates only. A private canonical QueryV1 inner codec is
+//! implemented but not wired to this protocol; parser-qualified confinement,
+//! actual parser invocation, admission witnesses, permits, and serving remain
+//! absent.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod build_identity;
 mod profile;
 pub(crate) mod protocol;
+mod query_v1;
 mod supervisor;
 mod worker;
 

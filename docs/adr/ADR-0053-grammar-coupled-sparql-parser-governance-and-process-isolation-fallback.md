@@ -31,10 +31,18 @@ envelope, install and self-probe a default-kill control-ready policy candidate,
 and complete exact `Hello`/`Ready`/EOF. Malformed or unprepared reserved
 invocations still exit silently with status 78 via raw Unix `_exit`; a prepared
 evidence exchange can exit 0. The partial dependency/profile digest and policy
-remain unqualified candidates. Query IPC, parser invocation, `QueryV1`, an
-admitted-query witness, independent release/runtime attestation, permit
-integration and serving remain absent. No UID/GID, supplementary-group,
-capability, namespace, LSM or privilege-transition qualification is claimed.
+remain unqualified candidates. A private pure-Rust `QueryV1` codec is now
+implemented but is not connected to either process: its fixed 32-byte header
+and records, explicit tag table and provisional record/edge/scalar/wire caps
+feed an allocation-free borrowed-wire preflight, exact postorder-tree and scalar
+validation, fallible iterative reconstruction, post-decode algebra validation
+and byte-exact canonical replay. Twenty-two focused golden, round-trip,
+full-variant and mutation tests pass. This establishes a codec foundation only:
+no request/result frame, parser execution, fresh-parse alpha oracle,
+worker-produced wire, admitted-query witness, independent release/runtime
+attestation, permit integration or serving exists. No UID/GID,
+supplementary-group, capability, namespace, LSM or privilege-transition
+qualification is claimed.
 These foundations do not enable `CompileProfileId::GovernedV1`, change serving,
 or change capability status or admission.
 
@@ -88,6 +96,16 @@ construction, allocation, failure and destruction coverage. A credible hook
 implementation would span the parser/actions, PEG macros/runtime and controlled
 representation or allocation. V1 therefore selects process containment.
 
+The runtime closure is wider than those four crates. `SparqlParser::new()`
+constructs randomized standard collections, while aggregate and anonymous-node
+generation uses `rand`/`rand_chacha`/`getrandom`. On the pinned GNU toolchain the
+observed forms include a `GRND_INSECURE` standard-library seed, a zero-length
+flags-zero probe and bounded flags-zero seed reads. The final policy must bind
+the complete resolved feature graph, Rust standard library, allocator, GNU libc
+and loader, admit only corpus-qualified `getrandom` argument forms, and keep any
+`/dev/urandom` fallback fail-closed. This observation does not yet qualify a
+syscall policy.
+
 ## Decision
 
 ### 1. Keep the raw scanner outside production authority
@@ -114,8 +132,11 @@ authority from the diagnostic scanner or from this audit.
 
 ### 3. Select a bounded fresh Rust process per parse
 
-V1 uses a Linux x86-64-only process-isolation profile. A prepared parent holds
-the same opened `sf-cli` executable, records its observed identity and SHA-256,
+V1 selects one exact 64-bit `x86_64-unknown-linux-gnu` process-isolation
+profile. The current `linux` + `x86_64` compile gate is broader than its
+GNU/glibc evidence and must be narrowed before promotion; musl or another ABI
+requires an independently qualified profile. A prepared parent holds the same
+opened `sf-cli` executable, records its observed identity and SHA-256,
 launches it by descriptor, and invokes a private parser-worker mode. Worker
 dispatch must be the first user-code statement, before Clap or application
 thread-pool initialization. Normal dynamic-loader and Rust runtime startup
@@ -144,8 +165,10 @@ allowlisting. The executable is duplicated to one exact descriptor at or above
 the post-setup `RLIMIT_NOFILE` ceiling. A stage-one seccomp policy permits only
 the one `execveat(AT_EMPTY_PATH)` using that descriptor and its exact static
 empty-path pointer, and denies descendant creation, process-group escape and
-limit mutation. The launch descriptor closes on successful exec and cannot be
-recreated below the enforced descriptor ceiling.
+limit mutation. The original launch descriptor closes on successful exec. The
+worker intentionally opens `/proc/self/exe` temporarily at a low descriptor to
+observe its bounded GNU build ID, then closes that descriptor before installing
+the final policy; no stronger descriptor-non-recreation claim is made.
 
 Both parent pipe ends are `O_NONBLOCK`. Prospective cumulative input/output
 caps reject an operation before I/O; fixed-buffer loops handle partial work,
@@ -164,6 +187,12 @@ allowances: the final query ceiling needs framing headroom and calibration. The
 evidence seam exchanges one exact `Hello`/`Ready` pair and then requires stdout
 EOF; no query frame is defined or accepted.
 
+The eventual one-shot terminal contract is stricter than receipt of a valid
+prefix: the parent accepts exactly one canonical result frame only after stdout
+EOF and successful child exit/reap. Trailing bytes, a valid frame followed by a
+panic or signal, a nonzero exit, truncation, nonce/digest mismatch or malformed
+framing discard the entire result and mint no witness.
+
 That stage-one policy is deliberately default-allow and is not a general
 sandbox. Its blanket `clone`/`clone3` denial preserves the single-threaded
 construction of worker entry. After exec and before reading `Hello`, worker
@@ -179,9 +208,11 @@ direction-byte and concurrency values are local candidate constants matched to
 the parent frame. This does not qualify the candidate for parser workloads or
 establish a credential, namespace or LSM boundary.
 
-Each parse uses a fresh child. Before announcing readiness, the child applies
-fixed stack, address-space, CPU, output, descriptor and descendant-process
-controls and closes every unintended inherited descriptor. The parent retains
+Each parse uses a fresh child. Before announcing readiness, the session
+establishes fixed stack, address-space, CPU, descriptor and descendant-process
+controls and closes every unintended inherited descriptor. Pipe-output and
+wall/concurrency limits are parent-owned; `RLIMIT_FSIZE` does not bound pipes.
+The parent retains
 compiler and aggregate permits through deterministic kill and reap. Timeout,
 cancellation, panic, abort, malformed output, output overflow or protocol
 failure destroys no parent-side recursive parser value, and a subsequent request
@@ -205,6 +236,25 @@ counts, indices and aggregate bytes are validated before allocation; decoding is
 iterative and fallible, so generic recursive Serde is not an admissible shortcut.
 A successful decode and post-parse algebra validation may eventually mint a
 private `AdmittedQuery`; the current control-only handshake cannot.
+
+The implemented inner-wire foundation freezes magic `SFPQW001`, version 1, a
+32-byte header, fixed 32-byte records, big-endian `u32` edges and a terminal
+scalar section. Provisional maxima are 65,536 records, 131,072 edges, 2 MiB of
+scalar bytes, an independent 8 MiB raw-input envelope checked before header
+access, and a separate 256-record reconstruction-depth guard. The component
+maxima currently imply a tighter 4,718,624-byte canonical structural maximum;
+the independent raw envelope rejects oversized arbitrary child output and
+remains authoritative if later profile-bound component limits change. The
+existing tighter algebra depth is rechecked after reconstruction.
+Every tag has one exact flags/fields/arity shape. Records form one canonical
+postorder tree: the root is last, child roots precede owners, reverse traversal
+visits every record exactly once, edge/scalar ranges are contiguous and fully
+consumed, and `NO_INDEX` is legal only for `VALUES` `UNDEF`. Borrowed UTF-8,
+IRI, variable, blank-node, datatype and language-tag validation precedes
+input-sized decode allocation. Recursive `Box` nodes use a reviewed fallible
+global-allocator helper; successful reconstruction must re-encode to the exact
+input bytes. These constants and bytes remain provisional until outer framing,
+corpus/fuzz calibration and profile binding are complete.
 
 `QueryV1` separates exact replay from fresh-reparse equivalence. Exact replay
 requires a worker wire to decode to the exact encoded AST and re-encode to the
@@ -300,10 +350,15 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    malformed protocol output and forced death; trailing control output is now
    contained. Prove no
    PID/FD/permit leak and a successful next request after each.
-5. Define a complete flat index-based `QueryV1` wire and iterative fallible
-   encoder/decoder. Prove exact decode/re-encode replay plus frame, input, output,
-   count, index and aggregate-byte `0`, exact `N` and `N+1` rejection before
-   allocation or access.
+5. **Partial; pure inner codec implemented:** the fixed flat index-based
+   `QueryV1` tag/schema table, fallible iterative encoder/reconstructor,
+   allocation-free structural/scalar preflight, canonical ownership proof and
+   exact decode/re-encode replay are covered by 22 focused tests over every
+   pinned query/algebra/function/aggregate family plus malformed headers,
+   ranges, indices, sharing, scalars and component bounds. Add frozen outer
+   request/result frames, allocation-failure injection, exact frame/direction
+   `0`/`N`/`N+1`, persisted fuzz/property corpora and worker-produced replay;
+   provisional inner limits are not accepted calibration.
 6. Differentially prove decoded `Query` semantics and syntax outcomes against
    a fresh direct pinned parse using the versioned scope-aware alpha mapping and
    SELECT/ASK/DESCRIBE/CONSTRUCT-specific oracles over application, W3C, Unicode
@@ -352,8 +407,9 @@ only the enumerated post-exec observations/repairs, candidate-policy installatio
 probe, exact `Hello`/`Ready`/EOF exchange and cleanup. It does not prove an
 accepted/final parser policy, parser-syscall completeness, a complete governed
 dependency profile, UID/GID/groups/capability/namespace/LSM confinement, query
-IPC, parser execution, `QueryV1`, an admitted witness, independent release or
-runtime attestation, permit integration or serving activation. The full-file
+IPC, parser execution, worker-produced `QueryV1`, a fresh-parse alpha oracle, an
+admitted witness, independent release or runtime attestation, permit integration
+or serving activation. The pure inner codec grants none of those authorities. The full-file
 fingerprint and bounded GNU build-ID digest do not authenticate a release or its
 dynamic closure; and pidfd acquisition assumes integration excludes a
 competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible

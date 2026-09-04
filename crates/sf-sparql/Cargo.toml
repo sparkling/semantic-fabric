@@ -14,7 +14,9 @@ sf-core.workspace = true
 sf-sql.workspace = true
 sf-mapping.workspace = true
 spargebra.workspace = true
+oxrdf.workspace = true
 oxiri.workspace = true # exact IRI resolution parity with the pinned spargebra parser
+oxilangtag.workspace = true # allocation-free QueryV1 language-tag validation
 oxsdatatypes.workspace = true  # exact Decimal accumulation for AVG (M3 fix 1) — the SAME fixed-point i128 type the spareval oracle uses for decimal AVG, never f64
 # sparopt (ADR-0007 pipeline step 2, opt-in/bypassable) is intentionally NOT
 # wired into the engine optimizer. The ADR-0007 order-disciplined cascade is the
@@ -33,5 +35,4 @@ bytes = "1"                    # BytesMut, for the ToSql wrapper that binds lexi
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] } # MySQL execution (WS-D)
 
 [dev-dependencies]
-oxrdf.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # async MySQL integration test
