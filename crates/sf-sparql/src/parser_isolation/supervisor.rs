@@ -25,23 +25,23 @@ use std::io as std_io;
 
 #[cfg(test)]
 use super::profile::v1_limits;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 use super::protocol::HandshakeError;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod executable;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod handshake;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod io;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod lifecycle;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod seccomp;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 use executable::PreparedParserExecutable;
 
 /// Closed failure categories for the private supervisor boundary.
@@ -51,7 +51,7 @@ pub(crate) enum SupervisorError {
     InvalidExecutable(&'static str),
     InvalidLimits(&'static str),
     InvalidState(&'static str),
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     Protocol(HandshakeError),
     DeadlineExceeded,
     Operation {
@@ -70,7 +70,7 @@ impl fmt::Display for SupervisorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedPlatform => {
-                formatter.write_str("parser supervisor requires qualified x86-64 Linux")
+                formatter.write_str("parser supervisor requires qualified GNU x86-64 Linux")
             }
             Self::InvalidExecutable(reason) => {
                 write!(formatter, "invalid held parser executable: {reason}")
@@ -79,7 +79,7 @@ impl fmt::Display for SupervisorError {
                 write!(formatter, "invalid parser containment limits: {reason}")
             }
             Self::InvalidState(reason) => write!(formatter, "invalid parser child state: {reason}"),
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
             Self::Protocol(error) => write!(formatter, "parser worker protocol: {error}"),
             Self::DeadlineExceeded => formatter.write_str("parser worker wall deadline exceeded"),
             Self::Operation { operation, source } => write!(formatter, "{operation}: {source}"),
@@ -91,21 +91,21 @@ impl std::error::Error for SupervisorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Operation { source, .. } => Some(source),
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
             Self::Protocol(source) => Some(source),
             _ => None,
         }
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 impl From<HandshakeError> for SupervisorError {
     fn from(error: HandshakeError) -> Self {
         Self::Protocol(error)
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 impl PreparedParserExecutable {
     /// The production-unreachable control-handshake launch primitive.
     ///
@@ -120,7 +120,8 @@ impl PreparedParserExecutable {
 #[cfg(all(
     feature = "parser-worker-evidence",
     target_os = "linux",
-    target_arch = "x86_64"
+    target_arch = "x86_64",
+    target_env = "gnu"
 ))]
 pub(super) fn exercise_handshake_for_evidence(file: std::fs::File) -> Result<(), SupervisorError> {
     let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
@@ -128,10 +129,10 @@ pub(super) fn exercise_handshake_for_evidence(file: std::fs::File) -> Result<(),
 }
 
 /// Buildable fail-closed stub for every unqualified target.
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
 struct PreparedParserExecutable;
 
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
 impl PreparedParserExecutable {
     fn current() -> Result<Self, SupervisorError> {
         Err(SupervisorError::UnsupportedPlatform)

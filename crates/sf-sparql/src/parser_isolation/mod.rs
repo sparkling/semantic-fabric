@@ -8,7 +8,7 @@
 //! confinement, actual parser invocation, admission witnesses, permits, and
 //! serving remain absent.
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod build_identity;
 mod parse_protocol;
 mod profile;
@@ -27,7 +27,8 @@ pub use worker::dispatch_private_parser_worker_v1;
 #[cfg(all(
     feature = "parser-worker-evidence",
     target_os = "linux",
-    target_arch = "x86_64"
+    target_arch = "x86_64",
+    target_env = "gnu"
 ))]
 pub fn exercise_private_parser_worker_handshake_for_evidence(
     executable: &std::path::Path,

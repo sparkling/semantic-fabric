@@ -1,6 +1,6 @@
 //! Private tests for the Linux supervisor foundation.
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux_tests {
     use std::fs::{self, File};
     use std::io::Read;

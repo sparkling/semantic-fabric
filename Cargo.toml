@@ -26,7 +26,7 @@ oxiri = "0.2.11"
 oxilangtag = "0.1.6"
 oxttl = { version = "0.2.3", features = ["rdf-12"] }
 oxjsonld = { version = "0.2.5", features = ["rdf-12"] }
-spargebra = { version = "0.4.6", features = ["sparql-12", "sep-0002", "sep-0006", "standard-unicode-escaping"] }
+spargebra = { version = "=0.4.6", features = ["sparql-12", "sep-0002", "sep-0006", "standard-unicode-escaping"] }
 sparesults = { version = "0.3.3", features = ["sparql-12"] }
 oxsdatatypes = "0.2.2"
 # --- errors / CLI ---

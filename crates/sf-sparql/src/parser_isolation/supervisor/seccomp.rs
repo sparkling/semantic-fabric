@@ -1,4 +1,4 @@
-//! Stage-one x86-64 Linux seccomp policy for descriptor-exact launch.
+//! Stage-one GNU x86-64 Linux seccomp policy for descriptor-exact launch.
 //!
 //! This is deliberately a default-allow deny-list, not a general sandbox. It
 //! prevents process/thread creation, process-group escape, limit relaxation,
@@ -11,31 +11,31 @@ use std::os::fd::RawFd;
 
 use super::SupervisorError;
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const X32_SYSCALL_BIT: u32 = 0x4000_0000;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const SECCOMP_DATA_NR: u32 = 0;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const SECCOMP_DATA_ARCH: u32 = 4;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const SECCOMP_DATA_ARGS: u32 = 16;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const BPF_LD_W_ABS: u16 = 0x20;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const BPF_JMP_JEQ_K: u16 = 0x15;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const BPF_JMP_JGE_K: u16 = 0x35;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const BPF_RET_K: u16 = 0x06;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 // EPERM is deliberate: it is deterministic and prevents libc compatibility
 // fallbacks (notably clone3 -> clone) that ENOSYS can trigger. These denials
 // expose an invariant violation to the trusted setup path/tests; they are not
@@ -43,7 +43,7 @@ const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const STAGE_ONE_DENIED: u32 = SECCOMP_RET_ERRNO | libc::EPERM as u32;
 
 pub(super) struct StageOnePolicy {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     filters: Box<[libc::sock_filter]>,
 }
 
@@ -54,7 +54,7 @@ impl StageOnePolicy {
         argv_address: usize,
         environment_address: usize,
     ) -> Result<Self, SupervisorError> {
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
         {
             let _ = (
                 executable_fd,
@@ -64,7 +64,7 @@ impl StageOnePolicy {
             );
             Err(SupervisorError::UnsupportedPlatform)
         }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
         {
             let filters = build_filters(
                 executable_fd,
@@ -87,11 +87,11 @@ impl StageOnePolicy {
     /// Called in the single-threaded child between fork and exec. The policy
     /// and its backing filter array must remain live for this call.
     pub(super) unsafe fn install_in_child(&self) -> std::io::Result<()> {
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
         {
             Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
         }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
         {
             // POD construction cannot allocate or lock after fork. Its pointer
             // remains valid for the duration of the syscall because `filters`
@@ -119,7 +119,7 @@ impl StageOnePolicy {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 fn build_filters(
     executable_fd: RawFd,
     empty_path_address: usize,
@@ -218,12 +218,12 @@ fn build_filters(
     Ok(filters)
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const fn argument_word(index: u32, high_word: u32) -> u32 {
     SECCOMP_DATA_ARGS + index * 8 + high_word * 4
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const fn statement(code: u16, k: u32) -> libc::sock_filter {
     libc::sock_filter {
         code,
@@ -233,7 +233,7 @@ const fn statement(code: u16, k: u32) -> libc::sock_filter {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
     libc::sock_filter { code, jt, jf, k }
 }

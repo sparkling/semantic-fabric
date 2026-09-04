@@ -25,6 +25,7 @@ pub(super) const V1_LIMIT_VALUES: ParserWorkerLimitValues = ParserWorkerLimitVal
 /// workspace features from drifting silently during the control-only slice.
 const CONTROL_READY_PROFILE_CANDIDATE_V1_MATERIAL: &[u8] =
     b"semantic-fabric/control-ready-profile-candidate/v1\n\
+target=x86_64-unknown-linux-gnu\n\
 spargebra=0.4.6;checksum=46715eb957d1fe960cbbc0b713da8f78e2cb19df315b48fb09c9467a1c84f656\n\
 features=sep-0002,sep-0006,sparql-12,standard-unicode-escaping\n\
 peg=0.8.6;checksum=0aad070be5b63aa72103f2fcdd70a83adbd5e90112ce5b574171ff1c65501773\n\
@@ -49,8 +50,13 @@ mod tests {
     #[test]
     fn control_ready_marker_is_bound_to_selected_sources_and_features() {
         assert!(WORKSPACE_MANIFEST.contains(
-            "spargebra = { version = \"0.4.6\", features = [\"sparql-12\", \"sep-0002\", \"sep-0006\", \"standard-unicode-escaping\"] }"
+            "spargebra = { version = \"=0.4.6\", features = [\"sparql-12\", \"sep-0002\", \"sep-0006\", \"standard-unicode-escaping\"] }"
         ));
+        assert!(
+            std::str::from_utf8(CONTROL_READY_PROFILE_CANDIDATE_V1_MATERIAL)
+                .unwrap()
+                .contains("target=x86_64-unknown-linux-gnu\n")
+        );
         for locked_identity in [
             "name = \"spargebra\"\nversion = \"0.4.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"46715eb957d1fe960cbbc0b713da8f78e2cb19df315b48fb09c9467a1c84f656\"",
             "name = \"peg\"\nversion = \"0.8.6\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0aad070be5b63aa72103f2fcdd70a83adbd5e90112ce5b574171ff1c65501773\"",

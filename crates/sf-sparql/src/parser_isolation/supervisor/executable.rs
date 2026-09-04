@@ -90,11 +90,11 @@ pub(super) struct PreparedParserExecutable {
 
 impl PreparedParserExecutable {
     pub(super) fn current() -> Result<Self, SupervisorError> {
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
         {
             return Err(SupervisorError::UnsupportedPlatform);
         }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
         {
             let file = OpenOptions::new()
                 .read(true)

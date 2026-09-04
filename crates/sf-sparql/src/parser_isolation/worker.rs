@@ -9,9 +9,9 @@
 
 use std::ffi::{OsStr, OsString};
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod policy_candidate;
 
 pub(super) const PRIVATE_WORKER_NAME: &str = "sf-parser-worker-v1";
@@ -101,7 +101,7 @@ fn reject_private_invocation() -> ! {
 }
 
 fn run_private_worker_v1() -> ! {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     {
         let status = if linux::run().is_ok() {
             0
@@ -110,7 +110,7 @@ fn run_private_worker_v1() -> ! {
         };
         unsafe { libc::_exit(status) }
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
     reject_private_invocation()
 }
 

@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#![cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 
 use std::path::Path;
 

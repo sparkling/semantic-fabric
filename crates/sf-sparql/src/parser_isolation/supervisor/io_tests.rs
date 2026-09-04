@@ -1,6 +1,6 @@
 //! Boundary and recovery tests for cumulative, deadline-aware worker I/O.
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux_tests {
     use std::fs::File;
     use std::os::fd::{AsRawFd, OwnedFd};

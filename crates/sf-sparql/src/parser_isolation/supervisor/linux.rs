@@ -110,12 +110,12 @@ fn spawn(
     limits: ParserWorkerLimits,
     arguments: &[&[u8]],
 ) -> Result<ParserWorkerProcess, SupervisorError> {
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
     {
         let _ = (executable, limits, arguments);
         return Err(SupervisorError::UnsupportedPlatform);
     }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     {
         require_parent_signal_contracts()?;
         if arguments.is_empty() || arguments.len() > MAX_FIXTURE_ARGUMENTS {
