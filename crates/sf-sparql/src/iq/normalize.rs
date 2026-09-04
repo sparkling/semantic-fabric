@@ -46,8 +46,9 @@
 //!
 //! * `InnerJoin(A, Union(B1..Bn)) ⇒ Union(InnerJoin(A,B1)..InnerJoin(A,Bn))` —
 //!   **either** operand (bag-exact: `⋈` distributes over bag union).
-//! * `Filter(Union(B1..Bn)) ⇒ Union(Filter(B1)..Filter(Bn))`, **cloning the symbolic
-//!   [`IqCond`] into each arm** (never a pre-lowered `SqlCond`).
+//! * `Filter(Union(B1..Bn)) ⇒ Union(Filter(B1)..Filter(Bn))`, copying the symbolic
+//!   [`IqCond`] only for preceding arms and moving it into the final arm (never a
+//!   pre-lowered `SqlCond`).
 //! * `LeftJoin` distributes ONLY over a `Union` on its **LEFT** (preserved) operand:
 //!   `(A∪B)⟕C ⇒ (A⟕C)∪(B⟕C)`. A `LeftJoin` with a `Union`/multi-scan **RIGHT** does
 //!   **not** distribute — it STAYS a `LeftJoin` node (handed to `left_join_branches`
@@ -222,10 +223,19 @@ fn lift_construction(
         // which would trap it un-distributed inside a join/filter body (a spine /
         // `=_bag` violation: the trapped `Union` never cross-products with the join's
         // other operands).
-        IqNode::Union { children: arms, .. } => {
+        IqNode::Union {
+            children: mut arms, ..
+        } => {
             let mut out = Vec::with_capacity(arms.len());
+            let last = arms.pop();
             for a in arms {
                 out.push(lift_construction(subst.clone(), project.clone(), a)?);
+            }
+            if let Some(a) = last {
+                // Every arm owns an independent substitution. Preserve order while
+                // moving the original into the final arm, so only the preceding
+                // fan-out arms pay for recursive copies.
+                out.push(lift_construction(subst, project.clone(), a)?);
             }
             normalize_union(out, project)
         }
@@ -330,14 +340,24 @@ fn normalize_inner_join(children: Vec<IqNode>, cond: Vec<IqCond>) -> Result<IqNo
         .iter()
         .position(|c| matches!(c, IqNode::Union { .. }))
     {
-        let IqNode::Union { children: arms, .. } = children.remove(i) else {
+        let IqNode::Union {
+            children: mut arms, ..
+        } = children.remove(i)
+        else {
             unreachable!("position matched a Union");
         };
         let mut out_arms = Vec::with_capacity(arms.len());
+        let last = arms.pop();
         for arm in arms {
             let mut nc = children.clone();
             nc.insert(i, arm);
             out_arms.push(normalize_inner_join(nc, cond.clone())?);
+        }
+        if let Some(arm) = last {
+            // The final distributed arm can consume both fixed operands and the
+            // condition; all earlier arms still require independent copies.
+            children.insert(i, arm);
+            out_arms.push(normalize_inner_join(children, cond)?);
         }
         return normalize_union(out_arms, join_vars);
     }
@@ -420,20 +440,25 @@ fn lift_inner_join(
 // ---- (b) + spine placement: filter ------------------------------------------------
 
 /// Normalize a `Filter { cond }` over its already-normalized `child` (design §4(b)).
-/// Distributes over a `Union` (cloning the symbolic `cond` into each arm), and over a
-/// leaf-CQ pushes the `Filter` **below the `Construction`** (the spine leaf-CQ is
-/// `Construction` over a `Filter` of leaves). Adjacent `Filter`s coalesce.
+/// Distributes over a `Union` (copying the symbolic `cond` for preceding arms and
+/// moving it into the final arm), and over a leaf-CQ pushes the `Filter` **below the
+/// `Construction`** (the spine leaf-CQ is `Construction` over a `Filter` of leaves).
+/// Adjacent `Filter`s coalesce.
 fn normalize_filter(cond: Vec<IqCond>, child: IqNode) -> Result<IqNode> {
     let cond = normalize_conds(cond)?;
     match child {
         IqNode::Empty { vars } => Ok(IqNode::Empty { vars }),
         IqNode::Union {
-            children: arms,
+            children: mut arms,
             project,
         } => {
             let mut out = Vec::with_capacity(arms.len());
+            let last = arms.pop();
             for a in arms {
                 out.push(normalize_filter(cond.clone(), a)?);
+            }
+            if let Some(a) = last {
+                out.push(normalize_filter(cond, a)?);
             }
             normalize_union(out, project)
         }
@@ -505,10 +530,18 @@ fn normalize_left_join(left: IqNode, right: IqNode, cond: Vec<IqCond>) -> Result
         IqNode::Empty { .. } => Ok(IqNode::Empty {
             vars: combined_vars,
         }),
-        IqNode::Union { children: arms, .. } => {
+        IqNode::Union {
+            children: mut arms, ..
+        } => {
             let mut out = Vec::with_capacity(arms.len());
+            let last = arms.pop();
             for a in arms {
                 out.push(normalize_left_join(a, right.clone(), cond.clone())?);
+            }
+            if let Some(a) = last {
+                // LEFT JOIN is non-commutative, so retain the left-arm order and
+                // transfer the original shared right/condition only to the last.
+                out.push(normalize_left_join(a, right, cond)?);
             }
             normalize_union(out, combined_vars)
         }
