@@ -71,7 +71,9 @@ impl ParserWorkerProcess {
             .child
             .as_mut()
             .ok_or(SupervisorError::InvalidState("worker is already reaped"))?;
-        self.stdin.take();
+        // Signal before closing stdin. Dropping the pipe first can let a
+        // well-behaved worker observe EOF and exit successfully while an
+        // explicit forced-termination path is still acquiring its targets.
         let group = kill_process_group(self.process_group);
         let exact = signal_pidfd(&self.pidfd, libc::SIGKILL);
         let fallback = if group.is_err() && exact.is_err() {
@@ -81,6 +83,7 @@ impl ParserWorkerProcess {
         } else {
             Ok(())
         };
+        self.stdin.take();
         if group.is_err() && exact.is_err() && fallback.is_err() {
             return Err(group
                 .err()

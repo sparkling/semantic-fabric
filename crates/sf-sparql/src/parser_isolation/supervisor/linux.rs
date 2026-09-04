@@ -145,8 +145,6 @@ fn spawn(
                 "launch descriptor is below RLIMIT_NOFILE",
             ));
         }
-        let empty_path = c"".as_ptr() as usize;
-        let policy = StageOnePolicy::new(launch_fd.as_raw_fd(), empty_path)?;
         let c_arguments = arguments
             .iter()
             .map(|argument| {
@@ -159,7 +157,17 @@ fn spawn(
             .map(|argument| argument.as_ptr() as usize)
             .collect::<Vec<_>>();
         argument_pointers.push(0);
-        let empty_environment = [0_usize];
+        // Box both pointer arrays before deriving the addresses enforced by
+        // seccomp. Moving the closure cannot move either backing allocation.
+        let argument_pointers = argument_pointers.into_boxed_slice();
+        let empty_environment = Box::new([0_usize]);
+        let empty_path = c"".as_ptr() as usize;
+        let policy = StageOnePolicy::new(
+            launch_fd.as_raw_fd(),
+            empty_path,
+            argument_pointers.as_ptr() as usize,
+            empty_environment.as_ptr() as usize,
+        )?;
         let launch_fd_raw = launch_fd.as_raw_fd();
         let limit_specs = limits.specs;
         let mut blocked_signal_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
@@ -171,8 +179,10 @@ fn spawn(
         }
         // SAFETY: getpid has no preconditions and is run before fork.
         let expected_parent = unsafe { libc::getpid() };
-        // This dummy path is never opened: the final pre-exec hook either
-        // replaces the image through the held fd or returns an error.
+        // Command supplies only fork, stdio, and process-group plumbing. Its
+        // dummy path and configured environment are deliberately bypassed: the
+        // final hook uses raw execveat with the held fd and explicit empty envp,
+        // or returns an error so Command never attempts its configured path.
         let mut command = Command::new("/__sf_descriptor_exec_only__");
         command
             .env_clear()
@@ -181,8 +191,10 @@ fn spawn(
             .stderr(Stdio::null())
             .process_group(0);
         // SAFETY: all allocations and pointer construction occur above. The
-        // closure performs only fixed control flow over prebuilt POD and raw or
-        // POSIX async-signal-safe syscalls, then execs or returns an OS error.
+        // boxed argv/envp arrays keep the exact seccomp-bound addresses stable.
+        // The closure performs only fixed control flow over prebuilt POD and
+        // raw or POSIX async-signal-safe syscalls, then execs or returns an OS
+        // error.
         unsafe {
             command.pre_exec(move || {
                 let _arguments_live = &c_arguments;

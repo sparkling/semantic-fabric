@@ -34,6 +34,12 @@ const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// EPERM is deliberate: it is deterministic and prevents libc compatibility
+// fallbacks (notably clone3 -> clone) that ENOSYS can trigger. These denials
+// expose an invariant violation to the trusted setup path/tests; they are not
+// evidence that this default-allow policy is a general sandbox.
+const STAGE_ONE_DENIED: u32 = SECCOMP_RET_ERRNO | libc::EPERM as u32;
 
 pub(super) struct StageOnePolicy {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -44,15 +50,28 @@ impl StageOnePolicy {
     pub(super) fn new(
         executable_fd: RawFd,
         empty_path_address: usize,
+        argv_address: usize,
+        environment_address: usize,
     ) -> Result<Self, SupervisorError> {
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         {
-            let _ = (executable_fd, empty_path_address);
+            let _ = (
+                executable_fd,
+                empty_path_address,
+                argv_address,
+                environment_address,
+            );
             Err(SupervisorError::UnsupportedPlatform)
         }
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
-            let filters = build_filters(executable_fd, empty_path_address)?.into_boxed_slice();
+            let filters = build_filters(
+                executable_fd,
+                empty_path_address,
+                argv_address,
+                environment_address,
+            )?
+            .into_boxed_slice();
             u16::try_from(filters.len()).map_err(|_| {
                 SupervisorError::InvalidState("stage-one seccomp program is too long")
             })?;
@@ -103,6 +122,8 @@ impl StageOnePolicy {
 fn build_filters(
     executable_fd: RawFd,
     empty_path_address: usize,
+    argv_address: usize,
+    environment_address: usize,
 ) -> Result<Vec<libc::sock_filter>, SupervisorError> {
     let executable_fd = u32::try_from(executable_fd).map_err(|_| {
         SupervisorError::InvalidState("stage-one executable descriptor is negative")
@@ -130,45 +151,67 @@ fn build_filters(
         libc::SYS_setrlimit,
     ] {
         filters.push(jump(BPF_JMP_JEQ_K, syscall as u32, 0, 1));
-        filters.push(statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32));
+        filters.push(statement(BPF_RET_K, STAGE_ONE_DENIED));
     }
 
-    // Permit exact limit observation but reject every prlimit64 mutation. The
-    // future worker must verify inherited caps before Ready without gaining a
-    // way to relax them, including when launched with ambient privilege.
-    filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 7));
+    // Permit only query-only self observation (pid 0, new_limit NULL), and
+    // reject cross-process queries and every mutation. The future worker must
+    // verify inherited caps before Ready without gaining a way to relax them.
+    filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_prlimit64 as u32, 0, 13));
     filters.extend([
+        statement(BPF_LD_W_ABS, argument_word(0, 0)),
+        jump(BPF_JMP_JEQ_K, 0, 1, 0),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
+        statement(BPF_LD_W_ABS, argument_word(0, 1)),
+        jump(BPF_JMP_JEQ_K, 0, 1, 0),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(2, 0)),
         jump(BPF_JMP_JEQ_K, 0, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(2, 1)),
         jump(BPF_JMP_JEQ_K, 0, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_RET_K, SECCOMP_RET_ALLOW),
     ]);
 
     let empty_path_address = empty_path_address as u64;
-    // A false comparison skips the eighteen checking instructions to ALLOW.
-    filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_execveat as u32, 0, 18));
+    let argv_address = argv_address as u64;
+    let environment_address = environment_address as u64;
+    // A false comparison skips the thirty checking instructions to ALLOW. The
+    // pointer checks bind exec to the immutable call tuple built before fork;
+    // trusting the pointed-to bytes remains a property of that private setup.
+    filters.push(jump(BPF_JMP_JEQ_K, libc::SYS_execveat as u32, 0, 30));
     filters.extend([
         statement(BPF_LD_W_ABS, argument_word(0, 0)),
         jump(BPF_JMP_JEQ_K, executable_fd, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(0, 1)),
         jump(BPF_JMP_JEQ_K, 0, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(1, 0)),
         jump(BPF_JMP_JEQ_K, empty_path_address as u32, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(1, 1)),
         jump(BPF_JMP_JEQ_K, (empty_path_address >> 32) as u32, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
+        statement(BPF_LD_W_ABS, argument_word(2, 0)),
+        jump(BPF_JMP_JEQ_K, argv_address as u32, 1, 0),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
+        statement(BPF_LD_W_ABS, argument_word(2, 1)),
+        jump(BPF_JMP_JEQ_K, (argv_address >> 32) as u32, 1, 0),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
+        statement(BPF_LD_W_ABS, argument_word(3, 0)),
+        jump(BPF_JMP_JEQ_K, environment_address as u32, 1, 0),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
+        statement(BPF_LD_W_ABS, argument_word(3, 1)),
+        jump(BPF_JMP_JEQ_K, (environment_address >> 32) as u32, 1, 0),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(4, 0)),
         jump(BPF_JMP_JEQ_K, libc::AT_EMPTY_PATH as u32, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_LD_W_ABS, argument_word(4, 1)),
         jump(BPF_JMP_JEQ_K, 0, 1, 0),
-        statement(BPF_RET_K, SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        statement(BPF_RET_K, STAGE_ONE_DENIED),
         statement(BPF_RET_K, SECCOMP_RET_ALLOW),
     ]);
     Ok(filters)

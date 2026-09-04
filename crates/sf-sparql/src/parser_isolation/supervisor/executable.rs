@@ -6,6 +6,11 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::SupervisorError;
 
 const ELF_MAGIC: [u8; 4] = *b"\x7fELF";
@@ -293,4 +298,68 @@ fn fingerprint(
         ));
     }
     Ok(ObservedExecutableFingerprint(digest.finalize().into()))
+}
+
+#[cfg(test)]
+pub(super) fn write_executable(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .expect("create executable fixture");
+    file.write_all(bytes).expect("write executable fixture");
+    file.set_permissions(std::fs::Permissions::from_mode(0o700))
+        .expect("make fixture executable");
+}
+
+#[cfg(test)]
+pub(super) fn executable_with_len(path: &Path, length: u64) -> File {
+    use std::os::unix::fs::PermissionsExt;
+
+    let file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("create sparse executable fixture");
+    file.set_len(length).expect("size sparse fixture");
+    file.set_permissions(std::fs::Permissions::from_mode(0o700))
+        .expect("make sparse fixture executable");
+    file
+}
+
+#[cfg(test)]
+pub(super) struct TempDirectory(PathBuf);
+
+#[cfg(test)]
+impl TempDirectory {
+    pub(super) fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "sf-parser-supervisor-{}-{nonce}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => panic!("create fixture directory: {error}"),
+            }
+        }
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

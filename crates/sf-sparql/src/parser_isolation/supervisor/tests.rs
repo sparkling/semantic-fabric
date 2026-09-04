@@ -2,17 +2,18 @@
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux_tests {
-    use std::fs::{self, File, OpenOptions};
-    use std::io::{Read, Write};
+    use std::fs::{self, File};
+    use std::io::Read;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::ExitStatusExt;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     use sha2::{Digest, Sha256};
 
-    use super::super::executable::{PreparedParserExecutable, MAX_EXECUTABLE_BYTES};
+    use super::super::executable::{
+        executable_with_len, write_executable, PreparedParserExecutable, TempDirectory,
+        MAX_EXECUTABLE_BYTES,
+    };
     use super::super::linux::spawn_fixture;
     use super::super::seccomp::StageOnePolicy;
     use super::super::{v1_limits, SupervisorError};
@@ -148,8 +149,15 @@ mod linux_tests {
             .expect("create high launch descriptor");
         assert!(launch_fd.as_raw_fd() >= 64);
         let empty_path = c"".as_ptr() as usize;
-        let policy =
-            StageOnePolicy::new(launch_fd.as_raw_fd(), empty_path).expect("build stage-one policy");
+        let argv = Box::new([c"true".as_ptr(), std::ptr::null()]);
+        let envp = Box::new([std::ptr::null::<libc::c_char>()]);
+        let policy = StageOnePolicy::new(
+            launch_fd.as_raw_fd(),
+            empty_path,
+            argv.as_ptr() as usize,
+            envp.as_ptr() as usize,
+        )
+        .expect("build stage-one policy");
         let (read_end, write_end) = pipe();
 
         // SAFETY: child uses only inherited POD, raw syscalls, then _exit.
@@ -157,7 +165,15 @@ mod linux_tests {
         assert!(pid >= 0, "fork canary process");
         if pid == 0 {
             drop(read_end);
-            let passed = unsafe { run_stage_one_canary(&policy, launch_fd.as_raw_fd()) };
+            let passed = unsafe {
+                run_stage_one_canary(
+                    &policy,
+                    launch_fd.as_raw_fd(),
+                    empty_path as *const libc::c_char,
+                    &*argv,
+                    &*envp,
+                )
+            };
             let result = [u8::from(passed)];
             // SAFETY: write_end is live and the byte has a stable address.
             unsafe {
@@ -297,7 +313,15 @@ mod linux_tests {
         }
     }
 
-    unsafe fn run_stage_one_canary(policy: &StageOnePolicy, launch_fd: i32) -> bool {
+    unsafe fn run_stage_one_canary(
+        policy: &StageOnePolicy,
+        launch_fd: i32,
+        empty_path: *const libc::c_char,
+        argv: &[*const libc::c_char],
+        envp: &[*const libc::c_char],
+    ) -> bool {
+        let wrong_argv = [c"true".as_ptr(), std::ptr::null()];
+        let wrong_envp = [std::ptr::null::<libc::c_char>()];
         // SAFETY: the canary child has not created threads and sets NNP before
         // installing the inherited, parent-built filter.
         if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
@@ -305,8 +329,6 @@ mod linux_tests {
         {
             return false;
         }
-        let argv = [c"true".as_ptr(), std::ptr::null()];
-        let envp = [std::ptr::null::<libc::c_char>()];
         let thread_flags = libc::CLONE_VM | libc::CLONE_SIGHAND | libc::CLONE_THREAD;
         let mut denied = unsafe { is_eperm_now(libc::syscall(libc::SYS_fork)) };
         denied &= unsafe { is_eperm_now(libc::syscall(libc::SYS_vfork)) };
@@ -324,34 +346,33 @@ mod linux_tests {
         denied &= unsafe { is_eperm_now(libc::syscall(libc::SYS_setsid)) };
         denied &= unsafe { is_eperm_now(libc::syscall(libc::SYS_setpgid, 0, 0)) };
         denied &= unsafe {
-            is_eperm_now(libc::syscall(
-                libc::SYS_execveat,
+            execveat_is_denied(
                 launch_fd,
                 c"/bin/true".as_ptr(),
-                argv.as_ptr(),
-                envp.as_ptr(),
+                argv,
+                envp,
                 libc::AT_EMPTY_PATH,
-            ))
+            )
         };
+        denied &= unsafe { execveat_is_denied(0, empty_path, argv, envp, libc::AT_EMPTY_PATH) };
+        denied &= unsafe { execveat_is_denied(launch_fd, empty_path, argv, envp, 0) };
         denied &= unsafe {
-            is_eperm_now(libc::syscall(
-                libc::SYS_execveat,
-                0,
-                c"".as_ptr(),
-                argv.as_ptr(),
-                envp.as_ptr(),
-                libc::AT_EMPTY_PATH,
-            ))
-        };
-        denied &= unsafe {
-            is_eperm_now(libc::syscall(
-                libc::SYS_execveat,
+            execveat_is_denied(
                 launch_fd,
-                c"".as_ptr(),
-                argv.as_ptr(),
-                envp.as_ptr(),
-                0,
-            ))
+                empty_path,
+                &wrong_argv,
+                envp,
+                libc::AT_EMPTY_PATH,
+            )
+        };
+        denied &= unsafe {
+            execveat_is_denied(
+                launch_fd,
+                empty_path,
+                argv,
+                &wrong_envp,
+                libc::AT_EMPTY_PATH,
+            )
         };
         if !denied {
             return false;
@@ -368,6 +389,16 @@ mod linux_tests {
                 std::ptr::null::<libc::rlimit>(),
                 &mut observed,
             )
+        };
+        let self_pid = unsafe { libc::syscall(libc::SYS_getpid) };
+        let other_query_denied = unsafe {
+            is_eperm_now(libc::syscall(
+                libc::SYS_prlimit64,
+                self_pid,
+                libc::RLIMIT_NOFILE,
+                std::ptr::null::<libc::rlimit>(),
+                &mut observed,
+            ))
         };
         let mutation = unsafe {
             libc::syscall(
@@ -387,6 +418,7 @@ mod linux_tests {
             ))
         };
         query == 0
+            && other_query_denied
             && mutation_denied
             && setrlimit_denied
             // A representative allowed syscall proves this is deliberately not
@@ -400,6 +432,26 @@ mod linux_tests {
 
     unsafe fn is_eperm_now(result: libc::c_long) -> bool {
         is_eperm(result)
+    }
+
+    unsafe fn execveat_is_denied(
+        fd: i32,
+        path: *const libc::c_char,
+        argv: &[*const libc::c_char],
+        envp: &[*const libc::c_char],
+        flags: i32,
+    ) -> bool {
+        // SAFETY: every pointer addresses a live, null-terminated canary array.
+        unsafe {
+            is_eperm_now(libc::syscall(
+                libc::SYS_execveat,
+                fd,
+                path,
+                argv.as_ptr(),
+                envp.as_ptr(),
+                flags,
+            ))
+        }
     }
 
     fn pipe() -> (OwnedFd, OwnedFd) {
@@ -427,60 +479,6 @@ mod linux_tests {
                 return digest.finalize().into();
             }
             digest.update(&buffer[..count]);
-        }
-    }
-
-    fn write_executable(path: &Path, bytes: &[u8]) {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .expect("create executable fixture");
-        file.write_all(bytes).expect("write executable fixture");
-        file.set_permissions(fs::Permissions::from_mode(0o700))
-            .expect("make fixture executable");
-    }
-
-    fn executable_with_len(path: &Path, length: u64) -> File {
-        let file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(path)
-            .expect("create sparse executable fixture");
-        file.set_len(length).expect("size sparse fixture");
-        file.set_permissions(fs::Permissions::from_mode(0o700))
-            .expect("make sparse fixture executable");
-        file
-    }
-
-    struct TempDirectory(PathBuf);
-
-    impl TempDirectory {
-        fn new() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            loop {
-                let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "sf-parser-supervisor-{}-{nonce}",
-                    std::process::id()
-                ));
-                match fs::create_dir(&path) {
-                    Ok(()) => return Self(path),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(error) => panic!("create fixture directory: {error}"),
-                }
-            }
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 }
