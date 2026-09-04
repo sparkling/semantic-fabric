@@ -3584,6 +3584,56 @@ mod tests {
         assert_eq!(next_alias, 3, "failed preflight must not reserve aliases");
     }
 
+    #[test]
+    fn group_union_duplicate_needed_columns_fail_before_arm_transfer() {
+        use crate::iq::node::{AggArg, AggDef};
+        use crate::iq::AggKind;
+
+        let arm = |alias: usize| {
+            let mut branch = Branch::single(Scan {
+                alias,
+                source: LogicalSource::Table(format!("t{alias}")),
+            });
+            for var in ["s", "o"] {
+                branch.bindings.insert(
+                    var.to_owned(),
+                    TermDef::Derived {
+                        term_map: TermMap::Column("shared".into(), TermSpec::plain_literal()),
+                        alias,
+                    },
+                );
+            }
+            branch
+        };
+        let mut inner = vec![arm(1), arm(2)];
+        let allocation = inner.as_ptr();
+        let aggs = [AggDef {
+            var: "count".into(),
+            kind: AggKind::Count,
+            arg: Some(AggArg::Var("o".into())),
+            distinct: false,
+            fixed_type: None,
+        }];
+        let mut next_alias = 3;
+
+        let pooled = try_sql_group_over_union(
+            &mut inner,
+            &["s".into()],
+            &aggs,
+            sf_sql::Dialect::Sqlite,
+            &mut next_alias,
+        );
+
+        assert!(
+            pooled.is_none(),
+            "two required vars sharing one projected column must fail closed"
+        );
+        assert_eq!(inner.len(), 2, "failed preflight must preserve every arm");
+        assert_eq!(inner.as_ptr(), allocation, "arms must not be transferred");
+        assert!(inner.iter().all(|arm| arm.bindings.len() == 2));
+        assert_eq!(next_alias, 3, "failed preflight must not reserve aliases");
+    }
+
     /// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.2): a
     /// GROUP BY key bound via an INJECTIVE, multi-column `TermMap::Template`
     /// (`{cc}-{num}`, separator present) — identical template in both arms — now
