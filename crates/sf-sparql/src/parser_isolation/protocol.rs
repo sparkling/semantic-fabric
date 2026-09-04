@@ -176,14 +176,14 @@ impl ReadyFrame {
         nonce: HandshakeNonce,
         build_identity: BuildIdentityDigest,
         parser_profile: ParserProfileDigest,
-        effective_limits: ParserWorkerLimits,
+        acknowledged_limits: ParserWorkerLimits,
     ) -> Self {
         Self {
             payload: HandshakePayload {
                 nonce,
                 build_identity,
                 parser_profile,
-                limits: effective_limits,
+                limits: acknowledged_limits,
             },
         }
     }
@@ -217,7 +217,7 @@ pub(crate) fn verify_ready(hello: &HelloFrame, ready: &ReadyFrame) -> Result<(),
         return Err(HandshakeError::ParserProfileMismatch);
     }
     if hello.payload.limits != ready.payload.limits {
-        return Err(HandshakeError::EffectiveLimitsMismatch);
+        return Err(HandshakeError::AcknowledgedLimitsMismatch);
     }
     Ok(())
 }
@@ -281,7 +281,7 @@ pub(crate) enum HandshakeError {
     NonceMismatch,
     BuildIdentityMismatch,
     ParserProfileMismatch,
-    EffectiveLimitsMismatch,
+    AcknowledgedLimitsMismatch,
 }
 
 impl fmt::Display for HandshakeError {
@@ -313,8 +313,8 @@ impl fmt::Display for HandshakeError {
             Self::ParserProfileMismatch => {
                 formatter.write_str("parser-worker parser profile mismatch")
             }
-            Self::EffectiveLimitsMismatch => {
-                formatter.write_str("parser-worker effective limits mismatch")
+            Self::AcknowledgedLimitsMismatch => {
+                formatter.write_str("parser-worker acknowledged limits mismatch")
             }
         }
     }

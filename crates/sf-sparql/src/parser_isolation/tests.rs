@@ -273,19 +273,19 @@ fn ready_verifier_rejects_each_identity_mismatch_axis() {
 }
 
 #[test]
-fn ready_verifier_rejects_each_effective_limit_mismatch_axis() {
+fn ready_verifier_rejects_each_acknowledged_limit_mismatch_axis() {
     let hello = sample_hello();
     for index in 0..9 {
-        let effective = changed_limit(index);
+        let acknowledged = changed_limit(index);
         let ready = ReadyFrame::new(
             HandshakeNonce::new([0x11; DIGEST_LEN]),
             BuildIdentityDigest::new([0x22; DIGEST_LEN]),
             ParserProfileDigest::new([0x33; DIGEST_LEN]),
-            effective,
+            acknowledged,
         );
         assert_eq!(
             verify_ready(&hello, &ready),
-            Err(HandshakeError::EffectiveLimitsMismatch),
+            Err(HandshakeError::AcknowledgedLimitsMismatch),
             "limit axis {index}"
         );
     }
@@ -369,9 +369,9 @@ fn every_handshake_error_has_fixed_non_reflective_display_and_debug() {
             "ParserProfileMismatch",
         ),
         (
-            HandshakeError::EffectiveLimitsMismatch,
-            "parser-worker effective limits mismatch",
-            "EffectiveLimitsMismatch",
+            HandshakeError::AcknowledgedLimitsMismatch,
+            "parser-worker acknowledged limits mismatch",
+            "AcknowledgedLimitsMismatch",
         ),
     ];
 
