@@ -439,7 +439,7 @@ fn lower_node(
             // The OPTIONAL ON-expression (R5 inner FILTER) is reconstructed to a single
             // `Expression` for `left_join_branches`/`build_left_join`, which lower it
             // against the COMBINED left+right bindings (we MUST NOT change that scope).
-            let expr = iqconds_to_expr(&cond)?;
+            let expr = iqconds_to_expr(cond)?;
             // The RIGHT is a single modifier-subquery (a pure SubPlan branch produced by
             // `lower_as_subplan` — an Aggregation/Distinct/Slice/OrderBy as the OPTIONAL's
             // right operand): attach it as a derived-table LEFT JOIN instead of routing
@@ -1149,19 +1149,24 @@ fn left_join_decomposed(
     // for every Ri that can possibly match. Identical to `left_join_branches`' multi
     // arm, so the opts-free output is `=_bag` to it.
     let mut out = Vec::new();
-    for l in &left {
+    for mut l in left {
         for r in &right {
-            if let Some(b) = inner_join_one(l, r, expr, dialect)? {
+            if let Some(b) = inner_join_one(&l, r, expr, dialect)? {
                 out.push(b);
             }
         }
-        let mut no_match = l.clone();
+        // Derive every anti-join from the same unmodified left branch, matching
+        // the previous rollback-copy semantics before transferring ownership.
+        let mut no_match_conditions = Vec::with_capacity(right.len());
         for r in &right {
-            if let Some(cond) = not_exists_cond_for(l, r, expr, dialect)? {
-                no_match.where_conds.push(cond);
+            if let Some(cond) = not_exists_cond_for(&l, r, expr, dialect)? {
+                no_match_conditions.push(cond);
             }
         }
-        out.push(no_match);
+        // Match branches have already copied the left state they need. Move the
+        // original into the one no-match tail instead of cloning the whole Branch.
+        l.where_conds.extend(no_match_conditions);
+        out.push(l);
     }
     Ok(out)
 }
@@ -1296,12 +1301,13 @@ fn left_join_over_subplan(
     Ok(out)
 }
 
-/// (`Vec<IqCond>`) for [`left_join_branches`] (design §5.3). BUILD split the original
-/// `&&` into conjuncts ([`crate::build`]); re-AND them (AND is associative, so `=_bag` is
-/// preserved). An `Sql`/`Exists`/`NotExists` ON-leaf cannot be expressed as a pushable
-/// `Expression` (the flat path likewise 501s an EXISTS-in-OPTIONAL-FILTER via
-/// `filter_cond`) → a sound 501.
-fn iqconds_to_expr(conds: &[IqCond]) -> Result<Option<Expression>> {
+/// Consume the normalized OPTIONAL condition (`Vec<IqCond>`) for
+/// [`left_join_branches`] (design §5.3). BUILD split the original `&&` into conjuncts;
+/// re-AND them in the same order (AND is associative, so `=_bag` is preserved). An
+/// `Sql`/`Exists`/`NotExists` ON-leaf cannot be expressed as a pushable `Expression`
+/// (the flat path likewise 501s an EXISTS-in-OPTIONAL-FILTER via `filter_cond`) → a
+/// sound 501.
+fn iqconds_to_expr(conds: Vec<IqCond>) -> Result<Option<Expression>> {
     let mut acc: Option<Expression> = None;
     for c in conds {
         let e = iqcond_to_expr(c)?;
@@ -1315,10 +1321,10 @@ fn iqconds_to_expr(conds: &[IqCond]) -> Result<Option<Expression>> {
 
 /// One [`IqCond`] → a pushable [`Expression`] (the inverse of BUILD's
 /// `lower_filter_to_iqconds`). `Sql`/`Exists`/`NotExists` have no `Expression` form → 501.
-fn iqcond_to_expr(c: &IqCond) -> Result<Expression> {
+fn iqcond_to_expr(c: IqCond) -> Result<Expression> {
     match c {
-        IqCond::Expr(e) => Ok((**e).clone()),
-        IqCond::Not(c) => Ok(Expression::Not(Box::new(iqcond_to_expr(c)?))),
+        IqCond::Expr(e) => Ok(*e),
+        IqCond::Not(c) => Ok(Expression::Not(Box::new(iqcond_to_expr(*c)?))),
         IqCond::And(cs) => fold_expr(cs, |a, b| Expression::And(Box::new(a), Box::new(b))),
         IqCond::Or(cs) => fold_expr(cs, |a, b| Expression::Or(Box::new(a), Box::new(b))),
         IqCond::Sql(_) | IqCond::Exists(_) | IqCond::NotExists { .. } => Err(Error::Unsupported(
@@ -1329,9 +1335,9 @@ fn iqcond_to_expr(c: &IqCond) -> Result<Expression> {
     }
 }
 
-/// Fold a non-empty `[IqCond]` into one [`Expression`] with `combine`.
+/// Consume and fold a non-empty condition group into one [`Expression`] with `combine`.
 fn fold_expr(
-    cs: &[IqCond],
+    cs: Vec<IqCond>,
     combine: impl Fn(Expression, Expression) -> Expression,
 ) -> Result<Expression> {
     let mut acc: Option<Expression> = None;
@@ -3192,6 +3198,110 @@ mod tests {
             .filter(|b| has_not_exists(&b.where_conds))
             .count();
         assert_eq!(no_match, 1, "exactly one no-match (NOT EXISTS) branch");
+    }
+
+    #[test]
+    fn optional_condition_conversion_moves_payloads_in_boolean_order() {
+        use sf_core::Literal;
+
+        let owned = |value: &str| {
+            let literal = Literal::new_simple_literal(value.to_owned());
+            let pointer = literal.value().as_ptr() as usize;
+            (
+                IqCond::Expr(Box::new(Expression::Literal(literal))),
+                pointer,
+            )
+        };
+        let (first, first_pointer) = owned("first-owned-condition");
+        let (second, second_pointer) = owned("second-owned-condition");
+        let (third, third_pointer) = owned("third-owned-condition");
+        let conditions = vec![
+            first,
+            IqCond::Or(vec![second, IqCond::Not(Box::new(third))]),
+        ];
+
+        let expression = iqconds_to_expr(conditions)
+            .expect("supported condition tree")
+            .expect("non-empty condition tree");
+        let Expression::And(first, tail) = expression else {
+            panic!("top-level condition order must remain conjunction-first")
+        };
+        let Expression::Literal(first) = *first else {
+            panic!("first condition must remain first")
+        };
+        let Expression::Or(second, third) = *tail else {
+            panic!("second condition must retain its OR group")
+        };
+        let Expression::Literal(second) = *second else {
+            panic!("OR left operand must remain second")
+        };
+        let Expression::Not(third) = *third else {
+            panic!("OR right operand must retain NOT")
+        };
+        let Expression::Literal(third) = *third else {
+            panic!("NOT payload must remain third")
+        };
+
+        assert_eq!(first.value().as_ptr() as usize, first_pointer);
+        assert_eq!(second.value().as_ptr() as usize, second_pointer);
+        assert_eq!(third.value().as_ptr() as usize, third_pointer);
+    }
+
+    #[test]
+    fn decomposed_left_join_moves_original_left_into_no_match_tail() {
+        let source = "SELECT an_owned_left_payload FROM a_source".to_owned();
+        let source_pointer = source.as_ptr() as usize;
+        let left = Branch::single(Scan {
+            alias: 1,
+            source: LogicalSource::Query(source),
+        });
+        let right = vec![
+            Branch::single(Scan {
+                alias: 2,
+                source: LogicalSource::Table("right-first".to_owned()),
+            }),
+            Branch::single(Scan {
+                alias: 3,
+                source: LogicalSource::Table("right-second".to_owned()),
+            }),
+        ];
+
+        let branches = left_join_decomposed(vec![left], right, None, sf_sql::Dialect::Sqlite)
+            .expect("decomposition");
+        assert_eq!(
+            branches
+                .iter()
+                .map(|branch| branch
+                    .core
+                    .iter()
+                    .map(|scan| scan.alias)
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            [vec![1, 2], vec![1, 3], vec![1]],
+            "match multiplicity and no-match tail order are exact"
+        );
+        for (index, branch) in branches.iter().enumerate() {
+            let LogicalSource::Query(source) = &branch.core[0].source else {
+                panic!("left source must remain the leading scan")
+            };
+            assert_eq!(
+                source.as_ptr() as usize == source_pointer,
+                index == 2,
+                "only the no-match tail receives the original left branch"
+            );
+        }
+        assert_eq!(
+            branches[2]
+                .where_conds
+                .iter()
+                .map(|condition| match condition {
+                    SqlCond::NotExists { scans, .. } => scans[0].alias,
+                    other => panic!("no-match tail must contain only NOT EXISTS: {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            [2, 3],
+            "anti-join conditions retain right-arm order"
+        );
     }
 
     /// ADR-0023 M4 wave 3 (§5.3 nested-right closure) — a RIGHT-nested OPTIONAL
