@@ -168,7 +168,12 @@ pub(super) fn visit_graph_pattern<'a>(
             walker.push(depth, Work::Expression(expr))?;
             walker.push(depth, Work::GraphPattern(inner))?;
         }
-        GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+        GraphPattern::Graph { name, inner }
+        | GraphPattern::Service {
+            name,
+            inner,
+            silent: _,
+        } => {
             walker.push(depth, Work::NamedNodePattern(name))?;
             walker.push(depth, Work::GraphPattern(inner))?;
         }
@@ -211,9 +216,14 @@ pub(super) fn visit_graph_pattern<'a>(
                 walker.push(depth, Work::Variable(variable))?;
             }
         }
-        GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => {
+        GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+            walker.push(depth, Work::GraphPattern(inner))?;
+        }
+        GraphPattern::Slice {
+            inner,
+            start: _,
+            length: _,
+        } => {
             walker.push(depth, Work::GraphPattern(inner))?;
         }
         GraphPattern::Group {
@@ -270,8 +280,12 @@ pub(super) fn visit_aggregate_expression<'a>(
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
     match aggregate {
-        AggregateExpression::CountSolutions { .. } => {}
-        AggregateExpression::FunctionCall { name, expr, .. } => {
+        AggregateExpression::CountSolutions { distinct: _ } => {}
+        AggregateExpression::FunctionCall {
+            name,
+            expr,
+            distinct: _,
+        } => {
             walker.push(depth, Work::AggregateFunction(name))?;
             walker.push(depth, Work::Expression(expr))?;
         }
@@ -315,9 +329,14 @@ pub(super) fn visit_triple_pattern<'a>(
     triple: &'a TriplePattern,
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
-    walker.push(depth, Work::TermPattern(&triple.subject))?;
-    walker.push(depth, Work::NamedNodePattern(&triple.predicate))?;
-    walker.push(depth, Work::TermPattern(&triple.object))
+    let TriplePattern {
+        subject,
+        predicate,
+        object,
+    } = triple;
+    walker.push(depth, Work::TermPattern(subject))?;
+    walker.push(depth, Work::NamedNodePattern(predicate))?;
+    walker.push(depth, Work::TermPattern(object))
 }
 
 pub(super) fn visit_term_pattern<'a>(
@@ -364,9 +383,14 @@ pub(super) fn visit_ground_triple<'a>(
     triple: &'a GroundTriple,
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
-    walker.push(depth, Work::NamedNode(&triple.subject))?;
-    walker.push(depth, Work::NamedNode(&triple.predicate))?;
-    walker.push(depth, Work::GroundTerm(&triple.object))
+    let GroundTriple {
+        subject,
+        predicate,
+        object,
+    } = triple;
+    walker.push(depth, Work::NamedNode(subject))?;
+    walker.push(depth, Work::NamedNode(predicate))?;
+    walker.push(depth, Work::GroundTerm(object))
 }
 
 pub(super) fn visit_term<'a>(
@@ -388,9 +412,14 @@ pub(super) fn visit_triple<'a>(
     triple: &'a Triple,
     depth: usize,
 ) -> Result<(), PlanMeasureError> {
-    walker.push(depth, Work::NamedOrBlankNode(&triple.subject))?;
-    walker.push(depth, Work::NamedNode(&triple.predicate))?;
-    walker.push(depth, Work::Term(&triple.object))
+    let Triple {
+        subject,
+        predicate,
+        object,
+    } = triple;
+    walker.push(depth, Work::NamedOrBlankNode(subject))?;
+    walker.push(depth, Work::NamedNode(predicate))?;
+    walker.push(depth, Work::Term(object))
 }
 
 pub(super) fn visit_named_or_blank<'a>(

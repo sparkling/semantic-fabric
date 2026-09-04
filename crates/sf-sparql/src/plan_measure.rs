@@ -1,12 +1,16 @@
-//! Deterministic V1 measurement of the complete owned graph below a [`crate::Plan`].
+//! Deterministic V1 measurement of compiler-owned clone graphs.
 //!
 //! The metric is deliberately independent of allocator layout: one unit per
 //! visited clone carrier, collection slot, and owned payload byte. It is meant
-//! for a future pre-charge before deep plan clones, not as a byte-size estimate.
-//! V1 limits are provisional until corpus calibration, and this module is not
-//! wired into compilation, serving, or the plan cache.
+//! for a future pre-charge before exact plan, branch-forest, or IQ-fragment
+//! clones, not as a byte-size estimate. V1 limits are provisional until corpus
+//! calibration, and this module is not wired into compilation, serving, or the
+//! plan cache.
+//!
+//! The measurement walk is iterative. It does not make the model's derived
+//! `Clone` implementations iterative or allocation-fallible.
 
-use std::collections::TryReserveError;
+use std::collections::{BTreeMap, TryReserveError};
 use std::fmt;
 
 use ::spargebra::algebra::{
@@ -19,12 +23,15 @@ use ::spargebra::term::{
 };
 use sf_core::ir::{LogicalSource, Segment, Template, TermMap, TermSpec};
 
+use crate::iq::node::{AggArg, AggDef, BindDef, ColOrConst, IqCond, IqNode, Var};
 use crate::iq::{
     AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, HopRelation, OptJoin, OrderKey,
     PathClosure, R2rmlGraphScope, RustAgg, RustGroup, Scan, SqlCond, SubPlanJoin, TermDef,
 };
 use crate::{DedupScope, Plan, PlanForm};
 
+mod iq;
+mod mapping;
 mod model;
 mod spargebra;
 
@@ -91,6 +98,67 @@ impl PlanMeasureV1 {
     pub(crate) fn measure(plan: &Plan) -> Result<Self, PlanMeasureError> {
         Walker::new(PlanMeasureLimits::V1).run(Work::Plan(plan))
     }
+}
+
+/// An exact IQ-owned fragment that may be cloned independently of its enclosing
+/// [`IqNode`]. Each variant mirrors a concrete `Clone` target in the compiler;
+/// callers must select the smallest value that the operation actually copies.
+#[derive(Clone, Copy)]
+pub(crate) enum IqCloneFragmentV1<'a> {
+    Nodes(&'a [IqNode]),
+    Conditions(&'a [IqCond]),
+    Substitution(&'a BTreeMap<Var, BindDef>),
+    Variables(&'a [Var]),
+    OrderKeys(&'a [OrderKey]),
+    ValueRows(&'a [Vec<Option<TermDef>>]),
+}
+
+/// Measure the exact dynamic work performed by `Vec<Branch>::clone`.
+pub(crate) fn measure_branch_forest_clone_v1(
+    branches: &[Branch],
+) -> Result<PlanMeasureV1, PlanMeasureError> {
+    measure_branch_forest_clone_with_limits(branches, PlanMeasureLimits::V1)
+}
+
+/// Measure the complete owned graph copied by `IqNode::clone`.
+pub(crate) fn measure_iq_node_clone_v1(node: &IqNode) -> Result<PlanMeasureV1, PlanMeasureError> {
+    Walker::new(PlanMeasureLimits::V1).run(Work::IqNode(node))
+}
+
+/// Measure an exact independently cloned IQ fragment.
+pub(crate) fn measure_iq_fragment_clone_v1(
+    fragment: IqCloneFragmentV1<'_>,
+) -> Result<PlanMeasureV1, PlanMeasureError> {
+    measure_iq_fragment_clone_with_limits(fragment, PlanMeasureLimits::V1)
+}
+
+fn measure_branch_forest_clone_with_limits(
+    branches: &[Branch],
+    limits: PlanMeasureLimits,
+) -> Result<PlanMeasureV1, PlanMeasureError> {
+    let mut walker = Walker::new(limits);
+    model::push_branches(&mut walker, branches, 0)?;
+    walker.finish()
+}
+
+fn measure_iq_fragment_clone_with_limits(
+    fragment: IqCloneFragmentV1<'_>,
+    limits: PlanMeasureLimits,
+) -> Result<PlanMeasureV1, PlanMeasureError> {
+    let mut walker = Walker::new(limits);
+    match fragment {
+        IqCloneFragmentV1::Nodes(nodes) => iq::push_nodes(&mut walker, nodes, 0)?,
+        IqCloneFragmentV1::Conditions(conditions) => {
+            iq::push_conditions(&mut walker, conditions, 0)?
+        }
+        IqCloneFragmentV1::Substitution(substitution) => {
+            iq::push_substitution(&mut walker, substitution, 0)?
+        }
+        IqCloneFragmentV1::Variables(variables) => iq::measure_variables(&mut walker, variables)?,
+        IqCloneFragmentV1::OrderKeys(keys) => model::push_order_keys(&mut walker, keys, 0)?,
+        IqCloneFragmentV1::ValueRows(rows) => iq::push_value_rows(&mut walker, rows, 0)?,
+    }
+    walker.finish()
 }
 
 #[derive(Clone, Copy)]
@@ -164,6 +232,12 @@ enum Work<'a> {
     BlankNode(&'a BlankNode),
     Literal(&'a Literal),
     Variable(&'a Variable),
+    IqNode(&'a IqNode),
+    IqCond(&'a IqCond),
+    IqAggDef(&'a AggDef),
+    IqAggArg(&'a AggArg),
+    IqColOrConst(&'a ColOrConst),
+    IqBindDef(&'a BindDef),
 }
 
 struct Walker<'a> {
@@ -190,6 +264,10 @@ impl<'a> Walker<'a> {
 
     fn run(mut self, root: Work<'a>) -> Result<PlanMeasureV1, PlanMeasureError> {
         self.push_at(root, 1)?;
+        self.finish()
+    }
+
+    fn finish(mut self) -> Result<PlanMeasureV1, PlanMeasureError> {
         while let Some(Pending { work, depth }) = self.stack.pop() {
             self.record_node()?;
             match work {
@@ -213,11 +291,11 @@ impl<'a> Walker<'a> {
                 Work::SubPlanJoin(value) => model::visit_subplan(&mut self, value, depth)?,
                 Work::RustGroup(value) => model::visit_rust_group(&mut self, value, depth)?,
                 Work::RustAgg(value) => model::visit_rust_agg(&mut self, value)?,
-                Work::LogicalSource(value) => model::visit_logical_source(&mut self, value)?,
-                Work::TermMap(value) => model::visit_term_map(&mut self, value, depth)?,
-                Work::Template(value) => model::visit_template(&mut self, value, depth)?,
-                Work::TermSpec(value) => model::visit_term_spec(&mut self, value, depth)?,
-                Work::Segment(value) => model::visit_segment(&mut self, value)?,
+                Work::LogicalSource(value) => mapping::visit_logical_source(&mut self, value)?,
+                Work::TermMap(value) => mapping::visit_term_map(&mut self, value, depth)?,
+                Work::Template(value) => mapping::visit_template(&mut self, value, depth)?,
+                Work::TermSpec(value) => mapping::visit_term_spec(&mut self, value, depth)?,
+                Work::Segment(value) => mapping::visit_segment(&mut self, value)?,
                 Work::Expression(value) => spargebra::visit_expression(&mut self, value, depth)?,
                 Work::Function(value) => spargebra::visit_function(&mut self, value, depth)?,
                 Work::GraphPattern(value) => {
@@ -255,6 +333,12 @@ impl<'a> Walker<'a> {
                 Work::BlankNode(value) => self.payload(value.as_str().len())?,
                 Work::Literal(value) => spargebra::visit_literal(&mut self, value, depth)?,
                 Work::Variable(value) => self.payload(value.as_str().len())?,
+                Work::IqNode(value) => iq::visit_node(&mut self, value, depth)?,
+                Work::IqCond(value) => iq::visit_condition(&mut self, value, depth)?,
+                Work::IqAggDef(value) => iq::visit_aggregate(&mut self, value, depth)?,
+                Work::IqAggArg(value) => iq::visit_aggregate_arg(&mut self, value, depth)?,
+                Work::IqColOrConst(value) => iq::visit_col_or_const(&mut self, value, depth)?,
+                Work::IqBindDef(value) => iq::visit_bind_def(&mut self, value, depth)?,
             }
         }
         Ok(self.measure)
@@ -380,3 +464,7 @@ fn enforce_usize(
 #[cfg(test)]
 #[path = "plan_measure/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "plan_measure/clone_roots_tests.rs"]
+mod clone_roots_tests;
