@@ -10,26 +10,30 @@
 //! The measurement walk is iterative. It does not make the model's derived
 //! `Clone` implementations iterative or allocation-fallible.
 
-use std::collections::{BTreeMap, TryReserveError};
+use std::collections::TryReserveError;
 use std::fmt;
 
 use ::spargebra::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
-    PropertyPathExpression,
+    PropertyPathExpression, QueryDataset,
 };
 use ::spargebra::term::{
     BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern, NamedOrBlankNode,
     Term, TermPattern, Triple, TriplePattern, Variable,
 };
-use sf_core::ir::{LogicalSource, Segment, Template, TermMap, TermSpec};
+use sf_core::ir::{
+    Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, Segment, SubjectMap,
+    Template, TermMap, TermSpec, TriplesMap,
+};
 
-use crate::iq::node::{AggArg, AggDef, BindDef, ColOrConst, IqCond, IqNode, Var};
+use crate::iq::node::{AggArg, AggDef, BindDef, ColOrConst, IqCond, IqNode};
 use crate::iq::{
     AggCol, Aggregation, Branch, ColRef, GroupKey, HopExpr, HopRelation, OptJoin, OrderKey,
     PathClosure, R2rmlGraphScope, RustAgg, RustGroup, Scan, SqlCond, SubPlanJoin, TermDef,
 };
 use crate::{DedupScope, Plan, PlanForm};
 
+pub(crate) mod clone_root;
 mod iq;
 mod mapping;
 mod model;
@@ -100,71 +104,6 @@ impl PlanMeasureV1 {
     }
 }
 
-/// An exact IQ-owned fragment that may be cloned independently of its enclosing
-/// [`IqNode`]. Each variant mirrors a concrete `Clone` target in the compiler;
-/// callers must select the smallest value that the operation actually copies.
-#[derive(Clone, Copy)]
-pub(crate) enum IqCloneFragmentV1<'a> {
-    Nodes(&'a [IqNode]),
-    Conditions(&'a [IqCond]),
-    Substitution(&'a BTreeMap<Var, BindDef>),
-    /// Variables are owned payload leaves rather than walker nodes. A
-    /// variable-only fragment therefore has zero depth and pending-item counts;
-    /// those two counters describe the iterative measurement stack, not Rust's
-    /// `Clone` call stack.
-    Variables(&'a [Var]),
-    OrderKeys(&'a [OrderKey]),
-    ValueRows(&'a [Vec<Option<TermDef>>]),
-}
-
-/// Measure the exact dynamic work performed by `Vec<Branch>::clone`.
-pub(crate) fn measure_branch_forest_clone_v1(
-    branches: &[Branch],
-) -> Result<PlanMeasureV1, PlanMeasureError> {
-    measure_branch_forest_clone_with_limits(branches, PlanMeasureLimits::V1)
-}
-
-/// Measure the complete owned graph copied by `IqNode::clone`.
-pub(crate) fn measure_iq_node_clone_v1(node: &IqNode) -> Result<PlanMeasureV1, PlanMeasureError> {
-    Walker::new(PlanMeasureLimits::V1).run(Work::IqNode(node))
-}
-
-/// Measure an exact independently cloned IQ fragment.
-pub(crate) fn measure_iq_fragment_clone_v1(
-    fragment: IqCloneFragmentV1<'_>,
-) -> Result<PlanMeasureV1, PlanMeasureError> {
-    measure_iq_fragment_clone_with_limits(fragment, PlanMeasureLimits::V1)
-}
-
-fn measure_branch_forest_clone_with_limits(
-    branches: &[Branch],
-    limits: PlanMeasureLimits,
-) -> Result<PlanMeasureV1, PlanMeasureError> {
-    let mut walker = Walker::new(limits);
-    model::push_branches(&mut walker, branches, 0)?;
-    walker.finish()
-}
-
-fn measure_iq_fragment_clone_with_limits(
-    fragment: IqCloneFragmentV1<'_>,
-    limits: PlanMeasureLimits,
-) -> Result<PlanMeasureV1, PlanMeasureError> {
-    let mut walker = Walker::new(limits);
-    match fragment {
-        IqCloneFragmentV1::Nodes(nodes) => iq::push_nodes(&mut walker, nodes, 0)?,
-        IqCloneFragmentV1::Conditions(conditions) => {
-            iq::push_conditions(&mut walker, conditions, 0)?
-        }
-        IqCloneFragmentV1::Substitution(substitution) => {
-            iq::push_substitution(&mut walker, substitution, 0)?
-        }
-        IqCloneFragmentV1::Variables(variables) => iq::measure_variables(&mut walker, variables)?,
-        IqCloneFragmentV1::OrderKeys(keys) => model::push_order_keys(&mut walker, keys, 0)?,
-        IqCloneFragmentV1::ValueRows(rows) => iq::push_value_rows(&mut walker, rows, 0)?,
-    }
-    walker.finish()
-}
-
 #[derive(Clone, Copy)]
 struct PlanMeasureLimits {
     max_nodes: u64,
@@ -213,6 +152,12 @@ enum Work<'a> {
     RustGroup(&'a RustGroup),
     RustAgg(&'a RustAgg),
     LogicalSource(&'a LogicalSource),
+    TriplesMap(&'a TriplesMap),
+    SubjectMap(&'a SubjectMap),
+    PredicateObjectMap(&'a PredicateObjectMap),
+    ObjectMap(&'a ObjectMap),
+    RefObjectMap(&'a RefObjectMap),
+    Join(&'a Join),
     TermMap(&'a TermMap),
     Template(&'a Template),
     TermSpec(&'a TermSpec),
@@ -224,6 +169,7 @@ enum Work<'a> {
     AggregateExpression(&'a AggregateExpression),
     AggregateFunction(&'a AggregateFunction),
     OrderExpression(&'a OrderExpression),
+    QueryDataset(&'a QueryDataset),
     TriplePattern(&'a TriplePattern),
     TermPattern(&'a TermPattern),
     NamedNodePattern(&'a NamedNodePattern),
@@ -296,6 +242,16 @@ impl<'a> Walker<'a> {
                 Work::RustGroup(value) => model::visit_rust_group(&mut self, value, depth)?,
                 Work::RustAgg(value) => model::visit_rust_agg(&mut self, value)?,
                 Work::LogicalSource(value) => mapping::visit_logical_source(&mut self, value)?,
+                Work::TriplesMap(value) => mapping::visit_triples_map(&mut self, value, depth)?,
+                Work::SubjectMap(value) => mapping::visit_subject_map(&mut self, value, depth)?,
+                Work::PredicateObjectMap(value) => {
+                    mapping::visit_predicate_object_map(&mut self, value, depth)?
+                }
+                Work::ObjectMap(value) => mapping::visit_object_map(&mut self, value, depth)?,
+                Work::RefObjectMap(value) => {
+                    mapping::visit_ref_object_map(&mut self, value, depth)?
+                }
+                Work::Join(value) => mapping::visit_join(&mut self, value)?,
                 Work::TermMap(value) => mapping::visit_term_map(&mut self, value, depth)?,
                 Work::Template(value) => mapping::visit_template(&mut self, value, depth)?,
                 Work::TermSpec(value) => mapping::visit_term_spec(&mut self, value, depth)?,
@@ -316,6 +272,9 @@ impl<'a> Walker<'a> {
                 }
                 Work::OrderExpression(value) => {
                     spargebra::visit_order_expression(&mut self, value, depth)?
+                }
+                Work::QueryDataset(value) => {
+                    spargebra::visit_query_dataset(&mut self, value, depth)?
                 }
                 Work::TriplePattern(value) => {
                     spargebra::visit_triple_pattern(&mut self, value, depth)?

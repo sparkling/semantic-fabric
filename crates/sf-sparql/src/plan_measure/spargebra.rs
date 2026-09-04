@@ -1,6 +1,6 @@
 use ::spargebra::algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
-    PropertyPathExpression,
+    PropertyPathExpression, QueryDataset,
 };
 use ::spargebra::term::{
     GroundTerm, GroundTriple, Literal, NamedNodePattern, NamedOrBlankNode, Term, TermPattern,
@@ -9,6 +9,24 @@ use ::spargebra::term::{
 use sf_core::datatype::XsdTypeCode;
 
 use super::{PlanMeasureError, Walker, Work};
+
+pub(super) fn visit_query_dataset<'a>(
+    walker: &mut Walker<'a>,
+    dataset: &'a QueryDataset,
+    depth: usize,
+) -> Result<(), PlanMeasureError> {
+    walker.collection(dataset.default.len())?;
+    for graph in &dataset.default {
+        walker.push(depth, Work::NamedNode(graph))?;
+    }
+    if let Some(named) = &dataset.named {
+        walker.collection(named.len())?;
+        for graph in named {
+            walker.push(depth, Work::NamedNode(graph))?;
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn visit_expression<'a>(
     walker: &mut Walker<'a>,

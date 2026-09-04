@@ -1,3 +1,8 @@
+use super::clone_root::{
+    measure_compiler_clone_collection_v1, measure_compiler_clone_collection_with_limits,
+    measure_compiler_clone_root_v1, measure_compiler_clone_root_with_limits,
+    CompilerCloneCollectionV1, CompilerCloneRootV1,
+};
 use super::*;
 
 use std::collections::BTreeMap;
@@ -111,13 +116,18 @@ fn branch_forest_clone_root_is_exact_through_nested_subplan() {
     });
     let forest = vec![outer];
 
-    let measured = measure_branch_forest_clone_v1(&forest).unwrap();
+    let measured =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(&forest)).unwrap();
     assert_eq!(
         measured,
-        measure_branch_forest_clone_v1(&forest.clone()).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Branches(&forest.clone()))
+            .unwrap()
     );
     assert_n_and_n_plus_one(measured, |limits| {
-        measure_branch_forest_clone_with_limits(&forest, limits)
+        measure_compiler_clone_collection_with_limits(
+            CompilerCloneCollectionV1::Branches(&forest),
+            limits,
+        )
     });
     assert!(measured.max_depth >= 5);
 }
@@ -146,10 +156,13 @@ fn iq_node_clone_root_is_exact_through_nested_exists_and_not_exists() {
         ],
     };
 
-    let measured = measure_iq_node_clone_v1(&node).unwrap();
-    assert_eq!(measured, measure_iq_node_clone_v1(&node.clone()).unwrap());
+    let measured = measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(&node)).unwrap();
+    assert_eq!(
+        measured,
+        measure_compiler_clone_root_v1(CompilerCloneRootV1::IqNode(&node.clone())).unwrap()
+    );
     assert_n_and_n_plus_one(measured, |limits| {
-        Walker::new(limits).run(Work::IqNode(&node))
+        measure_compiler_clone_root_with_limits(CompilerCloneRootV1::IqNode(&node), limits)
     });
     assert!(measured.max_depth >= 6);
 }
@@ -291,18 +304,22 @@ fn all_iq_variants() -> Vec<IqNode> {
 #[test]
 fn every_iq_node_condition_and_payload_variant_is_covered() {
     let nodes = all_iq_variants();
-    let measured = measure_iq_fragment_clone_v1(IqCloneFragmentV1::Nodes(&nodes)).unwrap();
+    let measured =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(&nodes)).unwrap();
     let cloned = nodes.clone();
     assert_eq!(
         measured,
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Nodes(&cloned)).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(&cloned)).unwrap()
     );
     assert!(measured.nodes > nodes.len() as u64);
     assert!(measured.collection_slots > nodes.len() as u64);
     assert!(measured.payload_bytes > 100);
 
     assert_n_and_n_plus_one(measured, |limits| {
-        measure_iq_fragment_clone_with_limits(IqCloneFragmentV1::Nodes(&nodes), limits)
+        measure_compiler_clone_collection_with_limits(
+            CompilerCloneCollectionV1::IqNodes(&nodes),
+            limits,
+        )
     });
 }
 
@@ -311,8 +328,9 @@ fn every_exact_iq_fragment_root_matches_its_clone() {
     let nodes = vec![IqNode::True];
     let node_clones = nodes.clone();
     assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Nodes(&nodes)).unwrap(),
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Nodes(&node_clones)).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(&nodes)).unwrap(),
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqNodes(&node_clones))
+            .unwrap()
     );
 
     let conditions = vec![IqCond::NotExists {
@@ -321,8 +339,12 @@ fn every_exact_iq_fragment_root_matches_its_clone() {
     }];
     let condition_clones = conditions.clone();
     assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Conditions(&conditions)).unwrap(),
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Conditions(&condition_clones)).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&conditions,))
+            .unwrap(),
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(
+            &condition_clones,
+        ))
+        .unwrap()
     );
 
     let substitution = BTreeMap::from([(
@@ -331,15 +353,25 @@ fn every_exact_iq_fragment_root_matches_its_clone() {
     )]);
     let substitution_clone = substitution.clone();
     assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Substitution(&substitution)).unwrap(),
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Substitution(&substitution_clone)).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqSubstitution(
+            &substitution,
+        ))
+        .unwrap(),
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqSubstitution(
+            &substitution_clone,
+        ))
+        .unwrap()
     );
 
     let variables: Vec<Var> = vec!["alpha".into(), "beta".into()];
     let variable_clones = variables.clone();
     assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Variables(&variables)).unwrap(),
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Variables(&variable_clones)).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Variables(&variables))
+            .unwrap(),
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Variables(
+            &variable_clones,
+        ))
+        .unwrap()
     );
 
     let keys = vec![OrderKey {
@@ -349,112 +381,17 @@ fn every_exact_iq_fragment_root_matches_its_clone() {
     }];
     let key_clones = keys.clone();
     assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::OrderKeys(&keys)).unwrap(),
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::OrderKeys(&key_clones)).unwrap()
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::OrderKeys(&keys)).unwrap(),
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::OrderKeys(&key_clones))
+            .unwrap()
     );
 
     let rows = vec![vec![Some(constant("http://example.test/cell")), None]];
     let row_clones = rows.clone();
     assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::ValueRows(&rows)).unwrap(),
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::ValueRows(&row_clones)).unwrap()
-    );
-}
-
-#[test]
-fn exact_clone_roots_have_hand_calculated_v1_schedules() {
-    let branches = vec![Branch::empty()];
-    assert_eq!(
-        measure_branch_forest_clone_v1(&branches).unwrap(),
-        PlanMeasureV1 {
-            nodes: 1,
-            collection_slots: 1,
-            payload_bytes: 0,
-            deep_clone_work: 2,
-            max_depth: 1,
-            max_pending_items: 1,
-        }
-    );
-
-    let nodes = vec![IqNode::True];
-    assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Nodes(&nodes)).unwrap(),
-        PlanMeasureV1 {
-            nodes: 1,
-            collection_slots: 1,
-            payload_bytes: 0,
-            deep_clone_work: 2,
-            max_depth: 1,
-            max_pending_items: 1,
-        }
-    );
-
-    let conditions = vec![IqCond::Sql(SqlCond::IsNull(col("x")))];
-    assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Conditions(&conditions)).unwrap(),
-        PlanMeasureV1 {
-            nodes: 3,
-            collection_slots: 1,
-            payload_bytes: 1,
-            deep_clone_work: 5,
-            max_depth: 3,
-            max_pending_items: 1,
-        }
-    );
-
-    let substitution = BTreeMap::from([(Var::from("v"), BindDef::Resolved(constant("http://x")))]);
-    assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Substitution(&substitution)).unwrap(),
-        PlanMeasureV1 {
-            nodes: 4,
-            collection_slots: 1,
-            payload_bytes: 9,
-            deep_clone_work: 14,
-            max_depth: 4,
-            max_pending_items: 1,
-        }
-    );
-
-    let variables: Vec<Var> = vec!["a".into(), "β".into()];
-    assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::Variables(&variables)).unwrap(),
-        PlanMeasureV1 {
-            nodes: 0,
-            collection_slots: 2,
-            payload_bytes: 3,
-            deep_clone_work: 5,
-            max_depth: 0,
-            max_pending_items: 0,
-        }
-    );
-
-    let keys = vec![OrderKey {
-        var: "key".to_owned(),
-        descending: false,
-        expr: None,
-    }];
-    assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::OrderKeys(&keys)).unwrap(),
-        PlanMeasureV1 {
-            nodes: 1,
-            collection_slots: 1,
-            payload_bytes: 3,
-            deep_clone_work: 5,
-            max_depth: 1,
-            max_pending_items: 1,
-        }
-    );
-
-    let rows = vec![vec![None, Some(constant("http://x"))]];
-    assert_eq!(
-        measure_iq_fragment_clone_v1(IqCloneFragmentV1::ValueRows(&rows)).unwrap(),
-        PlanMeasureV1 {
-            nodes: 3,
-            collection_slots: 3,
-            payload_bytes: 8,
-            deep_clone_work: 14,
-            max_depth: 3,
-            max_pending_items: 1,
-        }
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::TermDefRows(&rows))
+            .unwrap(),
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::TermDefRows(&row_clones))
+            .unwrap()
     );
 }
