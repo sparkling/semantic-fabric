@@ -277,15 +277,17 @@ dispatcher exact-matches the private two-token invocation and requires a
 raw-empty Linux environment. A feature-gated, non-default Rust evidence seam
 now completes a held-binary `Hello`/`Ready`/EOF control exchange after bounded
 GNU-build-ID correlation, post-exec envelope repair and installation/self-probe
-of a default-kill policy candidate. Malformed or unprepared reserved invocations
-still exit silently with status 78 via raw Unix `_exit`; other targets remain
-fail-closed. The workspace exact-pins `spargebra =0.4.6`; a private pure-Rust
-`QueryV1` inner codec plus dormant exact 96-byte request and 128-byte result
-codecs provide canonical bytes, allocation-free validation, fallible iterative
-reconstruction, exact replay and closed redacted framing without adding Node to
-Cargo or the production closure. This is control/codec evidence only: no
-product/serving launcher, query transport, worker parser execution, fresh-parse
-alpha oracle, witness or parser-qualified final policy exists, and no UID/GID,
+of a default-kill policy candidate. It prepares and caps an owned request before
+spawn, sends only `Hello` then EOF, and reverifies request correlation after
+clean EOF, successful exit and reap. Candidate totals bind the full framing and
+keep pipe accounting separate from the file-size limit. Malformed or unprepared
+reserved invocations still exit silently with status 78; other targets remain
+fail-closed. The workspace exact-pins `spargebra =0.4.6`; private pure-Rust
+inner/request/result codecs provide canonical, fallibly reconstructed, closed
+framing. A private typed alpha comparator covers bounded structural comparison
+under a correlation-only evidence profile. This is development evidence only:
+no request/result transport, worker parser execution, paired corpus receipt,
+witness or parser-qualified final policy exists, and no UID/GID,
 group, capability or privilege-transition contract is established. Node
 supplies none of the runtime and ADR-0053 remains proposed.
 

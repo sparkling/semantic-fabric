@@ -32,24 +32,21 @@ Compiler-measurement work-stack allocation failure has a distinct typed cause
 and a dormant redacted `503` mapping without `Retry-After`; no public controlled
 compiler path serves it.
 
-ADR-0053's private parent additionally has cumulative-cap nonblocking pipe I/O
-under the immutable spawn deadline. Fixed-buffer partial operations and
-`EINTR`/`EAGAIN`/hangup/error outcomes are contained, and each live-process I/O
-error invokes the termination/reap containment path. Direction caps cover the whole
-future protocol lifetime, including handshake and frame headers; they are not raw-query allowances.
-The evidence seam uses exact `Hello`/`Ready`/`EOF` control frames. Private dormant 96-byte `ParseRequestV1` and 128-byte
-`ParseResultV1` codecs exist, but no transport calls them. A 1 MiB source plus
-handshake/header needs 1,048,856 input bytes, exceeding the current 1,048,576-byte cap;
-integration must reconcile it without lowering the source ceiling.
+ADR-0053's private parent has cumulative-cap nonblocking pipe I/O under the
+immutable spawn deadline. Fixed-buffer partial operations and
+`EINTR`/`EAGAIN`/hangup/error outcomes are contained through termination/reap.
+The evidence seam prepares and caps an owned request before spawn, sends only
+`Hello` then EOF, and verifies it after EOF, successful exit and reap. Candidate totals are 1,048,856
+input and 8,388,920 output bytes, separate from the 67,108,864-byte file limit.
+Private 96-byte `ParseRequestV1` and 128-byte `ParseResultV1` codecs remain dormant.
 
-The private Rust `QueryV1` inner codec has fixed canonical bytes, an allocation-free
-borrowed preflight, exact flat-tree/scalar validation, fallible iterative reconstruction, the
-post-parse algebra envelope and byte-exact decode/re-encode replay. Its 22
-focused tests cover all pinned query/algebra/function/aggregate families and
-malformed wire classes. Seventeen outer-frame tests cover fixed goldens,
-zero flags/reserved fields, lengths, correlation, closed redacted outcomes, raw
-`0`/`N`/`N+1` caps and allocation-free rejection. Limits remain provisional; no
-worker emits these bytes and exact replay is not fresh-parse alpha equivalence.
+The private Rust `QueryV1` codec provides fixed canonical bytes, allocation-free
+preflight, exact validation, fallible iterative reconstruction and exact replay.
+Its 22 inner and 17 outer-frame tests cover pinned variants, malformed wire,
+correlation, closed outcomes and raw caps. Limits remain provisional; no worker
+emits these bytes. A private typed comparator adds eight tests for eligibility,
+closed outcomes, exact SELECT outputs and bounded alpha comparison. Its profile
+is correlation-only; no paired worker differential or admissible receipt exists.
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
@@ -375,10 +372,12 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    group, capability or privilege-transition contract. The workspace exact-pins
    `spargebra =0.4.6`; parser/evidence code requires
    `x86_64-unknown-linux-gnu`; and inner QueryV1 plus 96/128-byte outer codecs
-   are implemented. Transport, worker parsing, fresh alpha equivalence, witness,
-   serving and attestation remain absent. Normal loader/Rust startup precedes
-   dispatch. Qualify the complete profile, integrate those boundaries, reconcile
-   direction headroom and calibrate before activation.
+   are implemented. An owned request is prepared and reverified after clean EOF,
+   exit and reap, while the seam still sends only `Hello` then EOF. Exact
+   direction totals and a separate file limit are bound. A private typed alpha
+   comparator exists, but request/result transport, worker parsing, corpus
+   receipts, witness, serving and attestation remain absent. Qualify and calibrate
+   the complete profile before activation; normal loader/Rust startup precedes dispatch.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,
@@ -420,8 +419,10 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
   reparse equivalence. Fresh differentials bind identical source/profile,
   preserve every ordered structure/option and exact top-level SELECT schema, and
   use one query-wide variable map, one global pattern blank-node map and one
-  separate CONSTRUCT-template map. Mutations reject split, merged, partial and
-  cross-domain renamings; generated-name heuristics are inadmissible.
+  separate CONSTRUCT-template map. The private typed comparator covers this
+  structural core; paired fresh-worker corpus recipes, exact wire bindings and
+  receipts must still reject split, merged, partial and cross-domain renamings.
+  Generated-name heuristics are inadmissible.
 - Iterative algebra tests cover node, depth, collection and payload boundaries,
   fallible work-stack growth and exact pre-item charging in one pass.
 - Compiler tests cover mapping fan-out, `JOIN`/`OPTIONAL`/`MINUS` products,
@@ -460,9 +461,9 @@ bounded-pipe-I/O and cleanup foundation plus an evidence-only control-policy
 candidate and bounded `Hello`/`Ready`/`EOF` handshake. The pure inner QueryV1
 codec provides preflight, fallible iterative decode and exact replay; dormant
 request/result codecs provide closed, correlated outer framing. Profile
-qualification, transport, worker parse/encode, fresh alpha proof and a witness
-remain blockers for `compile_controlled` and every parser-inclusive boundedness
-claim—not merely a stronger one-second cancellation SLA. A separately named
+qualification, request/result transport, worker parse/encode, paired-corpus
+alpha receipts and a witness remain blockers for `compile_controlled` and every
+parser-inclusive boundedness claim—not merely a stronger one-second cancellation SLA. A separately named
 post-parse-only mode would not be whole-compiler governance.
 
 This ADR does not claim exact CPU seconds, wall time or heap bytes; database

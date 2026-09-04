@@ -40,11 +40,12 @@ and byte-exact canonical replay. Private 96-byte `ParseRequestV1` and 128-byte
 `ParseResultV1` outer codecs now bind exact kinds, lengths, nonce, source and
 payload digests, encoding/wire versions, zero flags/reserved fields and closed
 outcomes. Independent raw-frame caps run before header access; rejection
-encoding is allocation-free and carries no parser text. Twenty-two focused
-inner-wire tests and seventeen outer-frame tests pass. These establish dormant
-codec foundations only: no request/result transport, parser execution,
-fresh-parse alpha oracle, worker-produced wire, admitted-query witness,
-independent release/runtime attestation, permit integration or serving exists. No UID/GID,
+encoding is allocation-free and carries no parser text. The evidence seam
+prepares/caps one owned request before spawn and reverifies it after clean EOF,
+exit and reap, but sends only `Hello` then EOF. Candidate totals are 1,048,856
+input and 8,388,920 output bytes, separate from the 67,108,864-byte file limit.
+Twenty-two inner, seventeen outer and eight typed-alpha tests pass; the alpha profile is correlation-only. No request/result transport, parser execution,
+paired-worker receipt, worker wire, witness, attestation, permit or serving exists. No UID/GID,
 supplementary-group, capability, namespace, LSM or privilege-transition
 qualification is claimed.
 These foundations do not enable `CompileProfileId::GovernedV1`, change serving,
@@ -207,13 +208,12 @@ rejection requires an empty payload, zero QueryV1 version and exactly one of
 unknown values, nonzero flags/reserved bytes, truncation, trailing bytes or a
 noncanonical QueryV1 payload fails closed.
 
-With the existing 184-byte handshake, a full 1 MiB source needs at least
-1,048,856 cumulative input bytes (`184 + 96 + 1,048,576`), so the current
-1,048,576-byte candidate input cap cannot carry its stated source maximum. A
-full 8 MiB result needs at least 8,388,920 cumulative output bytes
-(`184 + 128 + 8,388,608`). Worker integration must bind those direction totals
-and define whether the one-byte EOF/trailing-output probe consumes budget; it
-must not silently reduce the public query ceiling to hide framing overhead.
+The candidate limits now bind the full framed totals: 1,048,856 cumulative
+input bytes (`184 + 96 + 1,048,576`) and 8,388,920 cumulative output bytes
+(`184 + 128 + 8,388,608`). The independent `RLIMIT_FSIZE` remains 64 MiB and
+does not stand in for pipe accounting. The one-byte EOF/trailing-output probe
+is rejected without being counted as accepted output. These values are still
+provisional and must not silently reduce the public query ceiling.
 
 The eventual one-shot terminal contract is stricter than receipt of a valid
 prefix: the parent accepts exactly one canonical result frame only after stdout
@@ -384,7 +384,10 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    prove held identity, limit validation, environment/descriptor closure,
    stage-one spawn/group/exec denial, canonical wall timeout, pipe-limit/failure
    containment, exact `Hello`/`Ready`/EOF, trailing-output rejection, reap and
-   clean next launch. The handshake correlates one bounded GNU build-ID digest;
+   clean next launch. The owned request is prepared and capped before spawn,
+   then decoded/re-encoded and nonce-checked only after EOF, successful exit and
+   reap; it is deliberately not written yet. Exact whole-lifetime direction
+   totals and the independent regular-file ceiling are bound. The handshake correlates one bounded GNU build-ID digest;
    the parent's separate full-file SHA remains diagnostic. This grants no
    production worker, parser-qualified policy/profile, query wire or admitted
    witness authority.
@@ -417,8 +420,13 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    direction `0`/`N`/`N+1`, allocation-failure injection, persisted
    fuzz/property corpora and worker-produced replay; provisional limits are not
    accepted calibration.
-6. Differentially prove decoded `Query` semantics and syntax outcomes against
-   a fresh direct pinned parse with the same source/profile. Use one global
+6. **Partial; typed comparator foundation implemented:** eight focused tests
+   cover correlation/outcome classification, bounded fallible traversal, exact
+   ordered top-level SELECT outputs, one global variable bijection, one global
+   query-pattern blank-node bijection and a disjoint CONSTRUCT-template
+   bijection without generated-name heuristics. Differentially prove decoded
+   worker `Query` semantics and syntax outcomes against a fresh direct pinned
+   parse with the same complete source/profile. Use one global
    variable bijection with exact ordered top-level SELECT outputs, one global
    query-pattern blank-node bijection and a disjoint CONSTRUCT-template
    bijection; do not infer generated-variable provenance from names or AST
@@ -470,8 +478,8 @@ only the enumerated post-exec observations/repairs, candidate-policy installatio
 probe, exact `Hello`/`Ready`/EOF exchange and cleanup. It does not prove an
 accepted/final parser policy, parser-syscall completeness, a complete governed
 dependency profile, UID/GID/groups/capability/namespace/LSM confinement, query
-IPC or transport, parser execution, worker-produced `QueryV1`, a fresh-parse alpha oracle, an
-admitted witness, independent release or runtime attestation, permit integration
+request/result IPC, parser execution, worker-produced `QueryV1`, a paired-worker
+fresh-parse corpus receipt, an admitted witness, independent release or runtime attestation, permit integration
 or serving activation. The dormant inner/outer codecs grant none of those authorities. The full-file
 fingerprint and bounded GNU build-ID digest do not authenticate a release or its
 dynamic closure; and pidfd acquisition assumes integration excludes a
