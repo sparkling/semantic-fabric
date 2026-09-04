@@ -16,14 +16,27 @@ mod policy_candidate;
 
 pub(super) const PRIVATE_WORKER_NAME: &str = "sf-parser-worker-v1";
 pub(super) const PRIVATE_WORKER_MODE: &str = "--sf-private-parser-worker-v1";
+pub(super) const PRIVATE_QUERY_V1_TRANSPORT_NAME: &str = "sf-query-v1-transport-peer-v1";
+pub(super) const PRIVATE_QUERY_V1_TRANSPORT_MODE: &str = "--sf-private-query-v1-transport-peer-v1";
+pub(super) const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME: &str =
+    "sf-query-v1-transport-mutant-peer-v1";
+pub(super) const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE: &str =
+    "--sf-private-query-v1-transport-mutant-peer-v1";
 
 const PRIVATE_WORKER_REJECTED_EXIT_CODE: i32 = 78;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrivateInvocation {
     Ordinary,
-    ExactPrivate,
+    ExactPrivate(PrivatePeer),
     MalformedReserved,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivatePeer {
+    Parser,
+    QueryV1Transport,
+    QueryV1TransportMutant,
 }
 
 fn classify_private_invocation(arguments: impl IntoIterator<Item = OsString>) -> PrivateInvocation {
@@ -31,16 +44,55 @@ fn classify_private_invocation(arguments: impl IntoIterator<Item = OsString>) ->
     let argument_zero = arguments.next();
     let argument_one = arguments.next();
     let has_argument_two = arguments.next().is_some();
-    let reserved_name = argument_zero.as_deref() == Some(OsStr::new(PRIVATE_WORKER_NAME));
-    let reserved_mode = argument_one.as_deref() == Some(OsStr::new(PRIVATE_WORKER_MODE));
+    let peer = private_peer_for_tuple(argument_zero.as_deref(), argument_one.as_deref());
+    let reserved =
+        is_reserved_token(argument_zero.as_deref()) || is_reserved_token(argument_one.as_deref());
 
-    if reserved_name && reserved_mode && !has_argument_two {
-        PrivateInvocation::ExactPrivate
-    } else if reserved_name || reserved_mode {
+    if let Some(peer) = peer.filter(|_| !has_argument_two) {
+        PrivateInvocation::ExactPrivate(peer)
+    } else if reserved {
         PrivateInvocation::MalformedReserved
     } else {
         PrivateInvocation::Ordinary
     }
+}
+
+fn private_peer_for_tuple(name: Option<&OsStr>, mode: Option<&OsStr>) -> Option<PrivatePeer> {
+    [
+        (
+            PRIVATE_WORKER_NAME,
+            PRIVATE_WORKER_MODE,
+            PrivatePeer::Parser,
+        ),
+        (
+            PRIVATE_QUERY_V1_TRANSPORT_NAME,
+            PRIVATE_QUERY_V1_TRANSPORT_MODE,
+            PrivatePeer::QueryV1Transport,
+        ),
+        (
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
+            PrivatePeer::QueryV1TransportMutant,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(expected_name, expected_mode, peer)| {
+        (name == Some(OsStr::new(expected_name)) && mode == Some(OsStr::new(expected_mode)))
+            .then_some(peer)
+    })
+}
+
+fn is_reserved_token(argument: Option<&OsStr>) -> bool {
+    [
+        PRIVATE_WORKER_NAME,
+        PRIVATE_WORKER_MODE,
+        PRIVATE_QUERY_V1_TRANSPORT_NAME,
+        PRIVATE_QUERY_V1_TRANSPORT_MODE,
+        PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+        PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
+    ]
+    .into_iter()
+    .any(|reserved| argument == Some(OsStr::new(reserved)))
 }
 
 /// Dispatch the reserved parser-worker invocation before public CLI parsing.
@@ -51,11 +103,11 @@ pub fn dispatch_private_parser_worker_v1() {
     match classify_private_invocation(std::env::args_os()) {
         PrivateInvocation::Ordinary => {}
         PrivateInvocation::MalformedReserved => reject_private_invocation(),
-        PrivateInvocation::ExactPrivate => {
+        PrivateInvocation::ExactPrivate(peer) => {
             if !private_environment_is_empty() {
                 reject_private_invocation();
             }
-            run_private_worker_v1();
+            run_private_peer_v1(peer);
         }
     }
 }
@@ -100,6 +152,18 @@ fn reject_private_invocation() -> ! {
     std::process::exit(PRIVATE_WORKER_REJECTED_EXIT_CODE)
 }
 
+fn run_private_peer_v1(peer: PrivatePeer) -> ! {
+    match peer {
+        PrivatePeer::Parser => run_private_worker_v1(),
+        // The transport peer implementations land in a later evidence slice.
+        // Their exact tuples are nevertheless reserved now so unavailable or
+        // unfinished invocations cannot fall through to public CLI parsing.
+        PrivatePeer::QueryV1Transport | PrivatePeer::QueryV1TransportMutant => {
+            reject_private_invocation()
+        }
+    }
+}
+
 fn run_private_worker_v1() -> ! {
     #[cfg(all(
         feature = "parser-worker-evidence",
@@ -133,35 +197,85 @@ mod tests {
     }
 
     #[test]
-    fn only_the_exact_two_argument_tuple_selects_private_mode() {
-        assert_eq!(
-            classify(&[PRIVATE_WORKER_NAME, PRIVATE_WORKER_MODE]),
-            PrivateInvocation::ExactPrivate
-        );
+    fn only_exact_reserved_tuples_select_private_peers() {
+        for (name, mode, peer) in [
+            (
+                PRIVATE_WORKER_NAME,
+                PRIVATE_WORKER_MODE,
+                PrivatePeer::Parser,
+            ),
+            (
+                PRIVATE_QUERY_V1_TRANSPORT_NAME,
+                PRIVATE_QUERY_V1_TRANSPORT_MODE,
+                PrivatePeer::QueryV1Transport,
+            ),
+            (
+                PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+                PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
+                PrivatePeer::QueryV1TransportMutant,
+            ),
+        ] {
+            assert_eq!(
+                classify(&[name, mode]),
+                PrivateInvocation::ExactPrivate(peer)
+            );
+        }
         assert_eq!(classify(&[]), PrivateInvocation::Ordinary);
         assert_eq!(classify(&["semantic-fabric"]), PrivateInvocation::Ordinary);
-        assert_eq!(
-            classify(&[PRIVATE_WORKER_NAME]),
-            PrivateInvocation::MalformedReserved
-        );
-        assert_eq!(
-            classify(&["semantic-fabric", PRIVATE_WORKER_MODE]),
-            PrivateInvocation::MalformedReserved
-        );
-        assert_eq!(
-            classify(&[PRIVATE_WORKER_NAME, "--help"]),
-            PrivateInvocation::MalformedReserved
-        );
-        assert_eq!(
-            classify(&[PRIVATE_WORKER_NAME, PRIVATE_WORKER_MODE, "extra"]),
-            PrivateInvocation::MalformedReserved
-        );
+    }
+
+    #[test]
+    fn every_reserved_partial_cross_and_extended_tuple_is_malformed() {
+        let pairs = [
+            (PRIVATE_WORKER_NAME, PRIVATE_WORKER_MODE),
+            (
+                PRIVATE_QUERY_V1_TRANSPORT_NAME,
+                PRIVATE_QUERY_V1_TRANSPORT_MODE,
+            ),
+            (
+                PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+                PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
+            ),
+        ];
+        for (name, mode) in pairs {
+            assert_eq!(classify(&[name]), PrivateInvocation::MalformedReserved);
+            assert_eq!(
+                classify(&["semantic-fabric", mode]),
+                PrivateInvocation::MalformedReserved
+            );
+            assert_eq!(
+                classify(&[name, "--help"]),
+                PrivateInvocation::MalformedReserved
+            );
+            assert_eq!(
+                classify(&[name, mode, "extra"]),
+                PrivateInvocation::MalformedReserved
+            );
+        }
+        for (name, _) in pairs {
+            for (_, mode) in pairs {
+                if private_peer_for_tuple(Some(OsStr::new(name)), Some(OsStr::new(mode))).is_none()
+                {
+                    assert_eq!(
+                        classify(&[name, mode]),
+                        PrivateInvocation::MalformedReserved
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn near_matches_and_reserved_tokens_in_later_positions_are_ordinary() {
         assert_eq!(
             classify(&["sf-parser-worker-v1x", "--sf-private-parser-worker-v1x",]),
+            PrivateInvocation::Ordinary
+        );
+        assert_eq!(
+            classify(&[
+                "sf-query-v1-transport-peer-v1x",
+                "--sf-private-query-v1-transport-peer-v1x",
+            ]),
             PrivateInvocation::Ordinary
         );
         assert_eq!(
@@ -178,6 +292,20 @@ mod tests {
         );
         assert_eq!(
             classify(&[PRIVATE_WORKER_NAME, "--sf-private-parser-worker-v1x"]),
+            PrivateInvocation::MalformedReserved
+        );
+        assert_eq!(
+            classify(&[
+                "sf-query-v1-transport-peer-v1x",
+                PRIVATE_QUERY_V1_TRANSPORT_MODE,
+            ]),
+            PrivateInvocation::MalformedReserved
+        );
+        assert_eq!(
+            classify(&[
+                PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+                "--sf-private-query-v1-transport-mutant-peer-v1x",
+            ]),
             PrivateInvocation::MalformedReserved
         );
     }

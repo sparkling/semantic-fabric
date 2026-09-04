@@ -6,6 +6,11 @@ use std::process::{Command, Output};
 const BINARY: &str = env!("CARGO_BIN_EXE_semantic-fabric");
 const PRIVATE_WORKER_NAME: &str = "sf-parser-worker-v1";
 const PRIVATE_WORKER_MODE: &str = "--sf-private-parser-worker-v1";
+const PRIVATE_QUERY_V1_TRANSPORT_NAME: &str = "sf-query-v1-transport-peer-v1";
+const PRIVATE_QUERY_V1_TRANSPORT_MODE: &str = "--sf-private-query-v1-transport-peer-v1";
+const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME: &str = "sf-query-v1-transport-mutant-peer-v1";
+const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE: &str =
+    "--sf-private-query-v1-transport-mutant-peer-v1";
 const PRIVATE_WORKER_REJECTED_EXIT_CODE: i32 = 78;
 
 fn run(argument_zero: &str, arguments: &[&str], clear_environment: bool) -> Output {
@@ -35,7 +40,19 @@ fn ordinary_help_still_reaches_clap() {
 
 #[test]
 fn exact_private_tuple_without_supervisor_envelope_exits_silently() {
-    assert_private_rejection(&run(PRIVATE_WORKER_NAME, &[PRIVATE_WORKER_MODE], true));
+    for (name, mode) in [
+        (PRIVATE_WORKER_NAME, PRIVATE_WORKER_MODE),
+        (
+            PRIVATE_QUERY_V1_TRANSPORT_NAME,
+            PRIVATE_QUERY_V1_TRANSPORT_MODE,
+        ),
+        (
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+            PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
+        ),
+    ] {
+        assert_private_rejection(&run(name, &[mode], true));
+    }
 }
 
 #[test]
@@ -111,6 +128,16 @@ fn malformed_reserved_invocations_never_reach_clap() {
     assert_private_rejection(&run(
         PRIVATE_WORKER_NAME,
         &[PRIVATE_WORKER_MODE, "extra"],
+        true,
+    ));
+    assert_private_rejection(&run(
+        PRIVATE_QUERY_V1_TRANSPORT_NAME,
+        &[PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE],
+        true,
+    ));
+    assert_private_rejection(&run(
+        PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
+        &["--sf-private-query-v1-transport-mutant-peer-v1x"],
         true,
     ));
 }

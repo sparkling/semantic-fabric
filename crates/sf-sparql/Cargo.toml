@@ -8,6 +8,8 @@ description = "semantic-fabric virtualizer: SPARQL→SQL OBDA rewriting (ADR-000
 
 [features]
 parser-worker-evidence = []
+query-v1-transport-evidence = []
+query-v1-transport-mutant-evidence = []
 
 [dependencies]
 sf-core.workspace = true
