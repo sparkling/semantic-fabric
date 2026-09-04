@@ -2,7 +2,7 @@
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::process::{Child, ExitStatus};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::io::BoundedWorkerIo;
 use super::SupervisorError;
@@ -63,8 +63,7 @@ impl ParserWorkerProcess {
         if self.child.is_none() {
             return Err(SupervisorError::InvalidState("worker is already reaped"));
         }
-        let remaining = self.wall_deadline.saturating_duration_since(Instant::now());
-        if !poll_pidfd(&self.pidfd, remaining)? {
+        if !poll_pidfd(&self.pidfd, self.wall_deadline)? {
             self.terminate_and_reap()?;
             return Err(SupervisorError::DeadlineExceeded);
         }
@@ -160,17 +159,15 @@ pub(super) fn open_pidfd(pid: u32) -> Result<OwnedFd, SupervisorError> {
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor as RawFd) })
 }
 
-fn poll_pidfd(pidfd: &OwnedFd, timeout: Duration) -> Result<bool, SupervisorError> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or(SupervisorError::InvalidLimits(
-            "wall timeout overflows Instant",
-        ))?;
+fn poll_pidfd(pidfd: &OwnedFd, deadline: Instant) -> Result<bool, SupervisorError> {
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let millis = remaining
-            .as_millis()
-            .saturating_add(u128::from(remaining.subsec_nanos() % 1_000_000 != 0));
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        let millis = remaining.as_millis().saturating_add(u128::from(
+            !remaining.subsec_nanos().is_multiple_of(1_000_000),
+        ));
         let timeout_ms = i32::try_from(millis.min(i32::MAX as u128)).unwrap_or(i32::MAX);
         let mut pollfd = libc::pollfd {
             fd: pidfd.as_raw_fd(),
@@ -180,6 +177,9 @@ fn poll_pidfd(pidfd: &OwnedFd, timeout: Duration) -> Result<bool, SupervisorErro
         // SAFETY: pollfd is a valid one-element writable array.
         let result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
         if result > 0 {
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
             if pollfd.revents & libc::POLLNVAL != 0 {
                 return Err(SupervisorError::InvalidState("parser pidfd became invalid"));
             }

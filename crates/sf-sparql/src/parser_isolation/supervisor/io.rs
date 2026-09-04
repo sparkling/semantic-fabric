@@ -19,6 +19,10 @@ pub(super) struct BoundedWorkerIo {
 }
 
 impl BoundedWorkerIo {
+    /// Creates one transport budget for the complete worker lifetime.
+    ///
+    /// Both ceilings include handshake bytes and every later frame header and
+    /// payload; they are not raw-query or result-payload allowances.
     pub(super) fn new(
         stdin: ChildStdin,
         stdout: ChildStdout,
@@ -70,6 +74,9 @@ impl BoundedWorkerIo {
                     .sent
                     .checked_add(count as u64)
                     .ok_or(SupervisorError::InvalidState(INPUT_LIMIT_MESSAGE))?;
+                if Instant::now() >= deadline {
+                    return Err(SupervisorError::DeadlineExceeded);
+                }
                 continue;
             }
             if count == 0 {
@@ -129,6 +136,9 @@ impl BoundedWorkerIo {
                     .received
                     .checked_add(count as u64)
                     .ok_or(SupervisorError::InvalidState(OUTPUT_LIMIT_MESSAGE))?;
+                if Instant::now() >= deadline {
+                    return Err(SupervisorError::DeadlineExceeded);
+                }
                 continue;
             }
             if count == 0 {

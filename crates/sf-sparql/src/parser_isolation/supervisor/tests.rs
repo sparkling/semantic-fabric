@@ -44,15 +44,16 @@ mod linux_tests {
     fn held_fingerprint_survives_path_replacement_without_reopening() {
         let directory = TempDirectory::new();
         let path = directory.path().join("worker");
-        let replacement = directory.path().join("replacement");
         write_executable(&path, b"original held bytes");
         let held_file = File::open(&path).expect("open original fixture");
+        // Unlink before preparation so the deliberate namespace replacement
+        // cannot also create a post-snapshot ctime drift on the held inode.
+        fs::remove_file(&path).expect("unlink held fixture path");
         let prepared = PreparedParserExecutable::from_file_for_test(held_file, false)
             .expect("prepare original fixture");
         let original_identity = prepared.identity();
 
-        write_executable(&replacement, b"replacement bytes");
-        fs::rename(&replacement, &path).expect("replace fixture path");
+        write_executable(&path, b"replacement bytes");
         let replacement_metadata = fs::metadata(&path).expect("stat replacement");
 
         assert_ne!(original_identity.inode(), replacement_metadata.ino());

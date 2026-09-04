@@ -4,6 +4,7 @@
 mod linux_tests {
     use std::fs::File;
     use std::os::fd::{AsRawFd, OwnedFd};
+    use std::time::Instant;
 
     use super::super::executable::PreparedParserExecutable;
     use super::super::linux::spawn_fixture;
@@ -26,7 +27,11 @@ mod linux_tests {
         child
             .write_all_until_deadline(&[])
             .expect("zero-byte write is canonical");
+        child
+            .read_exact_until_deadline(&mut [])
+            .expect("zero-byte read is canonical");
         assert_eq!(child.sent_bytes(), 0);
+        assert_eq!(child.received_bytes(), 0);
         for byte in [b'A', b'B'] {
             child.write_all_until_deadline(&[byte]).unwrap();
             let mut echoed = [0_u8; 1];
@@ -154,6 +159,32 @@ mod linux_tests {
                     operation: "write parser worker input",
                     ..
                 }
+        ));
+        assert!(child.child.is_none());
+        assert!(!pidfd_targets_live_process(&pidfd));
+    }
+
+    #[test]
+    fn buffered_output_cannot_reset_or_outlive_the_spawn_deadline() {
+        let executable = prepared("/bin/cat");
+        let mut values = v1_limits().values();
+        values.wall_time_millis = 250;
+        let mut child = spawn_fixture(
+            &executable,
+            ParserWorkerLimits::new(values).unwrap(),
+            &[b"cat", b"-"],
+        )
+        .expect("launch deadline fixture");
+        child.write_all_until_deadline(b"D").unwrap();
+        let deadline = child.wall_deadline;
+        while Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
+        let pidfd = child.duplicate_pidfd().unwrap();
+
+        assert!(matches!(
+            child.read_exact_until_deadline(&mut [0_u8; 1]),
+            Err(SupervisorError::DeadlineExceeded)
         ));
         assert!(child.child.is_none());
         assert!(!pidfd_targets_live_process(&pidfd));
