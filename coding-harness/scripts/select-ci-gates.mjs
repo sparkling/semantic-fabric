@@ -46,6 +46,14 @@ const RUST_HARNESS_PREFIXES = [
   'crates/sf-conformance/src/rust_closure_receipt/',
   'tests/capabilities/', 'tests/sparql/', 'tests/w3c/rdb2rdf/',
 ];
+const CAPTURE_LOCAL_SOURCE_PREFIXES = [
+  'crates/sf-bench/src/',
+  'crates/sf-core/src/',
+  'crates/sf-mapping/src/',
+  'crates/sf-sparql/src/',
+  'crates/sf-sql/src/',
+];
+const DIFF_STATUSES = new Set(['A', 'D', 'M', 'T']);
 
 export function allGates() {
   return Object.freeze(Object.fromEntries(GATE_NAMES.map((gate) => [gate, true])));
@@ -58,13 +66,25 @@ function noGates() {
 export function selectForPaths(paths, protectedPaths = []) {
   try {
     const changed = checkedPathList(paths, false);
+    return selectForChanges(changed.map((path) => ({ status: 'M', path })), protectedPaths);
+  } catch {
+    return allGates();
+  }
+}
+
+export function selectForChanges(changes, protectedPaths = []) {
+  try {
+    const changed = checkedChangeList(changes);
     const protectedSet = new Set(checkedPathList(protectedPaths, true));
-    if (changed.length === 0) return allGates();
     const selected = noGates();
-    for (const path of changed) {
+    for (const { status, path } of changed) {
       const classification = classify(path, protectedSet);
       if (classification === null) return allGates();
       for (const gate of classification) selected[gate] = true;
+      if ((status === 'A' || status === 'D')
+        && CAPTURE_LOCAL_SOURCE_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+        selected.coding_harness = true;
+      }
     }
     if (selected.acl_replay) selected.supervisor = true;
     if (selected.supervisor) selected.coding_harness = true;
@@ -72,6 +92,23 @@ export function selectForPaths(paths, protectedPaths = []) {
   } catch {
     return allGates();
   }
+}
+
+function checkedChangeList(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PATHS) {
+    throw new TypeError('CI_SELECTOR_CHANGE_LIST_INVALID');
+  }
+  const paths = value.map((change) => {
+    if (change === null || typeof change !== 'object' || Array.isArray(change)
+      || Object.getPrototypeOf(change) !== Object.prototype
+      || Object.keys(change).sort().join(',') !== 'path,status'
+      || typeof change.status !== 'string' || !DIFF_STATUSES.has(change.status)) {
+      throw new TypeError('CI_SELECTOR_CHANGE_INVALID');
+    }
+    return change.path;
+  });
+  const checkedPaths = checkedPathList(paths, false);
+  return checkedPaths.map((path, index) => ({ status: value[index].status, path }));
 }
 
 function classify(path, protectedPaths) {
@@ -127,10 +164,15 @@ export function parseDiffOutput(bytes) {
   }
   const text = decoder.decode(bytes);
   if (!text.endsWith('\0')) throw new TypeError('CI_SELECTOR_DIFF_INVALID');
-  return checkedPathList(text.slice(0, -1).split('\0'), false);
+  const fields = text.slice(0, -1).split('\0');
+  if (fields.length % 2 !== 0) throw new TypeError('CI_SELECTOR_DIFF_INVALID');
+  return checkedChangeList(Array.from({ length: fields.length / 2 }, (_, index) => ({
+    status: fields[index * 2],
+    path: fields[(index * 2) + 1],
+  })));
 }
 
-export function readChangedPaths({ repository, baseSha, headSha }) {
+export function readChangedChanges({ repository, baseSha, headSha }) {
   if (typeof repository !== 'string' || !isAbsolute(repository)
     || realpathSync(repository) !== resolve(repository) || !statSync(repository).isDirectory()
     || !SHA.test(baseSha) || !SHA.test(headSha) || baseSha === headSha) {
@@ -143,7 +185,7 @@ export function readChangedPaths({ repository, baseSha, headSha }) {
   const ancestor = git(repository, ['merge-base', '--is-ancestor', baseSha, headSha], 1_024);
   if (ancestor.status !== 0) throw new Error('CI_SELECTOR_ANCESTRY_INVALID');
   const diff = git(repository, [
-    'diff', '--no-renames', '--name-only', '-z', baseSha, headSha, '--',
+    'diff', '--no-renames', '--name-status', '-z', baseSha, headSha, '--',
   ], MAX_DIFF_BYTES + 1);
   if (diff.status !== 0 || diff.error || !Buffer.isBuffer(diff.stdout)) {
     throw new Error('CI_SELECTOR_DIFF_FAILED');
@@ -173,7 +215,10 @@ export function selectFromGit({ eventName, repository, baseSha, headSha, manifes
   if (eventName !== 'pull_request') return allGates();
   try {
     const protectedPaths = readProtectedPaths(manifestPath);
-    return selectForPaths(readChangedPaths({ repository, baseSha, headSha }), protectedPaths);
+    return selectForChanges(
+      readChangedChanges({ repository, baseSha, headSha }),
+      protectedPaths,
+    );
   } catch {
     return allGates();
   }

@@ -10,7 +10,8 @@ import {
   allGates,
   formatOutputs,
   parseDiffOutput,
-  readChangedPaths,
+  readChangedChanges,
+  selectForChanges,
   selectForPaths,
   selectFromGit,
 } from '../scripts/select-ci-gates.mjs';
@@ -66,6 +67,23 @@ describe('fail-closed CI impact selector', () => {
     ])).toEqual(allGates());
   });
 
+  it('runs the capture closure gate for reachable source membership changes only', () => {
+    expect(selectForChanges([
+      { status: 'M', path: 'crates/sf-sparql/src/lib.rs' },
+    ])).toEqual(gates(true, false));
+    for (const status of ['A', 'D'] as const) {
+      expect(selectForChanges([
+        { status, path: 'crates/sf-sparql/src/new-module.rs' },
+      ])).toEqual(gates(true, true));
+    }
+    expect(selectForChanges([
+      { status: 'A', path: 'crates/unreachable/src/new-module.rs' },
+    ])).toEqual(gates(true, false));
+    expect(selectForChanges([
+      { status: 'R', path: 'crates/sf-sparql/src/new-module.rs' },
+    ])).toEqual(allGates());
+  });
+
   it.each([
     [],
     ['../Cargo.toml'],
@@ -84,10 +102,15 @@ describe('fail-closed CI impact selector', () => {
   });
 
   it('strictly decodes bounded NUL-delimited Git output', () => {
-    expect(parseDiffOutput(Buffer.from('old.rs\0new.rs\0'))).toEqual(['old.rs', 'new.rs']);
+    expect(parseDiffOutput(Buffer.from('D\0old.rs\0A\0new.rs\0'))).toEqual([
+      { status: 'D', path: 'old.rs' },
+      { status: 'A', path: 'new.rs' },
+    ]);
     for (const bytes of [
       Buffer.alloc(0),
       Buffer.from('unterminated'),
+      Buffer.from('M\0missing-path-pair\0A\0'),
+      Buffer.from('R100\0old.rs\0new.rs\0'),
       Buffer.from([0xff, 0x00]),
       Buffer.alloc(1_048_577, 0x61),
     ]) {
@@ -132,15 +155,19 @@ describe('fail-closed CI impact selector', () => {
     const withOld = commit(fixture, 'old path');
     git(fixture, ['mv', 'crates/sf-core/src/old.rs', 'crates/sf-core/src/new.rs']);
     const renamed = commit(fixture, 'rename');
-    expect(readChangedPaths({ repository: fixture, baseSha: withOld, headSha: renamed }).sort())
-      .toEqual(['crates/sf-core/src/new.rs', 'crates/sf-core/src/old.rs']);
+    expect(readChangedChanges({ repository: fixture, baseSha: withOld, headSha: renamed })
+      .sort((left, right) => left.path.localeCompare(right.path)))
+      .toEqual([
+        { status: 'A', path: 'crates/sf-core/src/new.rs' },
+        { status: 'D', path: 'crates/sf-core/src/old.rs' },
+      ]);
 
     const manifest = join(fixture, 'manifest.json');
     writeFileSync(manifest, '{"protectedPaths":["Cargo.toml"]}\n');
     expect(selectFromGit({
       eventName: 'pull_request', repository: fixture,
       baseSha: withOld, headSha: renamed, manifestPath: manifest,
-    })).toEqual(gates(true, false));
+    })).toEqual(gates(true, true));
     expect(selectFromGit({
       eventName: 'push', repository: fixture,
       baseSha: withOld, headSha: renamed, manifestPath: manifest,
