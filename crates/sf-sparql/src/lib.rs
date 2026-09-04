@@ -699,8 +699,12 @@ fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
             distinct: false,
             project: None,
         };
-        let pre = sp.plan.branches.clone();
-        let post = cascade::run(pre.clone(), schema, &ctx);
+        // Cascade one cloned candidate while retaining the exact original as
+        // rollback state. Moving the original out avoids a second recursive
+        // BranchForest clone without weakening the multi-arm safety guard.
+        let candidate = sp.plan.branches.clone();
+        let pre = std::mem::take(&mut sp.plan.branches);
+        let post = cascade::run(candidate, schema, &ctx);
         let post_lens: Vec<usize> = post.iter().map(|br| br.projection().len()).collect();
         let safe = pre.len() == 1
             || (post.len() == pre.len() && post_lens.windows(2).all(|w| w[0] == w[1]));
