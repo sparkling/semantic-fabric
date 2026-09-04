@@ -294,7 +294,7 @@ impl<'query> State<'query> {
     }
 }
 
-fn bind<'query>(
+pub(super) fn bind<'query>(
     forward: &mut HashMap<&'query str, &'query str>,
     reverse: &mut HashMap<&'query str, &'query str>,
     left: &'query str,
@@ -304,8 +304,11 @@ fn bind<'query>(
     if let Some(mapped) = forward.get(left) {
         return Ok(*mapped == right);
     }
-    if reverse.contains_key(right) || forward.len() >= limit || reverse.len() >= limit {
+    if reverse.contains_key(right) {
         return Ok(false);
+    }
+    if forward.len() >= limit || reverse.len() >= limit {
+        return Err(());
     }
     forward.try_reserve(1).map_err(|_| ())?;
     reverse.try_reserve(1).map_err(|_| ())?;

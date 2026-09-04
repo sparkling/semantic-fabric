@@ -188,4 +188,9 @@ fn bounded_or_failed_traversal_reservation_is_inconclusive() {
         ),
         AlphaVerdictV1::Inconclusive
     );
+
+    assert_eq!(
+        super::compare::identity_budget_exhaustion_verdict(),
+        AlphaVerdictV1::Inconclusive
+    );
 }

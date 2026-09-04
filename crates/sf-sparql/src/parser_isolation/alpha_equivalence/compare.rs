@@ -98,6 +98,10 @@ fn compare_with_state<'query>(
             Ok(false)
         }
     });
+    verdict(result)
+}
+
+fn verdict(result: Result<bool, ()>) -> AlphaVerdictV1 {
     match result {
         Ok(true) => AlphaVerdictV1::Equivalent,
         Ok(false) => AlphaVerdictV1::Different,
@@ -118,6 +122,13 @@ pub(super) fn queries_with_limits(
 #[cfg(test)]
 pub(super) fn fail_next_work_reservation() {
     FAIL_NEXT_WORK_RESERVATION.with(|failed| failed.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn identity_budget_exhaustion_verdict() -> AlphaVerdictV1 {
+    let mut forward = HashMap::new();
+    let mut reverse = HashMap::new();
+    verdict(expr::bind(&mut forward, &mut reverse, "left", "right", 0))
 }
 
 #[cfg(test)]
