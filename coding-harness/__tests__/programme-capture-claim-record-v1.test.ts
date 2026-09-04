@@ -58,7 +58,7 @@ describe('programme capture V1 run-claim record', () => {
     expect(claim.claimKeyDigest)
       .toBe('4132efd8b7b1efe5890c7cd10b0bf675744305e6d17bb789a75c87c563487489');
     expect(claim.claimDigest)
-      .toBe('d43ce080a0369fefdb333c81a1d62b6d9073134f6fe10dc632971fd62f06e2ba');
+      .toBe('2e295e3917450913af040dfec4da89066de85aea2f3b55f5f54b3ab26e1a5259');
     for (const value of [claim, claim.authority, claim.task, claim.runnerProfile]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
