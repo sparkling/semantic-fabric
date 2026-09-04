@@ -116,7 +116,7 @@ pub(crate) fn normalize_with_work_mode(
             project,
         } => {
             let child = normalize_with_work_mode(*child, work_mode)?;
-            lift_construction(subst, project, child)
+            lift_construction(subst, project, child, work_mode)
         }
 
         // ---- selection: distribute over Union, else push below Construction -----
@@ -206,6 +206,7 @@ fn lift_construction(
     subst: BTreeMap<Var, BindDef>,
     project: Vec<Var>,
     child: IqNode,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<IqNode> {
     match child {
         // Construction ∘ Construction: compose the inner substitution into the outer
@@ -220,7 +221,7 @@ fn lift_construction(
             for (k, v) in subst {
                 merged.insert(k, v);
             }
-            lift_construction(merged, project, *gchild)
+            lift_construction(merged, project, *gchild, work_mode)
         }
 
         // Construction over Union: push the substitution AND the projection into each
@@ -235,16 +236,23 @@ fn lift_construction(
         IqNode::Union {
             children: mut arms, ..
         } => {
+            // Exact fan-out schedule for A arms (A >= 2): clone `subst`, then
+            // `project`, for each of the first A-1 arms; clone only `project` for
+            // the final arm. The original `subst` moves into that final arm and
+            // the original `project` moves into the resulting outer Union.
             let mut out = Vec::with_capacity(arms.len());
             let last = arms.pop();
             for a in arms {
-                out.push(lift_construction(subst.clone(), project.clone(), a)?);
+                let arm_subst = work_mode.clone_iq_substitution(&subst)?;
+                let arm_project = work_mode.clone_variables(&project)?;
+                out.push(lift_construction(arm_subst, arm_project, a, work_mode)?);
             }
             if let Some(a) = last {
                 // Every arm owns an independent substitution. Preserve order while
                 // moving the original into the final arm, so only the preceding
                 // fan-out arms pay for recursive copies.
-                out.push(lift_construction(subst, project.clone(), a)?);
+                let arm_project = work_mode.clone_variables(&project)?;
+                out.push(lift_construction(subst, arm_project, a, work_mode)?);
             }
             normalize_union(out, project)
         }

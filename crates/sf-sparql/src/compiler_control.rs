@@ -1,9 +1,11 @@
 //! Request-owned compiler-work accounting and checked prospective-work arithmetic.
 
+use std::collections::BTreeMap;
+
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 
 use crate::compile_envelope::CompileEnvelopeError;
-use crate::iq::node::{IqCond, IqNode};
+use crate::iq::node::{BindDef, IqCond, IqNode, Var};
 use crate::iq::Branch;
 use crate::plan_measure::clone_root::{
     measure_compiler_clone_collection_v1, measure_compiler_clone_root_v1,
@@ -171,6 +173,30 @@ impl<'control> CompileContext<'control> {
             .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(node.clone())
+    }
+
+    /// Measure, reserve, and perform exactly one recursive IQ-substitution clone.
+    pub(crate) fn clone_iq_substitution(
+        &self,
+        substitution: &BTreeMap<Var, BindDef>,
+    ) -> Result<BTreeMap<Var, BindDef>> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_collection_v1(
+            CompilerCloneCollectionV1::IqSubstitution(substitution),
+        )
+        .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(substitution.clone())
+    }
+
+    /// Measure, reserve, and perform exactly one IQ-variable collection clone.
+    pub(crate) fn clone_variables(&self, variables: &[Var]) -> Result<Vec<Var>> {
+        self.checkpoint()?;
+        let measure =
+            measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::Variables(variables))
+                .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(variables.to_vec())
     }
 
     fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {

@@ -53,7 +53,7 @@
 //!   inner-join branches per right-branch + NOT EXISTS anti-join for unmatched lefts.
 //! - **GROUP BY over UNION/multi-branch inner** — Rust-level grouping + aggregation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use sf_core::ir::TriplesMap;
@@ -95,6 +95,9 @@ pub mod unify;
 mod cache_binding_tests;
 #[cfg(test)]
 mod column_type_authority_tests;
+#[cfg(test)]
+#[path = "compiler_control/construction_union_tests.rs"]
+mod compiler_control_construction_union_tests;
 #[cfg(test)]
 #[path = "compiler_control/normalize_join_tests.rs"]
 mod compiler_control_normalize_join_tests;
@@ -550,6 +553,23 @@ impl CompilerWorkMode<'_> {
         match self {
             Self::Uncontrolled => Ok(node.clone()),
             Self::Metered(context) => context.clone_iq_node(node),
+        }
+    }
+
+    fn clone_iq_substitution(
+        self,
+        substitution: &BTreeMap<iq::node::Var, iq::node::BindDef>,
+    ) -> Result<BTreeMap<iq::node::Var, iq::node::BindDef>> {
+        match self {
+            Self::Uncontrolled => Ok(substitution.clone()),
+            Self::Metered(context) => context.clone_iq_substitution(substitution),
+        }
+    }
+
+    fn clone_variables(self, variables: &[iq::node::Var]) -> Result<Vec<iq::node::Var>> {
+        match self {
+            Self::Uncontrolled => Ok(variables.to_vec()),
+            Self::Metered(context) => context.clone_variables(variables),
         }
     }
 }
