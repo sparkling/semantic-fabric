@@ -22,6 +22,9 @@ mod function;
 mod model;
 mod schema;
 
+pub(super) const WIRE_VERSION: u16 = model::VERSION;
+pub(super) const MAX_QUERY_WIRE_BYTES: usize = model::MAX_WIRE_BYTES_V1;
+
 pub(super) fn encode(query: &spargebra::Query) -> Result<Vec<u8>, error::QueryWireError> {
     encode::encode(query)
 }

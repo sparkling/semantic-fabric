@@ -58,6 +58,12 @@ fixed_bytes_type!(HandshakeNonce);
 fixed_bytes_type!(BuildIdentityDigest);
 fixed_bytes_type!(ParserProfileDigest);
 
+impl HandshakeNonce {
+    pub(crate) const fn correlation_bytes(&self) -> &[u8; DIGEST_LEN] {
+        &self.0
+    }
+}
+
 /// Unvalidated scalar values used only at the construction/decoding boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ParserWorkerLimitValues {
