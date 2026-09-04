@@ -122,14 +122,6 @@ pub use parser_isolation::dispatch_private_parser_worker_v1;
 #[doc(hidden)]
 pub use parser_isolation::exercise_private_parser_worker_handshake_for_evidence;
 #[cfg(all(
-    feature = "query-v1-transport-mutant-evidence",
-    target_os = "linux",
-    target_arch = "x86_64",
-    target_env = "gnu"
-))]
-#[doc(hidden)]
-pub use parser_isolation::exercise_synthetic_query_v1_request_eof_order_for_evidence;
-#[cfg(all(
     feature = "query-v1-transport-evidence",
     target_os = "linux",
     target_arch = "x86_64",
@@ -137,6 +129,9 @@ pub use parser_isolation::exercise_synthetic_query_v1_request_eof_order_for_evid
 ))]
 #[doc(hidden)]
 pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+#[doc(hidden)]
+pub use parser_isolation::QueryV1TransportMutant;
 #[cfg(all(
     feature = "query-v1-transport-mutant-evidence",
     target_os = "linux",
@@ -144,10 +139,11 @@ pub use parser_isolation::exercise_synthetic_query_v1_transport_for_evidence;
     target_env = "gnu"
 ))]
 #[doc(hidden)]
-pub use parser_isolation::exercise_synthetic_query_v1_transport_mutant_for_evidence;
-#[cfg(feature = "query-v1-transport-mutant-evidence")]
-#[doc(hidden)]
-pub use parser_isolation::QueryV1TransportMutant;
+pub use parser_isolation::{
+    exercise_synthetic_query_v1_malformed_directives_for_evidence,
+    exercise_synthetic_query_v1_request_eof_order_for_evidence,
+    exercise_synthetic_query_v1_transport_mutant_for_evidence,
+};
 pub use saturate::Tbox;
 
 /// Errors raised by the virtualizer (deferred features surface as

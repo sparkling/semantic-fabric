@@ -3,7 +3,8 @@
 use std::time::{Duration, Instant};
 
 use super::executable::PreparedParserExecutable;
-use super::handshake::ControlReadyWorker;
+use super::handshake::{encoded_hello_for_malformed_directive_evidence, ControlReadyWorker};
+use super::linux;
 use super::query_v1_transport::{
     capture_reaped, ReapedTransport, TransportFailure, TransportStage,
 };
@@ -12,7 +13,7 @@ use crate::parser_isolation::parse_protocol::{
     ParseFrameError, ParseRequestV1, ParseResultV1, PreparedParseRequestV1, RequestEofCorruption,
     RESULT_HEADER_LEN,
 };
-use crate::parser_isolation::profile::V1_CANDIDATE_MAX_OUTPUT_BYTES;
+use crate::parser_isolation::profile::{v1_limits, V1_CANDIDATE_MAX_OUTPUT_BYTES};
 use crate::parser_isolation::protocol::FRAME_LEN;
 use crate::parser_isolation::query_v1_mutant::{QueryV1TransportMutant, MUTANT_DIRECTIVE_LEN};
 
@@ -25,6 +26,11 @@ const READY_ONLY_OUTPUT_BYTES: u64 = FRAME_LEN as u64;
 const REQUEST_EOF_OBSERVATION: Duration = Duration::from_millis(100);
 const REQUEST_EOF_SOURCE_BYTES: usize = 128 * 1024;
 const REQUEST_EOF_MUTANT: QueryV1TransportMutant = QueryV1TransportMutant::WrongNonceExitZero;
+const VALID_DIRECTIVE: [u8; MUTANT_DIRECTIVE_LEN] = REQUEST_EOF_MUTANT.encode();
+const EMPTY_DIRECTIVE: [u8; 0] = [];
+const SHORT_DIRECTIVE: [u8; 1] = [VALID_DIRECTIVE[0]];
+const LONG_DIRECTIVE: [u8; 3] = [VALID_DIRECTIVE[0], VALID_DIRECTIVE[1], 0xff];
+const UNKNOWN_DIRECTIVE: [u8; MUTANT_DIRECTIVE_LEN] = 0_u16.to_be_bytes();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExpectedTerminal {
@@ -48,6 +54,66 @@ enum ExpectedFailure {
 struct ExpectedOutcome {
     terminal: ExpectedTerminal,
     output_bytes: u64,
+}
+
+/// Prove that the closed two-byte directive rejects every malformed length and
+/// an unknown discriminant before Hello or Ready, then leaves no poisoned state.
+pub(super) fn exercise_malformed_directives(
+    executable: &PreparedParserExecutable,
+) -> Result<(), SupervisorError> {
+    let encoded_hello = encoded_hello_for_malformed_directive_evidence(executable)?;
+    // EOF makes the zero- and one-byte cases observably short. The valid
+    // two-byte prefix in the three-byte case is followed by an exact Hello, so
+    // accepting only its prefix would still expose the extra byte as misalignment.
+    for (directive, suffix) in [
+        (EMPTY_DIRECTIVE.as_slice(), EMPTY_DIRECTIVE.as_slice()),
+        (SHORT_DIRECTIVE.as_slice(), EMPTY_DIRECTIVE.as_slice()),
+        (LONG_DIRECTIVE.as_slice(), encoded_hello.as_slice()),
+        (UNKNOWN_DIRECTIVE.as_slice(), EMPTY_DIRECTIVE.as_slice()),
+    ] {
+        observe_one_malformed_directive(executable, directive, suffix)?;
+        prove_clean_next_launch(executable)?;
+    }
+    Ok(())
+}
+
+fn observe_one_malformed_directive(
+    executable: &PreparedParserExecutable,
+    directive: &[u8],
+    suffix: &[u8],
+) -> Result<(), SupervisorError> {
+    let mut process = linux::spawn_query_v1_transport_mutant(executable, v1_limits())?;
+    let total = directive
+        .len()
+        .checked_add(suffix.len())
+        .ok_or(SupervisorError::InvalidState(
+            "malformed-directive input length overflowed",
+        ))?;
+    let mut input = [0_u8; LONG_DIRECTIVE.len() + FRAME_LEN];
+    input[..directive.len()].copy_from_slice(directive);
+    input[directive.len()..total].copy_from_slice(suffix);
+    process.write_all_until_deadline(&input[..total])?;
+    process.close_stdin();
+    process.expect_stdout_eof_until_deadline()?;
+    let status = process.wait_until_deadline()?;
+    // The held spawn fixes stderr to /dev/null and the installed policy permits
+    // writes only to stdout. Exact exit 78 therefore also excludes a post-policy
+    // stderr write, which would terminate the child with SIGSYS instead.
+    require_exit_78(&status)?;
+    require_accounting(
+        process.sent_bytes(),
+        process.received_bytes(),
+        u64::try_from(total).map_err(|_| {
+            SupervisorError::InvalidState("malformed-directive input accounting overflowed")
+        })?,
+        0,
+    )?;
+    if process.child.is_some() {
+        return Err(SupervisorError::InvalidState(
+            "malformed-directive worker was not exactly reaped",
+        ));
+    }
+    Ok(())
 }
 
 /// Prove that validation of three fixed request defects is strictly post-EOF.
@@ -107,8 +173,8 @@ fn observe_one_request_eof_order(
 }
 
 fn prove_clean_next_launch(executable: &PreparedParserExecutable) -> Result<(), SupervisorError> {
-    let worker = executable
-        .launch_query_v1_transport_mutant("clean request EOF recovery", REQUEST_EOF_MUTANT)?;
+    let worker =
+        executable.launch_query_v1_transport_mutant("clean mutant recovery", REQUEST_EOF_MUTANT)?;
     finish(worker, REQUEST_EOF_MUTANT)
 }
 

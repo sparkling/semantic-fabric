@@ -87,6 +87,24 @@ pub fn exercise_synthetic_query_v1_transport_mutant_for_evidence(
         .map_err(|error| error.to_string())
 }
 
+/// Prove that the mutant peer silently rejects the closed malformed-directive set.
+///
+/// The zero-, one-, and three-byte directives plus one unknown two-byte
+/// discriminant are fixed internally; callers cannot supply behavior bytes.
+#[cfg(all(
+    feature = "query-v1-transport-mutant-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_synthetic_query_v1_malformed_directives_for_evidence(
+    executable: &std::path::Path,
+) -> Result<(), String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_query_v1_malformed_directives_for_evidence(file)
+        .map_err(|error| error.to_string())
+}
+
 /// Prove that fixed request defects remain silent until the one-shot EOF.
 ///
 /// The three corruptions and observation interval are closed inside this

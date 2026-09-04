@@ -40,6 +40,13 @@ pub(super) fn prepare(
 }
 
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(super) fn encoded_hello_for_malformed_directive_evidence(
+    executable: &PreparedParserExecutable,
+) -> Result<[u8; FRAME_LEN], SupervisorError> {
+    Ok(prepare(executable, "")?.hello.encode())
+}
+
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
 pub(super) fn prepare_query_v1_mutant(
     executable: &PreparedParserExecutable,
     source: &str,

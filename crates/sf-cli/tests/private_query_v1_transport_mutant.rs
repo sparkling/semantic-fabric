@@ -72,6 +72,12 @@ fn corrupt_requests_remain_alive_and_silent_until_exact_eof() {
 }
 
 #[test]
+fn malformed_directives_exit_silently_then_allow_a_clean_launch() {
+    sf_sparql::exercise_synthetic_query_v1_malformed_directives_for_evidence(Path::new(BINARY))
+        .expect("short, long, and unknown directives must be silent, reaped rejections");
+}
+
+#[test]
 fn mutant_evidence_rejects_paths_before_preparing_an_oversized_request() {
     for path in [Path::new("semantic-fabric"), Path::new("/tmp/../bin/false")] {
         let error = sf_sparql::exercise_synthetic_query_v1_transport_mutant_for_evidence(
