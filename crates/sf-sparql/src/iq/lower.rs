@@ -1453,6 +1453,7 @@ fn lower_as_subplan(
         }
     }
     let mut prepared = nested_plan.prepared_branches();
+    let mut rendered_pooling_rewrote_branches = false;
     if prepared.is_empty() {
         return Err(Error::Unsupported(
             "SubPlan: empty inner plan → 501".to_owned(),
@@ -1513,9 +1514,10 @@ fn lower_as_subplan(
         // Try rendering every projected var's FULL lexical form as one uniform-width
         // column per arm instead; only on that also failing does this stay the
         // ordinary sound 501.
-        match pool_rendered(&prepared, &vars, dialect)? {
+        match pool_rendered(prepared, &vars, dialect)? {
             Some(rewritten) => {
                 prepared = rewritten;
+                rendered_pooling_rewrote_branches = true;
                 arm_projections = emit_projections(&prepared)?;
                 if arm_projections
                     .iter()
@@ -1527,15 +1529,6 @@ fn lower_as_subplan(
                             .to_owned(),
                     ));
                 }
-                // `prepared` is a CLONE of `nested_plan.branches` (`Plan::prepared_
-                // branches`), not a view onto it — `emit_subplan_sql` later emits
-                // `nested_plan.branches` directly (never `prepared`, which exists
-                // only to drive the remap loop below), so the rewrite must also land
-                // there or the ACTUAL SQL sent to the database stays the original,
-                // width-mismatched arms while translation itself sees the fixed-up
-                // ones (a real, caught-live divergence: a translate-time-clean plan
-                // whose emitted SQL still 42S22/SQLITE_ERRORs on UNION column count).
-                nested_plan.branches = prepared.clone();
             }
             None => {
                 return Err(Error::Unsupported(
@@ -1605,6 +1598,13 @@ fn lower_as_subplan(
     {
         outer.distinct = true;
     }
+    // `prepared_branches` returns owned branches, not a view onto `nested_plan`.
+    // When rendered-width pooling rewrote them, transfer that allocation into the
+    // nested plan only after every remap/eligibility check above has finished. This
+    // keeps the actual emitted SQL in sync without cloning the complete branch graph.
+    if rendered_pooling_rewrote_branches {
+        nested_plan.branches = prepared;
+    }
     outer.subplan_joins.push(SubPlanJoin {
         alias: sp_alias,
         plan: Box::new(nested_plan),
@@ -1661,15 +1661,14 @@ fn left_join_as_subplan(
     // Dead tail (see the doc comment): reached only if a caller ever passes a single
     // opts-free right branch, which the `left_join_decomposed` guard never does.
     let mut out = Vec::new();
-    for l in &left {
-        if let Some(b) = crate::leftjoin::inner_join_one(l, &r, expr, dialect)? {
+    for mut l in left {
+        if let Some(b) = crate::leftjoin::inner_join_one(&l, &r, expr, dialect)? {
             out.push(b);
         }
-        let mut no_match = l.clone();
-        if let Some(cond) = crate::leftjoin::not_exists_cond_for(l, &r, expr, dialect)? {
-            no_match.where_conds.push(cond);
+        if let Some(cond) = crate::leftjoin::not_exists_cond_for(&l, &r, expr, dialect)? {
+            l.where_conds.push(cond);
         }
-        out.push(no_match);
+        out.push(l);
     }
     Ok(out)
 }
@@ -1900,7 +1899,7 @@ fn remap_term_map(
 ///   `Concat`/`Agg`/`ComposedTriple` never arise as a plain R2RML candidate-map
 ///   arm's own binding, but excluded defensively rather than assumed).
 pub(crate) fn pool_rendered(
-    arms: &[Branch],
+    arms: Vec<Branch>,
     vars: &[String],
     dialect: sf_sql::Dialect,
 ) -> Result<Option<Vec<Branch>>> {
@@ -1916,7 +1915,7 @@ pub(crate) fn pool_rendered(
     // else rendered-lexical equality is not term identity (see the doc comment).
     for v in vars {
         let mut class: Option<TermClass> = None;
-        for b in arms {
+        for b in &arms {
             let Some(def) = b.bindings.get(v.as_str()) else {
                 return Ok(None);
             };
@@ -1931,8 +1930,11 @@ pub(crate) fn pool_rendered(
         }
     }
 
-    let mut out = Vec::with_capacity(arms.len());
-    for b in arms {
+    // Complete every fallible/unsupported check while the owned arms are still
+    // untouched. Once this preflight succeeds, the rewrite below is infallible and
+    // can consume each branch instead of cloning its complete payload.
+    let mut rendered_arms = Vec::with_capacity(arms.len());
+    for b in &arms {
         let scan = &b.core[0];
         let local = format!("sfs{}", scan.alias);
         // This arm's immediate source text — `crate::cascade::col_is_unquoted_
@@ -1955,43 +1957,29 @@ pub(crate) fn pool_rendered(
         };
 
         let mut select_items = Vec::with_capacity(vars.len());
-        let mut new_bindings = BTreeMap::new();
         for (i, v) in vars.iter().enumerate() {
             // Presence + term-class agreement already checked above.
             let def = b.bindings.get(v.as_str()).expect("checked above");
             match def {
-                TermDef::Const(t) => {
-                    new_bindings.insert(v.clone(), TermDef::Const(t.clone()));
-                }
+                TermDef::Const(_) => {}
                 TermDef::Derived { term_map, .. } => {
-                    let (expr, spec) = match term_map {
-                        TermMap::Column(c, spec) => {
-                            let col_ref = crate::emit::render_immediate_source_column(
-                                &local, c, inner_sql, dialect,
-                            );
-                            (col_ref, spec.clone())
-                        }
+                    let expr = match term_map {
+                        TermMap::Column(c, _) => crate::emit::render_immediate_source_column(
+                            &local, c, inner_sql, dialect,
+                        ),
                         TermMap::Template(t, spec) => {
                             let encode_iri = spec.term_type == TermType::Iri;
-                            let expr = crate::emit::render_template_inline(
+                            crate::emit::render_template_inline(
                                 t.segments(),
                                 &local,
                                 encode_iri,
                                 inner_sql,
                                 dialect,
-                            )?;
-                            (expr, spec.clone())
+                            )?
                         }
                         TermMap::Constant(_) => return Ok(None), // unreachable: `def_of` never builds this
                     };
                     select_items.push(format!("{expr} AS rv{i}"));
-                    new_bindings.insert(
-                        v.clone(),
-                        TermDef::Derived {
-                            term_map: TermMap::Column(format!("rv{i}").into(), spec),
-                            alias: scan.alias,
-                        },
-                    );
                 }
                 TermDef::R2rmlBlank {
                     term_map, graph, ..
@@ -2009,34 +1997,20 @@ pub(crate) fn pool_rendered(
                     ) {
                         return Ok(None);
                     }
-                    let (expr, spec) = match term_map {
-                        TermMap::Column(c, spec) => {
-                            let col_ref = crate::emit::render_immediate_source_column(
-                                &local, c, inner_sql, dialect,
-                            );
-                            (col_ref, spec.clone())
-                        }
-                        TermMap::Template(t, spec) => {
-                            let expr = crate::emit::render_template_inline(
-                                t.segments(),
-                                &local,
-                                false,
-                                inner_sql,
-                                dialect,
-                            )?;
-                            (expr, spec.clone())
-                        }
+                    let expr = match term_map {
+                        TermMap::Column(c, _) => crate::emit::render_immediate_source_column(
+                            &local, c, inner_sql, dialect,
+                        ),
+                        TermMap::Template(t, _) => crate::emit::render_template_inline(
+                            t.segments(),
+                            &local,
+                            false,
+                            inner_sql,
+                            dialect,
+                        )?,
                         TermMap::Constant(_) => return Ok(None),
                     };
                     select_items.push(format!("{expr} AS rv{i}"));
-                    new_bindings.insert(
-                        v.clone(),
-                        TermDef::R2rmlBlank {
-                            term_map: TermMap::Column(format!("rv{i}").into(), spec),
-                            alias: scan.alias,
-                            graph: graph.clone(),
-                        },
-                    );
                 }
                 _ => return Ok(None), // Coalesce/Concat/Agg/ComposedTriple — not this shape
             }
@@ -2056,14 +2030,63 @@ pub(crate) fn pool_rendered(
             sql.push_str(" WHERE ");
             sql.push_str(&guards.join(" AND "));
         }
-        let mut rewritten = b.clone();
-        rewritten.core = vec![Scan {
-            alias: scan.alias,
+        rendered_arms.push((scan.alias, sql));
+    }
+
+    let mut out = Vec::with_capacity(arms.len());
+    for (mut branch, (alias, sql)) in arms.into_iter().zip(rendered_arms) {
+        let mut old_bindings = std::mem::take(&mut branch.bindings);
+        let mut new_bindings = BTreeMap::new();
+        for (i, v) in vars.iter().enumerate() {
+            // A repeated projection name is unusual but the borrowed implementation
+            // accepted it by overwriting the same map entry. Move the definition only
+            // for its last position to preserve that behavior without a clone.
+            if vars[i + 1..].contains(v) {
+                continue;
+            }
+            let def = old_bindings
+                .remove(v.as_str())
+                .expect("rendered-pooling preflight checked binding presence");
+            let rewritten = match def {
+                TermDef::Const(term) => TermDef::Const(term),
+                TermDef::Derived { term_map, .. } => {
+                    let spec = match term_map {
+                        TermMap::Column(_, spec) | TermMap::Template(_, spec) => spec,
+                        TermMap::Constant(_) => {
+                            unreachable!("rendered-pooling preflight rejected constant term maps")
+                        }
+                    };
+                    TermDef::Derived {
+                        term_map: TermMap::Column(format!("rv{i}").into(), spec),
+                        alias,
+                    }
+                }
+                TermDef::R2rmlBlank {
+                    term_map, graph, ..
+                } => {
+                    let spec = match term_map {
+                        TermMap::Column(_, spec) | TermMap::Template(_, spec) => spec,
+                        TermMap::Constant(_) => {
+                            unreachable!("rendered-pooling preflight rejected constant term maps")
+                        }
+                    };
+                    TermDef::R2rmlBlank {
+                        term_map: TermMap::Column(format!("rv{i}").into(), spec),
+                        alias,
+                        graph,
+                    }
+                }
+                _ => unreachable!("rendered-pooling preflight rejected unsupported bindings"),
+            };
+            new_bindings.insert(v.clone(), rewritten);
+        }
+        branch.core = vec![Scan {
+            alias,
             source: LogicalSource::Query(sql),
         }];
-        rewritten.where_conds = Vec::new();
-        rewritten.bindings = new_bindings;
-        out.push(rewritten);
+        branch.where_conds.clear();
+        branch.bindings = new_bindings;
+        out.push(branch);
     }
     Ok(Some(out))
 }
@@ -2152,7 +2175,7 @@ fn lower_aggregation(
     extra_keep: &HashSet<String>,
     star_env: &StarEnv,
 ) -> Result<Vec<Branch>> {
-    let inner = lower_node(child, dialect, false, next_alias, extra_keep, star_env)?;
+    let mut inner = lower_node(child, dialect, false, next_alias, extra_keep, star_env)?;
     spine.project.get_or_insert_with(|| {
         let mut out = grouping.clone();
         for a in &aggs {
@@ -2310,7 +2333,7 @@ fn lower_aggregation(
     } else if let Some(branch) = if spine.force_rust_group {
         None
     } else {
-        try_sql_group_over_union(&inner, &grouping, &aggs, dialect, next_alias)
+        try_sql_group_over_union(&mut inner, &grouping, &aggs, dialect, next_alias)
     } {
         // SQL pushdown (ADR-0023 optimizer-residue, q9 agg-pushdown wave): the union
         // arms pool into ONE derived-table `UNION ALL` and the DB does the GROUP BY —
@@ -2371,7 +2394,7 @@ fn lower_aggregation(
 /// 4. *Scope.* This function is additive (`iq/lower.rs` gains a helper, no rewrite);
 ///    `RustGroup`/`rust_group_execute` are untouched and remain the oracle.
 fn try_sql_group_over_union(
-    inner: &[Branch],
+    inner: &mut Vec<Branch>,
     grouping: &[Var],
     aggs: &[AggDef],
     dialect: sf_sql::Dialect,
@@ -2487,7 +2510,7 @@ fn try_sql_group_over_union(
     let mut shapes: Vec<KeyShape> = Vec::with_capacity(sorted_vars.len());
     for v in &sorted_vars {
         let mut common: Option<KeyShape> = None;
-        for arm in inner {
+        for arm in inner.iter() {
             let def = arm.bindings.get(v.as_str())?;
             let shape = key_shape(def)?;
             match &common {
@@ -2561,42 +2584,57 @@ fn try_sql_group_over_union(
         start
     };
 
-    // Pool the arms: each retains its own FROM/WHERE, reduced to ONLY the needed
+    // Preflight the pooled arms: each will retain its own FROM/WHERE, reduced to ONLY the needed
     // bindings — but `Branch::projection()` ALSO appends every raw column its
     // (non-DISTINCT) `where_conds`/`opts`/`subplan_joins` reference (join-key
     // equalities etc., deduped against the bindings columns) — the SAME mechanism
     // a normal multi-branch bag-union relies on. Those trailing columns are dead
     // weight here (the outer `Aggregation` only ever reads positions `0..sorted_vars
     // .len()`, resolved by `pos()` below) but they DO have to line up 1:1 across
-    // arms for `UNION ALL` to be syntactically valid — checked after the fact
+    // arms for `UNION ALL` to be syntactically valid — checked before ownership transfer
     // (equal-length gate) rather than suppressed, since suppressing them would mean
     // `distinct: true`, which would corrupt the pre-aggregation multiset.
-    let pooled_arms: Vec<Branch> = inner
-        .iter()
-        .map(|arm| {
-            let bindings = sorted_vars
-                .iter()
-                .map(|v| (v.clone(), arm.bindings[v.as_str()].clone()))
-                .collect();
-            Branch {
-                bindings,
-                distinct: false,
-                limit: None,
-                offset: 0,
-                order: Vec::new(),
-                ..arm.clone()
+    let prospective_projection = |arm: &Branch| {
+        let mut cols: Vec<ColRef> = Vec::new();
+        let push = |col: ColRef, cols: &mut Vec<ColRef>| {
+            if !cols.contains(&col) {
+                cols.push(col);
             }
-        })
-        .collect();
+        };
+        for v in &sorted_vars {
+            for col in arm.bindings[v.as_str()].columns() {
+                push(col, &mut cols);
+            }
+        }
+        for cond in &arm.where_conds {
+            crate::iq::collect_cond_cols(cond, &mut |col| push(col.clone(), &mut cols));
+        }
+        for opt in &arm.opts {
+            for cond in opt.on.iter().chain(&opt.extra) {
+                crate::iq::collect_cond_cols(cond, &mut |col| push(col.clone(), &mut cols));
+            }
+        }
+        for subplan in &arm.subplan_joins {
+            for cond in &subplan.on {
+                crate::iq::collect_cond_cols(cond, &mut |col| push(col.clone(), &mut cols));
+            }
+        }
+        cols
+    };
     // Cross-arm column-count parity (the `UNION ALL` syntactic requirement): every
     // arm's `where_conds`/`opts`/`subplan_joins` may contribute a different number of
     // trailing dead columns via `projection()` when the arms' shapes are NOT
     // symmetric (e.g. one arm joins 2 tables, another 3) — bail to the Rust path
     // rather than emit a `UNION ALL` the database rejects (or, worse, one it
     // silently accepts with misaligned trailing columns nothing ever reads).
-    let proj_len = pooled_arms.first().map(|b| b.projection().len())?;
-    if pooled_arms.iter().any(|b| b.projection().len() != proj_len) {
-        return None;
+    let mut proj_len = None;
+    for arm in inner.iter() {
+        let len = prospective_projection(arm).len();
+        match proj_len {
+            None => proj_len = Some(len),
+            Some(expected) if expected == len => {}
+            Some(_) => return None,
+        }
     }
     // Degenerate-shape guard: `offsets` above assumes each `sorted_vars[i]`'s columns
     // occupy EXACTLY its own contiguous `c{start}..c{start+len}` run (the FIRST
@@ -2619,8 +2657,21 @@ fn try_sql_group_over_union(
         }
         true
     };
-    if !pooled_arms.iter().all(needed_cols_distinct) {
+    if !inner.iter().all(needed_cols_distinct) {
         return None;
+    }
+
+    // No fallback remains beyond this point. Transfer the complete branches and
+    // mutate only the fields the old struct-update expression replaced, avoiding
+    // deep clones of scans, conditions, OPTIONALs, and nested subplans.
+    let mut pooled_arms = std::mem::take(inner);
+    for arm in &mut pooled_arms {
+        arm.bindings
+            .retain(|v, _| sorted_vars.binary_search(v).is_ok());
+        arm.distinct = false;
+        arm.limit = None;
+        arm.offset = 0;
+        arm.order.clear();
     }
 
     let sp_alias = *next_alias;
@@ -3415,6 +3466,124 @@ mod tests {
         assert_eq!(b.subplan_joins[0].plan.branches.len(), 2);
     }
 
+    #[test]
+    fn group_union_pooling_transfers_arms_only_after_preflight() {
+        use crate::iq::node::{AggArg, AggDef};
+        use crate::iq::AggKind;
+
+        let arm = |alias: usize| {
+            let mut branch = Branch::single(Scan {
+                alias,
+                source: LogicalSource::Table(format!("t{alias}")),
+            });
+            for (var, column) in [("s", "id"), ("o", "value"), ("unused", "extra")] {
+                branch.bindings.insert(
+                    var.to_owned(),
+                    TermDef::Derived {
+                        term_map: TermMap::Column(column.into(), TermSpec::plain_literal()),
+                        alias,
+                    },
+                );
+            }
+            branch
+                .where_conds
+                .push(SqlCond::IsNotNull(ColRef::new(alias, "guard")));
+            branch.distinct = true;
+            branch.limit = Some(7);
+            branch.offset = 3;
+            branch.order.push(OrderKey {
+                var: "o".to_owned(),
+                descending: true,
+                expr: None,
+            });
+            branch.nps = true;
+            branch
+        };
+        let grouping = vec!["s".into()];
+        let aggs = vec![AggDef {
+            var: "count".into(),
+            kind: AggKind::Count,
+            arg: Some(AggArg::Var("o".into())),
+            distinct: false,
+            fixed_type: None,
+        }];
+        let mut inner = vec![arm(1), arm(2)];
+        let mut next_alias = 3;
+
+        let pooled = try_sql_group_over_union(
+            &mut inner,
+            &grouping,
+            &aggs,
+            sf_sql::Dialect::Sqlite,
+            &mut next_alias,
+        )
+        .expect("compatible arms pool");
+
+        assert!(
+            inner.is_empty(),
+            "successful pooling transfers arm ownership"
+        );
+        let nested = &pooled.subplan_joins[0].plan.branches;
+        assert_eq!(nested.len(), 2);
+        for branch in nested {
+            assert_eq!(branch.core.len(), 1);
+            assert_eq!(branch.where_conds.len(), 1);
+            assert_eq!(branch.bindings.len(), 2);
+            assert!(branch.bindings.contains_key("s"));
+            assert!(branch.bindings.contains_key("o"));
+            assert!(!branch.distinct);
+            assert_eq!(branch.limit, None);
+            assert_eq!(branch.offset, 0);
+            assert!(branch.order.is_empty());
+            assert!(branch.nps);
+        }
+    }
+
+    #[test]
+    fn group_union_pooling_failure_preserves_all_arms() {
+        let arm = |alias: usize, extra_guard: bool| {
+            let mut branch = Branch::single(Scan {
+                alias,
+                source: LogicalSource::Table(format!("t{alias}")),
+            });
+            branch.bindings.insert(
+                "s".to_owned(),
+                TermDef::Derived {
+                    term_map: TermMap::Column("id".into(), TermSpec::plain_literal()),
+                    alias,
+                },
+            );
+            branch
+                .where_conds
+                .push(SqlCond::IsNotNull(ColRef::new(alias, "guard")));
+            if extra_guard {
+                branch
+                    .where_conds
+                    .push(SqlCond::IsNotNull(ColRef::new(alias, "other")));
+            }
+            branch
+        };
+        let mut inner = vec![arm(1, false), arm(2, true)];
+        let mut next_alias = 3;
+
+        let pooled = try_sql_group_over_union(
+            &mut inner,
+            &["s".into()],
+            &[],
+            sf_sql::Dialect::Sqlite,
+            &mut next_alias,
+        );
+
+        assert!(
+            pooled.is_none(),
+            "projection-width mismatch must fail closed"
+        );
+        assert_eq!(inner.len(), 2, "failed preflight must preserve ownership");
+        assert_eq!(inner[0].where_conds.len(), 1);
+        assert_eq!(inner[1].where_conds.len(), 2);
+        assert_eq!(next_alias, 3, "failed preflight must not reserve aliases");
+    }
+
     /// ADR-0023 optimizer-residue wave, q9 agg-pushdown follow-up (Wave A.2): a
     /// GROUP BY key bound via an INJECTIVE, multi-column `TermMap::Template`
     /// (`{cc}-{num}`, separator present) — identical template in both arms — now
@@ -3889,8 +4058,61 @@ mod tests {
             );
             branch
         };
-        let arms = [arm(1), arm(2)];
-        let pooled = pool_rendered(&arms, &["s".to_owned()], sf_sql::Dialect::Sqlite).unwrap();
+        let arms = vec![arm(1), arm(2)];
+        let pooled = pool_rendered(arms, &["s".to_owned()], sf_sql::Dialect::Sqlite).unwrap();
         assert!(pooled.is_none(), "dynamic graph scope must fail closed");
+    }
+
+    #[test]
+    fn rendered_pooling_rewrites_owned_arm_and_preserves_metadata() {
+        let mut arm = Branch::single(Scan {
+            alias: 7,
+            source: LogicalSource::Table("source".to_owned()),
+        });
+        arm.bindings.insert(
+            "s".to_owned(),
+            TermDef::Derived {
+                term_map: TermMap::Column("id".into(), TermSpec::plain_literal()),
+                alias: 7,
+            },
+        );
+        arm.bindings.insert(
+            "unused".to_owned(),
+            TermDef::Derived {
+                term_map: TermMap::Column("extra".into(), TermSpec::plain_literal()),
+                alias: 7,
+            },
+        );
+        arm.where_conds
+            .push(SqlCond::IsNotNull(ColRef::new(7, "id")));
+        arm.distinct = true;
+        arm.limit = Some(5);
+        arm.offset = 2;
+        arm.order.push(OrderKey {
+            var: "s".to_owned(),
+            descending: false,
+            expr: None,
+        });
+        arm.nps = true;
+
+        let pooled = pool_rendered(vec![arm], &["s".to_owned()], sf_sql::Dialect::Sqlite)
+            .unwrap()
+            .expect("simple column binding is renderable");
+        let rewritten = &pooled[0];
+
+        assert_eq!(rewritten.core.len(), 1);
+        let LogicalSource::Query(sql) = &rewritten.core[0].source else {
+            panic!("rendered pooling must wrap the source in a query")
+        };
+        assert!(sql.contains("SELECT sfs7.\"id\" AS rv0 FROM \"source\" sfs7"));
+        assert!(sql.contains("WHERE sfs7.\"id\" IS NOT NULL"));
+        assert!(rewritten.where_conds.is_empty());
+        assert_eq!(rewritten.bindings.len(), 1);
+        assert!(rewritten.bindings.contains_key("s"));
+        assert!(rewritten.distinct);
+        assert_eq!(rewritten.limit, Some(5));
+        assert_eq!(rewritten.offset, 2);
+        assert_eq!(rewritten.order.len(), 1);
+        assert!(rewritten.nps);
     }
 }

@@ -1916,7 +1916,7 @@ fn pool_group(
         // sibling's has 2). Try rendering every projected var's FULL lexical form
         // as one uniform-width column per arm instead; only on that also failing
         // does this stay the ordinary sound 501.
-        match crate::iq::lower::pool_rendered(&narrowed, vars, dialect)? {
+        match crate::iq::lower::pool_rendered(narrowed, vars, dialect)? {
             Some(rewritten) => {
                 narrowed = rewritten;
                 arm_projections = narrowed
