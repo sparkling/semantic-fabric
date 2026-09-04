@@ -375,9 +375,9 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    are implemented. An owned request is prepared and reverified after clean EOF,
    exit and reap, while the seam still sends only `Hello` then EOF. Exact
    direction totals and a separate file limit are bound. A private typed alpha
-   comparator exists, but request/result transport, worker parsing, corpus
-   receipts, witness, serving and attestation remain absent. Qualify and calibrate
-   the complete profile before activation; normal loader/Rust startup precedes dispatch.
+   comparator exists. First exercise exact request/result framing, bounded
+   transport, clean EOF/exit/reap and post-reap decode only against a separately named synthetic Rust peer; that evidence grants no parser execution or parser-policy/profile, paired-corpus, witness, cache, serving, release or admission authority.
+   Then qualify and calibrate the complete parser profile before real worker parsing, worker-produced QueryV1, paired-corpus evidence or activation; normal loader/Rust startup precedes dispatch.
 3. **Owned compiler work — five fan-out/rollback sites plus lowering propagation:** the private
    work-mode seam prospectively measures and charges nested-subplan cascade
    rollback branch forests, FILTER-over-UNION preceding-arm conditions,

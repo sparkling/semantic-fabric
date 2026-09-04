@@ -401,8 +401,8 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    `Hello`, and emits independently derived `Ready`. Descendant prevention does
    not rely on per-user `RLIMIT_NPROC`. The candidate must still be replaced or
    qualified against the complete parser corpus/syscall surface, and the partial
-   dependency marker must become a complete governed profile before QueryV1
-   integration, profile admission or serving.
+   dependency marker must become a complete governed profile before real worker
+   parsing, profile admission or serving. Before that gate, a separately named synthetic peer may exercise framing, bounded transport, cleanup and parent decode only; it grants no parser execution or parser-policy/profile, corpus, witness, cache, release or admission authority.
 4. **Partial:** parent I/O tests inject stalls, truncation, closed pipes and
    cumulative-limit rejection, proving attempted kill/reap and successful next
    launch. Add cancellation, panic, abort, stack/address-space exhaustion,
@@ -416,10 +416,10 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    pinned query/algebra/function/aggregate family plus malformed headers,
    ranges, indices, sharing, scalars and component bounds. Exact dormant
    96-byte request and 128-byte result codecs add 17 focused golden, mutation,
-   correlation, redaction and raw-cap `0`/`N`/`N+1` tests. Add transport-level
-   direction `0`/`N`/`N+1`, allocation-failure injection, persisted
-   fuzz/property corpora and worker-produced replay; provisional limits are not
-   accepted calibration.
+   correlation, redaction and raw-cap `0`/`N`/`N+1` tests. First add transport-level
+   direction `0`/`N`/`N+1`, allocation-failure, terminal EOF/exit/reap and
+   post-reap decode tests against a separately named synthetic Rust peer. Only
+   after Gate 3 qualifies the complete profile may real worker parsing/encoding be connected; then add worker-produced replay and persisted fuzz/property corpora. Provisional limits are not accepted calibration.
 6. **Partial; typed comparator foundation implemented:** eight focused tests
    cover correlation/outcome classification, bounded fallible traversal, exact
    ordered top-level SELECT outputs, one global variable bijection, one global
