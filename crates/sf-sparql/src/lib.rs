@@ -512,7 +512,7 @@ pub fn translate_tree(
 /// Selects how project-owned compiler operations execute without granting a
 /// parser or cache profile any governed authority.
 #[derive(Clone, Copy)]
-enum CompilerWorkMode<'control> {
+pub(crate) enum CompilerWorkMode<'control> {
     Uncontrolled,
     #[allow(dead_code)]
     // Activated one owned operation at a time before serving switches profiles.
@@ -524,6 +524,13 @@ impl CompilerWorkMode<'_> {
         match self {
             Self::Uncontrolled => Ok(branches.to_vec()),
             Self::Metered(context) => context.clone_branch_forest(branches),
+        }
+    }
+
+    fn clone_iq_conditions(self, conditions: &[iq::node::IqCond]) -> Result<Vec<iq::node::IqCond>> {
+        match self {
+            Self::Uncontrolled => Ok(conditions.to_vec()),
+            Self::Metered(context) => context.clone_iq_conditions(conditions),
         }
     }
 }
@@ -564,7 +571,7 @@ fn translate_tree_with_column_type_use(
     let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
         let built = build::build_tree(pattern, None)?;
         let resolved = iq::resolve::resolve(built, &mut cx)?;
-        let normalized = iq::normalize::normalize(resolved)?;
+        let normalized = iq::normalize::normalize_with_work_mode(resolved, work_mode)?;
         iq::lower::lower(normalized, dialect, &extra_keep, &star_env)
     };
 

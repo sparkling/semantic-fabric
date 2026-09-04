@@ -5,7 +5,8 @@ use sf_core::query_control::{
 
 use super::*;
 use crate::compile_envelope::{CompileEnvelopeError, CompileEnvelopeLimit};
-use crate::iq::{Branch, Scan};
+use crate::iq::node::{IqCond, IqNode};
+use crate::iq::{Branch, Scan, TermDef};
 use crate::plan_measure::clone_root::{
     measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
 };
@@ -41,6 +42,17 @@ fn branch_forest() -> Vec<Branch> {
         alias: 1,
         source: LogicalSource::Table("source".to_owned()),
     })]
+}
+
+fn nested_iq_conditions() -> Vec<IqCond> {
+    vec![IqCond::Exists(Box::new(IqNode::Values {
+        vars: vec!["inside".into()],
+        rows: vec![vec![Some(TermDef::Const(
+            spargebra::term::NamedNode::new("http://example.test/inside")
+                .unwrap()
+                .into(),
+        ))]],
+    }))]
 }
 
 fn assert_copy<T: Copy>() {}
@@ -117,6 +129,37 @@ fn compile_context_binds_exact_measure_reservation_and_one_clone() {
             .expect_err("the exact clone measure exceeds the budget"),
         QueryControlError::CompilerWorkExceeded,
     );
+    assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
+}
+
+#[test]
+fn compile_context_binds_exact_iq_condition_measure_to_one_clone() {
+    let source = nested_iq_conditions();
+    let measure =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&source))
+            .unwrap();
+    let exact = budget(measure.deep_clone_work);
+    let source_allocation = source.as_ptr();
+
+    let cloned = CompileContext::new(&exact)
+        .clone_iq_conditions(&source)
+        .unwrap();
+
+    assert_eq!(format!("{cloned:?}"), format!("{source:?}"));
+    assert_ne!(cloned.as_ptr(), source_allocation);
+    assert_eq!(
+        exact.consumed(QueryCharge::CompilerWork),
+        measure.deep_clone_work
+    );
+
+    let short = budget(measure.deep_clone_work - 1);
+    assert_control_error(
+        CompileContext::new(&short)
+            .clone_iq_conditions(&source)
+            .expect_err("N-1 must reject before cloning the condition forest"),
+        QueryControlError::CompilerWorkExceeded,
+    );
+    assert_eq!(source.as_ptr(), source_allocation);
     assert_eq!(short.consumed(QueryCharge::CompilerWork), 0);
 }
 

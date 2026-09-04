@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use sf_core::ir::LogicalSource;
 use sf_core::query_control::{
     QueryBudget, QueryCharge, QueryControl, QueryControlError, QueryLimits,
@@ -6,7 +8,8 @@ use sf_sql::Dialect;
 
 use super::*;
 use crate::compiler_control::CompileContext;
-use crate::iq::{Branch, Scan, SubPlanJoin};
+use crate::iq::node::{IqCond, IqNode};
+use crate::iq::{Branch, Scan, SubPlanJoin, TermDef};
 use crate::plan_measure::clone_root::{
     measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
 };
@@ -78,6 +81,55 @@ fn nested_branches(branch: &Branch) -> &[Branch] {
 
 fn second_level_branches(branch: &Branch) -> &[Branch] {
     &nested_branches(branch)[0].subplan_joins[0].plan.branches
+}
+
+fn condition_with_nested_exists() -> Vec<IqCond> {
+    vec![IqCond::Exists(Box::new(IqNode::Values {
+        vars: vec!["inside".into()],
+        rows: vec![vec![Some(TermDef::Const(
+            spargebra::term::NamedNode::new("http://example.test/nested-payload")
+                .unwrap()
+                .into(),
+        ))]],
+    }))]
+}
+
+fn extensional_arm(alias: usize) -> IqNode {
+    IqNode::Extensional {
+        scan: Scan {
+            alias,
+            source: LogicalSource::Table(format!("source_{alias}")),
+        },
+        bind: BTreeMap::new(),
+    }
+}
+
+fn filter_over_union(aliases: &[usize], cond: Vec<IqCond>) -> IqNode {
+    IqNode::Filter {
+        child: Box::new(IqNode::Union {
+            children: aliases.iter().copied().map(extensional_arm).collect(),
+            project: Vec::new(),
+        }),
+        cond,
+    }
+}
+
+fn distributed_filter_aliases(node: &IqNode) -> Vec<usize> {
+    let IqNode::Union { children, .. } = node else {
+        panic!("expected distributed Union, got {node:?}")
+    };
+    children
+        .iter()
+        .map(|child| {
+            let IqNode::Filter { child, .. } = child else {
+                panic!("expected Filter arm, got {child:?}")
+            };
+            let IqNode::Extensional { scan, .. } = child.as_ref() else {
+                panic!("expected Extensional Filter child, got {child:?}")
+            };
+            scan.alias
+        })
+        .collect()
 }
 
 fn assert_control_error(error: Error, expected: QueryControlError) {
@@ -175,6 +227,96 @@ fn nested_rejection_keeps_prior_operation_charge_without_whole_call_rollback() {
         outer_measure.deep_clone_work,
         "completed operation charges are never refunded"
     );
+    assert_eq!(
+        budget.checkpoint(),
+        Err(QueryControlError::CompilerWorkExceeded)
+    );
+}
+
+#[test]
+fn metered_filter_over_three_arms_charges_two_exact_nested_condition_clones() {
+    let cond = condition_with_nested_exists();
+    let measure =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
+            .unwrap();
+    let expected = measure.deep_clone_work.checked_mul(2).unwrap();
+    let budget = budget(expected);
+
+    let normalized = iq::normalize::normalize_with_work_mode(
+        filter_over_union(&[11, 11, 22], cond),
+        CompilerWorkMode::Metered(CompileContext::new(&budget)),
+    )
+    .unwrap();
+
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), expected);
+    assert_eq!(distributed_filter_aliases(&normalized), vec![11, 11, 22]);
+}
+
+#[test]
+fn later_filter_arm_rejection_keeps_the_completed_clone_charge() {
+    let cond = condition_with_nested_exists();
+    let measure =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
+            .unwrap();
+    let budget = budget(measure.deep_clone_work * 2 - 1);
+
+    assert_control_error(
+        iq::normalize::normalize_with_work_mode(
+            filter_over_union(&[21, 22, 23], cond),
+            CompilerWorkMode::Metered(CompileContext::new(&budget)),
+        )
+        .expect_err("the second clone must reject after the first operation completes"),
+        QueryControlError::CompilerWorkExceeded,
+    );
+
+    assert_eq!(
+        budget.consumed(QueryCharge::CompilerWork),
+        measure.deep_clone_work,
+        "completed operation charges are never refunded"
+    );
+}
+
+#[test]
+fn metered_filter_union_exact_n_matches_the_public_raw_path() {
+    let cond = condition_with_nested_exists();
+    let measure =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
+            .unwrap();
+    let source = filter_over_union(&[31, 32], cond);
+    let budget = budget(measure.deep_clone_work);
+
+    let raw = iq::normalize::normalize(source.clone()).unwrap();
+    let metered = iq::normalize::normalize_with_work_mode(
+        source,
+        CompilerWorkMode::Metered(CompileContext::new(&budget)),
+    )
+    .unwrap();
+
+    assert_eq!(format!("{metered:?}"), format!("{raw:?}"));
+    assert_eq!(
+        budget.consumed(QueryCharge::CompilerWork),
+        measure.deep_clone_work
+    );
+}
+
+#[test]
+fn metered_filter_union_rejects_n_minus_one_before_the_guarded_clone() {
+    let cond = condition_with_nested_exists();
+    let measure =
+        measure_compiler_clone_collection_v1(CompilerCloneCollectionV1::IqConditions(&cond))
+            .unwrap();
+    let budget = budget(measure.deep_clone_work - 1);
+
+    assert_control_error(
+        iq::normalize::normalize_with_work_mode(
+            filter_over_union(&[41, 42], cond),
+            CompilerWorkMode::Metered(CompileContext::new(&budget)),
+        )
+        .expect_err("N-1 must reject before the preceding-arm condition clone"),
+        QueryControlError::CompilerWorkExceeded,
+    );
+
+    assert_eq!(budget.consumed(QueryCharge::CompilerWork), 0);
     assert_eq!(
         budget.checkpoint(),
         Err(QueryControlError::CompilerWorkExceeded)

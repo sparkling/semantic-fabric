@@ -82,7 +82,7 @@ use std::collections::BTreeMap;
 use crate::iq::node::{BindDef, IqCond, IqNode, Var};
 use crate::iq::TermDef;
 use crate::unify::{bind_term_def, unify, Unify};
-use crate::{Error, Result};
+use crate::{CompilerWorkMode, Error, Result};
 
 type ValuesRows = Vec<Vec<Option<TermDef>>>;
 
@@ -99,6 +99,15 @@ type ValuesRows = Vec<Vec<Option<TermDef>>>;
 /// [`IqCond::NotExists`]) and normalizes them as first-class `IqNode`s (design-lock §3
 /// recursion clause, BINDING).
 pub fn normalize(node: IqNode) -> Result<IqNode> {
+    normalize_with_work_mode(node, CompilerWorkMode::Uncontrolled)
+}
+
+/// Internal normalization entry point carrying the private compiler-work seam.
+/// Public/raw normalization always calls [`normalize`] and remains uncontrolled.
+pub(crate) fn normalize_with_work_mode(
+    node: IqNode,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<IqNode> {
     match node {
         // ---- substitution-lifting carrier (a) -----------------------------------
         IqNode::Construction {
@@ -106,37 +115,37 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
             subst,
             project,
         } => {
-            let child = normalize(*child)?;
+            let child = normalize_with_work_mode(*child, work_mode)?;
             lift_construction(subst, project, child)
         }
 
         // ---- selection: distribute over Union, else push below Construction -----
         IqNode::Filter { child, cond } => {
-            let child = normalize(*child)?;
-            normalize_filter(cond, child)
+            let child = normalize_with_work_mode(*child, work_mode)?;
+            normalize_filter(cond, child, work_mode)
         }
 
         // ---- n-ary inner join: distribute over Union, else lift Constructions ----
         IqNode::InnerJoin { children, cond } => {
             let children = children
                 .into_iter()
-                .map(normalize)
+                .map(|child| normalize_with_work_mode(child, work_mode))
                 .collect::<Result<Vec<_>>>()?;
-            normalize_inner_join(children, cond)
+            normalize_inner_join(children, cond, work_mode)
         }
 
         // ---- left join: distribute over a LEFT Union only; right stays intact ----
         IqNode::LeftJoin { left, right, cond } => {
-            let left = normalize(*left)?;
-            let right = normalize(*right)?;
-            normalize_left_join(left, right, cond)
+            let left = normalize_with_work_mode(*left, work_mode)?;
+            let right = normalize_with_work_mode(*right, work_mode)?;
+            normalize_left_join(left, right, cond, work_mode)
         }
 
         // ---- bag union: flatten, prune Empty arms (NO arm-merge) ----------------
         IqNode::Union { children, project } => {
             let children = children
                 .into_iter()
-                .map(normalize)
+                .map(|child| normalize_with_work_mode(child, work_mode))
                 .collect::<Result<Vec<_>>>()?;
             normalize_union(children, project)
         }
@@ -147,12 +156,12 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
             grouping,
             aggs,
         } => Ok(IqNode::Aggregation {
-            child: Box::new(normalize(*child)?),
+            child: Box::new(normalize_with_work_mode(*child, work_mode)?),
             grouping,
             aggs,
         }),
         IqNode::Distinct { child } => {
-            let child = normalize(*child)?;
+            let child = normalize_with_work_mode(*child, work_mode)?;
             Ok(normalize_distinct(child))
         }
         IqNode::Slice {
@@ -160,11 +169,11 @@ pub fn normalize(node: IqNode) -> Result<IqNode> {
             offset,
             limit,
         } => {
-            let child = normalize(*child)?;
+            let child = normalize_with_work_mode(*child, work_mode)?;
             Ok(normalize_slice(offset, limit, child))
         }
         IqNode::OrderBy { child, keys } => Ok(IqNode::OrderBy {
-            child: Box::new(normalize(*child)?),
+            child: Box::new(normalize_with_work_mode(*child, work_mode)?),
             keys,
         }),
 
@@ -303,7 +312,11 @@ fn merge_into(
 /// children, distributes over a `Union` child (recursing per arm), then — once no
 /// `Union` child remains — lifts the children's `Construction`s into a single
 /// `Construction` over the flattened `InnerJoin` of leaves.
-fn normalize_inner_join(children: Vec<IqNode>, cond: Vec<IqCond>) -> Result<IqNode> {
+fn normalize_inner_join(
+    children: Vec<IqNode>,
+    cond: Vec<IqCond>,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<IqNode> {
     let join_vars = union_vars(&children);
 
     // (c) absorbing: any Empty child ⇒ the whole join is Empty over all its vars.
@@ -326,7 +339,7 @@ fn normalize_inner_join(children: Vec<IqNode>, cond: Vec<IqCond>) -> Result<IqNo
         } else {
             Ok(IqNode::Filter {
                 child: Box::new(IqNode::True),
-                cond: normalize_conds(cond)?,
+                cond: normalize_conds(cond, work_mode)?,
             })
         };
     }
@@ -351,19 +364,19 @@ fn normalize_inner_join(children: Vec<IqNode>, cond: Vec<IqCond>) -> Result<IqNo
         for arm in arms {
             let mut nc = children.clone();
             nc.insert(i, arm);
-            out_arms.push(normalize_inner_join(nc, cond.clone())?);
+            out_arms.push(normalize_inner_join(nc, cond.clone(), work_mode)?);
         }
         if let Some(arm) = last {
             // The final distributed arm can consume both fixed operands and the
             // condition; all earlier arms still require independent copies.
             children.insert(i, arm);
-            out_arms.push(normalize_inner_join(children, cond)?);
+            out_arms.push(normalize_inner_join(children, cond, work_mode)?);
         }
         return normalize_union(out_arms, join_vars);
     }
 
     // (a) no Union child: lift the children's Constructions to one Construction.
-    lift_inner_join(children, cond, join_vars)
+    lift_inner_join(children, cond, join_vars, work_mode)
 }
 
 /// Lift the `Construction`s of a Union-free `InnerJoin` into a single `Construction`
@@ -376,10 +389,11 @@ fn lift_inner_join(
     children: Vec<IqNode>,
     cond: Vec<IqCond>,
     join_vars: Vec<Var>,
+    work_mode: CompilerWorkMode<'_>,
 ) -> Result<IqNode> {
     let mut acc: BTreeMap<Var, BindDef> = BTreeMap::new();
     let mut body_children: Vec<IqNode> = Vec::new();
-    let mut body_cond: Vec<IqCond> = normalize_conds(cond)?;
+    let mut body_cond: Vec<IqCond> = normalize_conds(cond, work_mode)?;
     let mut had_construction = false;
 
     for child in children {
@@ -444,8 +458,12 @@ fn lift_inner_join(
 /// moving it into the final arm), and over a leaf-CQ pushes the `Filter` **below the
 /// `Construction`** (the spine leaf-CQ is `Construction` over a `Filter` of leaves).
 /// Adjacent `Filter`s coalesce.
-fn normalize_filter(cond: Vec<IqCond>, child: IqNode) -> Result<IqNode> {
-    let cond = normalize_conds(cond)?;
+fn normalize_filter(
+    cond: Vec<IqCond>,
+    child: IqNode,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<IqNode> {
+    let cond = normalize_conds(cond, work_mode)?;
     match child {
         IqNode::Empty { vars } => Ok(IqNode::Empty { vars }),
         IqNode::Union {
@@ -455,10 +473,11 @@ fn normalize_filter(cond: Vec<IqCond>, child: IqNode) -> Result<IqNode> {
             let mut out = Vec::with_capacity(arms.len());
             let last = arms.pop();
             for a in arms {
-                out.push(normalize_filter(cond.clone(), a)?);
+                let arm_cond = work_mode.clone_iq_conditions(&cond)?;
+                out.push(normalize_filter(arm_cond, a, work_mode)?);
             }
             if let Some(a) = last {
-                out.push(normalize_filter(cond, a)?);
+                out.push(normalize_filter(cond, a, work_mode)?);
             }
             normalize_union(out, project)
         }
@@ -515,8 +534,13 @@ fn push_filter(cond: Vec<IqCond>, body: IqNode) -> IqNode {
 /// a `Union`/multi-scan **right** is preserved as-is (the node STAYS a `LeftJoin`,
 /// lowered via `left_join_branches` at M3c — `A⟕(C∪D)` is never split). An empty left
 /// ⇒ `Empty`; an empty right ⇒ the left unchanged (`OPTIONAL {}` over no match).
-fn normalize_left_join(left: IqNode, right: IqNode, cond: Vec<IqCond>) -> Result<IqNode> {
-    let cond = normalize_conds(cond)?;
+fn normalize_left_join(
+    left: IqNode,
+    right: IqNode,
+    cond: Vec<IqCond>,
+    work_mode: CompilerWorkMode<'_>,
+) -> Result<IqNode> {
+    let cond = normalize_conds(cond, work_mode)?;
     let combined_vars = {
         let mut v = left.output_vars();
         for x in right.output_vars() {
@@ -536,12 +560,17 @@ fn normalize_left_join(left: IqNode, right: IqNode, cond: Vec<IqCond>) -> Result
             let mut out = Vec::with_capacity(arms.len());
             let last = arms.pop();
             for a in arms {
-                out.push(normalize_left_join(a, right.clone(), cond.clone())?);
+                out.push(normalize_left_join(
+                    a,
+                    right.clone(),
+                    cond.clone(),
+                    work_mode,
+                )?);
             }
             if let Some(a) = last {
                 // LEFT JOIN is non-commutative, so retain the left-arm order and
                 // transfer the original shared right/condition only to the last.
-                out.push(normalize_left_join(a, right, cond)?);
+                out.push(normalize_left_join(a, right, cond, work_mode)?);
             }
             normalize_union(out, combined_vars)
         }
@@ -1265,22 +1294,27 @@ fn const_rows_equal(left: &[Option<TermDef>], right: &[Option<TermDef>]) -> bool
 /// Normalize a conjunction of [`IqCond`]s (design-lock §3 recursion clause). The
 /// symbolic `Expr`/`Sql` leaves pass through untouched (FILTER/ON stays symbolic until
 /// LOWER); the `Exists`/`NotExists` subtrees are normalized as first-class `IqNode`s.
-fn normalize_conds(conds: Vec<IqCond>) -> Result<Vec<IqCond>> {
-    conds.into_iter().map(normalize_cond).collect()
+fn normalize_conds(conds: Vec<IqCond>, work_mode: CompilerWorkMode<'_>) -> Result<Vec<IqCond>> {
+    conds
+        .into_iter()
+        .map(|cond| normalize_cond(cond, work_mode))
+        .collect()
 }
 
 /// Normalize one [`IqCond`], descending into the built `IqNode` of an
 /// `Exists`/`NotExists` payload (and through the boolean combinators).
-fn normalize_cond(cond: IqCond) -> Result<IqCond> {
+fn normalize_cond(cond: IqCond, work_mode: CompilerWorkMode<'_>) -> Result<IqCond> {
     match cond {
         IqCond::Expr(e) => Ok(IqCond::Expr(e)),
         IqCond::Sql(s) => Ok(IqCond::Sql(s)),
-        IqCond::And(cs) => Ok(IqCond::And(normalize_conds(cs)?)),
-        IqCond::Or(cs) => Ok(IqCond::Or(normalize_conds(cs)?)),
-        IqCond::Not(c) => Ok(IqCond::Not(Box::new(normalize_cond(*c)?))),
-        IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(normalize(*n)?))),
+        IqCond::And(cs) => Ok(IqCond::And(normalize_conds(cs, work_mode)?)),
+        IqCond::Or(cs) => Ok(IqCond::Or(normalize_conds(cs, work_mode)?)),
+        IqCond::Not(c) => Ok(IqCond::Not(Box::new(normalize_cond(*c, work_mode)?))),
+        IqCond::Exists(n) => Ok(IqCond::Exists(Box::new(normalize_with_work_mode(
+            *n, work_mode,
+        )?))),
         IqCond::NotExists { inner, is_minus } => Ok(IqCond::NotExists {
-            inner: Box::new(normalize(*inner)?),
+            inner: Box::new(normalize_with_work_mode(*inner, work_mode)?),
             is_minus,
         }),
     }

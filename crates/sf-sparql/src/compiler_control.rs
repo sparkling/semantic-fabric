@@ -3,6 +3,7 @@
 use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
 
 use crate::compile_envelope::CompileEnvelopeError;
+use crate::iq::node::IqCond;
 use crate::iq::Branch;
 use crate::plan_measure::clone_root::{
     measure_compiler_clone_collection_v1, CompilerCloneCollectionV1,
@@ -132,6 +133,21 @@ impl<'control> CompileContext<'control> {
                 .map_err(|error| self.measurement_error(error))?;
         self.reserve_measured_clone(&measure)?;
         Ok(branches.to_vec())
+    }
+
+    /// Measure, reserve, and perform exactly one recursive IQ-condition clone.
+    ///
+    /// The source slice remains bound to its exact measurement and the one clone,
+    /// so normalization cannot charge a different condition forest or reuse one
+    /// reservation for multiple Union arms.
+    pub(crate) fn clone_iq_conditions(&self, conditions: &[IqCond]) -> Result<Vec<IqCond>> {
+        self.checkpoint()?;
+        let measure = measure_compiler_clone_collection_v1(
+            CompilerCloneCollectionV1::IqConditions(conditions),
+        )
+        .map_err(|error| self.measurement_error(error))?;
+        self.reserve_measured_clone(&measure)?;
+        Ok(conditions.to_vec())
     }
 
     fn reserve_measured_clone(&self, measure: &PlanMeasureV1) -> Result<u64> {
