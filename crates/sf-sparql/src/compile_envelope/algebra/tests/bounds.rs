@@ -78,6 +78,26 @@ fn should_keep_typed_errors_free_of_submitted_payload() {
     assert!(!format!("{error:?}").contains(marker));
 }
 
+#[test]
+fn should_report_accounting_overflow_without_saturating_into_a_limit_error() {
+    assert_eq!(
+        checked_sum(usize::MAX, 1),
+        Err(CompileEnvelopeError::AccountingOverflow)
+    );
+}
+
+#[test]
+fn should_map_work_stack_reservation_failure_without_allocator_text() {
+    let reserve_error = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("an impossible capacity must fail");
+
+    assert_eq!(
+        CompileEnvelopeError::from(reserve_error),
+        CompileEnvelopeError::AllocationFailed
+    );
+}
+
 fn nested_distinct(levels: usize) -> GraphPattern {
     let mut pattern = empty();
     for _ in 0..levels {

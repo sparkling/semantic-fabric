@@ -35,7 +35,7 @@ pub(crate) struct AlgebraEnvelopeV1 {
 }
 
 impl AlgebraEnvelopeV1 {
-    /// Measures a parsed query with an iterative, allocation-bounded walk.
+    /// Measures a parsed query with an iterative, fallibly allocated walk.
     ///
     /// An algebra node is each visited query, dataset, graph-pattern,
     /// expression, path, aggregate, order, triple, term-pattern, ground-term,
@@ -104,14 +104,14 @@ impl<'query> Validator<'query> {
             .algebra_nodes
             .checked_add(self.stack.len())
             .and_then(|value| value.checked_add(1))
-            .unwrap_or(usize::MAX);
+            .ok_or(CompileEnvelopeError::AccountingOverflow)?;
         enforce(
             CompileEnvelopeLimit::AlgebraNodes,
             observed,
             MAX_ALGEBRA_NODES_V1,
         )?;
         if self.stack.len() == self.stack.capacity() {
-            self.stack.reserve(1);
+            self.stack.try_reserve(1)?;
         }
         self.stack.push(Frame { depth, work });
         self.envelope.max_depth = self.envelope.max_depth.max(depth);
@@ -119,7 +119,7 @@ impl<'query> Validator<'query> {
     }
 
     fn record_node(&mut self, depth: usize) -> Result<(), CompileEnvelopeError> {
-        let observed = saturated_sum(self.envelope.algebra_nodes, 1);
+        let observed = checked_sum(self.envelope.algebra_nodes, 1)?;
         enforce(
             CompileEnvelopeLimit::AlgebraNodes,
             observed,
@@ -131,7 +131,7 @@ impl<'query> Validator<'query> {
     }
 
     fn collection(&mut self, slots: usize) -> Result<(), CompileEnvelopeError> {
-        let observed = saturated_sum(self.envelope.collection_slots, slots);
+        let observed = checked_sum(self.envelope.collection_slots, slots)?;
         enforce(
             CompileEnvelopeLimit::CollectionSlots,
             observed,
@@ -142,7 +142,7 @@ impl<'query> Validator<'query> {
     }
 
     fn payload(&mut self, bytes: usize) -> Result<(), CompileEnvelopeError> {
-        let observed = saturated_sum(self.envelope.retained_payload_bytes, bytes);
+        let observed = checked_sum(self.envelope.retained_payload_bytes, bytes)?;
         enforce(
             CompileEnvelopeLimit::RetainedPayloadBytes,
             observed,
@@ -153,8 +153,9 @@ impl<'query> Validator<'query> {
     }
 }
 
-fn saturated_sum(left: usize, right: usize) -> usize {
-    left.saturating_add(right)
+fn checked_sum(left: usize, right: usize) -> Result<usize, CompileEnvelopeError> {
+    left.checked_add(right)
+        .ok_or(CompileEnvelopeError::AccountingOverflow)
 }
 
 #[cfg(test)]

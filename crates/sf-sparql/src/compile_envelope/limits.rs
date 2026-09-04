@@ -1,3 +1,4 @@
+use std::collections::TryReserveError;
 use std::fmt;
 
 /// Independent V1 input ceiling. Changing any profile constant requires a new
@@ -67,6 +68,16 @@ pub(crate) enum CompileEnvelopeError {
         observed: usize,
         maximum: usize,
     },
+    #[error("compile envelope V1 arithmetic overflow")]
+    AccountingOverflow,
+    #[error("compile envelope V1 work-stack allocation failed")]
+    AllocationFailed,
+}
+
+impl From<TryReserveError> for CompileEnvelopeError {
+    fn from(_: TryReserveError) -> Self {
+        Self::AllocationFailed
+    }
 }
 
 /// Measurements retained by the V1 scan for later work accounting.
