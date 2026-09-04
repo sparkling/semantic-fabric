@@ -158,9 +158,7 @@ fn run_private_peer_v1(peer: PrivatePeer) -> ! {
     match peer {
         PrivatePeer::Parser => run_private_worker_v1(),
         PrivatePeer::QueryV1Transport => run_query_v1_transport_worker_v1(),
-        // Mutants remain independently gated and unavailable until their
-        // evidence slice lands; the exact tuple stays fail-closed meanwhile.
-        PrivatePeer::QueryV1TransportMutant => reject_private_invocation(),
+        PrivatePeer::QueryV1TransportMutant => run_query_v1_transport_mutant_worker_v1(),
     }
 }
 
@@ -195,6 +193,25 @@ fn run_query_v1_transport_worker_v1() -> ! {
     }
     #[cfg(not(all(
         feature = "query-v1-transport-evidence",
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    )))]
+    reject_private_invocation()
+}
+
+fn run_query_v1_transport_mutant_worker_v1() -> ! {
+    #[cfg(all(
+        feature = "query-v1-transport-mutant-evidence",
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    ))]
+    {
+        linux::run_query_v1_transport_mutant()
+    }
+    #[cfg(not(all(
+        feature = "query-v1-transport-mutant-evidence",
         target_os = "linux",
         target_arch = "x86_64",
         target_env = "gnu"

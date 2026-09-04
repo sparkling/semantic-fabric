@@ -15,7 +15,12 @@ use crate::parser_isolation::protocol::{
     FRAME_LEN,
 };
 
-#[cfg(feature = "query-v1-transport-evidence")]
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+mod query_v1_mutant;
+#[cfg(any(
+    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence"
+))]
 mod query_v1_transport;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +50,11 @@ pub(super) fn run_query_v1_transport() -> ! {
         }
         Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
     }
+}
+
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(super) fn run_query_v1_transport_mutant() -> ! {
+    query_v1_mutant::run_peer()
 }
 
 struct PreparedForHello {

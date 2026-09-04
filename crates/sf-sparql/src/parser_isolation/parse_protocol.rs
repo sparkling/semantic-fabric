@@ -15,15 +15,36 @@ use super::query_v1;
 mod binary;
 mod header;
 mod prepared;
-#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+#[cfg(any(
+    test,
+    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence"
+))]
 mod streaming;
-#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+#[cfg(any(
+    test,
+    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence"
+))]
 mod synthetic;
 
 pub(crate) use prepared::PreparedParseRequestV1;
-#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+#[cfg(any(
+    test,
+    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence"
+))]
 pub(crate) use streaming::decode_streamed_request_exact_for_nonce;
-#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+#[cfg(feature = "query-v1-transport-mutant-evidence")]
+pub(crate) use synthetic::{
+    mutate_synthetic_result_header, synthetic_mutant_result_header_for_body,
+    synthetic_mutant_result_header_for_payload, SyntheticResultHeaderMutation,
+};
+#[cfg(any(
+    test,
+    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence"
+))]
 pub(crate) use synthetic::{synthetic_empty_ask_result_header_for, SYNTHETIC_EMPTY_ASK_QUERY_V1};
 
 pub(crate) use binary::{allocate_frame_exact, FrameAllocation};
