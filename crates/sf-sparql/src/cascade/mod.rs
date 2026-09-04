@@ -70,6 +70,8 @@ fn schema_map_get<'a>(map: &SchemaMap<'a>, name: &str) -> Option<&'a TableSchema
 
 mod fd;
 mod joinelim;
+#[cfg(test)]
+mod pool_source_authority_tests;
 mod sameterm;
 #[cfg(test)]
 mod tests;
@@ -1647,48 +1649,179 @@ pub(crate) enum PoolTypeSafety {
     Unproven,
 }
 
+/// The source identity facts a D1 rewrite is allowed to obscure, without
+/// retaining a clone of the whole [`Branch`]. Entries are de-duplicated by
+/// alias using [`Branch::alias_sources`]'s first-match order. `is_core` records
+/// whether that first source came from `Branch::core`, because only a base
+/// table there may authorize a catalog column-type lookup.
+pub(crate) struct PoolSourceAuthority {
+    sources: Vec<PoolSourceAuthorityEntry>,
+}
+
+struct PoolSourceAuthorityEntry {
+    alias: usize,
+    source: LogicalSource,
+    is_core: bool,
+}
+
+impl PoolSourceAuthority {
+    pub(crate) fn capture(branch: &Branch) -> Self {
+        let core_count = branch.core.len();
+        let mut sources = Vec::new();
+        for (position, (alias, source)) in branch.alias_sources().into_iter().enumerate() {
+            if sources
+                .iter()
+                .any(|entry: &PoolSourceAuthorityEntry| entry.alias == alias)
+            {
+                continue;
+            }
+            sources.push(PoolSourceAuthorityEntry {
+                alias,
+                source: source.clone(),
+                is_core: position < core_count,
+            });
+        }
+        Self { sources }
+    }
+
+    fn physical_source(&self, alias: usize) -> Option<&LogicalSource> {
+        self.sources
+            .iter()
+            .find(|entry| entry.alias == alias)
+            .map(|entry| &entry.source)
+    }
+
+    fn core_source(&self, alias: usize) -> Option<&LogicalSource> {
+        self.sources
+            .iter()
+            .find(|entry| entry.alias == alias && entry.is_core)
+            .map(|entry| &entry.source)
+    }
+}
+
+fn pool_core_source<'a>(
+    branch: &'a Branch,
+    authority: Option<&'a PoolSourceAuthority>,
+    alias: usize,
+) -> Option<&'a LogicalSource> {
+    if let Some(authority) = authority {
+        authority.core_source(alias)
+    } else {
+        branch
+            .core
+            .iter()
+            .find(|scan| scan.alias == alias)
+            .map(|scan| &scan.source)
+    }
+}
+
+fn pool_physical_source<'a>(
+    branch: &'a Branch,
+    authority: Option<&'a PoolSourceAuthority>,
+    alias: usize,
+) -> Option<&'a LogicalSource> {
+    if let Some(authority) = authority {
+        authority.physical_source(alias)
+    } else {
+        branch
+            .alias_sources()
+            .into_iter()
+            .find_map(|(candidate, source)| (candidate == alias).then_some(source))
+    }
+}
+
 pub(crate) fn group_pool_type_safety(
     members: &[&Branch],
     schema: &[TableSchema],
     dialect: sf_sql::Dialect,
     column_type_use: crate::compiler_schema::ColumnTypeUse,
 ) -> PoolTypeSafety {
+    group_pool_type_safety_impl(members, None, schema, dialect, column_type_use)
+}
+
+/// Evaluate the current branch bindings against source identities captured
+/// before D1. `members` and `source_authorities` are parallel, branch-indexed
+/// slices; a broken alignment fails closed.
+pub(crate) fn group_pool_type_safety_with_source_authority(
+    members: &[&Branch],
+    source_authorities: &[&PoolSourceAuthority],
+    schema: &[TableSchema],
+    dialect: sf_sql::Dialect,
+    column_type_use: crate::compiler_schema::ColumnTypeUse,
+) -> PoolTypeSafety {
+    group_pool_type_safety_impl(
+        members,
+        Some(source_authorities),
+        schema,
+        dialect,
+        column_type_use,
+    )
+}
+
+fn group_pool_type_safety_impl(
+    members: &[&Branch],
+    source_authorities: Option<&[&PoolSourceAuthority]>,
+    schema: &[TableSchema],
+    dialect: sf_sql::Dialect,
+    column_type_use: crate::compiler_schema::ColumnTypeUse,
+) -> PoolTypeSafety {
+    if matches!(source_authorities, Some(authorities) if authorities.len() != members.len()) {
+        return PoolTypeSafety::Unproven;
+    }
     if dialect != sf_sql::Dialect::Postgres || members.len() < 2 {
         return PoolTypeSafety::ProvenSafe;
     }
     let schema_map = build_schema_map(schema);
-    let col_type = |b: &Branch, c: &ColRef| -> Option<&str> {
-        let scan = b.core.iter().find(|s| s.alias == c.alias)?;
-        let LogicalSource::Table(t) = &scan.source else {
+    let col_type = |index: usize, branch: &Branch, c: &ColRef| -> Option<&str> {
+        let authority = source_authorities.map(|authorities| authorities[index]);
+        let LogicalSource::Table(t) = pool_core_source(branch, authority, c.alias)? else {
             return None;
         };
         schema_map_get(&schema_map, t)?
             .column(&c.column)
             .map(|col| col.sql_type.as_str())
     };
-    fn physical_col<'a>(b: &'a Branch, c: &ColRef) -> Option<&'a LogicalSource> {
-        b.alias_sources()
-            .into_iter()
-            .find_map(|(alias, source)| (alias == c.alias).then_some(source))
-    }
-    let same_physical_col = |bi: &Branch, ci: &ColRef, bj: &Branch, cj: &ColRef| {
-        if ci.column != cj.column {
-            return false;
-        }
-        matches!(
-            (physical_col(bi, ci), physical_col(bj, cj)),
-            (Some(LogicalSource::Table(a)), Some(LogicalSource::Table(b))) if a == b
-        ) || matches!(
-            (physical_col(bi, ci), physical_col(bj, cj)),
-            (Some(LogicalSource::Query(a)), Some(LogicalSource::Query(b))) if a == b
-        )
-    };
+    let same_physical_col =
+        |i: usize, bi: &Branch, ci: &ColRef, j: usize, bj: &Branch, cj: &ColRef| {
+            if ci.column != cj.column {
+                return false;
+            }
+            matches!(
+                (
+                    pool_physical_source(
+                        bi,
+                        source_authorities.map(|authorities| authorities[i]),
+                        ci.alias,
+                    ),
+                    pool_physical_source(
+                        bj,
+                        source_authorities.map(|authorities| authorities[j]),
+                        cj.alias,
+                    )
+                ),
+                (Some(LogicalSource::Table(a)), Some(LogicalSource::Table(b))) if a == b
+            ) || matches!(
+                (
+                    pool_physical_source(
+                        bi,
+                        source_authorities.map(|authorities| authorities[i]),
+                        ci.alias,
+                    ),
+                    pool_physical_source(
+                        bj,
+                        source_authorities.map(|authorities| authorities[j]),
+                        cj.alias,
+                    )
+                ),
+                (Some(LogicalSource::Query(a)), Some(LogicalSource::Query(b))) if a == b
+            )
+        };
     let is_float = |ty: &str| {
         let ty = ty.to_ascii_lowercase();
         ty == "real" || ty.contains("float") || ty.contains("double")
     };
     for (i, bi) in members.iter().enumerate() {
-        for bj in &members[i + 1..] {
+        for (j, bj) in members.iter().enumerate().skip(i + 1) {
             for (var, def_i) in &bi.bindings {
                 let Some(def_j) = bj.bindings.get(var) else {
                     continue;
@@ -1698,13 +1831,13 @@ pub(crate) fn group_pool_type_safety(
                     continue;
                 }
                 for (ci, cj) in cols_i.iter().zip(&cols_j) {
-                    if same_physical_col(bi, ci, bj, cj) {
+                    if same_physical_col(i, bi, ci, j, bj, cj) {
                         continue;
                     }
                     if column_type_use == crate::compiler_schema::ColumnTypeUse::Unverified {
                         return PoolTypeSafety::Unproven;
                     }
-                    let (Some(ti), Some(tj)) = (col_type(bi, ci), col_type(bj, cj)) else {
+                    let (Some(ti), Some(tj)) = (col_type(i, bi, ci), col_type(j, bj, cj)) else {
                         return PoolTypeSafety::Unproven;
                     };
                     if !ti.eq_ignore_ascii_case(tj) && (is_float(ti) || is_float(tj)) {

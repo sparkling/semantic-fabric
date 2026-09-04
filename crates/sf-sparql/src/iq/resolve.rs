@@ -161,10 +161,15 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
             }
             let mut branches = cx.unfolder.resolve_pattern(&pattern, graph.as_ref())?;
             // D1 may wrap a base Table scan in a compiler-generated Query to
-            // enforce duplicate safety. Keep the pre-wrap branches as the
-            // column-type provenance authority for the later D2 pooling gate;
-            // the wrapper changes SQL shape, not the physical column's type.
-            let type_authority_branches = branches.clone();
+            // enforce duplicate safety. Capture only each branch's pre-wrap
+            // alias→source authority for the later D2 pooling gate; current
+            // bindings continue to come from `branches`. The two vectors stay
+            // index-aligned, and the wrapper changes SQL shape, not physical
+            // source identity or column type.
+            let source_authorities = branches
+                .iter()
+                .map(crate::cascade::PoolSourceAuthority::capture)
+                .collect::<Vec<_>>();
             // ADR-0034 D1/D2 are both skipped inside a FILTER EXISTS / FILTER NOT
             // EXISTS / MINUS body — see `Unfolder::in_existential`'s own doc comment
             // for the SPARQL semantics that make this sound (an existence / anti-join
@@ -270,12 +275,14 @@ pub fn resolve(node: IqNode, cx: &mut ResolveCx) -> Result<IqNode> {
                     // floating-point column's lexical form, and mutable startup type
                     // observations cannot prove different physical columns remain
                     // compatible — see `cascade::group_pool_type_safety`.
-                    let member_refs: Vec<&Branch> = group
+                    let member_refs = members.iter().collect::<Vec<_>>();
+                    let source_authority_refs = group
                         .iter()
-                        .map(|&index| &type_authority_branches[index])
-                        .collect();
-                    if crate::cascade::group_pool_type_safety(
+                        .map(|&index| &source_authorities[index])
+                        .collect::<Vec<_>>();
+                    if crate::cascade::group_pool_type_safety_with_source_authority(
                         &member_refs,
+                        &source_authority_refs,
                         cx.unfolder.schema,
                         cx.unfolder.dialect,
                         cx.unfolder.column_type_use,
