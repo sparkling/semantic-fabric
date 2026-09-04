@@ -1,5 +1,7 @@
 //! Adversarial tests for the immutable compiler/cache binding.
 
+use std::sync::Arc;
+
 use rusqlite::Connection;
 use sf_core::ir::{
     Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, SubjectMap, Template,
@@ -11,8 +13,8 @@ use spargebra::SparqlParser;
 
 use crate::cache::{self, CachedPlan, CompileProfileId};
 use crate::{
-    exec, parse_and_translate_with, translate_cached, translate_with, CompilerBinding,
-    CompilerSchema, ConstraintAuthority, Error, Tbox,
+    exec, parse_and_translate_with, translate_cached, translate_cached_shared, translate_with,
+    CompilerBinding, CompilerSchema, ConstraintAuthority, Error, Tbox,
 };
 
 fn binding(source_id: SourceId, dialect: Dialect) -> CompilerBinding {
@@ -48,6 +50,20 @@ fn translate_cached_reuses_only_within_one_immutable_binding() {
     let pg_plan = translate_cached(&query, &postgres).unwrap();
     assert_eq!(pg_plan.dialect, Dialect::Postgres);
     assert_eq!(postgres.cache_len(), 1);
+}
+
+#[test]
+fn shared_cache_path_reuses_the_same_plan_allocation() {
+    let query = SparqlParser::new()
+        .parse_query("SELECT * WHERE { ?s ?p ?o }")
+        .unwrap();
+    let binding = binding(SourceId::new(0).unwrap(), Dialect::Sqlite);
+
+    let first = translate_cached_shared(&query, &binding).unwrap();
+    let second = translate_cached_shared(&query, &binding).unwrap();
+
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(binding.cache_len(), 1);
 }
 
 #[test]

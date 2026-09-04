@@ -10,6 +10,7 @@
 //! or production capability admission.
 
 use std::fmt;
+use std::sync::Arc;
 
 use sf_core::{SourceId, SourceMapping};
 use sf_sparql::{CompileScope, CompilerBinding, CompilerSchema, Plan, Tbox};
@@ -131,7 +132,7 @@ impl RuntimeBinding {
     }
 
     pub(crate) fn compile(&self, sparql: &str) -> sf_sparql::Result<BoundPlan> {
-        self.compiler.compile(sparql).map(|plan| BoundPlan {
+        self.compiler.compile_shared(sparql).map(|plan| BoundPlan {
             scope: self.compiler.scope(),
             source_id: self.compiler.source_id(),
             plan,
@@ -181,11 +182,11 @@ impl fmt::Debug for RuntimeBinding {
 pub(crate) struct BoundPlan {
     scope: CompileScope,
     source_id: SourceId,
-    plan: Plan,
+    plan: Arc<Plan>,
 }
 
 impl BoundPlan {
-    pub(crate) const fn plan(&self) -> &Plan {
+    pub(crate) fn plan(&self) -> &Plan {
         &self.plan
     }
 }
@@ -204,11 +205,11 @@ impl fmt::Debug for BoundPlan {
 /// An ownership-checked backend/plan pair ready for form dispatch.
 pub(crate) struct ExecutablePlan {
     backend: Backend,
-    plan: Plan,
+    plan: Arc<Plan>,
 }
 
 impl ExecutablePlan {
-    pub(crate) fn into_parts(self) -> (Backend, Plan) {
+    pub(crate) fn into_parts(self) -> (Backend, Arc<Plan>) {
         (self.backend, self.plan)
     }
 }
@@ -298,5 +299,14 @@ mod tests {
             binding.scope().constraint_authority(),
             sf_sparql::ConstraintAuthority::Unverified
         );
+    }
+
+    #[test]
+    fn runtime_binding_reuses_the_cached_plan_allocation() {
+        let binding = binding(0);
+        let first = binding.compile("SELECT * WHERE { ?s ?p ?o }").unwrap();
+        let second = binding.compile("SELECT * WHERE { ?s ?p ?o }").unwrap();
+
+        assert!(Arc::ptr_eq(&first.plan, &second.plan));
     }
 }

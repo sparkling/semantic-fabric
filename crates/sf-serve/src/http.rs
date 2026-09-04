@@ -150,7 +150,7 @@ async fn compile(
 /// committed then, so this slice does not claim an atomic/no-prefix result body.
 async fn respond_select(
     backend: Backend,
-    plan: Plan,
+    plan: Arc<Plan>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
@@ -224,7 +224,7 @@ async fn respond_select(
 
 async fn respond_ask(
     backend: Backend,
-    plan: Plan,
+    plan: Arc<Plan>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
@@ -319,7 +319,7 @@ async fn respond_ask(
 /// the RDF serialiser into the body, never collected, on **both** backends.
 async fn respond_construct(
     backend: Backend,
-    plan: Plan,
+    plan: Arc<Plan>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {

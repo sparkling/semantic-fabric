@@ -54,6 +54,7 @@
 //! - **GROUP BY over UNION/multi-branch inner** — Rust-level grouping + aggregation.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use sf_core::ir::TriplesMap;
 use sf_sql::{Dialect, TableSchema};
@@ -720,7 +721,7 @@ fn cascade_subplans(b: &mut Branch, schema: &[TableSchema]) {
 /// reuses its plan; replacing any source-local semantic input requires a new
 /// binding and therefore a new namespace. Keying remains collision-safe because
 /// the canonical algebra disambiguates equal 64-bit hashes (see [`cache`]).
-pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan> {
+pub fn translate_cached_shared(query: &Query, binding: &CompilerBinding) -> Result<Arc<Plan>> {
     let profile = cache::CompileProfileId::Uncontrolled;
     let key = cache::plan_key_for_profile(query, binding.scope(), profile);
     if let Some(cached) = binding.cache().get(&key) {
@@ -734,7 +735,7 @@ pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan
                 "compiled-plan cache profile mismatch".to_owned(),
             ));
         }
-        return Ok(cached.plan().clone());
+        return Ok(cached.shared_plan());
     }
     let plan = translate_tree_with_column_type_use(
         query,
@@ -744,11 +745,19 @@ pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan
         binding.schema(),
         binding.column_type_use(),
     )?;
+    let plan = Arc::new(plan);
     binding.cache().put(
         key,
-        cache::CachedPlan::new(binding.scope(), profile, plan.clone()),
+        cache::CachedPlan::from_shared(binding.scope(), profile, Arc::clone(&plan)),
     );
     Ok(plan)
+}
+
+/// Compatibility form of [`translate_cached_shared`] that returns an owned
+/// deep clone. Product serving uses the shared form to avoid this recursive
+/// copy; callers that require independent mutation retain the old API.
+pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan> {
+    translate_cached_shared(query, binding).map(|plan| plan.as_ref().clone())
 }
 
 /// Parse `sparql` and translate it with caching (ADR-0007 *Plan cache*). The
@@ -757,10 +766,19 @@ pub fn translate_cached(query: &Query, binding: &CompilerBinding) -> Result<Plan
 /// full rewrite. Callers that already have a parsed `Query` call
 /// [`translate_cached`] directly.
 pub fn parse_and_translate_cached(sparql: &str, binding: &CompilerBinding) -> Result<Plan> {
+    parse_and_translate_cached_shared(sparql, binding).map(|plan| plan.as_ref().clone())
+}
+
+/// Shared-plan form of [`parse_and_translate_cached`] used by serving so cache
+/// hits and insertion clone only an [`Arc`], never the recursive [`Plan`].
+pub fn parse_and_translate_cached_shared(
+    sparql: &str,
+    binding: &CompilerBinding,
+) -> Result<Arc<Plan>> {
     let query = spargebra::SparqlParser::new()
         .parse_query(sparql)
         .map_err(|e| Error::Parse(e.to_string()))?;
-    translate_cached(&query, binding)
+    translate_cached_shared(&query, binding)
 }
 
 /// Parse `sparql` and translate it (convenience over [`translate`]).

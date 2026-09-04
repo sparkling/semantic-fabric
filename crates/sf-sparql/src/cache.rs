@@ -181,6 +181,14 @@ impl CompilerBinding {
         crate::parse_and_translate_cached(sparql, self)
     }
 
+    /// Parse and compile while sharing the cache-owned plan allocation.
+    ///
+    /// This avoids recursive plan clones on serving cache hits and insertion.
+    /// It does not grant governed compilation authority.
+    pub fn compile_shared(&self, sparql: &str) -> Result<Arc<Plan>> {
+        crate::parse_and_translate_cached_shared(sparql, self)
+    }
+
     pub const fn source_id(&self) -> SourceId {
         self.mapping.source_id()
     }
@@ -237,11 +245,20 @@ pub(crate) struct CachedPlan {
 }
 
 impl CachedPlan {
+    #[cfg(test)]
     pub(crate) fn new(scope: CompileScope, profile: CompileProfileId, plan: Plan) -> Self {
+        Self::from_shared(scope, profile, Arc::new(plan))
+    }
+
+    pub(crate) fn from_shared(
+        scope: CompileScope,
+        profile: CompileProfileId,
+        plan: Arc<Plan>,
+    ) -> Self {
         Self {
             scope,
             profile,
-            plan: Arc::new(plan),
+            plan,
         }
     }
 
@@ -253,8 +270,8 @@ impl CachedPlan {
         self.profile
     }
 
-    pub(crate) fn plan(&self) -> &Plan {
-        self.plan.as_ref()
+    pub(crate) fn shared_plan(&self) -> Arc<Plan> {
+        Arc::clone(&self.plan)
     }
 }
 
