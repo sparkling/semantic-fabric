@@ -9,12 +9,42 @@ use crate::parser_isolation::profile::{
     control_ready_profile_candidate_digest, v1_limits, V1_CANDIDATE_RLIMIT_FSIZE_BYTES,
     V1_LIMIT_VALUES,
 };
-use crate::parser_isolation::protocol::{BuildIdentityDigest, HelloFrame, FRAME_LEN};
+use crate::parser_isolation::protocol::{
+    BuildIdentityDigest, HandshakeNonce, HelloFrame, ParserProfileDigest, ParserWorkerLimits,
+    FRAME_LEN,
+};
+
+#[cfg(feature = "query-v1-transport-evidence")]
+mod query_v1_transport;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct WorkerFailure;
 
 pub(super) fn run() -> Result<(), WorkerFailure> {
+    let prepared = prepare_for_hello()?;
+    let (_nonce, _policy) = read_hello_and_emit_ready(prepared)?;
+
+    // QueryV1 is not implemented on the parser peer. Remaining alive until
+    // the trusted parent closes its pipe proves a real control-ready
+    // transition without accepting an unframed byte as a parser request.
+    require_parent_eof()
+}
+
+#[cfg(feature = "query-v1-transport-evidence")]
+pub(super) fn run_query_v1_transport() -> Result<(), WorkerFailure> {
+    let prepared = prepare_for_hello()?;
+    let (nonce, _policy) = read_hello_and_emit_ready(prepared)?;
+    query_v1_transport::run(nonce)
+}
+
+struct PreparedForHello {
+    build_identity: BuildIdentityDigest,
+    parser_profile_candidate: ParserProfileDigest,
+    observed_limits: ParserWorkerLimits,
+    policy: ControlReadyPolicyCandidate,
+}
+
+fn prepare_for_hello() -> Result<PreparedForHello, WorkerFailure> {
     let stable_parent = repair_and_verify_kernel_envelope()?;
     let build_identity = observe_current_executable()?;
     close_unintended_descriptors()?;
@@ -28,19 +58,30 @@ pub(super) fn run() -> Result<(), WorkerFailure> {
         return Err(WorkerFailure);
     }
 
+    Ok(PreparedForHello {
+        build_identity,
+        parser_profile_candidate,
+        observed_limits,
+        policy,
+    })
+}
+
+fn read_hello_and_emit_ready(
+    prepared: PreparedForHello,
+) -> Result<(HandshakeNonce, ControlReadyPolicyCandidate), WorkerFailure> {
     let mut encoded_hello = [0_u8; FRAME_LEN];
     read_exact(libc::STDIN_FILENO, &mut encoded_hello)?;
     let hello = HelloFrame::decode(&encoded_hello).map_err(|_| WorkerFailure)?;
+    let nonce = hello.nonce();
     let ready = hello
-        .acknowledge_verified(build_identity, parser_profile_candidate, observed_limits)
+        .acknowledge_verified(
+            prepared.build_identity,
+            prepared.parser_profile_candidate,
+            prepared.observed_limits,
+        )
         .map_err(|_| WorkerFailure)?;
     write_all(libc::STDOUT_FILENO, &ready.encode())?;
-
-    // QueryV1 is not implemented. Remaining alive until the trusted parent
-    // closes its pipe proves a real control-ready transition without accepting
-    // an unframed byte as a parser request. This does not qualify the candidate
-    // syscall surface for parser execution.
-    require_parent_eof()
+    Ok((nonce, prepared.policy))
 }
 
 fn repair_and_verify_kernel_envelope() -> Result<libc::pid_t, WorkerFailure> {

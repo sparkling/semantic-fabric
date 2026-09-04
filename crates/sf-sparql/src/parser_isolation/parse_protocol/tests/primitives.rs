@@ -152,6 +152,87 @@ fn static_empty_ask_fixture_has_independent_query_v1_replay() {
     );
 }
 
+#[test]
+fn streamed_request_validation_is_nonce_first_and_allocation_free() {
+    let expected_nonce = sample_nonce();
+    let canonical = request(SAMPLE_SOURCE).encode().unwrap();
+    let (header, body) = split_request(&canonical);
+    assert_eq!(
+        decode_streamed_request_exact_for_nonce(header, body, expected_nonce)
+            .expect("streamed request decodes")
+            .source(),
+        SAMPLE_SOURCE
+    );
+
+    let mut wrong_nonce_and_digest = canonical.clone();
+    wrong_nonce_and_digest[NONCE_OFFSET] ^= 1;
+    wrong_nonce_and_digest[REQUEST_HEADER_LEN] ^= 1;
+    let (header, body) = split_request(&wrong_nonce_and_digest);
+    assert_eq!(
+        decode_streamed_request_exact_for_nonce(header, body, expected_nonce),
+        Err(ParseFrameError::NonceMismatch)
+    );
+
+    let mut wrong_digest = canonical.clone();
+    wrong_digest[REQUEST_HEADER_LEN] ^= 1;
+    let (header, body) = split_request(&wrong_digest);
+    assert_eq!(
+        decode_streamed_request_exact_for_nonce(header, body, expected_nonce),
+        Err(ParseFrameError::SourceDigestMismatch)
+    );
+
+    let mut invalid_utf8 = request("x").encode().unwrap();
+    invalid_utf8[REQUEST_HEADER_LEN] = 0xff;
+    resign_request(&mut invalid_utf8);
+    let (header, body) = split_request(&invalid_utf8);
+    assert_eq!(
+        decode_streamed_request_exact_for_nonce(header, body, expected_nonce),
+        Err(ParseFrameError::InvalidSourceEncoding)
+    );
+
+    let mut drifted = canonical.clone();
+    set_u64(
+        &mut drifted,
+        BODY_LEN_OFFSET,
+        (SAMPLE_SOURCE.len() + 1) as u64,
+    );
+    let (header, body) = split_request(&drifted);
+    assert_eq!(
+        decode_streamed_request_exact_for_nonce(header, body, expected_nonce),
+        Err(ParseFrameError::InvalidFrameLength)
+    );
+}
+
+#[test]
+fn synthetic_result_header_matches_the_independent_success_vector() {
+    let request = request(SAMPLE_SOURCE);
+    let expected = ParseResultV1::success_for(
+        &request,
+        Query::Ask {
+            dataset: None,
+            pattern: GraphPattern::Bgp {
+                patterns: Vec::new(),
+            },
+            base_iri: None,
+        },
+    )
+    .encode()
+    .expect("independent empty-ASK result encodes");
+    let header = synthetic_empty_ask_result_header_for(&request)
+        .expect("fixed synthetic result header encodes");
+
+    assert_eq!(header.as_slice(), &expected[..RESULT_HEADER_LEN]);
+    assert_eq!(
+        SYNTHETIC_EMPTY_ASK_QUERY_V1.as_slice(),
+        &expected[RESULT_HEADER_LEN..]
+    );
+}
+
+fn split_request(wire: &[u8]) -> (&[u8; REQUEST_HEADER_LEN], &[u8]) {
+    let (header, body) = wire.split_at(REQUEST_HEADER_LEN);
+    (header.try_into().expect("fixed request header"), body)
+}
+
 fn fixed_success(request: &ParseRequestV1<'_>) -> Vec<u8> {
     ParseResultV1::success_for(
         request,

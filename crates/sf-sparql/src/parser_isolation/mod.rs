@@ -4,9 +4,9 @@
 //! exact Hello/Ready/EOF exchange through a non-default evidence feature. A raw
 //! or malformed reserved invocation fails closed. The policy and profile are
 //! control-ready candidates only. Private canonical request/result and QueryV1
-//! codecs are implemented but not connected to worker I/O; parser-qualified
-//! confinement, actual parser invocation, admission witnesses, permits, and
-//! serving remain absent.
+//! codecs connect only to a parser-free fixed-fixture transport peer;
+//! parser-qualified confinement, actual parser invocation, admission witnesses,
+//! permits, and serving remain absent.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod build_identity;

@@ -1,8 +1,9 @@
 //! Canonical one-shot parse request/result frames for the dormant V1 worker.
 //!
-//! The codecs are deliberately private and are not connected to worker I/O.
-//! Decoding validates fixed headers, bounded lengths, correlation fields and
-//! payload digests before any input-sized QueryV1 allocation.
+//! The codecs are deliberately private. Only the parser-free synthetic
+//! transport evidence peer is connected to worker I/O; the parser peer remains
+//! control-only. Decoding validates fixed headers, bounded lengths, correlation
+//! fields and payload digests before any input-sized QueryV1 allocation.
 
 use std::fmt;
 
@@ -14,10 +15,16 @@ use super::query_v1;
 mod binary;
 mod header;
 mod prepared;
+#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+mod streaming;
+#[cfg(any(test, feature = "query-v1-transport-evidence"))]
 mod synthetic;
 
 pub(crate) use prepared::PreparedParseRequestV1;
-pub(crate) const SYNTHETIC_EMPTY_ASK_QUERY_V1: [u8; 100] = synthetic::SYNTHETIC_EMPTY_ASK_QUERY_V1;
+#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+pub(crate) use streaming::decode_streamed_request_exact_for_nonce;
+#[cfg(any(test, feature = "query-v1-transport-evidence"))]
+pub(crate) use synthetic::{synthetic_empty_ask_result_header_for, SYNTHETIC_EMPTY_ASK_QUERY_V1};
 
 pub(crate) use binary::{allocate_frame_exact, FrameAllocation};
 use binary::{encode_common_header, read_u16, write_u16, ContentDigest};

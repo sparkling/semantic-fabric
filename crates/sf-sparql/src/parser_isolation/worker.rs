@@ -5,7 +5,9 @@
 //! On qualified Linux, the worker verifies and repairs its inherited kernel
 //! envelope, stacks a default-kill control-ready policy candidate, and only then
 //! reads Hello. Unprepared or malformed reserved invocations terminate silently
-//! and cannot fall through to the public CLI. No parser request is accepted.
+//! and cannot fall through to the public CLI. The parser peer accepts no parse
+//! request; the independently gated transport peer returns only a fixed,
+//! parser-free QueryV1 fixture.
 
 use std::ffi::{OsStr, OsString};
 
@@ -155,12 +157,10 @@ fn reject_private_invocation() -> ! {
 fn run_private_peer_v1(peer: PrivatePeer) -> ! {
     match peer {
         PrivatePeer::Parser => run_private_worker_v1(),
-        // The transport peer implementations land in a later evidence slice.
-        // Their exact tuples are nevertheless reserved now so unavailable or
-        // unfinished invocations cannot fall through to public CLI parsing.
-        PrivatePeer::QueryV1Transport | PrivatePeer::QueryV1TransportMutant => {
-            reject_private_invocation()
-        }
+        PrivatePeer::QueryV1Transport => run_query_v1_transport_worker_v1(),
+        // Mutants remain independently gated and unavailable until their
+        // evidence slice lands; the exact tuple stays fail-closed meanwhile.
+        PrivatePeer::QueryV1TransportMutant => reject_private_invocation(),
     }
 }
 
@@ -181,6 +181,30 @@ fn run_private_worker_v1() -> ! {
     }
     #[cfg(not(all(
         feature = "parser-worker-evidence",
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    )))]
+    reject_private_invocation()
+}
+
+fn run_query_v1_transport_worker_v1() -> ! {
+    #[cfg(all(
+        feature = "query-v1-transport-evidence",
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    ))]
+    {
+        let status = if linux::run_query_v1_transport().is_ok() {
+            0
+        } else {
+            PRIVATE_WORKER_REJECTED_EXIT_CODE
+        };
+        unsafe { libc::_exit(status) }
+    }
+    #[cfg(not(all(
+        feature = "query-v1-transport-evidence",
         target_os = "linux",
         target_arch = "x86_64",
         target_env = "gnu"
