@@ -56,23 +56,36 @@ impl ParserWorkerProcess {
     ) -> Result<(), SupervisorError> {
         match result {
             Ok(()) => Ok(()),
-            Err(primary) => match self.terminate_and_reap() {
-                Ok(_) => Err(primary),
-                Err(containment) => Err(containment),
-            },
+            Err(primary) => Err(self.contain_live_failure(primary)),
         }
     }
 
     /// Waits only to the immutable V1 deadline established before spawn.
     pub(super) fn wait_until_deadline(&mut self) -> Result<ExitStatus, SupervisorError> {
+        self.wait_until_deadline_with(poll_pidfd, inspect_exited_without_reaping)
+    }
+
+    fn wait_until_deadline_with<P, I>(
+        &mut self,
+        poll: P,
+        inspect: I,
+    ) -> Result<ExitStatus, SupervisorError>
+    where
+        P: FnOnce(&OwnedFd, Instant) -> Result<bool, SupervisorError>,
+        I: FnOnce(u32) -> Result<(), SupervisorError>,
+    {
         if self.child.is_none() {
             return Err(SupervisorError::InvalidState("worker is already reaped"));
         }
-        if !poll_pidfd(&self.pidfd, self.wall_deadline)? {
+        let exited = match poll(&self.pidfd, self.wall_deadline) {
+            Ok(exited) => exited,
+            Err(primary) => return Err(self.contain_live_failure(primary)),
+        };
+        if !exited {
             self.terminate_and_reap()?;
             return Err(SupervisorError::DeadlineExceeded);
         }
-        self.sweep_and_reap()
+        self.sweep_and_reap_with(inspect)
     }
 
     pub(super) fn terminate_and_reap(&mut self) -> Result<ExitStatus, SupervisorError> {
@@ -120,16 +133,29 @@ impl ParserWorkerProcess {
         Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
     }
 
-    fn sweep_and_reap(&mut self) -> Result<ExitStatus, SupervisorError> {
-        let child = self
+    fn sweep_and_reap_with<I>(&mut self, inspect: I) -> Result<ExitStatus, SupervisorError>
+    where
+        I: FnOnce(u32) -> Result<(), SupervisorError>,
+    {
+        let child_id = self
             .child
             .as_ref()
-            .ok_or(SupervisorError::InvalidState("worker is already reaped"))?;
-        inspect_exited_without_reaping(child.id())?;
+            .ok_or(SupervisorError::InvalidState("worker is already reaped"))?
+            .id();
+        if let Err(primary) = inspect(child_id) {
+            return Err(self.contain_live_failure(primary));
+        }
         let group = kill_process_group(self.process_group);
         let status = self.reap_exact()?;
         group?;
         Ok(status)
+    }
+
+    fn contain_live_failure(&mut self, primary: SupervisorError) -> SupervisorError {
+        match self.terminate_and_reap() {
+            Ok(_) => primary,
+            Err(containment) => containment,
+        }
     }
 
     fn reap_exact(&mut self) -> Result<ExitStatus, SupervisorError> {
@@ -287,4 +313,109 @@ pub(super) fn terminate_unbound_child(child: &mut Child) -> Result<(), Superviso
     group?;
     exact?;
     waited.map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+    use std::os::fd::{AsRawFd, OwnedFd};
+
+    use super::*;
+    use crate::parser_isolation::profile::v1_limits;
+    use crate::parser_isolation::supervisor::executable::PreparedParserExecutable;
+    use crate::parser_isolation::supervisor::linux::spawn_fixture;
+
+    #[test]
+    fn pidfd_poll_error_is_contained_and_reaped_before_recovery() {
+        let executable = prepared_cat();
+        let mut child = live_cat(&executable);
+        let pidfd = child.duplicate_pidfd().expect("duplicate pidfd");
+
+        let error = child
+            .wait_until_deadline_with(
+                |_, _| Err(SupervisorError::InvalidState("injected pidfd poll failure")),
+                |_| Ok(()),
+            )
+            .expect_err("poll failure must fail closed");
+
+        assert!(matches!(
+            error,
+            SupervisorError::InvalidState("injected pidfd poll failure")
+        ));
+        assert!(child.child.is_none());
+        assert!(!pidfd_targets_live_process(&pidfd));
+        successful_round_trip(&executable);
+    }
+
+    #[test]
+    fn exited_inspection_error_is_contained_and_reaped_before_recovery() {
+        let executable = prepared_cat();
+        let mut child = live_cat(&executable);
+        let pidfd = child.duplicate_pidfd().expect("duplicate pidfd");
+
+        let error = child
+            .wait_until_deadline_with(
+                |_, _| Ok(true),
+                |_| {
+                    Err(SupervisorError::InvalidState(
+                        "injected exited inspection failure",
+                    ))
+                },
+            )
+            .expect_err("inspection failure must fail closed");
+
+        assert!(matches!(
+            error,
+            SupervisorError::InvalidState("injected exited inspection failure")
+        ));
+        assert!(child.child.is_none());
+        assert!(!pidfd_targets_live_process(&pidfd));
+        successful_round_trip(&executable);
+    }
+
+    fn prepared_cat() -> PreparedParserExecutable {
+        PreparedParserExecutable::from_file_for_test(
+            File::open("/bin/cat").expect("open cat fixture"),
+            true,
+        )
+        .expect("prepare cat fixture")
+    }
+
+    fn live_cat(executable: &PreparedParserExecutable) -> ParserWorkerProcess {
+        spawn_fixture(executable, v1_limits(), &[b"cat", b"-"]).expect("launch cat fixture")
+    }
+
+    fn successful_round_trip(executable: &PreparedParserExecutable) {
+        let mut child = live_cat(executable);
+        child.write_all_until_deadline(b"R").expect("write byte");
+        let mut output = [0_u8; 1];
+        child
+            .read_exact_until_deadline(&mut output)
+            .expect("read echoed byte");
+        assert_eq!(output, [b'R']);
+        child.close_stdin();
+        assert!(child.wait_until_deadline().expect("reap cat").success());
+    }
+
+    fn pidfd_targets_live_process(pidfd: &OwnedFd) -> bool {
+        // SAFETY: signal zero only probes the process identified by this live pidfd.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                pidfd.as_raw_fd(),
+                0,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if result == 0 {
+            true
+        } else {
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+            false
+        }
+    }
 }

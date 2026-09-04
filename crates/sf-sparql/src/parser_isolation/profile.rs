@@ -2,15 +2,32 @@
 
 use sha2::{Digest, Sha256};
 
+use super::parse_protocol::{MAX_SOURCE_BYTES_V1, REQUEST_HEADER_LEN, RESULT_HEADER_LEN};
+use super::protocol::FRAME_LEN;
 use super::protocol::{ParserProfileDigest, ParserWorkerLimitValues, ParserWorkerLimits};
+use super::query_v1::MAX_QUERY_WIRE_BYTES;
+
+pub(super) const V1_CANDIDATE_MAX_INPUT_BYTES: u64 =
+    (FRAME_LEN + REQUEST_HEADER_LEN + MAX_SOURCE_BYTES_V1) as u64;
+pub(super) const V1_CANDIDATE_MAX_OUTPUT_BYTES: u64 =
+    (FRAME_LEN + RESULT_HEADER_LEN + MAX_QUERY_WIRE_BYTES) as u64;
+
+/// Separate regular-file ceiling; this does not govern worker pipe output.
+pub(super) const V1_CANDIDATE_RLIMIT_FSIZE_BYTES: u64 = 64 * 1024 * 1024;
+
+const _: () = {
+    assert!(V1_CANDIDATE_MAX_INPUT_BYTES == 1_048_856);
+    assert!(V1_CANDIDATE_MAX_OUTPUT_BYTES == 8_388_920);
+    assert!(V1_CANDIDATE_RLIMIT_FSIZE_BYTES == 67_108_864);
+};
 
 pub(super) const V1_LIMIT_VALUES: ParserWorkerLimitValues = ParserWorkerLimitValues {
     stack_bytes: 16 * 1024 * 1024,
     address_space_bytes: 1024 * 1024 * 1024,
     cpu_time_millis: 10_000,
     wall_time_millis: 15_000,
-    max_input_bytes: 1024 * 1024,
-    max_output_bytes: 64 * 1024 * 1024,
+    max_input_bytes: V1_CANDIDATE_MAX_INPUT_BYTES,
+    max_output_bytes: V1_CANDIDATE_MAX_OUTPUT_BYTES,
     max_open_fds: 64,
     max_processes: 1,
     max_concurrency: 64,
@@ -68,6 +85,22 @@ mod tests {
         assert_ne!(
             control_ready_profile_candidate_digest(),
             ParserProfileDigest::new([0; 32])
+        );
+    }
+
+    #[test]
+    fn transport_caps_include_both_handshake_and_frame_headers() {
+        assert_eq!(
+            V1_CANDIDATE_MAX_INPUT_BYTES,
+            (FRAME_LEN + REQUEST_HEADER_LEN + MAX_SOURCE_BYTES_V1) as u64
+        );
+        assert_eq!(
+            V1_CANDIDATE_MAX_OUTPUT_BYTES,
+            (FRAME_LEN + RESULT_HEADER_LEN + MAX_QUERY_WIRE_BYTES) as u64
+        );
+        assert_ne!(
+            V1_LIMIT_VALUES.max_output_bytes,
+            V1_CANDIDATE_RLIMIT_FSIZE_BYTES
         );
     }
 }

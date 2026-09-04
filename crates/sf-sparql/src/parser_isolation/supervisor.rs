@@ -23,6 +23,8 @@
 use std::fmt;
 use std::io as std_io;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+use super::parse_protocol::ParseFrameError;
 #[cfg(test)]
 use super::profile::v1_limits;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
@@ -53,6 +55,8 @@ pub(crate) enum SupervisorError {
     InvalidState(&'static str),
     #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     Protocol(HandshakeError),
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+    ParseFrame(ParseFrameError),
     DeadlineExceeded,
     Operation {
         operation: &'static str,
@@ -81,6 +85,8 @@ impl fmt::Display for SupervisorError {
             Self::InvalidState(reason) => write!(formatter, "invalid parser child state: {reason}"),
             #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
             Self::Protocol(error) => write!(formatter, "parser worker protocol: {error}"),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+            Self::ParseFrame(error) => write!(formatter, "parser request preparation: {error}"),
             Self::DeadlineExceeded => formatter.write_str("parser worker wall deadline exceeded"),
             Self::Operation { operation, source } => write!(formatter, "{operation}: {source}"),
         }
@@ -93,6 +99,8 @@ impl std::error::Error for SupervisorError {
             Self::Operation { source, .. } => Some(source),
             #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
             Self::Protocol(source) => Some(source),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+            Self::ParseFrame(source) => Some(source),
             _ => None,
         }
     }
@@ -106,14 +114,25 @@ impl From<HandshakeError> for SupervisorError {
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+impl From<ParseFrameError> for SupervisorError {
+    fn from(error: ParseFrameError) -> Self {
+        Self::ParseFrame(error)
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 impl PreparedParserExecutable {
     /// The production-unreachable control-handshake launch primitive.
     ///
     /// `sf-cli` must not call this until its private worker dispatch runs before
     /// Clap/application thread-pool initialization and installs/verifies the
     /// control-ready policy candidate before emitting the handshake response.
-    fn launch_private_worker(&self) -> Result<handshake::ControlReadyWorker, SupervisorError> {
-        handshake::launch(self)
+    fn launch_private_worker(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch(self, prepared)
     }
 }
 
@@ -123,9 +142,14 @@ impl PreparedParserExecutable {
     target_arch = "x86_64",
     target_env = "gnu"
 ))]
-pub(super) fn exercise_handshake_for_evidence(file: std::fs::File) -> Result<(), SupervisorError> {
+pub(super) fn exercise_handshake_for_evidence(
+    file: std::fs::File,
+    source: &str,
+) -> Result<(), SupervisorError> {
     let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
-    prepared.launch_private_worker()?.finish_without_query()
+    prepared
+        .launch_private_worker(source)?
+        .finish_without_query()
 }
 
 /// Buildable fail-closed stub for every unqualified target.

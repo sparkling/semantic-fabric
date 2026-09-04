@@ -6,7 +6,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use super::policy_candidate::ControlReadyPolicyCandidate;
 use crate::parser_isolation::build_identity;
 use crate::parser_isolation::profile::{
-    control_ready_profile_candidate_digest, v1_limits, V1_LIMIT_VALUES,
+    control_ready_profile_candidate_digest, v1_limits, V1_CANDIDATE_RLIMIT_FSIZE_BYTES,
+    V1_LIMIT_VALUES,
 };
 use crate::parser_isolation::protocol::{BuildIdentityDigest, HelloFrame, FRAME_LEN};
 
@@ -146,7 +147,7 @@ fn verify_limits_and_stage_one() -> Result<(), WorkerFailure> {
         (libc::RLIMIT_CORE, 0),
         (libc::RLIMIT_AS, V1_LIMIT_VALUES.address_space_bytes),
         (libc::RLIMIT_CPU, V1_LIMIT_VALUES.cpu_time_millis / 1_000),
-        (libc::RLIMIT_FSIZE, V1_LIMIT_VALUES.max_output_bytes),
+        (libc::RLIMIT_FSIZE, V1_CANDIDATE_RLIMIT_FSIZE_BYTES),
         (libc::RLIMIT_NOFILE, V1_LIMIT_VALUES.max_open_fds),
         (libc::RLIMIT_STACK, V1_LIMIT_VALUES.stack_bytes),
     ] {

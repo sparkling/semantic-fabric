@@ -12,6 +12,9 @@ use super::protocol::{HandshakeNonce, DIGEST_LEN};
 use super::query_v1;
 
 mod binary;
+mod prepared;
+
+pub(crate) use prepared::PreparedParseRequestV1;
 
 use binary::{
     allocate_frame, checked_frame_len, encode_common_header, read_u16, read_u32, read_u64,
@@ -116,6 +119,17 @@ impl<'source> ParseRequestV1<'source> {
             source,
             source_digest: declared_digest,
         })
+    }
+
+    pub(crate) fn decode_exact_for_nonce(
+        input: &'source [u8],
+        expected_nonce: HandshakeNonce,
+    ) -> Result<Self, ParseFrameError> {
+        let request = Self::decode_exact(input)?;
+        if request.nonce != expected_nonce {
+            return Err(ParseFrameError::NonceMismatch);
+        }
+        Ok(request)
     }
 
     pub(crate) fn encode(self) -> Result<Vec<u8>, ParseFrameError> {

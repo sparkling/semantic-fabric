@@ -196,12 +196,9 @@ impl BoundedWorkerIo {
                 return Ok(());
             }
             if count > 0 {
-                self.received =
-                    self.received
-                        .checked_add(1)
-                        .ok_or(SupervisorError::InvalidState(
-                            "parser worker output accounting overflowed",
-                        ))?;
+                // The unconditional one-byte probe distinguishes exact EOF from
+                // a longer stream. A trailing byte is rejected, never accepted
+                // output, so it does not enlarge or mutate the cumulative cap.
                 return Err(SupervisorError::InvalidState(
                     "parser worker emitted trailing protocol output",
                 ));

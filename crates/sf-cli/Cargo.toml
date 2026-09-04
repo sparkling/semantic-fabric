@@ -10,6 +10,15 @@ description = "semantic-fabric command-line interface — the single binary (ADR
 name = "semantic-fabric"
 path = "src/main.rs"
 
+[features]
+default = []
+parser-worker-evidence = ["sf-sparql/parser-worker-evidence"]
+
+[[test]]
+name = "private_worker_handshake"
+path = "tests/private_worker_handshake.rs"
+required-features = ["parser-worker-evidence"]
+
 [dependencies]
 sf-core.workspace = true
 sf-sparql.workspace = true
@@ -21,4 +30,3 @@ anyhow.workspace = true
 
 [dev-dependencies]
 libc.workspace = true
-sf-sparql = { workspace = true, features = ["parser-worker-evidence"] }

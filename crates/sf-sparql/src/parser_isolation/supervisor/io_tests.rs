@@ -85,15 +85,20 @@ mod linux_tests {
     #[test]
     fn output_eof_is_exact_and_trailing_bytes_are_contained_before_recovery() {
         let shell = prepared("/bin/sh");
-        let mut clean = spawn_fixture(&shell, v1_limits(), &[b"sh", b"-c", b"printf R"])
+        let mut values = v1_limits().values();
+        values.max_output_bytes = 1;
+        let exact_output_limit = ParserWorkerLimits::new(values).unwrap();
+        let mut clean = spawn_fixture(&shell, exact_output_limit, &[b"sh", b"-c", b"printf R"])
             .expect("launch clean EOF fixture");
         let mut frame = [0_u8; 1];
         clean.read_exact_until_deadline(&mut frame).unwrap();
         assert_eq!(frame, [b'R']);
+        assert_eq!(clean.received_bytes(), 1);
         clean.expect_stdout_eof_until_deadline().unwrap();
+        assert_eq!(clean.received_bytes(), 1);
         assert!(clean.wait_until_deadline().unwrap().success());
 
-        let mut trailing = spawn_fixture(&shell, v1_limits(), &[b"sh", b"-c", b"printf RZ"])
+        let mut trailing = spawn_fixture(&shell, exact_output_limit, &[b"sh", b"-c", b"printf RZ"])
             .expect("launch trailing-output fixture");
         trailing.read_exact_until_deadline(&mut frame).unwrap();
         assert_eq!(frame, [b'R']);
@@ -104,6 +109,7 @@ mod linux_tests {
                 "parser worker emitted trailing protocol output"
             ))
         ));
+        assert_eq!(trailing.received_bytes(), 1);
         assert!(trailing.child.is_none(), "trailing output must reap");
         assert!(!pidfd_targets_live_process(&pidfd));
         successful_round_trip(&prepared("/bin/cat"));

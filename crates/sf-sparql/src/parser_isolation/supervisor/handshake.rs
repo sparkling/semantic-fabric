@@ -3,6 +3,7 @@
 use super::executable::PreparedParserExecutable;
 use super::lifecycle::ParserWorkerProcess;
 use super::{linux, SupervisorError};
+use crate::parser_isolation::parse_protocol::PreparedParseRequestV1;
 use crate::parser_isolation::profile::{control_ready_profile_candidate_digest, v1_limits};
 use crate::parser_isolation::protocol::{
     verify_ready, HandshakeNonce, HelloFrame, ReadyFrame, DIGEST_LEN, FRAME_LEN,
@@ -10,19 +11,34 @@ use crate::parser_isolation::protocol::{
 
 pub(super) struct ControlReadyWorker {
     process: ParserWorkerProcess,
+    prepared_request: PreparedParseRequestV1,
 }
 
-pub(super) fn launch(
+pub(super) struct PreparedControlExchange {
+    hello: HelloFrame,
+    request: PreparedParseRequestV1,
+}
+
+pub(super) fn prepare(
     executable: &PreparedParserExecutable,
-) -> Result<ControlReadyWorker, SupervisorError> {
+    source: &str,
+) -> Result<PreparedControlExchange, SupervisorError> {
     let hello = HelloFrame::new(
         generate_nonce()?,
         executable.identity().build_identity(),
         control_ready_profile_candidate_digest(),
         v1_limits(),
     );
+    let request = PreparedParseRequestV1::new(hello.nonce(), source)?;
+    Ok(PreparedControlExchange { hello, request })
+}
+
+pub(super) fn launch(
+    executable: &PreparedParserExecutable,
+    prepared: PreparedControlExchange,
+) -> Result<ControlReadyWorker, SupervisorError> {
     let mut process = linux::spawn_private(executable, v1_limits())?;
-    process.write_all_until_deadline(&hello.encode())?;
+    process.write_all_until_deadline(&prepared.hello.encode())?;
 
     let mut encoded_ready = [0_u8; FRAME_LEN];
     process.read_exact_until_deadline(&mut encoded_ready)?;
@@ -30,10 +46,13 @@ pub(super) fn launch(
         Ok(ready) => ready,
         Err(error) => return Err(contain_protocol_failure(&mut process, error.into())),
     };
-    if let Err(error) = verify_ready(&hello, &ready) {
+    if let Err(error) = verify_ready(&prepared.hello, &ready) {
         return Err(contain_protocol_failure(&mut process, error.into()));
     }
-    Ok(ControlReadyWorker { process })
+    Ok(ControlReadyWorker {
+        process,
+        prepared_request: prepared.request,
+    })
 }
 
 impl ControlReadyWorker {
@@ -43,13 +62,13 @@ impl ControlReadyWorker {
         self.process.close_stdin();
         self.process.expect_stdout_eof_until_deadline()?;
         let status = self.process.wait_until_deadline()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(SupervisorError::InvalidState(
+        if !status.success() {
+            return Err(SupervisorError::InvalidState(
                 "control-ready parser worker rejected EOF",
-            ))
+            ));
         }
+        self.prepared_request.verify_exact()?;
+        Ok(())
     }
 }
 

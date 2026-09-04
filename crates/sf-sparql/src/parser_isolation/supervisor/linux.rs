@@ -11,6 +11,7 @@ use super::io::BoundedWorkerIo;
 use super::lifecycle::{open_pidfd, terminate_unbound_child, ParserWorkerProcess};
 use super::seccomp::StageOnePolicy;
 use super::SupervisorError;
+use crate::parser_isolation::profile::V1_CANDIDATE_RLIMIT_FSIZE_BYTES;
 use crate::parser_isolation::protocol::ParserWorkerLimits;
 use crate::parser_isolation::worker::{PRIVATE_WORKER_MODE, PRIVATE_WORKER_NAME};
 
@@ -66,7 +67,7 @@ impl ValidatedLimits {
                 limit(libc::RLIMIT_CPU, cpu_seconds)?,
                 // RLIMIT_FSIZE does not bound pipe output. BoundedWorkerIo
                 // independently enforces cumulative `max_output_bytes`.
-                limit(libc::RLIMIT_FSIZE, values.max_output_bytes)?,
+                limit(libc::RLIMIT_FSIZE, V1_CANDIDATE_RLIMIT_FSIZE_BYTES)?,
                 limit(libc::RLIMIT_NOFILE, values.max_open_fds)?,
                 limit(libc::RLIMIT_STACK, values.stack_bytes)?,
             ],

@@ -67,7 +67,8 @@ pub(super) fn resign_result(bytes: &mut [u8]) {
 fn request_success_and_closed_rejections_round_trip_exactly() {
     let original_request = request(SAMPLE_SOURCE);
     let request_wire = original_request.encode().expect("request encodes");
-    let decoded_request = ParseRequestV1::decode_exact(&request_wire).expect("request decodes");
+    let decoded_request = ParseRequestV1::decode_exact_for_nonce(&request_wire, sample_nonce())
+        .expect("request decodes with its retained handshake nonce");
     assert_eq!(decoded_request.nonce(), sample_nonce());
     assert_eq!(decoded_request.source(), SAMPLE_SOURCE);
     assert_eq!(decoded_request.encode().unwrap(), request_wire);
@@ -95,6 +96,30 @@ fn request_success_and_closed_rejections_round_trip_exactly() {
         assert_eq!(decoded.rejection(), Some(rejection));
         assert_eq!(decoded.encode().unwrap(), wire);
     }
+}
+
+#[test]
+fn request_decode_requires_the_retained_handshake_nonce() {
+    let request_wire = request(SAMPLE_SOURCE).encode().expect("request encodes");
+    let different_nonce = HandshakeNonce::new([0xff; DIGEST_LEN]);
+
+    assert_eq!(
+        ParseRequestV1::decode_exact_for_nonce(&request_wire, different_nonce),
+        Err(ParseFrameError::NonceMismatch)
+    );
+}
+
+#[test]
+fn owned_prepared_request_replays_exactly_without_self_reference() {
+    let prepared =
+        PreparedParseRequestV1::new(sample_nonce(), SAMPLE_SOURCE).expect("prepare owned request");
+
+    assert_eq!(prepared.nonce(), sample_nonce());
+    assert_eq!(
+        prepared.encoded().len(),
+        REQUEST_HEADER_LEN + SAMPLE_SOURCE.len()
+    );
+    prepared.verify_exact().expect("exact local replay");
 }
 
 #[test]
