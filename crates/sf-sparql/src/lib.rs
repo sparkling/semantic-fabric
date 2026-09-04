@@ -80,6 +80,8 @@ pub mod exec_pg;
 mod graph_map;
 pub mod iq;
 pub mod leftjoin;
+#[allow(dead_code)] // Dormant ADR-0053 handshake; process wiring is a later slice.
+mod parser_isolation;
 pub mod path;
 #[allow(dead_code)] // Staged clone/envelope primitive; cache wiring is a later slice.
 mod plan_measure;
