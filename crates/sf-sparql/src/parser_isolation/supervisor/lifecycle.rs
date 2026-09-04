@@ -1,11 +1,10 @@
 //! Required-pidfd ownership and process-group-before-reap cleanup.
 
-#[cfg(test)]
-use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::process::{Child, ChildStdin, ChildStdout, ExitStatus};
+use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
+use super::io::BoundedWorkerIo;
 use super::SupervisorError;
 
 /// Live child ownership. The group leader is deliberately left unreaped until
@@ -14,43 +13,49 @@ pub(super) struct ParserWorkerProcess {
     pub(super) child: Option<Child>,
     pub(super) pidfd: OwnedFd,
     pub(super) process_group: libc::pid_t,
-    pub(super) stdin: Option<ChildStdin>,
-    pub(super) stdout: Option<ChildStdout>,
+    pub(super) io: BoundedWorkerIo,
     pub(super) wall_deadline: Instant,
 }
 
 impl ParserWorkerProcess {
-    #[cfg(test)]
-    pub(super) fn stdin_mut(&mut self) -> Result<&mut ChildStdin, SupervisorError> {
-        self.stdin
-            .as_mut()
-            .ok_or(SupervisorError::InvalidState("worker stdin is closed"))
+    pub(super) fn write_all_until_deadline(&mut self, bytes: &[u8]) -> Result<(), SupervisorError> {
+        let result = self.io.write_all(&self.pidfd, self.wall_deadline, bytes);
+        self.contain_io_result(result)
     }
 
-    #[cfg(test)]
-    pub(super) fn stdout_mut(&mut self) -> Result<&mut ChildStdout, SupervisorError> {
-        self.stdout
-            .as_mut()
-            .ok_or(SupervisorError::InvalidState("worker stdout is closed"))
+    pub(super) fn read_exact_until_deadline(
+        &mut self,
+        bytes: &mut [u8],
+    ) -> Result<(), SupervisorError> {
+        let result = self.io.read_exact(&self.pidfd, self.wall_deadline, bytes);
+        self.contain_io_result(result)
     }
 
-    #[cfg(test)]
-    pub(super) fn write_all(&mut self, bytes: &[u8]) -> Result<(), SupervisorError> {
-        self.stdin_mut()?
-            .write_all(bytes)
-            .map_err(SupervisorError::operation("write parser worker input"))
-    }
-
-    #[cfg(test)]
-    pub(super) fn read_exact(&mut self, bytes: &mut [u8]) -> Result<(), SupervisorError> {
-        self.stdout_mut()?
-            .read_exact(bytes)
-            .map_err(SupervisorError::operation("read parser worker output"))
-    }
-
-    #[cfg(test)]
     pub(super) fn close_stdin(&mut self) {
-        self.stdin.take();
+        self.io.close_stdin();
+    }
+
+    #[cfg(test)]
+    pub(super) const fn sent_bytes(&self) -> u64 {
+        self.io.sent()
+    }
+
+    #[cfg(test)]
+    pub(super) const fn received_bytes(&self) -> u64 {
+        self.io.received()
+    }
+
+    fn contain_io_result(
+        &mut self,
+        result: Result<(), SupervisorError>,
+    ) -> Result<(), SupervisorError> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(primary) => match self.terminate_and_reap() {
+                Ok(_) => Err(primary),
+                Err(containment) => Err(containment),
+            },
+        }
     }
 
     /// Waits only to the immutable V1 deadline established before spawn.
@@ -83,7 +88,7 @@ impl ParserWorkerProcess {
         } else {
             Ok(())
         };
-        self.stdin.take();
+        self.io.close_stdin();
         if group.is_err() && exact.is_err() && fallback.is_err() {
             return Err(group
                 .err()
@@ -124,8 +129,7 @@ impl ParserWorkerProcess {
     }
 
     fn reap_exact(&mut self) -> Result<ExitStatus, SupervisorError> {
-        self.stdin.take();
-        self.stdout.take();
+        self.io.close();
         self.child
             .take()
             .ok_or(SupervisorError::InvalidState("worker is already reaped"))?

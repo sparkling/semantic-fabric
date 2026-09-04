@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::executable::PreparedParserExecutable;
+use super::io::BoundedWorkerIo;
 use super::lifecycle::{open_pidfd, terminate_unbound_child, ParserWorkerProcess};
 use super::seccomp::StageOnePolicy;
 use super::SupervisorError;
@@ -64,8 +65,8 @@ impl ValidatedLimits {
                 limit(libc::RLIMIT_CORE, 0)?,
                 limit(libc::RLIMIT_AS, values.address_space_bytes)?,
                 limit(libc::RLIMIT_CPU, cpu_seconds)?,
-                // RLIMIT_FSIZE does not bound pipe output. The future protocol
-                // reader must independently enforce `max_output_bytes`.
+                // RLIMIT_FSIZE does not bound pipe output. BoundedWorkerIo
+                // independently enforces cumulative `max_output_bytes`.
                 limit(libc::RLIMIT_FSIZE, values.max_output_bytes)?,
                 limit(libc::RLIMIT_NOFILE, values.max_open_fds)?,
                 limit(libc::RLIMIT_STACK, values.stack_bytes)?,
@@ -114,7 +115,7 @@ fn spawn(
     }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        require_sigchld_contract()?;
+        require_parent_signal_contracts()?;
         if arguments.is_empty() || arguments.len() > MAX_FIXTURE_ARGUMENTS {
             return Err(SupervisorError::InvalidState(
                 "worker argv count is outside the fixed launch bound",
@@ -132,6 +133,7 @@ fn spawn(
                 "worker argv bytes exceed the fixed launch bound",
             ));
         }
+        let io_limits = limits.values();
         let limits = ValidatedLimits::new(limits)?;
         let wall_deadline =
             Instant::now()
@@ -255,12 +257,23 @@ fn spawn(
                 return Err(cleanup.err().unwrap_or(primary));
             }
         };
+        let io = match BoundedWorkerIo::new(
+            stdin,
+            stdout,
+            io_limits.max_input_bytes,
+            io_limits.max_output_bytes,
+        ) {
+            Ok(io) => io,
+            Err(primary) => {
+                let cleanup = terminate_unbound_child(&mut child);
+                return Err(cleanup.err().unwrap_or(primary));
+            }
+        };
         Ok(ParserWorkerProcess {
             child: Some(child),
             pidfd,
             process_group,
-            stdin: Some(stdin),
-            stdout: Some(stdout),
+            io,
             wall_deadline,
         })
     }
@@ -350,7 +363,7 @@ unsafe fn set_and_verify_limit(limit: LimitSpec) -> std::io::Result<()> {
     Ok(())
 }
 
-fn require_sigchld_contract() -> Result<(), SupervisorError> {
+fn require_parent_signal_contracts() -> Result<(), SupervisorError> {
     // Post-spawn pidfd_open is valid only while SIGCHLD creates a zombie and no
     // competing wait-any reaper consumes this child. The disposition is checked
     // here; exclusive reaping remains an explicit integration precondition.
@@ -364,6 +377,23 @@ fn require_sigchld_contract() -> Result<(), SupervisorError> {
     if action.sa_sigaction == libc::SIG_IGN || action.sa_flags & libc::SA_NOCLDWAIT != 0 {
         return Err(SupervisorError::InvalidState(
             "SIGCHLD disposition cannot preserve an unreaped child",
+        ));
+    }
+    // The nonblocking parent writer uses a pipe write after poll. A concurrent
+    // close can still race that syscall, so SIGPIPE must remain ignored and
+    // EPIPE must be reported as an ordinary contained I/O failure. Rust's
+    // standard runtime establishes this disposition; future integration must
+    // exclude process-wide signal mutation while supervisors can be live.
+    let mut pipe_action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    // SAFETY: a null new action queries the process-wide disposition.
+    if unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut pipe_action) } != 0 {
+        return Err(SupervisorError::operation("inspect SIGPIPE disposition")(
+            std::io::Error::last_os_error(),
+        ));
+    }
+    if pipe_action.sa_sigaction != libc::SIG_IGN {
+        return Err(SupervisorError::InvalidState(
+            "SIGPIPE disposition cannot make worker pipe failures recoverable",
         ));
     }
     Ok(())

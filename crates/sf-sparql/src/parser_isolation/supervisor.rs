@@ -10,19 +10,23 @@
 //! bytes, applies exact OS limits, prevents descendants/group escape, and owns
 //! pidfd/group cleanup. It does **not** attest release provenance or dynamic
 //! libraries, restrict filesystem/network/ioctl access, drop OS privilege,
-//! bound pipe output, implement a general syscall sandbox, or make reap bounded
-//! under uninterruptible kernel sleep. The default-allow stage-one filter is
-//! safe only because no peer-controlled bytes are accepted before a future
-//! worker verifies and stacks its final policy.
+//! implement a general syscall sandbox, or make reap bounded under
+//! uninterruptible kernel sleep. Parent pipe operations are cumulative-byte
+//! bounded, nonblocking, and share the immutable spawn deadline, but no protocol
+//! exchange calls them yet. The default-allow stage-one filter is safe only
+//! because no peer-controlled bytes are accepted before a future worker verifies
+//! and stacks its final policy.
 
 use std::fmt;
-use std::io;
+use std::io as std_io;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use super::protocol::{ParserWorkerLimitValues, ParserWorkerLimits};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod executable;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod io;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -58,12 +62,12 @@ pub(crate) enum SupervisorError {
     DeadlineExceeded,
     Operation {
         operation: &'static str,
-        source: io::Error,
+        source: std_io::Error,
     },
 }
 
 impl SupervisorError {
-    pub(super) fn operation(operation: &'static str) -> impl FnOnce(io::Error) -> Self {
+    pub(super) fn operation(operation: &'static str) -> impl FnOnce(std_io::Error) -> Self {
         move |source| Self::Operation { operation, source }
     }
 }
@@ -124,5 +128,7 @@ impl PreparedParserExecutable {
     }
 }
 
+#[cfg(test)]
+mod io_tests;
 #[cfg(test)]
 mod tests;

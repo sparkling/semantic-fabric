@@ -129,16 +129,13 @@ mod linux_tests {
         let mut child = spawn_fixture(&shell, v1_limits(), &[b"sh", b"-c", script.as_bytes()])
             .expect("launch shell fixture");
         drop(ambient_fd);
-        let mut output = Vec::new();
+        let mut output = [0_u8; EXPECTED.len()];
         child
-            .stdout_mut()
-            .expect("fixture stdout")
-            .take(256)
-            .read_to_end(&mut output)
-            .expect("read bounded fixture output");
+            .read_exact_until_deadline(&mut output)
+            .expect("read exact fixture output before the canonical deadline");
         let status = child.wait_until_deadline().expect("reap shell fixture");
         assert!(status.success(), "fixture status: {status}");
-        assert_eq!(output, EXPECTED);
+        assert_eq!(&output, EXPECTED);
     }
 
     #[test]
@@ -227,7 +224,6 @@ mod linux_tests {
         let limits = ParserWorkerLimits::new(values).expect("short fixture limits");
         let mut child =
             spawn_fixture(&executable, limits, &[b"cat", b"-"]).expect("launch deadline fixture");
-        barrier(&mut child);
         assert!(matches!(
             child.wait_until_deadline(),
             Err(SupervisorError::DeadlineExceeded)
@@ -274,9 +270,13 @@ mod linux_tests {
     }
 
     fn barrier(child: &mut super::super::lifecycle::ParserWorkerProcess) {
-        child.write_all(b"B").expect("write barrier byte");
+        child
+            .write_all_until_deadline(b"B")
+            .expect("write barrier byte");
         let mut observed = [0_u8; 1];
-        child.read_exact(&mut observed).expect("read barrier byte");
+        child
+            .read_exact_until_deadline(&mut observed)
+            .expect("read barrier byte");
         assert_eq!(observed, [b'B']);
     }
 
