@@ -83,6 +83,8 @@ use crate::iq::TermDef;
 use crate::unify::{bind_term_def, unify, Unify};
 use crate::{Error, Result};
 
+type ValuesRows = Vec<Vec<Option<TermDef>>>;
+
 /// Normalize a whole RESOLVED tree to the leaf-CQ spine (design §4). Walks `node`
 /// bottom-up: each child is normalized first, then the node-local rewrite (fold /
 /// lift / distribute / prune) is applied, re-normalizing the structure a distribution
@@ -527,7 +529,7 @@ fn normalize_left_join(left: IqNode, right: IqNode, cond: Vec<IqCond>) -> Result
 /// Flattens nested `Union`s (associativity — keeps every arm), prunes `Empty` arms
 /// (the `Union` identity), and unwraps a one-arm `Union`. Beyond that it performs
 /// **NO multiplicity-losing arm-merge / dedup** — a multiplicity-bearing arm is never
-/// collapsed into a sibling — with exactly one exception: [`try_fold_constant_union`]
+/// collapsed into a sibling — with exactly one exception: [`fold_constant_union`]
 /// (ADR-0023 optimizer-residue Wave C, §4.15) combines arms that are ALL bare
 /// constant tuples into one `Values` leaf, which is bag-preserving (N constant arms
 /// → N rows), not a lossy dedup.
@@ -545,16 +547,13 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
     Ok(match arms.len() {
         0 => IqNode::Empty { vars: project },
         1 => arms.pop().expect("len checked == 1"),
-        _ => match try_fold_constant_union(&arms, &project) {
-            Some(values) => values,
-            None => match try_partial_fold_constant_union(&arms, &project) {
-                Some(union) => union,
-                None => IqNode::Union {
-                    children: arms,
-                    project,
-                },
-            },
-        },
+        _ if arms
+            .iter()
+            .all(|arm| constant_arm_is_foldable(arm, &project)) =>
+        {
+            fold_constant_union(arms, project)
+        }
+        _ => fold_partial_constant_runs(arms, project),
     })
 }
 
@@ -566,13 +565,8 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
 /// SAME `=_bag` multiset (one row per arm), just represented as a `Values` leaf
 /// instead of an N-arm `Union` of single-row `Construction`s.
 ///
-/// Declines (`None`, leaving the `Union` as-is) on the first arm that isn't in this
-/// exact shape: a binding that isn't a compile-time constant, or a `Construction`
-/// over a real pattern (a DATA arm — test15's "const arms fold, data arm kept"
-/// needs a partial fold this rule does not yet attempt). Never a partial/best-effort
-/// fold: any non-qualifying arm aborts the whole attempt, matching this codebase's
-/// sound-no-op-on-precondition-failure convention elsewhere (e.g.
-/// `try_sql_group_over_union`).
+/// The caller preflights every arm and uses [`fold_partial_constant_runs`] instead
+/// when a binding is not compile-time constant or an arm contains a real pattern.
 ///
 /// Ontop `ValuesNodeOptimization::test25NoVariableTrueNodesAndValuesNodes`: a bare
 /// `IqNode::True` arm (the zero-var identity — no `Construction` at all, since it
@@ -593,27 +587,61 @@ fn normalize_union(children: Vec<IqNode>, project: Vec<Var>) -> Result<IqNode> {
 /// IRI/literal or a `CONCAT` of recursively-constant parts (`Expression::Variable`
 /// always fails against an empty map), so a successful result is *provably*
 /// column-free — safe to embed directly in a core-less `Values` row.
-fn try_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
-    if arms.len() < 2 {
-        return None;
-    }
+fn fold_constant_union(arms: Vec<IqNode>, project: Vec<Var>) -> IqNode {
+    debug_assert!(arms.len() >= 2);
     let mut rows = Vec::with_capacity(arms.len());
     for arm in arms {
-        rows.extend(const_rows_of(arm, project)?);
+        rows.extend(
+            into_const_rows(arm, &project).expect("constant_arm_is_foldable checked every arm"),
+        );
     }
-    Some(IqNode::Values {
-        vars: project.to_vec(),
+    IqNode::Values {
+        vars: project,
         rows,
+    }
+}
+
+/// Whether an arm can be consumed into constant rows without retaining the arm.
+fn constant_arm_is_foldable(arm: &IqNode, project: &[Var]) -> bool {
+    match arm {
+        IqNode::Values { vars, .. } => same_var_set(vars, project),
+        IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
+            constant_subst_can_form_row(subst, project)
+        }
+        IqNode::True => project.is_empty(),
+        _ => false,
+    }
+}
+
+fn constant_subst_can_form_row(subst: &BTreeMap<Var, BindDef>, project: &[Var]) -> bool {
+    let no_vars = BTreeMap::new();
+    project.iter().all(|var| match subst.get(var) {
+        Some(BindDef::Resolved(TermDef::Const(_))) | None => true,
+        Some(BindDef::Expr(expression)) => bind_term_def(expression, &no_vars).is_ok(),
+        Some(_) => false,
     })
 }
 
-/// Extract the constant row(s) this ARM alone would contribute to a folded
-/// `Values` leaf projecting `project` — `None` if this arm isn't one of the three
-/// constant-arm shapes `try_fold_constant_union`/`try_partial_fold_constant_union`
-/// recognize (a DATA arm, a real pattern underneath). Shared by both callers so
-/// the fold precondition is defined in exactly one place.
-fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
+fn constant_row_from_subst(
+    mut subst: BTreeMap<Var, BindDef>,
+    project: &[Var],
+) -> Option<Vec<Option<TermDef>>> {
     let no_vars = BTreeMap::new();
+    let mut row = Vec::with_capacity(project.len());
+    for var in project {
+        let cell = match subst.remove(var) {
+            Some(BindDef::Resolved(TermDef::Const(term))) => Some(TermDef::Const(term)),
+            Some(BindDef::Expr(expression)) => Some(bind_term_def(&expression, &no_vars).ok()?),
+            Some(_) => return None,
+            None => None,
+        };
+        row.push(cell);
+    }
+    Some(row)
+}
+
+/// Consume the constant row(s) this arm contributes to a folded `Values` leaf.
+fn into_const_rows(arm: IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
     match arm {
         // `A UNION B UNION C` is left-associative (`(A UNION B) UNION C`): the
         // inner `(A UNION B)` normalizes (and, when both are constant, this SAME
@@ -624,21 +652,13 @@ fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef
         // (SAME variables, order-independent) is the acceptance test, and
         // `reorder_row` permutes each row by variable NAME to `project`'s order
         // before absorbing it (a no-op permutation when the orders already agree).
-        IqNode::Values { vars, rows } if same_var_set(vars, project) => {
-            Some(rows.iter().map(|r| reorder_row(vars, r, project)).collect())
-        }
-        IqNode::Construction { child, subst, .. } if matches!(**child, IqNode::True) => {
-            let mut row = Vec::with_capacity(project.len());
-            for var in project {
-                let cell = match subst.get(var) {
-                    Some(BindDef::Resolved(TermDef::Const(t))) => Some(TermDef::Const(t.clone())),
-                    Some(BindDef::Expr(e)) => Some(bind_term_def(e, &no_vars).ok()?),
-                    Some(_) => return None, // a resolved non-constant (e.g. a column)
-                    None => None,           // unbound in this arm -- UNDEF (Values semantics)
-                };
-                row.push(cell);
-            }
-            Some(vec![row])
+        IqNode::Values { vars, rows } if same_var_set(&vars, project) => Some(
+            rows.into_iter()
+                .map(|row| reorder_row(vars.as_slice(), row, project))
+                .collect(),
+        ),
+        IqNode::Construction { child, subst, .. } if matches!(child.as_ref(), IqNode::True) => {
+            Some(vec![constant_row_from_subst(subst, project)?])
         }
         // test25: a bare `True` arm binds nothing, so it can only fold when
         // there is nothing TO bind -- an empty `project` -- contributing one
@@ -662,7 +682,7 @@ fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef
     }
 }
 
-/// Partial version of `try_fold_constant_union` (Ontop
+/// Partial version of [`fold_constant_union`] (Ontop
 /// `ValuesNodeOptimization::test15ConstructionUnionTrueTrueDataNode`): when SOME
 /// (but not all) of a `Union`'s arms are constant, fold JUST those into one
 /// `Values` arm, keeping the rest (the DATA arms — real patterns underneath)
@@ -670,11 +690,10 @@ fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef
 /// `Union` distributes row-membership independently of how its arms are grouped);
 /// only the SQL shape changes — fewer arms to plan/execute.
 ///
-/// Declines (`None`) when NO maximal contiguous run of 2+ constant arms exists
-/// anywhere in `arms` (a single isolated constant arm gains nothing from being
-/// wrapped in its own one-arm `Values`) or when the whole list folds into ONE
-/// run spanning every arm (`try_fold_constant_union`, tried first by the caller,
-/// already produces a strictly simpler bare `Values` for that case).
+/// Returns the original owned arms when NO maximal contiguous run of 2+ constant
+/// arms exists (a single isolated constant arm gains nothing from being wrapped
+/// in a one-arm `Values`). The caller handles the all-constant case first with
+/// [`fold_constant_union`].
 ///
 /// Folds each maximal contiguous run of 2+ constant arms into one `Values` arm
 /// AT that run's own starting position — never combining constant arms
@@ -688,41 +707,57 @@ fn const_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef
 /// UNION {{c1}} UNION {{c2}} LIMIT 2` returned the data arm's rows on the flat
 /// side but the folded constants on the tree side, because an earlier version
 /// of this function unconditionally prepended the fold regardless of position).
-fn try_partial_fold_constant_union(arms: &[IqNode], project: &[Var]) -> Option<IqNode> {
+fn fold_partial_constant_runs(arms: Vec<IqNode>, project: Vec<Var>) -> IqNode {
+    let foldable: Vec<bool> = arms
+        .iter()
+        .map(|arm| constant_arm_is_foldable(arm, &project))
+        .collect();
+    if !foldable.windows(2).any(|pair| pair[0] && pair[1]) {
+        return IqNode::Union {
+            children: arms,
+            project,
+        };
+    }
+
     let mut children = Vec::with_capacity(arms.len());
-    let mut folded_a_run = false;
+    let mut source = arms.into_iter();
     let mut i = 0;
-    while i < arms.len() {
-        let mut run_rows = Vec::new();
-        let mut run_len = 0;
-        while i + run_len < arms.len() {
-            match const_rows_of(&arms[i + run_len], project) {
-                Some(r) => {
-                    run_rows.extend(r);
-                    run_len += 1;
-                }
-                None => break,
-            }
+    while i < foldable.len() {
+        if !foldable[i] {
+            children.push(source.next().expect("foldability mirrors source arms"));
+            i += 1;
+            continue;
         }
+
+        let run_end = foldable[i..]
+            .iter()
+            .position(|foldable| !foldable)
+            .map_or(foldable.len(), |offset| i + offset);
+        let run_len = run_end - i;
         if run_len >= 2 {
+            let mut run_rows = Vec::new();
+            for _ in 0..run_len {
+                let arm = source.next().expect("foldability mirrors source arms");
+                run_rows.extend(
+                    into_const_rows(arm, &project)
+                        .expect("constant_arm_is_foldable checked the run"),
+                );
+            }
             children.push(IqNode::Values {
                 vars: project.to_vec(),
                 rows: run_rows,
             });
-            folded_a_run = true;
-            i += run_len;
         } else {
-            children.push(arms[i].clone());
-            i += 1;
+            children.push(source.next().expect("foldability mirrors source arms"));
         }
+        i = run_end;
     }
-    if !folded_a_run || children.len() == 1 {
-        return None;
+
+    if children.len() == 1 {
+        children.pop().expect("len checked == 1")
+    } else {
+        IqNode::Union { children, project }
     }
-    Some(IqNode::Union {
-        children,
-        project: project.to_vec(),
-    })
 }
 
 // ---- (d) Slice-over-Values truncation (ADR-0023 optimizer-residue Wave C; Ontop
@@ -749,14 +784,7 @@ fn normalize_slice(offset: usize, limit: Option<usize>, child: IqNode) -> IqNode
             rows: slice_rows(rows, offset, limit),
         },
         IqNode::Union { children, project } => {
-            match try_slice_over_union(offset, limit, &children, &project) {
-                Some(node) => node,
-                None => IqNode::Slice {
-                    child: Box::new(IqNode::Union { children, project }),
-                    offset,
-                    limit,
-                },
-            }
+            normalize_slice_over_union(offset, limit, children, project)
         }
         IqNode::Construction {
             child: inner,
@@ -794,14 +822,14 @@ fn slice_rows(
 
 /// An arm's statically-known row set matching `project` in EXACT column order: a
 /// bare `Values` leaf, or a single-row all-constant `Construction{child: True, ...}`
-/// (the same two shapes [`try_fold_constant_union`] recognizes for a WHOLE `Union`,
+/// (the same two shapes [`fold_constant_union`] recognizes for a WHOLE `Union`,
 /// generalized here to one arm at a time — a mixed `Union` with a genuine DATA arm
-/// declines `try_fold_constant_union` entirely, so an all-constant arm can still
+/// declines the full constant fold entirely, so an all-constant arm can still
 /// reach this function unfolded). `None` ⇒ unknown cardinality (a real pattern, or
 /// a column-order mismatch this rule doesn't reconcile — cf. test26).
-fn static_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
+fn static_row_count(arm: &IqNode, project: &[Var]) -> Option<usize> {
     if let IqNode::Values { vars, rows } = arm {
-        return (vars.as_slice() == project).then(|| rows.clone());
+        return (vars.as_slice() == project).then_some(rows.len());
     }
     // A lone `VALUES` block as a Union arm is ALSO wrapped in the builder's identity-
     // projection `Construction` (confirmed empirically — the same pattern `normalize_
@@ -822,28 +850,82 @@ fn static_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDe
                 && arm_project.as_slice() == project
                 && vars.as_slice() == project =>
         {
-            Some(rows.clone())
+            Some(rows.len())
         }
-        IqNode::True => {
-            let no_vars = BTreeMap::new();
-            let mut row = Vec::with_capacity(project.len());
-            for var in project {
-                let cell = match subst.get(var) {
-                    Some(BindDef::Resolved(TermDef::Const(t))) => Some(TermDef::Const(t.clone())),
-                    Some(BindDef::Expr(e)) => Some(bind_term_def(e, &no_vars).ok()?),
-                    Some(_) => return None,
-                    None => None,
-                };
-                row.push(cell);
-            }
-            Some(vec![row])
-        }
+        IqNode::True if constant_subst_can_form_row(subst, project) => Some(1),
         _ => None,
     }
 }
 
+fn into_static_rows(arm: IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDef>>>> {
+    match arm {
+        IqNode::Values { vars, rows } if vars.as_slice() == project => Some(rows),
+        IqNode::Construction {
+            child,
+            subst,
+            project: arm_project,
+        } => match *child {
+            IqNode::Values { vars, rows }
+                if subst.is_empty()
+                    && arm_project.as_slice() == project
+                    && vars.as_slice() == project =>
+            {
+                Some(rows)
+            }
+            IqNode::True => Some(vec![constant_row_from_subst(subst, project)?]),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SliceUnionPlan {
+    known_arms: usize,
+    drop_remaining: bool,
+}
+
+fn plan_slice_over_union(
+    offset: usize,
+    limit: Option<usize>,
+    arms: &[IqNode],
+    project: &[Var],
+) -> Option<SliceUnionPlan> {
+    let limit_n = limit.unwrap_or(usize::MAX);
+    let window_end = offset.saturating_add(limit_n);
+    let mut cursor = 0usize;
+    let mut survivor_count = 0usize;
+    let mut i = 0;
+    let mut changed = false;
+
+    while i < arms.len() {
+        if survivor_count >= limit_n {
+            return Some(SliceUnionPlan {
+                known_arms: i,
+                drop_remaining: true,
+            });
+        }
+        let Some(row_count) = static_row_count(&arms[i], project) else {
+            break;
+        };
+        let local_start = offset.saturating_sub(cursor).min(row_count);
+        let local_end = window_end.saturating_sub(cursor).min(row_count);
+        if local_start > 0 || local_end < row_count {
+            changed = true;
+        }
+        survivor_count += local_end.saturating_sub(local_start);
+        cursor += row_count;
+        i += 1;
+    }
+
+    changed.then_some(SliceUnionPlan {
+        known_arms: i,
+        drop_remaining: false,
+    })
+}
+
 /// Resolve a `Slice(offset, limit)` over a `Union` whose LEADING arms have a
-/// statically-known row count ([`static_rows_of`]) by walking them in as-written
+/// statically-known row count ([`static_row_count`]) by walking them in as-written
 /// order, tracking `cursor` (the true row count consumed so far) and `survivors`
 /// (the rows the `[offset, offset+limit)` window actually keeps from them):
 ///
@@ -863,59 +945,62 @@ fn static_rows_of(arm: &IqNode, project: &[Var]) -> Option<Vec<Vec<Option<TermDe
 ///   (whose own semantics already read arms in order from position 0) does the
 ///   right thing for whatever follows, at any depth, with no further bookkeeping.
 ///
-/// Returns `None` (decline, keep `Slice{Union}` as-is) when nothing at all could be
-/// dropped or truncated — e.g. the very first arm is already unknown and the window
-/// isn't yet satisfied — matching every other rule's sound-decline convention.
-fn try_slice_over_union(
+/// Keeps the original owned `Slice{Union}` when nothing at all could be dropped or
+/// truncated — e.g. the first arm is already unknown and the window is not yet
+/// satisfied — matching every other rule's sound-decline convention.
+fn normalize_slice_over_union(
     offset: usize,
     limit: Option<usize>,
-    arms: &[IqNode],
-    project: &[Var],
-) -> Option<IqNode> {
+    arms: Vec<IqNode>,
+    project: Vec<Var>,
+) -> IqNode {
+    let Some(plan) = plan_slice_over_union(offset, limit, &arms, &project) else {
+        return IqNode::Slice {
+            child: Box::new(IqNode::Union {
+                children: arms,
+                project,
+            }),
+            offset,
+            limit,
+        };
+    };
+
     let limit_n = limit.unwrap_or(usize::MAX);
     let window_end = offset.saturating_add(limit_n);
     let mut cursor = 0usize;
     let mut survivors: Vec<Vec<Option<TermDef>>> = Vec::new();
-    let mut i = 0;
-    let mut changed = false;
+    let mut source = arms.into_iter();
 
-    while i < arms.len() {
-        if survivors.len() >= limit_n {
-            // Everything from here on (including arms[i] itself, not yet processed)
-            // is unreachable -- drop the whole remaining tail, not just what's
-            // already been looked at.
-            changed = true;
-            i = arms.len();
-            break;
+    for _ in 0..plan.known_arms {
+        let rows = into_static_rows(
+            source.next().expect("slice plan mirrors source arms"),
+            &project,
+        )
+        .expect("static_row_count admitted every planned arm");
+        let row_count = rows.len();
+        let local_start = offset.saturating_sub(cursor).min(row_count);
+        let local_end = window_end.saturating_sub(cursor).min(row_count);
+        if local_start < local_end {
+            survivors.extend(
+                rows.into_iter()
+                    .skip(local_start)
+                    .take(local_end - local_start),
+            );
         }
-        match static_rows_of(&arms[i], project) {
-            Some(rows) => {
-                let n = rows.len();
-                let local_start = offset.saturating_sub(cursor).min(n);
-                let local_end = window_end.saturating_sub(cursor).min(n);
-                if local_start > 0 || local_end < n {
-                    changed = true; // this arm got truncated (partly or fully outside the window)
-                }
-                if local_start < local_end {
-                    survivors.extend(rows[local_start..local_end].iter().cloned());
-                }
-                cursor += n;
-                i += 1;
-            }
-            None => break, // unknown cardinality -- stop, keep this arm + the rest
-        }
+        cursor += row_count;
     }
 
-    if !changed {
-        return None;
-    }
+    let remaining: Vec<IqNode> = if plan.drop_remaining {
+        Vec::new()
+    } else {
+        source.collect()
+    };
 
-    let remaining = &arms[i..];
     if remaining.is_empty() {
-        Some(IqNode::Values {
-            vars: project.to_vec(),
+        IqNode::Values {
+            vars: project,
             rows: survivors,
-        })
+        }
     } else {
         let mut new_arms = Vec::new();
         if !survivors.is_empty() {
@@ -924,16 +1009,16 @@ fn try_slice_over_union(
                 rows: survivors,
             });
         }
-        new_arms.extend(remaining.iter().cloned());
+        new_arms.extend(remaining);
         let child = if new_arms.len() == 1 {
             new_arms.pop().expect("len checked == 1")
         } else {
             IqNode::Union {
                 children: new_arms,
-                project: project.to_vec(),
+                project,
             }
         };
-        Some(IqNode::Slice {
+        IqNode::Slice {
             child: Box::new(child),
             // NOT unconditionally 0: an adversarial review caught that the known
             // arms' cumulative row count (`cursor`) may still fall SHORT of the
@@ -945,7 +1030,7 @@ fn try_slice_over_union(
             // however much of `offset` the known prefix DIDN'T already consume.
             offset: offset.saturating_sub(cursor),
             limit,
-        })
+        }
     }
 }
 
@@ -964,12 +1049,12 @@ fn normalize_distinct(child: IqNode) -> IqNode {
         // `Distinct` requirement itself — only discard the node when dedup actually
         // ran, else the duplicates it left behind would reach LOWER unguarded (a
         // wrong answer, not merely a missed optimization).
-        IqNode::Values { vars, rows } => match dedup_rows(&rows) {
-            Some(deduped) => IqNode::Values {
+        IqNode::Values { vars, rows } => match dedup_rows(rows) {
+            Ok(deduped) => IqNode::Values {
                 vars,
                 rows: deduped,
             },
-            None => IqNode::Distinct {
+            Err(rows) => IqNode::Distinct {
                 child: Box::new(IqNode::Values { vars, rows }),
             },
         },
@@ -1031,9 +1116,12 @@ fn same_var_set(a: &[Var], b: &[Var]) -> bool {
 /// under that precondition). A no-op permutation when the two orders already agree.
 fn reorder_row(
     from_order: &[Var],
-    row: &[Option<TermDef>],
+    mut row: Vec<Option<TermDef>>,
     to_order: &[Var],
 ) -> Vec<Option<TermDef>> {
+    if from_order == to_order {
+        return row;
+    }
     to_order
         .iter()
         .map(|v| {
@@ -1041,14 +1129,14 @@ fn reorder_row(
                 .iter()
                 .position(|w| w == v)
                 .expect("same_var_set checked by the caller");
-            row[i].clone()
+            std::mem::take(&mut row[i])
         })
         .collect()
 }
 
 /// Dedup ONE `Union` arm's own internal duplicate rows (a bare `Values` leaf, or a
 /// lone `VALUES`-as-union-arm wrapped in the builder's identity-projection
-/// `Construction` — the same shape `static_rows_of` recognizes, but returning the
+/// `Construction` — the same shape `static_row_count` recognizes, but returning the
 /// (possibly unchanged) `IqNode` here rather than an extracted row list, since a
 /// non-Values-shaped arm must be handed back completely untouched). Declines (the
 /// arm unchanged) when its own declared columns aren't EXACTLY the Union's
@@ -1059,12 +1147,12 @@ fn dedup_one_arm(arm: IqNode, project: &[Var]) -> IqNode {
     match arm {
         IqNode::Values { vars, rows } if vars.as_slice() == project => {
             let n = rows.len();
-            match dedup_rows(&rows) {
-                Some(deduped) if deduped.len() < n => IqNode::Values {
+            match dedup_rows(rows) {
+                Ok(deduped) if deduped.len() < n => IqNode::Values {
                     vars,
                     rows: deduped,
                 },
-                _ => IqNode::Values { vars, rows },
+                Ok(rows) | Err(rows) => IqNode::Values { vars, rows },
             }
         }
         IqNode::Construction {
@@ -1079,12 +1167,12 @@ fn dedup_one_arm(arm: IqNode, project: &[Var]) -> IqNode {
                 unreachable!("matched above")
             };
             let n = rows.len();
-            let deduped_child = match dedup_rows(&rows) {
-                Some(deduped) if deduped.len() < n => IqNode::Values {
+            let deduped_child = match dedup_rows(rows) {
+                Ok(deduped) if deduped.len() < n => IqNode::Values {
                     vars,
                     rows: deduped,
                 },
-                _ => IqNode::Values { vars, rows },
+                Ok(rows) | Err(rows) => IqNode::Values { vars, rows },
             };
             IqNode::Construction {
                 child: Box::new(deduped_child),
@@ -1103,29 +1191,40 @@ fn dedup_one_arm(arm: IqNode, project: &[Var]) -> IqNode {
 /// `rows` unchanged — still correct, `Distinct`/`SELECT DISTINCT` still runs at
 /// LOWER as before) the moment any cell isn't a plain `Const`: a `Concat`/`Coalesce`/
 /// `Agg`/`Derived` `TermDef` has no reconstruction-time-only comparable form here.
-fn dedup_rows(rows: &[Vec<Option<TermDef>>]) -> Option<Vec<Vec<Option<TermDef>>>> {
-    let keys: Option<Vec<Vec<Option<&sf_core::Term>>>> = rows
+fn dedup_rows(rows: ValuesRows) -> std::result::Result<ValuesRows, ValuesRows> {
+    let comparable = rows
         .iter()
-        .map(|row| {
-            row.iter()
-                .map(|cell| match cell {
-                    None => Some(None),
-                    Some(TermDef::Const(t)) => Some(Some(t)),
-                    Some(_) => None,
-                })
-                .collect()
-        })
-        .collect();
-    let keys = keys?; // some cell isn't a plain constant -- decline (caller keeps Distinct)
-    let mut seen: Vec<&Vec<Option<&sf_core::Term>>> = Vec::new();
-    let mut out = Vec::new();
-    for (row, key) in rows.iter().zip(keys.iter()) {
-        if !seen.contains(&key) {
-            seen.push(key);
-            out.push(row.clone());
+        .flatten()
+        .all(|cell| matches!(cell, None | Some(TermDef::Const(_))));
+    if !comparable {
+        return Err(rows);
+    }
+
+    let mut rows = rows;
+    let mut unique_prefix = 0;
+    while unique_prefix < rows.len() {
+        let duplicate = rows[..unique_prefix]
+            .iter()
+            .any(|seen| const_rows_equal(seen, &rows[unique_prefix]));
+        if duplicate {
+            rows.remove(unique_prefix);
+        } else {
+            unique_prefix += 1;
         }
     }
-    Some(out)
+    Ok(rows)
+}
+
+fn const_rows_equal(left: &[Option<TermDef>], right: &[Option<TermDef>]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| match (left, right) {
+                (None, None) => true,
+                (Some(TermDef::Const(left)), Some(TermDef::Const(right))) => left == right,
+                _ => false,
+            })
 }
 
 // ---- condition normalization (descend into EXISTS / NOT EXISTS payloads) ----------
@@ -1629,7 +1728,7 @@ mod tests {
 
     /// THREE arms: `A UNION B UNION C` parses left-associative (`(A UNION B) UNION
     /// C`), so the inner pair folds to a bare `Values` before the outer `Union` (with
-    /// arm C still a `Construction`) ever runs — `try_fold_constant_union` must absorb
+    /// arm C still a `Construction`) ever runs — the full constant fold must absorb
     /// an already-folded `Values` arm's rows directly, not just a `Construction` one.
     /// (RED before the fix: the outer fold declined on the first arm not being a
     /// `Construction`, leaving `Union[Values{[a,b]}, Construction{c}]` unfolded.)
@@ -1691,7 +1790,7 @@ mod tests {
     /// `Union` of two bare `VALUES` blocks — covered FOR FREE by composing the two
     /// existing rules above (no new production code): each bare `VALUES` arm is
     /// already an `IqNode::Values` (no `Construction` wrapper needed, unlike `BIND`),
-    /// so `try_fold_constant_union`'s "absorb an already-Values arm" case (added for
+    /// so `fold_constant_union`'s "absorb an already-Values arm" case (added for
     /// the left-associative 3-arm fix) folds the whole `Union` to one `Values`, which
     /// `normalize_slice` then truncates in place — verified here as its own named
     /// scenario, not assumed from the two rules' own tests.
@@ -1999,10 +2098,10 @@ mod tests {
     }
 
     /// A DATA arm (a real triple pattern, not a bare constant) blocks the FULL
-    /// fold (`try_fold_constant_union`) — no `Values` leaf. With only ONE constant
+    /// fold (`fold_constant_union`) — no `Values` leaf. With only ONE constant
     /// arm here (the class-atom `?s <rdf:type> ?x` itself expands to a 2-way
     /// per-table union during BUILD, so this is 1 constant + 2 data arms, not 1+1),
-    /// the PARTIAL fold (`try_partial_fold_constant_union`, test15) declines too
+    /// the PARTIAL fold (`fold_partial_constant_runs`, test15) declines too
     /// (nothing to combine — see that function's own doc comment); see
     /// `partial_fold_combines_multiple_constant_arms_keeps_data_arm` below for the
     /// 2-constant-arms case that DOES partially fold.
@@ -2026,10 +2125,10 @@ mod tests {
     /// The DATA arm is deliberately FIRST here (`A UNION B UNION C` is
     /// left-associative — `(A UNION B) UNION C`): with the data arm LAST, the
     /// inner `{BIND a} UNION {BIND b}` pair would fully fold via the PRE-EXISTING
-    /// `try_fold_constant_union` (test14, both arms constant) before this rule
+    /// `fold_constant_union` (test14, both arms constant) before this rule
     /// ever runs, making the test pass regardless of whether this new function
     /// exists at all — a mistake caught empirically via this test's OWN
-    /// revert-proof (bypassing `try_partial_fold_constant_union` produced no
+    /// revert-proof (bypassing `fold_partial_constant_runs` produced no
     /// failure with the data arm last, exposing the vacuous ordering).
     #[test]
     fn partial_fold_combines_multiple_constant_arms_keeps_data_arm() {
