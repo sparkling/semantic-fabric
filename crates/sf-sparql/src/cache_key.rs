@@ -13,6 +13,8 @@ use super::{CompileProfileId, CompileScope, PlanKey};
 pub(crate) enum BoundedCacheKeyError {
     #[error("canonical cache key exceeds its {maximum_bytes}-byte ceiling")]
     LimitExceeded { maximum_bytes: usize },
+    #[error("canonical cache key size accounting overflowed")]
+    AccountingOverflow,
     #[error("canonical cache key allocation failed")]
     AllocationFailed,
     #[error("canonical cache key formatting failed")]
@@ -68,6 +70,8 @@ struct BoundedWriter<R> {
 }
 
 impl<R> BoundedWriter<R> {
+    const MIN_GROWTH_BYTES: usize = 64;
+
     fn new(maximum_bytes: usize, reserve: R) -> Self {
         Self {
             output: String::new(),
@@ -91,6 +95,36 @@ impl<R> BoundedWriter<R> {
         self.failure = Some(failure);
         Err(fmt::Error)
     }
+
+    fn reserve_for(&mut self, required_bytes: usize) -> fmt::Result
+    where
+        R: FnMut(&mut String, usize) -> Result<(), ()>,
+    {
+        if required_bytes <= self.output.capacity() {
+            return Ok(());
+        }
+
+        // Grow geometrically, but never request retained capacity beyond the
+        // caller's content ceiling. Calling `try_reserve_exact(fragment.len())`
+        // for every formatter fragment can otherwise turn a one-byte-at-a-time
+        // `Display` implementation into linearly many reallocations.
+        let doubled = self
+            .output
+            .capacity()
+            .checked_mul(2)
+            .unwrap_or(self.maximum_bytes);
+        let target_capacity = required_bytes
+            .max(doubled)
+            .max(Self::MIN_GROWTH_BYTES.min(self.maximum_bytes))
+            .min(self.maximum_bytes);
+        let Some(additional) = target_capacity.checked_sub(self.output.len()) else {
+            return self.fail(BoundedCacheKeyError::AccountingOverflow);
+        };
+        if (self.reserve)(&mut self.output, additional).is_err() {
+            return self.fail(BoundedCacheKeyError::AllocationFailed);
+        }
+        Ok(())
+    }
 }
 
 impl<R> fmt::Write for BoundedWriter<R>
@@ -102,22 +136,29 @@ where
             return Err(fmt::Error);
         }
 
-        let Some(required_bytes) = self.output.len().checked_add(fragment.len()) else {
-            return self.fail(BoundedCacheKeyError::LimitExceeded {
-                maximum_bytes: self.maximum_bytes,
-            });
-        };
-        if required_bytes > self.maximum_bytes {
-            return self.fail(BoundedCacheKeyError::LimitExceeded {
-                maximum_bytes: self.maximum_bytes,
-            });
-        }
-        if (self.reserve)(&mut self.output, fragment.len()).is_err() {
-            return self.fail(BoundedCacheKeyError::AllocationFailed);
-        }
+        let required_bytes =
+            match checked_required_bytes(self.output.len(), fragment.len(), self.maximum_bytes) {
+                Ok(required_bytes) => required_bytes,
+                Err(error) => return self.fail(error),
+            };
+        self.reserve_for(required_bytes)?;
         self.output.push_str(fragment);
         Ok(())
     }
+}
+
+fn checked_required_bytes(
+    current_bytes: usize,
+    additional_bytes: usize,
+    maximum_bytes: usize,
+) -> Result<usize, BoundedCacheKeyError> {
+    let required_bytes = current_bytes
+        .checked_add(additional_bytes)
+        .ok_or(BoundedCacheKeyError::AccountingOverflow)?;
+    if required_bytes > maximum_bytes {
+        return Err(BoundedCacheKeyError::LimitExceeded { maximum_bytes });
+    }
+    Ok(required_bytes)
 }
 
 #[cfg(test)]
@@ -213,6 +254,51 @@ mod tests {
         assert_eq!(
             formatting.to_string(),
             "canonical cache key formatting failed"
+        );
+    }
+
+    #[test]
+    fn distinguishes_accounting_overflow_from_the_content_limit() {
+        assert_eq!(
+            checked_required_bytes(1, usize::MAX, usize::MAX),
+            Err(BoundedCacheKeyError::AccountingOverflow)
+        );
+        assert_eq!(
+            checked_required_bytes(2, 3, 4),
+            Err(BoundedCacheKeyError::LimitExceeded { maximum_bytes: 4 })
+        );
+        assert_eq!(
+            BoundedCacheKeyError::AccountingOverflow.to_string(),
+            "canonical cache key size accounting overflowed"
+        );
+    }
+
+    #[test]
+    fn tiny_formatter_fragments_use_geometric_fallible_growth() {
+        use std::cell::Cell;
+
+        struct TinyFragments(usize);
+        impl fmt::Display for TinyFragments {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for _ in 0..self.0 {
+                    formatter.write_str("x")?;
+                }
+                Ok(())
+            }
+        }
+
+        let reservations = Cell::new(0_usize);
+        let rendered = render_bounded_with(&TinyFragments(1024), 1024, |output, additional| {
+            reservations.set(reservations.get() + 1);
+            output.try_reserve_exact(additional).map_err(|_| ())
+        })
+        .unwrap();
+
+        assert_eq!(rendered.len(), 1024);
+        assert!(
+            reservations.get() <= 6,
+            "geometric growth made {} reservations",
+            reservations.get()
         );
     }
 
