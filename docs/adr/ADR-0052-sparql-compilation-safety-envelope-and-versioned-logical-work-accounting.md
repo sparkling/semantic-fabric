@@ -12,22 +12,21 @@ implements: [ADR-0010, ADR-0038]
 
 ## Status boundary
 
-This ADR is **proposed**. The compiler-work `QueryBudget` dimension, typed
-`CompilerWorkExceeded`/`CompilerEnvelopeExceeded`/`CompilerResourceExhausted`
-failures, mandatory `QueryControl::terminate` semantics, cache-profile key
-discriminator and `Arc<Plan>` cache storage are implemented foundations.
-Private dormant primitives also measure raw lexical proxies, parser-view direct-IRI
-materialization, post-parse algebra, compiler reservations and complete Plan
-clone work. Exact branch-forest measurement, reservation and one clone are
-encapsulated as a non-separable private operation. A private raw/metered work-mode
-seam now invokes it for the nested-subplan rollback candidate, with exact-limit
-and pre-mutation rejection tests. Public raw and cached entry points still select
-the uncontrolled mode, however. None is wired into whole-query serving
-governance: the blocking compiler closure receives the exact request control
-only for handoff checkpoints; `CompilerBinding::compile` remains uncontrolled,
-no request-owned `CompileContext` enters a publicly reachable compiler path,
-candidate limits are uncalibrated, and the parser and remaining owned compiler
-phases are not prospectively governed.
+This ADR is **proposed**. Implemented foundations include the compiler-work
+`QueryBudget` dimension and typed terminal causes, mandatory
+`QueryControl::terminate`, exact request-budget handoff and compiler-permit
+retention, profile-keyed cache entries, and active serving reuse of `Arc<Plan>`.
+Private dormant primitives provide fallible algebra/Plan measurement, bounded
+canonical key rendering, compiler reservations and exact clone roots. One
+non-separable measure/reserve/clone operation is privately wired to the
+nested-subplan rollback candidate, with exact-limit and pre-mutation rejection
+tests; allocation failure is classified as redacted service resource exhaustion.
+
+The active serving chain remains `RuntimeBinding::compile` →
+`CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
+request-control handoff checkpoints. No request-owned `CompileContext` enters a
+publicly reachable compiler path. Parser construction/destruction, remaining
+owned phases, cache capacity/eviction and provisional limits are not governed.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -302,25 +301,27 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    and explicit terminal semantics are present; final whole-path acceptance
    evidence remains a promotion gate.
 2. **Parser/envelope — diagnostic foundation only:** raw lexical, parser-view
-   direct-IRI, iterative algebra and Plan measurements exist with provisional
-   limits. Implement ADR-0053's authoritative parser boundary, make algebra
-   validation fallible and metered in one pass, add prospective plan-build
-   limits, and calibrate before activation.
+   direct-IRI and allocation-fallible iterative algebra/Plan measurements exist
+   with provisional limits. Implement ADR-0053's authoritative parser boundary,
+   integrate metering into the algebra pass, add prospective plan-build limits,
+   and calibrate before activation.
 3. **Owned compiler work — first operation metered:** the private work-mode seam
    prospectively measures and charges the nested-subplan cascade rollback clone,
-   and exact `N`/`N-1` tests prove raw equivalence and rejection before mutation.
+   and exact `N`/`N-1` tests prove raw equivalence and rejection before that
+   operation's mutation. Completed earlier operations and charges are not rolled
+   back when a later recursive operation fails.
    Instrument mapping expansion, branch products, the rest of
    normalization/cascade, canonical content, remaining hidden recursive copies
    and plan construction; reserve before work and prove whole-path governed/raw
    semantic equivalence.
-4. **Cache — partial:** key-level profile separation and `Arc<Plan>` storage are
-   present. Add the admitted witness, bounded key writer, physical capacity
-   separation, Arc propagation, final measurement and governed eviction/drop
-   control.
-5. **Serving — partial:** a finite placeholder compiler-work value and redacted
-   error mapping exist. Pass the exact `RequestBudget` into the worker, add the
-   explicit CLI/config limit, call only the governed API and retain both
-   admission permits until the worker really exits.
+4. **Cache — partial:** key-level profile separation, a dormant bounded writer,
+   `Arc<Plan>` storage and serving propagation are present. Add the admitted
+   witness, physical capacity separation, governed writer activation, stored
+   final measurement and eviction/drop control.
+5. **Serving — partial:** a finite placeholder value, typed/redacted error
+   mapping, exact worker `RequestBudget` handoff and permit retention are present.
+   Add the explicit calibrated CLI/config limit and call only the future governed
+   API after the parser, owned-work and cache gates pass.
 6. **Claims:** update capability and operational documentation only after all
    relevant gates pass; keep this ADR proposed until its constants and work
    model receive explicit maintainer acceptance.
@@ -338,7 +339,9 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
   fallible work-stack growth and exact pre-item charging in one pass.
 - Compiler tests cover mapping fan-out, `JOIN`/`OPTIONAL`/`MINUS` products,
   normalization/cascade fixpoints and every recursive Branch/IQ/Plan copy, and
-  prove rejection occurs before the guarded allocation, mutation or clone.
+  prove rejection occurs before each guarded allocation, mutation or clone.
+  Prior completed operations remain charged; whole-compilation failure discards
+  its local Plan rather than promising transactional rollback of intermediate work.
 - Cache tests pin cold and hot V1 work independently, allow the intentionally
   lower hot budget, reject raw-to-governed reuse, prove raw churn cannot evict
   governed state, contain eviction/drop work, and prove semantic identity.
