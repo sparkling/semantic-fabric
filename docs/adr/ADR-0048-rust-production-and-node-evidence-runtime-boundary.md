@@ -270,26 +270,46 @@ of ADR-0050 and ADR-0051 remains proposed.
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
 parser-worker handshake codec. Later Rust-only slices hold and observe the
 current executable, provide a private `x86_64-unknown-linux-gnu`
-descriptor-exact launcher
-with stage-one pre-exec controls, own pidfd/process-group termination/reap and
-bound parent-pipe I/O under one spawn deadline. A hidden first-statement Rust
-dispatcher exact-matches the private two-token invocation and requires a
-raw-empty Linux environment. A feature-gated, non-default Rust evidence seam
-now completes a held-binary `Hello`/`Ready`/EOF control exchange after bounded
-GNU-build-ID correlation, post-exec envelope repair and installation/self-probe
-of a default-kill policy candidate. It prepares and caps an owned request before
-spawn, sends only `Hello` then EOF, and reverifies request correlation after
-clean EOF, successful exit and reap. Candidate totals bind the full framing and
-keep pipe accounting separate from the file-size limit. Malformed or unprepared
-reserved invocations still exit silently with status 78; other targets remain
-fail-closed. The workspace exact-pins `spargebra =0.4.6`; private pure-Rust
-inner/request/result codecs provide canonical, fallibly reconstructed, closed
-framing. A private typed alpha comparator covers bounded structural comparison
-under a correlation-only evidence profile. This is development evidence only:
-no request/result transport, worker parser execution, paired corpus receipt,
-witness or parser-qualified final policy exists, and no UID/GID,
-group, capability or privilege-transition contract is established. Node
-supplies none of the runtime and ADR-0053 remains proposed.
+descriptor-exact launcher with stage-one pre-exec controls, own pidfd/process-
+group termination/reap and bind parent-pipe I/O under one spawn deadline. A
+hidden first-statement Rust dispatcher exact-matches private two-token
+invocations and requires a raw-empty Linux environment.
+
+Commits `c754165`, `56c2236`, `7c87fae` and `3a0199e` retain the exact normal
+control-only parser tuple and add a separate exact, feature-gated parser-free
+transport tuple against the same held ELF. After bounded GNU-build-ID
+correlation, post-exec envelope repair, installation/self-probe of the default-
+kill policy candidate and `Hello`/`Ready`, the parent sends its prepared
+96-byte request header plus source under the same cumulative cap and immutable
+deadline. The child structurally preflights the fixed header and body limit
+before one complete header-plus-body allocation, requires exact stdin EOF,
+checks nonce, source digest and UTF-8 in that order, and emits a correlated
+128-byte success header plus an independently defined static 100-byte empty-ASK
+`QueryV1` while retaining the policy owner through exit.
+
+The parent reads the result header on its stack, preflights it and prospectively
+charges the declared body before its one complete result-frame allocation. It
+requires exact stdout EOF, pidfd waitability, process-group sweep, exact reap
+and successful status before replaying the request, checking correlation and
+digests, decoding `QueryV1`, directly re-encoding it and comparing the static
+bytes. The hidden external seam drops the AST and returns only unit. Black-box
+coverage includes empty, ordinary ASK and unrelated sources, the exact 1 MiB
+source cap, over-limit rejection before launch, relative/traversal path
+rejection before source preparation and clean next-launch recovery.
+
+Candidate limits remain provisional at 1,048,856 cumulative input,
+8,388,920 cumulative output and a separate 67,108,864-byte `RLIMIT_FSIZE`.
+Malformed or unprepared reserved invocations still exit silently with status
+78; other targets remain fail-closed. The default-kill policy and partial
+dependency/profile digest remain unqualified, the parser syscall/randomness
+surface and dynamic closure remain unqualified, and GNU build-ID comparison is
+correlation rather than release attestation. No parser is invoked and
+no parser-produced wire exists; the synthetic exchange grants no parser-policy/profile qualification,
+paired corpus, witness, cache, admission, serving, release or independent
+attestation. It establishes no UID/GID, group, capability or privilege-
+transition contract. ADR-0053 remains proposed. All runtime code in this slice
+is Rust/Cargo; Node supplies development/evidence only. Neither the application
+goals nor the evolutionary semantic architecture changes.
 
 ## Consequences
 

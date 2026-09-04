@@ -12,44 +12,39 @@ implements: [ADR-0010, ADR-0052]
 
 ## Status boundary
 
-This ADR is **proposed**. A source-level feasibility audit selects the bounded
-Linux Rust process-isolation fallback for V1; complete in-process hooks would
-require a broad maintained fork, not the narrow extension originally preferred.
-A private parent-side supervisor, fixed-size `Hello`/`Ready` codec and
-control-only evidence exchange are implemented. The supervisor holds one opened
-ELF, records a bounded full-file SHA-256 diagnostic, launches that exact
-descriptor under a stage-one `x86_64-unknown-linux-gnu` policy, and owns pidfd/process-group
-termination and reap. Its nonblocking parent pipes are cumulatively byte-capped
-under the immutable spawn deadline. A hidden Rust dispatcher is the literal
-first statement of `sf-cli::main`, before Clap or application thread-pool
-initialization. It byte-compares only the exact reserved `argv[0]`/`argv[1]`
-tuple, rejects malformed reserved-position invocations, and requires the raw
-Linux `environ` vector—not Rust's filtered iterator—to be empty. A non-default
-Rust evidence seam can launch a prepared worker, correlate independently
-observed bounded GNU build-ID digests, repair and verify its post-exec control
-envelope, install and self-probe a default-kill control-ready policy candidate,
-and complete exact `Hello`/`Ready`/EOF. Malformed or unprepared reserved
-invocations still exit silently with status 78 via raw Unix `_exit`; a prepared
-evidence exchange can exit 0. The partial dependency/profile digest and policy
-remain unqualified candidates. A private pure-Rust `QueryV1` codec is now
-implemented but is not connected to either process: its fixed 32-byte header
-and records, explicit tag table and provisional record/edge/scalar/wire caps
-feed an allocation-free borrowed-wire preflight, exact postorder-tree and scalar
-validation, fallible iterative reconstruction, post-decode algebra validation
-and byte-exact canonical replay. Private 96-byte `ParseRequestV1` and 128-byte
-`ParseResultV1` outer codecs now bind exact kinds, lengths, nonce, source and
-payload digests, encoding/wire versions, zero flags/reserved fields and closed
-outcomes. Independent raw-frame caps run before header access; rejection
-encoding is allocation-free and carries no parser text. The evidence seam
-prepares/caps one owned request before spawn and reverifies it after clean EOF,
-exit and reap, but sends only `Hello` then EOF. Candidate totals are 1,048,856
-input and 8,388,920 output bytes, separate from the 67,108,864-byte file limit.
-Twenty-two inner, seventeen outer and eight typed-alpha tests pass; the alpha profile is correlation-only. No request/result transport, parser execution,
-paired-worker receipt, worker wire, witness, attestation, permit or serving exists. No UID/GID,
-supplementary-group, capability, namespace, LSM or privilege-transition
-qualification is claimed.
-These foundations do not enable `CompileProfileId::GovernedV1`, change serving,
-or change capability status or admission.
+This **proposed** ADR selects bounded Linux Rust process isolation for V1 after a source audit; complete in-process hooks require a broad maintained fork.
+A private parent-side supervisor and fixed-size `Hello`/`Ready` codec are
+implemented. It validates and holds one ELF before source preparation, records a bounded full-file SHA-256 diagnostic,
+launches that descriptor under a stage-one `x86_64-unknown-linux-gnu` policy,
+owns pidfd/process-group termination/reap, and caps nonblocking pipes under one
+immutable deadline. The first statement of `sf-cli::main` dispatches only exact
+private tuples before Clap or application thread-pool initialization: the normal
+`sf-parser-worker-v1 --sf-private-parser-worker-v1` control peer and separate
+`sf-query-v1-transport-peer-v1 --sf-private-query-v1-transport-peer-v1`
+parser-free peer. Both use the same held ELF and raw-empty Linux `environ`.
+
+After `Hello`/`Ready`, the synthetic parent sends its prepared 96-byte request
+header plus source under the same cap/deadline, then closes stdin. The child
+structurally preflights the header and body limit, allocates one complete header-plus-body frame, requires exact EOF, validates nonce
+then source digest then UTF-8, and writes a correlated 128-byte result header plus
+an independently static 100-byte empty-ASK `QueryV1`. The parent preflights on
+stack, prospectively caps and allocates one complete frame, requires exact EOF,
+pidfd waitability, group sweep, exact reap and success, then reverifies/replays
+the request and checks correlation, digests, decode, direct re-encoding and
+static equality. The hidden external seam returns only unit.
+
+The private pure-Rust `QueryV1` codec retains allocation-free preflight, fallible
+iterative reconstruction and exact replay. Provisional totals are 1,048,856 input and 8,388,920 output bytes, separate
+from the 67,108,864-byte `RLIMIT_FSIZE`. Black-box coverage includes unrelated and
+empty source, exact 1 MiB, over-limit prelaunch rejection, path rejection before
+preparation, and next-launch recovery. Twenty-two inner, seventeen outer and
+eight typed-alpha tests pass; the alpha profile is correlation-only. This proves
+no parser invocation, parser policy/profile qualification, parser-produced wire,
+paired-worker receipt, witness, cache, attestation, admission, permit, serving or
+release authority. No UID/GID, supplementary-group, capability, namespace, LSM
+or privilege-transition qualification is claimed. These foundations do not
+enable `CompileProfileId::GovernedV1` or change application goals, architecture,
+serving, capability status or admission.
 
 The raw lexical scanner, parser-view direct-IRI measurement, fallible post-parse
 algebra validator, bounded cache-key writer, exact clone roots, `CompileContext`
@@ -185,20 +180,19 @@ buffered at exit. Each live-process I/O error enters a containment path that
 tries process-group and exact-worker signaling before reap; if every signaling
 route fails, it surfaces that containment error rather than blocking on an
 uncontained wait. Tests prove limit, stall, truncation, closed-pipe and
-next-launch recovery. The
-parent contract requires ignored `SIGPIPE` so a raced close becomes a contained
+next-launch recovery. The parent requires ignored `SIGPIPE`, so a raced close is a contained
 `EPIPE`, not process termination. `max_input_bytes` and `max_output_bytes` count
 all bytes in their direction for the whole worker lifetime, including future
 `Hello`/`Ready` and every later frame header. They are not raw-query or payload
 allowances: the final query ceiling needs framing headroom and calibration. The
-evidence seam exchanges one exact `Hello`/`Ready` pair and then requires stdout
-EOF; the private query/result codecs are defined but no transport path accepts
-or emits them.
+normal parser peer remains control-only. The separately named parser-free peer
+uses the same process lifetime for one exact handshake, prepared request frame,
+fixed synthetic result frame and terminal EOF sequence described above.
 
-The dormant `ParseRequestV1` header is exactly 96 bytes: magic `SFPREQ01`,
+The private `ParseRequestV1` header is exactly 96 bytes: magic `SFPREQ01`,
 protocol version, request kind, zero flags, header length, source length,
 handshake nonce, SHA-256 source digest, UTF-8 encoding tag, QueryV1 version and
-zero reserved bytes. The dormant `ParseResultV1` header is exactly 128 bytes:
+zero reserved bytes. The private `ParseResultV1` header is exactly 128 bytes:
 magic `SFPRES01`, protocol version, success/rejection kind, zero flags, header
 length, payload length, the correlated nonce and source digest, SHA-256 payload
 digest, QueryV1 version, closed rejection code and zero reserved bytes. All
@@ -258,12 +252,12 @@ version must form the governed compile profile. The current four-crate/checksum/
 feature digest is only a partial control-ready marker and does not satisfy that
 gate.
 
-The child parses once and returns a bounded flat, index-based `QueryV1` wire. The
+The eventual qualified child will parse once and return a bounded flat, index-based `QueryV1` wire. The
 parent never accepts SPARQL/SSE text that would require reparsing. Frame lengths,
 counts, indices and aggregate bytes are validated before allocation; decoding is
 iterative and fallible, so generic recursive Serde is not an admissible shortcut.
 A successful decode and post-parse algebra validation may eventually mint a
-private `AdmittedQuery`; the current control-only handshake cannot.
+private `AdmittedQuery`; neither the normal control handshake nor the synthetic parser-free transaction can do so.
 
 The implemented inner-wire foundation freezes magic `SFPQW001`, version 1, a
 32-byte header, fixed 32-byte records, big-endian `u32` edges and a terminal
@@ -281,11 +275,11 @@ consumed, and `NO_INDEX` is legal only for `VALUES` `UNDEF`. Borrowed UTF-8,
 IRI, variable, blank-node, datatype and language-tag validation precedes
 input-sized decode allocation. Recursive `Box` nodes use a reviewed fallible
 global-allocator helper; successful reconstruction must re-encode to the exact
-input bytes. These constants and bytes remain provisional until transport
+input bytes. These constants and bytes remain provisional until parser transport
 integration, corpus/fuzz calibration and profile binding are complete.
 
 `QueryV1` separates exact replay from fresh-reparse equivalence. Exact replay
-requires a worker wire to decode to the exact encoded AST and re-encode to the
+requires a parser-produced worker wire to decode to the exact encoded AST and re-encode to the
 same canonical wire. A separate pinned-parser invocation cannot use raw AST or
 wire equality as its oracle: `spargebra` creates random internal variables and
 anonymous blank-node identifiers, so equal source may parse to unequal raw
@@ -383,14 +377,14 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    required ignored-`SIGPIPE` contract. Fixture and non-default evidence seams
    prove held identity, limit validation, environment/descriptor closure,
    stage-one spawn/group/exec denial, canonical wall timeout, pipe-limit/failure
-   containment, exact `Hello`/`Ready`/EOF, trailing-output rejection, reap and
-   clean next launch. The owned request is prepared and capped before spawn,
-   then decoded/re-encoded and nonce-checked only after EOF, successful exit and
-   reap; it is deliberately not written yet. Exact whole-lifetime direction
-   totals and the independent regular-file ceiling are bound. The handshake correlates one bounded GNU build-ID digest;
-   the parent's separate full-file SHA remains diagnostic. This grants no
-   production worker, parser-qualified policy/profile, query wire or admitted
-   witness authority.
+   containment, exact handshake/EOF, trailing-output rejection, reap and clean
+   next launch. The separate synthetic peer carries the prepared request and
+   fixed result under exact whole-lifetime direction totals and the independent
+   regular-file ceiling. Its child and parent validation order, exact EOF,
+   containment/reap and post-reap replay are fixed as above. The handshake
+   correlates one bounded GNU build-ID digest; the parent's separate full-file
+   SHA remains diagnostic. This grants no production parser worker,
+   parser-qualified policy/profile, parser-produced wire or admitted witness.
 3. **Partial; control-ready candidate evidenced:** the hidden private-entry discriminator is the first user-code
    statement before Clap/application thread-pool initialization. Exact two-token
    routing, malformed-reserved rejection, raw-empty-`environ` enforcement, ordinary
@@ -402,24 +396,28 @@ plan-construction bounds and owned-phase metering remain separate later gates.
    not rely on per-user `RLIMIT_NPROC`. The candidate must still be replaced or
    qualified against the complete parser corpus/syscall surface, and the partial
    dependency marker must become a complete governed profile before real worker
-   parsing, profile admission or serving. Before that gate, a separately named synthetic peer may exercise framing, bounded transport, cleanup and parent decode only; it grants no parser execution or parser-policy/profile, corpus, witness, cache, release or admission authority.
+   parsing, profile admission or serving. The separately named synthetic peer
+   now exercises framing, bounded transport, cleanup and parent decode only; it
+   grants no parser execution or parser-policy/profile, corpus, witness, cache,
+   release or admission authority.
 4. **Partial:** parent I/O tests inject stalls, truncation, closed pipes and
    cumulative-limit rejection, proving attempted kill/reap and successful next
    launch. Add cancellation, panic, abort, stack/address-space exhaustion,
    malformed protocol output and forced death; trailing control output is now
-   contained. Prove no
-   PID/FD/permit leak and a successful next request after each.
+   contained. Prove no PID/FD/permit leak and a successful next request after each.
 5. **Partial; inner and outer codecs implemented:** the fixed flat index-based
    `QueryV1` tag/schema table, fallible iterative encoder/reconstructor,
    allocation-free structural/scalar preflight, canonical ownership proof and
    exact decode/re-encode replay are covered by 22 focused tests over every
    pinned query/algebra/function/aggregate family plus malformed headers,
-   ranges, indices, sharing, scalars and component bounds. Exact dormant
+   ranges, indices, sharing, scalars and component bounds. Exact private
    96-byte request and 128-byte result codecs add 17 focused golden, mutation,
-   correlation, redaction and raw-cap `0`/`N`/`N+1` tests. First add transport-level
-   direction `0`/`N`/`N+1`, allocation-failure, terminal EOF/exit/reap and
-   post-reap decode tests against a separately named synthetic Rust peer. Only
-   after Gate 3 qualifies the complete profile may real worker parsing/encoding be connected; then add worker-produced replay and persisted fuzz/property corpora. Provisional limits are not accepted calibration.
+   correlation, redaction and raw-cap `0`/`N`/`N+1` tests. The parser-free peer
+   exercises the exact framed transaction and boundary cases stated above.
+   Allocation-failure injection and persisted fuzz/property evidence remain.
+   Only after Gate 3 qualifies the complete profile may real worker
+   parsing/encoding, parser-produced replay and paired-corpus evidence be added.
+   Provisional limits are not accepted calibration.
 6. **Partial; typed comparator foundation implemented:** eight focused tests
    cover correlation/outcome classification, bounded fallible traversal, exact
    ordered top-level SELECT outputs, one global variable bijection, one global
@@ -473,15 +471,16 @@ the current explicitly uncontrolled compiler path.
 ## Nonclaims
 
 This decision does not claim an accessible production parser worker, complete
-containment or a general syscall sandbox. The evidence-only control peer proves
-only the enumerated post-exec observations/repairs, candidate-policy installation
-probe, exact `Hello`/`Ready`/EOF exchange and cleanup. It does not prove an
-accepted/final parser policy, parser-syscall completeness, a complete governed
-dependency profile, UID/GID/groups/capability/namespace/LSM confinement, query
-request/result IPC, parser execution, worker-produced `QueryV1`, a paired-worker
-fresh-parse corpus receipt, an admitted witness, independent release or runtime attestation, permit integration
-or serving activation. The dormant inner/outer codecs grant none of those authorities. The full-file
-fingerprint and bounded GNU build-ID digest do not authenticate a release or its
+containment or a general syscall sandbox. The normal control peer proves the
+enumerated post-exec observations/repairs, candidate-policy probe, handshake and
+cleanup; the synthetic peer additionally proves only its fixed parser-free
+transaction. Neither proves an accepted parser policy, parser-syscall
+completeness, a complete governed dependency profile,
+UID/GID/groups/capability/namespace/LSM confinement, parser request/result IPC,
+parser execution, parser-produced `QueryV1`, a paired-worker fresh-parse receipt,
+an admitted witness, independent release/runtime attestation, permit integration
+or serving activation. The private codecs grant none of those authorities. The
+full-file fingerprint and bounded GNU build-ID digest do not authenticate a release or its
 dynamic closure; and pidfd acquisition assumes integration excludes a
 competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible
 sleep can still delay reap. This ADR also does not claim exact CPU time or heap
