@@ -15,11 +15,16 @@ implements: [ADR-0010, ADR-0052]
 This ADR is **proposed**. A source-level feasibility audit selects the bounded
 Linux Rust process-isolation fallback for V1; complete in-process hooks would
 require a broad maintained fork, not the narrow extension originally preferred.
-A dormant fixed-size `Hello`/`Ready` handshake codec is implemented, but no
-process supervisor or launch, enforced containment, parser invocation,
-`QueryV1` result wire, admitted-query witness or controlled binding exists.
-This codec does not enable `CompileProfileId::GovernedV1`, change serving, or
-change the capability catalogue.
+A dormant parent-side supervisor foundation and the fixed-size `Hello`/`Ready`
+handshake codec are implemented. The supervisor holds the opened current ELF,
+records a bounded observed SHA-256 fingerprint, launches a test-only fixture by
+that exact descriptor under a stage-one Linux x86-64 policy, and owns required
+pidfd/process-group termination and reap. It is private and unreachable from
+the product CLI. No pre-Clap worker entry, post-exec final-policy verification,
+`Ready` exchange, bounded query IPC, parser invocation, `QueryV1` result wire,
+admitted-query witness, concurrency-permit integration or serving binding
+exists. These foundations do not enable `CompileProfileId::GovernedV1`, change
+serving, or change the capability catalogue.
 
 The raw lexical scanner, parser-view direct-IRI measurement, fallible post-parse
 algebra validator, bounded cache-key writer, exact clone roots, `CompileContext`
@@ -93,13 +98,37 @@ authority from the diagnostic scanner or from this audit.
 
 ### 3. Select a bounded fresh Rust process per parse
 
-V1 uses a Linux-only process-isolation profile. A prepared parent holds and
-authenticates the same `sf-cli` executable, launches it by descriptor, and invokes
-a private parser-worker mode before normal CLI parsing. Starting with the same
-held binary keeps the worker inside the Rust/Cargo product boundary, pins the
-main/parser bytes and prevents a mutable path from choosing another executable;
-it does not attest the dynamic runtime closure, which remains an ADR-0039 release
-gate. Non-Linux builds fail closed for this profile.
+V1 uses a Linux x86-64-only process-isolation profile. A prepared parent holds
+the same opened `sf-cli` executable, records its observed identity and SHA-256,
+launches it by descriptor, and invokes a private parser-worker mode before
+normal CLI parsing. Starting with the same held binary keeps the worker inside
+the Rust/Cargo product boundary and prevents a mutable path from choosing
+another executable. The observed fingerprint is diagnostic continuity
+evidence, not release authority, executable authentication or attestation of
+the dynamic runtime closure; those remain ADR-0039 release gates. Other targets
+remain buildable but return `UnsupportedPlatform` before launch, so this profile
+fails closed rather than becoming a weaker fallback.
+
+The dormant parent foundation opens `/proc/self/exe` once, validates and hashes
+that bounded regular ELF through the held descriptor, and never reopens a
+derived path. Its child setup uses only prebuilt POD/C-string state and raw or
+async-signal-safe operations. It applies exact hard and soft rlimits, an empty
+environment, a new process group, parent-death signal, no-new-privileges,
+non-dumpable pre-exec state, a filled signal mask and close-on-exec descriptor
+allowlisting. The executable is duplicated to one exact descriptor at or above
+the post-setup `RLIMIT_NOFILE` ceiling. A stage-one seccomp policy permits only
+the one `execveat(AT_EMPTY_PATH)` using that descriptor and its exact static
+empty-path pointer, and denies descendant creation, process-group escape and
+limit mutation. The launch descriptor closes on successful exec and cannot be
+recreated below the enforced descriptor ceiling.
+
+That stage-one policy is deliberately default-allow and is not a general
+sandbox. Its blanket `clone`/`clone3` denial makes the future worker
+single-threaded. After exec, a future worker must verify/reset inherited state,
+install its final allowlist policy and prove the effective limits before
+`Ready`; it must consume no untrusted bytes before that transition. Executing a
+new image may reset dumpability, so the parent-side setting is not a post-exec
+claim. Those worker-side controls do not yet exist.
 
 Each parse uses a fresh child. Before announcing readiness, the child applies
 fixed stack, address-space, CPU, output, descriptor and descendant-process
@@ -167,13 +196,20 @@ plan-construction bounds and owned-phase metering remain separate later gates.
 1. Pin parser/PEG sources, checksums and features plus the exact same-executable
    worker identity, Linux control profile, fixed containment limits and
    parent-observable work schedule.
-2. **Handshake-codec foundation implemented:** fixed framing, magic, version,
-   nonce, build/parser profile and exact effective-limit acknowledgement are
-   canonical; failures are closed and non-reflective. Land the dormant supervisor next; this codec has no
-   process, containment, query-wire or admitted-witness authority.
-3. Prove child controls and descriptor/environment allowlists are installed
-   before `Ready`; qualify descendant prevention without relying on per-user
-   `RLIMIT_NPROC` as a per-worker boundary.
+2. **Dormant handshake and parent-supervisor foundations implemented:** fixed
+   framing, magic, version, nonce, build/parser profile and exact effective-limit
+   acknowledgement are canonical. The private Linux x86-64 launcher holds the
+   executable descriptor, installs exact parent-side pre-exec controls, requires
+   a pidfd and owns deterministic process-group kill/reap. Test-only fixture
+   seams prove held identity, limit validation, environment/descriptor closure,
+   stage-one spawn/group/exec denial, canonical wall timeout, reap and clean next
+   launch. This grants no production worker, query-wire or admitted-witness
+   authority.
+3. **Incomplete:** add the pre-Clap private worker and prove its post-exec
+   verification, signal reset, final syscall allowlist and effective controls
+   before `Ready`. Qualify descendant prevention without relying on per-user
+   `RLIMIT_NPROC` as a per-worker boundary. No untrusted bytes may be consumed
+   under the stage-one/default-allow gap.
 4. Inject timeout, cancellation, panic, abort, stack/address-space exhaustion,
    malformed/truncated/trailing/oversized output and forced death; prove bounded
    kill/reap, no PID/FD/permit leak and a successful next request after each.
@@ -207,6 +243,9 @@ the current explicitly uncontrolled compiler path.
   intact.
 - Good: process containment is a fail-closed boundary for the audited upstream
   parser paths that cannot be completely hooked in-process.
+- Good: the private dormant parent now has descriptor-exact launch and
+  deterministic pidfd/process-group cleanup primitives without exposing an
+  incomplete worker mode or widening the product API.
 - Cost: a fresh worker adds launch/IPC latency, a bounded wire protocol and
   Linux-specific operating-system qualification.
 - Cost: the flat wire must explicitly cover the full admitted `Query` algebra;
@@ -216,12 +255,19 @@ the current explicitly uncontrolled compiler path.
 
 ## Nonclaims
 
-This decision does not claim that the selected supervisor/worker launch,
-enforced containment profile, parser invocation or `QueryV1` wire is
-implemented. It does not claim exact CPU time or heap bytes, governance of
-raw/conformance APIs, complete owned compiler-phase accounting,
-database/recursive SQL work, source-native cancellation, atomic post-`200`
-delivery, backend admission, total M2 completion, or production readiness.
+This decision does not claim an accessible production worker, complete
+containment or a general syscall sandbox. In particular, it does not claim a
+pre-Clap worker entry, post-exec final-policy verification, `Ready` exchange,
+bounded query IPC, parser invocation, `QueryV1` wire, admitted witness,
+concurrency-permit integration or serving activation. The current fingerprint
+does not authenticate a release or its dynamic closure; pre-exec dumpability is
+not asserted after exec; and pidfd acquisition assumes integration excludes a
+competing wait-any reaper or hostile `SIGCHLD` mutation. Kernel uninterruptible
+sleep can still delay reap. This ADR also does not claim exact CPU time or heap
+bytes, governance of raw/conformance APIs, complete owned compiler-phase
+accounting, database/recursive SQL work, source-native cancellation, atomic
+post-`200` delivery, backend admission, total M2 completion or production
+readiness.
 
 ## More information
 

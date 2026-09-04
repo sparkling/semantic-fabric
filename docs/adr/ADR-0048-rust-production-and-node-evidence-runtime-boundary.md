@@ -17,8 +17,8 @@ fixes the implementation-language, packaging and authority boundary for the
 application, coding harness and proposed capture supervisor.
 
 It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050 through
-ADR-0053, claim that a Rust supervisor exists, authorize a database or
-deployment, or weaken any final correctness, security, performance,
+ADR-0053, claim that a complete or active Rust supervisor exists, authorize a
+database or deployment, or weaken any final correctness, security, performance,
 reproducibility or release gate. Existing TypeScript artefacts remain
 non-authorizing reference evidence.
 
@@ -271,6 +271,16 @@ Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a dormant
 fixed-size parser-worker handshake codec. It adds no process launcher, enforced
 containment, parser invocation, flat query wire, admitted witness or serving
 integration, and therefore grants no governed-parser capability.
+
+The next dormant slice remains product-owned Rust under `sf-sparql`: it holds
+and observes the current executable, provides a private Linux x86-64
+descriptor-exact fixture launcher with stage-one pre-exec controls, and owns
+required pidfd/process-group termination and reap. Other targets compile a
+fail-closed `UnsupportedPlatform` stub. Node supplies none of this runtime code.
+There is still no accessible private worker mode, post-exec final policy,
+`Ready` exchange, bounded query IPC, parser invocation, `QueryV1`, admitted
+witness, concurrency-permit integration or serving path, so this foundation
+does not grant governed-parser capability or accept ADR-0053.
 
 ## Consequences
 

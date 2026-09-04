@@ -4796,6 +4796,7 @@ name = "sf-sparql"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "libc",
  "mysql_async",
  "oxiri 0.2.11",
  "oxjsonld",
@@ -4807,6 +4808,7 @@ dependencies = [
  "sf-core",
  "sf-mapping",
  "sf-sql",
+ "sha2 0.10.9",
  "spargebra",
  "thiserror 2.0.20",
  "tokio",
