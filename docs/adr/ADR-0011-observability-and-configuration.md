@@ -71,8 +71,11 @@ implements:
 > dropped. Unit and listener tests prove an in-flight `200` during drain, exact
 > forced expiry, new-versus-existing budget behaviour, listener closure and
 > capacity release. Follow-up commit `1e2de3e` sends real SIGTERM to the
-> shipped CLI child, observes clean exit inside three seconds, and verifies the
-> listener is closed. These slices do not implement telemetry, layered
+> real `sf-cli` child, observes clean exit inside three seconds, and verifies the
+> listener is closed. Commit `bec1cf7` adds fixed, redacted query-less
+> `GET`/`HEAD /sparql` Service Description discovery as control metadata: it
+> consumes no request body, runtime lease, deadline, or application-work permit,
+> including while saturated, not ready, or draining. These slices do not implement telemetry, layered
 > configuration, verified TLS, source polling/failure
 > policy, SLOs, or the complete ADR-0011 control plane.
 

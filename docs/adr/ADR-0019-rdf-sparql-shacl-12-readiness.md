@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-01
+updated: 2026-09-05
 tags: [rdf-1.2, sparql-1.2, shacl, oxigraph, rudof, jena-replacement, conformance, gap-register, feature-flags, upstream-contribution]
 depends-on:
   - ADR-0001
@@ -18,6 +18,10 @@ implements:
 > not yet execute a pinned SPARQL 1.2 Query or Protocol conformance manifest,
 > Graph Store Protocol is absent, external `SERVICE` is outside the charter, and
 > both compiler paths currently reject the enabled `LATERAL` algebra variant.
+> Commit `bec1cf7` implements the SPARQL 1.1 Service Description discovery
+> contract for exact query-less `GET`/`HEAD /sparql`, advertising only fixed
+> custom subset resources and actually reachable formats; it does not promote
+> the endpoint to full SPARQL Query, Protocol, or federation conformance.
 > The generated capability matrix is the application/release authority;
 > upstream library capability is feasibility evidence, not semantic-fabric
 > implementation or production admission.
@@ -102,7 +106,7 @@ Two traps the sweep surfaced: **`sparql-12` alone is not full 1.2** — `ADJUST`
 | G5 | rudof `sh:sparql` SPARQL-based constraint component | **Resolved upstream** — shipped rudof 0.3.2, present in our 0.3.4. Use default features. |
 | G6 | rudof user-reachable panics: (a) report rendering on complex SHACL paths, (b) min/max on uncommon numeric datatypes | Contribute targeted fixes (effort M); avoid trigger shapes meanwhile. |
 | G7 | SHACL 1.2 (node expressions, rules) | **Wait-for-spec** (WD/FPWD; Jena lacks it too). |
-| G8 | SPARQL **Protocol** / **Graph Store Protocol** / `SERVICE` execution | Oxigraph provides these only in its server binary at SPARQL 1.1. Our serve layer is ours to build → **implement the SPARQL 1.2 Protocol ourselves**. External `SERVICE` is out of scope (ADR-0002); cross-RDBMS federation is our semi-join. |
+| G8 | SPARQL **Protocol** / **Graph Store Protocol** / `SERVICE` execution | Oxigraph provides these only in its server binary at SPARQL 1.1. Our serve layer implements a strict read-only query subset plus fixed SPARQL 1.1 Service Description discovery; full pinned Protocol and Graph Store Protocol remain open. External `SERVICE` is out of scope (ADR-0002); cross-RDBMS federation is our coordinator. |
 
 ### Jena baseline (regression check)
 
@@ -113,7 +117,7 @@ Jena 6.1.0 (2026-05-11): stable RDF 1.2 + SPARQL 1.2; jena-shacl = SHACL Core + 
 * Good, because the Rust dependency stack has no identified architectural blocker to replacing Jena for the intended profile; application parity is still earned by local executable gates.
 * Good, because gaps G2 and G5 are already resolved upstream and present in our Rust pins, and G4 is neutralised by running rudof in Native mode.
 * Neutral, because triple-term graphs must serialise as Turtle / N-Triples 1.2 (G1); JSON-LD is reserved for triple-term-free graphs (a syntax-level limit Jena shares).
-* Neutral, because the SPARQL 1.2 Protocol / Graph Store Protocol serve endpoint (G8) is ours to build — Oxigraph ships those only in its server binary at 1.1 — and external `SERVICE` stays out of scope (ADR-0002).
+* Neutral, because fixed Service Description discovery does not close the SPARQL 1.2 Protocol / Graph Store Protocol serve endpoint (G8); Oxigraph ships those only in its server binary at 1.1, and external `SERVICE` stays out of scope (ADR-0002).
 * Neutral, because exact patch versions must be pinned while the specs are pre-final, and `LATERAL` (`sep-0006`) is kept out of, and reported as outside, the 1.2 conformance surface.
 * Bad, because Oxigraph is effectively single-maintainer, requiring local patches to be kept minimal and upstreamed promptly; G4 (S) and G6 (a)+(b) (M) remain to be contributed, and G7 (SHACL 1.2) is parked until the spec reaches ≥ CR.
 
@@ -129,4 +133,4 @@ Jena 6.1.0 (2026-05-11): stable RDF 1.2 + SPARQL 1.2; jena-shacl = SHACL Core + 
 ## More Information
 
 - **Charter / no-JVM:** ADR-0001. **Substrate (Oxigraph crates):** ADR-0004 — this ADR fixes the 1.2 feature flags it pins. **Conformance / SHACL Native:** ADR-0005. **Reasoning (entailment in the rewriter):** ADR-0008. **Scope (SERVICE out):** ADR-0002.
-- **Evidence basis:** W3C RDF 1.2 / SPARQL 1.2 test suites (Oxigraph CI, empty skip-lists); pinned-crate source (oxrdf 0.3.3, oxttl 0.2.3, spargebra 0.4.6, oxjsonld 0.2.5, rudof `shacl` 0.3.4); Apache Jena 6.1.0 (CHANGES, jena-shacl source); W3C spec-status pages. Upstream health: rudof (WESO, ~biweekly releases, dual MIT/Apache, no CLA); Oxigraph (single-maintainer, very responsive, dual MIT/Apache, no CLA).
+- **Evidence basis:** W3C RDF 1.2 / SPARQL 1.2 test suites (Oxigraph CI, empty skip-lists); [SPARQL 1.1 Service Description Recommendation](https://www.w3.org/TR/2013/REC-sparql11-service-description-20130321/); pinned-crate source (oxrdf 0.3.3, oxttl 0.2.3, spargebra 0.4.6, oxjsonld 0.2.5, rudof `shacl` 0.3.4); Apache Jena 6.1.0 (CHANGES, jena-shacl source); W3C spec-status pages. Upstream health: rudof (WESO, ~biweekly releases, dual MIT/Apache, no CLA); Oxigraph (single-maintainer, very responsive, dual MIT/Apache, no CLA).
