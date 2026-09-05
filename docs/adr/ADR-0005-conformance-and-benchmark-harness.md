@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-28
+updated: 2026-09-06
 tags: [conformance, benchmarks, w3c, rdb2rdf, earl, gtfs-madrid, obda-oracle, ontop, m-join-t, shacl, fitness-function]
 supersedes: []
 depends-on:
@@ -21,9 +21,12 @@ implements:
 > documented deviation, and five skips; required-live PostgreSQL records 80 pass,
 > one documented deviation, and six skips. PostgreSQL provider absence is fatal
 > on receipt replay. The current seal contains no per-DBMS fork files; any future
-> fork must enter the canonical inventory before execution. MySQL mapping, complete
-> `M ⋈ T`, and the M0 performance/release envelope remain open. Mapping evidence
-> does not establish SPARQL Query, Protocol, or production-backend admission.
+> fork must enter the canonical inventory before execution. The product now
+> performs mandatory sealed `M ⋈ T` admission before constructing a serving
+> binding and carries its digest into compile identity; scaled Product Mock
+> timing/qualification, MySQL mapping, and the M0 performance/release envelope
+> remain open. Mapping evidence does not establish SPARQL Query, Protocol, or
+> production-backend admission.
 
 ## Context and Problem Statement
 
@@ -50,7 +53,7 @@ The virtualiser is measured on the **GTFS-Madrid-Bench OBDA / query-rewriting tr
 Ground truth for an OBDA answer: load the case's **expected RDF graph into an in-memory store and evaluate the same SPARQL** (`spareval`, ADR-0004), diffed against the virtualiser's live-SQL answer. This tests rewriter correctness directly, keeps CI **zero-JVM**, and — since the in-memory evaluator handles property paths — validates `P+`/`P*`. **Ontop** is retained as an *optional, offline* cross-check on a shared R2RML set (and the tier-2 OWL-QL oracle, ADR-0008), never a CI dependency.
 
 ### Cross-project `M ⋈ T` gate
-Evaluate the upstream modelling project's mapping-output validation (shapes) — `mf:MappingClassConformanceShape`, `mf:MappingPredicateConformanceShape`, `mf:MappingDatatypeConformanceShape`, `mf:EntitySubjectGroundingShape` (the upstream mapping-conformance requirements) — over the `M ⋈ T` closure for the virtualised path. **SHACL runner = rudof's `shacl` crate** (pin `shacl = "0.3"` + `oxrdf = "0.3"`), `ShaclValidationMode::Native` (pure Rust; its `sparql` feature is on by default, so Native is pinned explicitly — ADR-0019). Its in-memory graph is oxrdf-native (via `rudof_rdf`), so no second RDF stack enters the engine; the four shapes use only SHACL Core constraints (`sh:class`, `sh:datatype`, `sh:nodeKind`, `sh:property`, cardinality, `sh:in`/`sh:hasValue`), which `shacl` fully covers (engine rationale: `docs/research/shacl-engine-selection.md`).
+Evaluate the upstream modelling project's mapping-output validation (shapes) — `mf:MappingClassConformanceShape`, `mf:MappingPredicateConformanceShape`, `mf:MappingDatatypeConformanceShape`, `mf:EntitySubjectGroundingShape` (the upstream mapping-conformance requirements) — over the `M ⋈ T` closure for the virtualised path. **SHACL runner = rudof's `shacl` crate** (exact 0.3.14 dependency set), `ShaclValidationMode::Native` (pure Rust; its `sparql` feature is on by default, so Native is pinned explicitly — ADR-0019). Its in-memory graph is oxrdf-native (via `rudof_rdf`), so no second RDF stack enters the engine. Three shapes use SHACL Core paths/class/cardinality constraints; the mapping-datatype shape intentionally uses `sh:sparql` to compare each projected object-map datatype with T's property-shape datatype. `sf-validation` owns the sealed shapes, deterministic workload/cardinality preflight, Native execution, and redacted result (engine rationale: `docs/research/shacl-engine-selection.md`).
 
 ### Consequences
 * Good, because objective, standardised SOTA measurement from day one; a real fitness function (pass-rate gate + OBDA latency/memory objectives) for the Path-B loop; the cross-project `M ⋈ T` obligation becomes executable, not prose.

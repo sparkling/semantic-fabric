@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-02
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
@@ -20,7 +20,8 @@ diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after bounded
 rich observation, but its two-version operator observations are untracked and
 its evidence runner explicitly withholds qualification. The planned
 committed-unavailability path is incomplete, and no serving binding carries the
-digests.
+three Observed Schema Identity digests. Serving bindings now carry separate
+ontology and sealed semantic-admission digests; neither is schema authority.
 
 The 2026-09-05 Phase 5 foundation is implemented in Rust: `RuntimeSnapshot` owns
 a source-keyed immutable registry and deterministic compile identities; one
@@ -35,15 +36,19 @@ old/new HTTP results, failed construction, stale and slow candidates, response
 lifetime, and last-pin release.
 
 The publication primitive is crate-private and deliberately non-authorizing.
-There is still no validated candidate builder, automatic catalogue observation,
-`M ⋈ T`/capability validation, repeated-not-ready state revision, drift watcher,
-backend-generation lease, serving digest propagation, public reload surface, or
-live Direct Mapping. Therefore this is not full Phase 5 completion and grants no
-backend or production admission.
+The production construction path now requires bounded sealed `M ⋈ T`
+validation before constructing a binding, and the all-or-nothing registry
+builder validates every source before constructing any binding. There is still
+no general off-path reload candidate builder, automatic catalogue observation,
+capability validation, repeated-not-ready state revision, drift watcher,
+backend-generation lease, Observed Schema Identity propagation, public reload
+surface, or live Direct Mapping. Therefore this is not full Phase 5 completion
+and grants no backend or production admission.
 
 The current Rust serving path places its startup mapping, ontology,
 constraint/type-quarantined schema observation, backend and plan cache in one
-immutable source-keyed snapshot; the CLI still selects exactly one source. Its
+immutable source-keyed snapshot; the CLI selects either one source or the sealed
+exactly-two-source `UnionAll` profile. Its
 process-local compile scope prevents detached-plan reuse. PostgreSQL catalogue
 reads use one read-only repeatable-read startup transaction. Those are sound
 precursors, not mutable-schema authority: the transaction ends before
@@ -201,6 +206,28 @@ backend profile; observational profiles retain no such claim. After detected
 relevant drift, new requests fail readiness until a validated candidate
 activates. Old pools/caches drop only after their last request lease ends.
 
+#### Sealed semantic admission is a separate authority
+
+Before `RuntimeBinding` or its cache exists, executable mapping IR is projected
+to a bounded ground RDF graph containing only the class, predicate, object-map,
+and effective datatype facts consumed by the four sealed shapes. The product-
+owned `sf-validation` crate runs a deterministic workload/cardinality preflight
+and rudof Native SHACL over `M ⋈ T`; violations fail the whole candidate.
+
+Projection structural nodes are named only below
+`urn:semantic-fabric:mjoin-t:v1:`. An ontology using that reserved prefix as an
+asserted named subject, predicate, or named object is rejected before merge, so
+T cannot forge facts about M's structural nodes. A private `ValidatedMapping`
+receipt owns the mapping and binds its origin, exact ontology document digest,
+sealed shape digest, canonical projection, and redacted outcome. The ontology
+and source-effective projection are recomputed before receipt consumption, and
+their digests enter compile/cache identity.
+
+This receipt binds semantic compatibility, not the physical database,
+connection, source generation, or DDL lifetime. It cannot construct an
+`ObservedSchemaIdentity`, `RuntimeSnapshotLease`, or `VerifiedGenerationLease`;
+the latter authority problems remain governed independently by this ADR.
+
 ### 5. Qualify backend-generation leases separately
 
 PostgreSQL is the first target. A verified lease must bind and recheck the exact
@@ -278,9 +305,9 @@ persist across generations.
 5. **Atomic activation and drift (foundation implemented 2026-09-05):** the
    immutable registry, private whole-state publication primitive, readiness,
    ready-to-not-ready/slow-candidate rejection and body-lifetime leases are
-   implemented. The validated candidate builder, automatic watcher, opaque
-   revision for repeated not-ready observations and public reload lifecycle
-   remain.
+   implemented. The general off-path reload candidate builder, automatic
+   watcher, opaque revision for repeated not-ready observations and public
+   reload lifecycle remain.
 6. **Typed row identity and Direct Mapping:** validate/generate from the leased
    schema and admit backend profiles one at a time.
 
@@ -290,9 +317,10 @@ activation authority. Each later phase requires its own executable evidence
 before capability promotion.
 
 Crate ownership follows ADR-0006: `sf-core` owns neutral validated values and
-pure canonical hashing; `sf-sql` owns catalogue and lease I/O; `sf-serve` owns
-activation and readiness; and `sf-mapping` remains pure validated-schema-to-
-mapping generation.
+pure canonical hashing; `sf-sql` owns catalogue and lease I/O; `sf-mapping`
+owns pure validated-schema-to-mapping generation and its ground admission
+projection; `sf-validation` owns sealed bounded Native SHACL execution; and
+`sf-serve` owns semantic receipts, activation, and readiness.
 
 ## Required evidence
 
