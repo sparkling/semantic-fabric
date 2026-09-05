@@ -8,7 +8,7 @@ use axum::body::{Body, Bytes};
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::{Epoch, Tbox};
+use sf_sparql::Epoch;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
 
@@ -18,12 +18,13 @@ use crate::{
 };
 
 fn config() -> Arc<ServeConfig> {
-    let mut config = ServeConfig::new_unchecked(
+    let mut config = ServeConfig::new_with_unverified_source(
         Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
         Vec::new(),
-        Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     config.set_max_concurrent_requests(1).unwrap();
     Arc::new(config)
 }
@@ -32,7 +33,7 @@ fn candidate() -> RuntimeSnapshot {
     let source_id = SourceId::new(0).unwrap();
     RuntimeSnapshot::single(
         Epoch(1),
-        Tbox::default(),
+        crate::test_support::empty_ontology(),
         RuntimeSource::new(
             IntrospectedSource::unchecked(
                 Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
@@ -41,6 +42,7 @@ fn candidate() -> RuntimeSnapshot {
             SourceMapping::new(source_id, Vec::new()),
         ),
     )
+    .unwrap()
 }
 
 fn request(path: &str, body: Body) -> Request<Body> {
@@ -116,7 +118,13 @@ async fn health_paths_poll_neither_request_body_nor_source_admission() {
     let Backend::Sqlite(pool) = backend.clone() else {
         unreachable!()
     };
-    let mut unshared = ServeConfig::new_unchecked(backend, Vec::new(), Tbox::default(), Vec::new());
+    let mut unshared = ServeConfig::new_with_unverified_source(
+        backend,
+        Vec::new(),
+        crate::test_support::empty_ontology(),
+        Vec::new(),
+    )
+    .unwrap();
     unshared.set_max_concurrent_requests(1).unwrap();
     let config = Arc::new(unshared);
     let sole_permit = config

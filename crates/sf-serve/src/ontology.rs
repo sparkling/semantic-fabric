@@ -1,59 +1,100 @@
-//! Build a tier-1 [`Tbox`] (ADR-0008) from an optional ontology Turtle document.
+//! Bounded, immutable ontology document plus its tier-1 reasoning projection.
 //!
-//! The runtime reasoning lane is OWL-RL Safe-Group / RDFS tier-1 only (ADR-0008):
-//! we extract exactly the axioms the saturator consumes — `rdfs:subClassOf`,
-//! `rdfs:subPropertyOf`, `owl:inverseOf`, and `owl:SymmetricProperty` — and ignore
-//! everything else (no DL reasoner is wired at runtime). A `--ontology` flag is
-//! therefore honoured, not silently dropped.
+//! Runtime admission retains the complete RDF graph for M⋈T validation. The
+//! smaller [`Tbox`] is derived from that graph for query rewriting; it is never
+//! treated as the semantic document or its identity.
 
-use oxrdf::{NamedOrBlankNode, Term};
-use oxttl::TurtleParser;
+use oxrdf::{Graph, NamedOrBlankNodeRef, TermRef};
 use sf_sparql::Tbox;
+use sha2::{Digest, Sha256};
 
+const DOCUMENT_IDENTITY_DOMAIN: &[u8] = b"semantic-fabric/ontology-document/v1";
 const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const RDFS_SUBPROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
 const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const OWL_SYMMETRIC_PROPERTY: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
-/// Parse `turtle` and populate a [`Tbox`] with the tier-1 RDFS/OWL-RL axioms the
-/// saturator understands. Subjects/objects that are not IRIs are skipped (the
-/// saturator keys on IRI predicate/class names).
+/// Full, parsed ontology graph retained beside the derived reasoning T-box.
+/// Construction is bounded and private-fielded; runtime snapshots accept this
+/// type rather than a caller-supplied digest or reduced T-box.
+#[derive(Clone)]
+pub struct SemanticOntology {
+    graph: Graph,
+    tbox: Tbox,
+    document_digest: [u8; 32],
+}
+
+impl SemanticOntology {
+    /// Parse a bounded Turtle ontology. The digest is deliberately the exact
+    /// input-document identity, not a claim of RDF graph canonicalization.
+    pub fn from_turtle(turtle: &str) -> Result<Self, String> {
+        let graph = sf_validation::parse_turtle_graph(turtle, sf_validation::DEFAULT_GRAPH_LIMITS)
+            .map_err(|error| error.to_string())?;
+        let tbox = tbox_from_graph(&graph);
+        let mut hasher = Sha256::new();
+        hasher.update(DOCUMENT_IDENTITY_DOMAIN);
+        hasher.update(
+            u64::try_from(turtle.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        hasher.update(turtle.as_bytes());
+        Ok(Self {
+            graph,
+            tbox,
+            document_digest: hasher.finalize().into(),
+        })
+    }
+
+    pub(crate) const fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
+    pub(crate) const fn tbox(&self) -> &Tbox {
+        &self.tbox
+    }
+
+    pub(crate) const fn document_digest(&self) -> [u8; 32] {
+        self.document_digest
+    }
+}
+
+impl std::fmt::Debug for SemanticOntology {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SemanticOntology")
+            .field("triple_count", &self.graph.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Compatibility parser for compiler-only callers. Serving constructors accept
+/// [`SemanticOntology`] so this lossy projection cannot bypass admission.
 pub fn tbox_from_turtle(turtle: &str) -> Result<Tbox, String> {
+    SemanticOntology::from_turtle(turtle).map(|ontology| ontology.tbox)
+}
+
+fn tbox_from_graph(graph: &Graph) -> Tbox {
     let mut tbox = Tbox::new();
-    for triple in TurtleParser::new().for_slice(turtle) {
-        let t = triple.map_err(|e| format!("ontology Turtle parse error: {e}"))?;
-        let subject = match &t.subject {
-            NamedOrBlankNode::NamedNode(n) => n.as_str().to_owned(),
-            NamedOrBlankNode::BlankNode(_) => continue,
+    for triple in graph.iter() {
+        let NamedOrBlankNodeRef::NamedNode(subject) = triple.subject else {
+            continue;
         };
-        let object_iri = match &t.object {
-            Term::NamedNode(n) => Some(n.as_str().to_owned()),
-            _ => None,
+        let TermRef::NamedNode(object) = triple.object else {
+            continue;
         };
-        match t.predicate.as_str() {
-            RDFS_SUBCLASS_OF => {
-                if let Some(o) = object_iri {
-                    tbox.add_subclass(subject, o);
-                }
-            }
-            RDFS_SUBPROPERTY_OF => {
-                if let Some(o) = object_iri {
-                    tbox.add_subproperty(subject, o);
-                }
-            }
-            OWL_INVERSE_OF => {
-                if let Some(o) = object_iri {
-                    tbox.add_inverse(subject, o);
-                }
-            }
-            RDF_TYPE if object_iri.as_deref() == Some(OWL_SYMMETRIC_PROPERTY) => {
-                tbox.add_symmetric(subject);
+        match triple.predicate.as_str() {
+            RDFS_SUBCLASS_OF => tbox.add_subclass(subject.as_str(), object.as_str()),
+            RDFS_SUBPROPERTY_OF => tbox.add_subproperty(subject.as_str(), object.as_str()),
+            OWL_INVERSE_OF => tbox.add_inverse(subject.as_str(), object.as_str()),
+            RDF_TYPE if object.as_str() == OWL_SYMMETRIC_PROPERTY => {
+                tbox.add_symmetric(subject.as_str())
             }
             _ => {}
         }
     }
-    Ok(tbox)
+    tbox
 }
 
 #[cfg(test)]
@@ -61,85 +102,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_tier1_axioms() {
+    fn retains_declarations_that_the_reasoning_projection_does_not_use() {
         let ttl = r#"
-            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-            @prefix owl: <http://www.w3.org/2002/07/owl#> .
-            @prefix ex: <http://ex/> .
-            ex:Student rdfs:subClassOf ex:Person .
-            ex:knows a owl:SymmetricProperty .
-            ex:parentOf owl:inverseOf ex:childOf .
-        "#;
-        let tbox = tbox_from_turtle(ttl).unwrap();
-        assert!(tbox
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix ex: <http://ex/> .
+ex:Student a owl:Class; rdfs:subClassOf ex:Person .
+"#;
+        let ontology = SemanticOntology::from_turtle(ttl).unwrap();
+        assert_eq!(ontology.graph().len(), 2);
+        assert!(ontology
+            .tbox()
             .saturate_class("http://ex/Person")
             .contains(&"http://ex/Student".to_owned()));
-        assert!(tbox
-            .inverse_predicates("http://ex/parentOf")
-            .contains(&"http://ex/childOf".to_owned()));
     }
 
     #[test]
-    fn malformed_turtle_surfaces_as_an_err_not_a_panic() {
-        let err = tbox_from_turtle("this is not valid turtle @@@ ][ .").unwrap_err();
-        assert!(
-            err.contains("ontology Turtle parse error"),
-            "unexpected message: {err}"
-        );
+    fn exact_document_changes_partition_identity_conservatively() {
+        let first = SemanticOntology::from_turtle("<urn:C> <urn:p> <urn:O> .").unwrap();
+        let second = SemanticOntology::from_turtle("<urn:C>  <urn:p> <urn:O> .").unwrap();
+        assert_ne!(first.document_digest(), second.document_digest());
+        assert_eq!(first.graph(), second.graph());
     }
 
     #[test]
-    fn empty_document_yields_an_empty_tbox() {
-        let tbox = tbox_from_turtle("").unwrap();
-        assert!(tbox.is_empty());
+    fn malformed_turtle_surfaces_a_redacted_error() {
+        let error = SemanticOntology::from_turtle("<postgres://secret@host/x> [").unwrap_err();
+        assert!(!error.contains("secret"));
     }
 
     #[test]
-    fn blank_node_subject_is_skipped_not_an_error() {
-        // A blank-node subject can never be a class/property IRI the saturator
-        // keys on — `tbox_from_turtle` must skip it (continue) rather than error
-        // or attempt to stringify the blank node id as an IRI.
+    fn duplicate_hierarchy_statements_are_set_valued() {
         let ttl = r#"
-            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-            @prefix ex: <http://ex/> .
-            _:b1 rdfs:subClassOf ex:Person .
-        "#;
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <http://ex/> .
+ex:A rdfs:subClassOf ex:B .
+ex:A rdfs:subClassOf ex:B .
+"#;
         let tbox = tbox_from_turtle(ttl).unwrap();
-        assert!(
-            tbox.is_empty(),
-            "a blank-node-subject triple must contribute no axiom"
+        assert_eq!(
+            tbox.saturate_class("http://ex/B"),
+            vec!["http://ex/B", "http://ex/A"]
         );
-    }
-
-    #[test]
-    fn non_iri_object_is_skipped_not_an_error() {
-        // The saturator's axioms (subClassOf/subPropertyOf/inverseOf) all key on
-        // an IRI OBJECT; a literal object on one of these predicates has no
-        // representation and must be skipped, not misinterpreted as an IRI or
-        // cause an error.
-        let ttl = r#"
-            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-            @prefix ex: <http://ex/> .
-            ex:Student rdfs:subClassOf "not an IRI" .
-        "#;
-        let tbox = tbox_from_turtle(ttl).unwrap();
-        assert!(
-            tbox.is_empty(),
-            "a literal-object subClassOf triple must contribute no axiom"
-        );
-    }
-
-    #[test]
-    fn irrelevant_predicates_are_ignored() {
-        // Any triple whose predicate isn't one of the 4 tier-1 axiom predicates
-        // (or rdf:type owl:SymmetricProperty) contributes nothing — confirms the
-        // `_ => {}` catch-all doesn't accidentally swallow-as-error or otherwise
-        // misbehave on ordinary application data mixed into the same document.
-        let ttl = r#"
-            @prefix ex: <http://ex/> .
-            ex:Student ex:enrolledIn ex:CS101 .
-        "#;
-        let tbox = tbox_from_turtle(ttl).unwrap();
-        assert!(tbox.is_empty());
     }
 }

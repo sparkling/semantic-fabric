@@ -45,6 +45,7 @@ mod federation;
 mod health;
 mod http;
 mod lifecycle;
+mod observed_source;
 mod pg_generation;
 mod pg_response;
 mod post_body;
@@ -52,6 +53,7 @@ mod problem;
 mod request_compile;
 mod request_deadline;
 mod request_generation;
+mod semantic_admission;
 mod service_description;
 mod snapshot;
 mod source_acquisition;
@@ -80,20 +82,29 @@ mod request_admission_tests;
 mod runtime_activation_http_tests;
 #[cfg(test)]
 mod runtime_snapshot_tests;
+#[cfg(test)]
+mod semantic_admission_tests;
+#[cfg(test)]
+mod test_support;
 
 pub use activation::{ActivationError, ActivationId, ReadinessCause, RuntimeReadiness};
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
-pub use binding::{BackendProfile, IntrospectedSource};
+pub use binding::BackendProfile;
 pub use config::{
     ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
     DEFAULT_QUERY_LIMITS,
 };
 pub use http::router;
 pub use lifecycle::DEFAULT_SHUTDOWN_TIMEOUT;
-pub use ontology::tbox_from_turtle;
+pub use observed_source::IntrospectedSource;
+pub use ontology::{tbox_from_turtle, SemanticOntology};
 pub use problem::ServeError;
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
 pub use run::{serve_blocking, AdditionalSourceOptions, MappingRef, ServeOptions};
-pub use snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError, SourceRegistry};
+pub use semantic_admission::SemanticAdmissionError;
+#[cfg(test)]
+pub(crate) use snapshot::RuntimeSnapshot;
+pub(crate) use snapshot::RuntimeSource;
+pub use snapshot::SnapshotError;
 pub use source::{SourceInput, SourceRef, MAX_SOURCE_ENV_NAME_BYTES, MAX_SOURCE_INPUT_BYTES};
 pub use stream::RdfFormat;

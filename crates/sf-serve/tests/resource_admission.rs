@@ -6,9 +6,10 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_core::query_control::QueryLimits;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig, SqlitePool};
-use sf_sparql::Tbox;
+use sf_serve::{router, Backend, ServeConfig, SqlitePool};
 use tower::ServiceExt;
+
+mod support;
 
 const CREATE_SQL: &str = r#"
 CREATE TABLE "items" ("id" INTEGER PRIMARY KEY, "label" TEXT NOT NULL);
@@ -34,17 +35,12 @@ fn config() -> ServeConfig {
 fn config_and_pool() -> (ServeConfig, SqlitePool) {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
     conn.execute_batch(CREATE_SQL).expect("seed fixture");
-    let schema = introspect_sqlite_all(&conn).expect("introspect fixture");
-    let maps = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse fixture mapping");
     let backend = Backend::sqlite(conn);
     let Backend::Sqlite(pool) = &backend else {
         unreachable!("fixture is SQLite")
     };
     let pool = pool.clone();
-    (
-        ServeConfig::new_unchecked(backend, maps, Tbox::default(), schema),
-        pool,
-    )
+    (support::serve_config(backend, MAPPING_TTL), pool)
 }
 
 fn query_request(query: &str) -> Request<Body> {

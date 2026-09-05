@@ -4,8 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sf_core::query_control::QueryLimits;
-use sf_core::{ir::TriplesMap, SourceId, SourceMapping};
-use sf_sparql::{Epoch, Tbox};
+use sf_core::SourceId;
+#[cfg(test)]
+use sf_core::{ir::TriplesMap, SourceMapping};
+use sf_sparql::Epoch;
+#[cfg(test)]
 use sf_sql::TableSchema;
 use tokio::sync::{watch, Semaphore};
 
@@ -13,12 +16,14 @@ use crate::activation::{
     ActivationError, ActivationId, ReadinessCause, RuntimeManager, RuntimeReadiness,
     RuntimeSnapshotLease, SnapshotUnavailable,
 };
-use crate::binding::IntrospectedSource;
 use crate::budget::RequestBudget;
 use crate::lifecycle::ShutdownPhase;
 use crate::problem::StartupCause;
+use crate::semantic_admission::{MappingOrigin, ValidatedMapping};
 use crate::snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError};
-use crate::{Backend, ServeError};
+#[cfg(test)]
+use crate::Backend;
+use crate::{IntrospectedSource, SemanticOntology, ServeError};
 
 /// Worst-case wire bytes for the percent-encoded `query` key plus `=`.
 const FORM_QUERY_FIELD_OVERHEAD: usize = 16;
@@ -81,27 +86,47 @@ pub struct ServeConfig {
 
 impl ServeConfig {
     /// Build a source-bound config with the default governance knobs.
-    pub fn new(source: IntrospectedSource, mapping: SourceMapping, tbox: Tbox) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(
+        source: IntrospectedSource,
+        mapping: SourceMapping,
+        ontology: SemanticOntology,
+    ) -> Result<Self, SnapshotError> {
         let source_id = mapping.source_id();
-        let snapshot =
-            RuntimeSnapshot::single(Epoch::default(), tbox, RuntimeSource::new(source, mapping));
-        Self::from_snapshot(QueryMode::Single(source_id), snapshot)
+        let snapshot = RuntimeSnapshot::single(
+            Epoch::default(),
+            ontology,
+            RuntimeSource::new(source, mapping),
+        )?;
+        Ok(Self::from_snapshot(QueryMode::Single(source_id), snapshot))
     }
 
     /// Build the bounded two-source serving profile. This mode accepts only the
     /// source-affine top-level SELECT UNION vertical; it is not broad federation.
-    pub fn new_federated(sources: [RuntimeSource; 2], tbox: Tbox) -> Result<Self, SnapshotError> {
+    pub(crate) fn new_federated(
+        sources: [RuntimeSource; 2],
+        ontology: SemanticOntology,
+    ) -> Result<Self, SnapshotError> {
         let source_ids = [sources[0].source_id(), sources[1].source_id()];
         if source_ids[0] == source_ids[1] {
             return Err(SnapshotError::DuplicateSource {
                 source_id: source_ids[0],
             });
         }
-        let snapshot = RuntimeSnapshot::new(Epoch::default(), tbox, Vec::from(sources))?;
+        let snapshot = RuntimeSnapshot::new(Epoch::default(), ontology, Vec::from(sources))?;
         Ok(Self::from_snapshot(
             QueryMode::SourceAffineUnion(source_ids),
             snapshot,
         ))
+    }
+
+    pub(crate) fn from_runtime_source(
+        source: RuntimeSource,
+        ontology: SemanticOntology,
+    ) -> Result<Self, SnapshotError> {
+        let source_id = source.source_id();
+        let snapshot = RuntimeSnapshot::single(Epoch::default(), ontology, source)?;
+        Ok(Self::from_snapshot(QueryMode::Single(source_id), snapshot))
     }
 
     fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
@@ -123,22 +148,60 @@ impl ServeConfig {
         }
     }
 
-    /// Compatibility/test constructor for a caller that cannot yet provide an
-    /// observed backend/schema pair and source-aware mapping explicitly.
-    ///
-    /// The name keeps the missing provenance visible. Product startup does not
-    /// use this path.
-    pub fn new_unchecked(
+    /// Build a single-source embedding from authored R2RML and an opaque source
+    /// observation. Generated Direct-Mapping IR cannot enter this API, and the
+    /// source type has no public detached-schema constructor.
+    pub fn from_authored_r2rml(
+        source: IntrospectedSource,
+        mapping_turtle: &str,
+        ontology: SemanticOntology,
+    ) -> Result<Self, ServeError> {
+        if mapping_turtle.len() > sf_validation::DEFAULT_GRAPH_LIMITS.max_utf8_bytes {
+            return Err(ServeError::new(StartupCause::MappingParse {
+                error: "mapping document exceeds its byte limit".to_owned(),
+            }));
+        }
+        let source_id = SourceId::new(0).expect("single-source slot zero is representable");
+        let mapping =
+            sf_mapping::parse_r2rml_for_source(mapping_turtle, source_id).map_err(|_| {
+                ServeError::new(StartupCause::MappingParse {
+                    error: "mapping document is invalid".to_owned(),
+                })
+            })?;
+        ValidatedMapping::preflight(&mapping, &ontology).map_err(|error| {
+            ServeError::new(StartupCause::Configuration {
+                error: error.to_string(),
+            })
+        })?;
+        let mapping =
+            ValidatedMapping::validate(mapping, MappingOrigin::Authored, &ontology, &source)
+                .map_err(|error| {
+                    ServeError::new(StartupCause::Configuration {
+                        error: error.to_string(),
+                    })
+                })?;
+        Self::from_runtime_source(RuntimeSource::admitted(source, mapping), ontology).map_err(
+            |error| {
+                ServeError::new(StartupCause::Configuration {
+                    error: error.to_string(),
+                })
+            },
+        )
+    }
+
+    /// Unit-test construction over an explicitly fabricated observation.
+    #[cfg(test)]
+    pub(crate) fn new_with_unverified_source(
         backend: Backend,
         mapping: Vec<TriplesMap>,
-        tbox: Tbox,
+        ontology: SemanticOntology,
         schema: Vec<TableSchema>,
-    ) -> Self {
+    ) -> Result<Self, SnapshotError> {
         let source_id = SourceId::new(0).expect("single-source slot zero is representable");
         Self::new(
             IntrospectedSource::unchecked(backend, schema),
             SourceMapping::new(source_id, mapping),
-            tbox,
+            ontology,
         )
     }
 
@@ -188,6 +251,12 @@ impl ServeConfig {
     /// Current redacted readiness and activation identity.
     pub fn runtime_readiness(&self) -> Result<RuntimeReadiness, ActivationError> {
         self.runtime.readiness()
+    }
+
+    /// Warning-level findings admitted for `source_id` in the active semantic
+    /// generation. Returns `None` when the source or a ready generation is absent.
+    pub fn semantic_warning_count(&self, source_id: SourceId) -> Option<usize> {
+        self.runtime.semantic_warning_count(source_id)
     }
 
     /// Atomically publish a prebuilt candidate that still contains the source
@@ -314,12 +383,13 @@ mod tests {
     use super::*;
 
     fn config() -> ServeConfig {
-        ServeConfig::new_unchecked(
+        ServeConfig::new_with_unverified_source(
             Backend::sqlite(rusqlite::Connection::open_in_memory().expect("open fixture")),
             Vec::new(),
-            Tbox::default(),
+            crate::test_support::empty_ontology(),
             Vec::new(),
         )
+        .expect("empty mapping passes semantic admission")
     }
 
     #[test]
@@ -374,7 +444,7 @@ mod tests {
         let other_source = SourceId::new(1).unwrap();
         let candidate = RuntimeSnapshot::single(
             Epoch(1),
-            Tbox::default(),
+            crate::test_support::empty_ontology(),
             RuntimeSource::new(
                 IntrospectedSource::unchecked(
                     Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
@@ -382,7 +452,8 @@ mod tests {
                 ),
                 SourceMapping::new(other_source, Vec::new()),
             ),
-        );
+        )
+        .expect("empty replacement mapping passes semantic admission");
 
         assert!(matches!(
             config.activate_snapshot(current, candidate),

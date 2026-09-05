@@ -10,7 +10,6 @@ use oxrdf::{NamedNode, NamedOrBlankNode, Term};
 use oxttl::TurtleParser;
 use sf_core::ir::{LogicalSource, SubjectMap, TermMap, TriplesMap};
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::Tbox;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
 
@@ -42,10 +41,11 @@ fn sensitive_mapping(source_id: usize) -> SourceMapping {
     )
 }
 
-fn sensitive_tbox() -> Tbox {
-    let mut tbox = Tbox::new();
-    tbox.add_subclass(format!("urn:test:{SECRET}"), "urn:test:private-class");
-    tbox
+fn sensitive_ontology() -> crate::SemanticOntology {
+    crate::SemanticOntology::from_turtle(&format!(
+        "<urn:test:{SECRET}> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <urn:test:private-class> ."
+    ))
+    .unwrap()
 }
 
 fn runtime_source(source_id: usize) -> RuntimeSource {
@@ -65,15 +65,16 @@ fn single_config() -> Arc<ServeConfig> {
             Vec::new(),
         ),
         sensitive_mapping(0),
-        sensitive_tbox(),
-    );
+        sensitive_ontology(),
+    )
+    .unwrap();
     config.set_max_concurrent_requests(1).unwrap();
     Arc::new(config)
 }
 
 fn two_source_config() -> Arc<ServeConfig> {
     Arc::new(
-        ServeConfig::new_federated([runtime_source(3), runtime_source(7)], sensitive_tbox())
+        ServeConfig::new_federated([runtime_source(3), runtime_source(7)], sensitive_ontology())
             .unwrap(),
     )
 }

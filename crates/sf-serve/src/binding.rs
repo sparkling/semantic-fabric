@@ -13,91 +13,26 @@ use std::fmt;
 use std::sync::Arc;
 
 use sf_core::query_control::QueryControl;
-use sf_core::{SourceId, SourceMapping};
+use sf_core::SourceId;
 use sf_sparql::federation::FederatedPlan;
-use sf_sparql::{CompileDigests, CompileScope, CompilerBinding, Epoch, Plan, Tbox};
-use sf_sql::{Dialect, TableSchema};
+use sf_sparql::{
+    CompileDigests, CompileScope, CompilerBinding, Epoch, Plan, SemanticIdentity, Tbox,
+};
+use sf_sql::Dialect;
+#[cfg(test)]
+use sf_sql::TableSchema;
 
 use crate::backend::{Backend, BackendKind};
-use crate::pg_generation::{
-    PgGenerationError, PgGenerationRequirement, PostgresDirectGeneration, SourceGeneration,
-};
+use crate::pg_generation::{PgGenerationError, PgGenerationRequirement, SourceGeneration};
+use crate::semantic_admission::ValidatedMapping;
+use crate::IntrospectedSource;
 
 /// Plan-cache capacity for one immutable compiler binding (ADR-0007).
 const PLAN_CACHE_CAP: usize = 64;
 
-/// A backend paired with the schema observation made through that backend.
-///
-/// Pairing prevents later constructors from independently mixing a handle and
-/// unrelated schema vector. PostgreSQL observes one coherent read-only,
-/// repeatable-read `public` catalogue snapshot; SQLite and MySQL do not yet
-/// observe a whole catalogue in one explicit transaction. No path detects later
-/// drift, so this type deliberately says `Introspected`, not `VerifiedSnapshot`.
-pub struct IntrospectedSource {
-    backend: Backend,
-    schema: Vec<TableSchema>,
-    generation: SourceGeneration,
-}
-
-impl IntrospectedSource {
-    /// Build an explicitly unchecked pair for tests and embedding compatibility.
-    /// Production startup uses the crate-private observed constructor returned by
-    /// the backend opener.
-    pub fn unchecked(backend: Backend, schema: Vec<TableSchema>) -> Self {
-        Self {
-            backend,
-            schema,
-            generation: SourceGeneration::Unverified,
-        }
-    }
-
-    pub(crate) fn observed(backend: Backend, schema: Vec<TableSchema>) -> Self {
-        Self {
-            backend,
-            schema,
-            generation: SourceGeneration::Unverified,
-        }
-    }
-
-    pub(crate) fn bind_postgres_direct(
-        mut self,
-        schema: Vec<TableSchema>,
-        generation: PostgresDirectGeneration,
-    ) -> Result<Self, PgGenerationError> {
-        if self.kind() != BackendKind::Postgres {
-            return Err(PgGenerationError::Internal);
-        }
-        self.schema = schema;
-        self.generation = SourceGeneration::direct_postgres(generation);
-        Ok(self)
-    }
-
-    pub const fn kind(&self) -> BackendKind {
-        self.backend.kind()
-    }
-
-    pub(crate) fn observed_schema(&self) -> &[TableSchema] {
-        &self.schema
-    }
-
-    pub(crate) fn backend(&self) -> &Backend {
-        &self.backend
-    }
-
-    pub(crate) fn into_parts(self) -> (Backend, Vec<TableSchema>, SourceGeneration) {
-        (self.backend, self.schema, self.generation)
-    }
-}
-
-impl fmt::Debug for IntrospectedSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("IntrospectedSource")
-            .field("backend_kind", &self.kind())
-            .field("schema_table_count", &self.schema.len())
-            .field("verified_generation", &self.generation.is_verified())
-            .finish()
-    }
+#[cfg(test)]
+std::thread_local! {
+    static TEST_BINDING_CONSTRUCTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Exact compiler facts derived from a concrete serve adapter.
@@ -146,36 +81,56 @@ impl BackendProfile {
 pub(crate) struct RuntimeBinding {
     backend: Backend,
     profile: BackendProfile,
+    #[cfg(test)]
     observed_schema: Arc<[TableSchema]>,
     generation: SourceGeneration,
+    semantic_warnings: usize,
     compiler: CompilerBinding,
 }
 
 impl RuntimeBinding {
     pub(crate) fn new(
         source: IntrospectedSource,
-        mapping: SourceMapping,
+        mapping: ValidatedMapping,
         tbox: Tbox,
         epoch: Epoch,
     ) -> Self {
+        #[cfg(test)]
+        TEST_BINDING_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
         let (backend, schema, generation) = source.into_parts();
+        let (mapping, ontology_digest, semantic_admission_digest, semantic_warnings) =
+            mapping.into_parts();
         let profile = BackendProfile::from_kind(backend.kind());
-        let observed_schema: Arc<[TableSchema]> = schema.into();
-        let compiler = CompilerBinding::from_unverified_observation(
+        #[cfg(test)]
+        let observed_schema: Arc<[TableSchema]> = schema.clone().into();
+        let compiler = CompilerBinding::from_observation_with_semantic_identity(
             mapping,
             profile.dialect(),
             tbox,
-            observed_schema.to_vec(),
+            schema,
             epoch,
+            SemanticIdentity::new(ontology_digest, semantic_admission_digest),
             PLAN_CACHE_CAP,
         );
         Self {
             backend,
             profile,
+            #[cfg(test)]
             observed_schema,
             generation,
+            semantic_warnings,
             compiler,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_test_construction_count() {
+        TEST_BINDING_CONSTRUCTIONS.with(|count| count.set(0));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_construction_count() -> usize {
+        TEST_BINDING_CONSTRUCTIONS.with(std::cell::Cell::get)
     }
 
     /// Compile through the raw cache path while carrying the request control
@@ -238,16 +193,17 @@ impl RuntimeBinding {
         self.compiler.scope()
     }
 
-    pub(crate) const fn profile(&self) -> BackendProfile {
-        self.profile
-    }
-
+    #[cfg(test)]
     pub(crate) fn observed_schema(&self) -> &[TableSchema] {
         &self.observed_schema
     }
 
     pub(crate) const fn digests(&self) -> CompileDigests {
         self.compiler.digests()
+    }
+
+    pub(crate) const fn semantic_warning_count(&self) -> usize {
+        self.semantic_warnings
     }
 
     pub(crate) const fn compiler(&self) -> &CompilerBinding {
@@ -269,6 +225,7 @@ impl fmt::Debug for RuntimeBinding {
             .field("epoch", &self.scope().epoch())
             .field("digests", &self.digests())
             .field("profile", &self.profile)
+            .field("semantic_warnings", &self.semantic_warnings)
             .field("compiler", &self.compiler)
             .finish()
     }
@@ -393,11 +350,19 @@ mod tests {
     fn binding_at(source_index: usize, epoch: Epoch) -> RuntimeBinding {
         let source_id = SourceId::new(source_index).unwrap();
         let mapping = sf_mapping::parse_r2rml_for_source(MAPPING, source_id).unwrap();
+        let ontology = crate::test_support::empty_ontology();
         let source = IntrospectedSource::unchecked(
             Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
             vec![TableSchema::new(SECRET)],
         );
-        RuntimeBinding::new(source, mapping, Tbox::default(), epoch)
+        let mapping = crate::semantic_admission::ValidatedMapping::validate(
+            mapping,
+            crate::semantic_admission::MappingOrigin::Authored,
+            &ontology,
+            &source,
+        )
+        .unwrap();
+        RuntimeBinding::new(source, mapping, ontology.tbox().clone(), epoch)
     }
 
     #[test]

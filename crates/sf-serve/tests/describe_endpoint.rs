@@ -11,6 +11,8 @@ use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig, SqlitePool};
 use sf_sparql::Tbox;
 use tower::ServiceExt;
 
+mod support;
+
 const CREATE_SQL: &str = r#"
 CREATE TABLE "People" ("id" INTEGER PRIMARY KEY, "name" TEXT, "age" INTEGER);
 INSERT INTO "People" VALUES (1, 'Alice', 30), (2, 'Bob', 25);
@@ -54,17 +56,12 @@ const BLANK_OBJECT_MAPPING_TTL: &str = r#"
 fn config_and_pool(mapping: &str) -> (ServeConfig, SqlitePool) {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(CREATE_SQL).unwrap();
-    let schema = introspect_sqlite_all(&conn).unwrap();
-    let maps = sf_mapping::parse_r2rml(mapping).unwrap();
     let backend = Backend::sqlite(conn);
     let Backend::Sqlite(pool) = &backend else {
         unreachable!()
     };
     let pool = pool.clone();
-    (
-        ServeConfig::new_unchecked(backend, maps, Tbox::default(), schema),
-        pool,
-    )
+    (support::serve_config(backend, mapping), pool)
 }
 
 fn request(query: &str) -> Request<Body> {

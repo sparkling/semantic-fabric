@@ -1,24 +1,32 @@
 //! Startup assembly for single-source and bounded two-source serving modes.
 
+use std::io::Read;
+
 use sf_core::query_control::QueryLimits;
 use sf_core::SourceId;
 
 use crate::problem::StartupCause;
 use crate::run::ServeOptions;
+use crate::semantic_admission::{MappingOrigin, ValidatedMapping};
 use crate::source::PreparedSource;
-use crate::{BackendKind, IntrospectedSource, MappingRef, RuntimeSource, ServeConfig, ServeError};
+use crate::{
+    IntrospectedSource, MappingRef, RuntimeSource, SemanticOntology, ServeConfig, ServeError,
+};
+
+#[cfg(test)]
+use crate::BackendKind;
 
 pub(crate) async fn build_config(
     opts: &ServeOptions,
     primary: PreparedSource,
     additional: Option<PreparedSource>,
 ) -> Result<ServeConfig, ServeError> {
-    let tbox = read_tbox(opts.ontology_path.as_deref())?;
-    let primary_mapping = PreparedMapping::new(&opts.mapping, source_id(0))?;
+    let ontology = read_ontology(Some(opts.ontology_path.as_str()))?;
+    let primary_mapping = PreparedMapping::new(&opts.mapping, source_id(0), &ontology)?;
     let additional_mapping = opts
         .additional_source
         .as_ref()
-        .map(|options| PreparedMapping::new(&options.mapping, source_id(1)))
+        .map(|options| PreparedMapping::new(&options.mapping, source_id(1), &ontology))
         .transpose()?;
     admit_mapping_profile(
         &primary_mapping,
@@ -27,33 +35,24 @@ pub(crate) async fn build_config(
         additional.as_ref(),
     )?;
     let primary = open_source(opts, primary).await?;
-    let (primary, primary_mapping) = primary_mapping.finish(opts, primary).await?;
+    let primary = primary_mapping.finish(opts, primary, &ontology).await?;
 
     let mut config = match (additional_mapping, additional) {
-        (None, None) => ServeConfig::new(primary, primary_mapping, tbox),
+        (None, None) => ServeConfig::from_runtime_source(primary, ontology),
         (Some(additional_mapping), Some(additional)) => {
             let additional = open_source(opts, additional).await?;
-            let (additional, additional_mapping) =
-                additional_mapping.finish(opts, additional).await?;
-            ServeConfig::new_federated(
-                [
-                    RuntimeSource::new(primary, primary_mapping),
-                    RuntimeSource::new(additional, additional_mapping),
-                ],
-                tbox,
-            )
-            .map_err(|error| {
-                ServeError::new(StartupCause::Configuration {
-                    error: error.to_string(),
-                })
-            })?
+            let additional = additional_mapping
+                .finish(opts, additional, &ontology)
+                .await?;
+            ServeConfig::new_federated([primary, additional], ontology)
         }
         _ => {
             return Err(ServeError::new(StartupCause::Configuration {
                 error: "additional source and mapping must be configured together".to_owned(),
             }))
         }
-    };
+    }
+    .map_err(snapshot_error)?;
 
     config.timeout = opts.timeout;
     config.set_max_query_len(opts.max_query_len)?;
@@ -83,18 +82,26 @@ enum PreparedMapping {
 }
 
 impl PreparedMapping {
-    fn new(mapping: &MappingRef, source_id: SourceId) -> Result<Self, ServeError> {
+    fn new(
+        mapping: &MappingRef,
+        source_id: SourceId,
+        ontology: &SemanticOntology,
+    ) -> Result<Self, ServeError> {
         match mapping {
             MappingRef::R2rmlFile(path) => {
-                let turtle = std::fs::read_to_string(path).map_err(|error| {
+                let turtle = read_bounded_utf8(path).map_err(|error| {
                     ServeError::new(StartupCause::MappingRead {
                         path: path.to_owned(),
                         error: error.to_string(),
                     })
                 })?;
                 sf_mapping::parse_r2rml_for_source(&turtle, source_id)
-                    .map(Self::Authored)
                     .map_err(mapping_error)
+                    .and_then(|mapping| {
+                        ValidatedMapping::preflight(&mapping, ontology)
+                            .map_err(semantic_admission_error)?;
+                        Ok(Self::Authored(mapping))
+                    })
             }
             MappingRef::Direct { base_iri } => {
                 sf_mapping::validate_direct_mapping_base(base_iri).map_err(mapping_error)?;
@@ -110,9 +117,15 @@ impl PreparedMapping {
         self,
         opts: &ServeOptions,
         source: IntrospectedSource,
-    ) -> Result<(IntrospectedSource, sf_core::SourceMapping), ServeError> {
+        ontology: &SemanticOntology,
+    ) -> Result<RuntimeSource, ServeError> {
         match self {
-            Self::Authored(mapping) => Ok((source, mapping)),
+            Self::Authored(mapping) => {
+                let mapping =
+                    ValidatedMapping::validate(mapping, MappingOrigin::Authored, ontology, &source)
+                        .map_err(semantic_admission_error)?;
+                Ok(RuntimeSource::admitted(source, mapping))
+            }
             Self::Direct {
                 base_iri,
                 source_id,
@@ -141,7 +154,14 @@ impl PreparedMapping {
                 let source = source
                     .bind_postgres_direct(candidate.tables, candidate.generation)
                     .map_err(startup_generation_error)?;
-                Ok((source, candidate.mapping))
+                let mapping = ValidatedMapping::validate(
+                    candidate.mapping,
+                    MappingOrigin::Direct,
+                    ontology,
+                    &source,
+                )
+                .map_err(semantic_admission_error)?;
+                Ok(RuntimeSource::admitted(source, mapping))
             }
         }
     }
@@ -157,7 +177,9 @@ impl PreparedMapping {
         schema: &[sf_core::TableSchema],
     ) -> Result<sf_core::SourceMapping, ServeError> {
         match self {
-            Self::Authored(mapping) => Ok(mapping),
+            Self::Authored(_) => Err(configuration_error(
+                "the Direct Mapping test helper requires a Direct Mapping candidate",
+            )),
             Self::Direct {
                 base_iri,
                 source_id,
@@ -190,7 +212,7 @@ impl PreparedMapping {
 /// This boundary runs after pure source parsing but before connector I/O.
 fn admit_mapping_profile(
     primary_mapping: &PreparedMapping,
-    primary_source: &PreparedSource,
+    _primary_source: &PreparedSource,
     additional_mapping: Option<&PreparedMapping>,
     additional_source: Option<&PreparedSource>,
 ) -> Result<(), ServeError> {
@@ -199,11 +221,9 @@ fn admit_mapping_profile(
             "additional source and mapping must be configured together",
         ));
     }
-    if (primary_mapping.is_direct() || additional_mapping.is_some_and(PreparedMapping::is_direct))
-        && (additional_source.is_some() || primary_source.kind() != BackendKind::Postgres)
-    {
+    if primary_mapping.is_direct() || additional_mapping.is_some_and(PreparedMapping::is_direct) {
         return Err(configuration_error(
-            "live Direct Mapping requires the single-source PostgreSQL-16 public-base-table profile",
+            "live Direct Mapping is unavailable until the exact PostgreSQL-16 qualification receipts are accepted",
         ));
     }
     Ok(())
@@ -217,6 +237,18 @@ fn configuration_error(error: &'static str) -> ServeError {
 
 fn mapping_error(error: sf_core::Error) -> ServeError {
     ServeError::new(StartupCause::MappingParse {
+        error: error.to_string(),
+    })
+}
+
+fn semantic_admission_error(error: crate::SemanticAdmissionError) -> ServeError {
+    ServeError::new(StartupCause::Configuration {
+        error: error.to_string(),
+    })
+}
+
+fn snapshot_error(error: crate::SnapshotError) -> ServeError {
+    ServeError::new(StartupCause::Configuration {
         error: error.to_string(),
     })
 }
@@ -243,18 +275,40 @@ fn startup_generation_error(error: crate::pg_generation::PgGenerationError) -> S
     })
 }
 
-fn read_tbox(path: Option<&str>) -> Result<sf_sparql::Tbox, ServeError> {
+fn read_ontology(path: Option<&str>) -> Result<SemanticOntology, ServeError> {
     let Some(path) = path else {
-        return Ok(sf_sparql::Tbox::default());
+        return Err(configuration_error(
+            "an explicit ontology Turtle document is required for semantic admission",
+        ));
     };
-    let turtle = std::fs::read_to_string(path).map_err(|error| {
+    let turtle = read_bounded_utf8(path).map_err(|error| {
         ServeError::new(StartupCause::OntologyRead {
             path: path.to_owned(),
             error: error.to_string(),
         })
     })?;
-    crate::tbox_from_turtle(&turtle)
+    SemanticOntology::from_turtle(&turtle)
         .map_err(|error| ServeError::new(StartupCause::OntologyParse { error }))
+}
+
+fn read_bounded_utf8(path: &str) -> std::io::Result<String> {
+    let maximum = sf_validation::DEFAULT_GRAPH_LIMITS.max_utf8_bytes;
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(maximum.saturating_add(1)).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "semantic input exceeds its byte limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "semantic input is not valid UTF-8",
+        )
+    })
 }
 
 async fn open_source(
@@ -289,13 +343,26 @@ mod tests {
     }
 
     fn direct() -> PreparedMapping {
-        PreparedMapping::new(&MappingRef::direct(BASE), source_id(0)).unwrap()
+        PreparedMapping::new(
+            &MappingRef::direct(BASE),
+            source_id(0),
+            &crate::test_support::empty_ontology(),
+        )
+        .unwrap()
+    }
+
+    fn authored_empty(index: usize) -> PreparedMapping {
+        PreparedMapping::Authored(sf_core::SourceMapping::new(source_id(index), Vec::new()))
     }
 
     #[test]
     fn direct_mapping_base_is_validated_before_source_open() {
-        let error = PreparedMapping::new(&MappingRef::direct("not an absolute IRI"), source_id(0))
-            .expect_err("invalid base must fail during mapping preparation");
+        let error = PreparedMapping::new(
+            &MappingRef::direct("not an absolute IRI"),
+            source_id(0),
+            &crate::test_support::empty_ontology(),
+        )
+        .expect_err("invalid base must fail during mapping preparation");
         assert_eq!(error.code(), "startup-configuration");
     }
 
@@ -316,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn non_postgres_and_federated_direct_mapping_reject_before_connector_io() {
+    fn unaccepted_direct_mapping_rejects_every_profile_before_connector_io() {
         let sqlite = SourceRef::inline("sqlite:/path/that/must/not/be/created.db")
             .resolve()
             .unwrap()
@@ -333,18 +400,20 @@ mod tests {
             .prepare()
             .unwrap();
 
-        for source in [sqlite, mysql] {
+        for source in [sqlite, mysql, postgres] {
             let error = admit_mapping_profile(&direct(), &source, None, None)
-                .expect_err("unqualified backend must reject without connecting");
+                .expect_err("unaccepted qualification must reject without connecting");
             assert_eq!(error.code(), "startup-configuration");
         }
+        let postgres = SourceRef::inline("pg:host=database.invalid user=test")
+            .resolve()
+            .unwrap()
+            .prepare()
+            .unwrap();
         let error = admit_mapping_profile(
             &direct(),
             &postgres,
-            Some(&PreparedMapping::Authored(sf_core::SourceMapping::new(
-                source_id(1),
-                Vec::new(),
-            ))),
+            Some(&authored_empty(1)),
             Some(
                 &SourceRef::inline("pg:host=other.invalid user=test")
                     .resolve()

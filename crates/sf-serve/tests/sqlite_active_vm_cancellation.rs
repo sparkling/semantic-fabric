@@ -12,13 +12,15 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use rusqlite::functions::FunctionFlags;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{router, Backend, ServeConfig};
 use tower::ServiceExt;
+
+mod support;
 
 const MAPPING: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
 @prefix ex: <http://example.test/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 <#Slow> a rr:TriplesMap ;
   rr:logicalTable [ rr:sqlQuery """
     WITH RECURSIVE counter(value) AS (
@@ -31,7 +33,7 @@ const MAPPING: &str = r#"
   rr:subjectMap [ rr:template "http://example.test/slow/{id}" ] ;
   rr:predicateObjectMap [
     rr:predicate ex:slowValue ;
-    rr:objectMap [ rr:column "value" ]
+    rr:objectMap [ rr:column "value" ; rr:datatype xsd:integer ]
   ] .
 <#Fast> a rr:TriplesMap ;
   rr:logicalTable [ rr:tableName "fast_items" ] ;
@@ -103,10 +105,7 @@ fn shared_config(timeout: Duration) -> (Arc<ServeConfig>, Arc<StatementBarrier>)
         }
     })
     .expect("register statement-entry latch");
-    let schema = introspect_sqlite_all(&conn).expect("introspect fixture");
-    let mapping = sf_mapping::parse_r2rml(MAPPING).expect("parse mapping");
-    let mut config =
-        ServeConfig::new_unchecked(Backend::sqlite(conn), mapping, Tbox::default(), schema);
+    let mut config = support::serve_config(Backend::sqlite(conn), MAPPING);
     config.timeout = timeout;
     (Arc::new(config), barrier)
 }

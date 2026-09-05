@@ -10,7 +10,7 @@ fn options(max_concurrent_requests: usize) -> ServeOptions {
         source: SourceRef::environment("SF_REQUEST_ADMISSION_MUST_NOT_BE_READ"),
         mapping: MappingRef::r2rml_file("/mapping/that/must/not/be/read.ttl"),
         additional_source: None,
-        ontology_path: Some("/ontology/that/must/not/be/read.ttl".to_owned()),
+        ontology_path: "/ontology/that/must/not/be/read.ttl".to_owned(),
         bind: "203.0.113.1:1".to_owned(),
         timeout: Duration::from_secs(1),
         max_query_len: 1024,

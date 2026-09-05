@@ -18,6 +18,8 @@ use spareval::{QueryEvaluator, QueryResults};
 use spargebra::SparqlParser;
 use tower::ServiceExt;
 
+mod support;
+
 #[path = "order_window_semantic_oracle/fixture.rs"]
 mod fixture_data;
 

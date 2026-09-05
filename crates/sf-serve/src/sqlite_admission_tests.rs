@@ -19,7 +19,6 @@ use axum::body::Body;
 use axum::http::{header, Request, Response, StatusCode};
 use http_body_util::BodyExt;
 use rusqlite::functions::FunctionFlags;
-use sf_sparql::Tbox;
 use tower::{Service, ServiceExt};
 
 use crate::{introspect_sqlite_all, router, Backend, ServeConfig, SqlitePool};
@@ -30,19 +29,20 @@ const HOLDER_TIMEOUT: Duration = Duration::from_secs(3_600);
 const MAPPING: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
 @prefix ex: <http://example.test/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 <#Holder> a rr:TriplesMap ;
   rr:logicalTable [ rr:sqlQuery "SELECT 1 AS id, test_hold() AS value" ] ;
   rr:subjectMap [ rr:template "http://example.test/holder/{id}" ] ;
   rr:predicateObjectMap [
     rr:predicate ex:heldValue ;
-    rr:objectMap [ rr:column "value" ]
+    rr:objectMap [ rr:column "value" ; rr:datatype xsd:integer ]
   ] .
 <#Probe> a rr:TriplesMap ;
   rr:logicalTable [ rr:sqlQuery "SELECT 1 AS id, test_probe() AS value" ] ;
   rr:subjectMap [ rr:template "http://example.test/probe/{id}" ] ;
   rr:predicateObjectMap [
     rr:predicate ex:probeValue ;
-    rr:objectMap [ rr:column "value" ]
+    rr:objectMap [ rr:column "value" ; rr:datatype xsd:integer ]
   ] .
 "#;
 
@@ -143,8 +143,19 @@ fn fixture() -> Fixture {
     let pool = pool.clone();
     let config = |timeout| {
         let mapping = sf_mapping::parse_r2rml(MAPPING).expect("parse mapping");
-        let mut cfg =
-            ServeConfig::new_unchecked(backend.clone(), mapping, Tbox::default(), schema.clone());
+        let mut cfg = ServeConfig::new_with_unverified_source(
+            backend.clone(),
+            mapping,
+            crate::test_support::ontology(
+                &[],
+                &[
+                    "http://example.test/heldValue",
+                    "http://example.test/probeValue",
+                ],
+            ),
+            schema.clone(),
+        )
+        .unwrap();
         cfg.timeout = timeout;
         Arc::new(cfg)
     };

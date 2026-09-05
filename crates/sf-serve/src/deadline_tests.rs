@@ -24,12 +24,13 @@ fn request_budget(timeout: Duration) -> RequestBudget {
 #[tokio::test(start_paused = true)]
 async fn time_before_inner_router_dispatch_counts_toward_the_request_deadline() {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
-    let mut cfg = ServeConfig::new_unchecked(
+    let mut cfg = ServeConfig::new_with_unverified_source(
         Backend::sqlite(conn),
         Vec::new(),
-        sf_sparql::Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     cfg.timeout = Duration::from_secs(15);
 
     let request = axum::http::Request::builder()
@@ -59,12 +60,13 @@ async fn time_before_inner_router_dispatch_counts_toward_the_request_deadline() 
 #[tokio::test(start_paused = true)]
 async fn request_clock_starts_before_body_extraction() {
     let conn = rusqlite::Connection::open_in_memory().expect("open fixture");
-    let mut cfg = ServeConfig::new_unchecked(
+    let mut cfg = ServeConfig::new_with_unverified_source(
         Backend::sqlite(conn),
         Vec::new(),
-        sf_sparql::Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     cfg.timeout = Duration::from_secs(15);
 
     let (_body_tx, body_rx) =

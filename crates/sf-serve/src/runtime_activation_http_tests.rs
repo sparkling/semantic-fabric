@@ -6,7 +6,7 @@ use axum::body::{Body, Bytes};
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::{Epoch, Tbox};
+use sf_sparql::Epoch;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
 
@@ -51,7 +51,12 @@ fn runtime_source(name: &str) -> RuntimeSource {
 
 fn config(name: &str) -> ServeConfig {
     let (source, mapping) = source_parts(name);
-    ServeConfig::new(source, mapping, Tbox::default())
+    ServeConfig::new(
+        source,
+        mapping,
+        crate::test_support::ontology(&[], &["http://example.test/name"]),
+    )
+    .unwrap()
 }
 
 fn request(body: Body) -> Request<Body> {
@@ -89,7 +94,12 @@ async fn new_http_requests_switch_whole_snapshots_after_activation() {
     let activated = config
         .activate_snapshot(
             expected,
-            RuntimeSnapshot::single(Epoch(1), Tbox::default(), runtime_source("Bob")),
+            RuntimeSnapshot::single(
+                Epoch(1),
+                crate::test_support::ontology(&[], &["http://example.test/name"]),
+                runtime_source("Bob"),
+            )
+            .unwrap(),
         )
         .unwrap();
     assert!(activated > expected.activation_id());

@@ -188,7 +188,7 @@ mod tests {
     use super::*;
     use axum::body::Bytes;
     use sf_core::{SourceId, SourceMapping};
-    use sf_sparql::{Epoch, Tbox};
+    use sf_sparql::Epoch;
 
     use crate::{Backend, IntrospectedSource, RuntimeSnapshot, RuntimeSource};
 
@@ -217,38 +217,37 @@ mod tests {
     }
 
     fn cfg() -> ServeConfig {
-        ServeConfig::new_unchecked(
+        ServeConfig::new_with_unverified_source(
             Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
             Vec::new(),
-            Tbox::default(),
+            crate::test_support::empty_ontology(),
             Vec::new(),
         )
+        .unwrap()
     }
 
-    #[tokio::test]
-    async fn response_body_pins_the_old_snapshot_until_body_termination() {
-        let cfg = ServeConfig::new_unchecked(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-            Vec::new(),
-            Tbox::default(),
-            Vec::new(),
-        );
-        let old_state = cfg.runtime_readiness().unwrap();
-        let lease = cfg.runtime_lease().unwrap();
-        let old_snapshot = lease.weak_snapshot();
-        let source_id = SourceId::new(0).unwrap();
-        let candidate = RuntimeSnapshot::single(
+    fn candidate() -> RuntimeSnapshot {
+        RuntimeSnapshot::single(
             Epoch(1),
-            Tbox::default(),
+            crate::test_support::empty_ontology(),
             RuntimeSource::new(
                 IntrospectedSource::unchecked(
                     Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
                     Vec::new(),
                 ),
-                SourceMapping::new(source_id, Vec::new()),
+                SourceMapping::new(SourceId::new(0).unwrap(), Vec::new()),
             ),
-        );
-        cfg.activate_snapshot(old_state, candidate).unwrap();
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn response_body_pins_the_old_snapshot_until_body_termination() {
+        let cfg = cfg();
+        let old_state = cfg.runtime_readiness().unwrap();
+        let lease = cfg.runtime_lease().unwrap();
+        let old_snapshot = lease.weak_snapshot();
+        cfg.activate_snapshot(old_state, candidate()).unwrap();
 
         let response = pin_snapshot(
             Response::new(Body::new(http_body_util::Full::new(Bytes::from_static(
@@ -264,31 +263,11 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_an_unpolled_response_body_releases_its_snapshot() {
-        let cfg = ServeConfig::new_unchecked(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-            Vec::new(),
-            Tbox::default(),
-            Vec::new(),
-        );
+        let cfg = cfg();
         let old_state = cfg.runtime_readiness().unwrap();
         let lease = cfg.runtime_lease().unwrap();
         let old_snapshot = lease.weak_snapshot();
-        let source_id = SourceId::new(0).unwrap();
-        cfg.activate_snapshot(
-            old_state,
-            RuntimeSnapshot::single(
-                Epoch(1),
-                Tbox::default(),
-                RuntimeSource::new(
-                    IntrospectedSource::unchecked(
-                        Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-                        Vec::new(),
-                    ),
-                    SourceMapping::new(source_id, Vec::new()),
-                ),
-            ),
-        )
-        .unwrap();
+        cfg.activate_snapshot(old_state, candidate()).unwrap();
 
         let response = pin_snapshot(
             Response::new(Body::new(http_body_util::Full::new(Bytes::from_static(
@@ -303,30 +282,11 @@ mod tests {
 
     #[tokio::test]
     async fn response_body_error_releases_its_snapshot() {
-        let cfg = ServeConfig::new_unchecked(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-            Vec::new(),
-            Tbox::default(),
-            Vec::new(),
-        );
+        let cfg = cfg();
         let old_state = cfg.runtime_readiness().unwrap();
         let lease = cfg.runtime_lease().unwrap();
         let old_snapshot = lease.weak_snapshot();
-        cfg.activate_snapshot(
-            old_state,
-            RuntimeSnapshot::single(
-                Epoch(1),
-                Tbox::default(),
-                RuntimeSource::new(
-                    IntrospectedSource::unchecked(
-                        Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-                        Vec::new(),
-                    ),
-                    SourceMapping::new(SourceId::new(0).unwrap(), Vec::new()),
-                ),
-            ),
-        )
-        .unwrap();
+        cfg.activate_snapshot(old_state, candidate()).unwrap();
 
         let stream = tokio_stream::iter([Err::<Bytes, std::io::Error>(std::io::Error::other(
             "test body failure",
@@ -357,30 +317,11 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_body_consumer_releases_its_snapshot() {
-        let cfg = ServeConfig::new_unchecked(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-            Vec::new(),
-            Tbox::default(),
-            Vec::new(),
-        );
+        let cfg = cfg();
         let old_state = cfg.runtime_readiness().unwrap();
         let lease = cfg.runtime_lease().unwrap();
         let old_snapshot = lease.weak_snapshot();
-        cfg.activate_snapshot(
-            old_state,
-            RuntimeSnapshot::single(
-                Epoch(1),
-                Tbox::default(),
-                RuntimeSource::new(
-                    IntrospectedSource::unchecked(
-                        Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-                        Vec::new(),
-                    ),
-                    SourceMapping::new(SourceId::new(0).unwrap(), Vec::new()),
-                ),
-            ),
-        )
-        .unwrap();
+        cfg.activate_snapshot(old_state, candidate()).unwrap();
 
         let (first_poll, observed_poll) = tokio::sync::oneshot::channel();
         let response = pin_snapshot(
@@ -399,30 +340,11 @@ mod tests {
 
     #[test]
     fn old_snapshot_drops_only_after_its_last_response_pin() {
-        let cfg = ServeConfig::new_unchecked(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-            Vec::new(),
-            Tbox::default(),
-            Vec::new(),
-        );
+        let cfg = cfg();
         let old_state = cfg.runtime_readiness().unwrap();
         let lease = cfg.runtime_lease().unwrap();
         let old_snapshot = lease.weak_snapshot();
-        cfg.activate_snapshot(
-            old_state,
-            RuntimeSnapshot::single(
-                Epoch(1),
-                Tbox::default(),
-                RuntimeSource::new(
-                    IntrospectedSource::unchecked(
-                        Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-                        Vec::new(),
-                    ),
-                    SourceMapping::new(SourceId::new(0).unwrap(), Vec::new()),
-                ),
-            ),
-        )
-        .unwrap();
+        cfg.activate_snapshot(old_state, candidate()).unwrap();
 
         let first = pin_snapshot(Response::new(Body::empty()), lease.clone());
         let second = pin_snapshot(Response::new(Body::empty()), lease);

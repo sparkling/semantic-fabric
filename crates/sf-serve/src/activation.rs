@@ -216,6 +216,18 @@ impl RuntimeManager {
         }
     }
 
+    /// Read the admitted warning count from the currently published snapshot.
+    /// `None` means that no ready snapshot currently exposes this source.
+    pub(crate) fn semantic_warning_count(&self, source_id: SourceId) -> Option<usize> {
+        let state = self.state.read().ok()?;
+        match &*state {
+            RuntimeState::Ready { snapshot, .. } => {
+                snapshot.registry().semantic_warning_count(source_id)
+            }
+            RuntimeState::NotReady { .. } => None,
+        }
+    }
+
     /// Load readiness exactly once and pin the corresponding snapshot.
     pub(crate) fn lease(&self) -> Result<RuntimeSnapshotLease, SnapshotUnavailable> {
         let state = self

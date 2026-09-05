@@ -10,11 +10,12 @@ use axum::body::{Body, Bytes};
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_serve::{
-    introspect_sqlite_all, router, serve_blocking, Backend, ServeConfig, ServeOptions, SourceRef,
+    router, serve_blocking, Backend, ServeConfig, ServeOptions, SourceRef,
     DEFAULT_MAX_CONCURRENT_REQUESTS,
 };
-use sf_sparql::Tbox;
 use tower::ServiceExt;
+
+mod support;
 
 const MAPPING_TTL: &str = r#"
 @prefix rr: <http://www.w3.org/ns/r2rml#> .
@@ -29,14 +30,7 @@ fn config(max_query_len: usize) -> ServeConfig {
     connection
         .execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY);")
         .expect("create fixture table");
-    let schema = introspect_sqlite_all(&connection).expect("introspect fixture");
-    let mapping = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse mapping");
-    let mut config = ServeConfig::new_unchecked(
-        Backend::sqlite(connection),
-        mapping,
-        Tbox::default(),
-        schema,
-    );
+    let mut config = support::serve_config(Backend::sqlite(connection), MAPPING_TTL);
     config
         .set_max_query_len(max_query_len)
         .expect("representable query limit");
@@ -350,7 +344,7 @@ fn should_reject_unrepresentable_limit_before_source_or_file_io() {
         source: SourceRef::environment("SF_POST_BODY_ADMISSION_MUST_NOT_BE_READ"),
         mapping: sf_serve::MappingRef::r2rml_file("/path/that/must/not/be/read.ttl"),
         additional_source: None,
-        ontology_path: Some("/ontology/that/must/not/be/read.ttl".to_owned()),
+        ontology_path: "/ontology/that/must/not/be/read.ttl".to_owned(),
         bind: "203.0.113.1:1".to_owned(),
         timeout: Duration::from_secs(1),
         max_query_len: usize::MAX,

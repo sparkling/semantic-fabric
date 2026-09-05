@@ -13,8 +13,8 @@ pub struct ServeOptions {
     pub mapping: MappingRef,
     /// Optional second relational source and its source-local R2RML mapping.
     pub additional_source: Option<AdditionalSourceOptions>,
-    /// Optional ontology (Turtle) → tier-1 T-Box.
-    pub ontology_path: Option<String>,
+    /// Required ontology (Turtle) for semantic admission and the tier-1 T-Box.
+    pub ontology_path: String,
     /// `host:port` to bind (e.g. `127.0.0.1:7878`).
     pub bind: String,
     /// Request timeout (ADR-0010).
@@ -207,7 +207,7 @@ pub(crate) async fn open_backend(
 
 /// Introspect every MySQL base table in the current database (name order) — the
 /// MySQL analogue of [`introspect_pg_all`].
-async fn introspect_mysql_all(
+pub(crate) async fn introspect_mysql_all(
     conn: &mut mysql_async::Conn,
 ) -> Result<Vec<sf_sql::TableSchema>, String> {
     use mysql_async::prelude::Queryable;

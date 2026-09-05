@@ -4,33 +4,113 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use sf_core::query_control::QueryControl;
-use sf_core::{SourceId, SourceMapping};
+use sf_core::SourceId;
+#[cfg(test)]
+use sf_core::SourceMapping;
 use sf_sparql::federation::{
     compile_source_affine_union, compile_source_affine_union_uncached, FederatedPlan,
 };
-use sf_sparql::{CompileDigests, Epoch, OntologyDigest, Plan, Tbox};
+#[cfg(test)]
+use sf_sparql::CompileDigests;
+use sf_sparql::{Epoch, OntologyDigest, Plan};
+#[cfg(test)]
 use sf_sql::TableSchema;
 
 use crate::binding::{
     BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
-    IntrospectedSource, RuntimeBinding,
+    RuntimeBinding,
 };
 use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
-use crate::BackendProfile;
+#[cfg(test)]
+use crate::semantic_admission::MappingOrigin;
+use crate::semantic_admission::{SemanticAdmissionError, ValidatedMapping};
+use crate::{IntrospectedSource, SemanticOntology};
+
+enum RuntimeMapping {
+    #[cfg(test)]
+    Pending {
+        mapping: SourceMapping,
+        origin: MappingOrigin,
+    },
+    Validated(ValidatedMapping),
+}
+
+impl RuntimeMapping {
+    const fn source_id(&self) -> SourceId {
+        match self {
+            #[cfg(test)]
+            Self::Pending { mapping, .. } => mapping.source_id(),
+            Self::Validated(mapping) => mapping.source_id(),
+        }
+    }
+
+    fn validate(
+        self,
+        ontology: &SemanticOntology,
+        source: &IntrospectedSource,
+    ) -> Result<ValidatedMapping, SemanticAdmissionError> {
+        match self {
+            #[cfg(test)]
+            Self::Pending { mapping, origin } => {
+                ValidatedMapping::validate(mapping, origin, ontology, source)
+            }
+            Self::Validated(mapping) => mapping.ensure_context(ontology, source),
+        }
+    }
+}
 
 /// One source/backend/schema/mapping input awaiting snapshot validation.
-pub struct RuntimeSource {
+pub(crate) struct RuntimeSource {
     source: IntrospectedSource,
-    mapping: SourceMapping,
+    mapping: RuntimeMapping,
 }
 
 impl RuntimeSource {
-    pub fn new(source: IntrospectedSource, mapping: SourceMapping) -> Self {
-        Self { source, mapping }
+    /// Construct an authored mapping candidate. Semantic admission runs before
+    /// any runtime binding, compiler, or plan cache is allocated.
+    #[cfg(test)]
+    pub(crate) fn new(source: IntrospectedSource, mapping: SourceMapping) -> Self {
+        Self {
+            source,
+            mapping: RuntimeMapping::Pending {
+                mapping,
+                origin: MappingOrigin::Authored,
+            },
+        }
     }
 
-    pub const fn source_id(&self) -> SourceId {
+    #[cfg(test)]
+    pub(crate) fn direct(source: IntrospectedSource, mapping: SourceMapping) -> Self {
+        Self {
+            source,
+            mapping: RuntimeMapping::Pending {
+                mapping,
+                origin: MappingOrigin::Direct,
+            },
+        }
+    }
+
+    pub(crate) fn admitted(source: IntrospectedSource, mapping: ValidatedMapping) -> Self {
+        Self {
+            source,
+            mapping: RuntimeMapping::Validated(mapping),
+        }
+    }
+
+    pub(crate) const fn source_id(&self) -> SourceId {
         self.mapping.source_id()
+    }
+
+    fn validate(
+        self,
+        ontology: &SemanticOntology,
+    ) -> Result<(SourceId, IntrospectedSource, ValidatedMapping), SnapshotError> {
+        let source_id = self.source_id();
+        let mapping = self
+            .mapping
+            .validate(ontology, &self.source)
+            .map_err(|cause| SnapshotError::SemanticAdmission { source_id, cause })?;
+        Ok((source_id, self.source, mapping))
     }
 }
 
@@ -40,20 +120,19 @@ impl fmt::Debug for RuntimeSource {
             .debug_struct("RuntimeSource")
             .field("source_id", &self.source_id())
             .field("backend_kind", &self.source.kind())
-            .field("mapping", &self.mapping)
             .finish()
     }
 }
 
 /// Immutable lookup of runtime source bindings by snapshot-local [`SourceId`].
-pub struct SourceRegistry {
+pub(crate) struct SourceRegistry {
     entries: BTreeMap<SourceId, RuntimeBinding>,
 }
 
 impl SourceRegistry {
     fn build(
         epoch: Epoch,
-        ontology: &Tbox,
+        ontology: &SemanticOntology,
         sources: Vec<RuntimeSource>,
     ) -> Result<Self, SnapshotError> {
         if sources.is_empty() {
@@ -69,46 +148,53 @@ impl SourceRegistry {
             }
         }
 
-        let entries = sources
+        // Admission completes for every source before the first compiler or
+        // cache is constructed, so federated publication is all-or-nothing.
+        let validated = sources
             .into_iter()
-            .map(|source| {
-                let source_id = source.source_id();
-                let binding =
-                    RuntimeBinding::new(source.source, source.mapping, ontology.clone(), epoch);
+            .map(|source| source.validate(ontology))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let entries = validated
+            .into_iter()
+            .map(|(source_id, source, mapping)| {
+                let binding = RuntimeBinding::new(source, mapping, ontology.tbox().clone(), epoch);
                 (source_id, binding)
             })
             .collect();
         Ok(Self { entries })
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     pub fn contains_source(&self, source_id: SourceId) -> bool {
         self.entries.contains_key(&source_id)
     }
 
-    pub fn source_ids(&self) -> impl Iterator<Item = SourceId> + '_ {
+    #[cfg(test)]
+    pub(crate) fn source_ids(&self) -> impl Iterator<Item = SourceId> + '_ {
         self.entries.keys().copied()
     }
 
-    pub fn profile(&self, source_id: SourceId) -> Option<BackendProfile> {
-        self.entries.get(&source_id).map(RuntimeBinding::profile)
-    }
-
-    pub fn schema(&self, source_id: SourceId) -> Option<&[TableSchema]> {
+    #[cfg(test)]
+    pub(crate) fn schema(&self, source_id: SourceId) -> Option<&[TableSchema]> {
         self.entries
             .get(&source_id)
             .map(RuntimeBinding::observed_schema)
     }
 
-    pub fn digests(&self, source_id: SourceId) -> Option<CompileDigests> {
+    #[cfg(test)]
+    pub(crate) fn digests(&self, source_id: SourceId) -> Option<CompileDigests> {
         self.entries.get(&source_id).map(RuntimeBinding::digests)
+    }
+
+    pub(crate) fn semantic_warning_count(&self, source_id: SourceId) -> Option<usize> {
+        self.entries
+            .get(&source_id)
+            .map(RuntimeBinding::semantic_warning_count)
     }
 
     fn binding(&self, source_id: SourceId) -> Option<&RuntimeBinding> {
@@ -127,52 +213,45 @@ impl fmt::Debug for SourceRegistry {
 
 /// Immutable ontology, source mappings, observed schemas, runtime bindings,
 /// epochs, and deterministic digests for one runtime generation.
-pub struct RuntimeSnapshot {
+pub(crate) struct RuntimeSnapshot {
     epoch: Epoch,
-    ontology: Tbox,
+    _ontology: SemanticOntology,
     ontology_digest: OntologyDigest,
     registry: SourceRegistry,
 }
 
 impl RuntimeSnapshot {
     /// Validate source identity uniqueness before constructing any bindings.
-    pub fn new(
+    pub(crate) fn new(
         epoch: Epoch,
-        ontology: Tbox,
+        ontology: SemanticOntology,
         sources: Vec<RuntimeSource>,
     ) -> Result<Self, SnapshotError> {
         let registry = SourceRegistry::build(epoch, &ontology, sources)?;
-        let ontology_digest = registry
-            .entries
-            .values()
-            .next()
-            .expect("a validated registry is non-empty")
-            .digests()
-            .ontology();
+        let ontology_digest = OntologyDigest::from_sha256(ontology.document_digest());
+        #[cfg(test)]
         debug_assert!(registry
             .entries
             .values()
             .all(|binding| binding.digests().ontology() == ontology_digest));
         Ok(Self {
             epoch,
-            ontology,
+            _ontology: ontology,
             ontology_digest,
             registry,
         })
     }
 
-    /// Infallible compatibility path for the current one-source CLI/server.
-    pub fn single(epoch: Epoch, ontology: Tbox, source: RuntimeSource) -> Self {
+    pub(crate) fn single(
+        epoch: Epoch,
+        ontology: SemanticOntology,
+        source: RuntimeSource,
+    ) -> Result<Self, SnapshotError> {
         Self::new(epoch, ontology, vec![source])
-            .expect("one runtime source has a unique, non-empty registry identity")
     }
 
     pub const fn epoch(&self) -> Epoch {
         self.epoch
-    }
-
-    pub const fn ontology(&self) -> &Tbox {
-        &self.ontology
     }
 
     pub const fn ontology_digest(&self) -> OntologyDigest {
@@ -330,10 +409,16 @@ impl fmt::Debug for RuntimeSnapshot {
 }
 
 /// Runtime snapshot construction rejected an invalid source registry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SnapshotError {
     #[error("runtime snapshot requires at least one source")]
     EmptyRegistry,
     #[error("runtime snapshot contains duplicate {source_id}")]
     DuplicateSource { source_id: SourceId },
+    #[error("runtime snapshot rejected {source_id}: {cause}")]
+    SemanticAdmission {
+        source_id: SourceId,
+        #[source]
+        cause: SemanticAdmissionError,
+    },
 }

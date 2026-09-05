@@ -8,7 +8,7 @@ use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use sf_core::query_control::QueryLimits;
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::{Epoch, Tbox};
+use sf_sparql::Epoch;
 use tower::ServiceExt;
 
 use crate::{
@@ -117,7 +117,11 @@ fn config(
 ) -> (ServeConfig, [SqlitePool; 2], [DbFile; 2]) {
     let (left, left_pool, left_file) = runtime_source(0, predicates[0], values[0]);
     let (right, right_pool, right_file) = runtime_source(1, predicates[1], values[1]);
-    let config = ServeConfig::new_federated([left, right], Tbox::default()).unwrap();
+    let config = ServeConfig::new_federated(
+        [left, right],
+        crate::test_support::ontology(&[], &predicates),
+    )
+    .unwrap();
     (config, [left_pool, right_pool], [left_file, right_file])
 }
 
@@ -333,7 +337,15 @@ async fn in_flight_union_pins_both_old_source_bindings_across_activation() {
     config
         .activate_snapshot(
             expected,
-            RuntimeSnapshot::new(Epoch(1), Tbox::default(), vec![new_left, new_right]).unwrap(),
+            RuntimeSnapshot::new(
+                Epoch(1),
+                crate::test_support::ontology(
+                    &[],
+                    &["http://example.test/left", "http://example.test/right"],
+                ),
+                vec![new_left, new_right],
+            )
+            .unwrap(),
         )
         .unwrap();
     drop(old_lease);
@@ -359,7 +371,14 @@ async fn in_flight_union_pins_both_old_source_bindings_across_activation() {
 fn duplicate_ids_and_missing_activation_sources_fail_closed() {
     let (left, _pool, _file) = runtime_source(0, "http://example.test/left", &["one"]);
     let (duplicate, _pool, _file) = runtime_source(0, "http://example.test/right", &["two"]);
-    assert!(ServeConfig::new_federated([left, duplicate], Tbox::default()).is_err());
+    assert!(ServeConfig::new_federated(
+        [left, duplicate],
+        crate::test_support::ontology(
+            &[],
+            &["http://example.test/left", "http://example.test/right"],
+        ),
+    )
+    .is_err());
 
     let (config, _pools, _files) = config(
         ["http://example.test/left", "http://example.test/right"],
@@ -367,7 +386,12 @@ fn duplicate_ids_and_missing_activation_sources_fail_closed() {
     );
     let expected = config.runtime_readiness().unwrap();
     let (only, _pool, _file) = runtime_source(0, "http://example.test/left", &["new"]);
-    let candidate = RuntimeSnapshot::single(Epoch(1), Tbox::default(), only);
+    let candidate = RuntimeSnapshot::single(
+        Epoch(1),
+        crate::test_support::ontology(&[], &["http://example.test/left"]),
+        only,
+    )
+    .unwrap();
     assert!(matches!(
         config.activate_snapshot(expected, candidate),
         Err(crate::ActivationError::CandidateMissingSource { source_id })

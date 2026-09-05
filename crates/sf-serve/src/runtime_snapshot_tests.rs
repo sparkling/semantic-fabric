@@ -1,7 +1,7 @@
 use sf_core::ir::{LogicalSource, SubjectMap, TermMap, TriplesMap};
 use sf_core::query_control::UncontrolledQueryControl;
 use sf_core::{NamedNode, SourceId, SourceMapping, Term};
-use sf_sparql::{Epoch, Tbox};
+use sf_sparql::Epoch;
 use sf_sql::TableSchema;
 
 use crate::activation::{RuntimeManager, SnapshotUnavailable};
@@ -35,14 +35,19 @@ fn runtime_source(index: usize, table: &str) -> RuntimeSource {
 }
 
 fn snapshot(table: &str) -> RuntimeSnapshot {
-    RuntimeSnapshot::single(Epoch(0), Tbox::default(), runtime_source(0, table))
+    RuntimeSnapshot::single(
+        Epoch(0),
+        crate::test_support::empty_ontology(),
+        runtime_source(0, table),
+    )
+    .unwrap()
 }
 
 #[test]
 fn registry_is_source_keyed_and_accepts_multiple_runtime_sources() {
     let snapshot = RuntimeSnapshot::new(
         Epoch(4),
-        Tbox::default(),
+        crate::test_support::empty_ontology(),
         vec![runtime_source(7, "seven"), runtime_source(2, "two")],
     )
     .unwrap();
@@ -66,13 +71,13 @@ fn registry_is_source_keyed_and_accepts_multiple_runtime_sources() {
 #[test]
 fn empty_and_duplicate_source_registries_fail_closed() {
     assert!(matches!(
-        RuntimeSnapshot::new(Epoch(0), Tbox::default(), Vec::new()),
+        RuntimeSnapshot::new(Epoch(0), crate::test_support::empty_ontology(), Vec::new(),),
         Err(SnapshotError::EmptyRegistry)
     ));
     assert!(matches!(
         RuntimeSnapshot::new(
             Epoch(0),
-            Tbox::default(),
+            crate::test_support::empty_ontology(),
             vec![runtime_source(1, "first"), runtime_source(1, "second")],
         ),
         Err(SnapshotError::DuplicateSource { source_id })
@@ -83,11 +88,15 @@ fn empty_and_duplicate_source_registries_fail_closed() {
 #[test]
 fn compile_provenance_is_checked_against_the_execution_snapshot() {
     let source_id = SourceId::new(0).unwrap();
-    let first =
-        RuntimeSnapshot::new(Epoch(0), Tbox::default(), vec![runtime_source(0, "items")]).unwrap();
+    let first = RuntimeSnapshot::new(
+        Epoch(0),
+        crate::test_support::empty_ontology(),
+        vec![runtime_source(0, "items")],
+    )
+    .unwrap();
     let replacement = RuntimeSnapshot::new(
         Epoch(0),
-        Tbox::default(),
+        crate::test_support::empty_ontology(),
         vec![runtime_source(0, "replacement_items")],
     )
     .unwrap();
@@ -105,7 +114,8 @@ fn compile_provenance_is_checked_against_the_execution_snapshot() {
 #[test]
 fn singleton_constructor_preserves_the_current_runtime_shape() {
     let source = runtime_source(5, "items");
-    let snapshot = RuntimeSnapshot::single(Epoch(0), Tbox::default(), source);
+    let snapshot =
+        RuntimeSnapshot::single(Epoch(0), crate::test_support::empty_ontology(), source).unwrap();
 
     assert_eq!(snapshot.registry().len(), 1);
     assert!(snapshot
@@ -168,7 +178,7 @@ fn rejected_candidate_construction_leaves_the_active_snapshot_unchanged() {
     let before_identity = before.weak_snapshot();
 
     assert!(matches!(
-        RuntimeSnapshot::new(Epoch(1), Tbox::default(), Vec::new()),
+        RuntimeSnapshot::new(Epoch(1), crate::test_support::empty_ontology(), Vec::new(),),
         Err(SnapshotError::EmptyRegistry)
     ));
 

@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use oxrdf::{Dataset, GraphName, Literal, NamedNode, Quad};
 use rusqlite::{params, Connection};
-use sf_serve::{introspect_sqlite_all, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{Backend, ServeConfig};
 
 pub(crate) const EX: &str = "http://example.test/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -206,14 +205,10 @@ pub(crate) fn fixture() -> Fixture {
     add_optional_group(&connection, &mut mapping, &mut quads);
     add_multiple_key_group(&connection, &mut mapping, &mut quads);
 
-    let schema = introspect_sqlite_all(&connection).expect("introspect oracle fixture");
-    let maps = sf_mapping::parse_r2rml(&mapping).expect("parse generated fixture mapping");
     Fixture {
-        config: Arc::new(ServeConfig::new_unchecked(
+        config: Arc::new(crate::support::serve_config(
             Backend::sqlite(connection),
-            maps,
-            Tbox::default(),
-            schema,
+            &mapping,
         )),
         graph: Dataset::from_iter(quads),
     }
@@ -271,7 +266,7 @@ fn add_optional_group(connection: &Connection, mapping: &mut String, quads: &mut
         "<#map-optional> a rr:TriplesMap ;\n\
            rr:logicalTable [ rr:sqlQuery \"SELECT id, marker, value FROM optional_values ORDER BY id\" ] ;\n\
            rr:subjectMap [ rr:template \"http://example.test/optional_values/{id}\" ] ;\n\
-           rr:predicateObjectMap [ rr:predicate <http://example.test/row> ; rr:objectMap [ rr:column \"marker\" ] ] ;\n\
+           rr:predicateObjectMap [ rr:predicate <http://example.test/row> ; rr:objectMap [ rr:column \"marker\" ; rr:datatype <http://www.w3.org/2001/XMLSchema#string> ] ] ;\n\
            rr:predicateObjectMap [ rr:predicate <http://example.test/optional> ; rr:objectMap [ rr:column \"value\" ; rr:datatype <http://www.w3.org/2001/XMLSchema#integer> ] ] .\n",
     );
     for (id, value) in [

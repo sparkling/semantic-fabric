@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sf_core::query_control::{QueryControl, QueryControlError};
-use sf_sparql::Tbox;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 
@@ -12,12 +11,13 @@ use crate::lifecycle::{serve_listener_until_shutdown, ShutdownOutcome};
 use crate::{router, Backend, ServeConfig};
 
 fn config() -> Arc<ServeConfig> {
-    let mut config = ServeConfig::new_unchecked(
+    let mut config = ServeConfig::new_with_unverified_source(
         Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
         Vec::new(),
-        Tbox::default(),
+        crate::test_support::empty_ontology(),
         Vec::new(),
-    );
+    )
+    .unwrap();
     config.timeout = Duration::from_secs(60);
     config.set_max_concurrent_requests(1).unwrap();
     Arc::new(config)
@@ -100,7 +100,13 @@ async fn request_already_in_flight_drains_successfully_after_shutdown_starts() {
             .unwrap(),
         ShutdownOutcome::Drained
     );
-    assert_eq!(config.available_request_permits(), 1);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while config.available_request_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("drained response releases request capacity");
 }
 
 #[tokio::test]

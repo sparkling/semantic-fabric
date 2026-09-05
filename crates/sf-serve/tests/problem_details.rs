@@ -5,9 +5,10 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_serve::{introspect_sqlite_all, router, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{router, Backend, IntrospectedSource, ServeConfig};
 use tower::ServiceExt;
+
+mod support;
 
 const SECRET: &str = "sf_secret_NEVER_EXPOSE_7f42";
 const SECRET_COLUMN: &str = "sf_secret_NEVER_EXPOSE_7f42_column";
@@ -41,10 +42,19 @@ fn config_after_schema_change(change: &str) -> ServeConfig {
          INSERT INTO \"{SECRET_TABLE}\" VALUES (1, 'value');"
     ))
     .expect("seed fixture");
-    let schema = introspect_sqlite_all(&conn).expect("snapshot schema");
-    let mapping = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse mapping");
-    conn.execute_batch(change).expect("drift live schema");
-    ServeConfig::new_unchecked(Backend::sqlite(conn), mapping, Tbox::default(), schema)
+    let mapping = sf_mapping::parse_r2rml(MAPPING_TTL).expect("parse fixture mapping");
+    let ontology = support::ontology_for_mapping(&mapping);
+    let source = IntrospectedSource::observe_sqlite(Backend::sqlite(conn))
+        .expect("observe fixture before drift");
+    let pool = source.sqlite_pool().expect("fixture uses SQLite");
+    let config = ServeConfig::from_authored_r2rml(source, MAPPING_TTL, ontology)
+        .expect("admit fixture before drift");
+    pool.pick()
+        .lock()
+        .expect("lock fixture connection")
+        .execute_batch(change)
+        .expect("drift live schema");
+    config
 }
 
 fn request(query: &str, content_type: &str) -> Request<Body> {
