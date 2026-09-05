@@ -30,13 +30,13 @@ const SINGLE_SOURCE: &str = r#"@prefix sd: <http://www.w3.org/ns/sparql-service-
     sd:feature sf:select-query,
         sf:ask-query,
         sf:construct-query,
-        sf:describe-one-target-one-hop-query .
+        sf:describe-one-target-one-hop-query-v1 .
 
 sf:bounded-read-query-v1 a sd:Language .
 sf:select-query a sd:Feature .
 sf:ask-query a sd:Feature .
 sf:construct-query a sd:Feature .
-sf:describe-one-target-one-hop-query a sd:Feature .
+sf:describe-one-target-one-hop-query-v1 a sd:Feature .
 "#;
 const TWO_SOURCE: &str = r#"@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
 @prefix sf: <urn:semantic-fabric:service-description:> .

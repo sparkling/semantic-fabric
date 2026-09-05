@@ -167,7 +167,7 @@ async fn queryless_get_is_stable_redacted_rdf_with_a_matching_endpoint() {
         BTreeSet::from([
             format!("{SF}ask-query"),
             format!("{SF}construct-query"),
-            format!("{SF}describe-one-target-one-hop-query"),
+            format!("{SF}describe-one-target-one-hop-query-v1"),
             format!("{SF}select-query"),
         ])
     );
@@ -230,7 +230,7 @@ async fn two_source_mode_adds_only_the_exact_union_feature() {
         "production-admission",
         "ask-query",
         "construct-query",
-        "describe-one-target-one-hop-query",
+        "describe-one-target-one-hop-query-v1",
         "formats/Turtle",
         "formats/N-Triples",
         "formats/JSON-LD",
