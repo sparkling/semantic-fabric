@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
+use sf_sql::{Column, ForeignKey, TableSchema};
 use sha2::{Digest, Sha256};
 
 #[path = "fixture.rs"]
@@ -27,6 +28,15 @@ pub const GOLD_ROOT_ENV: &str = "SF_PRODUCT_MOCK_GOLD_ROOT";
 pub const SOURCE_ROOT_ENV: &str = "SF_PRODUCT_MOCK_SOURCE_ROOT";
 pub const PG_URL_ENV: &str = "SF_PRODUCT_MOCK_PG_URL";
 pub const SOURCE_REVISION: &str = "7c45292fccb8b88afe263e18de6806667ae18573";
+pub const STYLE_WINDOW_LIMIT: usize = 10_001;
+pub const STYLE_DIRECT_SQL: &str = "SELECT style_number, version FROM public.style \
+    ORDER BY style_number ASC, version ASC LIMIT 10001";
+pub const STYLE_SPARQL_QUERY: &str = r#"SELECT ?styleNumber ?version WHERE {
+  ?style <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ?styleNumber ;
+         <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Version> ?version .
+}
+ORDER BY ?styleNumber ?version
+LIMIT 10001"#;
 pub const MANIFEST_PATH: &str = "candidate-manifest.json";
 pub const SNAPSHOT_PATH: &str = "source-snapshot.json";
 pub const COVERAGE_PATH: &str = "relational-schema-coverage.json";
@@ -68,6 +78,26 @@ pub struct GoldVertical {
     pub r2rml: String,
     pub inventory: RelationalInventory,
     pub style: StyleSchema,
+}
+
+pub fn style_table_schema(style: &StyleSchema) -> TableSchema {
+    let mut table = TableSchema::new("style");
+    table.columns = style
+        .columns
+        .iter()
+        .map(|column| Column::new(&column.name, &column.store_type, !column.nullable))
+        .collect();
+    table.primary_key = style.primary_key.clone();
+    table.foreign_keys = style
+        .foreign_keys
+        .iter()
+        .map(|key| ForeignKey {
+            columns: key.child_columns.clone(),
+            parent_table: key.parent_table.clone(),
+            parent_columns: key.parent_columns.clone(),
+        })
+        .collect();
+    table
 }
 
 pub fn sha256(bytes: &[u8]) -> String {

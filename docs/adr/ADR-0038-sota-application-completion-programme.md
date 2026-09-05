@@ -58,6 +58,7 @@ The revision-pinned `semantic-builder` gold (`expected-ontology.json`, 14-catego
 and mutable ProductDesign/Style live vertical are three separate development authorities. A Rust table/column inventory gate recounts
 11 stores, 112 tables and 598 columns; its 2026-09-05 read-only live run failed
 closed on recorded database drift. The current bundle has 10,167 mapping quads in total. Its Source Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter; the in-charter qualified development KAT extracts and validates 148 relational R2RML TriplesMaps/721 predicate-object maps over all 112 tables/598 columns.
+The current Style map also passes an optional `sf-serve` HTTP differential for the exact finite `LIMIT 10001` window, while `LIMIT 10002` rejects with `501` before an unopened poison pool. This cross-session mutable observation does not repair the red inventory or admit PostgreSQL.
 Keys, constraints, defaults, indexes, views, privileges, a global snapshot and source/image provenance remain unclaimed.
 
 ### 1. Definition of complete

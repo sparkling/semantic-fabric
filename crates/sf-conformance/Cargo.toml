@@ -48,6 +48,13 @@ sparql_service = "0.3"
 spareval = { version = "0.2.6", features = ["sparql-12"] }
 spargebra.workspace = true
 
+[dev-dependencies]
+sf-serve.workspace = true
+axum.workspace = true
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+deadpool-postgres = "0.14"
+
 [[test]]
 name = "differential_mssql"
 required-features = ["sqlserver-backend"]

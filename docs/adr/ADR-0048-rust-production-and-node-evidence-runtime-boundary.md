@@ -238,9 +238,15 @@ The 2026-09-05 gold refresh seals the current 63,091-byte manifest and all 246
 transitive artifacts, keeps the 171-file source snapshot and two migration pins,
 and validates the Category-13 relational closure at 148 TriplesMaps/721
 predicate-object maps over 112 tables/598 columns. Its current Style differential
-passes in one rolled-back read-only PostgreSQL 16.9 snapshot. The separate full
-inventory gate still fails closed on the drift recorded above. Neither result
-depends on ignored `.metaharness` output or grants production authority.
+passes in one rolled-back read-only PostgreSQL 16.9 snapshot. A separate optional
+KAT sends the same exact `ORDER BY ?styleNumber ?version LIMIT 10001` query and
+sealed mapping through `sf-serve` HTTP admission, request control and PostgreSQL
+execution: the 2026-09-05 run returned `200` and all 500 typed bindings equalled
+the direct SQL rows in order. Its `LIMIT 10002` control returned redacted `501`
+before opening a deliberately unreachable PostgreSQL pool. This is a sequential
+cross-session mutable observation, not a coherent shared snapshot. The separate
+full inventory gate still fails closed on the drift recorded above. None of these
+results depends on ignored `.metaharness` output or grants production authority.
 
 Commits `9d228dd` and `67a779a` move neutral schema ownership into `sf-core` and
 centralize compiler dialect capabilities without adding Node to Cargo. Commit

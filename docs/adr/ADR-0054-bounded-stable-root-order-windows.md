@@ -25,10 +25,14 @@ admitted value domains, directions, UNBOUND, multiple keys and slice boundaries.
 It uses `spareval` only where relative order is defined; separate bag,
 repeatability and source-stable-tie assertions do not turn undefined
 cross-domain, NaN, partial-calendar or partial-duration order into a semantic
-claim. An admitted live Product Mock serve-path result is still missing, so the
-generated exact-bounded query profile remains planned. The CLI's retained-byte
-setting accounts exact textual binding payload; it is not described as a total
-peak-heap ceiling.
+claim. The optional live Product Mock KAT admits the exact `LIMIT 10001` query
+through `sf-serve`, returns all 500 current typed rows in direct-SQL order, and
+rejects `LIMIT 10002` before opening a poison pool. This completes the finite
+root window's qualification gates, but is cross-session development evidence,
+not PostgreSQL production admission or completion of the wider M1 global-
+operator profile. The generated exact-bounded query profile therefore remains
+planned. The CLI's retained-byte setting accounts exact textual binding payload;
+it is not described as a total peak-heap ceiling.
 
 ## Context
 
@@ -145,14 +149,16 @@ mapping/schema setup, execution and teardown in `VmHWM`, verifies all 80 ordered
 rows, and runs with a measurement-only 64 KiB SQLite page cache. Exact doubled
 median and nearest-rank p95 independently apply the checked 10% gate.
 
-ADR-0038 M1 qualification additionally requires:
+For this ORDER slice, ADR-0038 M1 qualification additionally required:
 
 1. an independent materialized-oracle differential for every admitted value
    domain, direction, UNBOUND, multiple-key and slice boundary; and
 2. an admitted live Product Mock serve-path result, not only a raw executor run.
 
-Item 2 is now required CI evidence. Items 1 and 3 remain open, so ORDER has not
-passed the complete M1 qualification gate.
+Both items now pass their stated gates. Item 1 is required CI evidence; item 2
+is a live-optional development KAT whose query is admitted by `sf-serve` but
+which grants no backend admission. This closes the finite root ORDER slice, not
+the complete M1 gate, whose other global operators remain open.
 
 No readiness score or unrelated passing test offsets a failed item.
 

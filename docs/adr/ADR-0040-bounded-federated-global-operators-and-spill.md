@@ -23,12 +23,12 @@ does not accept a spill substrate, claim federation exists, or weaken the
 exact-or-reject rule. Acceptance waits for the comparison evidence and explicit
 maintainer decisions listed below. Its `implements` relationship identifies the
 ADR-0038 design lock, not implementation completion.
-`sf-core::SourceId`/`SourceMapping` and the current immutable single-source runtime
-binding now join one backend, dialect, T-box, constraint-quarantined compiler
-schema, explicit `ConstraintAuthority::Unverified` and plan cache, and reject a
-detached plan before I/O. Its cache scope includes that authority. They still
-provide no digest-addressed runtime snapshot, structural/type drift/reload
-lifecycle, verified-constraint lease, federation or `ConsistencyVector`.
+`sf-core::SourceId`/`SourceMapping` and the immutable runtime snapshot registry
+now bind source-keyed backends, dialects, T-box, constraint-quarantined compiler
+schemas, explicit `ConstraintAuthority::Unverified`, plan caches and request
+lifetime leases, and reject detached plans before I/O. The foundation still has
+no validated candidate/reload builder, structural/type backend-generation lease,
+multi-source compiler/coordinator/caller, federation or `ConsistencyVector`.
 Accepting this ADR would explicitly amend ADR-0006's cross-source rule: bounded
 semi-join reduction and streaming merge alone cannot implement every exact N:M
 join/operator listed here. The source-pushdown and no-general-OLAP decisions
@@ -39,11 +39,11 @@ ADR-0054 now accepts one narrower single-source precursor: a finite root
 variable-key ORDER window uses stable in-memory prefix compaction under
 independent row and retained textual-payload ceilings. Unbounded, overflowed,
 nested and expression ORDER remain fail-closed in serving. This does not provide
-federation, spill, or the external `OrderBy` node proposed here, and it remains
-short of M1 qualification until an admitted live Product Mock serve-path result
-passes. Controlled heap and fresh-process RSS sweeps now pass the growth gate,
-and the independent materialized semantic oracle checks defined orders while
-withholding oracle authority from undefined extensions.
+federation, spill, or the external `OrderBy` node proposed here. Its controlled
+heap/RSS, independent materialized-oracle and live Product Mock `sf-serve` gates
+now pass for the finite root window. That completes this ORDER precursor's
+qualification list, not ADR-0038 M1: GROUP, solution/term DISTINCT, graph dedup,
+wider bounded operators and production backend admission remain open.
 
 ## Context and problem statement
 

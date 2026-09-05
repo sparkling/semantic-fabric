@@ -4722,7 +4722,10 @@ dependencies = [
 name = "sf-conformance"
 version = "0.0.0"
 dependencies = [
+ "axum",
  "cargo-platform",
+ "deadpool-postgres",
+ "http-body-util",
  "libc",
  "mysql_async",
  "oxrdf",
@@ -4733,6 +4736,7 @@ dependencies = [
  "serde_json",
  "sf-core",
  "sf-mapping",
+ "sf-serve",
  "sf-sparql",
  "sf-sql",
  "sha2 0.10.9",
@@ -4743,6 +4747,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-postgres",
+ "tower",
 ]
 
 [[package]]

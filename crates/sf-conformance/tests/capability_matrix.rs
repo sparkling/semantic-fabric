@@ -80,7 +80,12 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
     assert_eq!(live_cell.verification, Verification::LiveOptional);
     assert_eq!(
         live_cell.evidence_ids,
-        ["e-product-mock-live-pg", "e-product-mock-schema-live-pg"]
+        [
+            "e-product-mock-live-pg",
+            "e-product-mock-schema-live-pg",
+            "e-product-mock-serve-live-pg",
+            "e-product-mock-serve-support"
+        ]
     );
 
     let external = loaded
@@ -98,6 +103,14 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
         .find(|command| command.id == "cmd-semantic-builder-gold-external")
         .expect("external KAT command");
     assert_eq!(command.mode, CommandMode::Diagnostic);
+
+    let serve_command = loaded
+        .catalog
+        .commands
+        .iter()
+        .find(|command| command.id == "cmd-product-mock-serve-live-pg")
+        .expect("live Product Mock serve command");
+    assert_eq!(serve_command.mode, CommandMode::Diagnostic);
 }
 
 #[test]
