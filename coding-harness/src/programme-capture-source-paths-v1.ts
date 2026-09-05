@@ -100,6 +100,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/compiler_control/pipeline_tests.rs',
   'crates/sf-sparql/src/compiler_control/tests.rs',
   'crates/sf-sparql/src/compiler_schema.rs',
+  'crates/sf-sparql/src/describe.rs',
   'crates/sf-sparql/src/dump.rs',
   'crates/sf-sparql/src/emit.rs',
   'crates/sf-sparql/src/exec.rs',
