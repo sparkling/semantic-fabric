@@ -114,6 +114,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/exec_core/driver.rs',
   'crates/sf-sparql/src/exec_core/expression.rs',
   'crates/sf-sparql/src/exec_core/forms.rs',
+  'crates/sf-sparql/src/exec_core/literal_order.rs',
   'crates/sf-sparql/src/exec_core/order.rs',
   'crates/sf-sparql/src/exec_core/order_sort_key_tests.rs',
   'crates/sf-sparql/src/exec_core/probe_backend_tests.rs',
