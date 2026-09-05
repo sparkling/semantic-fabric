@@ -17,8 +17,13 @@ implemented. It does not accept ADR-0040's federation/spill proposal or claim
 that ORDER has passed the complete ADR-0038 M1 qualification gate.
 
 The required 1×/10×/100× requested-heap smoke exists and the 10×→100× growth is
-at most 10%. Fresh-process RSS and an independent materialized semantic oracle
-are still missing, so the generated exact-bounded query profile remains planned.
+at most 10%. A required independent materialized-oracle differential now covers
+the admitted value domains, directions, UNBOUND, multiple keys and slice
+boundaries. It uses `spareval` only where relative order is defined; separate
+bag, repeatability and source-stable-tie assertions do not turn undefined
+cross-domain, NaN, partial-calendar or partial-duration order into a semantic
+claim. Fresh-process RSS and an admitted live Product Mock serve result are
+still missing, so the generated exact-bounded query profile remains planned.
 The CLI's retained-byte setting accounts exact textual binding payload; it is
 not described as a total peak-heap ceiling.
 
@@ -87,9 +92,10 @@ first for ascending and last for descending. Multiple keys apply direction per
 key. Stable arrival order resolves comparator ties.
 
 The domain ranks deliberately extend SPARQL cases whose relative order is
-undefined. They must never reverse a characterized defined comparison. The
-independent semantic-oracle gate remains mandatory before production profile
-qualification.
+undefined. They must never reverse a characterized defined comparison. Oracle
+sequence equality is evidence only for defined comparisons; undefined
+extensions require result-bag preservation and deterministic behavior without
+borrowing the independent evaluator's implementation-defined sequence.
 
 ### 4. Separate row overhead from retained textual payload
 
@@ -131,6 +137,9 @@ ADR-0038 M1 qualification additionally requires:
 2. an independent materialized-oracle differential for every admitted value
    domain, direction, UNBOUND, multiple-key and slice boundary; and
 3. an admitted live Product Mock serve-path result, not only a raw executor run.
+
+Item 2 is now required CI evidence. Items 1 and 3 remain open, so ORDER has not
+passed the complete M1 qualification gate.
 
 No readiness score or unrelated passing test offsets a failed item.
 

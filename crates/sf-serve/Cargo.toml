@@ -37,3 +37,5 @@ tower = { workspace = true, features = ["util"] }
 form_urlencoded.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 rusqlite = { workspace = true, features = ["bundled", "functions"] }
+spargebra.workspace = true
+spareval = { version = "0.2.6", features = ["sparql-12", "sep-0002", "sep-0006"] }
