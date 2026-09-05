@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 86);
+    assert_eq!(loaded.catalog.cells.len(), 90);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&52));
+    assert_eq!(counts.get(&Status::Implemented), Some(&56));
     assert_eq!(counts.get(&Status::Planned), Some(&32));
     assert_eq!(counts.get(&Status::Unsupported), Some(&2));
     assert!(loaded
@@ -49,6 +49,36 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
         .standards
         .iter()
         .all(|standard| standard.url.contains("/TR/") && standard.byte_length > 0));
+}
+
+#[test]
+fn bounded_slices_do_not_promote_broad_programme_profiles() {
+    let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
+    for id in [
+        "bounded-graceful-shutdown-generic",
+        "federated-two-source-union-multi-source",
+        "generated-qe-per-pr-sqlite",
+        "health-readiness-probes-generic",
+    ] {
+        let cell = loaded
+            .catalog
+            .cells
+            .iter()
+            .find(|cell| cell.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(cell.status, Status::Implemented);
+        assert_eq!(cell.verification, Verification::CiRequired);
+    }
+    for id in ["federation-multi-source", "observability-lifecycle-generic"] {
+        let cell = loaded
+            .catalog
+            .cells
+            .iter()
+            .find(|cell| cell.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(cell.status, Status::Planned);
+        assert!(!cell.advertisable);
+    }
 }
 
 #[test]

@@ -26,9 +26,17 @@ ADR-0038 design lock, not implementation completion.
 `sf-core::SourceId`/`SourceMapping` and the immutable runtime snapshot registry
 now bind source-keyed backends, dialects, T-box, constraint-quarantined compiler
 schemas, explicit `ConstraintAuthority::Unverified`, plan caches and request
-lifetime leases, and reject detached plans before I/O. The foundation still has
-no validated candidate/reload builder, structural/type backend-generation lease,
-multi-source compiler/coordinator/caller, federation or `ConsistencyVector`.
+lifetime leases, and reject detached plans before I/O. Accepted ADR-0006 now
+also owns one implemented non-blocking cross-source exception: exactly two
+statically source-affine, one-triple BGP arms under a top-level `SELECT UNION`
+compile to two unchanged source-local plans and stream through a sequential
+`UnionAll`. It has a real two-file SQLite CLI/HTTP vertical plus exact negative,
+budget, failure-recovery and snapshot-pinning tests. This narrow slice needs no
+spill substrate and does not accept this ADR. There is still no validated
+candidate/reload builder, structural/type backend-generation lease, cross-source
+join or blocking global operator, reducer, spill, general coordinator,
+`ConsistencyVector`, PostgreSQL/MySQL federation evidence, or production
+federation admission.
 Accepting this ADR would explicitly amend ADR-0006's cross-source rule: bounded
 semi-join reduction and streaming merge alone cannot implement every exact N:M
 join/operator listed here. The source-pushdown and no-general-OLAP decisions
@@ -47,10 +55,11 @@ wider bounded operators and production backend admission remain open.
 
 ## Context and problem statement
 
-The semantic compiler currently emits a per-source `sf_sparql::Plan`: a bag of
-SQL branches plus result form, DISTINCT, slice, ordering, and optional Rust-level
-grouping. The public runtime owns one backend. Unbounded/nested ORDER, GROUP,
-and solution/triple dedup paths retain source-sized `Vec` or `HashSet` state.
+The semantic compiler emits a per-source `sf_sparql::Plan`: a bag of SQL branches
+plus result form, DISTINCT, slice, ordering, and optional Rust-level grouping.
+The public runtime owns one backend in normal mode or exactly two for ADR-0006's
+sealed non-blocking `UnionAll` mode. Unbounded/nested ORDER, GROUP, and
+solution/triple dedup paths retain source-sized `Vec` or `HashSet` state.
 ADR-0054 bounds only a finite root variable-key ORDER prefix; the existing
 semi-join cost model still has no production federation caller.
 
@@ -140,7 +149,7 @@ The only initially admissible coordinator nodes are:
 | Node | Required behavior |
 |---|---|
 | `Fragment` | Stream one admitted per-source `Plan` under the execution's acquired snapshot and budget. |
-| `UnionAll` | Concatenate input multisets; preserve every multiplicity. |
+| `UnionAll` | Concatenate input multisets; preserve every multiplicity. The exactly-two-source, one-triple-per-arm streaming subset is already implemented under ADR-0006; this row governs its future use inside the wider algebra. |
 | `InnerJoin` | Emit every compatible merged solution, including full N:M multiplicity. |
 | `LeftJoin` | SPARQL OPTIONAL: emit all compatible extensions or exactly one unchanged left solution when none matches. |
 | `Minus` | Remove a left solution only for a compatible right solution with a non-empty shared domain; disjoint domains are a no-op. |

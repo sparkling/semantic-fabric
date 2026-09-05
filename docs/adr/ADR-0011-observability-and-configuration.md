@@ -14,7 +14,7 @@ implements:
 
 # Observability & configuration
 
-> **Implementation status (2026-09-02): partially implemented.** Commits
+> **Implementation status (2026-09-05): partially implemented.** Commits
 > `3e0f920`/`c9e6c53` add the closed pre-commit RFC 9457 problem vocabulary,
 > opaque/redacted startup errors, bounded response-only correlation IDs,
 > `no-store` and `nosniff`, plus hostile SQL/schema/credential leak tests;
@@ -51,15 +51,30 @@ implements:
 > TOML/config/secret-store model and remote PostgreSQL still uses `NoTls`.
 > Correlation IDs currently reach the response
 > only, not a log sink. The production crates still contain no tracing/metrics/OTLP
-> stack or layered validated configuration model, and expose no metrics or
-> health endpoint. The 2026-09-05 Rust runtime-snapshot foundation does expose a
+> stack or layered validated configuration model, and expose no metrics. The
+> 2026-09-05 Rust runtime-snapshot foundation does expose a
 > closed redacted readiness state: new requests acquire one immutable snapshot
 > before request-body polling, not-ready state returns `503` with `Retry-After`,
 > and in-flight response bodies retain their original snapshot through
 > termination. Activation remains a crate-private, non-authorizing primitive;
 > automatic drift observation, validated candidate construction, public reload,
-> health/readiness endpoints and telemetry remain M3/M5 work under ADR-0038 and
-> ADR-0050.
+> and telemetry remain M3/M5 work under ADR-0038 and ADR-0050. Commits `5694489`
+> and `3abbdb4` add fixed `/livez` and `/readyz` endpoints plus bounded
+> three-phase SIGTERM/Ctrl-C shutdown. `/livez` reports event-loop liveness only;
+> `/readyz` reads the
+> already-established runtime-snapshot state and never polls a source, request
+> body, or application-work permit. Shutdown moves `Running` to `Draining`, marks
+> the runtime administratively not ready, rejects newly minted budgets and stops
+> ingress while existing admitted request identities may finish normally. At the
+> validated positive bound (30 seconds by default), `Forced` broadcasts
+> cooperative cancellation to remaining identities before the serving future is
+> dropped. Unit and listener tests prove an in-flight `200` during drain, exact
+> forced expiry, new-versus-existing budget behaviour, listener closure and
+> capacity release. Follow-up commit `1e2de3e` sends real SIGTERM to the
+> shipped CLI child, observes clean exit inside three seconds, and verifies the
+> listener is closed. These slices do not implement telemetry, layered
+> configuration, verified TLS, source polling/failure
+> policy, SLOs, or the complete ADR-0011 control plane.
 
 ## Context and Problem Statement
 
@@ -94,6 +109,21 @@ Limit-hit / timeout / rejection / injection-attempt emit **both** a `tracing` wa
 
 ### Configuration model
 Layered precedence: **defaults < config file (TOML) < env vars < secret injection** (via `figment`/`config` + `serde`, validated at startup, fail-fast). Sections: `[source]` (connections, dialect — ADR-0006), `[mappings]` (location/format), `[graphs]` (the in-memory T/M paths — ADR-0004), `[governance]` (the ADR-0010 limits), `[observability]` (log level, OTLP endpoint, metrics port), `[serve]` (endpoint config). **Secrets** are referenced, never inline (e.g. `password_env = "PG_PASSWORD"`).
+
+### Health, readiness, and bounded shutdown
+
+`GET /livez` is a fixed process/event-loop liveness response. `GET /readyz` is a
+fixed projection of the immutable runtime readiness state: ready is `200`,
+not-ready is `503` plus `Retry-After: 1`, and poisoned state is a redacted `500`.
+Both are `application/json`, `no-store`, and `nosniff`; neither reads request
+content, acquires application capacity, or probes a database. SIGTERM and Ctrl-C
+move `Running` to `Draining`, mark readiness administrative not-ready, reject new
+budgets, and stop new ingress while already-admitted requests retain their
+identities and may complete. At the configured positive monotonic-clock bound,
+`Forced` broadcasts cancellation to remaining identities before the server and
+connections are dropped. This is the implemented M3 probe/shutdown slice, not
+source-health polling, reload, telemetry, SLOs, or a cross-backend cleanup
+qualification.
 
 ### Redaction discipline
 Credentials, result data, PII and bound-parameter values are never logged at any
