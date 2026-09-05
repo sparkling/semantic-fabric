@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-09-01
+updated: 2026-09-05
 tags: [scope, virtualization, obda, rdbms, r2rml, direct-mapping, sparql-1.2, rdf-1.2, conformance]
 depends-on:
   - ADR-0001
@@ -91,13 +91,15 @@ A one-off RDF dump, where ever needed, is `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p 
 > are production-admitted under ADR-0038 R3. Cloud/REST prototypes remain
 > unadmitted under ADR-0024 and ADR-0036; this does not broaden the charter.
 
-> **Cross-source reconciliation (2026-09-01).** The current runtime
-> owns exactly one relational source per process; the semi-join cost model has no
-> production caller. `SourceId`, `SourceMapping`, and an enforcing immutable
-> single-source compiler/backend/cache binding have landed; registry, immutable
-> digests/reload, federated physical plan, bounded coordinator, and federation
+> **Cross-source reconciliation (2026-09-05).** The public serving configuration
+> still selects exactly one relational source per process, and the semi-join cost
+> model has no production caller. `SourceId`, `SourceMapping`, `SourceRegistry`,
+> deterministic immutable `RuntimeSnapshot` digests, atomic whole-generation
+> activation/readiness, and request-lifetime snapshot leases have landed. A
+> validated candidate builder, automatic drift/reload path, federated physical
+> plan, bounded coordinator, multi-source CLI configuration, and federation
 > evidence have not. Accepted ADR-0038 sequences that remaining work. Until then,
-> capability material must say “single-source runtime.”
+> capability material must still say “single-source public serving path.”
 
 ## More Information
 
