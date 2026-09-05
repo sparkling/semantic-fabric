@@ -4796,6 +4796,7 @@ dependencies = [
 name = "sf-sparql"
 version = "0.0.0"
 dependencies = [
+ "bigdecimal",
  "bytes",
  "libc",
  "mysql_async",

@@ -473,8 +473,9 @@ pub enum StrMatchOp {
 /// and bound terms order blank-node < IRI < literal.
 ///
 /// For expression keys the exec layer evaluates the expression against each
-/// solution's binding map and stores the result under `var` (a synthetic name
-/// `__sf_ord_{n}`) before sorting, so `order_cmp` can look up the key by name.
+/// solution's binding map and stores the result under `var` (a NUL-prefixed name
+/// impossible in SPARQL's `VARNAME` grammar) before sorting, so user bindings
+/// cannot collide with the private key.
 #[derive(Debug, Clone)]
 pub struct OrderKey {
     pub var: String,

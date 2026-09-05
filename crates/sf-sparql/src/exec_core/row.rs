@@ -339,6 +339,38 @@ impl Bindings {
     pub(super) fn iter(&self) -> impl Iterator<Item = (&str, &Term)> {
         self.0.iter().map(|(k, v)| (&**k, v))
     }
+
+    /// Exact textual payload bytes retained by this solution. Fixed container
+    /// overhead is bounded separately by the admitted row window.
+    pub(super) fn retained_payload_bytes(&self) -> Option<u64> {
+        self.0.iter().try_fold(0_u64, |total, (name, term)| {
+            total
+                .checked_add(u64::try_from(name.len()).ok()?)?
+                .checked_add(term_payload_bytes(term)?)
+        })
+    }
+}
+
+fn term_payload_bytes(term: &Term) -> Option<u64> {
+    fn length(value: &str) -> Option<u64> {
+        u64::try_from(value.len()).ok()
+    }
+    match term {
+        Term::NamedNode(node) => length(node.as_str()),
+        Term::BlankNode(node) => length(node.as_str()),
+        Term::Literal(literal) => length(literal.value())?
+            .checked_add(length(literal.datatype().as_str())?)?
+            .checked_add(length(literal.language().unwrap_or(""))?),
+        Term::Triple(triple) => {
+            let subject = match &triple.subject {
+                sf_core::NamedOrBlankNode::NamedNode(node) => length(node.as_str())?,
+                sf_core::NamedOrBlankNode::BlankNode(node) => length(node.as_str())?,
+            };
+            subject
+                .checked_add(length(triple.predicate.as_str())?)?
+                .checked_add(term_payload_bytes(&triple.object)?)
+        }
+    }
 }
 
 /// [`Bindings`]'s pairs in CANONICAL (var-name-sorted) order — see

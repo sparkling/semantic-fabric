@@ -11,6 +11,7 @@ mod dedup_scope_runtime;
 mod driver;
 mod expression;
 mod forms;
+mod literal_order;
 mod order;
 mod row;
 mod sql_error;

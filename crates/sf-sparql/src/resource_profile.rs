@@ -1,27 +1,20 @@
 //! Resource-state profile for compiled plans (ADR-0038 M1).
 //!
-//! The in-process executor remains a correctness oracle and still implements the
-//! Rust fallbacks classified here. Production serving, however, cannot advertise
-//! those paths as bounded: each one can retain state proportional to source rows
-//! or distinct output. This module reports the exact predicates that currently
-//! activate those fallbacks so `sf-serve` can reject them before execution.
-//!
-//! The profile is recursive because a derived-table [`crate::iq::SubPlanJoin`]
-//! carries a complete nested [`Plan`]. The report itself is bounded by plan shape,
-//! never source data, and is deterministically ordered and de-duplicated.
+//! Reports Rust fallbacks whose retained state can scale with source data, so
+//! production serving can reject them before execution. A finite root ORDER BY
+//! window is discharged only against an explicit retained-row ceiling; its
+//! independent retained-payload budget is enforced during execution.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::{Plan, PlanForm};
 
-/// A currently implemented Rust fallback whose retained state can grow with source
-/// cardinality. This is an execution-property report, not a capability claim: a
-/// future bounded physical implementation should remove its corresponding state
-/// only when the executor no longer takes that fallback.
+/// An implemented fallback whose retained state can grow with source cardinality.
+/// This execution-property report is not itself a capability claim.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SourceSizedState {
-    /// `exec_core::run_branches` buffers every ordered solution before sorting.
+    /// An ordered result without an admitted finite root window.
     GlobalOrder,
     /// `exec_core::rust_group_execute` collects every inner solution before grouping.
     RustGroup,
@@ -53,22 +46,43 @@ impl fmt::Display for SourceSizedState {
 }
 
 impl Plan {
-    /// Return every currently source-sized Rust fallback reachable from this plan,
-    /// including nested derived-table plans.
-    ///
-    /// The conditions deliberately share the executor's existing eligibility
-    /// helpers for term and CONSTRUCT dedup. That keeps this admission boundary from
-    /// growing a second, subtly different copy of those soundness predicates.
+    /// Return every source-sized fallback reachable from this plan. Conditions
+    /// reuse executor eligibility helpers rather than duplicating them.
     pub fn source_sized_states(&self) -> Vec<SourceSizedState> {
+        self.source_sized_states_with_order_window(0)
+    }
+
+    /// Return source-sized fallbacks after admitting an exact ordered result
+    /// window of at most `maximum_order_rows` retained solutions.
+    pub fn source_sized_states_with_order_window(
+        &self,
+        maximum_order_rows: usize,
+    ) -> Vec<SourceSizedState> {
         let mut states = BTreeSet::new();
-        collect_states(self, &mut states);
+        collect_states(self, maximum_order_rows, &mut states);
         states.into_iter().collect()
     }
 }
 
-fn collect_states(plan: &Plan, states: &mut BTreeSet<SourceSizedState>) {
+/// Number of sorted solutions that can influence `OFFSET` followed by `LIMIT`.
+/// `LIMIT 0` retains no row regardless of the offset; overflow is unbounded.
+pub(crate) fn retained_order_window(offset: usize, limit: Option<usize>) -> Option<usize> {
+    match limit {
+        Some(0) => Some(0),
+        Some(limit) => offset.checked_add(limit),
+        None => None,
+    }
+}
+
+fn collect_states(plan: &Plan, maximum_order_rows: usize, states: &mut BTreeSet<SourceSizedState>) {
     let source_backed = plan_reads_source(plan);
-    if source_backed && !plan.order.is_empty() && !matches!(plan.form, PlanForm::Ask) {
+    let order_is_bounded = retained_order_window(plan.offset, plan.limit)
+        .is_some_and(|window| window <= maximum_order_rows);
+    if source_backed
+        && !plan.order.is_empty()
+        && !matches!(plan.form, PlanForm::Ask)
+        && !order_is_bounded
+    {
         states.insert(SourceSizedState::GlobalOrder);
     }
     if source_backed && plan.rust_group.is_some() {
@@ -97,7 +111,8 @@ fn collect_states(plan: &Plan, states: &mut BTreeSet<SourceSizedState>) {
 
     for branch in &plan.branches {
         for subplan in &branch.subplan_joins {
-            collect_states(&subplan.plan, states);
+            // Nested ordered plans remain independently closed.
+            collect_states(&subplan.plan, 0, states);
         }
     }
 }
@@ -194,6 +209,36 @@ mod tests {
 
         assert_eq!(
             candidate.source_sized_states(),
+            vec![SourceSizedState::GlobalOrder]
+        );
+    }
+
+    #[test]
+    fn finite_order_window_has_exact_zero_cap_and_overflow_boundaries() {
+        let mut candidate = select_plan(vec![branch(1)]);
+        candidate.order.push(OrderKey {
+            var: "value".to_owned(),
+            descending: false,
+            expr: None,
+        });
+        candidate.offset = 3;
+        candidate.limit = Some(2);
+        assert!(candidate
+            .source_sized_states_with_order_window(5)
+            .is_empty());
+        assert_eq!(
+            candidate.source_sized_states_with_order_window(4),
+            vec![SourceSizedState::GlobalOrder]
+        );
+
+        candidate.offset = usize::MAX;
+        candidate.limit = Some(0);
+        assert!(candidate
+            .source_sized_states_with_order_window(0)
+            .is_empty());
+        candidate.limit = Some(1);
+        assert_eq!(
+            candidate.source_sized_states_with_order_window(usize::MAX),
             vec![SourceSizedState::GlobalOrder]
         );
     }

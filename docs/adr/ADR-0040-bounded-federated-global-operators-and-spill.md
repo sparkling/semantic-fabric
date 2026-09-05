@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-09-01
+updated: 2026-09-05
 tags: [federation, physical-plan, bounded-memory, spill, external-memory, sparql, consistency, cancellation]
 supersedes: []
 depends-on:
@@ -35,13 +35,22 @@ join/operator listed here. The source-pushdown and no-general-OLAP decisions
 remain; the proposed amendment admits only the irreducible, quota-bounded
 external operators below.
 
+ADR-0054 now accepts one narrower single-source precursor: a finite root
+variable-key ORDER window uses stable in-memory prefix compaction under
+independent row and retained textual-payload ceilings. Unbounded, overflowed,
+nested and expression ORDER remain fail-closed in serving. This does not provide
+federation, spill, or the external `OrderBy` node proposed here, and it remains
+short of M1 qualification until fresh-process RSS and independent semantic
+oracle gates pass.
+
 ## Context and problem statement
 
 The semantic compiler currently emits a per-source `sf_sparql::Plan`: a bag of
 SQL branches plus result form, DISTINCT, slice, ordering, and optional Rust-level
-grouping. The public runtime owns one backend. Some multi-branch ORDER, GROUP,
-solution/triple dedup paths retain source-sized `Vec` or `HashSet` state, and the
-existing semi-join cost model has no production federation caller.
+grouping. The public runtime owns one backend. Unbounded/nested ORDER, GROUP,
+and solution/triple dedup paths retain source-sized `Vec` or `HashSet` state.
+ADR-0054 bounds only a finite root variable-key ORDER prefix; the existing
+semi-join cost model still has no production federation caller.
 
 ADR-0006 correctly keeps relational scan/join/set work in a source database and
 rejects a general in-process OLAP mediator. ADR-0038 nevertheless retains the
@@ -413,3 +422,4 @@ No aggregate readiness score can offset a failed gate.
 - Resource governance, streaming, backpressure, and cancellation: ADR-0010.
 - Differential, property, fuzz, and CI evidence: ADR-0012.
 - Parent programme and M1/M2/M6 gates: ADR-0038.
+- Single-source finite root ORDER precursor: ADR-0054.

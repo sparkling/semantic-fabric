@@ -4,7 +4,9 @@ use crate::iq::OrderKey;
 
 /// Reuse the flat ORDER BY lowering (design §2 / iq.rs [`OrderKey`]): a variable key
 /// stores `expr: None`; a complex expression key stores the cloned [`Expression`]
-/// under a synthetic `__sf_ord_{n}` variable that exec evaluates before sorting.
+/// under an internal name that SPARQL's `VARNAME` grammar cannot express. The
+/// impossible NUL prefix prevents a user binding from being overwritten or used
+/// as the key when expression evaluation fails.
 pub(super) fn order_keys(expression: &[OrderExpression]) -> Vec<OrderKey> {
     let mut keys = Vec::with_capacity(expression.len());
     for oe in expression {
@@ -19,7 +21,7 @@ pub(super) fn order_keys(expression: &[OrderExpression]) -> Vec<OrderKey> {
                 expr: None,
             }),
             other => {
-                let syn = format!("__sf_ord_{}", keys.len());
+                let syn = format!("\0sf-order-{}", keys.len());
                 keys.push(OrderKey {
                     var: syn,
                     descending,

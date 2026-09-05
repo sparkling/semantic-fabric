@@ -1,5 +1,3 @@
-//! Closed public-error vocabulary and the sole response redaction boundary.
-
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -49,6 +47,10 @@ const CONTROL_PROBLEM_CODES: [(QueryControlError, ProblemCode); QueryControlErro
     ),
     (
         QueryControlError::SerializedBytesExceeded,
+        ProblemCode::QueryBudgetExceeded,
+    ),
+    (
+        QueryControlError::RetainedBytesExceeded,
         ProblemCode::QueryBudgetExceeded,
     ),
     (QueryControlError::AccountingOverflow, ProblemCode::Internal),

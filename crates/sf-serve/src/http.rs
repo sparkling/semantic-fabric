@@ -103,8 +103,8 @@ async fn process(
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    if let Err(error) = admission::admit(bound.plan()) {
-        let _internal_state = error.state();
+    if let Err(error) = admission::admit(bound.plan(), cfg.max_order_rows()) {
+        let _internal_reason = error.reason();
         return problem::response(ProblemCode::UnsupportedQuery);
     }
     let execution = match cfg.prepare_execution(bound) {

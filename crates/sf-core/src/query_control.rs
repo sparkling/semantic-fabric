@@ -1,8 +1,5 @@
-//! Runtime-neutral query-governance port and atomic accounting spine.
-//!
-//! [`QueryBudget`] owns no clock, async runtime, database, or HTTP policy. A
-//! runtime adapter supplies deadline observation and wake-up semantics while the
-//! executor and serializers share this exact accounting identity.
+//! Runtime-neutral query-governance port and atomic accounting spine. Adapters
+//! supply time while every phase shares one [`QueryBudget`] identity.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -11,14 +8,12 @@ use std::sync::{Arc, RwLock};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum QueryCharge {
-    /// One bounded unit of query compilation work.
     CompilerWork,
-    /// One metadata probe, branch open, or row-pull attempt.
     SourceWork,
-    /// One semantic SELECT row, CONSTRUCT triple, or ASK boolean.
     ResultItems,
-    /// Bytes offered to the response serializer's bounded writer.
     SerializedBytes,
+    /// Positive growth in a retained-memory high-water mark.
+    RetainedBytes,
 }
 
 /// Immutable inclusive limits for one request.
@@ -28,9 +23,12 @@ pub struct QueryLimits {
     max_source_work: u64,
     max_result_items: u64,
     max_serialized_bytes: u64,
+    max_retained_bytes: u64,
 }
 
 impl QueryLimits {
+    /// Construct the original cumulative limits. Retained bytes remain
+    /// unbounded until [`Self::with_max_retained_bytes`] is called; serving does so.
     pub const fn new(
         max_compiler_work: u64,
         max_source_work: u64,
@@ -42,7 +40,13 @@ impl QueryLimits {
             max_source_work,
             max_result_items,
             max_serialized_bytes,
+            max_retained_bytes: u64::MAX,
         }
+    }
+
+    pub const fn with_max_retained_bytes(mut self, maximum: u64) -> Self {
+        self.max_retained_bytes = maximum;
+        self
     }
 
     pub const fn max_compiler_work(self) -> u64 {
@@ -61,12 +65,17 @@ impl QueryLimits {
         self.max_serialized_bytes
     }
 
+    pub const fn max_retained_bytes(self) -> u64 {
+        self.max_retained_bytes
+    }
+
     const fn limit(self, charge: QueryCharge) -> u64 {
         match charge {
             QueryCharge::CompilerWork => self.max_compiler_work,
             QueryCharge::SourceWork => self.max_source_work,
             QueryCharge::ResultItems => self.max_result_items,
             QueryCharge::SerializedBytes => self.max_serialized_bytes,
+            QueryCharge::RetainedBytes => self.max_retained_bytes,
         }
     }
 }
@@ -98,6 +107,7 @@ define_query_control_error! {
     SourceWorkExceeded => "query source-work budget exceeded",
     ResultItemsExceeded => "query result-item budget exceeded",
     SerializedBytesExceeded => "query serialized-byte budget exceeded",
+    RetainedBytesExceeded => "query retained-byte budget exceeded",
     AccountingOverflow => "query budget accounting overflow",
 }
 
@@ -108,25 +118,22 @@ impl QueryControlError {
             QueryCharge::SourceWork => Self::SourceWorkExceeded,
             QueryCharge::ResultItems => Self::ResultItemsExceeded,
             QueryCharge::SerializedBytes => Self::SerializedBytesExceeded,
+            QueryCharge::RetainedBytes => Self::RetainedBytesExceeded,
         }
     }
 }
 
 /// The executor-facing governance contract.
 ///
-/// Implementations must keep one control identity for a query. `consume` is an
-/// inclusive checked charge: reaching a limit succeeds; the next unit fails.
-/// Stateful implementations must return their sticky first terminal cause;
-/// stateless controls must return the supplied reason unchanged.
+/// `consume` is inclusive: reaching a limit succeeds and the next unit fails.
+/// Stateful implementations return their sticky first terminal cause.
 pub trait QueryControl: Send + Sync {
     fn checkpoint(&self) -> Result<(), QueryControlError>;
     fn consume(&self, charge: QueryCharge, amount: u64) -> Result<(), QueryControlError>;
     fn terminate(&self, reason: QueryControlError) -> QueryControlError;
 }
 
-/// Explicit control for raw, diagnostic, and conformance APIs.
-///
-/// Production serving must supply a real request budget instead.
+/// Explicit control for raw/diagnostic APIs; production supplies a real budget.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UncontrolledQueryControl;
 
@@ -151,6 +158,7 @@ struct BudgetState {
     source_work: AtomicU64,
     result_items: AtomicU64,
     serialized_bytes: AtomicU64,
+    retained_bytes: AtomicU64,
     terminal: RwLock<Option<QueryControlError>>,
 }
 
@@ -166,6 +174,7 @@ impl QueryBudget {
             source_work: AtomicU64::new(0),
             result_items: AtomicU64::new(0),
             serialized_bytes: AtomicU64::new(0),
+            retained_bytes: AtomicU64::new(0),
             terminal: RwLock::new(None),
         }))
     }
@@ -202,6 +211,7 @@ impl QueryBudget {
             QueryCharge::SourceWork => &self.0.source_work,
             QueryCharge::ResultItems => &self.0.result_items,
             QueryCharge::SerializedBytes => &self.0.serialized_bytes,
+            QueryCharge::RetainedBytes => &self.0.retained_bytes,
         }
     }
 }
@@ -359,8 +369,12 @@ mod tests {
                 QueryCharge::SerializedBytes,
                 QueryControlError::SerializedBytesExceeded,
             ),
+            (
+                QueryCharge::RetainedBytes,
+                QueryControlError::RetainedBytesExceeded,
+            ),
         ] {
-            let budget = QueryBudget::new(QueryLimits::new(1, 1, 1, 1));
+            let budget = QueryBudget::new(QueryLimits::new(1, 1, 1, 1).with_max_retained_bytes(1));
             budget.consume(charge, 1).unwrap();
             assert_eq!(budget.consume(charge, 1), Err(expected));
         }

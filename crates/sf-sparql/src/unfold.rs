@@ -392,8 +392,9 @@ impl<'a> Unfolder<'a> {
             // [`crate::emit`]; multi-branch bag-union → the global stable sort in
             // [`crate::exec`], which per-branch SQL cannot give). Variable keys are
             // lowered to `OrderKey { expr: None }`; expression keys (`STRLEN(?n)` etc.)
-            // store the SPARQL expression and a synthetic var name so the exec layer
-            // evaluates and injects the sort value per solution before sorting.
+            // store the SPARQL expression and an impossible user-variable name so
+            // the exec layer can inject the sort value without colliding with a
+            // projected binding.
             GraphPattern::OrderBy { inner, expression } => {
                 let mut t = self.translate_pattern(inner)?;
                 let mut keys = Vec::with_capacity(expression.len());
@@ -412,7 +413,7 @@ impl<'a> Unfolder<'a> {
                         }
                         other => {
                             // Non-variable: store the expression; exec evaluates it.
-                            let syn = format!("__sf_ord_{}", keys.len());
+                            let syn = format!("\0sf-order-{}", keys.len());
                             keys.push(OrderKey {
                                 var: syn,
                                 descending,

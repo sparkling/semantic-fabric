@@ -1,5 +1,3 @@
-//! The blocking `semantic-fabric serve` entry point for loading, binding, and serving a source.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,11 +11,8 @@ use crate::{
     introspect_pg_all, router, Backend, IntrospectedSource, ServeConfig, ServeError, SourceRef,
 };
 
-/// Options resolved from the `serve` CLI flags; the runner reads semantic files.
 pub struct ServeOptions {
-    /// Credential-free inline source or environment-injected source reference.
     pub source: SourceRef,
-    /// Path to the R2RML mapping document (Turtle).
     pub mapping_path: String,
     /// Optional ontology (Turtle) → tier-1 T-Box.
     pub ontology_path: Option<String>,
@@ -33,6 +28,10 @@ pub struct ServeOptions {
     pub max_source_work: u64,
     /// Inclusive semantic SELECT-row, CONSTRUCT-triple, or ASK-boolean ceiling.
     pub max_result_items: u64,
+    /// Maximum exact in-process ORDER BY window (`OFFSET + LIMIT`).
+    pub max_order_rows: usize,
+    /// Maximum textual binding payload retained by ORDER BY.
+    pub max_order_bytes: u64,
     /// Inclusive serialized response-byte ceiling per request.
     pub max_serialized_bytes: u64,
     /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
@@ -112,12 +111,14 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
     cfg.timeout = opts.timeout;
     cfg.set_max_query_len(opts.max_query_len)?;
     cfg.set_max_concurrent_requests(opts.max_concurrent_requests)?;
+    cfg.set_max_order_rows(opts.max_order_rows);
     cfg.query_limits = QueryLimits::new(
         cfg.query_limits.max_compiler_work(),
         opts.max_source_work,
         opts.max_result_items,
         opts.max_serialized_bytes,
-    );
+    )
+    .with_max_retained_bytes(opts.max_order_bytes);
 
     let app = router(Arc::new(cfg));
     let listener = tokio::net::TcpListener::bind(&opts.bind)
@@ -143,9 +144,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
         })
 }
 
-/// Open the prepared backend and pair it with the base-table schema observed
-/// through that handle. PostgreSQL catalogue reads form one coherent read-only
-/// snapshot; validated reload/drift detection remains outside this constructor.
+/// Open the prepared backend and pair it with its observed base-table schema.
 /// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
 /// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
 /// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).

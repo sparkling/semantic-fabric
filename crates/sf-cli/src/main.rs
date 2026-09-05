@@ -12,7 +12,8 @@ use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
 use sf_serve::{
-    serve_blocking, ServeOptions, SourceRef, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_QUERY_LIMITS,
+    serve_blocking, ServeOptions, SourceRef, DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS, DEFAULT_QUERY_LIMITS,
 };
 
 #[derive(Parser)]
@@ -29,7 +30,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Serve the live SPARQL 1.2 Protocol endpoint over an RDBMS (ADR-0019 G8).
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Run the W3C RDB2RDF conformance suite (ADR-0005).
     Conformance,
     /// Run GTFS-Madrid OBDA benchmarks (ADR-0005).
@@ -65,6 +66,12 @@ struct ServeArgs {
     /// Max semantic result items per request (rows, triples, or ASK boolean).
     #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_result_items())]
     max_result_items: u64,
+    /// Max exact in-process ORDER BY window (`OFFSET + LIMIT`).
+    #[arg(long, default_value_t = DEFAULT_MAX_ORDER_ROWS)]
+    max_order_rows: usize,
+    /// Max textual binding payload retained by ORDER BY.
+    #[arg(long, default_value_t = DEFAULT_MAX_ORDER_BYTES)]
+    max_order_bytes: u64,
     /// Max serialized response bytes per request.
     #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_serialized_bytes())]
     max_serialized_bytes: u64,
@@ -107,7 +114,7 @@ fn main() -> ExitCode {
     sf_sparql::dispatch_private_parser_worker_v1();
     match Cli::parse().command {
         Command::Conformance => conformance(),
-        Command::Serve(args) => serve(args),
+        Command::Serve(args) => serve(*args),
         Command::Bench => bench(),
     }
 }
@@ -126,6 +133,8 @@ fn serve(args: ServeArgs) -> ExitCode {
         max_concurrent_requests: args.max_concurrent_requests,
         max_source_work: args.max_source_work,
         max_result_items: args.max_result_items,
+        max_order_rows: args.max_order_rows,
+        max_order_bytes: args.max_order_bytes,
         max_serialized_bytes: args.max_serialized_bytes,
         pg_pool_size: args.pg_pool_size,
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
@@ -356,6 +365,8 @@ mod tests {
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             max_source_work: 1_000,
             max_result_items: 1_000,
+            max_order_rows: DEFAULT_MAX_ORDER_ROWS,
+            max_order_bytes: DEFAULT_MAX_ORDER_BYTES,
             max_serialized_bytes: 1 << 20,
             pg_pool_size: 16,
             pg_pool_wait_secs: 5,

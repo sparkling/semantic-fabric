@@ -20,6 +20,7 @@ oxrdf.workspace = true
 oxiri.workspace = true # exact IRI resolution parity with the pinned spargebra parser
 oxilangtag.workspace = true # allocation-free QueryV1 language-tag validation
 oxsdatatypes.workspace = true  # exact Decimal accumulation for AVG (M3 fix 1) — the SAME fixed-point i128 type the spareval oracle uses for decimal AVG, never f64
+bigdecimal.workspace = true    # arbitrary-precision numeric ORDER keys; avoids f64 collisions
 # sparopt (ADR-0007 pipeline step 2, opt-in/bypassable) is intentionally NOT
 # wired into the engine optimizer. The ADR-0007 order-disciplined cascade is the
 # sole optimizer, so adding an opt-in pre-rewrite stage would duplicate authority.

@@ -1,13 +1,12 @@
-//! Backend-generic pull-cursor execution and plan-modifier sequencing.
-//!
-//! The corrected per-branch sequence (design §2, mirroring the old `exec.rs`
-//! SQLite loop): reconstruct → DISTINCT dedup (before slice) → if ordered {buffer,
-//! defer} else {streaming OFFSET/LIMIT} → after the loop: sort THEN slice.
+//! Backend-generic pull-cursor execution and plan-modifier sequencing: reconstruct,
+//! dedup, ORDER, then slice.
 
 use std::future::Future;
 use std::sync::Arc;
 
-use sf_core::query_control::{QueryCharge, QueryControl, UncontrolledQueryControl};
+use sf_core::query_control::{
+    QueryCharge, QueryControl, QueryControlError, UncontrolledQueryControl,
+};
 use sf_core::Term;
 use sf_sql::{BranchStream, Dialect, RawTuple, SqlBackend};
 
@@ -18,15 +17,13 @@ use crate::{DedupScope, Error, Plan, PlanForm, Result};
 use super::batch::{reconstruct_batch, TERM_GEN_BATCH_SIZE, TERM_GEN_FIRST_BATCH_SIZE};
 use super::expression::eval_expr;
 use super::forms::rust_group_execute;
-use super::order::{order_cmp_precomputed, precompute_order_keys, TermSortKey};
+use super::order::{compact_to_window, sorted_indices};
 use super::row::{build_col_index, canonical_pairs, intern_bindings, Bindings};
 use super::sql_error::map_sql_err;
 
-/// Drive an always-ready future to completion with no runtime (design §5 M2
-/// sync↔async bridge). SQLite backend waits resolve synchronously; the explicit
-/// cooperative checkpoint below returns `Pending` once and is immediately
-/// re-polled. A `noop` waker + poll loop therefore needs no tokio runtime and never
-/// nests / panics inside `sf-serve`'s `spawn_blocking`.
+/// Drive an always-ready future to completion with no runtime (design §5 M2).
+/// SQLite waits resolve synchronously; the cooperative checkpoint returns
+/// `Pending` once and is immediately re-polled by this no-op waker loop.
 pub(crate) fn block_on<F: Future>(fut: F) -> F::Output {
     use std::task::{Context, Poll, Waker};
     let mut cx = Context::from_waker(Waker::noop());
@@ -64,6 +61,10 @@ async fn cooperative_yield() {
     }
 
     YieldOnce(false).await;
+}
+
+fn accounting_overflow(control: &dyn QueryControl) -> Error {
+    Error::QueryControl(control.terminate(QueryControlError::AccountingOverflow))
 }
 
 /// Evaluate ORDER BY expression keys (e.g. `STRLEN(?n)`) and inject each result as a
@@ -127,11 +128,8 @@ where
         order: &plan.order,
         offset: plan.offset,
         limit: plan.limit,
-        // This is the plain streaming path (design §2: reconstruct -> DISTINCT ->
-        // ORDER/slice -> sink, ONE row in flight downstream) — parallel term-gen
-        // is now allowed here too, see `reconstruct_batch`'s `parallel_allowed`
-        // doc comment and [`TERM_GEN_MIN_PARALLEL_ROWS`]'s doc comment for the
-        // measured reason (ledger F8, un-gated on an idle-machine re-measurement).
+        // Plain streaming path: reconstruct -> DISTINCT -> ORDER/slice -> sink.
+        // The measured term-generation gate is documented by `reconstruct_batch`.
         parallel_term_gen: true,
         stop_after_first: matches!(plan.form, PlanForm::Ask),
         dedup_scopes: &plan.dedup_scopes,
@@ -163,15 +161,10 @@ pub(super) struct PlanCtx<'a> {
     pub(super) control: &'a dyn QueryControl,
 }
 
-/// [`for_each_solution`]'s non-`rust_group` streaming loop — does NOT check
-/// `rust_group` (the non-recursive split, so `rust_group_execute` can reuse it to
-/// collect inner solutions). One row in flight. Takes already-prepared branches
-/// ([`Plan::prepared_branches`]) plus the plan's scalar fields via [`PlanCtx`]
-/// rather than `&Plan`, so a caller that already holds a `Vec<Branch>` (the
-/// `rust_group` inner-collection path) is not forced to clone a whole `Plan` just
-/// to get one straight back out of `Plan::prepared_branches` again (ADR-0024/M4
-/// perf: this used to clone `plan.branches` twice — once building a throwaway
-/// `inner_plan`, once more inside `prepared_branches` — for exactly that reason).
+/// Non-recursive streaming loop reused by `rust_group_execute` for inner
+/// collection. It takes prepared branches plus [`PlanCtx`] so that caller does
+/// not clone a whole `Plan` only to repeat [`Plan::prepared_branches`]
+/// (ADR-0024/M4).
 pub(super) async fn run_branches<B, F, Fut>(
     branches: &[Branch],
     ctx: PlanCtx<'_>,
@@ -184,6 +177,10 @@ where
     Fut: Future<Output = Result<()>>,
 {
     ctx.control.checkpoint()?;
+    // LIMIT 0 is source-independent: return before metadata, cursor, or retention.
+    if ctx.limit == Some(0) {
+        return Ok(());
+    }
     // The post-cascade lift normally guarantees alignment. Keep this boundary
     // fail-closed for hand-built/internal Plans before metadata probing or SQL
     // emission can perform I/O.
@@ -276,12 +273,12 @@ where
     > = std::collections::HashMap::new();
     let mut seen = 0usize; // solutions observed (for offset)
     let mut emitted = 0usize; // solutions passed downstream (for limit)
-                              // ORDER BY is applied HERE for every plan, never in SQL (a SQL ORDER BY inherits
-                              // the column's collation/affinity). Buffer, stable-sort via the type-aware
-                              // order_cmp, then OFFSET/LIMIT (SPARQL §15: order, then slice).
-                              // ASK existence is order-independent; do not force a full-source buffer.
+                              // ORDER stays here, not under a source collation; ASK needs no buffer.
     let ordered = !ctx.order.is_empty() && !ctx.stop_after_first;
+    let order_window = crate::resource_profile::retained_order_window(ctx.offset, ctx.limit);
     let mut buffer: Vec<(usize, Bindings)> = Vec::new();
+    let mut retained_payload = 0_u64;
+    let mut charged_payload_peak = 0_u64;
     for (bi, (branch, e)) in branches.iter().zip(&emitted_branches).enumerate() {
         // Run 4 Wave C0d (ADR-0034 D1's term-level dedup path — see `cascade::
         // eligible_for_term_dedup`'s doc comment for the full mechanism and its sound-
@@ -425,6 +422,19 @@ where
                 // type-aware sort after every row (OFFSET/LIMIT applied after the sort).
                 if ordered {
                     let bindings = inject_order_expr_keys(ctx.order, bindings);
+                    let payload = bindings
+                        .retained_payload_bytes()
+                        .ok_or_else(|| accounting_overflow(ctx.control))?;
+                    retained_payload = retained_payload
+                        .checked_add(payload)
+                        .ok_or_else(|| accounting_overflow(ctx.control))?;
+                    if retained_payload > charged_payload_peak {
+                        ctx.control.consume(
+                            QueryCharge::RetainedBytes,
+                            retained_payload - charged_payload_peak,
+                        )?;
+                        charged_payload_peak = retained_payload;
+                    }
                     buffer.push((bi, bindings));
                     continue;
                 }
@@ -447,6 +457,18 @@ where
                     return Ok(());
                 }
             }
+            if let (true, Some(window)) = (ordered, order_window) {
+                if buffer.len() > window {
+                    ctx.control.checkpoint()?;
+                    compact_to_window(&mut buffer, ctx.order, window);
+                    retained_payload = buffer
+                        .iter()
+                        .try_fold(0_u64, |total, (_, bindings)| {
+                            total.checked_add(bindings.retained_payload_bytes()?)
+                        })
+                        .ok_or_else(|| accounting_overflow(ctx.control))?;
+                }
+            }
             if exhausted {
                 break;
             }
@@ -461,12 +483,8 @@ where
     // `buffer` both immutable, and preserves `sort_by`'s stability identically to
     // sorting `buffer` directly (the indices start in `buffer`'s original order).
     if ordered {
-        let keys: Vec<Vec<Option<TermSortKey>>> = buffer
-            .iter()
-            .map(|(_, bindings)| precompute_order_keys(ctx.order, bindings))
-            .collect();
-        let mut idx: Vec<usize> = (0..buffer.len()).collect();
-        idx.sort_by(|&i, &j| order_cmp_precomputed(ctx.order, &keys[i], &keys[j]));
+        ctx.control.checkpoint()?;
+        let idx = sorted_indices(&buffer, ctx.order);
         let take = ctx.limit.unwrap_or(usize::MAX);
         for &i in idx.iter().skip(ctx.offset).take(take) {
             let (bi, bindings) = &buffer[i];

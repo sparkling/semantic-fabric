@@ -19,9 +19,14 @@ const FORM_QUERY_FIELD_OVERHEAD: usize = 16;
 /// Default request timeout and max query length when constructed via [`ServeConfig::new`].
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_QUERY_LEN: usize = 1 << 20; // 1 MiB
-/// Finite serve defaults; CLI help and programmatic construction share this value.
+/// Textual binding payload retained by an exact global ORDER operation.
+pub const DEFAULT_MAX_ORDER_BYTES: u64 = 64 * 1024 * 1024;
+/// Finite serve defaults; CLI help and programmatic construction share these values.
 pub const DEFAULT_QUERY_LIMITS: QueryLimits =
-    QueryLimits::new(1_000_000, 1_000_000, 100_000, 64 * 1024 * 1024);
+    QueryLimits::new(1_000_000, 1_000_000, 100_000, 64 * 1024 * 1024)
+        .with_max_retained_bytes(DEFAULT_MAX_ORDER_BYTES);
+/// Maximum exact in-process ORDER BY window (`OFFSET + LIMIT`) admitted by default.
+pub const DEFAULT_MAX_ORDER_ROWS: usize = 100_000;
 /// Conservative finite governance default for admitted requests. This value is
 /// not a throughput target or a load-test result.
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 64;
@@ -41,6 +46,7 @@ pub struct ServeConfig {
     max_form_body_len: usize,
     /// Inclusive request-wide compiler/source/result/serialization ceilings.
     pub query_limits: QueryLimits,
+    max_order_rows: usize,
     /// Bounds active `spawn_blocking` compilers. An owned permit lives inside the
     /// blocking closure, including after its request waiter times out.
     compiler_permits: Arc<Semaphore>,
@@ -59,6 +65,7 @@ impl ServeConfig {
             max_query_len: DEFAULT_MAX_QUERY_LEN,
             max_form_body_len,
             query_limits: DEFAULT_QUERY_LIMITS,
+            max_order_rows: DEFAULT_MAX_ORDER_ROWS,
             compiler_permits: Arc::new(Semaphore::new(DEFAULT_COMPILER_PERMITS)),
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             request_admission_permits: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_REQUESTS)),
@@ -110,6 +117,17 @@ impl ServeConfig {
     /// Configured server-wide request-admission ceiling.
     pub fn max_concurrent_requests(&self) -> usize {
         self.max_concurrent_requests
+    }
+
+    /// Set the independent exact ORDER BY retained-row ceiling. Zero disables
+    /// every non-empty ordered window while still admitting `LIMIT 0`.
+    pub fn set_max_order_rows(&mut self, maximum: usize) {
+        self.max_order_rows = maximum;
+    }
+
+    /// Maximum exact ORDER BY window admitted for in-process retention.
+    pub fn max_order_rows(&self) -> usize {
+        self.max_order_rows
     }
 
     pub(crate) fn max_form_body_len(&self) -> usize {
@@ -194,6 +212,11 @@ mod tests {
         assert_eq!(
             config.available_request_permits(),
             DEFAULT_MAX_CONCURRENT_REQUESTS
+        );
+        assert_eq!(config.max_order_rows(), DEFAULT_MAX_ORDER_ROWS);
+        assert_eq!(
+            config.query_limits.max_retained_bytes(),
+            DEFAULT_MAX_ORDER_BYTES
         );
     }
 

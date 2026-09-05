@@ -29,6 +29,7 @@ oxjsonld = { version = "0.2.5", features = ["rdf-12"] }
 spargebra = { version = "=0.4.6", features = ["sparql-12", "sep-0002", "sep-0006", "standard-unicode-escaping"] }
 sparesults = { version = "0.3.3", features = ["sparql-12"] }
 oxsdatatypes = "0.2.2"
+bigdecimal = "0.4.10"
 # --- errors / CLI ---
 thiserror = "2"
 anyhow = "1"

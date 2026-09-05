@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn generated_error_cardinality_includes_the_distinct_compiler_envelope_reason() {
-    assert_eq!(QueryControlError::VARIANT_COUNT, 9);
-    assert_eq!(QueryControlError::VARIANTS.len(), 9);
+    assert_eq!(QueryControlError::VARIANT_COUNT, 10);
+    assert_eq!(QueryControlError::VARIANTS.len(), 10);
     assert_eq!(
         QueryControlError::VARIANTS
             .iter()

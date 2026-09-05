@@ -57,7 +57,10 @@ mod request_admission_tests;
 
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::{BackendProfile, IntrospectedSource};
-pub use config::{ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_QUERY_LIMITS};
+pub use config::{
+    ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
+    DEFAULT_QUERY_LIMITS,
+};
 pub use http::router;
 pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
