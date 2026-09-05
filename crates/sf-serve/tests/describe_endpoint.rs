@@ -26,11 +26,20 @@ const MAPPING_TTL: &str = r#"
   rr:predicateObjectMap [ rr:predicate ex:age ; rr:objectMap [ rr:column "age" ] ] .
 "#;
 
-fn config_and_pool() -> (ServeConfig, SqlitePool) {
+const SINGLE_POM_MAPPING_TTL: &str = r#"
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://ex/> .
+<#People> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "People" ] ;
+  rr:subjectMap [ rr:template "http://ex/person/{id}" ] ;
+  rr:predicateObjectMap [ rr:predicate ex:name ; rr:objectMap [ rr:column "name" ] ] .
+"#;
+
+fn config_and_pool(mapping: &str) -> (ServeConfig, SqlitePool) {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(CREATE_SQL).unwrap();
     let schema = introspect_sqlite_all(&conn).unwrap();
-    let maps = sf_mapping::parse_r2rml(MAPPING_TTL).unwrap();
+    let maps = sf_mapping::parse_r2rml(mapping).unwrap();
     let backend = Backend::sqlite(conn);
     let Backend::Sqlite(pool) = &backend else {
         unreachable!()
@@ -79,7 +88,7 @@ fn predicate_iris(triples: &[oxrdf::Triple]) -> BTreeSet<&str> {
 
 #[tokio::test]
 async fn one_iri_returns_its_exact_one_hop_outgoing_description() {
-    let (config, _) = config_and_pool();
+    let (config, _) = config_and_pool(MAPPING_TTL);
     let (status, triples) = send(config, "DESCRIBE <http://ex/person/1>").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -99,24 +108,27 @@ async fn one_iri_returns_its_exact_one_hop_outgoing_description() {
 
 #[tokio::test]
 async fn legal_user_variable_names_cannot_capture_description_internals() {
-    let (config, _) = config_and_pool();
-    let query = r#"DESCRIBE ?__sf_describe_object_0 WHERE {
-        VALUES ?__sf_describe_object_0 { <http://ex/person/1> }
+    let (config, _) = config_and_pool(SINGLE_POM_MAPPING_TTL);
+    let query = r#"DESCRIBE ?s WHERE {
+        VALUES (?s ?__sf_describe_p ?__sf_describe_o) {
+            (<http://ex/person/1> <urn:sentinel:predicate> "sentinel")
+        }
     }"#;
     let (status, triples) = send(config, query).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         triples.len(),
-        3,
-        "the user binding must not filter outgoing triples"
+        1,
+        "legal user bindings must not capture the description internals"
     );
-    assert_eq!(predicate_iris(&triples).len(), 3);
+    assert_eq!(predicate_iris(&triples), BTreeSet::from(["http://ex/name"]));
+    assert_eq!(triples[0].object.to_string(), "\"Alice\"");
 }
 
 #[tokio::test]
 async fn multiple_targets_reject_before_source_io_until_bounded_union_exists() {
-    let (config, pool) = config_and_pool();
+    let (config, pool) = config_and_pool(MAPPING_TTL);
     pool.pick()
         .lock()
         .unwrap()
