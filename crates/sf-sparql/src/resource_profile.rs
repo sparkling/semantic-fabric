@@ -364,6 +364,19 @@ mod tests {
     }
 
     #[test]
+    fn construct_distinct_is_not_a_graph_set_fallback_marker() {
+        let mut candidate = plan(
+            vec![branch(1), branch(2)],
+            PlanForm::Construct {
+                template: Vec::new(),
+            },
+        );
+        candidate.distinct = true;
+
+        assert!(candidate.source_sized_states().is_empty());
+    }
+
+    #[test]
     fn recurses_through_nested_subplans_and_deduplicates_state_kinds() {
         let mut nested = select_plan(vec![branch(2)]);
         nested.order.push(OrderKey {

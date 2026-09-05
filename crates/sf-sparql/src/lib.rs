@@ -220,6 +220,7 @@ pub(crate) struct DedupScope {
 pub struct Plan {
     pub branches: Vec<Branch>,
     pub form: PlanForm,
+    /// Root solution-set DISTINCT.
     pub distinct: bool,
     pub limit: Option<usize>,
     pub offset: usize,
@@ -238,15 +239,11 @@ pub struct Plan {
     /// proves ownership and key preservation through pure unary wrappers.
     /// An empty vector is the common no-group case.
     pub(crate) dedup_scopes: Vec<Option<DedupScope>>,
-    /// ADR-0034 item 3 (Run 5): `true` when SOME `PlanForm::Construct` branch's
-    /// ORIGINAL (pre-narrowing) bindings bound a variable the CONSTRUCT
-    /// template does not use — captured by `dedup_construct_template_
-    /// projected_vars` (lib.rs) at the ONE point that information exists,
-    /// before its own narrowing pass overwrites `Branch::bindings` to match
-    /// the template exactly (`exec_core::construct_may_need_cross_branch_
-    /// dedup`'s doc comment has the full reasoning for why this can't be
-    /// recomputed later from `branches` alone). Always `false` for a
-    /// non-`Construct` plan.
+    /// Cross-branch graph-set dedup is still required. For ordinary CONSTRUCT,
+    /// ADR-0034 sets this when pre-narrowing bindings contain a variable the
+    /// template drops. For DESCRIBE, lowering overwrites it with the exact
+    /// post-narrowing result: two or more output-triple branches are not proved
+    /// pairwise disjoint. Always `false` for a non-`Construct` plan.
     pub(crate) construct_drops_some_branch_var: bool,
 }
 
@@ -385,14 +382,14 @@ fn translate_inner_flat(
         (expanded, &empty_tbox)
     };
     let mut uf = unfold::Unfolder::new(&saturated_maps, uf_tbox, dialect, schema);
-    let (trans, form) = match query {
+    let (trans, form, describe_form) = match query {
         Query::Select { pattern, .. } => {
             let t = uf.translate_pattern(pattern)?;
             let vars = t
                 .project
                 .clone()
                 .unwrap_or_else(|| visible_vars(&t.branches));
-            (t, PlanForm::Select { vars })
+            (t, PlanForm::Select { vars }, false)
         }
         Query::Construct {
             template, pattern, ..
@@ -405,16 +402,16 @@ fn translate_inner_flat(
             // (`star::substitute_construct_template`'s doc comment).
             let template = star::substitute_construct_template(template, &star_env);
             let t = uf.translate_pattern(pattern)?;
-            (t, PlanForm::Construct { template })
+            (t, PlanForm::Construct { template }, false)
         }
         Query::Ask { pattern, .. } => {
             let t = uf.translate_pattern(pattern)?;
-            (t, PlanForm::Ask)
+            (t, PlanForm::Ask, false)
         }
         Query::Describe { pattern, .. } => {
             let (description_pattern, template) = describe::rewrite(pattern)?;
             let t = uf.translate_pattern(&description_pattern)?;
-            (t, PlanForm::Construct { template })
+            (t, PlanForm::Construct { template }, true)
         }
     };
     // Pass (6) needs the projected-variable set + the requested DISTINCT to prove
@@ -454,7 +451,9 @@ fn translate_inner_flat(
     // branch's `distinct`, and reading the flag any earlier would capture a
     // stale `false` that `Plan::prepared_branches` would blindly write back at
     // emission, silently undoing the fix.
-    let construct_drops_some_branch_var = if let PlanForm::Construct { template } = &form {
+    let construct_drops_some_branch_var = if describe_form {
+        enforce_describe_graph_set(&mut branches, &form)?
+    } else if let PlanForm::Construct { template } = &form {
         dedup_construct_template_projected_vars(&mut branches, template)
     } else {
         false
@@ -627,6 +626,7 @@ fn translate_tree_with_column_type_use(
         iq::lower::lower_with_work_mode(normalized, dialect, &extra_keep, &star_env, work_mode)
     };
 
+    let describe_form = matches!(query, Query::Describe { .. });
     let mut plan = match query {
         // SELECT — `lower` already produced the projected-variable `PlanForm::Select`
         // from the tree's outermost `Construction.project` (the SELECT scope).
@@ -701,7 +701,10 @@ fn translate_tree_with_column_type_use(
     cascade::dedup_before_aggregate(&mut plan.branches, dialect);
     // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
     // `translate_inner_flat`): MUST run before the `distinct` capture below.
-    if let PlanForm::Construct { template } = &plan.form {
+    if describe_form {
+        plan.construct_drops_some_branch_var =
+            enforce_describe_graph_set(&mut plan.branches, &plan.form)?;
+    } else if let PlanForm::Construct { template } = &plan.form {
         plan.construct_drops_some_branch_var =
             dedup_construct_template_projected_vars(&mut plan.branches, template);
     }
@@ -994,6 +997,57 @@ fn dedup_construct_template_projected_vars(
         b.distinct = true;
     }
     drops_some_var
+}
+
+/// Make the admitted DESCRIBE profile a graph rather than a bag. Each branch
+/// projects only the outgoing triple terms and performs `DISTINCT` in SQL. The
+/// return value says that separate branches are not provably disjoint and need
+/// the existing cross-branch CONSTRUCT set fallback; serving admission rejects
+/// that source-sized state before I/O, while raw/oracle execution stays exact.
+fn enforce_describe_graph_set(branches: &mut [Branch], form: &PlanForm) -> Result<bool> {
+    let PlanForm::Construct { template } = form else {
+        return Err(Error::Unsupported(
+            "DESCRIBE lowering did not produce a construct plan".to_owned(),
+        ));
+    };
+    let [triple] = template.as_slice() else {
+        return Err(Error::Unsupported(
+            "DESCRIBE graph-set proof requires exactly one outgoing triple template".to_owned(),
+        ));
+    };
+    let subject_supported = matches!(
+        &triple.subject,
+        TermPattern::NamedNode(_) | TermPattern::Variable(_)
+    );
+    if !subject_supported
+        || !matches!(&triple.predicate, NamedNodePattern::Variable(_))
+        || !matches!(&triple.object, TermPattern::Variable(_))
+    {
+        return Err(Error::Unsupported(
+            "DESCRIBE graph-set proof requires the one-hop outgoing template".to_owned(),
+        ));
+    }
+    let template_vars = template_variables(template);
+    for branch in &mut *branches {
+        if branch.path.is_some()
+            || branch.agg.is_some()
+            || !branch.order.is_empty()
+            || branch.limit.is_some()
+            || branch.offset != 0
+            || !template_vars
+                .iter()
+                .all(|variable| branch.bindings.contains_key(variable.as_str()))
+        {
+            return Err(Error::Unsupported(
+                "DESCRIBE graph-set projection is not proved for this plan shape".to_owned(),
+            ));
+        }
+        branch
+            .bindings
+            .retain(|variable, _| template_vars.contains(variable.as_str()));
+        branch.distinct = true;
+    }
+    Ok(branches.len() > 1 && !unfold::all_pairwise_disjoint(branches))
 }
 
 /// Every variable named anywhere in a CONSTRUCT template (subject/predicate/

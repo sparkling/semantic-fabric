@@ -10,9 +10,11 @@ use crate::Error;
 /// Lower one DESCRIBE target to its one-hop outgoing-description graph.
 ///
 /// SPARQL leaves DESCRIBE graph construction implementation-defined. This
-/// profile deliberately emits only outgoing triples for one target. Multiple
-/// targets remain unsupported until their union and graph-set dedup have a
-/// source-independent memory proof.
+/// profile deliberately emits only outgoing triples for one target expression.
+/// A variable expression is projected and deduplicated before the outgoing
+/// triple join, so repeated WHERE solutions do not repeat the same resource's
+/// description. Multiple target expressions remain unsupported until their
+/// union and graph-set dedup have a source-independent memory proof.
 pub(crate) fn rewrite(pattern: &GraphPattern) -> Result<(GraphPattern, Vec<TriplePattern>), Error> {
     let (targets, inner) = match pattern {
         GraphPattern::Project { variables, inner } => (variables.clone(), inner.as_ref().clone()),
@@ -25,7 +27,15 @@ pub(crate) fn rewrite(pattern: &GraphPattern) -> Result<(GraphPattern, Vec<Tripl
     }
 
     let target = targets.into_iter().next().expect("exactly one target");
-    let (subject, inner) = description_subject(target, inner)?;
+    let (subject, mut inner) = description_subject(target, inner)?;
+    if let TermPattern::Variable(variable) = &subject {
+        inner = GraphPattern::Distinct {
+            inner: Box::new(GraphPattern::Project {
+                inner: Box::new(inner),
+                variables: vec![variable.clone()],
+            }),
+        };
+    }
     let mut names = crate::star::collect_pattern_vars(&inner)
         .into_iter()
         .map(|variable| variable.as_str().to_owned())
@@ -162,5 +172,21 @@ mod tests {
     fn unbound_variable_target_rejects_instead_of_scanning_every_subject() {
         let pattern = describe_pattern("DESCRIBE ?s WHERE { ?x ?p ?o }");
         assert!(matches!(rewrite(&pattern), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn variable_target_is_projected_and_deduplicated_before_the_outgoing_join() {
+        let pattern =
+            describe_pattern("DESCRIBE ?s WHERE { VALUES ?s { <http://ex/a> <http://ex/a> } }");
+        let (rewritten, _) = rewrite(&pattern).unwrap();
+        let GraphPattern::Join { left, .. } = rewritten else {
+            panic!("description lowering must join selected targets to outgoing triples")
+        };
+        assert!(matches!(
+            left.as_ref(),
+            GraphPattern::Distinct { inner }
+                if matches!(inner.as_ref(), GraphPattern::Project { variables, .. }
+                    if variables.len() == 1 && variables[0].as_str() == "s")
+        ));
     }
 }
