@@ -6,13 +6,7 @@ fn parse(q: &str) -> Query {
 }
 
 fn scope(dialect: Dialect, epoch: Epoch) -> CompileScope {
-    CompileScope::new(
-        CompileBindingId::mint(),
-        dialect,
-        epoch,
-        ConstraintAuthority::Unverified,
-        ColumnTypeAuthority::Unverified,
-    )
+    test_scope(SourceId::new(0).unwrap(), dialect, epoch)
 }
 
 #[test]
@@ -58,28 +52,9 @@ fn hash_collision_does_not_serve_the_wrong_plan() {
 #[test]
 fn epoch_bump_invalidates() {
     let q = parse("SELECT * WHERE { ?s ?p ?o }");
-    let binding = CompileBindingId::mint();
     assert_ne!(
-        plan_key(
-            &q,
-            CompileScope::new(
-                binding,
-                Dialect::Sqlite,
-                Epoch(1),
-                ConstraintAuthority::Unverified,
-                ColumnTypeAuthority::Unverified,
-            ),
-        ),
-        plan_key(
-            &q,
-            CompileScope::new(
-                binding,
-                Dialect::Sqlite,
-                Epoch(2),
-                ConstraintAuthority::Unverified,
-                ColumnTypeAuthority::Unverified,
-            ),
-        )
+        plan_key(&q, scope(Dialect::Sqlite, Epoch(1))),
+        plan_key(&q, scope(Dialect::Sqlite, Epoch(2)))
     );
 }
 
@@ -91,27 +66,14 @@ fn epoch_exhaustion_fails_instead_of_wrapping() {
 }
 
 #[test]
-fn dialect_and_binding_identity_are_part_of_the_key() {
+fn dialect_capabilities_and_source_identity_are_part_of_the_key() {
     let q = parse("SELECT * WHERE { ?s ?p ?o }");
-    let binding = CompileBindingId::mint();
-    let sqlite = CompileScope::new(
-        binding,
-        Dialect::Sqlite,
-        Epoch(0),
-        ConstraintAuthority::Unverified,
-        ColumnTypeAuthority::Unverified,
-    );
-    let postgres = CompileScope::new(
-        binding,
-        Dialect::Postgres,
-        Epoch(0),
-        ConstraintAuthority::Unverified,
-        ColumnTypeAuthority::Unverified,
-    );
-    let other_binding = scope(Dialect::Sqlite, Epoch(0));
+    let sqlite = scope(Dialect::Sqlite, Epoch(0));
+    let postgres = scope(Dialect::Postgres, Epoch(0));
+    let other_source = test_scope(SourceId::new(1).unwrap(), Dialect::Sqlite, Epoch(0));
 
     assert_ne!(plan_key(&q, sqlite), plan_key(&q, postgres));
-    assert_ne!(plan_key(&q, sqlite), plan_key(&q, other_binding));
+    assert_ne!(plan_key(&q, sqlite), plan_key(&q, other_source));
 }
 
 #[test]

@@ -1,10 +1,10 @@
 //! Plan cache (ADR-0007 *Performance*) — owned by one immutable
-//! [`CompilerBinding`] and keyed on both its opaque compile scope and a
+//! [`CompilerBinding`] and keyed on both its immutable compile scope and a
 //! **structural hash of the SPARQL algebra**.
 //!
 //! The scope binds one source ID, mapping, T-Box, compiler-safe schema, dialect,
-//! and cache. A new binding gets a process-unique identity and explicit epoch.
-//! No live reload path exists; later DDL does not advance an existing binding.
+//! and cache. The scope carries deterministic content digests and an explicit
+//! epoch. No live reload path exists; later DDL does not advance a binding.
 //!
 //! **Sharp keying rule (ADR-0007):** parameterise *data* constants but key on
 //! *schema-selecting* constants (predicate IRIs and IRI-template constants — the
@@ -15,8 +15,6 @@
 //! This safely causes only extra misses; data-constant sharing remains deferred.
 
 use std::fmt;
-use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use sf_core::{SourceId, SourceMapping};
@@ -26,6 +24,7 @@ use spargebra::Query;
 use crate::compiler_schema::{
     ColumnTypeAuthority, ColumnTypeUse, CompilerSchema, ConstraintAuthority,
 };
+use crate::runtime_identity::CompileDigests;
 use crate::{Plan, Result, Tbox};
 
 /// Closed compiler-governance profile used to partition cache authority.
@@ -55,68 +54,42 @@ impl Epoch {
     }
 }
 
-static NEXT_BINDING_ID: AtomicU64 = AtomicU64::new(1);
-
-/// A process-unique, non-secret identity for one immutable compiler binding.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct CompileBindingId(NonZeroU64);
-
-impl CompileBindingId {
-    fn mint() -> Self {
-        let value = NEXT_BINDING_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .expect("compiler binding identity exhausted");
-        Self(NonZeroU64::new(value).expect("binding IDs start at one"))
-    }
-
-    const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl fmt::Debug for CompileBindingId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "binding[{}]", self.get())
-    }
-}
-
 /// Exact cache namespace for one compiler binding and generation.
 ///
-/// Construction is private so callers cannot accidentally reuse an identity for
-/// a different mapping/schema/T-Box/backend context. Obtain it from
-/// [`CompilerBinding::scope`].
+/// Construction is private: the source, mapping, ontology, schema, authority,
+/// and capability identity is derived from the binding inputs, never supplied
+/// independently by a caller. Obtain it from [`CompilerBinding::scope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompileScope {
-    binding: CompileBindingId,
+    source_id: SourceId,
     dialect: Dialect,
     epoch: Epoch,
     constraint_authority: ConstraintAuthority,
     column_type_authority: ColumnTypeAuthority,
+    digests: CompileDigests,
 }
 
 impl CompileScope {
     fn new(
-        binding: CompileBindingId,
+        source_id: SourceId,
         dialect: Dialect,
         epoch: Epoch,
         constraint_authority: ConstraintAuthority,
         column_type_authority: ColumnTypeAuthority,
+        digests: CompileDigests,
     ) -> Self {
         Self {
-            binding,
+            source_id,
             dialect,
             epoch,
             constraint_authority,
             column_type_authority,
+            digests,
         }
     }
 
-    /// Process-local binding identity. This is diagnostic metadata, not a
-    /// persistent source identifier or release receipt.
-    pub const fn binding_id(self) -> u64 {
-        self.binding.get()
+    pub const fn source_id(self) -> SourceId {
+        self.source_id
     }
 
     pub const fn dialect(self) -> Dialect {
@@ -134,6 +107,33 @@ impl CompileScope {
     pub const fn column_type_authority(self) -> ColumnTypeAuthority {
         self.column_type_authority
     }
+
+    pub const fn digests(self) -> CompileDigests {
+        self.digests
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_scope(source_id: SourceId, dialect: Dialect, epoch: Epoch) -> CompileScope {
+    let mapping = SourceMapping::new(source_id, Vec::new());
+    let tbox = Tbox::default();
+    let schema = CompilerSchema::from_unverified_observation(Vec::new());
+    let digests = CompileDigests::from_inputs(
+        &mapping,
+        &tbox,
+        schema.tables(),
+        dialect,
+        schema.constraint_authority(),
+        schema.column_type_authority(),
+    );
+    CompileScope::new(
+        source_id,
+        dialect,
+        epoch,
+        schema.constraint_authority(),
+        schema.column_type_authority(),
+        digests,
+    )
 }
 
 /// Immutable semantic inputs and cache for one source-local compiler.
@@ -159,12 +159,75 @@ impl CompilerBinding {
         cache_capacity: usize,
     ) -> Self {
         assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
-        let scope = CompileScope::new(
-            CompileBindingId::mint(),
+        let digests = CompileDigests::from_inputs(
+            &mapping,
+            &tbox,
+            schema.tables(),
             dialect,
-            Epoch::default(),
             schema.constraint_authority(),
             schema.column_type_authority(),
+        );
+        Self::from_parts(
+            mapping,
+            dialect,
+            tbox,
+            schema,
+            Epoch::default(),
+            digests,
+            cache_capacity,
+        )
+    }
+
+    /// Build a serving binding from one raw catalogue observation. Identity is
+    /// computed before unverified constraints and types are quarantined, so a
+    /// replacement observation cannot reuse an old cache scope accidentally.
+    pub fn from_unverified_observation(
+        mapping: SourceMapping,
+        dialect: Dialect,
+        tbox: Tbox,
+        observed_schema: Vec<TableSchema>,
+        epoch: Epoch,
+        cache_capacity: usize,
+    ) -> Self {
+        assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
+        let constraint_authority = ConstraintAuthority::Unverified;
+        let column_type_authority = ColumnTypeAuthority::Unverified;
+        let digests = CompileDigests::from_inputs(
+            &mapping,
+            &tbox,
+            &observed_schema,
+            dialect,
+            constraint_authority,
+            column_type_authority,
+        );
+        let schema = CompilerSchema::from_unverified_observation(observed_schema);
+        Self::from_parts(
+            mapping,
+            dialect,
+            tbox,
+            schema,
+            epoch,
+            digests,
+            cache_capacity,
+        )
+    }
+
+    fn from_parts(
+        mapping: SourceMapping,
+        dialect: Dialect,
+        tbox: Tbox,
+        schema: CompilerSchema,
+        epoch: Epoch,
+        digests: CompileDigests,
+        cache_capacity: usize,
+    ) -> Self {
+        let scope = CompileScope::new(
+            mapping.source_id(),
+            dialect,
+            epoch,
+            schema.constraint_authority(),
+            schema.column_type_authority(),
+            digests,
         );
         Self {
             mapping,
@@ -199,6 +262,10 @@ impl CompilerBinding {
 
     pub const fn scope(&self) -> CompileScope {
         self.scope
+    }
+
+    pub const fn digests(&self) -> CompileDigests {
+        self.scope.digests()
     }
 
     pub const fn constraint_authority(&self) -> ConstraintAuthority {

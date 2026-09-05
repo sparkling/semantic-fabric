@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use sf_core::query_control::QueryLimits;
 use sf_core::{ir::TriplesMap, SourceId, SourceMapping};
-use sf_sparql::Tbox;
+use sf_sparql::{Epoch, Tbox};
 use sf_sql::TableSchema;
 use tokio::sync::Semaphore;
 
-use crate::binding::{BoundPlan, ExecutablePlan, IntrospectedSource, RuntimeBinding};
+use crate::binding::{BoundPlan, ExecutablePlan, IntrospectedSource};
 use crate::problem::StartupCause;
+use crate::snapshot::{RuntimeSnapshot, RuntimeSource};
 use crate::{Backend, ServeError};
 
 /// Worst-case wire bytes for the percent-encoded `query` key plus `=`.
@@ -37,10 +38,11 @@ const DEFAULT_COMPILER_PERMITS: usize = 4;
 
 /// The immutable server configuration shared (in an `Arc`) across all requests.
 /// Semantic/compiler/backend state is private and inseparable inside one
-/// [`RuntimeBinding`]; only request-governance knobs remain independently
-/// configurable.
+/// immutable [`RuntimeSnapshot`]. The current serving API selects its sole
+/// registered source; only request-governance knobs remain configurable.
 pub struct ServeConfig {
-    binding: RuntimeBinding,
+    snapshot: Arc<RuntimeSnapshot>,
+    source_id: SourceId,
     pub timeout: Duration,
     max_query_len: usize,
     max_form_body_len: usize,
@@ -59,8 +61,15 @@ impl ServeConfig {
     pub fn new(source: IntrospectedSource, mapping: SourceMapping, tbox: Tbox) -> Self {
         let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
             .expect("default query length has a representable form-body limit");
+        let source_id = mapping.source_id();
+        let snapshot = Arc::new(RuntimeSnapshot::single(
+            Epoch::default(),
+            tbox,
+            RuntimeSource::new(source, mapping),
+        ));
         Self {
-            binding: RuntimeBinding::new(source, mapping, tbox),
+            snapshot,
+            source_id,
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
             max_form_body_len,
@@ -139,14 +148,14 @@ impl ServeConfig {
         query: &str,
         control: &dyn sf_core::query_control::QueryControl,
     ) -> sf_sparql::Result<BoundPlan> {
-        self.binding.compile(query, control)
+        self.snapshot.compile(self.source_id, query, control)
     }
 
     pub(crate) fn prepare_execution(
         &self,
         plan: BoundPlan,
     ) -> Result<ExecutablePlan, crate::binding::BindingMismatch> {
-        self.binding.prepare_execution(plan)
+        self.snapshot.prepare_execution(plan)
     }
 
     pub(crate) fn compiler_permits(&self) -> Arc<Semaphore> {

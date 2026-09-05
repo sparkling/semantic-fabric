@@ -217,6 +217,8 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/plan_measure/spargebra.rs',
   'crates/sf-sparql/src/plan_measure/tests.rs',
   'crates/sf-sparql/src/resource_profile.rs',
+  'crates/sf-sparql/src/runtime_identity.rs',
+  'crates/sf-sparql/src/runtime_identity_tests.rs',
   'crates/sf-sparql/src/saturate.rs',
   'crates/sf-sparql/src/star.rs',
   'crates/sf-sparql/src/star/collect_vars.rs',

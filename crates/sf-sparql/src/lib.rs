@@ -86,6 +86,7 @@ pub mod path;
 #[allow(dead_code)] // Staged clone/envelope primitive; cache wiring is a later slice.
 mod plan_measure;
 pub mod resource_profile;
+mod runtime_identity;
 pub mod saturate;
 pub mod star;
 pub mod unfold;
@@ -107,6 +108,8 @@ mod compiler_control_normalize_join_tests;
 #[cfg(test)]
 #[path = "compiler_control/pipeline_tests.rs"]
 mod compiler_control_pipeline_tests;
+#[cfg(test)]
+mod runtime_identity_tests;
 
 pub use cache::{CompileScope, CompilerBinding, Epoch, PlanCache, PlanKey};
 pub use compiler_schema::{ColumnTypeAuthority, CompilerSchema, ConstraintAuthority};
@@ -154,6 +157,10 @@ pub use parser_isolation::{
     exercise_synthetic_query_v1_mutant_matrix_for_evidence,
     exercise_synthetic_query_v1_request_eof_order_for_evidence,
     exercise_synthetic_query_v1_transport_mutant_for_evidence,
+};
+pub use runtime_identity::{
+    CapabilityDigest, CompileDigests, ConstraintPolicyDigest, MappingDigest, OntologyDigest,
+    SchemaDigest, StructuralSchemaDigest, TypeSchemaDigest,
 };
 pub use saturate::Tbox;
 

@@ -42,6 +42,7 @@ mod http;
 mod post_body;
 mod problem;
 mod request_deadline;
+mod snapshot;
 mod sqlite_admission;
 mod terminal_body;
 
@@ -54,6 +55,8 @@ mod deadline_tests;
 mod query_budget_tests;
 #[cfg(test)]
 mod request_admission_tests;
+#[cfg(test)]
+mod runtime_snapshot_tests;
 
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::{BackendProfile, IntrospectedSource};
@@ -66,5 +69,6 @@ pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
 pub use run::{serve_blocking, ServeOptions};
+pub use snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError, SourceRegistry};
 pub use source::{SourceInput, SourceRef, MAX_SOURCE_ENV_NAME_BYTES, MAX_SOURCE_INPUT_BYTES};
 pub use stream::RdfFormat;

@@ -168,10 +168,8 @@ mod tests {
     use spargebra::SparqlParser;
 
     use super::*;
-    use crate::cache::{
-        plan_key_for_profile as unbounded_plan_key, CompileBindingId, Epoch, PlanCache,
-    };
-    use crate::{ColumnTypeAuthority, ConstraintAuthority};
+    use crate::cache::{plan_key_for_profile as unbounded_plan_key, test_scope, Epoch, PlanCache};
+    use sf_core::SourceId;
     use sf_sql::Dialect;
 
     fn parse(source: &str) -> Query {
@@ -179,13 +177,7 @@ mod tests {
     }
 
     fn scope() -> CompileScope {
-        CompileScope::new(
-            CompileBindingId::mint(),
-            Dialect::Sqlite,
-            Epoch(0),
-            ConstraintAuthority::Unverified,
-            ColumnTypeAuthority::Unverified,
-        )
+        test_scope(SourceId::new(0).unwrap(), Dialect::Sqlite, Epoch(0))
     }
 
     #[test]

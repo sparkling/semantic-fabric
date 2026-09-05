@@ -1,10 +1,10 @@
-//! Immutable single-source runtime binding.
+//! Immutable per-source runtime binding.
 //!
 //! The serve lane compiles and executes only through this owner, so a plan
 //! cannot be detached from the backend, source identity, dialect, mapping,
 //! T-Box, constraint-quarantined compiler schema, or cache that produced it.
-//! This is the enforcing single-source precursor to the proposed multi-source
-//! `RuntimeSnapshot`.
+//! A [`crate::RuntimeSnapshot`] owns these bindings through its source registry;
+//! the current CLI selects exactly one entry and exposes no federated query path.
 //! PostgreSQL supplies a coherent startup catalogue snapshot; the abstraction
 //! does not claim that for every backend, nor live drift detection, federation,
 //! or production capability admission.
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use sf_core::query_control::QueryControl;
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::{CompileScope, CompilerBinding, CompilerSchema, Plan, Tbox};
+use sf_sparql::{CompileDigests, CompileScope, CompilerBinding, Epoch, Plan, Tbox};
 use sf_sql::{Dialect, TableSchema};
 
 use crate::backend::{Backend, BackendKind};
@@ -111,23 +111,32 @@ impl BackendProfile {
 pub(crate) struct RuntimeBinding {
     backend: Backend,
     profile: BackendProfile,
+    observed_schema: Arc<[TableSchema]>,
     compiler: CompilerBinding,
 }
 
 impl RuntimeBinding {
-    pub(crate) fn new(source: IntrospectedSource, mapping: SourceMapping, tbox: Tbox) -> Self {
+    pub(crate) fn new(
+        source: IntrospectedSource,
+        mapping: SourceMapping,
+        tbox: Tbox,
+        epoch: Epoch,
+    ) -> Self {
         let (backend, schema) = source.into_parts();
         let profile = BackendProfile::from_kind(backend.kind());
-        let compiler = CompilerBinding::new(
+        let observed_schema: Arc<[TableSchema]> = schema.into();
+        let compiler = CompilerBinding::from_unverified_observation(
             mapping,
             profile.dialect(),
             tbox,
-            CompilerSchema::from_unverified_observation(schema),
+            observed_schema.to_vec(),
+            epoch,
             PLAN_CACHE_CAP,
         );
         Self {
             backend,
             profile,
+            observed_schema,
             compiler,
         }
     }
@@ -176,14 +185,27 @@ impl RuntimeBinding {
     pub(crate) const fn scope(&self) -> CompileScope {
         self.compiler.scope()
     }
+
+    pub(crate) const fn profile(&self) -> BackendProfile {
+        self.profile
+    }
+
+    pub(crate) fn observed_schema(&self) -> &[TableSchema] {
+        &self.observed_schema
+    }
+
+    pub(crate) const fn digests(&self) -> CompileDigests {
+        self.compiler.digests()
+    }
 }
 
 impl fmt::Debug for RuntimeBinding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeBinding")
-            .field("binding_id", &self.scope().binding_id())
             .field("source_id", &self.source_id())
+            .field("epoch", &self.scope().epoch())
+            .field("digests", &self.digests())
             .field("profile", &self.profile)
             .field("compiler", &self.compiler)
             .finish()
@@ -201,14 +223,19 @@ impl BoundPlan {
     pub(crate) fn plan(&self) -> &Plan {
         &self.plan
     }
+
+    pub(crate) const fn source_id(&self) -> SourceId {
+        self.source_id
+    }
 }
 
 impl fmt::Debug for BoundPlan {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("BoundPlan")
-            .field("binding_id", &self.scope.binding_id())
             .field("source_id", &self.source_id)
+            .field("epoch", &self.scope.epoch())
+            .field("digests", &self.scope.digests())
             .field("dialect", &self.plan.dialect)
             .finish()
     }
@@ -244,13 +271,17 @@ mod tests {
     "#;
 
     fn binding(source_index: usize) -> RuntimeBinding {
+        binding_at(source_index, Epoch::default())
+    }
+
+    fn binding_at(source_index: usize, epoch: Epoch) -> RuntimeBinding {
         let source_id = SourceId::new(source_index).unwrap();
         let mapping = sf_mapping::parse_r2rml_for_source(MAPPING, source_id).unwrap();
         let source = IntrospectedSource::unchecked(
             Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
             vec![TableSchema::new(SECRET)],
         );
-        RuntimeBinding::new(source, mapping, Tbox::default())
+        RuntimeBinding::new(source, mapping, Tbox::default(), epoch)
     }
 
     #[test]
@@ -277,7 +308,7 @@ mod tests {
     #[test]
     fn a_plan_from_another_binding_is_rejected_before_execution() {
         let first = binding(0);
-        let second = binding(0);
+        let second = binding_at(0, Epoch(1));
         let control = sf_core::query_control::UncontrolledQueryControl;
         let bound = first
             .compile("SELECT * WHERE { ?s ?p ?o }", &control)
@@ -295,7 +326,7 @@ mod tests {
         let binding = binding(7);
         let debug = format!("{binding:?}");
 
-        assert!(debug.contains("binding_id"));
+        assert!(debug.contains("digests"));
         assert!(debug.contains("triples_map_count"));
         assert!(debug.contains("Unverified"));
         assert!(!debug.contains(SECRET));

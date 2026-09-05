@@ -73,7 +73,7 @@ fn deliberately_misscoped_cached_artifact_fails_closed() {
         .unwrap();
     let source_id = SourceId::new(0).unwrap();
     let current = binding(source_id, Dialect::Sqlite);
-    let other = binding(source_id, Dialect::Sqlite);
+    let other = binding(SourceId::new(1).unwrap(), Dialect::Sqlite);
     let plan = translate_with(&query, &[], Dialect::Sqlite, &Tbox::default(), &[]).unwrap();
     let key = cache::plan_key(&query, current.scope());
     current.cache().put(
