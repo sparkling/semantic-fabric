@@ -88,8 +88,7 @@ fn request(address: SocketAddr) -> Option<String> {
     response.starts_with("HTTP/1.1 200").then_some(response)
 }
 
-#[test]
-fn cli_serves_the_two_source_union_vertical() {
+fn start_server() -> (Fixture, SocketAddr, Server) {
     let mut fixture = Fixture { paths: Vec::new() };
     let first_db = fixture.path("first.db");
     let second_db = fixture.path("second.db");
@@ -119,19 +118,56 @@ fn cli_serves_the_two_source_union_vertical() {
         .stderr(Stdio::null())
         .spawn()
         .expect("launch semantic-fabric server");
-    let mut server = Server(child);
+    (fixture, address, Server(child))
+}
 
+fn wait_for_query(address: SocketAddr, server: &mut Server) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let response = loop {
+    loop {
         if let Some(response) = request(address) {
-            break response;
+            return response;
         }
         if let Some(status) = server.0.try_wait().expect("inspect server") {
             panic!("server exited before serving: {status}");
         }
         assert!(Instant::now() < deadline, "server startup timed out");
         thread::sleep(Duration::from_millis(25));
-    };
+    }
+}
+
+#[test]
+fn cli_serves_the_two_source_union_vertical() {
+    let (_fixture, address, mut server) = start_server();
+    let response = wait_for_query(address, &mut server);
     let body = response.split_once("\r\n\r\n").unwrap().1;
     assert_eq!(body.matches("\"value\":\"same\"").count(), 2, "{body}");
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_handles_real_sigterm_and_exits_cleanly() {
+    let (_fixture, address, mut server) = start_server();
+    let _ = wait_for_query(address, &mut server);
+
+    // SAFETY: `server` owns this live child PID, and `kill` does not retain the pointer-free
+    // integer argument. The child is reaped below and again defensively by `Drop`.
+    let sent = unsafe { libc::kill(server.0.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(sent, 0, "send SIGTERM to semantic-fabric child");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = server.0.try_wait().expect("inspect shutdown") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "server did not handle SIGTERM within the test bound"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success(), "SIGTERM shutdown status: {status}");
+    assert!(
+        TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err(),
+        "listener still accepted after process shutdown"
+    );
 }
