@@ -3,8 +3,7 @@
 //! R2RML)").
 //!
 //! The Direct Mapping of a relational schema is, by construction, an R2RML
-//! mapping: per table one `rr:TriplesMap` whose subject is an `rr:template` over
-//! the primary key (a blank node when the table has none), one predicate-object
+//! mapping: one `rr:TriplesMap` per table with a PK subject (or blank node),
 //! map per column, one `rdf:type` to the table class, and one referencing object
 //! map ([`crate::r2rml`] `RefObjectMap`) per foreign key (W3C Direct Mapping §2).
 //! So Direct Mapping produces the *same* [`sf_core::ir::TriplesMap`] shape that
@@ -23,20 +22,45 @@ use sf_core::ir::{
     Join, LogicalSource, ObjectMap, PredicateObjectMap, RefObjectMap, Segment, SubjectMap,
     Template, TermMap, TermSpec, TriplesMap,
 };
-use sf_core::{NamedNode, Result, TableSchema, Term};
+use sf_core::{NamedNode, Result, TableSchema};
 
-/// Generate the Direct-Mapping IR for a relational schema (W3C Direct Mapping §2),
-/// as auto-generated R2RML. `base_iri` is the document base (the test suite fixes
-/// it at `http://example.com/base/`, ADR-0005). The produced [`TriplesMap`]s are
-/// identical in shape to a parsed R2RML mapping (ADR-0003), so the virtualiser is
-/// unaffected by which path produced them.
+mod input;
+mod term;
+
+use input::validate_direct_mapping_input;
+pub use input::{
+    validate_direct_mapping_base, DirectMappingRowIdentity, MAX_DIRECT_MAPPING_BASE_IRI_BYTES_V1,
+    MAX_DIRECT_MAPPING_GENERATED_UTF8_BYTES_V1, MAX_DIRECT_MAPPING_WORK_UNITS_V1,
+};
+use term::{blank_node_template, constant_iri, encode};
+
+/// Generate W3C Direct-Mapping IR as auto-generated R2RML. The result has the
+/// same [`TriplesMap`] shape as authored R2RML (ADR-0003).
 pub fn direct_mapping(tables: &[TableSchema], base_iri: &str) -> Result<Vec<TriplesMap>> {
-    tables.iter().map(|t| table_map(t, base_iri)).collect()
+    direct_mapping_with_row_identity(tables, base_iri, DirectMappingRowIdentity::SqliteRowId)
 }
 
-fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
+/// Generate Direct-Mapping IR with an explicit no-primary-key identity policy;
+/// production callers select this from their concrete backend profile.
+pub fn direct_mapping_with_row_identity(
+    tables: &[TableSchema],
+    base_iri: &str,
+    row_identity: DirectMappingRowIdentity,
+) -> Result<Vec<TriplesMap>> {
+    validate_direct_mapping_input(tables, base_iri, row_identity)?;
+    tables
+        .iter()
+        .map(|table| table_map_with_row_identity(table, base_iri, row_identity))
+        .collect()
+}
+
+fn table_map_with_row_identity(
+    table: &TableSchema,
+    base: &str,
+    row_identity: DirectMappingRowIdentity,
+) -> Result<TriplesMap> {
     let class_iri = format!("{base}{}", encode(&table.name));
-    let subject = subject_map(table, base, &class_iri)?;
+    let subject = subject_map(table, base, &class_iri, row_identity)?;
     let mut poms = Vec::new();
 
     // One literal predicate-object map per column (W3C DM §2: the column property
@@ -47,7 +71,7 @@ fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
             "{base}{}#{}",
             encode(&table.name),
             encode(&col.name)
-        ));
+        ))?;
         poms.push(PredicateObjectMap {
             predicates: vec![predicate],
             objects: vec![ObjectMap::Term(TermMap::Column(
@@ -69,7 +93,7 @@ fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
             .map(|c| encode(c))
             .collect::<Vec<_>>()
             .join(";");
-        let predicate = constant_iri(&format!("{base}{}#ref-{}", encode(&table.name), ref_name));
+        let predicate = constant_iri(&format!("{base}{}#ref-{}", encode(&table.name), ref_name))?;
         let joins = fk
             .columns
             .iter()
@@ -97,16 +121,26 @@ fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
     })
 }
 
+#[cfg(test)]
+fn table_map(table: &TableSchema, base: &str) -> Result<TriplesMap> {
+    table_map_with_row_identity(table, base, DirectMappingRowIdentity::SqliteRowId)
+}
+
 /// The subject map: a primary-key template IRI (`<base/Table/Col=val[;Col=val]>`),
 /// or a per-row blank node when the table has no primary key (W3C DM §2). The
 /// table class is attached via `rr:class`, yielding the `rdf:type` triple.
-fn subject_map(table: &TableSchema, base: &str, class_iri: &str) -> Result<SubjectMap> {
+fn subject_map(
+    table: &TableSchema,
+    base: &str,
+    class_iri: &str,
+    row_identity: DirectMappingRowIdentity,
+) -> Result<SubjectMap> {
     let class = NamedNode::new(class_iri)
         .map_err(|e| sf_core::Error::Mapping(format!("invalid DM class IRI {class_iri:?}: {e}")))?;
     let term = if table.primary_key.is_empty() {
         // No PK ⇒ a fresh blank node per row, keyed on all columns so each row
         // gets a distinct node (W3C DM §2: "a fresh blank node unique to the row").
-        blank_node_template(table)
+        blank_node_template(table, row_identity)?
     } else {
         pk_template(table, base)?
     };
@@ -139,64 +173,16 @@ fn pk_template(table: &TableSchema, base: &str) -> Result<TermMap> {
     ))
 }
 
-/// A per-row blank-node template (W3C DM §2: "a fresh blank node unique to the
-/// row"). A no-PK table has no stable key over its columns — two identical rows
-/// must still get *distinct* blank nodes — so the node is keyed on the source's
-/// physical row identifier (SQLite's `rowid` pseudo-column; SQLite is this wave's
-/// execution target, ADR-0005), table-qualified so rows of different no-PK tables
-/// never share a label. The label is existential (graph-isomorphism ignores its
-/// spelling), so the only requirements are per-row uniqueness and per-row
-/// stability, which `{table}_{rowid}` satisfies.
-fn blank_node_template(table: &TableSchema) -> TermMap {
-    let segs = vec![
-        Segment::Literal(format!("{}_", encode(&table.name)).into()),
-        Segment::Column(ROWID.into()),
-    ];
-    // from_segments only fails on an empty list; this list is non-empty.
-    TermMap::Template(
-        Template::from_segments(segs).expect("non-empty segment list"),
-        TermSpec::blank_node(),
-    )
-}
-
-/// SQLite's per-row physical identifier pseudo-column (R2RML §5 sources are base
-/// tables; the executor projects `t<alias>."rowid"`). Keyed on for no-PK rows.
-const ROWID: &str = "rowid";
-
-fn constant_iri(iri: &str) -> TermMap {
-    TermMap::Constant(Term::NamedNode(NamedNode::new_unchecked(iri)))
-}
-
-/// Percent-encode a table/column name for the fixed (non-value) part of a DM IRI.
-/// W3C DM uses RFC 3987 IRI encoding: the *iunreserved* set passes through, so
-/// ASCII specials are `%XX`-escaped but non-ASCII Unicode (ucschar — e.g. CJK
-/// table/column names) is emitted verbatim, yielding an IRI rather than a URI.
-fn encode(name: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
-        if ch.is_ascii() {
-            let b = ch as u8;
-            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-                out.push(ch);
-            } else {
-                out.push('%');
-                out.push(HEX[(b >> 4) as usize] as char);
-                out.push(HEX[(b & 0x0f) as usize] as char);
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
+#[cfg(test)]
+#[path = "direct_mapping/input_tests.rs"]
+mod input_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sf_core::ir::TermType;
     use sf_core::term::generate_into;
-    use sf_core::{Column, ForeignKey};
+    use sf_core::{Column, ForeignKey, Term};
 
     const BASE: &str = "http://example.com/base/";
 
@@ -473,26 +459,6 @@ mod tests {
     }
 
     // --- name encoding (fixed IRI parts: table/column names, not row values) ---
-
-    #[test]
-    fn encode_passes_unreserved_ascii_through_untouched() {
-        assert_eq!(encode("Table-Name_1.2~3"), "Table-Name_1.2~3");
-    }
-
-    #[test]
-    fn encode_percent_encodes_ascii_specials_with_uppercase_hex() {
-        assert_eq!(encode("a b"), "a%20b");
-        assert_eq!(encode("a#b"), "a%23b");
-        assert_eq!(encode("a/b"), "a%2Fb");
-    }
-
-    #[test]
-    fn encode_passes_non_ascii_through_verbatim() {
-        // W3C DM uses RFC 3987 IRI encoding: ucschar (e.g. CJK) is not %-escaped,
-        // unlike a strict RFC 3986 URI encoder.
-        assert_eq!(encode("café"), "café");
-        assert_eq!(encode("表"), "表");
-    }
 
     #[test]
     fn fk_predicate_name_encodes_special_characters_in_column_names() {
