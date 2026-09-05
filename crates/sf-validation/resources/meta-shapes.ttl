@@ -1,24 +1,8 @@
-# =============================================================================
-# Mapping-output validation shapes — the M ⋈ T gate (ADR-0005)
-#
-# PROVENANCE: vendored from the mapping-authoring layer's mapping-output
-# validation shapes (the four shapes named in ADR-0005 §"Cross-repo M⋈T gate").
-# Copied here so sf-conformance's gate test is hermetic; the mapping-authoring
-# layer remains the source of truth. Re-sync if those shapes change.
-#
-# Validated in rudof `shacl` Native mode (ADR-0019). Note (ADR-0019):
-# mf:MappingDatatypeConformanceShape uses an sh:sparql constraint and
-# mf:EntitySubjectGroundingShape uses inverse/alternative property paths — the
-# two existence shapes below are pure SHACL-Core and are what the hermetic gate
-# test exercises; the datatype/grounding shapes are vendored for completeness and
-# the cross-repo full run.
-# =============================================================================
-
 @prefix mf:  <http://example.org/mapping-fabric#> .
 @prefix sh:  <http://www.w3.org/ns/shacl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rr:  <http://www.w3.org/ns/r2rml#> .
 @prefix rml: <http://semweb.mmlab.be/ns/rml#> .
 

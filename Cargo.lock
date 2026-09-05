@@ -4731,7 +4731,6 @@ dependencies = [
  "mysql_async",
  "oxrdf",
  "oxttl",
- "rudof_rdf",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4740,11 +4739,10 @@ dependencies = [
  "sf-serve",
  "sf-sparql",
  "sf-sql",
+ "sf-validation",
  "sha2 0.10.9",
- "shacl",
  "spareval",
  "spargebra",
- "sparql_service",
  "thiserror 2.0.20",
  "tokio",
  "tokio-postgres",
@@ -4766,6 +4764,7 @@ dependencies = [
 name = "sf-mapping"
 version = "0.0.0"
 dependencies = [
+ "oxrdf",
  "oxttl",
  "sf-core",
  "thiserror 2.0.20",
@@ -4849,6 +4848,19 @@ dependencies = [
  "tokio-postgres",
  "tokio-util",
  "wiremock",
+]
+
+[[package]]
+name = "sf-validation"
+version = "0.0.0"
+dependencies = [
+ "oxrdf",
+ "oxttl",
+ "rudof_rdf",
+ "sha2 0.10.9",
+ "shacl",
+ "sparql_service",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

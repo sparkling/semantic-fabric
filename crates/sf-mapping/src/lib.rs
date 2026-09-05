@@ -8,6 +8,7 @@
 //! formulation / heterogeneous-source generality (ADR-0002).
 
 pub mod direct_mapping;
+mod projection;
 pub mod r2rml;
 
 pub use direct_mapping::{
@@ -15,6 +16,7 @@ pub use direct_mapping::{
     DirectMappingRowIdentity, MAX_DIRECT_MAPPING_BASE_IRI_BYTES_V1,
     MAX_DIRECT_MAPPING_GENERATED_UTF8_BYTES_V1, MAX_DIRECT_MAPPING_WORK_UNITS_V1,
 };
+pub use projection::{project_to_rdf, ProjectionError, MAX_MAPPING_PROJECTION_TRIPLES};
 pub use r2rml::parse_r2rml;
 
 use sf_core::{Result, SourceId, SourceMapping, TableSchema};

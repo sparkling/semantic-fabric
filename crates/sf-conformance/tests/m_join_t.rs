@@ -3,13 +3,10 @@
 //! `M ⋈ T` closure (a source-mapping graph joined with a minimal generated model
 //! `T`) and must flag a dangling mapping target.
 
-use std::path::PathBuf;
-
 use sf_conformance::mapping_conforms_to_t;
 
-fn shapes() -> String {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/m-join-t/meta-shapes.ttl");
-    std::fs::read_to_string(p).expect("vendored meta-shapes present")
+fn shapes() -> &'static str {
+    sf_validation::META_SHAPES_TTL
 }
 
 /// A conforming closure: every `rr:class` / `rr:predicate` target is declared in T.
@@ -35,9 +32,9 @@ ex:worksFor a owl:ObjectProperty .
 
 #[test]
 fn m_join_t_gate_passes_a_conforming_closure() {
-    let out = mapping_conforms_to_t(CONFORMING, &shapes()).expect("Native validation runs");
+    let out = mapping_conforms_to_t(CONFORMING, shapes()).expect("Native validation runs");
     assert!(
-        out.conforms,
+        out.conforms(),
         "conforming M⋈T closure must pass the gate: {out:?}"
     );
     assert_eq!(out.violations, 0);
@@ -45,9 +42,9 @@ fn m_join_t_gate_passes_a_conforming_closure() {
 
 #[test]
 fn m_join_t_gate_flags_a_dangling_target_class() {
-    let out = mapping_conforms_to_t(DANGLING, &shapes()).expect("Native validation runs");
+    let out = mapping_conforms_to_t(DANGLING, shapes()).expect("Native validation runs");
     assert!(
-        !out.conforms,
+        !out.conforms(),
         "a dangling rr:class target is an M-vs-T drift and must violate the gate: {out:?}"
     );
     assert!(out.violations >= 1);

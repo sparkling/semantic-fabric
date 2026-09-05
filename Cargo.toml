@@ -1,11 +1,12 @@
 # semantic-fabric — Rust data-fabric workspace (ADR-0001).
-# Shared core + the virtualiser frontend (ADR-0003), realised as 8 crates (ADR-0006).
+# Shared core + the virtualiser frontend (ADR-0003), realised as 9 crates (ADR-0006).
 [workspace]
 resolver = "2"
 members = [
     "crates/sf-core",
     "crates/sf-sql",
     "crates/sf-mapping",
+    "crates/sf-validation",
     "crates/sf-sparql",
     "crates/sf-conformance",
     "crates/sf-bench",
@@ -39,10 +40,15 @@ libc = "0.2"
 cargo-platform = "=0.3.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# --- sealed native M⋈T validation substrate (ADR-0005 / ADR-0019) ---
+shacl = "=0.3.14"
+rudof_rdf = "=0.3.14"
+sparql_service = "=0.3.14"
 # --- internal crates ---
 sf-core = { path = "crates/sf-core" }
 sf-sql = { path = "crates/sf-sql" }
 sf-mapping = { path = "crates/sf-mapping" }
+sf-validation = { path = "crates/sf-validation" }
 sf-sparql = { path = "crates/sf-sparql" }
 sf-conformance = { path = "crates/sf-conformance" }
 sf-bench = { path = "crates/sf-bench" }

@@ -8,5 +8,6 @@ description = "semantic-fabric R2RML/Direct-Mapping parser (Turtle -> sf-core IR
 
 [dependencies]
 sf-core.workspace = true
+oxrdf.workspace = true
 oxttl.workspace = true
 thiserror.workspace = true
