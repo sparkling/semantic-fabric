@@ -94,10 +94,18 @@ fn start_server() -> (Fixture, SocketAddr, Server) {
     let second_db = fixture.path("second.db");
     let first_mapping = fixture.path("first.ttl");
     let second_mapping = fixture.path("second.ttl");
+    let ontology = fixture.path("ontology.ttl");
     database(&first_db);
     database(&second_db);
     std::fs::write(&first_mapping, mapping("http://example.test/left")).unwrap();
     std::fs::write(&second_mapping, mapping("http://example.test/right")).unwrap();
+    std::fs::write(
+        &ontology,
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         <http://example.test/left> a owl:DatatypeProperty .\n\
+         <http://example.test/right> a owl:DatatypeProperty .\n",
+    )
+    .unwrap();
 
     let address = available_address();
     let child = Command::new(BINARY)
@@ -111,6 +119,8 @@ fn start_server() -> (Fixture, SocketAddr, Server) {
             &format!("sqlite:{}", second_db.display()),
             "--mapping-2",
             second_mapping.to_str().unwrap(),
+            "--ontology",
+            ontology.to_str().unwrap(),
             "--bind",
             &address.to_string(),
         ])

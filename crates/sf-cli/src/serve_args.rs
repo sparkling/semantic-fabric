@@ -14,9 +14,9 @@ pub(super) struct ServeArgs {
     pub(super) mapping_input: MappingArgs,
     #[command(flatten)]
     pub(super) additional_source_input: AdditionalSourceArgs,
-    /// Optional ontology (Turtle) → tier-1 T-Box (ADR-0008).
+    /// Required ontology (Turtle) for semantic admission and the tier-1 T-Box (ADR-0008).
     #[arg(long)]
-    pub(super) ontology: Option<String>,
+    pub(super) ontology: String,
     /// Address to bind.
     #[arg(long, default_value = "127.0.0.1:7878")]
     pub(super) bind: String,

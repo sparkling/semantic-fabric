@@ -135,21 +135,22 @@ Start the endpoint with an R2RML mapping:
 # SQLite
 cargo run --locked -p sf-cli -- serve \
   --source sqlite:/path/to/app.db \
-  --mapping /path/to/mapping.ttl
-
+  --mapping /path/to/mapping.ttl \
+  --ontology /path/to/ontology.ttl
 # PostgreSQL
 cargo run --locked -p sf-cli -- serve \
   --source 'pg:host=localhost dbname=app' \
-  --mapping /path/to/mapping.ttl
-
+  --mapping /path/to/mapping.ttl \
+  --ontology /path/to/ontology.ttl
 # MySQL; SF_MYSQL_SOURCE is injected by the process manager or secret store
 cargo run --locked -p sf-cli -- serve \
   --source-env SF_MYSQL_SOURCE \
-  --mapping /path/to/mapping.ttl
+  --mapping /path/to/mapping.ttl \
+  --ontology /path/to/ontology.ttl
 ```
 
 Choose exactly one primary selector. `--source` accepts only credential-free values; credential-bearing PostgreSQL/MySQL values must use bounded `--source-env` resolution, and parsed inline passwords fail before runtime, file, or network I/O. An optional `--source-2`/`--source-env-2` plus `--mapping-2` pair enables only the exactly-two-source, one-triple-per-arm top-level `SELECT UNION` profile described below—not general federation.
-Optional flags include `--ontology`, `--bind`, `--timeout-secs`, `--shutdown-timeout-secs`, `--max-query-len`, `--max-concurrent-requests`, `--max-source-work`, `--max-result-items`, `--max-order-rows`, `--max-order-bytes`, `--max-serialized-bytes`, and PostgreSQL/SQLite pool sizing.
+Every `serve` invocation requires an explicit `--ontology` Turtle document. Authored mappings receive a schema-independent preflight before connector I/O; after a bounded source observation, the Rust product projects the executable mapping IR with effective datatypes, joins it with that ontology, and requires the sealed native-SHACL class, property, datatype, and entity-grounding gate before constructing any compiler, cache, or runtime binding. A reserved projection namespace prevents ontology laundering, every configured source must pass before publication, warning counts remain observable, and exact ontology/admission digests partition compiled plans and caches. This semantic receipt binds mapping origin and the source-derived projection; it is not a physical-schema generation lease or production-backend admission. Optional flags include `--bind`, `--timeout-secs`, `--shutdown-timeout-secs`, `--max-query-len`, `--max-concurrent-requests`, `--max-source-work`, `--max-result-items`, `--max-order-rows`, `--max-order-bytes`, `--max-serialized-bytes`, and PostgreSQL/SQLite pool sizing.
 The shared request-admission ceiling defaults to 64—a conservative finite governance value, not a throughput result. The default endpoint is `http://127.0.0.1:7878/sparql`; an exact query-less `GET`/`HEAD` returns its fixed, redacted Turtle Service Description.
 
 ```bash

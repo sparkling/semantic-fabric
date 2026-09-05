@@ -5,6 +5,10 @@ use std::process::{Command, Output};
 use sf_serve::MAX_SOURCE_INPUT_BYTES;
 
 const SECRET: &str = "sf_secret_NEVER_EXPOSE_c913";
+const ONTOLOGY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/w3c/rdb2rdf/manifest-evaluation.ttl"
+);
 
 fn missing_mapping() -> String {
     std::env::temp_dir()
@@ -19,7 +23,7 @@ fn missing_mapping() -> String {
 
 fn serve_command(mapping: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_semantic-fabric"));
-    command.args(["serve", "--mapping", mapping]);
+    command.args(["serve", "--mapping", mapping, "--ontology", ONTOLOGY]);
     command
 }
 
