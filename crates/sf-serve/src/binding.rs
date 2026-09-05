@@ -4,10 +4,10 @@
 //! cannot be detached from the backend, source identity, dialect, mapping,
 //! T-Box, constraint-quarantined compiler schema, or cache that produced it.
 //! A [`crate::RuntimeSnapshot`] owns these bindings through its source registry;
-//! the current CLI selects exactly one entry and exposes no federated query path.
+//! the CLI selects either one entry or the exact bounded two-source UNION path.
 //! PostgreSQL supplies a coherent startup catalogue snapshot; the abstraction
-//! does not claim that for every backend, nor live drift detection, federation,
-//! or production capability admission.
+//! does not claim that for every backend, nor live drift detection, general
+//! federation, or production capability admission.
 
 use std::fmt;
 use std::sync::Arc;
