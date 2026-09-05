@@ -23,6 +23,7 @@ fn options(max_concurrent_requests: usize) -> ServeOptions {
         pg_pool_size: 1,
         pg_pool_wait: Duration::from_secs(1),
         sqlite_pool_size: 1,
+        shutdown_timeout: std::time::Duration::from_secs(30),
     }
 }
 

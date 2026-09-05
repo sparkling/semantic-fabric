@@ -14,7 +14,7 @@ use sf_conformance::{run_and_report, Kind};
 use sf_serve::{
     serve_blocking, AdditionalSourceOptions, ServeOptions, SourceRef,
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
-    DEFAULT_QUERY_LIMITS,
+    DEFAULT_QUERY_LIMITS, DEFAULT_SHUTDOWN_TIMEOUT,
 };
 
 #[derive(Parser)]
@@ -91,6 +91,9 @@ struct ServeArgs {
     /// Read-only connection pool size for a file-backed SQLite source.
     #[arg(long, default_value_t = 4)]
     sqlite_pool_size: usize,
+    /// Max seconds to drain active requests after SIGTERM or Ctrl-C.
+    #[arg(long, default_value_t = DEFAULT_SHUTDOWN_TIMEOUT.as_secs())]
+    shutdown_timeout_secs: u64,
 }
 
 /// Optional second source selector. Supplying either selector requires its
@@ -175,6 +178,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         pg_pool_size: args.pg_pool_size,
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
         sqlite_pool_size: args.sqlite_pool_size,
+        shutdown_timeout: Duration::from_secs(args.shutdown_timeout_secs),
     };
     match serve_blocking(opts) {
         Ok(()) => ExitCode::SUCCESS,
@@ -415,6 +419,10 @@ mod tests {
             defaults.max_concurrent_requests,
             DEFAULT_MAX_CONCURRENT_REQUESTS
         );
+        assert_eq!(
+            Duration::from_secs(defaults.shutdown_timeout_secs),
+            DEFAULT_SHUTDOWN_TIMEOUT
+        );
 
         let explicit =
             Cli::try_parse_from(base.into_iter().chain(["--max-concurrent-requests", "7"]))
@@ -423,6 +431,14 @@ mod tests {
             panic!("serve command")
         };
         assert_eq!(explicit.max_concurrent_requests, 7);
+
+        let explicit_shutdown =
+            Cli::try_parse_from(base.into_iter().chain(["--shutdown-timeout-secs", "9"]))
+                .expect("explicit shutdown timeout");
+        let Command::Serve(explicit_shutdown) = explicit_shutdown.command else {
+            panic!("serve command")
+        };
+        assert_eq!(explicit_shutdown.shutdown_timeout_secs, 9);
     }
 
     #[test]
@@ -456,6 +472,7 @@ mod tests {
             pg_pool_size: 16,
             pg_pool_wait_secs: 5,
             sqlite_pool_size: 4,
+            shutdown_timeout_secs: DEFAULT_SHUTDOWN_TIMEOUT.as_secs(),
         };
         assert_eq!(serve(opts), ExitCode::FAILURE);
     }

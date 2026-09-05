@@ -33,6 +33,8 @@ mod tests;
 pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
     let inner = Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
+        .route("/livez", get(crate::health::live))
+        .route("/readyz", get(crate::health::ready))
         .fallback(problem::not_found)
         .method_not_allowed_fallback(problem::method_not_allowed)
         .with_state(cfg.clone());

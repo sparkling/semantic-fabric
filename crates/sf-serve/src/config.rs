@@ -7,13 +7,14 @@ use sf_core::query_control::QueryLimits;
 use sf_core::{ir::TriplesMap, SourceId, SourceMapping};
 use sf_sparql::{Epoch, Tbox};
 use sf_sql::TableSchema;
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 
 use crate::activation::{
     ActivationError, ActivationId, ReadinessCause, RuntimeManager, RuntimeReadiness,
     RuntimeSnapshotLease, SnapshotUnavailable,
 };
 use crate::binding::IntrospectedSource;
+use crate::budget::RequestBudget;
 use crate::problem::StartupCause;
 use crate::snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError};
 use crate::{Backend, ServeError};
@@ -57,8 +58,9 @@ impl QueryMode {
 
 /// The immutable server configuration shared (in an `Arc`) across all requests.
 /// Semantic/compiler/backend state is private and inseparable inside one
-/// immutable [`RuntimeSnapshot`]. The current serving API selects its sole
-/// registered source; only request-governance knobs remain configurable.
+/// immutable [`RuntimeSnapshot`]. The serving API selects either one registered
+/// source or the exact bounded two-source UNION profile; only request-governance
+/// knobs remain configurable.
 pub struct ServeConfig {
     runtime: Arc<RuntimeManager>,
     query_mode: QueryMode,
@@ -73,6 +75,7 @@ pub struct ServeConfig {
     compiler_permits: Arc<Semaphore>,
     max_concurrent_requests: usize,
     request_admission_permits: Arc<Semaphore>,
+    shutdown: watch::Sender<bool>,
 }
 
 impl ServeConfig {
@@ -103,6 +106,7 @@ impl ServeConfig {
     fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
         let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
             .expect("default query length has a representable form-body limit");
+        let (shutdown, _) = watch::channel(false);
         Self {
             runtime: Arc::new(RuntimeManager::new(snapshot)),
             query_mode,
@@ -114,6 +118,7 @@ impl ServeConfig {
             compiler_permits: Arc::new(Semaphore::new(DEFAULT_COMPILER_PERMITS)),
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             request_admission_permits: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_REQUESTS)),
+            shutdown,
         }
     }
 
@@ -229,6 +234,23 @@ impl ServeConfig {
 
     pub(crate) fn request_admission_permits(&self) -> Arc<Semaphore> {
         self.request_admission_permits.clone()
+    }
+
+    pub(crate) fn request_budget(&self) -> RequestBudget {
+        RequestBudget::after_with_shutdown(
+            self.timeout,
+            self.query_limits,
+            self.shutdown.subscribe(),
+        )
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        if let Ok(RuntimeReadiness::Ready { activation_id }) = self.runtime_readiness() {
+            let _ = self
+                .runtime
+                .mark_not_ready(activation_id, ReadinessCause::Administrative);
+        }
+        self.shutdown.send_replace(true);
     }
 
     #[cfg(test)]

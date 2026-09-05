@@ -40,7 +40,9 @@ mod budget;
 mod config;
 mod deadline;
 mod federation;
+mod health;
 mod http;
+mod lifecycle;
 mod post_body;
 mod problem;
 mod request_compile;
@@ -54,9 +56,15 @@ mod terminal_body;
 mod sqlite_admission_tests;
 
 #[cfg(test)]
+mod budget_tests;
+#[cfg(test)]
 mod deadline_tests;
 #[cfg(test)]
 mod federated_union_tests;
+#[cfg(test)]
+mod health_tests;
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod query_budget_tests;
 #[cfg(test)]
@@ -74,6 +82,7 @@ pub use config::{
     DEFAULT_QUERY_LIMITS,
 };
 pub use http::router;
+pub use lifecycle::DEFAULT_SHUTDOWN_TIMEOUT;
 pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};

@@ -363,6 +363,7 @@ fn should_reject_unrepresentable_limit_before_source_or_file_io() {
         pg_pool_size: 1,
         pg_pool_wait: Duration::from_secs(1),
         sqlite_pool_size: 1,
+        shutdown_timeout: Duration::from_secs(30),
     };
 
     let error = serve_blocking(options).expect_err("body-cap configuration must fail first");

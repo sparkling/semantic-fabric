@@ -57,7 +57,13 @@ impl Service<Request<Body>> for RequestDeadlineService {
     }
 
     fn call(&mut self, mut request: Request<Body>) -> Self::Future {
-        let mut budget = RequestBudget::after(self.cfg.timeout, self.cfg.query_limits);
+        if crate::health::is_health_path(request.uri().path()) {
+            let replacement = self.inner.clone();
+            let mut inner = std::mem::replace(&mut self.inner, replacement);
+            return Box::pin(async move { inner.call(request).await });
+        }
+
+        let mut budget = self.cfg.request_budget();
         if let Err(error) = budget.checkpoint() {
             return deadline_checked_response(budget, problem::response_for_control(error));
         }

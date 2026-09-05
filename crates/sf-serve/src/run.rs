@@ -39,6 +39,8 @@ pub struct ServeOptions {
     pub pg_pool_wait: Duration,
     /// Read-only file-backed SQLite pool size (ADR-0010 status-correction part 2).
     pub sqlite_pool_size: usize,
+    /// Maximum time to drain active requests after SIGTERM or Ctrl-C.
+    pub shutdown_timeout: Duration,
 }
 
 /// The normal startup input for the bounded two-source UNION profile.
@@ -51,7 +53,8 @@ pub struct AdditionalSourceOptions {
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     validate_max_query_len(opts.max_query_len)?;
     validate_max_concurrent_requests(opts.max_concurrent_requests)?;
-    validate_request_timeout(opts.timeout)?;
+    crate::lifecycle::validate_request_timeout(opts.timeout)?;
+    crate::lifecycle::validate_shutdown_timeout(opts.shutdown_timeout)?;
     if opts
         .additional_source
         .as_ref()
@@ -76,18 +79,9 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
                 error: error.to_string(),
             })
         })?;
-    rt.block_on(async move { serve_async(opts, source, additional).await })
-}
-
-fn validate_request_timeout(timeout: Duration) -> Result<(), ServeError> {
-    tokio::time::Instant::now()
-        .checked_add(timeout)
-        .map(|_| ())
-        .ok_or_else(|| {
-            ServeError::new(StartupCause::Configuration {
-                error: "request timeout exceeds the monotonic clock range".to_owned(),
-            })
-        })
+    let result = rt.block_on(async move { serve_async(opts, source, additional).await });
+    rt.shutdown_timeout(Duration::ZERO);
+    result
 }
 
 async fn serve_async(
@@ -97,28 +91,9 @@ async fn serve_async(
 ) -> Result<(), ServeError> {
     let cfg = crate::startup::build_config(&opts, source, additional).await?;
 
-    let app = router(Arc::new(cfg));
-    let listener = tokio::net::TcpListener::bind(&opts.bind)
-        .await
-        .map_err(|error| {
-            ServeError::new(StartupCause::Bind {
-                bind: opts.bind.clone(),
-                error: error.to_string(),
-            })
-        })?;
-    let addr = listener.local_addr().map_err(|error| {
-        ServeError::new(StartupCause::Server {
-            error: error.to_string(),
-        })
-    })?;
-    println!("semantic-fabric: SPARQL 1.2 endpoint listening on http://{addr}/sparql");
-    axum::serve(listener, app.into_make_service())
-        .await
-        .map_err(|error| {
-            ServeError::new(StartupCause::Server {
-                error: error.to_string(),
-            })
-        })
+    let cfg = Arc::new(cfg);
+    let app = router(cfg.clone());
+    crate::lifecycle::serve(&opts.bind, app, cfg, opts.shutdown_timeout).await
 }
 
 /// Open the prepared backend and pair it with its observed base-table schema.
@@ -249,7 +224,8 @@ mod tests {
 
     #[test]
     fn should_reject_unrepresentable_request_timeout_before_startup_io() {
-        let error = validate_request_timeout(Duration::from_secs(u64::MAX)).unwrap_err();
+        let error =
+            crate::lifecycle::validate_request_timeout(Duration::from_secs(u64::MAX)).unwrap_err();
         assert_eq!(error.code(), "startup-configuration");
         assert!(matches!(
             error.internal_cause(),
