@@ -148,7 +148,7 @@ async fn queryless_get_is_stable_redacted_rdf_with_a_matching_endpoint() {
         .any(|part| part == SECRET.as_bytes()));
 
     let triples = parsed(&first);
-    assert_eq!(triples.len(), 17);
+    assert_eq!(triples.len(), 19);
     assert!(triples.iter().any(|triple| {
         matches!(&triple.subject, NamedOrBlankNode::NamedNode(node) if node.as_str() == ENDPOINT)
             && triple.predicate == oxrdf::vocab::rdf::TYPE
@@ -167,6 +167,7 @@ async fn queryless_get_is_stable_redacted_rdf_with_a_matching_endpoint() {
         BTreeSet::from([
             format!("{SF}ask-query"),
             format!("{SF}construct-query"),
+            format!("{SF}describe-one-target-one-hop-query"),
             format!("{SF}select-query"),
         ])
     );
@@ -229,6 +230,7 @@ async fn two_source_mode_adds_only_the_exact_union_feature() {
         "production-admission",
         "ask-query",
         "construct-query",
+        "describe-one-target-one-hop-query",
         "formats/Turtle",
         "formats/N-Triples",
         "formats/JSON-LD",

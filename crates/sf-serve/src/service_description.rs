@@ -29,12 +29,14 @@ const SINGLE_SOURCE: &str = r#"@prefix sd: <http://www.w3.org/ns/sparql-service-
         <http://www.w3.org/ns/formats/JSON-LD> ;
     sd:feature sf:select-query,
         sf:ask-query,
-        sf:construct-query .
+        sf:construct-query,
+        sf:describe-one-target-one-hop-query .
 
 sf:bounded-read-query-v1 a sd:Language .
 sf:select-query a sd:Feature .
 sf:ask-query a sd:Feature .
 sf:construct-query a sd:Feature .
+sf:describe-one-target-one-hop-query a sd:Feature .
 "#;
 const TWO_SOURCE: &str = r#"@prefix sd: <http://www.w3.org/ns/sparql-service-description#> .
 @prefix sf: <urn:semantic-fabric:service-description:> .
