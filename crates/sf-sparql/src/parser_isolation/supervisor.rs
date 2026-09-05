@@ -44,6 +44,13 @@ mod lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod linux;
 #[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+mod parser_observation;
+#[cfg(all(
     feature = "query-v1-transport-mutant-evidence",
     target_os = "linux",
     target_arch = "x86_64",
@@ -155,6 +162,15 @@ impl PreparedParserExecutable {
         handshake::launch(self, prepared)
     }
 
+    #[cfg(feature = "parser-worker-evidence")]
+    fn launch_parser_observation(
+        &self,
+        source: &str,
+    ) -> Result<handshake::ControlReadyWorker, SupervisorError> {
+        let prepared = handshake::prepare(self, source)?;
+        handshake::launch_parser_observation(self, prepared)
+    }
+
     #[cfg(feature = "query-v1-transport-evidence")]
     fn launch_query_v1_transport(
         &self,
@@ -189,6 +205,19 @@ pub(super) fn exercise_handshake_for_evidence(
     prepared
         .launch_private_worker(source)?
         .finish_without_query()
+}
+
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub(super) fn exercise_parser_observation_corpus_for_evidence(
+    file: std::fs::File,
+) -> Result<super::parser_observation::ParserObservationSummaryV1, SupervisorError> {
+    let prepared = PreparedParserExecutable::from_file_for_evidence(file)?;
+    parser_observation::exercise_corpus(&prepared)
 }
 
 #[cfg(all(

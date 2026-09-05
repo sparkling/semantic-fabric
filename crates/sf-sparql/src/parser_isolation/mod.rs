@@ -4,13 +4,16 @@
 //! exact Hello/Ready/EOF exchange through a non-default evidence feature. A raw
 //! or malformed reserved invocation fails closed. The policy and profile are
 //! control-ready candidates only. Private canonical request/result and QueryV1
-//! codecs connect only to a parser-free fixed-fixture transport peer;
-//! parser-qualified confinement, actual parser invocation, admission witnesses,
-//! permits, and serving remain absent.
+//! codecs connect only to a parser-free fixed-fixture transport peer. A separate
+//! qualification-only peer observes the real parser on an internally sealed
+//! starter corpus and returns fixed terminal outcomes; it grants no qualified
+//! policy, admission witness, permit, cache, or serving authority.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 mod build_identity;
 mod parse_protocol;
+#[cfg(feature = "parser-worker-evidence")]
+mod parser_observation;
 mod profile;
 pub(crate) mod protocol;
 mod query_v1;
@@ -23,6 +26,9 @@ mod worker;
 mod alpha_equivalence;
 
 pub use worker::dispatch_private_parser_worker_v1;
+
+#[cfg(feature = "parser-worker-evidence")]
+pub use parser_observation::ParserObservationSummaryV1;
 
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 pub use query_v1_mutant::QueryV1TransportMutant;
@@ -44,6 +50,26 @@ pub fn exercise_private_parser_worker_handshake_for_evidence(
 ) -> Result<(), String> {
     let file = open_evidence_executable(executable)?;
     supervisor::exercise_handshake_for_evidence(file, source).map_err(|error| error.to_string())
+}
+
+/// Observe the pinned parser over the internally sealed starter corpus.
+///
+/// Every case runs in a fresh contained child and returns only a correlated,
+/// fixed-size parsed/syntax-rejected outcome. This is qualification evidence,
+/// not a complete grammar corpus, parser-policy qualification, QueryV1 output,
+/// an admission witness, cache authority, or a serving fallback.
+#[cfg(all(
+    feature = "parser-worker-evidence",
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+))]
+pub fn exercise_private_parser_observation_corpus_for_evidence(
+    executable: &std::path::Path,
+) -> Result<ParserObservationSummaryV1, String> {
+    let file = open_evidence_executable(executable)?;
+    supervisor::exercise_parser_observation_corpus_for_evidence(file)
+        .map_err(|error| error.to_string())
 }
 
 /// Non-default Rust evidence seam for the parser-free QueryV1 transport.

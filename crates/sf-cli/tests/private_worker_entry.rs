@@ -11,6 +11,8 @@ const PRIVATE_QUERY_V1_TRANSPORT_MODE: &str = "--sf-private-query-v1-transport-p
 const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME: &str = "sf-query-v1-transport-mutant-peer-v1";
 const PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE: &str =
     "--sf-private-query-v1-transport-mutant-peer-v1";
+const PRIVATE_PARSER_OBSERVATION_NAME: &str = "sf-parser-observation-peer-v1";
+const PRIVATE_PARSER_OBSERVATION_MODE: &str = "--sf-private-parser-observation-peer-v1";
 const PRIVATE_WORKER_REJECTED_EXIT_CODE: i32 = 78;
 
 fn run(argument_zero: &str, arguments: &[&str], clear_environment: bool) -> Output {
@@ -49,6 +51,10 @@ fn exact_private_tuple_without_supervisor_envelope_exits_silently() {
         (
             PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
             PRIVATE_QUERY_V1_TRANSPORT_MUTANT_MODE,
+        ),
+        (
+            PRIVATE_PARSER_OBSERVATION_NAME,
+            PRIVATE_PARSER_OBSERVATION_MODE,
         ),
     ] {
         assert_private_rejection(&run(name, &[mode], true));
@@ -138,6 +144,11 @@ fn malformed_reserved_invocations_never_reach_clap() {
     assert_private_rejection(&run(
         PRIVATE_QUERY_V1_TRANSPORT_MUTANT_NAME,
         &["--sf-private-query-v1-transport-mutant-peer-v1x"],
+        true,
+    ));
+    assert_private_rejection(&run(
+        PRIVATE_PARSER_OBSERVATION_NAME,
+        &[PRIVATE_QUERY_V1_TRANSPORT_MODE],
         true,
     ));
 }

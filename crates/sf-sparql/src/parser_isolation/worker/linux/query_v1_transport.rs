@@ -1,14 +1,22 @@
 //! Parser-free, one-shot QueryV1 transport evidence child.
 
 use crate::parser_isolation::parse_protocol::{
-    allocate_frame_exact, decode_streamed_request_exact_for_nonce,
-    synthetic_empty_ask_result_header_for, FrameAllocation, ParseRequestV1, RequestHeaderV1,
-    MAX_SOURCE_BYTES_V1, REQUEST_HEADER_LEN, SYNTHETIC_EMPTY_ASK_QUERY_V1,
+    allocate_frame_exact, decode_streamed_request_exact_for_nonce, FrameAllocation, ParseRequestV1,
+    RequestHeaderV1, MAX_SOURCE_BYTES_V1, REQUEST_HEADER_LEN,
+};
+#[cfg(any(
+    feature = "query-v1-transport-evidence",
+    feature = "query-v1-transport-mutant-evidence"
+))]
+use crate::parser_isolation::parse_protocol::{
+    synthetic_empty_ask_result_header_for, SYNTHETIC_EMPTY_ASK_QUERY_V1,
 };
 use crate::parser_isolation::profile::V1_CANDIDATE_MAX_INPUT_BYTES;
 use crate::parser_isolation::protocol::{HandshakeNonce, FRAME_LEN};
 
-use super::{read_exact, require_parent_eof, write_all, WorkerFailure};
+#[cfg(feature = "query-v1-transport-evidence")]
+use super::write_all;
+use super::{read_exact, require_parent_eof, WorkerFailure};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RequestConstraints {
@@ -35,6 +43,7 @@ impl RequestConstraints {
     }
 }
 
+#[cfg(feature = "query-v1-transport-evidence")]
 pub(super) fn run(expected_nonce: HandshakeNonce) -> Result<(), WorkerFailure> {
     run_with_validated_request(
         expected_nonce,
@@ -84,6 +93,7 @@ pub(super) fn run_with_validated_request(
     emit(&request)
 }
 
+#[cfg(feature = "query-v1-transport-evidence")]
 fn emit_normal_result(request: &ParseRequestV1<'_>) -> Result<(), WorkerFailure> {
     let result_header =
         synthetic_empty_ask_result_header_for(request).map_err(|_| WorkerFailure)?;

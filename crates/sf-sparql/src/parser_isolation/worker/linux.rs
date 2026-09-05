@@ -15,9 +15,12 @@ use crate::parser_isolation::protocol::{
     FRAME_LEN,
 };
 
+#[cfg(feature = "parser-worker-evidence")]
+mod parser_observation;
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 mod query_v1_mutant;
 #[cfg(any(
+    feature = "parser-worker-evidence",
     feature = "query-v1-transport-evidence",
     feature = "query-v1-transport-mutant-evidence"
 ))]
@@ -55,6 +58,17 @@ pub(super) fn run_query_v1_transport() -> ! {
 #[cfg(feature = "query-v1-transport-mutant-evidence")]
 pub(super) fn run_query_v1_transport_mutant() -> ! {
     query_v1_mutant::run_peer()
+}
+
+#[cfg(feature = "parser-worker-evidence")]
+pub(super) fn run_parser_observation() -> ! {
+    match prepare_for_hello() {
+        Ok(prepared) => {
+            let result = read_hello_and_emit_ready(&prepared).and_then(parser_observation::run);
+            exit_with_policy_owner_live(&prepared, result)
+        }
+        Err(_) => raw_exit(PRIVATE_WORKER_REJECTED_EXIT_CODE),
+    }
 }
 
 struct PreparedForHello {
