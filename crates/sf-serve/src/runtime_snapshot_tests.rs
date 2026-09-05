@@ -4,7 +4,11 @@ use sf_core::{NamedNode, SourceId, SourceMapping, Term};
 use sf_sparql::{Epoch, Tbox};
 use sf_sql::TableSchema;
 
-use crate::{Backend, IntrospectedSource, RuntimeSnapshot, RuntimeSource, SnapshotError};
+use crate::activation::{RuntimeManager, SnapshotUnavailable};
+use crate::{
+    ActivationError, Backend, IntrospectedSource, ReadinessCause, RuntimeReadiness,
+    RuntimeSnapshot, RuntimeSource, SnapshotError,
+};
 
 fn runtime_source(index: usize, table: &str) -> RuntimeSource {
     let source_id = SourceId::new(index).unwrap();
@@ -28,6 +32,10 @@ fn runtime_source(index: usize, table: &str) -> RuntimeSource {
         vec![TableSchema::new(table)],
     );
     RuntimeSource::new(source, mapping)
+}
+
+fn snapshot(table: &str) -> RuntimeSnapshot {
+    RuntimeSnapshot::single(Epoch(0), Tbox::default(), runtime_source(0, table))
 }
 
 #[test]
@@ -103,4 +111,186 @@ fn singleton_constructor_preserves_the_current_runtime_shape() {
     assert!(snapshot
         .registry()
         .contains_source(SourceId::new(5).unwrap()));
+}
+
+#[test]
+fn activation_is_monotonic_pins_old_requests_and_rejects_a_stale_candidate() {
+    let manager = RuntimeManager::new(snapshot("first"));
+    let old_lease = manager.lease().unwrap();
+    let old_state = manager.readiness().unwrap();
+    let old_id = old_lease.activation_id();
+    let old_snapshot = old_lease.weak_snapshot();
+
+    let next_id = manager.activate(old_state, snapshot("second")).unwrap();
+    assert!(next_id > old_id);
+    assert_eq!(
+        old_lease
+            .snapshot()
+            .registry()
+            .schema(SourceId::new(0).unwrap())
+            .unwrap()[0]
+            .name,
+        "first"
+    );
+    assert!(matches!(
+        manager.activate(old_state, snapshot("stale")),
+        Err(ActivationError::StaleState {
+            expected,
+            actual: RuntimeReadiness::Ready { activation_id },
+        }) if expected == old_state && activation_id == next_id
+    ));
+    assert_eq!(
+        manager
+            .lease()
+            .unwrap()
+            .snapshot()
+            .registry()
+            .schema(SourceId::new(0).unwrap())
+            .unwrap()[0]
+            .name,
+        "second"
+    );
+
+    assert!(old_snapshot.upgrade().is_some());
+    drop(old_lease);
+    assert!(old_snapshot.upgrade().is_none());
+
+    let third_id = manager
+        .activate(manager.readiness().unwrap(), snapshot("first"))
+        .unwrap();
+    assert!(third_id > next_id, "A-B-A publication must not reuse an ID");
+}
+
+#[test]
+fn rejected_candidate_construction_leaves_the_active_snapshot_unchanged() {
+    let manager = RuntimeManager::new(snapshot("active"));
+    let before = manager.lease().unwrap();
+    let before_identity = before.weak_snapshot();
+
+    assert!(matches!(
+        RuntimeSnapshot::new(Epoch(1), Tbox::default(), Vec::new()),
+        Err(SnapshotError::EmptyRegistry)
+    ));
+
+    let after = manager.lease().unwrap();
+    assert_eq!(after.activation_id(), before.activation_id());
+    assert!(std::sync::Weak::ptr_eq(
+        &before_identity,
+        &after.weak_snapshot()
+    ));
+}
+
+#[test]
+fn drift_blocks_new_leases_until_a_new_generation_activates() {
+    let manager = RuntimeManager::new(snapshot("active"));
+    let in_flight = manager.lease().unwrap();
+    let original_id = in_flight.activation_id();
+
+    manager
+        .mark_not_ready(original_id, ReadinessCause::SchemaDrift)
+        .unwrap();
+    assert_eq!(
+        manager.readiness().unwrap(),
+        RuntimeReadiness::NotReady {
+            activation_id: original_id,
+            cause: ReadinessCause::SchemaDrift,
+        }
+    );
+    assert!(matches!(
+        manager.lease(),
+        Err(SnapshotUnavailable::NotReady {
+            activation_id,
+            cause: ReadinessCause::SchemaDrift,
+        }) if activation_id == original_id
+    ));
+    assert!(matches!(
+        manager.mark_not_ready(original_id, ReadinessCause::SourceUnavailable),
+        Err(ActivationError::AlreadyNotReady { activation_id })
+            if activation_id == original_id
+    ));
+
+    let not_ready = manager.readiness().unwrap();
+    let replacement_id = manager
+        .activate(not_ready, snapshot("replacement"))
+        .unwrap();
+    assert!(replacement_id > original_id);
+    assert!(matches!(
+        manager.readiness().unwrap(),
+        RuntimeReadiness::Ready { activation_id } if activation_id == replacement_id
+    ));
+    assert_eq!(in_flight.activation_id(), original_id);
+    assert!(matches!(
+        manager.mark_not_ready(original_id, ReadinessCause::SchemaDrift),
+        Err(ActivationError::StaleGeneration { expected, actual })
+            if expected == original_id && actual == replacement_id
+    ));
+}
+
+#[test]
+fn slow_candidate_cannot_overwrite_a_faster_successor() {
+    let manager = std::sync::Arc::new(RuntimeManager::new(snapshot("initial")));
+    let expected = manager.readiness().unwrap();
+    let (release_slow, wait_for_fast) = std::sync::mpsc::sync_channel(0);
+    let slow_manager = manager.clone();
+    let slow = std::thread::spawn(move || {
+        let candidate = snapshot("slow");
+        wait_for_fast.recv().unwrap();
+        slow_manager.activate(expected, candidate)
+    });
+
+    let fast_id = manager.activate(expected, snapshot("fast")).unwrap();
+    release_slow.send(()).unwrap();
+    assert!(matches!(
+        slow.join().unwrap(),
+        Err(ActivationError::StaleState {
+            expected: stale,
+            actual: RuntimeReadiness::Ready { activation_id },
+        }) if stale == expected && activation_id == fast_id
+    ));
+    assert_eq!(
+        manager
+            .lease()
+            .unwrap()
+            .snapshot()
+            .registry()
+            .schema(SourceId::new(0).unwrap())
+            .unwrap()[0]
+            .name,
+        "fast"
+    );
+}
+
+#[test]
+fn candidate_built_before_drift_cannot_heal_the_not_ready_state() {
+    let manager = std::sync::Arc::new(RuntimeManager::new(snapshot("initial")));
+    let expected = manager.readiness().unwrap();
+    let activation_id = expected.activation_id();
+    let (release_slow, wait_for_drift) = std::sync::mpsc::sync_channel(0);
+    let slow_manager = manager.clone();
+    let slow = std::thread::spawn(move || {
+        let candidate = snapshot("pre-drift");
+        wait_for_drift.recv().unwrap();
+        slow_manager.activate(expected, candidate)
+    });
+
+    manager
+        .mark_not_ready(activation_id, ReadinessCause::SchemaDrift)
+        .unwrap();
+    let drifted = manager.readiness().unwrap();
+    release_slow.send(()).unwrap();
+    assert!(matches!(
+        slow.join().unwrap(),
+        Err(ActivationError::StaleState { expected: stale, actual })
+            if stale == expected && actual == drifted
+    ));
+    assert!(matches!(
+        manager.lease(),
+        Err(SnapshotUnavailable::NotReady {
+            activation_id: actual,
+            cause: ReadinessCause::SchemaDrift,
+        }) if actual == activation_id
+    ));
+
+    let healed = manager.activate(drifted, snapshot("post-drift")).unwrap();
+    assert!(healed > activation_id);
 }

@@ -1,20 +1,10 @@
 ---
 status: accepted
 date: 2026-08-27
-updated: 2026-09-04
+updated: 2026-09-05
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
-depends-on:
-  - ADR-0002
-  - ADR-0006
-  - ADR-0010
-  - ADR-0011
-  - ADR-0012
-  - ADR-0014
-  - ADR-0017
-  - ADR-0018
-  - ADR-0024
-  - ADR-0037
+depends-on: [ADR-0002, ADR-0006, ADR-0010, ADR-0011, ADR-0012, ADR-0014, ADR-0017, ADR-0018, ADR-0024, ADR-0037]
 implements: []
 ---
 # SOTA application-completion programme
@@ -455,6 +445,9 @@ Proposed [ADR-0053](ADR-0053-grammar-coupled-sparql-parser-governance-and-proces
 The default-kill policy and partial profile digest remain unqualified; no parser is invoked and no parser-produced wire exists, so this transport/lifecycle evidence grants no parser execution or policy/profile qualification, paired corpus, witness, cache, admission, serving, release, attestation or controlled compiler authority. Parser execution and complete profile qualification remain next. The private typed alpha comparator stays correlation-only. Normal loader/Rust startup precedes dispatch, no credential boundary is added, all product/runtime code remains Rust/Cargo, Node/MetaHarness remains development/evidence only, and neither the virtualisation-only goals nor the evolutionary architecture changes.
 The implemented comparator preserves the conservative contract without changing the application architecture: source/profile eligibility and closed outcomes; exact ordered top-level SELECT outputs; one query-wide variable bijection; one global query-pattern blank-node bijection; one disjoint CONSTRUCT-template blank-node bijection; exact preservation of every other structure, order, duplicate, scalar and option; and inconclusive hard-terminal or budget failure. `spargebra::Query` cannot distinguish every generated variable from an authored lookalike, so name/shape heuristics remain prohibited. Exact generated/source provenance would require a versioned parser sidecar or maintained fork and a new governed wire/profile, not an application rewrite. The comparator is not a cache canonicalizer; full fresh-worker, application/W3C/adversarial corpus differentials and receipt bindings remain open, and no comparator result independently grants admission or cache authority.
 The characterized normalizer was mechanically split into `iq/normalize.rs` plus thematic production and test modules, all below 500 lines, without changing behavior or API. Eighteen product-source files remain above 500 lines: 12 in `sf-sparql` (`iq/lower.rs`, `cascade/mod.rs`, `unfold.rs`, `emit.rs`, `unify.rs`, `lib.rs`, `iq/resolve.rs`, `iq.rs`, `cascade/joinelim.rs`, `path.rs`, `leftjoin.rs`, `cascade/ws_st.rs`), four in `sf-sql` (`backend/rest.rs`, `backend/pg.rs`, `backend/sqlserver.rs`, `backend/monetdb.rs`) and two in `sf-mapping` (`r2rml.rs`, `direct_mapping.rs`); `sf-bench/workload.rs` and multiple test/evidence files are also oversized. Characterization-preserving slices continue without making file size a semantic rewrite. Node remains development/evidence infrastructure only, while every parser worker and deployable component remains Rust/Cargo under ADR-0048. These changes extend safety and maintainability boundaries without changing the virtualisation-only application goals or semantic architecture.
+
+**2026-09-05 runtime-activation correction:** the serving path now owns a
+source-keyed immutable `RuntimeSnapshot` behind one Rust `RuntimeManager` state. Each request loads readiness and one snapshot exactly once before body polling, compiles and prepares against that lease, and pins it through response EOF, error, cancellation or drop. Whole-state publication uses checked monotonic activation identities and complete expected-readiness comparison; deterministic tests cover invalid construction, A-B-A, stale/slow and drift-before-slow candidates, old/new HTTP results and last-pin release. Not-ready requests fail pre-I/O with a redacted `503` and fixed retry hint. The activation primitive is crate-private because no validated candidate builder exists. Automatic schema observation and drift watching, repeated-not-ready revision fencing, `M ⋈ T`/capability validation, verified backend-generation leases, Direct Mapping regeneration and a public reload/health surface remain open. This is an M5 application-lifetime foundation, not full M5 or source admission; product code remains Rust and Node remains evidence-only under ADR-0048.
 
 ## Acceptance
 

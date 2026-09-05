@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-26
-updated: 2026-09-02
+updated: 2026-09-05
 tags: [observability, logging, metrics, tracing, configuration, opentelemetry, production]
 supersedes: []
 depends-on:
@@ -51,8 +51,15 @@ implements:
 > TOML/config/secret-store model and remote PostgreSQL still uses `NoTls`.
 > Correlation IDs currently reach the response
 > only, not a log sink. The production crates still contain no tracing/metrics/OTLP
-> stack or layered validated configuration model, and expose no metrics/readiness
-> lifecycle. ADR-0038 retains those M3/M5 gates.
+> stack or layered validated configuration model, and expose no metrics or
+> health endpoint. The 2026-09-05 Rust runtime-snapshot foundation does expose a
+> closed redacted readiness state: new requests acquire one immutable snapshot
+> before request-body polling, not-ready state returns `503` with `Retry-After`,
+> and in-flight response bodies retain their original snapshot through
+> termination. Activation remains a crate-private, non-authorizing primitive;
+> automatic drift observation, validated candidate construction, public reload,
+> health/readiness endpoints and telemetry remain M3/M5 work under ADR-0038 and
+> ADR-0050.
 
 ## Context and Problem Statement
 

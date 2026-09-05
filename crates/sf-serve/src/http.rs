@@ -13,6 +13,7 @@ use sf_core::query_control::{QueryCharge, QueryControl};
 use sf_sparql::{exec, exec_mysql, exec_pg, Plan, PlanForm};
 use sparesults::QueryResultsFormat;
 
+use crate::activation::RuntimeSnapshotLease;
 use crate::admission;
 use crate::backend::{Backend, PgConn};
 use crate::binding::BoundPlan;
@@ -42,6 +43,7 @@ pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
 async fn handle_get(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
+    Extension(snapshot): Extension<RuntimeSnapshotLease>,
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
 ) -> Response {
@@ -59,7 +61,7 @@ async fn handle_get(
         }
         None => return problem::response(ProblemCode::InvalidRequest),
     };
-    process(cfg, query, accept(&headers), budget).await
+    process(cfg, snapshot, query, accept(&headers), budget).await
 }
 
 /// `POST /sparql` — either a strict single-query urlencoded form or a bounded
@@ -67,6 +69,7 @@ async fn handle_get(
 async fn handle_post(
     State(cfg): State<Arc<ServeConfig>>,
     Extension(budget): Extension<RequestBudget>,
+    Extension(snapshot): Extension<RuntimeSnapshotLease>,
     request: Request<Body>,
 ) -> Response {
     if request.uri().query().is_some() {
@@ -85,12 +88,13 @@ async fn handle_post(
         Ok(query) => query,
         Err(code) => return problem::response(code),
     };
-    process(cfg, query, accepted, budget).await
+    process(cfg, snapshot, query, accepted, budget).await
 }
 
 /// The shared request pipeline: cap → compile → dispatch by query form → stream.
 async fn process(
     cfg: Arc<ServeConfig>,
+    snapshot: RuntimeSnapshotLease,
     query: String,
     accept: Option<String>,
     budget: RequestBudget,
@@ -99,7 +103,7 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let bound = match compile(cfg.clone(), query, budget.clone()).await {
+    let bound = match compile(cfg.clone(), snapshot.clone(), query, budget.clone()).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -107,7 +111,7 @@ async fn process(
         let _internal_reason = error.reason();
         return problem::response(ProblemCode::UnsupportedQuery);
     }
-    let execution = match cfg.prepare_execution(bound) {
+    let execution = match snapshot.prepare_execution(bound) {
         Ok(execution) => execution,
         Err(_) => return problem::response(ProblemCode::Internal),
     };
@@ -128,12 +132,13 @@ async fn process(
 /// stays charged until that detached blocking closure actually returns.
 async fn compile(
     cfg: Arc<ServeConfig>,
+    snapshot: RuntimeSnapshotLease,
     query: String,
     budget: RequestBudget,
 ) -> Result<BoundPlan, Response> {
     let permits = cfg.compiler_permits();
     let compiled = deadline::run_compiler(budget, permits, move |worker_budget| {
-        cfg.compile(&query, &worker_budget)
+        snapshot.compile(cfg.source_id(), &query, &worker_budget)
     })
     .await;
     match compiled {

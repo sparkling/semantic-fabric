@@ -32,6 +32,7 @@ pub mod run;
 pub mod source;
 pub mod stream;
 
+mod activation;
 mod admission;
 mod backend;
 mod binding;
@@ -56,8 +57,11 @@ mod query_budget_tests;
 #[cfg(test)]
 mod request_admission_tests;
 #[cfg(test)]
+mod runtime_activation_http_tests;
+#[cfg(test)]
 mod runtime_snapshot_tests;
 
+pub use activation::{ActivationError, ActivationId, ReadinessCause, RuntimeReadiness};
 pub use backend::{introspect_pg_all, introspect_sqlite_all, Backend, BackendKind, SqlitePool};
 pub use binding::{BackendProfile, IntrospectedSource};
 pub use config::{

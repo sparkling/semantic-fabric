@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-02
-updated: 2026-09-03
+updated: 2026-09-05
 tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
 supersedes: []
 depends-on: [ADR-0006, ADR-0007, ADR-0011, ADR-0015, ADR-0038, ADR-0048]
@@ -12,28 +12,44 @@ implements: [ADR-0038]
 
 ## Status boundary
 
-This ADR remains **proposed** for lifecycle phases 2 through 6. Its Phase 1 pure
-`sf-core` Observed Schema Identity V1 kernel is implemented as a non-authorizing
-content-identity utility. [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md)
-now proposes the first closed production-shaped profile. Its private, opt-in
-`sf-sql` diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after
-bounded rich observation, but its two-version operator observations are
-untracked and its evidence runner explicitly withholds qualification. The
-planned committed-unavailability path is incomplete, and no serving binding
-carries the digests.
-This does not accept the remaining design or claim that a runtime snapshot
-manager, reload, drift detection, a backend-generation lease, or live Direct
-Mapping exists.
+This ADR remains **proposed overall**. Its Phase 1 pure `sf-core` Observed Schema
+Identity V1 kernel is implemented as a non-authorizing content-identity utility.
+[ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md) now proposes
+the first closed production-shaped profile. Its private, opt-in `sf-sql`
+diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after bounded
+rich observation, but its two-version operator observations are untracked and
+its evidence runner explicitly withholds qualification. The planned
+committed-unavailability path is incomplete, and no serving binding carries the
+digests.
 
-The current Rust serving path safely owns one startup mapping, ontology,
-constraint/type-quarantined schema observation, backend and plan cache inside a
-single `RuntimeBinding`. Its process-local compile scope prevents detached-plan
-reuse. PostgreSQL catalogue reads use one read-only repeatable-read startup
-transaction. Those are sound precursors, not a mutable-schema authority: the
-transaction ends before compilation and streamed execution, later requests may
-use another pooled connection, and there is no adapter-emitted runtime
-authority, serving digest propagation, watcher, readiness transition or atomic
-replacement path.
+The 2026-09-05 Phase 5 foundation is implemented in Rust: `RuntimeSnapshot` owns
+a source-keyed immutable registry and deterministic compile identities; one
+`RuntimeManager` state linearizes readiness and whole-snapshot replacement;
+each ready request acquires exactly one application-snapshot lease before body
+polling and retains it through response EOF, error, cancellation, or drop; and
+generation-bound not-ready state rejects new requests as a redacted pre-I/O
+`503`. Checked activation identities prevent ABA, complete expected-readiness
+comparison rejects ready-to-not-ready and slow-candidate races, and stale
+watchers cannot mark a newer activation unavailable. Deterministic tests cover
+old/new HTTP results, failed construction, stale and slow candidates, response
+lifetime, and last-pin release.
+
+The publication primitive is crate-private and deliberately non-authorizing.
+There is still no validated candidate builder, automatic catalogue observation,
+`M ⋈ T`/capability validation, repeated-not-ready state revision, drift watcher,
+backend-generation lease, serving digest propagation, public reload surface, or
+live Direct Mapping. Therefore this is not full Phase 5 completion and grants no
+backend or production admission.
+
+The current Rust serving path places its startup mapping, ontology,
+constraint/type-quarantined schema observation, backend and plan cache in one
+immutable source-keyed snapshot; the CLI still selects exactly one source. Its
+process-local compile scope prevents detached-plan reuse. PostgreSQL catalogue
+reads use one read-only repeatable-read startup transaction. Those are sound
+precursors, not mutable-schema authority: the transaction ends before
+compilation and streamed execution, later requests may use another pooled
+connection, and there is no adapter-emitted runtime authority, watcher,
+validated candidate lifecycle or verified execution generation.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,
@@ -157,14 +173,18 @@ lossy `DATA_TYPE`, but remains observational until independently qualified.
 Candidate construction performs every source observation, validation,
 `M ⋈ T` check, capability check, Direct-Mapping generation, cache creation or
 warmup, and readiness calculation off-path. All fallible work precedes one final
-allocation-free compare-and-swap. An expected-generation mismatch rejects and
-drops the candidate without partial publication; every other failure also drops
-candidate resources and leaves the active state byte-for-byte unchanged.
+allocation-free compare-and-publish linearization. A checked replacement under
+one state-cell lock and a lock-free compare-and-swap are semantically
+equivalent here: readers may observe only a complete old or complete new state.
+An expected-state mismatch rejects and drops the candidate without partial
+publication; every other failure also drops candidate resources and leaves the
+active state byte-for-byte unchanged.
 
 One atomic state cell exposes either `Ready(snapshot)` or a generation-bound
 `NotReady { activation_id, cause }`; readiness has no second owner inside the
-snapshot. Publication compares against the expected active activation. A slow
-older candidate or watcher cannot overwrite or heal a newer generation.
+snapshot. Publication compares against an opaque state revision that changes on
+every semantically relevant readiness transition. A slow older candidate or
+watcher cannot overwrite or heal a newer state.
 
 `ActivationId` is checked-monotonic and distinct from repeatable content
 digests. This prevents A-to-B-to-A ABA. A reload is a no-op only while the state
@@ -255,8 +275,12 @@ persist across generations.
    mapping, ontology, capability and policy digest has a canonical contract.
 4. **PostgreSQL verified lease:** bind one owned protected transaction through
    revalidation, compilation and complete streaming.
-5. **Atomic activation and drift:** add candidate construction, CAS publication,
-   readiness, stale-watcher rejection and body-lifetime snapshot leases.
+5. **Atomic activation and drift (foundation implemented 2026-09-05):** the
+   immutable registry, private whole-state publication primitive, readiness,
+   ready-to-not-ready/slow-candidate rejection and body-lifetime leases are
+   implemented. The validated candidate builder, automatic watcher, opaque
+   revision for repeated not-ready observations and public reload lifecycle
+   remain.
 6. **Typed row identity and Direct Mapping:** validate/generate from the leased
    schema and admit backend profiles one at a time.
 
@@ -335,8 +359,8 @@ require that none escape.
   are distinct types; none promotes another.
 - **R2** — raw catalogue input is bounded and validated before hashing or mapping
   generation; planning statistics are not semantic identity.
-- **R3** — an activated generation is immutable and published as one CAS-protected
-  state after all fallible work succeeds.
+- **R3** — an activated generation is immutable and published as one
+  compare-and-publish-protected state after all fallible work succeeds.
 - **R4** — every request pins one snapshot through response termination; verified
   source authority, where supported, spans compilation and the complete stream.
 - **R5** — drift/readiness and rollback are activation-ID bound and ABA-safe.

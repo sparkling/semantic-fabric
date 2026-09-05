@@ -9,7 +9,11 @@ use sf_sparql::{Epoch, Tbox};
 use sf_sql::TableSchema;
 use tokio::sync::Semaphore;
 
-use crate::binding::{BoundPlan, ExecutablePlan, IntrospectedSource};
+use crate::activation::{
+    ActivationError, ActivationId, ReadinessCause, RuntimeManager, RuntimeReadiness,
+    RuntimeSnapshotLease, SnapshotUnavailable,
+};
+use crate::binding::IntrospectedSource;
 use crate::problem::StartupCause;
 use crate::snapshot::{RuntimeSnapshot, RuntimeSource};
 use crate::{Backend, ServeError};
@@ -41,7 +45,7 @@ const DEFAULT_COMPILER_PERMITS: usize = 4;
 /// immutable [`RuntimeSnapshot`]. The current serving API selects its sole
 /// registered source; only request-governance knobs remain configurable.
 pub struct ServeConfig {
-    snapshot: Arc<RuntimeSnapshot>,
+    runtime: Arc<RuntimeManager>,
     source_id: SourceId,
     pub timeout: Duration,
     max_query_len: usize,
@@ -62,13 +66,10 @@ impl ServeConfig {
         let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
             .expect("default query length has a representable form-body limit");
         let source_id = mapping.source_id();
-        let snapshot = Arc::new(RuntimeSnapshot::single(
-            Epoch::default(),
-            tbox,
-            RuntimeSource::new(source, mapping),
-        ));
+        let snapshot =
+            RuntimeSnapshot::single(Epoch::default(), tbox, RuntimeSource::new(source, mapping));
         Self {
-            snapshot,
+            runtime: Arc::new(RuntimeManager::new(snapshot)),
             source_id,
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
@@ -143,19 +144,48 @@ impl ServeConfig {
         self.max_form_body_len
     }
 
-    pub(crate) fn compile(
-        &self,
-        query: &str,
-        control: &dyn sf_core::query_control::QueryControl,
-    ) -> sf_sparql::Result<BoundPlan> {
-        self.snapshot.compile(self.source_id, query, control)
+    /// Current redacted readiness and activation identity.
+    pub fn runtime_readiness(&self) -> Result<RuntimeReadiness, ActivationError> {
+        self.runtime.readiness()
     }
 
-    pub(crate) fn prepare_execution(
+    /// Atomically publish a prebuilt candidate that still contains the source
+    /// selected by this serving configuration. This private primitive does not
+    /// validate or authorize the candidate and stays sealed until the complete
+    /// candidate builder exists.
+    #[allow(
+        dead_code,
+        reason = "activation stays sealed until the validated candidate builder lands"
+    )]
+    pub(crate) fn activate_snapshot(
         &self,
-        plan: BoundPlan,
-    ) -> Result<ExecutablePlan, crate::binding::BindingMismatch> {
-        self.snapshot.prepare_execution(plan)
+        expected: RuntimeReadiness,
+        candidate: RuntimeSnapshot,
+    ) -> Result<ActivationId, ActivationError> {
+        if !candidate.registry().contains_source(self.source_id) {
+            return Err(ActivationError::CandidateMissingSource {
+                source_id: self.source_id,
+            });
+        }
+        self.runtime.activate(expected, candidate)
+    }
+
+    /// Reject new requests for the current generation while preserving every
+    /// lease already in flight.
+    pub fn mark_runtime_not_ready(
+        &self,
+        expected: ActivationId,
+        cause: ReadinessCause,
+    ) -> Result<(), ActivationError> {
+        self.runtime.mark_not_ready(expected, cause)
+    }
+
+    pub(crate) fn runtime_lease(&self) -> Result<RuntimeSnapshotLease, SnapshotUnavailable> {
+        self.runtime.lease()
+    }
+
+    pub(crate) const fn source_id(&self) -> SourceId {
+        self.source_id
     }
 
     pub(crate) fn compiler_permits(&self) -> Arc<Semaphore> {
@@ -253,5 +283,31 @@ mod tests {
                 &config.request_admission_permits()
             ));
         }
+    }
+
+    #[test]
+    fn activation_rejects_a_candidate_without_the_selected_source() {
+        let config = config();
+        let current = config.runtime_readiness().unwrap();
+        let selected_source = SourceId::new(0).unwrap();
+        let other_source = SourceId::new(1).unwrap();
+        let candidate = RuntimeSnapshot::single(
+            Epoch(1),
+            Tbox::default(),
+            RuntimeSource::new(
+                IntrospectedSource::unchecked(
+                    Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
+                    Vec::new(),
+                ),
+                SourceMapping::new(other_source, Vec::new()),
+            ),
+        );
+
+        assert!(matches!(
+            config.activate_snapshot(current, candidate),
+            Err(ActivationError::CandidateMissingSource { source_id })
+                if source_id == selected_source
+        ));
+        assert_eq!(config.runtime_readiness().unwrap(), current);
     }
 }
