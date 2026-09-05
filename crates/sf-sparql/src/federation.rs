@@ -194,6 +194,32 @@ pub fn compile_source_affine_union(
     bindings: [&CompilerBinding; 2],
     control: &dyn QueryControl,
 ) -> Result<FederatedPlan> {
+    compile_source_affine_union_with(sparql, bindings, control, CompileMode::Cached)
+}
+
+/// Compile the exact two-arm profile without reading or populating either
+/// source cache. Serving uses this only as a non-authorizing, pre-I/O preflight;
+/// the returned value must be discarded before generation-lease acquisition.
+pub fn compile_source_affine_union_uncached(
+    sparql: &str,
+    bindings: [&CompilerBinding; 2],
+    control: &dyn QueryControl,
+) -> Result<FederatedPlan> {
+    compile_source_affine_union_with(sparql, bindings, control, CompileMode::Uncached)
+}
+
+#[derive(Clone, Copy)]
+enum CompileMode {
+    Cached,
+    Uncached,
+}
+
+fn compile_source_affine_union_with(
+    sparql: &str,
+    bindings: [&CompilerBinding; 2],
+    control: &dyn QueryControl,
+    mode: CompileMode,
+) -> Result<FederatedPlan> {
     if bindings[0].source_id() == bindings[1].source_id() {
         return Err(Error::Mapping(
             "federated compiler bindings must have distinct source identities".to_owned(),
@@ -213,7 +239,10 @@ pub fn compile_source_affine_union(
         }
         let binding = candidates[0];
         control.checkpoint()?;
-        let plan = binding.compile_union_arm_shared(arm)?;
+        let plan = match mode {
+            CompileMode::Cached => binding.compile_union_arm_shared(arm),
+            CompileMode::Uncached => binding.compile_union_arm_uncached_shared(arm),
+        }?;
         control.checkpoint()?;
         selected.push(SourceFragment::new(binding.source_id(), plan)?);
     }
@@ -339,5 +368,23 @@ mod tests {
         assert_eq!(plan.fragments()[1].source_id(), SourceId::new(1).unwrap());
         assert_eq!(left.cache_len(), 1, "wrong source must not be compiled");
         assert_eq!(right.cache_len(), 1, "wrong source must not be compiled");
+    }
+
+    #[test]
+    fn uncached_preflight_leaves_both_source_caches_empty() {
+        let left = binding(0, "http://example.test/left");
+        let right = binding(1, "http://example.test/right");
+        let plan = compile_source_affine_union_uncached(
+            "SELECT ?value WHERE { \
+             { ?s <http://example.test/left> ?value } UNION \
+             { ?s <http://example.test/right> ?value } }",
+            [&left, &right],
+            &UncontrolledQueryControl,
+        )
+        .unwrap();
+
+        assert_eq!(plan.fragments().len(), 2);
+        assert_eq!(left.cache_len(), 0);
+        assert_eq!(right.cache_len(), 0);
     }
 }

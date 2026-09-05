@@ -67,6 +67,23 @@ fn shared_cache_path_reuses_the_same_plan_allocation() {
 }
 
 #[test]
+fn uncached_preflight_neither_reads_nor_populates_the_plan_cache() {
+    let binding = binding(SourceId::new(0).unwrap(), Dialect::Sqlite);
+    let query = "SELECT * WHERE { ?s ?p ?o }";
+
+    let authoritative = binding.compile_shared(query).unwrap();
+    assert_eq!(binding.cache_len(), 1);
+    let preflight = binding.compile_uncached_shared(query).unwrap();
+
+    assert!(!Arc::ptr_eq(&authoritative, &preflight));
+    assert_eq!(
+        binding.cache_len(),
+        1,
+        "preflight must not read, replace, or grow the authoritative cache"
+    );
+}
+
+#[test]
 fn deliberately_misscoped_cached_artifact_fails_closed() {
     let query = SparqlParser::new()
         .parse_query("SELECT * WHERE { ?s ?p ?o }")

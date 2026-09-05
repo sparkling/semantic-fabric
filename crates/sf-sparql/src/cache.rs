@@ -252,10 +252,46 @@ impl CompilerBinding {
         crate::parse_and_translate_cached_shared(sparql, self)
     }
 
+    /// Parse and compile without reading or populating this binding's cache.
+    ///
+    /// This narrow seam exists for a serving preflight that must reject invalid
+    /// or unsupported work before source I/O, while ensuring that no plan made
+    /// before a verified source-generation lease can become authoritative. The
+    /// caller must discard the returned plan after structural admission and
+    /// compile again through [`Self::compile_shared`] while holding its lease.
+    pub fn compile_uncached_shared(&self, sparql: &str) -> Result<Arc<Plan>> {
+        let query = spargebra::SparqlParser::new()
+            .parse_query(sparql)
+            .map_err(|error| crate::Error::Parse(error.to_string()))?;
+        self.compile_parsed_uncached_shared(&query)
+    }
+
     /// Compile one arm from a query that was parsed and structurally admitted
     /// once by the narrow federation boundary.
     pub(crate) fn compile_union_arm_shared(&self, arm: &SourceAffineUnionArm) -> Result<Arc<Plan>> {
         crate::translate_cached_shared(arm.query(), self)
+    }
+
+    /// Uncached counterpart used only by the non-authorizing federation
+    /// preflight. No result from this method may enter execution or a cache.
+    pub(crate) fn compile_union_arm_uncached_shared(
+        &self,
+        arm: &SourceAffineUnionArm,
+    ) -> Result<Arc<Plan>> {
+        self.compile_parsed_uncached_shared(arm.query())
+    }
+
+    fn compile_parsed_uncached_shared(&self, query: &Query) -> Result<Arc<Plan>> {
+        crate::translate_tree_with_column_type_use(
+            query,
+            self.triples_maps(),
+            self.tbox(),
+            self.dialect(),
+            self.schema(),
+            self.column_type_use(),
+            crate::CompilerWorkMode::Uncontrolled,
+        )
+        .map(Arc::new)
     }
 
     pub const fn source_id(&self) -> SourceId {
