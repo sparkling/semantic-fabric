@@ -39,12 +39,15 @@ mod binding;
 mod budget;
 mod config;
 mod deadline;
+mod federation;
 mod http;
 mod post_body;
 mod problem;
+mod request_compile;
 mod request_deadline;
 mod snapshot;
 mod sqlite_admission;
+mod startup;
 mod terminal_body;
 
 #[cfg(test)]
@@ -52,6 +55,8 @@ mod sqlite_admission_tests;
 
 #[cfg(test)]
 mod deadline_tests;
+#[cfg(test)]
+mod federated_union_tests;
 #[cfg(test)]
 mod query_budget_tests;
 #[cfg(test)]
@@ -72,7 +77,7 @@ pub use http::router;
 pub use ontology::tbox_from_turtle;
 pub use problem::ServeError;
 pub use request_deadline::{RequestDeadlineMakeService, RequestDeadlineService};
-pub use run::{serve_blocking, ServeOptions};
+pub use run::{serve_blocking, AdditionalSourceOptions, ServeOptions};
 pub use snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError, SourceRegistry};
 pub use source::{SourceInput, SourceRef, MAX_SOURCE_ENV_NAME_BYTES, MAX_SOURCE_INPUT_BYTES};
 pub use stream::RdfFormat;

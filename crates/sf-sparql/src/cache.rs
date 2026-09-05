@@ -25,7 +25,7 @@ use crate::compiler_schema::{
     ColumnTypeAuthority, ColumnTypeUse, CompilerSchema, ConstraintAuthority,
 };
 use crate::runtime_identity::CompileDigests;
-use crate::{Plan, Result, Tbox};
+use crate::{federation::SourceAffineUnionArm, Plan, Result, Tbox};
 
 /// Closed compiler-governance profile used to partition cache authority.
 ///
@@ -250,6 +250,12 @@ impl CompilerBinding {
     /// It does not grant governed compilation authority.
     pub fn compile_shared(&self, sparql: &str) -> Result<Arc<Plan>> {
         crate::parse_and_translate_cached_shared(sparql, self)
+    }
+
+    /// Compile one arm from a query that was parsed and structurally admitted
+    /// once by the narrow federation boundary.
+    pub(crate) fn compile_union_arm_shared(&self, arm: &SourceAffineUnionArm) -> Result<Arc<Plan>> {
+        crate::translate_cached_shared(arm.query(), self)
     }
 
     pub const fn source_id(&self) -> SourceId {

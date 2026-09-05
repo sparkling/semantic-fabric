@@ -349,6 +349,7 @@ fn should_reject_unrepresentable_limit_before_source_or_file_io() {
     let options = ServeOptions {
         source: SourceRef::environment("SF_POST_BODY_ADMISSION_MUST_NOT_BE_READ"),
         mapping_path: "/path/that/must/not/be/read.ttl".to_owned(),
+        additional_source: None,
         ontology_path: Some("/ontology/that/must/not/be/read.ttl".to_owned()),
         bind: "203.0.113.1:1".to_owned(),
         timeout: Duration::from_secs(1),

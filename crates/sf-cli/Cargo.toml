@@ -42,3 +42,4 @@ anyhow.workspace = true
 
 [dev-dependencies]
 libc.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }

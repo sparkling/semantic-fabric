@@ -42,6 +42,14 @@ impl SourceRef {
         Self::Environment(variable.into())
     }
 
+    pub(crate) fn same_reference(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Inline(left), Self::Inline(right))
+            | (Self::Environment(left), Self::Environment(right)) => left == right,
+            _ => false,
+        }
+    }
+
     /// Resolve and validate this reference without exposing the source value in
     /// any public error representation.
     pub fn resolve(&self) -> Result<SourceInput, ServeError> {

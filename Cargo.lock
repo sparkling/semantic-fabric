@@ -4711,6 +4711,7 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
+ "rusqlite",
  "sf-bench",
  "sf-conformance",
  "sf-core",

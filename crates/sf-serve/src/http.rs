@@ -16,11 +16,11 @@ use sparesults::QueryResultsFormat;
 use crate::activation::RuntimeSnapshotLease;
 use crate::admission;
 use crate::backend::{Backend, PgConn};
-use crate::binding::BoundPlan;
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
-use crate::deadline::{self, CompilerRunError, JoinedTaskError};
+use crate::deadline::{self, JoinedTaskError};
 use crate::problem::{self, ProblemCode};
+use crate::request_compile::BoundQuery;
 use crate::request_deadline::RequestDeadlineService;
 use crate::sqlite_admission;
 use crate::stream::{self, RdfFormat};
@@ -103,51 +103,51 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let bound = match compile(cfg.clone(), snapshot.clone(), query, budget.clone()).await {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
-    if let Err(error) = admission::admit(bound.plan(), cfg.max_order_rows()) {
-        let _internal_reason = error.reason();
-        return problem::response(ProblemCode::UnsupportedQuery);
-    }
-    let execution = match snapshot.prepare_execution(bound) {
-        Ok(execution) => execution,
-        Err(_) => return problem::response(ProblemCode::Internal),
-    };
-    let (backend, plan) = execution.into_parts();
+    let bound =
+        match crate::request_compile::compile(cfg.clone(), snapshot.clone(), query, budget.clone())
+            .await
+        {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let accept = accept.as_deref();
 
-    match &plan.form {
-        PlanForm::Select { .. } => respond_select(backend, plan, accept, budget).await,
-        PlanForm::Ask => respond_ask(backend, plan, accept, budget).await,
-        PlanForm::Construct { .. } => respond_construct(backend, plan, accept, budget).await,
-    }
-}
-
-/// Compile (parse + rewrite) off the async runtime (ADR-0006); map errors to status.
-/// Uses the per-config plan cache (ADR-0007): repeated queries at the same epoch
-/// skip the full rewrite and return a shared cached plan handle. Timeout stops
-/// the request waiter, not CPU work already running; the owned admission permit
-/// stays charged until that detached blocking closure actually returns.
-async fn compile(
-    cfg: Arc<ServeConfig>,
-    snapshot: RuntimeSnapshotLease,
-    query: String,
-    budget: RequestBudget,
-) -> Result<BoundPlan, Response> {
-    let permits = cfg.compiler_permits();
-    let compiled = deadline::run_compiler(budget, permits, move |worker_budget| {
-        snapshot.compile(cfg.source_id(), &query, &worker_budget)
-    })
-    .await;
-    match compiled {
-        Err(CompilerRunError::Control(error)) => Err(problem::response_for_control(error)),
-        Err(CompilerRunError::AdmissionClosed | CompilerRunError::Join(_)) => {
-            Err(problem::response(ProblemCode::Internal))
+    match bound {
+        BoundQuery::Single(bound) => {
+            if let Err(error) = admission::admit(bound.plan(), cfg.max_order_rows()) {
+                let _internal_reason = error.reason();
+                return problem::response(ProblemCode::UnsupportedQuery);
+            }
+            let execution = match snapshot.prepare_execution(*bound) {
+                Ok(execution) => execution,
+                Err(_) => return problem::response(ProblemCode::Internal),
+            };
+            let (backend, plan) = execution.into_parts();
+            match &plan.form {
+                PlanForm::Select { .. } => respond_select(backend, plan, accept, budget).await,
+                PlanForm::Ask => respond_ask(backend, plan, accept, budget).await,
+                PlanForm::Construct { .. } => {
+                    respond_construct(backend, plan, accept, budget).await
+                }
+            }
         }
-        Ok(Err(e)) => Err(problem::response_for_sparql(&e)),
-        Ok(Ok(plan)) => Ok(plan),
+        BoundQuery::Federated(bound) => {
+            for fragment in bound.plan().fragments() {
+                if let Err(error) = admission::admit(fragment.plan(), cfg.max_order_rows()) {
+                    let _internal_reason = error.reason();
+                    return problem::response(ProblemCode::UnsupportedQuery);
+                }
+            }
+            let execution = match snapshot.prepare_federated_execution(*bound) {
+                Ok(execution) => execution,
+                Err(_) => return problem::response(ProblemCode::Internal),
+            };
+            let format = negotiate_results(accept);
+            match crate::federation::select_union_body(execution, format, budget).await {
+                Ok(body) => ok_stream(format.media_type(), body),
+                Err(response) => response,
+            }
+        }
     }
 }
 
@@ -398,7 +398,7 @@ async fn respond_construct(
     ok_stream(fmt.media_type(), body)
 }
 
-async fn acquire_mysql(
+pub(crate) async fn acquire_mysql(
     pool: &mysql_async::Pool,
     budget: &RequestBudget,
 ) -> Result<mysql_async::Conn, Response> {
@@ -414,7 +414,7 @@ async fn acquire_mysql(
 /// configured `--pg-pool-wait-secs`) is shed as a fast, honest `503` +
 /// `Retry-After` rather than queued indefinitely or reported as a generic `500`
 /// — the ADR-0010 "shed overflow" clause this pass implements.
-async fn acquire_pg(
+pub(crate) async fn acquire_pg(
     pool: &deadpool_postgres::Pool,
     budget: RequestBudget,
 ) -> Result<PgConn, Response> {

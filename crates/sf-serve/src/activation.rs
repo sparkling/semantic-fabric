@@ -6,7 +6,9 @@ use std::sync::{Arc, RwLock};
 use sf_core::query_control::QueryControl;
 use sf_core::SourceId;
 
-use crate::binding::{BindingMismatch, BoundPlan, ExecutablePlan};
+use crate::binding::{
+    BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
+};
 use crate::snapshot::RuntimeSnapshot;
 
 /// Monotonic process-local identity for one published runtime generation.
@@ -96,6 +98,23 @@ impl RuntimeSnapshotLease {
         plan: BoundPlan,
     ) -> Result<ExecutablePlan, BindingMismatch> {
         self.snapshot.prepare_execution(plan)
+    }
+
+    pub(crate) fn compile_federated_union(
+        &self,
+        source_ids: [SourceId; 2],
+        query: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<BoundFederatedPlan> {
+        self.snapshot
+            .compile_federated_union(source_ids, query, control)
+    }
+
+    pub(crate) fn prepare_federated_execution(
+        &self,
+        plan: BoundFederatedPlan,
+    ) -> Result<ExecutableFederatedPlan, BindingMismatch> {
+        self.snapshot.prepare_federated_execution(plan)
     }
 
     #[cfg(test)]

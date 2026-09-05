@@ -5,11 +5,13 @@ use std::fmt;
 
 use sf_core::query_control::QueryControl;
 use sf_core::{SourceId, SourceMapping};
+use sf_sparql::federation::compile_source_affine_union;
 use sf_sparql::{CompileDigests, Epoch, OntologyDigest, Tbox};
 use sf_sql::TableSchema;
 
 use crate::binding::{
-    BindingMismatch, BoundPlan, ExecutablePlan, IntrospectedSource, RuntimeBinding,
+    BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
+    IntrospectedSource, RuntimeBinding,
 };
 use crate::BackendProfile;
 
@@ -200,6 +202,65 @@ impl RuntimeSnapshot {
             .binding(bound.source_id())
             .ok_or(BindingMismatch)?
             .prepare_execution(bound)
+    }
+
+    pub(crate) fn compile_federated_union(
+        &self,
+        source_ids: [SourceId; 2],
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<BoundFederatedPlan> {
+        if source_ids[0] == source_ids[1]
+            || source_ids
+                .iter()
+                .any(|source_id| !self.registry.contains_source(*source_id))
+        {
+            return Err(sf_sparql::Error::Mapping(
+                "federated source registry does not match the serving configuration".to_owned(),
+            ));
+        }
+
+        let left = self.registry.binding(source_ids[0]).ok_or_else(|| {
+            sf_sparql::Error::Mapping("runtime source is not registered".to_owned())
+        })?;
+        let right = self.registry.binding(source_ids[1]).ok_or_else(|| {
+            sf_sparql::Error::Mapping("runtime source is not registered".to_owned())
+        })?;
+        let plan =
+            compile_source_affine_union(sparql, [left.compiler(), right.compiler()], control)?;
+        let scope_for = |index: usize| {
+            self.registry
+                .binding(plan.fragments()[index].source_id())
+                .expect("compiled fragment source remains registered")
+                .scope()
+        };
+        let scopes = [scope_for(0), scope_for(1)];
+        Ok(BoundFederatedPlan::new(plan, scopes))
+    }
+
+    pub(crate) fn prepare_federated_execution(
+        &self,
+        bound: BoundFederatedPlan,
+    ) -> Result<ExecutableFederatedPlan, BindingMismatch> {
+        let (plan, scopes) = bound.into_parts();
+        let variables = plan.variables().to_vec();
+        let mut executable = Vec::with_capacity(2);
+        for (fragment, scope) in plan.fragments().iter().zip(scopes) {
+            if fragment.source_id() != scope.source_id() {
+                return Err(BindingMismatch);
+            }
+            let binding = self
+                .registry
+                .binding(fragment.source_id())
+                .ok_or(BindingMismatch)?;
+            executable.push(binding.prepare_execution(BoundPlan::from_parts(
+                scope,
+                fragment.source_id(),
+                fragment.shared_plan(),
+            ))?);
+        }
+        let executable = executable.try_into().map_err(|_| BindingMismatch)?;
+        Ok(ExecutableFederatedPlan::new(variables, executable))
     }
 }
 

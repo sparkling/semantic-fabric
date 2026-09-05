@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use sf_core::query_control::QueryControl;
 use sf_core::{SourceId, SourceMapping};
+use sf_sparql::federation::FederatedPlan;
 use sf_sparql::{CompileDigests, CompileScope, CompilerBinding, Epoch, Plan, Tbox};
 use sf_sql::{Dialect, TableSchema};
 
@@ -197,6 +198,10 @@ impl RuntimeBinding {
     pub(crate) const fn digests(&self) -> CompileDigests {
         self.compiler.digests()
     }
+
+    pub(crate) const fn compiler(&self) -> &CompilerBinding {
+        &self.compiler
+    }
 }
 
 impl fmt::Debug for RuntimeBinding {
@@ -220,12 +225,41 @@ pub(crate) struct BoundPlan {
 }
 
 impl BoundPlan {
+    pub(crate) fn from_parts(scope: CompileScope, source_id: SourceId, plan: Arc<Plan>) -> Self {
+        Self {
+            scope,
+            source_id,
+            plan,
+        }
+    }
+
     pub(crate) fn plan(&self) -> &Plan {
         &self.plan
     }
 
     pub(crate) const fn source_id(&self) -> SourceId {
         self.source_id
+    }
+}
+
+/// A federated plan plus the private compile scopes needed to prove that each
+/// fragment still belongs to the activated source binding before any I/O.
+pub(crate) struct BoundFederatedPlan {
+    plan: FederatedPlan,
+    scopes: [CompileScope; 2],
+}
+
+impl BoundFederatedPlan {
+    pub(crate) fn new(plan: FederatedPlan, scopes: [CompileScope; 2]) -> Self {
+        Self { plan, scopes }
+    }
+
+    pub(crate) fn plan(&self) -> &FederatedPlan {
+        &self.plan
+    }
+
+    pub(crate) fn into_parts(self) -> (FederatedPlan, [CompileScope; 2]) {
+        (self.plan, self.scopes)
     }
 }
 
@@ -250,6 +284,24 @@ pub(crate) struct ExecutablePlan {
 impl ExecutablePlan {
     pub(crate) fn into_parts(self) -> (Backend, Arc<Plan>) {
         (self.backend, self.plan)
+    }
+}
+
+pub(crate) struct ExecutableFederatedPlan {
+    variables: Vec<String>,
+    fragments: [ExecutablePlan; 2],
+}
+
+impl ExecutableFederatedPlan {
+    pub(crate) fn new(variables: Vec<String>, fragments: [ExecutablePlan; 2]) -> Self {
+        Self {
+            variables,
+            fragments,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<String>, [ExecutablePlan; 2]) {
+        (self.variables, self.fragments)
     }
 }
 

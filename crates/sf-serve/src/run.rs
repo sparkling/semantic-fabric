@@ -1,19 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sf_core::query_control::QueryLimits;
 use tokio_postgres::NoTls;
 
 use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
 use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
-use crate::{
-    introspect_pg_all, router, Backend, IntrospectedSource, ServeConfig, ServeError, SourceRef,
-};
+use crate::{introspect_pg_all, router, Backend, IntrospectedSource, ServeError, SourceRef};
 
 pub struct ServeOptions {
     pub source: SourceRef,
     pub mapping_path: String,
+    /// Optional second relational source and its source-local R2RML mapping.
+    pub additional_source: Option<AdditionalSourceOptions>,
     /// Optional ontology (Turtle) → tier-1 T-Box.
     pub ontology_path: Option<String>,
     /// `host:port` to bind (e.g. `127.0.0.1:7878`).
@@ -42,13 +41,33 @@ pub struct ServeOptions {
     pub sqlite_pool_size: usize,
 }
 
+/// The normal startup input for the bounded two-source UNION profile.
+pub struct AdditionalSourceOptions {
+    pub source: SourceRef,
+    pub mapping_path: String,
+}
+
 /// Build the config + router and serve until stopped; invalid input returns an error.
 pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
     validate_max_query_len(opts.max_query_len)?;
     validate_max_concurrent_requests(opts.max_concurrent_requests)?;
     validate_request_timeout(opts.timeout)?;
+    if opts
+        .additional_source
+        .as_ref()
+        .is_some_and(|additional| opts.source.same_reference(&additional.source))
+    {
+        return Err(ServeError::new(StartupCause::Configuration {
+            error: "the two-source profile requires distinct source references".to_owned(),
+        }));
+    }
     // Resolve and reject inline credentials before runtime or connector construction.
     let source = opts.source.resolve()?.prepare()?;
+    let additional = opts
+        .additional_source
+        .as_ref()
+        .map(|source| source.source.resolve()?.prepare())
+        .transpose()?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -57,7 +76,7 @@ pub fn serve_blocking(opts: ServeOptions) -> Result<(), ServeError> {
                 error: error.to_string(),
             })
         })?;
-    rt.block_on(async move { serve_async(opts, source).await })
+    rt.block_on(async move { serve_async(opts, source, additional).await })
 }
 
 fn validate_request_timeout(timeout: Duration) -> Result<(), ServeError> {
@@ -71,54 +90,12 @@ fn validate_request_timeout(timeout: Duration) -> Result<(), ServeError> {
         })
 }
 
-async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), ServeError> {
-    let mapping_ttl = std::fs::read_to_string(&opts.mapping_path).map_err(|error| {
-        ServeError::new(StartupCause::MappingRead {
-            path: opts.mapping_path.clone(),
-            error: error.to_string(),
-        })
-    })?;
-    let source_id = sf_core::SourceId::new(0).expect("single-source slot zero is representable");
-    let mapping = sf_mapping::parse_r2rml_for_source(&mapping_ttl, source_id).map_err(|error| {
-        ServeError::new(StartupCause::MappingParse {
-            error: error.to_string(),
-        })
-    })?;
-
-    let tbox = match &opts.ontology_path {
-        Some(path) => {
-            let ttl = std::fs::read_to_string(path).map_err(|error| {
-                ServeError::new(StartupCause::OntologyRead {
-                    path: path.clone(),
-                    error: error.to_string(),
-                })
-            })?;
-            crate::tbox_from_turtle(&ttl)
-                .map_err(|error| ServeError::new(StartupCause::OntologyParse { error }))?
-        }
-        None => sf_sparql::Tbox::default(),
-    };
-
-    let source = open_backend(
-        source,
-        opts.pg_pool_size,
-        opts.pg_pool_wait,
-        opts.sqlite_pool_size,
-    )
-    .await?;
-
-    let mut cfg = ServeConfig::new(source, mapping, tbox);
-    cfg.timeout = opts.timeout;
-    cfg.set_max_query_len(opts.max_query_len)?;
-    cfg.set_max_concurrent_requests(opts.max_concurrent_requests)?;
-    cfg.set_max_order_rows(opts.max_order_rows);
-    cfg.query_limits = QueryLimits::new(
-        cfg.query_limits.max_compiler_work(),
-        opts.max_source_work,
-        opts.max_result_items,
-        opts.max_serialized_bytes,
-    )
-    .with_max_retained_bytes(opts.max_order_bytes);
+async fn serve_async(
+    opts: ServeOptions,
+    source: PreparedSource,
+    additional: Option<PreparedSource>,
+) -> Result<(), ServeError> {
+    let cfg = crate::startup::build_config(&opts, source, additional).await?;
 
     let app = router(Arc::new(cfg));
     let listener = tokio::net::TcpListener::bind(&opts.bind)
@@ -148,7 +125,7 @@ async fn serve_async(opts: ServeOptions, source: PreparedSource) -> Result<(), S
 /// `pg_pool_size`/`pg_pool_wait` size the PostgreSQL pool (ADR-0010 §C
 /// stream-lane pool, ADR-0027); `sqlite_pool_size` sizes the read-only pool for
 /// a file-backed SQLite source ([`Backend::sqlite_pool_from_path`]).
-async fn open_backend(
+pub(crate) async fn open_backend(
     source: PreparedSource,
     pg_pool_size: usize,
     pg_pool_wait: Duration,

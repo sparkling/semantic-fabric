@@ -15,7 +15,7 @@ use crate::activation::{
 };
 use crate::binding::IntrospectedSource;
 use crate::problem::StartupCause;
-use crate::snapshot::{RuntimeSnapshot, RuntimeSource};
+use crate::snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError};
 use crate::{Backend, ServeError};
 
 /// Worst-case wire bytes for the percent-encoded `query` key plus `=`.
@@ -40,13 +40,28 @@ pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 64;
 /// same request deadline; this is a partial-M2 capacity bound, not a work budget.
 const DEFAULT_COMPILER_PERMITS: usize = 4;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QueryMode {
+    Single(SourceId),
+    SourceAffineUnion([SourceId; 2]),
+}
+
+impl QueryMode {
+    fn source_ids(self) -> [Option<SourceId>; 2] {
+        match self {
+            Self::Single(source_id) => [Some(source_id), None],
+            Self::SourceAffineUnion(source_ids) => source_ids.map(Some),
+        }
+    }
+}
+
 /// The immutable server configuration shared (in an `Arc`) across all requests.
 /// Semantic/compiler/backend state is private and inseparable inside one
 /// immutable [`RuntimeSnapshot`]. The current serving API selects its sole
 /// registered source; only request-governance knobs remain configurable.
 pub struct ServeConfig {
     runtime: Arc<RuntimeManager>,
-    source_id: SourceId,
+    query_mode: QueryMode,
     pub timeout: Duration,
     max_query_len: usize,
     max_form_body_len: usize,
@@ -63,14 +78,34 @@ pub struct ServeConfig {
 impl ServeConfig {
     /// Build a source-bound config with the default governance knobs.
     pub fn new(source: IntrospectedSource, mapping: SourceMapping, tbox: Tbox) -> Self {
-        let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
-            .expect("default query length has a representable form-body limit");
         let source_id = mapping.source_id();
         let snapshot =
             RuntimeSnapshot::single(Epoch::default(), tbox, RuntimeSource::new(source, mapping));
+        Self::from_snapshot(QueryMode::Single(source_id), snapshot)
+    }
+
+    /// Build the bounded two-source serving profile. This mode accepts only the
+    /// source-affine top-level SELECT UNION vertical; it is not broad federation.
+    pub fn new_federated(sources: [RuntimeSource; 2], tbox: Tbox) -> Result<Self, SnapshotError> {
+        let source_ids = [sources[0].source_id(), sources[1].source_id()];
+        if source_ids[0] == source_ids[1] {
+            return Err(SnapshotError::DuplicateSource {
+                source_id: source_ids[0],
+            });
+        }
+        let snapshot = RuntimeSnapshot::new(Epoch::default(), tbox, Vec::from(sources))?;
+        Ok(Self::from_snapshot(
+            QueryMode::SourceAffineUnion(source_ids),
+            snapshot,
+        ))
+    }
+
+    fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
+        let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
+            .expect("default query length has a representable form-body limit");
         Self {
             runtime: Arc::new(RuntimeManager::new(snapshot)),
-            source_id,
+            query_mode,
             timeout: DEFAULT_TIMEOUT,
             max_query_len: DEFAULT_MAX_QUERY_LEN,
             max_form_body_len,
@@ -162,10 +197,10 @@ impl ServeConfig {
         expected: RuntimeReadiness,
         candidate: RuntimeSnapshot,
     ) -> Result<ActivationId, ActivationError> {
-        if !candidate.registry().contains_source(self.source_id) {
-            return Err(ActivationError::CandidateMissingSource {
-                source_id: self.source_id,
-            });
+        for source_id in self.query_mode.source_ids().into_iter().flatten() {
+            if !candidate.registry().contains_source(source_id) {
+                return Err(ActivationError::CandidateMissingSource { source_id });
+            }
         }
         self.runtime.activate(expected, candidate)
     }
@@ -184,8 +219,8 @@ impl ServeConfig {
         self.runtime.lease()
     }
 
-    pub(crate) const fn source_id(&self) -> SourceId {
-        self.source_id
+    pub(crate) const fn query_mode(&self) -> QueryMode {
+        self.query_mode
     }
 
     pub(crate) fn compiler_permits(&self) -> Arc<Semaphore> {
