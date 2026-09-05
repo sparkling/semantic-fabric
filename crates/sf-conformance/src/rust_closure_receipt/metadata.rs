@@ -80,6 +80,15 @@ pub(super) fn parse(
     repo_root: &Path,
     target: &TargetContext,
 ) -> Result<Vec<PackageRecord>, String> {
+    parse_with_tree(raw, super::tree::parse(raw_tree)?, repo_root, target)
+}
+
+pub(super) fn parse_with_tree(
+    raw: &str,
+    parsed_tree: Vec<super::tree::TreePackage>,
+    repo_root: &Path,
+    target: &TargetContext,
+) -> Result<Vec<PackageRecord>, String> {
     let input: Metadata =
         serde_json::from_str(raw).map_err(|error| format!("parse cargo metadata: {error}"))?;
     if input.packages.is_empty()
@@ -105,7 +114,7 @@ pub(super) fn parse(
     }
     let packages = index_packages(input.packages)?;
     let nodes = index_nodes(input.resolve.nodes)?;
-    let tree_packages = bind_tree_packages(super::tree::parse(raw_tree)?, &packages)?;
+    let tree_packages = bind_tree_packages(parsed_tree, &packages)?;
     validate_root(root_id, &packages, repo_root, &tree_packages)?;
     let reachable = reachable_nodes(root_id, &nodes, &packages, &tree_packages, target)?;
     let mut keys = BTreeMap::new();

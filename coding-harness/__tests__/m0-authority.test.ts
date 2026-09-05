@@ -193,7 +193,7 @@ const M0_AUTHORITY_PATHS = [
   'docs/plans/sota-application-completion-programme.md',
   'tests/capabilities/catalog-v1.json',
   'tests/capabilities/schema-v1.json',
-  'tests/rust-dependency-closure.tsv',
+  'tests/rust-dependency-closure.tsv', 'tests/rust-parser-worker-qualification-inputs-v1.tsv',
   'tests/sparql/protocol/inventory.tsv',
   'tests/sparql/protocol/sqlite-expected-regression-baseline.tsv',
   'tests/sparql/query/inventory.tsv',
@@ -204,28 +204,26 @@ const M0_AUTHORITY_PATHS = [
 ] as const;
 
 const EXPECTED_ARTIFACT_INTERFACE_PATHS = [
-  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs',
-  'crates/sf-conformance/tests/binary_artifact_receipt.rs',
+  'crates/sf-conformance/src/bin/current-sf-cli-artifact-observation.rs', 'crates/sf-conformance/tests/binary_artifact_receipt.rs',
 ] as const;
 
 const REQUIRED_CI_COMMANDS = [
-  'cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check',
-  'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check',
+  'cargo run --locked -p sf-conformance --bin rdb2rdf-inventory -- --check', 'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check',
   'cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-query-regression-baseline -- --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin sparql-protocol-regression-baseline -- --check',
   'cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check',
+  'cargo run --locked -p sf-conformance --features evidence-receipts --bin rust-closure-receipt -- --check --profile parser-worker-qualification-inputs-v1',
   'cargo run --locked -p sf-bench --features performance-receipts --bin sf-performance-receipt -- check-scenarios',
   'cargo run --locked -p sf-conformance --bin capability-matrix -- --check',
 ] as const;
 
 const REQUIRED_FEATURE_CLIPPY = [
-  'cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings',
-  'cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings',
+  'cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings', 'cargo clippy --locked -p sf-bench --features performance-receipts --all-targets -- -D warnings',
 ] as const;
 
 const REQUIRED_ARTIFACT_OBSERVATION_TEST =
-  'cargo test --locked -p sf-conformance --features evidence-receipts --lib --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1';
+  'cargo test --locked -p sf-conformance --features evidence-receipts --lib --bin rust-closure-receipt --test binary_artifact_receipt --test regression_baseline_cli --test rust_closure_receipt -- --test-threads=1';
 
 const NATIVE_PREPARED_OBSERVATION_TEST =
   'binary_artifact_receipt::runtime_linkage::object_authority::tests::prepared_probe::prepared_probe_observes_the_current_release_profile_binary_from_sealed_source_copies';
@@ -357,9 +355,11 @@ describe('M0 protected authority and CI contract', () => {
 
   it('runs each read-only authority check exactly once and in dependency order', () => {
     const workflow = readFileSync(resolve(repository, '.github/workflows/ci.yml'), 'utf8');
+    const workflowLines = workflow.split(/\r?\n/);
     const positions = REQUIRED_CI_COMMANDS.map((command) => {
-      expect(workflow.split(command)).toHaveLength(2);
-      return workflow.indexOf(command);
+      const line = `        run: ${command}`;
+      expect(workflowLines.filter((candidate) => candidate === line)).toHaveLength(1);
+      return workflowLines.indexOf(line);
     });
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     for (const binary of [

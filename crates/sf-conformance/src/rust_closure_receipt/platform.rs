@@ -3,6 +3,28 @@ use std::str::FromStr;
 
 use cargo_platform::{Cfg, Platform};
 
+const QUALIFICATION_CFG: &str = concat!(
+    "debug_assertions\n",
+    "panic=\"unwind\"\n",
+    "target_abi=\"\"\n",
+    "target_arch=\"x86_64\"\n",
+    "target_endian=\"little\"\n",
+    "target_env=\"gnu\"\n",
+    "target_family=\"unix\"\n",
+    "target_feature=\"fxsr\"\n",
+    "target_feature=\"sse\"\n",
+    "target_feature=\"sse2\"\n",
+    "target_has_atomic=\"16\"\n",
+    "target_has_atomic=\"32\"\n",
+    "target_has_atomic=\"64\"\n",
+    "target_has_atomic=\"8\"\n",
+    "target_has_atomic=\"ptr\"\n",
+    "target_os=\"linux\"\n",
+    "target_pointer_width=\"64\"\n",
+    "target_vendor=\"unknown\"\n",
+    "unix\n",
+);
+
 #[derive(Debug, Clone)]
 pub(super) struct TargetContext {
     name: String,
@@ -42,6 +64,15 @@ impl TargetContext {
     }
 }
 
+pub(super) fn canonical_qualification_cfg(raw: &str) -> Result<String, String> {
+    if raw != QUALIFICATION_CFG {
+        return Err(
+            "qualification target cfg is not the exact pinned x86_64 GNU/Linux fact set".to_owned(),
+        );
+    }
+    Ok(raw.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,5 +100,23 @@ mod tests {
         assert!(TargetContext::parse("target", "").is_err());
         assert!(TargetContext::parse("target", "unix\nunix\n").is_err());
         assert!(TargetContext::parse("target", "cfg(unix)\n").is_err());
+    }
+
+    #[test]
+    fn qualification_cfg_requires_canonical_gnu_x86_64_facts() {
+        let valid = QUALIFICATION_CFG;
+        assert_eq!(canonical_qualification_cfg(valid).unwrap(), valid);
+        assert!(canonical_qualification_cfg(&valid.replace("gnu", "musl")).is_err());
+        assert!(canonical_qualification_cfg(&valid.replace(
+            "target_arch=\"x86_64\"\ntarget_endian=\"little\"",
+            "target_endian=\"little\"\ntarget_arch=\"x86_64\""
+        ))
+        .is_err());
+        assert!(canonical_qualification_cfg(&valid.replace(
+            "target_os=\"linux\"\n",
+            "target_os=\"linux\"\ntarget_os=\"windows\"\n"
+        ))
+        .is_err());
+        assert!(canonical_qualification_cfg(&format!("{valid}windows\n")).is_err());
     }
 }
