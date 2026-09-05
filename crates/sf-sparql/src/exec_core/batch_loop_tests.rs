@@ -10,6 +10,7 @@ use crate::iq::{Branch, OrderKey, Scan, TermDef};
 use crate::{Plan, PlanForm};
 
 use super::batch::TERM_GEN_BATCH_SIZE;
+use super::driver::parallel_term_gen_for;
 use super::select;
 
 struct MockBackend {
@@ -144,6 +145,10 @@ fn finite_order_window_compacts_across_multiple_batches_without_changing_slice()
         dedup_scopes: Vec::new(),
         construct_drops_some_branch_var: false,
     };
+    assert!(
+        !parallel_term_gen_for(&plan),
+        "finite ORDER reconstruction must stay sequential for its RSS bound"
+    );
     let rows = (0..n)
         .map(|index| RawTuple {
             values: vec![Some(format!("{:07}", n - 1 - index))],

@@ -40,9 +40,10 @@ variable-key ORDER window uses stable in-memory prefix compaction under
 independent row and retained textual-payload ceilings. Unbounded, overflowed,
 nested and expression ORDER remain fail-closed in serving. This does not provide
 federation, spill, or the external `OrderBy` node proposed here, and it remains
-short of M1 qualification until fresh-process RSS and an admitted live Product
-Mock serve result pass. Its independent materialized semantic oracle now checks
-defined orders while withholding oracle authority from undefined extensions.
+short of M1 qualification until an admitted live Product Mock serve-path result
+passes. Controlled heap and fresh-process RSS sweeps now pass the growth gate,
+and the independent materialized semantic oracle checks defined orders while
+withholding oracle authority from undefined extensions.
 
 ## Context and problem statement
 

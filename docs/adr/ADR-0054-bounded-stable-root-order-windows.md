@@ -16,16 +16,19 @@ This ADR is **accepted** and its single-source execution and admission rules are
 implemented. It does not accept ADR-0040's federation/spill proposal or claim
 that ORDER has passed the complete ADR-0038 M1 qualification gate.
 
-The required 1×/10×/100× requested-heap smoke exists and the 10×→100× growth is
-at most 10%. A required independent materialized-oracle differential now covers
-the admitted value domains, directions, UNBOUND, multiple keys and slice
-boundaries. It uses `spareval` only where relative order is defined; separate
-bag, repeatability and source-stable-tie assertions do not turn undefined
+The required 1×/10×/100× requested-heap and fresh-process RSS gates exist; both
+10×→100× median and p95 RSS growth are capped at 10%. The RSS workers exclude
+source generation, assert the exact fixed result, and use an explicit 64 KiB
+SQLite page cache as a measurement-source control, not a production tuning
+claim. A required independent materialized-oracle differential covers the
+admitted value domains, directions, UNBOUND, multiple keys and slice boundaries.
+It uses `spareval` only where relative order is defined; separate bag,
+repeatability and source-stable-tie assertions do not turn undefined
 cross-domain, NaN, partial-calendar or partial-duration order into a semantic
-claim. Fresh-process RSS and an admitted live Product Mock serve result are
-still missing, so the generated exact-bounded query profile remains planned.
-The CLI's retained-byte setting accounts exact textual binding payload; it is
-not described as a total peak-heap ceiling.
+claim. An admitted live Product Mock serve-path result is still missing, so the
+generated exact-bounded query profile remains planned. The CLI's retained-byte
+setting accounts exact textual binding payload; it is not described as a total
+peak-heap ceiling.
 
 ## Context
 
@@ -74,6 +77,12 @@ The final pass sorts the retained buffer and then applies OFFSET/LIMIT. No SQL
 ORDER or source collation participates. The fixed reconstruction batch remains
 part of the ADR-0006 constant execution budget, so live row count is
 `O(K + fixed_batch)`, never `O(source_cardinality)`.
+
+The plain execution path keeps term reconstruction sequential whenever ORDER is
+present. Repeated parallel batches distributed short-lived term allocations
+across system-allocator arenas and failed the fresh-process RSS gate even though
+requested live heap was bounded. Non-ORDER streaming and aggregate inner
+collection retain their existing measured parallel path.
 
 ### 3. Use one deterministic total comparator
 
@@ -129,14 +138,18 @@ setting is a fail-closed request budget, not a pre-allocation heap reservation.
 Required CI evidence covers checked window arithmetic, stable tie boundaries,
 all reconstruction chunk sizes, mixed-domain comparator laws, exact row/payload
 caps, typed expression rejection, internal-name hygiene, LIMIT-0 poison-source
-behavior, and file-backed 1×/10×/100× requested heap.
+behavior, file-backed 1×/10×/100× requested heap, and 50 fresh Linux workers per
+scale for process-lifetime RSS. The controller creates exact 1,000/10,000/100,000
+row SQLite sources before any worker starts. Each worker includes startup,
+mapping/schema setup, execution and teardown in `VmHWM`, verifies all 80 ordered
+rows, and runs with a measurement-only 64 KiB SQLite page cache. Exact doubled
+median and nearest-rank p95 independently apply the checked 10% gate.
 
 ADR-0038 M1 qualification additionally requires:
 
-1. fresh worker processes at each scale proving RSS 10×→100× growth ≤10%;
-2. an independent materialized-oracle differential for every admitted value
+1. an independent materialized-oracle differential for every admitted value
    domain, direction, UNBOUND, multiple-key and slice boundary; and
-3. an admitted live Product Mock serve-path result, not only a raw executor run.
+2. an admitted live Product Mock serve-path result, not only a raw executor run.
 
 Item 2 is now required CI evidence. Items 1 and 3 remain open, so ORDER has not
 passed the complete M1 qualification gate.

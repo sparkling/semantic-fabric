@@ -22,8 +22,7 @@ use super::row::{build_col_index, canonical_pairs, intern_bindings, Bindings};
 use super::sql_error::map_sql_err;
 
 /// Drive an always-ready future to completion with no runtime (design §5 M2).
-/// SQLite waits resolve synchronously; the cooperative checkpoint returns
-/// `Pending` once and is immediately re-polled by this no-op waker loop.
+/// SQLite's cooperative `Pending` checkpoint is immediately re-polled here.
 pub(crate) fn block_on<F: Future>(fut: F) -> F::Output {
     use std::task::{Context, Poll, Waker};
     let mut cx = Context::from_waker(Waker::noop());
@@ -67,9 +66,8 @@ fn accounting_overflow(control: &dyn QueryControl) -> Error {
     Error::QueryControl(control.terminate(QueryControlError::AccountingOverflow))
 }
 
-/// Evaluate ORDER BY expression keys (e.g. `STRLEN(?n)`) and inject each result as a
-/// synthetic binding so `order_cmp` finds it (design §2 — the extraction of the old
-/// SQLite-only `exec.rs` injection, now backend-uniform).
+/// Evaluate ORDER expressions and inject synthetic bindings for the comparator
+/// (design §2 — extracted from the old SQLite-only `exec.rs` path).
 fn inject_order_expr_keys(order: &[OrderKey], bindings: Bindings) -> Bindings {
     if order.iter().any(|k| k.expr.is_some()) {
         let mut b = bindings;
@@ -102,6 +100,10 @@ where
     for_each_solution_controlled(plan, b, &UncontrolledQueryControl, sink).await
 }
 
+pub(super) fn parallel_term_gen_for(plan: &Plan) -> bool {
+    plan.order.is_empty()
+}
+
 /// Controlled sibling of [`for_each_solution`]. Production serving supplies one
 /// request-scoped control; raw/conformance entry points use the explicit
 /// [`UncontrolledQueryControl`] wrapper above.
@@ -128,9 +130,9 @@ where
         order: &plan.order,
         offset: plan.offset,
         limit: plan.limit,
-        // Plain streaming path: reconstruct -> DISTINCT -> ORDER/slice -> sink.
-        // The measured term-generation gate is documented by `reconstruct_batch`.
-        parallel_term_gen: true,
+        // ORDER stays sequential: repeated Rayon batches spread short-lived
+        // allocations across system-allocator arenas and violate its RSS gate.
+        parallel_term_gen: parallel_term_gen_for(plan),
         stop_after_first: matches!(plan.form, PlanForm::Ask),
         dedup_scopes: &plan.dedup_scopes,
         control,
