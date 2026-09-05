@@ -16,7 +16,7 @@ mod schema;
 
 pub use fixture::SyntheticFixture;
 #[allow(unused_imports)]
-pub use r2rml::extract_r2rml;
+pub use r2rml::extract_relational_r2rml;
 #[allow(unused_imports)]
 pub use schema::{
     RelationSchema, RelationalColumn, RelationalInventory, StoreSchema, StyleColumn,
@@ -30,14 +30,16 @@ pub const SOURCE_REVISION: &str = "7c45292fccb8b88afe263e18de6806667ae18573";
 pub const MANIFEST_PATH: &str = "candidate-manifest.json";
 pub const SNAPSHOT_PATH: &str = "source-snapshot.json";
 pub const COVERAGE_PATH: &str = "relational-schema-coverage.json";
-pub const MAPPING_PATH: &str = "categories/13-source-mapping/part-001.ttl";
+pub const CATEGORY_MAPPING_PATH: &str = "categories/13-source-mapping/category.json";
+pub const CATEGORY_SHARD_PREFIX: &str = "categories/13-source-mapping/part-";
 pub const INITIAL_MIGRATION: &str =
     "src/services/ProductDesign/ProductDesign.Infrastructure/Migrations/202607181735_Initial.cs";
 pub const FK_MIGRATION: &str = "src/services/ProductDesign/ProductDesign.Infrastructure/Migrations/202607212000_AddIntraContextForeignKeys.cs";
 
 const STYLE_MAP: &str =
-    "https://hm.com/ns/semantic-product-mock/source-map/relational/ProductDesign/style";
+    "https://hm.com/ns/semantic-product-mock/mapping/category-13/triples-map/82e916bdb2399497da35f6c278c951aed98750933a36137675533eb02b4717da";
 const STYLE_CLASS: &str = "https://hm.com/ns/semantic-product-mock/product-design/Style";
+const STYLE_TABLE_IDENTITY: &str = "src/services/ProductDesign/ProductDesign.Infrastructure::style";
 const STYLE_NUMBER_PREDICATE: &str =
     "https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber";
 const VERSION_PREDICATE: &str =
@@ -82,11 +84,11 @@ fn pin(path: &str, bytes: &[u8]) -> Pin {
 
 pub fn external_policy() -> SealPolicy {
     SealPolicy {
-        manifest_bytes: 38_321,
-        manifest_sha256: "sha256:edad6efab2406c021e85dd55a8d4354f5c115e3b6a5e3f6b7a86f75330f2b1cb"
+        manifest_bytes: 63_091,
+        manifest_sha256: "sha256:bf43a09b9eb952e9708044838c16684351eb85e1049b5dc4a599ce7884d51f5d"
             .to_owned(),
-        artifact_count: 139,
-        artifact_bytes: 41_845_098,
+        artifact_count: 246,
+        artifact_bytes: 69_062_740,
         snapshot_file_count: 171,
         snapshot_file_bytes: 1_037_818,
         source_pins: vec![
@@ -204,7 +206,9 @@ where
         if value.len() as u64 != bytes || sha256(&value) != digest {
             return Err("transitive artifact seal mismatch");
         }
-        if [SNAPSHOT_PATH, COVERAGE_PATH, MAPPING_PATH].contains(&path) {
+        if [SNAPSHOT_PATH, COVERAGE_PATH, CATEGORY_MAPPING_PATH].contains(&path)
+            || path.starts_with(CATEGORY_SHARD_PREFIX) && path.ends_with(".ttl")
+        {
             selected.insert(path.to_owned(), value);
         }
     }
@@ -219,10 +223,10 @@ where
         .remove(COVERAGE_PATH)
         .ok_or("relational coverage artifact is missing")?;
     let (inventory, style) = validate_coverage(&coverage)?;
-    let mapping = selected
-        .remove(MAPPING_PATH)
-        .ok_or("source mapping artifact is missing")?;
-    let r2rml = r2rml::validate_mapping(&mapping)?;
+    let category = selected
+        .remove(CATEGORY_MAPPING_PATH)
+        .ok_or("source-mapping category manifest is missing")?;
+    let r2rml = r2rml::validate_mapping(&category, &selected)?;
     Ok(GoldVertical {
         r2rml,
         inventory,
@@ -247,12 +251,14 @@ fn exact_manifest_claims(manifest: &Value) -> Result<(), &'static str> {
         .find(|entry| entry.pointer("/category").and_then(Value::as_u64) == Some(13))
         .ok_or("category 13 is missing")?;
     for (field, expected) in [
+        ("rmlTriplesMaps", 134),
+        ("predicateObjectMaps", 492),
         ("relationalSchemaTables", 112),
         ("relationalSchemaColumns", 598),
-        ("relationalR2rmlTriplesMaps", 1),
-        ("relationalR2rmlPredicateObjectMaps", 2),
-        ("relationalR2rmlMappedTables", 1),
-        ("relationalR2rmlMappedColumns", 2),
+        ("relationalR2rmlTriplesMaps", 148),
+        ("relationalR2rmlPredicateObjectMaps", 721),
+        ("relationalR2rmlMappedTables", 112),
+        ("relationalR2rmlMappedColumns", 598),
     ] {
         expect_u64(category, &format!("/stats/{field}"), expected)?;
     }
@@ -315,29 +321,27 @@ fn validate_coverage(bytes: &[u8]) -> Result<(RelationalInventory, StyleSchema),
     expect_u64(&coverage, "/relationalSchema/summary/tables", 112)?;
     expect_u64(&coverage, "/relationalSchema/summary/columns", 598)?;
     for (field, expected) in [
-        ("mappedTables", 1),
-        ("mappedColumns", 2),
-        ("unmappedTables", 111),
-        ("unmappedColumns", 596),
+        ("mappedTables", 112),
+        ("mappedColumns", 598),
+        ("unmappedTables", 0),
+        ("unmappedColumns", 0),
+        ("triplesMaps", 148),
+        ("predicateObjectMaps", 721),
     ] {
         expect_u64(&coverage, &format!("/relationalR2rml/{field}"), expected)?;
     }
-    expect_str(&coverage, "/relationalR2rml/status", "partial")?;
+    expect_str(&coverage, "/relationalR2rml/status", "complete")?;
     let bindings = array(&coverage, "/relationalR2rml/bindings")?;
-    if bindings.len() != 1 {
+    if bindings.len() != 112 {
         return Err("relational R2RML binding count mismatch");
     }
-    let binding = &bindings[0];
-    expect_str(binding, "/store", "ProductDesign")?;
-    expect_str(binding, "/table", "style")?;
-    expect_str(binding, "/sourcePath", INITIAL_MIGRATION)?;
-    let mapped: Vec<_> = array(binding, "/columns")?
+    let binding = bindings
         .iter()
-        .map(|value| string(value, "/column"))
-        .collect::<Result<_, _>>()?;
-    if mapped != ["style_number", "version"] {
-        return Err("relational R2RML mapped columns mismatch");
-    }
+        .find(|value| {
+            value.pointer("/tableIdentity").and_then(Value::as_str) == Some(STYLE_TABLE_IDENTITY)
+        })
+        .ok_or("Style relational R2RML binding is missing")?;
+    expect_str(binding, "/subjectClassIri", STYLE_CLASS)?;
     let store = array(&coverage, "/relationalSchema/stores")?
         .iter()
         .find(|value| value.pointer("/store").and_then(Value::as_str) == Some("ProductDesign"))

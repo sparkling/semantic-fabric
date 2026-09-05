@@ -38,6 +38,46 @@ fn replace_artifact(
     fixture.reseal_artifact(path);
 }
 
+fn replace_and_reseal_category_shard(
+    fixture: &mut support::SyntheticFixture,
+    path: &str,
+    from: &str,
+    to: &str,
+) {
+    let source = fixture.artifacts.get(path).expect("synthetic shard exists");
+    let source = std::str::from_utf8(source).expect("synthetic shard is UTF-8");
+    let changed = source.replacen(from, to, 1);
+    assert_ne!(changed, source, "synthetic shard mutation must apply");
+    fixture
+        .artifacts
+        .insert(path.to_owned(), changed.into_bytes());
+
+    let shard = fixture.artifacts.get(path).unwrap();
+    let mut category: Value = serde_json::from_slice(
+        fixture
+            .artifacts
+            .get(support::CATEGORY_MAPPING_PATH)
+            .expect("Category 13 manifest exists"),
+    )
+    .unwrap();
+    let descriptor = category["shards"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["path"].as_str() == Some(path))
+        .expect("synthetic shard descriptor exists");
+    descriptor["bytes"] = json!(shard.len());
+    descriptor["lines"] =
+        json!(shard.iter().filter(|byte| **byte == b'\n').count() + usize::from(!shard.is_empty()));
+    descriptor["digest"] = json!(support::sha256(shard));
+    fixture.artifacts.insert(
+        support::CATEGORY_MAPPING_PATH.to_owned(),
+        serde_json::to_vec(&category).unwrap(),
+    );
+    fixture.reseal_artifact(path);
+    fixture.reseal_artifact(support::CATEGORY_MAPPING_PATH);
+}
+
 #[test]
 fn sealed_product_mock_gold_loader_accepts_a_valid_candidate() {
     let fixture = support::SyntheticFixture::valid();
@@ -46,21 +86,28 @@ fn sealed_product_mock_gold_loader_accepts_a_valid_candidate() {
     assert_eq!(admitted.style.columns.len(), 5);
     assert_eq!(admitted.style.primary_key, ["style_number"]);
     assert_eq!(admitted.style.foreign_keys.len(), 2);
-    assert!(admitted.r2rml.contains(" a rr:TriplesMap ;"));
-    assert!(!admitted.r2rml.contains(" a rml:TriplesMap ;"));
-    assert!(!admitted.r2rml.contains("rml:logicalSource"));
+    let mappings = sf_mapping::parse_r2rml(&admitted.r2rml).unwrap();
+    assert_eq!(mappings.len(), 148);
+    assert_eq!(
+        mappings
+            .iter()
+            .map(|mapping| mapping.predicate_object_maps.len())
+            .sum::<usize>(),
+        721
+    );
+    assert!(!admitted.r2rml.contains("http://w3id.org/rml/"));
 }
 
 #[test]
 fn exact_external_policy_pins_manifest_and_transitive_counts() {
     let policy = support::external_policy();
-    assert_eq!(policy.manifest_bytes, 38_321);
+    assert_eq!(policy.manifest_bytes, 63_091);
     assert_eq!(
         policy.manifest_sha256,
-        "sha256:edad6efab2406c021e85dd55a8d4354f5c115e3b6a5e3f6b7a86f75330f2b1cb"
+        "sha256:bf43a09b9eb952e9708044838c16684351eb85e1049b5dc4a599ce7884d51f5d"
     );
-    assert_eq!(policy.artifact_count, 139);
-    assert_eq!(policy.artifact_bytes, 41_845_098);
+    assert_eq!(policy.artifact_count, 246);
+    assert_eq!(policy.artifact_bytes, 69_062_740);
     assert_eq!(policy.snapshot_file_count, 171);
     assert_eq!(policy.snapshot_file_bytes, 1_037_818);
     assert_eq!(policy.source_pins.len(), 2);
@@ -146,7 +193,7 @@ fn pure_coherently_resealed_claim_mutants_still_fail_structural_oracles() {
         &mut table_gap,
         support::COVERAGE_PATH,
         "/relationalR2rml/unmappedTables",
-        json!(110),
+        json!(1),
     );
     assert_eq!(
         support::admit_synthetic(&table_gap),
@@ -158,7 +205,7 @@ fn pure_coherently_resealed_claim_mutants_still_fail_structural_oracles() {
         &mut column_gap,
         support::COVERAGE_PATH,
         "/relationalR2rml/unmappedColumns",
-        json!(595),
+        json!(1),
     );
     assert_eq!(
         support::admit_synthetic(&column_gap),
@@ -176,32 +223,93 @@ fn pure_coherently_resealed_claim_mutants_still_fail_structural_oracles() {
         support::admit_synthetic(&column_order),
         Err("Style column contract mismatch")
     );
+
+    let mut shard_lines = support::SyntheticFixture::valid();
+    replace_artifact(
+        &mut shard_lines,
+        support::CATEGORY_MAPPING_PATH,
+        "/shards/0/lines",
+        json!(0),
+    );
+    assert_eq!(
+        support::admit_synthetic(&shard_lines),
+        Err("source-mapping shard seal mismatch")
+    );
 }
 
 #[test]
-fn only_the_r2rml_prefix_before_the_first_rml_map_is_accepted() {
+fn rdf_union_extracts_only_the_exact_relational_r2rml_closure() {
     let mut fixture = support::SyntheticFixture::valid();
-    let full = std::str::from_utf8(
-        fixture
-            .artifacts
-            .get(support::MAPPING_PATH)
-            .expect("mapping exists"),
-    )
-    .expect("mapping UTF-8");
-    let unbounded_parse = sf_mapping::parse_r2rml(full).expect("RML entries are ignored");
-    assert_eq!(unbounded_parse.len(), 1);
-    assert!(!unbounded_parse[0].id.contains("first-rml-map"));
-    let extracted = support::extract_r2rml(full).expect("bounded R2RML prefix extracts");
-    assert_eq!(sf_mapping::parse_r2rml(extracted).unwrap().len(), 1);
+    let category = fixture
+        .artifacts
+        .get(support::CATEGORY_MAPPING_PATH)
+        .expect("Category 13 manifest exists")
+        .clone();
+    let shards = fixture
+        .artifacts
+        .iter()
+        .filter(|(path, _)| path.starts_with(support::CATEGORY_SHARD_PREFIX))
+        .map(|(path, bytes)| (path.clone(), bytes.clone()))
+        .collect();
+    let raw_union = fixture
+        .artifacts
+        .iter()
+        .filter(|(path, _)| path.starts_with(support::CATEGORY_SHARD_PREFIX))
+        .flat_map(|(_, bytes)| bytes.iter().copied())
+        .collect::<Vec<_>>();
+    let raw_union = std::str::from_utf8(&raw_union).expect("synthetic shard union is UTF-8");
+    assert!(sf_mapping::parse_r2rml(raw_union).is_err());
+    let extracted = support::extract_relational_r2rml(&category, &shards)
+        .expect("sealed relational RDF closure extracts");
+    let mappings = sf_mapping::parse_r2rml(&extracted).unwrap();
+    assert_eq!(mappings.len(), 148);
+    assert_eq!(
+        mappings
+            .iter()
+            .map(|mapping| mapping.predicate_object_maps.len())
+            .sum::<usize>(),
+        721
+    );
+    assert!(!extracted.contains("http://w3id.org/rml/"));
 
-    let poisoned = full.replacen(" a rr:TriplesMap ;", " a rml:TriplesMap ;", 1);
+    let shard_path = format!("{}001.ttl", support::CATEGORY_SHARD_PREFIX);
     fixture
         .artifacts
-        .insert(support::MAPPING_PATH.to_owned(), poisoned.into_bytes());
-    fixture.reseal_artifact(support::MAPPING_PATH);
+        .get_mut(&shard_path)
+        .expect("synthetic shard exists")
+        .push(b' ');
+    fixture.reseal_artifact(&shard_path);
     assert_eq!(
         support::admit_synthetic(&fixture),
-        Err("R2RML extraction boundary mismatch")
+        Err("source-mapping shard seal mismatch")
+    );
+}
+
+#[test]
+fn coherently_resealed_root_or_rml_contamination_mutants_fail_closed() {
+    let shard_path = format!("{}001.ttl", support::CATEGORY_SHARD_PREFIX);
+    let mut root_count = support::SyntheticFixture::valid();
+    replace_and_reseal_category_shard(
+        &mut root_count,
+        &shard_path,
+        "http://www.w3.org/ns/r2rml#TriplesMap",
+        "http://w3id.org/rml/TriplesMap",
+    );
+    assert_eq!(
+        support::admit_synthetic(&root_count),
+        Err("source-mapping triples-map root count mismatch")
+    );
+
+    let mut contamination = support::SyntheticFixture::valid();
+    replace_and_reseal_category_shard(
+        &mut contamination,
+        &shard_path,
+        "http://www.w3.org/ns/r2rml#class",
+        "http://w3id.org/rml/class",
+    );
+    assert_eq!(
+        support::admit_synthetic(&contamination),
+        Err("relational R2RML closure reached an RML term")
     );
 }
 
@@ -243,5 +351,13 @@ fn exact_external_product_mock_gold_and_source_are_admitted() {
     assert_eq!(admitted.style.columns.len(), 5);
     assert_eq!(admitted.style.primary_key, ["style_number"]);
     assert_eq!(admitted.style.foreign_keys.len(), 2);
-    assert_eq!(sf_mapping::parse_r2rml(&admitted.r2rml).unwrap().len(), 1);
+    let mappings = sf_mapping::parse_r2rml(&admitted.r2rml).unwrap();
+    assert_eq!(mappings.len(), 148);
+    assert_eq!(
+        mappings
+            .iter()
+            .map(|mapping| mapping.predicate_object_maps.len())
+            .sum::<usize>(),
+        721
+    );
 }

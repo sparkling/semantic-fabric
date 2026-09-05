@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::{
-    pin, sha256, Pin, SealPolicy, COVERAGE_PATH, FK_MIGRATION, INITIAL_MIGRATION, MAPPING_PATH,
-    SNAPSHOT_PATH, SOURCE_REVISION,
+    pin, sha256, Pin, SealPolicy, CATEGORY_MAPPING_PATH, CATEGORY_SHARD_PREFIX, COVERAGE_PATH,
+    FK_MIGRATION, INITIAL_MIGRATION, SNAPSHOT_PATH, SOURCE_REVISION, STYLE_CLASS, STYLE_MAP,
+    STYLE_NUMBER_PREDICATE, VERSION_PREDICATE,
 };
 
 #[derive(Clone, Debug)]
@@ -43,14 +44,31 @@ impl SyntheticFixture {
             "files": snapshot_pins.iter().map(pin_json).collect::<Vec<_>>()
         }))
         .expect("synthetic snapshot serializes");
-        let artifacts = BTreeMap::from([
+        let mapping_shards = synthetic_mapping_shards();
+        let shard_pins: Vec<_> = mapping_shards
+            .iter()
+            .map(|(path, bytes)| pin(path, bytes))
+            .collect();
+        let category = serde_json::to_vec(&json!({
+            "category": 13,
+            "concern": "Source Mapping",
+            "coverageStatus": "facet-scoped-complete",
+            "stats": category_stats(),
+            "shards": shard_pins.iter().map(|entry| json!({
+                "path": entry.path,
+                "digest": entry.digest,
+                "bytes": entry.bytes,
+                "lines": mapping_shards[&entry.path].iter().filter(|byte| **byte == b'\n').count()
+                    + usize::from(!mapping_shards[&entry.path].is_empty())
+            })).collect::<Vec<_>>()
+        }))
+        .expect("synthetic Category 13 manifest serializes");
+        let mut artifacts = BTreeMap::from([
             (SNAPSHOT_PATH.to_owned(), snapshot),
             (COVERAGE_PATH.to_owned(), synthetic_coverage()),
-            (
-                MAPPING_PATH.to_owned(),
-                synthetic_mapping().as_bytes().to_vec(),
-            ),
+            (CATEGORY_MAPPING_PATH.to_owned(), category),
         ]);
+        artifacts.extend(mapping_shards);
         let artifact_pins: Vec<_> = artifacts
             .iter()
             .map(|(path, bytes)| pin(path, bytes))
@@ -59,11 +77,7 @@ impl SyntheticFixture {
             "purpose": "development",
             "source": {"pinnedRevision": SOURCE_REVISION, "admittedView": "exact-committed-tree", "mutableHeadAndWorkingTreeExcluded": true},
             "categoryCount": 14,
-            "categories": [{"category": 13, "stats": {
-                "relationalSchemaTables": 112, "relationalSchemaColumns": 598,
-                "relationalR2rmlTriplesMaps": 1, "relationalR2rmlPredicateObjectMaps": 2,
-                "relationalR2rmlMappedTables": 1, "relationalR2rmlMappedColumns": 2
-            }}],
+            "categories": [{"category": 13, "stats": category_stats()}],
             "applicability": {"productionAuthority": false},
             "operationalQualification": {"productionAuthority": false},
             "artifactFiles": artifact_pins.iter().map(pin_json).collect::<Vec<_>>()
@@ -119,15 +133,40 @@ fn pin_json(entry: &Pin) -> serde_json::Value {
 }
 
 fn synthetic_coverage() -> Vec<u8> {
+    let mut bindings = (0..111)
+        .map(|index| {
+            json!({
+                "tableIdentity": format!("synthetic/source::{index}"),
+                "subjectClassIri": format!("https://example.invalid/class/{index}")
+            })
+        })
+        .collect::<Vec<_>>();
+    bindings.push(json!({
+        "tableIdentity": "src/services/ProductDesign/ProductDesign.Infrastructure::style",
+        "subjectClassIri": STYLE_CLASS
+    }));
     serde_json::to_vec(&json!({
         "sourceRevision": SOURCE_REVISION,
         "relationalSchema": {"summary": {"tables": 112, "columns": 598},
             "stores": synthetic_stores()},
-        "relationalR2rml": {"status":"partial","mappedTables":1,"mappedColumns":2,
-            "unmappedTables":111,"unmappedColumns":596,"bindings":[{"store":"ProductDesign",
-            "table":"style","sourcePath":INITIAL_MIGRATION,"columns":[{"column":"style_number"},{"column":"version"}]}]}
+        "relationalR2rml": {"status":"complete","mappedTables":112,"mappedColumns":598,
+            "unmappedTables":0,"unmappedColumns":0,"triplesMaps":148,
+            "predicateObjectMaps":721,"bindings":bindings}
     }))
     .expect("synthetic coverage serializes")
+}
+
+fn category_stats() -> Value {
+    json!({
+        "rmlTriplesMaps": 134,
+        "predicateObjectMaps": 492,
+        "relationalSchemaTables": 112,
+        "relationalSchemaColumns": 598,
+        "relationalR2rmlTriplesMaps": 148,
+        "relationalR2rmlPredicateObjectMaps": 721,
+        "relationalR2rmlMappedTables": 112,
+        "relationalR2rmlMappedColumns": 598
+    })
 }
 
 fn synthetic_stores() -> Vec<Value> {
@@ -187,19 +226,155 @@ fn synthetic_style() -> Value {
     ]})
 }
 
-fn synthetic_mapping() -> &'static str {
-    r#"@prefix rr: <http://www.w3.org/ns/r2rml#> .
-@prefix rml: <http://w3id.org/rml/> .
-@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-
-<https://hm.com/ns/semantic-product-mock/source-map/relational/ProductDesign/style> a rr:TriplesMap ;
-  rr:logicalTable [ rr:tableName "style" ] ;
-  rr:subjectMap [ rr:template "https://hm.com/ns/semantic-product-mock/resource/product-design/Style/{style_number}" ; rr:termType rr:IRI ; rr:class <https://hm.com/ns/semantic-product-mock/product-design/Style> ] ;
-  rr:predicateObjectMap
-    [ rr:predicate <https://hm.com/ns/semantic-product-mock/product-design/Style/field/StyleNumber> ; rr:objectMap [ rr:column "style_number" ; rr:datatype xsd:string ] ],
-    [ rr:predicate <https://hm.com/ns/semantic-product-mock/product-design/Style/field/Version> ; rr:objectMap [ rr:column "version" ; rr:datatype xsd:integer ] ] .
-
-<https://example.invalid/first-rml-map> a rml:TriplesMap ;
-  rml:logicalSource [ rml:source <https://example.invalid/source> ] .
-"#
+fn synthetic_mapping_shards() -> BTreeMap<String, Vec<u8>> {
+    let mut triples = Vec::new();
+    for index in 0..148 {
+        let map = if index == 0 {
+            STYLE_MAP.to_owned()
+        } else {
+            format!("https://example.invalid/r2rml/map/{index}")
+        };
+        let logical = format!("{map}/logical-table");
+        let subject = format!("{map}/subject-map");
+        push_iri(&mut triples, &map, RDF_TYPE, RR_TRIPLES_MAP);
+        push_iri(&mut triples, &map, RR_LOGICAL_TABLE, &logical);
+        if index == 0 {
+            push_literal(&mut triples, &logical, RR_SQL_QUERY, STYLE_SQL_QUERY);
+        } else {
+            push_literal(
+                &mut triples,
+                &logical,
+                RR_TABLE_NAME,
+                &format!("synthetic_table_{index}"),
+            );
+        }
+        push_iri(&mut triples, &map, RR_SUBJECT_MAP, &subject);
+        let template = if index == 0 {
+            format!("{STYLE_TEMPLATE_PREFIX}{{style_number}}")
+        } else {
+            format!("https://example.invalid/resource/{index}/{{id}}")
+        };
+        push_literal(&mut triples, &subject, RR_TEMPLATE, &template);
+        push_iri(&mut triples, &subject, RR_TERM_TYPE, RR_IRI);
+        push_iri(
+            &mut triples,
+            &subject,
+            RR_CLASS,
+            if index == 0 {
+                STYLE_CLASS
+            } else {
+                "https://example.invalid/class/Synthetic"
+            },
+        );
+        let pom_count = if index == 0 {
+            11
+        } else if index <= 122 {
+            5
+        } else {
+            4
+        };
+        for pom_index in 0..pom_count {
+            let pom = format!("{map}/predicate-object-map/{pom_index}");
+            let object = format!("{pom}/object-map");
+            let (predicate, column, datatype) = style_or_synthetic_term(index, pom_index);
+            push_iri(&mut triples, &map, RR_PREDICATE_OBJECT_MAP, &pom);
+            push_iri(&mut triples, &pom, RR_PREDICATE, &predicate);
+            push_iri(&mut triples, &pom, RR_OBJECT_MAP, &object);
+            push_literal(&mut triples, &object, RR_COLUMN, &column);
+            push_iri(&mut triples, &object, RR_DATATYPE, &datatype);
+        }
+    }
+    for index in 0..134 {
+        let map = format!("https://example.invalid/rml/map/{index}");
+        let logical = format!("{map}/logical-source");
+        let subject = format!("{map}/subject-map");
+        push_iri(&mut triples, &map, RDF_TYPE, RML_TRIPLES_MAP);
+        push_iri(&mut triples, &map, RML_LOGICAL_SOURCE, &logical);
+        push_iri(
+            &mut triples,
+            &logical,
+            RML_SOURCE,
+            "https://example.invalid/source",
+        );
+        push_iri(&mut triples, &map, RR_SUBJECT_MAP, &subject);
+        push_literal(
+            &mut triples,
+            &subject,
+            RR_TEMPLATE,
+            &format!("https://example.invalid/rml-resource/{index}/{{id}}"),
+        );
+    }
+    let mut parts = [String::new(), String::new()];
+    for (index, triple) in triples.into_iter().enumerate() {
+        parts[index % 2].push_str(&triple);
+    }
+    BTreeMap::from([
+        (
+            format!("{CATEGORY_SHARD_PREFIX}001.ttl"),
+            parts[0].as_bytes().to_vec(),
+        ),
+        (
+            format!("{CATEGORY_SHARD_PREFIX}002.ttl"),
+            parts[1].as_bytes().to_vec(),
+        ),
+    ])
 }
+
+fn style_or_synthetic_term(index: usize, pom_index: usize) -> (String, String, String) {
+    if index == 0 && pom_index == 0 {
+        return (
+            STYLE_NUMBER_PREDICATE.to_owned(),
+            "style_number".to_owned(),
+            XSD_STRING.to_owned(),
+        );
+    }
+    if index == 0 && pom_index == 1 {
+        return (
+            VERSION_PREDICATE.to_owned(),
+            "version".to_owned(),
+            XSD_INTEGER.to_owned(),
+        );
+    }
+    (
+        format!("https://example.invalid/predicate/{index}/{pom_index}"),
+        format!("column_{pom_index}"),
+        XSD_STRING.to_owned(),
+    )
+}
+
+fn push_iri(triples: &mut Vec<String>, subject: &str, predicate: &str, object: &str) {
+    triples.push(format!("<{subject}> <{predicate}> <{object}> .\n"));
+}
+
+fn push_literal(triples: &mut Vec<String>, subject: &str, predicate: &str, object: &str) {
+    let object = serde_json::to_string(object).expect("synthetic literal serializes");
+    triples.push(format!("<{subject}> <{predicate}> {object} .\n"));
+}
+
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RR_TRIPLES_MAP: &str = "http://www.w3.org/ns/r2rml#TriplesMap";
+const RR_LOGICAL_TABLE: &str = "http://www.w3.org/ns/r2rml#logicalTable";
+const RR_SQL_QUERY: &str = "http://www.w3.org/ns/r2rml#sqlQuery";
+const RR_TABLE_NAME: &str = "http://www.w3.org/ns/r2rml#tableName";
+const RR_SUBJECT_MAP: &str = "http://www.w3.org/ns/r2rml#subjectMap";
+const RR_TEMPLATE: &str = "http://www.w3.org/ns/r2rml#template";
+const RR_TERM_TYPE: &str = "http://www.w3.org/ns/r2rml#termType";
+const RR_IRI: &str = "http://www.w3.org/ns/r2rml#IRI";
+const RR_CLASS: &str = "http://www.w3.org/ns/r2rml#class";
+const RR_PREDICATE_OBJECT_MAP: &str = "http://www.w3.org/ns/r2rml#predicateObjectMap";
+const RR_PREDICATE: &str = "http://www.w3.org/ns/r2rml#predicate";
+const RR_OBJECT_MAP: &str = "http://www.w3.org/ns/r2rml#objectMap";
+const RR_COLUMN: &str = "http://www.w3.org/ns/r2rml#column";
+const RR_DATATYPE: &str = "http://www.w3.org/ns/r2rml#datatype";
+const RML_TRIPLES_MAP: &str = "http://w3id.org/rml/TriplesMap";
+const RML_LOGICAL_SOURCE: &str = "http://w3id.org/rml/logicalSource";
+const RML_SOURCE: &str = "http://w3id.org/rml/source";
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const STYLE_SQL_QUERY: &str = "SELECT source.*, CASE source.\"status\" WHEN 'Draft' THEN \
+    'https://hm.com/ns/semantic-product-mock/product-design/vocabulary/StyleStatus/Draft' \
+    WHEN 'Locked' THEN \
+    'https://hm.com/ns/semantic-product-mock/product-design/vocabulary/StyleStatus/Locked' \
+    ELSE NULL END AS \"__sb_enum_2789c5144a07118e\" FROM \"style\" AS source";
+const STYLE_TEMPLATE_PREFIX: &str = "https://hm.com/ns/semantic-product-mock/resource/record/\
+    2e86ee77d484e286f8cf45bf9ef67aee749476294c96b3a13eb8fcd3e554b020/";

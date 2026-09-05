@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-04
+updated: 2026-09-05
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -41,10 +41,11 @@ second production runtime without a reviewed reason.
 The canonical `semantic-builder` gold for product-mock, the sealed
 `semantic-product-mock` source revision and the narrow mutable ProductDesign/Style
 live vertical provide a faster development path; the separately inspected
-11-database inventory is red. The gold contains 30,696 ontology, 3,617 shape,
-4,501 total mapping and 900 provenance quads across 14 categories. Its Source
+11-database inventory is red. The gold contains 38,962 ontology, 7,495 shape,
+10,167 total mapping and 900 provenance quads across 14 categories. Its Source
 Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps;
-the in-charter qualified development KAT slice covers only one table/two columns. It is a
+the in-charter qualified development KAT covers 148 relational R2RML TriplesMaps/721
+predicate-object maps over all 112 tables/598 columns. It is a
 deterministic development oracle, not standards qualification or production
 admission.
 
@@ -143,13 +144,16 @@ and the live server/version/schema posture. They do not attest the source Git
 worktree, OCI image bytes, build process, or a source-to-container provenance
 link; SQL observations cannot prove the container was built from that source.
 Its operational rows are not gold, and mutable volume, trust authentication,
-lack of TLS and partial R2RML coverage prohibit backend admission or release
+lack of TLS and unqualified mutable full-inventory state prohibit backend admission or release
 claims.
 
-Semantic Fabric continues to support R2RML, not generic RML. The one in-charter
-qualified development R2RML map may seed an end-to-end vertical slice. Coverage of the
-remaining relational schema is an upstream mapping workstream, not permission
-to expand this application's charter or infer mappings.
+Semantic Fabric continues to support R2RML, not generic RML. The development
+adapter unions every sealed Category-13 shard, takes the RDF-reachable closure
+from exactly 148 `rr:TriplesMap` roots, rejects reachable generic-RML terms, and
+validates 721 predicate-object maps over all 112 tables/598 columns before the
+unchanged production R2RML parser. The Style map seeds an end-to-end vertical;
+this development authority is not permission to expand the application's
+charter, infer mappings, admit a backend or claim full live-inventory conformity.
 
 ### 6. Run four lanes in parallel
 
@@ -168,7 +172,7 @@ claims that require their authority. Harness scores, plans and receipts do not
 earn product progress; deterministic application behavior and direct product
 tests do.
 
-### 7. Implementation status (2026-09-04)
+### 7. Implementation status (through 2026-09-05)
 
 Commit `7c12aa7` enforces the Rust product boundary in protected harness and CI
 metadata while preserving the dependency-free Node oracle. Commits `13b8187`,
@@ -229,6 +233,14 @@ columns, `Style360` lacked three tables/21 columns, and `ProductDesign` had one
 changed column. The gate compares table identity plus ordered column name, type
 and nullability only—not keys, constraints, defaults, indexes, views or privileges.
 It infers no mapping, mutates no database and grants no production authority.
+
+The 2026-09-05 gold refresh seals the current 63,091-byte manifest and all 246
+transitive artifacts, keeps the 171-file source snapshot and two migration pins,
+and validates the Category-13 relational closure at 148 TriplesMaps/721
+predicate-object maps over 112 tables/598 columns. Its current Style differential
+passes in one rolled-back read-only PostgreSQL 16.9 snapshot. The separate full
+inventory gate still fails closed on the drift recorded above. Neither result
+depends on ignored `.metaharness` output or grants production authority.
 
 Commits `9d228dd` and `67a779a` move neutral schema ownership into `sf-core` and
 centralize compiler dialect capabilities without adding Node to Cargo. Commit
