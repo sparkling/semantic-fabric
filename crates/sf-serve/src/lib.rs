@@ -10,6 +10,8 @@
 //! backend → serialise the negotiated form, **streaming** the bytes into the
 //! response body (ADR-0010 §C; [`stream`]). Values stay bound parameters end to
 //! end—the rewriter/executors never interpolate (ADR-0010 R1).
+//! An exact query-less `GET`/`HEAD /sparql` returns a fixed, redacted W3C Service
+//! Description without acquiring query capacity or a runtime/source lease.
 //!
 //! Governance (ADR-0010): one request budget spans body extraction, admitted
 //! compilation, pool wait, controlled execution, and serialisation. It combines
@@ -47,6 +49,7 @@ mod post_body;
 mod problem;
 mod request_compile;
 mod request_deadline;
+mod service_description;
 mod snapshot;
 mod sqlite_admission;
 mod startup;

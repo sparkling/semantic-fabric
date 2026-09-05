@@ -320,7 +320,9 @@ async fn missing_query_param_returns_400() {
     let cfg = Arc::new(sqlite_config());
     let req = Request::builder()
         .method("GET")
-        .uri("/sparql")
+        // A truly query-less GET is W3C Service Description discovery. A query
+        // string which omits the required `query` field remains invalid.
+        .uri("/sparql?default-graph-uri=https%3A%2F%2Fexample.test%2Fgraph")
         .body(Body::empty())
         .unwrap();
     let (status, _ctype, _body) = send(cfg, req).await;

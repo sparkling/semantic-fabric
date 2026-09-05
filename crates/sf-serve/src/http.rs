@@ -29,7 +29,7 @@ use crate::stream::{self, RdfFormat};
 #[path = "http_tests.rs"]
 mod tests;
 
-/// Build the governed request service exposing `GET`/`POST /sparql` over `cfg`.
+/// Build the governed query service plus fixed discovery and health controls.
 pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
     let inner = Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
@@ -61,6 +61,7 @@ async fn handle_get(
                 }
             }
         }
+        // The outer service consumes the exact query-less discovery request.
         None => return problem::response(ProblemCode::InvalidRequest),
     };
     process(cfg, snapshot, query, accept(&headers), budget).await

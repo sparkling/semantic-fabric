@@ -26,7 +26,9 @@ use crate::problem;
 /// Axum path/method matching, fallbacks, extraction, and handler work all happen
 /// inside the one absolute deadline created here. The same boundary fail-fast
 /// admits active application work before the Router or request body is polled;
-/// overload never creates another internal waiter.
+/// overload never creates another internal waiter. Fixed health and W3C service-
+/// description discovery responses are control metadata and bypass query-work
+/// admission, runtime leases, and the query deadline.
 #[derive(Clone)]
 pub struct RequestDeadlineService {
     inner: Router,
@@ -57,6 +59,14 @@ impl Service<Request<Body>> for RequestDeadlineService {
     }
 
     fn call(&mut self, mut request: Request<Body>) -> Self::Future {
+        if crate::service_description::is_request(&request) {
+            let response = crate::service_description::response(
+                request.headers(),
+                self.cfg.query_mode(),
+                request.method() == axum::http::Method::HEAD,
+            );
+            return Box::pin(async move { Ok(response) });
+        }
         if crate::health::is_health_path(request.uri().path()) {
             let replacement = self.inner.clone();
             let mut inner = std::mem::replace(&mut self.inner, replacement);
