@@ -72,8 +72,8 @@
 //! `Expression` tree rewrite (the five triple-term functions, composed-aware
 //! `=`/`sameTerm`, the error-marker/boolean-literal leaves); [`top_level`] —
 //! the whole-query entry point and the top-level UNION/VALUES
-//! composed-ness-mismatch relaxation; `collect_vars` — the variable-collection
-//! helper `top_level`'s uniform-composed-ness check uses; `util` — shared
+//! composed-ness-mismatch relaxation; `collect_vars` — the shared whole-pattern
+//! authored-variable inventory used by RDF-star and DESCRIBE hygiene; `util` — shared
 //! vocabulary constants and fresh-variable minting. Every child is a private
 //! submodule (not `pub mod`): this file re-exports exactly the items that
 //! were `pub`/`pub(crate)` before the split, so the crate's observable
@@ -87,6 +87,7 @@ mod top_level;
 mod util;
 mod walk;
 
+pub(crate) use collect_vars::collect_pattern_vars;
 pub(crate) use env::composed_term_def;
 pub use env::{
     all_component_var_names, apply_composed_bindings, expand_projection_for_cascade,

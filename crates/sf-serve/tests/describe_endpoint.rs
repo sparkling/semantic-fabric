@@ -110,7 +110,7 @@ async fn one_iri_returns_its_exact_one_hop_outgoing_description() {
 async fn legal_user_variable_names_cannot_capture_description_internals() {
     let (config, _) = config_and_pool(SINGLE_POM_MAPPING_TTL);
     let query = r#"DESCRIBE ?s WHERE {
-        VALUES (?s ?__sf_describe_p ?__sf_describe_o) {
+        VALUES (?s ?__sf_describe_predicate_0 ?__sf_describe_object_0) {
             (<http://ex/person/1> <urn:sentinel:predicate> "sentinel")
         }
     }"#;

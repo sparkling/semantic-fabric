@@ -26,10 +26,10 @@ pub(crate) fn rewrite(pattern: &GraphPattern) -> Result<(GraphPattern, Vec<Tripl
 
     let target = targets.into_iter().next().expect("exactly one target");
     let (subject, inner) = description_subject(target, inner)?;
-    let mut names = BTreeSet::new();
-    inner.on_in_scope_variable(|variable| {
-        names.insert(variable.as_str().to_owned());
-    });
+    let mut names = crate::star::collect_pattern_vars(&inner)
+        .into_iter()
+        .map(|variable| variable.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
     if let TermPattern::Variable(variable) = &subject {
         names.insert(variable.as_str().to_owned());
     }
@@ -109,6 +109,22 @@ mod tests {
     fn legal_user_names_do_not_capture_internal_bindings() {
         let pattern = describe_pattern(
             "DESCRIBE ?s WHERE { ?s ?__sf_describe_predicate_0 ?__sf_describe_object_0 }",
+        );
+        let (_, template) = rewrite(&pattern).unwrap();
+        let NamedNodePattern::Variable(predicate) = &template[0].predicate else {
+            unreachable!()
+        };
+        let TermPattern::Variable(object) = &template[0].object else {
+            unreachable!()
+        };
+        assert_eq!(predicate.as_str(), "__sf_describe_predicate_1");
+        assert_eq!(object.as_str(), "__sf_describe_object_1");
+    }
+
+    #[test]
+    fn names_mentioned_only_in_expressions_are_still_reserved() {
+        let pattern = describe_pattern(
+            "DESCRIBE ?s WHERE { VALUES ?s { <http://ex/a> } FILTER(!BOUND(?__sf_describe_predicate_0) && !BOUND(?__sf_describe_object_0)) }",
         );
         let (_, template) = rewrite(&pattern).unwrap();
         let NamedNodePattern::Variable(predicate) = &template[0].predicate else {
