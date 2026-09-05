@@ -22,6 +22,12 @@ implements:
 > contract for exact query-less `GET`/`HEAD /sparql`, advertising only fixed
 > custom subset resources and actually reachable formats; it does not promote
 > the endpoint to full SPARQL Query, Protocol, or federation conformance.
+> Commits `5804d4e`/`a71e6c7`/`d5cf056`/`f694a84` add required SQLite
+> evidence for the exact one-target-expression, one-hop outgoing DESCRIBE
+> profile, including graph-set union and repeated-target collapse. Commit
+> `36eb31f` advertises only its versioned custom single-source feature. This is
+> not Concise Bounded Description; wider shapes, recursive blank-node closure
+> and other backends remain unqualified.
 > The generated capability matrix is the application/release authority;
 > upstream library capability is feasibility evidence, not semantic-fabric
 > implementation or production admission.

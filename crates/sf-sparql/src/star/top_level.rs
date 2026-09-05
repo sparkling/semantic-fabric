@@ -24,9 +24,10 @@ use spargebra::Query;
 
 use crate::{Error, Result};
 
-use super::collect_vars::collect_pattern_vars;
+use super::collect_vars::{collect_pattern_vars, collect_query_vars};
 use super::env::StarEnv;
 use super::expr::rewrite_expr;
+use super::util::FreshVars;
 use super::walk::rewrite_pattern;
 
 /// Rewrite a whole query's WHERE pattern (rules R1-R7 plus the ADR-0032 D3
@@ -41,7 +42,7 @@ use super::walk::rewrite_pattern;
 /// itself (a separate `Vec<TriplePattern>`, not a `GraphPattern`) is
 /// untouched HERE.
 pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
-    let mut n = 0usize;
+    let mut n = FreshVars::new(collect_query_vars(query));
     let mut env = StarEnv::new();
     let rewritten = match query {
         // SELECT gets ONE extra rewrite option beyond `rewrite_pattern`: the
@@ -159,7 +160,7 @@ pub fn rewrite_query(query: &Query) -> Result<(Query, StarEnv)> {
 /// all (see [`rewrite_query`]'s own doc comment); `DESCRIBE`/`ASK` likewise.
 pub(super) fn rewrite_top_level_pattern(
     gp: &GraphPattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     match gp {
@@ -308,7 +309,7 @@ pub(super) fn partition_values_by_triple_shape(
 pub(super) fn rewrite_union(
     left: &GraphPattern,
     right: &GraphPattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
     top_level: bool,
 ) -> Result<GraphPattern> {
@@ -414,7 +415,7 @@ fn rewrite_filter_over_union(
     expr: &Expression,
     left: &GraphPattern,
     right: &GraphPattern,
-    n: &mut usize,
+    n: &mut FreshVars,
     env: &mut StarEnv,
 ) -> Result<GraphPattern> {
     let rw_left = rewrite_pattern(left, n, env)?;

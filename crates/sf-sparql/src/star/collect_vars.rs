@@ -9,6 +9,27 @@ use std::collections::BTreeSet;
 
 use spargebra::algebra::{AggregateExpression, Expression, GraphPattern, OrderExpression};
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
+use spargebra::Query;
+
+/// Every variable name already present in a parsed query before this module
+/// introduces its own bindings. In addition to the query pattern, CONSTRUCT's
+/// separate template must be included: a template-only variable is unbound by
+/// definition, but capturing it with a generated component variable would make
+/// it spuriously bound and change the produced graph.
+pub(super) fn collect_query_vars(query: &Query) -> BTreeSet<Variable> {
+    let mut out = match query {
+        Query::Select { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. }
+        | Query::Construct { pattern, .. } => collect_pattern_vars(pattern),
+    };
+    if let Query::Construct { template, .. } = query {
+        for triple in template {
+            collect_triple_vars(triple, &mut out);
+        }
+    }
+    out
+}
 
 /// Every [`Variable`] mentioned anywhere in `gp` — triple-pattern subject/
 /// object (recursing into a nested quoted triple), VALUES/Extend/Group/Path
@@ -177,6 +198,32 @@ fn collect_expr_vars(e: &Expression, out: &mut BTreeSet<Variable>) {
             for e in args {
                 collect_expr_vars(e, out);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_inventory_includes_graph_service_and_extend_binding_sites() {
+        let query = spargebra::SparqlParser::new()
+            .parse_query(
+                "SELECT ?s WHERE { \
+                 GRAPH ?__sf_star_0 { ?s ?p ?o } \
+                 BIND(?s AS ?__sf_star_1) \
+                 SERVICE ?__sf_star_2 { ?a ?b ?c } \
+                 }",
+            )
+            .expect("all three binding sites are legal SPARQL");
+
+        let variables = collect_query_vars(&query);
+        for name in ["__sf_star_0", "__sf_star_1", "__sf_star_2"] {
+            assert!(
+                variables.contains(&Variable::new_unchecked(name)),
+                "missing binding-site variable {name}"
+            );
         }
     }
 }

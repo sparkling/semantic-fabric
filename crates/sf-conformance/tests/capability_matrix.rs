@@ -41,8 +41,8 @@ fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let counts = capability_catalog::status_counts(&loaded.catalog);
     assert_eq!(loaded.catalog.cells.len(), 91);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&57));
-    assert_eq!(counts.get(&Status::Planned), Some(&32));
+    assert_eq!(counts.get(&Status::Implemented), Some(&58));
+    assert_eq!(counts.get(&Status::Planned), Some(&31));
     assert_eq!(counts.get(&Status::Unsupported), Some(&2));
     assert!(loaded
         .catalog
@@ -56,6 +56,7 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     for id in [
         "bounded-graceful-shutdown-generic",
+        "describe-execution-sqlite",
         "federated-two-source-union-multi-source",
         "generated-qe-per-pr-sqlite",
         "health-readiness-probes-generic",
@@ -80,6 +81,84 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         assert_eq!(cell.status, Status::Planned);
         assert!(!cell.advertisable);
     }
+}
+
+#[test]
+fn describe_profile_is_exact_versioned_and_backend_scoped() {
+    let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
+    let sqlite = loaded
+        .catalog
+        .cells
+        .iter()
+        .find(|cell| cell.id == "describe-execution-sqlite")
+        .expect("SQLite DESCRIBE cell");
+    assert_eq!(sqlite.status, Status::Implemented);
+    assert_eq!(sqlite.verification, Verification::CiRequired);
+    assert!(sqlite.semantic_exact);
+    assert!(sqlite.bounded);
+    assert!(sqlite.advertisable);
+    assert_eq!(
+        sqlite.evidence_ids,
+        [
+            "e-describe-compile",
+            "e-describe-sqlite",
+            "e-describe-variable-inventory",
+            "e-describe-wiring",
+            "e-query-budget-handler",
+            "e-resource-admission",
+            "e-resource-profile",
+        ]
+    );
+    assert!(sqlite
+        .qualification
+        .contains("one parsed target expression"));
+    assert!(sqlite.qualification.contains("RDF-graph set union"));
+    assert!(sqlite.qualification.contains("retained executor state"));
+
+    for id in ["describe-execution-mysql", "describe-execution-postgresql"] {
+        let cell = loaded
+            .catalog
+            .cells
+            .iter()
+            .find(|cell| cell.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(cell.status, Status::Planned);
+        assert!(!cell.semantic_exact);
+        assert!(!cell.bounded);
+        assert!(!cell.advertisable);
+    }
+
+    let limitation = loaded
+        .catalog
+        .limitations
+        .iter()
+        .find(|limitation| limitation.id == "l-describe")
+        .expect("DESCRIBE limitation");
+    assert!(limitation.release_blocking);
+
+    let compiler_claim = loaded
+        .catalog
+        .claims
+        .iter()
+        .find(|claim| claim.id == "claim-compiler-describe")
+        .expect("compiler DESCRIBE claim");
+    assert_eq!(compiler_claim.cell_ids, ["describe-compilation-compiler"]);
+    let runtime_claim = loaded
+        .catalog
+        .claims
+        .iter()
+        .find(|claim| claim.id == "claim-sqlite-describe")
+        .expect("SQLite DESCRIBE claim");
+    assert_eq!(runtime_claim.cell_ids, ["describe-execution-sqlite"]);
+    let discovery_claim = loaded
+        .catalog
+        .claims
+        .iter()
+        .find(|claim| claim.id == "claim-service-description")
+        .expect("Service Description claim");
+    assert!(discovery_claim
+        .text
+        .contains("urn:semantic-fabric:service-description:describe-one-target-one-hop-query-v1"));
 }
 
 #[test]

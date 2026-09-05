@@ -2,8 +2,8 @@
 //! pre-pass that desugars quoted-triple patterns onto the native-reification
 //! encoding Wave 1 now emits (`sf-mapping`'s `r2rml/star.rs`), applied once at
 //! the top of both `translate_tree` and `translate_inner_flat` (`lib.rs`) —
-//! mirrors the DESCRIBE→CBD rewrite already living there (a recursive algebra
-//! rebuild minting `__sf_`-prefixed synthetic variables), so
+//! mirrors the DESCRIBE graph-pattern pre-pass already living there (a
+//! recursive algebra rebuild with hygienic synthetic variables), so
 //! `build.rs`/`iq/*.rs`/`unfold.rs`/`cascade/`/`emit.rs` never see a
 //! `TermPattern::Triple` at all (R1).
 //!

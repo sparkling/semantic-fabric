@@ -8,6 +8,8 @@
 //! ([`named_node_pattern_to_term_pattern`]) with no state of their own that
 //! [`super::walk`] and [`super::env`] both need.
 
+use std::collections::BTreeSet;
+
 use spargebra::algebra::GraphPattern;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
 
@@ -43,33 +45,69 @@ pub(super) const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 /// self-documenting if it ever surfaces in a debug print or error message.
 pub(super) const ERROR_MARKER_IRI: &str = "urn:sf-star:error-marker";
 
-/// A fresh whole-query identity variable (shared counter, see
-/// [`super::top_level::rewrite_query`]): `__sf_star_{n}`, unwritable in real
-/// query text (spargebra rejects a leading double-underscore in surface
-/// syntax the same way the CBD rewrite's `__sf_describe_*` relies on) so it
-/// can never collide with a user variable.
-pub(super) fn fresh_var(n: &mut usize) -> TermPattern {
-    TermPattern::Variable(fresh_component_var(n))
+/// Whole-query generated-variable state. Parsed SPARQL variables may legally
+/// start with `__`, so a prefix alone is not hygienic. Every pre-existing query
+/// variable is reserved up front, and each generated name is inserted into the
+/// same set before it is returned. One ordinal sequence still spans BGPs,
+/// UNION arms, expressions, VALUES decomposition, and empty markers.
+#[derive(Debug, Default)]
+pub(super) struct FreshVars {
+    next: usize,
+    reserved: BTreeSet<String>,
+}
+
+impl FreshVars {
+    pub(super) fn new(vars: impl IntoIterator<Item = Variable>) -> Self {
+        Self {
+            next: 0,
+            reserved: vars
+                .into_iter()
+                .map(|variable| variable.as_str().to_owned())
+                .collect(),
+        }
+    }
+
+    fn mint(&mut self, prefix: &str) -> Variable {
+        loop {
+            let ordinal = self.next;
+            self.next = self
+                .next
+                .checked_add(1)
+                .expect("a query cannot mint more than usize::MAX generated variables");
+            let candidate = format!("{prefix}{ordinal}");
+            if self.reserved.insert(candidate.clone()) {
+                return Variable::new_unchecked(candidate);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn next_ordinal(&self) -> usize {
+        self.next
+    }
+}
+
+/// A fresh whole-query identity variable (`__sf_star_{n}`), minted through
+/// [`FreshVars`] so it cannot capture any variable already present in the
+/// parsed query.
+pub(super) fn fresh_var(fresh: &mut FreshVars) -> TermPattern {
+    TermPattern::Variable(fresh_component_var(fresh))
 }
 
 /// Like [`fresh_var`], but returns the bare [`Variable`] (not wrapped in a
 /// `TermPattern`) — for minting [`super::env::ComposedInfo`]'s
 /// `s_var`/`p_var`/`o_var`.
-pub(super) fn fresh_component_var(n: &mut usize) -> Variable {
-    let v = Variable::new_unchecked(format!("__sf_star_{n}"));
-    *n += 1;
-    v
+pub(super) fn fresh_component_var(fresh: &mut FreshVars) -> Variable {
+    fresh.mint("__sf_star_")
 }
 
-/// Rule R1's zero-solution replacement: a fresh, equally-unwritable
+/// Rule R1's zero-solution replacement: a fresh, collision-checked
 /// `__sf_star_empty_{n}` variable naming an empty `VALUES` clause (see
 /// [`empty_pattern`]) — kept textually distinct from [`fresh_var`]'s identity
 /// variables (which DO bind real terms) purely for readability when a
-/// rewritten query is inspected; both draw from the same whole-query counter.
-fn fresh_empty_var(n: &mut usize) -> Variable {
-    let v = Variable::new_unchecked(format!("__sf_star_empty_{n}"));
-    *n += 1;
-    v
+/// rewritten query is inspected; both draw from the same whole-query state.
+fn fresh_empty_var(fresh: &mut FreshVars) -> Variable {
+    fresh.mint("__sf_star_empty_")
 }
 
 /// Rule R1 (SPARQL 1.2 §18.1.3): the statically-empty replacement for a
@@ -81,9 +119,9 @@ fn fresh_empty_var(n: &mut usize) -> Variable {
 /// `iq/normalize.rs` already treats an empty result as the `Join`/`Union`
 /// absorbing/identity element via its own purpose-built `IqNode::Empty`.
 /// Never an error, never a match.
-pub(super) fn empty_pattern(n: &mut usize) -> GraphPattern {
+pub(super) fn empty_pattern(fresh: &mut FreshVars) -> GraphPattern {
     GraphPattern::Values {
-        variables: vec![fresh_empty_var(n)],
+        variables: vec![fresh_empty_var(fresh)],
         bindings: Vec::new(),
     }
 }
@@ -113,4 +151,31 @@ pub(super) fn named_node_pattern_to_term_pattern(p: &NamedNodePattern) -> TermPa
 pub(super) fn has_subject_position_triple_term(tp: &TriplePattern) -> bool {
     matches!(tp.subject, TermPattern::Triple(_))
         || matches!(&tp.object, TermPattern::Triple(inner) if has_subject_position_triple_term(inner))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn authored(name: &str) -> Variable {
+        Variable::new_unchecked(name)
+    }
+
+    #[test]
+    fn mint_skips_multiple_consecutive_authored_candidates() {
+        let mut fresh = FreshVars::new([authored("__sf_star_0"), authored("__sf_star_1")]);
+        assert_eq!(fresh_component_var(&mut fresh).as_str(), "__sf_star_2");
+        assert_eq!(fresh.next_ordinal(), 3);
+    }
+
+    #[test]
+    fn prefixes_share_an_ordinal_without_skipping_collision_checks() {
+        let mut fresh = FreshVars::new([authored("__sf_star_1")]);
+        let GraphPattern::Values { variables, .. } = empty_pattern(&mut fresh) else {
+            panic!("empty marker must be a VALUES pattern");
+        };
+        assert_eq!(variables[0].as_str(), "__sf_star_empty_0");
+        assert_eq!(fresh_component_var(&mut fresh).as_str(), "__sf_star_2");
+        assert_eq!(fresh.next_ordinal(), 3);
+    }
 }
