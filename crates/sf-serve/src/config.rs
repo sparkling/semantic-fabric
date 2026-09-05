@@ -15,6 +15,7 @@ use crate::activation::{
 };
 use crate::binding::IntrospectedSource;
 use crate::budget::RequestBudget;
+use crate::lifecycle::ShutdownPhase;
 use crate::problem::StartupCause;
 use crate::snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError};
 use crate::{Backend, ServeError};
@@ -75,7 +76,7 @@ pub struct ServeConfig {
     compiler_permits: Arc<Semaphore>,
     max_concurrent_requests: usize,
     request_admission_permits: Arc<Semaphore>,
-    shutdown: watch::Sender<bool>,
+    shutdown: watch::Sender<ShutdownPhase>,
 }
 
 impl ServeConfig {
@@ -106,7 +107,7 @@ impl ServeConfig {
     fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
         let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
             .expect("default query length has a representable form-body limit");
-        let (shutdown, _) = watch::channel(false);
+        let (shutdown, _) = watch::channel(ShutdownPhase::Running);
         Self {
             runtime: Arc::new(RuntimeManager::new(snapshot)),
             query_mode,
@@ -237,11 +238,15 @@ impl ServeConfig {
     }
 
     pub(crate) fn request_budget(&self) -> RequestBudget {
-        RequestBudget::after_with_shutdown(
+        let budget = RequestBudget::after_with_shutdown(
             self.timeout,
             self.query_limits,
             self.shutdown.subscribe(),
-        )
+        );
+        if *self.shutdown.borrow() != ShutdownPhase::Running {
+            budget.cancel();
+        }
+        budget
     }
 
     pub(crate) fn begin_shutdown(&self) {
@@ -250,7 +255,26 @@ impl ServeConfig {
                 .runtime
                 .mark_not_ready(activation_id, ReadinessCause::Administrative);
         }
-        self.shutdown.send_replace(true);
+        self.shutdown.send_if_modified(|phase| {
+            if *phase == ShutdownPhase::Running {
+                *phase = ShutdownPhase::Draining;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    /// Cancel identities that did not complete within the graceful drain bound.
+    pub(crate) fn force_shutdown(&self) {
+        self.shutdown.send_if_modified(|phase| {
+            if *phase != ShutdownPhase::Forced {
+                *phase = ShutdownPhase::Forced;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     #[cfg(test)]

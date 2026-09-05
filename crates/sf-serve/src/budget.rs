@@ -11,12 +11,15 @@ use sf_core::query_control::{
 use tokio::sync::{watch, OwnedSemaphorePermit};
 use tokio::time::Instant;
 
+use crate::lifecycle::ShutdownPhase;
+
 struct RequestBudgetState {
     accounting: QueryBudget,
     deadline: Option<Instant>,
     deadline_representable: bool,
     terminal: watch::Sender<Option<QueryControlError>>,
-    shutdown: Option<watch::Receiver<bool>>,
+    /// Draining preserves this in-flight identity; only the forced phase cancels it.
+    shutdown: Option<watch::Receiver<ShutdownPhase>>,
     /// One fail-fast serve-lane admission identity. The owned permit follows
     /// every budget clone into active producers and blocking workers, then
     /// returns only when the last such clone is dropped.
@@ -37,10 +40,11 @@ impl RequestBudget {
         Self::build(timeout, limits, None)
     }
 
+    /// Mint a serving budget that observes only forced shutdown, not graceful drain.
     pub(crate) fn after_with_shutdown(
         timeout: Duration,
         limits: QueryLimits,
-        shutdown: watch::Receiver<bool>,
+        shutdown: watch::Receiver<ShutdownPhase>,
     ) -> Self {
         Self::build(timeout, limits, Some(shutdown))
     }
@@ -48,7 +52,7 @@ impl RequestBudget {
     fn build(
         timeout: Duration,
         limits: QueryLimits,
-        shutdown: Option<watch::Receiver<bool>>,
+        shutdown: Option<watch::Receiver<ShutdownPhase>>,
     ) -> Self {
         let now = Instant::now();
         let (terminal, _) = watch::channel(None);
@@ -120,7 +124,7 @@ impl RequestBudget {
                     .or_else(|| self.0.accounting.terminal())
                     .unwrap_or(QueryControlError::AccountingOverflow))
             }
-            _ = wait_for_shutdown(shutdown) => {
+            _ = wait_for_forced_shutdown(shutdown) => {
                 Err(self.cancel())
             }
             output = future => {
@@ -148,7 +152,7 @@ impl RequestBudget {
         {
             return Err(self.handoff_deadline_error());
         }
-        if self.shutdown_requested() {
+        if self.shutdown_forced() {
             return Err(self.cancel());
         }
         let shutdown = self.0.shutdown.clone();
@@ -157,11 +161,11 @@ impl RequestBudget {
             _ = wait_for_deadline(self.0.deadline) => {
                 Err(self.handoff_deadline_error())
             }
-            _ = wait_for_shutdown(shutdown) => {
+            _ = wait_for_forced_shutdown(shutdown) => {
                 Err(self.cancel())
             }
             output = future => {
-                if self.shutdown_requested() {
+                if self.shutdown_forced() {
                     return Err(self.cancel());
                 }
                 self.check_handoff_deadline_at(Instant::now())?;
@@ -204,7 +208,7 @@ impl RequestBudget {
         if let Some(reason) = self.0.accounting.terminal() {
             return Err(reason);
         }
-        if self.shutdown_requested() {
+        if self.shutdown_forced() {
             return Err(self.cancel());
         }
         if self.0.deadline.is_some_and(|deadline| now >= deadline) {
@@ -217,11 +221,11 @@ impl RequestBudget {
         self.0.deadline.is_some_and(|deadline| now >= deadline)
     }
 
-    fn shutdown_requested(&self) -> bool {
+    fn shutdown_forced(&self) -> bool {
         self.0
             .shutdown
             .as_ref()
-            .is_some_and(|shutdown| *shutdown.borrow())
+            .is_some_and(|shutdown| *shutdown.borrow() == ShutdownPhase::Forced)
     }
 
     fn check_handoff_deadline_at(&self, now: Instant) -> Result<(), QueryControlError> {
@@ -282,13 +286,13 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
     }
 }
 
-async fn wait_for_shutdown(mut shutdown: Option<watch::Receiver<bool>>) {
+async fn wait_for_forced_shutdown(mut shutdown: Option<watch::Receiver<ShutdownPhase>>) {
     let Some(shutdown) = shutdown.as_mut() else {
         std::future::pending::<()>().await;
         return;
     };
     loop {
-        if *shutdown.borrow_and_update() {
+        if *shutdown.borrow_and_update() == ShutdownPhase::Forced {
             return;
         }
         if shutdown.changed().await.is_err() {

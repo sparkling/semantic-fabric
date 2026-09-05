@@ -13,6 +13,13 @@ use crate::{RequestDeadlineService, ServeConfig, ServeError};
 pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShutdownPhase {
+    Running,
+    Draining,
+    Forced,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShutdownOutcome {
     Drained,
     Forced,
@@ -85,6 +92,7 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let (started_tx, started_rx) = oneshot::channel();
+    let force_config = config.clone();
     let graceful_signal = async move {
         shutdown.await;
         config.begin_shutdown();
@@ -92,7 +100,11 @@ where
     };
     let server =
         axum::serve(listener, app.into_make_service()).with_graceful_shutdown(graceful_signal);
-    finish_with_bound(server.into_future(), started_rx, drain_timeout).await
+    let outcome = finish_with_bound(server.into_future(), started_rx, drain_timeout).await?;
+    if outcome == ShutdownOutcome::Forced {
+        force_config.force_shutdown();
+    }
+    Ok(outcome)
 }
 
 async fn finish_with_bound<F>(
