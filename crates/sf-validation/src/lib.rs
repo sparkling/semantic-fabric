@@ -7,8 +7,10 @@
 //! each other.
 
 mod gate;
+mod preflight;
 
 pub use gate::{
     parse_turtle_graph, shape_set_digest, validate_graph, validate_turtle, GateError, GateOutcome,
-    GraphLimits, DEFAULT_GRAPH_LIMITS, META_SHAPES_TTL,
+    GraphLimits, ValidationLimits, DEFAULT_GRAPH_LIMITS, DEFAULT_VALIDATION_LIMITS,
+    META_SHAPES_TTL,
 };

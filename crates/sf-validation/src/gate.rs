@@ -22,11 +22,24 @@ pub const DEFAULT_GRAPH_LIMITS: GraphLimits = GraphLimits {
     max_parsed_triples: 250_000,
 };
 
+/// Fixed logical-work and prospective-report bounds for the sealed shapes.
+pub const DEFAULT_VALIDATION_LIMITS: ValidationLimits = ValidationLimits {
+    max_work_units: 1_000_000,
+    max_result_cardinality: 250_000,
+};
+
 /// Fixed limits applied before a graph can enter semantic admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GraphLimits {
     pub max_utf8_bytes: usize,
     pub max_parsed_triples: usize,
+}
+
+/// Limits for the deterministic preflight that runs before Native validation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidationLimits {
+    pub max_work_units: usize,
+    pub max_result_cardinality: usize,
 }
 
 /// Redacted result of running the sealed four-shape gate.
@@ -50,6 +63,10 @@ pub enum GateError {
     ByteLimit,
     #[error("semantic graph exceeds its triple limit")]
     TripleLimit,
+    #[error("semantic validation exceeds its logical-work limit")]
+    ValidationWorkLimit,
+    #[error("semantic validation exceeds its result-cardinality limit")]
+    ValidationResultLimit,
     #[error("semantic graph is not valid Turtle")]
     InvalidTurtle,
     #[error("sealed semantic shape set is invalid")]
@@ -82,6 +99,7 @@ pub fn validate_graph(graph: &Graph) -> Result<GateOutcome, GateError> {
     if graph.len() > DEFAULT_GRAPH_LIMITS.max_parsed_triples {
         return Err(GateError::TripleLimit);
     }
+    crate::preflight::admit(graph, DEFAULT_VALIDATION_LIMITS)?;
     catch_unwind(AssertUnwindSafe(|| validate_graph_inner(graph)))
         .map_err(|_| GateError::ValidationPanicked)?
 }
@@ -167,7 +185,7 @@ ex:propertyShape sh:path ex:age; sh:datatype xsd:integer .
             .collect::<String>();
         assert_eq!(
             hex,
-            "33e6ebebec19f4c2f2f91633c3187a4fd63a0adcff9b73960235a0c42dec91ef"
+            "884cee08a9ad9ed1e8e30357a91d986bdb1d5f2be7ed4fc425b13a9060b847f9"
         );
     }
 
@@ -192,6 +210,12 @@ ex:pom rr:predicate ex:notDeclared .
         assert!(matching.conforms(), "{matching:?}");
         assert!(!mismatching.conforms(), "{mismatching:?}");
         assert!(mismatching.violations >= 1);
+    }
+
+    #[test]
+    fn constrained_predicate_rejects_an_object_without_an_effective_datatype() {
+        let outcome = validate_turtle(DATATYPE_PREFIXES).unwrap();
+        assert!(!outcome.conforms(), "{outcome:?}");
     }
 
     #[test]

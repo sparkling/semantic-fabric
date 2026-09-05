@@ -42,11 +42,11 @@ mf:MappingDatatypeConformanceShape a sh:NodeShape ;
             SELECT $this WHERE {
                 $this (rr:predicate|rml:predicate) ?p .
                 $this (rr:objectMap|rml:objectMap) ?om .
-                ?om (rr:datatype|rml:datatype) ?md .
+                OPTIONAL { ?om (rr:datatype|rml:datatype) ?md . }
                 ?ns sh:property ?ps .
                 ?ps sh:path ?p .
                 ?ps sh:datatype ?td .
-                FILTER(?md != ?td)
+                FILTER(!BOUND(?md) || ?md != ?td)
             }
         """ ;
     ] .
