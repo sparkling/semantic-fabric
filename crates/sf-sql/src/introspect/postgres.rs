@@ -7,11 +7,16 @@ use tokio_postgres::types::Type;
 use crate::error::{Error, Result};
 use crate::schema::{Column, ForeignKey, TableSchema};
 
+mod generation;
 mod legacy_bounds;
 mod legacy_query;
 mod legacy_row;
 mod legacy_sql;
 mod observation;
+#[allow(unused_imports)] // Re-exported by introspect.rs when the serving caller is wired.
+pub use generation::{
+    introspect_postgres_public_observed_snapshot_in_transaction, lock_postgres_public_base_tables,
+};
 use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
 use legacy_query::{
     query_bounded, TypedQueryParameter, LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
@@ -145,35 +150,17 @@ pub async fn introspect_postgres_public_observed_snapshot(
         .read_only(true)
         .start()
         .await?;
-    transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
-    observation::qualify_profile_guard(&transaction)
+    transaction
+        .batch_execute(SNAPSHOT_TIMEOUTS_SQL)
         .await
-        .map_err(|error| Error::Introspection(error.to_string()))?;
-    let rows = query_bounded(
-        &transaction,
-        TABLES_SQL,
-        &[
-            TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
-            TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
-            TypedQueryParameter::new(&LEGACY_RELATION_QUERY_LIMIT_PG16_V1, Type::INT8),
-        ],
-        MAX_LEGACY_RELATIONS_PG16_V1,
-        "table rows",
-    )
-    .await?;
-    let tables: Vec<String> = rows
-        .into_iter()
-        .map(|row| LegacyRow::try_new(&row)?.text("bounded_text_0", "table name"))
-        .collect::<Result<_>>()?;
-    let legacy_tables = introspect_in_schema(&transaction, RUNTIME_SCHEMA, &tables).await?;
-    let rich = observation::capture_registered_observation(&transaction, RUNTIME_SCHEMA)
+        .map_err(|_| Error::Introspection("PostgreSQL observed snapshot setup failed".into()))?;
+    let snapshot =
+        introspect_postgres_public_observed_snapshot_in_transaction(&transaction).await?;
+    transaction
+        .commit()
         .await
-        .map_err(|error| Error::Introspection(error.to_string()))?;
-    transaction.commit().await?;
-    Ok(observation::Postgres16PublicObservedSnapshotV1::available(
-        legacy_tables,
-        rich,
-    ))
+        .map_err(|_| Error::Introspection("PostgreSQL observed snapshot commit failed".into()))?;
+    Ok(snapshot)
 }
 
 async fn introspect_in_schema<C>(

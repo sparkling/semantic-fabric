@@ -12,7 +12,7 @@ pub(super) const RICH_RELATIONS_SQL_V1: &str = "SELECT \
  (n.nspname IS NULL OR c.relname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(n.nspname::text,'UTF8')) > $2 OR pg_catalog.octet_length(pg_catalog.convert_to(c.relname::text,'UTF8')) > $2) AS sf_text_overflow, \
  c.relkind::text AS relkind, c.relpersistence::text AS relpersistence, c.relispartition, c.relisshared, c.relrowsecurity, c.relforcerowsecurity, c.reloftype, c.relrewrite, c.relam, am.oid AS joined_access_method_oid, CASE WHEN am.oid IS NULL THEN NULL::text ELSE 'pg_catalog'::text END AS access_method_namespace, am.amname::text AS access_method_name, am.amtype::text AS access_method_type, (EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhrelid=c.oid)) AS inherits_as_child, (EXISTS (SELECT 1 FROM pg_catalog.pg_inherits h WHERE h.inhparent=c.oid)) AS inherits_as_parent, c.relnatts \
  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam \
- WHERE n.nspname=$1 AND c.relkind IN ('r','p','f') ORDER BY c.relname LIMIT $3";
+ WHERE n.nspname=$1 AND c.relkind IN ('r','p','f','v','m') ORDER BY c.relname LIMIT $3";
 
 pub(super) const RICH_GUARD_SQL_V1: &str = "SELECT \
  current_setting('server_version_num')::int4 AS server_version_num, \
@@ -258,8 +258,9 @@ mod tests {
             assert!(query.contains("LIMIT $3"));
             assert!(query.contains("sf_text_overflow"));
             assert!(query.contains("n.nspname=$1"));
-            assert!(query.contains("c.relkind IN ('r','p','f')"));
         }
+        assert!(RICH_RELATIONS_SQL_V1.contains("c.relkind IN ('r','p','f','v','m')"));
+        assert!(RICH_ATTRIBUTES_SQL_V1.contains("c.relkind IN ('r','p','f')"));
     }
 
     #[test]

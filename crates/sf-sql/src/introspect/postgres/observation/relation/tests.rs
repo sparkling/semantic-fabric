@@ -215,7 +215,7 @@ fn relation_admission_predicates_are_independently_closed() {
     let mut value = base.clone();
     value.namespace_name = "private".into();
     mutations.push(value);
-    for kind in ['p', 'f', 'v'] {
+    for kind in ['p', 'f'] {
         let mut value = base.clone();
         value.relation_kind = kind;
         mutations.push(value);
@@ -281,6 +281,19 @@ fn relation_admission_predicates_are_independently_closed() {
         assert_reason(
             vec![candidate],
             attributes,
+            PostgresSchemaIdentityUnavailableV1::UnsupportedRelation,
+        );
+    }
+}
+
+#[test]
+fn closed_public_base_table_profile_rejects_censused_views() {
+    for kind in ['v', 'm'] {
+        let mut view = relation_fact(42, "visible_but_unsupported", 1);
+        view.relation_kind = kind;
+        assert_reason(
+            vec![view],
+            Vec::new(),
             PostgresSchemaIdentityUnavailableV1::UnsupportedRelation,
         );
     }

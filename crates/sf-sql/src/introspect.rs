@@ -215,12 +215,13 @@ fn sqlite_has_stat1(conn: &rusqlite::Connection) -> Result<bool> {
 mod postgres;
 pub use postgres::{
     introspect_postgres, introspect_postgres_all, introspect_postgres_public_observed_snapshot,
+    introspect_postgres_public_observed_snapshot_in_transaction,
     introspect_postgres_public_snapshot, introspect_postgres_public_snapshot_guarded,
-    Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
-    PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
-    PostgresSchemaIdentityLimitCodeV1, PostgresSchemaIdentityUnavailableV1,
-    POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1, POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1,
-    POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1,
+    lock_postgres_public_base_tables, Postgres16PublicObservedSchemaV1,
+    Postgres16PublicObservedSnapshotV1, PostgresSchemaIdentityAvailabilityV1,
+    PostgresSchemaIdentityGuardCodeV1, PostgresSchemaIdentityLimitCodeV1,
+    PostgresSchemaIdentityUnavailableV1, POSTGRES16_PUBLIC_CONSTRAINT_PROFILE_ID_V1,
+    POSTGRES16_PUBLIC_STRUCTURAL_PROFILE_ID_V1, POSTGRES16_PUBLIC_TYPE_PROFILE_ID_V1,
 };
 
 // --- MySQL (integration-tested, ADR-0012) -------------------------------------

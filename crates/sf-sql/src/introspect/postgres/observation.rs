@@ -25,6 +25,8 @@ mod constraint_budget;
 #[allow(dead_code)]
 mod constraints;
 #[allow(dead_code)]
+mod direct_mapping;
+#[allow(dead_code)]
 mod relation;
 #[allow(dead_code)]
 mod source_type;
@@ -87,13 +89,18 @@ fn build_registered_observation(
     constraints: Vec<ConstraintInputV1>,
 ) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1> {
     let profiles = select_registered_profile_v1(server_version_num)?.profiles()?;
+    let direct_mapping_tables =
+        direct_mapping::project_direct_mapping_tables_v1(&relations, &constraints)?;
     let identity = ObservedSchemaIdentityV1::build(SchemaObservationInputV1 {
         profiles,
         relations,
         constraints,
     })
     .map_err(map_schema_identity_error_v1)?;
-    Ok(Postgres16PublicObservedSchemaV1 { identity })
+    Ok(Postgres16PublicObservedSchemaV1 {
+        identity,
+        direct_mapping_tables,
+    })
 }
 
 /// Assemble a registered observation from the private normalized relation
@@ -116,6 +123,7 @@ fn build_registered_observation_from_raw(
 pub(super) async fn capture_registered_observation<C>(
     client: &C,
     schema_name: &str,
+    legacy_tables: &[TableSchema],
 ) -> Result<Postgres16PublicObservedSchemaV1, PostgresSchemaIdentityUnavailableV1>
 where
     C: GenericClient + Sync,
@@ -166,6 +174,7 @@ where
     )
     .await?;
     let normalized = relation::normalize_postgres16_relations_v1(relations, attributes)?;
+    relation::compare_postgres16_legacy_coordinates_v1(legacy_tables, &normalized)?;
     let mut raw_constraints = constraints::observed_not_null_constraints_v1(&normalized)?;
     let (remaining_constraints, constraint_limit) =
         constraint_budget::constraint_catalog_budget_v1(raw_constraints.len())?;
@@ -251,12 +260,19 @@ const fn map_schema_identity_limit_v1(
 #[derive(Eq, PartialEq)]
 pub struct Postgres16PublicObservedSchemaV1 {
     identity: ObservedSchemaIdentityV1,
+    direct_mapping_tables: Vec<TableSchema>,
 }
 
 impl Postgres16PublicObservedSchemaV1 {
     /// Returns the non-authorizing content identity carried by this observation.
     pub const fn identity(&self) -> &ObservedSchemaIdentityV1 {
         &self.identity
+    }
+
+    /// Returns the Direct-Mapping DTOs derived from the exact admitted rich
+    /// relation, type, and constraint facts carried by this observation.
+    pub fn direct_mapping_tables(&self) -> &[TableSchema] {
+        &self.direct_mapping_tables
     }
 }
 
@@ -430,6 +446,17 @@ impl Postgres16PublicObservedSnapshotV1 {
 
     pub const fn availability(&self) -> &PostgresSchemaIdentityAvailabilityV1 {
         &self.availability
+    }
+
+    /// Returns the rich-authority Direct-Mapping projection when identity is
+    /// available. Legacy DTOs are deliberately not substituted on failure.
+    pub fn direct_mapping_tables(&self) -> Option<&[TableSchema]> {
+        match &self.availability {
+            PostgresSchemaIdentityAvailabilityV1::Available(observation) => {
+                Some(observation.direct_mapping_tables())
+            }
+            PostgresSchemaIdentityAvailabilityV1::Unavailable(_) => None,
+        }
     }
 
     /// Preserves both the legacy projection and its identity availability.
