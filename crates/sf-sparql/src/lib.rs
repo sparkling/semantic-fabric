@@ -46,7 +46,7 @@
 //!
 //! ## Wave-E / M4 additions (2026-06-29)
 //!
-//! - **DESCRIBE** → Concise Bounded Description CONSTRUCT (CBD, SPARQL §10.4).
+//! - **DESCRIBE** → one-target, one-hop outgoing-description CONSTRUCT.
 //! - **ORDER BY with arbitrary expressions** — evaluated at exec time via
 //!   `exec::eval_expr` (STRLEN, arithmetic, IF, BOUND, comparisons, COALESCE, …).
 //! - **OPTIONAL with UNION/multi-branch right** — sound ISWC-2018 decomposition:
@@ -59,7 +59,6 @@ use std::sync::Arc;
 use sf_core::ir::TriplesMap;
 use sf_sql::{Dialect, TableSchema};
 use spargebra::algebra::GraphPattern;
-use spargebra::term::Variable;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern};
 use spargebra::Query;
 
@@ -71,6 +70,7 @@ mod compile_envelope;
 #[allow(dead_code)] // Internal primitives; compiler pipeline wiring is a later slice.
 mod compiler_control;
 mod compiler_schema;
+mod describe;
 pub mod dump;
 pub mod emit;
 pub mod exec;
@@ -412,50 +412,8 @@ fn translate_inner_flat(
             (t, PlanForm::Ask)
         }
         Query::Describe { pattern, .. } => {
-            // Concise Bounded Description (CBD): for each described resource r,
-            // CONSTRUCT { r ?__sf_p ?__sf_o } WHERE { <original WHERE> . r ?__sf_p ?__sf_o }.
-            // The `pattern` field encodes the DESCRIBE targets as a Project over the
-            // WHERE clause (the parser wraps literal resources in BIND expressions).
-            let (describe_vars, inner_pat) = match pattern {
-                GraphPattern::Project { variables, inner } => {
-                    (variables.clone(), inner.as_ref().clone())
-                }
-                other => (Vec::new(), other.clone()),
-            };
-            if describe_vars.is_empty() {
-                return Err(Error::Unsupported(
-                    "DESCRIBE * (wildcard) is not supported → 501".to_owned(),
-                ));
-            }
-            // Fresh synthetic variables for the CBD predicate and object
-            // (double-underscore prefix avoids collision with user variables).
-            let var_p = Variable::new_unchecked("__sf_describe_p");
-            let var_o = Variable::new_unchecked("__sf_describe_o");
-            // Build the CBD WHERE: join the original WHERE with `?v ?__sf_p ?__sf_o`
-            // for each described variable. Multiple DESCRIBE targets each add their own
-            // CBD triple, returning triples for all described resources in one plan.
-            let mut cbd_pattern = inner_pat;
-            for v in &describe_vars {
-                cbd_pattern = GraphPattern::Join {
-                    left: Box::new(cbd_pattern),
-                    right: Box::new(GraphPattern::Bgp {
-                        patterns: vec![TriplePattern {
-                            subject: TermPattern::Variable(v.clone()),
-                            predicate: NamedNodePattern::Variable(var_p.clone()),
-                            object: TermPattern::Variable(var_o.clone()),
-                        }],
-                    }),
-                };
-            }
-            let template = describe_vars
-                .iter()
-                .map(|v| TriplePattern {
-                    subject: TermPattern::Variable(v.clone()),
-                    predicate: NamedNodePattern::Variable(var_p.clone()),
-                    object: TermPattern::Variable(var_o.clone()),
-                })
-                .collect();
-            let t = uf.translate_pattern(&cbd_pattern)?;
+            let (description_pattern, template) = describe::rewrite(pattern)?;
+            let t = uf.translate_pattern(&description_pattern)?;
             (t, PlanForm::Construct { template })
         }
     };
@@ -540,8 +498,8 @@ fn translate_inner_flat(
 /// [`translate_with`] both route here. It drives the four-stage tree pipeline —
 /// [`build::build_tree`] → [`iq::resolve::resolve`]
 /// → [`iq::normalize::normalize`] → [`iq::lower::lower`] — for the same per-`Query`-form
-/// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK / DESCRIBE
-/// CBD), producing a [`Plan`] the SAME `exec` runs. After lowering, the **proven flat
+/// wrapping the flat core uses (SELECT projection / CONSTRUCT template / ASK /
+/// one-hop DESCRIBE), producing a [`Plan`] the SAME `exec` runs. After lowering, the **proven flat
 /// cascade** ([`cascade::run`]) is reused on the lowered branches (ADR-0023 M4 wave 1),
 /// giving the tree the within-leaf-CQ rewrites (self-join / FK elimination, filter
 /// pushdown, distinct removal, …) for free. The cascade is `=_bag`-preserving, so the
@@ -661,7 +619,7 @@ fn translate_tree_with_column_type_use(
     let extra_keep = star::all_component_var_names(&star_env);
     // Compile one WHERE pattern through the four-stage tree pipeline. The shared `cx`
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
-    // (e.g. DESCRIBE's CBD join) keeps disjoint aliases across them.
+    // (e.g. DESCRIBE's outgoing-triple join) keeps disjoint aliases across them.
     let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
         let built = build::build_tree(pattern, None)?;
         let resolved = iq::resolve::resolve(built, &mut cx)?;
@@ -690,46 +648,11 @@ fn translate_tree_with_column_type_use(
             plan.form = PlanForm::Ask;
             plan
         }
-        // DESCRIBE — Concise Bounded Description, replicated from the flat core: wrap
-        // the WHERE in a CBD `?v ?__sf_p ?__sf_o` join per described resource and emit
-        // a CONSTRUCT over the synthetic predicate/object (M3 design §7 "same template/
-        // cbd/current_graph wrapping the flat core uses").
+        // DESCRIBE uses the same hygienic one-target outgoing-description rewrite
+        // as the flat compiler before this tree path is lowered.
         Query::Describe { pattern, .. } => {
-            let (describe_vars, inner_pat) = match pattern {
-                GraphPattern::Project { variables, inner } => {
-                    (variables.clone(), inner.as_ref().clone())
-                }
-                other => (Vec::new(), other.clone()),
-            };
-            if describe_vars.is_empty() {
-                return Err(Error::Unsupported(
-                    "DESCRIBE * (wildcard) is not supported → 501".to_owned(),
-                ));
-            }
-            let var_p = Variable::new_unchecked("__sf_describe_p");
-            let var_o = Variable::new_unchecked("__sf_describe_o");
-            let mut cbd_pattern = inner_pat;
-            for v in &describe_vars {
-                cbd_pattern = GraphPattern::Join {
-                    left: Box::new(cbd_pattern),
-                    right: Box::new(GraphPattern::Bgp {
-                        patterns: vec![TriplePattern {
-                            subject: TermPattern::Variable(v.clone()),
-                            predicate: NamedNodePattern::Variable(var_p.clone()),
-                            object: TermPattern::Variable(var_o.clone()),
-                        }],
-                    }),
-                };
-            }
-            let template = describe_vars
-                .iter()
-                .map(|v| TriplePattern {
-                    subject: TermPattern::Variable(v.clone()),
-                    predicate: NamedNodePattern::Variable(var_p.clone()),
-                    object: TermPattern::Variable(var_o.clone()),
-                })
-                .collect();
-            let mut plan = compile(&cbd_pattern)?;
+            let (description_pattern, template) = describe::rewrite(pattern)?;
+            let mut plan = compile(&description_pattern)?;
             plan.form = PlanForm::Construct { template };
             plan
         }
@@ -1126,7 +1049,7 @@ mod tests {
 
     #[test]
     fn describe_iri_produces_construct_plan() {
-        // DESCRIBE <r> translates to a CBD CONSTRUCT — should succeed, not 501.
+        // One target translates to the admitted outgoing-description CONSTRUCT.
         let q = spargebra::SparqlParser::new()
             .parse_query("DESCRIBE <http://ex/x>")
             .unwrap();
@@ -1143,22 +1066,14 @@ mod tests {
     }
 
     #[test]
-    fn describe_wildcard_produces_construct_plan() {
-        // DESCRIBE * WHERE { P } expands `*` to all in-scope variables, each of which
-        // becomes a CBD target — should succeed and produce a CONSTRUCT plan.
+    fn describe_wildcard_with_multiple_targets_is_explicitly_unsupported() {
+        // The wildcard expands to all three in-scope variables. Their exact graph
+        // union remains closed until cross-target set semantics are bounded.
         let q = spargebra::SparqlParser::new()
             .parse_query("DESCRIBE * WHERE { ?s ?p ?o }")
             .unwrap();
         let result = translate(&q, &[], Dialect::Sqlite);
-        assert!(
-            result.is_ok(),
-            "DESCRIBE * should translate successfully, got: {:?}",
-            result
-        );
-        assert!(
-            matches!(result.unwrap().form, PlanForm::Construct { .. }),
-            "DESCRIBE * should produce a Construct form"
-        );
+        assert!(matches!(result, Err(Error::Unsupported(_))));
     }
 
     #[test]
