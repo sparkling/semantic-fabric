@@ -126,6 +126,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-sparql/src/exec_core_deadline_tests.rs',
   'crates/sf-sparql/src/exec_mysql.rs',
   'crates/sf-sparql/src/exec_pg.rs',
+  'crates/sf-sparql/src/federation.rs',
   'crates/sf-sparql/src/graph_map.rs',
   'crates/sf-sparql/src/iq.rs',
   'crates/sf-sparql/src/iq/lower.rs',
