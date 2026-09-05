@@ -143,7 +143,7 @@ fn ontology_mapping_and_epoch_each_partition_the_compile_scope() {
 }
 
 #[test]
-fn structural_type_statistics_and_capabilities_are_distinct_identity_axes() {
+fn structural_type_and_capabilities_are_identity_but_statistics_are_not() {
     let source_id = SourceId::new(3).unwrap();
     let baseline = binding(
         mapping(source_id, "items"),
@@ -188,7 +188,7 @@ fn structural_type_statistics_and_capabilities_are_distinct_identity_axes() {
         baseline.digests().structural_schema(),
         type_changed.digests().structural_schema()
     );
-    assert_ne!(
+    assert_eq!(
         baseline.digests().schema(),
         statistics_changed.digests().schema()
     );

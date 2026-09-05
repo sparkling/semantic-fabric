@@ -14,7 +14,6 @@
 //! v1 keys use the full canonical algebra string, so every constant is keyed.
 //! This safely causes only extra misses; data-constant sharing remains deferred.
 
-use std::fmt;
 use std::sync::Arc;
 
 use sf_core::{SourceId, SourceMapping};
@@ -149,6 +148,9 @@ pub struct CompilerBinding {
     cache: PlanCache<CachedPlan>,
     scope: CompileScope,
 }
+
+#[path = "cache_binding.rs"]
+mod binding_extensions;
 
 impl CompilerBinding {
     pub fn new(
@@ -381,21 +383,6 @@ impl CachedPlan {
 
     pub(crate) fn shared_plan(&self) -> Arc<Plan> {
         Arc::clone(&self.plan)
-    }
-}
-
-impl fmt::Debug for CompilerBinding {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CompilerBinding")
-            .field("scope", &self.scope)
-            .field("source_id", &self.source_id())
-            .field("dialect", &self.dialect)
-            .field("triples_map_count", &self.mapping.len())
-            .field("schema", &self.schema)
-            .field("tbox_empty", &self.tbox.is_empty())
-            .field("cache_entries", &self.cache.len())
-            .finish()
     }
 }
 

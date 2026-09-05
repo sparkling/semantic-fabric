@@ -161,7 +161,8 @@ pub use parser_isolation::{
 };
 pub use runtime_identity::{
     CapabilityDigest, CompileDigests, ConstraintPolicyDigest, MappingDigest, OntologyDigest,
-    SchemaDigest, StructuralSchemaDigest, TypeSchemaDigest,
+    SchemaDigest, SemanticAdmissionDigest, SemanticIdentity, StructuralSchemaDigest,
+    TypeSchemaDigest,
 };
 pub use saturate::Tbox;
 

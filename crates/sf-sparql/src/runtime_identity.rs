@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{ColumnTypeAuthority, ConstraintAuthority, Tbox};
 
-const IDENTITY_VERSION: &[u8] = b"semantic-fabric/runtime-identity/v1";
+const IDENTITY_VERSION: &[u8] = b"semantic-fabric/runtime-identity/v2";
 
 macro_rules! digest_type {
     ($name:ident) => {
@@ -34,6 +34,7 @@ macro_rules! digest_type {
 }
 
 digest_type!(OntologyDigest);
+digest_type!(SemanticAdmissionDigest);
 digest_type!(MappingDigest);
 digest_type!(StructuralSchemaDigest);
 digest_type!(TypeSchemaDigest);
@@ -41,10 +42,29 @@ digest_type!(SchemaDigest);
 digest_type!(ConstraintPolicyDigest);
 digest_type!(CapabilityDigest);
 
+/// Exact semantic document and admission identities supplied by a caller that
+/// owns the validation authority. This value partitions compiler/cache scope;
+/// it is deliberately not an admission token by itself.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SemanticIdentity {
+    ontology: OntologyDigest,
+    admission: SemanticAdmissionDigest,
+}
+
+impl SemanticIdentity {
+    pub const fn new(ontology: OntologyDigest, admission: SemanticAdmissionDigest) -> Self {
+        Self {
+            ontology,
+            admission,
+        }
+    }
+}
+
 /// Content identity carried by cache keys and compiled plans.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct CompileDigests {
     ontology: OntologyDigest,
+    semantic_admission: SemanticAdmissionDigest,
     mapping: MappingDigest,
     structural_schema: StructuralSchemaDigest,
     type_schema: TypeSchemaDigest,
@@ -60,6 +80,10 @@ impl CompileDigests {
 
     pub const fn mapping(self) -> MappingDigest {
         self.mapping
+    }
+
+    pub const fn semantic_admission(self) -> SemanticAdmissionDigest {
+        self.semantic_admission
     }
 
     pub const fn structural_schema(self) -> StructuralSchemaDigest {
@@ -91,15 +115,35 @@ impl CompileDigests {
         column_type_authority: ColumnTypeAuthority,
     ) -> Self {
         let ontology = ontology_digest(tbox);
+        let semantic_admission = unvalidated_semantic_admission_digest();
+        Self::from_inputs_with_semantic_identity(
+            mapping,
+            schema,
+            dialect,
+            constraint_authority,
+            column_type_authority,
+            SemanticIdentity::new(ontology, semantic_admission),
+        )
+    }
+
+    pub(crate) fn from_inputs_with_semantic_identity(
+        mapping: &SourceMapping,
+        schema: &[TableSchema],
+        dialect: Dialect,
+        constraint_authority: ConstraintAuthority,
+        column_type_authority: ColumnTypeAuthority,
+        semantic: SemanticIdentity,
+    ) -> Self {
         let mapping = mapping_digest(mapping);
         let structural_schema = structural_schema_digest(schema);
         let type_schema = type_schema_digest(schema);
-        let schema = schema_digest(schema, structural_schema, type_schema);
+        let schema = schema_digest(structural_schema, type_schema);
         let constraint_policy =
             constraint_policy_digest(constraint_authority, column_type_authority);
         let capability = capability_digest(dialect);
         Self {
-            ontology,
+            ontology: semantic.ontology,
+            semantic_admission: semantic.admission,
             mapping,
             structural_schema,
             type_schema,
@@ -107,6 +151,22 @@ impl CompileDigests {
             constraint_policy,
             capability,
         }
+    }
+}
+
+impl OntologyDigest {
+    /// Bind an externally computed exact ontology-document SHA-256. This is an
+    /// identity value, not an admission token; serving still requires the
+    /// unforgeable validation receipt that contributes the separate semantic
+    /// admission digest.
+    pub const fn from_sha256(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+}
+
+impl SemanticAdmissionDigest {
+    pub const fn from_sha256(value: [u8; 32]) -> Self {
+        Self(value)
     }
 }
 
@@ -293,23 +353,15 @@ fn type_schema_digest(schema: &[TableSchema]) -> TypeSchemaDigest {
     TypeSchemaDigest(out.finish())
 }
 
-fn schema_digest(
-    schema: &[TableSchema],
-    structural: StructuralSchemaDigest,
-    types: TypeSchemaDigest,
-) -> SchemaDigest {
+fn schema_digest(structural: StructuralSchemaDigest, types: TypeSchemaDigest) -> SchemaDigest {
     let mut out = CanonicalHasher::new(b"schema");
     out.bytes(structural.as_bytes());
     out.bytes(types.as_bytes());
-    out.len(schema.len());
-    for table in schema {
-        out.optional_u64(table.row_estimate);
-        out.len(table.columns.len());
-        for column in &table.columns {
-            out.optional_u64(column.distinct_estimate);
-        }
-    }
     SchemaDigest(out.finish())
+}
+
+fn unvalidated_semantic_admission_digest() -> SemanticAdmissionDigest {
+    SemanticAdmissionDigest(CanonicalHasher::new(b"semantic-admission/unvalidated").finish())
 }
 
 fn constraint_policy_digest(
@@ -406,13 +458,6 @@ impl CanonicalHasher {
         self.boolean(value.is_some());
         if let Some(value) = value {
             self.text(value);
-        }
-    }
-
-    fn optional_u64(&mut self, value: Option<u64>) {
-        self.boolean(value.is_some());
-        if let Some(value) = value {
-            self.u64(value);
         }
     }
 
