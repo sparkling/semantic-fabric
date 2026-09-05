@@ -44,9 +44,9 @@ import { diagnosticBlob, diagnosticBlobDigest, programmeV5RufloFixture }
 import { PROGRAMME_V5_POST_HISTORICAL_PATHS }
   from './programme-v5-post-historical-paths.js';
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = 'a7a899061b9a98ea70fcd653952e20199fea355824abe81b1f507f380ed07d25';
-const ACCEPTANCE_DIGEST = '5de1bec263273e69d0e48d986ccc5fb4a52f9483d5dfb5a6fb36c2e38ba641bb';
-const ENVELOPE_DIGEST = 'eff81a57dd66dfb0c6b141ae524dfb13eea68d9b3bca5f7b6fc84e34f64110ff';
+const POLICY_FINGERPRINT = '38d550e2810f3edc2fdb59a7a6e1ab01ca251b5d9668706515a0ccccd98ff5d1';
+const ACCEPTANCE_DIGEST = '46c51b96c3954f9e8dbee726a8dee6a49ef4135d1b6df712ace3c25a26553904';
+const ENVELOPE_DIGEST = '880972fef292643c8d25a7a6a9b527b87b97e7df5cbe9f914fa4e8488e89d4ea';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';

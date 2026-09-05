@@ -19,6 +19,7 @@ export const PROGRAMME_CAPTURE_REQUIRED_SOURCE_PATHS = Object.freeze([
   'crates/sf-bench/src/performance/format.rs',
   'crates/sf-bench/src/performance/mod.rs',
   'crates/sf-bench/src/performance/model.rs',
+  'crates/sf-bench/src/performance/order_window_rss.rs',
   'crates/sf-bench/src/performance/paths.rs',
   'crates/sf-bench/src/performance/proc_status.rs',
   'crates/sf-bench/src/performance/producer.rs',
