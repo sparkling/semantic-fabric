@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-09-01
+updated: 2026-09-05
 tags: [federation, physical-plan, bounded-memory, spill, external-memory, sparql, consistency, cancellation]
 supersedes: []
 depends-on:
@@ -55,8 +55,8 @@ The revision-pinned canonical gold in `semantic-builder`—machine bundle,
 snapshot plus mutable live development PostgreSQL instance are the initial
 prototype corpus. Each run seals the gold manifest/source revision and records live version/schema
 observations separately; no source-to-container provenance link is implied. Semantic
-Fabric's in-charter qualified development R2RML KAT covers one of 112 tables/two columns. The
-gold has 4,501 mapping quads total; its Source Mapping facet declares 134 generic
+Fabric's in-charter qualified development R2RML KAT covers all 112 tables/598 columns through
+148 relational TriplesMaps/721 predicate-object maps. The gold has 10,167 mapping quads total; its Source Mapping facet declares 134 generic
 RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter.
 Wider federation evidence requires explicit maps or independent generated
 fixtures, never inferred mappings.

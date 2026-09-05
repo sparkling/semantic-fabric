@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-08-27
-updated: 2026-09-04
+updated: 2026-09-05
 tags: [programme, sota, completion, correctness, federation, production, release, sparc, ruflo]
 supersedes: []
 depends-on:
@@ -66,8 +66,8 @@ ADR-0039 remains proposed: ADR-0006 stays controlling; immutable V1 `sf-cli`
 receipts are canonical current-path evidence with `authority=none` and grant no admission or release authority.
 The revision-pinned `semantic-builder` gold (`expected-ontology.json`, 14-category `categories/`, and `candidate-manifest.json`), sealed `semantic-product-mock` source revision,
 and mutable ProductDesign/Style live vertical are three separate development authorities. A Rust table/column inventory gate recounts
-11 stores, 112 tables and 598 columns; its 2026-09-01 read-only live run failed
-closed on recorded database drift. The bundle has 4,501 mapping quads in total. Its Source Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter; the in-charter qualified development KAT slice covers one table/two columns.
+11 stores, 112 tables and 598 columns; its 2026-09-05 read-only live run failed
+closed on recorded database drift. The current bundle has 10,167 mapping quads in total. Its Source Mapping facet declares 134 generic RML TriplesMaps/492 predicate-object maps outside Semantic Fabric's charter; the in-charter qualified development KAT extracts and validates 148 relational R2RML TriplesMaps/721 predicate-object maps over all 112 tables/598 columns.
 Keys, constraints, defaults, indexes, views, privileges, a global snapshot and source/image provenance remain unclaimed.
 
 ### 1. Definition of complete
