@@ -1,9 +1,9 @@
 //! Optional live Product Mock proof through the governed `sf-serve` endpoint.
 //!
 //! The success case compares every ordered HTTP binding with a direct SQL read
-//! of the same finite Style window. The rejection case binds the same sealed
-//! mapping and schema to a deliberately unreachable pool: a `501` can therefore
-//! be returned only if the over-cap window is rejected before source I/O.
+//! of the same finite Style window. The rejection case uses the public offline
+//! plan resource profile with a deliberately unopened pool, because safe serving
+//! construction now requires a real coherent source observation.
 
 #[path = "product_mock_gold/support.rs"]
 mod support;
@@ -17,10 +17,10 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use http_body_util::BodyExt;
-use sf_serve::{router, Backend, ServeConfig};
-use sf_sparql::Tbox;
+use sf_serve::{router, IntrospectedSource, SemanticOntology, ServeConfig};
+use sf_sparql::resource_profile::SourceSizedState;
 use sf_sql::introspect::introspect_postgres;
-use sf_sql::TableSchema;
+use sf_sql::{Dialect, TableSchema};
 use tokio_postgres::config::Host;
 use tokio_postgres::{Config, NoTls};
 use tower::ServiceExt;
@@ -211,13 +211,16 @@ async fn exact_live_style_window_is_http_200_and_matches_ordered_sql_rows() {
         .collect();
     assert_eq!(expected.len(), count as usize);
 
-    let maps = sf_mapping::parse_r2rml(&gold.r2rml).expect("parse sealed Style mapping");
-    let mut serve = ServeConfig::new_unchecked(
-        Backend::Pg(endpoint_pool(endpoint_source, Duration::from_secs(2))),
-        maps,
-        Tbox::default(),
-        vec![actual_schema],
-    );
+    let observed = IntrospectedSource::observe_postgres(endpoint_pool(
+        endpoint_source,
+        Duration::from_secs(2),
+    ))
+    .await
+    .expect("observe the serving pool and complete public catalogue");
+    let ontology = SemanticOntology::from_turtle(&gold.ontology_turtle)
+        .expect("parse sealed canonical ontology");
+    let mut serve = ServeConfig::from_authored_r2rml(observed, &gold.r2rml, ontology)
+        .expect("admit authored Product Mock mapping against ontology and source");
     serve.set_max_order_rows(support::STYLE_WINDOW_LIMIT);
     let (status, content_type, body) = response(serve, support::STYLE_SPARQL_QUERY)
         .await
@@ -235,9 +238,9 @@ async fn exact_live_style_window_is_http_200_and_matches_ordered_sql_rows() {
     driver.abort();
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[test]
 #[ignore = "requires exact external gold/source roots"]
-async fn over_cap_style_window_is_501_before_poison_postgres_io() {
+fn over_cap_style_window_is_identified_before_poison_postgres_io() {
     let gold = external_gold().expect("sealed Product Mock inputs");
     let maps = sf_mapping::parse_r2rml(&gold.r2rml).expect("parse sealed Style mapping");
     let mut poison: Config = "host=127.0.0.1 port=1 user=product_design dbname=product_design"
@@ -245,22 +248,18 @@ async fn over_cap_style_window_is_501_before_poison_postgres_io() {
         .expect("static poison source");
     poison.connect_timeout(Duration::from_millis(20));
     let pool = endpoint_pool(poison, Duration::from_millis(20));
-    let mut serve = ServeConfig::new_unchecked(
-        Backend::Pg(pool.clone()),
-        maps,
-        Tbox::default(),
-        vec![support::style_table_schema(&gold.style)],
-    );
-    serve.timeout = Duration::from_millis(100);
-    serve.set_max_order_rows(support::STYLE_WINDOW_LIMIT);
     let query = support::STYLE_SPARQL_QUERY.replace("LIMIT 10001", "LIMIT 10002");
     assert_ne!(query, support::STYLE_SPARQL_QUERY);
-
-    let (status, _, body) = response(serve, &query)
-        .await
-        .expect("complete pre-I/O rejection response");
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    let problem: serde_json::Value = serde_json::from_slice(&body).expect("problem JSON");
-    assert_eq!(problem["code"], "unsupported-query");
+    let admitted =
+        sf_sparql::parse_and_translate(support::STYLE_SPARQL_QUERY, &maps, Dialect::Postgres)
+            .expect("compile admitted finite Style window");
+    assert!(!admitted
+        .source_sized_states_with_order_window(support::STYLE_WINDOW_LIMIT)
+        .contains(&SourceSizedState::GlobalOrder));
+    let over_cap = sf_sparql::parse_and_translate(&query, &maps, Dialect::Postgres)
+        .expect("compile over-cap Style window for structural preflight");
+    assert!(over_cap
+        .source_sized_states_with_order_window(support::STYLE_WINDOW_LIMIT)
+        .contains(&SourceSizedState::GlobalOrder));
     assert_eq!(pool.status().size, 0, "poison pool must remain unopened");
 }

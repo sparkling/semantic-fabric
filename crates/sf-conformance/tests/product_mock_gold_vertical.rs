@@ -86,6 +86,26 @@ fn sealed_product_mock_gold_loader_accepts_a_valid_candidate() {
     assert_eq!(admitted.style.columns.len(), 5);
     assert_eq!(admitted.style.primary_key, ["style_number"]);
     assert_eq!(admitted.style.foreign_keys.len(), 2);
+    sf_serve::SemanticOntology::from_turtle(&admitted.ontology_turtle)
+        .expect("assembled semantic document parses as Turtle");
+    let mut previous = None;
+    for included in [
+        "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "14",
+    ] {
+        let position = admitted
+            .ontology_turtle
+            .find(&format!("ontology/category/{included}"))
+            .expect("included category marker is retained");
+        assert!(previous.is_none_or(|earlier| earlier < position));
+        previous = Some(position);
+    }
+    assert!(!admitted
+        .ontology_turtle
+        .contains("mapping/category-13/triples-map"));
+    assert!(!admitted
+        .ontology_turtle
+        .contains("http://www.w3.org/ns/r2rml#TriplesMap"));
+    assert!(!admitted.ontology_turtle.contains("http://w3id.org/rml/"));
     let mappings = sf_mapping::parse_r2rml(&admitted.r2rml).unwrap();
     assert_eq!(mappings.len(), 148);
     assert_eq!(
@@ -96,6 +116,56 @@ fn sealed_product_mock_gold_loader_accepts_a_valid_candidate() {
         721
     );
     assert!(!admitted.r2rml.contains("http://w3id.org/rml/"));
+}
+
+#[test]
+fn canonical_ontology_shard_limit_rejects_before_artifact_read() {
+    let shard_path = "categories/01-domain-structure/part-001.ttl";
+    let mut fixture = support::SyntheticFixture::valid();
+    let mut manifest: Value = serde_json::from_slice(&fixture.manifest).unwrap();
+    let descriptor = manifest["artifactFiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["path"].as_str() == Some(shard_path))
+        .expect("synthetic root shard descriptor exists");
+    descriptor["bytes"] = json!(64 * 1024 + 1);
+    fixture.manifest = serde_json::to_vec(&manifest).unwrap();
+    fixture.reseal_manifest();
+    fixture.artifacts.remove(shard_path);
+
+    assert_eq!(
+        support::admit_synthetic(&fixture),
+        Err("canonical ontology shard exceeds its byte limit")
+    );
+}
+
+#[test]
+fn canonical_ontology_requires_its_category_seals_and_manifest_order() {
+    let shard_path = "categories/01-domain-structure/part-001.ttl";
+    let mut stale_category_seal = support::SyntheticFixture::valid();
+    stale_category_seal
+        .artifacts
+        .get_mut(shard_path)
+        .expect("synthetic ontology shard exists")
+        .push(b' ');
+    stale_category_seal.reseal_artifact(shard_path);
+    assert_eq!(
+        support::admit_synthetic(&stale_category_seal),
+        Err("canonical ontology shard seal mismatch")
+    );
+
+    let mut reordered = support::SyntheticFixture::valid();
+    replace_artifact(
+        &mut reordered,
+        "categories/01-domain-structure/category.json",
+        "/shards/0/path",
+        json!("categories/01-domain-structure/part-002.ttl"),
+    );
+    assert_eq!(
+        support::admit_synthetic(&reordered),
+        Err("canonical ontology shard path or order mismatch")
+    );
 }
 
 #[test]
@@ -360,4 +430,9 @@ fn exact_external_product_mock_gold_and_source_are_admitted() {
             .sum::<usize>(),
         721
     );
+    sf_serve::SemanticOntology::from_turtle(&admitted.ontology_turtle)
+        .expect("external canonical ontology parses");
+    assert!(!admitted
+        .ontology_turtle
+        .contains("mapping/category-13/triples-map"));
 }

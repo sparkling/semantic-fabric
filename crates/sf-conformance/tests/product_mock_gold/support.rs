@@ -5,11 +5,12 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
-use sf_sql::{Column, ForeignKey, TableSchema};
 use sha2::{Digest, Sha256};
 
 #[path = "fixture.rs"]
 mod fixture;
+#[path = "ontology.rs"]
+mod ontology;
 #[path = "r2rml.rs"]
 mod r2rml;
 #[path = "schema.rs"]
@@ -20,8 +21,8 @@ pub use fixture::SyntheticFixture;
 pub use r2rml::extract_relational_r2rml;
 #[allow(unused_imports)]
 pub use schema::{
-    RelationSchema, RelationalColumn, RelationalInventory, StoreSchema, StyleColumn,
-    StyleForeignKey, StyleSchema,
+    style_table_schema, RelationSchema, RelationalColumn, RelationalInventory, StoreSchema,
+    StyleColumn, StyleForeignKey, StyleSchema,
 };
 
 pub const GOLD_ROOT_ENV: &str = "SF_PRODUCT_MOCK_GOLD_ROOT";
@@ -75,29 +76,10 @@ pub struct SealPolicy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GoldVertical {
+    pub ontology_turtle: String,
     pub r2rml: String,
     pub inventory: RelationalInventory,
     pub style: StyleSchema,
-}
-
-pub fn style_table_schema(style: &StyleSchema) -> TableSchema {
-    let mut table = TableSchema::new("style");
-    table.columns = style
-        .columns
-        .iter()
-        .map(|column| Column::new(&column.name, &column.store_type, !column.nullable))
-        .collect();
-    table.primary_key = style.primary_key.clone();
-    table.foreign_keys = style
-        .foreign_keys
-        .iter()
-        .map(|key| ForeignKey {
-            columns: key.child_columns.clone(),
-            parent_table: key.parent_table.clone(),
-            parent_columns: key.parent_columns.clone(),
-        })
-        .collect();
-    table
 }
 
 pub fn sha256(bytes: &[u8]) -> String {
@@ -222,6 +204,8 @@ where
     let mut seen = BTreeSet::new();
     let mut total = 0_u64;
     let mut selected = BTreeMap::new();
+    let mut ontology_shards = 0_usize;
+    let mut ontology_bytes = 0_u64;
     for entry in files {
         let path = string(entry, "/path")?;
         let bytes = unsigned(entry, "/bytes")?;
@@ -232,12 +216,13 @@ where
         total = total
             .checked_add(bytes)
             .ok_or("transitive artifact byte count overflow")?;
+        ontology::account_descriptor(path, bytes, &mut ontology_shards, &mut ontology_bytes)?;
         let value = artifact(path)?;
         if value.len() as u64 != bytes || sha256(&value) != digest {
             return Err("transitive artifact seal mismatch");
         }
-        if [SNAPSHOT_PATH, COVERAGE_PATH, CATEGORY_MAPPING_PATH].contains(&path)
-            || path.starts_with(CATEGORY_SHARD_PREFIX) && path.ends_with(".ttl")
+        if [SNAPSHOT_PATH, COVERAGE_PATH].contains(&path)
+            || ontology::is_canonical_category_artifact(path)
         {
             selected.insert(path.to_owned(), value);
         }
@@ -253,11 +238,13 @@ where
         .remove(COVERAGE_PATH)
         .ok_or("relational coverage artifact is missing")?;
     let (inventory, style) = validate_coverage(&coverage)?;
+    let ontology_turtle = ontology::assemble(&manifest, &mut selected)?;
     let category = selected
         .remove(CATEGORY_MAPPING_PATH)
         .ok_or("source-mapping category manifest is missing")?;
     let r2rml = r2rml::validate_mapping(&category, &selected)?;
     Ok(GoldVertical {
+        ontology_turtle,
         r2rml,
         inventory,
         style,
