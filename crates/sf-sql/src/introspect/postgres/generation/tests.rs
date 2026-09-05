@@ -1,4 +1,5 @@
 use super::*;
+use crate::introspect::PostgresSchemaIdentityUnavailableV1;
 
 fn names(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
@@ -89,4 +90,36 @@ fn postgres_identifier_byte_bound_is_inclusive() {
     let error = build_public_base_table_lock_sql(std::slice::from_ref(&over_cap))
         .expect_err("64-byte identifier must reject");
     assert!(!error.to_string().contains(&over_cap));
+}
+
+#[test]
+fn lock_sqlstate_preserves_only_schema_drift_classification() {
+    for code in [SqlState::UNDEFINED_TABLE, SqlState::UNDEFINED_SCHEMA] {
+        assert_eq!(
+            classify_lock_sqlstate(Some(&code)),
+            PostgresPublicTableLockFailure::RelationSetChanged
+        );
+    }
+    assert_eq!(
+        classify_lock_sqlstate(Some(&SqlState::LOCK_NOT_AVAILABLE)),
+        PostgresPublicTableLockFailure::Unavailable
+    );
+    assert_eq!(
+        classify_lock_sqlstate(None),
+        PostgresPublicTableLockFailure::Unavailable
+    );
+}
+
+#[test]
+fn observation_failures_do_not_turn_transport_errors_into_profile_drift() {
+    assert_eq!(
+        classify_observation_failure(PostgresSchemaIdentityUnavailableV1::CatalogQuery),
+        PostgresGenerationObservationFailure::SourceUnavailable
+    );
+    assert_eq!(
+        classify_observation_failure(PostgresSchemaIdentityUnavailableV1::UnsupportedType),
+        PostgresGenerationObservationFailure::ProfileUnavailable(
+            PostgresSchemaIdentityUnavailableV1::UnsupportedType
+        )
+    );
 }

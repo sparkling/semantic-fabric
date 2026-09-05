@@ -15,7 +15,10 @@ mod legacy_sql;
 mod observation;
 #[allow(unused_imports)] // Re-exported by introspect.rs when the serving caller is wired.
 pub use generation::{
-    introspect_postgres_public_observed_snapshot_in_transaction, lock_postgres_public_base_tables,
+    introspect_postgres_public_observed_snapshot_in_transaction,
+    introspect_postgres_public_observed_snapshot_in_transaction_classified,
+    lock_postgres_public_base_tables, lock_postgres_public_base_tables_classified,
+    PostgresGenerationObservationFailure, PostgresPublicTableLockFailure,
 };
 use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
 use legacy_query::{

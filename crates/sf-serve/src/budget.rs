@@ -134,6 +134,17 @@ impl RequestBudget {
         }
     }
 
+    /// Remaining wall-clock allowance on this request's original absolute
+    /// deadline. PostgreSQL generation leases convert this to transaction-local
+    /// statement, lock, and idle timeouts; they never refresh it per phase.
+    pub(crate) fn remaining_duration(&self) -> Result<Option<Duration>, QueryControlError> {
+        self.checkpoint()?;
+        Ok(self
+            .0
+            .deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now())))
+    }
+
     /// Race ingress/handler work only against the absolute clock. A streaming
     /// producer may seal a result/work limit immediately after the handler builds
     /// its response; ignoring non-deadline terminals here keeps the status-line

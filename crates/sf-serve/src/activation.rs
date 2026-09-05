@@ -9,6 +9,7 @@ use sf_core::SourceId;
 use crate::binding::{
     BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
 };
+use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
 use crate::snapshot::RuntimeSnapshot;
 
 /// Monotonic process-local identity for one published runtime generation.
@@ -93,6 +94,15 @@ impl RuntimeSnapshotLease {
         self.snapshot.compile(source_id, query, control)
     }
 
+    pub(crate) fn preflight_compile(
+        &self,
+        source_id: SourceId,
+        query: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<std::sync::Arc<sf_sparql::Plan>> {
+        self.snapshot.preflight_compile(source_id, query, control)
+    }
+
     pub(crate) fn prepare_execution(
         &self,
         plan: BoundPlan,
@@ -108,6 +118,23 @@ impl RuntimeSnapshotLease {
     ) -> sf_sparql::Result<BoundFederatedPlan> {
         self.snapshot
             .compile_federated_union(source_ids, query, control)
+    }
+
+    pub(crate) fn preflight_federated_union(
+        &self,
+        source_ids: [SourceId; 2],
+        query: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<sf_sparql::federation::FederatedPlan> {
+        self.snapshot
+            .preflight_federated_union(source_ids, query, control)
+    }
+
+    pub(crate) fn generation_requirements(
+        &self,
+        source_ids: impl IntoIterator<Item = SourceId>,
+    ) -> Result<Vec<PgGenerationRequirement>, PgGenerationError> {
+        self.snapshot.generation_requirements(source_ids)
     }
 
     pub(crate) fn prepare_federated_execution(

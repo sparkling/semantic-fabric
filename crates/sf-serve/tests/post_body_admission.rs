@@ -348,7 +348,7 @@ fn should_reject_unrepresentable_limit_through_public_config_api() {
 fn should_reject_unrepresentable_limit_before_source_or_file_io() {
     let options = ServeOptions {
         source: SourceRef::environment("SF_POST_BODY_ADMISSION_MUST_NOT_BE_READ"),
-        mapping_path: "/path/that/must/not/be/read.ttl".to_owned(),
+        mapping: sf_serve::MappingRef::r2rml_file("/path/that/must/not/be/read.ttl"),
         additional_source: None,
         ontology_path: Some("/ontology/that/must/not/be/read.ttl".to_owned()),
         bind: "203.0.113.1:1".to_owned(),

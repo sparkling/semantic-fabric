@@ -19,6 +19,9 @@ use sf_sparql::{CompileDigests, CompileScope, CompilerBinding, Epoch, Plan, Tbox
 use sf_sql::{Dialect, TableSchema};
 
 use crate::backend::{Backend, BackendKind};
+use crate::pg_generation::{
+    PgGenerationError, PgGenerationRequirement, PostgresDirectGeneration, SourceGeneration,
+};
 
 /// Plan-cache capacity for one immutable compiler binding (ADR-0007).
 const PLAN_CACHE_CAP: usize = 64;
@@ -33,6 +36,7 @@ const PLAN_CACHE_CAP: usize = 64;
 pub struct IntrospectedSource {
     backend: Backend,
     schema: Vec<TableSchema>,
+    generation: SourceGeneration,
 }
 
 impl IntrospectedSource {
@@ -40,19 +44,48 @@ impl IntrospectedSource {
     /// Production startup uses the crate-private observed constructor returned by
     /// the backend opener.
     pub fn unchecked(backend: Backend, schema: Vec<TableSchema>) -> Self {
-        Self { backend, schema }
+        Self {
+            backend,
+            schema,
+            generation: SourceGeneration::Unverified,
+        }
     }
 
     pub(crate) fn observed(backend: Backend, schema: Vec<TableSchema>) -> Self {
-        Self { backend, schema }
+        Self {
+            backend,
+            schema,
+            generation: SourceGeneration::Unverified,
+        }
+    }
+
+    pub(crate) fn bind_postgres_direct(
+        mut self,
+        schema: Vec<TableSchema>,
+        generation: PostgresDirectGeneration,
+    ) -> Result<Self, PgGenerationError> {
+        if self.kind() != BackendKind::Postgres {
+            return Err(PgGenerationError::Internal);
+        }
+        self.schema = schema;
+        self.generation = SourceGeneration::direct_postgres(generation);
+        Ok(self)
     }
 
     pub const fn kind(&self) -> BackendKind {
         self.backend.kind()
     }
 
-    pub(crate) fn into_parts(self) -> (Backend, Vec<TableSchema>) {
-        (self.backend, self.schema)
+    pub(crate) fn observed_schema(&self) -> &[TableSchema] {
+        &self.schema
+    }
+
+    pub(crate) fn backend(&self) -> &Backend {
+        &self.backend
+    }
+
+    pub(crate) fn into_parts(self) -> (Backend, Vec<TableSchema>, SourceGeneration) {
+        (self.backend, self.schema, self.generation)
     }
 }
 
@@ -62,6 +95,7 @@ impl fmt::Debug for IntrospectedSource {
             .debug_struct("IntrospectedSource")
             .field("backend_kind", &self.kind())
             .field("schema_table_count", &self.schema.len())
+            .field("verified_generation", &self.generation.is_verified())
             .finish()
     }
 }
@@ -113,6 +147,7 @@ pub(crate) struct RuntimeBinding {
     backend: Backend,
     profile: BackendProfile,
     observed_schema: Arc<[TableSchema]>,
+    generation: SourceGeneration,
     compiler: CompilerBinding,
 }
 
@@ -123,7 +158,7 @@ impl RuntimeBinding {
         tbox: Tbox,
         epoch: Epoch,
     ) -> Self {
-        let (backend, schema) = source.into_parts();
+        let (backend, schema, generation) = source.into_parts();
         let profile = BackendProfile::from_kind(backend.kind());
         let observed_schema: Arc<[TableSchema]> = schema.into();
         let compiler = CompilerBinding::from_unverified_observation(
@@ -138,6 +173,7 @@ impl RuntimeBinding {
             backend,
             profile,
             observed_schema,
+            generation,
             compiler,
         }
     }
@@ -161,6 +197,19 @@ impl RuntimeBinding {
         })
     }
 
+    /// Compile an uncached plan for structural admission only. The caller must
+    /// discard it and may not prepare it for execution.
+    pub(crate) fn preflight_compile(
+        &self,
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<Arc<Plan>> {
+        control.checkpoint()?;
+        let compiled = self.compiler.compile_uncached_shared(sparql);
+        control.checkpoint()?;
+        compiled
+    }
+
     /// Verify plan ownership before returning the inseparable execution pair.
     /// No connection, pool slot, or source I/O is acquired before this check.
     pub(crate) fn prepare_execution(
@@ -175,6 +224,8 @@ impl RuntimeBinding {
         }
         Ok(ExecutablePlan {
             backend: self.backend.clone(),
+            source_id: self.source_id(),
+            verified_generation: self.generation.is_verified(),
             plan: bound.plan,
         })
     }
@@ -201,6 +252,12 @@ impl RuntimeBinding {
 
     pub(crate) const fn compiler(&self) -> &CompilerBinding {
         &self.compiler
+    }
+
+    pub(crate) fn generation_requirement(
+        &self,
+    ) -> Result<Option<PgGenerationRequirement>, PgGenerationError> {
+        self.generation.requirement(&self.backend)
     }
 }
 
@@ -278,12 +335,19 @@ impl fmt::Debug for BoundPlan {
 /// An ownership-checked backend/plan pair ready for form dispatch.
 pub(crate) struct ExecutablePlan {
     backend: Backend,
+    source_id: SourceId,
+    verified_generation: bool,
     plan: Arc<Plan>,
 }
 
 impl ExecutablePlan {
-    pub(crate) fn into_parts(self) -> (Backend, Arc<Plan>) {
-        (self.backend, self.plan)
+    pub(crate) fn into_parts(self) -> (SourceId, Backend, bool, Arc<Plan>) {
+        (
+            self.source_id,
+            self.backend,
+            self.verified_generation,
+            self.plan,
+        )
     }
 }
 

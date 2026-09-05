@@ -1,5 +1,6 @@
 //! Relational backend handles, SQLite pooling, and backend introspection.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use sf_sql::backend::sqlite::SqliteOwnedConnection;
@@ -19,12 +20,29 @@ const POSTGRES_RELATION_SCOPE_QUERY: &str =
 /// statement caching), not directly to `Client` — `sf_sparql::exec_pg`'s generic
 /// client-handle bound (`Deref<Target = Client>`, shared with the conformance
 /// harness's plain `Arc<Client>`) needs the single hop this newtype provides.
-pub(crate) struct PgConn(deadpool_postgres::Object);
+pub(crate) struct PgConn {
+    object: Option<deadpool_postgres::Object>,
+    recyclable: AtomicBool,
+}
 
 impl PgConn {
     pub(crate) async fn checked(conn: deadpool_postgres::Object) -> Result<Self, String> {
         verify_pg_relation_scope(&conn).await?;
-        Ok(Self(conn))
+        Ok(Self {
+            object: Some(conn),
+            recyclable: AtomicBool::new(true),
+        })
+    }
+
+    /// A verified-generation transaction must never return to the pool until
+    /// its rollback has been acknowledged. This flag is set before `BEGIN`.
+    pub(crate) fn mark_generation_dirty(&self) {
+        self.recyclable.store(false, Ordering::Release);
+    }
+
+    /// Permit normal pool recycling only after an acknowledged rollback.
+    pub(crate) fn mark_recyclable(&self) {
+        self.recyclable.store(true, Ordering::Release);
     }
 }
 
@@ -32,7 +50,19 @@ impl std::ops::Deref for PgConn {
     type Target = tokio_postgres::Client;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.object
+            .as_deref()
+            .expect("active PostgreSQL connection")
+    }
+}
+
+impl Drop for PgConn {
+    fn drop(&mut self) {
+        if !self.recyclable.load(Ordering::Acquire) {
+            if let Some(object) = self.object.take() {
+                drop(deadpool_postgres::Object::take(object));
+            }
+        }
     }
 }
 

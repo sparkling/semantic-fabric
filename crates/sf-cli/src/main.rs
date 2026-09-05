@@ -11,10 +11,20 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use sf_bench::{run_obda_scenario, Scenario};
 use sf_conformance::{run_and_report, Kind};
+use sf_serve::{serve_blocking, ServeOptions};
+#[cfg(test)]
 use sf_serve::{
-    serve_blocking, AdditionalSourceOptions, ServeOptions, SourceRef,
     DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
-    DEFAULT_QUERY_LIMITS, DEFAULT_SHUTDOWN_TIMEOUT,
+    DEFAULT_SHUTDOWN_TIMEOUT,
+};
+
+mod serve_args;
+
+use serve_args::ServeArgs;
+#[cfg(test)]
+use serve_args::{
+    AdditionalMappingSelector, AdditionalSourceArgs, AdditionalSourceSelector, MappingArgs,
+    SourceArgs,
 };
 
 #[derive(Parser)]
@@ -38,115 +48,6 @@ enum Command {
     Bench,
 }
 
-/// `serve` flags (ADR-0019 G8, ADR-0010/0011). Read-only query endpoint.
-#[derive(clap::Args)]
-struct ServeArgs {
-    #[command(flatten)]
-    source_input: SourceArgs,
-    /// R2RML mapping document (Turtle).
-    #[arg(long)]
-    mapping: String,
-    #[command(flatten)]
-    additional_source_input: AdditionalSourceArgs,
-    /// R2RML mapping document for the optional second relational source.
-    #[arg(long = "mapping-2", requires = "additional-source-selector")]
-    mapping_2: Option<String>,
-    /// Optional ontology (Turtle) → tier-1 T-Box (ADR-0008).
-    #[arg(long)]
-    ontology: Option<String>,
-    /// Address to bind.
-    #[arg(long, default_value = "127.0.0.1:7878")]
-    bind: String,
-    /// Request timeout in seconds (ADR-0010).
-    #[arg(long, default_value_t = 30)]
-    timeout_secs: u64,
-    /// Max query length in bytes (ADR-0010).
-    #[arg(long, default_value_t = 1 << 20)]
-    max_query_len: usize,
-    /// Server-wide ceiling for requests admitted into application work.
-    #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT_REQUESTS)]
-    max_concurrent_requests: usize,
-    /// Max metadata probes, branch opens, and row-pull attempts per request.
-    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_source_work())]
-    max_source_work: u64,
-    /// Max semantic result items per request (rows, triples, or ASK boolean).
-    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_result_items())]
-    max_result_items: u64,
-    /// Max exact in-process ORDER BY window (`OFFSET + LIMIT`).
-    #[arg(long, default_value_t = DEFAULT_MAX_ORDER_ROWS)]
-    max_order_rows: usize,
-    /// Max textual binding payload retained by ORDER BY.
-    #[arg(long, default_value_t = DEFAULT_MAX_ORDER_BYTES)]
-    max_order_bytes: u64,
-    /// Max serialized response bytes per request.
-    #[arg(long, default_value_t = DEFAULT_QUERY_LIMITS.max_serialized_bytes())]
-    max_serialized_bytes: u64,
-    /// Max PostgreSQL pool connections (ADR-0010 §C stream-lane pool, ADR-0027).
-    #[arg(long, default_value_t = 16)]
-    pg_pool_size: usize,
-    /// Max seconds to wait for a pooled PostgreSQL connection before shedding
-    /// `503` (ADR-0010 §C).
-    #[arg(long, default_value_t = 5)]
-    pg_pool_wait_secs: u64,
-    /// Read-only connection pool size for a file-backed SQLite source.
-    #[arg(long, default_value_t = 4)]
-    sqlite_pool_size: usize,
-    /// Max seconds to drain active requests after SIGTERM or Ctrl-C.
-    #[arg(long, default_value_t = DEFAULT_SHUTDOWN_TIMEOUT.as_secs())]
-    shutdown_timeout_secs: u64,
-}
-
-/// Optional second source selector. Supplying either selector requires its
-/// source-local `--mapping-2`; the two transports remain mutually exclusive.
-#[derive(clap::Args)]
-#[group(id = "additional-source-selector", required = false, multiple = false)]
-struct AdditionalSourceArgs {
-    #[arg(id = "source_2", long = "source-2", requires = "mapping_2")]
-    source: Option<String>,
-    #[arg(id = "source_env_2", long = "source-env-2", requires = "mapping_2")]
-    source_env: Option<String>,
-}
-
-impl AdditionalSourceArgs {
-    fn into_options(self, mapping_path: Option<String>) -> Option<AdditionalSourceOptions> {
-        match (self.source, self.source_env, mapping_path) {
-            (Some(source), None, Some(mapping_path)) => Some(AdditionalSourceOptions {
-                source: SourceRef::inline(source),
-                mapping_path,
-            }),
-            (None, Some(variable), Some(mapping_path)) => Some(AdditionalSourceOptions {
-                source: SourceRef::environment(variable),
-                mapping_path,
-            }),
-            (None, None, None) => None,
-            _ => unreachable!("clap requires a complete second source and mapping pair"),
-        }
-    }
-}
-
-/// Exactly one source transport: a credential-free inline value or the name of
-/// an environment variable containing the complete source value.
-#[derive(clap::Args)]
-#[group(required = true, multiple = false)]
-struct SourceArgs {
-    /// Credential-free `sqlite:`, `pg:`, or `mysql://` source.
-    #[arg(long)]
-    source: Option<String>,
-    /// Environment variable containing the complete source (credentials allowed).
-    #[arg(long)]
-    source_env: Option<String>,
-}
-
-impl SourceArgs {
-    fn into_source_ref(self) -> SourceRef {
-        match (self.source, self.source_env) {
-            (Some(value), None) => SourceRef::inline(value),
-            (None, Some(variable)) => SourceRef::environment(variable),
-            _ => unreachable!("clap requires exactly one source argument"),
-        }
-    }
-}
-
 fn main() -> ExitCode {
     sf_sparql::dispatch_private_parser_worker_v1();
     match Cli::parse().command {
@@ -160,10 +61,11 @@ fn main() -> ExitCode {
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
     let source = args.source_input.into_source_ref();
-    let additional_source = args.additional_source_input.into_options(args.mapping_2);
+    let mapping = args.mapping_input.into_mapping_ref();
+    let additional_source = args.additional_source_input.into_options();
     let opts = ServeOptions {
         source,
-        mapping_path: args.mapping,
+        mapping,
         additional_source,
         ontology_path: args.ontology,
         bind: args.bind,
@@ -358,6 +260,26 @@ mod tests {
     }
 
     #[test]
+    fn serve_mapping_selector_requires_exactly_one_mapping_mode() {
+        let source = ["semantic-fabric", "serve", "--source", "sqlite::memory:"];
+        assert!(Cli::try_parse_from(source).is_err());
+        assert!(Cli::try_parse_from(source.into_iter().chain([
+            "--mapping",
+            "mapping.ttl",
+            "--direct-mapping-base",
+            "http://example.com/base/",
+        ]))
+        .is_err());
+
+        assert!(Cli::try_parse_from(
+            source
+                .into_iter()
+                .chain(["--direct-mapping-base", "http://example.com/base/",])
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn serve_second_source_requires_one_selector_and_its_mapping() {
         let base = [
             "semantic-fabric",
@@ -383,6 +305,15 @@ mod tests {
             "second.ttl",
         ]))
         .is_err());
+        assert!(Cli::try_parse_from(base.into_iter().chain([
+            "--source-2",
+            "sqlite:second.db",
+            "--mapping-2",
+            "second.ttl",
+            "--direct-mapping-base-2",
+            "http://example.com/second/",
+        ]))
+        .is_err());
 
         let parsed = Cli::try_parse_from(base.into_iter().chain([
             "--source-2",
@@ -394,10 +325,40 @@ mod tests {
         let Command::Serve(parsed) = parsed.command else {
             panic!("serve command")
         };
-        assert_eq!(parsed.mapping_2.as_deref(), Some("second.ttl"));
         assert_eq!(
-            parsed.additional_source_input.source.as_deref(),
+            parsed
+                .additional_source_input
+                .mapping_input
+                .mapping
+                .as_deref(),
+            Some("second.ttl")
+        );
+        assert_eq!(
+            parsed
+                .additional_source_input
+                .source_input
+                .source
+                .as_deref(),
             Some("sqlite:second.db")
+        );
+
+        let direct = Cli::try_parse_from(base.into_iter().chain([
+            "--source-2",
+            "sqlite:second.db",
+            "--direct-mapping-base-2",
+            "http://example.com/second/",
+        ]))
+        .expect("complete two-source Direct Mapping startup arguments");
+        let Command::Serve(direct) = direct.command else {
+            panic!("serve command")
+        };
+        assert_eq!(
+            direct
+                .additional_source_input
+                .mapping_input
+                .direct_mapping_base
+                .as_deref(),
+            Some("http://example.com/second/")
         );
     }
 
@@ -453,12 +414,20 @@ mod tests {
                 source: Some("sqlite::memory:".to_owned()),
                 source_env: None,
             },
-            mapping: "/nonexistent/path/does-not-exist.ttl".to_owned(),
-            additional_source_input: AdditionalSourceArgs {
-                source: None,
-                source_env: None,
+            mapping_input: MappingArgs {
+                mapping: Some("/nonexistent/path/does-not-exist.ttl".to_owned()),
+                direct_mapping_base: None,
             },
-            mapping_2: None,
+            additional_source_input: AdditionalSourceArgs {
+                source_input: AdditionalSourceSelector {
+                    source: None,
+                    source_env: None,
+                },
+                mapping_input: AdditionalMappingSelector {
+                    mapping: None,
+                    direct_mapping_base: None,
+                },
+            },
             ontology: None,
             bind: "127.0.0.1:0".to_owned(),
             timeout_secs: 1,

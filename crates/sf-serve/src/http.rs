@@ -8,17 +8,17 @@ use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
-use deadpool_postgres::PoolError;
 use sf_core::query_control::{QueryCharge, QueryControl};
-use sf_sparql::{exec, exec_mysql, exec_pg, Plan, PlanForm};
+use sf_sparql::{exec, exec_mysql, Plan, PlanForm};
 use sparesults::QueryResultsFormat;
 
 use crate::activation::RuntimeSnapshotLease;
 use crate::admission;
-use crate::backend::{Backend, PgConn};
+use crate::backend::Backend;
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
 use crate::deadline::{self, JoinedTaskError};
+use crate::pg_generation::VerifiedPostgresGenerationLease;
 use crate::problem::{self, ProblemCode};
 use crate::request_compile::BoundQuery;
 use crate::request_deadline::RequestDeadlineService;
@@ -106,12 +106,20 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
+    let mut generations =
+        match crate::request_generation::acquire(cfg.clone(), &snapshot, &query, &budget).await {
+            Ok(generations) => generations,
+            Err(response) => return response,
+        };
     let bound =
         match crate::request_compile::compile(cfg.clone(), snapshot.clone(), query, budget.clone())
             .await
         {
             Ok(p) => p,
-            Err(resp) => return resp,
+            Err(response) => {
+                let _ = generations.finish().await;
+                return response;
+            }
         };
     let accept = accept.as_deref();
 
@@ -119,18 +127,33 @@ async fn process(
         BoundQuery::Single(bound) => {
             if let Err(error) = admission::admit(bound.plan(), cfg.max_order_rows()) {
                 let _internal_reason = error.reason();
+                let _ = generations.finish().await;
                 return problem::response(ProblemCode::UnsupportedQuery);
             }
             let execution = match snapshot.prepare_execution(*bound) {
                 Ok(execution) => execution,
-                Err(_) => return problem::response(ProblemCode::Internal),
+                Err(_) => {
+                    let _ = generations.finish().await;
+                    return problem::response(ProblemCode::Internal);
+                }
             };
-            let (backend, plan) = execution.into_parts();
+            let (source_id, backend, verified_generation, plan) = execution.into_parts();
+            if generations.contains(source_id) != verified_generation {
+                let _ = generations.finish().await;
+                return problem::response(ProblemCode::Internal);
+            }
+            let generation = generations.take(source_id);
+            if !generations.is_empty() {
+                let _ = generations.finish().await;
+                return problem::response(ProblemCode::Internal);
+            }
             match &plan.form {
-                PlanForm::Select { .. } => respond_select(backend, plan, accept, budget).await,
-                PlanForm::Ask => respond_ask(backend, plan, accept, budget).await,
+                PlanForm::Select { .. } => {
+                    respond_select(backend, plan, generation, accept, budget).await
+                }
+                PlanForm::Ask => respond_ask(backend, plan, generation, accept, budget).await,
                 PlanForm::Construct { .. } => {
-                    respond_construct(backend, plan, accept, budget).await
+                    respond_construct(backend, plan, generation, accept, budget).await
                 }
             }
         }
@@ -138,15 +161,20 @@ async fn process(
             for fragment in bound.plan().fragments() {
                 if let Err(error) = admission::admit(fragment.plan(), cfg.max_order_rows()) {
                     let _internal_reason = error.reason();
+                    let _ = generations.finish().await;
                     return problem::response(ProblemCode::UnsupportedQuery);
                 }
             }
             let execution = match snapshot.prepare_federated_execution(*bound) {
                 Ok(execution) => execution,
-                Err(_) => return problem::response(ProblemCode::Internal),
+                Err(_) => {
+                    let _ = generations.finish().await;
+                    return problem::response(ProblemCode::Internal);
+                }
             };
             let format = negotiate_results(accept);
-            match crate::federation::select_union_body(execution, format, budget).await {
+            match crate::federation::select_union_body(execution, generations, format, budget).await
+            {
                 Ok(body) => ok_stream(format.media_type(), body),
                 Err(response) => response,
             }
@@ -162,6 +190,7 @@ async fn process(
 async fn respond_select(
     backend: Backend,
     plan: Arc<Plan>,
+    generation: Option<VerifiedPostgresGenerationLease>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
@@ -172,6 +201,9 @@ async fn respond_select(
     let vars = vars.clone();
     let body = match backend {
         Backend::Sqlite(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
                 Err(response) => return response,
@@ -195,24 +227,16 @@ async fn respond_select(
             )
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, budget.clone()).await {
-                Ok(c) => c,
-                Err(resp) => return resp,
-            };
-            let drive_budget = budget.clone();
-            stream::select_body_streaming_controlled(
-                move |sink| {
-                    Box::pin(async move {
-                        exec_pg::select_each_pg_controlled(&plan, conn, &drive_budget, sink).await
-                    })
-                },
-                fmt,
-                vars,
-                budget,
-            )
+            match crate::pg_response::select(pool, plan, generation, fmt, vars, budget).await {
+                Ok(body) => body,
+                Err(response) => return response,
+            }
         }
         Backend::Mysql(pool) => {
-            let conn = match acquire_mysql(&pool, &budget).await {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
+            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,
             };
@@ -236,6 +260,7 @@ async fn respond_select(
 async fn respond_ask(
     backend: Backend,
     plan: Arc<Plan>,
+    generation: Option<VerifiedPostgresGenerationLease>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
@@ -245,6 +270,9 @@ async fn respond_ask(
     let fmt = negotiate_results(accept);
     let value = match backend {
         Backend::Sqlite(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             // The concrete adapter future proves the `Send` obligation.
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
@@ -263,19 +291,15 @@ async fn respond_ask(
             }
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, budget.clone()).await {
-                Ok(c) => c,
-                Err(resp) => return resp,
-            };
-            match budget
-                .run(exec_pg::ask_pg_controlled(&plan, conn, &budget))
-                .await
-            {
-                Err(error) => return problem::response_for_control(error),
+            match crate::pg_response::ask(pool, plan, generation, budget.clone()).await {
                 Ok(result) => result,
+                Err(response) => return response,
             }
         }
         Backend::Mysql(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             // ASK collects (a single boolean). Unlike PG (whose `PgRowStream` is
             // `'static`), MySQL's branch cursor BORROWS the connection, so awaiting
             // `ask_mysql` inline in this handler future leaves the borrowing stream
@@ -284,7 +308,7 @@ async fn respond_ask(
             // owned-`Conn` task future directly (provable), and gives the dedicated
             // conn a task to live in, dropped/disposed after the run (§4.2). Mirrors
             // the SQLite ASK arm's `tokio::spawn` + `Ok(Err)/Ok(Ok)` join handling.
-            let conn = match acquire_mysql(&pool, &budget).await {
+            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,
             };
@@ -331,12 +355,16 @@ async fn respond_ask(
 async fn respond_construct(
     backend: Backend,
     plan: Arc<Plan>,
+    generation: Option<VerifiedPostgresGenerationLease>,
     accept: Option<&str>,
     budget: RequestBudget,
 ) -> Response {
     let fmt = negotiate_rdf(accept);
     let body = match backend {
         Backend::Sqlite(pool) => {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
                 Err(response) => return response,
@@ -359,24 +387,16 @@ async fn respond_construct(
             )
         }
         Backend::Pg(pool) => {
-            let conn = match acquire_pg(&pool, budget.clone()).await {
-                Ok(c) => c,
-                Err(resp) => return resp,
-            };
-            let drive_budget = budget.clone();
-            stream::construct_body_streaming_controlled(
-                move |sink| {
-                    Box::pin(async move {
-                        exec_pg::construct_each_pg_controlled(&plan, conn, &drive_budget, sink)
-                            .await
-                    })
-                },
-                fmt,
-                budget,
-            )
+            match crate::pg_response::construct(pool, plan, generation, fmt, budget).await {
+                Ok(body) => body,
+                Err(response) => return response,
+            }
         }
         Backend::Mysql(pool) => {
-            let conn = match acquire_mysql(&pool, &budget).await {
+            if generation.is_some() {
+                return problem::response(ProblemCode::Internal);
+            }
+            let conn = match crate::source_acquisition::acquire_mysql(&pool, &budget).await {
                 Ok(conn) => conn,
                 Err(response) => return response,
             };
@@ -399,44 +419,6 @@ async fn respond_construct(
         }
     };
     ok_stream(fmt.media_type(), body)
-}
-
-pub(crate) async fn acquire_mysql(
-    pool: &mysql_async::Pool,
-    budget: &RequestBudget,
-) -> Result<mysql_async::Conn, Response> {
-    match budget.run(pool.get_conn()).await {
-        Err(error) => Err(problem::response_for_control(error)),
-        Ok(Err(_)) => Err(problem::response(ProblemCode::SourceUnavailable)),
-        Ok(Ok(conn)) => Ok(conn),
-    }
-}
-
-/// Acquire a pooled PostgreSQL connection (ADR-0010 §C stream-lane pool, ADR-0027;
-/// M4 wave-2 finding 2). Pool exhaustion (no free connection within the
-/// configured `--pg-pool-wait-secs`) is shed as a fast, honest `503` +
-/// `Retry-After` rather than queued indefinitely or reported as a generic `500`
-/// — the ADR-0010 "shed overflow" clause this pass implements.
-pub(crate) async fn acquire_pg(
-    pool: &deadpool_postgres::Pool,
-    budget: RequestBudget,
-) -> Result<PgConn, Response> {
-    let acquired = match budget.run(pool.get()).await {
-        Ok(result) => result,
-        Err(error) => return Err(problem::response_for_control(error)),
-    };
-    let conn = acquired.map_err(|e| match e {
-        // Fixed at 1s rather than derived from pool pressure/wait-time — a
-        // pressure-aware value is future work (ADR-0010 status correction part
-        // 2's second open refinement).
-        PoolError::Timeout(_) => problem::response_with_retry_after(ProblemCode::SourceUnavailable),
-        _ => problem::response(ProblemCode::Internal),
-    })?;
-    match budget.run(PgConn::checked(conn)).await {
-        Err(error) => Err(problem::response_for_control(error)),
-        Ok(Err(_)) => Err(problem::response(ProblemCode::Internal)),
-        Ok(Ok(conn)) => Ok(conn),
-    }
 }
 
 /// The sole decoded `query` field, rejecting duplicates and every other key.

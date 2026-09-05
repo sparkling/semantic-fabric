@@ -7,7 +7,7 @@
 use std::fmt::Write as _;
 
 use tokio_postgres::types::Type;
-use tokio_postgres::GenericClient;
+use tokio_postgres::{error::SqlState, GenericClient};
 
 use crate::dialect::Dialect;
 use crate::error::{Error, Result};
@@ -51,8 +51,37 @@ pub async fn introspect_postgres_public_observed_snapshot_in_transaction<C>(
 where
     C: GenericClient + Sync,
 {
-    require_generation_transaction(client).await?;
-    collect_observed_snapshot(client).await
+    introspect_postgres_public_observed_snapshot_in_transaction_classified(client)
+        .await
+        .map_err(|error| match error {
+            PostgresGenerationObservationFailure::SourceUnavailable => {
+                redacted("PostgreSQL observed snapshot collection failed")
+            }
+            PostgresGenerationObservationFailure::ProfileUnavailable(reason) => {
+                closed_observation_error(reason)
+            }
+        })
+}
+
+/// Identifier-free split between transient source failure and a coherently
+/// observed profile rejection. Verified runtimes use this distinction to avoid
+/// quarantining an activation merely because a query timed out or disconnected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostgresGenerationObservationFailure {
+    SourceUnavailable,
+    ProfileUnavailable(super::PostgresSchemaIdentityUnavailableV1),
+}
+
+pub async fn introspect_postgres_public_observed_snapshot_in_transaction_classified<C>(
+    client: &C,
+) -> std::result::Result<Postgres16PublicObservedSnapshotV1, PostgresGenerationObservationFailure>
+where
+    C: GenericClient + Sync,
+{
+    require_generation_transaction(client)
+        .await
+        .map_err(|_| PostgresGenerationObservationFailure::SourceUnavailable)?;
+    collect_observed_snapshot_classified(client).await
 }
 
 /// Acquire `ACCESS SHARE` locks for an exact bounded set of quoted `public`
@@ -70,32 +99,85 @@ pub async fn lock_postgres_public_base_tables<C>(client: &C, tables: &[String]) 
 where
     C: GenericClient + Sync,
 {
-    if let Some(sql) = build_public_base_table_lock_sql(tables)? {
+    lock_postgres_public_base_tables_classified(client, tables)
+        .await
+        .map_err(|_| redacted("PostgreSQL public relation lock failed"))
+}
+
+/// Redacted structured outcome for a generation-lock attempt. This preserves
+/// only the distinction needed by runtime readiness; it never exposes source
+/// names, SQL text, connection details, or backend messages.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostgresPublicTableLockFailure {
+    InvalidRelationSet,
+    RelationSetChanged,
+    Unavailable,
+}
+
+/// Structured sibling used by verified-generation adapters to distinguish a
+/// stale relation set from transient lock/transport unavailability.
+pub async fn lock_postgres_public_base_tables_classified<C>(
+    client: &C,
+    tables: &[String],
+) -> std::result::Result<(), PostgresPublicTableLockFailure>
+where
+    C: GenericClient + Sync,
+{
+    let sql = build_public_base_table_lock_sql(tables)
+        .map_err(|_| PostgresPublicTableLockFailure::InvalidRelationSet)?;
+    if let Some(sql) = sql {
         client
             .batch_execute(&sql)
             .await
-            .map_err(|_| redacted("PostgreSQL public relation lock failed"))?;
+            .map_err(classify_lock_error)?;
     }
-    require_generation_transaction(client).await
+    require_generation_transaction(client)
+        .await
+        .map_err(|_| PostgresPublicTableLockFailure::Unavailable)
 }
 
-async fn collect_observed_snapshot<C>(client: &C) -> Result<Postgres16PublicObservedSnapshotV1>
+fn classify_lock_error(error: tokio_postgres::Error) -> PostgresPublicTableLockFailure {
+    classify_lock_sqlstate(error.code())
+}
+
+fn classify_lock_sqlstate(code: Option<&SqlState>) -> PostgresPublicTableLockFailure {
+    match code {
+        Some(code) if *code == SqlState::UNDEFINED_TABLE || *code == SqlState::UNDEFINED_SCHEMA => {
+            PostgresPublicTableLockFailure::RelationSetChanged
+        }
+        _ => PostgresPublicTableLockFailure::Unavailable,
+    }
+}
+
+async fn collect_observed_snapshot_classified<C>(
+    client: &C,
+) -> std::result::Result<Postgres16PublicObservedSnapshotV1, PostgresGenerationObservationFailure>
 where
     C: GenericClient + Sync,
 {
     observation::qualify_profile_guard(client)
         .await
-        .map_err(closed_observation_error)?;
+        .map_err(classify_observation_failure)?;
     let legacy_tables = collect_legacy_public_tables(client)
         .await
-        .map_err(|_| redacted("PostgreSQL observed snapshot legacy collection failed"))?;
+        .map_err(|_| PostgresGenerationObservationFailure::SourceUnavailable)?;
     let rich = observation::capture_registered_observation(client, RUNTIME_SCHEMA, &legacy_tables)
         .await
-        .map_err(closed_observation_error)?;
+        .map_err(classify_observation_failure)?;
     Ok(Postgres16PublicObservedSnapshotV1::available(
         legacy_tables,
         rich,
     ))
+}
+
+fn classify_observation_failure(
+    reason: super::PostgresSchemaIdentityUnavailableV1,
+) -> PostgresGenerationObservationFailure {
+    if reason == super::PostgresSchemaIdentityUnavailableV1::CatalogQuery {
+        PostgresGenerationObservationFailure::SourceUnavailable
+    } else {
+        PostgresGenerationObservationFailure::ProfileUnavailable(reason)
+    }
 }
 
 async fn collect_legacy_public_tables<C>(client: &C) -> Result<Vec<crate::schema::TableSchema>>

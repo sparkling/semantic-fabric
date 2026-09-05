@@ -5,14 +5,17 @@ use std::fmt;
 
 use sf_core::query_control::QueryControl;
 use sf_core::{SourceId, SourceMapping};
-use sf_sparql::federation::compile_source_affine_union;
-use sf_sparql::{CompileDigests, Epoch, OntologyDigest, Tbox};
+use sf_sparql::federation::{
+    compile_source_affine_union, compile_source_affine_union_uncached, FederatedPlan,
+};
+use sf_sparql::{CompileDigests, Epoch, OntologyDigest, Plan, Tbox};
 use sf_sql::TableSchema;
 
 use crate::binding::{
     BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
     IntrospectedSource, RuntimeBinding,
 };
+use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
 use crate::BackendProfile;
 
 /// One source/backend/schema/mapping input awaiting snapshot validation.
@@ -194,6 +197,20 @@ impl RuntimeSnapshot {
             .compile(sparql, control)
     }
 
+    pub(crate) fn preflight_compile(
+        &self,
+        source_id: SourceId,
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<std::sync::Arc<Plan>> {
+        self.registry
+            .binding(source_id)
+            .ok_or_else(|| {
+                sf_sparql::Error::Mapping("runtime source is not registered".to_owned())
+            })?
+            .preflight_compile(sparql, control)
+    }
+
     pub(crate) fn prepare_execution(
         &self,
         bound: BoundPlan,
@@ -236,6 +253,43 @@ impl RuntimeSnapshot {
         };
         let scopes = [scope_for(0), scope_for(1)];
         Ok(BoundFederatedPlan::new(plan, scopes))
+    }
+
+    pub(crate) fn preflight_federated_union(
+        &self,
+        source_ids: [SourceId; 2],
+        sparql: &str,
+        control: &dyn QueryControl,
+    ) -> sf_sparql::Result<FederatedPlan> {
+        if source_ids[0] == source_ids[1] {
+            return Err(sf_sparql::Error::Mapping(
+                "federated source registry does not match the serving configuration".to_owned(),
+            ));
+        }
+        let left = self.registry.binding(source_ids[0]).ok_or_else(|| {
+            sf_sparql::Error::Mapping("runtime source is not registered".to_owned())
+        })?;
+        let right = self.registry.binding(source_ids[1]).ok_or_else(|| {
+            sf_sparql::Error::Mapping("runtime source is not registered".to_owned())
+        })?;
+        compile_source_affine_union_uncached(sparql, [left.compiler(), right.compiler()], control)
+    }
+
+    pub(crate) fn generation_requirements(
+        &self,
+        source_ids: impl IntoIterator<Item = SourceId>,
+    ) -> Result<Vec<PgGenerationRequirement>, PgGenerationError> {
+        let mut requirements = Vec::new();
+        for source_id in source_ids {
+            let binding = self
+                .registry
+                .binding(source_id)
+                .ok_or(PgGenerationError::Internal)?;
+            if let Some(requirement) = binding.generation_requirement()? {
+                requirements.push(requirement);
+            }
+        }
+        Ok(requirements)
     }
 
     pub(crate) fn prepare_federated_execution(

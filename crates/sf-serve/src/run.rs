@@ -10,7 +10,7 @@ use crate::{introspect_pg_all, router, Backend, IntrospectedSource, ServeError, 
 
 pub struct ServeOptions {
     pub source: SourceRef,
-    pub mapping_path: String,
+    pub mapping: MappingRef,
     /// Optional second relational source and its source-local R2RML mapping.
     pub additional_source: Option<AdditionalSourceOptions>,
     /// Optional ontology (Turtle) → tier-1 T-Box.
@@ -46,7 +46,26 @@ pub struct ServeOptions {
 /// The normal startup input for the bounded two-source UNION profile.
 pub struct AdditionalSourceOptions {
     pub source: SourceRef,
-    pub mapping_path: String,
+    pub mapping: MappingRef,
+}
+
+/// A source mapping selected for startup: authored R2RML on disk or Direct
+/// Mapping generated from the live observed schema.
+pub enum MappingRef {
+    R2rmlFile(String),
+    Direct { base_iri: String },
+}
+
+impl MappingRef {
+    pub fn r2rml_file(path: impl Into<String>) -> Self {
+        Self::R2rmlFile(path.into())
+    }
+
+    pub fn direct(base_iri: impl Into<String>) -> Self {
+        Self::Direct {
+            base_iri: base_iri.into(),
+        }
+    }
 }
 
 /// Build the config + router and serve until stopped; invalid input returns an error.
@@ -266,7 +285,7 @@ mod tests {
         let source = prepare_inline(spec).expect("valid SQLite source");
         let result = open_backend(source, 16, Duration::from_secs(5), 4).await;
 
-        let (backend, schema) = result.expect("valid sqlite spec should open").into_parts();
+        let (backend, schema, _) = result.expect("valid sqlite spec should open").into_parts();
         assert!(matches!(backend, Backend::Sqlite(_)));
         assert!(
             !schema.is_empty(),
@@ -283,7 +302,7 @@ mod tests {
         let spec = format!("sqlite:{}", path.display());
 
         let source = prepare_inline(spec).expect("valid SQLite source");
-        let (_backend, schema) = open_backend(source, 16, Duration::from_secs(5), 4)
+        let (_backend, schema, _) = open_backend(source, 16, Duration::from_secs(5), 4)
             .await
             .expect("valid sqlite spec should open")
             .into_parts();
@@ -415,7 +434,7 @@ mod tests {
 
         let source = prepare_injected(format!("pg:{conn_str}"))
             .expect("environment-injected pg source should prepare");
-        let (backend, _schema) = open_backend(source, 3, Duration::from_secs(2), 4)
+        let (backend, _schema, _) = open_backend(source, 3, Duration::from_secs(2), 4)
             .await
             .expect("reachable pg spec should open")
             .into_parts();

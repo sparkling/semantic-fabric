@@ -11,6 +11,8 @@ use sparesults::QueryResultsFormat;
 use crate::backend::PgConn;
 use crate::binding::ExecutableFederatedPlan;
 use crate::budget::RequestBudget;
+use crate::pg_generation::{VerifiedGenerationLeases, VerifiedPostgresGenerationLease};
+use crate::problem::{self, ProblemCode};
 use crate::{sqlite_admission, stream, Backend};
 
 enum AcquiredFragment {
@@ -20,6 +22,10 @@ enum AcquiredFragment {
     },
     Postgres {
         connection: Box<PgConn>,
+        plan: Arc<Plan>,
+    },
+    VerifiedPostgres {
+        lease: VerifiedPostgresGenerationLease,
         plan: Arc<Plan>,
     },
     MySql {
@@ -32,28 +38,55 @@ enum AcquiredFragment {
 /// then concatenate their source-local solution streams through one serializer.
 pub(crate) async fn select_union_body(
     execution: ExecutableFederatedPlan,
+    mut generations: VerifiedGenerationLeases,
     format: QueryResultsFormat,
     budget: RequestBudget,
 ) -> Result<Body, Response> {
     let (variables, fragments) = execution.into_parts();
+    let fragments = fragments.map(|fragment| fragment.into_parts());
+    let valid = fragments[0].0 != fragments[1].0
+        && fragments
+            .iter()
+            .all(|(source_id, backend, verified_generation, _)| {
+                generations.contains(*source_id) == *verified_generation
+                    && (!*verified_generation || matches!(backend, Backend::Pg(_)))
+            });
+    if !valid {
+        let _ = generations.finish().await;
+        return Err(problem::response(ProblemCode::Internal));
+    }
+
     let mut acquired = Vec::with_capacity(2);
-    for fragment in fragments {
-        let (backend, plan) = fragment.into_parts();
+    for (source_id, backend, _verified_generation, plan) in fragments {
         let source = match backend {
-            Backend::Sqlite(pool) => AcquiredFragment::Sqlite {
-                lease: sqlite_admission::acquire(&pool, &budget).await?,
-                plan,
+            Backend::Sqlite(pool) => sqlite_admission::acquire(&pool, &budget)
+                .await
+                .map(|lease| AcquiredFragment::Sqlite { lease, plan }),
+            Backend::Pg(pool) => match generations.take(source_id) {
+                Some(lease) => Ok(AcquiredFragment::VerifiedPostgres { lease, plan }),
+                None => crate::source_acquisition::acquire_pg(&pool, budget.clone())
+                    .await
+                    .map(|connection| AcquiredFragment::Postgres {
+                        connection: Box::new(connection),
+                        plan,
+                    }),
             },
-            Backend::Pg(pool) => AcquiredFragment::Postgres {
-                connection: Box::new(crate::http::acquire_pg(&pool, budget.clone()).await?),
-                plan,
-            },
-            Backend::Mysql(pool) => AcquiredFragment::MySql {
-                connection: crate::http::acquire_mysql(&pool, &budget).await?,
-                plan,
-            },
+            Backend::Mysql(pool) => crate::source_acquisition::acquire_mysql(&pool, &budget)
+                .await
+                .map(|connection| AcquiredFragment::MySql { connection, plan }),
         };
-        acquired.push(source);
+        match source {
+            Ok(source) => acquired.push(source),
+            Err(response) => {
+                close_acquired(acquired).await;
+                let _ = generations.finish().await;
+                return Err(response);
+            }
+        }
+    }
+    if !generations.is_empty() {
+        let _ = generations.finish().await;
+        return Err(problem::response(ProblemCode::Internal));
     }
 
     let drive_budget = budget.clone();
@@ -78,6 +111,16 @@ pub(crate) async fn select_union_body(
                             )
                             .await?;
                         }
+                        AcquiredFragment::VerifiedPostgres { lease, plan } => {
+                            match lease.select_each(&plan, &drive_budget, &mut sink).await {
+                                Ok(result) => result?,
+                                Err(_) => {
+                                    return Err(sf_sparql::Error::Sql(
+                                        "verified generation close failed".to_owned(),
+                                    ))
+                                }
+                            }
+                        }
                         AcquiredFragment::MySql { connection, plan } => {
                             exec_mysql::select_each_mysql_controlled(
                                 &plan,
@@ -96,4 +139,12 @@ pub(crate) async fn select_union_body(
         variables,
         budget.clone(),
     ))
+}
+
+async fn close_acquired(acquired: Vec<AcquiredFragment>) {
+    for fragment in acquired {
+        if let AcquiredFragment::VerifiedPostgres { lease, .. } = fragment {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), lease.finish()).await;
+        }
+    }
 }

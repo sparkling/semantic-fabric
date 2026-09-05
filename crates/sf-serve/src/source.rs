@@ -200,6 +200,18 @@ pub(crate) enum PreparedSource {
     },
 }
 
+impl PreparedSource {
+    /// Source family selected by parsing alone; this performs no connector or
+    /// catalogue I/O and is therefore safe for startup capability admission.
+    pub(crate) const fn kind(&self) -> crate::BackendKind {
+        match self {
+            Self::Sqlite { .. } => crate::BackendKind::Sqlite,
+            Self::Postgres { .. } => crate::BackendKind::Postgres,
+            Self::Mysql { .. } => crate::BackendKind::MySql,
+        }
+    }
+}
+
 fn validate_environment_name(variable: &str) -> Result<(), ServeError> {
     let mut bytes = variable.bytes();
     let valid_first = matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'));

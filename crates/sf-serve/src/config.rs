@@ -49,7 +49,7 @@ pub(crate) enum QueryMode {
 }
 
 impl QueryMode {
-    fn source_ids(self) -> [Option<SourceId>; 2] {
+    pub(crate) fn source_ids(self) -> [Option<SourceId>; 2] {
         match self {
             Self::Single(source_id) => [Some(source_id), None],
             Self::SourceAffineUnion(source_ids) => source_ids.map(Some),
