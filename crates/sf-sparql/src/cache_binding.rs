@@ -57,7 +57,7 @@ impl fmt::Debug for CompilerBinding {
             .field("triples_map_count", &self.mapping.len())
             .field("schema", &self.schema)
             .field("tbox_empty", &self.tbox.is_empty())
-            .field("cache_entries", &self.cache.len())
+            .field("cache_entries", &self.cache().len())
             .finish()
     }
 }

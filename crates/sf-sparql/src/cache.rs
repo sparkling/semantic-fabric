@@ -26,6 +26,10 @@ use crate::compiler_schema::{
 use crate::runtime_identity::CompileDigests;
 use crate::{federation::SourceAffineUnionArm, Plan, Result, Tbox};
 
+#[path = "cache_profile.rs"]
+mod profile;
+use profile::ProfiledPlanCaches;
+
 /// Closed compiler-governance profile used to partition cache authority.
 ///
 /// The governed variant is intentionally dormant until every owned compiler
@@ -145,7 +149,7 @@ pub struct CompilerBinding {
     dialect: Dialect,
     tbox: Tbox,
     schema: CompilerSchema,
-    cache: PlanCache<CachedPlan>,
+    caches: ProfiledPlanCaches<CachedPlan>,
     scope: CompileScope,
 }
 
@@ -236,7 +240,7 @@ impl CompilerBinding {
             dialect,
             tbox,
             schema,
-            cache: PlanCache::new(cache_capacity),
+            caches: ProfiledPlanCaches::new(cache_capacity),
             scope,
         }
     }
@@ -337,12 +341,16 @@ impl CompilerBinding {
     }
 
     pub(crate) fn cache(&self) -> &PlanCache<CachedPlan> {
-        &self.cache
+        self.cache_for(CompileProfileId::Uncontrolled)
+    }
+
+    pub(crate) fn cache_for(&self, profile: CompileProfileId) -> &PlanCache<CachedPlan> {
+        self.caches.for_profile(profile)
     }
 
     #[cfg(test)]
     pub(crate) fn cache_len(&self) -> usize {
-        self.cache.len()
+        self.cache().len()
     }
 }
 

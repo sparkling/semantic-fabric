@@ -131,3 +131,38 @@ fn hot_working_set_survives_cold_churn_past_capacity() {
         "hot working set should survive cold churn past capacity, got hit_rate={hit_rate:.3}"
     );
 }
+
+#[test]
+fn uncontrolled_churn_cannot_evict_governed_entries() {
+    let caches: ProfiledPlanCaches<u32> = ProfiledPlanCaches::new(2);
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+    let governed = PlanKey {
+        scope,
+        profile: CompileProfileId::GovernedV1,
+        structural_hash: 7,
+        canonical: "governed".to_owned(),
+    };
+    caches
+        .for_profile(CompileProfileId::GovernedV1)
+        .put(governed.clone(), 99);
+
+    for id in 0..128 {
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .put(synth_key(scope, id), id as u32);
+    }
+
+    assert_eq!(
+        caches
+            .for_profile(CompileProfileId::GovernedV1)
+            .get(&governed),
+        Some(99)
+    );
+    assert!(
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .get(&governed)
+            .is_none(),
+        "a governed key cannot cross the physical cache partition"
+    );
+}
