@@ -80,3 +80,27 @@ fn explicit_rr_datatype_overrides_compatibility_type_for_value_two() {
     assert_eq!(literal.value(), "2");
     assert_eq!(literal.datatype(), sf_core::vocab::xsd::INTEGER);
 }
+
+#[test]
+fn explicit_rr_datetime_preserves_adapter_canonical_lexical_form() {
+    let schema = vec![ColRef::new(0, "observed_at")];
+    let index = build_col_index(&schema);
+    let values = vec![Some("2024-03-15T00:00:00".to_owned())];
+    let codes = vec![Some(XsdTypeCode::DateTime)];
+    let raw = RawRow {
+        values: &values,
+        codes: &codes,
+        index: &index,
+    };
+    let term_map = TermMap::Column(
+        "observed_at".into(),
+        TermSpec::typed_literal(sf_core::NamedNode::from(sf_core::vocab::xsd::DATE_TIME)),
+    );
+
+    let term = derived_term(&term_map, 0, &raw).unwrap().unwrap();
+    let Term::Literal(literal) = term else {
+        panic!("explicit rr:datatype did not produce a literal");
+    };
+    assert_eq!(literal.value(), "2024-03-15T00:00:00");
+    assert_eq!(literal.datatype(), sf_core::vocab::xsd::DATE_TIME);
+}

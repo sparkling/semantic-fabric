@@ -215,10 +215,10 @@ fn mysql_value_to_string(v: Value, code: Option<XsdTypeCode>) -> Result<Option<S
             if code == Some(XsdTypeCode::Date) {
                 Some(format!("{y:04}-{mo:02}-{d:02}"))
             } else if us == 0 {
-                Some(format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}"))
+                Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"))
             } else {
                 Some(format!(
-                    "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}"
+                    "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{us:06}"
                 ))
             }
         }

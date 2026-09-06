@@ -66,7 +66,7 @@ fn metadata_distinguishes_date_from_midnight_datetime() {
     let date_only = lexical(value.clone(), Some(XsdTypeCode::Date));
     let midnight_datetime = lexical(value, Some(XsdTypeCode::DateTime));
     assert_eq!(date_only, Some("2024-03-15".to_owned()));
-    assert_eq!(midnight_datetime, Some("2024-03-15 00:00:00".to_owned()));
+    assert_eq!(midnight_datetime, Some("2024-03-15T00:00:00".to_owned()));
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn date_with_time_no_micros_renders_iso_t_separated() {
             Value::Date(2024, 3, 15, 13, 45, 30, 0),
             Some(XsdTypeCode::DateTime)
         ),
-        Some("2024-03-15 13:45:30".to_owned())
+        Some("2024-03-15T13:45:30".to_owned())
     );
 }
 
@@ -87,7 +87,7 @@ fn date_with_microseconds_renders_fractional_seconds() {
             Value::Date(2024, 3, 15, 13, 45, 30, 123456),
             Some(XsdTypeCode::DateTime)
         ),
-        Some("2024-03-15 13:45:30.123456".to_owned())
+        Some("2024-03-15T13:45:30.123456".to_owned())
     );
 }
 
