@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-03
-updated: 2026-09-04
+updated: 2026-09-06
 tags: [sparql, compiler, resource-governance, cancellation, cache, dos]
 supersedes: []
 depends-on: [ADR-0004, ADR-0006, ADR-0007, ADR-0010, ADR-0012, ADR-0023, ADR-0038, ADR-0048]
@@ -44,10 +44,15 @@ The provisional whole-life input cap is exactly 1,048,856 bytes: the normal sour
 
 The active serving chain remains `RuntimeBinding::compile` →
 `CompilerBinding::compile_shared`, with `CompilerWorkMode::Uncontrolled` and only
-request-control handoff checkpoints. No request-owned `CompileContext` enters a
-publicly reachable compiler path. Parser construction/destruction, remaining
+request-control handoff checkpoints. For a private verified-generation
+requirement, a non-cache-authorizing semantic/resource preflight now reserves
+one opaque compiler permit before source I/O, retains that exact permit across
+lease acquisition, and moves it into authoritative compilation without
+requeueing while relation locks are held. This closes a semaphore/lock-ordering
+hazard, not logical-work governance. No request-owned `CompileContext` enters a
+publicly reachable compiler path; parser construction/destruction, remaining
 owned phases and recursive-copy sites, cache capacity/eviction and provisional
-limits are not governed.
+limits remain ungoverned.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.
@@ -387,8 +392,10 @@ Implementation proceeds as bounded, independently reviewable Rust slices:
    final measurement and eviction/drop control.
 5. **Serving — partial:** a finite placeholder value, typed/redacted error
    mapping, exact worker `RequestBudget` handoff and permit retention are present.
-   Add the explicit calibrated CLI/config limit and call only the future governed
-   API after the parser, owned-work and cache gates pass.
+   The private verified-generation path also retains one preflight reservation
+   across source acquisition and authoritative compilation without upgrading it
+   to `GovernedV1`. Add the calibrated CLI/config limit and call only the future
+   governed API after the parser, owned-work and cache gates pass.
 6. **Claims:** update capability and operational documentation only after all
    relevant gates pass; keep this ADR proposed until its constants and work
    model receive explicit maintainer acceptance.

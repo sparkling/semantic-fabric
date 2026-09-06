@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-09-01
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [rust, node, metaharness, evidence, supervisor, packaging, postgresql]
 supersedes: []
 depends-on: [ADR-0038]
@@ -269,21 +269,36 @@ Constraint-driven optimiser passes remain available to explicit frozen-schema
 translation/conformance tests, but that capability grants no serving authority.
 Duplicate safety stays conservative when keys are quarantined.
 
-Current `sf-serve` loads authored R2RML before opening the backend and does not
-generate Direct Mapping. The Direct Mapping utility and conformance runners use
-explicit frozen fixture schemas. Because PK/FK facts determine the generated
-mapping itself, any future live Direct-Mapping path must bind mapping generation
-and the entire streamed execution to one verified source generation; removing
-optimiser facts after generation would be insufficient. These changes close the
-later-DDL integrity-constraint wrong-answer path. ADR-0050's pure Phase 1 Rust
-kernel computes non-authorizing structural/type/constraint content digests, and
-the opt-in `sf-sql` PostgreSQL observed-snapshot path can now emit the private
-ADR-0051 profile after one guarded transaction. The ordinary `sf-serve`
-`IntrospectedSource` and `RuntimeBinding` still carry only the legacy schema and
-no observed identity, so compiler constraint/type authorities remain
-`Unverified`. Drift detection, atomic reload, a verified-constraint lease,
-federation, production admission and release authority remain absent; the rest
-of ADR-0050 and ADR-0051 remains proposed.
+Public `sf-serve` startup still accepts authored R2RML only: its mapping-profile
+gate rejects every Direct Mapping selection before connector I/O. Behind that
+gate, a private Rust-only PostgreSQL foundation now consumes the ADR-0051 rich
+snapshot and complete table projection from one owned transaction. It marks the
+pool member dirty before `BEGIN`, locks the exact public-table set before the
+first repeatable-read snapshot, generates only the primary-key-backed Direct
+Mapping candidate, compares its rich identity and database/role/session policy,
+then performs a final exact recheck and acknowledged rollback before packaging
+the inseparable schema, observation, mapping and request-generation expectation.
+
+For an internal verified request, semantic/resource-shape preflight first
+reserves one opaque server-wide compiler permit. The same permit remains held
+without requeue while the request acquires and revalidates its generation lease,
+then moves into the authoritative compiler worker. Every PostgreSQL branch uses
+the lease-owned connection; completion rechecks the same generation and rolls
+back under a fixed cleanup allowance. If timeout, cancellation, error, drop or
+a retained execution view prevents acknowledged rollback, the member stays
+dirty, issues a bounded best-effort native cancel and detaches from the pool
+rather than recycling an uncertain transaction.
+
+One required-live Rust test provisions an isolated restricted-role PostgreSQL
+16.15 database and covers the pre-lock no-snapshot state, clean close,
+`ACCESS EXCLUSIVE` exclusion, compatible additive-FK old-generation coherence
+plus next-acquisition drift, local policy mutation, cancelled work and dirty
+member replacement. This is direct product evidence, not Node authority, but it
+is not the tracked 16.9/16.15 qualification-receipt pair. Compiler type and
+constraint authorities remain `Unverified`; public Direct Mapping, no-PK
+identity, reload/watchers, other backend leases, federation, production
+admission and release authority remain absent. ADR-0050 and ADR-0051 stay
+proposed.
 
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
 parser-worker handshake codec. Later Rust-only slices hold and observe the

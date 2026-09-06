@@ -18,10 +18,12 @@ Identity V1 kernel is implemented as a non-authorizing content-identity utility.
 the first closed production-shaped profile. Its private, opt-in `sf-sql`
 diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after bounded
 rich observation, but its two-version operator observations are untracked and
-its evidence runner explicitly withholds qualification. The committed snapshot
-now carries either that whole identity or one closed unavailable reason into an
-exact backend/`SourceId`-bound serving field. It remains non-authorizing and the
-three identity digests enter no compiler, cache, readiness or execution input.
+its evidence runner explicitly withholds qualification. Ordinary authored
+mapping carries the whole identity or one closed unavailable reason only as a
+non-authorizing backend/`SourceId`-bound diagnostic. The private Direct-Mapping
+foundation may retain the identity with the complete rich table and session
+expectations checked by an unforgeable lease; the digest itself still grants no
+compiler, cache, readiness, mapping or execution authority.
 
 The 2026-09-05 Phase 5 foundation is implemented in Rust: `RuntimeSnapshot` owns
 a source-keyed immutable registry and deterministic compile identities; one
@@ -42,25 +44,37 @@ and last-pin release. Checked revision exhaustion terminalizes readiness with a
 closed `StateRevisionExhausted` cause before reporting the counter error.
 
 The publication primitive is crate-private and deliberately non-authorizing.
-The construction path now requires bounded sealed `M ⋈ T` validation before a
+The construction path requires bounded sealed `M ⋈ T` validation before a
 binding, and its policy-v2 receipt partitions compile/cache identity. The
-all-or-nothing registry validates every source before constructing any binding. There is still
-no general off-path reload candidate builder, automatic catalogue observation,
-capability validation, drift watcher, backend-generation lease, authorizing
-Observed Schema Identity admission, public reload surface, or live Direct
-Mapping. Therefore this is not full Phase 5 completion
-and grants no live Direct Mapping, backend or production admission.
+all-or-nothing registry validates every source before constructing any binding.
+There is still no general off-path reload candidate builder, automatic watcher,
+public reload surface or admitted backend profile.
 
-The current Rust serving path places its startup mapping, ontology,
-constraint/type-quarantined schema observation, backend and plan cache in one
-immutable source-keyed snapshot; the CLI selects either one source or the sealed
-exactly-two-source `UnionAll` profile. Its
-process-local compile scope prevents detached-plan reuse. PostgreSQL catalogue
-reads use one read-only repeatable-read startup transaction. Those are sound
-precursors, not mutable-schema authority: the transaction ends before
-compilation and streamed execution, later requests may use another pooled
-connection, and there is no adapter-emitted runtime authority, watcher,
-validated candidate lifecycle or verified execution generation.
+A private PostgreSQL candidate/request foundation now implements the essential
+verified-generation ownership law. One pool member is marked dirty before
+`BEGIN`; the exact public-table set is relation-locked before the first
+repeatable-read snapshot; bounded rich identity, complete table facts, database,
+role, session and policy context are captured on that connection. Candidate
+primary-key-backed Direct Mapping is generated while it is protected, then
+rechecked and rolled back cleanly before its inseparable expectation is stored.
+For each internal request, a non-cache-authorizing preflight reserves the exact
+compiler permit before source I/O; the permit remains held without requeue while
+the request acquires and revalidates the lease, then moves into authoritative
+compilation. Every branch executes through the lease-owned connection, followed
+by a final same-transaction recheck and acknowledged rollback.
+
+A fixed cleanup allowance is independent of the expired user deadline. If
+timeout, cancellation, error, drop or a retained execution view prevents
+acknowledged rollback, the member remains dirty, attempts one bounded native
+cancel and detaches the pool object instead of recycling uncertain state. An isolated disposable PostgreSQL 16.15
+live gate exercises lock-before-snapshot, clean close, incompatible DDL
+exclusion, compatible additive-FK old-generation coherence followed by
+next-acquisition drift, policy mutation, cancellation and dirty-member
+replacement. Public startup nevertheless rejects every Direct Mapping selection
+before connector I/O. Exact 16.9/16.15 qualification receipts, capability
+promotion, general reload/drift/source health, no-PK identity, other backend
+leases and production admission remain open. This is not full Phase 4, Phase 5
+or Phase 6 completion.
 
 Node and MetaHarness may test vectors and lifecycle properties but remain
 development/evidence infrastructure under ADR-0048. Every product type,
@@ -255,10 +269,13 @@ unsupported user-defined types or collations, and every unresolved dependency.
 RLS admission requires the later `SecurityContext` and policy-dependency
 contract; recording `row_security` alone does not authorize it.
 
-Compilation occurs only after the lease is established. All statements and
-branches execute inside it; a pool checkout, transaction, lock or generation
-mismatch rejects before semantic response commitment. A digest precheck on one
-connection followed by execution on another is not verified mode.
+A non-cache-authorizing semantic/resource-shape preflight may run before source
+I/O only while retaining the exact compiler permit. Authoritative compilation
+occurs after the lease is established without requeue. All statements and
+branches execute inside it; a pool checkout, transaction, lock, binding or
+generation mismatch rejects before semantic response commitment. A digest
+precheck on one connection followed by execution on another is not verified
+mode.
 
 Raw `rr:sqlQuery` is rejected in verified mode unless a future design extracts,
 validates and holds its complete relation/view/function/result-type dependency
@@ -310,15 +327,20 @@ persist across generations.
    activation/content inputs while retaining fresh per-snapshot caches. This
    cannot replace process-unique binding identity until every cache-semantic
    mapping, ontology, capability and policy digest has a canonical contract.
-4. **PostgreSQL verified lease:** bind one owned protected transaction through
-   revalidation, compilation and complete streaming.
+4. **PostgreSQL verified lease (private foundation implemented 2026-09-06):**
+   retain one compiler permit across preflight and lease acquisition, then bind
+   one dirty, protected transaction through authoritative compilation, complete
+   streaming, final recheck and acknowledged rollback. Public profile
+   qualification and version receipts remain open.
 5. **Atomic activation and drift (revision fence implemented 2026-09-06):** the
    immutable registry, private whole-state publication primitive, readiness,
    body-lifetime leases, full-state CAS, repeated-not-ready revision and
    shutdown/activation fence are implemented. The general off-path reload
    candidate builder, automatic watcher and public reload lifecycle remain.
-6. **Typed row identity and Direct Mapping:** validate/generate from the leased
-   schema and admit backend profiles one at a time.
+6. **Typed row identity and Direct Mapping (private PK-backed foundation
+   implemented 2026-09-06):** validate/generate the PostgreSQL candidate from
+   its leased schema and reacquire the exact expectation for each request.
+   Startup admission, no-PK identity and per-backend promotion remain open.
 
 Phases 1 and 2 do not add reload, verified authority or live Direct Mapping.
 Phase 1 completion therefore grants no source, compiler, serving, cache or
@@ -353,9 +375,12 @@ projection; `sf-validation` owns the sealed bounded Native/global split; and
   concurrent update/vacuum and blank-node stability tests.
 
 Live tests use project-owned isolated databases and never the product-mock
-instance. Adversarial redaction tests seed public errors, debug output,
-readiness and metrics with credentials, paths, raw SQL, names and values and
-require that none escape.
+instance. The current PostgreSQL 16.15 gate closes the listed lock ordering,
+same-generation execution, final-recheck, cancellation and dirty-cleanup
+foundations; it is not the required two-version receipt bundle and does not
+close reload or public admission. Adversarial redaction tests seed public
+errors, debug output, readiness and metrics with credentials, paths, raw SQL,
+names and values and require that none escape.
 
 ## Consequences
 
