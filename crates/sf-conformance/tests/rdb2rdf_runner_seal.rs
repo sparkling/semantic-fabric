@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sf_conformance::inventory::{AllowedOutcome, CaseKind};
 use sf_conformance::pg::{self, LiveMode};
-use sf_conformance::sealed_suite::{Backend, SealedSuite};
+use sf_conformance::sealed_suite::{
+    Backend, ClassifiedCaseResult, ClassifiedReport, OutcomeCode, SealedSuite,
+};
 use sf_conformance::{CaseResult, Kind, Report, Status};
 
 static NEXT_TEMP: AtomicUsize = AtomicUsize::new(0);
@@ -82,6 +84,7 @@ fn policy_report(sealed: &SealedSuite, backend: Backend) -> Report {
             let policy = match backend {
                 Backend::Sqlite => case.sqlite,
                 Backend::Postgres => case.postgres,
+                Backend::MySql => case.mysql,
             };
             let status = match policy {
                 AllowedOutcome::Pass => Status::Passed,
@@ -97,6 +100,35 @@ fn policy_report(sealed: &SealedSuite, backend: Backend) -> Report {
         })
         .collect();
     Report { cases }
+}
+
+fn mysql_classified_policy_report(sealed: &SealedSuite) -> ClassifiedReport {
+    ClassifiedReport {
+        cases: sealed
+            .inventory()
+            .cases
+            .iter()
+            .map(|case| {
+                let (status, outcome_code) = match case.mysql {
+                    AllowedOutcome::Pass if case.expected_error => {
+                        (Status::Passed, OutcomeCode::MappingError)
+                    }
+                    AllowedOutcome::Pass => (Status::Passed, OutcomeCode::GraphMatched),
+                    AllowedOutcome::Deviation => (Status::Failed, OutcomeCode::UnexpectedOutput),
+                    AllowedOutcome::Skip => {
+                        (Status::Skipped, OutcomeCode::DirectMappingUnsupported)
+                    }
+                };
+                ClassifiedCaseResult {
+                    id: case.identifier.clone(),
+                    kind: manifest_kind(case.kind),
+                    status,
+                    outcome_code,
+                    reason: "typed MySQL policy fixture".to_owned(),
+                }
+            })
+            .collect(),
+    }
 }
 
 #[test]
@@ -154,7 +186,7 @@ fn report_identity_order_swap_fails_closed() {
 #[test]
 fn documented_nonpassing_cases_may_improve_to_pass() {
     let sealed = SealedSuite::load(&source_suite()).expect("load sealed suite");
-    for backend in [Backend::Sqlite, Backend::Postgres] {
+    for backend in [Backend::Sqlite, Backend::Postgres, Backend::MySql] {
         let mut report = policy_report(&sealed, backend);
         for case in &mut report.cases {
             case.status = Status::Passed;
@@ -163,6 +195,44 @@ fn documented_nonpassing_cases_may_improve_to_pass() {
             .validate_report(backend, &report)
             .expect("passing is always allowed");
     }
+}
+
+#[test]
+fn mysql_skip_cause_is_typed_and_exact_per_id() {
+    let sealed = SealedSuite::load(&source_suite()).expect("load sealed suite");
+    let mut report = mysql_classified_policy_report(&sealed);
+    sealed
+        .validate_classified_report(Backend::MySql, &report)
+        .expect("exact typed MySQL profile");
+    let case = report
+        .cases
+        .iter_mut()
+        .find(|case| case.id == "DirectGraphTC0025")
+        .expect("sealed unsupported identity");
+    case.outcome_code = OutcomeCode::FixtureLoadError;
+    let error = sealed
+        .validate_classified_report(Backend::MySql, &report)
+        .unwrap_err();
+    assert!(error.contains("DirectGraphTC0025"), "{error}");
+    assert!(error.contains("nonpassing cause mismatch"), "{error}");
+}
+
+#[test]
+fn policy_mismatch_never_exposes_free_form_diagnostics() {
+    let sealed = SealedSuite::load(&source_suite()).expect("load sealed suite");
+    let mut report = policy_report(&sealed, Backend::MySql);
+    let marker = "mysql://root:seeded-secret@example.invalid/database";
+    let case = report
+        .cases
+        .iter_mut()
+        .find(|case| case.id == "DirectGraphTC0006")
+        .expect("passing MySQL case");
+    case.status = Status::Skipped;
+    case.reason = marker.to_owned();
+    let error = sealed.validate_report(Backend::MySql, &report).unwrap_err();
+    assert!(error.contains("DirectGraphTC0006"), "{error}");
+    assert!(!error.contains(marker), "{error}");
+    assert!(!error.contains("mysql://"), "{error}");
 }
 
 #[test]
@@ -205,6 +275,16 @@ fn postgres_entrypoint_rejects_bad_inventory_before_provider_probe() {
     let suite = TempSuite::copy();
     fs::write(suite.0.join("inventory.tsv"), b"").expect("empty inventory");
     let error = pg::run(&suite.0, LiveMode::LocalOptional).unwrap_err();
+    assert_eq!(error, "inventory is empty");
+}
+
+#[test]
+fn mysql_entrypoint_rejects_bad_inventory_before_configuration_or_provider_probe() {
+    let suite = TempSuite::copy();
+    fs::write(suite.0.join("inventory.tsv"), b"").expect("empty inventory");
+    let error =
+        sf_conformance::mysql::run(&suite.0, sf_conformance::mysql::LiveMode::LocalOptional)
+            .unwrap_err();
     assert_eq!(error, "inventory is empty");
 }
 

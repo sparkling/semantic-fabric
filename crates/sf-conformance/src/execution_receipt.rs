@@ -136,6 +136,7 @@ fn run_backend(sealed: &SealedSuite, backend: Backend) -> Result<ClassifiedRepor
     match backend {
         Backend::Sqlite => runner::run_sealed_suite(sealed),
         Backend::Postgres => crate::pg::run_sealed_suite_required(sealed),
+        Backend::MySql => crate::mysql::run_sealed_suite_required(sealed),
     }
 }
 

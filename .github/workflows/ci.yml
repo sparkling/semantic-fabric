@@ -224,9 +224,9 @@ jobs:
     if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.rust != 'false') }}
     runs-on: ubuntu-24.04
     # Live PostgreSQL/MySQL/SQL Server service containers. The sealed PostgreSQL
-    # RDB2RDF receipt check below explicitly requires this live service; the other
-    # provider-specific suites still expose their live-optional grade in the generated
-    # capability matrix rather than silently becoming production-admission evidence.
+    # and MySQL RDB2RDF receipt checks below explicitly require their live services;
+    # other provider-specific suites still expose their live-optional grade in the
+    # generated capability matrix rather than becoming production-admission evidence.
     # `sqlserver-backend` is
     # already enabled here via workspace feature unification (sf-conformance
     # depends on sf-sql with it on) — no extra feature flag is needed below.
@@ -343,6 +343,16 @@ jobs:
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --check
       - name: replay sealed required-live PostgreSQL RDB2RDF outcome baseline
         run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend postgresql --check
+      - name: replay sealed required-live MySQL RDB2RDF outcome baseline
+        run: cargo run --locked -p sf-conformance --bin rdb2rdf-execution-receipt -- --backend mysql --check
+      - name: test required-live MySQL cancellation cleanup ownership
+        run: |
+          set -euo pipefail
+          test_name='mysql::tests::live_cancelled_run_removes_only_its_owned_scratch_database'
+          listed="$(cargo test --locked -p sf-conformance --lib "$test_name" -- --exact --list)"
+          test "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" = 1
+          cargo test --locked -p sf-conformance --lib "$test_name" -- \
+            --exact --test-threads=1 --nocapture
       - name: clippy deterministic evidence receipt tooling
         run: cargo clippy --locked -p sf-conformance --features evidence-receipts --all-targets -- -D warnings
       # This mutable hosted runner validates parser-free receipt inputs and the

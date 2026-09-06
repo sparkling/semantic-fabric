@@ -1,9 +1,11 @@
-semantic-fabric-rdb2rdf-execution-receipt-v3
+semantic-fabric-rdb2rdf-execution-receipt-v4
 meta	backend	sqlite
 meta	runner	sf-conformance::runner::run_sealed_suite
 meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance
+meta	provider-version	unbound
+meta	provider-image-digest	unbound
 meta	inventory-path	inventory.tsv
-meta	inventory-sha256	4d2eb56e25920c4b8488b47d971cf887902b4e4178257420bf3a7ea44c504c96
+meta	inventory-sha256	397e1ae0a600bfdbea1d2e9876cc03a49199bcb63c808de4c80c4926a5fa3747
 meta	hash-algorithm	sha256
 meta	case-count	87
 meta	r2rml-count	63

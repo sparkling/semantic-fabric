@@ -9,10 +9,10 @@ use crate::manifest::Kind;
 use crate::sealed_suite::{Backend, OutcomeCode};
 use crate::Status;
 
-const HEADER: &str = "semantic-fabric-rdb2rdf-execution-receipt-v3";
+const HEADER: &str = "semantic-fabric-rdb2rdf-execution-receipt-v4";
 const INVENTORY_PATH: &str = "inventory.tsv";
 const HASH_ALGORITHM: &str = "sha256";
-const METADATA_COUNT: usize = 13;
+const METADATA_COUNT: usize = 15;
 const MAX_LINE_BYTES: usize = 512;
 
 pub(super) const MAX_RECEIPT_BYTES: u64 = 64 * 1024;
@@ -89,6 +89,8 @@ pub(super) fn parse(input: &str) -> Result<ExecutionReceipt, String> {
         "attestation-scope",
         "sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance",
     )?;
+    expect(&mut metadata, "provider-version", "unbound")?;
+    expect(&mut metadata, "provider-image-digest", "unbound")?;
     expect(&mut metadata, "inventory-path", INVENTORY_PATH)?;
     expect(&mut metadata, "hash-algorithm", HASH_ALGORITHM)?;
     expect_count(&mut metadata, "case-count", cases.len())?;
@@ -166,6 +168,8 @@ fn metadata(receipt: &ExecutionReceipt) -> Vec<(&'static str, String)> {
             "sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance"
                 .to_owned(),
         ),
+        ("provider-version", "unbound".to_owned()),
+        ("provider-image-digest", "unbound".to_owned()),
         ("inventory-path", INVENTORY_PATH.to_owned()),
         ("inventory-sha256", receipt.inventory_sha256.clone()),
         ("hash-algorithm", HASH_ALGORITHM.to_owned()),
@@ -193,6 +197,7 @@ fn runner_name(backend: Backend) -> &'static str {
     match backend {
         Backend::Sqlite => "sf-conformance::runner::run_sealed_suite",
         Backend::Postgres => "sf-conformance::pg::run_sealed_suite_required",
+        Backend::MySql => "sf-conformance::mysql::run_sealed_suite_required",
     }
 }
 

@@ -1,4 +1,4 @@
-semantic-fabric-rdb2rdf-inventory-v1
+semantic-fabric-rdb2rdf-inventory-v2
 meta	snapshot-provenance	local-vendored-copy
 meta	snapshot-source	https://github.com/johardi/jr2rml-test-suite res mirror; recorded by local README
 meta	upstream-revision	not-recorded-in-local-snapshot
@@ -38,93 +38,93 @@ scenario	D022-2tables1primarykey1foreignkeyReferencesNoPrimaryKey
 scenario	D023-2tables2primarykeys2foreignkeysReferencesToNon-primarykeys
 scenario	D024-2tables2primarykeys1foreignkeyToARowWithSomeNulls
 scenario	D025-3tables3primarykeys3foreignkeys
-case	DirectGraphTC0000	direct-mapping	D000-1table1column0rows	-	cases/D000-1table1column0rows/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0001	direct-mapping	D001-1table1column1row	-	cases/D001-1table1column1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0002	direct-mapping	D002-1table2columns1row	-	cases/D002-1table2columns1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0003	direct-mapping	D003-1table3columns1row	-	cases/D003-1table3columns1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0004	direct-mapping	D004-1table2columns1row	-	cases/D004-1table2columns1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0005	direct-mapping	D005-1table3columns3rows2duplicates	-	cases/D005-1table3columns3rows2duplicates/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0006	direct-mapping	D006-1table1primarykey1column1row	-	cases/D006-1table1primarykey1column1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0007	direct-mapping	D007-1table1primarykey2columns1row	-	cases/D007-1table1primarykey2columns1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0008	direct-mapping	D008-1table1compositeprimarykey3columns1row	-	cases/D008-1table1compositeprimarykey3columns1row/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0009	direct-mapping	D009-2tables1primarykey1foreignkey	-	cases/D009-2tables1primarykey1foreignkey/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0010	direct-mapping	D010-1table1primarykey3colums3rows	-	cases/D010-1table1primarykey3colums3rows/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0011	direct-mapping	D011-M2MRelations	-	cases/D011-M2MRelations/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0012	direct-mapping	D012-2tables2duplicates0nulls	-	cases/D012-2tables2duplicates0nulls/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0013	direct-mapping	D013-1table1primarykey3columns2rows1nullvalue	-	cases/D013-1table1primarykey3columns2rows1nullvalue/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0014	direct-mapping	D014-3tables1primarykey1foreignkey	-	cases/D014-3tables1primarykey1foreignkey/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0015	direct-mapping	D015-1table3columns1composityeprimarykey3rows2languages	-	cases/D015-1table3columns1composityeprimarykey3rows2languages/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0016	direct-mapping	D016-1table1primarykey10columns3rowsSQLdatatypes	-	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/directGraph.ttl	false	pass	skip
-case	DirectGraphTC0017	direct-mapping	D017-I18NnoSpecialChars	-	cases/D017-I18NnoSpecialChars/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0018	direct-mapping	D018-1table1primarykey2columns3rows	-	cases/D018-1table1primarykey2columns3rows/directGraph.ttl	false	pass	pass
-case	DirectGraphTC0021	direct-mapping	D021-2tables2primarykeys1foreignkeyReferencesAllNulls	-	cases/D021-2tables2primarykeys1foreignkeyReferencesAllNulls/directGraph.ttl	false	skip	pass
-case	DirectGraphTC0022	direct-mapping	D022-2tables1primarykey1foreignkeyReferencesNoPrimaryKey	-	cases/D022-2tables1primarykey1foreignkeyReferencesNoPrimaryKey/directGraph.ttl	false	skip	pass
-case	DirectGraphTC0023	direct-mapping	D023-2tables2primarykeys2foreignkeysReferencesToNon-primarykeys	-	cases/D023-2tables2primarykeys2foreignkeysReferencesToNon-primarykeys/directGraph.ttl	false	skip	pass
-case	DirectGraphTC0024	direct-mapping	D024-2tables2primarykeys1foreignkeyToARowWithSomeNulls	-	cases/D024-2tables2primarykeys1foreignkeyToARowWithSomeNulls/directGraph.ttl	false	skip	pass
-case	DirectGraphTC0025	direct-mapping	D025-3tables3primarykeys3foreignkeys	-	cases/D025-3tables3primarykeys3foreignkeys/directGraph.ttl	false	skip	pass
-case	R2RMLTC0000	r2rml	D000-1table1column0rows	cases/D000-1table1column0rows/r2rml.ttl	cases/D000-1table1column0rows/mapped.nq	false	pass	pass
-case	R2RMLTC0001a	r2rml	D001-1table1column1row	cases/D001-1table1column1row/r2rmla.ttl	cases/D001-1table1column1row/mappeda.nq	false	pass	pass
-case	R2RMLTC0001b	r2rml	D001-1table1column1row	cases/D001-1table1column1row/r2rmlb.ttl	cases/D001-1table1column1row/mappedb.nq	false	pass	pass
-case	R2RMLTC0002a	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmla.ttl	cases/D002-1table2columns1row/mappeda.nq	false	pass	pass
-case	R2RMLTC0002b	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlb.ttl	cases/D002-1table2columns1row/mappedb.nq	false	pass	pass
-case	R2RMLTC0002c	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlc.ttl	-	true	pass	pass
-case	R2RMLTC0002d	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmld.ttl	cases/D002-1table2columns1row/mappedd.nq	false	pass	pass
-case	R2RMLTC0002e	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmle.ttl	-	true	pass	pass
-case	R2RMLTC0002f	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlf.ttl	-	true	deviation	deviation
-case	R2RMLTC0002g	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlg.ttl	-	true	pass	pass
-case	R2RMLTC0002h	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlh.ttl	-	true	pass	pass
-case	R2RMLTC0002i	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmli.ttl	cases/D002-1table2columns1row/mappedi.nq	false	pass	pass
-case	R2RMLTC0002j	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlj.ttl	cases/D002-1table2columns1row/mappedj.nq	false	pass	pass
-case	R2RMLTC0003a	r2rml	D003-1table3columns1row	cases/D003-1table3columns1row/r2rmla.ttl	-	true	pass	pass
-case	R2RMLTC0003b	r2rml	D003-1table3columns1row	cases/D003-1table3columns1row/r2rmlb.ttl	cases/D003-1table3columns1row/mappedb.nq	false	pass	pass
-case	R2RMLTC0003c	r2rml	D003-1table3columns1row	cases/D003-1table3columns1row/r2rmlc.ttl	cases/D003-1table3columns1row/mappedc.nq	false	pass	pass
-case	R2RMLTC0004a	r2rml	D004-1table2columns1row	cases/D004-1table2columns1row/r2rmla.ttl	cases/D004-1table2columns1row/mappeda.nq	false	pass	pass
-case	R2RMLTC0004b	r2rml	D004-1table2columns1row	cases/D004-1table2columns1row/r2rmlb.ttl	-	true	pass	pass
-case	R2RMLTC0005a	r2rml	D005-1table3columns3rows2duplicates	cases/D005-1table3columns3rows2duplicates/r2rmla.ttl	cases/D005-1table3columns3rows2duplicates/mappeda.nq	false	pass	pass
-case	R2RMLTC0005b	r2rml	D005-1table3columns3rows2duplicates	cases/D005-1table3columns3rows2duplicates/r2rmlb.ttl	cases/D005-1table3columns3rows2duplicates/mappedb.nq	false	pass	pass
-case	R2RMLTC0006a	r2rml	D006-1table1primarykey1column1row	cases/D006-1table1primarykey1column1row/r2rmla.ttl	cases/D006-1table1primarykey1column1row/mappeda.nq	false	pass	pass
-case	R2RMLTC0007a	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmla.ttl	cases/D007-1table1primarykey2columns1row/mappeda.nq	false	pass	pass
-case	R2RMLTC0007b	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlb.ttl	cases/D007-1table1primarykey2columns1row/mappedb.nq	false	pass	pass
-case	R2RMLTC0007c	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlc.ttl	cases/D007-1table1primarykey2columns1row/mappedc.nq	false	pass	pass
-case	R2RMLTC0007d	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmld.ttl	cases/D007-1table1primarykey2columns1row/mappedd.nq	false	pass	pass
-case	R2RMLTC0007e	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmle.ttl	cases/D007-1table1primarykey2columns1row/mappede.nq	false	pass	pass
-case	R2RMLTC0007f	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlf.ttl	cases/D007-1table1primarykey2columns1row/mappedf.nq	false	pass	pass
-case	R2RMLTC0007g	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlg.ttl	cases/D007-1table1primarykey2columns1row/mappedg.nq	false	pass	pass
-case	R2RMLTC0007h	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlh.ttl	-	true	pass	pass
-case	R2RMLTC0008a	r2rml	D008-1table1compositeprimarykey3columns1row	cases/D008-1table1compositeprimarykey3columns1row/r2rmla.ttl	cases/D008-1table1compositeprimarykey3columns1row/mappeda.nq	false	pass	pass
-case	R2RMLTC0008b	r2rml	D008-1table1compositeprimarykey3columns1row	cases/D008-1table1compositeprimarykey3columns1row/r2rmlb.ttl	cases/D008-1table1compositeprimarykey3columns1row/mappedb.nq	false	pass	pass
-case	R2RMLTC0008c	r2rml	D008-1table1compositeprimarykey3columns1row	cases/D008-1table1compositeprimarykey3columns1row/r2rmlc.ttl	cases/D008-1table1compositeprimarykey3columns1row/mappedc.nq	false	pass	pass
-case	R2RMLTC0009a	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmla.ttl	cases/D009-2tables1primarykey1foreignkey/mappeda.nq	false	pass	pass
-case	R2RMLTC0009b	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmlb.ttl	cases/D009-2tables1primarykey1foreignkey/mappedb.nq	false	pass	pass
-case	R2RMLTC0009c	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmlc.ttl	cases/D009-2tables1primarykey1foreignkey/mappedc.nq	false	pass	pass
-case	R2RMLTC0009d	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmld.ttl	cases/D009-2tables1primarykey1foreignkey/mappedd.nq	false	pass	pass
-case	R2RMLTC0010a	r2rml	D010-1table1primarykey3colums3rows	cases/D010-1table1primarykey3colums3rows/r2rmla.ttl	cases/D010-1table1primarykey3colums3rows/mappeda.nq	false	pass	pass
-case	R2RMLTC0010b	r2rml	D010-1table1primarykey3colums3rows	cases/D010-1table1primarykey3colums3rows/r2rmlb.ttl	cases/D010-1table1primarykey3colums3rows/mappedb.nq	false	pass	pass
-case	R2RMLTC0010c	r2rml	D010-1table1primarykey3colums3rows	cases/D010-1table1primarykey3colums3rows/r2rmlc.ttl	cases/D010-1table1primarykey3colums3rows/mappedc.nq	false	pass	pass
-case	R2RMLTC0011a	r2rml	D011-M2MRelations	cases/D011-M2MRelations/r2rmla.ttl	cases/D011-M2MRelations/mappeda.nq	false	pass	pass
-case	R2RMLTC0011b	r2rml	D011-M2MRelations	cases/D011-M2MRelations/r2rmlb.ttl	cases/D011-M2MRelations/mappedb.nq	false	pass	pass
-case	R2RMLTC0012a	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmla.ttl	cases/D012-2tables2duplicates0nulls/mappeda.nq	false	pass	pass
-case	R2RMLTC0012b	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmlb.ttl	cases/D012-2tables2duplicates0nulls/mappedb.nq	false	pass	pass
-case	R2RMLTC0012c	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmlc.ttl	-	true	pass	pass
-case	R2RMLTC0012d	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmld.ttl	-	true	pass	pass
-case	R2RMLTC0012e	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmle.ttl	cases/D012-2tables2duplicates0nulls/mappede.nq	false	pass	pass
-case	R2RMLTC0013a	r2rml	D013-1table1primarykey3columns2rows1nullvalue	cases/D013-1table1primarykey3columns2rows1nullvalue/r2rmla.ttl	cases/D013-1table1primarykey3columns2rows1nullvalue/mappeda.nq	false	pass	pass
-case	R2RMLTC0014a	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmla.ttl	cases/D014-3tables1primarykey1foreignkey/mappeda.nq	false	pass	pass
-case	R2RMLTC0014b	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmlb.ttl	cases/D014-3tables1primarykey1foreignkey/mappedb.nq	false	pass	pass
-case	R2RMLTC0014c	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmlc.ttl	cases/D014-3tables1primarykey1foreignkey/mappedc.nq	false	pass	pass
-case	R2RMLTC0014d	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmld.ttl	cases/D014-3tables1primarykey1foreignkey/mappedd.nq	false	pass	pass
-case	R2RMLTC0015a	r2rml	D015-1table3columns1composityeprimarykey3rows2languages	cases/D015-1table3columns1composityeprimarykey3rows2languages/r2rmla.ttl	cases/D015-1table3columns1composityeprimarykey3rows2languages/mappeda.nq	false	pass	pass
-case	R2RMLTC0015b	r2rml	D015-1table3columns1composityeprimarykey3rows2languages	cases/D015-1table3columns1composityeprimarykey3rows2languages/r2rmlb.ttl	-	true	pass	pass
-case	R2RMLTC0016a	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmla.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappeda.nq	false	pass	skip
-case	R2RMLTC0016b	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmlb.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappedb.nq	false	pass	skip
-case	R2RMLTC0016c	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmlc.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappedc.nq	false	pass	skip
-case	R2RMLTC0016d	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmld.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappedd.nq	false	pass	skip
-case	R2RMLTC0016e	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmle.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappede.nq	false	pass	skip
-case	R2RMLTC0018a	r2rml	D018-1table1primarykey2columns3rows	cases/D018-1table1primarykey2columns3rows/r2rmla.ttl	cases/D018-1table1primarykey2columns3rows/mappeda.nq	false	pass	pass
-case	R2RMLTC0019a	r2rml	D019-1table1primarykey3columns3rows	cases/D019-1table1primarykey3columns3rows/r2rmla.ttl	cases/D019-1table1primarykey3columns3rows/mappeda.nq	false	pass	pass
-case	R2RMLTC0019b	r2rml	D019-1table1primarykey3columns3rows	cases/D019-1table1primarykey3columns3rows/r2rmlb.ttl	-	true	pass	pass
-case	R2RMLTC0020a	r2rml	D020-1table1column5rows	cases/D020-1table1column5rows/r2rmla.ttl	cases/D020-1table1column5rows/mappeda.nq	false	pass	pass
-case	R2RMLTC0020b	r2rml	D020-1table1column5rows	cases/D020-1table1column5rows/r2rmlb.ttl	-	true	pass	pass
+case	DirectGraphTC0000	direct-mapping	D000-1table1column0rows	-	cases/D000-1table1column0rows/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0001	direct-mapping	D001-1table1column1row	-	cases/D001-1table1column1row/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0002	direct-mapping	D002-1table2columns1row	-	cases/D002-1table2columns1row/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0003	direct-mapping	D003-1table3columns1row	-	cases/D003-1table3columns1row/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0004	direct-mapping	D004-1table2columns1row	-	cases/D004-1table2columns1row/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0005	direct-mapping	D005-1table3columns3rows2duplicates	-	cases/D005-1table3columns3rows2duplicates/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0006	direct-mapping	D006-1table1primarykey1column1row	-	cases/D006-1table1primarykey1column1row/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0007	direct-mapping	D007-1table1primarykey2columns1row	-	cases/D007-1table1primarykey2columns1row/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0008	direct-mapping	D008-1table1compositeprimarykey3columns1row	-	cases/D008-1table1compositeprimarykey3columns1row/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0009	direct-mapping	D009-2tables1primarykey1foreignkey	-	cases/D009-2tables1primarykey1foreignkey/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0010	direct-mapping	D010-1table1primarykey3colums3rows	-	cases/D010-1table1primarykey3colums3rows/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0011	direct-mapping	D011-M2MRelations	-	cases/D011-M2MRelations/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0012	direct-mapping	D012-2tables2duplicates0nulls	-	cases/D012-2tables2duplicates0nulls/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0013	direct-mapping	D013-1table1primarykey3columns2rows1nullvalue	-	cases/D013-1table1primarykey3columns2rows1nullvalue/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0014	direct-mapping	D014-3tables1primarykey1foreignkey	-	cases/D014-3tables1primarykey1foreignkey/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0015	direct-mapping	D015-1table3columns1composityeprimarykey3rows2languages	-	cases/D015-1table3columns1composityeprimarykey3rows2languages/directGraph.ttl	false	pass	pass	pass
+case	DirectGraphTC0016	direct-mapping	D016-1table1primarykey10columns3rowsSQLdatatypes	-	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/directGraph.ttl	false	pass	skip	pass
+case	DirectGraphTC0017	direct-mapping	D017-I18NnoSpecialChars	-	cases/D017-I18NnoSpecialChars/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0018	direct-mapping	D018-1table1primarykey2columns3rows	-	cases/D018-1table1primarykey2columns3rows/directGraph.ttl	false	pass	pass	skip
+case	DirectGraphTC0021	direct-mapping	D021-2tables2primarykeys1foreignkeyReferencesAllNulls	-	cases/D021-2tables2primarykeys1foreignkeyReferencesAllNulls/directGraph.ttl	false	skip	pass	pass
+case	DirectGraphTC0022	direct-mapping	D022-2tables1primarykey1foreignkeyReferencesNoPrimaryKey	-	cases/D022-2tables1primarykey1foreignkeyReferencesNoPrimaryKey/directGraph.ttl	false	skip	pass	skip
+case	DirectGraphTC0023	direct-mapping	D023-2tables2primarykeys2foreignkeysReferencesToNon-primarykeys	-	cases/D023-2tables2primarykeys2foreignkeysReferencesToNon-primarykeys/directGraph.ttl	false	skip	pass	pass
+case	DirectGraphTC0024	direct-mapping	D024-2tables2primarykeys1foreignkeyToARowWithSomeNulls	-	cases/D024-2tables2primarykeys1foreignkeyToARowWithSomeNulls/directGraph.ttl	false	skip	pass	pass
+case	DirectGraphTC0025	direct-mapping	D025-3tables3primarykeys3foreignkeys	-	cases/D025-3tables3primarykeys3foreignkeys/directGraph.ttl	false	skip	pass	skip
+case	R2RMLTC0000	r2rml	D000-1table1column0rows	cases/D000-1table1column0rows/r2rml.ttl	cases/D000-1table1column0rows/mapped.nq	false	pass	pass	pass
+case	R2RMLTC0001a	r2rml	D001-1table1column1row	cases/D001-1table1column1row/r2rmla.ttl	cases/D001-1table1column1row/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0001b	r2rml	D001-1table1column1row	cases/D001-1table1column1row/r2rmlb.ttl	cases/D001-1table1column1row/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0002a	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmla.ttl	cases/D002-1table2columns1row/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0002b	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlb.ttl	cases/D002-1table2columns1row/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0002c	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlc.ttl	-	true	pass	pass	pass
+case	R2RMLTC0002d	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmld.ttl	cases/D002-1table2columns1row/mappedd.nq	false	pass	pass	pass
+case	R2RMLTC0002e	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmle.ttl	-	true	pass	pass	pass
+case	R2RMLTC0002f	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlf.ttl	-	true	deviation	deviation	deviation
+case	R2RMLTC0002g	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlg.ttl	-	true	pass	pass	pass
+case	R2RMLTC0002h	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlh.ttl	-	true	pass	pass	pass
+case	R2RMLTC0002i	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmli.ttl	cases/D002-1table2columns1row/mappedi.nq	false	pass	pass	pass
+case	R2RMLTC0002j	r2rml	D002-1table2columns1row	cases/D002-1table2columns1row/r2rmlj.ttl	cases/D002-1table2columns1row/mappedj.nq	false	pass	pass	pass
+case	R2RMLTC0003a	r2rml	D003-1table3columns1row	cases/D003-1table3columns1row/r2rmla.ttl	-	true	pass	pass	pass
+case	R2RMLTC0003b	r2rml	D003-1table3columns1row	cases/D003-1table3columns1row/r2rmlb.ttl	cases/D003-1table3columns1row/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0003c	r2rml	D003-1table3columns1row	cases/D003-1table3columns1row/r2rmlc.ttl	cases/D003-1table3columns1row/mappedc.nq	false	pass	pass	pass
+case	R2RMLTC0004a	r2rml	D004-1table2columns1row	cases/D004-1table2columns1row/r2rmla.ttl	cases/D004-1table2columns1row/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0004b	r2rml	D004-1table2columns1row	cases/D004-1table2columns1row/r2rmlb.ttl	-	true	pass	pass	pass
+case	R2RMLTC0005a	r2rml	D005-1table3columns3rows2duplicates	cases/D005-1table3columns3rows2duplicates/r2rmla.ttl	cases/D005-1table3columns3rows2duplicates/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0005b	r2rml	D005-1table3columns3rows2duplicates	cases/D005-1table3columns3rows2duplicates/r2rmlb.ttl	cases/D005-1table3columns3rows2duplicates/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0006a	r2rml	D006-1table1primarykey1column1row	cases/D006-1table1primarykey1column1row/r2rmla.ttl	cases/D006-1table1primarykey1column1row/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0007a	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmla.ttl	cases/D007-1table1primarykey2columns1row/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0007b	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlb.ttl	cases/D007-1table1primarykey2columns1row/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0007c	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlc.ttl	cases/D007-1table1primarykey2columns1row/mappedc.nq	false	pass	pass	pass
+case	R2RMLTC0007d	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmld.ttl	cases/D007-1table1primarykey2columns1row/mappedd.nq	false	pass	pass	pass
+case	R2RMLTC0007e	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmle.ttl	cases/D007-1table1primarykey2columns1row/mappede.nq	false	pass	pass	pass
+case	R2RMLTC0007f	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlf.ttl	cases/D007-1table1primarykey2columns1row/mappedf.nq	false	pass	pass	pass
+case	R2RMLTC0007g	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlg.ttl	cases/D007-1table1primarykey2columns1row/mappedg.nq	false	pass	pass	pass
+case	R2RMLTC0007h	r2rml	D007-1table1primarykey2columns1row	cases/D007-1table1primarykey2columns1row/r2rmlh.ttl	-	true	pass	pass	pass
+case	R2RMLTC0008a	r2rml	D008-1table1compositeprimarykey3columns1row	cases/D008-1table1compositeprimarykey3columns1row/r2rmla.ttl	cases/D008-1table1compositeprimarykey3columns1row/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0008b	r2rml	D008-1table1compositeprimarykey3columns1row	cases/D008-1table1compositeprimarykey3columns1row/r2rmlb.ttl	cases/D008-1table1compositeprimarykey3columns1row/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0008c	r2rml	D008-1table1compositeprimarykey3columns1row	cases/D008-1table1compositeprimarykey3columns1row/r2rmlc.ttl	cases/D008-1table1compositeprimarykey3columns1row/mappedc.nq	false	pass	pass	pass
+case	R2RMLTC0009a	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmla.ttl	cases/D009-2tables1primarykey1foreignkey/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0009b	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmlb.ttl	cases/D009-2tables1primarykey1foreignkey/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0009c	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmlc.ttl	cases/D009-2tables1primarykey1foreignkey/mappedc.nq	false	pass	pass	pass
+case	R2RMLTC0009d	r2rml	D009-2tables1primarykey1foreignkey	cases/D009-2tables1primarykey1foreignkey/r2rmld.ttl	cases/D009-2tables1primarykey1foreignkey/mappedd.nq	false	pass	pass	pass
+case	R2RMLTC0010a	r2rml	D010-1table1primarykey3colums3rows	cases/D010-1table1primarykey3colums3rows/r2rmla.ttl	cases/D010-1table1primarykey3colums3rows/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0010b	r2rml	D010-1table1primarykey3colums3rows	cases/D010-1table1primarykey3colums3rows/r2rmlb.ttl	cases/D010-1table1primarykey3colums3rows/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0010c	r2rml	D010-1table1primarykey3colums3rows	cases/D010-1table1primarykey3colums3rows/r2rmlc.ttl	cases/D010-1table1primarykey3colums3rows/mappedc.nq	false	pass	pass	pass
+case	R2RMLTC0011a	r2rml	D011-M2MRelations	cases/D011-M2MRelations/r2rmla.ttl	cases/D011-M2MRelations/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0011b	r2rml	D011-M2MRelations	cases/D011-M2MRelations/r2rmlb.ttl	cases/D011-M2MRelations/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0012a	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmla.ttl	cases/D012-2tables2duplicates0nulls/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0012b	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmlb.ttl	cases/D012-2tables2duplicates0nulls/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0012c	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmlc.ttl	-	true	pass	pass	pass
+case	R2RMLTC0012d	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmld.ttl	-	true	pass	pass	pass
+case	R2RMLTC0012e	r2rml	D012-2tables2duplicates0nulls	cases/D012-2tables2duplicates0nulls/r2rmle.ttl	cases/D012-2tables2duplicates0nulls/mappede.nq	false	pass	pass	pass
+case	R2RMLTC0013a	r2rml	D013-1table1primarykey3columns2rows1nullvalue	cases/D013-1table1primarykey3columns2rows1nullvalue/r2rmla.ttl	cases/D013-1table1primarykey3columns2rows1nullvalue/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0014a	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmla.ttl	cases/D014-3tables1primarykey1foreignkey/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0014b	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmlb.ttl	cases/D014-3tables1primarykey1foreignkey/mappedb.nq	false	pass	pass	pass
+case	R2RMLTC0014c	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmlc.ttl	cases/D014-3tables1primarykey1foreignkey/mappedc.nq	false	pass	pass	pass
+case	R2RMLTC0014d	r2rml	D014-3tables1primarykey1foreignkey	cases/D014-3tables1primarykey1foreignkey/r2rmld.ttl	cases/D014-3tables1primarykey1foreignkey/mappedd.nq	false	pass	pass	pass
+case	R2RMLTC0015a	r2rml	D015-1table3columns1composityeprimarykey3rows2languages	cases/D015-1table3columns1composityeprimarykey3rows2languages/r2rmla.ttl	cases/D015-1table3columns1composityeprimarykey3rows2languages/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0015b	r2rml	D015-1table3columns1composityeprimarykey3rows2languages	cases/D015-1table3columns1composityeprimarykey3rows2languages/r2rmlb.ttl	-	true	pass	pass	pass
+case	R2RMLTC0016a	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmla.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappeda.nq	false	pass	skip	pass
+case	R2RMLTC0016b	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmlb.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappedb.nq	false	pass	skip	pass
+case	R2RMLTC0016c	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmlc.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappedc.nq	false	pass	skip	pass
+case	R2RMLTC0016d	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmld.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappedd.nq	false	pass	skip	pass
+case	R2RMLTC0016e	r2rml	D016-1table1primarykey10columns3rowsSQLdatatypes	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/r2rmle.ttl	cases/D016-1table1primarykey10columns3rowsSQLdatatypes/mappede.nq	false	pass	skip	pass
+case	R2RMLTC0018a	r2rml	D018-1table1primarykey2columns3rows	cases/D018-1table1primarykey2columns3rows/r2rmla.ttl	cases/D018-1table1primarykey2columns3rows/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0019a	r2rml	D019-1table1primarykey3columns3rows	cases/D019-1table1primarykey3columns3rows/r2rmla.ttl	cases/D019-1table1primarykey3columns3rows/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0019b	r2rml	D019-1table1primarykey3columns3rows	cases/D019-1table1primarykey3columns3rows/r2rmlb.ttl	-	true	pass	pass	pass
+case	R2RMLTC0020a	r2rml	D020-1table1column5rows	cases/D020-1table1column5rows/r2rmla.ttl	cases/D020-1table1column5rows/mappeda.nq	false	pass	pass	pass
+case	R2RMLTC0020b	r2rml	D020-1table1column5rows	cases/D020-1table1column5rows/r2rmlb.ttl	-	true	pass	pass	pass
 file	cases/D000-1table1column0rows/create.sql	bd7bedd72156b93a069406ececd085a379d955281cc4372ccccedd9f6dd65df0
 file	cases/D000-1table1column0rows/directGraph.ttl	a7f4aacd16179a789564b173928f87f16346d16c0352a2b2d7cf2ba97c23283e
 file	cases/D000-1table1column0rows/manifest.ttl	e797608b5c0768e2e69cd774fee2b8fdea737c23d579a06cae9f287dadcb2a01

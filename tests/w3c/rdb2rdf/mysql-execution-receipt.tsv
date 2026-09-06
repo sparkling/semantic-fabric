@@ -1,6 +1,6 @@
 semantic-fabric-rdb2rdf-execution-receipt-v4
-meta	backend	postgresql
-meta	runner	sf-conformance::pg::run_sealed_suite_required
+meta	backend	mysql
+meta	runner	sf-conformance::mysql::run_sealed_suite_required
 meta	attestation-scope	sealed-input-and-outcome-baseline-not-runner-toolchain-host-or-provider-provenance
 meta	provider-version	unbound
 meta	provider-image-digest	unbound
@@ -10,34 +10,34 @@ meta	hash-algorithm	sha256
 meta	case-count	87
 meta	r2rml-count	63
 meta	direct-mapping-count	24
-meta	passed-count	80
+meta	passed-count	74
 meta	failed-count	1
-meta	skipped-count	6
-meta	outcomes-sha256	9ec4a308f27a858f86a96fdd627b3ba820acbae8fd67aab466d0ba78a08f4ca5
-case	DirectGraphTC0000	direct-mapping	passed	graph-matched
-case	DirectGraphTC0001	direct-mapping	passed	graph-matched
-case	DirectGraphTC0002	direct-mapping	passed	graph-matched
-case	DirectGraphTC0003	direct-mapping	passed	graph-matched
-case	DirectGraphTC0004	direct-mapping	passed	graph-matched
-case	DirectGraphTC0005	direct-mapping	passed	graph-matched
+meta	skipped-count	12
+meta	outcomes-sha256	e1e3677b1b51351fab2e9ae84167d48435c1a5a8818747ee96a7182fe58e95df
+case	DirectGraphTC0000	direct-mapping	skipped	direct-mapping-unsupported
+case	DirectGraphTC0001	direct-mapping	skipped	direct-mapping-unsupported
+case	DirectGraphTC0002	direct-mapping	skipped	direct-mapping-unsupported
+case	DirectGraphTC0003	direct-mapping	skipped	direct-mapping-unsupported
+case	DirectGraphTC0004	direct-mapping	skipped	direct-mapping-unsupported
+case	DirectGraphTC0005	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0006	direct-mapping	passed	graph-matched
 case	DirectGraphTC0007	direct-mapping	passed	graph-matched
 case	DirectGraphTC0008	direct-mapping	passed	graph-matched
 case	DirectGraphTC0009	direct-mapping	passed	graph-matched
 case	DirectGraphTC0010	direct-mapping	passed	graph-matched
 case	DirectGraphTC0011	direct-mapping	passed	graph-matched
-case	DirectGraphTC0012	direct-mapping	passed	graph-matched
+case	DirectGraphTC0012	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0013	direct-mapping	passed	graph-matched
-case	DirectGraphTC0014	direct-mapping	passed	graph-matched
+case	DirectGraphTC0014	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0015	direct-mapping	passed	graph-matched
-case	DirectGraphTC0016	direct-mapping	skipped	fixture-load-error
-case	DirectGraphTC0017	direct-mapping	passed	graph-matched
-case	DirectGraphTC0018	direct-mapping	passed	graph-matched
+case	DirectGraphTC0016	direct-mapping	passed	graph-matched
+case	DirectGraphTC0017	direct-mapping	skipped	direct-mapping-unsupported
+case	DirectGraphTC0018	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0021	direct-mapping	passed	graph-matched
-case	DirectGraphTC0022	direct-mapping	passed	graph-matched
+case	DirectGraphTC0022	direct-mapping	skipped	direct-mapping-unsupported
 case	DirectGraphTC0023	direct-mapping	passed	graph-matched
 case	DirectGraphTC0024	direct-mapping	passed	graph-matched
-case	DirectGraphTC0025	direct-mapping	passed	graph-matched
+case	DirectGraphTC0025	direct-mapping	skipped	direct-mapping-unsupported
 case	R2RMLTC0000	r2rml	passed	graph-matched
 case	R2RMLTC0001a	r2rml	passed	graph-matched
 case	R2RMLTC0001b	r2rml	passed	graph-matched
@@ -91,11 +91,11 @@ case	R2RMLTC0014c	r2rml	passed	graph-matched
 case	R2RMLTC0014d	r2rml	passed	graph-matched
 case	R2RMLTC0015a	r2rml	passed	graph-matched
 case	R2RMLTC0015b	r2rml	passed	mapping-error
-case	R2RMLTC0016a	r2rml	skipped	fixture-load-error
-case	R2RMLTC0016b	r2rml	skipped	fixture-load-error
-case	R2RMLTC0016c	r2rml	skipped	fixture-load-error
-case	R2RMLTC0016d	r2rml	skipped	fixture-load-error
-case	R2RMLTC0016e	r2rml	skipped	fixture-load-error
+case	R2RMLTC0016a	r2rml	passed	graph-matched
+case	R2RMLTC0016b	r2rml	passed	graph-matched
+case	R2RMLTC0016c	r2rml	passed	graph-matched
+case	R2RMLTC0016d	r2rml	passed	graph-matched
+case	R2RMLTC0016e	r2rml	passed	graph-matched
 case	R2RMLTC0018a	r2rml	passed	graph-matched
 case	R2RMLTC0019a	r2rml	passed	graph-matched
 case	R2RMLTC0019b	r2rml	passed	execution-error

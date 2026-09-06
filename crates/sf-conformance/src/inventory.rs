@@ -43,6 +43,7 @@ pub struct CaseEntry {
     pub expected_error: bool,
     pub sqlite: AllowedOutcome,
     pub postgres: AllowedOutcome,
+    pub mysql: AllowedOutcome,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +115,7 @@ pub fn build(suite_root: &Path) -> Result<Inventory, String> {
                 .as_deref()
                 .map(|name| case_path(scenario, name))
                 .transpose()?;
-            let (sqlite, postgres) = allowed_outcomes(&case.identifier);
+            let (sqlite, postgres, mysql) = allowed_outcomes(&case.identifier);
             cases.push(CaseEntry {
                 identifier: case.identifier,
                 kind,
@@ -124,6 +125,7 @@ pub fn build(suite_root: &Path) -> Result<Inventory, String> {
                 expected_error: !case.has_expected_output,
                 sqlite,
                 postgres,
+                mysql,
             });
         }
     }
@@ -320,7 +322,7 @@ fn validate_case(case: &CaseEntry) -> Result<(), String> {
         validate_case_path(&case.scenario, path)?;
     }
     let expected = allowed_outcomes(&case.identifier);
-    if (case.sqlite, case.postgres) != expected {
+    if (case.sqlite, case.postgres, case.mysql) != expected {
         return Err(format!(
             "allowed outcomes for {} do not match pinned backend policy",
             case.identifier

@@ -31,6 +31,7 @@ pub mod execution_receipt;
 pub mod graph;
 pub mod inventory;
 pub mod manifest;
+pub mod mysql;
 pub mod oracle;
 pub mod pg;
 #[cfg(feature = "evidence-receipts")]

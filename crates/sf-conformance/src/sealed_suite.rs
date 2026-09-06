@@ -14,6 +14,7 @@ use crate::{CaseResult, Report, Status};
 pub enum Backend {
     Sqlite,
     Postgres,
+    MySql,
 }
 
 impl Backend {
@@ -21,6 +22,7 @@ impl Backend {
         match self {
             Self::Sqlite => "sqlite",
             Self::Postgres => "postgresql",
+            Self::MySql => "mysql",
         }
     }
 
@@ -28,6 +30,7 @@ impl Backend {
         match value {
             "sqlite" => Some(Self::Sqlite),
             "postgresql" => Some(Self::Postgres),
+            "mysql" => Some(Self::MySql),
             _ => None,
         }
     }
@@ -53,6 +56,7 @@ pub enum OutcomeCode {
     QuadDumpUnsupported,
     QuadDumpError,
     DirectMappingError,
+    DirectMappingUnsupported,
 }
 
 impl OutcomeCode {
@@ -74,6 +78,7 @@ impl OutcomeCode {
             Self::QuadDumpUnsupported => "quad-dump-unsupported",
             Self::QuadDumpError => "quad-dump-error",
             Self::DirectMappingError => "direct-mapping-error",
+            Self::DirectMappingUnsupported => "direct-mapping-unsupported",
         }
     }
 
@@ -95,6 +100,7 @@ impl OutcomeCode {
             "quad-dump-unsupported" => Self::QuadDumpUnsupported,
             "quad-dump-error" => Self::QuadDumpError,
             "direct-mapping-error" => Self::DirectMappingError,
+            "direct-mapping-unsupported" => Self::DirectMappingUnsupported,
             _ => return None,
         })
     }
@@ -236,7 +242,7 @@ impl SealedSuite {
                 ));
             }
             let allowed = backend_policy(expected, backend);
-            if !code_matches_nonpassing_policy(allowed, actual) {
+            if !code_matches_nonpassing_policy(allowed, backend, actual) {
                 return Err(format!(
                     "{backend:?} nonpassing cause mismatch for {}: policy={allowed:?}, code={}",
                     expected.identifier,
@@ -349,6 +355,9 @@ fn code_matches_case(expected: &CaseEntry, actual: &ClassifiedCaseResult) -> boo
         | Code::TranslationUnsupported
         | Code::ExecutionUnsupported
         | Code::QuadDumpUnsupported => actual.status == Status::Skipped,
+        Code::DirectMappingUnsupported => {
+            expected.kind == CaseKind::DirectMapping && actual.status == Status::Skipped
+        }
         Code::MappingError
         | Code::SourceValidationError
         | Code::TranslationError
@@ -367,14 +376,21 @@ fn code_matches_case(expected: &CaseEntry, actual: &ClassifiedCaseResult) -> boo
     }
 }
 
-fn code_matches_nonpassing_policy(allowed: AllowedOutcome, actual: &ClassifiedCaseResult) -> bool {
+fn code_matches_nonpassing_policy(
+    allowed: AllowedOutcome,
+    backend: Backend,
+    actual: &ClassifiedCaseResult,
+) -> bool {
     match (allowed, actual.status) {
         (AllowedOutcome::Deviation, Status::Failed) => {
             actual.outcome_code == OutcomeCode::UnexpectedOutput
         }
-        (AllowedOutcome::Skip, Status::Skipped) => {
-            actual.outcome_code == OutcomeCode::FixtureLoadError
-        }
+        (AllowedOutcome::Skip, Status::Skipped) => match backend {
+            Backend::MySql => actual.outcome_code == OutcomeCode::DirectMappingUnsupported,
+            Backend::Sqlite | Backend::Postgres => {
+                actual.outcome_code == OutcomeCode::FixtureLoadError
+            }
+        },
         _ => true,
     }
 }
@@ -383,6 +399,7 @@ fn backend_policy(entry: &CaseEntry, backend: Backend) -> AllowedOutcome {
     match backend {
         Backend::Sqlite => entry.sqlite,
         Backend::Postgres => entry.postgres,
+        Backend::MySql => entry.mysql,
     }
 }
 
