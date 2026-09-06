@@ -4804,6 +4804,7 @@ name = "sf-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "libc",
  "rusqlite",
@@ -4813,6 +4814,8 @@ dependencies = [
  "sf-core",
  "sf-serve",
  "sf-sparql",
+ "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

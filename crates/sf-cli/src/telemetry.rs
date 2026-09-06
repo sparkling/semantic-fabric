@@ -7,6 +7,7 @@ use sf_core::TELEMETRY_TARGET;
 use tracing::{Level, Metadata};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Context, Filter};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -56,20 +57,29 @@ impl fmt::Display for InitError {
 impl std::error::Error for InitError {}
 
 pub(super) fn init(level: TelemetryLevel) -> Result<(), InitError> {
+    production_subscriber(level, std::io::stderr)
+        .try_init()
+        .map_err(redact_init_error)
+}
+
+fn production_subscriber<W>(
+    level: TelemetryLevel,
+    writer: W,
+) -> impl tracing::Subscriber + Send + Sync
+where
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
     let formatter = tracing_subscriber::fmt::layer()
         .json()
         .flatten_event(true)
-        .with_writer(std::io::stderr)
+        .with_writer(writer)
         .with_ansi(false)
         .with_target(false)
         .with_file(false)
         .with_line_number(false)
         .with_thread_ids(false)
         .with_span_events(FmtSpan::CLOSE);
-    tracing_subscriber::registry()
-        .with(formatter.with_filter(product_filter(level)))
-        .try_init()
-        .map_err(redact_init_error)
+    tracing_subscriber::registry().with(formatter.with_filter(product_filter(level)))
 }
 
 #[derive(Clone, Copy)]
@@ -106,6 +116,10 @@ fn is_product_metadata(metadata: &Metadata<'_>, level: TelemetryLevel) -> bool {
 fn redact_init_error<T>(_error: T) -> InitError {
     InitError
 }
+
+#[cfg(test)]
+#[path = "telemetry_runtime_tests.rs"]
+mod runtime_tests;
 
 #[cfg(test)]
 mod tests {
