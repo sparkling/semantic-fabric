@@ -11,7 +11,7 @@ use sf_sparql::federation::{
     compile_source_affine_union, compile_source_affine_union_uncached, FederatedPlan,
 };
 #[cfg(test)]
-use sf_sparql::CompileDigests;
+use sf_sparql::{CompileDigests, CompileScope};
 use sf_sparql::{Epoch, OntologyDigest, Plan};
 #[cfg(test)]
 use sf_sql::TableSchema;
@@ -191,6 +191,11 @@ impl SourceRegistry {
         self.entries.get(&source_id).map(RuntimeBinding::digests)
     }
 
+    #[cfg(test)]
+    pub(crate) fn scope(&self, source_id: SourceId) -> Option<CompileScope> {
+        self.entries.get(&source_id).map(RuntimeBinding::scope)
+    }
+
     pub(crate) fn semantic_warning_count(&self, source_id: SourceId) -> Option<usize> {
         self.entries
             .get(&source_id)
@@ -324,17 +329,7 @@ impl RuntimeSnapshot {
         })?;
         let plan =
             compile_source_affine_union(sparql, [left.compiler(), right.compiler()], control)?;
-        let binding_for = |index: usize| {
-            self.registry
-                .binding(plan.fragments()[index].source_id())
-                .expect("compiled fragment source remains registered")
-        };
-        let binding_identities = [
-            binding_for(0).binding_identity(),
-            binding_for(1).binding_identity(),
-        ];
-        let scopes = [binding_for(0).scope(), binding_for(1).scope()];
-        Ok(BoundFederatedPlan::new(plan, binding_identities, scopes))
+        Ok(BoundFederatedPlan::new(plan, [left, right]))
     }
 
     pub(crate) fn preflight_federated_union(
@@ -378,27 +373,14 @@ impl RuntimeSnapshot {
         &self,
         bound: BoundFederatedPlan,
     ) -> Result<ExecutableFederatedPlan, BindingMismatch> {
-        let (plan, binding_identities, scopes) = bound.into_parts();
-        let variables = plan.variables().to_vec();
+        let (variables, plans) = bound.into_bound_plans();
         let mut executable = Vec::with_capacity(2);
-        for (fragment, (binding_identity, scope)) in plan
-            .fragments()
-            .iter()
-            .zip(binding_identities.into_iter().zip(scopes))
-        {
-            if fragment.source_id() != scope.source_id() {
-                return Err(BindingMismatch);
-            }
+        for plan in plans {
             let binding = self
                 .registry
-                .binding(fragment.source_id())
+                .binding(plan.source_id())
                 .ok_or(BindingMismatch)?;
-            executable.push(binding.prepare_execution(BoundPlan::from_parts(
-                binding_identity,
-                scope,
-                fragment.source_id(),
-                fragment.shared_plan(),
-            ))?);
+            executable.push(binding.prepare_execution(plan)?);
         }
         let executable = executable.try_into().map_err(|_| BindingMismatch)?;
         Ok(ExecutableFederatedPlan::new(variables, executable))

@@ -112,6 +112,37 @@ fn compile_provenance_is_checked_against_the_execution_snapshot() {
 }
 
 #[test]
+fn different_epoch_compile_scope_mismatch_is_rejected() {
+    let source_id = SourceId::new(0).unwrap();
+    let first = RuntimeSnapshot::single(
+        Epoch(0),
+        crate::test_support::empty_ontology(),
+        runtime_source(0, "items"),
+    )
+    .unwrap();
+    let replacement = RuntimeSnapshot::single(
+        Epoch(1),
+        crate::test_support::empty_ontology(),
+        runtime_source(0, "items"),
+    )
+    .unwrap();
+    let bound = first
+        .compile(
+            source_id,
+            "SELECT * WHERE { ?s ?p ?o }",
+            &UncontrolledQueryControl,
+        )
+        .unwrap();
+
+    assert_ne!(
+        first.registry().scope(source_id),
+        replacement.registry().scope(source_id),
+        "regression precondition"
+    );
+    assert!(replacement.prepare_execution(bound).is_err());
+}
+
+#[test]
 fn cloned_snapshot_lease_preserves_plan_authority() {
     let source_id = SourceId::new(0).unwrap();
     let manager = RuntimeManager::new(snapshot("items"));
@@ -145,6 +176,11 @@ fn content_equal_reactivation_does_not_reuse_plan_authority() {
     manager.activate(expected, snapshot("items")).unwrap();
     let replacement_lease = manager.lease().unwrap();
 
+    assert_eq!(
+        old_lease.snapshot().registry().scope(source_id),
+        replacement_lease.snapshot().registry().scope(source_id),
+        "content-equal same-Epoch precondition"
+    );
     assert!(replacement_lease.prepare_execution(bound).is_err());
 }
 

@@ -1,3 +1,5 @@
+//! Closed PostgreSQL generation-admission error classification.
+
 use sf_core::query_control::QueryControlError;
 
 #[derive(Debug)]

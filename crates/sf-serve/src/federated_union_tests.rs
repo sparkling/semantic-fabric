@@ -387,6 +387,13 @@ fn content_equal_federated_snapshots_do_not_share_plan_authority() {
     let (first, _first_pools, _first_files) = sources();
     let (second, second_pools, _second_files) = sources();
     let source_ids = [SourceId::new(0).unwrap(), SourceId::new(1).unwrap()];
+    for source_id in source_ids {
+        assert_eq!(
+            first.registry().scope(source_id),
+            second.registry().scope(source_id),
+            "content-equal same-Epoch precondition"
+        );
+    }
     let bound = first
         .compile_federated_union(source_ids, UNION_SAME_VAR, &UncontrolledQueryControl)
         .unwrap();

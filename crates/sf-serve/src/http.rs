@@ -139,7 +139,7 @@ async fn process(
             };
             let (source_id, binding_identity, backend, verified_generation, plan) =
                 execution.into_parts();
-            if generations.contains(source_id, &binding_identity) != verified_generation {
+            if !generations.matches(source_id, &binding_identity, verified_generation) {
                 let _ = generations.finish().await;
                 return problem::response(ProblemCode::Internal);
             }

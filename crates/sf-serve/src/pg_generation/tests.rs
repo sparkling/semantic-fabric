@@ -70,13 +70,14 @@ fn generation_lease_is_pinned_to_the_exact_binding_identity() {
         leases: BTreeMap::from([(source_id, (binding_identity, lease))]),
     };
 
-    assert!(!generations.contains(source_id, &other_binding));
+    assert!(!generations.matches(source_id, &other_binding, true));
+    assert!(!generations.matches(source_id, &other_binding, false));
     assert!(generations.take(source_id, &other_binding).is_none());
     assert!(
         !generations.is_empty(),
         "mismatch must retain cleanup ownership"
     );
-    assert!(generations.contains(source_id, &same_binding));
+    assert!(generations.matches(source_id, &same_binding, true));
     assert_eq!(
         generations
             .take(source_id, &same_binding)
@@ -85,6 +86,7 @@ fn generation_lease_is_pinned_to_the_exact_binding_identity() {
         source_id
     );
     assert!(generations.is_empty());
+    assert!(generations.matches(source_id, &same_binding, false));
 }
 
 #[test]

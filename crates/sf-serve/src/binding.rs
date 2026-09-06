@@ -175,8 +175,8 @@ impl RuntimeBinding {
         &self,
         bound: BoundPlan,
     ) -> Result<ExecutablePlan, BindingMismatch> {
-        if !bound.binding_identity.ptr_eq(&self.binding_identity)
-            || bound.scope != self.compiler.scope()
+        if bound.scope != self.compiler.scope()
+            || !bound.binding_identity.ptr_eq(&self.binding_identity)
             || bound.source_id != self.compiler.source_id()
             || bound.plan.dialect != self.profile.dialect()
         {
@@ -197,10 +197,6 @@ impl RuntimeBinding {
 
     pub(crate) const fn scope(&self) -> CompileScope {
         self.compiler.scope()
-    }
-
-    pub(crate) fn binding_identity(&self) -> RuntimeBindingIdentity {
-        self.binding_identity.clone()
     }
 
     #[cfg(test)]
@@ -251,20 +247,6 @@ pub(crate) struct BoundPlan {
 }
 
 impl BoundPlan {
-    pub(crate) fn from_parts(
-        binding_identity: RuntimeBindingIdentity,
-        scope: CompileScope,
-        source_id: SourceId,
-        plan: Arc<Plan>,
-    ) -> Self {
-        Self {
-            binding_identity,
-            scope,
-            source_id,
-            plan,
-        }
-    }
-
     pub(crate) fn plan(&self) -> &Plan {
         &self.plan
     }
@@ -283,11 +265,20 @@ pub(crate) struct BoundFederatedPlan {
 }
 
 impl BoundFederatedPlan {
-    pub(crate) fn new(
-        plan: FederatedPlan,
-        binding_identities: [RuntimeBindingIdentity; 2],
-        scopes: [CompileScope; 2],
-    ) -> Self {
+    pub(crate) fn new(plan: FederatedPlan, bindings: [&RuntimeBinding; 2]) -> Self {
+        let binding_for = |index: usize| {
+            let source_id = plan.fragments()[index].source_id();
+            bindings
+                .iter()
+                .copied()
+                .find(|binding| binding.source_id() == source_id)
+                .expect("compiled fragment source remains bound")
+        };
+        let binding_identities = [
+            binding_for(0).binding_identity.clone(),
+            binding_for(1).binding_identity.clone(),
+        ];
+        let scopes = [binding_for(0).scope(), binding_for(1).scope()];
         Self {
             plan,
             binding_identities,
@@ -299,14 +290,26 @@ impl BoundFederatedPlan {
         &self.plan
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        FederatedPlan,
-        [RuntimeBindingIdentity; 2],
-        [CompileScope; 2],
-    ) {
-        (self.plan, self.binding_identities, self.scopes)
+    pub(crate) fn into_bound_plans(self) -> (Vec<String>, [BoundPlan; 2]) {
+        let variables = self.plan.variables().to_vec();
+        let fragments = self.plan.fragments();
+        let [first_identity, second_identity] = self.binding_identities;
+        let [first_scope, second_scope] = self.scopes;
+        let plans = [
+            BoundPlan {
+                binding_identity: first_identity,
+                scope: first_scope,
+                source_id: fragments[0].source_id(),
+                plan: fragments[0].shared_plan(),
+            },
+            BoundPlan {
+                binding_identity: second_identity,
+                scope: second_scope,
+                source_id: fragments[1].source_id(),
+                plan: fragments[1].shared_plan(),
+            },
+        ];
+        (variables, plans)
     }
 }
 

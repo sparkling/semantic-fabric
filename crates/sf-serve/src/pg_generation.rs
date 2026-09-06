@@ -158,14 +158,16 @@ impl VerifiedGenerationLeases {
         Some(lease)
     }
 
-    pub(crate) fn contains(
+    pub(crate) fn matches(
         &self,
         source_id: SourceId,
         binding_identity: &RuntimeBindingIdentity,
+        verified_generation: bool,
     ) -> bool {
-        self.leases
-            .get(&source_id)
-            .is_some_and(|(identity, _)| identity.ptr_eq(binding_identity))
+        match self.leases.get(&source_id) {
+            Some((identity, _)) => verified_generation && identity.ptr_eq(binding_identity),
+            None => !verified_generation,
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {

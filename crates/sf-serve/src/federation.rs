@@ -34,6 +34,26 @@ enum AcquiredFragment {
     },
 }
 
+struct GenerationMismatch;
+
+fn take_postgres_generation(
+    generations: &mut VerifiedGenerationLeases,
+    source_id: sf_core::SourceId,
+    binding_identity: &crate::binding_identity::RuntimeBindingIdentity,
+    verified_generation: bool,
+) -> Result<Option<VerifiedPostgresGenerationLease>, GenerationMismatch> {
+    if !generations.matches(source_id, binding_identity, verified_generation) {
+        return Err(GenerationMismatch);
+    }
+    if !verified_generation {
+        return Ok(None);
+    }
+    generations
+        .take(source_id, binding_identity)
+        .map(Some)
+        .ok_or(GenerationMismatch)
+}
+
 /// Acquire both participating sources before committing a success response,
 /// then concatenate their source-local solution streams through one serializer.
 pub(crate) async fn select_union_body(
@@ -47,7 +67,7 @@ pub(crate) async fn select_union_body(
     let valid = fragments[0].0 != fragments[1].0
         && fragments.iter().all(
             |(source_id, binding_identity, backend, verified_generation, _)| {
-                generations.contains(*source_id, binding_identity) == *verified_generation
+                generations.matches(*source_id, binding_identity, *verified_generation)
                     && (!*verified_generation || matches!(backend, Backend::Pg(_)))
             },
         );
@@ -57,19 +77,25 @@ pub(crate) async fn select_union_body(
     }
 
     let mut acquired = Vec::with_capacity(2);
-    for (source_id, binding_identity, backend, _verified_generation, plan) in fragments {
+    for (source_id, binding_identity, backend, verified_generation, plan) in fragments {
         let source = match backend {
             Backend::Sqlite(pool) => sqlite_admission::acquire(&pool, &budget)
                 .await
                 .map(|lease| AcquiredFragment::Sqlite { lease, plan }),
-            Backend::Pg(pool) => match generations.take(source_id, &binding_identity) {
-                Some(lease) => Ok(AcquiredFragment::VerifiedPostgres { lease, plan }),
-                None => crate::source_acquisition::acquire_pg(&pool, budget.clone())
+            Backend::Pg(pool) => match take_postgres_generation(
+                &mut generations,
+                source_id,
+                &binding_identity,
+                verified_generation,
+            ) {
+                Ok(Some(lease)) => Ok(AcquiredFragment::VerifiedPostgres { lease, plan }),
+                Ok(None) => crate::source_acquisition::acquire_pg(&pool, budget.clone())
                     .await
                     .map(|connection| AcquiredFragment::Postgres {
                         connection: Box::new(connection),
                         plan,
                     }),
+                Err(GenerationMismatch) => Err(problem::response(ProblemCode::Internal)),
             },
             Backend::Mysql(pool) => crate::source_acquisition::acquire_mysql(&pool, &budget)
                 .await
@@ -146,5 +172,26 @@ async fn close_acquired(acquired: Vec<AcquiredFragment>) {
         if let AcquiredFragment::VerifiedPostgres { lease, .. } = fragment {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(1), lease.finish()).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binding_identity::RuntimeBindingIdentity;
+
+    #[test]
+    fn verified_fragment_without_its_identity_bound_lease_is_internal() {
+        let mut generations = VerifiedGenerationLeases::default();
+        let source_id = sf_core::SourceId::new(0).unwrap();
+        let identity = RuntimeBindingIdentity::fresh();
+
+        let Err(GenerationMismatch) =
+            take_postgres_generation(&mut generations, source_id, &identity, true)
+        else {
+            panic!("verified fragment must not fall through to ordinary acquisition");
+        };
+
+        assert!(generations.is_empty());
     }
 }
