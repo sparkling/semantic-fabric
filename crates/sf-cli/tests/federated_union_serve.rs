@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -11,21 +12,42 @@ const BINARY: &str = env!("CARGO_BIN_EXE_semantic-fabric");
 const QUERY: &str = "SELECT ?s ?value WHERE { \
     { ?s <http://example.test/left> ?value } UNION \
     { ?s <http://example.test/right> ?value } }";
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
+    root: PathBuf,
     paths: Vec<PathBuf>,
 }
 
 impl Fixture {
+    fn new() -> Self {
+        loop {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos();
+            let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "sf_cli_federated_{}_{}_{}",
+                std::process::id(),
+                timestamp,
+                sequence
+            ));
+            match std::fs::create_dir(&root) {
+                Ok(()) => {
+                    return Self {
+                        root,
+                        paths: Vec::new(),
+                    };
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create isolated fixture directory: {error}"),
+            }
+        }
+    }
+
     fn path(&mut self, suffix: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "sf_cli_federated_{suffix}_{}_{unique}",
-            std::process::id()
-        ));
+        let path = self.root.join(suffix);
         self.paths.push(path.clone());
         path
     }
@@ -36,6 +58,7 @@ impl Drop for Fixture {
         for path in &self.paths {
             let _ = std::fs::remove_file(path);
         }
+        let _ = std::fs::remove_dir(&self.root);
     }
 }
 
@@ -89,7 +112,7 @@ fn request(address: SocketAddr) -> Option<String> {
 }
 
 fn start_server() -> (Fixture, SocketAddr, Server) {
-    let mut fixture = Fixture { paths: Vec::new() };
+    let mut fixture = Fixture::new();
     let first_db = fixture.path("first.db");
     let second_db = fixture.path("second.db");
     let first_mapping = fixture.path("first.ttl");
