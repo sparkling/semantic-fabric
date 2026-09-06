@@ -10,7 +10,7 @@ use tracing::{Instrument, Span};
 
 pub(crate) use crate::correlation::CorrelationId;
 
-const SCHEMA: &str = "semantic-fabric.telemetry.v1";
+pub(crate) const SCHEMA: &str = "semantic-fabric.telemetry.v1";
 #[derive(Clone, Copy)]
 enum RequestMethod {
     Get,

@@ -2,7 +2,7 @@
 
 use sf_core::TELEMETRY_TARGET;
 
-const SCHEMA: &str = "semantic-fabric.telemetry.v1";
+use crate::telemetry::SCHEMA;
 
 /// Closed decision labels adopted by ADR-0018.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

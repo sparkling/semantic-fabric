@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -128,12 +128,6 @@ impl Hasher for ConstantHasher {
     fn write(&mut self, _bytes: &[u8]) {}
 }
 
-fn forced_hash(key: &SecurityPlanKey) -> u64 {
-    let mut hasher = ConstantHasher;
-    key.hash(&mut hasher);
-    hasher.finish()
-}
-
 #[test]
 fn forced_hash_collision_cannot_cross_security_partitions() {
     let binding = binding();
@@ -156,8 +150,9 @@ fn forced_hash_collision_cannot_cross_security_partitions() {
         query.to_string(),
     );
 
-    assert_eq!(forced_hash(&first_key), forced_hash(&second_key));
     assert_ne!(first_key, second_key);
+    // This map's hasher forces every key into one bucket. Exact key equality,
+    // rather than the hash alone, must still keep the partitions disjoint.
     let mut collision_map: HashMap<SecurityPlanKey, (), BuildHasherDefault<ConstantHasher>> =
         HashMap::default();
     collision_map.insert(first_key.clone(), ());
@@ -205,6 +200,71 @@ fn corrupted_cached_identity_fails_closed() {
         .compile_shared(&request_context, QUERY)
         .unwrap_err();
     assert!(matches!(error, SecurityCompileError::CacheIdentityMismatch));
+}
+
+#[test]
+fn corrupted_cached_scope_fails_closed() {
+    let binding = binding();
+    let other_binding = CompilerBinding::new(
+        SourceMapping::new(SourceId::new(1).unwrap(), Vec::new()),
+        Dialect::Sqlite,
+        Tbox::default(),
+        CompilerSchema::from_unverified_observation(Vec::new()),
+        8,
+    );
+    let cache = security_cache();
+    let request_context = context(1, 2, 3);
+    let query = spargebra::SparqlParser::new().parse_query(QUERY).unwrap();
+    let key = SecurityPlanKey::from_query(
+        &query,
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        request_context.cache_identity(),
+    );
+    cache.put(
+        key,
+        SecurityCachedPlan::from_shared(
+            other_binding.scope(),
+            CompileProfileId::Uncontrolled,
+            request_context.cache_identity(),
+            binding.compile_uncached_shared(QUERY).unwrap(),
+        ),
+    );
+
+    let error = binding
+        .for_security_policy(policy(1), &cache)
+        .compile_shared(&request_context, QUERY)
+        .unwrap_err();
+    assert!(matches!(error, SecurityCompileError::CacheScopeMismatch));
+}
+
+#[test]
+fn corrupted_cached_profile_fails_closed() {
+    let binding = binding();
+    let cache = security_cache();
+    let request_context = context(1, 2, 3);
+    let query = spargebra::SparqlParser::new().parse_query(QUERY).unwrap();
+    let key = SecurityPlanKey::from_query(
+        &query,
+        binding.scope(),
+        CompileProfileId::Uncontrolled,
+        request_context.cache_identity(),
+    );
+    cache.put(
+        key,
+        SecurityCachedPlan::from_shared(
+            binding.scope(),
+            CompileProfileId::GovernedV1,
+            request_context.cache_identity(),
+            binding.compile_uncached_shared(QUERY).unwrap(),
+        ),
+    );
+
+    let error = binding
+        .for_security_policy(policy(1), &cache)
+        .compile_shared(&request_context, QUERY)
+        .unwrap_err();
+    assert!(matches!(error, SecurityCompileError::CacheProfileMismatch));
 }
 
 #[test]

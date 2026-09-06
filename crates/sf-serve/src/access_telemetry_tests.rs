@@ -37,7 +37,7 @@ impl<'writer> MakeWriter<'writer> for Capture {
 }
 
 #[test]
-fn access_decision_vocabulary_is_closed() {
+fn adopted_access_decision_labels_are_stable() {
     assert_eq!(
         [
             AccessDecision::Allow,
@@ -85,12 +85,27 @@ fn access_decisions_emit_only_closed_payload_free_fields_on_the_m3_target() {
 
     assert_eq!(lines.len(), 3, "output={output}");
     for (line, decision) in lines.iter().zip(["allow", "deny", "mask"]) {
+        let mut keys: Vec<&str> = line
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "decision",
+                "event",
+                "level",
+                "schema",
+                "target",
+                "timestamp"
+            ]
+        );
         assert_eq!(line["target"], TELEMETRY_TARGET);
         assert_eq!(line["event"], "security.access_decision");
         assert_eq!(line["schema"], "semantic-fabric.telemetry.v1");
         assert_eq!(line["decision"], decision);
-        for forbidden in ["subject", "policy", "attributes", "query", "source"] {
-            assert!(line.get(forbidden).is_none(), "output={output}");
-        }
     }
 }
