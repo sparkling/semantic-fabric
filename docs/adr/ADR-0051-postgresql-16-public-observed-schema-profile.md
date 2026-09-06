@@ -32,14 +32,14 @@ non-owner-role, immutable-image and byte-identical protocol.
 
 The public Rust diagnostic collects a complete legacy projection and publishes either the branded rich identity or one closed, identifier-free `Unavailable` reason only after the outer transaction commits.
 Clean pre-legacy mismatches remain pending unavailability; rich failures may downgrade only after successful savepoint recovery, while transaction, legacy or commit failures remain fatal.
-The exact transaction/commit fault matrix and two-replay qualification receipts remain open; the evidence executor still fails closed because required counts and preflight evidence are absent.
+The exact transaction/commit fault matrix and two-replay qualification receipts remain open; the evidence executor still fails closed because those replay receipts and public promotion evidence are absent.
 Existing legacy entry points are unchanged. For authored mappings, `sf-serve` carries the committed availability state bound to backend and `SourceId` only as a non-authorizing diagnostic.
 A distinct private Direct-Mapping foundation consumes the rich in-transaction API as one step in an unforgeable PostgreSQL lease rather than promoting the observation itself.
 It marks a pool member dirty before `BEGIN`, locks the exact public-table set before the first repeatable-read snapshot, and binds the identity, complete rich tables, database, role, session and policy context.
 A primary-key-backed candidate is generated under that protection, rechecked, rolled back and stored only as an inseparable generation expectation.
-For each internal verified request, one compiler permit is reserved before source I/O, retained across lease acquisition without requeue, and used for authoritative compilation after exact reobservation.
-All branches use that connection; final recheck plus acknowledged rollback is mandatory, while any cancellation, error or drop that prevents rollback triggers bounded native cancel and dirty-member detachment.
-An isolated PostgreSQL 16.15 live gate covers lock-before-snapshot, DDL barriers, old-generation coherence, successor drift, policy mutation, cancellation and dirty replacement.
+For each internal verified request, one compiler permit is reserved before source I/O, retained across lease acquisition without requeue, and used for authoritative compilation after exact reobservation. The request reserves exactly 34 source-work units from typed executable inventories; 33 rejects before pool I/O.
+Required-live evidence carries mapped SELECT, ASK and CONSTRUCT through request generation, retained-permit compilation and the same lease-owned connection. Final recheck plus acknowledged rollback is mandatory; any cancellation, error or drop that prevents rollback triggers bounded native cancel and dirty-member detachment.
+The PostgreSQL 16.15 gate also covers lock-before-snapshot, DDL barriers, old-generation coherence, successor drift, policy mutation, cancellation and dirty replacement.
 The identity remains forgeable content equality and does not itself grant type, constraint, mapping, cache, readiness or execution authority; compiler facts remain `Unverified`.
 Public startup still rejects every Direct Mapping selection before connector I/O, and no tracked 16.9/16.15 qualification-receipt pair, reload lifecycle or backend admission exists.
 Qualification never silently extends to another patch; SQLite and MySQL remain unavailable. Product code is Rust, while Node/MetaHarness remains development evidence with learning, evolution and promotion disabled.

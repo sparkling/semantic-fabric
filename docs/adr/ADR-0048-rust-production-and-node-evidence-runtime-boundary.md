@@ -282,7 +282,9 @@ the inseparable schema, observation, mapping and request-generation expectation.
 For an internal verified request, semantic/resource-shape preflight first
 reserves one opaque server-wide compiler permit. The same permit remains held
 without requeue while the request acquires and revalidates its generation lease,
-then moves into the authoritative compiler worker. Every PostgreSQL branch uses
+then moves into the authoritative compiler worker. Typed executable inventories
+derive the exact 34-unit metadata reservation and reject 33 before pool I/O;
+required-live SELECT, ASK and CONSTRUCT use
 the lease-owned connection; completion rechecks the same generation and rolls
 back under a fixed cleanup allowance. If timeout, cancellation, error, drop or
 a retained execution view prevents acknowledged rollback, the member stays

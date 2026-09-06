@@ -48,11 +48,13 @@ request-control handoff checkpoints. For a private verified-generation
 requirement, a non-cache-authorizing semantic/resource preflight now reserves
 one opaque compiler permit before source I/O, retains that exact permit across
 lease acquisition, and moves it into authoritative compilation without
-requeueing while relation locks are held. This closes a semaphore/lock-ordering
-hazard, not logical-work governance. No request-owned `CompileContext` enters a
-publicly reachable compiler path; parser construction/destruction, remaining
-owned phases and recursive-copy sites, cache capacity/eviction and provisional
-limits remain ungoverned.
+requeueing while relation locks are held. Required-live SELECT, ASK and
+CONSTRUCT prove that handoff; 34 inventory-derived metadata units admit and 33
+reject before pool I/O. This closes a semaphore/lock-ordering hazard, not
+logical-work governance. No request-owned `CompileContext` enters a publicly
+reachable compiler path; parser construction/destruction, remaining owned phases
+and recursive-copy sites, cache capacity/eviction and provisional limits remain
+ungoverned.
 
 No capability catalogue entry, readiness signal or production-admission claim
 may cite this ADR until the implementation and acceptance gates below pass.

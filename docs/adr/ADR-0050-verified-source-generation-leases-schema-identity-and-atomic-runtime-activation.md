@@ -60,8 +60,9 @@ rechecked and rolled back cleanly before its inseparable expectation is stored.
 For each internal request, a non-cache-authorizing preflight reserves the exact
 compiler permit before source I/O; the permit remains held without requeue while
 the request acquires and revalidates the lease, then moves into authoritative
-compilation. Every branch executes through the lease-owned connection, followed
-by a final same-transaction recheck and acknowledged rollback.
+compilation. Typed executable inventories derive a 34-unit metadata reservation,
+with 33 rejected before pool I/O. Required-live SELECT, ASK and CONSTRUCT execute
+through the lease-owned connection before final recheck and acknowledged rollback.
 
 A fixed cleanup allowance is independent of the expired user deadline. If
 timeout, cancellation, error, drop or a retained execution view prevents
@@ -329,8 +330,8 @@ persist across generations.
    mapping, ontology, capability and policy digest has a canonical contract.
 4. **PostgreSQL verified lease (private foundation implemented 2026-09-06):**
    retain one compiler permit across preflight and lease acquisition, then bind
-   one dirty, protected transaction through authoritative compilation, complete
-   streaming, final recheck and acknowledged rollback. Public profile
+   one dirty, protected transaction through authoritative compilation and mapped
+   SELECT/ASK/CONSTRUCT, final recheck and acknowledged rollback. Public profile
    qualification and version receipts remain open.
 5. **Atomic activation and drift (revision fence implemented 2026-09-06):** the
    immutable registry, private whole-state publication primitive, readiness,
