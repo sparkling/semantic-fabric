@@ -14,10 +14,7 @@ fn connection_authority_is_fixed_and_has_no_password() {
             [Host::Unix(path)] if path == Path::new(SOCKET)
         ));
         assert_eq!(config.get_application_name(), Some(APPLICATION));
-        assert_eq!(
-            config.get_options(),
-            Some("-c client_encoding=UTF8 -c session_replication_role=origin")
-        );
+        assert_eq!(config.get_options(), Some("-c client_encoding=UTF8"));
     }
 }
 

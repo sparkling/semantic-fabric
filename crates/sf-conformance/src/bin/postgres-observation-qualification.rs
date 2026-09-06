@@ -292,7 +292,10 @@ fn fixed_config(role: &'static str) -> Config {
         .dbname(DATABASE)
         .user(role)
         .application_name(APPLICATION)
-        .options("-c client_encoding=UTF8 -c session_replication_role=origin")
+        // `session_replication_role` is already guarded by the observation
+        // transaction and cannot be set by the deliberately unprivileged
+        // qualification roles. Keep only the client encoding startup pin.
+        .options("-c client_encoding=UTF8")
         .connect_timeout(Duration::from_secs(5));
     config
 }
