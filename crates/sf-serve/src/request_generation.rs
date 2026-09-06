@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::response::Response;
 
-use crate::activation::{ReadinessCause, RuntimeSnapshotLease};
+use crate::activation::RuntimeSnapshotLease;
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
 use crate::deadline::CompilerReservation;
@@ -33,7 +33,7 @@ pub(crate) async fn acquire(
     let source_ids = cfg.query_mode().source_ids().into_iter().flatten();
     let requirements = snapshot
         .generation_requirements(source_ids)
-        .map_err(|error| response_for_error(&cfg, snapshot, error))?;
+        .map_err(response_for_error)?;
     if requirements.is_empty() {
         return Ok(RequestGenerationAdmission {
             generations: VerifiedGenerationLeases::default(),
@@ -50,35 +50,20 @@ pub(crate) async fn acquire(
     .await?;
     let generations = VerifiedGenerationLeases::acquire(requirements, budget)
         .await
-        .map_err(|error| response_for_error(&cfg, snapshot, error))?;
+        .map_err(response_for_error)?;
     Ok(RequestGenerationAdmission {
         generations,
         compiler: Some(compiler),
     })
 }
 
-pub(crate) fn response_for_error(
-    cfg: &ServeConfig,
-    snapshot: &RuntimeSnapshotLease,
-    error: PgGenerationError,
-) -> Response {
+pub(crate) fn response_for_error(error: PgGenerationError) -> Response {
     match error {
         PgGenerationError::Control(error) => problem::response_for_control(error),
         PgGenerationError::SourceUnavailable => {
             problem::response_with_retry_after(ProblemCode::SourceUnavailable)
         }
-        PgGenerationError::SchemaDrift => {
-            let _ = cfg.mark_runtime_not_ready(
-                snapshot.ready_state_witness(),
-                ReadinessCause::SchemaDrift,
-            );
-            problem::response_with_retry_after(ProblemCode::SourceUnavailable)
-        }
-        PgGenerationError::CapabilityDrift => {
-            let _ = cfg.mark_runtime_not_ready(
-                snapshot.ready_state_witness(),
-                ReadinessCause::CapabilityDrift,
-            );
+        PgGenerationError::SchemaDrift | PgGenerationError::CapabilityDrift => {
             problem::response_with_retry_after(ProblemCode::SourceUnavailable)
         }
         PgGenerationError::Mapping(_) | PgGenerationError::Internal => {
@@ -109,21 +94,17 @@ mod tests {
     }
 
     #[test]
-    fn request_failure_uses_its_exact_ready_state_witness() {
+    fn request_scoped_drift_does_not_change_runtime_readiness() {
         let config = config();
-        let stale_lease = config.runtime_lease().unwrap();
-        let unavailable = config
-            .mark_runtime_not_ready(
-                stale_lease.ready_state_witness(),
-                ReadinessCause::SourceUnavailable,
-            )
-            .unwrap();
-        let current = config
-            .mark_runtime_not_ready(unavailable, ReadinessCause::CapabilityDrift)
-            .unwrap();
+        let ready = config.runtime_readiness().unwrap();
 
-        let response = response_for_error(&config, &stale_lease, PgGenerationError::SchemaDrift);
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(config.runtime_readiness().unwrap(), current);
+        for error in [
+            PgGenerationError::SchemaDrift,
+            PgGenerationError::CapabilityDrift,
+        ] {
+            let response = response_for_error(error);
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(config.runtime_readiness().unwrap(), ready);
+        }
     }
 }

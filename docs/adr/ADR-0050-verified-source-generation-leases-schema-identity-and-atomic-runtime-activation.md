@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-02
 updated: 2026-09-06
 tags: [schema, lifecycle, snapshot, digest, lease, reload, direct-mapping, postgres]
@@ -10,10 +10,16 @@ implements: [ADR-0038]
 
 # Verified source-generation leases, schema identity, and atomic runtime activation
 
-## Status boundary
+## Decision status
 
-This ADR remains **proposed overall**. Its Phase 1 pure `sf-core` Observed Schema
-Identity V1 kernel is implemented as a non-authorizing content-identity utility.
+This ADR is **accepted as architecture**. Acceptance binds Decision sections
+1–7, Rules R1–R9, and the two normative appendices. It does not claim that every
+phase is implemented, enable a backend profile, or grant production admission.
+
+### Implementation status (non-normative)
+
+The Phase 1 pure `sf-core` Observed Schema Identity V1 kernel is implemented as
+a non-authorizing content-identity utility.
 [ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md) now accepts
 the first production-shaped profile for observation qualification only. Its
 private, opt-in `sf-sql` diagnostic can emit a branded identity for PostgreSQL
@@ -36,9 +42,9 @@ generation-bound not-ready state rejects new requests as a redacted pre-I/O
 comparison rejects ready-to-not-ready and slow-candidate races, and stale
 watchers cannot mark a newer activation unavailable. An opaque checked state
 revision now advances on activation and every accepted not-ready observation,
-including same-cause repeats. Request-generation failures carry their exact
-ready-state witness; shutdown atomically fences the current state after closing
-transitions, so it cannot leave a racing activation ready, and a transition
+including same-cause repeats. Request-generation failures remain request-scoped
+until the recovery coordinator exists; shutdown atomically fences the current
+state after closing transitions, so it cannot leave a racing activation ready, and a transition
 losing that race reports `ShuttingDown` rather than a misleading stale state. Deterministic tests
 cover these races, old/new HTTP results, failed construction, response lifetime,
 and last-pin release. Checked revision exhaustion terminalizes readiness with a
@@ -314,6 +320,42 @@ identity proves same-row blank-node stability across every branch and concurrent
 update/vacuum. Row identities and blank-node labels never enter telemetry or
 persist across generations.
 
+#### Initial PostgreSQL lifecycle profile
+
+`PgDirectLifecycleV1` is the only initial live Direct-Mapping profile. It is
+defined here but remains disabled until its complete builder, coordinator and
+admission evidence exist. It admits exactly one PostgreSQL source using
+ADR-0051's qualified `Postgres16PublicBaseV1` observation profile, permanent
+`public` base tables, a primary key for every mapped table, one immutable
+ontology, one validated absolute base IRI and one immutable resolved source
+configuration. Authored-plus-Direct mapping mixtures, RLS, raw SQL, no-PK
+tables, federation, additional sources and other backends reject.
+
+The profile has three closed source-failure classes. Connection, checkout,
+query, statement-timeout, cancellation and row-decode failures before a
+complete context is decoded are `SourceUnavailable`. A held verified lease that
+successfully reobserves a different expected generation is `SchemaDrift`. A
+complete decoded database, role, session or policy context that differs from
+the expectation is `CapabilityDrift`. All three return the same redacted
+request-scoped `503`; a request never changes application readiness directly.
+
+Until a complete candidate builder and recovery coordinator are enabled, no
+source-failure path may arm a global drift fence. Once enabled, exactly one
+serialized coordinator owns source-readiness transitions. It uses a dedicated
+bounded control connection, never a request-pool member; skips missed polling
+ticks; permits at most one probe/build at a time; and compares the complete
+opaque runtime-state revision before fencing or activation. A completed failed
+control observation fences the source. While not ready, the coordinator keeps
+retrying under fixed deadlines; only a completely validated successor candidate
+may recover readiness through the atomic activation primitive. Unexpected
+coordinator termination fails the source closed.
+
+For this single-source profile, source readiness determines application
+readiness. `/readyz` only projects that immutable state and never polls the
+database. Digest equality, request traffic and caller-provided identifiers
+cannot trigger or heal a transition. This profile adds no public administrative
+reload and no hot reload of source credentials, files or configuration.
+
 ### 7. Deliver in authority-preserving phases
 
 1. **Pure Observed Schema Identity V1 kernel (implemented 2026-09-02):** neutral
@@ -434,6 +476,9 @@ names and values and require that none escape.
 - **R7** — backend qualification is per profile; observation never implies
   production admission.
 - **R8** — product implementation is Rust; Node remains evidence-only.
+- **R9** — requests never own readiness transitions; a source-failure fence is
+  enabled only with its bounded recovery coordinator and complete validated
+  candidate path.
 
 ## Links
 

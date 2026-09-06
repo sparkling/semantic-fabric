@@ -114,13 +114,6 @@ impl RuntimeSnapshotLease {
         self.activation_id
     }
 
-    pub(crate) const fn ready_state_witness(&self) -> RuntimeReadiness {
-        RuntimeReadiness::Ready {
-            activation_id: self.activation_id,
-            revision: self.state_revision,
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> &RuntimeSnapshot {
         &self.snapshot

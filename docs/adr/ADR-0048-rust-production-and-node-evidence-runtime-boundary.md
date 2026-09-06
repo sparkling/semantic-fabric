@@ -16,11 +16,13 @@ This ADR is **accepted** by explicit maintainer direction on 2026-09-01. It
 fixes the implementation-language, packaging and authority boundary for the
 application, coding harness and proposed capture supervisor.
 
-It does not accept ADR-0039, ADR-0041 through ADR-0047 or ADR-0050 through
-ADR-0053, claim that a complete or production-active Rust supervisor exists, authorize a
+It does not accept ADR-0039, ADR-0041 through ADR-0047, ADR-0052 or ADR-0053,
+claim that a complete or production-active Rust supervisor exists, authorize a
 database or deployment, or weaken any final correctness, security, performance,
 reproducibility or release gate. Existing TypeScript artefacts remain
 non-authorizing reference evidence.
+ADR-0050 is independently accepted as a lifecycle design, not as a claim that
+its incomplete runtime phases or initial PostgreSQL profile are enabled.
 
 ## Context
 
@@ -301,7 +303,8 @@ observation-profile gate after two fresh runs per patch and independent clean
 replay. Compiler type and constraint authorities remain `Unverified`; public
 Direct Mapping, no-PK identity, reload/watchers, other backend leases,
 federation, production admission and release authority remain absent. ADR-0050
-stays proposed; ADR-0051 is accepted for observation qualification only.
+is accepted as a design but remains partially implemented; ADR-0051 is accepted
+for observation qualification only.
 
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
 parser-worker handshake codec. Later Rust-only slices hold and observe the
