@@ -12,7 +12,9 @@
 //! use requires a janitor plus global residue accounting. Successful reads keep
 //! one bounded plaintext block resident until the next mutation or run drop;
 //! memory locking, swap exclusion, and plaintext copied by callers are outside
-//! this prototype's claim.
+//! this prototype's claim. Key erasure covers the stable owner and RustCrypto's
+//! stored cipher state, not compiler-generated or library-internal derived
+//! temporaries.
 
 use std::fmt;
 use std::io::{ErrorKind, Read, Write};
@@ -29,7 +31,12 @@ use filesystem::{OwnedArtifacts, MAX_BLOCKS};
 use frame::{EphemeralKey, FrameBinding, HEADER_LEN, TAG_LEN};
 
 const MAX_PLAINTEXT_BLOCK: usize = 16 * 1024 * 1024;
-const HELD_FILE_DESCRIPTORS: u64 = 3;
+// `OwnedArtifacts` retains exactly the root and run directory descriptors.
+// Exclusive `&mut self` I/O admits at most one transient block descriptor, so
+// the structural peak is 2 + 1 rather than a block-count-dependent value.
+const HELD_DIRECTORY_DESCRIPTORS: u64 = 2;
+const TRANSIENT_BLOCK_DESCRIPTORS: u64 = 1;
+const HELD_FILE_DESCRIPTORS: u64 = HELD_DIRECTORY_DESCRIPTORS + TRANSIENT_BLOCK_DESCRIPTORS;
 const HELD_OPERATOR_TASKS: u64 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -391,6 +398,10 @@ impl SecureSpillRun {
         }
     }
 
+    /// Best-effort cancellation consumes the owner and invokes Drop cleanup.
+    /// It deliberately has no cleanup-result channel: any CleanupFailed residue
+    /// is not reported here and remains outside the released per-query token.
+    /// A production operator needs an auditable janitor/global accounting path.
     fn cancel(self) {
         drop(self);
     }

@@ -70,7 +70,7 @@ impl EphemeralKey {
     }
 
     #[cfg(test)]
-    fn from_test_byte(byte: u8) -> Self {
+    pub(super) fn from_test_byte(byte: u8) -> Self {
         Self::generate_with(|output| {
             output.fill(byte);
             Ok::<(), ()>(())
@@ -132,9 +132,9 @@ pub(super) fn seal(
 
     let (header, body_and_tag) = scratch.split_at_mut(HEADER_LEN);
     let (body, tag_output) = body_and_tag.split_at_mut(plaintext.len());
-    // RustCrypto's `ChaChaPoly1305` implements `ZeroizeOnDrop` when its
-    // `chacha20` backend has the enabled zeroize support. Thus its unavoidable
-    // working-key copy is erased independently of our stable owner.
+    // RustCrypto's `ChaChaPoly1305` implements `ZeroizeOnDrop` for its stored
+    // cipher state. This claim is limited to that owned working-key state;
+    // library-internal derived temporaries are outside this prototype's proof.
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.bytes()));
     let tag = cipher
         .encrypt_in_place_detached(XNonce::from_slice(&nonce), header, body)
@@ -203,8 +203,9 @@ pub(super) fn open(
     tag.copy_from_slice(&scratch[tag_offset..]);
     let (header, body_and_tag) = scratch.split_at_mut(HEADER_LEN);
     let body = &mut body_and_tag[..payload_len];
-    // The RustCrypto cipher's owned working-key state implements
-    // `ZeroizeOnDrop`; see the compile-time trait assertion below.
+    // The RustCrypto cipher's stored working-key state implements
+    // `ZeroizeOnDrop`; see the compile-time trait assertion below. Derived
+    // library/compiler temporaries remain outside the erasure claim.
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.bytes()));
     cipher
         .decrypt_in_place_detached(

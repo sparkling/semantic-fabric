@@ -1,12 +1,12 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, MetadataExt};
 
 use sf_core::query_control::ReservationShape;
 
-use super::frame::{DECLARED_LEN_OFFSET, VERSION_OFFSET};
+use super::frame::{EphemeralKey, DECLARED_LEN_OFFSET, VERSION_OFFSET};
 use super::tests::{budget_for, identity, Fixture};
-use super::{SecureSpillRun, SpillConfig, SpillError};
+use super::{SecureSpillRun, SpillConfig, SpillError, SpillIdentity};
 
 fn configured_run(
     seed: u8,
@@ -103,38 +103,50 @@ fn replay_or_reordering_is_rejected_by_expected_sequence() {
     assert_eq!(run.read_next(), Err(SpillError::SequenceMismatch));
 }
 
+fn pin_test_crypto_context(run: &mut SecureSpillRun) {
+    run.binding.run = [0x42; 16];
+    run.key = EphemeralKey::from_test_byte(0x24);
+}
+
 #[test]
-fn cross_query_and_cross_schema_blocks_are_rejected() {
-    let (source_fixture, _source_budget, mut source) = configured_run(15, 1);
-    source.write_block(b"foreign block").unwrap();
-    let source_path = source.test_block_path(source_fixture.root(), 0);
-
-    let (target_fixture, _target_budget, mut target) = configured_run(16, 1);
-    target.write_block(b"foreign block").unwrap();
-    fs::copy(
-        &source_path,
-        target.test_block_path(target_fixture.root(), 0),
-    )
-    .unwrap();
-    assert_eq!(target.read_next(), Err(SpillError::IdentityMismatch));
-
-    let fixture = Fixture::new();
+fn query_and_schema_identity_fields_are_individually_load_bearing() {
+    let source_identity = SpillIdentity::new([15; 32], [16; 32], [17; 32]);
+    let source_fixture = Fixture::new();
     let config = SpillConfig::new(64, 1).unwrap();
-    let budget = budget_for(config.reservation_shape().unwrap());
-    let mut schema_target = SecureSpillRun::create(
-        fixture.root(),
-        &budget,
-        super::SpillIdentity::new([15; 32], [16; 32], [99; 32]),
+    let source_budget = budget_for(config.reservation_shape().unwrap());
+    let mut source = SecureSpillRun::create(
+        source_fixture.root(),
+        &source_budget,
+        source_identity,
         config,
     )
     .unwrap();
-    schema_target.write_block(b"foreign block").unwrap();
-    fs::copy(
-        source_path,
-        schema_target.test_block_path(fixture.root(), 0),
-    )
-    .unwrap();
-    assert_eq!(schema_target.read_next(), Err(SpillError::IdentityMismatch));
+    pin_test_crypto_context(&mut source);
+    source.write_block(b"foreign block").unwrap();
+    let source_path = source.test_block_path(source_fixture.root(), 0);
+
+    for target_identity in [
+        SpillIdentity::new([99; 32], [16; 32], [17; 32]),
+        SpillIdentity::new([15; 32], [16; 32], [99; 32]),
+    ] {
+        let target_fixture = Fixture::new();
+        let target_budget = budget_for(config.reservation_shape().unwrap());
+        let mut target = SecureSpillRun::create(
+            target_fixture.root(),
+            &target_budget,
+            target_identity,
+            config,
+        )
+        .unwrap();
+        pin_test_crypto_context(&mut target);
+        target.write_block(b"foreign block").unwrap();
+        fs::copy(
+            &source_path,
+            target.test_block_path(target_fixture.root(), 0),
+        )
+        .unwrap();
+        assert_eq!(target.read_next(), Err(SpillError::IdentityMismatch));
+    }
 }
 
 #[test]
@@ -203,6 +215,27 @@ fn cleanup_never_removes_unowned_siblings_or_follows_replacements() {
         .file_type()
         .is_symlink());
     assert_eq!(budget.reserved(), ReservationShape::ZERO);
+}
+
+#[test]
+fn hardlink_nlink_change_fails_closed_and_cleanup_failure_precedes_run_failure() {
+    let (fixture, budget, mut run) = configured_run(36, 1);
+    run.write_block(b"owned inode").unwrap();
+    let run_path = run.test_run_path(fixture.root());
+    let block_path = run.test_block_path(fixture.root(), 0);
+    let hardlink = run_path.join("unowned-hardlink");
+    fs::hard_link(&block_path, &hardlink).unwrap();
+    assert_eq!(fs::metadata(&block_path).unwrap().nlink(), 2);
+
+    assert_eq!(run.read_next(), Err(SpillError::OwnershipMismatch));
+    assert_eq!(
+        run.finish(),
+        Err(SpillError::CleanupFailed),
+        "cleanup failure must take precedence over the already-failed run"
+    );
+    assert_eq!(budget.reserved(), ReservationShape::ZERO);
+    assert!(block_path.exists());
+    assert!(hardlink.exists());
 }
 
 #[test]

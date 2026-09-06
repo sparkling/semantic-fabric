@@ -9,7 +9,7 @@ use sf_core::query_control::{
 
 use super::{
     checked_reservation_shape, frame, SecureSpillRun, SpillConfig, SpillError, SpillIdentity,
-    MAX_BLOCKS, MAX_PLAINTEXT_BLOCK,
+    HELD_DIRECTORY_DESCRIPTORS, MAX_BLOCKS, MAX_PLAINTEXT_BLOCK, TRANSIENT_BLOCK_DESCRIPTORS,
 };
 
 static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
@@ -146,6 +146,11 @@ fn frame_overhead_inode_count_and_max_multiplication_are_checked_exactly() {
     assert_eq!(shape.retained_bytes(), frame_bytes);
     assert_eq!(shape.spill_bytes(), frame_bytes * 4);
     assert_eq!(shape.spill_files(), 5, "four blocks plus the run directory");
+    assert_eq!(
+        shape.file_descriptors(),
+        HELD_DIRECTORY_DESCRIPTORS + TRANSIENT_BLOCK_DESCRIPTORS
+    );
+    assert_eq!(shape.file_descriptors(), 3);
 
     assert!(SpillConfig::new(MAX_PLAINTEXT_BLOCK, MAX_BLOCKS as u64).is_ok());
     assert_eq!(
@@ -240,8 +245,16 @@ fn run_and_files_have_private_exact_modes_and_random_names() {
     let block_mode = fs::metadata(&block_path).unwrap().permissions().mode() & 0o777;
     assert_eq!(run_mode, 0o700);
     assert_eq!(block_mode, 0o600);
-    assert!(run.test_run_name().starts_with("run-"));
-    assert!(run.test_block_name(0).starts_with("blk-"));
+    assert_random_entry_name(run.test_run_name(), "run-");
+    assert_random_entry_name(run.test_block_name(0), "blk-");
+}
+
+fn assert_random_entry_name(name: &str, prefix: &str) {
+    let suffix = name.strip_prefix(prefix).expect("expected spill prefix");
+    assert_eq!(suffix.len(), 32, "128-bit random suffix must be complete");
+    assert!(suffix
+        .bytes()
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
 }
 
 #[test]
@@ -357,7 +370,23 @@ fn cancellation_before_read_rejects_and_drop_cleans_the_existing_block() {
 }
 
 #[test]
-fn seal_failure_is_sticky_and_cleanup_residue_is_outside_released_admission() {
+fn cancel_is_best_effort_and_does_not_report_cleanup_residue() {
+    let fixture = Fixture::new();
+    let config = SpillConfig::new(16, 1).unwrap();
+    let shape = config.reservation_shape().unwrap();
+    let budget = budget_for(shape);
+    let run = SecureSpillRun::create(fixture.root(), &budget, identity(37), config).unwrap();
+    let run_path = run.test_run_path(fixture.root());
+    let residue = run_path.join("unowned-cancel-residue");
+    fs::write(&residue, b"outside owned inventory").unwrap();
+
+    assert_eq!(run.cancel(), ());
+    assert_eq!(budget.reserved(), ReservationShape::ZERO);
+    assert_eq!(fs::read(residue).unwrap(), b"outside owned inventory");
+}
+
+#[test]
+fn seal_failure_is_sticky_and_cleanup_failure_precedes_run_failure() {
     let fixture = Fixture::new();
     let config = SpillConfig::new(16, 1).unwrap();
     let shape = config.reservation_shape().unwrap();
@@ -383,7 +412,11 @@ fn seal_failure_is_sticky_and_cleanup_residue_is_outside_released_admission() {
     let run_path = run.test_run_path(fixture.root());
     let sibling = run_path.join("unowned");
     fs::write(&sibling, b"keep").unwrap();
-    assert_eq!(run.finish(), Err(SpillError::CleanupFailed));
+    assert_eq!(
+        run.finish(),
+        Err(SpillError::CleanupFailed),
+        "cleanup failure takes precedence over the injected run failure"
+    );
     // The residue is real, but a per-query admission token cannot honestly
     // represent global disk high-water after its owner has ended.
     assert_eq!(budget.reserved(), ReservationShape::ZERO);

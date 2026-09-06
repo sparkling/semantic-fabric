@@ -144,6 +144,8 @@ pub(super) struct OpenedBlock {
 }
 
 pub(super) struct OwnedArtifacts {
+    // FD accounting invariant: these are the two descriptors retained for the
+    // run lifetime. Block create/open returns one transient `File` at a time.
     root: File,
     run: File,
     run_name: EntryName,
