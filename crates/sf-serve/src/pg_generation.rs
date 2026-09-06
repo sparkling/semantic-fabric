@@ -323,6 +323,9 @@ async fn open_generation(
             sf_sql::introspect::PostgresPublicTableLockFailure::RelationSetChanged => {
                 PgGenerationError::SchemaDrift
             }
+            sf_sql::introspect::PostgresPublicTableLockFailure::InsufficientPrivilege => {
+                PgGenerationError::CapabilityDrift
+            }
             sf_sql::introspect::PostgresPublicTableLockFailure::Unavailable => {
                 PgGenerationError::SourceUnavailable
             }

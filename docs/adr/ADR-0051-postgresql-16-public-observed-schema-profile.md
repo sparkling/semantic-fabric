@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-09-02
-updated: 2026-09-03
+updated: 2026-09-06
 tags: [postgresql, schema, identity, pg-catalog, runtime, observation]
 supersedes: []
 depends-on: [ADR-0006, ADR-0015, ADR-0038, ADR-0048, ADR-0050]
@@ -31,14 +31,16 @@ failed closed with a redacted unsupported-constraint error. No repository receip
 development diagnostics, not qualification: they did not execute the required twice-per-image networkless,
 non-owner-role, immutable-image and byte-identical protocol.
 
-The current public diagnostic still propagates a rich guard/query/decode/unsupported failure as redacted
-`sf_sql::Error::Introspection` and constructs only an available snapshot. It does not yet implement this ADR's planned
-savepoint recovery, committed `Unavailable` result, or transaction/commit fault matrix. A closed two-replay evidence
-contract binds the future receipt fields and literal non-authority/runtime-gap status, but its executor fails closed
-because the current Rust probe cannot supply the required counts and preflight evidence. Exact PostgreSQL 16.9/16.15
-qualification receipts therefore remain open. Existing legacy entry points are unchanged; `sf-serve` does not consume
-the identity and no `RuntimeBinding` carries it, so it cannot affect compilation, cache identity, readiness, reload or
-execution.
+The public Rust diagnostic now collects a complete legacy projection and publishes either the branded rich identity
+or one closed, identifier-free `Unavailable` reason only after the outer transaction commits. Clean pre-legacy profile
+mismatches are retained as pending unavailability; fatal guard/legacy failures still abort. Rich failures are isolated
+behind a savepoint and may downgrade only after successful rollback-to-savepoint and release. Transaction setup,
+savepoint setup/release/recovery, legacy collection and commit failures remain fatal. The exact live transaction/commit
+fault matrix and its two-replay qualification receipts remain open. The closed evidence contract already binds the
+future receipt fields and literal non-authority/runtime-gap status, but its executor still fails closed because the
+current Rust probe cannot supply the required counts and preflight evidence. Existing legacy entry points are
+unchanged; `sf-serve` still does not consume the identity and no `RuntimeBinding` carries it, so it cannot affect
+compilation, cache identity, readiness, reload or execution.
 Qualification never silently extends to another patch. The profile is observational: its identity grants no type,
 constraint, mapping, cache, readiness, execution, reload, Direct-Mapping or generation-lease authority. Existing
 compiler facts remain `Unverified`; SQLite and MySQL remain explicitly unavailable. Product implementation is Rust.

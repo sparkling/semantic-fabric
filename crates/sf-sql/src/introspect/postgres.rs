@@ -13,6 +13,7 @@ mod legacy_query;
 mod legacy_row;
 mod legacy_sql;
 mod observation;
+use generation::collect_postgres_public_observed_snapshot_allow_unavailable;
 #[allow(unused_imports)] // Re-exported by introspect.rs when the serving caller is wired.
 pub use generation::{
     introspect_postgres_public_observed_snapshot_in_transaction,
@@ -40,7 +41,7 @@ pub use observation::{
 
 const RUNTIME_SCHEMA: &str = "public";
 const SNAPSHOT_TIMEOUTS_SQL: &str =
-    "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s'; SELECT set_config('search_path','pg_catalog,public,pg_temp',true); SET LOCAL session_replication_role = origin;";
+    "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s'; SELECT set_config('search_path','pg_catalog,public,pg_temp',true);";
 
 /// Introspect one table from the runtime-supported PostgreSQL `public` schema.
 pub async fn introspect_postgres(
@@ -140,10 +141,10 @@ pub async fn introspect_postgres_public_snapshot_guarded(
     Ok(schemas)
 }
 
-/// Capture a guarded snapshot with an available, non-authorizing identity.
-/// Rich catalogue evidence is collected in the same repeatable-read
-/// transaction; guard, query, decode, and unsupported-evidence failures are
-/// currently returned as redacted introspection errors.
+/// Capture one committed legacy snapshot with a non-authorizing rich-identity
+/// availability result. A recoverable rich-profile failure is published only
+/// after savepoint recovery and successful outer commit; transaction, legacy,
+/// recovery, and commit failures remain fatal.
 pub async fn introspect_postgres_public_observed_snapshot(
     client: &mut tokio_postgres::Client,
 ) -> Result<Postgres16PublicObservedSnapshotV1> {
@@ -158,7 +159,7 @@ pub async fn introspect_postgres_public_observed_snapshot(
         .await
         .map_err(|_| Error::Introspection("PostgreSQL observed snapshot setup failed".into()))?;
     let snapshot =
-        introspect_postgres_public_observed_snapshot_in_transaction(&transaction).await?;
+        collect_postgres_public_observed_snapshot_allow_unavailable(&transaction).await?;
     transaction
         .commit()
         .await

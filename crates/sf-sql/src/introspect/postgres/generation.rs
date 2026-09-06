@@ -25,6 +25,10 @@ use super::{
 
 const EXPLICIT_TRANSACTION_PROBE_SQL: &str =
     "SAVEPOINT sf_generation_transaction_probe; RELEASE SAVEPOINT sf_generation_transaction_probe;";
+const OBSERVATION_SAVEPOINT_SQL: &str = "SAVEPOINT sf_observed_schema_v1";
+const OBSERVATION_RELEASE_SQL: &str = "RELEASE SAVEPOINT sf_observed_schema_v1";
+const OBSERVATION_RECOVER_SQL: &str =
+    "ROLLBACK TO SAVEPOINT sf_observed_schema_v1; RELEASE SAVEPOINT sf_observed_schema_v1";
 const TRANSACTION_MODE_SQL: &str =
     "SELECT pg_catalog.current_setting('transaction_isolation')::pg_catalog.text = 'repeatable read'::pg_catalog.text AS repeatable_read, pg_catalog.current_setting('transaction_read_only')::pg_catalog.text = 'on'::pg_catalog.text AS read_only";
 const MAX_POSTGRES_IDENTIFIER_BYTES_V1: usize = 63;
@@ -84,6 +88,88 @@ where
     collect_observed_snapshot_classified(client).await
 }
 
+/// Collect a complete legacy projection and either an available rich identity
+/// or one closed unavailable reason. Rich failures are downgraded only after a
+/// successful savepoint recovery; guard failures that make legacy decoding or
+/// runtime name resolution unsafe remain fatal.
+pub(super) async fn collect_postgres_public_observed_snapshot_allow_unavailable<C>(
+    client: &C,
+) -> Result<Postgres16PublicObservedSnapshotV1>
+where
+    C: GenericClient + Sync,
+{
+    require_generation_transaction(client).await?;
+    let pending_unavailability = match observation::qualify_profile_guard(client).await {
+        Ok(()) => None,
+        Err(reason) if guard_failure_may_downgrade(reason) => Some(reason),
+        Err(reason) => return Err(closed_observation_error(reason)),
+    };
+    let legacy_tables = collect_legacy_public_tables(client).await?;
+    if let Some(reason) = pending_unavailability {
+        return Ok(Postgres16PublicObservedSnapshotV1::unavailable(
+            legacy_tables,
+            reason,
+        ));
+    }
+
+    client
+        .batch_execute(OBSERVATION_SAVEPOINT_SQL)
+        .await
+        .map_err(|_| redacted("PostgreSQL observed snapshot savepoint failed"))?;
+    match observation::capture_registered_observation(client, RUNTIME_SCHEMA, &legacy_tables).await
+    {
+        Ok(observation) => {
+            client
+                .batch_execute(OBSERVATION_RELEASE_SQL)
+                .await
+                .map_err(|_| redacted("PostgreSQL observed snapshot savepoint release failed"))?;
+            Ok(Postgres16PublicObservedSnapshotV1::available(
+                legacy_tables,
+                observation,
+            ))
+        }
+        Err(reason) => {
+            client
+                .batch_execute(OBSERVATION_RECOVER_SQL)
+                .await
+                .map_err(|_| redacted("PostgreSQL observed snapshot recovery failed"))?;
+            Ok(Postgres16PublicObservedSnapshotV1::unavailable(
+                legacy_tables,
+                reason,
+            ))
+        }
+    }
+}
+
+fn guard_failure_may_downgrade(reason: super::PostgresSchemaIdentityUnavailableV1) -> bool {
+    use super::PostgresSchemaIdentityGuardCodeV1 as Guard;
+    use super::PostgresSchemaIdentityUnavailableV1 as Unavailable;
+
+    match reason {
+        Unavailable::ProfileNotImplemented
+        | Unavailable::UnqualifiedEnginePatch
+        | Unavailable::IdentityRejected => true,
+        Unavailable::GuardUnsupported(
+            Guard::IndexKeyLimit
+            | Guard::IntegerDatetimes
+            | Guard::ReplicationRole
+            | Guard::PublicNamespace
+            | Guard::CurrentDatabase,
+        ) => true,
+        Unavailable::GuardUnsupported(
+            Guard::ServerEncoding | Guard::IdentifierLength | Guard::SearchPath,
+        )
+        | Unavailable::LegacyCoordinateMismatch
+        | Unavailable::CatalogQuery
+        | Unavailable::CatalogDecode
+        | Unavailable::LimitExceeded(_)
+        | Unavailable::UnsupportedRelation
+        | Unavailable::UnsupportedType
+        | Unavailable::UnsupportedCollation
+        | Unavailable::UnsupportedConstraint => false,
+    }
+}
+
 /// Acquire `ACCESS SHARE` locks for an exact bounded set of quoted `public`
 /// relation names and retain them until the caller ends its transaction.
 ///
@@ -111,6 +197,7 @@ where
 pub enum PostgresPublicTableLockFailure {
     InvalidRelationSet,
     RelationSetChanged,
+    InsufficientPrivilege,
     Unavailable,
 }
 
@@ -144,6 +231,9 @@ fn classify_lock_sqlstate(code: Option<&SqlState>) -> PostgresPublicTableLockFai
     match code {
         Some(code) if *code == SqlState::UNDEFINED_TABLE || *code == SqlState::UNDEFINED_SCHEMA => {
             PostgresPublicTableLockFailure::RelationSetChanged
+        }
+        Some(code) if *code == SqlState::INSUFFICIENT_PRIVILEGE => {
+            PostgresPublicTableLockFailure::InsufficientPrivilege
         }
         _ => PostgresPublicTableLockFailure::Unavailable,
     }

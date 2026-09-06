@@ -19,6 +19,50 @@ fn transaction_probe_and_mode_query_are_closed_and_exact() {
     );
     assert!(TRANSACTION_MODE_SQL.contains("'repeatable read'"));
     assert!(TRANSACTION_MODE_SQL.contains("'on'"));
+    assert_eq!(OBSERVATION_SAVEPOINT_SQL, "SAVEPOINT sf_observed_schema_v1");
+    assert_eq!(
+        OBSERVATION_RELEASE_SQL,
+        "RELEASE SAVEPOINT sf_observed_schema_v1"
+    );
+    assert_eq!(
+        OBSERVATION_RECOVER_SQL,
+        "ROLLBACK TO SAVEPOINT sf_observed_schema_v1; RELEASE SAVEPOINT sf_observed_schema_v1"
+    );
+}
+
+#[test]
+fn only_clean_pre_legacy_guard_mismatches_may_downgrade() {
+    use crate::introspect::PostgresSchemaIdentityGuardCodeV1 as Guard;
+    use crate::introspect::PostgresSchemaIdentityLimitCodeV1 as Limit;
+    use PostgresSchemaIdentityUnavailableV1 as Unavailable;
+
+    for reason in [
+        Unavailable::ProfileNotImplemented,
+        Unavailable::UnqualifiedEnginePatch,
+        Unavailable::IdentityRejected,
+        Unavailable::GuardUnsupported(Guard::IndexKeyLimit),
+        Unavailable::GuardUnsupported(Guard::IntegerDatetimes),
+        Unavailable::GuardUnsupported(Guard::ReplicationRole),
+        Unavailable::GuardUnsupported(Guard::PublicNamespace),
+        Unavailable::GuardUnsupported(Guard::CurrentDatabase),
+    ] {
+        assert!(guard_failure_may_downgrade(reason), "{reason:?}");
+    }
+    for reason in [
+        Unavailable::GuardUnsupported(Guard::ServerEncoding),
+        Unavailable::GuardUnsupported(Guard::IdentifierLength),
+        Unavailable::GuardUnsupported(Guard::SearchPath),
+        Unavailable::LegacyCoordinateMismatch,
+        Unavailable::CatalogQuery,
+        Unavailable::CatalogDecode,
+        Unavailable::LimitExceeded(Limit::RichRelations),
+        Unavailable::UnsupportedRelation,
+        Unavailable::UnsupportedType,
+        Unavailable::UnsupportedCollation,
+        Unavailable::UnsupportedConstraint,
+    ] {
+        assert!(!guard_failure_may_downgrade(reason), "{reason:?}");
+    }
 }
 
 #[test]
@@ -93,13 +137,17 @@ fn postgres_identifier_byte_bound_is_inclusive() {
 }
 
 #[test]
-fn lock_sqlstate_preserves_only_schema_drift_classification() {
+fn lock_sqlstate_preserves_schema_drift_and_privilege_classification() {
     for code in [SqlState::UNDEFINED_TABLE, SqlState::UNDEFINED_SCHEMA] {
         assert_eq!(
             classify_lock_sqlstate(Some(&code)),
             PostgresPublicTableLockFailure::RelationSetChanged
         );
     }
+    assert_eq!(
+        classify_lock_sqlstate(Some(&SqlState::INSUFFICIENT_PRIVILEGE)),
+        PostgresPublicTableLockFailure::InsufficientPrivilege
+    );
     assert_eq!(
         classify_lock_sqlstate(Some(&SqlState::LOCK_NOT_AVAILABLE)),
         PostgresPublicTableLockFailure::Unavailable
