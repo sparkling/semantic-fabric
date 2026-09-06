@@ -31,12 +31,15 @@ import {
 } from '../src/programme-task-runtime-v1.js';
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
 import type { RustOfflineProfile } from '../src/rust-sandbox.js';
-import { PROGRAMME_V5_POST_HISTORICAL_PATHS }
+import {
+  PROGRAMME_V5_POST_HISTORICAL_PATHS,
+  projectProgrammeV5HistoricalConfigProtectedPaths,
+}
   from './programme-v5-post-historical-paths.js';
 
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
 const EXPECTED_POLICY_FINGERPRINT =
-  'e0bd2be892a5fc33c5d3afa47b8fd4f55cdba9749189a02cd0ad3c524e82baa7';
+  'f6d77c44cb97d189e22af5caad73549f08bb5ffb5681bb3e14b5b0d2d62b93b5';
 const HISTORICAL_POLICY_FINGERPRINT =
   '7888d16a81b048d2bd1a436047cac8ebd13d61050daeff670371140383526c3c';
 const HISTORICAL_MANIFEST_DIGEST =
@@ -416,9 +419,12 @@ function historicalManifest(): { manifestBlob: string; harnessConfig: HarnessCon
   const manifestBlob = `${JSON.stringify(manifest, null, 2)}\n`;
   const harnessConfig = parseHarnessConfig({
     ...structuredClone(SECURE_HARNESS_CONFIG),
-    requiredProtectedPaths: SECURE_HARNESS_CONFIG.requiredProtectedPaths
-      .filter((path) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path)),
+    requiredProtectedPaths: projectProgrammeV5HistoricalConfigProtectedPaths(
+      SECURE_HARNESS_CONFIG.requiredProtectedPaths,
+    ),
   });
+  expect([...harnessConfig.requiredProtectedPaths].sort())
+    .toEqual([...manifest.protectedPaths].sort());
   return { manifestBlob, harnessConfig };
 }
 

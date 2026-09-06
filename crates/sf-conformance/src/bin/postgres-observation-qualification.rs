@@ -27,6 +27,7 @@ const QUALIFICATION_FAILURE_EXIT: u8 = 78;
 const ROLE_PREFLIGHT_SQL: &str = r#"
 WITH role_facts AS (
   SELECT r.oid AS role_oid, r.rolsuper, r.rolinherit, r.rolbypassrls,
+         r.rolcreaterole, r.rolcreatedb, r.rolreplication,
          d.datdba = r.oid AS database_owner
   FROM pg_catalog.pg_roles r
   JOIN pg_catalog.pg_database d ON d.datname = pg_catalog.current_database()
@@ -50,7 +51,8 @@ WITH role_facts AS (
 )
 SELECT r.rolsuper, r.database_owner, r.rolinherit, r.rolbypassrls,
        pg_catalog.pg_has_role(CURRENT_USER, 'sf_observation_owner_v1', 'SET') AS can_set_role,
-       (pg_catalog.has_database_privilege(CURRENT_USER, pg_catalog.current_database(), 'CREATE')
+       (r.rolcreaterole OR r.rolcreatedb OR r.rolreplication
+        OR pg_catalog.has_database_privilege(CURRENT_USER, pg_catalog.current_database(), 'CREATE')
         OR pg_catalog.has_database_privilege(CURRENT_USER, pg_catalog.current_database(), 'TEMPORARY')
         OR pg_catalog.has_schema_privilege(CURRENT_USER, 'public', 'CREATE')
         OR EXISTS (SELECT 1 FROM public_tables t WHERE t.relowner = r.role_oid)) AS can_ddl,
@@ -115,6 +117,7 @@ struct Preflight {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy)]
 struct ComparisonRole {
     superuser: bool,
     database_owner: bool,
@@ -146,7 +149,7 @@ struct Observation {
     row_counts: RowCounts,
     streaming: RichStreaming,
     identity: Identity,
-    legacy_comparison: &'static str,
+    legacy_coordinate_comparison: &'static str,
     error_code: Option<&'static str>,
     failure_phase: Option<&'static str>,
 }
@@ -447,7 +450,9 @@ fn build_envelope(
             types: identity.types().to_string(),
             constraints: identity.constraints().to_string(),
         },
-        legacy_comparison: "equal",
+        // Availability can exist only after the internal LegacyComparison
+        // phase has matched the collected legacy relation/column coordinates.
+        legacy_coordinate_comparison: "equal",
         error_code: None,
         failure_phase: None,
     };

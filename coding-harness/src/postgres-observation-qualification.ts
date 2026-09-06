@@ -7,72 +7,187 @@ import {
   assertExactKeys,
   deepFreeze,
 } from './contracts.js';
+import {
+  parsePostgresObservationQualificationCandidate,
+} from './postgres-observation-qualification-candidate.js';
 import type {
-  PostgresObservationErrorCode,
-  PostgresObservationFailurePhase,
   PostgresObservationQualificationCandidate,
   PostgresObservationQualificationExecution,
   PostgresObservationQualificationReceipt,
-  PostgresObservationStreamEvidence,
 } from './postgres-observation-qualification-runner.js';
 import {
-  POSTGRES_OBSERVATION_ERROR_CODES,
-  POSTGRES_OBSERVATION_FAILURE_PHASES,
   POSTGRES_OBSERVATION_MAX_OUTPUT_BYTES,
-  validatePostgresObservationState,
 } from './postgres-observation-qualification-runner.js';
+import {
+  POSTGRES_QUALIFICATION_IMAGE_EXPECTATIONS,
+  expectedQualificationImageIdentity,
+} from './postgres-observation-qualification-protocol.js';
+import { parseJsonWithoutDuplicateKeys } from './strict-json.js';
+
+export {
+  parsePostgresObservationQualificationCandidate,
+  parsePostgresObservationQualificationCandidateJson,
+  parsePostgresObservationQualificationProbeOutput,
+} from './postgres-observation-qualification-candidate.js';
 export type {
-  PostgresObservationErrorCode,
-  PostgresObservationFailurePhase,
+  PostgresObservationCompletedPhase,
   PostgresObservationQualificationCandidate,
   PostgresObservationQualificationExecution,
+  PostgresObservationQualificationProbeOutput,
   PostgresObservationQualificationReceipt,
   PostgresObservationStreamEvidence,
+  PostgresObservationStreamId,
 } from './postgres-observation-qualification-runner.js';
-const MAX_RELATIONS = 4_096;
-const MAX_ATTRIBUTES = 65_536;
-const MAX_CONSTRAINTS = 65_536;
-const GIT_OBJECT_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
-const ERROR_CODES = new Set<string>(POSTGRES_OBSERVATION_ERROR_CODES);
 
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const MAX_RECEIPT_BYTES = 1_048_576;
+const MAX_RECEIPT_PAIR_BYTES = (MAX_RECEIPT_BYTES * 2) + 3;
 const RECEIPT_KEYS = [
-  'receiptKind', 'evidenceClass', 'authority', 'productionAdmission', 'verifiedLease',
-  'reload', 'directMapping', 'runtimeCoverage', 'qualificationStatus', 'candidates',
-  'replay', 'replayStatus', 'receiptSha256',
+  'receiptKind', 'evidenceClass', 'authority', 'observationProfileQualification',
+  'runtimeAdmissionStatus', 'productionAdmission', 'verifiedLease', 'reload',
+  'directMapping', 'candidates', 'replay', 'replayStatus', 'receiptSha256',
 ] as const;
 
-export function parsePostgresObservationQualificationCandidate(
-  value: unknown,
-): PostgresObservationQualificationCandidate {
-  const input = closed(value, ['provenance', 'preflight', 'observation'], 'candidate');
-  const candidate = {
-    provenance: parseProvenance(input.provenance),
-    preflight: parsePreflight(input.preflight),
-    observation: parseObservation(input.observation),
-  };
-  return deepFreeze(candidate);
-}
+type CandidatePair = [
+  PostgresObservationQualificationCandidate,
+  PostgresObservationQualificationCandidate,
+];
+type ExecutionPair = [
+  PostgresObservationQualificationExecution,
+  PostgresObservationQualificationExecution,
+];
+
 export function createPostgresObservationQualificationReceipt(
   value: unknown,
 ): PostgresObservationQualificationReceipt {
   const input = closed(value, ['candidates', 'executions'], 'qualification receipt input');
   const candidates = parseCandidatePair(input.candidates);
   const executions = parseExecutionPair(input.executions, candidates, false);
-  const replayStatus = candidates[0].observation.identity === null ? 'fail' : 'pass';
-  const body = receiptBody(candidates, executions, replayStatus);
+  const body = receiptBody(candidates, executions);
   return deepFreeze({ ...body, receiptSha256: hash(canonical(body)) });
 }
+
+export function parsePostgresObservationQualificationReceiptJson(
+  serialized: string,
+): PostgresObservationQualificationReceipt {
+  if (typeof serialized !== 'string'
+    || Buffer.byteLength(serialized, 'utf8') > MAX_RECEIPT_BYTES) {
+    throw new TypeError('qualification receipt must be bounded JSON');
+  }
+  const parsed = parseJsonWithoutDuplicateKeys(serialized, 'qualification receipt');
+  if (canonical(parsed) !== serialized) {
+    throw new TypeError('qualification receipt must use exact canonical JSON bytes');
+  }
+  return parseReceipt(parsed);
+}
+
+export function parsePostgresObservationQualificationReceiptPairJson(
+  serialized: string,
+): readonly [PostgresObservationQualificationReceipt, PostgresObservationQualificationReceipt] {
+  if (typeof serialized !== 'string'
+    || Buffer.byteLength(serialized, 'utf8') > MAX_RECEIPT_PAIR_BYTES) {
+    throw new TypeError('qualification receipt pair must be bounded JSON');
+  }
+  const parsed = parseJsonWithoutDuplicateKeys(serialized, 'qualification receipt pair');
+  if (canonical(parsed) !== serialized) {
+    throw new TypeError('qualification receipt pair must use exact canonical JSON bytes');
+  }
+  const values = asDenseArray(parsed, 'qualification receipt pair');
+  verifyPostgresObservationQualificationReceiptPair(values);
+  const receipts = values.map(parseReceipt) as [
+    PostgresObservationQualificationReceipt,
+    PostgresObservationQualificationReceipt,
+  ];
+  if (receipts[0].candidates[0].observation.serverVersionNum !== 160009
+    || receipts[1].candidates[0].observation.serverVersionNum !== 160015) {
+    throw new TypeError('qualification receipt pair order must be 16.9 then 16.15');
+  }
+  return deepFreeze(receipts);
+}
+
 export function verifyPostgresObservationQualificationReceipt(value: unknown): void {
+  parseReceipt(value);
+}
+
+export function verifyPostgresObservationQualificationReceiptPair(value: unknown): void {
+  const values = asDenseArray(value, 'qualification receipt pair');
+  if (values.length !== 2) {
+    throw new TypeError('qualification requires exactly one 16.9 and one 16.15 receipt');
+  }
+  const receipts = values.map(parseReceipt) as [
+    PostgresObservationQualificationReceipt,
+    PostgresObservationQualificationReceipt,
+  ];
+  if (receipts.some((receipt) => receipt.observationProfileQualification !== 'pass'
+    || receipt.replayStatus !== 'pass')) {
+    throw new TypeError('cross-patch qualification requires two passing observation receipts');
+  }
+  const byPatch = new Map(
+    receipts.map((receipt) => [receipt.candidates[0].observation.serverVersionNum, receipt]),
+  );
+  if (byPatch.size !== 2 || !byPatch.has(160009) || !byPatch.has(160015)) {
+    throw new TypeError('qualification requires exactly one 16.9 and one 16.15 receipt');
+  }
+  const pg169 = byPatch.get(160009)!;
+  const pg1615 = byPatch.get(160015)!;
+  for (const receipt of receipts) {
+    const version = receipt.candidates[0].observation.serverVersionNum;
+    const expectation = POSTGRES_QUALIFICATION_IMAGE_EXPECTATIONS.find(
+      (image) => image.serverVersionNum === version,
+    );
+    if (expectation === undefined || receipt.candidates.some((candidate) =>
+      canonical(candidate.provenance.image)
+        !== canonical(expectedQualificationImageIdentity(expectation)))) {
+      throw new TypeError('qualification receipt image identity is not pinned');
+    }
+  }
+  const candidate169 = pg169.candidates[0];
+  const candidate1615 = pg1615.candidates[0];
+  if (canonical(criticalBindings(candidate169)) !== canonical(criticalBindings(candidate1615))) {
+    throw new TypeError('cross-patch qualification-critical bindings differ');
+  }
+  if (canonical(normalizedObservation(candidate169)) !== canonical(
+    normalizedObservation(candidate1615),
+  )) {
+    throw new TypeError('cross-patch observation differs outside exact server version');
+  }
+  for (const [field, label] of [
+    ['preflight', 'preflight'],
+    ['queryAccounting', 'query accounting'],
+    ['lifecycle', 'lifecycle'],
+  ] as const) {
+    if (canonical(candidate169[field]) !== canonical(candidate1615[field])) {
+      throw new TypeError(`cross-patch ${label} differs`);
+    }
+  }
+  const executions = receipts.flatMap((receipt) => receipt.replay.executions);
+  requireAllDistinct(
+    executions.map((execution) => execution.containerIdentitySha256),
+    'cross-patch containers',
+  );
+  requireAllDistinct(
+    executions.map((execution) => execution.volumeIdentitySha256),
+    'cross-patch volumes',
+  );
+}
+
+function parseReceipt(value: unknown): PostgresObservationQualificationReceipt {
   const receipt = closed(value, RECEIPT_KEYS, 'qualification receipt');
   exact(receipt.receiptKind, ['postgresql-public-observation-qualification-v1'] as const, 'kind');
   exact(receipt.evidenceClass, ['test-only-non-runtime'] as const, 'evidence class');
-  exact(receipt.authority, ['development-only-no-promotion'] as const, 'authority');
+  exact(receipt.authority, ['observation-profile-only'] as const, 'authority');
+  exact(
+    receipt.observationProfileQualification, ['pass'] as const,
+    'observation profile qualification',
+  );
+  exact(
+    receipt.runtimeAdmissionStatus, ['withheld-independent-gates'] as const,
+    'runtime admission status',
+  );
   exact(receipt.productionAdmission, [false] as const, 'production admission');
   exact(receipt.verifiedLease, [false] as const, 'verified lease');
   exact(receipt.reload, [false] as const, 'reload');
   exact(receipt.directMapping, [false] as const, 'Direct Mapping');
-  parseRuntimeCoverage(receipt.runtimeCoverage);
-  exact(receipt.qualificationStatus, ['withheld-runtime-gaps'] as const, 'qualification status');
   const candidates = parseCandidatePair(receipt.candidates);
   const replay = closed(receipt.replay, [
     'requiredRuns', 'canonicalCandidatesByteEqual', 'freshContainers', 'freshVolumes',
@@ -80,35 +195,28 @@ export function verifyPostgresObservationQualificationReceipt(value: unknown): v
   ], 'replay');
   exactReplayFlags(replay);
   const executions = parseExecutionPair(replay.executions, candidates, true);
-  const replayStatus = exact(receipt.replayStatus, ['pass', 'fail'] as const, 'replay status');
-  if (replayStatus !== (candidates[0].observation.identity === null ? 'fail' : 'pass')) {
-    throw new TypeError('qualification replay status is inconsistent');
-  }
-  const body = receiptBody(candidates, executions, replayStatus);
+  exact(receipt.replayStatus, ['pass'] as const, 'replay status');
+  const body = receiptBody(candidates, executions);
   if (digest(receipt.receiptSha256, 'receipt digest') !== hash(canonical(body))) {
     throw new Error('qualification receipt digest mismatch');
   }
+  return deepFreeze({ ...body, receiptSha256: receipt.receiptSha256 as string });
 }
+
 function receiptBody(
-  candidates: [PostgresObservationQualificationCandidate, PostgresObservationQualificationCandidate],
-  executions: [PostgresObservationQualificationExecution, PostgresObservationQualificationExecution],
-  replayStatus: 'pass' | 'fail',
+  candidates: CandidatePair,
+  executions: ExecutionPair,
 ) {
   return {
     receiptKind: 'postgresql-public-observation-qualification-v1' as const,
     evidenceClass: 'test-only-non-runtime' as const,
-    authority: 'development-only-no-promotion' as const,
+    authority: 'observation-profile-only' as const,
+    observationProfileQualification: 'pass' as const,
+    runtimeAdmissionStatus: 'withheld-independent-gates' as const,
     productionAdmission: false as const,
     verifiedLease: false as const,
     reload: false as const,
     directMapping: false as const,
-    runtimeCoverage: {
-      savepointRecovery: 'not-implemented' as const,
-      committedUnavailable: 'not-implemented' as const,
-      transactionCommitFaultMatrix: 'not-exercised' as const,
-      runtimeCarrier: 'not-integrated' as const,
-    },
-    qualificationStatus: 'withheld-runtime-gaps' as const,
     candidates,
     replay: {
       requiredRuns: 2 as const,
@@ -118,188 +226,48 @@ function receiptBody(
       cleanupVerified: true as const,
       executions,
     },
-    replayStatus,
+    replayStatus: 'pass' as const,
   };
 }
-function parseProvenance(value: unknown): PostgresObservationQualificationCandidate['provenance'] {
-  const input = closed(value, ['source', 'inputs', 'toolchain', 'image'], 'provenance');
-  const sourceInput = closed(input.source, [
-    'commit', 'tree', 'cargoLockSha256', 'probeArtifactSha256',
-  ], 'source provenance');
-  const commit = gitObject(sourceInput.commit, 'source commit');
-  const tree = gitObject(sourceInput.tree, 'source tree');
-  if (commit.length !== tree.length) throw new TypeError('source Git object formats differ');
-  const inputs = closed(input.inputs, [
-    'adrSha256', 'profileSha256', 'queriesSha256', 'testsSha256', 'fixtureSha256',
-    'runnerSha256', 'protocolSha256',
-  ], 'input provenance');
-  const toolchain = closed(input.toolchain, [
-    'rustcVvSha256', 'cargoVersionSha256', 'targetTriple',
-  ], 'toolchain provenance');
-  const image = closed(input.image, [
-    'repository', 'manifestDigest', 'configDigest', 'platform', 'inspectSha256',
-  ], 'image provenance');
-  return {
-    source: {
-      commit,
-      tree,
-      cargoLockSha256: digest(sourceInput.cargoLockSha256, 'Cargo lock digest'),
-      probeArtifactSha256: digest(sourceInput.probeArtifactSha256, 'probe artifact digest'),
-    },
-    inputs: Object.fromEntries(Object.entries(inputs).map(([key, raw]) => [
-      key, digest(raw, `${key} digest`),
-    ])) as PostgresObservationQualificationCandidate['provenance']['inputs'],
-    toolchain: {
-      rustcVvSha256: digest(toolchain.rustcVvSha256, 'rustc digest'),
-      cargoVersionSha256: digest(toolchain.cargoVersionSha256, 'Cargo version digest'),
-      targetTriple: exact(
-        toolchain.targetTriple, ['x86_64-unknown-linux-gnu'] as const, 'target triple',
-      ),
-    },
-    image: {
-      repository: exact(image.repository, ['postgres'] as const, 'image repository'),
-      manifestDigest: prefixedDigest(image.manifestDigest, 'image manifest digest'),
-      configDigest: prefixedDigest(image.configDigest, 'image config digest'),
-      platform: exact(image.platform, ['linux/amd64'] as const, 'image platform'),
-      inspectSha256: digest(image.inspectSha256, 'image inspection digest'),
-    },
-  };
-}
-function parsePreflight(value: unknown): PostgresObservationQualificationCandidate['preflight'] {
-  const input = closed(value, [
-    'networkMode', 'fixedDatabase', 'unixSocket', 'comparisonRole',
-    'ownerIdentityEqual', 'legacyConstraintVisibilityDiffers',
-  ], 'preflight');
-  const role = closed(input.comparisonRole, [
-    'superuser', 'databaseOwner', 'inherit', 'bypassRls', 'canSetRole', 'canDdl',
-    'privilegesExact',
-  ], 'comparison role');
-  return {
-    networkMode: exact(input.networkMode, ['none'] as const, 'network mode'),
-    fixedDatabase: exact(input.fixedDatabase, [true] as const, 'fixed database'),
-    unixSocket: exact(input.unixSocket, [true] as const, 'Unix socket'),
-    comparisonRole: {
-      superuser: exact(role.superuser, [false] as const, 'superuser'),
-      databaseOwner: exact(role.databaseOwner, [false] as const, 'database owner'),
-      inherit: exact(role.inherit, [false] as const, 'role inheritance'),
-      bypassRls: exact(role.bypassRls, [false] as const, 'BYPASSRLS'),
-      canSetRole: exact(role.canSetRole, [false] as const, 'SET ROLE'),
-      canDdl: exact(role.canDdl, [false] as const, 'DDL'),
-      privilegesExact: exact(role.privilegesExact, [true] as const, 'privileges'),
-    },
-    ownerIdentityEqual: exact(input.ownerIdentityEqual, [true] as const, 'owner identity'),
-    legacyConstraintVisibilityDiffers: exact(
-      input.legacyConstraintVisibilityDiffers, [true] as const, 'legacy visibility control',
-    ),
-  };
-}
-function parseObservation(value: unknown): PostgresObservationQualificationCandidate['observation'] {
-  const input = closed(value, [
-    'serverVersion', 'serverVersionNum', 'guard', 'rowCounts', 'streaming', 'identity',
-    'legacyComparison', 'errorCode', 'failurePhase',
-  ], 'observation');
-  const serverVersionNum = exact(
-    input.serverVersionNum, [160009, 160015] as const, 'server version number',
-  );
-  const patch = serverVersionNum === 160009 ? '16.9' : '16.15';
-  if (!validServerVersion(input.serverVersion, patch)) {
-    throw new TypeError('server version does not match the exact qualified patch');
-  }
-  const counts = closed(input.rowCounts, [
-    'relations', 'attributes', 'notNullConstraints', 'catalogConstraints',
-    'combinedConstraints',
-  ], 'row counts');
-  const rowCounts = {
-    relations: asInteger(counts.relations, 'relation row count'),
-    attributes: asInteger(counts.attributes, 'attribute row count'),
-    notNullConstraints: asInteger(counts.notNullConstraints, 'NOT NULL count'),
-    catalogConstraints: asInteger(counts.catalogConstraints, 'catalogue constraint count'),
-    combinedConstraints: asInteger(counts.combinedConstraints, 'combined constraint count'),
-  };
-  if (rowCounts.notNullConstraints > MAX_CONSTRAINTS
-    || rowCounts.notNullConstraints + rowCounts.catalogConstraints
-      !== rowCounts.combinedConstraints) {
-    throw new TypeError('combined constraint count is inconsistent');
-  }
-  const streams = closed(
-    input.streaming, ['relations', 'attributes', 'catalogConstraints'], 'streaming evidence',
-  );
-  const streaming = {
-    relations: streamEvidence(streams.relations, MAX_RELATIONS, 'relations'),
-    attributes: streamEvidence(streams.attributes, MAX_ATTRIBUTES, 'attributes'),
-    catalogConstraints: streamEvidence(
-      streams.catalogConstraints, MAX_CONSTRAINTS - rowCounts.notNullConstraints,
-      'catalog constraints',
-    ),
-  };
-  if (rowCounts.relations !== streaming.relations.decoded
-    || rowCounts.attributes !== streaming.attributes.decoded
-    || rowCounts.catalogConstraints !== streaming.catalogConstraints.decoded) {
-    throw new TypeError('row counts do not match streaming decode evidence');
-  }
-  const guard = exact(input.guard, ['pass', 'fail'] as const, 'guard result');
-  const identity = input.identity === null ? null : parseIdentity(input.identity);
-  const legacyComparison = exact(
-    input.legacyComparison, ['equal', 'unavailable'] as const, 'legacy comparison',
-  );
-  const errorCode = parseErrorCode(input.errorCode);
-  const failurePhase = input.failurePhase === null ? null : exact(
-    input.failurePhase, POSTGRES_OBSERVATION_FAILURE_PHASES, 'failure phase',
-  );
-  validatePostgresObservationState({
-    guard, rowCounts, streaming, identity, legacyComparison, errorCode, failurePhase,
-  });
-  return {
-    serverVersion: input.serverVersion as string,
-    serverVersionNum,
-    guard,
-    rowCounts,
-    streaming,
-    identity,
-    legacyComparison,
-    errorCode,
-    failurePhase,
-  };
-}
-function parseExecutionPair(
-  value: unknown,
-  candidates: [PostgresObservationQualificationCandidate, PostgresObservationQualificationCandidate],
-  includesCandidateDigest: boolean,
-): [PostgresObservationQualificationExecution, PostgresObservationQualificationExecution] {
-  const values = asDenseArray(value, 'qualification executions');
-  if (values.length !== 2) throw new TypeError('qualification requires exactly two executions');
-  const parsed = values.map((entry, index) => parseExecution(
-    entry, (index + 1) as 1 | 2, hash(canonical(candidates[index])),
-    candidates[index].provenance.image.configDigest,
-    includesCandidateDigest,
-  )) as [PostgresObservationQualificationExecution, PostgresObservationQualificationExecution];
-  if (parsed[0].containerIdentitySha256 === parsed[1].containerIdentitySha256) {
-    throw new TypeError('qualification requires distinct containers');
-  }
-  if (parsed[0].volumeIdentitySha256 === parsed[1].volumeIdentitySha256) {
-    throw new TypeError('qualification requires distinct volumes');
-  }
-  return parsed;
-}
-function parseCandidatePair(value: unknown): [
-  PostgresObservationQualificationCandidate,
-  PostgresObservationQualificationCandidate,
-] {
+
+function parseCandidatePair(value: unknown): CandidatePair {
   const values = asDenseArray(value, 'qualification candidates');
   if (values.length !== 2) throw new TypeError('qualification requires exactly two candidates');
-  const candidates = values.map(parsePostgresObservationQualificationCandidate) as [
-    PostgresObservationQualificationCandidate, PostgresObservationQualificationCandidate,
-  ];
+  const candidates = values.map(parsePostgresObservationQualificationCandidate) as CandidatePair;
   if (canonical(candidates[0]) !== canonical(candidates[1])) {
     throw new TypeError('qualification replay candidates are not byte equal');
   }
   return candidates;
 }
+
+function parseExecutionPair(
+  value: unknown,
+  candidates: CandidatePair,
+  includesCandidateDigest: boolean,
+): ExecutionPair {
+  const values = asDenseArray(value, 'qualification executions');
+  if (values.length !== 2) throw new TypeError('qualification requires exactly two executions');
+  const parsed = values.map((entry, index) => parseExecution(
+    entry,
+    (index + 1) as 1 | 2,
+    candidates[index],
+    includesCandidateDigest,
+  )) as ExecutionPair;
+  requireAllDistinct(
+    parsed.map((execution) => execution.containerIdentitySha256),
+    'qualification containers',
+  );
+  requireAllDistinct(
+    parsed.map((execution) => execution.volumeIdentitySha256),
+    'qualification volumes',
+  );
+  return parsed;
+}
+
 function parseExecution(
   value: unknown,
   expectedSlot: 1 | 2,
-  candidateSha256: string,
-  imageConfigDigest: string,
+  candidate: PostgresObservationQualificationCandidate,
   includesCandidateDigest: boolean,
 ): PostgresObservationQualificationExecution {
   const keys = [
@@ -310,14 +278,24 @@ function parseExecution(
   ];
   const input = closed(value, keys, `execution ${expectedSlot}`);
   exact(input.slot, [expectedSlot] as const, `execution ${expectedSlot} slot`);
+  const candidateSha256 = hash(canonical(candidate));
   if (includesCandidateDigest
     && digest(input.candidateSha256, 'candidate digest') !== candidateSha256) {
     throw new TypeError('execution candidate digest is inconsistent');
   }
   const before = prefixedDigest(input.imageConfigDigestBefore, 'image config before');
   const after = prefixedDigest(input.imageConfigDigestAfter, 'image config after');
-  if (before !== imageConfigDigest || after !== imageConfigDigest) {
+  if (before !== candidate.provenance.image.configDigest
+    || after !== candidate.provenance.image.configDigest) {
     throw new TypeError('execution image configuration drifted');
+  }
+  const stdout = parseOutput(input.stdout, 'stdout', 1);
+  if (stdout.sha256 !== candidate.provenance.source.probeStdoutSha256) {
+    throw new TypeError('execution stdout does not match candidate provenance');
+  }
+  const stderr = parseOutput(input.stderr, 'stderr');
+  if (stderr.bytes !== 0 || stderr.sha256 !== EMPTY_SHA256) {
+    throw new TypeError('execution stderr must bind the exact empty SHA-256');
   }
   return {
     slot: expectedSlot,
@@ -326,48 +304,18 @@ function parseExecution(
     volumeIdentitySha256: digest(input.volumeIdentitySha256, 'volume identity'),
     imageConfigDigestBefore: before,
     imageConfigDigestAfter: after,
-    stdout: parseOutput(input.stdout, 'stdout'),
-    stderr: parseOutput(input.stderr, 'stderr'),
+    stdout,
+    stderr,
     exitCode: exact(input.exitCode, [0] as const, 'exit code'),
     timedOut: exact(input.timedOut, [false] as const, 'timeout state'),
     outputLimitExceeded: exact(input.outputLimitExceeded, [false] as const, 'output limit'),
     cleanup: parseCleanup(input.cleanup),
   };
 }
-function streamEvidence(
-  value: unknown,
-  expectedCap: number,
-  label: string,
-): PostgresObservationStreamEvidence {
-  const input = closed(value, [
-    'cap', 'polled', 'decoded', 'retainedPeak', 'overflow', 'terminal',
-  ], `${label} streaming evidence`);
-  const cap = asInteger(input.cap, `${label} cap`);
-  const polled = asInteger(input.polled, `${label} polled rows`);
-  const decoded = asInteger(input.decoded, `${label} decoded rows`);
-  const retainedPeak = asInteger(input.retainedPeak, `${label} retained peak`);
-  const terminal = exact(input.terminal, [
-    'complete', 'overflow', 'row-failure', 'query-failure', 'not-started',
-  ] as const, `${label} terminal state`);
-  if (cap !== expectedCap) throw new TypeError(`${label} cap is inconsistent`);
-  if (typeof input.overflow !== 'boolean') throw new TypeError(`${label} overflow must be Boolean`);
-  if (polled > cap + 1 || decoded > cap || retainedPeak !== decoded
-    || input.overflow !== (terminal === 'overflow')) {
-    throw new TypeError(`${label} decoded its overflow sentinel or has inconsistent retention`);
-  }
-  const validTerminal = terminal === 'complete' ? polled === decoded
-    : terminal === 'overflow' ? polled === cap + 1 && decoded === cap
-      : terminal === 'row-failure' ? polled === decoded + 1 && decoded < cap
-        : terminal === 'query-failure' ? polled === decoded
-          : polled === 0 && decoded === 0;
-  if (!validTerminal) {
-    throw new TypeError(`${label} overflow evidence is inconsistent`);
-  }
-  return { cap, polled, decoded, retainedPeak, overflow: input.overflow, terminal };
-}
-function parseOutput(value: unknown, label: string) {
+
+function parseOutput(value: unknown, label: string, minimumBytes = 0) {
   const input = closed(value, ['bytes', 'sha256', 'truncated'], `${label} evidence`);
-  const bytes = asInteger(input.bytes, `${label} byte count`);
+  const bytes = asInteger(input.bytes, `${label} byte count`, minimumBytes);
   if (bytes > POSTGRES_OBSERVATION_MAX_OUTPUT_BYTES) {
     throw new TypeError(`${label} evidence exceeds the protocol byte limit`);
   }
@@ -377,6 +325,7 @@ function parseOutput(value: unknown, label: string) {
     truncated: exact(input.truncated, [false] as const, `${label} truncation`),
   };
 }
+
 function parseCleanup(value: unknown) {
   const input = closed(value, [
     'containerRemoved', 'volumeRemoved', 'labelledContainersRemaining',
@@ -398,45 +347,37 @@ function parseCleanup(value: unknown) {
     throw new TypeError('qualification cleanup is incomplete');
   }
 }
-function parseRuntimeCoverage(value: unknown): void {
-  const input = closed(value, [
-    'savepointRecovery', 'committedUnavailable', 'transactionCommitFaultMatrix',
-    'runtimeCarrier',
-  ], 'runtime coverage');
-  exact(input.savepointRecovery, ['not-implemented'] as const, 'savepoint recovery');
-  exact(input.committedUnavailable, ['not-implemented'] as const, 'committed unavailability');
-  exact(input.transactionCommitFaultMatrix, ['not-exercised'] as const, 'commit fault matrix');
-  exact(input.runtimeCarrier, ['not-integrated'] as const, 'runtime carrier');
+
+function criticalBindings(candidate: PostgresObservationQualificationCandidate) {
+  const { probeStdoutSha256: _probeStdoutSha256, ...source } = candidate.provenance.source;
+  return {
+    source,
+    inputs: candidate.provenance.inputs,
+    toolchain: candidate.provenance.toolchain,
+  };
 }
+
+function normalizedObservation(candidate: PostgresObservationQualificationCandidate) {
+  const {
+    serverVersion: _serverVersion,
+    serverVersionNum: _serverVersionNum,
+    ...observation
+  } = candidate.observation;
+  return observation;
+}
+
+function requireAllDistinct(values: readonly string[], label: string): void {
+  if (new Set(values).size !== values.length) {
+    throw new TypeError(`${label} must be distinct`);
+  }
+}
+
 function exactReplayFlags(value: Record<string, unknown>): void {
   exact(value.requiredRuns, [2] as const, 'required replay count');
   exact(value.canonicalCandidatesByteEqual, [true] as const, 'candidate replay equality');
   exact(value.freshContainers, [true] as const, 'fresh containers');
   exact(value.freshVolumes, [true] as const, 'fresh volumes');
   exact(value.cleanupVerified, [true] as const, 'verified cleanup');
-}
-function parseIdentity(value: unknown) {
-  const input = closed(value, ['structural', 'types', 'constraints'], 'identity');
-  return {
-    structural: digest(input.structural, 'structural identity'),
-    types: digest(input.types, 'type identity'),
-    constraints: digest(input.constraints, 'constraint identity'),
-  };
-}
-function validServerVersion(value: unknown, patch: '16.9' | '16.15'): value is string {
-  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 256) return false;
-  if (value !== `PostgreSQL ${patch}` && !value.startsWith(`PostgreSQL ${patch} `)) return false;
-  return [...value].every((character) => {
-    const code = character.charCodeAt(0);
-    return code >= 0x20 && code <= 0x7e;
-  });
-}
-function parseErrorCode(value: unknown): PostgresObservationErrorCode | null {
-  if (value === null) return null;
-  if (typeof value !== 'string' || !ERROR_CODES.has(value as never)) {
-    throw new TypeError('qualification error code is invalid');
-  }
-  return value as PostgresObservationErrorCode;
 }
 
 function closed(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
@@ -466,12 +407,5 @@ function prefixedDigest(value: unknown, label: string): string {
     throw new TypeError(`${label} is invalid`);
   }
   digest(value.slice(7), label);
-  return value;
-}
-
-function gitObject(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !GIT_OBJECT_PATTERN.test(value)) {
-    throw new TypeError(`${label} must be a full lowercase Git object ID`);
-  }
   return value;
 }

@@ -42,7 +42,7 @@ fn stream_and_phase_inventories_are_closed_and_complete() {
 
 #[test]
 fn role_admission_requires_every_negative_and_positive_fact() {
-    let mut role = ComparisonRole {
+    let role = ComparisonRole {
         superuser: false,
         database_owner: false,
         inherit: false,
@@ -52,9 +52,43 @@ fn role_admission_requires_every_negative_and_positive_fact() {
         privileges_exact: true,
     };
     assert!(role.admitted());
-    role.can_set_role = true;
-    assert!(!role.admitted());
-    role.can_set_role = false;
-    role.privileges_exact = false;
-    assert!(!role.admitted());
+    for rejected in [
+        ComparisonRole {
+            superuser: true,
+            ..role
+        },
+        ComparisonRole {
+            database_owner: true,
+            ..role
+        },
+        ComparisonRole {
+            inherit: true,
+            ..role
+        },
+        ComparisonRole {
+            bypass_rls: true,
+            ..role
+        },
+        ComparisonRole {
+            can_set_role: true,
+            ..role
+        },
+        ComparisonRole {
+            can_ddl: true,
+            ..role
+        },
+        ComparisonRole {
+            privileges_exact: false,
+            ..role
+        },
+    ] {
+        assert!(!rejected.admitted());
+    }
+}
+
+#[test]
+fn role_preflight_rejects_cluster_level_mutation_authority() {
+    for attribute in ["r.rolcreaterole", "r.rolcreatedb", "r.rolreplication"] {
+        assert!(ROLE_PREFLIGHT_SQL.contains(attribute));
+    }
 }

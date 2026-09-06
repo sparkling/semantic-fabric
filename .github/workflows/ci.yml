@@ -24,6 +24,7 @@ jobs:
       coding_harness: ${{ steps.selector.outputs.coding_harness }}
       supervisor: ${{ steps.selector.outputs.supervisor }}
       acl_replay: ${{ steps.selector.outputs.acl_replay }}
+      pg_observation: ${{ steps.selector.outputs.pg_observation }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -41,7 +42,8 @@ jobs:
         run: |
           set -euo pipefail
           full() {
-            printf '%s\n' 'rust=true' 'coding_harness=true' 'supervisor=true' 'acl_replay=true' >> "$GITHUB_OUTPUT"
+            printf '%s\n' 'rust=true' 'coding_harness=true' 'supervisor=true' \
+              'acl_replay=true' 'pg_observation=true' >> "$GITHUB_OUTPUT"
           }
           if [ "$EVENT_NAME" != pull_request ]; then
             full
@@ -49,6 +51,7 @@ jobs:
           fi
           selector="$RUNNER_TEMP/select-ci-gates.mjs"
           manifest="$RUNNER_TEMP/base-harness-manifest.json"
+          qualification_inventory="$RUNNER_TEMP/base-pg-observation-inputs.tsv"
           if ! git show "${BASE_SHA}:coding-harness/scripts/select-ci-gates.mjs" > "$selector"; then
             full
             exit 0
@@ -57,8 +60,25 @@ jobs:
             full
             exit 0
           fi
-          node "$selector" --event "$EVENT_NAME" --repository "$GITHUB_WORKSPACE" \
-            --base "$BASE_SHA" --head "$HEAD_SHA" --manifest "$manifest" >> "$GITHUB_OUTPUT"
+          if ! git show "${BASE_SHA}:tests/postgresql/observation-qualification-inputs-v1.tsv" \
+            > "$qualification_inventory"; then
+            full
+            exit 0
+          fi
+          selected="$RUNNER_TEMP/selected-ci-gates"
+          if ! node "$selector" --event "$EVENT_NAME" --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --manifest "$manifest" \
+            --qualification-inventory "$qualification_inventory" > "$selected"; then
+            full
+            exit 0
+          fi
+          # A trusted base predating this fifth output cannot classify it. Run it
+          # until the new selector is itself present on the protected base.
+          if ! grep -Eq '^pg_observation=(true|false)$' "$selected"; then
+            full
+            exit 0
+          fi
+          cat "$selected" >> "$GITHUB_OUTPUT"
 
   coding-harness:
     name: coding harness · node ${{ matrix.node }} · build · test
@@ -148,6 +168,55 @@ jobs:
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs baseline-v2
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs branch
           node coding-harness/supervisor-service/scripts/replay-postgresql-public-acl-suite-v3.mjs final-where
+
+  postgresql-observation-qualification:
+    name: PostgreSQL observation · ${{ matrix.postgres_patch }} · node ${{ matrix.node }}
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.pg_observation != 'false') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '20.0.0'
+            postgres_patch: '16.9'
+            postgres_image: postgres@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f
+          - node: '24.14.1'
+            postgres_patch: '16.9'
+            postgres_image: postgres@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f
+          - node: '20.0.0'
+            postgres_patch: '16.15'
+            postgres_image: postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
+          - node: '24.14.1'
+            postgres_patch: '16.15'
+            postgres_image: postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The receipt verifier reads exact historical source commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # Node builds and executes evidence tooling; it is not product runtime.
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: coding-harness/package-lock.json
+      - name: install pinned evidence-harness dependencies
+        run: npm --prefix coding-harness ci --ignore-scripts
+      - name: build canonical evidence harness
+        run: npm --prefix coding-harness run build
+      - name: pull exact Rust builder platform manifest
+        env:
+          RUST_BUILDER_IMAGE: rust@sha256:c993d32d95cc146bd12c84d66f0b924a6a96f3988325f39c144f2f9893dea120
+        run: docker pull --platform linux/amd64 "$RUST_BUILDER_IMAGE"
+      - name: pull exact PostgreSQL platform manifest
+        env:
+          POSTGRES_IMAGE: ${{ matrix.postgres_image }}
+        run: docker pull --platform linux/amd64 "$POSTGRES_IMAGE"
+      - name: replay exact PostgreSQL observation receipt
+        run: npm --prefix coding-harness run postgres-observation-qualification -- replay --patch "${{ matrix.postgres_patch }}"
 
   build:
     name: fmt · clippy · build · test
@@ -300,7 +369,7 @@ jobs:
 
   required:
     name: required
-    needs: [changes, coding-harness, supervisor-service, postgresql-public-acl-replay, build]
+    needs: [changes, coding-harness, supervisor-service, postgresql-public-acl-replay, postgresql-observation-qualification, build]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     env:
@@ -309,10 +378,12 @@ jobs:
       SELECT_CODING_HARNESS: ${{ needs.changes.outputs.coding_harness }}
       SELECT_SUPERVISOR: ${{ needs.changes.outputs.supervisor }}
       SELECT_ACL_REPLAY: ${{ needs.changes.outputs.acl_replay }}
+      SELECT_PG_OBSERVATION: ${{ needs.changes.outputs.pg_observation }}
       RUST_RESULT: ${{ needs.build.result }}
       CODING_HARNESS_RESULT: ${{ needs['coding-harness'].result }}
       SUPERVISOR_RESULT: ${{ needs['supervisor-service'].result }}
       ACL_REPLAY_RESULT: ${{ needs['postgresql-public-acl-replay'].result }}
+      PG_OBSERVATION_RESULT: ${{ needs['postgresql-observation-qualification'].result }}
     steps:
       - name: require every selected gate and reject malformed selection
         shell: bash
@@ -330,10 +401,13 @@ jobs:
           }
           test "$SELECT_ACL_REPLAY" != true || test "$SELECT_SUPERVISOR" = true
           test "$SELECT_SUPERVISOR" != true || test "$SELECT_CODING_HARNESS" = true
+          test "$SELECT_PG_OBSERVATION" != true || test "$SELECT_RUST" = true
+          test "$SELECT_PG_OBSERVATION" != true || test "$SELECT_CODING_HARNESS" = true
           check "$SELECT_RUST" "$RUST_RESULT"
           check "$SELECT_CODING_HARNESS" "$CODING_HARNESS_RESULT"
           check "$SELECT_SUPERVISOR" "$SUPERVISOR_RESULT"
           check "$SELECT_ACL_REPLAY" "$ACL_REPLAY_RESULT"
+          check "$SELECT_PG_OBSERVATION" "$PG_OBSERVATION_RESULT"
 
   readiness:
     name: meta-harness readiness telemetry (ADR-0026)

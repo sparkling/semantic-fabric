@@ -41,12 +41,15 @@ import { digestValue, ReceiptChain, type Receipt, type ReceiptStatus } from '../
 import { resolveTaskEvidencePlanV1 } from '../src/task-evidence-plan.js';
 import { diagnosticBlob, diagnosticBlobDigest, programmeV5RufloFixture }
   from './candidate-fixtures.js';
-import { PROGRAMME_V5_POST_HISTORICAL_PATHS }
+import {
+  PROGRAMME_V5_POST_HISTORICAL_PATHS,
+  projectProgrammeV5HistoricalConfigProtectedPaths,
+}
   from './programme-v5-post-historical-paths.js';
 const taskPath = 'coding-harness/config/issue-8-acceptance.json';
-const POLICY_FINGERPRINT = '3d1872cf9faaa703556c50f9264a9f1a006f53b4b700c52cc5f3e8c87a0d1c7e';
-const ACCEPTANCE_DIGEST = 'e20403261db5cd3a37b3c5ec03143cd460f4cff9d22cadd87f747e7e8cdc5c88';
-const ENVELOPE_DIGEST = '69ed27204f2fb18a8dc38e5666be00854e198fd04d1a8c02c19bda39b066c25e';
+const POLICY_FINGERPRINT = '0d67a1acb89ca6d8d9f2dad0ca63dad4063e8a6489d5b748a458a2cdf21e7122';
+const ACCEPTANCE_DIGEST = '54c3c93bb732284090d151ce59bbf75cea1471e0b73e5a401aa51df9c7943f01';
+const ENVELOPE_DIGEST = 'ef86e077a9679873b2a1b927ae004f42531ada89ae2ec3380e3e61ea6064518a';
 const HISTORICAL_POLICY_FINGERPRINT = '3f6481bd336a59bbda3e9f475adb88551f1650d0be55b0e398c1ec384fcfe59d';
 const HISTORICAL_ACCEPTANCE_DIGEST = '480103f3d9876b67e4a1bb2a48909240b4ca0d14b0a3917d2bb20db757b402ee';
 const HISTORICAL_ENVELOPE_DIGEST = '7b3de3ef1b02c6b4558bed6203a09b2f730a2df30e0b02c6bb45235901bc2031';
@@ -458,11 +461,15 @@ function historicalManifest(): { manifestBlob: string; harnessConfig: HarnessCon
     (path: string) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path),
   );
   const manifestBlob = `${JSON.stringify(manifest, null, 2)}\n`;
-  return { manifestBlob, harnessConfig: parseHarnessConfig({
+  const harnessConfig = parseHarnessConfig({
     ...structuredClone(SECURE_HARNESS_CONFIG),
-    requiredProtectedPaths: SECURE_HARNESS_CONFIG.requiredProtectedPaths
-      .filter((path) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path)),
-  }) };
+    requiredProtectedPaths: projectProgrammeV5HistoricalConfigProtectedPaths(
+      SECURE_HARNESS_CONFIG.requiredProtectedPaths,
+    ),
+  });
+  expect([...harnessConfig.requiredProtectedPaths].sort())
+    .toEqual([...manifest.protectedPaths].sort());
+  return { manifestBlob, harnessConfig };
 }
 
 function rehashEnvelope(value: any): void {

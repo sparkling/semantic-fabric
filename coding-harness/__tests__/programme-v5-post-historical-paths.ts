@@ -12,6 +12,8 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/__tests__/select-ci-gates.test.ts',
   'coding-harness/__tests__/native-test-prerequisites.ts',
   'coding-harness/__tests__/postgres-observation-qualification.test.ts',
+  'coding-harness/__tests__/postgres-observation-qualification-execution.test.ts',
+  'coding-harness/__tests__/postgres-product-slice-closure.test.ts',
   'coding-harness/__tests__/programme-capture-claim-io-v1.test.ts',
   'coding-harness/__tests__/programme-capture-claim-record-v1.test.ts',
   'coding-harness/__tests__/programme-capture-git-v1.test.ts',
@@ -50,6 +52,7 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/config/programme-v5-ruflo-schema-v2-memory-initializer.js.gz',
   'coding-harness/config/programme-v5-ruflo-schema-v2-overlay.json',
   'coding-harness/scripts/select-ci-gates.mjs',
+  'coding-harness/scripts/sync-harness-manifest.mjs',
   'coding-harness/src/immutable-private-tree-overlay.ts',
   'coding-harness/src/native-proxy-launcher.cts',
   'coding-harness/src/programme-capture-claim-io-v1.ts',
@@ -68,8 +71,20 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-runner-profile-v1.ts',
   'coding-harness/src/programme-capture-source-paths-v1.ts',
   'coding-harness/src/programme-capture-state-v1.ts',
+  'coding-harness/src/postgres-observation-qualification-build.ts',
+  'coding-harness/src/postgres-observation-qualification-candidate.ts',
+  'coding-harness/src/postgres-observation-qualification-cli.ts',
+  'coding-harness/src/postgres-observation-qualification-docker-inspect.ts',
+  'coding-harness/src/postgres-observation-qualification-docker.ts',
+  'coding-harness/src/postgres-observation-qualification-io.ts',
+  'coding-harness/src/postgres-observation-qualification-process.ts',
+  'coding-harness/src/postgres-observation-qualification-programme.ts',
+  'coding-harness/src/postgres-observation-qualification-protocol.ts',
+  'coding-harness/src/postgres-observation-qualification-provenance.ts',
   'coding-harness/src/postgres-observation-qualification-runner.ts',
+  'coding-harness/src/postgres-observation-qualification-source-worktree.ts',
   'coding-harness/src/postgres-observation-qualification.ts',
+  'coding-harness/src/protected-paths.ts',
   'coding-harness/src/programme-capture-supervisor-authority-config-v2.ts',
   'coding-harness/src/programme-capture-supervisor-authority-transition-v2.ts',
   'coding-harness/src/programme-capture-supervisor-checkpoint-v1.ts',
@@ -93,9 +108,24 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'coding-harness/src/programme-capture-task-v1.ts',
   'coding-harness/src/programme-v5-ruflo-schema-v2-materialization.ts',
   ...PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
+  'crates/sf-conformance/src/bin/postgres-observation-qualification.rs',
+  'crates/sf-conformance/src/bin/postgres-observation-qualification/tests.rs',
+  'tests/postgresql/observation-qualification-fixture.sql',
+  'tests/postgresql/observation-qualification-inputs-v1.tsv',
+  'tests/postgresql/observation-qualification-protocol-v1.json',
+  'tests/postgresql/postgresql-16-observation-qualification-receipt-pair-v1.json',
   'crates/sf-bench/src/performance/order_window_rss.rs',
   'crates/sf-cli/tests/federated_union_serve.rs',
+  'crates/sf-core/src/lib.rs',
   'crates/sf-core/src/schema.rs',
+  'crates/sf-core/src/schema_identity/encode.rs',
+  'crates/sf-core/src/schema_identity/mod.rs',
+  'crates/sf-core/src/schema_identity/model.rs',
+  'crates/sf-core/src/schema_identity/tests/bounds.rs',
+  'crates/sf-core/src/schema_identity/tests/mod.rs',
+  'crates/sf-core/src/schema_identity/tests/mutations.rs',
+  'crates/sf-core/src/schema_identity/tests/vectors.rs',
+  'crates/sf-core/src/schema_identity/validate.rs',
   'crates/sf-conformance/tests/generated_qe_train.rs',
   'crates/sf-conformance/tests/generated_qe_train/query.rs',
   'crates/sf-conformance/tests/generated_qe_train/r2rml.rs',
@@ -107,6 +137,36 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'crates/sf-conformance/tests/product_mock_gold_schema_live_pg.rs',
   'crates/sf-conformance/tests/product_mock_gold_serve_live_pg.rs',
   'crates/sf-conformance/tests/product_mock_gold_vertical.rs',
+  'crates/sf-serve/src/backend.rs',
+  'crates/sf-serve/src/binding_identity.rs',
+  'crates/sf-serve/src/config.rs',
+  'crates/sf-serve/src/deadline_tests.rs',
+  'crates/sf-serve/src/deadline.rs',
+  'crates/sf-serve/src/observed_source.rs',
+  'crates/sf-serve/src/pg_generation.rs',
+  'crates/sf-serve/src/pg_generation/context.rs',
+  'crates/sf-serve/src/pg_generation/error.rs',
+  'crates/sf-serve/src/pg_generation/execution.rs',
+  'crates/sf-serve/src/pg_generation/lease.rs',
+  'crates/sf-serve/src/pg_generation/lease/inventory.rs',
+  'crates/sf-serve/src/pg_generation/live_tests.rs',
+  'crates/sf-serve/src/pg_generation/live_tests/budget_expiry.rs',
+  'crates/sf-serve/src/pg_generation/live_tests/fixture.rs',
+  'crates/sf-serve/src/pg_generation/live_tests/request_route.rs',
+  'crates/sf-serve/src/pg_generation/tests.rs',
+  'crates/sf-serve/src/pg_response.rs',
+  'crates/sf-serve/src/request_generation.rs',
+  'crates/sf-serve/src/schema_observation.rs',
+  'crates/sf-serve/src/semantic_admission_tests.rs',
+  'crates/sf-serve/src/semantic_admission.rs',
+  'crates/sf-serve/src/snapshot.rs',
+  'crates/sf-serve/src/source.rs',
+  'crates/sf-sparql/src/runtime_identity.rs',
+  'crates/sf-sql/src/backend/pg.rs',
+  'crates/sf-sql/src/backend/pg/tests.rs',
+  'crates/sf-sql/src/backend/pg/timetz.rs',
+  'crates/sf-sql/src/introspect.rs',
+  'crates/sf-validation/Cargo.toml',
   'crates/sf-serve/src/budget_tests.rs',
   'crates/sf-serve/src/federated_union_tests.rs',
   'crates/sf-serve/src/federation.rs',
@@ -127,7 +187,51 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'crates/sf-sparql/src/describe.rs',
   'crates/sf-sparql/src/exec_core/literal_order.rs',
   'crates/sf-sparql/src/federation.rs',
+  'crates/sf-sql/src/dialect.rs',
+  'crates/sf-sql/src/error.rs',
   'crates/sf-sql/src/introspect/postgres.rs',
+  'crates/sf-sql/src/introspect/postgres/evidence.rs',
+  'crates/sf-sql/src/introspect/postgres/evidence/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/generation.rs',
+  'crates/sf-sql/src/introspect/postgres/generation/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_bounds.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_bounds/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_inventory.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_query.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_query/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_row.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_row/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/legacy_sql.rs',
+  'crates/sf-sql/src/introspect/postgres/observation.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/capture.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/catalog_decode.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/catalog_decode/constraint.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/catalog_decode/guard.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/catalog_decode/relation_attribute.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/catalog_decode/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/catalog_sql.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/constraint_budget.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/constraints.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/constraints/not_null_tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/constraints/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/direct_mapping.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/direct_mapping/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/relation.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/relation/accounting.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/relation/adversarial_tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/relation/legacy.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/relation/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/source_type.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/source_type/adversarial_tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/source_type/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/tests.rs',
+  'crates/sf-sql/src/introspect/postgres/observation/trigger_evidence.rs',
+  'crates/sf-sql/src/introspect/postgres/observed_snapshot.rs',
+  'crates/sf-sql/src/introspect/postgres/tests.rs',
+  'crates/sf-sql/src/lib.rs',
+  'crates/sf-sql/src/schema.rs',
+  'crates/sf-sql/tests/postgres_introspection.rs',
+  'crates/sf-sql/tests/postgres_observation_contract.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/process/capture.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/process/execveat.rs',
   'crates/sf-conformance/src/binary_artifact_receipt/runtime_elf.rs',
@@ -196,3 +300,56 @@ export const PROGRAMME_V5_POST_HISTORICAL_PATHS: ReadonlySet<string> = new Set([
   'docs/design/ADR-0050-observed-schema-identity-v1-known-answer-vectors.md',
   'tests/rust-parser-worker-qualification-inputs-v1.tsv',
 ]);
+
+const PROGRAMME_V5_HISTORICAL_CONFIG_ORDER_GROUPS = Object.freeze([
+  Object.freeze([
+    'coding-harness/src/acceptance-task.ts',
+    'coding-harness/src/acceptance-task-v3.ts',
+  ]),
+  Object.freeze([
+    'coding-harness/src/git-materialization.ts',
+    'coding-harness/src/git-process.ts',
+  ]),
+  Object.freeze([
+    'coding-harness/src/rust-closure.ts',
+    'coding-harness/src/rust-registry-closure.ts',
+    'coding-harness/src/rust-sandbox.ts',
+  ]),
+] as const);
+
+const HISTORICAL_CONFIG_GROUP_BY_PATH = new Map<string, readonly string[]>(
+  PROGRAMME_V5_HISTORICAL_CONFIG_ORDER_GROUPS.flatMap(
+    (group) => group.map((path) => [path, group] as const),
+  ),
+);
+
+export function projectProgrammeV5HistoricalConfigProtectedPaths(
+  paths: readonly string[],
+): readonly string[] {
+  if (new Set(paths).size !== paths.length) {
+    throw new TypeError('programme V5 current protected paths must be unique');
+  }
+  const filtered = paths.filter((path) => !PROGRAMME_V5_POST_HISTORICAL_PATHS.has(path));
+  const present = new Set(filtered);
+  for (const group of PROGRAMME_V5_HISTORICAL_CONFIG_ORDER_GROUPS) {
+    const presentCount = group.filter((path) => present.has(path)).length;
+    if (presentCount !== 0 && presentCount !== group.length) {
+      throw new TypeError('programme V5 historical config order group is incomplete');
+    }
+  }
+  const emittedGroups = new Set<readonly string[]>();
+  const projected: string[] = [];
+  for (const path of filtered) {
+    const group = HISTORICAL_CONFIG_GROUP_BY_PATH.get(path);
+    if (group === undefined) {
+      projected.push(path);
+    } else if (!emittedGroups.has(group)) {
+      projected.push(...group);
+      emittedGroups.add(group);
+    }
+  }
+  if (projected.length !== filtered.length || new Set(projected).size !== projected.length) {
+    throw new TypeError('programme V5 historical config projection is not set preserving');
+  }
+  return Object.freeze(projected);
+}

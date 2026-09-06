@@ -8,9 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SECURE_HARNESS_CONFIG } from '../src/config.js';
 import {
-  PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1,
-  PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1,
-  PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
+  POSTGRESQL_PRODUCT_SLICE_PROTECTED_PATHS_V1, PROGRAMME_CAPTURE_SUPERVISOR_SERVICE_PACKAGE_PROTECTED_PATHS_V1, PROGRAMME_CAPTURE_TEST_PROTECTED_PATHS_V1, PROGRAMME_CAPTURE_TEST_SUPPORT_PROTECTED_PATHS_V1,
 } from '../src/programme-capture-protected-paths-v1.js';
 import { PROGRAMME_V5_POST_HISTORICAL_PATHS } from './programme-v5-post-historical-paths.js';
 
@@ -183,6 +181,7 @@ const M0_AUTHORITY_PATHS = [
   'crates/sf-conformance/tests/regression_baseline_cli.rs',
   'crates/sf-conformance/tests/rust_closure_receipt.rs',
   'crates/sf-conformance/tests/w3c_pg_suite.rs',
+  ...POSTGRESQL_PRODUCT_SLICE_PROTECTED_PATHS_V1,
   'crates/sf-serve/src/http_tests.rs', 'crates/sf-serve/src/post_body.rs', 'crates/sf-serve/src/request_deadline.rs', 'crates/sf-serve/tests/post_body_admission.rs',
   'crates/sf-serve/tests/endpoint.rs',
   'crates/sf-sparql/tests/e2e.rs',
@@ -390,7 +389,7 @@ describe('M0 protected authority and CI contract', () => {
     const build = 'npm --prefix coding-harness run build';
     const attestation =
       'git diff --exit-code -- coding-harness/.harness/controller-build.json';
-    expect(workflow.split(build)).toHaveLength(2);
+    expect(workflow.split(build)).toHaveLength(3);
     expect(workflow.split(attestation)).toHaveLength(2);
     expect(workflow.indexOf(attestation)).toBeGreaterThan(workflow.indexOf(build));
     for (const command of REQUIRED_FEATURE_CLIPPY) {

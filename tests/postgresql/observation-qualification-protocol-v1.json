@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "semantic-fabric.postgresql-public-observation-qualification-protocol/v1",
+  "receiptKind": "postgresql-public-observation-qualification-v1",
+  "authority": "observation-profile-only",
+  "platform": "linux/amd64",
+  "builder": {
+    "reference": "rust@sha256:c993d32d95cc146bd12c84d66f0b924a6a96f3988325f39c144f2f9893dea120",
+    "configDigest": "sha256:13783f492bda9b66aed2e6c95c874499f1c5020821704d412113c104bc9cf14f",
+    "platform": "linux/amd64"
+  },
+  "database": {
+    "name": "sf_observation_qualification_v1",
+    "template": "template0",
+    "encoding": "UTF8",
+    "localeProvider": "libc",
+    "lcCollate": "C",
+    "lcCtype": "C"
+  },
+  "roles": {
+    "owner": "sf_observation_owner_v1",
+    "observer": "sf_observation_observer_v1"
+  },
+  "container": {
+    "networkMode": "none",
+    "pgdataPath": "/var/lib/postgresql/data",
+    "socketPath": "/var/run/postgresql",
+    "fixturePath": "/docker-entrypoint-initdb.d/010-observation-qualification.sql",
+    "probePath": "/opt/semantic-fabric/bin/postgres-observation-qualification",
+    "ownerLabelKey": "io.github.sparkling.semantic-fabric.postgresql-observation-qualification"
+  },
+  "probe": {
+    "package": "sf-conformance",
+    "bin": "postgres-observation-qualification",
+    "artifactPath": "target/x86_64-unknown-linux-gnu/release/postgres-observation-qualification",
+    "maxOutputBytes": 262144
+  },
+  "replay": {
+    "requiredRuns": 2,
+    "readinessTimeoutMs": 60000,
+    "commandTimeoutMs": 60000,
+    "cleanupTimeoutMs": 30000
+  },
+  "images": [
+    {
+      "patch": "16.9",
+      "serverVersionNum": 160009,
+      "reference": "postgres@sha256:ddfe3e8713e3ee5b8f286082cb12512488dfbf3f5a1ecb0b74a42e6055af0a5f",
+      "configDigest": "sha256:5d77af46c4cb952e855106b849c6972b8a1ee2a2518159eb1854702fda47542f"
+    },
+    {
+      "patch": "16.15",
+      "serverVersionNum": 160015,
+      "reference": "postgres@sha256:485935f94cc7165afa896978809c37b592dc07f0a37d2c8f645f12412d0212c8",
+      "configDigest": "sha256:80f4c7a5e91618546dce5b4fe60cf03b14c0f9efa7e40157278d122772ced8d2"
+    }
+  ],
+  "streams": [
+    "legacy-tables",
+    "legacy-earlier-collisions",
+    "legacy-columns",
+    "legacy-keys",
+    "legacy-foreign-keys",
+    "legacy-relation-statistics",
+    "legacy-column-statistics",
+    "rich-relations",
+    "rich-attributes",
+    "rich-catalog-constraints"
+  ],
+  "phases": [
+    "guard",
+    "relations-stream",
+    "attributes-stream",
+    "relation-normalization",
+    "not-null-derivation",
+    "constraint-budget",
+    "catalog-constraints-stream",
+    "constraint-normalization",
+    "legacy-comparison",
+    "identity-build"
+  ]
+}

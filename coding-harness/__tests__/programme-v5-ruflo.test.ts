@@ -18,7 +18,9 @@ import {
   stableProgrammeV5RufloFileDigest,
 } from '../src/programme-v5-ruflo.js';
 import {
+  PROGRAMME_V5_RUFLO_DEFAULT_PACKAGE_ROOT,
   createProgrammeV5RufloPrivateRuntime,
+  resolveProgrammeV5RufloPackageRoot,
   type ProgrammeV5RufloPrivateRuntime,
 }
   from '../src/programme-v5-ruflo-runtime.js';
@@ -27,6 +29,28 @@ import { bwrapAvailable } from './native-test-prerequisites.js';
 const nativeIt = bwrapAvailable() ? it : it.skip;
 
 describe('programme v5 local Ruflo MCP collector', () => {
+  it('defaults to the established content-addressed pinned package closure', () => {
+    expect(PROGRAMME_V5_RUFLO_DEFAULT_PACKAGE_ROOT).toBe(
+      '/home/claude/.cache/semantic-fabric-harness/'
+      + 'ruflo-package-f574f094c233d47e9cb450dcb4f7a31aa01a53056063e62c1174560b60814b02',
+    );
+  });
+
+  it('reports a missing pinned package cache explicitly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'semantic-fabric-ruflo-missing-'));
+    const variable = 'SF_HARNESS_RUFLO_PACKAGE_ROOT';
+    const original = process.env[variable];
+    try {
+      process.env[variable] = join(root, 'missing-package');
+      expect(() => resolveProgrammeV5RufloPackageRoot())
+        .toThrow('HARNESS_PROGRAMME_V5_RUFLO_PINNED_PACKAGE_MISSING');
+    } finally {
+      if (original === undefined) delete process.env[variable];
+      else process.env[variable] = original;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a non-canonical configured package source', async () => {
     const root = await mkdtemp(join(tmpdir(), 'semantic-fabric-ruflo-source-'));
     const variable = 'SF_HARNESS_RUFLO_PACKAGE_ROOT';

@@ -1,104 +1,174 @@
+import { canonical } from '@metaharness/harness';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   createPostgresObservationQualificationReceipt,
   parsePostgresObservationQualificationCandidate,
+  parsePostgresObservationQualificationProbeOutput,
+  parsePostgresObservationQualificationReceiptPairJson,
+  parsePostgresObservationQualificationReceiptJson,
   verifyPostgresObservationQualificationReceipt,
+  verifyPostgresObservationQualificationReceiptPair,
 } from '../src/postgres-observation-qualification.js';
 import {
-  POSTGRES_OBSERVATION_QUALIFICATION_RUNNER_STATUS,
-  runPostgresObservationQualificationProbe,
+  POSTGRES_OBSERVATION_COMPLETED_PHASES,
+  POSTGRES_OBSERVATION_STREAM_IDS,
 } from '../src/postgres-observation-qualification-runner.js';
+import {
+  POSTGRES_QUALIFICATION_BUILDER_EXPECTATION,
+  POSTGRES_QUALIFICATION_IMAGE_EXPECTATIONS,
+  expectedQualificationBuilderImageIdentity,
+  expectedQualificationImageIdentity,
+} from '../src/postgres-observation-qualification-protocol.js';
+import {
+  POSTGRES_QUALIFICATION_RECEIPT_PAIR_PATH,
+  readPostgresQualificationReceiptPair,
+  writePostgresQualificationReceiptPair,
+} from '../src/postgres-observation-qualification-io.js';
 
 const hex = (character: string): string => character.repeat(64);
 const sha = (character: string): string => `sha256:${hex(character)}`;
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
-const candidate = {
-  provenance: {
-    source: {
-      commit: 'a'.repeat(40),
-      tree: 'b'.repeat(40),
-      cargoLockSha256: hex('c'),
-      probeArtifactSha256: hex('d'),
-    },
-    inputs: {
-      adrSha256: hex('e'),
-      profileSha256: hex('f'),
-      queriesSha256: hex('1'),
-      testsSha256: hex('2'),
-      fixtureSha256: hex('3'),
-      runnerSha256: hex('4'),
-      protocolSha256: hex('5'),
-    },
-    toolchain: {
-      rustcVvSha256: hex('6'),
-      cargoVersionSha256: hex('7'),
-      targetTriple: 'x86_64-unknown-linux-gnu' as const,
-    },
-    image: {
-      repository: 'postgres' as const,
-      manifestDigest: sha('8'),
-      configDigest: sha('9'),
-      platform: 'linux/amd64' as const,
-      inspectSha256: hex('a'),
-    },
-  },
-  preflight: {
-    networkMode: 'none' as const,
-    fixedDatabase: true as const,
-    unixSocket: true as const,
-    comparisonRole: {
-      superuser: false as const,
-      databaseOwner: false as const,
-      inherit: false as const,
-      bypassRls: false as const,
-      canSetRole: false as const,
-      canDdl: false as const,
-      privilegesExact: true as const,
-    },
-    ownerIdentityEqual: true as const,
-    legacyConstraintVisibilityDiffers: true as const,
-  },
-  observation: {
-    serverVersion: 'PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2)',
-    serverVersionNum: 160015 as const,
-    guard: 'pass' as const,
-    rowCounts: {
-      relations: 1,
-      attributes: 1,
-      notNullConstraints: 1,
-      catalogConstraints: 1,
-      combinedConstraints: 2,
-    },
-    streaming: {
-      relations: {
-        cap: 4_096, polled: 1, decoded: 1, retainedPeak: 1, overflow: false,
-        terminal: 'complete' as const,
-      },
-      attributes: {
-        cap: 65_536, polled: 1, decoded: 1, retainedPeak: 1, overflow: false,
-        terminal: 'complete' as const,
-      },
-      catalogConstraints: {
-        cap: 65_535, polled: 1, decoded: 1, retainedPeak: 1, overflow: false,
-        terminal: 'complete' as const,
-      },
-    },
-    identity: { structural: hex('b'), types: hex('c'), constraints: hex('d') },
-    legacyComparison: 'equal' as const,
-    errorCode: null,
-    failurePhase: null,
-  },
+function stream(cap: number, decoded = 1) {
+  return {
+    cap, polled: decoded, decoded, retainedPeak: decoded, overflow: false,
+    terminal: 'complete' as const,
+  };
+}
+
+const richStreaming = {
+  relations: stream(4_096),
+  attributes: stream(65_536),
+  catalogConstraints: stream(65_535),
 };
 
-function execution(slot: 1 | 2, identity: string) {
+function queryAccounting() {
+  const evidence = POSTGRES_OBSERVATION_STREAM_IDS.map((id) => {
+    if (id === 'legacy-tables' || id === 'legacy-earlier-collisions') {
+      return { id, evidence: stream(4_096) };
+    }
+    if (id === 'rich-relations') return { id, evidence: structuredClone(richStreaming.relations) };
+    if (id === 'rich-attributes') return { id, evidence: structuredClone(richStreaming.attributes) };
+    if (id === 'rich-catalog-constraints') {
+      return { id, evidence: structuredClone(richStreaming.catalogConstraints) };
+    }
+    return { id, evidence: stream(65_536) };
+  });
+  return {
+    prequalificationGuard: 1 as const,
+    richCapture: 4 as const,
+    guardQueriesObserved: 2 as const,
+    streamQueriesObserved: 10 as const,
+    totalQueriesObserved: 12 as const,
+    streams: evidence,
+  };
+}
+
+function candidateFor(
+  patch: '16.9' | '16.15' = '16.15',
+  outputDigest = patch === '16.9' ? '6' : '1',
+) {
+  const serverVersionNum = patch === '16.9' ? 160009 as const : 160015 as const;
+  const imageExpectation = POSTGRES_QUALIFICATION_IMAGE_EXPECTATIONS.find(
+    (image) => image.patch === patch,
+  )!;
+  return {
+    provenance: {
+      source: {
+        commit: 'a'.repeat(40),
+        tree: 'b'.repeat(40),
+        cargoLockSha256: hex('c'),
+        probeArtifactSha256: hex('d'),
+        probeStdoutSha256: hex(outputDigest),
+      },
+      inputs: {
+        adrSha256: hex('e'),
+        profileSha256: hex('f'),
+        queriesSha256: hex('1'),
+        testsSha256: hex('2'),
+        fixtureSha256: hex('3'),
+        runnerSha256: hex('4'),
+        protocolSha256: hex('5'),
+      },
+      toolchain: {
+        rustcVvSha256: hex('6'),
+        cargoVersionSha256: hex('7'),
+        targetTriple: 'x86_64-unknown-linux-gnu' as const,
+        builderImage: expectedQualificationBuilderImageIdentity(
+          POSTGRES_QUALIFICATION_BUILDER_EXPECTATION,
+        ),
+      },
+      image: expectedQualificationImageIdentity(imageExpectation),
+    },
+    preflight: {
+      networkMode: 'none' as const,
+      fixedDatabase: true as const,
+      unixSocket: true as const,
+      comparisonRole: {
+        superuser: false as const,
+        databaseOwner: false as const,
+        inherit: false as const,
+        bypassRls: false as const,
+        canSetRole: false as const,
+        canDdl: false as const,
+        privilegesExact: true as const,
+      },
+      ownerIdentityEqual: true as const,
+      legacyConstraintVisibilityDiffers: true as const,
+    },
+    observation: {
+      serverVersion: `PostgreSQL ${patch} (Debian)`,
+      serverVersionNum,
+      guard: 'pass' as const,
+      rowCounts: {
+        relations: 1,
+        attributes: 1,
+        notNullConstraints: 1,
+        catalogConstraints: 1,
+        combinedConstraints: 2,
+      },
+      streaming: structuredClone(richStreaming),
+      identity: { structural: hex('b'), types: hex('c'), constraints: hex('d') },
+      legacyCoordinateComparison: 'equal' as const,
+      errorCode: null,
+      failurePhase: null,
+    },
+    queryAccounting: queryAccounting(),
+    lifecycle: {
+      savepoint: 'released' as const,
+      recovery: 'not-needed' as const,
+      commit: 'complete' as const,
+      phasesCompleted: [...POSTGRES_OBSERVATION_COMPLETED_PHASES],
+    },
+  };
+}
+
+function execution(
+  candidate: ReturnType<typeof candidateFor>,
+  slot: 1 | 2,
+  resource: string,
+) {
   return {
     slot,
-    containerIdentitySha256: hex(identity),
-    volumeIdentitySha256: hex(slot === 1 ? 'e' : 'f'),
+    containerIdentitySha256: hex(resource),
+    volumeIdentitySha256: hex(resource === 'a' ? 'b' : resource === 'c' ? 'd' : resource),
     imageConfigDigestBefore: candidate.provenance.image.configDigest,
     imageConfigDigestAfter: candidate.provenance.image.configDigest,
-    stdout: { bytes: 512, sha256: hex('1'), truncated: false as const },
-    stderr: { bytes: 0, sha256: hex('2'), truncated: false as const },
+    stdout: {
+      bytes: 512, sha256: candidate.provenance.source.probeStdoutSha256, truncated: false as const,
+    },
+    stderr: { bytes: 0, sha256: EMPTY_SHA256, truncated: false as const },
     exitCode: 0 as const,
     timedOut: false as const,
     outputLimitExceeded: false as const,
@@ -112,306 +182,217 @@ function execution(slot: 1 | 2, identity: string) {
   };
 }
 
-function receiptInput(overrides: Record<string, unknown> = {}) {
-  return {
+function receiptFromCandidate(
+  candidate: ReturnType<typeof candidateFor>,
+  resources: [string, string] = ['a', 'c'],
+) {
+  return createPostgresObservationQualificationReceipt({
     candidates: [candidate, structuredClone(candidate)],
-    executions: [execution(1, '1'), execution(2, '2')],
-    ...overrides,
-  };
+    executions: [execution(candidate, 1, resources[0]), execution(candidate, 2, resources[1])],
+  });
+}
+
+function receiptFor(patch: '16.9' | '16.15', resources: [string, string] = ['a', 'c']) {
+  return receiptFromCandidate(candidateFor(patch), resources);
 }
 
 describe('PostgreSQL observation qualification receipt', () => {
-  it('binds two distinct exact replays while withholding runtime qualification', () => {
-    const receipt = createPostgresObservationQualificationReceipt(receiptInput());
-    expect(receipt.replayStatus).toBe('pass');
-    expect(receipt.evidenceClass).toBe('test-only-non-runtime');
-    expect(receipt.authority).toBe('development-only-no-promotion');
-    expect(receipt.qualificationStatus).toBe('withheld-runtime-gaps');
-    expect(receipt.productionAdmission).toBe(false);
-    expect(receipt.verifiedLease).toBe(false);
-    expect(receipt.reload).toBe(false);
-    expect(receipt.directMapping).toBe(false);
+  it('binds the exact successful observation without promoting runtime authority', () => {
+    const receipt = receiptFor('16.15');
+    expect(receipt).toMatchObject({
+      authority: 'observation-profile-only',
+      observationProfileQualification: 'pass',
+      runtimeAdmissionStatus: 'withheld-independent-gates',
+      productionAdmission: false,
+      verifiedLease: false,
+      reload: false,
+      directMapping: false,
+      replayStatus: 'pass',
+    });
+    expect(receipt.replay.executions.map((value) => value.stdout.sha256))
+      .toEqual([hex('1'), hex('1')]);
     expect(receipt.replay.executions[0].candidateSha256)
       .toBe(receipt.replay.executions[1].candidateSha256);
     expect(() => verifyPostgresObservationQualificationReceipt(receipt)).not.toThrow();
   });
 
-  it('rejects unknown fields, tampering, same resources, drift, or unverified cleanup', () => {
+  it('requires all five candidate sections and the exact accounting/lifecycle inventories', () => {
+    const candidate = candidateFor();
+    const missingAccounting = structuredClone(candidate) as Record<string, unknown>;
+    delete missingAccounting.queryAccounting;
+    expect(() => parsePostgresObservationQualificationCandidate(missingAccounting))
+      .toThrow(/queryAccounting/);
+
+    const reordered = structuredClone(candidate);
+    [reordered.queryAccounting.streams[0], reordered.queryAccounting.streams[1]] =
+      [reordered.queryAccounting.streams[1], reordered.queryAccounting.streams[0]];
+    expect(() => parsePostgresObservationQualificationCandidate(reordered)).toThrow(/stream.*order/i);
+
+    const wrongLegacyCap = structuredClone(candidate);
+    wrongLegacyCap.queryAccounting.streams[0].evidence.cap = 65_536;
+    expect(() => parsePostgresObservationQualificationCandidate(wrongLegacyCap))
+      .toThrow(/cap is inconsistent/i);
+
+    const richDrift = structuredClone(candidate);
+    richDrift.queryAccounting.streams[7].evidence.decoded = 0;
+    richDrift.queryAccounting.streams[7].evidence.polled = 0;
+    richDrift.queryAccounting.streams[7].evidence.retainedPeak = 0;
+    expect(() => parsePostgresObservationQualificationCandidate(richDrift))
+      .toThrow(/rich stream evidence/);
+
+    const wrongPhaseOrder = structuredClone(candidate);
+    [wrongPhaseOrder.lifecycle.phasesCompleted[8], wrongPhaseOrder.lifecycle.phasesCompleted[9]] =
+      [wrongPhaseOrder.lifecycle.phasesCompleted[9], wrongPhaseOrder.lifecycle.phasesCompleted[8]];
+    expect(() => parsePostgresObservationQualificationCandidate(wrongPhaseOrder))
+      .toThrow(/phase.*order/i);
+    expect(POSTGRES_OBSERVATION_COMPLETED_PHASES.slice(-2))
+      .toEqual(['legacy-comparison', 'identity-build']);
+
+    const wrongBuilder = structuredClone(candidate);
+    wrongBuilder.provenance.toolchain.builderImage.configDigest = sha('8');
+    expect(() => parsePostgresObservationQualificationCandidate(wrongBuilder))
+      .toThrow(/builder image identity/);
+
+    const failed = JSON.parse(JSON.stringify(candidate));
+    failed.observation.guard = 'fail';
+    failed.observation.identity = null;
+    failed.observation.legacyCoordinateComparison = 'unavailable';
+    failed.observation.errorCode = 'CatalogQuery';
+    failed.observation.failurePhase = 'guard';
+    expect(() => parsePostgresObservationQualificationCandidate(failed))
+      .toThrow(/guard result/);
+  });
+
+  it('strictly parses duplicate-free closed probe and receipt JSON', () => {
+    const candidate = candidateFor();
+    const { provenance: _provenance, ...probe } = candidate;
+    expect(parsePostgresObservationQualificationProbeOutput(canonical(probe)))
+      .toEqual(probe);
+    expect(() => parsePostgresObservationQualificationProbeOutput(
+      canonical(probe).replace('"savepoint":"released"',
+        '"savepoint":"released","savepoint":"released"'),
+    )).toThrow(/duplicate JSON key/);
+
+    const receipt = receiptFor('16.15');
+    const serialized = canonical(receipt);
+    expect(parsePostgresObservationQualificationReceiptJson(serialized)).toEqual(receipt);
+    expect(() => parsePostgresObservationQualificationReceiptJson(`${serialized}\n`))
+      .toThrow(/exact canonical JSON bytes/);
+    expect(() => parsePostgresObservationQualificationReceiptJson(JSON.stringify(receipt, null, 2)))
+      .toThrow(/exact canonical JSON bytes/);
+    expect(() => parsePostgresObservationQualificationReceiptJson(
+      serialized.replace('"authority":"observation-profile-only"',
+        '"authority":"observation-profile-only","authority":"observation-profile-only"'),
+    )).toThrow(/duplicate JSON key/);
+    expect(() => parsePostgresObservationQualificationReceiptJson(
+      canonical({ ...receipt, surprise: true }),
+    )).toThrow(/invalid keys/);
+
+    const pair = [receiptFor('16.9', ['5', '6']), receipt] as const;
+    expect(parsePostgresObservationQualificationReceiptPairJson(canonical(pair))).toEqual(pair);
+    expect(() => parsePostgresObservationQualificationReceiptPairJson(
+      canonical([pair[1], pair[0]]),
+    )).toThrow(/order must be 16\.9 then 16\.15/);
+    expect(() => parsePostgresObservationQualificationReceiptPairJson(
+      `${canonical(pair)}\n`,
+    )).toThrow(/exact canonical JSON bytes/);
+  });
+
+  it('publishes the two receipts through one atomically replaceable pair artifact', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'semantic-fabric-pgq-io-')));
+    try {
+      mkdirSync(resolve(root, 'tests/postgresql'), { recursive: true });
+      const first = [
+        receiptFor('16.9', ['5', '6']), receiptFor('16.15', ['a', 'c']),
+      ] as const;
+      writePostgresQualificationReceiptPair(root, [first[1], first[0]]);
+      expect(readPostgresQualificationReceiptPair(root)).toEqual(first);
+      expect(readFileSync(resolve(root, POSTGRES_QUALIFICATION_RECEIPT_PAIR_PATH), 'utf8'))
+        .toBe(`${canonical(first)}\n`);
+
+      const replacement = [
+        receiptFor('16.9', ['7', '8']), receiptFor('16.15', ['9', 'e']),
+      ] as const;
+      writePostgresQualificationReceiptPair(root, replacement);
+      expect(readPostgresQualificationReceiptPair(root)).toEqual(replacement);
+      expect(readdirSync(resolve(root, 'tests/postgresql')))
+        .toEqual(['postgresql-16-observation-qualification-receipt-pair-v1.json']);
+      expect(existsSync(resolve(
+        root, 'tests/postgresql/postgresql-16.9-observation-qualification-receipt-v1.json',
+      ))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unbound output, nonempty stderr, reused resources, drift, and incomplete cleanup', () => {
+    const candidate = candidateFor();
+    const base = [execution(candidate, 1, 'a'), execution(candidate, 2, 'c')] as const;
+    const create = (executions: unknown[]) => createPostgresObservationQualificationReceipt({
+      candidates: [candidate, structuredClone(candidate)], executions,
+    });
+    const differentCandidate = structuredClone(candidate);
+    differentCandidate.observation.identity!.constraints = hex('a');
     expect(() => createPostgresObservationQualificationReceipt({
-      ...receiptInput(), surprise: true,
-    })).toThrow(/invalid keys/);
-    const receipt = createPostgresObservationQualificationReceipt(receiptInput());
+      candidates: [candidate, differentCandidate], executions: base,
+    })).toThrow(/not byte equal/);
+    expect(() => create([base[0], {
+      ...base[1], stdout: { ...base[1].stdout, sha256: hex('f') },
+    }])).toThrow(/stdout.*provenance/i);
+    expect(() => create([base[0], {
+      ...base[1], stderr: { ...base[1].stderr, sha256: hex('f') },
+    }])).toThrow(/empty SHA-256/i);
+    expect(() => create([base[0], {
+      ...base[1], stderr: { ...base[1].stderr, bytes: 1 },
+    }])).toThrow(/empty SHA-256/i);
+    expect(() => create([base[0], { ...base[1], containerIdentitySha256: hex('a') }]))
+      .toThrow(/containers.*distinct/);
+    expect(() => create([base[0], {
+      ...base[1], imageConfigDigestAfter: sha('7'),
+    }])).toThrow(/image configuration/);
+    expect(() => create([base[0], {
+      ...base[1], cleanup: { ...base[1].cleanup, volumeRemoved: false },
+    }])).toThrow(/cleanup/);
+  });
+
+  it('requires a coherent 16.9 plus 16.15 pair with identical critical bindings', () => {
+    const pg169 = receiptFor('16.9', ['5', '6']);
+    const pg1615 = receiptFor('16.15', ['a', 'c']);
+    expect(() => verifyPostgresObservationQualificationReceiptPair([pg1615, pg169]))
+      .not.toThrow();
+    expect(() => verifyPostgresObservationQualificationReceiptPair([pg1615, pg1615]))
+      .toThrow(/16\.9.*16\.15/);
+    expect(() => verifyPostgresObservationQualificationReceiptPair([
+      pg1615, receiptFor('16.9', ['a', 'c']),
+    ])).toThrow(/cross-patch containers.*distinct/);
+
+    const criticalCandidate = candidateFor('16.9');
+    criticalCandidate.provenance.inputs.protocolSha256 = hex('a');
+    const criticalDrift = receiptFromCandidate(criticalCandidate, ['5', '6']);
+    expect(() => verifyPostgresObservationQualificationReceiptPair([pg1615, criticalDrift]))
+      .toThrow(/critical bindings/);
+
+    const observationCandidate = candidateFor('16.9');
+    observationCandidate.observation.identity!.types = hex('a');
+    const observationDrift = receiptFromCandidate(observationCandidate, ['5', '6']);
+    expect(() => verifyPostgresObservationQualificationReceiptPair([pg1615, observationDrift]))
+      .toThrow(/cross-patch observation/);
+
+    const imageCandidate = JSON.parse(JSON.stringify(candidateFor('16.9')));
+    imageCandidate.provenance.image.configDigest = sha('7');
+    imageCandidate.provenance.image.inspectSha256 = hex('7');
+    const imageDrift = receiptFromCandidate(imageCandidate, ['5', '6']);
+    expect(() => verifyPostgresObservationQualificationReceiptPair([pg1615, imageDrift]))
+      .toThrow(/image identity is not pinned/);
+
     expect(() => verifyPostgresObservationQualificationReceipt({
-      ...receipt, productionAdmission: true,
-    })).toThrow();
-    expect(() => createPostgresObservationQualificationReceipt(receiptInput({
-      executions: [execution(1, '1'), execution(2, '1')],
-    }))).toThrow(/distinct containers/);
-    expect(() => createPostgresObservationQualificationReceipt(receiptInput({
-      executions: [execution(1, '1'), {
-        ...execution(2, '2'), imageConfigDigestAfter: sha('7'),
-      }],
-    }))).toThrow(/image configuration/);
-    expect(() => createPostgresObservationQualificationReceipt(receiptInput({
-      executions: [execution(1, '1'), {
-        ...execution(2, '2'), cleanup: {
-          ...execution(2, '2').cleanup, volumeRemoved: false,
-        },
-      }],
-    }))).toThrow(/cleanup/);
-    expect(() => createPostgresObservationQualificationReceipt(receiptInput({
-      candidates: [candidate, {
-        ...candidate,
-        observation: {
-          ...candidate.observation,
-          identity: { ...candidate.observation.identity!, constraints: hex('e') },
-        },
-      }],
-    }))).toThrow(/not byte equal/);
-    expect(() => createPostgresObservationQualificationReceipt(receiptInput({
-      executions: [execution(1, '1'), {
-        ...execution(2, '2'), stdout: {
-          ...execution(2, '2').stdout, bytes: 262_145,
-        },
-      }],
-    }))).toThrow(/byte limit/);
-  });
-
-  it('closes version, error, combined-cap, and sentinel evidence', () => {
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...candidate,
-      observation: { ...candidate.observation, serverVersion: 'PostgreSQL 16.150' },
-    })).toThrow(/version/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...candidate,
-      observation: { ...candidate.observation, serverVersion: 'PostgreSQL 16.15\u0000bad' },
-    })).toThrow(/version/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...candidate,
-      observation: {
-        ...candidate.observation, identity: null, legacyComparison: 'unavailable',
-        errorCode: 'Invented:Reason',
-      },
-    })).toThrow(/error code/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...candidate,
-      observation: {
-        ...candidate.observation,
-        identity: null,
-        legacyComparison: 'unavailable',
-        errorCode: 'UnqualifiedEnginePatch',
-      },
-    })).toThrow(/profile-selection/);
-
-    const overflowCandidate = {
-      ...candidate,
-      observation: {
-        ...candidate.observation,
-        rowCounts: {
-          ...candidate.observation.rowCounts,
-          catalogConstraints: 65_535,
-          combinedConstraints: 65_536,
-        },
-        streaming: {
-          ...candidate.observation.streaming,
-          catalogConstraints: {
-            cap: 65_535,
-            polled: 65_536,
-            decoded: 65_535,
-            retainedPeak: 65_535,
-            overflow: true,
-            terminal: 'overflow' as const,
-          },
-        },
-        identity: null,
-        legacyComparison: 'unavailable' as const,
-        errorCode: 'LimitExceeded:RawConstraints' as const,
-        failurePhase: 'catalog-constraints-stream' as const,
-      },
-    };
-    const receipt = createPostgresObservationQualificationReceipt({
-      candidates: [overflowCandidate, structuredClone(overflowCandidate)],
-      executions: [execution(1, '1'), execution(2, '2')],
-    });
-    expect(receipt.replayStatus).toBe('fail');
-    expect(() => verifyPostgresObservationQualificationReceipt(receipt)).not.toThrow();
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...overflowCandidate,
-      observation: {
-        ...overflowCandidate.observation,
-        streaming: {
-          ...overflowCandidate.observation.streaming,
-          catalogConstraints: {
-            ...overflowCandidate.observation.streaming.catalogConstraints,
-            decoded: 65_536,
-            retainedPeak: 65_536,
-          },
-        },
-      },
-    })).toThrow(/overflow sentinel/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...overflowCandidate,
-      observation: {
-        ...overflowCandidate.observation,
-        errorCode: 'LimitExceeded:PhysicalAttributes',
-      },
-    })).toThrow(/exact error/);
-    const relationNormalizationFailure = {
-      ...candidate,
-      observation: {
-        ...candidate.observation,
-        identity: null,
-        legacyComparison: 'unavailable',
-        errorCode: 'LimitExceeded:PhysicalAttributes',
-        failurePhase: 'relation-normalization',
-        rowCounts: {
-          ...candidate.observation.rowCounts,
-          notNullConstraints: 0,
-          catalogConstraints: 0,
-          combinedConstraints: 0,
-        },
-        streaming: {
-          ...candidate.observation.streaming,
-          catalogConstraints: {
-            cap: 65_536, polled: 0, decoded: 0, retainedPeak: 0, overflow: false,
-            terminal: 'not-started',
-          },
-        },
-      },
-    };
-    expect(() => parsePostgresObservationQualificationCandidate(
-      relationNormalizationFailure,
-    )).not.toThrow();
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...relationNormalizationFailure,
-      observation: {
-        ...relationNormalizationFailure.observation,
-        rowCounts: {
-          ...relationNormalizationFailure.observation.rowCounts,
-          notNullConstraints: 1,
-          combinedConstraints: 1,
-        },
-        streaming: {
-          ...relationNormalizationFailure.observation.streaming,
-          catalogConstraints: {
-            ...relationNormalizationFailure.observation.streaming.catalogConstraints,
-            cap: 65_535,
-          },
-        },
-      },
-    })).toThrow(/claims derived constraints/);
-
-    const decodeFailure = {
-      ...candidate,
-      observation: {
-        ...candidate.observation,
-        rowCounts: {
-          relations: 0, attributes: 0, notNullConstraints: 0,
-          catalogConstraints: 0, combinedConstraints: 0,
-        },
-        streaming: {
-          relations: {
-            cap: 4_096, polled: 1, decoded: 0, retainedPeak: 0, overflow: false,
-            terminal: 'row-failure' as const,
-          },
-          attributes: {
-            cap: 65_536, polled: 0, decoded: 0, retainedPeak: 0, overflow: false,
-            terminal: 'not-started' as const,
-          },
-          catalogConstraints: {
-            cap: 65_536, polled: 0, decoded: 0, retainedPeak: 0, overflow: false,
-            terminal: 'not-started' as const,
-          },
-        },
-        identity: null,
-        legacyComparison: 'unavailable' as const,
-        errorCode: 'CatalogDecode' as const,
-        failurePhase: 'relations-stream' as const,
-      },
-    };
-    expect(() => parsePostgresObservationQualificationCandidate(decodeFailure)).not.toThrow();
-
-    const semanticRowFailure = {
-      ...candidate,
-      observation: {
-        ...candidate.observation,
-        rowCounts: {
-          relations: 1, attributes: 0, notNullConstraints: 0,
-          catalogConstraints: 0, combinedConstraints: 0,
-        },
-        streaming: {
-          relations: candidate.observation.streaming.relations,
-          attributes: {
-            cap: 65_536, polled: 1, decoded: 0, retainedPeak: 0, overflow: false,
-            terminal: 'row-failure' as const,
-          },
-          catalogConstraints: {
-            cap: 65_536, polled: 0, decoded: 0, retainedPeak: 0, overflow: false,
-            terminal: 'not-started' as const,
-          },
-        },
-        identity: null,
-        legacyComparison: 'unavailable' as const,
-        errorCode: 'UnsupportedType' as const,
-        failurePhase: 'attributes-stream' as const,
-      },
-    };
-    expect(() => parsePostgresObservationQualificationCandidate(semanticRowFailure)).not.toThrow();
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...semanticRowFailure,
-      observation: {
-        ...semanticRowFailure.observation,
-        rowCounts: {
-          ...semanticRowFailure.observation.rowCounts,
-          notNullConstraints: 1,
-          combinedConstraints: 1,
-        },
-        streaming: {
-          ...semanticRowFailure.observation.streaming,
-          catalogConstraints: {
-            ...semanticRowFailure.observation.streaming.catalogConstraints,
-            cap: 65_535,
-          },
-        },
-      },
-    })).toThrow(/claims derived constraints/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...semanticRowFailure,
-      observation: {
-        ...semanticRowFailure.observation,
-        failurePhase: 'relation-normalization',
-      },
-    })).toThrow(/failure phase/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...semanticRowFailure,
-      observation: {
-        ...semanticRowFailure.observation,
-        errorCode: 'UnsupportedCollation',
-      },
-    })).toThrow(/exact error/);
-    expect(() => parsePostgresObservationQualificationCandidate({
-      ...overflowCandidate,
-      observation: {
-        ...overflowCandidate.observation,
-        streaming: {
-          ...overflowCandidate.observation.streaming,
-          catalogConstraints: {
-            ...overflowCandidate.observation.streaming.catalogConstraints,
-            overflow: false,
-            terminal: 'row-failure',
-          },
-        },
-        errorCode: 'UnsupportedConstraint',
-      },
-    })).toThrow(/overflow evidence/);
-  });
-
-  it('keeps the executable qualification path fail closed until Rust evidence is complete', async () => {
-    expect(POSTGRES_OBSERVATION_QUALIFICATION_RUNNER_STATUS).toEqual({
-      available: false,
-      reason: 'rust-evidence-contract-incomplete',
-    });
-    await expect(runPostgresObservationQualificationProbe()).rejects
-      .toThrow('POSTGRES_OBSERVATION_QUALIFICATION_WITHHELD');
+      ...pg1615, productionAdmission: true,
+    })).toThrow(/production admission/);
+    expect(() => verifyPostgresObservationQualificationReceipt({
+      ...pg1615, runtimeAdmissionStatus: 'admitted',
+    })).toThrow(/runtime admission/);
+    expect(() => verifyPostgresObservationQualificationReceipt({
+      ...pg1615, observationProfileQualification: 'fail', replayStatus: 'fail',
+    })).toThrow(/observation profile qualification/);
   });
 });
