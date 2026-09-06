@@ -297,6 +297,12 @@ jobs:
         run: cargo build --locked --workspace --all-targets
       - name: test
         run: cargo test --locked --workspace
+      # Private ADR-0040 comparison evidence only. The feature stays default-off
+      # and this gate does not admit the substrate into product execution.
+      - name: clippy (sf-sparql secure-spill-prototype)
+        run: cargo clippy --locked -p sf-sparql --features secure-spill-prototype --all-targets -- -D warnings
+      - name: test (sf-sparql secure-spill-prototype)
+        run: cargo test --locked -p sf-sparql --features secure-spill-prototype --lib federation::global::spill
       - name: test required-live PostgreSQL verified-generation lifecycle
         timeout-minutes: 5
         env:
