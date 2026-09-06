@@ -111,7 +111,20 @@ fn request(address: SocketAddr) -> Option<String> {
     response.starts_with("HTTP/1.1 200").then_some(response)
 }
 
-fn start_server() -> (Fixture, SocketAddr, Server) {
+fn metrics(address: SocketAddr) -> Option<String> {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(100)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    write!(
+        stream,
+        "GET /metrics HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    response.starts_with("HTTP/1.1 200").then_some(response)
+}
+
+fn start_server(enable_metrics: bool) -> (Fixture, SocketAddr, Server) {
     let mut fixture = Fixture::new();
     let first_db = fixture.path("first.db");
     let second_db = fixture.path("second.db");
@@ -131,22 +144,26 @@ fn start_server() -> (Fixture, SocketAddr, Server) {
     .unwrap();
 
     let address = available_address();
-    let child = Command::new(BINARY)
-        .args([
-            "serve",
-            "--source",
-            &format!("sqlite:{}", first_db.display()),
-            "--mapping",
-            first_mapping.to_str().unwrap(),
-            "--source-2",
-            &format!("sqlite:{}", second_db.display()),
-            "--mapping-2",
-            second_mapping.to_str().unwrap(),
-            "--ontology",
-            ontology.to_str().unwrap(),
-            "--bind",
-            &address.to_string(),
-        ])
+    let mut command = Command::new(BINARY);
+    command.args([
+        "serve",
+        "--source",
+        &format!("sqlite:{}", first_db.display()),
+        "--mapping",
+        first_mapping.to_str().unwrap(),
+        "--source-2",
+        &format!("sqlite:{}", second_db.display()),
+        "--mapping-2",
+        second_mapping.to_str().unwrap(),
+        "--ontology",
+        ontology.to_str().unwrap(),
+        "--bind",
+        &address.to_string(),
+    ]);
+    if enable_metrics {
+        command.arg("--metrics");
+    }
+    let child = command
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -170,16 +187,53 @@ fn wait_for_query(address: SocketAddr, server: &mut Server) -> String {
 
 #[test]
 fn cli_serves_the_two_source_union_vertical() {
-    let (_fixture, address, mut server) = start_server();
+    let (_fixture, address, mut server) = start_server(false);
     let response = wait_for_query(address, &mut server);
     let body = response.split_once("\r\n\r\n").unwrap().1;
     assert_eq!(body.matches("\"value\":\"same\"").count(), 2, "{body}");
 }
 
+#[test]
+fn cli_exposes_only_opted_in_bounded_prometheus_metrics() {
+    let (_fixture, address, mut server) = start_server(true);
+    let query_response = wait_for_query(address, &mut server);
+    assert!(query_response.starts_with("HTTP/1.1 200"));
+
+    let response = metrics(address).expect("enabled metrics endpoint");
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+    assert!(
+        headers.contains("content-type: text/plain; version=0.0.4; charset=utf-8"),
+        "headers={headers}"
+    );
+    assert!(
+        headers.contains("cache-control: no-store"),
+        "headers={headers}"
+    );
+    assert!(headers.contains("x-content-type-options: nosniff"));
+    assert!(
+        body.contains("# TYPE sf_query_total counter"),
+        "body={body}"
+    );
+    assert!(body.contains("sf_query_total{"), "body={body}");
+    assert!(body.contains("status=\"success\""), "body={body}");
+    assert!(body.contains("body=\"complete\""), "body={body}");
+    assert!(
+        body.contains("# TYPE sf_query_duration_seconds histogram"),
+        "body={body}"
+    );
+    assert!(body.contains("sf_query_duration_seconds_bucket{"));
+    for forbidden in [QUERY, "http://example.test/left", "sqlite:"] {
+        assert!(
+            !body.contains(forbidden),
+            "forbidden={forbidden}, body={body}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_handles_real_sigterm_and_exits_cleanly() {
-    let (_fixture, address, mut server) = start_server();
+    let (_fixture, address, mut server) = start_server(false);
     let _ = wait_for_query(address, &mut server);
 
     // SAFETY: `server` owns this live child PID, and `kill` does not retain the pointer-free
