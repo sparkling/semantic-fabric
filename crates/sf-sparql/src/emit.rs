@@ -1713,7 +1713,9 @@ pub(crate) fn render_immediate_source_column(
     if dialect == Dialect::Postgres && column == "rowid" && inner_sql.is_none() {
         return format!("({alias}.ctid)::text");
     }
-    if inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, column)) {
+    if dialect == Dialect::Postgres
+        && inner_sql.is_some_and(|sql| crate::cascade::col_is_unquoted_alias(sql, column))
+    {
         format!("{alias}.{column}")
     } else {
         format!("{alias}.{}", dialect.quote_ident(column))
@@ -1870,26 +1872,19 @@ END, '' ORDER BY n\
 /// re-interprets an in-flight (possibly standalone-invalid) byte as text,
 /// and the FINAL aggregated result is converted back to `utf8mb4` once, at
 /// the very end (mirrors the SQLite per-byte-cast pattern: only the fully
-/// reassembled result needs to be valid UTF-8, confirmed live). The
-/// `SET_VAR` optimizer hint raises two session limits for THIS query only
-/// (no separate `SET SESSION` statement, so no change to connection
-/// setup elsewhere in the codebase): `group_concat_max_len` (MySQL's
-/// default of 1024 bytes SILENTLY truncates a longer `GROUP_CONCAT` result
-/// with no error — confirmed live — which is exactly the unsound-truncation
-/// class this whole fix exists to close, so it cannot be left at the
-/// default) and `cte_max_recursion_depth` (default 1000; exceeding it is a
-/// query ERROR, not a silent truncation — sound but incomplete for a very
-/// long column value — raised anyway for headroom, confirmed live up to a
-/// 2000-character input).
+/// reassembled result needs to be valid UTF-8, confirmed live).
+///
+/// `JSON_TABLE(... FOR ORDINALITY)` supplies a row per byte. This is
+/// deliberately not a correlated recursive CTE: MySQL 8.4 materializes such
+/// a CTE using one outer row's length when the expression is projected for
+/// several rows, which silently truncates/pads other values. `JSON_TABLE` is
+/// implicitly lateral in MySQL and evaluates its document per outer row.
+/// The `SET_VAR` optimizer hint raises `group_concat_max_len` for this query
+/// only; MySQL's 1024-byte default otherwise silently truncates the result.
 fn percent_encode_col_mysql(col: &str) -> String {
     format!(
-        "(WITH RECURSIVE seq AS (\
-SELECT 1 AS n WHERE LENGTH(CAST({col} AS BINARY)) > 0 \
-UNION ALL \
-SELECT n + 1 FROM seq WHERE n < LENGTH(CAST({col} AS BINARY))\
-) \
-SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
-SELECT /*+ SET_VAR(group_concat_max_len = 1000000) SET_VAR(cte_max_recursion_depth = 100000) */ \
+        "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
+SELECT /*+ SET_VAR(group_concat_max_len = 1000000) */ \
 CONVERT(CAST(GROUP_CONCAT(\
 CASE \
 WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '30' AND '39' \
@@ -1901,7 +1896,11 @@ THEN SUBSTRING(CAST({col} AS BINARY), n, 1) \
 ELSE CAST(CONCAT('%', HEX(SUBSTRING(CAST({col} AS BINARY), n, 1))) AS BINARY) \
 END ORDER BY n SEPARATOR ''\
 ) AS BINARY) USING utf8mb4)\
-FROM seq\
+FROM JSON_TABLE(\
+CASE WHEN LENGTH(CAST({col} AS BINARY)) = 0 THEN '[]' \
+ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
+'$[*]' COLUMNS (n FOR ORDINALITY)\
+) AS sfpe\
 ), '') END)"
     )
 }
@@ -2208,8 +2207,7 @@ mod tests {
     /// [`percent_encode_col_mysql`]'s own doc comments for the
     /// dialect-specific bugs their first drafts had (a PG NULL/empty
     /// conflation; a MySQL `LENGTH`-vs-`SUBSTRING` byte/character unit
-    /// mismatch; a MySQL `group_concat_max_len`/`cte_max_recursion_depth`
-    /// silent-truncation exposure).
+    /// mismatch; and MySQL `group_concat_max_len` silent truncation).
     #[test]
     fn percent_encode_col_sqlite_matches_reference_iri_encoding() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -2246,6 +2244,18 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
+    #[test]
+    fn mysql_percent_encoder_round_trips_through_the_ast_boundary() {
+        let expression =
+            percent_encode_col("sfs0.`value`", Dialect::MySql).expect("MySQL is supported");
+        let skeleton = format!("SELECT {expression} FROM `source` sfs0");
+        let emitted = Dialect::MySql
+            .emit_via_ast(&skeleton)
+            .expect("MySQL JSON_TABLE encoder must pass the SQL AST boundary");
+        assert!(emitted.contains("JSON_TABLE"), "{emitted}");
+        assert!(emitted.contains("FOR ORDINALITY"), "{emitted}");
     }
 
     /// A dialect this module does not implement encoding for (Oracle, picked

@@ -11,11 +11,13 @@
 
 use std::borrow::BorrowMut;
 
+use mysql_async::consts::ColumnType;
 use mysql_async::prelude::Queryable;
-use mysql_async::{BinaryProtocol, Conn, Params, QueryResult, Value};
+use mysql_async::{BinaryProtocol, Column, Conn, Params, QueryResult, Value};
+use sf_core::datatype::{self, XsdTypeCode};
 
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// A MySQL backend over any holder that yields `&mut Conn`. Generic over `C` so the
 /// same adapter serves both lanes (mirroring `PgBackend<C>`):
@@ -37,6 +39,7 @@ impl<C: BorrowMut<Conn>> MysqlBackend<C> {
 /// time (no client-side `Vec<Row>`), marshalled to a [`RawTuple`] per `next_row`.
 pub struct MysqlBranch<'s> {
     result: QueryResult<'s, 'static, BinaryProtocol>,
+    codes: Vec<Option<XsdTypeCode>>,
 }
 
 impl BranchStream for MysqlBranch<'_> {
@@ -49,11 +52,9 @@ impl BranchStream for MysqlBranch<'_> {
         for i in 0..ncols {
             // exec_mysql.rs:146 VERBATIM.
             let v: Value = row.take(i).unwrap_or(Value::NULL);
-            values.push(mysql_value_to_string(v));
+            values.push(mysql_value_to_string(v, self.codes[i])?);
         }
-        // v1: text protocol carries no per-row wire types ⇒ all codes None
-        // (exec_mysql.rs:187 verbatim).
-        let codes = vec![None; ncols];
+        let codes = self.codes.clone();
         Ok(Some(RawTuple { values, codes }))
     }
 }
@@ -80,9 +81,10 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
             .collect();
         let conn = self.conn.borrow_mut(); // &'s mut Conn
         let stmt = conn.prep(sql).await?;
+        let codes = stmt.columns().iter().map(mysql_xsd_code).collect();
         // exec_iter (packet-streamed) — NOT exec() (buffer-all Vec<Row>).
         let result = conn.exec_iter(stmt, Params::Positional(params)).await?;
-        Ok(MysqlBranch { result })
+        Ok(MysqlBranch { result, codes })
     }
 }
 
@@ -90,37 +92,35 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
 /// All wire types are converted via their natural Rust representation and then
 /// formatted as strings — the same principle as the PostgreSQL text-protocol path.
 ///
-/// **Bytes:** only valid UTF-8 sequences are accepted; non-UTF-8 bytes (BLOB /
-/// VARBINARY) yield `None` (unbound) rather than a silently-corrupted literal.
-/// Callers that need binary BLOB values should add an `rr:datatype` declaration
-/// and a custom term-gen hook (ADR-0014 follow-up).
-///
-/// **Date midnight:** `Value::Date` with all-zero time fields is produced by both
-/// MySQL `DATE` columns and `DATETIME`/`TIMESTAMP` columns whose value is exactly
-/// midnight. Without per-column wire-type metadata (available from `stmt.columns()`
-/// but not yet threaded through the v1 executor) the two are indistinguishable.
-/// The emitted lexical form `"YYYY-MM-DD"` is correct for `DATE` columns mapped with
-/// `rr:datatype xsd:date`; for `DATETIME` midnight mapped with `rr:datatype xsd:dateTime`
-/// this produces an invalid xsd:dateTime lexical form — a known v1 limitation tracked
-/// under ADR-0014.
-fn mysql_value_to_string(v: Value) -> Option<String> {
+/// Prepared-statement metadata supplies the natural XSD code. Binary values are
+/// uppercase-hex encoded only for a binary column; invalid UTF-8 in a text column
+/// is a hard marshalling error. The same metadata distinguishes DATE from a
+/// DATETIME/TIMESTAMP whose value happens to be midnight.
+fn mysql_value_to_string(v: Value, code: Option<XsdTypeCode>) -> Result<Option<String>> {
     use mysql_async::Value::*;
-    match v {
+    Ok(match v {
         NULL => None,
-        // Reject non-UTF-8 bytes rather than silently corrupting BLOB data.
-        Bytes(b) => String::from_utf8(b).ok(),
+        Bytes(bytes) if code == Some(XsdTypeCode::HexBinary) => {
+            let mut encoded = String::new();
+            datatype::hex_binary_upper(&bytes, &mut encoded);
+            Some(encoded)
+        }
+        Bytes(bytes) => Some(
+            String::from_utf8(bytes)
+                .map_err(|error| Error::Marshal(format!("non-UTF8 MySQL text column: {error}")))?,
+        ),
         Int(i) => Some(i.to_string()),
         UInt(u) => Some(u.to_string()),
         Float(f) => Some(f.to_string()),
         Double(d) => Some(d.to_string()),
         Date(y, mo, d, h, mi, s, us) => {
-            if h == 0 && mi == 0 && s == 0 && us == 0 {
+            if code == Some(XsdTypeCode::Date) {
                 Some(format!("{y:04}-{mo:02}-{d:02}"))
             } else if us == 0 {
-                Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"))
+                Some(format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}"))
             } else {
                 Some(format!(
-                    "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{us:06}"
+                    "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}"
                 ))
             }
         }
@@ -133,6 +133,50 @@ fn mysql_value_to_string(v: Value) -> Option<String> {
                 Some(format!("{sign}{total_h:02}:{mi:02}:{s:02}.{us:06}"))
             }
         }
+    })
+}
+
+fn mysql_xsd_code(column: &Column) -> Option<XsdTypeCode> {
+    use ColumnType::*;
+    match column.column_type() {
+        MYSQL_TYPE_TINY if column.column_length() == 1 => Some(XsdTypeCode::Boolean),
+        MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG
+        | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => Some(XsdTypeCode::Integer),
+        MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => Some(XsdTypeCode::Decimal),
+        MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE => Some(XsdTypeCode::Double),
+        MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => Some(XsdTypeCode::Date),
+        MYSQL_TYPE_TIME | MYSQL_TYPE_TIME2 => Some(XsdTypeCode::Time),
+        MYSQL_TYPE_TIMESTAMP
+        | MYSQL_TYPE_TIMESTAMP2
+        | MYSQL_TYPE_DATETIME
+        | MYSQL_TYPE_DATETIME2 => Some(XsdTypeCode::DateTime),
+        MYSQL_TYPE_BIT => Some(XsdTypeCode::HexBinary),
+        MYSQL_TYPE_VARCHAR
+        | MYSQL_TYPE_VAR_STRING
+        | MYSQL_TYPE_STRING
+        | MYSQL_TYPE_TINY_BLOB
+        | MYSQL_TYPE_MEDIUM_BLOB
+        | MYSQL_TYPE_LONG_BLOB
+        | MYSQL_TYPE_BLOB
+            if column.character_set() == 63 =>
+        {
+            Some(XsdTypeCode::HexBinary)
+        }
+        MYSQL_TYPE_VARCHAR
+        | MYSQL_TYPE_VAR_STRING
+        | MYSQL_TYPE_STRING
+        | MYSQL_TYPE_TINY_BLOB
+        | MYSQL_TYPE_MEDIUM_BLOB
+        | MYSQL_TYPE_LONG_BLOB
+        | MYSQL_TYPE_BLOB
+        | MYSQL_TYPE_ENUM
+        | MYSQL_TYPE_SET
+        | MYSQL_TYPE_JSON => Some(XsdTypeCode::String),
+        MYSQL_TYPE_NULL
+        | MYSQL_TYPE_TYPED_ARRAY
+        | MYSQL_TYPE_VECTOR
+        | MYSQL_TYPE_UNKNOWN
+        | MYSQL_TYPE_GEOMETRY => None,
     }
 }
 
@@ -141,43 +185,51 @@ mod tests {
     use super::*;
     use mysql_async::Value;
 
+    fn lexical(value: Value, code: Option<XsdTypeCode>) -> Option<String> {
+        mysql_value_to_string(value, code).expect("value marshals")
+    }
+
     #[test]
     fn null_maps_to_none() {
-        assert_eq!(mysql_value_to_string(Value::NULL), None);
+        assert_eq!(lexical(Value::NULL, None), None);
     }
 
     #[test]
     fn utf8_bytes_pass_through() {
         assert_eq!(
-            mysql_value_to_string(Value::Bytes(b"hello".to_vec())),
+            lexical(Value::Bytes(b"hello".to_vec()), Some(XsdTypeCode::String)),
             Some("hello".to_owned())
         );
     }
 
     #[test]
-    fn non_utf8_bytes_are_rejected_not_corrupted() {
-        // A raw BLOB that isn't valid UTF-8 (e.g. arbitrary binary data in a
-        // TEXT-typed column) must be rejected (None), never silently corrupted
-        // via a lossy conversion.
-        assert_eq!(mysql_value_to_string(Value::Bytes(vec![0xff, 0xfe])), None);
+    fn binary_bytes_are_hex_encoded_and_text_bytes_remain_strict() {
+        assert_eq!(
+            lexical(Value::Bytes(vec![0xff, 0xfe]), Some(XsdTypeCode::HexBinary)),
+            Some("FFFE".to_owned())
+        );
+        let error =
+            mysql_value_to_string(Value::Bytes(vec![0xff, 0xfe]), Some(XsdTypeCode::String))
+                .unwrap_err();
+        assert!(matches!(error, Error::Marshal(_)), "{error:?}");
     }
 
     #[test]
     fn integer_and_float_variants_render_via_to_string() {
         assert_eq!(
-            mysql_value_to_string(Value::Int(-42)),
+            lexical(Value::Int(-42), Some(XsdTypeCode::Integer)),
             Some("-42".to_owned())
         );
         assert_eq!(
-            mysql_value_to_string(Value::UInt(42)),
+            lexical(Value::UInt(42), Some(XsdTypeCode::Integer)),
             Some("42".to_owned())
         );
         assert_eq!(
-            mysql_value_to_string(Value::Float(1.5)),
+            lexical(Value::Float(1.5), Some(XsdTypeCode::Double)),
             Some("1.5".to_owned())
         );
         assert_eq!(
-            mysql_value_to_string(Value::Double(2.5)),
+            lexical(Value::Double(2.5), Some(XsdTypeCode::Double)),
             Some("2.5".to_owned())
         );
     }
@@ -185,45 +237,52 @@ mod tests {
     #[test]
     fn date_with_zero_time_renders_as_bare_date() {
         assert_eq!(
-            mysql_value_to_string(Value::Date(2024, 3, 15, 0, 0, 0, 0)),
+            lexical(
+                Value::Date(2024, 3, 15, 0, 0, 0, 0),
+                Some(XsdTypeCode::Date)
+            ),
             Some("2024-03-15".to_owned())
         );
     }
 
     #[test]
-    fn date_documented_midnight_ambiguity() {
-        // DOCUMENTED pre-existing limitation (see the module's own doc comment):
-        // a DATETIME column whose value happens to be exactly midnight renders
-        // IDENTICALLY to a bare DATE column — there is no way to tell them apart
-        // from the wire value alone. This test locks in that CURRENT behavior
-        // (both forms collapse to "YYYY-MM-DD"), not a "fix": distinguishing them
-        // would need the column's declared type, not just its value.
-        let date_only = mysql_value_to_string(Value::Date(2024, 3, 15, 0, 0, 0, 0));
-        let midnight_datetime = mysql_value_to_string(Value::Date(2024, 3, 15, 0, 0, 0, 0));
-        assert_eq!(date_only, midnight_datetime);
+    fn metadata_distinguishes_date_from_midnight_datetime() {
+        let value = Value::Date(2024, 3, 15, 0, 0, 0, 0);
+        let date_only = lexical(value.clone(), Some(XsdTypeCode::Date));
+        let midnight_datetime = lexical(value, Some(XsdTypeCode::DateTime));
         assert_eq!(date_only, Some("2024-03-15".to_owned()));
+        assert_eq!(midnight_datetime, Some("2024-03-15 00:00:00".to_owned()));
     }
 
     #[test]
     fn date_with_time_no_micros_renders_iso_t_separated() {
         assert_eq!(
-            mysql_value_to_string(Value::Date(2024, 3, 15, 13, 45, 30, 0)),
-            Some("2024-03-15T13:45:30".to_owned())
+            lexical(
+                Value::Date(2024, 3, 15, 13, 45, 30, 0),
+                Some(XsdTypeCode::DateTime)
+            ),
+            Some("2024-03-15 13:45:30".to_owned())
         );
     }
 
     #[test]
     fn date_with_microseconds_renders_fractional_seconds() {
         assert_eq!(
-            mysql_value_to_string(Value::Date(2024, 3, 15, 13, 45, 30, 123456)),
-            Some("2024-03-15T13:45:30.123456".to_owned())
+            lexical(
+                Value::Date(2024, 3, 15, 13, 45, 30, 123456),
+                Some(XsdTypeCode::DateTime)
+            ),
+            Some("2024-03-15 13:45:30.123456".to_owned())
         );
     }
 
     #[test]
     fn time_zero_days_no_micros() {
         assert_eq!(
-            mysql_value_to_string(Value::Time(false, 0, 13, 45, 30, 0)),
+            lexical(
+                Value::Time(false, 0, 13, 45, 30, 0),
+                Some(XsdTypeCode::Time)
+            ),
             Some("13:45:30".to_owned())
         );
     }
@@ -231,7 +290,7 @@ mod tests {
     #[test]
     fn time_negative_renders_leading_minus() {
         assert_eq!(
-            mysql_value_to_string(Value::Time(true, 0, 13, 45, 30, 0)),
+            lexical(Value::Time(true, 0, 13, 45, 30, 0), Some(XsdTypeCode::Time)),
             Some("-13:45:30".to_owned())
         );
     }
@@ -241,7 +300,7 @@ mod tests {
         // MySQL TIME can exceed 24h (elapsed-time semantics); `days` folds into
         // the hour count rather than being dropped or rendered separately.
         assert_eq!(
-            mysql_value_to_string(Value::Time(false, 2, 3, 0, 0, 0)),
+            lexical(Value::Time(false, 2, 3, 0, 0, 0), Some(XsdTypeCode::Time)),
             Some("51:00:00".to_owned()) // 2*24 + 3 = 51
         );
     }
@@ -249,8 +308,35 @@ mod tests {
     #[test]
     fn time_with_microseconds_renders_fractional_seconds() {
         assert_eq!(
-            mysql_value_to_string(Value::Time(false, 0, 13, 45, 30, 500000)),
+            lexical(
+                Value::Time(false, 0, 13, 45, 30, 500000),
+                Some(XsdTypeCode::Time)
+            ),
             Some("13:45:30.500000".to_owned())
+        );
+    }
+
+    #[test]
+    fn prepared_column_metadata_maps_mysql_natural_types() {
+        assert_eq!(
+            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_LONG)),
+            Some(XsdTypeCode::Integer)
+        );
+        assert_eq!(
+            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_TINY).with_column_length(1)),
+            Some(XsdTypeCode::Boolean)
+        );
+        assert_eq!(
+            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_VAR_STRING).with_character_set(63)),
+            Some(XsdTypeCode::HexBinary)
+        );
+        assert_eq!(
+            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_VAR_STRING)),
+            Some(XsdTypeCode::String)
+        );
+        assert_eq!(
+            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_DATETIME)),
+            Some(XsdTypeCode::DateTime)
         );
     }
 }

@@ -240,7 +240,7 @@ pub use postgres::{
 
 /// Columns, NOT NULL, and data type — from `information_schema.COLUMNS`, bound
 /// by table name with a `?` positional placeholder (Dialect::MySql, ADR-0010 R1).
-const MYSQL_COLUMNS_SQL: &str = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
+const MYSQL_COLUMNS_SQL: &str = "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE \
      FROM information_schema.COLUMNS \
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
      ORDER BY ORDINAL_POSITION";
@@ -285,15 +285,15 @@ pub async fn introspect_mysql(conn: &mut mysql_async::Conn, table: &str) -> Resu
         let name: String = row.get(0).ok_or_else(|| {
             Error::Introspection(format!("MySQL COLUMNS missing COLUMN_NAME for {table}"))
         })?;
-        let data_type: String = row.get(1).ok_or_else(|| {
-            Error::Introspection(format!("MySQL COLUMNS missing DATA_TYPE for {name}"))
+        let column_type: String = row.get(1).ok_or_else(|| {
+            Error::Introspection(format!("MySQL COLUMNS missing COLUMN_TYPE for {name}"))
         })?;
         let is_nullable: String = row.get(2).ok_or_else(|| {
             Error::Introspection(format!("MySQL COLUMNS missing IS_NULLABLE for {name}"))
         })?;
         schema.columns.push(Column::new(
             name,
-            data_type,
+            column_type,
             is_nullable.eq_ignore_ascii_case("NO"),
         ));
     }
