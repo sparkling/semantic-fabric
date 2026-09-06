@@ -137,12 +137,13 @@ async fn process(
                     return problem::response(ProblemCode::Internal);
                 }
             };
-            let (source_id, backend, verified_generation, plan) = execution.into_parts();
-            if generations.contains(source_id) != verified_generation {
+            let (source_id, binding_identity, backend, verified_generation, plan) =
+                execution.into_parts();
+            if generations.contains(source_id, &binding_identity) != verified_generation {
                 let _ = generations.finish().await;
                 return problem::response(ProblemCode::Internal);
             }
-            let generation = generations.take(source_id);
+            let generation = generations.take(source_id, &binding_identity);
             if !generations.is_empty() {
                 let _ = generations.finish().await;
                 return problem::response(ProblemCode::Internal);

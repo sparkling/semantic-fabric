@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
-use sf_core::query_control::QueryLimits;
+use sf_core::query_control::{QueryLimits, UncontrolledQueryControl};
 use sf_core::{SourceId, SourceMapping};
 use sf_sparql::Epoch;
 use tower::ServiceExt;
@@ -365,6 +365,47 @@ async fn in_flight_union_pins_both_old_source_bindings_across_activation() {
     let new = new["results"]["bindings"].as_array().unwrap();
     assert!(new.iter().any(|row| row["value"]["value"] == "new-left"));
     assert!(new.iter().any(|row| row["value"]["value"] == "new-right"));
+}
+
+#[test]
+fn content_equal_federated_snapshots_do_not_share_plan_authority() {
+    let predicates = ["http://example.test/left", "http://example.test/right"];
+    let sources = || {
+        let (left, left_pool, left_file) = runtime_source(0, predicates[0], &["same"]);
+        let (right, right_pool, right_file) = runtime_source(1, predicates[1], &["same"]);
+        (
+            RuntimeSnapshot::new(
+                Epoch(0),
+                crate::test_support::ontology(&[], &predicates),
+                vec![left, right],
+            )
+            .unwrap(),
+            [left_pool, right_pool],
+            [left_file, right_file],
+        )
+    };
+    let (first, _first_pools, _first_files) = sources();
+    let (second, second_pools, _second_files) = sources();
+    let source_ids = [SourceId::new(0).unwrap(), SourceId::new(1).unwrap()];
+    let bound = first
+        .compile_federated_union(source_ids, UNION_SAME_VAR, &UncontrolledQueryControl)
+        .unwrap();
+    let io = Arc::new(AtomicUsize::new(0));
+    for pool in second_pools {
+        let io = io.clone();
+        pool.set_admission_pending_observer(move || {
+            io.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    let Err(error) = second.prepare_federated_execution(bound) else {
+        panic!("content-equal federated bindings must not share plan authority");
+    };
+    assert_eq!(
+        error.to_string(),
+        "compiled plan does not belong to this runtime binding"
+    );
+    assert_eq!(io.load(Ordering::SeqCst), 0, "rejection touched a pool");
 }
 
 #[test]

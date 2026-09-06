@@ -324,14 +324,17 @@ impl RuntimeSnapshot {
         })?;
         let plan =
             compile_source_affine_union(sparql, [left.compiler(), right.compiler()], control)?;
-        let scope_for = |index: usize| {
+        let binding_for = |index: usize| {
             self.registry
                 .binding(plan.fragments()[index].source_id())
                 .expect("compiled fragment source remains registered")
-                .scope()
         };
-        let scopes = [scope_for(0), scope_for(1)];
-        Ok(BoundFederatedPlan::new(plan, scopes))
+        let binding_identities = [
+            binding_for(0).binding_identity(),
+            binding_for(1).binding_identity(),
+        ];
+        let scopes = [binding_for(0).scope(), binding_for(1).scope()];
+        Ok(BoundFederatedPlan::new(plan, binding_identities, scopes))
     }
 
     pub(crate) fn preflight_federated_union(
@@ -375,10 +378,14 @@ impl RuntimeSnapshot {
         &self,
         bound: BoundFederatedPlan,
     ) -> Result<ExecutableFederatedPlan, BindingMismatch> {
-        let (plan, scopes) = bound.into_parts();
+        let (plan, binding_identities, scopes) = bound.into_parts();
         let variables = plan.variables().to_vec();
         let mut executable = Vec::with_capacity(2);
-        for (fragment, scope) in plan.fragments().iter().zip(scopes) {
+        for (fragment, (binding_identity, scope)) in plan
+            .fragments()
+            .iter()
+            .zip(binding_identities.into_iter().zip(scopes))
+        {
             if fragment.source_id() != scope.source_id() {
                 return Err(BindingMismatch);
             }
@@ -387,6 +394,7 @@ impl RuntimeSnapshot {
                 .binding(fragment.source_id())
                 .ok_or(BindingMismatch)?;
             executable.push(binding.prepare_execution(BoundPlan::from_parts(
+                binding_identity,
                 scope,
                 fragment.source_id(),
                 fragment.shared_plan(),

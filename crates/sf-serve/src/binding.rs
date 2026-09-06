@@ -23,6 +23,7 @@ use sf_sql::Dialect;
 use sf_sql::TableSchema;
 
 use crate::backend::{Backend, BackendKind};
+use crate::binding_identity::RuntimeBindingIdentity;
 use crate::pg_generation::{PgGenerationError, PgGenerationRequirement, SourceGeneration};
 use crate::semantic_admission::ValidatedMapping;
 use crate::IntrospectedSource;
@@ -79,6 +80,7 @@ impl BackendProfile {
 /// Raw catalogue observations become a constraint-quarantined compiler view
 /// before the binding or cache exists.
 pub(crate) struct RuntimeBinding {
+    binding_identity: RuntimeBindingIdentity,
     backend: Backend,
     profile: BackendProfile,
     #[cfg(test)]
@@ -113,6 +115,7 @@ impl RuntimeBinding {
             PLAN_CACHE_CAP,
         );
         Self {
+            binding_identity: RuntimeBindingIdentity::fresh(),
             backend,
             profile,
             #[cfg(test)]
@@ -146,6 +149,7 @@ impl RuntimeBinding {
         let compiled = self.compiler.compile_shared(sparql);
         control.checkpoint()?;
         compiled.map(|plan| BoundPlan {
+            binding_identity: self.binding_identity.clone(),
             scope: self.compiler.scope(),
             source_id: self.compiler.source_id(),
             plan,
@@ -171,13 +175,15 @@ impl RuntimeBinding {
         &self,
         bound: BoundPlan,
     ) -> Result<ExecutablePlan, BindingMismatch> {
-        if bound.scope != self.compiler.scope()
+        if !bound.binding_identity.ptr_eq(&self.binding_identity)
+            || bound.scope != self.compiler.scope()
             || bound.source_id != self.compiler.source_id()
             || bound.plan.dialect != self.profile.dialect()
         {
             return Err(BindingMismatch);
         }
         Ok(ExecutablePlan {
+            binding_identity: self.binding_identity.clone(),
             backend: self.backend.clone(),
             source_id: self.source_id(),
             verified_generation: self.generation.is_verified(),
@@ -191,6 +197,10 @@ impl RuntimeBinding {
 
     pub(crate) const fn scope(&self) -> CompileScope {
         self.compiler.scope()
+    }
+
+    pub(crate) fn binding_identity(&self) -> RuntimeBindingIdentity {
+        self.binding_identity.clone()
     }
 
     #[cfg(test)]
@@ -213,7 +223,8 @@ impl RuntimeBinding {
     pub(crate) fn generation_requirement(
         &self,
     ) -> Result<Option<PgGenerationRequirement>, PgGenerationError> {
-        self.generation.requirement(&self.backend)
+        self.generation
+            .requirement(&self.backend, &self.binding_identity)
     }
 }
 
@@ -231,16 +242,23 @@ impl fmt::Debug for RuntimeBinding {
     }
 }
 
-/// A compiled plan that remains attached to its source and compile scope.
+/// A compiled plan attached to its exact runtime binding, source, and scope.
 pub(crate) struct BoundPlan {
+    binding_identity: RuntimeBindingIdentity,
     scope: CompileScope,
     source_id: SourceId,
     plan: Arc<Plan>,
 }
 
 impl BoundPlan {
-    pub(crate) fn from_parts(scope: CompileScope, source_id: SourceId, plan: Arc<Plan>) -> Self {
+    pub(crate) fn from_parts(
+        binding_identity: RuntimeBindingIdentity,
+        scope: CompileScope,
+        source_id: SourceId,
+        plan: Arc<Plan>,
+    ) -> Self {
         Self {
+            binding_identity,
             scope,
             source_id,
             plan,
@@ -256,24 +274,39 @@ impl BoundPlan {
     }
 }
 
-/// A federated plan plus the private compile scopes needed to prove that each
-/// fragment still belongs to the activated source binding before any I/O.
+/// A federated plan plus the private binding identities and compile scopes that
+/// prove each fragment still belongs to the activated binding before any I/O.
 pub(crate) struct BoundFederatedPlan {
     plan: FederatedPlan,
+    binding_identities: [RuntimeBindingIdentity; 2],
     scopes: [CompileScope; 2],
 }
 
 impl BoundFederatedPlan {
-    pub(crate) fn new(plan: FederatedPlan, scopes: [CompileScope; 2]) -> Self {
-        Self { plan, scopes }
+    pub(crate) fn new(
+        plan: FederatedPlan,
+        binding_identities: [RuntimeBindingIdentity; 2],
+        scopes: [CompileScope; 2],
+    ) -> Self {
+        Self {
+            plan,
+            binding_identities,
+            scopes,
+        }
     }
 
     pub(crate) fn plan(&self) -> &FederatedPlan {
         &self.plan
     }
 
-    pub(crate) fn into_parts(self) -> (FederatedPlan, [CompileScope; 2]) {
-        (self.plan, self.scopes)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        FederatedPlan,
+        [RuntimeBindingIdentity; 2],
+        [CompileScope; 2],
+    ) {
+        (self.plan, self.binding_identities, self.scopes)
     }
 }
 
@@ -291,6 +324,7 @@ impl fmt::Debug for BoundPlan {
 
 /// An ownership-checked backend/plan pair ready for form dispatch.
 pub(crate) struct ExecutablePlan {
+    binding_identity: RuntimeBindingIdentity,
     backend: Backend,
     source_id: SourceId,
     verified_generation: bool,
@@ -298,9 +332,10 @@ pub(crate) struct ExecutablePlan {
 }
 
 impl ExecutablePlan {
-    pub(crate) fn into_parts(self) -> (SourceId, Backend, bool, Arc<Plan>) {
+    pub(crate) fn into_parts(self) -> (SourceId, RuntimeBindingIdentity, Backend, bool, Arc<Plan>) {
         (
             self.source_id,
+            self.binding_identity,
             self.backend,
             self.verified_generation,
             self.plan,
@@ -389,17 +424,32 @@ mod tests {
     #[test]
     fn a_plan_from_another_binding_is_rejected_before_execution() {
         let first = binding(0);
-        let second = binding_at(0, Epoch(1));
+        let second = binding(0);
         let control = sf_core::query_control::UncontrolledQueryControl;
         let bound = first
             .compile("SELECT * WHERE { ?s ?p ?o }", &control)
             .unwrap();
 
-        assert_ne!(first.scope(), second.scope());
-        assert!(matches!(
-            second.prepare_execution(bound),
-            Err(BindingMismatch)
-        ));
+        assert_eq!(first.scope(), second.scope(), "regression precondition");
+        let Err(error) = second.prepare_execution(bound) else {
+            panic!("content-equal bindings must not share plan authority");
+        };
+        assert_eq!(error, BindingMismatch);
+        assert_eq!(
+            error.to_string(),
+            "compiled plan does not belong to this runtime binding"
+        );
+    }
+
+    #[test]
+    fn a_plan_remains_valid_for_its_original_binding() {
+        let binding = binding(0);
+        let control = sf_core::query_control::UncontrolledQueryControl;
+        let bound = binding
+            .compile("SELECT * WHERE { ?s ?p ?o }", &control)
+            .unwrap();
+
+        binding.prepare_execution(bound).unwrap();
     }
 
     #[test]

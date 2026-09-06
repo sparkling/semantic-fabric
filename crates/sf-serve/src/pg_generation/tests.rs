@@ -55,3 +55,78 @@ fn live_postgres_profile_rejects_the_untyped_rowid_sentinel() {
     ordinary.primary_key = vec!["id".to_owned()];
     assert!(postgres_direct_table_profile_is_unambiguous(&[ordinary]));
 }
+
+#[test]
+fn generation_lease_is_pinned_to_the_exact_binding_identity() {
+    let source_id = SourceId::new(0).unwrap();
+    let binding_identity = RuntimeBindingIdentity::fresh();
+    let same_binding = binding_identity.clone();
+    let other_binding = RuntimeBindingIdentity::fresh();
+    let lease = VerifiedPostgresGenerationLease {
+        source_id,
+        conn: None,
+    };
+    let mut generations = VerifiedGenerationLeases {
+        leases: BTreeMap::from([(source_id, (binding_identity, lease))]),
+    };
+
+    assert!(!generations.contains(source_id, &other_binding));
+    assert!(generations.take(source_id, &other_binding).is_none());
+    assert!(
+        !generations.is_empty(),
+        "mismatch must retain cleanup ownership"
+    );
+    assert!(generations.contains(source_id, &same_binding));
+    assert_eq!(
+        generations
+            .take(source_id, &same_binding)
+            .unwrap()
+            .source_id(),
+        source_id
+    );
+    assert!(generations.is_empty());
+}
+
+#[test]
+fn generation_requirement_preserves_the_binding_identity_without_io() {
+    use sf_core::schema_identity::{ProfileIdV1, SchemaObservationInputV1, SchemaProfilesV1};
+
+    let profile = |value| ProfileIdV1::new(value).unwrap();
+    let observed_identity = ObservedSchemaIdentityV1::build(SchemaObservationInputV1 {
+        profiles: SchemaProfilesV1 {
+            structural: profile("test-structural-v1"),
+            types: profile("test-types-v1"),
+            constraints: profile("test-constraints-v1"),
+        },
+        relations: Vec::new(),
+        constraints: Vec::new(),
+    })
+    .unwrap();
+    let source_id = SourceId::new(0).unwrap();
+    let generation = SourceGeneration::direct_postgres(PostgresDirectGeneration {
+        source_id,
+        base_iri: Arc::from("http://example.test/"),
+        row_identity: sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey,
+        identity: observed_identity,
+        session: valid_context(),
+        table_names: Arc::from(Vec::<String>::new()),
+    });
+    let pg_config: tokio_postgres::Config = "host=127.0.0.1 port=1".parse().unwrap();
+    let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(
+        pg_config,
+        tokio_postgres::NoTls,
+    ))
+    .max_size(1)
+    .build()
+    .unwrap();
+    let binding_identity = RuntimeBindingIdentity::fresh();
+    let requirement = generation
+        .requirement(&crate::Backend::Pg(pool), &binding_identity)
+        .unwrap()
+        .unwrap();
+
+    assert!(requirement.binding_identity.ptr_eq(&binding_identity));
+    assert!(!requirement
+        .binding_identity
+        .ptr_eq(&RuntimeBindingIdentity::fresh()));
+}

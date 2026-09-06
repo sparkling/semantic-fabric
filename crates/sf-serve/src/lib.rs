@@ -38,6 +38,7 @@ mod activation;
 mod admission;
 mod backend;
 mod binding;
+mod binding_identity;
 mod budget;
 mod config;
 mod deadline;

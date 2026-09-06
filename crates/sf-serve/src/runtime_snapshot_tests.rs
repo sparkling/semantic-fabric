@@ -112,6 +112,43 @@ fn compile_provenance_is_checked_against_the_execution_snapshot() {
 }
 
 #[test]
+fn cloned_snapshot_lease_preserves_plan_authority() {
+    let source_id = SourceId::new(0).unwrap();
+    let manager = RuntimeManager::new(snapshot("items"));
+    let compiling_lease = manager.lease().unwrap();
+    let execution_lease = compiling_lease.clone();
+    let bound = compiling_lease
+        .compile(
+            source_id,
+            "SELECT * WHERE { ?s ?p ?o }",
+            &UncontrolledQueryControl,
+        )
+        .unwrap();
+
+    execution_lease.prepare_execution(bound).unwrap();
+}
+
+#[test]
+fn content_equal_reactivation_does_not_reuse_plan_authority() {
+    let source_id = SourceId::new(0).unwrap();
+    let manager = RuntimeManager::new(snapshot("items"));
+    let old_lease = manager.lease().unwrap();
+    let bound = old_lease
+        .compile(
+            source_id,
+            "SELECT * WHERE { ?s ?p ?o }",
+            &UncontrolledQueryControl,
+        )
+        .unwrap();
+    let expected = manager.readiness().unwrap();
+
+    manager.activate(expected, snapshot("items")).unwrap();
+    let replacement_lease = manager.lease().unwrap();
+
+    assert!(replacement_lease.prepare_execution(bound).is_err());
+}
+
+#[test]
 fn singleton_constructor_preserves_the_current_runtime_shape() {
     let source = runtime_source(5, "items");
     let snapshot =

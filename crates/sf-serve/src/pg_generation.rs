@@ -10,15 +10,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::PoolError;
-use sf_core::query_control::{QueryCharge, QueryControl, QueryControlError};
+use sf_core::query_control::{QueryCharge, QueryControl};
 use sf_core::schema_identity::ObservedSchemaIdentityV1;
 use sf_core::{SourceId, SourceMapping, TableSchema};
 
 use crate::backend::PgConn;
+use crate::binding_identity::RuntimeBindingIdentity;
 use crate::budget::RequestBudget;
 
 mod context;
+mod error;
 mod execution;
+
+pub(crate) use error::PgGenerationError;
 
 #[cfg(test)]
 use context::validate_session_context;
@@ -47,6 +51,7 @@ impl SourceGeneration {
     pub(crate) fn requirement(
         &self,
         backend: &crate::Backend,
+        binding_identity: &RuntimeBindingIdentity,
     ) -> Result<Option<PgGenerationRequirement>, PgGenerationError> {
         match self {
             Self::Unverified => Ok(None),
@@ -54,6 +59,7 @@ impl SourceGeneration {
                 crate::Backend::Pg(pool) => Ok(Some(PgGenerationRequirement {
                     pool: pool.clone(),
                     expected: Arc::clone(expected),
+                    binding_identity: binding_identity.clone(),
                 })),
                 crate::Backend::Sqlite(_) | crate::Backend::Mysql(_) => {
                     Err(PgGenerationError::Internal)
@@ -93,6 +99,7 @@ impl std::fmt::Debug for PostgresDirectGeneration {
 pub(crate) struct PgGenerationRequirement {
     pool: deadpool_postgres::Pool,
     expected: Arc<PostgresDirectGeneration>,
+    binding_identity: RuntimeBindingIdentity,
 }
 
 impl PgGenerationRequirement {
@@ -101,10 +108,12 @@ impl PgGenerationRequirement {
     }
 }
 
-/// Request-owned verified transactions keyed by their source identity.
+/// Request-owned verified transactions keyed by source and exact binding.
+type RuntimeBoundGenerationLease = (RuntimeBindingIdentity, VerifiedPostgresGenerationLease);
+
 #[derive(Default)]
 pub(crate) struct VerifiedGenerationLeases {
-    leases: BTreeMap<SourceId, VerifiedPostgresGenerationLease>,
+    leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>,
 }
 
 impl VerifiedGenerationLeases {
@@ -122,9 +131,10 @@ impl VerifiedGenerationLeases {
         let mut leases = BTreeMap::new();
         for requirement in requirements {
             let source_id = requirement.source_id();
+            let binding_identity = requirement.binding_identity.clone();
             match acquire_expected(requirement, budget).await {
                 Ok(lease) => {
-                    leases.insert(source_id, lease);
+                    leases.insert(source_id, (binding_identity, lease));
                 }
                 Err(error) => {
                     close_leases(leases).await;
@@ -135,14 +145,27 @@ impl VerifiedGenerationLeases {
         Ok(Self { leases })
     }
 
-    pub(crate) fn take(&mut self, source_id: SourceId) -> Option<VerifiedPostgresGenerationLease> {
-        let lease = self.leases.remove(&source_id)?;
+    pub(crate) fn take(
+        &mut self,
+        source_id: SourceId,
+        binding_identity: &RuntimeBindingIdentity,
+    ) -> Option<VerifiedPostgresGenerationLease> {
+        if !self.leases.get(&source_id)?.0.ptr_eq(binding_identity) {
+            return None;
+        }
+        let (_, lease) = self.leases.remove(&source_id)?;
         debug_assert_eq!(lease.source_id(), source_id);
         Some(lease)
     }
 
-    pub(crate) fn contains(&self, source_id: SourceId) -> bool {
-        self.leases.contains_key(&source_id)
+    pub(crate) fn contains(
+        &self,
+        source_id: SourceId,
+        binding_identity: &RuntimeBindingIdentity,
+    ) -> bool {
+        self.leases
+            .get(&source_id)
+            .is_some_and(|(identity, _)| identity.ptr_eq(binding_identity))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -377,15 +400,15 @@ async fn fail_lease<T>(
     Err(error)
 }
 
-async fn close_leases(leases: BTreeMap<SourceId, VerifiedPostgresGenerationLease>) {
+async fn close_leases(leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>) {
     let _ = finish_leases(leases).await;
 }
 
 async fn finish_leases(
-    leases: BTreeMap<SourceId, VerifiedPostgresGenerationLease>,
+    leases: BTreeMap<SourceId, RuntimeBoundGenerationLease>,
 ) -> Result<(), PgGenerationError> {
     let mut first_error = None;
-    for (_, lease) in leases {
+    for (_, (_, lease)) in leases {
         let result = tokio::time::timeout(Duration::from_secs(1), lease.finish()).await;
         if first_error.is_none() {
             first_error = match result {
@@ -462,22 +485,6 @@ impl std::ops::Deref for PgGenerationClient {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum PgGenerationError {
-    Control(QueryControlError),
-    SourceUnavailable,
-    SchemaDrift,
-    CapabilityDrift,
-    Mapping(sf_core::Error),
-    Internal,
-}
-
-impl From<QueryControlError> for PgGenerationError {
-    fn from(error: QueryControlError) -> Self {
-        Self::Control(error)
     }
 }
 

@@ -45,24 +45,24 @@ pub(crate) async fn select_union_body(
     let (variables, fragments) = execution.into_parts();
     let fragments = fragments.map(|fragment| fragment.into_parts());
     let valid = fragments[0].0 != fragments[1].0
-        && fragments
-            .iter()
-            .all(|(source_id, backend, verified_generation, _)| {
-                generations.contains(*source_id) == *verified_generation
+        && fragments.iter().all(
+            |(source_id, binding_identity, backend, verified_generation, _)| {
+                generations.contains(*source_id, binding_identity) == *verified_generation
                     && (!*verified_generation || matches!(backend, Backend::Pg(_)))
-            });
+            },
+        );
     if !valid {
         let _ = generations.finish().await;
         return Err(problem::response(ProblemCode::Internal));
     }
 
     let mut acquired = Vec::with_capacity(2);
-    for (source_id, backend, _verified_generation, plan) in fragments {
+    for (source_id, binding_identity, backend, _verified_generation, plan) in fragments {
         let source = match backend {
             Backend::Sqlite(pool) => sqlite_admission::acquire(&pool, &budget)
                 .await
                 .map(|lease| AcquiredFragment::Sqlite { lease, plan }),
-            Backend::Pg(pool) => match generations.take(source_id) {
+            Backend::Pg(pool) => match generations.take(source_id, &binding_identity) {
                 Some(lease) => Ok(AcquiredFragment::VerifiedPostgres { lease, plan }),
                 None => crate::source_acquisition::acquire_pg(&pool, budget.clone())
                     .await
