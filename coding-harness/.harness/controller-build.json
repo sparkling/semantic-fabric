@@ -100,7 +100,7 @@
     "coding-harness/dist/postgres-observation-qualification-protocol.js": "4469c0c67ca97f5aa62a27a2a818c1d691f32dfc84d2d679bcbbf8f1b8205ebf",
     "coding-harness/dist/postgres-observation-qualification-provenance.js": "031cbf22d6fb339e5792c38c0452a02cedba1fa174c04f43cf78bcdf5ccc9cbe",
     "coding-harness/dist/postgres-observation-qualification-runner.js": "a35148ba48d5c6c0759ddfed81cb55fc7e80889abc0b4267f22d4bb4d2310d08",
-    "coding-harness/dist/postgres-observation-qualification-source-worktree.js": "b0003bf647ef196ae8e1f1bbfeff677aea537a524536f29fa78589409a18fdee",
+    "coding-harness/dist/postgres-observation-qualification-source-worktree.js": "f6ac8af62a5a7bb5260852f978571c29826dd6a8e08b515eb21b8f17d86a7330",
     "coding-harness/dist/postgres-observation-qualification.js": "c14232aeffa6cc35876a0d3fbec336b102133cf191a57bce235a7974eb9e43fd",
     "coding-harness/dist/process.js": "75ecf658c55defbfb6006e2668f48319078fe9dd226238bc1e94bc06fc7f1497",
     "coding-harness/dist/programme-acceptance.js": "cd81658e6681c9752216a24fdf914f68f8fd0980c94b174165c40b271cb84293",
@@ -317,5 +317,5 @@
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm": "c8c087648f9d484a11ad9290ea7cd526c9dd0a94e47a21c6ecc04c4a7e4db659",
     "coding-harness/node_modules/@ruvector/emergent-time/pkg/emergent_time_wasm_bg.wasm.d.ts": "6e8cf90bf3ace49f38b690da0ae45e8b29e76f1e9da0b535ad8f46dd0a2fe2bf"
   },
-  "runtimeTreeDigest": "d1f0e25607f91ae052721ab4227df4fe42c44222473487c66dbff47e59eac7d9"
+  "runtimeTreeDigest": "09cef7bcd47f7ad7a1c88a36cfa9c09c1bb7eece0324648eab120559f30c3f92"
 }

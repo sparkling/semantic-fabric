@@ -19,6 +19,7 @@ export async function withPostgresQualificationSourceWorktree<T>(
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'semantic-fabric-pgq-source-'));
   const sourceRoot = join(temporaryRoot, 'source');
   let added = false;
+  let completed = false;
   let actionError: unknown;
   let output: T | undefined;
   try {
@@ -33,6 +34,7 @@ export async function withPostgresQualificationSourceWorktree<T>(
       throw new Error('POSTGRES_QUALIFICATION_SOURCE_WORKTREE_INVALID');
     }
     output = await action(sourceRoot);
+    completed = true;
   } catch (error) {
     actionError = error;
   }
@@ -61,8 +63,8 @@ export async function withPostgresQualificationSourceWorktree<T>(
   }
   if (actionError !== undefined) throw actionError;
   if (cleanupError !== undefined) throw cleanupError;
-  if (output === undefined) throw new Error('POSTGRES_QUALIFICATION_SOURCE_ACTION_INCOMPLETE');
-  return output;
+  if (!completed) throw new Error('POSTGRES_QUALIFICATION_SOURCE_ACTION_INCOMPLETE');
+  return output as T;
 }
 
 function canonicalRoot(root: string): string {
