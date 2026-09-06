@@ -20,35 +20,41 @@ impl<'a> FromSql<'a> for AlwaysMarshal {
     }
 }
 
-fn base_conn() -> String {
-    std::env::var("SF_PG_URL").unwrap_or_else(|_| {
-        let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
-        format!("host=localhost port=5432 user={user}")
-    })
+fn configured_conn() -> Option<String> {
+    match std::env::var("SF_PG_URL") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("SF_PG_URL must be valid Unicode when configured")
+        }
+    }
 }
 
 async fn disposable_database(prefix: &str) -> Option<(Client, Client, String)> {
-    let conn_str = format!("{} dbname=postgres", base_conn());
-    let Ok((admin, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
-        eprintln!("skipping live PostgreSQL test: no server reachable");
+    let Some(base_conn) = configured_conn() else {
+        eprintln!("skipping live PostgreSQL test: SF_PG_URL is not configured");
         return None;
     };
+    let conn_str = format!("{base_conn} dbname=postgres");
+    let (admin, connection) = tokio_postgres::connect(&conn_str, NoTls)
+        .await
+        .expect("SF_PG_URL is configured but its PostgreSQL server is unreachable");
     tokio::spawn(async move {
         let _ = connection.await;
     });
     let db = format!("{prefix}_{}", std::process::id());
-    let _ = admin
-        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
-        .await;
+    admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"))
+        .await
+        .expect("reset disposable test database");
     admin
         .batch_execute(&format!("CREATE DATABASE {db}"))
         .await
         .expect("create test database");
 
-    let (client, connection) =
-        tokio_postgres::connect(&format!("{} dbname={db}", base_conn()), NoTls)
-            .await
-            .expect("connect to test database");
+    let (client, connection) = tokio_postgres::connect(&format!("{base_conn} dbname={db}"), NoTls)
+        .await
+        .expect("connect to test database");
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -57,9 +63,10 @@ async fn disposable_database(prefix: &str) -> Option<(Client, Client, String)> {
 
 async fn drop_database(admin: &Client, client: Client, db: &str) {
     drop(client);
-    let _ = admin
-        .batch_execute(&format!("DROP DATABASE IF EXISTS {db}"))
-        .await;
+    admin
+        .batch_execute(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"))
+        .await
+        .expect("drop disposable test database");
 }
 
 #[test]
