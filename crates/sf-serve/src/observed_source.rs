@@ -56,6 +56,24 @@ impl IntrospectedSource {
         }
     }
 
+    /// Builds the lifecycle discovery source only from the normalized rich
+    /// projection carried by the same opaque observation. The legacy schema
+    /// vector is intentionally inaccessible to this path.
+    pub(crate) fn observed_postgres_direct(
+        pool: deadpool_postgres::Pool,
+        snapshot: sf_sql::introspect::Postgres16PublicObservedSnapshotV1,
+    ) -> Result<Self, PgGenerationError> {
+        let (schema, observation) = snapshot
+            .into_direct_mapping_parts()
+            .map_err(|_| PgGenerationError::CapabilityDrift)?;
+        Ok(Self {
+            backend: Backend::Pg(pool),
+            schema,
+            observation: SourceSchemaObservationV1::postgres16_public(observation),
+            generation: SourceGeneration::Unverified,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn postgres_unavailable(
         pool: deadpool_postgres::Pool,

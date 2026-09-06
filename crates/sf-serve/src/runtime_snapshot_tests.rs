@@ -173,7 +173,9 @@ fn content_equal_reactivation_does_not_reuse_plan_authority() {
         .unwrap();
     let expected = manager.readiness().unwrap();
 
-    manager.activate(expected, snapshot("items")).unwrap();
+    manager
+        .activate_test_snapshot(expected, snapshot("items"))
+        .unwrap();
     let replacement_lease = manager.lease().unwrap();
 
     assert_eq!(
@@ -204,7 +206,9 @@ fn activation_is_monotonic_pins_old_requests_and_rejects_a_stale_candidate() {
     let old_id = old_lease.activation_id();
     let old_snapshot = old_lease.weak_snapshot();
 
-    let next_id = manager.activate(old_state, snapshot("second")).unwrap();
+    let next_id = manager
+        .activate_test_snapshot(old_state, snapshot("second"))
+        .unwrap();
     assert!(next_id > old_id);
     assert!(manager.readiness().unwrap().state_revision() > old_state.state_revision());
     assert_eq!(
@@ -217,7 +221,7 @@ fn activation_is_monotonic_pins_old_requests_and_rejects_a_stale_candidate() {
         "first"
     );
     assert!(matches!(
-        manager.activate(old_state, snapshot("stale")),
+        manager.activate_test_snapshot(old_state, snapshot("stale")),
         Err(ActivationError::StaleState {
             expected,
             actual: RuntimeReadiness::Ready { activation_id, .. },
@@ -240,7 +244,7 @@ fn activation_is_monotonic_pins_old_requests_and_rejects_a_stale_candidate() {
     assert!(old_snapshot.upgrade().is_none());
 
     let third_id = manager
-        .activate(manager.readiness().unwrap(), snapshot("first"))
+        .activate_test_snapshot(manager.readiness().unwrap(), snapshot("first"))
         .unwrap();
     assert!(third_id > next_id, "A-B-A publication must not reuse an ID");
 }
@@ -306,7 +310,7 @@ fn drift_blocks_new_leases_until_a_new_generation_activates() {
     ));
 
     let replacement_id = manager
-        .activate(unavailable, snapshot("replacement"))
+        .activate_test_snapshot(unavailable, snapshot("replacement"))
         .unwrap();
     assert!(replacement_id > original_id);
     assert!(matches!(
@@ -330,10 +334,12 @@ fn slow_candidate_cannot_overwrite_a_faster_successor() {
     let slow = std::thread::spawn(move || {
         let candidate = snapshot("slow");
         wait_for_fast.recv().unwrap();
-        slow_manager.activate(expected, candidate)
+        slow_manager.activate_test_snapshot(expected, candidate)
     });
 
-    let fast_id = manager.activate(expected, snapshot("fast")).unwrap();
+    let fast_id = manager
+        .activate_test_snapshot(expected, snapshot("fast"))
+        .unwrap();
     release_slow.send(()).unwrap();
     assert!(matches!(
         slow.join().unwrap(),
@@ -365,7 +371,7 @@ fn candidate_built_before_drift_cannot_heal_the_not_ready_state() {
     let slow = std::thread::spawn(move || {
         let candidate = snapshot("pre-drift");
         wait_for_drift.recv().unwrap();
-        slow_manager.activate(expected, candidate)
+        slow_manager.activate_test_snapshot(expected, candidate)
     });
 
     manager
@@ -386,6 +392,8 @@ fn candidate_built_before_drift_cannot_heal_the_not_ready_state() {
         }) if actual == activation_id
     ));
 
-    let healed = manager.activate(drifted, snapshot("post-drift")).unwrap();
+    let healed = manager
+        .activate_test_snapshot(drifted, snapshot("post-drift"))
+        .unwrap();
     assert!(healed > activation_id);
 }

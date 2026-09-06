@@ -214,6 +214,15 @@ impl Fixture {
         )
     }
 
+    pub(super) fn reader_config(&self) -> Config {
+        let mut config = self.root_config.clone();
+        config.dbname(&self.database);
+        config.user(&self.role);
+        config.password(READER_PASSWORD);
+        config.options(POSTGRES_RELATION_SCOPE_OPTIONS);
+        config
+    }
+
     pub(super) async fn cleanup(self) {
         drop(self.pool);
         drop(self.admin);

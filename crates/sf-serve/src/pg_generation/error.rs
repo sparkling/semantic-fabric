@@ -8,7 +8,13 @@ pub(crate) enum PgGenerationError {
     SourceUnavailable,
     SchemaDrift,
     CapabilityDrift,
-    Mapping(sf_core::Error),
+    Mapping(
+        #[allow(
+            dead_code,
+            reason = "payload is retained for test diagnostics while live admission is withheld"
+        )]
+        sf_core::Error,
+    ),
     Internal,
 }
 

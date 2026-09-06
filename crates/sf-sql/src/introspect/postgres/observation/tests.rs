@@ -64,6 +64,17 @@ fn lossy_projection_discards_only_availability() {
 }
 
 #[test]
+fn lifecycle_projection_uses_only_normalized_rich_facts() {
+    let (tables, observation) = available_snapshot()
+        .into_direct_mapping_parts()
+        .expect("the rich observation is available");
+
+    assert_eq!(tables, vec![TableSchema::new("rich_table_name")]);
+    assert_eq!(tables, observation.direct_mapping_tables());
+    assert_ne!(tables, vec![TableSchema::new("private_table_name")]);
+}
+
+#[test]
 fn unavailable_snapshot_is_total_and_exclusive() {
     let reason = PostgresSchemaIdentityUnavailableV1::ProfileNotImplemented;
     let snapshot = Postgres16PublicObservedSnapshotV1 {
@@ -74,6 +85,12 @@ fn unavailable_snapshot_is_total_and_exclusive() {
     assert!(snapshot.availability().identity().is_none());
     assert_eq!(snapshot.availability().unavailable_reason(), Some(reason));
     assert!(snapshot.direct_mapping_tables().is_none());
+
+    let unavailable = Postgres16PublicObservedSnapshotV1 {
+        legacy_tables: vec![TableSchema::new("must_not_be_substituted")],
+        availability: PostgresSchemaIdentityAvailabilityV1::Unavailable(reason),
+    };
+    assert_eq!(unavailable.into_direct_mapping_parts(), Err(reason));
 }
 
 #[test]

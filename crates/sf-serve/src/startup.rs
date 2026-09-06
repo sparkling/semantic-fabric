@@ -76,7 +76,9 @@ fn source_id(index: usize) -> SourceId {
 enum PreparedMapping {
     Authored(sf_core::SourceMapping),
     Direct {
+        #[allow(dead_code, reason = "retained for the sealed lifecycle handoff")]
         base_iri: String,
+        #[allow(dead_code, reason = "retained for the sealed lifecycle handoff")]
         source_id: SourceId,
     },
 }
@@ -127,30 +129,13 @@ impl PreparedMapping {
                 RuntimeSource::admitted(source, mapping).map_err(semantic_admission_error)
             }
             Self::Direct {
-                base_iri,
-                source_id,
+                base_iri: _,
+                source_id: _,
             } => {
-                match source.backend() {
-                    crate::Backend::Pg(_) => {}
-                    crate::Backend::Sqlite(_) | crate::Backend::Mysql(_) => {
-                        return Err(configuration_error(
-                            "live Direct Mapping requires PostgreSQL",
-                        ))
-                    }
-                }
-                let deadline = std::time::Instant::now()
-                    .checked_add(opts.timeout)
-                    .ok_or_else(|| configuration_error("startup timeout is not representable"))?;
-                let budget = crate::budget::RequestBudget::uncontrolled(Some(deadline));
-                let (source, mapping) = crate::pg_generation::build_and_bind_direct_candidate(
-                    source, &base_iri, source_id, &budget,
-                )
-                .await
-                .map_err(startup_generation_error)?;
-                let mapping =
-                    ValidatedMapping::validate(mapping, MappingOrigin::Direct, ontology, &source)
-                        .map_err(semantic_admission_error)?;
-                RuntimeSource::admitted(source, mapping).map_err(semantic_admission_error)
+                let _ = (opts, source, ontology);
+                Err(configuration_error(
+                    "live Direct Mapping requires the sealed lifecycle builder",
+                ))
             }
         }
     }
@@ -201,7 +186,7 @@ impl PreparedMapping {
 /// This boundary runs after pure source parsing but before connector I/O.
 fn admit_mapping_profile(
     primary_mapping: &PreparedMapping,
-    _primary_source: &PreparedSource,
+    primary_source: &PreparedSource,
     additional_mapping: Option<&PreparedMapping>,
     additional_source: Option<&PreparedSource>,
 ) -> Result<(), ServeError> {
@@ -210,12 +195,24 @@ fn admit_mapping_profile(
             "additional source and mapping must be configured together",
         ));
     }
-    if primary_mapping.is_direct() || additional_mapping.is_some_and(PreparedMapping::is_direct) {
+    let direct_requested =
+        primary_mapping.is_direct() || additional_mapping.is_some_and(PreparedMapping::is_direct);
+    if !direct_requested {
+        return Ok(());
+    }
+    if additional_mapping.is_some() {
         return Err(configuration_error(
-            "live Direct Mapping is unavailable until the exact PostgreSQL-16 qualification receipts are accepted",
+            "live Direct Mapping admits exactly one source and no authored companion mapping",
         ));
     }
-    Ok(())
+    if !matches!(primary_source, PreparedSource::Postgres { .. }) {
+        return Err(configuration_error(
+            "live Direct Mapping admits only the closed PostgreSQL-16 profile",
+        ));
+    }
+    Err(configuration_error(
+        "live Direct Mapping is unavailable until the exact PostgreSQL-16 qualification receipts are accepted",
+    ))
 }
 
 fn configuration_error(error: &'static str) -> ServeError {
@@ -239,28 +236,6 @@ fn semantic_admission_error(error: crate::SemanticAdmissionError) -> ServeError 
 fn snapshot_error(error: crate::SnapshotError) -> ServeError {
     ServeError::new(StartupCause::Configuration {
         error: error.to_string(),
-    })
-}
-
-fn startup_generation_error(error: crate::pg_generation::PgGenerationError) -> ServeError {
-    if let crate::pg_generation::PgGenerationError::Mapping(error) = error {
-        return mapping_error(error);
-    }
-    let category = match error {
-        crate::pg_generation::PgGenerationError::Control(_) => "generation budget expired",
-        crate::pg_generation::PgGenerationError::SourceUnavailable => {
-            "generation source unavailable"
-        }
-        crate::pg_generation::PgGenerationError::SchemaDrift => "generation schema changed",
-        crate::pg_generation::PgGenerationError::CapabilityDrift => {
-            "generation profile unavailable"
-        }
-        crate::pg_generation::PgGenerationError::Internal => "generation assembly failed",
-        crate::pg_generation::PgGenerationError::Mapping(_) => unreachable!("handled above"),
-    };
-    ServeError::new(StartupCause::Schema {
-        spec: "<prepared-source>".to_owned(),
-        error: category.to_owned(),
     })
 }
 
@@ -389,11 +364,15 @@ mod tests {
             .prepare()
             .unwrap();
 
-        for source in [sqlite, mysql, postgres] {
+        for source in [sqlite, mysql] {
             let error = admit_mapping_profile(&direct(), &source, None, None)
-                .expect_err("unaccepted qualification must reject without connecting");
+                .expect_err("non-PostgreSQL Direct Mapping must reject without connecting");
             assert_eq!(error.code(), "startup-configuration");
         }
+        let error = admit_mapping_profile(&direct(), &postgres, None, None)
+            .expect_err("the complete profile remains withheld pending independent review");
+        assert_eq!(error.code(), "startup-configuration");
+
         let postgres = SourceRef::inline("pg:host=database.invalid user=test")
             .resolve()
             .unwrap()
@@ -412,6 +391,28 @@ mod tests {
             ),
         )
         .expect_err("Direct Mapping federation must reject without connecting");
+        assert_eq!(error.code(), "startup-configuration");
+
+        let primary_authored = authored_empty(0);
+        let additional_direct = PreparedMapping::new(
+            &MappingRef::direct(BASE),
+            source_id(1),
+            &crate::test_support::empty_ontology(),
+        )
+        .unwrap();
+        let error = admit_mapping_profile(
+            &primary_authored,
+            &postgres,
+            Some(&additional_direct),
+            Some(
+                &SourceRef::inline("pg:host=additional.invalid user=test")
+                    .resolve()
+                    .unwrap()
+                    .prepare()
+                    .unwrap(),
+            ),
+        )
+        .expect_err("an authored plus Direct profile must reject without connecting");
         assert_eq!(error.code(), "startup-configuration");
     }
 }

@@ -1,11 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio_postgres::NoTls;
-
 use crate::config::{validate_max_concurrent_requests, validate_max_query_len};
 use crate::problem::StartupCause;
-use crate::source::{PreparedSource, POSTGRES_RELATION_SCOPE_RECYCLE_SQL};
+use crate::source::PreparedSource;
 use crate::{router, Backend, IntrospectedSource, ServeError, SourceRef};
 
 pub struct ServeOptions {
@@ -139,24 +137,8 @@ pub(crate) async fn open_backend(
         PreparedSource::Postgres { config, label } => {
             // A bounded pool (ADR-0010 §C stream-lane pool, ADR-0027; M4 wave-2 finding
             // 2), not a single shared client — mirrors MySQL's `mysql_async::Pool`.
-            let manager = deadpool_postgres::Manager::from_config(
-                *config,
-                NoTls,
-                deadpool_postgres::ManagerConfig {
-                    recycling_method: deadpool_postgres::RecyclingMethod::Custom(
-                        POSTGRES_RELATION_SCOPE_RECYCLE_SQL.to_owned(),
-                    ),
-                },
-            );
-            let pool = deadpool_postgres::Pool::builder(manager)
-                .max_size(pg_pool_size)
-                .wait_timeout(Some(pg_pool_wait))
-                // The wait timeout needs an async runtime to enforce it (deadpool is
-                // runtime-agnostic by default) — without this, `pool.get()` errors
-                // `NoRuntimeSpecified` instead of ever honouring the timeout.
-                .runtime(deadpool_postgres::Runtime::Tokio1)
-                .build()
-                .map_err(|error| {
+            let pool =
+                crate::pg_pool::build(*config, pg_pool_size, pg_pool_wait).map_err(|error| {
                     ServeError::new(StartupCause::SourceConnect {
                         spec: label.to_owned(),
                         error: error.to_string(),
@@ -430,7 +412,9 @@ mod tests {
             let user = std::env::var("USER").unwrap_or_else(|_| "postgres".to_owned());
             format!("host=localhost port=5432 user={user}")
         });
-        let Ok((_client, connection)) = tokio_postgres::connect(&conn_str, NoTls).await else {
+        let Ok((_client, connection)) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await
+        else {
             eprintln!(
                 "SKIP should_configure_pg_pool_size_when_opening_a_pg_backend: \
                  no PostgreSQL on localhost:5432"

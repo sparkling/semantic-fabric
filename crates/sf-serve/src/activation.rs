@@ -9,6 +9,7 @@ use sf_core::SourceId;
 use crate::binding::{
     BindingMismatch, BoundFederatedPlan, BoundPlan, ExecutableFederatedPlan, ExecutablePlan,
 };
+use crate::pg_direct_lifecycle::{RuntimeTransitionAuthority, ValidatedRuntimeCandidate};
 use crate::pg_generation::{PgGenerationError, PgGenerationRequirement};
 use crate::snapshot::RuntimeSnapshot;
 
@@ -27,10 +28,6 @@ impl ActivationId {
         self.0
     }
 
-    #[allow(
-        dead_code,
-        reason = "activation stays sealed until the off-path reload-candidate builder lands"
-    )]
     fn successor(self) -> Result<Self, ActivationError> {
         self.0
             .checked_add(1)
@@ -270,7 +267,7 @@ impl RuntimeState {
 
 /// Single owner of runtime readiness and whole-generation publication.
 ///
-/// Candidate construction is complete before [`Self::activate`] is called. The
+/// Candidate construction is complete before [`Self::activate_candidate`] is called. The
 /// final write-lock section compares the complete expected state and replaces
 /// it, so readers observe either the old or new generation.
 pub(crate) struct RuntimeManager {
@@ -334,19 +331,16 @@ impl RuntimeManager {
             .map_err(|_| ActivationError::StatePoisoned)
     }
 
-    /// Publish a prebuilt candidate if the complete expected readiness state is
-    /// still current. This private primitive does not validate or authorize the
-    /// candidate; the future off-path reload-candidate builder must do so first.
-    #[allow(
-        dead_code,
-        reason = "activation stays sealed until the off-path reload-candidate builder lands"
-    )]
-    pub(crate) fn activate(
+    /// Publish a sealed, fully validated candidate if its complete expected
+    /// readiness state is still current. Both arguments are lifecycle-only
+    /// capabilities that request paths cannot construct.
+    pub(crate) fn activate_candidate(
         &self,
-        expected: RuntimeReadiness,
-        candidate: RuntimeSnapshot,
+        _authority: &RuntimeTransitionAuthority,
+        candidate: ValidatedRuntimeCandidate,
     ) -> Result<ActivationId, ActivationError> {
-        let candidate = Arc::new(candidate);
+        let expected = candidate.expected();
+        let candidate = Arc::new(candidate.into_snapshot());
         let mut state = self
             .state
             .write()
@@ -370,10 +364,25 @@ impl RuntimeManager {
         Ok(next)
     }
 
+    /// Test-only bridge: production callers must present the sealed lifecycle
+    /// candidate instead of a raw snapshot.
+    #[cfg(test)]
+    pub(crate) fn activate_test_snapshot(
+        &self,
+        expected: RuntimeReadiness,
+        snapshot: RuntimeSnapshot,
+    ) -> Result<ActivationId, ActivationError> {
+        self.activate_candidate(
+            &RuntimeTransitionAuthority::for_test(),
+            crate::pg_direct_lifecycle::sealed_candidate_for_test(expected, snapshot),
+        )
+    }
+
     /// Stop new request leases after generation-bound drift or an explicit
     /// administrative transition. Existing leases remain valid.
-    pub(crate) fn mark_not_ready(
+    pub(crate) fn transition_not_ready(
         &self,
+        _authority: &RuntimeTransitionAuthority,
         expected: RuntimeReadiness,
         cause: ReadinessCause,
     ) -> Result<RuntimeReadiness, ActivationError> {
@@ -393,17 +402,25 @@ impl RuntimeManager {
         error.map_or(Ok(readiness), Err)
     }
 
+    #[cfg(test)]
+    pub(crate) fn mark_not_ready(
+        &self,
+        expected: RuntimeReadiness,
+        cause: ReadinessCause,
+    ) -> Result<RuntimeReadiness, ActivationError> {
+        self.transition_not_ready(&RuntimeTransitionAuthority::for_test(), expected, cause)
+    }
+
     /// Establish an administrative fence against whichever generation and
     /// readiness event is current at the write-lock linearization point.
-    pub(crate) fn mark_current_not_ready(
+    pub(crate) fn mark_current_administratively_not_ready(
         &self,
-        cause: ReadinessCause,
     ) -> Result<RuntimeReadiness, ActivationError> {
         let mut state = self
             .state
             .write()
             .map_err(|_| ActivationError::StatePoisoned)?;
-        let (next, error) = state.not_ready_transition(cause);
+        let (next, error) = state.not_ready_transition(ReadinessCause::Administrative);
         let readiness = next.readiness();
         let previous = std::mem::replace(&mut *state, next);
         drop(state);
@@ -452,40 +469,5 @@ pub enum ActivationError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn activation_and_state_counters_fail_closed_at_exhaustion() {
-        let activation = ActivationId(u64::MAX);
-        assert!(matches!(
-            activation.successor(),
-            Err(ActivationError::ActivationIdExhausted { current }) if current == activation
-        ));
-
-        let revision = RuntimeStateRevision(u64::MAX);
-        assert_eq!(
-            revision.successor(),
-            Err(ActivationError::StateRevisionExhausted { current: revision })
-        );
-
-        let state = RuntimeState::NotReady {
-            activation_id: ActivationId::INITIAL,
-            revision,
-            cause: ReadinessCause::SchemaDrift,
-        };
-        let (terminal, error) = state.not_ready_transition(ReadinessCause::SourceUnavailable);
-        assert_eq!(
-            terminal.readiness(),
-            RuntimeReadiness::NotReady {
-                activation_id: ActivationId::INITIAL,
-                revision,
-                cause: ReadinessCause::StateRevisionExhausted,
-            }
-        );
-        assert_eq!(
-            error,
-            Some(ActivationError::StateRevisionExhausted { current: revision })
-        );
-    }
-}
+#[path = "activation/tests.rs"]
+mod tests;

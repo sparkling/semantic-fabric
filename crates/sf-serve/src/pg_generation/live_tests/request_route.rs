@@ -31,9 +31,13 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
         ServeConfig::from_runtime_source(source, ontology)
             .expect("build private request-route runtime"),
     );
+    exercise_config(fixture, &cfg).await;
+}
+
+pub(super) async fn exercise_config(fixture: &Arc<Fixture>, cfg: &Arc<ServeConfig>) {
     let snapshot = cfg.runtime_lease().expect("lease request-route snapshot");
 
-    assert_exact_metadata_reservation(fixture, &cfg, &snapshot).await;
+    assert_exact_metadata_reservation(fixture, cfg, &snapshot).await;
 
     let permits = cfg.compiler_permits();
     let spare = permits
@@ -49,7 +53,7 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
 
     let select = format!("SELECT ?label WHERE {{ ?s <{LABEL}> ?label }}");
     let (plan, lease, request, identity) =
-        acquire_compile(fixture, &cfg, &snapshot, &select, &permits).await;
+        acquire_compile(fixture, cfg, &snapshot, &select, &permits).await;
     let rows = Arc::new(Mutex::new(Vec::new()));
     let sink_rows = Arc::clone(&rows);
     lease
@@ -78,7 +82,7 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
 
     let ask = format!("ASK WHERE {{ <{BASE}parent/id=1> <{LABEL}> \"parent\" }}");
     let (plan, lease, request, ask_identity) =
-        acquire_compile(fixture, &cfg, &snapshot, &ask, &permits).await;
+        acquire_compile(fixture, cfg, &snapshot, &ask, &permits).await;
     assert_eq!(
         ask_identity, identity,
         "clean rollback must recycle the member"
@@ -95,7 +99,7 @@ pub(super) async fn exercise(fixture: &Arc<Fixture>) {
          WHERE {{ ?s <{LABEL}> ?label }}"
     );
     let (plan, lease, request, construct_identity) =
-        acquire_compile(fixture, &cfg, &snapshot, &construct, &permits).await;
+        acquire_compile(fixture, cfg, &snapshot, &construct, &permits).await;
     assert_eq!(
         construct_identity, identity,
         "every request must reuse only the acknowledged-clean member"
@@ -207,7 +211,7 @@ async fn assert_exact_metadata_reservation(
     );
 }
 
-fn direct_ontology() -> crate::SemanticOntology {
+pub(super) fn direct_ontology() -> crate::SemanticOntology {
     crate::test_support::ontology(
         &[
             "http://example.test/base/child",

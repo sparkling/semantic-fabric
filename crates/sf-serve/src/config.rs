@@ -1,5 +1,6 @@
 //! Immutable per-server configuration and governance defaults.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,9 +13,11 @@ use sf_sparql::Epoch;
 use sf_sql::TableSchema;
 use tokio::sync::{watch, Semaphore};
 
+#[cfg(test)]
+use crate::activation::ActivationId;
 use crate::activation::{
-    ActivationError, ActivationId, ReadinessCause, RuntimeManager, RuntimeReadiness,
-    RuntimeSnapshotLease, SnapshotUnavailable,
+    ActivationError, ReadinessCause, RuntimeManager, RuntimeReadiness, RuntimeSnapshotLease,
+    SnapshotUnavailable,
 };
 use crate::budget::RequestBudget;
 use crate::lifecycle::ShutdownPhase;
@@ -82,6 +85,7 @@ pub struct ServeConfig {
     max_concurrent_requests: usize,
     request_admission_permits: Arc<Semaphore>,
     shutdown: watch::Sender<ShutdownPhase>,
+    pg_direct_lifecycle_claimed: AtomicBool,
 }
 
 impl ServeConfig {
@@ -129,6 +133,24 @@ impl ServeConfig {
         Ok(Self::from_snapshot(QueryMode::Single(source_id), snapshot))
     }
 
+    /// Consume the sealed initial output of the dormant PostgreSQL Direct
+    /// lifecycle. This is initial construction only; runtime publication still
+    /// requires the validated-candidate and transition-authority pair.
+    #[allow(
+        dead_code,
+        reason = "the sealed profile remains disconnected pending independent admission review"
+    )]
+    pub(crate) fn from_initial_pg_direct(
+        initial: crate::pg_direct_lifecycle::InitialPgDirectGeneration,
+    ) -> (Self, crate::pg_generation::PostgresDirectExpectation) {
+        let (snapshot, expectation) = initial.into_parts();
+        let source_id = SourceId::new(0).expect("the closed profile uses source slot zero");
+        (
+            Self::from_snapshot(QueryMode::Single(source_id), snapshot),
+            expectation,
+        )
+    }
+
     fn from_snapshot(query_mode: QueryMode, snapshot: RuntimeSnapshot) -> Self {
         let max_form_body_len = checked_form_body_len(DEFAULT_MAX_QUERY_LEN)
             .expect("default query length has a representable form-body limit");
@@ -145,6 +167,7 @@ impl ServeConfig {
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             request_admission_permits: Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_REQUESTS)),
             shutdown,
+            pg_direct_lifecycle_claimed: AtomicBool::new(false),
         }
     }
 
@@ -262,42 +285,44 @@ impl ServeConfig {
         self.runtime.semantic_warning_count(source_id)
     }
 
-    /// Atomically publish a prebuilt candidate that still contains the source
-    /// selected by this serving configuration. This private primitive does not
-    /// validate or authorize the candidate and stays sealed until the complete
-    /// off-path reload-candidate builder exists.
-    #[allow(
-        dead_code,
-        reason = "activation stays sealed until the off-path reload-candidate builder lands"
-    )]
+    /// Raw snapshots can exercise activation invariants only in crate tests.
+    #[cfg(test)]
     pub(crate) fn activate_snapshot(
         &self,
         expected: RuntimeReadiness,
         candidate: RuntimeSnapshot,
     ) -> Result<ActivationId, ActivationError> {
-        self.ensure_runtime_transitions_open()?;
         for source_id in self.query_mode.source_ids().into_iter().flatten() {
             if !candidate.registry().contains_source(source_id) {
                 return Err(ActivationError::CandidateMissingSource { source_id });
             }
         }
         self.ensure_runtime_transitions_open()?;
-        let result = self.runtime.activate(expected, candidate);
+        let result = self.runtime.activate_candidate(
+            &crate::pg_direct_lifecycle::RuntimeTransitionAuthority::for_test(),
+            crate::pg_direct_lifecycle::sealed_candidate_for_test(expected, candidate),
+        );
         self.normalize_shutdown_race(result)
     }
 
     /// Reject new requests only if the complete expected state is current,
     /// while preserving every lease already in flight.
-    pub fn mark_runtime_not_ready(
+    #[cfg(test)]
+    pub(crate) fn mark_runtime_not_ready(
         &self,
         expected: RuntimeReadiness,
         cause: ReadinessCause,
     ) -> Result<RuntimeReadiness, ActivationError> {
         self.ensure_runtime_transitions_open()?;
-        let result = self.runtime.mark_not_ready(expected, cause);
+        let result = self.runtime.transition_not_ready(
+            &crate::pg_direct_lifecycle::RuntimeTransitionAuthority::for_test(),
+            expected,
+            cause,
+        );
         self.normalize_shutdown_race(result)
     }
 
+    #[cfg(test)]
     fn ensure_runtime_transitions_open(&self) -> Result<(), ActivationError> {
         if *self.shutdown.borrow() == ShutdownPhase::Running {
             Ok(())
@@ -306,6 +331,7 @@ impl ServeConfig {
         }
     }
 
+    #[cfg(test)]
     fn normalize_shutdown_race<T>(
         &self,
         result: Result<T, ActivationError>,
@@ -322,6 +348,17 @@ impl ServeConfig {
 
     pub(crate) fn runtime_lease(&self) -> Result<RuntimeSnapshotLease, SnapshotUnavailable> {
         self.runtime.lease()
+    }
+
+    pub(crate) fn lifecycle_runtime(&self) -> Arc<RuntimeManager> {
+        Arc::clone(&self.runtime)
+    }
+
+    pub(crate) fn claim_pg_direct_lifecycle(&self) -> Result<(), ReadinessCause> {
+        self.pg_direct_lifecycle_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| ReadinessCause::CapabilityDrift)
     }
 
     pub(crate) const fn query_mode(&self) -> QueryMode {
@@ -358,9 +395,7 @@ impl ServeConfig {
             }
         });
         if began {
-            let _ = self
-                .runtime
-                .mark_current_not_ready(ReadinessCause::Administrative);
+            let _ = self.runtime.mark_current_administratively_not_ready();
         }
     }
 
@@ -409,87 +444,5 @@ fn checked_form_body_len(max_query_len: usize) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config() -> ServeConfig {
-        ServeConfig::new_with_unverified_source(
-            Backend::sqlite(rusqlite::Connection::open_in_memory().expect("open fixture")),
-            Vec::new(),
-            crate::test_support::empty_ontology(),
-            Vec::new(),
-        )
-        .expect("empty mapping passes semantic admission")
-    }
-
-    #[test]
-    fn request_admission_defaults_to_one_shared_finite_gate() {
-        let config = config();
-        assert_eq!(
-            config.max_concurrent_requests(),
-            DEFAULT_MAX_CONCURRENT_REQUESTS
-        );
-        assert_eq!(
-            config.available_request_permits(),
-            DEFAULT_MAX_CONCURRENT_REQUESTS
-        );
-        assert_eq!(config.max_order_rows(), DEFAULT_MAX_ORDER_ROWS);
-        assert_eq!(
-            config.query_limits.max_retained_bytes(),
-            DEFAULT_MAX_ORDER_BYTES
-        );
-    }
-
-    #[test]
-    fn request_admission_setter_is_checked_and_preserves_state_on_error() {
-        let mut config = config();
-        config
-            .set_max_concurrent_requests(3)
-            .expect("finite request ceiling");
-        let configured_gate = config.request_admission_permits();
-        assert_eq!(config.available_request_permits(), 3);
-
-        for invalid in [0, Semaphore::MAX_PERMITS + 1] {
-            let error = config
-                .set_max_concurrent_requests(invalid)
-                .expect_err("invalid request ceiling");
-            assert_eq!(error.code(), "startup-configuration");
-            assert!(matches!(
-                error.internal_cause(),
-                StartupCause::Configuration { .. }
-            ));
-            assert_eq!(config.max_concurrent_requests(), 3);
-            assert!(Arc::ptr_eq(
-                &configured_gate,
-                &config.request_admission_permits()
-            ));
-        }
-    }
-
-    #[test]
-    fn activation_rejects_a_candidate_without_the_selected_source() {
-        let config = config();
-        let current = config.runtime_readiness().unwrap();
-        let selected_source = SourceId::new(0).unwrap();
-        let other_source = SourceId::new(1).unwrap();
-        let candidate = RuntimeSnapshot::single(
-            Epoch(1),
-            crate::test_support::empty_ontology(),
-            RuntimeSource::new(
-                IntrospectedSource::unchecked(
-                    Backend::sqlite(rusqlite::Connection::open_in_memory().unwrap()),
-                    Vec::new(),
-                ),
-                SourceMapping::new(other_source, Vec::new()),
-            ),
-        )
-        .expect("empty replacement mapping passes semantic admission");
-
-        assert!(matches!(
-            config.activate_snapshot(current, candidate),
-            Err(ActivationError::CandidateMissingSource { source_id })
-                if source_id == selected_source
-        ));
-        assert_eq!(config.runtime_readiness().unwrap(), current);
-    }
-}
+#[path = "config/tests.rs"]
+mod tests;

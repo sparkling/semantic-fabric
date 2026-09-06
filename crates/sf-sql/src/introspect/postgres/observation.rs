@@ -359,6 +359,27 @@ impl Postgres16PublicObservedSnapshotV1 {
         }
     }
 
+    /// Consumes this snapshot into the Direct-Mapping projection and the exact
+    /// rich observation from which that projection was derived.
+    ///
+    /// This is the only compatibility projection suitable for lifecycle
+    /// admission. An unavailable rich observation fails closed; the legacy
+    /// projection is never substituted.
+    pub fn into_direct_mapping_parts(
+        self,
+    ) -> Result<
+        (Vec<TableSchema>, Postgres16PublicObservedSchemaV1),
+        PostgresSchemaIdentityUnavailableV1,
+    > {
+        match self.availability {
+            PostgresSchemaIdentityAvailabilityV1::Available(observation) => {
+                let tables = observation.direct_mapping_tables.clone();
+                Ok((tables, observation))
+            }
+            PostgresSchemaIdentityAvailabilityV1::Unavailable(reason) => Err(reason),
+        }
+    }
+
     /// Preserves both the legacy projection and its identity availability.
     pub fn into_parts(self) -> (Vec<TableSchema>, PostgresSchemaIdentityAvailabilityV1) {
         (self.legacy_tables, self.availability)

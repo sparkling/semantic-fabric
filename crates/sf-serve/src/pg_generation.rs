@@ -30,12 +30,11 @@ pub(crate) use lease::VerifiedPostgresGenerationLease;
 #[cfg(test)]
 use context::validate_session_context;
 use context::{capture_session_context, PgSessionContext, POSTGRES_SESSION_CONTEXT_QUERY_COUNT_V1};
-use lease::open_observed_generation;
 #[cfg(test)]
-use lease::{
-    open_generation_before_lock_for_test, transaction_setup_sql, BEGIN_GENERATION_SQL,
-    GENERATION_METADATA_PROBE_RESERVATION,
-};
+use lease::{open_generation_before_lock_for_test, transaction_setup_sql, BEGIN_GENERATION_SQL};
+use lease::{open_observed_generation, GENERATION_METADATA_PROBE_RESERVATION};
+
+pub(crate) const PG_DIRECT_CONTROL_SOURCE_WORK_V1: u64 = GENERATION_METADATA_PROBE_RESERVATION;
 
 #[derive(Clone, Default)]
 pub(crate) enum SourceGeneration {
@@ -101,6 +100,10 @@ pub(crate) struct PostgresDirectGeneration {
     session: PgSessionContext,
     tables: Arc<[TableSchema]>,
 }
+
+/// Opaque expectation retained by the one Direct-Mapping control coordinator.
+#[derive(Clone)]
+pub(crate) struct PostgresDirectExpectation(Arc<PostgresDirectGeneration>);
 
 impl std::fmt::Debug for PostgresDirectGeneration {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -234,8 +237,60 @@ impl PostgresDirectCandidate {
     }
 }
 
-/// Consume one observed source, derive candidate inputs from its exact pool,
-/// and return that same source with the inseparable verified facts installed.
+/// Complete source-side result awaiting semantic admission and snapshot build.
+pub(crate) struct BoundPostgresDirectCandidate {
+    source: crate::IntrospectedSource,
+    mapping: SourceMapping,
+    expectation: PostgresDirectExpectation,
+}
+
+impl BoundPostgresDirectCandidate {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        crate::IntrospectedSource,
+        SourceMapping,
+        PostgresDirectExpectation,
+    ) {
+        (self.source, self.mapping, self.expectation)
+    }
+}
+
+/// Consume one request-lane source, derive candidate inputs on the separately
+/// supplied control pool, and return that source with inseparable facts from
+/// the exact protected rich observation installed.
+pub(crate) async fn build_and_bind_direct_candidate_on_control(
+    source: crate::IntrospectedSource,
+    control_pool: &deadpool_postgres::Pool,
+    base_iri: &str,
+    source_id: SourceId,
+    budget: &RequestBudget,
+) -> Result<BoundPostgresDirectCandidate, PgGenerationError> {
+    match source.backend() {
+        crate::Backend::Pg(_) => {}
+        crate::Backend::Sqlite(_) | crate::Backend::Mysql(_) => {
+            return Err(PgGenerationError::Internal)
+        }
+    }
+    let discovery = source.observed_schema().to_vec();
+    let candidate =
+        build_direct_candidate(control_pool, &discovery, base_iri, source_id, budget).await?;
+    let (mapping, source_candidate) = candidate.into_parts();
+    let SourceGeneration::DirectPostgres(expectation) = &source_candidate.generation else {
+        return Err(PgGenerationError::Internal);
+    };
+    let expectation = PostgresDirectExpectation(Arc::clone(expectation));
+    let source = source.bind_postgres_direct(source_candidate)?;
+    Ok(BoundPostgresDirectCandidate {
+        source,
+        mapping,
+        expectation,
+    })
+}
+
+/// Compatibility helper for the low-level lease tests. The production
+/// lifecycle always supplies its distinct control pool explicitly.
+#[cfg(test)]
 pub(crate) async fn build_and_bind_direct_candidate(
     source: crate::IntrospectedSource,
     base_iri: &str,
@@ -248,11 +303,25 @@ pub(crate) async fn build_and_bind_direct_candidate(
             return Err(PgGenerationError::Internal)
         }
     };
-    let discovery = source.observed_schema().to_vec();
-    let candidate = build_direct_candidate(&pool, &discovery, base_iri, source_id, budget).await?;
-    let (mapping, source_candidate) = candidate.into_parts();
-    let source = source.bind_postgres_direct(source_candidate)?;
+    let candidate =
+        build_and_bind_direct_candidate_on_control(source, &pool, base_iri, source_id, budget)
+            .await?;
+    let (source, mapping, _) = candidate.into_parts();
     Ok((source, mapping))
+}
+
+pub(crate) async fn probe_direct_expectation(
+    control_pool: &deadpool_postgres::Pool,
+    expectation: &PostgresDirectExpectation,
+    budget: &RequestBudget,
+) -> Result<(), PgGenerationError> {
+    let expected = Arc::clone(&expectation.0);
+    let table_names = normalized_table_names(&expected.tables)?;
+    let lease = open_observed_generation(control_pool, expected.source_id, &table_names, budget)
+        .await?
+        .promote_expected(expected)
+        .await?;
+    lease.finish_bounded(budget).await
 }
 
 async fn build_direct_candidate(
