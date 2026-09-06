@@ -29,7 +29,7 @@ impl ActivationId {
 
     #[allow(
         dead_code,
-        reason = "activation stays sealed until the validated candidate builder lands"
+        reason = "activation stays sealed until the off-path reload-candidate builder lands"
     )]
     fn successor(self) -> Result<Self, ActivationError> {
         self.0
@@ -261,10 +261,10 @@ impl RuntimeManager {
 
     /// Publish a prebuilt candidate if the complete expected readiness state is
     /// still current. This private primitive does not validate or authorize the
-    /// candidate; the future candidate builder must do so before calling it.
+    /// candidate; the future off-path reload-candidate builder must do so first.
     #[allow(
         dead_code,
-        reason = "activation stays sealed until the validated candidate builder lands"
+        reason = "activation stays sealed until the off-path reload-candidate builder lands"
     )]
     pub(crate) fn activate(
         &self,

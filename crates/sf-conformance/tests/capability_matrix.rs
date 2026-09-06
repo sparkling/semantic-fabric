@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 91);
+    assert_eq!(loaded.catalog.cells.len(), 92);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&58));
+    assert_eq!(counts.get(&Status::Implemented), Some(&59));
     assert_eq!(counts.get(&Status::Planned), Some(&31));
     assert_eq!(counts.get(&Status::Unsupported), Some(&2));
     assert!(loaded
@@ -60,6 +60,7 @@ fn bounded_slices_do_not_promote_broad_programme_profiles() {
         "federated-two-source-union-multi-source",
         "generated-qe-per-pr-sqlite",
         "health-readiness-probes-generic",
+        "mapping-ontology-semantic-admission-generic",
         "service-description-discovery-generic",
     ] {
         let cell = loaded
@@ -176,7 +177,8 @@ fn static_gold_and_source_evidence_is_not_fused_with_mutable_postgres() {
         static_cell.evidence_ids,
         [
             "e-semantic-builder-gold-external",
-            "e-semantic-builder-gold-loader"
+            "e-semantic-builder-gold-loader",
+            "e-semantic-builder-gold-ontology"
         ]
     );
 

@@ -262,10 +262,10 @@ impl ServeConfig {
     /// Atomically publish a prebuilt candidate that still contains the source
     /// selected by this serving configuration. This private primitive does not
     /// validate or authorize the candidate and stays sealed until the complete
-    /// candidate builder exists.
+    /// off-path reload-candidate builder exists.
     #[allow(
         dead_code,
-        reason = "activation stays sealed until the validated candidate builder lands"
+        reason = "activation stays sealed until the off-path reload-candidate builder lands"
     )]
     pub(crate) fn activate_snapshot(
         &self,
