@@ -3,6 +3,38 @@
 //! These strings are executed only by the guarded rich snapshot collector;
 //! production availability still requires the live qualification receipts.
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(in crate::introspect::postgres) enum RichCatalogueQueryV1 {
+    Guard,
+    Relations,
+    Attributes,
+    Constraints,
+    Count,
+}
+
+pub(in crate::introspect::postgres) const RICH_CAPTURE_QUERY_INVENTORY_V1: [RichCatalogueQueryV1;
+    4] = [
+    RichCatalogueQueryV1::Guard,
+    RichCatalogueQueryV1::Relations,
+    RichCatalogueQueryV1::Attributes,
+    RichCatalogueQueryV1::Constraints,
+];
+const _: () =
+    assert!(RICH_CAPTURE_QUERY_INVENTORY_V1.len() == RichCatalogueQueryV1::Count as usize);
+
+impl RichCatalogueQueryV1 {
+    pub(in crate::introspect::postgres) const fn sql(self) -> &'static str {
+        match self {
+            Self::Guard => RICH_GUARD_SQL_V1,
+            Self::Relations => RICH_RELATIONS_SQL_V1,
+            Self::Attributes => RICH_ATTRIBUTES_SQL_V1,
+            Self::Constraints => RICH_CONSTRAINTS_SQL_V1,
+            Self::Count => panic!("rich catalogue query count sentinel is not executable"),
+        }
+    }
+}
+
 pub(super) const RICH_RELATIONS_SQL_V1: &str = "SELECT \
  c.oid AS relation_oid, c.relnamespace AS relation_namespace_oid, n.oid AS joined_namespace_oid, \
  CASE WHEN n.nspname IS NULL OR pg_catalog.octet_length(pg_catalog.convert_to(n.nspname::text,'UTF8')) > $2 \

@@ -33,6 +33,8 @@ mod source_type;
 #[allow(dead_code)]
 mod trigger_evidence;
 
+pub(in crate::introspect::postgres) use catalog_sql::RICH_CAPTURE_QUERY_INVENTORY_V1;
+
 pub(super) async fn qualify_profile_guard<C>(
     client: &C,
 ) -> Result<(), PostgresSchemaIdentityUnavailableV1>
@@ -40,7 +42,7 @@ where
     C: GenericClient + Sync,
 {
     let row: Row = client
-        .query_one(catalog_sql::RICH_GUARD_SQL_V1, &[])
+        .query_one(catalog_sql::RichCatalogueQueryV1::Guard.sql(), &[])
         .await
         .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
     catalog_decode::decode_guard_row_v1(&row).map(|_| ())
@@ -129,7 +131,7 @@ where
     C: GenericClient + Sync,
 {
     let guard_row = client
-        .query_one(catalog_sql::RICH_GUARD_SQL_V1, &[])
+        .query_one(catalog_sql::RichCatalogueQueryV1::Guard.sql(), &[])
         .await
         .map_err(|_| PostgresSchemaIdentityUnavailableV1::CatalogQuery)?;
     let guard = catalog_decode::decode_guard_row_v1(&guard_row)?;
@@ -138,7 +140,7 @@ where
     let relation_limit = MAX_RELATIONS_V1 as i64 + 1;
     let relations = query_bounded_mapped(
         client,
-        catalog_sql::RICH_RELATIONS_SQL_V1,
+        catalog_sql::RichCatalogueQueryV1::Relations.sql(),
         &[
             TypedQueryParameter::new(&schema_name, Type::TEXT),
             TypedQueryParameter::new(&text_limit, Type::INT4),
@@ -157,7 +159,7 @@ where
     let attribute_limit = relation::MAX_PHYSICAL_ATTRIBUTES_TOTAL_PG16_V1 as i64 + 1;
     let attributes = query_bounded_mapped(
         client,
-        catalog_sql::RICH_ATTRIBUTES_SQL_V1,
+        catalog_sql::RichCatalogueQueryV1::Attributes.sql(),
         &[
             TypedQueryParameter::new(&schema_name, Type::TEXT),
             TypedQueryParameter::new(&text_limit, Type::INT4),
@@ -180,7 +182,7 @@ where
         constraint_budget::constraint_catalog_budget_v1(raw_constraints.len())?;
     let mut catalog_constraints = query_bounded_mapped(
         client,
-        catalog_sql::RICH_CONSTRAINTS_SQL_V1,
+        catalog_sql::RichCatalogueQueryV1::Constraints.sql(),
         &[
             TypedQueryParameter::new(&schema_name, Type::TEXT),
             TypedQueryParameter::new(&constraint_limit, Type::INT8),

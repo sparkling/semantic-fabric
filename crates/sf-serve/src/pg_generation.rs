@@ -29,10 +29,13 @@ pub(crate) use lease::VerifiedPostgresGenerationLease;
 
 #[cfg(test)]
 use context::validate_session_context;
-use context::{capture_session_context, PgSessionContext};
+use context::{capture_session_context, PgSessionContext, POSTGRES_SESSION_CONTEXT_QUERY_COUNT_V1};
 use lease::open_observed_generation;
 #[cfg(test)]
-use lease::{open_generation_before_lock_for_test, transaction_setup_sql, BEGIN_GENERATION_SQL};
+use lease::{
+    open_generation_before_lock_for_test, transaction_setup_sql, BEGIN_GENERATION_SQL,
+    GENERATION_METADATA_PROBE_RESERVATION,
+};
 
 #[derive(Clone, Default)]
 pub(crate) enum SourceGeneration {

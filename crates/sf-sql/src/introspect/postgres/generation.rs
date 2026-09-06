@@ -13,6 +13,7 @@ use crate::dialect::Dialect;
 use crate::error::{Error, Result};
 
 use super::legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
+use super::legacy_inventory::LegacyCatalogueQueryV1;
 use super::legacy_query::{
     query_bounded, TypedQueryParameter, LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
     MAX_LEGACY_RELATIONS_PG16_V1,
@@ -20,7 +21,6 @@ use super::legacy_query::{
 use super::legacy_row::{LegacyRow, LEGACY_TEXT_QUERY_LIMIT_PG16_V1};
 use super::{
     introspect_in_schema, observation, Postgres16PublicObservedSnapshotV1, RUNTIME_SCHEMA,
-    TABLES_SQL,
 };
 
 const EXPLICIT_TRANSACTION_PROBE_SQL: &str =
@@ -32,6 +32,38 @@ const OBSERVATION_RECOVER_SQL: &str =
 const TRANSACTION_MODE_SQL: &str =
     "SELECT pg_catalog.current_setting('transaction_isolation')::pg_catalog.text = 'repeatable read'::pg_catalog.text AS repeatable_read, pg_catalog.current_setting('transaction_read_only')::pg_catalog.text = 'on'::pg_catalog.text AS read_only";
 const MAX_POSTGRES_IDENTIFIER_BYTES_V1: usize = 63;
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum GenerationTransactionProbeV1 {
+    Savepoint,
+    Mode,
+    Count,
+}
+
+const GENERATION_TRANSACTION_PROBE_INVENTORY_V1: [GenerationTransactionProbeV1; 2] = [
+    GenerationTransactionProbeV1::Savepoint,
+    GenerationTransactionProbeV1::Mode,
+];
+const _: () = assert!(
+    GENERATION_TRANSACTION_PROBE_INVENTORY_V1.len() == GenerationTransactionProbeV1::Count as usize
+);
+
+impl GenerationTransactionProbeV1 {
+    const fn sql(self) -> &'static str {
+        match self {
+            Self::Savepoint => EXPLICIT_TRANSACTION_PROBE_SQL,
+            Self::Mode => TRANSACTION_MODE_SQL,
+            Self::Count => panic!("transaction probe count sentinel is not executable"),
+        }
+    }
+}
+
+/// Queries issued by each transaction-policy check.
+pub const POSTGRES_GENERATION_TRANSACTION_PROBE_QUERY_COUNT_V1: u64 =
+    GENERATION_TRANSACTION_PROBE_INVENTORY_V1.len() as u64;
+/// Fail-early profile-guard query issued before legacy catalogue decoding.
+pub const POSTGRES_PROFILE_PREQUALIFICATION_QUERY_COUNT_V1: u64 = 1;
 
 /// Capture the guarded PostgreSQL-16 public observation in a caller-owned
 /// `REPEATABLE READ READ ONLY` transaction.
@@ -277,7 +309,7 @@ where
 {
     let rows = query_bounded(
         client,
-        TABLES_SQL,
+        LegacyCatalogueQueryV1::Tables.sql(),
         &[
             TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
             TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
@@ -299,11 +331,11 @@ where
     C: GenericClient + Sync,
 {
     client
-        .batch_execute(EXPLICIT_TRANSACTION_PROBE_SQL)
+        .batch_execute(GenerationTransactionProbeV1::Savepoint.sql())
         .await
         .map_err(|_| redacted("PostgreSQL generation transaction required"))?;
     let row = client
-        .query_one(TRANSACTION_MODE_SQL, &[])
+        .query_one(GenerationTransactionProbeV1::Mode.sql(), &[])
         .await
         .map_err(|_| redacted("PostgreSQL generation transaction check failed"))?;
     let repeatable_read = row

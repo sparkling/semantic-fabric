@@ -18,6 +18,7 @@ const SESSION_CONTEXT_SQL: &str = "SELECT \
  JOIN pg_catalog.pg_roles cr ON cr.rolname = CURRENT_USER \
  JOIN pg_catalog.pg_roles sr ON sr.rolname = SESSION_USER \
  WHERE d.datname = pg_catalog.current_database()";
+pub(super) const POSTGRES_SESSION_CONTEXT_QUERY_COUNT_V1: u64 = 1;
 
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct PgSessionContext {

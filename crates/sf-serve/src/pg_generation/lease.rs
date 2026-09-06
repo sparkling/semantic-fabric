@@ -20,15 +20,13 @@ use super::{
     capture_session_context, PgGenerationError, PgSessionContext, PostgresDirectGeneration,
 };
 
-pub(super) const BEGIN_GENERATION_SQL: &str =
-    "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY";
+mod inventory;
+#[cfg(test)]
+pub(super) use inventory::BEGIN_GENERATION_SQL;
+pub(super) use inventory::{transaction_setup_sql, GENERATION_METADATA_PROBE_RESERVATION};
+
 const ROLLBACK_SQL: &str = "ROLLBACK";
-const DEFAULT_UNBOUNDED_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_POSTGRES_TIMEOUT_MILLIS: u128 = i32::MAX as u128;
 const VERIFIED_GENERATION_ROLLBACK_ALLOWANCE: Duration = Duration::from_secs(2);
-/// Initial and final checks each cover the lock/transaction guards, both
-/// bounded catalogue projections, session context, and fixed subqueries.
-const GENERATION_METADATA_PROBE_RESERVATION: u64 = 32;
 
 /// A pool member detached from recycling before a transaction can begin.
 struct DirtyGeneration {
@@ -394,21 +392,6 @@ pub(super) async fn open_generation_before_lock_for_test(
         owner: open.0,
         backend_pid,
     })
-}
-
-pub(super) fn transaction_setup_sql(budget: &RequestBudget) -> Result<String, PgGenerationError> {
-    let remaining = budget
-        .remaining_duration()?
-        .unwrap_or(DEFAULT_UNBOUNDED_TIMEOUT);
-    let millis = remaining.as_millis().clamp(1, MAX_POSTGRES_TIMEOUT_MILLIS);
-    let lock_millis = millis.min(1_000);
-    Ok(format!(
-        "{BEGIN_GENERATION_SQL}; SET LOCAL statement_timeout = {millis}; \
-         SET LOCAL lock_timeout = {lock_millis}; \
-         SET LOCAL idle_in_transaction_session_timeout = {millis}; \
-         SET LOCAL search_path = pg_catalog, public, pg_temp; \
-         SET LOCAL row_security = on;"
-    ))
 }
 
 async fn revalidate(

@@ -145,6 +145,36 @@ fn generation_requirement_preserves_the_binding_identity_without_io() {
         .ptr_eq(&RuntimeBindingIdentity::fresh()));
 }
 
+#[tokio::test]
+async fn generation_metadata_reservation_rejects_one_short_before_pool_io() {
+    use sf_core::query_control::{QueryCharge, QueryControlError, QueryLimits};
+
+    let pg_config: tokio_postgres::Config = "host=127.0.0.1 port=1".parse().unwrap();
+    let pool = deadpool_postgres::Pool::builder(deadpool_postgres::Manager::new(
+        pg_config,
+        tokio_postgres::NoTls,
+    ))
+    .max_size(1)
+    .build()
+    .unwrap();
+    pool.close();
+    let budget = RequestBudget::after(
+        Duration::from_secs(1),
+        QueryLimits::new(1, GENERATION_METADATA_PROBE_RESERVATION - 1, 1, 1),
+    );
+
+    assert!(pool.is_closed());
+    assert_eq!(pool.status().size, 0);
+    assert!(matches!(
+        open_observed_generation(&pool, SourceId::new(0).unwrap(), &[], &budget).await,
+        Err(PgGenerationError::Control(
+            QueryControlError::SourceWorkExceeded
+        ))
+    ));
+    assert_eq!(budget.consumed(QueryCharge::SourceWork), 0);
+    assert_eq!(pool.status().size, 0);
+}
+
 #[test]
 fn verification_compares_the_exact_rich_projection_and_session() {
     let source_id = SourceId::new(0).unwrap();

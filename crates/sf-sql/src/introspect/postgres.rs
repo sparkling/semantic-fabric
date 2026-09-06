@@ -9,6 +9,7 @@ use crate::schema::{Column, ForeignKey, TableSchema};
 
 mod generation;
 mod legacy_bounds;
+mod legacy_inventory;
 mod legacy_query;
 mod legacy_row;
 mod legacy_sql;
@@ -20,17 +21,28 @@ pub use generation::{
     introspect_postgres_public_observed_snapshot_in_transaction_classified,
     lock_postgres_public_base_tables, lock_postgres_public_base_tables_classified,
     PostgresGenerationObservationFailure, PostgresPublicTableLockFailure,
+    POSTGRES_GENERATION_TRANSACTION_PROBE_QUERY_COUNT_V1,
+    POSTGRES_PROFILE_PREQUALIFICATION_QUERY_COUNT_V1,
 };
 use legacy_bounds::{validate_legacy_table_names, PRODUCTION_LEGACY_INPUT_LIMITS_V1};
+use legacy_inventory::LegacyCatalogueQueryV1;
 use legacy_query::{
     query_bounded, TypedQueryParameter, LEGACY_RELATION_QUERY_LIMIT_PG16_V1,
     LEGACY_SET_QUERY_LIMIT_PG16_V1, MAX_LEGACY_RELATIONS_PG16_V1, MAX_LEGACY_ROWS_PER_SET_PG16_V1,
 };
 use legacy_row::{LegacyRow, LEGACY_TEXT_QUERY_LIMIT_PG16_V1};
+#[cfg(test)]
 use legacy_sql::{
     COLUMNS_SQL, EARLIER_RELATION_COLLISIONS_SQL, FOREIGN_KEYS_SQL, KEYS_SQL, NDISTINCT_SQL,
     RELTUPLES_SQL, TABLES_SQL,
 };
+
+/// Query count for one complete version-1 legacy public-catalogue projection.
+pub const POSTGRES_LEGACY_CATALOGUE_QUERY_COUNT_V1: u64 =
+    legacy_inventory::LEGACY_CATALOGUE_QUERY_INVENTORY_V1.len() as u64;
+/// Query count for one version-1 rich-profile capture, including its guard.
+pub const POSTGRES_RICH_CAPTURE_CATALOGUE_QUERY_COUNT_V1: u64 =
+    observation::RICH_CAPTURE_QUERY_INVENTORY_V1.len() as u64;
 pub use observation::{
     Postgres16PublicObservedSchemaV1, Postgres16PublicObservedSnapshotV1,
     PostgresSchemaIdentityAvailabilityV1, PostgresSchemaIdentityGuardCodeV1,
@@ -84,7 +96,7 @@ pub async fn introspect_postgres_public_snapshot(
     transaction.batch_execute(SNAPSHOT_TIMEOUTS_SQL).await?;
     let rows = query_bounded(
         &transaction,
-        TABLES_SQL,
+        LegacyCatalogueQueryV1::Tables.sql(),
         &[
             TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
             TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
@@ -122,7 +134,7 @@ pub async fn introspect_postgres_public_snapshot_guarded(
         .map_err(|error| Error::Introspection(error.to_string()))?;
     let rows = query_bounded(
         &transaction,
-        TABLES_SQL,
+        LegacyCatalogueQueryV1::Tables.sql(),
         &[
             TypedQueryParameter::new(&RUNTIME_SCHEMA, Type::TEXT),
             TypedQueryParameter::new(&LEGACY_TEXT_QUERY_LIMIT_PG16_V1, Type::INT4),
@@ -215,7 +227,7 @@ where
     let earlier_schema = "pg_catalog";
     let collisions: Vec<String> = query_bounded(
         client,
-        EARLIER_RELATION_COLLISIONS_SQL,
+        LegacyCatalogueQueryV1::EarlierRelationCollisions.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&earlier_schema, Type::TEXT),
@@ -250,7 +262,7 @@ where
 {
     for row in query_bounded(
         client,
-        COLUMNS_SQL,
+        LegacyCatalogueQueryV1::Columns.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -298,7 +310,7 @@ where
     let mut unique: HashMap<String, BTreeMap<String, Vec<String>>> = HashMap::new();
     for row in query_bounded(
         client,
-        KEYS_SQL,
+        LegacyCatalogueQueryV1::Keys.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -348,7 +360,7 @@ where
     let mut foreign: HashMap<String, BTreeMap<String, ForeignKey>> = HashMap::new();
     for row in query_bounded(
         client,
-        FOREIGN_KEYS_SQL,
+        LegacyCatalogueQueryV1::ForeignKeys.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -400,7 +412,7 @@ where
 {
     for row in query_bounded(
         client,
-        RELTUPLES_SQL,
+        LegacyCatalogueQueryV1::RelationStatistics.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
@@ -423,7 +435,7 @@ where
     }
     for row in query_bounded(
         client,
-        NDISTINCT_SQL,
+        LegacyCatalogueQueryV1::ColumnStatistics.sql(),
         &[
             TypedQueryParameter::new(&tables, Type::TEXT_ARRAY),
             TypedQueryParameter::new(&schema_name, Type::TEXT),
