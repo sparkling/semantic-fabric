@@ -14,11 +14,12 @@ implements: [ADR-0038]
 
 This ADR remains **proposed overall**. Its Phase 1 pure `sf-core` Observed Schema
 Identity V1 kernel is implemented as a non-authorizing content-identity utility.
-[ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md) now proposes
-the first closed production-shaped profile. Its private, opt-in `sf-sql`
-diagnostic can emit a branded identity for PostgreSQL 16.9/16.15 after bounded
-rich observation, but its two-version operator observations are untracked and
-its evidence runner explicitly withholds qualification. Ordinary authored
+[ADR-0051](ADR-0051-postgresql-16-public-observed-schema-profile.md) now accepts
+the first production-shaped profile for observation qualification only. Its
+private, opt-in `sf-sql` diagnostic can emit a branded identity for PostgreSQL
+16.9/16.15 after bounded rich observation. The tracked pair receipt binds two
+fresh generation runs per exact patch and independent clean replay, and passes
+only that observation-profile gate. Ordinary authored
 mapping carries the whole identity or one closed unavailable reason only as a
 non-authorizing backend/`SourceId`-bound diagnostic. The private Direct-Mapping
 foundation may retain the identity with the complete rich table and session
@@ -72,8 +73,8 @@ live gate exercises lock-before-snapshot, clean close, incompatible DDL
 exclusion, compatible additive-FK old-generation coherence followed by
 next-acquisition drift, policy mutation, cancellation and dirty-member
 replacement. Public startup nevertheless rejects every Direct Mapping selection
-before connector I/O. Exact 16.9/16.15 qualification receipts, capability
-promotion, general reload/drift/source health, no-PK identity, other backend
+before connector I/O. Capability promotion, general reload/drift/source
+health, no-PK identity, other backend
 leases and production admission remain open. This is not full Phase 4, Phase 5
 or Phase 6 completion.
 
@@ -376,10 +377,11 @@ projection; `sf-validation` owns the sealed bounded Native/global split; and
   concurrent update/vacuum and blank-node stability tests.
 
 Live tests use project-owned isolated databases and never the product-mock
-instance. The current PostgreSQL 16.15 gate closes the listed lock ordering,
+instance. The PostgreSQL 16.15 lifecycle gate closes the listed lock ordering,
 same-generation execution, final-recheck, cancellation and dirty-cleanup
-foundations; it is not the required two-version receipt bundle and does not
-close reload or public admission. Adversarial redaction tests seed public
+foundations. The separate exact 16.9/16.15 pair receipt closes only the
+observation-profile qualification gate; neither evidence closes reload, public
+Direct Mapping, backend admission or production admission. Adversarial redaction tests seed public
 errors, debug output, readiness and metrics with credentials, paths, raw SQL,
 names and values and require that none escape.
 

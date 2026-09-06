@@ -295,12 +295,13 @@ One required-live Rust test provisions an isolated restricted-role PostgreSQL
 16.15 database and covers the pre-lock no-snapshot state, clean close,
 `ACCESS EXCLUSIVE` exclusion, compatible additive-FK old-generation coherence
 plus next-acquisition drift, local policy mutation, cancelled work and dirty
-member replacement. This is direct product evidence, not Node authority, but it
-is not the tracked 16.9/16.15 qualification-receipt pair. Compiler type and
-constraint authorities remain `Unverified`; public Direct Mapping, no-PK
-identity, reload/watchers, other backend leases, federation, production
-admission and release authority remain absent. ADR-0050 and ADR-0051 stay
-proposed.
+member replacement. This is direct product evidence, not Node authority.
+Separately, the tracked exact PostgreSQL 16.9/16.15 pair passes the
+observation-profile gate after two fresh runs per patch and independent clean
+replay. Compiler type and constraint authorities remain `Unverified`; public
+Direct Mapping, no-PK identity, reload/watchers, other backend leases,
+federation, production admission and release authority remain absent. ADR-0050
+stays proposed; ADR-0051 is accepted for observation qualification only.
 
 Commit `824bb74` begins proposed ADR-0053's Rust-only boundary with a fixed-size
 parser-worker handshake codec. Later Rust-only slices hold and observe the
