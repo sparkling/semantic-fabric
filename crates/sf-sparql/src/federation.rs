@@ -19,6 +19,9 @@ use spargebra::{Query, SparqlParser};
 
 use crate::{CompilerBinding, Error, Plan, PlanForm, Result};
 
+#[allow(dead_code)] // Private ADR-0040 comparison prototype; not serving admission.
+mod global;
+
 /// One parsed source-local arm of the narrow federated UNION profile.
 #[derive(Clone, Debug)]
 pub(crate) struct SourceAffineUnionArm {
