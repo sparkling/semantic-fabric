@@ -6,7 +6,7 @@ use sf_core::query_control::{
 use super::mapping::{compatible, compatible_bag_pairs, minus_matches, SemanticMapping};
 use super::semantic_key::{
     checked_len_add, equal_after_hash_by, BlankNodeScope, ScopedTerm, SemanticKeyCaps,
-    SemanticKeyError, SemanticSolutionKeyV1,
+    SemanticKeyError, SemanticSolutionKeyV1, WriterPassMismatch,
 };
 
 fn budget(max_retained_bytes: u64) -> QueryBudget {
@@ -428,4 +428,30 @@ fn reservation_rejection_returns_no_partial_key_or_capacity() {
         SemanticKeyError::Reservation(ReservationError::RetainedBytesExceeded)
     );
     assert_eq!(budget.reserved(), ReservationShape::ZERO);
+}
+
+#[test]
+fn writer_measurement_mismatch_returns_no_key_and_releases_reservation() {
+    let budget = budget(4_096);
+    let mapping = mapping(vec![("x", Some(plain("value")))]);
+
+    for mismatch in [
+        WriterPassMismatch::FewerBytes,
+        WriterPassMismatch::MoreBytes,
+    ] {
+        let error = SemanticSolutionKeyV1::encode_with_writer_mismatch(
+            &["x"],
+            &mapping,
+            &budget,
+            SemanticKeyCaps::default(),
+            mismatch,
+        )
+        .unwrap_err();
+        assert_eq!(error, SemanticKeyError::WriterMeasurementMismatch);
+        assert_eq!(
+            error.to_string(),
+            "semantic-key writer does not match its measured length"
+        );
+        assert_eq!(budget.reserved(), ReservationShape::ZERO);
+    }
 }

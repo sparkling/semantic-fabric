@@ -117,6 +117,8 @@ pub(super) enum SemanticKeyError {
     TripleDepthExceeded,
     #[error("semantic-key length arithmetic overflow")]
     LengthOverflow,
+    #[error("semantic-key writer does not match its measured length")]
+    WriterMeasurementMismatch,
     #[error("semantic-key resource reservation rejected")]
     Reservation(ReservationError),
 }
@@ -141,6 +143,16 @@ impl SemanticSolutionKeyV1 {
         budget: &QueryBudget,
         caps: SemanticKeyCaps,
     ) -> Result<Self, SemanticKeyError> {
+        Self::encode_with_writer_hook(schema, mapping, budget, caps, |_| Ok(()))
+    }
+
+    fn encode_with_writer_hook(
+        schema: &[&str],
+        mapping: &super::mapping::SemanticMapping,
+        budget: &QueryBudget,
+        caps: SemanticKeyCaps,
+        after_write: impl FnOnce(&mut Encoder<'_>) -> Result<(), SemanticKeyError>,
+    ) -> Result<Self, SemanticKeyError> {
         validate_schema(schema, mapping, caps)?;
 
         let mut measure = Encoder::measure(caps.max_encoded_bytes);
@@ -153,10 +165,21 @@ impl SemanticSolutionKeyV1 {
         // This is the first output-buffer allocation. Any panic unwinds through
         // `reservation`, restoring the admitted capacity.
         let mut bytes = Vec::with_capacity(encoded_len);
-        {
-            let mut writer = Encoder::writer(&mut bytes, caps.max_encoded_bytes);
-            encode_mapping(&mut writer, schema, mapping, caps.max_triple_depth)?;
-            debug_assert_eq!(writer.len(), encoded_len);
+        let written = {
+            let mut writer = Encoder::writer(&mut bytes, encoded_len);
+            let result = encode_mapping(&mut writer, schema, mapping, caps.max_triple_depth)
+                .and_then(|()| after_write(&mut writer));
+            let written = writer.len();
+            match result {
+                Ok(()) => written,
+                Err(SemanticKeyError::EncodedBytesExceeded) => {
+                    return Err(SemanticKeyError::WriterMeasurementMismatch);
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if written != encoded_len || bytes.len() != encoded_len {
+            return Err(SemanticKeyError::WriterMeasurementMismatch);
         }
 
         let digest = Sha256::digest(&bytes).into();
@@ -164,6 +187,19 @@ impl SemanticSolutionKeyV1 {
             bytes,
             digest,
             _reservation: reservation,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn encode_with_writer_mismatch(
+        schema: &[&str],
+        mapping: &super::mapping::SemanticMapping,
+        budget: &QueryBudget,
+        caps: SemanticKeyCaps,
+        mismatch: WriterPassMismatch,
+    ) -> Result<Self, SemanticKeyError> {
+        Self::encode_with_writer_hook(schema, mapping, budget, caps, move |writer| {
+            writer.inject_mismatch(mismatch)
         })
     }
 
@@ -369,6 +405,13 @@ struct Encoder<'a> {
     max: usize,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WriterPassMismatch {
+    FewerBytes,
+    MoreBytes,
+}
+
 impl<'a> Encoder<'a> {
     const fn measure(max: usize) -> Self {
         Self {
@@ -422,5 +465,26 @@ impl<'a> Encoder<'a> {
             self.byte(byte.to_ascii_lowercase())?;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn inject_mismatch(&mut self, mismatch: WriterPassMismatch) -> Result<(), SemanticKeyError> {
+        match mismatch {
+            WriterPassMismatch::FewerBytes => {
+                let output = self
+                    .output
+                    .as_deref_mut()
+                    .ok_or(SemanticKeyError::WriterMeasurementMismatch)?;
+                output
+                    .pop()
+                    .ok_or(SemanticKeyError::WriterMeasurementMismatch)?;
+                self.len = self
+                    .len
+                    .checked_sub(1)
+                    .ok_or(SemanticKeyError::WriterMeasurementMismatch)?;
+                Ok(())
+            }
+            WriterPassMismatch::MoreBytes => self.byte(0),
+        }
     }
 }
