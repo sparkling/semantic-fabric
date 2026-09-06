@@ -13,20 +13,25 @@ implements:
 
 # Conformance & benchmark harness — the correctness gate and the fitness function
 
-> **Implementation status (2026-08-28): partially implemented.** The canonical
+> **Implementation status (2026-09-06): partially implemented.** The canonical
 > RDB2RDF input authority now seals 1 suite manifest, 26 scenarios, 87 exact
-> cases, and 189 case-tree files. SQLite and PostgreSQL runners consume that
-> authority in canonical order. Backend-aware v3 receipts bind the inventory and
-> all 87 ordered identity/kind/status/cause records: SQLite records 81 pass, one
-> documented deviation, and five skips; required-live PostgreSQL records 80 pass,
-> one documented deviation, and six skips. PostgreSQL provider absence is fatal
-> on receipt replay. The current seal contains no per-DBMS fork files; any future
-> fork must enter the canonical inventory before execution. The product now
-> performs mandatory sealed `M ⋈ T` admission before constructing a serving
-> binding and carries validation-policy-v2 into compile identity. The exact
-> static Product Mock closure passes; live Direct Mapping, backend/production
-> admission, MySQL mapping, and M0 performance/release qualification remain
-> open. Mapping evidence does not establish SPARQL Query or Protocol.
+> cases, and 189 case-tree files. SQLite, PostgreSQL, and MySQL runners consume
+> that authority in canonical order. Backend-aware v5 receipts bind the inventory,
+> execution type profile, and all 87 ordered identity/kind/status/cause records:
+> SQLite records 81 pass, one documented deviation, and five skips; required-live
+> PostgreSQL records 80 pass, one documented deviation, and six skips; required-live
+> MySQL records 74 pass, the documented `R2RMLTC0002f` deviation, and 12 exact
+> typed Direct Mapping unsupported outcomes under `RequirePrimaryKey`. PostgreSQL
+> or MySQL provider absence is fatal on required-live replay. MySQL's
+> `mysql-w3c-sql-2008-v1` type profile is conformance-only; native product MySQL
+> conservatively treats ambiguous `TINYINT(1)`/`BOOL` as integer unless explicit
+> `rr:datatype` supplies authority. Receipt provider image/toolchain provenance is
+> explicitly unbound. Exact-image CI/live runs are mapping evidence, not production
+> admission or full Query/Protocol conformance. The current seal contains no
+> per-DBMS fork files; any future fork must enter the inventory before execution.
+> Mandatory sealed `M ⋈ T` admission and the exact static Product Mock closure pass;
+> wider Direct Mapping, backend admission, and M0 performance/release qualification
+> remain open.
 
 ## Context and Problem Statement
 
@@ -44,7 +49,7 @@ ADR-0001 commits the engine to a standardised correctness gate and SOTA performa
 ## Decision Outcome
 
 ### Correctness gate — W3C RDB2RDF test cases (via CONSTRUCT)
-Vendor the suite into `tests/w3c/rdb2rdf/` (~49–63 named cases across D000–D025, positive **and** error cases; the W3C document licence permits redistribution). Base IRI fixed at `http://example.com/base/`. The engine has no materialiser, so each case runs as a **`CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` through the rewriter**, streaming the produced triples. Comparison is **graph isomorphism** (blank-node aware, via `oxrdf`) against the case's expected output (R2RML cases → N-Quads/Turtle; Direct Mapping cases → the auto-generated-R2RML path). Execute against embedded **SQLite** for fast per-push CI and **PostgreSQL** for the full run; **per-DBMS forked fixtures** capture dialect-specific expected output (ADR-0015). Emit `earl-semantic-fabric-{r2rml,direct}.ttl` (the first Rust entry in the implementation report).
+Vendor the suite into `tests/w3c/rdb2rdf/` (~49–63 named cases across D000–D025, positive **and** error cases; the W3C document licence permits redistribution). Base IRI fixed at `http://example.com/base/`. The engine has no materialiser, so each case runs as a **`CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` through the rewriter**, streaming the produced triples. Comparison is **graph isomorphism** (blank-node aware, via `oxrdf`) against the case's expected output (R2RML cases → N-Quads/Turtle; Direct Mapping cases → the auto-generated-R2RML path). Execute against embedded **SQLite** for fast per-push CI and required-live **PostgreSQL** and **MySQL** for full mapping runs; **per-DBMS forked fixtures** capture dialect-specific expected output (ADR-0015). Emit `earl-semantic-fabric-{r2rml,direct}.ttl` (the first Rust entry in the implementation report).
 
 ### Performance benchmark — GTFS-Madrid-Bench (OBDA track)
 The virtualiser is measured on the **GTFS-Madrid-Bench OBDA / query-rewriting track** (scale factors 1×–1000×): match or beat **Ontop** query latency, and — the differentiator — hold **constant engine memory and bounded first-result latency under growing source data** (the streaming invariant, ADR-0006 / ADR-0010). Materialisation benchmarks (KROWN) do not apply. Driven by `criterion`; results feed the Path-B objective.
@@ -61,6 +66,7 @@ Evaluate the upstream modelling project's four mapping-output shapes over the `M
 
 ### Confirmation
 * `cargo test -p sf-conformance` drives the vendored W3C suite via CONSTRUCT (red until engine logic lands) and writes an EARL report.
+* `rdb2rdf-execution-receipt --check` replays SQLite; `--backend postgresql --check` and `--backend mysql --check` are required-live, fail closed when their configured provider is absent, and verify every sealed typed outcome.
 * `cargo bench -p sf-bench` compiles the GTFS-Madrid OBDA-track driver.
 * The `M ⋈ T` hook runs three Core shapes through rudof Native and the parsed sealed datatype query once globally; differential, mutation, cardinality and policy-digest KATs guard the split.
 * The ignored exact static replay uses `SF_PRODUCT_MOCK_GOLD_ROOT=/home/claude/src/hm/semantic-builder/docs/reviews/semantic-product-mock-gold-candidate-v0.1.0/artifacts SF_PRODUCT_MOCK_SOURCE_ROOT=/home/claude/src/hm/semantic-product-mock-worktrees/ontology-gap-repair cargo test -p sf-conformance --test product_mock_gold_vertical --locked exact_external_product_mock_gold_and_source_are_admitted -- --ignored --nocapture`. Uncontrolled validation-only observations of about 1.3–1.9 s are diagnostic, not a benchmark, SLO, or admission claim.

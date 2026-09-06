@@ -15,7 +15,9 @@ implements:
 # Observability & configuration
 
 > **Implementation status (2026-09-06): partially implemented.** Commits
-> `413ea76` and `7557b29` implement the current trace/JSON slice. After private
+> `01d0a67` and `0fcad17` implement the current trace/JSON slice; `64bae33`
+> records this boundary and `fc29acc` proves the exact production filter through
+> a real request. After private
 > parser-worker dispatch and public argument parsing, only `serve` installs the
 > JSON subscriber. Its only operator control is the closed
 > `--log-level off|error|warn|info` value (default `info`); an exact product-target

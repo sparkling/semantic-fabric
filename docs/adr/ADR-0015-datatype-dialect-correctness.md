@@ -1,7 +1,7 @@
 ---
 status: accepted
 date: 2026-06-27
-updated: 2026-08-28
+updated: 2026-09-06
 tags: [datatype, dialect, r2rml-section-10, canonicalization, oxsdatatypes, sqlite-affinity, correctness]
 supersedes: []
 depends-on:
@@ -29,12 +29,14 @@ R2RML §10 defines the natural mapping from a SQL value to an RDF literal and ma
 
 **Never trust the driver's rendering for a non-string value. Determine the target XSD datatype from catalog metadata, then produce the XSD canonical lexical form in Rust.** Two layers:
 
-1. **Type determination — a per-dialect `DbTypeMap`** (the Ontop `DBTypeFactory` analogue): native source type → internal `XsdTypeCode`, read from the catalog (`information_schema`/`pg_catalog` for PostgreSQL; `PRAGMA table_info` for SQLite; `information_schema.COLUMN_TYPE` for MySQL, to disambiguate `tinyint(1)`).
+1. **Type determination — a per-dialect `DbTypeMap`** (the Ontop `DBTypeFactory` analogue): native source type → internal `XsdTypeCode`, read from the catalog (`information_schema`/`pg_catalog` for PostgreSQL; `PRAGMA table_info` for SQLite; MySQL catalog plus wire metadata). MySQL deliberately cannot recover whether an authored `BOOL` or `TINYINT(1)` produced the same server type identity.
 2. **Value canonicalization — one Rust chokepoint** in `sf-core` term generation. Fetch each value in the most type-faithful driver form (binary/typed over text), parse into `oxsdatatypes`, and emit via its `Display`, which **is** the XSD canonical mapping — so literals round-trip through `oxttl`/`oxrdf` byte-identically using the same code path Oxigraph itself uses. `oxsdatatypes` does not cover `xsd:hexBinary`; a small uppercase-hex encoder handles it. Canonicalization is keyed on the value's **target XSD type**, never on the dialect's text. **Do not push canonicalization into SQL** (scientific notation, decimal trimming, hex casing are fragile across dialects and the cross-source read goes through other renderers anyway): SQL does set-work, Rust does lexical form.
 
 > **Reconciliation note (2026-06-28, impl-verified).** "emit via its `Display`" is exact for every XSD type the engine canonicalizes **except `xsd:double` / `xsd:float`**: in `oxsdatatypes` 0.2.2 their `Display` delegates to Rust `f64`/`f32` formatting, which is **not** XSD-canonical (e.g. `1.0` → `1`, no mandatory `E`-notation — contradicting the "`E`-notation everywhere" requirement above). For those two types the single `sf-core` chokepoint still **parses/validates through `oxsdatatypes`** but emits the XSD-canonical scientific form itself (mantissa with ≥ 1 fractional digit, uppercase `E`, no leading-zero exponent; `INF`/`-INF`/`NaN`); all other types use `oxsdatatypes` `Display` directly as stated. This is a documentation correction only — the implemented output is XSD-canonical per §10 (verified by the `sf-core` canonical-double tests). Companion note in ADR-0006 §Term generation.
 
 **SQLite — the special hazard (dynamic typing / type affinity).** A column's declared type is only a recommendation; values carry their own storage class. Policy: **branch on the per-value storage class** (`sqlite3_column_type()`), with a fast-path when the table is declared `STRICT` (3.37+). A documented, tested contract.
+
+**MySQL — explicit profile boundary.** `MysqlTypeProfile::Native` is the product law: ambiguous `BOOL`/`TINYINT(1)` remains `xsd:integer`, including value `2`. Only the sealed W3C runner selects `MysqlTypeProfile::W3cSql2008`, whose versioned identity `mysql-w3c-sql-2008-v1` applies the suite's SQL-2008 logical-boolean convention. An explicit `rr:datatype` is authoritative in either profile. MySQL-only aliases remain outside dialect-neutral `natural_xsd`, so neither SQLite nor PostgreSQL admission changes. The selected profile participates in receipt outcome identity; this convention is not native-product type provenance.
 
 **`sqlparser` is SQL syntax only** — used for SQL emission and parsing `rr:sqlQuery`; it contributes nothing to type semantics, which is this separate subsystem. **NULL** in any referenced column ⇒ no RDF term (R2RML §11), enforced in Rust (not via SQL concat NULL-semantics).
 
@@ -76,13 +78,19 @@ R2RML §5 mandates **SQL:2008 identifier comparison**: regular (undelimited) ide
 
 A `(SQL source type × dialect) → expected RDF literal` matrix, realised as **per-DBMS forked golden N-Triples fixtures** (the RML-community layout; ADR-0012) run against real PostgreSQL/SQLite, plus: **cross-dialect** byte-identity (the §10 consistency clause), Rust canonicalization unit tests over the raw dialect renderings, and SQLite affinity-violation + STRICT tests. The W3C RDB2RDF suite (ADR-0005) is the floor.
 
-> **Implementation boundary (2026-08-28).** The current exact RDB2RDF inventory
+> **Implementation boundary (2026-09-06).** The current exact RDB2RDF inventory
 > contains only the canonical fixture names; it has no per-DBMS fork files yet.
-> PostgreSQL now executes only bytes captured by that seal and records them in a
-> backend-aware v3 outcome receipt. A future `*.postgres.*` or other dialect fork
-> must be added to the canonical inventory and captured before execution; runtime
-> filesystem discovery or rereading after the sealing barrier is prohibited.
-> This closes snapshot immutability, not the full per-dialect golden matrix above.
+> SQLite, required-live PostgreSQL, and required-live MySQL execute only bytes
+> captured by that seal and record them in backend-aware v5 outcome receipts.
+> MySQL records 74 pass, one documented `R2RMLTC0002f` deviation, and 12 exact
+> typed Direct Mapping unsupported outcomes under `RequirePrimaryKey`; its
+> conformance-only type-profile identifier is part of outcome identity. Receipt
+> provider image/toolchain provenance remains explicitly unbound, so pinned-image
+> CI/live evidence qualifies only this mapping baseline—not native product type
+> provenance, backend admission, or full Query/Protocol conformance. A future
+> dialect fork must enter the inventory before execution; runtime discovery or
+> rereading after the sealing barrier is prohibited. This closes snapshot
+> immutability for the current baseline, not the full per-dialect golden matrix.
 
 > **Amendment (2026-07-16, impl-verified).** This ADR's Confirmation clause calls
 > for "Rust canonicalization unit tests over the raw dialect renderings" per
