@@ -39,9 +39,9 @@ fn by_id<'a>(values: &'a mut [Value], id: &str) -> &'a mut Value {
 fn tracked_catalog_is_strict_evidence_bound_and_has_zero_admissions() {
     let loaded = capability_catalog::load(&root()).expect("load tracked catalog");
     let counts = capability_catalog::status_counts(&loaded.catalog);
-    assert_eq!(loaded.catalog.cells.len(), 92);
+    assert_eq!(loaded.catalog.cells.len(), 93);
     assert_eq!(counts.get(&Status::Admitted).copied().unwrap_or(0), 0);
-    assert_eq!(counts.get(&Status::Implemented), Some(&59));
+    assert_eq!(counts.get(&Status::Implemented), Some(&60));
     assert_eq!(counts.get(&Status::Planned), Some(&31));
     assert_eq!(counts.get(&Status::Unsupported), Some(&2));
     assert!(loaded
@@ -366,10 +366,52 @@ fn postgresql_mapping_receipt_does_not_admit_the_backend() {
             .iter()
             .find(|cell| cell.id == id)
             .unwrap_or_else(|| panic!("missing {id}"));
+        assert_eq!(cell.status, Status::Implemented);
         assert_eq!(cell.verification, Verification::Receipt);
         assert!(!cell.advertisable);
         assert!(!cell.semantic_exact);
     }
+    let generation = loaded
+        .catalog
+        .cells
+        .iter()
+        .find(|cell| cell.id == "verified-source-generation-postgresql")
+        .expect("PostgreSQL verified-generation cell");
+    assert_eq!(generation.status, Status::Implemented);
+    assert_eq!(generation.verification, Verification::CiRequired);
+    assert!(generation.semantic_exact);
+    assert!(generation.bounded);
+    assert!(!generation.advertisable);
+    assert_eq!(
+        generation.limitation_ids,
+        ["l-verified-source-generation-promotion"]
+    );
+    assert_eq!(
+        generation.evidence_ids,
+        [
+            "e-architecture-schema-lifecycle",
+            "e-postgresql-verified-generation-budget",
+            "e-postgresql-verified-generation-budget-expiry",
+            "e-postgresql-verified-generation-ci",
+            "e-postgresql-verified-generation-core",
+            "e-postgresql-verified-generation-lease",
+            "e-postgresql-verified-generation-live",
+            "e-postgresql-verified-generation-request-route",
+        ]
+    );
+    let command = loaded
+        .catalog
+        .commands
+        .iter()
+        .find(|command| command.id == "cmd-postgresql-verified-generation-live")
+        .expect("PostgreSQL verified-generation command");
+    assert_eq!(
+        command.argv,
+        "cargo test --locked -p sf-serve --lib \
+         pg_generation::live_tests::verified_generation_lifecycle_is_coherent_and_fail_closed \
+         -- --ignored --exact --test-threads=1 --nocapture"
+    );
+    assert_eq!(command.mode, CommandMode::Required);
     let admission = loaded
         .catalog
         .cells
