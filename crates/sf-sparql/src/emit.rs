@@ -2310,7 +2310,7 @@ mod tests {
             .prefer_socket(Some(true))
             .stmt_cache_size(Some(0))
             .into();
-        let mut conn = mysql_async::Conn::new(opts.clone())
+        let mut conn = mysql_async::Conn::new(opts)
             .await
             .unwrap_or_else(|_| panic!("connect to isolated MySQL provider failed"));
         let expression = percent_encode_col_mysql("source_value.value");
@@ -2335,27 +2335,38 @@ mod tests {
             result.is_err(),
             "statement-observed aggregate ceiling must fail closed"
         );
-        let original_packet: u64 = conn
-            .query_first("SELECT @@GLOBAL.max_allowed_packet")
-            .await
-            .unwrap_or_else(|_| panic!("read isolated MySQL packet ceiling failed"))
-            .unwrap_or_else(|| panic!("isolated MySQL packet ceiling is absent"));
-        conn.query_drop("SET GLOBAL max_allowed_packet = 8192")
-            .await
-            .unwrap_or_else(|_| panic!("constrain isolated MySQL packet ceiling failed"));
         conn.disconnect()
             .await
             .unwrap_or_else(|_| panic!("close isolated MySQL connection failed"));
+    }
 
-        let mut limited = mysql_async::Conn::new(opts.clone())
+    #[tokio::test]
+    #[ignore = "requires a purpose-created MySQL provider pinned to an 8192-byte packet ceiling"]
+    async fn mysql_percent_encoder_packet_ceiling_fails_instead_of_truncating() {
+        use mysql_async::prelude::Queryable;
+
+        let socket = std::env::var("SF_MYSQL_SOCKET")
+            .expect("required-live MySQL socket must be configured");
+        let opts: mysql_async::Opts = mysql_async::OptsBuilder::default()
+            .user(Some("root"))
+            .socket(Some(socket))
+            .prefer_socket(Some(true))
+            .stmt_cache_size(Some(0))
+            .into();
+        let mut limited = mysql_async::Conn::new(opts)
             .await
-            .unwrap_or_else(|_| panic!("reconnect to isolated MySQL provider failed"));
+            .unwrap_or_else(|_| panic!("connect to packet-bounded MySQL provider failed"));
         let observed_packet: u64 = limited
             .query_first("SELECT @@SESSION.max_allowed_packet")
             .await
             .unwrap_or_else(|_| panic!("read constrained MySQL packet ceiling failed"))
             .unwrap_or_else(|| panic!("constrained MySQL packet ceiling is absent"));
+        assert_eq!(
+            observed_packet, 8192,
+            "packet-bound evidence requires the exact isolated provider profile"
+        );
         let packet_bound = (observed_packet.saturating_sub(MYSQL_PACKET_RESERVE_BYTES as u64)) / 3;
+        let expression = percent_encode_col_mysql("source_value.value");
         let packet_query = format!(
             "SELECT {expression} FROM \
              (SELECT REPEAT(' ', {}) AS value) AS source_value",
@@ -2364,14 +2375,9 @@ mod tests {
         let packet_result: mysql_async::Result<Option<String>> =
             limited.query_first(packet_query).await;
         limited
-            .query_drop(format!("SET GLOBAL max_allowed_packet = {original_packet}"))
-            .await
-            .unwrap_or_else(|_| panic!("restore isolated MySQL packet ceiling failed"));
-        limited
             .disconnect()
             .await
             .unwrap_or_else(|_| panic!("close constrained MySQL connection failed"));
-        assert_eq!(observed_packet, 8192);
         assert!(
             packet_result.is_err(),
             "statement-observed packet ceiling must fail closed"
