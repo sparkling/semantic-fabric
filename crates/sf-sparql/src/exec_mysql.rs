@@ -32,7 +32,7 @@ use std::future::Future;
 use mysql_async::Conn;
 use sf_core::query_control::QueryControl;
 use sf_core::{Quad, Term, Triple};
-use sf_sql::backend::mysql::MysqlBackend;
+use sf_sql::backend::mysql::{MysqlBackend, MysqlTypeProfile};
 use sf_sql::Dialect;
 
 use crate::exec::Solutions;
@@ -59,7 +59,18 @@ pub async fn ask_mysql(plan: &Plan, conn: &mut Conn) -> Result<bool> {
 /// bounded-memory core ([`crate::exec_core::construct_triples`]); this collects for
 /// the integration harness.
 pub async fn construct_triples_mysql(plan: &Plan, conn: &mut Conn) -> Result<Vec<Triple>> {
-    let mut b = MysqlBackend::new(conn);
+    construct_triples_mysql_with_type_profile(plan, conn, MysqlTypeProfile::Native).await
+}
+
+/// Conformance-only variant whose explicit profile resolves MySQL catalogue
+/// ambiguity without changing native product execution.
+#[doc(hidden)]
+pub async fn construct_triples_mysql_with_type_profile(
+    plan: &Plan,
+    conn: &mut Conn,
+    type_profile: MysqlTypeProfile,
+) -> Result<Vec<Triple>> {
+    let mut b = MysqlBackend::with_type_profile(conn, type_profile);
     crate::exec_core::construct_triples(plan, &mut b).await
 }
 
@@ -71,7 +82,19 @@ pub async fn dump_quads_mysql(
     conn: &mut Conn,
     dialect: Dialect,
 ) -> Result<Vec<Quad>> {
-    let mut b = MysqlBackend::new(conn);
+    dump_quads_mysql_with_type_profile(maps, conn, dialect, MysqlTypeProfile::Native).await
+}
+
+/// Conformance-only quad-dump variant paired with
+/// [`construct_triples_mysql_with_type_profile`].
+#[doc(hidden)]
+pub async fn dump_quads_mysql_with_type_profile(
+    maps: &[sf_core::ir::TriplesMap],
+    conn: &mut Conn,
+    dialect: Dialect,
+    type_profile: MysqlTypeProfile,
+) -> Result<Vec<Quad>> {
+    let mut b = MysqlBackend::with_type_profile(conn, type_profile);
     crate::exec_core::dump_quads(maps, &mut b, dialect).await
 }
 

@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use mysql_async::prelude::Queryable;
 use mysql_async::Conn;
 use sf_sparql::{exec_mysql, parse_and_translate_with, Error as SparqlError, Tbox};
+use sf_sql::backend::mysql::MysqlTypeProfile;
 use sf_sql::introspect::introspect_mysql;
-use sf_sql::{Dialect, TableSchema};
+use sf_sql::{Dialect, Error as SqlError, TableSchema};
 
 use super::outcome::{classified_error, classify_comparison, outcome, CaseOutcome};
 use crate::graph::{has_named_graph, parse_nquads, parse_turtle};
@@ -17,6 +18,7 @@ use crate::Status;
 
 const DUMP: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 const BASE: &str = "http://example.com/base/";
+const TYPE_PROFILE: MysqlTypeProfile = MysqlTypeProfile::W3cSql2008;
 
 pub(super) async fn run_cases(
     sealed: &SealedSuite,
@@ -96,7 +98,10 @@ async fn introspect_all(conn: &mut Conn) -> Result<Vec<TableSchema>, String> {
         schemas.push(
             introspect_mysql(conn, &name)
                 .await
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| match error {
+                    SqlError::Introspection(detail) => detail,
+                    _ => "MySQL catalogue introspection failed".to_owned(),
+                })?,
         );
     }
     Ok(schemas)
@@ -194,7 +199,13 @@ async fn run_r2rml(entry: &SealedCase, conn: &mut Conn) -> Result<CaseOutcome, S
                 ))
             }
         };
-    let triples = match exec_mysql::construct_triples_mysql(&plan, conn).await {
+    let triples = match exec_mysql::construct_triples_mysql_with_type_profile(
+        &plan,
+        conn,
+        TYPE_PROFILE,
+    )
+    .await
+    {
         Ok(triples) => triples,
         Err(SparqlError::Unsupported(message)) => {
             return Ok(outcome(
@@ -238,7 +249,14 @@ async fn compare_r2rml_output(
     let expected = parse_nquads(expected_text)
         .map_err(|error| input_error(case, output, &format!("invalid N-Quads: {error}")))?;
     if has_named_graph(&expected) {
-        let quads = match exec_mysql::dump_quads_mysql(maps, conn, Dialect::MySql).await {
+        let quads = match exec_mysql::dump_quads_mysql_with_type_profile(
+            maps,
+            conn,
+            Dialect::MySql,
+            TYPE_PROFILE,
+        )
+        .await
+        {
             Ok(quads) => quads,
             Err(SparqlError::Unsupported(message)) => {
                 return Ok(outcome(
@@ -330,7 +348,13 @@ async fn run_direct(entry: &SealedCase, conn: &mut Conn) -> Result<CaseOutcome, 
                 ))
             }
         };
-    let triples = match exec_mysql::construct_triples_mysql(&plan, conn).await {
+    let triples = match exec_mysql::construct_triples_mysql_with_type_profile(
+        &plan,
+        conn,
+        TYPE_PROFILE,
+    )
+    .await
+    {
         Ok(triples) => triples,
         Err(SparqlError::Unsupported(message)) => {
             return Ok(outcome(

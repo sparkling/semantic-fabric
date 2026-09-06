@@ -1879,12 +1879,20 @@ END, '' ORDER BY n\
 /// a CTE using one outer row's length when the expression is projected for
 /// several rows, which silently truncates/pads other values. `JSON_TABLE` is
 /// implicitly lateral in MySQL and evaluates its document per outer row.
-/// The `SET_VAR` optimizer hint raises `group_concat_max_len` for this query
-/// only; MySQL's 1024-byte default otherwise silently truncates the result.
+/// The `SET_VAR` optimizer hint raises `group_concat_max_len` to 1,000,000
+/// bytes for this query only; MySQL's 1024-byte default otherwise silently
+/// truncates the result. Since one source byte can expand to three output
+/// bytes, the JSON document deliberately becomes invalid above 333,333 input
+/// bytes so execution fails instead of returning a truncated IRI. A server
+/// whose `max_allowed_packet` is lower may fail earlier, which is also a hard
+/// error rather than an incorrect result.
+const MYSQL_GROUP_CONCAT_MAX_LEN: usize = 1_000_000;
+const MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES: usize = MYSQL_GROUP_CONCAT_MAX_LEN / 3;
+
 fn percent_encode_col_mysql(col: &str) -> String {
     format!(
         "(SELECT CASE WHEN {col} IS NULL THEN NULL ELSE COALESCE((\
-SELECT /*+ SET_VAR(group_concat_max_len = 1000000) */ \
+SELECT /*+ SET_VAR(group_concat_max_len = {group_limit}) */ \
 CONVERT(CAST(GROUP_CONCAT(\
 CASE \
 WHEN HEX(SUBSTRING(CAST({col} AS BINARY), n, 1)) BETWEEN '30' AND '39' \
@@ -1898,10 +1906,14 @@ END ORDER BY n SEPARATOR ''\
 ) AS BINARY) USING utf8mb4)\
 FROM JSON_TABLE(\
 CASE WHEN LENGTH(CAST({col} AS BINARY)) = 0 THEN '[]' \
+WHEN LENGTH(CAST({col} AS BINARY)) > {max_input} \
+THEN 'semantic-fabric-percent-encoding-input-limit' \
 ELSE CONCAT('[0', REPEAT(',0', LENGTH(CAST({col} AS BINARY)) - 1), ']') END, \
 '$[*]' COLUMNS (n FOR ORDINALITY)\
 ) AS sfpe\
-), '') END)"
+), '') END)",
+        group_limit = MYSQL_GROUP_CONCAT_MAX_LEN,
+        max_input = MYSQL_PERCENT_ENCODE_MAX_INPUT_BYTES,
     )
 }
 
@@ -2256,6 +2268,15 @@ mod tests {
             .expect("MySQL JSON_TABLE encoder must pass the SQL AST boundary");
         assert!(emitted.contains("JSON_TABLE"), "{emitted}");
         assert!(emitted.contains("FOR ORDINALITY"), "{emitted}");
+        assert!(
+            emitted.contains("group_concat_max_len = 1000000"),
+            "{emitted}"
+        );
+        assert!(emitted.contains("> 333333"), "{emitted}");
+        assert!(
+            emitted.contains("semantic-fabric-percent-encoding-input-limit"),
+            "{emitted}"
+        );
     }
 
     /// A dialect this module does not implement encoding for (Oracle, picked

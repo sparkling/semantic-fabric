@@ -63,27 +63,16 @@ impl XsdTypeCode {
 /// admission and row reconstruction share one type law instead of drifting.
 pub fn natural_xsd(sql_type: &str) -> Option<XsdTypeCode> {
     use XsdTypeCode::*;
-    if is_mysql_boolean_alias(sql_type) {
-        return Some(Boolean);
-    }
     match normalize_sql_type(sql_type).as_str() {
         "CHARACTER" | "CHARACTER VARYING" | "CHAR" | "VARCHAR" | "CLOB" | "NCHAR"
         | "NCHAR VARYING" | "NVARCHAR" | "NCLOB" | "TEXT" | "BPCHAR" | "NAME" | "UNKNOWN" => {
             Some(String)
         }
-        "BINARY"
-        | "BINARY VARYING"
-        | "VARBINARY"
-        | "BINARY LARGE OBJECT"
-        | "BLOB"
-        | "TINYBLOB"
-        | "MEDIUMBLOB"
-        | "LONGBLOB"
-        | "BYTEA"
-        | "BIT" => Some(HexBinary),
+        "BINARY" | "BINARY VARYING" | "VARBINARY" | "BINARY LARGE OBJECT" | "BLOB" | "BYTEA" => {
+            Some(HexBinary)
+        }
         "NUMERIC" | "DECIMAL" | "DEC" => Some(Decimal),
-        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INTEGER" | "INT" | "BIGINT" | "YEAR" | "INT2"
-        | "INT4" | "INT8" => Some(Integer),
+        "SMALLINT" | "INTEGER" | "INT" | "BIGINT" | "INT2" | "INT4" | "INT8" => Some(Integer),
         "FLOAT" | "REAL" | "DOUBLE PRECISION" | "DOUBLE" | "FLOAT4" | "FLOAT8" => Some(Double),
         "BOOLEAN" | "BOOL" => Some(Boolean),
         "DATE" => Some(Date),
@@ -91,8 +80,7 @@ pub fn natural_xsd(sql_type: &str) -> Option<XsdTypeCode> {
         "TIMESTAMP"
         | "TIMESTAMP WITHOUT TIME ZONE"
         | "TIMESTAMP WITH TIME ZONE"
-        | "TIMESTAMPTZ"
-        | "DATETIME" => Some(DateTime),
+        | "TIMESTAMPTZ" => Some(DateTime),
         _ => None, // INTERVAL (§10 undefined) and anything unrecognised
     }
 }
@@ -102,9 +90,7 @@ pub fn natural_xsd(sql_type: &str) -> Option<XsdTypeCode> {
 fn normalize_sql_type(sql_type: &str) -> String {
     let base = sql_type.split('(').next().unwrap_or(sql_type);
     let mut out = String::with_capacity(base.len());
-    for word in base.split_whitespace().filter(|word| {
-        !word.eq_ignore_ascii_case("UNSIGNED") && !word.eq_ignore_ascii_case("ZEROFILL")
-    }) {
+    for word in base.split_whitespace() {
         if !out.is_empty() {
             out.push(' ');
         }
@@ -113,18 +99,6 @@ fn normalize_sql_type(sql_type: &str) -> String {
         }
     }
     out
-}
-
-fn is_mysql_boolean_alias(sql_type: &str) -> bool {
-    let compact: String = sql_type
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace())
-        .flat_map(char::to_uppercase)
-        .collect();
-    matches!(
-        compact.as_str(),
-        "TINYINT(1)" | "TINYINT(1)UNSIGNED" | "TINYINT(1)ZEROFILL"
-    )
 }
 
 /// Emit the **XSD-canonical** lexical form of `value` for the target XSD type,
@@ -251,15 +225,20 @@ mod tests {
     }
 
     #[test]
-    fn natural_xsd_covers_mysql_catalog_aliases() {
-        assert_eq!(natural_xsd("tinyint(1)"), Some(XsdTypeCode::Boolean));
-        assert_eq!(
-            natural_xsd("tinyint(1) unsigned"),
-            Some(XsdTypeCode::Boolean)
-        );
-        assert_eq!(natural_xsd("tinyint"), Some(XsdTypeCode::Integer));
-        assert_eq!(natural_xsd("int unsigned"), Some(XsdTypeCode::Integer));
-        assert_eq!(natural_xsd("datetime(6)"), Some(XsdTypeCode::DateTime));
+    fn natural_xsd_does_not_absorb_mysql_only_type_spelling() {
+        for name in [
+            "bit(8)",
+            "tinyblob",
+            "mediumblob",
+            "longblob",
+            "tinyint(1)",
+            "mediumint",
+            "year",
+            "datetime(6)",
+            "int unsigned",
+        ] {
+            assert_eq!(natural_xsd(name), None, "{name}");
+        }
         assert_eq!(natural_xsd("varbinary(200)"), Some(XsdTypeCode::HexBinary));
     }
 

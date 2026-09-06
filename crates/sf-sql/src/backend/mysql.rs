@@ -19,6 +19,79 @@ use sf_core::datatype::{self, XsdTypeCode};
 use crate::backend::{BranchStream, RawTuple, SqlBackend};
 use crate::error::{Error, Result};
 
+/// How an otherwise ambiguous MySQL type identity is interpreted.
+///
+/// MySQL reports both authored `BOOL` and authored `TINYINT(1)` as the same
+/// catalogue/wire type. Native product execution therefore treats it as an
+/// integer. Only the sealed W3C SQL-2008 fixture runner may opt into the
+/// compatibility convention that the width-one type originated as `BOOLEAN`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MysqlTypeProfile {
+    Native,
+    W3cSql2008,
+}
+
+impl MysqlTypeProfile {
+    pub const fn evidence_name(self) -> &'static str {
+        match self {
+            Self::Native => "mysql-native-v1",
+            Self::W3cSql2008 => "mysql-w3c-sql-2008-v1",
+        }
+    }
+}
+
+/// MySQL catalogue spelling to the natural XSD type used by row execution.
+///
+/// This law is deliberately outside `sf_core::datatype::natural_xsd`: MySQL
+/// aliases and modifiers must not change PostgreSQL or SQLite semantics.
+pub fn mysql_natural_xsd(sql_type: &str, profile: MysqlTypeProfile) -> Option<XsdTypeCode> {
+    use XsdTypeCode::*;
+    if mysql_tinyint_one(sql_type) {
+        return Some(match profile {
+            MysqlTypeProfile::Native => Integer,
+            MysqlTypeProfile::W3cSql2008 => Boolean,
+        });
+    }
+    let normalized = normalize_mysql_type(sql_type);
+    match normalized.as_str() {
+        "BOOL" | "BOOLEAN" => Some(match profile {
+            MysqlTypeProfile::Native => Integer,
+            MysqlTypeProfile::W3cSql2008 => Boolean,
+        }),
+        "TINYINT" | "MEDIUMINT" | "YEAR" => Some(Integer),
+        "DATETIME" => Some(DateTime),
+        "BIT" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => Some(HexBinary),
+        "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" | "SET" | "JSON" => Some(String),
+        _ => datatype::natural_xsd(&normalized),
+    }
+}
+
+fn normalize_mysql_type(sql_type: &str) -> String {
+    let base = sql_type.split('(').next().unwrap_or(sql_type);
+    let mut normalized = String::new();
+    for word in base.split_whitespace().filter(|word| {
+        !word.eq_ignore_ascii_case("UNSIGNED") && !word.eq_ignore_ascii_case("ZEROFILL")
+    }) {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.extend(word.chars().flat_map(char::to_uppercase));
+    }
+    normalized
+}
+
+fn mysql_tinyint_one(sql_type: &str) -> bool {
+    let compact: String = sql_type
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect();
+    matches!(
+        compact.as_str(),
+        "TINYINT(1)" | "TINYINT(1)UNSIGNED" | "TINYINT(1)ZEROFILL" | "TINYINT(1)UNSIGNEDZEROFILL"
+    )
+}
+
 /// A MySQL backend over any holder that yields `&mut Conn`. Generic over `C` so the
 /// same adapter serves both lanes (mirroring `PgBackend<C>`):
 ///   * `MysqlBackend<&mut Conn>` — the borrowing collecting path (`select_mysql`/…).
@@ -27,11 +100,19 @@ use crate::error::{Error, Result};
 ///     pooled connection (design §4.2).
 pub struct MysqlBackend<C> {
     conn: C,
+    type_profile: MysqlTypeProfile,
 }
 
 impl<C: BorrowMut<Conn>> MysqlBackend<C> {
     pub fn new(conn: C) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            type_profile: MysqlTypeProfile::Native,
+        }
+    }
+
+    pub fn with_type_profile(conn: C, type_profile: MysqlTypeProfile) -> Self {
+        Self { conn, type_profile }
     }
 }
 
@@ -48,14 +129,27 @@ impl BranchStream for MysqlBranch<'_> {
             return Ok(None);
         };
         let ncols = row.len();
+        ensure_row_arity(ncols, self.codes.len())?;
         let mut values = Vec::with_capacity(ncols);
-        for i in 0..ncols {
+        for (i, code) in self.codes.iter().copied().enumerate() {
             // exec_mysql.rs:146 VERBATIM.
-            let v: Value = row.take(i).unwrap_or(Value::NULL);
-            values.push(mysql_value_to_string(v, self.codes[i])?);
+            let v: Value = row.take(i).ok_or_else(|| {
+                Error::Marshal("MySQL result row column is unavailable".to_owned())
+            })?;
+            values.push(mysql_value_to_string(v, code)?);
         }
         let codes = self.codes.clone();
         Ok(Some(RawTuple { values, codes }))
+    }
+}
+
+fn ensure_row_arity(row_columns: usize, metadata_columns: usize) -> Result<()> {
+    if row_columns == metadata_columns {
+        Ok(())
+    } else {
+        Err(Error::Marshal(
+            "MySQL result metadata/row arity mismatch".to_owned(),
+        ))
     }
 }
 
@@ -81,7 +175,11 @@ impl<C: BorrowMut<Conn>> SqlBackend for MysqlBackend<C> {
             .collect();
         let conn = self.conn.borrow_mut(); // &'s mut Conn
         let stmt = conn.prep(sql).await?;
-        let codes = stmt.columns().iter().map(mysql_xsd_code).collect();
+        let codes = stmt
+            .columns()
+            .iter()
+            .map(|column| mysql_xsd_code(column, self.type_profile))
+            .collect::<Result<Vec<_>>>()?;
         // exec_iter (packet-streamed) — NOT exec() (buffer-all Vec<Row>).
         let result = conn.exec_iter(stmt, Params::Positional(params)).await?;
         Ok(MysqlBranch { result, codes })
@@ -136,21 +234,25 @@ fn mysql_value_to_string(v: Value, code: Option<XsdTypeCode>) -> Result<Option<S
     })
 }
 
-fn mysql_xsd_code(column: &Column) -> Option<XsdTypeCode> {
+fn mysql_xsd_code(column: &Column, profile: MysqlTypeProfile) -> Result<Option<XsdTypeCode>> {
     use ColumnType::*;
-    match column.column_type() {
-        MYSQL_TYPE_TINY if column.column_length() == 1 => Some(XsdTypeCode::Boolean),
+    Ok(Some(match column.column_type() {
+        MYSQL_TYPE_TINY
+            if profile == MysqlTypeProfile::W3cSql2008 && column.column_length() == 1 =>
+        {
+            XsdTypeCode::Boolean
+        }
         MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG
-        | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => Some(XsdTypeCode::Integer),
-        MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => Some(XsdTypeCode::Decimal),
-        MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE => Some(XsdTypeCode::Double),
-        MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => Some(XsdTypeCode::Date),
-        MYSQL_TYPE_TIME | MYSQL_TYPE_TIME2 => Some(XsdTypeCode::Time),
+        | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => XsdTypeCode::Integer,
+        MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => XsdTypeCode::Decimal,
+        MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE => XsdTypeCode::Double,
+        MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => XsdTypeCode::Date,
+        MYSQL_TYPE_TIME | MYSQL_TYPE_TIME2 => XsdTypeCode::Time,
         MYSQL_TYPE_TIMESTAMP
         | MYSQL_TYPE_TIMESTAMP2
         | MYSQL_TYPE_DATETIME
-        | MYSQL_TYPE_DATETIME2 => Some(XsdTypeCode::DateTime),
-        MYSQL_TYPE_BIT => Some(XsdTypeCode::HexBinary),
+        | MYSQL_TYPE_DATETIME2 => XsdTypeCode::DateTime,
+        MYSQL_TYPE_BIT => XsdTypeCode::HexBinary,
         MYSQL_TYPE_VARCHAR
         | MYSQL_TYPE_VAR_STRING
         | MYSQL_TYPE_STRING
@@ -160,7 +262,7 @@ fn mysql_xsd_code(column: &Column) -> Option<XsdTypeCode> {
         | MYSQL_TYPE_BLOB
             if column.character_set() == 63 =>
         {
-            Some(XsdTypeCode::HexBinary)
+            XsdTypeCode::HexBinary
         }
         MYSQL_TYPE_VARCHAR
         | MYSQL_TYPE_VAR_STRING
@@ -171,172 +273,16 @@ fn mysql_xsd_code(column: &Column) -> Option<XsdTypeCode> {
         | MYSQL_TYPE_BLOB
         | MYSQL_TYPE_ENUM
         | MYSQL_TYPE_SET
-        | MYSQL_TYPE_JSON => Some(XsdTypeCode::String),
-        MYSQL_TYPE_NULL
-        | MYSQL_TYPE_TYPED_ARRAY
-        | MYSQL_TYPE_VECTOR
-        | MYSQL_TYPE_UNKNOWN
-        | MYSQL_TYPE_GEOMETRY => None,
-    }
+        | MYSQL_TYPE_JSON => XsdTypeCode::String,
+        MYSQL_TYPE_NULL => return Ok(None),
+        MYSQL_TYPE_TYPED_ARRAY | MYSQL_TYPE_VECTOR | MYSQL_TYPE_UNKNOWN | MYSQL_TYPE_GEOMETRY => {
+            return Err(Error::Unsupported(
+                "MySQL result column type is unsupported".to_owned(),
+            ))
+        }
+    }))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use mysql_async::Value;
-
-    fn lexical(value: Value, code: Option<XsdTypeCode>) -> Option<String> {
-        mysql_value_to_string(value, code).expect("value marshals")
-    }
-
-    #[test]
-    fn null_maps_to_none() {
-        assert_eq!(lexical(Value::NULL, None), None);
-    }
-
-    #[test]
-    fn utf8_bytes_pass_through() {
-        assert_eq!(
-            lexical(Value::Bytes(b"hello".to_vec()), Some(XsdTypeCode::String)),
-            Some("hello".to_owned())
-        );
-    }
-
-    #[test]
-    fn binary_bytes_are_hex_encoded_and_text_bytes_remain_strict() {
-        assert_eq!(
-            lexical(Value::Bytes(vec![0xff, 0xfe]), Some(XsdTypeCode::HexBinary)),
-            Some("FFFE".to_owned())
-        );
-        let error =
-            mysql_value_to_string(Value::Bytes(vec![0xff, 0xfe]), Some(XsdTypeCode::String))
-                .unwrap_err();
-        assert!(matches!(error, Error::Marshal(_)), "{error:?}");
-    }
-
-    #[test]
-    fn integer_and_float_variants_render_via_to_string() {
-        assert_eq!(
-            lexical(Value::Int(-42), Some(XsdTypeCode::Integer)),
-            Some("-42".to_owned())
-        );
-        assert_eq!(
-            lexical(Value::UInt(42), Some(XsdTypeCode::Integer)),
-            Some("42".to_owned())
-        );
-        assert_eq!(
-            lexical(Value::Float(1.5), Some(XsdTypeCode::Double)),
-            Some("1.5".to_owned())
-        );
-        assert_eq!(
-            lexical(Value::Double(2.5), Some(XsdTypeCode::Double)),
-            Some("2.5".to_owned())
-        );
-    }
-
-    #[test]
-    fn date_with_zero_time_renders_as_bare_date() {
-        assert_eq!(
-            lexical(
-                Value::Date(2024, 3, 15, 0, 0, 0, 0),
-                Some(XsdTypeCode::Date)
-            ),
-            Some("2024-03-15".to_owned())
-        );
-    }
-
-    #[test]
-    fn metadata_distinguishes_date_from_midnight_datetime() {
-        let value = Value::Date(2024, 3, 15, 0, 0, 0, 0);
-        let date_only = lexical(value.clone(), Some(XsdTypeCode::Date));
-        let midnight_datetime = lexical(value, Some(XsdTypeCode::DateTime));
-        assert_eq!(date_only, Some("2024-03-15".to_owned()));
-        assert_eq!(midnight_datetime, Some("2024-03-15 00:00:00".to_owned()));
-    }
-
-    #[test]
-    fn date_with_time_no_micros_renders_iso_t_separated() {
-        assert_eq!(
-            lexical(
-                Value::Date(2024, 3, 15, 13, 45, 30, 0),
-                Some(XsdTypeCode::DateTime)
-            ),
-            Some("2024-03-15 13:45:30".to_owned())
-        );
-    }
-
-    #[test]
-    fn date_with_microseconds_renders_fractional_seconds() {
-        assert_eq!(
-            lexical(
-                Value::Date(2024, 3, 15, 13, 45, 30, 123456),
-                Some(XsdTypeCode::DateTime)
-            ),
-            Some("2024-03-15 13:45:30.123456".to_owned())
-        );
-    }
-
-    #[test]
-    fn time_zero_days_no_micros() {
-        assert_eq!(
-            lexical(
-                Value::Time(false, 0, 13, 45, 30, 0),
-                Some(XsdTypeCode::Time)
-            ),
-            Some("13:45:30".to_owned())
-        );
-    }
-
-    #[test]
-    fn time_negative_renders_leading_minus() {
-        assert_eq!(
-            lexical(Value::Time(true, 0, 13, 45, 30, 0), Some(XsdTypeCode::Time)),
-            Some("-13:45:30".to_owned())
-        );
-    }
-
-    #[test]
-    fn time_days_component_folds_into_total_hours() {
-        // MySQL TIME can exceed 24h (elapsed-time semantics); `days` folds into
-        // the hour count rather than being dropped or rendered separately.
-        assert_eq!(
-            lexical(Value::Time(false, 2, 3, 0, 0, 0), Some(XsdTypeCode::Time)),
-            Some("51:00:00".to_owned()) // 2*24 + 3 = 51
-        );
-    }
-
-    #[test]
-    fn time_with_microseconds_renders_fractional_seconds() {
-        assert_eq!(
-            lexical(
-                Value::Time(false, 0, 13, 45, 30, 500000),
-                Some(XsdTypeCode::Time)
-            ),
-            Some("13:45:30.500000".to_owned())
-        );
-    }
-
-    #[test]
-    fn prepared_column_metadata_maps_mysql_natural_types() {
-        assert_eq!(
-            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_LONG)),
-            Some(XsdTypeCode::Integer)
-        );
-        assert_eq!(
-            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_TINY).with_column_length(1)),
-            Some(XsdTypeCode::Boolean)
-        );
-        assert_eq!(
-            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_VAR_STRING).with_character_set(63)),
-            Some(XsdTypeCode::HexBinary)
-        );
-        assert_eq!(
-            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_VAR_STRING)),
-            Some(XsdTypeCode::String)
-        );
-        assert_eq!(
-            mysql_xsd_code(&Column::new(ColumnType::MYSQL_TYPE_DATETIME)),
-            Some(XsdTypeCode::DateTime)
-        );
-    }
-}
+#[path = "mysql/tests.rs"]
+mod tests;

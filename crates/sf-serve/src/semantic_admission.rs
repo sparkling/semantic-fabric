@@ -4,6 +4,7 @@ use oxrdf::{Graph, NamedNode, NamedOrBlankNodeRef, TermRef};
 use sf_core::ir::LogicalSource;
 use sf_core::{datatype, SourceMapping};
 use sf_sparql::{MappingDigest, OntologyDigest, SemanticAdmissionDigest};
+use sf_sql::backend::mysql::{mysql_natural_xsd, MysqlTypeProfile};
 use sha2::{Digest, Sha256};
 
 use crate::{BackendKind, IntrospectedSource, SemanticOntology};
@@ -209,15 +210,10 @@ fn effective_column_datatype(
     source: &LogicalSource,
     column: &str,
 ) -> Option<NamedNode> {
-    // The current MySQL executor intentionally has no per-column wire-type
-    // channel and reconstructs every implicit literal as xsd:string.
-    if kind == BackendKind::MySql {
-        return Some(oxrdf::vocab::xsd::STRING.into_owned());
-    }
     let LogicalSource::Table(table_name) = source else {
-        // PostgreSQL/SQLite rr:sqlQuery result types are execution-statement
-        // facts, not facts in the base-table catalogue snapshot. Require an
-        // explicit rr:datatype until a coherent result-schema probe is sealed.
+        // rr:sqlQuery result types are execution-statement facts, not facts in
+        // the base-table catalogue snapshot. Require an explicit rr:datatype
+        // until a coherent result-schema probe is sealed for each dialect.
         return None;
     };
     let mut tables = schema.iter().filter(|table| table.name == *table_name);
@@ -233,7 +229,11 @@ fn effective_column_datatype(
     if columns.next().is_some() {
         return None;
     }
-    datatype::natural_xsd(&column.sql_type).map(|code| code.iri().into_owned())
+    let code = match kind {
+        BackendKind::MySql => mysql_natural_xsd(&column.sql_type, MysqlTypeProfile::Native),
+        BackendKind::Sqlite | BackendKind::Postgres => datatype::natural_xsd(&column.sql_type),
+    }?;
+    Some(code.iri().into_owned())
 }
 
 fn map_projection_error(error: sf_mapping::ProjectionError) -> SemanticAdmissionError {
@@ -359,6 +359,17 @@ fn hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {
 mod digest_tests {
     use super::*;
 
+    fn effective(kind: BackendKind, sql_type: &str) -> Option<NamedNode> {
+        let mut table = sf_core::TableSchema::new("items");
+        table.columns = vec![sf_core::Column::new("value", sql_type, false)];
+        effective_column_datatype(
+            kind,
+            &[table],
+            &LogicalSource::Table("items".into()),
+            "value",
+        )
+    }
+
     #[test]
     fn validation_policy_alone_partitions_admission_identity() {
         let graph = Graph::new();
@@ -391,6 +402,72 @@ mod digest_tests {
         assert_ne!(
             first_binding.scope().digests().semantic_admission(),
             second_binding.scope().digests().semantic_admission()
+        );
+    }
+
+    #[test]
+    fn mysql_table_admission_uses_the_native_execution_type_law() {
+        assert_eq!(
+            effective(BackendKind::MySql, "tinyint(1)"),
+            Some(oxrdf::vocab::xsd::INTEGER.into_owned())
+        );
+        assert_eq!(
+            effective(BackendKind::MySql, "bit(8)"),
+            Some(oxrdf::vocab::xsd::HEX_BINARY.into_owned())
+        );
+        assert_eq!(
+            effective(BackendKind::MySql, "datetime(6)"),
+            Some(oxrdf::vocab::xsd::DATE_TIME.into_owned())
+        );
+    }
+
+    #[test]
+    fn mysql_only_spellings_do_not_change_other_dialect_admission() {
+        for kind in [BackendKind::Sqlite, BackendKind::Postgres] {
+            assert_eq!(effective(kind, "tinyint(1)"), None);
+            assert_eq!(effective(kind, "bit(8)"), None);
+            assert_eq!(effective(kind, "datetime(6)"), None);
+        }
+    }
+
+    #[test]
+    fn mysql_query_source_stays_unresolved_without_statement_type_evidence() {
+        let mut table = sf_core::TableSchema::new("items");
+        table.columns = vec![sf_core::Column::new("value", "integer", false)];
+        assert_eq!(
+            effective_column_datatype(
+                BackendKind::MySql,
+                &[table],
+                &LogicalSource::Query("SELECT value FROM items".into()),
+                "value",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn mysql_catalog_type_change_changes_projection_identity() {
+        let mapping = sf_mapping::parse_r2rml_for_source(
+            "@prefix rr: <http://www.w3.org/ns/r2rml#> .\n\
+             <#m> rr:logicalTable [ rr:tableName \"items\" ];\n\
+             rr:subjectMap [ rr:constant <http://example.test/item> ];\n\
+             rr:predicateObjectMap [ rr:predicate <http://example.test/value>;\n\
+             rr:objectMap [ rr:column \"value\" ] ] .",
+            sf_core::SourceId::new(0).unwrap(),
+        )
+        .unwrap();
+        let project = |sql_type| {
+            let mut table = sf_core::TableSchema::new("items");
+            table.columns = vec![sf_core::Column::new("value", sql_type, false)];
+            sf_mapping::project_to_rdf(&mapping, |source, column| {
+                effective_column_datatype(BackendKind::MySql, &[table.clone()], source, column)
+            })
+            .unwrap()
+        };
+
+        assert_ne!(
+            graph_digest(&project("tinyint(1)")),
+            graph_digest(&project("bit(8)"))
         );
     }
 }
