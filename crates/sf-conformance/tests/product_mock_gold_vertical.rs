@@ -2,8 +2,10 @@
 mod support;
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use serde_json::{json, Value};
+use sf_core::SourceId;
 
 fn replace_manifest(fixture: &mut support::SyntheticFixture, pointer: &str, value: Value) {
     let mut manifest: Value =
@@ -418,20 +420,46 @@ fn exact_external_product_mock_gold_and_source_are_admitted() {
             .expect("SF_PRODUCT_MOCK_SOURCE_ROOT is required"),
     );
     let admitted = support::load_external(&gold, &source).expect("external seals must match");
+    let started = Instant::now();
     assert_eq!(admitted.style.columns.len(), 5);
     assert_eq!(admitted.style.primary_key, ["style_number"]);
     assert_eq!(admitted.style.foreign_keys.len(), 2);
-    let mappings = sf_mapping::parse_r2rml(&admitted.r2rml).unwrap();
-    assert_eq!(mappings.len(), 148);
+    let mapping = sf_mapping::parse_r2rml_for_source(
+        &admitted.r2rml,
+        SourceId::new(0).expect("fixed source id is valid"),
+    )
+    .unwrap();
+    assert_eq!(mapping.len(), 148);
     assert_eq!(
-        mappings
+        mapping
+            .triples_maps()
             .iter()
             .map(|mapping| mapping.predicate_object_maps.len())
             .sum::<usize>(),
         721
     );
-    sf_serve::SemanticOntology::from_turtle(&admitted.ontology_turtle)
-        .expect("external canonical ontology parses");
+    let mut closure = sf_validation::parse_turtle_graph(
+        &admitted.ontology_turtle,
+        sf_validation::DEFAULT_GRAPH_LIMITS,
+    )
+    .expect("external canonical ontology parses");
+    assert_eq!(closure.len(), 47_463);
+    let projection = sf_mapping::project_static_to_rdf(&mapping).unwrap();
+    assert_eq!(projection.len(), 3_064);
+    for triple in projection.iter() {
+        closure.insert(triple);
+    }
+    assert_eq!(closure.len(), 50_527);
+    let validation_started = Instant::now();
+    let outcome = sf_validation::validate_graph(&closure).unwrap();
+    let validation_elapsed = validation_started.elapsed();
+    assert_eq!(outcome.violations, 0);
+    assert_eq!(outcome.warnings, 0);
+    eprintln!(
+        "exact static Product Mock M-join-T: total {:?}; validation {:?}",
+        started.elapsed(),
+        validation_elapsed
+    );
     assert!(!admitted
         .ontology_turtle
         .contains("mapping/category-13/triples-map"));

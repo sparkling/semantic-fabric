@@ -36,14 +36,14 @@ old/new HTTP results, failed construction, stale and slow candidates, response
 lifetime, and last-pin release.
 
 The publication primitive is crate-private and deliberately non-authorizing.
-The production construction path now requires bounded sealed `M ⋈ T`
-validation before constructing a binding, and the all-or-nothing registry
-builder validates every source before constructing any binding. There is still
+The construction path now requires bounded sealed `M ⋈ T` validation before a
+binding, and its policy-v2 receipt partitions compile/cache identity. The
+all-or-nothing registry validates every source before constructing any binding. There is still
 no general off-path reload candidate builder, automatic catalogue observation,
 capability validation, repeated-not-ready state revision, drift watcher,
 backend-generation lease, Observed Schema Identity propagation, public reload
 surface, or live Direct Mapping. Therefore this is not full Phase 5 completion
-and grants no backend or production admission.
+and grants no live Direct Mapping, backend or production admission.
 
 The current Rust serving path places its startup mapping, ontology,
 constraint/type-quarantined schema observation, backend and plan cache in one
@@ -211,15 +211,19 @@ activates. Old pools/caches drop only after their last request lease ends.
 Before `RuntimeBinding` or its cache exists, executable mapping IR is projected
 to a bounded ground RDF graph containing only the class, predicate, object-map,
 and effective datatype facts consumed by the four sealed shapes. The product-
-owned `sf-validation` crate runs a deterministic workload/cardinality preflight
-and rudof Native SHACL over `M ⋈ T`; violations fail the whole candidate.
+owned `sf-validation` crate runs a deterministic workload/cardinality preflight,
+three Core shapes through rudof Native, and the datatype component's exact
+parsed sealed `sh:select` once globally over `M ⋈ T`; violations fail the whole
+candidate. Blank POM focus preserves the prior redacted fail-closed behavior.
 
 Projection structural nodes are named only below
 `urn:semantic-fabric:mjoin-t:v1:`. An ontology using that reserved prefix as an
 asserted named subject, predicate, or named object is rejected before merge, so
 T cannot forge facts about M's structural nodes. A private `ValidatedMapping`
 receipt owns the mapping and binds its origin, exact ontology document digest,
-sealed shape digest, canonical projection, and redacted outcome. The ontology
+canonical projection, count-only redacted outcome, warning policy and validation
+policy v2. That policy covers shape/query bytes, Native/global topology, exact
+evaluator/parser versions and features, limits, preflight revision and blank-focus policy. The ontology
 and source-effective projection are recomputed before receipt consumption, and
 their digests enter compile/cache identity.
 
@@ -319,7 +323,7 @@ before capability promotion.
 Crate ownership follows ADR-0006: `sf-core` owns neutral validated values and
 pure canonical hashing; `sf-sql` owns catalogue and lease I/O; `sf-mapping`
 owns pure validated-schema-to-mapping generation and its ground admission
-projection; `sf-validation` owns sealed bounded Native SHACL execution; and
+projection; `sf-validation` owns the sealed bounded Native/global split; and
 `sf-serve` owns semantic receipts, activation, and readiness.
 
 ## Required evidence

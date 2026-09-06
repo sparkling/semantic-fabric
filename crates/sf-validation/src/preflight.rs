@@ -27,16 +27,29 @@ type NodeTermCounts<'a> = HashMap<NamedOrBlankNodeRef<'a>, TermCounts<'a>>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ValidationWorkload {
-    work_units: usize,
-    result_cardinality: usize,
+    pub(crate) work_units: usize,
+    pub(crate) result_cardinality: usize,
+    pub(crate) datatype_candidates: usize,
+    pub(crate) has_blank_datatype_focus: bool,
+    #[cfg(test)]
+    pub(crate) datatype_focus_nodes: usize,
+    #[cfg(test)]
+    pub(crate) datatype_mapping_bindings: usize,
+    #[cfg(test)]
+    pub(crate) datatype_constraint_bindings: usize,
     #[cfg(test)]
     class_targets: usize,
     #[cfg(test)]
     predicate_targets: usize,
     #[cfg(test)]
-    datatype_candidates: usize,
-    #[cfg(test)]
     entity_targets: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DatatypeWork {
+    mapping_bindings: usize,
+    constraint_bindings: usize,
+    candidates: usize,
 }
 
 #[derive(Default)]
@@ -74,7 +87,12 @@ fn measure(graph: &Graph) -> Result<ValidationWorkload, GateError> {
     let class_targets = facts.class_targets.len();
     let predicate_targets = facts.predicate_targets.len();
     let entity_targets = facts.entity_targets.len();
-    let datatype_candidates = datatype_candidates(&facts)?;
+    let datatype_focus_nodes = facts.predicates_by_pom.len();
+    let has_blank_datatype_focus = facts
+        .predicates_by_pom
+        .keys()
+        .any(|focus| matches!(focus, NamedOrBlankNodeRef::BlankNode(_)));
+    let datatype_work = datatype_work(&facts)?;
     let grounding_candidates = facts
         .entity_targets
         .iter()
@@ -100,7 +118,10 @@ fn measure(graph: &Graph) -> Result<ValidationWorkload, GateError> {
         graph.len(),
         class_work,
         predicate_branch_work,
-        datatype_candidates,
+        datatype_focus_nodes,
+        datatype_work.mapping_bindings,
+        datatype_work.constraint_bindings,
+        datatype_work.candidates,
         entity_targets,
         grounding_candidates,
     ]
@@ -117,7 +138,7 @@ fn measure(graph: &Graph) -> Result<ValidationWorkload, GateError> {
     let result_cardinality = [
         class_targets,
         predicate_result_bound,
-        datatype_candidates,
+        datatype_work.candidates,
         entity_targets,
     ]
     .into_iter()
@@ -128,12 +149,18 @@ fn measure(graph: &Graph) -> Result<ValidationWorkload, GateError> {
     Ok(ValidationWorkload {
         work_units,
         result_cardinality,
+        datatype_candidates: datatype_work.candidates,
+        has_blank_datatype_focus,
+        #[cfg(test)]
+        datatype_focus_nodes,
+        #[cfg(test)]
+        datatype_mapping_bindings: datatype_work.mapping_bindings,
+        #[cfg(test)]
+        datatype_constraint_bindings: datatype_work.constraint_bindings,
         #[cfg(test)]
         class_targets,
         #[cfg(test)]
         predicate_targets,
-        #[cfg(test)]
-        datatype_candidates,
         #[cfg(test)]
         entity_targets,
     })
@@ -233,8 +260,9 @@ fn class_constraint_work<'a>(
     })
 }
 
-fn datatype_candidates(facts: &ShapeFacts<'_>) -> Result<usize, GateError> {
+fn datatype_work(facts: &ShapeFacts<'_>) -> Result<DatatypeWork, GateError> {
     let mut constraints_by_predicate = HashMap::<TermRef<'_>, usize>::new();
+    let mut constraint_bindings = 0usize;
     for (property_shape, paths) in &facts.paths_by_property_shape {
         let owner_count = facts
             .property_shape_owners
@@ -254,6 +282,11 @@ fn datatype_candidates(facts: &ShapeFacts<'_>) -> Result<usize, GateError> {
                 *path_count,
                 GateError::ValidationWorkLimit,
             )?;
+            constraint_bindings = checked_add(
+                constraint_bindings,
+                candidates,
+                GateError::ValidationWorkLimit,
+            )?;
             add_to(
                 &mut constraints_by_predicate,
                 *path,
@@ -264,6 +297,7 @@ fn datatype_candidates(facts: &ShapeFacts<'_>) -> Result<usize, GateError> {
     }
 
     let mut candidates = 0usize;
+    let mut mapping_bindings = 0usize;
     for (pom, predicates) in &facts.predicates_by_pom {
         let Some(object_maps) = facts.object_maps_by_pom.get(pom) else {
             continue;
@@ -280,6 +314,18 @@ fn datatype_candidates(facts: &ShapeFacts<'_>) -> Result<usize, GateError> {
                         checked_mul(*edge_count, datatype_count, GateError::ValidationWorkLimit)?;
                     checked_add(sum, solutions, GateError::ValidationWorkLimit)
                 })?;
+        let predicate_count = predicates.values().try_fold(0usize, |sum, count| {
+            checked_add(sum, *count, GateError::ValidationWorkLimit)
+        })?;
+        mapping_bindings = checked_add(
+            mapping_bindings,
+            checked_mul(
+                predicate_count,
+                object_solutions,
+                GateError::ValidationWorkLimit,
+            )?,
+            GateError::ValidationWorkLimit,
+        )?;
         for (predicate, edge_count) in predicates {
             let constraint_count = constraints_by_predicate
                 .get(predicate)
@@ -298,7 +344,11 @@ fn datatype_candidates(facts: &ShapeFacts<'_>) -> Result<usize, GateError> {
             candidates = checked_add(candidates, joined, GateError::ValidationWorkLimit)?;
         }
     }
-    Ok(candidates)
+    Ok(DatatypeWork {
+        mapping_bindings,
+        constraint_bindings,
+        candidates,
+    })
 }
 
 fn as_node(term: TermRef<'_>) -> Option<NamedOrBlankNodeRef<'_>> {
@@ -349,112 +399,5 @@ fn checked_mul(left: usize, right: usize, error: GateError) -> Result<usize, Gat
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ALL_SHAPES: &str = r#"
-@prefix mf:  <http://example.org/mapping-fabric#> .
-@prefix rr:  <http://www.w3.org/ns/r2rml#> .
-@prefix sh:  <http://www.w3.org/ns/shacl#> .
-@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-@prefix ex:  <http://ex/> .
-ex:subject rr:class ex:Entity .
-ex:pom rr:predicate ex:value; rr:objectMap ex:object .
-ex:object rr:datatype xsd:string .
-ex:nodeShape sh:property ex:propertyShape .
-ex:propertyShape sh:path ex:value; sh:datatype xsd:string .
-ex:Entity mf:stereotype mf:Entity .
-"#;
-
-    fn all_shapes_graph() -> Graph {
-        crate::parse_turtle_graph(ALL_SHAPES, crate::DEFAULT_GRAPH_LIMITS).unwrap()
-    }
-
-    #[test]
-    fn measures_every_sealed_shape_before_native_validation() {
-        let workload = measure(&all_shapes_graph()).unwrap();
-
-        assert_eq!(workload.class_targets, 1);
-        assert_eq!(workload.predicate_targets, 1);
-        assert_eq!(workload.datatype_candidates, 1);
-        assert_eq!(workload.entity_targets, 1);
-    }
-
-    #[test]
-    fn missing_object_datatype_still_consumes_a_sparql_candidate() {
-        let input = ALL_SHAPES.replace("ex:object rr:datatype xsd:string .", "");
-        let graph = crate::parse_turtle_graph(&input, crate::DEFAULT_GRAPH_LIMITS).unwrap();
-
-        assert_eq!(measure(&graph).unwrap().datatype_candidates, 1);
-    }
-
-    #[test]
-    fn exact_preflight_limits_are_admitted() {
-        let graph = all_shapes_graph();
-        let workload = measure(&graph).unwrap();
-        assert_eq!(workload.work_units, 16);
-        assert_eq!(workload.result_cardinality, 8);
-        assert_eq!(
-            admit(
-                &graph,
-                ValidationLimits {
-                    max_work_units: workload.work_units,
-                    max_result_cardinality: workload.result_cardinality,
-                },
-            ),
-            Ok(workload)
-        );
-    }
-
-    #[test]
-    fn n_plus_one_workload_is_rejected_with_a_closed_error() {
-        let graph = all_shapes_graph();
-        let workload = measure(&graph).unwrap();
-        assert_eq!(
-            admit(
-                &graph,
-                ValidationLimits {
-                    max_work_units: workload.work_units - 1,
-                    max_result_cardinality: usize::MAX,
-                },
-            ),
-            Err(GateError::ValidationWorkLimit)
-        );
-        assert_eq!(
-            GateError::ValidationWorkLimit.to_string(),
-            "semantic validation exceeds its logical-work limit"
-        );
-    }
-
-    #[test]
-    fn n_plus_one_result_cardinality_is_rejected_with_a_closed_error() {
-        let graph = all_shapes_graph();
-        let workload = measure(&graph).unwrap();
-        assert_eq!(
-            admit(
-                &graph,
-                ValidationLimits {
-                    max_work_units: usize::MAX,
-                    max_result_cardinality: workload.result_cardinality - 1,
-                },
-            ),
-            Err(GateError::ValidationResultLimit)
-        );
-        assert_eq!(
-            GateError::ValidationResultLimit.to_string(),
-            "semantic validation exceeds its result-cardinality limit"
-        );
-    }
-
-    #[test]
-    fn arithmetic_overflow_fails_closed() {
-        assert_eq!(
-            checked_add(usize::MAX, 1, GateError::ValidationWorkLimit),
-            Err(GateError::ValidationWorkLimit)
-        );
-        assert_eq!(
-            checked_mul(usize::MAX, 2, GateError::ValidationResultLimit),
-            Err(GateError::ValidationResultLimit)
-        );
-    }
-}
+#[path = "preflight_tests.rs"]
+mod tests;

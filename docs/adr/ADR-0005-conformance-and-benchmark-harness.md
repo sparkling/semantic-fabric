@@ -23,10 +23,10 @@ implements:
 > on receipt replay. The current seal contains no per-DBMS fork files; any future
 > fork must enter the canonical inventory before execution. The product now
 > performs mandatory sealed `M ⋈ T` admission before constructing a serving
-> binding and carries its digest into compile identity; scaled Product Mock
-> timing/qualification, MySQL mapping, and the M0 performance/release envelope
-> remain open. Mapping evidence does not establish SPARQL Query, Protocol, or
-> production-backend admission.
+> binding and carries validation-policy-v2 into compile identity. The exact
+> static Product Mock closure passes; live Direct Mapping, backend/production
+> admission, MySQL mapping, and M0 performance/release qualification remain
+> open. Mapping evidence does not establish SPARQL Query or Protocol.
 
 ## Context and Problem Statement
 
@@ -39,7 +39,7 @@ ADR-0001 commits the engine to a standardised correctness gate and SOTA performa
 * Materialisation benchmarks (KROWN) — rejected: do not apply, since the engine has no materialiser.
 * Differential oracle via native in-memory (Oxigraph) evaluation — chosen: zero-JVM, validates property paths directly.
 * Ontop as a CI dependency for the differential oracle — rejected as a CI dependency; retained only as an optional, offline cross-check (and tier-2 OWL-QL oracle, ADR-0008).
-* SHACL runner = rudof's `shacl` crate in `ShaclValidationMode::Native` — chosen for the cross-project `M ⋈ T` gate (pure Rust, oxrdf-native, no second RDF stack; rationale in `docs/research/shacl-engine-selection.md`).
+* SHACL runner = rudof's `shacl` crate in `ShaclValidationMode::Native` for the three Core shapes, plus one global execution of the exact parsed sealed datatype `sh:select` — chosen for the cross-project `M ⋈ T` gate (pure Rust, oxrdf-native, no second RDF stack; rationale in `docs/research/shacl-engine-selection.md`).
 
 ## Decision Outcome
 
@@ -53,7 +53,7 @@ The virtualiser is measured on the **GTFS-Madrid-Bench OBDA / query-rewriting tr
 Ground truth for an OBDA answer: load the case's **expected RDF graph into an in-memory store and evaluate the same SPARQL** (`spareval`, ADR-0004), diffed against the virtualiser's live-SQL answer. This tests rewriter correctness directly, keeps CI **zero-JVM**, and — since the in-memory evaluator handles property paths — validates `P+`/`P*`. **Ontop** is retained as an *optional, offline* cross-check on a shared R2RML set (and the tier-2 OWL-QL oracle, ADR-0008), never a CI dependency.
 
 ### Cross-project `M ⋈ T` gate
-Evaluate the upstream modelling project's mapping-output validation (shapes) — `mf:MappingClassConformanceShape`, `mf:MappingPredicateConformanceShape`, `mf:MappingDatatypeConformanceShape`, `mf:EntitySubjectGroundingShape` (the upstream mapping-conformance requirements) — over the `M ⋈ T` closure for the virtualised path. **SHACL runner = rudof's `shacl` crate** (exact 0.3.14 dependency set), `ShaclValidationMode::Native` (pure Rust; its `sparql` feature is on by default, so Native is pinned explicitly — ADR-0019). Its in-memory graph is oxrdf-native (via `rudof_rdf`), so no second RDF stack enters the engine. Three shapes use SHACL Core paths/class/cardinality constraints; the mapping-datatype shape intentionally uses `sh:sparql` to compare each projected object-map datatype with T's property-shape datatype. `sf-validation` owns the sealed shapes, deterministic workload/cardinality preflight, Native execution, and redacted result (engine rationale: `docs/research/shacl-engine-selection.md`).
+Evaluate the upstream modelling project's four mapping-output shapes over the `M ⋈ T` closure. `sf-validation` runs the three Core shapes through rudof 0.3.14 `ShaclValidationMode::Native`, but extracts the exact digest-pinned datatype `sh:select` from its parsed sealed component and executes it once globally; the datatype shape is deactivated only on the Native branch. Policy v2 binds the exact shape/query bytes, topology, evaluator/parser versions and features, four numeric limits, preflight revision and fail-closed blank-POM-focus policy into the semantic receipt. Results preserve violation/warning counts but deliberately discard details; raw blank POM focus returns redacted `ValidationFailed`, while the product's projection is IRI-skolemised. The oxrdf-native graph remains single-stack. This gate does not admit live Direct Mapping or a backend to production.
 
 ### Consequences
 * Good, because objective, standardised SOTA measurement from day one; a real fitness function (pass-rate gate + OBDA latency/memory objectives) for the Path-B loop; the cross-project `M ⋈ T` obligation becomes executable, not prose.
@@ -62,7 +62,8 @@ Evaluate the upstream modelling project's mapping-output validation (shapes) —
 ### Confirmation
 * `cargo test -p sf-conformance` drives the vendored W3C suite via CONSTRUCT (red until engine logic lands) and writes an EARL report.
 * `cargo bench -p sf-bench` compiles the GTFS-Madrid OBDA-track driver.
-* The `M ⋈ T` hook wires rudof `shacl` (Native) over the four shape IRIs.
+* The `M ⋈ T` hook runs three Core shapes through rudof Native and the parsed sealed datatype query once globally; differential, mutation, cardinality and policy-digest KATs guard the split.
+* The ignored exact static replay uses `SF_PRODUCT_MOCK_GOLD_ROOT=/home/claude/src/hm/semantic-builder/docs/reviews/semantic-product-mock-gold-candidate-v0.1.0/artifacts SF_PRODUCT_MOCK_SOURCE_ROOT=/home/claude/src/hm/semantic-product-mock-worktrees/ontology-gap-repair cargo test -p sf-conformance --test product_mock_gold_vertical --locked exact_external_product_mock_gold_and_source_are_admitted -- --ignored --nocapture`. Uncontrolled validation-only observations of about 1.3–1.9 s are diagnostic, not a benchmark, SLO, or admission claim.
 
 ## More Information
 * **Scope:** ADR-0002. **Architecture:** ADR-0003. **Substrate (in-memory oracle):** ADR-0004. **Execution:** ADR-0006. **Datatype correctness + per-DBMS fixtures:** ADR-0015. **Inner test layers:** ADR-0012. **Reasoning oracle:** ADR-0008. **SHACL / 1.2:** ADR-0019.

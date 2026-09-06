@@ -150,7 +150,7 @@ cargo run --locked -p sf-cli -- serve \
 ```
 
 Choose exactly one primary selector. `--source` accepts only credential-free values; credential-bearing PostgreSQL/MySQL values must use bounded `--source-env` resolution, and parsed inline passwords fail before runtime, file, or network I/O. An optional `--source-2`/`--source-env-2` plus `--mapping-2` pair enables only the exactly-two-source, one-triple-per-arm top-level `SELECT UNION` profile described below—not general federation.
-Every `serve` invocation requires an explicit `--ontology` Turtle document. Authored mappings receive a schema-independent preflight before connector I/O; after a bounded source observation, the Rust product projects the executable mapping IR with effective datatypes, joins it with that ontology, and requires the sealed native-SHACL class, property, datatype, and entity-grounding gate before constructing any compiler, cache, or runtime binding. A reserved projection namespace prevents ontology laundering, every configured source must pass before publication, warning counts remain observable, and exact ontology/admission digests partition compiled plans and caches. This semantic receipt binds mapping origin and the source-derived projection; it is not a physical-schema generation lease or production-backend admission. Optional flags include `--bind`, `--timeout-secs`, `--shutdown-timeout-secs`, `--max-query-len`, `--max-concurrent-requests`, `--max-source-work`, `--max-result-items`, `--max-order-rows`, `--max-order-bytes`, `--max-serialized-bytes`, and PostgreSQL/SQLite pool sizing.
+Every `serve` invocation requires an explicit `--ontology` Turtle document. Authored mappings receive a schema-independent preflight before connector I/O; after a bounded source observation, the Rust product projects the executable mapping IR with effective datatypes and joins it with that ontology. The sealed gate runs three Core shapes through rudof Native and the exact parsed datatype `sh:select` once globally; blank POM focus fails closed and only violation/warning counts survive. Validation policy v2 plus the warning policy, mapping origin, ontology and projection partition admission/compile/cache identity before any binding. A reserved projection namespace prevents ontology laundering and every configured source must pass before publication. This receipt is not a physical-schema generation lease and does not admit live Direct Mapping or any backend to production. Optional flags include `--bind`, `--timeout-secs`, `--shutdown-timeout-secs`, `--max-query-len`, `--max-concurrent-requests`, `--max-source-work`, `--max-result-items`, `--max-order-rows`, `--max-order-bytes`, `--max-serialized-bytes`, and PostgreSQL/SQLite pool sizing.
 The shared request-admission ceiling defaults to 64—a conservative finite governance value, not a throughput result. The default endpoint is `http://127.0.0.1:7878/sparql`; an exact query-less `GET`/`HEAD` returns its fixed, redacted Turtle Service Description.
 
 ```bash
@@ -199,10 +199,10 @@ harness score:
 - Differential suites compare flat and operator-tree planners with native
   materialized RDF and spareval across ordinary queries, paths, graphs, and
   RDF-star.
-- The 2026-08-26 closeout passed format, clippy with warnings denied, all-target
-  build, issue-#8 tests 4/4, differential oracle 7/7, differential tree 178/178,
-  workspace tests 1,088 passed with 3 ignored, and conformance with zero
-  unexpected failures.
+- The ignored exact static Product Mock gate parses sealed T and fixed-source M,
+  projects 3,064 triples, joins them with 47,463 ontology triples, and validates
+  the 50,527-triple closure at 0/0. Uncontrolled validation-only observations of
+  about 1.3–1.9 s are diagnostic, not a benchmark, SLO, or backend-admission claim.
 - The 2026-09-04 discovered engineering-harness inventory contained 980 cases across 126 files. Its hermetic checkpoint passed 971 cases across 125 files with two intentional skips; the separate seven-case mutable ambient Ruflo collector passed three fail-closed controls and rejected four positive cases on untrusted installed/runtime files, granting no authority.
 
 Reproduce the primary gates:

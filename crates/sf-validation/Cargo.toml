@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Bounded native semantic admission for semantic-fabric M⋈T inputs"
+description = "Bounded semantic admission for semantic-fabric M⋈T inputs"
 
 [dependencies]
 oxrdf.workspace = true

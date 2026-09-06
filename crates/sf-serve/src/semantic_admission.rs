@@ -8,8 +8,29 @@ use sha2::{Digest, Sha256};
 
 use crate::{BackendKind, IntrospectedSource, SemanticOntology};
 
-const ADMISSION_DOMAIN: &[u8] = b"semantic-fabric/m-join-t-admission/v1";
+const ADMISSION_DOMAIN: &[u8] = b"semantic-fabric/m-join-t-admission/v2";
 const PROJECTION_DOMAIN: &[u8] = b"semantic-fabric/m-join-t-projection/v1";
+
+#[derive(Clone, Copy)]
+enum WarningPolicy {
+    AdmitAndCount,
+}
+
+impl WarningPolicy {
+    const fn admits(self, outcome: sf_validation::GateOutcome) -> bool {
+        match self {
+            Self::AdmitAndCount => outcome.violations == 0,
+        }
+    }
+
+    const fn tag(self) -> &'static [u8] {
+        match self {
+            Self::AdmitAndCount => b"admit-and-count/v1",
+        }
+    }
+}
+
+const WARNING_POLICY: WarningPolicy = WarningPolicy::AdmitAndCount;
 
 /// Mapping provenance is part of admission identity even when two origins
 /// happen to project to the same executable IR.
@@ -38,15 +59,18 @@ impl ValidatedMapping {
         let projection = project_for_source(&mapping, source)?;
         let closure = join_graphs(ontology.graph(), &projection)?;
         let outcome = sf_validation::validate_graph(&closure).map_err(map_gate_error)?;
-        if !outcome.conforms() {
+        if !WARNING_POLICY.admits(outcome) {
             return Err(SemanticAdmissionError::Violations {
                 count: outcome.violations,
             });
         }
         let ontology_digest = OntologyDigest::from_sha256(ontology.document_digest());
         let projection_digest = graph_digest(&projection);
+        let validation_policy_digest =
+            sf_validation::validation_policy_digest().map_err(map_gate_error)?;
         let admission_digest = SemanticAdmissionDigest::from_sha256(admission_digest(
             ontology.document_digest(),
+            validation_policy_digest,
             &projection,
             origin,
             outcome,
@@ -71,7 +95,7 @@ impl ValidatedMapping {
             sf_mapping::project_static_to_rdf(mapping).map_err(map_projection_error)?;
         let closure = join_graphs(ontology.graph(), &projection)?;
         let outcome = sf_validation::validate_graph(&closure).map_err(map_gate_error)?;
-        if outcome.conforms() {
+        if WARNING_POLICY.admits(outcome) {
             Ok(())
         } else {
             Err(SemanticAdmissionError::Violations {
@@ -245,6 +269,7 @@ fn map_gate_error(error: sf_validation::GateError) -> SemanticAdmissionError {
 
 fn admission_digest(
     ontology_digest: [u8; 32],
+    validation_policy_digest: [u8; 32],
     projection: &Graph,
     origin: MappingOrigin,
     outcome: sf_validation::GateOutcome,
@@ -256,12 +281,12 @@ fn admission_digest(
     let mut hasher = Sha256::new();
     hash_bytes(&mut hasher, ADMISSION_DOMAIN);
     hash_bytes(&mut hasher, &ontology_digest);
-    hash_bytes(&mut hasher, &sf_validation::shape_set_digest());
+    hash_bytes(&mut hasher, &validation_policy_digest);
     hasher.update([match origin {
         MappingOrigin::Authored => 0,
         MappingOrigin::Direct => 1,
     }]);
-    hasher.update([0]); // warning policy v1: warnings are admitted and counted.
+    hash_bytes(&mut hasher, WARNING_POLICY.tag());
     hasher.update(
         u64::try_from(outcome.violations)
             .unwrap_or(u64::MAX)
@@ -311,4 +336,44 @@ fn canonical_triples(graph: &Graph) -> Vec<String> {
 fn hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
     hasher.update(bytes);
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+
+    #[test]
+    fn validation_policy_alone_partitions_admission_identity() {
+        let graph = Graph::new();
+        let outcome = sf_validation::GateOutcome {
+            violations: 0,
+            warnings: 0,
+        };
+        let first = admission_digest([7; 32], [11; 32], &graph, MappingOrigin::Authored, outcome);
+        let second = admission_digest([7; 32], [12; 32], &graph, MappingOrigin::Authored, outcome);
+        assert_ne!(first, second);
+
+        let source_id = sf_core::SourceId::new(0).unwrap();
+        let binding = |admission| {
+            sf_sparql::CompilerBinding::from_observation_with_semantic_identity(
+                SourceMapping::new(source_id, Vec::new()),
+                sf_sql::Dialect::Sqlite,
+                sf_sparql::Tbox::default(),
+                Vec::new(),
+                sf_sparql::Epoch(0),
+                sf_sparql::SemanticIdentity::new(
+                    OntologyDigest::from_sha256([7; 32]),
+                    SemanticAdmissionDigest::from_sha256(admission),
+                ),
+                1,
+            )
+        };
+        let first_binding = binding(first);
+        let second_binding = binding(second);
+        assert_ne!(first_binding.scope(), second_binding.scope());
+        assert_ne!(
+            first_binding.scope().digests().semantic_admission(),
+            second_binding.scope().digests().semantic_admission()
+        );
+    }
 }

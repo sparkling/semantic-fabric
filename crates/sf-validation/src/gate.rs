@@ -15,18 +15,20 @@ use sparql_service::RdfData;
 /// call. Callers cannot replace or deactivate this set.
 pub const META_SHAPES_TTL: &str = include_str!("../resources/meta-shapes.ttl");
 
+// The batch rewrite is valid only for these reviewed bytes.  A shape change
+// must deliberately update both this pin and the differential evidence.
+pub(crate) const REVIEWED_SHAPE_SET_DIGEST: [u8; 32] = [
+    0x88, 0x4c, 0xee, 0x08, 0xa9, 0xad, 0x9e, 0xd1, 0xe8, 0xe3, 0x03, 0x57, 0xa9, 0x1d, 0x98, 0x6b,
+    0xdb, 0x1d, 0x5f, 0x2b, 0xe7, 0xed, 0x4f, 0xc4, 0x25, 0xb1, 0x3a, 0x90, 0x60, 0xb8, 0x47, 0xf9,
+];
+const SH_DEACTIVATED: &str = "http://www.w3.org/ns/shacl#deactivated";
+
 /// Default input envelope. It comfortably covers the 2026 product-mock gold
 /// while bounding parse memory and Native/SPARQL validation work at startup.
-pub const DEFAULT_GRAPH_LIMITS: GraphLimits = GraphLimits {
-    max_utf8_bytes: 32 * 1024 * 1024,
-    max_parsed_triples: 250_000,
-};
+pub const DEFAULT_GRAPH_LIMITS: GraphLimits = crate::policy::graph_limits();
 
 /// Fixed logical-work and prospective-report bounds for the sealed shapes.
-pub const DEFAULT_VALIDATION_LIMITS: ValidationLimits = ValidationLimits {
-    max_work_units: 1_000_000,
-    max_result_cardinality: 250_000,
-};
+pub const DEFAULT_VALIDATION_LIMITS: ValidationLimits = crate::policy::validation_limits();
 
 /// Fixed limits applied before a graph can enter semantic admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,6 +45,10 @@ pub struct ValidationLimits {
 }
 
 /// Redacted result of running the sealed four-shape gate.
+///
+/// The severity counts are faithful to the sealed rules' SPARQL bag
+/// cardinality. The result is intentionally report-lossy: focus nodes, paths,
+/// values, messages, and engine diagnostics are not exposed or retained.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GateOutcome {
     pub violations: usize,
@@ -71,9 +77,9 @@ pub enum GateError {
     InvalidTurtle,
     #[error("sealed semantic shape set is invalid")]
     InvalidShapeSet,
-    #[error("native semantic validation failed")]
+    #[error("semantic validation failed")]
     ValidationFailed,
-    #[error("native semantic validation panicked")]
+    #[error("semantic validation panicked")]
     ValidationPanicked,
 }
 
@@ -96,28 +102,57 @@ pub fn parse_turtle_graph(input: &str, limits: GraphLimits) -> Result<Graph, Gat
 
 /// Validate one already-bounded closure graph against the sealed shape set.
 pub fn validate_graph(graph: &Graph) -> Result<GateOutcome, GateError> {
-    if graph.len() > DEFAULT_GRAPH_LIMITS.max_parsed_triples {
+    let graph_limits = crate::policy::graph_limits();
+    let validation_limits = crate::policy::validation_limits();
+    if graph.len() > graph_limits.max_parsed_triples {
         return Err(GateError::TripleLimit);
     }
-    crate::preflight::admit(graph, DEFAULT_VALIDATION_LIMITS)?;
-    catch_unwind(AssertUnwindSafe(|| validate_graph_inner(graph)))
+    let workload = crate::preflight::admit(graph, validation_limits)?;
+    // Preserve rudof 0.3.14's fail-closed behavior for raw blank-node POM
+    // focus nodes. Product admission never hits this path because sf-mapping
+    // emits an IRI-skolemised projection.
+    crate::policy::enforce_blank_datatype_focus(workload.has_blank_datatype_focus)?;
+    catch_unwind(AssertUnwindSafe(|| validate_graph_inner(graph, workload)))
         .map_err(|_| GateError::ValidationPanicked)?
 }
 
 /// Convenience entry point used by hermetic conformance fixtures.
 pub fn validate_turtle(input: &str) -> Result<GateOutcome, GateError> {
-    let graph = parse_turtle_graph(input, DEFAULT_GRAPH_LIMITS)?;
+    let graph = parse_turtle_graph(input, crate::policy::graph_limits())?;
     validate_graph(&graph)
 }
 
-/// SHA-256 of the exact embedded shape bytes, for runtime admission receipts.
+/// SHA-256 of the exact embedded shape bytes used by the policy identity.
+///
+/// This identifies only the shape document. Admission receipts must bind
+/// [`validation_policy_digest`] so the execution policy cannot be detached.
 pub fn shape_set_digest() -> [u8; 32] {
     Sha256::digest(META_SHAPES_TTL.as_bytes()).into()
 }
 
-fn validate_graph_inner(graph: &Graph) -> Result<GateOutcome, GateError> {
+/// SHA-256 identity of the sealed shapes and the exact execution strategy.
+///
+/// Admission receipts bind this digest so changing the shape/query bytes,
+/// Native/global topology, evaluator and parser identities/features, limits,
+/// preflight revision, or blank-focus policy changes runtime identity.
+pub fn validation_policy_digest() -> Result<[u8; 32], GateError> {
+    crate::policy::digest(shape_set_digest())
+}
+
+fn validate_graph_inner(
+    graph: &Graph,
+    workload: crate::preflight::ValidationWorkload,
+) -> Result<GateOutcome, GateError> {
+    crate::policy::verify_shape_digest(shape_set_digest())?;
+    // Retain the reviewed document as receipt identity, but deactivate its one
+    // SPARQL shape for rudof: that exact rule is evaluated once below.  The
+    // remaining three Core shapes still execute through rudof Native.
+    let core_shapes = format!(
+        "{META_SHAPES_TTL}\n<{}> <{SH_DEACTIVATED}> true .\n",
+        crate::batched_datatype::SHAPE_IRI
+    );
     let shapes = RdfData::from_str(
-        META_SHAPES_TTL,
+        &core_shapes,
         &rudof_rdf::rdf_core::RDFFormat::Turtle,
         None,
         &rudof_rdf::rdf_impl::ReaderMode::Strict,
@@ -127,20 +162,53 @@ fn validate_graph_inner(graph: &Graph) -> Result<GateOutcome, GateError> {
         .parse()
         .map_err(|_| GateError::InvalidShapeSet)?;
     let schema_ir: IRSchema = schema.try_into().map_err(|_| GateError::InvalidShapeSet)?;
+    let datatype_select = crate::batched_datatype::select(&schema_ir)?;
 
     let mut data = OxigraphInMemory::new();
     for triple in graph.iter() {
         data.add_triple_ref(triple.subject, triple.predicate, triple.object)
             .map_err(|_| GateError::ValidationFailed)?;
     }
-    let rdf_data = RdfData::from_graph(data).map_err(|_| GateError::ValidationFailed)?;
+    let mut rdf_data = RdfData::from_graph(data).map_err(|_| GateError::ValidationFailed)?;
+    rdf_data
+        .check_store()
+        .map_err(|_| GateError::ValidationFailed)?;
+    let datatype_violations = crate::batched_datatype::violation_count(
+        &rdf_data,
+        datatype_select,
+        workload.datatype_candidates,
+        crate::policy::validation_limits().max_result_cardinality,
+    )?;
     let mut validator: DataValidation = rdf_data.into();
     let report = validator
         .validate(&schema_ir, &ShaclValidationMode::Native)
         .map_err(|_| GateError::ValidationFailed)?;
+    compose_outcome(
+        report.get_count_of(&Severity::Violation),
+        report.get_count_of(&Severity::Warning),
+        datatype_violations,
+        workload.result_cardinality,
+    )
+}
+
+fn compose_outcome(
+    native_violations: usize,
+    native_warnings: usize,
+    datatype_violations: usize,
+    result_bound: usize,
+) -> Result<GateOutcome, GateError> {
+    let violations = native_violations
+        .checked_add(datatype_violations)
+        .ok_or(GateError::ValidationFailed)?;
+    let result_count = violations
+        .checked_add(native_warnings)
+        .ok_or(GateError::ValidationFailed)?;
+    if result_count > result_bound {
+        return Err(GateError::ValidationFailed);
+    }
     Ok(GateOutcome {
-        violations: report.get_count_of(&Severity::Violation),
-        warnings: report.get_count_of(&Severity::Warning),
+        violations,
+        warnings: native_warnings,
     })
 }
 
@@ -179,14 +247,7 @@ ex:propertyShape sh:path ex:age; sh:datatype xsd:integer .
 
     #[test]
     fn sealed_shape_bytes_have_the_reviewed_digest() {
-        let hex = shape_set_digest()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        assert_eq!(
-            hex,
-            "884cee08a9ad9ed1e8e30357a91d986bdb1d5f2be7ed4fc425b13a9060b847f9"
-        );
+        assert_eq!(shape_set_digest(), REVIEWED_SHAPE_SET_DIGEST);
     }
 
     #[test]
@@ -202,7 +263,7 @@ ex:pom rr:predicate ex:notDeclared .
     }
 
     #[test]
-    fn native_mode_executes_the_sparql_datatype_constraint() {
+    fn sealed_gate_executes_the_sparql_datatype_constraint() {
         let matching = format!("{DATATYPE_PREFIXES}\nex:om rr:datatype xsd:integer .");
         let mismatching = format!("{DATATYPE_PREFIXES}\nex:om rr:datatype xsd:string .");
         let matching = validate_turtle(&matching).unwrap();
@@ -273,5 +334,24 @@ ex:subjectMap rr:class ex:Person .
             Err(GateError::InvalidTurtle)
         );
         assert!(!GateError::InvalidTurtle.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn post_composition_overflow_and_bound_underestimate_fail_closed() {
+        assert_eq!(
+            compose_outcome(usize::MAX, 0, 1, usize::MAX),
+            Err(GateError::ValidationFailed)
+        );
+        assert_eq!(
+            compose_outcome(1, 1, 1, 2),
+            Err(GateError::ValidationFailed)
+        );
+        assert_eq!(
+            compose_outcome(1, 1, 1, 3),
+            Ok(GateOutcome {
+                violations: 2,
+                warnings: 1,
+            })
+        );
     }
 }
