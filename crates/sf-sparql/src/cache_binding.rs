@@ -23,7 +23,6 @@ impl CompilerBinding {
         semantic: SemanticIdentity,
         cache_capacity: usize,
     ) -> Self {
-        assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
         let constraint_authority = ConstraintAuthority::Unverified;
         let column_type_authority = ColumnTypeAuthority::Unverified;
         let digests = CompileDigests::from_inputs_with_semantic_identity(

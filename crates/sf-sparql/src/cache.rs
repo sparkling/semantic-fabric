@@ -144,6 +144,7 @@ pub(crate) fn test_scope(source_id: SourceId, dialect: Dialect, epoch: Epoch) ->
 /// Grouping these values makes dialect/context mismatch unrepresentable on the
 /// cached translation path. Creating a replacement mapping, ontology, schema,
 /// or backend requires a new binding and therefore a fresh cache namespace.
+/// The supplied capacity remains raw-only while governance is dormant.
 pub struct CompilerBinding {
     mapping: SourceMapping,
     dialect: Dialect,
@@ -164,7 +165,6 @@ impl CompilerBinding {
         schema: CompilerSchema,
         cache_capacity: usize,
     ) -> Self {
-        assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
         let digests = CompileDigests::from_inputs(
             &mapping,
             &tbox,
@@ -195,7 +195,6 @@ impl CompilerBinding {
         epoch: Epoch,
         cache_capacity: usize,
     ) -> Self {
-        assert!(cache_capacity > 0, "plan cache capacity must be non-zero");
         let constraint_authority = ConstraintAuthority::Unverified;
         let column_type_authority = ColumnTypeAuthority::Unverified;
         let digests = CompileDigests::from_inputs(
@@ -240,7 +239,7 @@ impl CompilerBinding {
             dialect,
             tbox,
             schema,
-            caches: ProfiledPlanCaches::new(cache_capacity),
+            caches: ProfiledPlanCaches::uncontrolled_only(cache_capacity),
             scope,
         }
     }

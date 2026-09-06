@@ -134,7 +134,7 @@ fn hot_working_set_survives_cold_churn_past_capacity() {
 
 #[test]
 fn uncontrolled_churn_cannot_evict_governed_entries() {
-    let caches: ProfiledPlanCaches<u32> = ProfiledPlanCaches::new(2);
+    let caches: ProfiledPlanCaches<u32> = ProfiledPlanCaches::with_capacities(2, 2);
     let scope = scope(Dialect::Sqlite, Epoch(0));
     let governed = PlanKey {
         scope,
@@ -165,4 +165,65 @@ fn uncontrolled_churn_cannot_evict_governed_entries() {
             .is_none(),
         "a governed key cannot cross the physical cache partition"
     );
+}
+
+#[test]
+fn explicit_profile_capacities_have_a_checked_aggregate_bound() {
+    assert_eq!(ProfiledPlanCaches::<u32>::aggregate_entry_bound(2, 3), 5);
+    let caches = ProfiledPlanCaches::with_capacities(2, 3);
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+
+    for id in 0..128 {
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .put(synth_key(scope, id), id as u32);
+        caches.for_profile(CompileProfileId::GovernedV1).put(
+            PlanKey {
+                scope,
+                profile: CompileProfileId::GovernedV1,
+                structural_hash: id as u64,
+                canonical: format!("governed-plan-{id}"),
+            },
+            id as u32,
+        );
+    }
+
+    let raw = caches.for_profile(CompileProfileId::Uncontrolled).len();
+    let governed = caches.for_profile(CompileProfileId::GovernedV1).len();
+    assert!(raw <= 2);
+    assert!(governed <= 3);
+    assert!(raw.checked_add(governed).unwrap() <= 5);
+}
+
+#[test]
+#[should_panic(expected = "aggregate plan cache capacity overflow")]
+fn profiled_cache_rejects_an_unrepresentable_aggregate_bound() {
+    let _ = ProfiledPlanCaches::<u32>::with_capacities(usize::MAX, 1);
+}
+
+#[test]
+fn uncontrolled_only_preserves_the_binding_capacity_and_disables_governed_writes() {
+    let caches = ProfiledPlanCaches::uncontrolled_only(2);
+    let scope = scope(Dialect::Sqlite, Epoch(0));
+    for id in 0..128 {
+        caches
+            .for_profile(CompileProfileId::Uncontrolled)
+            .put(synth_key(scope, id), id as u32);
+    }
+    let governed = PlanKey {
+        scope,
+        profile: CompileProfileId::GovernedV1,
+        structural_hash: 7,
+        canonical: "dormant-governed".to_owned(),
+    };
+    caches
+        .for_profile(CompileProfileId::GovernedV1)
+        .put(governed.clone(), 99);
+
+    assert!(caches.for_profile(CompileProfileId::Uncontrolled).len() <= 2);
+    assert!(caches
+        .for_profile(CompileProfileId::GovernedV1)
+        .get(&governed)
+        .is_none());
+    assert_eq!(ProfiledPlanCaches::<u32>::aggregate_entry_bound(2, 0), 2);
 }
