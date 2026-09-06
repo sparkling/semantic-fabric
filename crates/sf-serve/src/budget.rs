@@ -2,6 +2,7 @@
 //! admission identity.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,12 +13,16 @@ use tokio::sync::{watch, OwnedSemaphorePermit};
 use tokio::time::Instant;
 
 use crate::lifecycle::ShutdownPhase;
+use crate::telemetry::{self, CorrelationId};
 
 struct RequestBudgetState {
     accounting: QueryBudget,
     deadline: Option<Instant>,
     deadline_representable: bool,
     terminal: watch::Sender<Option<QueryControlError>>,
+    correlation: CorrelationId,
+    emit_terminal_telemetry: bool,
+    terminal_telemetry_recorded: AtomicBool,
     /// Draining preserves this in-flight identity; only the forced phase cancels it.
     shutdown: Option<watch::Receiver<ShutdownPhase>>,
     /// One fail-fast serve-lane admission identity. The owned permit follows
@@ -37,7 +42,7 @@ pub(crate) struct CancellationGuard(Option<RequestBudget>);
 impl RequestBudget {
     #[cfg(test)]
     pub(crate) fn after(timeout: Duration, limits: QueryLimits) -> Self {
-        Self::build(timeout, limits, None)
+        Self::build(timeout, limits, None, CorrelationId::generate(), false)
     }
 
     /// Mint a serving budget that observes only forced shutdown, not graceful drain.
@@ -45,14 +50,17 @@ impl RequestBudget {
         timeout: Duration,
         limits: QueryLimits,
         shutdown: watch::Receiver<ShutdownPhase>,
+        correlation: CorrelationId,
     ) -> Self {
-        Self::build(timeout, limits, Some(shutdown))
+        Self::build(timeout, limits, Some(shutdown), correlation, true)
     }
 
     fn build(
         timeout: Duration,
         limits: QueryLimits,
         shutdown: Option<watch::Receiver<ShutdownPhase>>,
+        correlation: CorrelationId,
+        emit_terminal_telemetry: bool,
     ) -> Self {
         let now = Instant::now();
         let (terminal, _) = watch::channel(None);
@@ -62,6 +70,9 @@ impl RequestBudget {
             deadline: Some(deadline.unwrap_or(now)),
             deadline_representable: deadline.is_some(),
             terminal,
+            correlation,
+            emit_terminal_telemetry,
+            terminal_telemetry_recorded: AtomicBool::new(false),
             shutdown,
             admission: None,
         }));
@@ -74,7 +85,7 @@ impl RequestBudget {
     /// Mint a bounded internal control-plane budget with no request admission
     /// or shutdown identity. The lifecycle supervisor owns cancellation.
     pub(crate) fn for_control(timeout: Duration, limits: QueryLimits) -> Self {
-        Self::build(timeout, limits, None)
+        Self::build(timeout, limits, None, CorrelationId::generate(), false)
     }
 
     pub(crate) fn uncontrolled(deadline: Option<std::time::Instant>) -> Self {
@@ -84,6 +95,9 @@ impl RequestBudget {
             deadline: deadline.map(Instant::from_std),
             deadline_representable: true,
             terminal,
+            correlation: CorrelationId::generate(),
+            emit_terminal_telemetry: false,
+            terminal_telemetry_recorded: AtomicBool::new(false),
             shutdown: None,
             admission: None,
         }))
@@ -271,14 +285,37 @@ impl RequestBudget {
 
     fn terminate(&self, reason: QueryControlError) -> QueryControlError {
         let reason = self.0.accounting.terminate(reason);
+        self.record_terminal_once(reason);
         self.0.terminal.send_replace(Some(reason));
         reason
     }
 
     fn signal_error(&self, error: QueryControlError) -> QueryControlError {
         let error = self.0.accounting.terminal().unwrap_or(error);
+        self.record_terminal_once(error);
         self.0.terminal.send_replace(Some(error));
         error
+    }
+
+    fn record_terminal_once(&self, reason: QueryControlError) {
+        if self.0.emit_terminal_telemetry
+            && self
+                .0
+                .terminal_telemetry_recorded
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            telemetry::record_governance_terminal(reason, &self.0.correlation);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn after_with_telemetry(
+        timeout: Duration,
+        limits: QueryLimits,
+        correlation: CorrelationId,
+    ) -> Self {
+        Self::build(timeout, limits, None, correlation, true)
     }
 }
 

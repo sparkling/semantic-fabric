@@ -2,6 +2,12 @@ use super::*;
 
 // --- form_param ---------------------------------------------------------------
 
+fn form_param(encoded: &str, key: &str) -> Option<String> {
+    (key == "query")
+        .then(|| crate::post_body::unique_query_param(encoded.as_bytes(), usize::MAX).ok())
+        .flatten()
+}
+
 #[test]
 fn form_param_extracts_the_named_key() {
     assert_eq!(

@@ -24,6 +24,9 @@ use crate::request_compile::BoundQuery;
 use crate::request_deadline::RequestDeadlineService;
 use crate::sqlite_admission;
 use crate::stream::{self, RdfFormat};
+use crate::telemetry::{
+    execute as traced_execute, in_stage as traced, in_stage_sync as traced_sync, Stage,
+};
 
 #[cfg(test)]
 #[path = "http_tests.rs"]
@@ -49,20 +52,20 @@ async fn handle_get(
     RawQuery(raw): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let query = match raw.as_deref() {
+    let decoded = traced_sync(Stage::Decode, || match raw.as_deref() {
         Some(encoded) => {
-            match crate::post_body::unique_query_param(encoded.as_bytes(), cfg.max_query_len()) {
-                Ok(query) => query,
-                Err(crate::post_body::QueryParamError::Invalid) => {
-                    return problem::response(ProblemCode::InvalidRequest)
-                }
-                Err(crate::post_body::QueryParamError::TooLong) => {
-                    return problem::response(ProblemCode::PayloadTooLarge)
-                }
-            }
+            crate::post_body::unique_query_param(encoded.as_bytes(), cfg.max_query_len()).map_err(
+                |error| match error {
+                    crate::post_body::QueryParamError::Invalid => ProblemCode::InvalidRequest,
+                    crate::post_body::QueryParamError::TooLong => ProblemCode::PayloadTooLarge,
+                },
+            )
         }
-        // The outer service consumes the exact query-less discovery request.
-        None => return problem::response(ProblemCode::InvalidRequest),
+        None => Err(ProblemCode::InvalidRequest),
+    });
+    let query = match decoded {
+        Ok(query) => query,
+        Err(code) => return problem::response(code),
     };
     process(cfg, snapshot, query, accept(&headers), budget).await
 }
@@ -80,11 +83,14 @@ async fn handle_post(
     }
     let (parts, body) = request.into_parts();
     let accepted = accept(&parts.headers);
-    let query = match crate::post_body::query(
-        &parts.headers,
-        body,
-        cfg.max_query_len(),
-        cfg.max_form_body_len(),
+    let query = match traced(
+        Stage::Decode,
+        crate::post_body::query(
+            &parts.headers,
+            body,
+            cfg.max_query_len(),
+            cfg.max_form_body_len(),
+        ),
     )
     .await
     {
@@ -94,7 +100,6 @@ async fn handle_post(
     process(cfg, snapshot, query, accepted, budget).await
 }
 
-/// The shared request pipeline: cap → compile → dispatch by query form → stream.
 async fn process(
     cfg: Arc<ServeConfig>,
     snapshot: RuntimeSnapshotLease,
@@ -106,18 +111,25 @@ async fn process(
         return problem::response(ProblemCode::PayloadTooLarge);
     }
 
-    let generation_admission =
-        match crate::request_generation::acquire(cfg.clone(), &snapshot, &query, &budget).await {
-            Ok(admission) => admission,
-            Err(response) => return response,
-        };
+    let generation_admission = match traced(
+        Stage::GenerationLease,
+        crate::request_generation::acquire(cfg.clone(), &snapshot, &query, &budget),
+    )
+    .await
+    {
+        Ok(admission) => admission,
+        Err(response) => return response,
+    };
     let (mut generations, compiler) = generation_admission.into_parts();
-    let bound = match crate::request_compile::compile(
-        cfg.clone(),
-        snapshot.clone(),
-        query,
-        budget.clone(),
-        compiler,
+    let bound = match traced(
+        Stage::Compile,
+        crate::request_compile::compile(
+            cfg.clone(),
+            snapshot.clone(),
+            query,
+            budget.clone(),
+            compiler,
+        ),
     )
     .await
     {
@@ -131,18 +143,22 @@ async fn process(
 
     match bound {
         BoundQuery::Single(bound) => {
-            if let Err(error) = admission::admit(bound.plan(), cfg.max_order_rows()) {
+            let admitted = traced_sync(Stage::ShapeAdmission, || {
+                admission::admit(bound.plan(), cfg.max_order_rows())
+            });
+            if let Err(error) = admitted {
                 let _internal_reason = error.reason();
                 let _ = generations.finish().await;
                 return problem::response(ProblemCode::UnsupportedQuery);
             }
-            let execution = match snapshot.prepare_execution(*bound) {
-                Ok(execution) => execution,
-                Err(_) => {
-                    let _ = generations.finish().await;
-                    return problem::response(ProblemCode::Internal);
-                }
-            };
+            let execution =
+                match traced_sync(Stage::BindExecution, || snapshot.prepare_execution(*bound)) {
+                    Ok(execution) => execution,
+                    Err(_) => {
+                        let _ = generations.finish().await;
+                        return problem::response(ProblemCode::Internal);
+                    }
+                };
             let (source_id, binding_identity, backend, verified_generation, plan) =
                 execution.into_parts();
             if !generations.matches(source_id, &binding_identity, verified_generation) {
@@ -156,23 +172,31 @@ async fn process(
             }
             match &plan.form {
                 PlanForm::Select { .. } => {
-                    respond_select(backend, plan, generation, accept, budget).await
+                    traced_execute(respond_select(backend, plan, generation, accept, budget)).await
                 }
-                PlanForm::Ask => respond_ask(backend, plan, generation, accept, budget).await,
+                PlanForm::Ask => {
+                    traced_execute(respond_ask(backend, plan, generation, accept, budget)).await
+                }
                 PlanForm::Construct { .. } => {
-                    respond_construct(backend, plan, generation, accept, budget).await
+                    traced_execute(respond_construct(backend, plan, generation, accept, budget))
+                        .await
                 }
             }
         }
         BoundQuery::Federated(bound) => {
             for fragment in bound.plan().fragments() {
-                if let Err(error) = admission::admit(fragment.plan(), cfg.max_order_rows()) {
+                let admitted = traced_sync(Stage::ShapeAdmission, || {
+                    admission::admit(fragment.plan(), cfg.max_order_rows())
+                });
+                if let Err(error) = admitted {
                     let _internal_reason = error.reason();
                     let _ = generations.finish().await;
                     return problem::response(ProblemCode::UnsupportedQuery);
                 }
             }
-            let execution = match snapshot.prepare_federated_execution(*bound) {
+            let execution = match traced_sync(Stage::BindExecution, || {
+                snapshot.prepare_federated_execution(*bound)
+            }) {
                 Ok(execution) => execution,
                 Err(_) => {
                     let _ = generations.finish().await;
@@ -180,7 +204,13 @@ async fn process(
                 }
             };
             let format = negotiate_results(accept);
-            match crate::federation::select_union_body(execution, generations, format, budget).await
+            match traced_execute(crate::federation::select_union_body(
+                execution,
+                generations,
+                format,
+                budget,
+            ))
+            .await
             {
                 Ok(body) => ok_stream(format.media_type(), body),
                 Err(response) => response,
@@ -280,13 +310,12 @@ async fn respond_ask(
             if generation.is_some() {
                 return problem::response(ProblemCode::Internal);
             }
-            // The concrete adapter future proves the `Send` obligation.
             let lease = match sqlite_admission::acquire(&pool, &budget).await {
                 Ok(lease) => lease,
                 Err(response) => return response,
             };
             let task_control: Arc<dyn QueryControl> = Arc::new(budget.clone());
-            let run = tokio::spawn(async move {
+            let run = deadline::spawn_request_task(async move {
                 exec::ask_sqlite_owned_interruptible_leased(&plan, lease, task_control).await
             });
             match deadline::join_task(budget.clone(), run).await {
@@ -320,7 +349,7 @@ async fn respond_ask(
                 Err(response) => return response,
             };
             let task_budget = budget.clone();
-            let run = tokio::spawn(async move {
+            let run = deadline::spawn_request_task(async move {
                 exec_mysql::ask_each_mysql_controlled(&plan, conn, &task_budget).await
             });
             match deadline::join_task(budget.clone(), run).await {
@@ -337,7 +366,7 @@ async fn respond_ask(
             if let Err(error) = budget.checkpoint() {
                 return problem::response_for_control(error);
             }
-            match stream::serialize_boolean(b, fmt) {
+            match traced_sync(Stage::Serialize, || stream::serialize_boolean(b, fmt)) {
                 Ok(bytes) => {
                     let Ok(amount) = u64::try_from(bytes.len()) else {
                         return problem::response(ProblemCode::Internal);
@@ -426,14 +455,6 @@ async fn respond_construct(
         }
     };
     ok_stream(fmt.media_type(), body)
-}
-
-/// The sole decoded `query` field, rejecting duplicates and every other key.
-#[cfg(test)]
-fn form_param(encoded: &str, key: &str) -> Option<String> {
-    (key == "query")
-        .then(|| crate::post_body::unique_query_param(encoded.as_bytes(), usize::MAX).ok())
-        .flatten()
 }
 
 fn accept(headers: &HeaderMap) -> Option<String> {

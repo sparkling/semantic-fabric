@@ -6,9 +6,12 @@ fn generated_ids_are_bounded_ascii_and_distinct() {
     let second = generated_correlation_id();
     assert_ne!(first, second);
     for id in [first, second] {
-        assert!(id.len() <= 32, "id={id:?}");
-        assert!(id.starts_with("sf-"));
-        assert!(id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        assert_eq!(id.as_str().len(), 36, "id={id:?}");
+        assert!(id.as_str().starts_with("sf-"));
+        assert!(id
+            .as_str()
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-'));
     }
 }
 
@@ -96,7 +99,7 @@ fn every_problem_code_has_one_stable_status_and_public_value() {
     for (code, status, value) in cases {
         assert_eq!(code.status(), status);
         assert_eq!(code.value(), value);
-        let details = ProblemDetails::new(code);
+        let details = ProblemDetails::new(code, &generated_correlation_id());
         assert_eq!(details.status, status.as_u16());
         assert_eq!(details.code, value);
         assert!(!details.title.is_empty());
@@ -118,6 +121,17 @@ fn temporary_unavailability_uses_one_fixed_retry_hint() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get(header::RETRY_AFTER).unwrap(), "1");
     }
+}
+
+#[test]
+fn pending_problem_can_only_be_materialized_once() {
+    let mut response = response(ProblemCode::InvalidRequest);
+    let correlation = generated_correlation_id();
+    assert_eq!(
+        finalize(&mut response, &correlation),
+        Some(FailureKind::InvalidRequest)
+    );
+    assert_eq!(finalize(&mut response, &correlation), None);
 }
 
 #[test]

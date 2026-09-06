@@ -63,6 +63,8 @@ mod snapshot;
 mod source_acquisition;
 mod sqlite_admission;
 mod startup;
+mod telemetry;
+mod telemetry_body;
 mod terminal_body;
 
 #[cfg(test)]
@@ -88,6 +90,8 @@ mod runtime_activation_http_tests;
 mod runtime_snapshot_tests;
 #[cfg(test)]
 mod semantic_admission_tests;
+#[cfg(test)]
+mod telemetry_tests;
 #[cfg(test)]
 mod test_support;
 

@@ -1,5 +1,4 @@
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
@@ -10,7 +9,8 @@ use sf_core::query_control::QueryControlError::{
 };
 use sf_sparql::Error as SparqlError;
 
-static NEXT_CORRELATION_ID: AtomicU64 = AtomicU64::new(1);
+use crate::telemetry::{self, CorrelationId, FailureKind, StartupFailure};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProblemCode {
     InvalidRequest,
@@ -130,6 +130,25 @@ impl ProblemCode {
     }
 }
 
+impl From<ProblemCode> for FailureKind {
+    fn from(code: ProblemCode) -> Self {
+        match code {
+            ProblemCode::InvalidRequest => Self::InvalidRequest,
+            ProblemCode::NotFound => Self::NotFound,
+            ProblemCode::MethodNotAllowed => Self::MethodNotAllowed,
+            ProblemCode::NotAcceptable => Self::NotAcceptable,
+            ProblemCode::UnsupportedMediaType => Self::UnsupportedMediaType,
+            ProblemCode::PayloadTooLarge => Self::PayloadTooLarge,
+            ProblemCode::UnsupportedQuery => Self::UnsupportedQuery,
+            ProblemCode::RequestTimeout => Self::RequestTimeout,
+            ProblemCode::QueryBudgetExceeded => Self::QueryBudgetExceeded,
+            ProblemCode::ServiceOverloaded => Self::ServiceOverloaded,
+            ProblemCode::SourceUnavailable => Self::SourceUnavailable,
+            ProblemCode::Internal => Self::Internal,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ProblemDetails {
     #[serde(rename = "type")]
@@ -140,41 +159,80 @@ struct ProblemDetails {
     instance: String,
     code: &'static str,
     #[serde(rename = "correlationId")]
-    correlation_id: String,
+    correlation_id: CorrelationId,
 }
 
 impl ProblemDetails {
-    fn new(code: ProblemCode) -> Self {
-        let correlation_id = generated_correlation_id();
+    fn new(code: ProblemCode, correlation_id: &CorrelationId) -> Self {
         Self {
             kind: format!("urn:semantic-fabric:problem:{}", code.value()),
             title: code.title(),
             status: code.status().as_u16(),
             detail: code.detail(),
-            instance: format!("urn:semantic-fabric:problem-instance:{correlation_id}"),
+            instance: format!(
+                "urn:semantic-fabric:problem-instance:{}",
+                correlation_id.as_str()
+            ),
             code: code.value(),
-            correlation_id,
+            correlation_id: correlation_id.clone(),
         }
     }
 }
 
-fn generated_correlation_id() -> String {
-    let sequence = NEXT_CORRELATION_ID.fetch_add(1, Ordering::Relaxed);
-    format!("sf-{:08x}-{sequence:016x}", std::process::id())
+fn generated_correlation_id() -> CorrelationId {
+    CorrelationId::generate()
 }
 
+#[derive(Clone, Copy)]
+struct PendingProblem {
+    code: ProblemCode,
+    include_body: bool,
+}
+
+/// Build a typed pending problem. The outer request coordinator materializes it
+/// only after deadline arbitration, using the sole request correlation identity.
 pub(crate) fn response(code: ProblemCode) -> Response {
-    let details = ProblemDetails::new(code);
-    let correlation_id = details.correlation_id.clone();
-    let body = serde_json::to_vec(&details).expect("fixed problem details must serialize");
-    Response::builder()
+    pending_response(code, true)
+}
+
+pub(crate) fn response_without_body(code: ProblemCode) -> Response {
+    pending_response(code, false)
+}
+
+fn pending_response(code: ProblemCode, include_body: bool) -> Response {
+    let mut response = Response::builder()
         .status(code.status())
         .header(header::CONTENT_TYPE, "application/problem+json")
         .header(header::CACHE_CONTROL, "no-store")
         .header("x-content-type-options", "nosniff")
-        .header("x-correlation-id", correlation_id)
-        .body(Body::from(body))
-        .expect("static problem response builder")
+        .body(Body::empty())
+        .expect("static pending problem response builder");
+    response
+        .extensions_mut()
+        .insert(PendingProblem { code, include_body });
+    response
+}
+
+/// Materialize a pending problem at the outer winning-response boundary.
+pub(crate) fn finalize(
+    response: &mut Response,
+    correlation_id: &CorrelationId,
+) -> Option<FailureKind> {
+    let pending = response.extensions_mut().remove::<PendingProblem>()?;
+    debug_assert_eq!(response.status(), pending.code.status());
+    *response.body_mut() = if pending.include_body {
+        let details = ProblemDetails::new(pending.code, correlation_id);
+        let body = serde_json::to_vec(&details).expect("fixed problem details must serialize");
+        Body::from(body)
+    } else {
+        Body::empty()
+    };
+    response.headers_mut().insert(
+        "x-correlation-id",
+        HeaderValue::from_str(correlation_id.as_str())
+            .expect("generated correlation is an ASCII header value"),
+    );
+    Some(pending.code.into())
 }
 
 /// Build a temporary-unavailability response with the shared fixed retry hint.
@@ -208,6 +266,16 @@ enum StartupCode {
     Configuration,
     Source,
     Runtime,
+}
+
+impl From<StartupCode> for StartupFailure {
+    fn from(code: StartupCode) -> Self {
+        match code {
+            StartupCode::Configuration => Self::Configuration,
+            StartupCode::Source => Self::Source,
+            StartupCode::Runtime => Self::Runtime,
+        }
+    }
 }
 
 impl StartupCode {
@@ -291,7 +359,7 @@ impl fmt::Display for StartupCause {
 /// inside `sf-serve` for a future internal tracing sink.
 pub struct ServeError {
     code: StartupCode,
-    correlation_id: String,
+    correlation_id: CorrelationId,
     cause: StartupCause,
 }
 
@@ -311,7 +379,13 @@ impl ServeError {
 
     /// Bounded generated identifier suitable for support correlation.
     pub fn correlation_id(&self) -> &str {
-        &self.correlation_id
+        self.correlation_id.as_str()
+    }
+
+    /// Emit the safe startup failure vocabulary after the executable installs
+    /// its structured subscriber. The retained typed cause is never recorded.
+    pub fn record_telemetry(&self) {
+        telemetry::record_startup_failure(self.code.into(), &self.correlation_id);
     }
 
     #[allow(dead_code)]
@@ -327,7 +401,7 @@ impl fmt::Display for ServeError {
             "{}: {} (correlation {})",
             self.code.value(),
             self.code.detail(),
-            self.correlation_id
+            self.correlation_id.as_str()
         )
     }
 }
@@ -337,7 +411,7 @@ impl fmt::Debug for ServeError {
         formatter
             .debug_struct("ServeError")
             .field("code", &self.code.value())
-            .field("correlation_id", &self.correlation_id)
+            .field("correlation_id", &self.correlation_id.as_str())
             .field("cause", &"<redacted>")
             .finish()
     }

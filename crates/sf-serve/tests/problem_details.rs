@@ -106,7 +106,7 @@ async fn assert_problem_response(
         .expect("ASCII correlation id")
         .to_owned();
     assert!(correlation.starts_with("sf-"));
-    assert!(correlation.len() <= 32, "correlation={correlation:?}");
+    assert_eq!(correlation.len(), 36, "correlation={correlation:?}");
     assert!(
         correlation
             .bytes()
@@ -136,6 +136,32 @@ async fn assert_problem_response(
     assert!(json["title"].as_str().is_some_and(|s| !s.is_empty()));
     assert!(json["detail"].as_str().is_some_and(|s| !s.is_empty()));
     body
+}
+
+#[tokio::test]
+async fn inbound_correlation_is_ignored_by_the_full_request_boundary() {
+    let response = router(Arc::new(config_with_stale_schema()))
+        .oneshot(
+            Request::builder()
+                .uri("/missing")
+                .header("x-correlation-id", SECRET)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let correlation = response.headers()["x-correlation-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(correlation, SECRET);
+    assert_eq!(correlation.len(), 36);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(problem["correlationId"], correlation);
+    assert!(!body
+        .windows(SECRET.len())
+        .any(|window| window == SECRET.as_bytes()));
 }
 
 fn assert_secret_absent(body: &[u8]) {

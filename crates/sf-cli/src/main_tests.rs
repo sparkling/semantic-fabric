@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn non_serve_commands_bypass_structured_subscriber_initialization() {
+    for command in [Command::Conformance, Command::Bench] {
+        let mut calls = 0;
+        initialize_telemetry_for(&command, || {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 0);
+    }
+}
+
+#[test]
 fn suite_root_points_at_the_vendored_w3c_suite_relative_to_the_crate() {
     let root = suite_root();
     assert!(

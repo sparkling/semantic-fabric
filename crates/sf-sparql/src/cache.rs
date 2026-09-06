@@ -265,9 +265,7 @@ impl CompilerBinding {
     /// caller must discard the returned plan after structural admission and
     /// compile again through [`Self::compile_shared`] while holding its lease.
     pub fn compile_uncached_shared(&self, sparql: &str) -> Result<Arc<Plan>> {
-        let query = spargebra::SparqlParser::new()
-            .parse_query(sparql)
-            .map_err(|error| crate::Error::Parse(error.to_string()))?;
+        let query = crate::parse_query(sparql)?;
         self.compile_parsed_uncached_shared(&query)
     }
 

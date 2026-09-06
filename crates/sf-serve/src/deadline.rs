@@ -5,8 +5,10 @@ use std::sync::Arc;
 use sf_core::query_control::QueryControlError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{JoinError, JoinHandle};
+use tracing::Instrument;
 
 use crate::budget::RequestBudget;
+use crate::telemetry::{self, Stage};
 
 /// Failure before a blocking compiler produces its value.
 #[derive(Debug, thiserror::Error)]
@@ -120,12 +122,15 @@ where
     O: FnOnce() + Send,
 {
     let worker_budget = budget.clone();
+    let worker_span = telemetry::stage_span(Stage::CompileWorker);
     let task = tokio::task::spawn_blocking(move || {
-        // A timed-out async waiter must not return aggregate request capacity
-        // while its detached compiler is still queued or running.
-        let worker_lifetime = worker_budget.clone();
-        let value = work(worker_budget);
-        (value, reservation, worker_lifetime)
+        worker_span.in_scope(|| {
+            // A timed-out async waiter must not return aggregate request capacity
+            // while its detached compiler is still queued or running.
+            let worker_lifetime = worker_budget.clone();
+            let value = work(worker_budget);
+            (value, reservation, worker_lifetime)
+        })
     });
     on_submitted();
 
@@ -165,4 +170,13 @@ pub(crate) async fn join_task<T>(
         Ok(Err(error)) => Err(JoinedTaskError::Join(error)),
         Ok(Ok(value)) => Ok(value),
     }
+}
+
+/// Spawn request work with an explicit closed stage and inherited request parent.
+pub(crate) fn spawn_request_task<T, F>(future: F) -> JoinHandle<T>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = T> + Send + 'static,
+{
+    tokio::spawn(future.instrument(telemetry::stage_span(Stage::ExecuteTask)))
 }

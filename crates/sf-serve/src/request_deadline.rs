@@ -14,11 +14,13 @@ use http_body_util::BodyExt;
 use sf_core::query_control::QueryControl;
 use tokio::sync::TryAcquireError;
 use tower::Service;
+use tracing::Instrument;
 
 use crate::activation::{RuntimeSnapshotLease, SnapshotUnavailable};
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
 use crate::problem;
+use crate::telemetry::{self, CorrelationId, RequestTrace, Stage};
 
 /// Service that mints the request budget before dispatching into Axum routing.
 ///
@@ -59,55 +61,104 @@ impl Service<Request<Body>> for RequestDeadlineService {
     }
 
     fn call(&mut self, mut request: Request<Body>) -> Self::Future {
+        let correlation = CorrelationId::generate();
+        let trace = RequestTrace::new(&request, correlation.clone());
+        request.headers_mut().remove("x-correlation-id");
         if crate::service_description::is_request(&request) {
-            let response = crate::service_description::response(
-                request.headers(),
-                self.cfg.query_mode(),
-                request.method() == axum::http::Method::HEAD,
-            );
-            return Box::pin(async move { Ok(response) });
+            let response = trace.in_scope(|| {
+                crate::service_description::response(
+                    request.headers(),
+                    self.cfg.query_mode(),
+                    request.method() == axum::http::Method::HEAD,
+                )
+            });
+            return completed_response(trace, response);
         }
         if crate::health::is_health_path(request.uri().path()) {
             let replacement = self.inner.clone();
             let mut inner = std::mem::replace(&mut self.inner, replacement);
-            return Box::pin(async move { inner.call(request).await });
-        }
-
-        let mut budget = self.cfg.request_budget();
-        if let Err(error) = budget.checkpoint() {
-            return deadline_checked_response(budget, problem::response_for_control(error));
-        }
-
-        let snapshot = match self.cfg.runtime_lease() {
-            Ok(snapshot) => snapshot,
-            Err(error) => return deadline_checked_response(budget, snapshot_error_response(error)),
-        };
-
-        let permit = match self.cfg.request_admission_permits().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(TryAcquireError::NoPermits) => {
-                return deadline_checked_response(
-                    budget,
-                    problem::response_with_retry_after(problem::ProblemCode::ServiceOverloaded),
-                )
-            }
-            Err(TryAcquireError::Closed) => {
-                return deadline_checked_response(
-                    budget,
-                    problem::response(problem::ProblemCode::Internal),
-                )
-            }
-        };
-        if let Err(error) = budget.checkpoint() {
-            drop(permit);
-            return deadline_checked_response(budget, problem::response_for_control(error));
-        }
-        if budget.retain_admission(permit).is_err() {
-            return deadline_checked_response(
-                budget,
-                problem::response(problem::ProblemCode::Internal),
+            let span = trace.span();
+            return Box::pin(
+                async move {
+                    let response = match inner.call(request).await {
+                        Ok(response) => response,
+                        Err(never) => match never {},
+                    };
+                    Ok(trace.complete(response))
+                }
+                .instrument(span),
             );
         }
+
+        enum Admission {
+            Admitted {
+                budget: RequestBudget,
+                snapshot: RuntimeSnapshotLease,
+            },
+            Rejected {
+                budget: RequestBudget,
+                response: Response,
+            },
+        }
+        let admission = trace.in_scope(|| {
+            telemetry::in_stage_sync(Stage::RequestAdmission, || {
+                let mut budget = self.cfg.request_budget_for(correlation);
+                if let Err(error) = budget.checkpoint() {
+                    return Admission::Rejected {
+                        budget,
+                        response: problem::response_for_control(error),
+                    };
+                }
+
+                let snapshot = match self.cfg.runtime_lease() {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        return Admission::Rejected {
+                            budget,
+                            response: snapshot_error_response(error),
+                        }
+                    }
+                };
+
+                let permit = match self.cfg.request_admission_permits().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(TryAcquireError::NoPermits) => {
+                        return Admission::Rejected {
+                            budget,
+                            response: problem::response_with_retry_after(
+                                problem::ProblemCode::ServiceOverloaded,
+                            ),
+                        }
+                    }
+                    Err(TryAcquireError::Closed) => {
+                        return Admission::Rejected {
+                            budget,
+                            response: problem::response(problem::ProblemCode::Internal),
+                        }
+                    }
+                };
+                if let Err(error) = budget.checkpoint() {
+                    drop(permit);
+                    return Admission::Rejected {
+                        budget,
+                        response: problem::response_for_control(error),
+                    };
+                }
+                if budget.retain_admission(permit).is_err() {
+                    return Admission::Rejected {
+                        budget,
+                        response: problem::response(problem::ProblemCode::Internal),
+                    };
+                }
+                Admission::Admitted { budget, snapshot }
+            })
+        });
+        let (budget, snapshot) = match admission {
+            Admission::Admitted { budget, snapshot } => (budget, snapshot),
+            Admission::Rejected { budget, response } => {
+                return deadline_checked_response(budget, response, trace)
+            }
+        };
         request.extensions_mut().insert(budget.clone());
         request.extensions_mut().insert(snapshot.clone());
 
@@ -116,17 +167,21 @@ impl Service<Request<Body>> for RequestDeadlineService {
         let replacement = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, replacement);
 
-        Box::pin(async move {
-            let mut cancellation = budget.cancellation_guard();
-            let inner_response = async move { inner.call(request).await };
-            let response = match budget.run_until_deadline(inner_response).await {
-                Ok(Ok(response)) => response,
-                Ok(Err(never)) => match never {},
-                Err(error) => problem::response_for_control(error),
-            };
-            cancellation.disarm();
-            Ok(pin_snapshot(response, snapshot))
-        })
+        let span = trace.span();
+        Box::pin(
+            async move {
+                let mut cancellation = budget.cancellation_guard();
+                let inner_response = async move { inner.call(request).await };
+                let response = match budget.run_until_deadline(inner_response).await {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(never)) => match never {},
+                    Err(error) => problem::response_for_control(error),
+                };
+                cancellation.disarm();
+                Ok(pin_snapshot(trace.complete(response), snapshot))
+            }
+            .instrument(span),
+        )
     }
 }
 
@@ -151,14 +206,27 @@ fn pin_snapshot(response: Response, snapshot: RuntimeSnapshotLease) -> Response 
     })
 }
 
-fn deadline_checked_response(budget: RequestBudget, response: Response) -> ResponseFuture {
-    Box::pin(async move {
-        let response = match budget.run_until_deadline(async move { response }).await {
-            Ok(response) => response,
-            Err(error) => problem::response_for_control(error),
-        };
-        Ok(response)
-    })
+fn completed_response(trace: RequestTrace, response: Response) -> ResponseFuture {
+    let span = trace.span();
+    Box::pin(async move { Ok(trace.complete(response)) }.instrument(span))
+}
+
+fn deadline_checked_response(
+    budget: RequestBudget,
+    response: Response,
+    trace: RequestTrace,
+) -> ResponseFuture {
+    let span = trace.span();
+    Box::pin(
+        async move {
+            let response = match budget.run_until_deadline(async move { response }).await {
+                Ok(response) => response,
+                Err(error) => problem::response_for_control(error),
+            };
+            Ok(trace.complete(response))
+        }
+        .instrument(span),
+    )
 }
 
 type ResponseFuture = Pin<Box<dyn Future<Output = Result<Response, Infallible>> + Send + 'static>>;

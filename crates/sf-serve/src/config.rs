@@ -24,6 +24,7 @@ use crate::lifecycle::ShutdownPhase;
 use crate::problem::StartupCause;
 use crate::semantic_admission::{MappingOrigin, ValidatedMapping};
 use crate::snapshot::{RuntimeSnapshot, RuntimeSource, SnapshotError};
+use crate::telemetry::CorrelationId;
 #[cfg(test)]
 use crate::Backend;
 use crate::{IntrospectedSource, SemanticOntology, ServeError};
@@ -373,16 +374,22 @@ impl ServeConfig {
         self.request_admission_permits.clone()
     }
 
-    pub(crate) fn request_budget(&self) -> RequestBudget {
+    pub(crate) fn request_budget_for(&self, correlation: CorrelationId) -> RequestBudget {
         let budget = RequestBudget::after_with_shutdown(
             self.timeout,
             self.query_limits,
             self.shutdown.subscribe(),
+            correlation,
         );
         if *self.shutdown.borrow() != ShutdownPhase::Running {
             budget.cancel();
         }
         budget
+    }
+
+    #[cfg(test)]
+    pub(crate) fn request_budget(&self) -> RequestBudget {
+        self.request_budget_for(CorrelationId::generate())
     }
 
     pub(crate) fn begin_shutdown(&self) {

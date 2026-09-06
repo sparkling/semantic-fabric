@@ -39,7 +39,10 @@ sf-bench.workspace = true
 sf-serve.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 libc.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
+serde_json.workspace = true

@@ -19,6 +19,7 @@ use sf_serve::{
 };
 
 mod serve_args;
+mod telemetry;
 
 use serve_args::ServeArgs;
 #[cfg(test)]
@@ -50,10 +51,25 @@ enum Command {
 
 fn main() -> ExitCode {
     sf_sparql::dispatch_private_parser_worker_v1();
-    match Cli::parse().command {
+    let command = Cli::parse().command;
+    if let Err(error) = initialize_telemetry_for(&command, telemetry::init) {
+        eprintln!("semantic-fabric: {error}");
+        return ExitCode::FAILURE;
+    }
+    match command {
         Command::Conformance => conformance(),
         Command::Serve(args) => serve(*args),
         Command::Bench => bench(),
+    }
+}
+
+fn initialize_telemetry_for(
+    command: &Command,
+    initialize: impl FnOnce() -> Result<(), telemetry::InitError>,
+) -> Result<(), telemetry::InitError> {
+    match command {
+        Command::Serve(_) => initialize(),
+        Command::Conformance | Command::Bench => Ok(()),
     }
 }
 
@@ -85,7 +101,7 @@ fn serve(args: ServeArgs) -> ExitCode {
     match serve_blocking(opts) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("semantic-fabric: serve failed: {e}");
+            e.record_telemetry();
             ExitCode::FAILURE
         }
     }

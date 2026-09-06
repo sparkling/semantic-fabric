@@ -67,11 +67,10 @@ pub(crate) fn is_request<B>(request: &Request<B>) -> bool {
 /// Return metadata without acquiring a runtime generation or query-work permit.
 pub(crate) fn response(headers: &HeaderMap, mode: QueryMode, head: bool) -> Response {
     if !accepts_turtle(headers) {
-        let response = problem::response(ProblemCode::NotAcceptable);
         return if head {
-            response.map(|_| Body::empty())
+            problem::response_without_body(ProblemCode::NotAcceptable)
         } else {
-            response
+            problem::response(ProblemCode::NotAcceptable)
         };
     }
 

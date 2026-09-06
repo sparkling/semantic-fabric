@@ -9,8 +9,10 @@ use axum::body::{Body, Bytes};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_stream::Stream;
+use tracing::Instrument;
 
 use crate::budget::RequestBudget;
+use crate::telemetry::{self, Stage, StreamOutcome};
 
 const STREAM_FAILURE_MESSAGE: &str = "result stream failed";
 
@@ -101,33 +103,42 @@ where
     Fut: Future<Output = io::Result<()>> + Send + 'static,
 {
     let (data_tx, terminal, body) = channel(capacity);
-    let task = tokio::spawn(async move {
-        // Exactly one sender lives outside the governed producer future. It is
-        // used only for receiver-drop observation and guarantees the data channel
-        // cannot close before the terminal outcome is stored below.
-        let closed_tx = data_tx.clone();
-        let result = {
-            let phase_budget = budget.clone();
-            let guarded = budget.run(produce(data_tx, phase_budget));
-            tokio::select! {
-                biased;
-                _ = closed_tx.closed() => {
-                    budget.cancel();
-                    return;
+    let stage = telemetry::stage_span(Stage::ExecuteStream);
+    let task = tokio::spawn(
+        async move {
+            // Exactly one sender lives outside the governed producer future. It is
+            // used only for receiver-drop observation and guarantees the data channel
+            // cannot close before the terminal outcome is stored below.
+            let closed_tx = data_tx.clone();
+            let result = {
+                let phase_budget = budget.clone();
+                let guarded = budget.run(produce(data_tx, phase_budget));
+                tokio::select! {
+                    biased;
+                    _ = closed_tx.closed() => {
+                        budget.cancel();
+                        telemetry::record_stream_outcome(StreamOutcome::ClientGone);
+                        return;
+                    }
+                    result = guarded => result
+                        .map_or(ProducerOutcome::Failed, |result| {
+                            if result.is_ok() {
+                                ProducerOutcome::Complete
+                            } else {
+                                ProducerOutcome::Failed
+                            }
+                        }),
                 }
-                result = guarded => result
-                    .map_or(ProducerOutcome::Failed, |result| {
-                        if result.is_ok() {
-                            ProducerOutcome::Complete
-                        } else {
-                            ProducerOutcome::Failed
-                        }
-                    }),
-            }
-        };
-        terminal.finish(result);
-        drop(closed_tx);
-    });
+            };
+            telemetry::record_stream_outcome(match result {
+                ProducerOutcome::Complete => StreamOutcome::Complete,
+                ProducerOutcome::Failed => StreamOutcome::Failed,
+            });
+            terminal.finish(result);
+            drop(closed_tx);
+        }
+        .instrument(stage),
+    );
     (body, task)
 }
 

@@ -34,6 +34,7 @@ bigdecimal.workspace = true    # arbitrary-precision numeric ORDER keys; avoids 
 # remains available transitively through the conformance oracle (ADR-0019).
 oxjsonld.workspace = true      # JSON-LD 1.2 output for CONSTRUCT/DESCRIBE (ADR-0006/0019); wired now so the 1.2 surface resolves
 thiserror.workspace = true
+tracing.workspace = true
 libc.workspace = true          # Linux parser-worker process containment (ADR-0053)
 sha2.workspace = true          # observed held-executable fingerprint; not release authority
 rayon = "1.12"                  # chunked term-gen batch parallelism, exec_core (ADR-0006 rayon/tokio pool separation, M4 wave-2 batch restructure)

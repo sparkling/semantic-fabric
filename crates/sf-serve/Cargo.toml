@@ -24,6 +24,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 form_urlencoded.workspace = true
 http-body-util = "0.1"
+http-body = "1"
 # Source drivers (held in the server backend; ADR-0006).
 rusqlite = { workspace = true, features = ["bundled"] }
 tokio-postgres = "0.7"
@@ -33,6 +34,7 @@ thiserror.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
@@ -41,3 +43,4 @@ tokio = { workspace = true, features = ["test-util"] }
 rusqlite = { workspace = true, features = ["bundled", "functions"] }
 spargebra.workspace = true
 spareval = { version = "0.2.6", features = ["sparql-12", "sep-0002", "sep-0006"] }
+tracing-subscriber.workspace = true

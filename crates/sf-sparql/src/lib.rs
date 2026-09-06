@@ -70,6 +70,7 @@ mod compile_envelope;
 #[allow(dead_code)] // Internal primitives; compiler pipeline wiring is a later slice.
 mod compiler_control;
 mod compiler_schema;
+mod compiler_telemetry;
 mod describe;
 pub mod dump;
 pub mod emit;
@@ -372,7 +373,10 @@ fn translate_inner_flat(
     // determined to be triple-term-valued (ADR-0032 D3 item 2); consulted below
     // to pre-substitute the CONSTRUCT template and, once `branches` is
     // otherwise finalized, to install the native projection (D2).
-    let (query, star_env) = star::rewrite_query(query)?;
+    let (query, star_env) =
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
+            star::rewrite_query(query)
+        })?;
     let query = &query;
     // M6 offline T-mapping: fold Tbox hierarchy into the maps once at startup so
     // the per-query unfold can use an empty Tbox (no runtime hash-map lookups).
@@ -608,7 +612,10 @@ fn translate_tree_with_column_type_use(
     // `cascade`'s pass 7, so it needs to know which columns a LATER stage will
     // still need — see `lower`'s own doc comment for why. `star_env` — see the
     // identical note in `translate_inner_flat`.
-    let (query, star_env) = star::rewrite_query(query)?;
+    let (query, star_env) =
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
+            star::rewrite_query(query)
+        })?;
     let query = &query;
     let mut cx = iq::resolve::ResolveCx::new_with_column_type_use(
         maps,
@@ -622,10 +629,20 @@ fn translate_tree_with_column_type_use(
     // (one alias counter) is threaded by `&mut`, so a query with several patterns
     // (e.g. DESCRIBE's outgoing-triple join) keeps disjoint aliases across them.
     let mut compile = |pattern: &GraphPattern| -> Result<Plan> {
-        let built = build::build_tree(pattern, None)?;
-        let resolved = iq::resolve::resolve(built, &mut cx)?;
-        let normalized = iq::normalize::normalize_with_work_mode(resolved, work_mode)?;
-        iq::lower::lower_with_work_mode(normalized, dialect, &extra_keep, &star_env, work_mode)
+        let built = compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Build, || {
+            build::build_tree(pattern, None)
+        })?;
+        let resolved =
+            compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Resolve, || {
+                iq::resolve::resolve(built, &mut cx)
+            })?;
+        let normalized =
+            compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Normalize, || {
+                iq::normalize::normalize_with_work_mode(resolved, work_mode)
+            })?;
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Lower, || {
+            iq::lower::lower_with_work_mode(normalized, dialect, &extra_keep, &star_env, work_mode)
+        })
     };
 
     let describe_form = matches!(query, Query::Describe { .. });
@@ -653,7 +670,10 @@ fn translate_tree_with_column_type_use(
         // DESCRIBE uses the same hygienic one-target outgoing-description rewrite
         // as the flat compiler before this tree path is lowered.
         Query::Describe { pattern, .. } => {
-            let (description_pattern, template) = describe::rewrite(pattern)?;
+            let (description_pattern, template) =
+                compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Rewrite, || {
+                    describe::rewrite(pattern)
+                })?;
             let mut plan = compile(&description_pattern)?;
             plan.form = PlanForm::Construct { template };
             plan
@@ -683,7 +703,10 @@ fn translate_tree_with_column_type_use(
         distinct: plan.distinct,
         project: project_vars.as_deref(),
     };
-    plan.branches = cascade::run(plan.branches, schema, &ctx);
+    plan.branches =
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
+            cascade::run(plan.branches, schema, &ctx)
+        });
     // A SubPlan derived table (§5.1: the M5 nested-modifier joins; ADR-0023
     // optimizer-residue's SQL agg-over-UNION pushdown) hides its own arms one level
     // down in `SubPlanJoin::plan.branches` — the `cascade::run` above never reaches
@@ -693,14 +716,18 @@ fn translate_tree_with_column_type_use(
     // guard above — a nested arm's raw columns feed its outer union/aggregation BY
     // NAME, so they must never be shrunk away).
     for b in &mut plan.branches {
-        cascade_subplans(b, schema, work_mode)?;
+        compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
+            cascade_subplans(b, schema, work_mode)
+        })?;
     }
     // ADR-0034: dedup below GROUP BY (see the identical note in
     // `translate_inner_flat`). Ordinary D1 needs no extra call here either: like
     // the flat engine's `unfold::bgp`, `iq::resolve`'s `Intensional` arm already
     // applies it per pattern, before this tree's own aggregation lowering
     // (`iq::lower`) ever narrows a branch's bindings down to its grouping keys.
-    cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+    compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Cascade, || {
+        cascade::dedup_before_aggregate(&mut plan.branches, dialect);
+    });
     // ADR-0034 Item 2 / §16.2 — CONSTRUCT set-dedup (see the identical note in
     // `translate_inner_flat`): MUST run before the `distinct` capture below.
     if describe_form {
@@ -834,17 +861,21 @@ pub fn parse_and_translate_cached_shared(
     sparql: &str,
     binding: &CompilerBinding,
 ) -> Result<Arc<Plan>> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_cached_shared(&query, binding)
+}
+
+fn parse_query(sparql: &str) -> Result<Query> {
+    compiler_telemetry::in_stage(compiler_telemetry::CompilerStage::Parse, || {
+        spargebra::SparqlParser::new()
+            .parse_query(sparql)
+            .map_err(|error| Error::Parse(error.to_string()))
+    })
 }
 
 /// Parse `sparql` and translate it (convenience over [`translate`]).
 pub fn parse_and_translate(sparql: &str, maps: &[TriplesMap], dialect: Dialect) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate(&query, maps, dialect)
 }
 
@@ -859,9 +890,7 @@ pub fn parse_and_translate_tree_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_tree(&query, maps, tbox, dialect, schema)
 }
 
@@ -877,9 +906,7 @@ pub fn parse_and_translate_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_with(&query, maps, dialect, tbox, schema)
 }
 
@@ -895,9 +922,7 @@ pub fn parse_and_translate_flat_with(
     tbox: &Tbox,
     schema: &[TableSchema],
 ) -> Result<Plan> {
-    let query = spargebra::SparqlParser::new()
-        .parse_query(sparql)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let query = parse_query(sparql)?;
     translate_with_flat(&query, maps, dialect, tbox, schema)
 }
 

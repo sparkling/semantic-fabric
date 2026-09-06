@@ -18,6 +18,7 @@ use crate::binding_identity::RuntimeBindingIdentity;
 use crate::budget::RequestBudget;
 use crate::schema_observation::SourceSchemaObservationV1;
 use crate::semantic_admission::{MappingOrigin, SemanticAdmissionError, ValidatedMapping};
+use crate::telemetry::{self, Stage};
 
 mod context;
 mod error;
@@ -348,15 +349,18 @@ async fn build_direct_candidate(
     let session = observed.session().clone();
     let row_identity = sf_mapping::DirectMappingRowIdentity::RequirePrimaryKey;
     let base_iri_owned = base_iri.to_owned();
+    let generation_span = telemetry::stage_span(Stage::GenerationBuild);
     let generated = match budget
         .run(tokio::task::spawn_blocking(move || {
-            let mapping = sf_mapping::direct_mapping_for_source_with_row_identity(
-                &tables,
-                &base_iri_owned,
-                source_id,
-                row_identity,
-            );
-            (tables, mapping)
+            generation_span.in_scope(|| {
+                let mapping = sf_mapping::direct_mapping_for_source_with_row_identity(
+                    &tables,
+                    &base_iri_owned,
+                    source_id,
+                    row_identity,
+                );
+                (tables, mapping)
+            })
         }))
         .await
     {
