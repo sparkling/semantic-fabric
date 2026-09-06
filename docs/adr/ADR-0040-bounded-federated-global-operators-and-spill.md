@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-08-28
-updated: 2026-09-05
+updated: 2026-09-06
 tags: [federation, physical-plan, bounded-memory, spill, external-memory, sparql, consistency, cancellation]
 supersedes: []
 depends-on:
@@ -23,6 +23,17 @@ does not accept a spill substrate, claim federation exists, or weaken the
 exact-or-reject rule. Acceptance waits for the comparison evidence and explicit
 maintainer decisions listed below. Its `implements` relationship identifies the
 ADR-0038 design lock, not implementation completion.
+
+A 2026-09-06 implemented precursor now exists behind `sf-sparql`'s Linux-only,
+private, default-off `secure-spill-prototype` feature and a dedicated Ubuntu CI
+gate. It is only a bounded secure-frame and descriptor-relative filesystem
+comparison substrate using one pre-reserved `QueryBudget` token, authenticated
+versioned blocks, private artifacts, fail-closed validation/cancellation, and
+best-effort owned cleanup. It supplies no global operator or semantic-key
+adapter, no embedded candidate, no janitor or global disk high-water accounting,
+and no serving or production admission. It does not accept this ADR or complete
+an acceptance gate: gates 1–11 and both open maintainer decisions remain open.
+
 `sf-core::SourceId`/`SourceMapping` and the immutable runtime snapshot registry
 now bind source-keyed backends, dialects, T-box, constraint-quarantined compiler
 schemas, explicit `ConstraintAuthority::Unverified`, plan caches and request
