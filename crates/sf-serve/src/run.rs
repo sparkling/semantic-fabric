@@ -39,6 +39,8 @@ pub struct ServeOptions {
     pub sqlite_pool_size: usize,
     /// Maximum time to drain active requests after SIGTERM or Ctrl-C.
     pub shutdown_timeout: Duration,
+    /// Optional Prometheus renderer. `None` keeps `/metrics` absent.
+    pub metrics: Option<crate::MetricsEndpoint>,
 }
 
 /// The normal startup input for the bounded two-source UNION profile.
@@ -109,7 +111,10 @@ async fn serve_async(
     let cfg = crate::startup::build_config(&opts, source, additional).await?;
 
     let cfg = Arc::new(cfg);
-    let app = router(cfg.clone());
+    let app = match opts.metrics {
+        Some(metrics) => crate::router_with_metrics(cfg.clone(), metrics),
+        None => router(cfg.clone()),
+    };
     crate::lifecycle::serve(&opts.bind, app, cfg, opts.shutdown_timeout).await
 }
 

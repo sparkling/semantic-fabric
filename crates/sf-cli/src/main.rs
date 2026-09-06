@@ -18,6 +18,7 @@ use sf_serve::{
     DEFAULT_SHUTDOWN_TIMEOUT,
 };
 
+mod metrics;
 mod serve_args;
 mod telemetry;
 
@@ -77,6 +78,13 @@ fn initialize_telemetry_for(
 /// Run the SPARQL 1.2 Protocol endpoint (`sf-serve`). Returns a clear error
 /// (non-zero exit, no panic) if a required input is missing or invalid.
 fn serve(args: ServeArgs) -> ExitCode {
+    let metrics = match metrics::init(args.metrics) {
+        Ok(metrics) => metrics,
+        Err(error) => {
+            eprintln!("semantic-fabric: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let source = args.source_input.into_source_ref();
     let mapping = args.mapping_input.into_mapping_ref();
     let additional_source = args.additional_source_input.into_options();
@@ -98,6 +106,7 @@ fn serve(args: ServeArgs) -> ExitCode {
         pg_pool_wait: Duration::from_secs(args.pg_pool_wait_secs),
         sqlite_pool_size: args.sqlite_pool_size,
         shutdown_timeout: Duration::from_secs(args.shutdown_timeout_secs),
+        metrics,
     };
     match serve_blocking(opts) {
         Ok(()) => ExitCode::SUCCESS,

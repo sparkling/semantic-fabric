@@ -1,6 +1,7 @@
 //! Closed, payload-free request telemetry vocabulary (ADR-0011, partial M3).
 
 use std::future::Future;
+use std::time::Instant;
 
 use axum::body::Body;
 use axum::http::{HeaderValue, Method, Request, Response, StatusCode};
@@ -294,12 +295,16 @@ pub(crate) struct RequestTrace {
     span: Span,
     correlation: CorrelationId,
     method: RequestMethod,
+    started: Instant,
+    query_attempt: bool,
 }
 
 impl RequestTrace {
     pub(crate) fn new<B>(request: &Request<B>, correlation: CorrelationId) -> Self {
         let method = RequestMethod::classify(request.method());
         let route = RequestRoute::classify(request.uri().path());
+        let query_attempt = matches!(route, RequestRoute::Sparql)
+            && !crate::service_description::is_request(request);
         let span = tracing::info_span!(
             target: TELEMETRY_TARGET,
             "sf.request",
@@ -314,6 +319,8 @@ impl RequestTrace {
             span,
             correlation,
             method,
+            started: Instant::now(),
+            query_attempt,
         }
     }
 
@@ -335,6 +342,9 @@ impl RequestTrace {
         let status = response.status();
         let body_disposition = self.method.body_disposition(status);
         let outcome = RequestOutcome::from_status(status);
+        let query_terminal = self
+            .query_attempt
+            .then(|| crate::metrics::QueryTerminal::new(self.started, outcome.as_str()));
         self.span.record("status", status.as_u16());
         self.span.record("outcome", outcome.as_str());
         if let Some(failure) = problem {
@@ -353,7 +363,13 @@ impl RequestTrace {
         let (parts, body) = response.into_parts();
         Response::from_parts(
             parts,
-            crate::telemetry_body::wrap(body, self.span, self.correlation, body_disposition),
+            crate::telemetry_body::wrap(
+                body,
+                self.span,
+                self.correlation,
+                body_disposition,
+                query_terminal,
+            ),
         )
     }
 }
@@ -411,6 +427,7 @@ pub(crate) fn record_governance_terminal(error: QueryControlError, correlation: 
         outcome = outcome.as_str(),
         correlation_id = correlation.as_str(),
     );
+    crate::metrics::record_governance_rejection(outcome.as_str());
 }
 
 pub(crate) fn record_startup_failure(failure: StartupFailure, correlation: &CorrelationId) {

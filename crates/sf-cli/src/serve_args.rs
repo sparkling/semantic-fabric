@@ -25,6 +25,9 @@ pub(super) struct ServeArgs {
     /// Structured product telemetry ceiling; applies only to `serve`.
     #[arg(long, value_enum, default_value_t = TelemetryLevel::Info)]
     pub(super) log_level: TelemetryLevel,
+    /// Expose bounded-cardinality Prometheus metrics at `/metrics`.
+    #[arg(long, default_value_t = false)]
+    pub(super) metrics: bool,
     /// Request timeout in seconds (ADR-0010).
     #[arg(long, default_value_t = 30)]
     pub(super) timeout_secs: u64,

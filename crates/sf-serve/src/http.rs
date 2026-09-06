@@ -18,6 +18,7 @@ use crate::backend::Backend;
 use crate::budget::RequestBudget;
 use crate::config::ServeConfig;
 use crate::deadline::{self, JoinedTaskError};
+use crate::metrics::MetricsEndpoint;
 use crate::pg_generation::VerifiedPostgresGenerationLease;
 use crate::problem::{self, ProblemCode};
 use crate::request_compile::BoundQuery;
@@ -34,14 +35,35 @@ mod tests;
 
 /// Build the governed query service plus fixed discovery and health controls.
 pub fn router(cfg: Arc<ServeConfig>) -> RequestDeadlineService {
-    let inner = Router::new()
+    build_router(cfg, None)
+}
+
+/// Build the query service with an explicitly enabled Prometheus control route.
+pub fn router_with_metrics(
+    cfg: Arc<ServeConfig>,
+    endpoint: MetricsEndpoint,
+) -> RequestDeadlineService {
+    build_router(cfg, Some(endpoint))
+}
+
+fn build_router(cfg: Arc<ServeConfig>, metrics: Option<MetricsEndpoint>) -> RequestDeadlineService {
+    let metrics_enabled = metrics.is_some();
+    let mut inner = Router::new()
         .route("/sparql", get(handle_get).post(handle_post))
         .route("/livez", get(crate::health::live))
         .route("/readyz", get(crate::health::ready))
         .fallback(problem::not_found)
-        .method_not_allowed_fallback(problem::method_not_allowed)
-        .with_state(cfg.clone());
-    RequestDeadlineService::new(inner, cfg)
+        .method_not_allowed_fallback(problem::method_not_allowed);
+    if let Some(endpoint) = metrics {
+        inner = inner.route(
+            "/metrics",
+            get(move || {
+                let endpoint = endpoint.clone();
+                async move { endpoint.response() }
+            }),
+        );
+    }
+    RequestDeadlineService::new(inner.with_state(cfg.clone()), cfg, metrics_enabled)
 }
 
 /// `GET /sparql?query=...` for the strict, single-query Protocol subset.

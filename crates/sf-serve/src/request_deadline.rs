@@ -35,11 +35,16 @@ use crate::telemetry::{self, CorrelationId, RequestTrace, Stage};
 pub struct RequestDeadlineService {
     inner: Router,
     cfg: Arc<ServeConfig>,
+    metrics_enabled: bool,
 }
 
 impl RequestDeadlineService {
-    pub(crate) fn new(inner: Router, cfg: Arc<ServeConfig>) -> Self {
-        Self { inner, cfg }
+    pub(crate) fn new(inner: Router, cfg: Arc<ServeConfig>, metrics_enabled: bool) -> Self {
+        Self {
+            inner,
+            cfg,
+            metrics_enabled,
+        }
     }
 
     /// Adapt this request service for production use with [`axum::serve`].
@@ -75,6 +80,21 @@ impl Service<Request<Body>> for RequestDeadlineService {
             return completed_response(trace, response);
         }
         if crate::health::is_health_path(request.uri().path()) {
+            let replacement = self.inner.clone();
+            let mut inner = std::mem::replace(&mut self.inner, replacement);
+            let span = trace.span();
+            return Box::pin(
+                async move {
+                    let response = match inner.call(request).await {
+                        Ok(response) => response,
+                        Err(never) => match never {},
+                    };
+                    Ok(trace.complete(response))
+                }
+                .instrument(span),
+            );
+        }
+        if self.metrics_enabled && crate::metrics::is_path(request.uri().path()) {
             let replacement = self.inner.clone();
             let mut inner = std::mem::replace(&mut self.inner, replacement);
             let span = trace.span();

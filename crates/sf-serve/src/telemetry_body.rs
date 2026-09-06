@@ -9,6 +9,7 @@ use http_body::{Body as HttpBody, Frame, SizeHint};
 use sf_core::TELEMETRY_TARGET;
 use tracing::Span;
 
+use crate::metrics::QueryTerminal;
 use crate::telemetry::CorrelationId;
 
 const SCHEMA: &str = "semantic-fabric.telemetry.v1";
@@ -43,6 +44,7 @@ struct TracedResponseBody {
     span: Span,
     correlation: CorrelationId,
     disposition: BodyDisposition,
+    query_terminal: Option<QueryTerminal>,
     finished: AtomicBool,
 }
 
@@ -52,12 +54,14 @@ impl TracedResponseBody {
         span: Span,
         correlation: CorrelationId,
         disposition: BodyDisposition,
+        query_terminal: Option<QueryTerminal>,
     ) -> Self {
         Self {
             inner,
             span,
             correlation,
             disposition,
+            query_terminal,
             finished: AtomicBool::new(false),
         }
     }
@@ -88,6 +92,9 @@ impl TracedResponseBody {
             outcome = outcome.as_str(),
             correlation_id = self.correlation.as_str(),
         );
+        if let Some(query_terminal) = self.query_terminal {
+            query_terminal.record(outcome.as_str());
+        }
     }
 }
 
@@ -134,11 +141,13 @@ pub(crate) fn wrap(
     span: Span,
     correlation: CorrelationId,
     disposition: BodyDisposition,
+    query_terminal: Option<QueryTerminal>,
 ) -> Body {
     Body::new(TracedResponseBody::new(
         body,
         span,
         correlation,
         disposition,
+        query_terminal,
     ))
 }

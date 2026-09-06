@@ -264,6 +264,7 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
         panic!("serve command")
     };
     assert_eq!(args.log_level, TelemetryLevel::Info);
+    assert!(!args.metrics);
 
     for (value, expected) in [
         ("off", TelemetryLevel::Off),
@@ -280,6 +281,12 @@ fn serve_log_level_is_closed_bounded_and_defaults_to_info() {
     for invalid in ["debug", "trace", "sf_sql=debug", "info,hyper=trace"] {
         assert!(Cli::try_parse_from(base.into_iter().chain(["--log-level", invalid])).is_err());
     }
+
+    let parsed = Cli::try_parse_from(base.into_iter().chain(["--metrics"])).unwrap();
+    let Command::Serve(args) = parsed.command else {
+        panic!("serve command")
+    };
+    assert!(args.metrics);
 }
 
 #[test]
@@ -309,6 +316,7 @@ fn serve_returns_failure_exit_code_not_panic_on_missing_mapping_file() {
             .into_owned(),
         bind: "127.0.0.1:0".to_owned(),
         log_level: TelemetryLevel::Info,
+        metrics: false,
         timeout_secs: 1,
         max_query_len: 1024,
         max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,

@@ -35,6 +35,7 @@ sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+metrics.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
@@ -44,3 +45,4 @@ rusqlite = { workspace = true, features = ["bundled", "functions"] }
 spargebra.workspace = true
 spareval = { version = "0.2.6", features = ["sparql-12", "sep-0002", "sep-0006"] }
 tracing-subscriber.workspace = true
+metrics-exporter-prometheus.workspace = true

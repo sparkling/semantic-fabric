@@ -44,6 +44,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # --- sealed native M⋈T validation substrate (ADR-0005 / ADR-0019) ---
 shacl = "=0.3.14"
 rudof_rdf = "=0.3.14"

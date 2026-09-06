@@ -49,6 +49,7 @@ mod federation;
 mod health;
 mod http;
 mod lifecycle;
+mod metrics;
 mod observed_source;
 mod pg_direct_lifecycle;
 mod pg_generation;
@@ -84,6 +85,8 @@ mod health_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
+mod metrics_tests;
+#[cfg(test)]
 mod query_budget_tests;
 #[cfg(test)]
 mod request_admission_tests;
@@ -109,8 +112,12 @@ pub use config::{
     ServeConfig, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_ORDER_BYTES, DEFAULT_MAX_ORDER_ROWS,
     DEFAULT_QUERY_LIMITS,
 };
-pub use http::router;
+pub use http::{router, router_with_metrics};
 pub use lifecycle::DEFAULT_SHUTDOWN_TIMEOUT;
+pub use metrics::{
+    describe_all as describe_metrics, MetricsEndpoint, ProductMetricsRecorder, METRICS_TARGET,
+    QUERY_DURATION_BUCKETS, QUERY_DURATION_SECONDS,
+};
 pub use observed_source::IntrospectedSource;
 pub use ontology::{tbox_from_turtle, SemanticOntology};
 pub use problem::ServeError;
